@@ -1,0 +1,10 @@
+.env
+.env.*
+!.env.example
+*.pem
+__pycache__/
+.venv/
+node_modules/
+.idea/
+.vscode/
+*.log
