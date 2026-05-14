@@ -1,5 +1,6 @@
 import httpx
 import structlog
+
 from trader.auth.models import TokenResponse
 
 log = structlog.get_logger()

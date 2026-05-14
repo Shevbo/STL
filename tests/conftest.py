@@ -1,6 +1,8 @@
 # tests/conftest.py
+from datetime import datetime, timedelta, timezone
+
 import pytest
-from datetime import datetime, timezone, timedelta
+
 from trader.auth.models import TokenResponse
 
 

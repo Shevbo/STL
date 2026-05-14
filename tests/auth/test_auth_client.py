@@ -1,7 +1,9 @@
 # tests/auth/test_auth_client.py
+from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
+
 import pytest
-from unittest.mock import AsyncMock, patch
-from datetime import datetime, timezone, timedelta
+
 from trader.auth.client import AsyncAuthClient
 from trader.auth.models import TokenResponse
 

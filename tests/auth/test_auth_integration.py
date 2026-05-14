@@ -9,8 +9,9 @@ Run:
   poetry run pytest tests/auth/test_auth_integration.py -v -m integration
 """
 import pytest
-from trader.config import Settings
+
 from trader.auth.client import AsyncAuthClient
+from trader.config import Settings
 
 pytestmark = pytest.mark.integration
 
