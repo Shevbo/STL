@@ -1,4 +1,5 @@
 import pytest
+from pydantic import ValidationError
 
 from trader.config import Settings
 
@@ -20,5 +21,5 @@ def test_settings_missing_required_field_raises(monkeypatch):
     monkeypatch.delenv("FINAM_SECRET_TOKEN", raising=False)
     monkeypatch.delenv("FINAM_ACCOUNT_ID", raising=False)
 
-    with pytest.raises(Exception):  # pydantic ValidationError
+    with pytest.raises(ValidationError):
         Settings()
