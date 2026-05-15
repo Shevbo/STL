@@ -5,7 +5,7 @@ import orjson
 import pytest
 import websockets.exceptions
 
-from trader.md.ws_client import AuthError, WsSession, RECONNECT_MAX
+from trader.md.ws_client import RECONNECT_MAX, AuthError, WsSession
 
 # Save a reference to the real asyncio.sleep BEFORE any patching
 _real_sleep = asyncio.sleep
@@ -147,6 +147,7 @@ async def test_backoff_cap_never_exceeds_reconnect_max():
     """Full-jitter backoff: delay = random.uniform(0, min(BASE * 2**n, MAX)).
     After 100 failures the cap must never exceed RECONNECT_MAX."""
     import random
+
     from trader.md.ws_client import RECONNECT_BASE
 
     for attempt in range(100):
