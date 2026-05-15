@@ -1,7 +1,7 @@
 import asyncio
 import random
 import time
-from collections.abc import AsyncIterator, Callable, Awaitable
+from collections.abc import AsyncIterator, Awaitable, Callable
 
 import orjson
 import structlog

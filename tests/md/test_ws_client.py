@@ -2,7 +2,6 @@
 Tests for WsSession happy-path only (no reconnect logic — see test_reconnect.py).
 WS protocol TODO markers are present — update when actual Finam API format is confirmed.
 """
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import orjson
