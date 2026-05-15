@@ -30,10 +30,21 @@ async def registry():
     await reg.aclose()
 
 
-async def test_search_returns_nonempty_list(registry):
-    results = await registry.search("SBER")
-    assert len(results) > 0
-    assert all(r.ticker == "SBER" for r in results)
+async def test_assets_api_returns_nonempty(registry):
+    """Verify /v1/assets/all is accessible and returns parseable instruments.
+
+    Full search() loads thousands of pages (~15+ min). This test fetches
+    the first page only — enough to confirm auth and API connectivity.
+    """
+    headers = await registry._auth_headers()
+    response = await registry._get_page(headers, cursor=0)
+    body = response.json()
+    assets = body.get("assets", [])
+    assert len(assets) > 0
+    for asset in assets[:3]:
+        inst = registry._parse_instrument(asset)
+        assert inst.symbol
+        assert inst.ticker
 
 
 async def test_get_detail_mvp_symbol(registry):

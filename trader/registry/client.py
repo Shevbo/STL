@@ -123,7 +123,12 @@ class InstrumentRegistry:
         data = response.json()
 
         is_tradable_obj = data.get("is_tradable")
-        is_tradable = bool(is_tradable_obj.get("value")) if is_tradable_obj else False
+        if is_tradable_obj is None:
+            is_tradable = False
+        elif isinstance(is_tradable_obj, bool):
+            is_tradable = is_tradable_obj
+        else:
+            is_tradable = bool(is_tradable_obj.get("value"))
 
         def parse_money(obj: dict | None) -> Decimal:
             if not obj:
