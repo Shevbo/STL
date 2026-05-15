@@ -1,3 +1,4 @@
+import asyncio
 from decimal import Decimal
 
 import httpx
@@ -38,16 +39,26 @@ class InstrumentRegistry:
             is_archived=data.get("is_archived", False),
         )
 
+    async def _get_page(self, headers: dict, cursor: int) -> httpx.Response:
+        params = {"only_active": "true", "cursor": str(cursor)}
+        for attempt in range(3):
+            response = await self._http.get(_ASSETS_ALL_PATH, headers=headers, params=params)
+            if response.status_code == 429:
+                retry_after = int(response.headers.get("Retry-After", 60))
+                log.warning("registry.rate_limited", cursor=cursor, wait_secs=retry_after, attempt=attempt)
+                await asyncio.sleep(retry_after)
+                continue
+            response.raise_for_status()
+            return response
+        response.raise_for_status()
+        return response
+
     async def _load_all(self) -> dict[str, Instrument]:
         cache: dict[str, Instrument] = {}
         cursor = 0
         headers = await self._auth_headers()
         while True:
-            params = {"only_active": "true", "cursor": str(cursor)}
-            response = await self._http.get(
-                _ASSETS_ALL_PATH, headers=headers, params=params
-            )
-            response.raise_for_status()
+            response = await self._get_page(headers, cursor)
             body = response.json()
             for item in body.get("assets", []):
                 inst = self._parse_instrument(item)
@@ -56,6 +67,7 @@ class InstrumentRegistry:
             if not next_cursor:
                 break
             cursor = next_cursor
+            await asyncio.sleep(0.4)
         log.info("registry.loaded", count=len(cache))
         return cache
 
