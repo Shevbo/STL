@@ -23,3 +23,16 @@ def test_settings_missing_required_field_raises(monkeypatch):
 
     with pytest.raises(ValidationError):
         Settings(_env_file=[])
+
+
+def test_settings_mvp_symbol_default_empty(monkeypatch):
+    monkeypatch.setenv("FINAM_SECRET_TOKEN", "test_secret")
+    settings = Settings(_env_file=[])
+    assert settings.finam_mvp_symbol == ""
+
+
+def test_settings_mvp_symbol_from_env(monkeypatch):
+    monkeypatch.setenv("FINAM_SECRET_TOKEN", "test_secret")
+    monkeypatch.setenv("FINAM_MVP_SYMBOL", "GZM6@RFUD")
+    settings = Settings(_env_file=[])
+    assert settings.finam_mvp_symbol == "GZM6@RFUD"

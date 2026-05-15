@@ -18,3 +18,4 @@ class Settings(BaseSettings):
     finam_secret_token: SecretStr
     finam_account_id: str = ""
     finam_token_refresh_before_secs: int = 60
+    finam_mvp_symbol: str = ""
