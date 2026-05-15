@@ -1,4 +1,5 @@
-from datetime import datetime, timezone
+from dataclasses import FrozenInstanceError
+from datetime import timezone
 from decimal import Decimal, InvalidOperation
 
 import pytest
@@ -6,7 +7,6 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from trader.md.models import FeedState, Quote
-
 
 # --- FeedState ---
 
@@ -74,7 +74,7 @@ def test_quote_is_frozen():
         "timestamp": "2026-05-15T10:00:00Z",
     }
     q = Quote.from_payload("S", payload)
-    with pytest.raises(Exception):  # FrozenInstanceError
+    with pytest.raises(FrozenInstanceError):
         q.bid = Decimal("99")
 
 
