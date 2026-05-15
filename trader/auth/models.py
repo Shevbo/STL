@@ -4,8 +4,12 @@ from pydantic import BaseModel
 
 
 class TokenResponse(BaseModel):
-    access_token: str
+    token: str
     expires_at: datetime
+
+    @property
+    def access_token(self) -> str:
+        return self.token
 
     def is_expired(self, buffer_secs: int = 60) -> bool:
         now = datetime.now(timezone.utc)

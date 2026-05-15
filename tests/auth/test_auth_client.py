@@ -38,7 +38,7 @@ async def test_cached_token_is_reused(auth_client, mock_token):
 async def test_expired_token_triggers_refresh(auth_client, expired_token):
     auth_client._cached_token = expired_token
     new_token = TokenResponse(
-        access_token="new_jwt_xyz",
+        token="new_jwt_xyz",
         expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
     )
 

@@ -22,4 +22,4 @@ def test_settings_missing_required_field_raises(monkeypatch):
     monkeypatch.delenv("FINAM_ACCOUNT_ID", raising=False)
 
     with pytest.raises(ValidationError):
-        Settings()
+        Settings(_env_file=[])

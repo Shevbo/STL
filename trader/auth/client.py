@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 import httpx
 import structlog
 
@@ -5,8 +7,8 @@ from trader.auth.models import TokenResponse
 
 log = structlog.get_logger()
 
-# TODO: Verify exact path from https://api.finam.ru/docs/rest → Authentication
-_TOKEN_PATH = "/api/v1/auth/token"
+_TOKEN_PATH = "/v1/sessions"
+_DETAILS_PATH = "/v1/sessions/details"
 
 
 class AsyncAuthClient:
@@ -27,14 +29,17 @@ class AsyncAuthClient:
         log.info("auth.fetch_token", base_url=self._base_url)
         response = await self._http.post(
             _TOKEN_PATH,
-            json={"secret_token": self._secret_token},
+            json={"secret": self._secret_token},
         )
         response.raise_for_status()
-        data = response.json()
-        return TokenResponse(
-            access_token=data["access_token"],
-            expires_at=data["expires_at"],
+        access_token = response.json()["token"]
+
+        details = await self._http.post(_DETAILS_PATH, json={"token": access_token})
+        details.raise_for_status()
+        expires_at = datetime.fromisoformat(
+            details.json()["expires_at"].replace("Z", "+00:00")
         )
+        return TokenResponse(token=access_token, expires_at=expires_at)
 
     async def aclose(self):
         await self._http.aclose()
