@@ -11,11 +11,16 @@ python = "^3.12"
 httpx = {extras = ["http2"], version = "^0.27"}
 pydantic-settings = "^2.3"
 structlog = "^24.4"
+websockets = "^13.1"
+orjson = "^3.10"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.2"
 pytest-asyncio = "^0.23"
 ruff = "^0.4"
+pytest-mock = "^3.14"
+hypothesis = "^6"
+pytest-timeout = "^2"
 
 [build-system]
 requires = ["poetry-core"]
