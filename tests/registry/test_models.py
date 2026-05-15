@@ -3,7 +3,7 @@ from decimal import Decimal
 from trader.registry.models import Instrument, InstrumentDetail, TradingParams
 
 
-def test_instrument_symbol_property():
+def test_instrument_fields():
     inst = Instrument(symbol="GZM6@RFUD", ticker="GZM6", mic="RFUD",
                       name="Газпром-6.26", type="future", is_archived=False)
     assert inst.symbol == "GZM6@RFUD"
@@ -11,7 +11,7 @@ def test_instrument_symbol_property():
     assert inst.mic == "RFUD"
 
 
-def test_instrument_detail_min_step_calculation():
+def test_instrument_detail_fields():
     detail = InstrumentDetail(
         symbol="TEST@MISX", ticker="TEST", mic="MISX",
         name="Test", type="stock", is_archived=False,
