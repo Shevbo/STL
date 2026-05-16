@@ -155,3 +155,75 @@ async def test_subscribe_break_no_hang():
     await asyncio.wait_for(done.wait(), timeout=2.0)
     task.cancel()
     await feed.aclose()
+
+
+# --- Watchdog ---
+
+async def test_watchdog_transitions_to_stale_on_timeout():
+    ws = make_mock_ws()  # no quotes → heartbeat never fires
+    feed = MarketDataFeed(ws, watchdog_secs=0.05)  # very short timeout for test
+    await feed.start(get_token=AsyncMock(return_value="tok"))
+    # Fake LIVE state so watchdog has something to degrade
+    feed._state = FeedState.LIVE
+    await asyncio.sleep(0.15)
+    assert feed.state == FeedState.STALE
+    await feed.aclose()
+
+
+async def test_watchdog_recovers_to_live_on_heartbeat():
+    ws = make_mock_ws()
+    feed = MarketDataFeed(ws, watchdog_secs=0.05)
+    await feed.start(get_token=AsyncMock(return_value="tok"))
+    feed._state = FeedState.LIVE
+    await asyncio.sleep(0.1)  # → STALE (at least one timeout cycle)
+    assert feed.state == FeedState.STALE
+
+    # Simulate a heartbeat arriving and close before watchdog can time out again
+    feed._heartbeat.set()
+    await asyncio.sleep(0.01)  # yield to let watchdog pick up the heartbeat
+    assert feed.state == FeedState.LIVE
+    await feed.aclose()
+
+
+# --- aclose ---
+
+async def test_aclose_sets_state_closed():
+    ws = make_mock_ws()
+    feed = MarketDataFeed(ws, watchdog_secs=5.0)
+    await feed.start(get_token=AsyncMock(return_value="tok"))
+    await feed.aclose()
+    assert feed.state == FeedState.CLOSED
+
+
+async def test_aclose_wakes_subscribe_iterators():
+    """aclose() while a consumer is blocked in subscribe() → iterator exits."""
+    ws = make_mock_ws()
+    feed = MarketDataFeed(ws, watchdog_secs=5.0)
+    await feed.start(get_token=AsyncMock(return_value="tok"))
+    await feed.add_symbol("GZM6@RTSX")
+
+    consumer_exited = asyncio.Event()
+
+    async def consumer():
+        async for _ in feed.subscribe("GZM6@RTSX"):
+            pass
+        consumer_exited.set()
+
+    task = asyncio.create_task(consumer())
+    await asyncio.sleep(0.02)  # let consumer block in event.wait()
+    await feed.aclose()
+    await asyncio.wait_for(consumer_exited.wait(), timeout=2.0)
+    task.cancel()
+
+
+async def test_aclose_then_subscribe_does_not_hang():
+    """After aclose(), subscribe() must exit immediately (slot._closed = True)."""
+    ws = make_mock_ws()
+    feed = MarketDataFeed(ws, watchdog_secs=5.0)
+    await feed.start(get_token=AsyncMock(return_value="tok"))
+    await feed.aclose()
+
+    count = 0
+    async for _ in feed.subscribe("GZM6@RTSX"):
+        count += 1
+    assert count == 0
