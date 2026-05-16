@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.hypothesis/
+
+# Env / secrets
+.env
+*.env
+.shectory_trade.env
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.svelte-kit/
+frontend/mock/venv/
+
+# Poetry
+poetry.lock
