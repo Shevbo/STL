@@ -66,11 +66,15 @@ async def test_network_drop_triggers_reconnect():
         resubscribed = True
 
     with patch("trader.md.ws_client.websockets.connect", side_effect=fake_connect):
-        with patch("trader.md.ws_client.asyncio.sleep", new_callable=AsyncMock):
-            session = WsSession()
-            await session.connect(get_token=AsyncMock(return_value="tok"), on_reconnect=on_reconnect)
-            await asyncio.sleep(0.05)  # let reader_loop react
-            await session.close()
+        session = WsSession()
+        await session.connect(get_token=AsyncMock(return_value="tok"), on_reconnect=on_reconnect)
+        # condition-based wait: let reader_loop detect the drop and reconnect
+        # (reconnect backoff is random.uniform(0, 0.1) — completes fast)
+        for _ in range(200):
+            if session.reconnect_count >= 1:
+                break
+            await asyncio.sleep(0.01)
+        await session.close()
 
     assert session.reconnect_count >= 1
     assert resubscribed is True
@@ -84,7 +88,7 @@ async def test_auth_401_invalid_token_no_retry():
     ws.__aenter__ = AsyncMock(return_value=ws)
     ws.__aexit__ = AsyncMock(return_value=None)
 
-    with patch("trader.md.ws_client.websockets.connect", return_value=ws):
+    with patch("trader.md.ws_client.websockets.connect", AsyncMock(return_value=ws)):
         session = WsSession()
         with pytest.raises(AuthError) as exc_info:
             await session.connect(get_token=AsyncMock(return_value="bad_tok"))

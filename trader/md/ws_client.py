@@ -57,7 +57,17 @@ class WsSession:
         self._get_token = get_token
         self._on_reconnect = on_reconnect
         self._running = True
-        await self._do_connect()
+        # token_expired on the initial connect → refresh token + retry once
+        token_expired_retry = False
+        while True:
+            try:
+                await self._do_connect()
+                break
+            except AuthError as e:
+                if e.is_invalid or token_expired_retry:
+                    raise
+                token_expired_retry = True
+                continue
         self._reader_task = asyncio.create_task(self._reader_loop())
 
     async def _do_connect(self) -> None:

@@ -71,6 +71,9 @@ class MarketDataFeed:
         if symbol not in self._slots:
             await self.add_symbol(symbol)
         slot = self._slots[symbol]
+        # conflation: a fresh subscriber immediately receives the latest known quote
+        if self._running and not slot._closed and slot._latest is not None:
+            yield slot._latest
         try:
             while self._running and not slot._closed:
                 event = slot.next_event()

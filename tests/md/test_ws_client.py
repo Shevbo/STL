@@ -19,9 +19,14 @@ def make_fake_ws(recv_messages: list[dict]) -> AsyncMock:
     ws.recv = AsyncMock(return_value=orjson.dumps({"type": "auth_ack"}))
     ws.send = AsyncMock()
     ws.close = AsyncMock()
-    # __aiter__ yields subsequent frames
+    # __aiter__ yields subsequent frames via an async generator
     encoded = [orjson.dumps(m) for m in recv_messages]
-    ws.__aiter__ = MagicMock(return_value=iter(encoded))
+
+    async def _aiter():
+        for f in encoded:
+            yield f
+
+    ws.__aiter__ = MagicMock(return_value=_aiter())
     ws.__aenter__ = AsyncMock(return_value=ws)
     ws.__aexit__ = AsyncMock(return_value=None)
     return ws
@@ -33,7 +38,7 @@ def fake_ws():
 
 
 async def test_connect_sends_auth_message(fake_ws):
-    with patch("trader.md.ws_client.websockets.connect", return_value=fake_ws):
+    with patch("trader.md.ws_client.websockets.connect", AsyncMock(return_value=fake_ws)):
         session = WsSession()
         await session.connect(get_token=AsyncMock(return_value="tok123"))
         await session.close()
@@ -45,7 +50,7 @@ async def test_connect_sends_auth_message(fake_ws):
 
 
 async def test_connect_sets_connected_true(fake_ws):
-    with patch("trader.md.ws_client.websockets.connect", return_value=fake_ws):
+    with patch("trader.md.ws_client.websockets.connect", AsyncMock(return_value=fake_ws)):
         session = WsSession()
         await session.connect(get_token=AsyncMock(return_value="tok"))
         assert session.connected is True
@@ -57,7 +62,7 @@ async def test_subscribe_sends_subscribe_message(fake_ws):
     ack = {"type": "subscribe_ack", "symbol": "GZM6@RTSX"}
     fake_ws_with_ack = make_fake_ws([ack])
 
-    with patch("trader.md.ws_client.websockets.connect", return_value=fake_ws_with_ack):
+    with patch("trader.md.ws_client.websockets.connect", AsyncMock(return_value=fake_ws_with_ack)):
         session = WsSession()
         await session.connect(get_token=AsyncMock(return_value="tok"))
         await session.subscribe("GZM6@RTSX")
@@ -80,7 +85,7 @@ async def test_iter_quotes_yields_quote_frames():
     }
     fake_ws_with_quote = make_fake_ws([quote_frame])
 
-    with patch("trader.md.ws_client.websockets.connect", return_value=fake_ws_with_quote):
+    with patch("trader.md.ws_client.websockets.connect", AsyncMock(return_value=fake_ws_with_quote)):
         session = WsSession()
         await session.connect(get_token=AsyncMock(return_value="tok"))
 
@@ -96,7 +101,7 @@ async def test_iter_quotes_yields_quote_frames():
 
 
 async def test_close_sets_connected_false(fake_ws):
-    with patch("trader.md.ws_client.websockets.connect", return_value=fake_ws):
+    with patch("trader.md.ws_client.websockets.connect", AsyncMock(return_value=fake_ws)):
         session = WsSession()
         await session.connect(get_token=AsyncMock(return_value="tok"))
         await session.close()
@@ -112,7 +117,7 @@ async def test_messages_received_counter_increments():
     ]
     fake = make_fake_ws(frames)
 
-    with patch("trader.md.ws_client.websockets.connect", return_value=fake):
+    with patch("trader.md.ws_client.websockets.connect", AsyncMock(return_value=fake)):
         session = WsSession()
         await session.connect(get_token=AsyncMock(return_value="tok"))
         # Drain the data queue
