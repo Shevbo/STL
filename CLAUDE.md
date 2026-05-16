@@ -27,8 +27,8 @@ poetry run ruff check trader/ tests/                # lint
 |---|---|---|---|
 | M0 Auth | trader/auth/ | Stage 2 | ✅ |
 | M10 Config | trader/config.py | Stage 1 | ✅ |
-| M4 Instrument Registry | trader/registry/ | Stage 3 | 🔲 |
-| M1 Market Data | trader/md/ | Stage 4 | 🔲 |
+| M4 Instrument Registry | trader/registry/ | Stage 3 | ✅ |
+| M1 Market Data | trader/md/ | Stage 4 | ✅ |
 | M2 TX Adapter | trader/tx/ | Stage 5 | 🔲 |
 | M3 OMS Core | trader/oms/ | Stage 5 | 🔲 |
 | M5 Positions | trader/positions/ | Stage 6 | 🔲 |
