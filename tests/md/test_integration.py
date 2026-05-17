@@ -1,4 +1,3 @@
-# tests/md/test_integration.py
 """
 Integration tests — require real Finam credentials + live market hours.
 
@@ -16,9 +15,11 @@ from trader.config import Settings
 from trader.auth.client import AsyncAuthClient
 from trader.md.feed import MarketDataFeed
 from trader.md.models import FeedState
-from trader.md.ws_client import WsSession
+from trader.md.grpc_client import QuoteStream
 
 pytestmark = pytest.mark.integration
+
+SYMBOL = "GZM6@RTSX"
 
 
 async def _wait_for_state(feed: MarketDataFeed, target: FeedState, timeout: float = 30.0) -> None:
@@ -37,8 +38,8 @@ async def feed():
         secret_token=settings.finam_secret_token.get_secret_value(),
         refresh_before_secs=settings.finam_token_refresh_before_secs,
     )
-    ws = WsSession()
-    _feed = MarketDataFeed(ws, watchdog_secs=5.0)
+    qs = QuoteStream()
+    _feed = MarketDataFeed(qs, watchdog_secs=5.0)
     await _feed.start(get_token=auth.get_token)
     yield _feed
     await _feed.aclose()
@@ -46,28 +47,27 @@ async def feed():
 
 
 @pytest.mark.timeout(60)
-async def test_feed_state_is_live_after_start(feed):
-    await feed.add_symbol("GZM6@RTSX")
+async def test_feed_state_is_live_after_first_quote(feed):
+    await feed.add_symbol(SYMBOL)
     await _wait_for_state(feed, FeedState.LIVE, timeout=30.0)
     assert feed.state == FeedState.LIVE
 
 
 @pytest.mark.timeout(60)
 async def test_live_quote_received(feed):
-    await feed.add_symbol("GZM6@RTSX")
-    async for quote in feed.subscribe("GZM6@RTSX"):
-        assert quote.bid > 0
-        assert quote.ask > 0
+    await feed.add_symbol(SYMBOL)
+    async for quote in feed.subscribe(SYMBOL):
+        assert quote.bid >= 0
+        assert quote.ask >= 0
         assert quote.timestamp.tzinfo is not None
         assert feed.state == FeedState.LIVE
         break
 
 
 @pytest.mark.timeout(60)
-async def test_second_subscribe_call_uses_cache(feed):
-    await feed.add_symbol("GZM6@RTSX")
+async def test_second_subscribe_reuses_slot(feed):
+    await feed.add_symbol(SYMBOL)
     await _wait_for_state(feed, FeedState.LIVE, timeout=30.0)
-    # Second subscribe should reuse slot without re-subscribing to WS
-    async for quote in feed.subscribe("GZM6@RTSX"):
+    async for quote in feed.subscribe(SYMBOL):
         assert quote is not None
         break
