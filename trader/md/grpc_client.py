@@ -1,7 +1,4 @@
-import asyncio
 import random
-import sys
-from collections.abc import AsyncIterator, Callable, Awaitable
 from datetime import timezone
 
 import grpc
@@ -9,7 +6,9 @@ import grpc.aio
 import structlog
 
 # Bootstrap grpc namespace so generated stubs are importable as grpc.tradeapi.*
-_GEN_GRPC = str(__import__('pathlib').Path(__file__).parent.parent / "proto" / "gen" / "grpc")
+_GEN_GRPC = str(
+    __import__("pathlib").Path(__file__).parent.parent / "proto" / "gen" / "grpc"
+)
 if _GEN_GRPC not in grpc.__path__:
     grpc.__path__.append(_GEN_GRPC)
 
@@ -30,7 +29,7 @@ _SENTINEL = object()
 
 
 def _backoff(attempt: int) -> float:
-    return random.uniform(0, min(RECONNECT_BASE * (2 ** attempt), RECONNECT_MAX))
+    return random.uniform(0, min(RECONNECT_BASE * (2**attempt), RECONNECT_MAX))
 
 
 def quote_from_proto(pb) -> dict:

@@ -1,20 +1,28 @@
 # tests/md/test_grpc_client.py
 """Unit tests for grpc_client — quote_from_proto and QuoteStream."""
+
 import sys
+
 sys.path.insert(0, "trader/proto/gen")
 
 from datetime import datetime, timezone
 from decimal import Decimal
 
-import pytest
 
 from trader.md.grpc_client import quote_from_proto
 from trader.md.models import Quote
 
 
-def _make_pb_quote(symbol="GZM6@RTSX", bid="100.5", ask="100.6",
-                   last="100.55", bid_size="10", ask_size="5", last_size="3",
-                   ts_sec=1_716_000_000):
+def _make_pb_quote(
+    symbol="GZM6@RTSX",
+    bid="100.5",
+    ask="100.6",
+    last="100.55",
+    bid_size="10",
+    ask_size="5",
+    last_size="3",
+    ts_sec=1_716_000_000,
+):
     """Build a real proto Quote object."""
     from grpc.tradeapi.v1.marketdata import marketdata_service_pb2 as md_pb2
     from google.protobuf import timestamp_pb2
@@ -25,6 +33,7 @@ def _make_pb_quote(symbol="GZM6@RTSX", bid="100.5", ask="100.6",
 
     def _dec(v):
         from google.type import decimal_pb2
+
         d = decimal_pb2.Decimal()
         d.value = v
         return d
@@ -76,6 +85,7 @@ def test_quote_from_proto_empty_decimal_becomes_zero():
     """Empty decimal (no bid on market) maps to '0', not crash."""
     from grpc.tradeapi.v1.marketdata import marketdata_service_pb2 as md_pb2
     from google.protobuf import timestamp_pb2
+
     pb = md_pb2.Quote()
     pb.symbol = "X"
     pb.timestamp.CopyFrom(timestamp_pb2.Timestamp(seconds=1_716_000_000))
