@@ -47,3 +47,34 @@ async def test_expired_token_triggers_refresh(auth_client, expired_token):
 
     mock_fetch.assert_called_once()
     assert token == "new_jwt_xyz"
+
+
+async def test_get_token_force_refresh_bypasses_cache(respx_mock):
+    """force_refresh=True must re-fetch even if token is not expired."""
+    import httpx
+
+    respx_mock.post("https://api.finam.ru/v1/sessions").mock(
+        return_value=httpx.Response(200, json={"token": "fresh_tok"})
+    )
+    respx_mock.post("https://api.finam.ru/v1/sessions/details").mock(
+        return_value=httpx.Response(
+            200,
+            json={"expires_at": "2099-01-01T00:00:00Z"},
+        )
+    )
+    client = AsyncAuthClient(
+        base_url="https://api.finam.ru",
+        secret_token="sec",
+    )
+    # Prime the cache with a non-expired token
+    await client.get_token()
+    # Second call: force_refresh must bypass the cache and re-fetch
+    respx_mock.post("https://api.finam.ru/v1/sessions").mock(
+        return_value=httpx.Response(200, json={"token": "second_tok"})
+    )
+    respx_mock.post("https://api.finam.ru/v1/sessions/details").mock(
+        return_value=httpx.Response(200, json={"expires_at": "2099-01-01T00:00:00Z"})
+    )
+    tok = await client.get_token(force_refresh=True)
+    assert tok == "second_tok"
+    await client.aclose()

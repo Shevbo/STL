@@ -19,8 +19,12 @@ class AsyncAuthClient:
         self._cached_token: TokenResponse | None = None
         self._http = httpx.AsyncClient(http2=True, base_url=base_url)
 
-    async def get_token(self) -> str:
-        if self._cached_token and not self._cached_token.is_expired(self._refresh_before_secs):
+    async def get_token(self, force_refresh: bool = False) -> str:
+        if (
+            not force_refresh
+            and self._cached_token
+            and not self._cached_token.is_expired(self._refresh_before_secs)
+        ):
             return self._cached_token.access_token
         self._cached_token = await self._fetch_token()
         return self._cached_token.access_token
