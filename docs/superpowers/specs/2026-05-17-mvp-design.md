@@ -91,7 +91,7 @@ class MarketDataSource(Protocol):
 ### 3.2 feed.py changes
 
 - `MarketDataFeed.__init__(self, qs: MarketDataSource, ...)` — rename `ws` → `qs`
-- `start()`: `await self._qs.start(get_token)` then `await self._qs.subscribe(symbol)` per active symbol — no `on_reconnect` callback (reconnect is internal to QuoteStream)
+- `start()`: `await self._qs.start(get_token)` only — no subscribe here (active_symbols is empty at start). Symbols added via `add_symbol()` after start.
 - `add_symbol()`: `await self._qs.subscribe(symbol)` — auto-reconnects internally
 - `aclose()`: `await self._qs.close()` — no `code=1000` arg
 - Remove `_resubscribe_all()` entirely

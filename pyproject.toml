@@ -10,8 +10,6 @@ python = "^3.12"
 httpx = {extras = ["http2"], version = "^0.27"}
 pydantic-settings = "^2.3"
 structlog = "^24.4"
-websockets = "^13.1"
-orjson = "^3.10"
 grpcio = ">=1.63,<2"
 protobuf = ">=5.26,<6"
 googleapis-common-protos = ">=1.63"
