@@ -1,11 +1,9 @@
 import asyncio
 from collections.abc import AsyncIterator, Callable, Awaitable
 
-import orjson
 import structlog
 
 from trader.md.models import FeedState, Quote
-from trader.md.ws_client import WsSession
 
 log = structlog.get_logger()
 
@@ -28,11 +26,11 @@ class QuoteState:
 class MarketDataFeed:
     def __init__(
         self,
-        ws: WsSession,
+        qs,  # QuoteStream — typed loosely to avoid circular import
         watchdog_secs: float = 5.0,
         on_raw: Callable[[dict], None] | None = None,
     ) -> None:
-        self._ws = ws
+        self._qs = qs
         self._watchdog_secs = watchdog_secs
         self._on_raw = on_raw
         self._slots: dict[str, QuoteState] = {}
@@ -49,10 +47,7 @@ class MarketDataFeed:
 
     async def start(self, get_token: Callable[[], Awaitable[str]]) -> None:
         self._running = True
-        await self._ws.connect(
-            get_token=get_token,
-            on_reconnect=self._resubscribe_all,
-        )
+        await self._qs.start(get_token=get_token)
         self._reader_task = asyncio.create_task(self._reader())
         self._watchdog_task = asyncio.create_task(self._watchdog())
 
@@ -61,7 +56,7 @@ class MarketDataFeed:
             self._slots[symbol] = QuoteState()
         if symbol not in self._active_symbols:
             self._active_symbols.add(symbol)
-            await self._ws.subscribe(symbol)
+            await self._qs.subscribe(symbol)
 
     def latest(self, symbol: str) -> Quote | None:
         slot = self._slots.get(symbol)
@@ -85,7 +80,7 @@ class MarketDataFeed:
 
     async def _reader(self) -> None:
         try:
-            async for raw in self._ws.iter_quotes():
+            async for raw in self._qs.iter_quotes():
                 if self._on_raw:
                     try:
                         self._on_raw(raw)
@@ -136,15 +131,11 @@ class MarketDataFeed:
                     self._state = FeedState.STALE
                     log.warning("md.watchdog.stale")
 
-    async def _resubscribe_all(self) -> None:
-        for symbol in self._active_symbols:
-            await self._ws.subscribe(symbol)
-
     async def aclose(self) -> None:
         self._running = False
         if self._watchdog_task:
             self._watchdog_task.cancel()
-        await self._ws.close(code=1000)
+        await self._qs.close()
         if self._reader_task:
             try:
                 await asyncio.wait_for(self._reader_task, timeout=2.0)

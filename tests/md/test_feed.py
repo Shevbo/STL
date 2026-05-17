@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock
 
 from trader.md.feed import MarketDataFeed
 from trader.md.models import FeedState, Quote
-from trader.md.ws_client import WsSession
 
 
 def make_quote(symbol: str = "GZM6@RTSX", bid: str = "100.0", offset_sec: int = 0) -> Quote:
@@ -21,12 +20,11 @@ def make_quote(symbol: str = "GZM6@RTSX", bid: str = "100.0", offset_sec: int = 
     )
 
 
-def make_mock_ws(quote_frames: list[dict] | None = None) -> WsSession:
-    ws = AsyncMock(spec=WsSession)
-    ws.connected = True
-    ws.connect = AsyncMock()
-    ws.subscribe = AsyncMock()
-    ws.close = AsyncMock()
+def make_mock_qs(quote_frames: list[dict] | None = None):
+    qs = AsyncMock()
+    qs.start = AsyncMock()
+    qs.subscribe = AsyncMock()
+    qs.close = AsyncMock()
 
     frames = quote_frames or []
 
@@ -35,15 +33,15 @@ def make_mock_ws(quote_frames: list[dict] | None = None) -> WsSession:
             yield f
         await asyncio.sleep(9999)  # block — feed will be closed externally
 
-    ws.iter_quotes = fake_iter_quotes
-    return ws
+    qs.iter_quotes = fake_iter_quotes
+    return qs
 
 
 # --- latest() ---
 
 async def test_latest_returns_none_before_first_tick():
-    ws = make_mock_ws()
-    feed = MarketDataFeed(ws, watchdog_secs=5.0)
+    qs = make_mock_qs()
+    feed = MarketDataFeed(qs, watchdog_secs=5.0)
     await feed.start(get_token=AsyncMock(return_value="tok"))
     assert feed.latest("GZM6@RTSX") is None
     await feed.aclose()
@@ -59,8 +57,8 @@ async def test_latest_returns_quote_after_tick():
         "last": str(q.last), "last_size": q.last_size,
         "timestamp": q.timestamp.isoformat().replace("+00:00", "Z"),
     }
-    ws = make_mock_ws([frame])
-    feed = MarketDataFeed(ws, watchdog_secs=5.0)
+    qs = make_mock_qs([frame])
+    feed = MarketDataFeed(qs, watchdog_secs=5.0)
     await feed.start(get_token=AsyncMock(return_value="tok"))
     await feed.add_symbol("GZM6@RTSX")  # slot must exist before reader processes frame
     await asyncio.sleep(0.05)
@@ -73,8 +71,8 @@ async def test_latest_returns_quote_after_tick():
 # --- state ---
 
 async def test_initial_state_is_connecting():
-    ws = make_mock_ws()
-    feed = MarketDataFeed(ws, watchdog_secs=5.0)
+    qs = make_mock_qs()
+    feed = MarketDataFeed(qs, watchdog_secs=5.0)
     assert feed.state == FeedState.CONNECTING
 
 
@@ -87,8 +85,8 @@ async def test_state_becomes_live_after_first_quote():
         "last": str(q.last), "last_size": q.last_size,
         "timestamp": q.timestamp.isoformat().replace("+00:00", "Z"),
     }
-    ws = make_mock_ws([frame])
-    feed = MarketDataFeed(ws, watchdog_secs=5.0)
+    qs = make_mock_qs([frame])
+    feed = MarketDataFeed(qs, watchdog_secs=5.0)
     await feed.start(get_token=AsyncMock(return_value="tok"))
     await feed.add_symbol("GZM6@RTSX")  # slot must exist before reader processes frame
     await asyncio.sleep(0.05)
@@ -112,8 +110,8 @@ async def test_subscribe_conflation_slow_consumer():
             "timestamp": ts,
         })
 
-    ws = make_mock_ws(quotes)
-    feed = MarketDataFeed(ws, watchdog_secs=5.0)
+    qs = make_mock_qs(quotes)
+    feed = MarketDataFeed(qs, watchdog_secs=5.0)
     await feed.start(get_token=AsyncMock(return_value="tok"))
     await feed.add_symbol("GZM6@RTSX")  # slot must exist before reader processes frames
 
@@ -133,8 +131,8 @@ async def test_subscribe_conflation_slow_consumer():
 
 async def test_subscribe_break_no_hang():
     """Breaking out of subscribe() should not hang or raise."""
-    ws = make_mock_ws()
-    feed = MarketDataFeed(ws, watchdog_secs=5.0)
+    qs = make_mock_qs()
+    feed = MarketDataFeed(qs, watchdog_secs=5.0)
     await feed.start(get_token=AsyncMock(return_value="tok"))
 
     # add_symbol + immediately break before any quote arrives
@@ -160,8 +158,8 @@ async def test_subscribe_break_no_hang():
 # --- Watchdog ---
 
 async def test_watchdog_transitions_to_stale_on_timeout():
-    ws = make_mock_ws()  # no quotes → heartbeat never fires
-    feed = MarketDataFeed(ws, watchdog_secs=0.05)  # very short timeout for test
+    qs = make_mock_qs()  # no quotes → heartbeat never fires
+    feed = MarketDataFeed(qs, watchdog_secs=0.05)  # very short timeout for test
     await feed.start(get_token=AsyncMock(return_value="tok"))
     # Fake LIVE state so watchdog has something to degrade
     feed._state = FeedState.LIVE
@@ -171,8 +169,8 @@ async def test_watchdog_transitions_to_stale_on_timeout():
 
 
 async def test_watchdog_recovers_to_live_on_heartbeat():
-    ws = make_mock_ws()
-    feed = MarketDataFeed(ws, watchdog_secs=0.05)
+    qs = make_mock_qs()
+    feed = MarketDataFeed(qs, watchdog_secs=0.05)
     await feed.start(get_token=AsyncMock(return_value="tok"))
     feed._state = FeedState.LIVE
     await asyncio.sleep(0.1)  # → STALE (at least one timeout cycle)
@@ -188,8 +186,8 @@ async def test_watchdog_recovers_to_live_on_heartbeat():
 # --- aclose ---
 
 async def test_aclose_sets_state_closed():
-    ws = make_mock_ws()
-    feed = MarketDataFeed(ws, watchdog_secs=5.0)
+    qs = make_mock_qs()
+    feed = MarketDataFeed(qs, watchdog_secs=5.0)
     await feed.start(get_token=AsyncMock(return_value="tok"))
     await feed.aclose()
     assert feed.state == FeedState.CLOSED
@@ -197,8 +195,8 @@ async def test_aclose_sets_state_closed():
 
 async def test_aclose_wakes_subscribe_iterators():
     """aclose() while a consumer is blocked in subscribe() → iterator exits."""
-    ws = make_mock_ws()
-    feed = MarketDataFeed(ws, watchdog_secs=5.0)
+    qs = make_mock_qs()
+    feed = MarketDataFeed(qs, watchdog_secs=5.0)
     await feed.start(get_token=AsyncMock(return_value="tok"))
     await feed.add_symbol("GZM6@RTSX")
 
@@ -218,8 +216,8 @@ async def test_aclose_wakes_subscribe_iterators():
 
 async def test_aclose_then_subscribe_does_not_hang():
     """After aclose(), subscribe() must exit immediately (slot._closed = True)."""
-    ws = make_mock_ws()
-    feed = MarketDataFeed(ws, watchdog_secs=5.0)
+    qs = make_mock_qs()
+    feed = MarketDataFeed(qs, watchdog_secs=5.0)
     await feed.start(get_token=AsyncMock(return_value="tok"))
     await feed.aclose()
 
