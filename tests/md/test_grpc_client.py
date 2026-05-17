@@ -107,3 +107,129 @@ def test_quote_from_proto_is_parseable_by_from_payload():
     assert quote.ask_size == 5
     assert quote.last_size == 3
     assert quote.timestamp.tzinfo is not None
+
+
+# --- QuoteStream unit tests ---
+
+import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
+
+
+def _make_subscribe_response(quotes_data: list[dict]):
+    """Build a SubscribeQuoteResponse proto with Quote list."""
+    from grpc.tradeapi.v1.marketdata import marketdata_service_pb2 as md_pb2
+    resp = md_pb2.SubscribeQuoteResponse()
+    for d in quotes_data:
+        pb_q = _make_pb_quote(**d)
+        resp.quote.append(pb_q)
+    return resp
+
+
+def _make_error_response(code: int, description: str):
+    from grpc.tradeapi.v1.marketdata import marketdata_service_pb2 as md_pb2
+    resp = md_pb2.SubscribeQuoteResponse()
+    resp.error.code = code
+    resp.error.description = description
+    return resp
+
+
+def _make_stub(responses: list, *, raise_after: Exception | None = None):
+    """Return a fake stub whose SubscribeQuote is an async generator."""
+    stub = MagicMock()
+
+    async def _gen(*args, **kwargs):
+        for r in responses:
+            yield r
+        if raise_after:
+            raise raise_after
+        # else: clean exit (simulates server closing stream)
+
+    stub.SubscribeQuote = MagicMock(return_value=_gen())
+    return stub
+
+
+async def test_subscribe_starts_task_and_quotes_appear_in_iter_quotes():
+    from trader.md.grpc_client import QuoteStream
+
+    resp = _make_subscribe_response([{}])  # one quote with defaults
+
+    qs = QuoteStream()
+    await qs.start(get_token=AsyncMock(return_value="tok"))
+
+    stub = _make_stub([resp])
+
+    with (
+        patch("trader.md.grpc_client.grpc.ssl_channel_credentials"),
+        patch("trader.md.grpc_client.grpc.aio.secure_channel", return_value=AsyncMock()),
+        patch("trader.md.grpc_client.MarketDataServiceStub", return_value=stub),
+    ):
+        await qs.subscribe("GZM6@RTSX")
+        await asyncio.sleep(0.05)
+
+        received = []
+        async for raw in qs.iter_quotes():
+            received.append(raw)
+            break
+
+    await qs.close()
+    assert len(received) == 1
+    assert received[0]["symbol"] == "GZM6@RTSX"
+
+
+async def test_stream_error_in_payload_is_skipped():
+    """StreamError in response body is logged and skipped — does not raise."""
+    from trader.md.grpc_client import QuoteStream
+
+    err_resp = _make_error_response(code=503, description="service unavailable")
+    quote_resp = _make_subscribe_response([{}])
+
+    qs = QuoteStream()
+    await qs.start(get_token=AsyncMock(return_value="tok"))
+
+    stub = _make_stub([err_resp, quote_resp])
+
+    with (
+        patch("trader.md.grpc_client.grpc.ssl_channel_credentials"),
+        patch("trader.md.grpc_client.grpc.aio.secure_channel", return_value=AsyncMock()),
+        patch("trader.md.grpc_client.MarketDataServiceStub", return_value=stub),
+    ):
+        await qs.subscribe("GZM6@RTSX")
+        await asyncio.sleep(0.05)
+        received = []
+        async for raw in qs.iter_quotes():
+            received.append(raw)
+            break
+
+    await qs.close()
+    # Must have received the valid quote (error response was skipped)
+    assert len(received) == 1
+
+
+async def test_backoff_cap_never_exceeds_reconnect_max():
+    from trader.md.grpc_client import RECONNECT_BASE, RECONNECT_MAX, _backoff
+
+    for attempt in range(100):
+        delay = _backoff(attempt)
+        assert delay <= RECONNECT_MAX, f"attempt {attempt}: delay {delay} > {RECONNECT_MAX}"
+
+
+async def test_close_drains_sentinel_so_iter_quotes_exits():
+    """close() must unblock an in-progress iter_quotes() call."""
+    from trader.md.grpc_client import QuoteStream
+
+    qs = QuoteStream()
+    await qs.start(get_token=AsyncMock(return_value="tok"))
+
+    # No subscribe — just test that close() sends sentinel
+    exited = asyncio.Event()
+
+    async def _consume():
+        async for _ in qs.iter_quotes():
+            pass
+        exited.set()
+
+    task = asyncio.create_task(_consume())
+    await asyncio.sleep(0.01)
+    await qs.close()
+    await asyncio.wait_for(exited.wait(), timeout=2.0)
+    task.cancel()
