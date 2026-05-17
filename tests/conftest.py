@@ -1,9 +1,17 @@
 # tests/conftest.py
+import sys
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
+import grpc as _grpc
 import pytest
 
 from trader.auth.models import TokenResponse
+
+# Extend the grpc package path so generated stubs are importable as grpc.tradeapi.*
+_GEN_GRPC = str(Path(__file__).parent.parent / "trader" / "proto" / "gen" / "grpc")
+if _GEN_GRPC not in _grpc.__path__:
+    _grpc.__path__.append(_GEN_GRPC)
 
 
 @pytest.fixture
