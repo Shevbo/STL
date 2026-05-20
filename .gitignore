@@ -21,8 +21,7 @@ frontend/mock/venv/
 # Poetry
 poetry.lock
 
-# Generated proto stubs
-trader/proto/gen/
+# Proto stubs are committed (grpcio-tools needed to regenerate)
 
 # Claude Code local settings (machine-specific)
 .claude/settings.local.json
