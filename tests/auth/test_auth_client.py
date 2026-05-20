@@ -78,3 +78,36 @@ async def test_get_token_force_refresh_bypasses_cache(respx_mock):
     tok = await client.get_token(force_refresh=True)
     assert tok == "second_tok"
     await client.aclose()
+
+
+async def test_fetch_token_extracts_account_id_from_account_ids(respx_mock):
+    import httpx
+
+    respx_mock.post("https://api.finam.ru/v1/sessions").mock(
+        return_value=httpx.Response(200, json={"token": "tok"})
+    )
+    respx_mock.post("https://api.finam.ru/v1/sessions/details").mock(
+        return_value=httpx.Response(200, json={
+            "expires_at": "2099-01-01T00:00:00Z",
+            "account_ids": ["2035452"],
+        })
+    )
+    client = AsyncAuthClient(base_url="https://api.finam.ru", secret_token="sec")
+    await client.get_token()
+    assert client.account_id == "2035452"
+    await client.aclose()
+
+
+async def test_account_id_empty_when_not_in_details(respx_mock):
+    import httpx
+
+    respx_mock.post("https://api.finam.ru/v1/sessions").mock(
+        return_value=httpx.Response(200, json={"token": "tok"})
+    )
+    respx_mock.post("https://api.finam.ru/v1/sessions/details").mock(
+        return_value=httpx.Response(200, json={"expires_at": "2099-01-01T00:00:00Z"})
+    )
+    client = AsyncAuthClient(base_url="https://api.finam.ru", secret_token="sec")
+    await client.get_token()
+    assert client.account_id == ""
+    await client.aclose()

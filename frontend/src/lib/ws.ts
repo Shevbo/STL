@@ -4,6 +4,9 @@ import { quotesStore } from './stores/quotes.svelte';
 import { servicesStore } from './stores/services.svelte';
 import { accountStore } from './stores/account.svelte';
 import { robotsStore } from './stores/robots.svelte';
+import { positionsStore } from './stores/positions.svelte';
+import { candlesStore } from './stores/candles.svelte';
+import { orderbookStore } from './stores/orderbook.svelte';
 
 export class WsClient {
   private ws: WebSocket | null = null;
@@ -51,6 +54,17 @@ export class WsClient {
         });
       } else if (msg.type === 'robot_update') {
         robotsStore.set(msg.robots);
+      } else if (msg.type === 'position_update') {
+        positionsStore.set(msg.positions);
+      } else if (msg.type === 'ohlc_history') {
+        candlesStore.setHistory(msg.symbol, msg.bars);
+      } else if (msg.type === 'ohlc_update') {
+        candlesStore.upsertBar(msg.symbol, {
+          time: msg.time, open: msg.open, high: msg.high,
+          low: msg.low, close: msg.close, volume: msg.volume,
+        });
+      } else if (msg.type === 'orderbook') {
+        orderbookStore.set(msg.symbol, { bids: msg.bids, asks: msg.asks });
       }
     }
   }

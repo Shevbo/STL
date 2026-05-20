@@ -9,14 +9,16 @@
 
   let robots = $derived(robotsStore.all);
 
-  function fmtPnl(pnl: number): string {
-    const sign = pnl >= 0 ? '+' : '';
-    return `${sign}${pnl.toLocaleString('ru-RU', { maximumFractionDigits: 0 })} ₽`;
+  function fmtPnl(pnl: number | undefined): string {
+    const v = pnl ?? 0;
+    const sign = v >= 0 ? '+' : '';
+    return `${sign}${v.toLocaleString('ru-RU', { maximumFractionDigits: 0 })} ₽`;
   }
 
-  function posLabel(pos: number): string {
-    if (pos === 0) return 'Flat';
-    return pos > 0 ? `↑${pos}` : `↓${Math.abs(pos)}`;
+  function posLabel(pos: number | undefined): string {
+    const p = pos ?? 0;
+    if (p === 0) return 'Flat';
+    return p > 0 ? `↑${p}` : `↓${Math.abs(p)}`;
   }
 </script>
 

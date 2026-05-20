@@ -23,3 +23,15 @@ poetry.lock
 
 # Generated proto stubs
 trader/proto/gen/
+
+# Claude Code local settings (machine-specific)
+.claude/settings.local.json
+
+# Playwright MCP local state
+.playwright-mcp/
+
+# Debug screenshots
+*.png
+
+# Root npm lockfile (accidental)
+/package-lock.json

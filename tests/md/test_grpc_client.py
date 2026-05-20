@@ -1,13 +1,13 @@
 # tests/md/test_grpc_client.py
 """Unit tests for grpc_client — quote_from_proto and QuoteStream."""
 
+import asyncio
 import sys
-
-sys.path.insert(0, "trader/proto/gen")
-
 from datetime import datetime, timezone
 from decimal import Decimal
+from unittest.mock import AsyncMock, MagicMock, patch
 
+sys.path.insert(0, "trader/proto/gen")
 
 from trader.md.grpc_client import quote_from_proto
 from trader.md.models import Quote
@@ -111,9 +111,6 @@ def test_quote_from_proto_is_parseable_by_from_payload():
 
 # --- QuoteStream unit tests ---
 
-import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
-
 
 def _make_subscribe_response(quotes_data: list[dict]):
     """Build a SubscribeQuoteResponse proto with Quote list."""
@@ -206,7 +203,7 @@ async def test_stream_error_in_payload_is_skipped():
 
 
 async def test_backoff_cap_never_exceeds_reconnect_max():
-    from trader.md.grpc_client import RECONNECT_BASE, RECONNECT_MAX, _backoff
+    from trader.md.grpc_client import RECONNECT_MAX, _backoff
 
     for attempt in range(100):
         delay = _backoff(attempt)

@@ -33,9 +33,7 @@
 
 <style>
   .instrument-panel {
-    width: 180px; flex-shrink: 0;
-    background: #14142a; border-left: 1px solid #2d2d4a;
-    padding: 12px 10px; font-size: 12px; overflow-y: auto;
+    padding: 12px 10px; font-size: 12px;
   }
   .title { font-weight: 600; color: #ddd; margin-bottom: 12px; font-size: 13px; }
   .section { margin-bottom: 10px; }

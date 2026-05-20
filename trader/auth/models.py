@@ -6,6 +6,7 @@ from pydantic import BaseModel
 class TokenResponse(BaseModel):
     token: str
     expires_at: datetime
+    account_id: str = ""
 
     @property
     def access_token(self) -> str:

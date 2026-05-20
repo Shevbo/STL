@@ -1,0 +1,21 @@
+[Unit]
+Description=Shectory Trader API (FastAPI + uvicorn)
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/apps/shectory-trader
+
+# pydantic-settings loads ~/.shectory_trade.env automatically
+ExecStart=/bin/bash -c 'exec $(/home/ubuntu/.local/bin/poetry env info --path)/bin/uvicorn trader.api.app:app --host 127.0.0.1 --port 8000 --workers 1'
+
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=shectory-trader
+
+[Install]
+WantedBy=multi-user.target

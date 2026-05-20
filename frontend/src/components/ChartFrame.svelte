@@ -1,15 +1,14 @@
 <!-- frontend/src/components/ChartFrame.svelte -->
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
+  import { candlesStore } from '$lib/stores/candles.svelte';
   import { quotesStore } from '$lib/stores/quotes.svelte';
-  import type { OhlcBar, TradeMarker, BacktestResult } from '$lib/types';
+  import type { TradeMarker } from '$lib/types';
 
-  let { robotName, symbol, ohlc = [], markers = [], backtest = null }: {
+  let { robotName, symbol, markers = [] }: {
     robotName: string;
     symbol: string;
-    ohlc?: OhlcBar[];
     markers?: TradeMarker[];
-    backtest?: BacktestResult | null;
   } = $props();
 
   let tickEl: HTMLDivElement;
@@ -26,10 +25,11 @@
   let tvChart: any = null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let tvCandle: any = null;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let tvEquity: any = null;
 
+  let ohlc = $derived(candlesStore.get(symbol));
   let quote = $derived(quotesStore.get(symbol));
+
+  let lastOhlcLen = 0;
 
   $effect(() => {
     if (!quote || !uplotInst) return;
@@ -45,24 +45,25 @@
 
   $effect(() => {
     if (!tvCandle || !ohlc.length) return;
-    tvCandle.setData(ohlc.map((b: OhlcBar) => ({
-      time: b.time, open: b.open, high: b.high, low: b.low, close: b.close,
-    })));
+    const bars = ohlc.map(b => ({
+      time: b.time as number,
+      open: b.open as number,
+      high: b.high as number,
+      low: b.low as number,
+      close: b.close as number,
+    }));
+    if (ohlc.length !== lastOhlcLen) {
+      tvCandle.setData(bars);
+      lastOhlcLen = ohlc.length;
+      tvChart.timeScale().fitContent();
+    } else {
+      tvCandle.update(bars[bars.length - 1]);
+    }
   });
 
   $effect(() => {
     if (!tvCandle) return;
     tvCandle.setMarkers(markers);
-  });
-
-  $effect(() => {
-    if (!tvEquity) return;
-    if (backtest?.equityCurve.length) {
-      tvEquity.setData(backtest.equityCurve);
-      tvEquity.applyOptions({ visible: true });
-    } else {
-      tvEquity.applyOptions({ visible: false });
-    }
   });
 
   const TICK_H = 80;
@@ -88,7 +89,7 @@
       tickEl,
     );
 
-    const { createChart, CandlestickSeries, LineSeries } = await import('lightweight-charts');
+    const { createChart } = await import('lightweight-charts');
     const chartH = Math.max((ohlcEl.clientHeight || 320) - TICK_H, 100);
     tvChart = createChart(ohlcEl, {
       width: ohlcEl.clientWidth || 400,
@@ -98,14 +99,34 @@
       timeScale: { borderColor: '#2d2d4a' },
       crosshair: { mode: 1 },
     });
-    tvCandle = tvChart.addSeries(CandlestickSeries, {
+    tvCandle = tvChart.addCandlestickSeries({
       upColor: '#4caf50', downColor: '#f44336',
       borderUpColor: '#4caf50', borderDownColor: '#f44336',
       wickUpColor: '#4caf50', wickDownColor: '#f44336',
     });
-    tvEquity = tvChart.addSeries(LineSeries, {
-      color: '#3d5af1', lineWidth: 1, visible: false,
+
+    const initial = candlesStore.get(symbol);
+    if (initial.length) {
+      const bars = initial.map(b => ({
+        time: b.time as number,
+        open: b.open as number,
+        high: b.high as number,
+        low: b.low as number,
+        close: b.close as number,
+      }));
+      tvCandle.setData(bars);
+      lastOhlcLen = initial.length;
+      tvChart.timeScale().fitContent();
+    }
+
+    const ro = new ResizeObserver(() => {
+      if (!tvChart) return;
+      tvChart.applyOptions({
+        width: ohlcEl.clientWidth,
+        height: Math.max(ohlcEl.clientHeight - TICK_H, 100),
+      });
     });
+    ro.observe(ohlcEl);
   });
 
   onDestroy(() => {

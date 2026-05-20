@@ -1,5 +1,5 @@
 # tests/md/test_models.py
-from datetime import datetime, timezone
+from datetime import timezone
 from decimal import Decimal, InvalidOperation
 
 import pytest

@@ -29,6 +29,10 @@ class AsyncAuthClient:
         self._cached_token = await self._fetch_token()
         return self._cached_token.access_token
 
+    @property
+    def account_id(self) -> str:
+        return self._cached_token.account_id if self._cached_token else ""
+
     async def _fetch_token(self) -> TokenResponse:
         log.info("auth.fetch_token", base_url=self._base_url)
         response = await self._http.post(
@@ -40,10 +44,17 @@ class AsyncAuthClient:
 
         details = await self._http.post(_DETAILS_PATH, json={"token": access_token})
         details.raise_for_status()
+        details_json = details.json()
         expires_at = datetime.fromisoformat(
-            details.json()["expires_at"].replace("Z", "+00:00")
+            details_json["expires_at"].replace("Z", "+00:00")
         )
-        return TokenResponse(token=access_token, expires_at=expires_at)
+        account_ids = details_json.get("account_ids", [])
+        account_id = account_ids[0] if account_ids else ""
+        if account_id:
+            log.info("auth.account_id_detected", account_id=account_id)
+        else:
+            log.warning("auth.account_id_not_found")
+        return TokenResponse(token=access_token, expires_at=expires_at, account_id=account_id)
 
     async def aclose(self):
         await self._http.aclose()

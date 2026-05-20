@@ -21,7 +21,7 @@
   },
   "dependencies": {
     "@monaco-editor/loader": "^1.4.0",
-    "lightweight-charts": "^4.2.0",
+    "lightweight-charts": "^4.2.3",
     "uplot": "^1.6.31"
   }
 }

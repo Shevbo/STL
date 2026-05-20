@@ -19,3 +19,7 @@ class Settings(BaseSettings):
     finam_account_id: str = ""
     finam_token_refresh_before_secs: int = 60
     finam_mvp_symbol: str = ""
+    shectory_portal_url: str = "https://shectory.ru"
+    shectory_auth_bridge_secret: str = ""
+    shectory_local_user_email: str = ""
+    shectory_local_user_password_sha256: str = ""

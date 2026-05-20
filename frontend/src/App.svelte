@@ -5,34 +5,71 @@
   import RobotsPanel from './components/RobotsPanel.svelte';
   import ChartFrame from './components/ChartFrame.svelte';
   import InstrumentPanel from './components/InstrumentPanel.svelte';
+  import OrderPanel from './components/OrderPanel.svelte';
+  import OrderConfirmDialog from './components/OrderConfirmDialog.svelte';
+  import PositionsTable from './components/PositionsTable.svelte';
+  import OrderBook from './components/OrderBook.svelte';
   import BottomBar from './components/BottomBar.svelte';
   import LabBar from './components/LabBar.svelte';
   import CodeEditor from './components/CodeEditor.svelte';
+  import LoginDialog from './components/LoginDialog.svelte';
   import { WsClient } from '$lib/ws';
   import { OfflinePlayer } from '$lib/offline-player';
   import { robotsStore } from '$lib/stores/robots.svelte';
-  import type { Strategy, BacktestResult } from '$lib/types';
+  import { quotesStore } from '$lib/stores/quotes.svelte';
+  import { positionsStore } from '$lib/stores/positions.svelte';
+  import { placeOrder } from '$lib/api';
+  import type { Strategy, BacktestResult, OrderRequest } from '$lib/types';
 
+  let authed = $state(false);
   let labMode = $state(false);
   let selectedRobotId = $state<string | null>(null);
   let backtestResult = $state<BacktestResult | null>(null);
   let editorPath = $state<string | null>(null);
   let events = $state<string[]>([]);
+  let pendingOrder = $state<OrderRequest | null>(null);
 
   let robots = $derived(robotsStore.all);
   let selectedRobot = $derived(robots.find(r => r.id === selectedRobotId) ?? robots[0] ?? null);
+  let positions = $derived(positionsStore.all);
+  let currentQuote = $derived(selectedRobot ? quotesStore.get(selectedRobot.symbol) : undefined);
 
   let ws: WsClient;
   let offlinePlayer: OfflinePlayer | null = null;
 
-  onMount(() => {
-    ws = new WsClient('ws://localhost:8000/ws');
+  function onLogin() {
+    authed = true;
+    startWs();
+  }
+
+  function startWs() {
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws = new WsClient(`${proto}//${window.location.host}/ws`);
     ws.connect();
+  }
+
+  onMount(async () => {
+    const res = await fetch('/api/auth/me');
+    if (res.ok) {
+      authed = true;
+      startWs();
+    }
   });
   onDestroy(() => {
     ws?.disconnect();
     offlinePlayer?.stop();
   });
+
+  async function handleConfirmOrder(order: OrderRequest): Promise<void> {
+    try {
+      const resp = await placeOrder(order);
+      events = [...events, `${new Date().toLocaleTimeString()} Заявка ${resp.order_id}: ${resp.status}`];
+    } catch (e) {
+      events = [...events, `${new Date().toLocaleTimeString()} Ошибка заявки: ${e}`];
+    } finally {
+      pendingOrder = null;
+    }
+  }
 
   async function handleRunBacktest(symbol: string, from: string, to: string, stratId: string): Promise<void> {
     const res = await fetch(`/api/backtest?symbol=${symbol}&from=${from}&to=${to}&strategy=${stratId}`);
@@ -95,26 +132,44 @@
   }
 </script>
 
+{#if !authed}
+  <LoginDialog {onLogin} />
+{:else}
 <div class="shell">
   <TopBar {labMode} onToggleLab={() => labMode = !labMode} />
   <div class="body">
     <RobotsPanel selectedId={selectedRobotId} onSelect={(id) => selectedRobotId = id} />
-    <main class="content">
-      {#each robots as robot (robot.id)}
-        <ChartFrame
-          robotName={robot.name}
-          symbol={robot.symbol}
-          backtest={robot.id === selectedRobot?.id ? backtestResult : null}
-        />
-      {/each}
-    </main>
-    <InstrumentPanel info={selectedRobot ? {
-      symbol: selectedRobot.symbol,
-      priceMin: 20_000,
-      priceMax: 30_000,
-      margin: 12_400,
-      expiration: '17.06.2026',
-    } : null} />
+    <div class="center-col">
+      <div class="chart-book-row">
+        <main class="content">
+          {#each robots as robot (robot.id)}
+            <ChartFrame
+              robotName={robot.name}
+              symbol={robot.symbol}
+              backtest={robot.id === selectedRobot?.id ? backtestResult : null}
+            />
+          {/each}
+        </main>
+        {#if selectedRobot}
+          <OrderBook symbol={selectedRobot.symbol} />
+        {/if}
+      </div>
+      <PositionsTable {positions} />
+    </div>
+    <div class="right-col">
+      <InstrumentPanel info={selectedRobot ? {
+        symbol: selectedRobot.symbol,
+        priceMin: 20_000,
+        priceMax: 30_000,
+        margin: 12_400,
+        expiration: '17.06.2026',
+      } : null} />
+      <OrderPanel
+        symbol={selectedRobot?.symbol ?? ''}
+        quote={currentQuote}
+        onSubmit={(order) => pendingOrder = order}
+      />
+    </div>
   </div>
   {#if labMode}
     <LabBar
@@ -134,10 +189,21 @@
       onClose={() => editorPath = null}
     />
   {/if}
+  {#if pendingOrder}
+    <OrderConfirmDialog
+      order={pendingOrder}
+      onConfirm={handleConfirmOrder}
+      onCancel={() => pendingOrder = null}
+    />
+  {/if}
 </div>
+{/if}
 
 <style>
   .shell { height: 100%; display: flex; flex-direction: column; }
   .body { flex: 1; display: flex; overflow: hidden; min-height: 0; }
-  .content { flex: 1; overflow-y: auto; background: #0f0f1e; display: flex; flex-direction: column; }
+  .center-col { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .chart-book-row { flex: 1; display: flex; min-height: 0; overflow: hidden; }
+  .content { flex: 1; overflow-y: auto; background: #0f0f1e; display: flex; flex-direction: column; min-width: 0; }
+  .right-col { width: 180px; flex-shrink: 0; background: #14142a; border-left: 1px solid #2d2d4a; display: flex; flex-direction: column; overflow-y: auto; }
 </style>
