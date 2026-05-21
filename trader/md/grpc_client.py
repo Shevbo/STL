@@ -175,7 +175,7 @@ class QuoteStream:
 
 
 class BarsStream:
-    """gRPC streaming client for 5-min (M5) bars."""
+    """gRPC streaming client for OHLC bars (configurable timeframe)."""
 
     def __init__(self) -> None:
         self._channel: grpc.aio.Channel | None = None
@@ -193,14 +193,24 @@ class BarsStream:
             creds = grpc.ssl_channel_credentials()
             self._channel = grpc.aio.secure_channel(GRPC_TARGET, creds, options=CHANNEL_OPTIONS)
 
-    async def subscribe(self, symbol: str) -> None:
-        if symbol in self._stream_tasks and not self._stream_tasks[symbol].done():
-            return
+    def flush_queue(self) -> None:
+        while not self._data_q.empty():
+            try:
+                self._data_q.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
+    async def subscribe(self, symbol: str, timeframe: int = 5) -> None:
+        existing = self._stream_tasks.get(symbol)
+        if existing and not existing.done():
+            existing.cancel()
+            await asyncio.gather(existing, return_exceptions=True)
+        self.flush_queue()
         self._ensure_channel()
-        task = asyncio.create_task(self._stream_symbol(symbol))
+        task = asyncio.create_task(self._stream_symbol(symbol, timeframe))
         self._stream_tasks[symbol] = task
 
-    async def _stream_symbol(self, symbol: str) -> None:
+    async def _stream_symbol(self, symbol: str, timeframe: int = 5) -> None:
         attempt = 0
         while self._running:
             try:
@@ -208,7 +218,7 @@ class BarsStream:
                 token = await self._get_token(force)
                 metadata = [("authorization", token)]
                 stub = MarketDataServiceStub(self._channel)
-                req = SubscribeBarsRequest(symbol=symbol, timeframe=5)  # 5 = TIME_FRAME_M5
+                req = SubscribeBarsRequest(symbol=symbol, timeframe=timeframe)
                 async for resp in stub.SubscribeBars(req, metadata=metadata):
                     for bar in resp.bars:
                         self._put_data({"symbol": symbol, **bar_from_proto(bar)})

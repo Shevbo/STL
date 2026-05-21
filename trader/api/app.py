@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 
+import httpx
 import structlog
 from fastapi import FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import JSONResponse, Response
@@ -59,6 +60,7 @@ async def lifespan(app: FastAPI):
         book_stream=book_stream,
         base_url=settings.finam_api_base_url,
         get_token=auth.get_token,
+        account_id=account_id,
     )
 
     try:
@@ -74,6 +76,8 @@ async def lifespan(app: FastAPI):
     app.state.tx = tx
     app.state.pos = pos
     app.state.settings = settings
+    app.state.auth = auth
+    app.state.account_id = account_id
 
     yield
 
@@ -149,6 +153,61 @@ def create_app() -> FastAPI:
     async def get_portfolio(request: Request):
         require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
         return await request.app.state.pos.get_portfolio()
+
+    @fastapi_app.get("/api/v1/instruments")
+    async def list_instruments(request: Request):
+        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        settings: Settings = request.app.state.settings
+        auth_client: AsyncAuthClient = request.app.state.auth
+        try:
+            token = await auth_client.get_token()
+            headers = {"Authorization": f"Bearer {token}"}
+            async with httpx.AsyncClient(http2=True) as client:
+                resp = await client.get(
+                    f"{settings.finam_api_base_url}/v1/assets",
+                    headers=headers,
+                    timeout=10.0,
+                )
+                resp.raise_for_status()
+                body = resp.json()
+            instruments = [
+                {
+                    "symbol": a.get("symbol", ""),
+                    "ticker": a.get("ticker", a.get("code", "")),
+                    "name": a.get("name", a.get("short_name", "")),
+                }
+                for a in body.get("assets", [])
+                if "@RTSX" in a.get("symbol", "")
+            ]
+            return {"instruments": instruments}
+        except Exception as exc:
+            log.error("api.instruments_error", exc=str(exc))
+            raise HTTPException(status_code=502, detail="Finam API unavailable")
+
+    @fastapi_app.get("/api/v1/instruments/{symbol:path}/params")
+    async def get_instrument_params(symbol: str, request: Request):
+        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        settings: Settings = request.app.state.settings
+        auth_client: AsyncAuthClient = request.app.state.auth
+        try:
+            token = await auth_client.get_token()
+            headers = {"Authorization": f"Bearer {token}"}
+            params: dict = {}
+            account_id: str = request.app.state.account_id
+            if account_id:
+                params["account_id"] = account_id
+            async with httpx.AsyncClient(http2=True) as client:
+                resp = await client.get(
+                    f"{settings.finam_api_base_url}/v1/assets/{symbol}/params",
+                    headers=headers,
+                    params=params,
+                    timeout=10.0,
+                )
+                resp.raise_for_status()
+                return resp.json()
+        except Exception as exc:
+            log.error("api.instrument_params_error", exc=str(exc), symbol=symbol)
+            raise HTTPException(status_code=502, detail="Finam API unavailable")
 
     @fastapi_app.exception_handler(Exception)
     async def generic_error_handler(request: Request, exc: Exception):

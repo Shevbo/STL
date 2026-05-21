@@ -18,6 +18,7 @@
   import { robotsStore } from '$lib/stores/robots.svelte';
   import { quotesStore } from '$lib/stores/quotes.svelte';
   import { positionsStore } from '$lib/stores/positions.svelte';
+  import { instrumentStore } from '$lib/stores/instrument.svelte';
   import { placeOrder } from '$lib/api';
   import type { Strategy, BacktestResult, OrderRequest } from '$lib/types';
 
@@ -40,6 +41,7 @@
   function onLogin() {
     authed = true;
     startWs();
+    loadInstruments();
   }
 
   function startWs() {
@@ -48,11 +50,37 @@
     ws.connect();
   }
 
+  async function loadInstruments() {
+    try {
+      const res = await fetch('/api/v1/instruments');
+      if (!res.ok) return;
+      const data = await res.json() as { instruments: { symbol: string; ticker: string; name: string }[] };
+      instrumentStore.setList(data.instruments ?? []);
+    } catch {
+      // Non-critical: instrument list may fail, chart still works with current symbol
+    }
+  }
+
+  // Task 4: fetch params when active symbol changes
+  $effect(() => {
+    const sym = selectedRobot?.symbol;
+    if (!sym || !authed) return;
+    fetch(`/api/v1/instruments/${encodeURIComponent(sym)}/params`)
+      .then(r => r.ok ? r.json() as Promise<Record<string, unknown>> : null)
+      .then(data => { if (data) instrumentStore.setParams(data); })
+      .catch(() => {});
+  });
+
+  function handleSubscribe(sym: string, timeframe: number) {
+    ws?.send({ type: 'subscribe', symbol: sym, timeframe });
+  }
+
   onMount(async () => {
     const res = await fetch('/api/auth/me');
     if (res.ok) {
       authed = true;
       startWs();
+      loadInstruments();
     }
   });
   onDestroy(() => {
@@ -144,9 +172,8 @@
         <main class="content">
           {#each robots as robot (robot.id)}
             <ChartFrame
-              robotName={robot.name}
               symbol={robot.symbol}
-              backtest={robot.id === selectedRobot?.id ? backtestResult : null}
+              onSubscribe={handleSubscribe}
             />
           {/each}
         </main>
@@ -157,13 +184,7 @@
       <PositionsTable {positions} />
     </div>
     <div class="right-col">
-      <InstrumentPanel info={selectedRobot ? {
-        symbol: selectedRobot.symbol,
-        priceMin: 20_000,
-        priceMax: 30_000,
-        margin: 12_400,
-        expiration: '17.06.2026',
-      } : null} />
+      <InstrumentPanel symbol={selectedRobot?.symbol ?? ''} />
       <OrderPanel
         symbol={selectedRobot?.symbol ?? ''}
         quote={currentQuote}

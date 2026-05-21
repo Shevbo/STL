@@ -43,6 +43,28 @@ export interface TradeMarker {
   text: string;
 }
 
+export interface InstrumentMeta {
+  symbol: string;
+  ticker: string;
+  name: string;
+}
+
+export interface OpenOrder {
+  order_id: string;
+  symbol: string;
+  side: 'buy' | 'sell';
+  price: number;
+  qty: number;
+}
+
+export interface TradeFill {
+  trade_id: string;
+  symbol: string;
+  side: 'buy' | 'sell';
+  price: number;
+  time: number; // unix seconds
+}
+
 export interface BacktestResult {
   equityCurve: Array<{ time: number; value: number }>;
   totalPnl: number;
@@ -97,4 +119,6 @@ export type WsIncoming =
   | { type: 'position_update'; positions: Position[] }
   | { type: 'ohlc_history'; symbol: string; bars: OhlcBar[] }
   | { type: 'ohlc_update'; symbol: string; time: number; open: number; high: number; low: number; close: number; volume: number }
-  | { type: 'orderbook'; symbol: string; bids: OrderBookLevel[]; asks: OrderBookLevel[] };
+  | { type: 'orderbook'; symbol: string; bids: OrderBookLevel[]; asks: OrderBookLevel[] }
+  | { type: 'order_update'; orders: OpenOrder[] }
+  | { type: 'trade_update'; trades: TradeFill[] };

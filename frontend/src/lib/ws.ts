@@ -7,6 +7,8 @@ import { robotsStore } from './stores/robots.svelte';
 import { positionsStore } from './stores/positions.svelte';
 import { candlesStore } from './stores/candles.svelte';
 import { orderbookStore } from './stores/orderbook.svelte';
+import { ordersStore } from './stores/orders.svelte';
+import { tradesStore } from './stores/trades.svelte';
 
 export class WsClient {
   private ws: WebSocket | null = null;
@@ -15,6 +17,12 @@ export class WsClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly url: string) {}
+
+  send(msg: object): void {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify(msg));
+    }
+  }
 
   connect(): void {
     this.ws = new WebSocket(this.url);
@@ -65,6 +73,10 @@ export class WsClient {
         });
       } else if (msg.type === 'orderbook') {
         orderbookStore.set(msg.symbol, { bids: msg.bids, asks: msg.asks });
+      } else if (msg.type === 'order_update') {
+        ordersStore.set(msg.orders);
+      } else if (msg.type === 'trade_update') {
+        tradesStore.set(msg.trades);
       }
     }
   }
