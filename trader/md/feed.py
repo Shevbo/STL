@@ -100,7 +100,6 @@ class MarketDataFeed:
                 slot = self._slots[symbol]
                 if slot._latest and quote.timestamp < slot._latest.timestamp:
                     log.warning("md.out_of_order", symbol=symbol)
-                    continue
 
                 slot.update(quote)
                 self._heartbeat.set()
