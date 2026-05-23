@@ -1,6 +1,5 @@
 {
   "permissions": {
-    "defaultMode": "bypassPermissions",
     "allow": [
       "Read",
       "Write",
@@ -14,7 +13,8 @@
     "deny": [
       "Bash(git push --force*)",
       "Bash(rm -rf *)"
-    ]
+    ],
+    "defaultMode": "bypassPermissions"
   },
   "enabledPlugins": {
     "superpowers@claude-plugins-official": true,

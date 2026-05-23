@@ -32,6 +32,7 @@ class TxClient:
             "quantity": {"value": str(req.quantity)},
             "type": _TYPE_MAP[req.order_type],
             "time_in_force": "TIME_IN_FORCE_DAY",
+            "comment": "STL",
         }
         if req.price is not None:
             body["limit_price"] = {"value": f"{req.price:.1f}"}

@@ -3,6 +3,7 @@
   import { onMount, onDestroy } from 'svelte';
   import TopBar from './components/TopBar.svelte';
   import RobotsPanel from './components/RobotsPanel.svelte';
+  import ActiveOrdersPanel from './components/ActiveOrdersPanel.svelte';
   import ChartFrame from './components/ChartFrame.svelte';
   import InstrumentPanel from './components/InstrumentPanel.svelte';
   import OrderPanel from './components/OrderPanel.svelte';
@@ -30,10 +31,22 @@
   let events = $state<string[]>([]);
   let pendingOrder = $state<OrderRequest | null>(null);
 
+  // п.1: активный символ — поднят из ChartFrame в App
+  let activeSymbol = $state<string>('');
+
+  // Сбрасывать activeSymbol при смене робота
+  $effect(() => {
+    const _ = selectedRobotId;
+    activeSymbol = '';
+  });
+
   let robots = $derived(robotsStore.all);
   let selectedRobot = $derived(robots.find(r => r.id === selectedRobotId) ?? robots[0] ?? null);
   let positions = $derived(positionsStore.all);
-  let currentQuote = $derived(selectedRobot ? quotesStore.get(selectedRobot.symbol) : undefined);
+
+  // п.1: effectiveSymbol — то, что реально показано на экране
+  let effectiveSymbol = $derived(activeSymbol || selectedRobot?.symbol || '');
+  let currentQuote = $derived(quotesStore.get(effectiveSymbol));
 
   let ws: WsClient;
   let offlinePlayer: OfflinePlayer | null = null;
@@ -61,17 +74,18 @@
     }
   }
 
-  // Task 4: fetch params when active symbol changes
+  // п.1: fetch params when effective symbol changes
   $effect(() => {
-    const sym = selectedRobot?.symbol;
-    if (!sym || !authed) return;
-    fetch(`/api/v1/instruments/${encodeURIComponent(sym)}/params`)
+    if (!effectiveSymbol || !authed) return;
+    fetch(`/api/v1/instruments/${encodeURIComponent(effectiveSymbol)}/params`)
       .then(r => r.ok ? r.json() as Promise<Record<string, unknown>> : null)
       .then(data => { if (data) instrumentStore.setParams(data); })
       .catch(() => {});
   });
 
   function handleSubscribe(sym: string, timeframe: number) {
+    // п.1: сохранить выбранный символ и отправить WS-запрос
+    activeSymbol = sym;
     ws?.send({ type: 'subscribe', symbol: sym, timeframe });
   }
 
@@ -158,6 +172,11 @@
       selectedRobot?.symbol ?? 'GZM6@RTSX', '2026-01-01', '2026-05-01', 's1',
     );
   }
+
+  // п.6: клик по стакану → открыть диалог заявки с quantity=1
+  function handleBookOrder(partial: Omit<OrderRequest, 'quantity'>): void {
+    pendingOrder = { ...partial, quantity: 1 };
+  }
 </script>
 
 {#if !authed}
@@ -166,27 +185,33 @@
 <div class="shell">
   <TopBar {labMode} onToggleLab={() => labMode = !labMode} />
   <div class="body">
-    <RobotsPanel selectedId={selectedRobotId} onSelect={(id) => selectedRobotId = id} />
+    <div class="left-col">
+      <RobotsPanel selectedId={selectedRobotId} onSelect={(id) => selectedRobotId = id} />
+      <ActiveOrdersPanel />
+    </div>
     <div class="center-col">
       <div class="chart-book-row">
         <main class="content">
-          {#each robots as robot (robot.id)}
+          {#if effectiveSymbol}
             <ChartFrame
-              symbol={robot.symbol}
+              symbol={effectiveSymbol}
               onSubscribe={handleSubscribe}
             />
-          {/each}
+          {/if}
         </main>
-        {#if selectedRobot}
-          <OrderBook symbol={selectedRobot.symbol} />
+        {#if effectiveSymbol}
+          <OrderBook
+            symbol={effectiveSymbol}
+            onOpenOrder={handleBookOrder}
+          />
         {/if}
       </div>
       <PositionsTable {positions} />
     </div>
     <div class="right-col">
-      <InstrumentPanel symbol={selectedRobot?.symbol ?? ''} />
+      <InstrumentPanel symbol={effectiveSymbol} />
       <OrderPanel
-        symbol={selectedRobot?.symbol ?? ''}
+        symbol={effectiveSymbol}
         quote={currentQuote}
         onSubmit={(order) => pendingOrder = order}
       />
@@ -223,6 +248,11 @@
 <style>
   .shell { height: 100%; display: flex; flex-direction: column; }
   .body { flex: 1; display: flex; overflow: hidden; min-height: 0; }
+  .left-col {
+    width: 200px; flex-shrink: 0;
+    background: #14142a; border-right: 1px solid #2d2d4a;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
   .center-col { flex: 1; display: flex; flex-direction: column; min-width: 0; }
   .chart-book-row { flex: 1; display: flex; min-height: 0; overflow: hidden; }
   .content { flex: 1; overflow-y: auto; background: #0f0f1e; display: flex; flex-direction: column; min-width: 0; }

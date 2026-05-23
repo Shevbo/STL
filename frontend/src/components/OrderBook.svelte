@@ -1,10 +1,17 @@
 <!-- frontend/src/components/OrderBook.svelte -->
 <script lang="ts">
   import { orderbookStore } from '$lib/stores/orderbook.svelte';
+  import type { OrderRequest } from '$lib/types';
 
-  let { symbol }: { symbol: string } = $props();
+  let {
+    symbol,
+    onOpenOrder,
+  }: {
+    symbol: string;
+    onOpenOrder?: (order: Omit<OrderRequest, 'quantity'>) => void;
+  } = $props();
 
-  const LEVELS = 14;
+  const LEVELS = 20;
 
   let book = $derived(orderbookStore.get(symbol));
   let asks = $derived(book.asks.slice(0, LEVELS));
@@ -24,6 +31,14 @@
   function fmt(price: number): string {
     return price.toLocaleString('ru-RU', { maximumFractionDigits: 0 });
   }
+
+  function clickAsk(price: number): void {
+    onOpenOrder?.({ symbol, side: 'buy', order_type: 'limit', price });
+  }
+
+  function clickBid(price: number): void {
+    onOpenOrder?.({ symbol, side: 'sell', order_type: 'limit', price });
+  }
 </script>
 
 <div class="ob">
@@ -32,21 +47,25 @@
     <div class="ob-empty">Ожидание данных…</div>
   {:else}
     <div class="ob-levels">
-      {#each asksReversed as level (level.price)}
-        <div class="ob-row ask">
-          <div class="ob-bar ask-bar" style="width:{(level.size / maxSize) * 100}%"></div>
-          <span class="ob-size">{level.size}</span>
-          <span class="ob-price ask-price">{fmt(level.price)}</span>
-        </div>
-      {/each}
+      <div class="ob-asks">
+        {#each asksReversed as level (level.price)}
+          <button class="ob-row ask" onclick={() => clickAsk(level.price)}>
+            <div class="ob-bar ask-bar" style="width:{(level.size / maxSize) * 100}%"></div>
+            <span class="ob-size">{level.size}</span>
+            <span class="ob-price ask-price">{fmt(level.price)}</span>
+          </button>
+        {/each}
+      </div>
       <div class="ob-spread">спред {spread}</div>
-      {#each bids as level (level.price)}
-        <div class="ob-row bid">
-          <div class="ob-bar bid-bar" style="width:{(level.size / maxSize) * 100}%"></div>
-          <span class="ob-size">{level.size}</span>
-          <span class="ob-price bid-price">{fmt(level.price)}</span>
-        </div>
-      {/each}
+      <div class="ob-bids">
+        {#each bids as level (level.price)}
+          <button class="ob-row bid" onclick={() => clickBid(level.price)}>
+            <div class="ob-bar bid-bar" style="width:{(level.size / maxSize) * 100}%"></div>
+            <span class="ob-size">{level.size}</span>
+            <span class="ob-price bid-price">{fmt(level.price)}</span>
+          </button>
+        {/each}
+      </div>
     </div>
   {/if}
 </div>
@@ -58,7 +77,7 @@
     border-left: 1px solid #2d2d4a;
     width: 160px; flex-shrink: 0;
     font-size: 11px; font-family: 'JetBrains Mono', 'Consolas', monospace;
-    overflow: hidden;
+    overflow: hidden; align-self: stretch;
   }
   .ob-title {
     padding: 3px 8px; font-size: 11px; color: #666;
@@ -70,12 +89,23 @@
   }
   .ob-levels {
     flex: 1; overflow: hidden; display: flex; flex-direction: column;
-    justify-content: center;
+    min-height: 0;
+  }
+  .ob-asks {
+    flex: 1; display: flex; flex-direction: column; justify-content: flex-end;
+    overflow: hidden;
+  }
+  .ob-bids {
+    flex: 1; display: flex; flex-direction: column;
+    overflow: hidden;
   }
   .ob-row {
     position: relative; display: flex; align-items: center;
     height: 17px; padding: 0 6px; gap: 4px; overflow: hidden;
+    cursor: pointer; background: transparent; border: none; width: 100%;
+    text-align: left;
   }
+  .ob-row:hover { background: rgba(255,255,255,0.04); }
   .ob-bar {
     position: absolute; top: 0; right: 0; bottom: 0;
     opacity: 0.18; pointer-events: none;

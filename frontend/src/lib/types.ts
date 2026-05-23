@@ -55,6 +55,8 @@ export interface OpenOrder {
   side: 'buy' | 'sell';
   price: number;
   qty: number;
+  comment?: string;
+  created_at?: number;
 }
 
 export interface TradeFill {

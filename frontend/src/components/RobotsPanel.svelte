@@ -51,9 +51,8 @@
 
 <style>
   .robots-panel {
-    width: 200px; flex-shrink: 0;
+    flex: 1; min-height: 0;
     overflow-y: auto; background: #14142a;
-    border-right: 1px solid #2d2d4a;
     display: flex; flex-direction: column;
   }
   .card {

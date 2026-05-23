@@ -173,9 +173,17 @@ class WsHub:
 
         if self._bars_task:
             self._bars_task.cancel()
+            try:
+                await self._bars_task
+            except asyncio.CancelledError:
+                pass
             self._bars_task = None
         if self._book_task:
             self._book_task.cancel()
+            try:
+                await self._book_task
+            except asyncio.CancelledError:
+                pass
             self._book_task = None
 
         if self._base_url and self._get_token:
@@ -367,20 +375,32 @@ class WsHub:
             result = []
             for o in body.get("orders", []):
                 status = o.get("status", "")
-                if "ACTIVE" not in status and "NEW" not in status:
+                if "ACTIVE" not in status and "NEW" not in status and "PENDING" not in status:
                     continue
-                side = "buy" if "BUY" in o.get("side", "") else "sell"
-                price = _dec_field(o.get("limit_price", 0))
-                qty_raw = o.get("quantity", {})
+                order_detail = o.get("order", {})
+                side = "buy" if "BUY" in order_detail.get("side", o.get("side", "")) else "sell"
+                price = _dec_field(order_detail.get("limit_price", o.get("limit_price", 0)))
+                qty_raw = order_detail.get("quantity", o.get("quantity", {}))
                 qty = int(float(
                     qty_raw.get("value", 1) if isinstance(qty_raw, dict) else qty_raw
                 ))
+                ts_str = o.get("transact_at", "")
+                created_at = 0
+                if ts_str:
+                    try:
+                        created_at = int(
+                            datetime.fromisoformat(ts_str.replace("Z", "+00:00")).timestamp()
+                        )
+                    except Exception:
+                        pass
                 result.append({
                     "order_id": o.get("order_id", ""),
-                    "symbol": o.get("symbol", ""),
+                    "symbol": order_detail.get("symbol", o.get("symbol", "")),
                     "side": side,
                     "price": price,
                     "qty": qty,
+                    "comment": order_detail.get("comment", ""),
+                    "created_at": created_at,
                 })
             return result
         except Exception as exc:
