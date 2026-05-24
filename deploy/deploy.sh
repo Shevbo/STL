@@ -18,7 +18,7 @@ fi
 
 # ── 2. Push на удалённый репозиторий ────────────────────────────────────────
 echo "▶ git push..."
-git push
+git push github main
 
 # ── 3. Удалённые команды ─────────────────────────────────────────────────────
 echo "▶ Обновление кода и перезапуск сервиса на $HOSTER..."
@@ -29,7 +29,7 @@ cd /home/ubuntu/apps/shectory-trader
 
 # Обновить код из git
 echo "  git pull..."
-git pull
+git pull github main
 
 # Собрать фронтенд
 echo "  Сборка фронтенда..."
