@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # deploy.sh — полный деплой на хостер 83.69.248.175
 # Использование: bash deploy/deploy.sh
-# Ключ SSH должен быть доступен (ssh-agent или ~/.ssh/config)
+# Требует: git push уже выполнен, SSH доступ настроен в ~/.ssh/config
 
 set -euo pipefail
 
@@ -9,27 +9,27 @@ HOSTER="hoster"
 REMOTE_DIR="/home/ubuntu/apps/shectory-trader"
 SERVICE="shectory-trader"
 
-# ── 1. Сборка фронтенда (на хостере, чтобы избежать PATH issues на Windows) ──
-echo "▶ Сборка фронтенда будет выполнена на хостере..."
+# ── 1. Проверить что коммиты готовы к отправке ──────────────────────────────
+echo "▶ Проверка статуса git..."
+if ! git diff-index --quiet HEAD --; then
+  echo "✗ Есть неустановленные изменения. Используйте: git add && git commit"
+  exit 1
+fi
 
-# ── 2. Синхронизировать код на хостер ───────────────────────────────────────
-echo "▶ rsync → $HOSTER:$REMOTE_DIR"
-ssh "$HOSTER" "mkdir -p $REMOTE_DIR"
-rsync -az --delete \
-  --exclude='.git' \
-  --exclude='node_modules' \
-  --exclude='__pycache__' \
-  --exclude='*.pyc' \
-  --exclude='.venv' \
-  --exclude='frontend/node_modules' \
-  . "$HOSTER:$REMOTE_DIR/"
+# ── 2. Push на удалённый репозиторий ────────────────────────────────────────
+echo "▶ git push..."
+git push
 
 # ── 3. Удалённые команды ─────────────────────────────────────────────────────
-echo "▶ Установка зависимостей и перезапуск сервиса..."
+echo "▶ Обновление кода и перезапуск сервиса на $HOSTER..."
 ssh "$HOSTER" bash -s <<'REMOTE'
 set -euo pipefail
 export PATH="/home/ubuntu/.local/bin:$PATH"
 cd /home/ubuntu/apps/shectory-trader
+
+# Обновить код из git
+echo "  git pull..."
+git pull
 
 # Собрать фронтенд
 echo "  Сборка фронтенда..."
@@ -60,4 +60,4 @@ sleep 2
 sudo systemctl is-active --quiet shectory-trader && echo "  ✓ сервис запущен" || (sudo journalctl -u shectory-trader -n 20 --no-pager; exit 1)
 REMOTE
 
-echo "✓ Деплой завершён → http://83.69.248.175"
+echo "✓ Деплой завершён → https://stl.shectory.ru/"
