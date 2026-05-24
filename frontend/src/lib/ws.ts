@@ -16,8 +16,16 @@ export class WsClient {
   private rafId: number | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private sendQueue: object[] = [];
+  private baseUrl: string;
+  private token: string | null = null;
 
-  constructor(private readonly url: string) {}
+  constructor(private readonly url: string) {
+    this.baseUrl = url;
+    const storedToken = typeof window !== 'undefined' ? localStorage.getItem('authToken') : null;
+    if (storedToken) {
+      this.token = storedToken;
+    }
+  }
 
   send(msg: object): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
@@ -35,7 +43,12 @@ export class WsClient {
   }
 
   connect(): void {
-    this.ws = new WebSocket(this.url);
+    let connectUrl = this.baseUrl;
+    if (this.token) {
+      const separator = connectUrl.includes('?') ? '&' : '?';
+      connectUrl = `${connectUrl}${separator}token=${encodeURIComponent(this.token)}`;
+    }
+    this.ws = new WebSocket(connectUrl);
     this.ws.onopen = () => {
       servicesStore.set('md', 'ok');
       this.flushQueue();

@@ -40,7 +40,7 @@ def ws_auth_ok(bridge_secret: str, websocket: WebSocket) -> bool:
         if auth_header.startswith("Bearer "):
             token = auth_header[7:]
         else:
-            return False
+            token = websocket.query_params.get("token")
     if not token:
         return False
     return verify_session_token(token, bridge_secret) is not None
