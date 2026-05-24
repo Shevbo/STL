@@ -114,7 +114,7 @@ def create_app() -> FastAPI:
             httponly=True, samesite="lax",
             secure=False, path="/", max_age=_COOKIE_MAX_AGE,
         )
-        return {"ok": True, "email": user.email, "role": user.role}
+        return {"ok": True, "email": user.email, "role": user.role, "token": token}
 
     @fastapi_app.get("/api/auth/me")
     async def auth_me(request: Request):
