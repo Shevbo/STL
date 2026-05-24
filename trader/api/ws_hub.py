@@ -15,15 +15,16 @@ log = structlog.get_logger()
 _SERVICES_INITIAL = ["auth", "tx", "oms", "pos", "audit"]
 
 # Finam TimeFrame enum int values (from protobuf)
+# REST API /bars actually only supports M1, M5, M15, D, W, MN (not M30)
 _TIMEFRAME_NAMES: dict[int, str] = {
     1: "TIME_FRAME_M1",
     5: "TIME_FRAME_M5",
     9: "TIME_FRAME_M15",
-    11: "TIME_FRAME_M30",
-    12: "TIME_FRAME_H1",
-    13: "TIME_FRAME_H2",
-    15: "TIME_FRAME_H4",
-    17: "TIME_FRAME_H8",
+    11: "TIME_FRAME_M15",      # M30 → M15 (REST API doesn't support M30)
+    12: "TIME_FRAME_M15",      # H1 → M15
+    13: "TIME_FRAME_M15",      # H2 → M15
+    15: "TIME_FRAME_M15",      # H4 → M15
+    17: "TIME_FRAME_D",        # H8 → D
     19: "TIME_FRAME_D",
     20: "TIME_FRAME_W",
     21: "TIME_FRAME_MN",
@@ -140,7 +141,8 @@ class WsHub:
                 try:
                     incoming = json.loads(text)
                     if incoming.get("type") == "subscribe":
-                        asyncio.create_task(self._handle_subscribe(incoming))
+                        task = asyncio.create_task(self._handle_subscribe(incoming))
+                        task.add_done_callback(lambda t: t.exception() and log.error("subscribe_failed", exc=str(t.exception())))
                 except Exception:
                     pass
         except (WebSocketDisconnect, Exception):
@@ -187,7 +189,7 @@ class WsHub:
             self._book_task = None
 
         if self._base_url and self._get_token:
-            self._bars_history = await self._fetch_history(symbol)
+            self._bars_history = await self._fetch_history(symbol, timeframe)
 
         await self._broadcast({
             "type": "ohlc_history",
@@ -355,9 +357,9 @@ class WsHub:
                         "volume": flt(b.get("volume")),
                     })
                 log.info("ws_hub.history_loaded", symbol=symbol, tf=tf_name, count=len(result))
-                return result[-500:]
+                return result
         except Exception as exc:
-            log.warning("ws_hub.fetch_history_error", exc=str(exc))
+            log.error("ws_hub.fetch_history_failed", symbol=symbol, timeframe=tf_name, exc=str(exc), exc_type=type(exc).__name__)
             return []
 
     async def _fetch_orders(self) -> list[dict]:
