@@ -35,6 +35,7 @@
 
   let tickEl: HTMLDivElement;
   let ohlcEl: HTMLDivElement;
+  let ohlcAreaEl: HTMLDivElement;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let uplotInst: any = null;
@@ -206,10 +207,12 @@
       tickEl,
     );
 
+    await new Promise(r => requestAnimationFrame(r));
+
     const { createChart } = await import('lightweight-charts');
-    const chartH = Math.max((ohlcEl.clientHeight || 320) - TICK_H, 100);
-    tvChart = createChart(ohlcEl, {
-      width: ohlcEl.clientWidth || 400,
+    const chartH = Math.max((ohlcAreaEl.clientHeight || 320) - TICK_H, 100);
+    tvChart = createChart(ohlcAreaEl, {
+      width: ohlcAreaEl.clientWidth || 400,
       height: chartH,
       layout: { background: { color: '#0f0f1e' }, textColor: '#888' },
       grid: { vertLines: { color: '#1e1e3a' }, horzLines: { color: '#1e1e3a' } },
@@ -255,11 +258,11 @@
     const ro = new ResizeObserver(() => {
       if (!tvChart) return;
       tvChart.applyOptions({
-        width: ohlcEl.clientWidth,
-        height: Math.max(ohlcEl.clientHeight - TICK_H, 100),
+        width: ohlcAreaEl.clientWidth,
+        height: Math.max(ohlcAreaEl.clientHeight, 100),
       });
     });
-    ro.observe(ohlcEl);
+    ro.observe(ohlcAreaEl);
   });
 
   onDestroy(() => {
@@ -295,8 +298,9 @@
       {/each}
     </div>
   </div>
-  <div class="chart-area" bind:this={ohlcEl}>
+  <div class="chart-area">
     <div class="tick-strip" bind:this={tickEl}></div>
+    <div class="ohlc-area" bind:this={ohlcAreaEl}></div>
   </div>
 </div>
 
@@ -323,6 +327,7 @@
   }
   .tf-btn:hover { color: #aaa; }
   .tf-btn.active { color: #4caf50; border-color: #4caf5066; }
-  .chart-area { flex: 1; position: relative; overflow: hidden; }
-  .tick-strip { position: absolute; bottom: 0; left: 0; right: 0; z-index: 1; }
+  .chart-area { flex: 1; position: relative; overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
+  .tick-strip { flex-shrink: 0; height: 80px; position: relative; z-index: 1; }
+  .ohlc-area { flex: 1; min-height: 0; position: relative; }
 </style>

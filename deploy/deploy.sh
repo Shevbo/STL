@@ -5,14 +5,12 @@
 
 set -euo pipefail
 
-HOSTER="ubuntu@83.69.248.175"
+HOSTER="hoster"
 REMOTE_DIR="/home/ubuntu/apps/shectory-trader"
 SERVICE="shectory-trader"
 
-# ── 1. Собрать фронтенд ──────────────────────────────────────────────────────
-echo "▶ Сборка фронтенда..."
-cd "$(dirname "$0")/.."
-(cd frontend && npm install --silent && npm run build)
+# ── 1. Сборка фронтенда (на хостере, чтобы избежать PATH issues на Windows) ──
+echo "▶ Сборка фронтенда будет выполнена на хостере..."
 
 # ── 2. Синхронизировать код на хостер ───────────────────────────────────────
 echo "▶ rsync → $HOSTER:$REMOTE_DIR"
@@ -32,6 +30,10 @@ ssh "$HOSTER" bash -s <<'REMOTE'
 set -euo pipefail
 export PATH="/home/ubuntu/.local/bin:$PATH"
 cd /home/ubuntu/apps/shectory-trader
+
+# Собрать фронтенд
+echo "  Сборка фронтенда..."
+(cd frontend && npm install --silent && npm run build)
 
 # Установить Python-зависимости
 poetry install --no-root --only main
