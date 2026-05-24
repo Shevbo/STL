@@ -28,8 +28,14 @@ export PATH="/home/ubuntu/.local/bin:$PATH"
 cd /home/ubuntu/apps/shectory-trader
 
 # Обновить код из git
-echo "  git pull..."
-git pull github main
+echo "  Обновление кода из GitHub..."
+if ! git pull github main; then
+  echo "  ✗ git pull failed, trying to re-clone..."
+  cd /home/ubuntu/apps
+  rm -rf shectory-trader
+  git clone https://github.com/Shevbo/STL.git shectory-trader
+  cd shectory-trader
+fi
 
 # Собрать фронтенд
 echo "  Сборка фронтенда..."
