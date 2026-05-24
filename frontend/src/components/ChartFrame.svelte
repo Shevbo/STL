@@ -6,6 +6,7 @@
   import { ordersStore } from '$lib/stores/orders.svelte';
   import { tradesStore } from '$lib/stores/trades.svelte';
   import { instrumentStore } from '$lib/stores/instrument.svelte';
+  import { orderbookStore } from '$lib/stores/orderbook.svelte';
 
   let {
     symbol,
@@ -168,15 +169,17 @@
 
   function changeSymbol(sym: string) {
     if (sym === selectedSymbol) return;
+    const oldSymbol = selectedSymbol;
     symbolOverride = sym;
     orderLines.forEach(line => tvCandle?.removePriceLine(line));
     orderLines.clear();
     lastOhlcLen = 0;
-    // Clear chart data immediately when switching symbols
+    // Clear chart data and orderbook immediately when switching symbols
     if (tvCandle) {
       tvCandle.setData([]);
       tvVolume?.setData([]);
     }
+    orderbookStore.clear(oldSymbol);
     onSubscribe?.(sym, selectedTf);
   }
 

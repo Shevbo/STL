@@ -13,10 +13,10 @@
 
   const LEVELS = 20;
 
-  let book = $derived(orderbookStore.get(symbol));
-  let asks = $derived(book.asks.slice(0, LEVELS));
-  let bids = $derived(book.bids.slice(0, LEVELS));
-  let asksReversed = $derived([...asks].reverse());
+  let book = $derived.by(() => orderbookStore.get(symbol));
+  let asks = $derived.by(() => book.asks.slice(0, LEVELS));
+  let bids = $derived.by(() => book.bids.slice(0, LEVELS));
+  let asksReversed = $derived.by(() => [...asks].reverse());
 
   let maxSize = $derived(
     Math.max(...asks.map(a => a.size), ...bids.map(b => b.size), 1)
