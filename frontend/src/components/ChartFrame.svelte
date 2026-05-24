@@ -94,7 +94,11 @@
 
   // Task 2: sync OHLC + volume series
   $effect(() => {
-    if (!tvCandle || !ohlc.length) return;
+    console.log('[Chart] $effect fired: tvCandle=', !!tvCandle, 'ohlc.length=', ohlc.length, 'lastOhlcLen=', lastOhlcLen);
+    if (!tvCandle || !ohlc.length) {
+      console.log('[Chart] Early return: tvCandle=', !!tvCandle, 'ohlc.length=', ohlc.length);
+      return;
+    }
     const bars = ohlc.map(b => ({
       time: b.time as number,
       open: b.open as number,
@@ -108,11 +112,13 @@
       color: (b.close as number) >= (b.open as number) ? '#4caf5040' : '#f4433640',
     }));
     if (ohlc.length !== lastOhlcLen) {
+      console.log('[Chart] setData: bars=', bars.length, 'vols=', vols.length);
       tvCandle.setData(bars);
       tvVolume?.setData(vols);
       lastOhlcLen = ohlc.length;
       tvChart.timeScale().fitContent();
     } else {
+      console.log('[Chart] update last bar only');
       tvCandle.update(bars[bars.length - 1]);
       tvVolume?.update(vols[vols.length - 1]);
     }
@@ -170,6 +176,7 @@
 
   function changeSymbol(sym: string) {
     if (sym === selectedSymbol) return;
+    console.log('[Chart] changeSymbol: from', selectedSymbol, 'to', sym);
     const oldSymbol = selectedSymbol;
     symbolOverride = sym;
     orderLines.forEach(line => tvCandle?.removePriceLine(line));
@@ -177,10 +184,12 @@
     lastOhlcLen = 0;
     // Clear chart data and orderbook immediately when switching symbols
     if (tvCandle) {
+      console.log('[Chart] clearing chart data');
       tvCandle.setData([]);
       tvVolume?.setData([]);
     }
     orderbookStore.clear(oldSymbol);
+    console.log('[Chart] calling onSubscribe for', sym);
     onSubscribe?.(sym, selectedTf);
   }
 
