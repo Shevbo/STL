@@ -10,6 +10,12 @@ def _get_email(bridge_secret: str, request: Request) -> str | None:
         return "debug"
     token = request.cookies.get(_SESSION_COOKIE)
     if not token:
+        auth_header = request.headers.get("authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+        else:
+            return None
+    if not token:
         return None
     return verify_session_token(token, bridge_secret)
 
@@ -29,6 +35,12 @@ def ws_auth_ok(bridge_secret: str, websocket: WebSocket) -> bool:
     if not bridge_secret:
         return True
     token = websocket.cookies.get(_SESSION_COOKIE)
+    if not token:
+        auth_header = websocket.headers.get("authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+        else:
+            return False
     if not token:
         return False
     return verify_session_token(token, bridge_secret) is not None

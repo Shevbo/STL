@@ -22,6 +22,10 @@
         error = data.detail ?? 'Ошибка входа';
         return;
       }
+      const data = await res.json() as { token?: string };
+      if (data.token) {
+        localStorage.setItem('authToken', data.token);
+      }
       onLogin();
     } catch {
       error = 'Нет связи с сервером';
