@@ -47,7 +47,9 @@
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let orderLines = new Map<string, any>();
 
-  let ohlc = $derived(candlesStore.get(selectedSymbol));
+  let ohlc = $derived.by(() => {
+    return candlesStore.get(selectedSymbol);
+  });
   let quote = $derived(quotesStore.get(selectedSymbol));
   let orders = $derived(ordersStore.forSymbol(selectedSymbol));
   let trades = $derived(tradesStore.forSymbol(selectedSymbol));
@@ -170,6 +172,11 @@
     orderLines.forEach(line => tvCandle?.removePriceLine(line));
     orderLines.clear();
     lastOhlcLen = 0;
+    // Clear chart data immediately when switching symbols
+    if (tvCandle) {
+      tvCandle.setData([]);
+      tvVolume?.setData([]);
+    }
     onSubscribe?.(sym, selectedTf);
   }
 
@@ -213,7 +220,6 @@
       wickUpColor: '#4caf50', wickDownColor: '#f44336',
     });
 
-    // Task 2: volume histogram overlaid at bottom 20% of chart
     tvVolume = tvChart.addHistogramSeries({
       priceScaleId: 'volume',
       priceFormat: { type: 'volume' },
