@@ -41,7 +41,7 @@
     const monaco = await loader.init();
     let content = '';
     try {
-      const res = await fetch(`/api/scripts/${encodeURIComponent(scriptPath)}`);
+      const res = await fetch(`/api/scripts/${encodeURIComponent(scriptPath)}`, { credentials: 'include' });
       if (res.ok) content = await res.text();
     } catch {
       // file not found — start empty

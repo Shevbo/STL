@@ -65,7 +65,7 @@
 
   async function loadInstruments() {
     try {
-      const res = await fetch('/api/v1/instruments');
+      const res = await fetch('/api/v1/instruments', { credentials: 'include' });
       if (!res.ok) return;
       const data = await res.json() as { instruments: { symbol: string; ticker: string; name: string }[] };
       instrumentStore.setList(data.instruments ?? []);
@@ -77,7 +77,7 @@
   // п.1: fetch params when effective symbol changes
   $effect(() => {
     if (!effectiveSymbol || !authed) return;
-    fetch(`/api/v1/instruments/${encodeURIComponent(effectiveSymbol)}/params`)
+    fetch(`/api/v1/instruments/${encodeURIComponent(effectiveSymbol)}/params`, { credentials: 'include' })
       .then(r => r.ok ? r.json() as Promise<Record<string, unknown>> : null)
       .then(data => { if (data) instrumentStore.setParams(data); })
       .catch(() => {});
@@ -90,7 +90,7 @@
   }
 
   onMount(async () => {
-    const res = await fetch('/api/auth/me');
+    const res = await fetch('/api/auth/me', { credentials: 'include' });
     if (res.ok) {
       authed = true;
       startWs();
@@ -114,7 +114,7 @@
   }
 
   async function handleRunBacktest(symbol: string, from: string, to: string, stratId: string): Promise<void> {
-    const res = await fetch(`/api/backtest?symbol=${symbol}&from=${from}&to=${to}&strategy=${stratId}`);
+    const res = await fetch(`/api/backtest?symbol=${symbol}&from=${from}&to=${to}&strategy=${stratId}`, { credentials: 'include' });
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
     backtestResult = await res.json() as BacktestResult;
   }
@@ -160,7 +160,7 @@
 
   async function handleEditorSave(path: string, content: string): Promise<void> {
     const res = await fetch(`/api/scripts/${encodeURIComponent(path)}`, {
-      method: 'PUT', body: content,
+      method: 'PUT', credentials: 'include', body: content,
       headers: { 'Content-Type': 'text/plain' },
     });
     if (!res.ok) throw new Error(`Save failed: ${res.status}`);
