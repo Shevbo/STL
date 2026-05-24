@@ -11,8 +11,8 @@ SERVICE="shectory-trader"
 
 # ── 1. Проверить что коммиты готовы к отправке ──────────────────────────────
 echo "▶ Проверка статуса git..."
-if ! git diff-index --quiet HEAD --; then
-  echo "✗ Есть неустановленные изменения. Используйте: git add && git commit"
+if ! git diff-index --quiet HEAD -- ':!.claude/worktrees'; then
+  echo "✗ Есть неустановленные изменения (исключая .claude/worktrees). Используйте: git add && git commit"
   exit 1
 fi
 
