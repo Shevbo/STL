@@ -112,7 +112,7 @@ def create_app() -> FastAPI:
         response.set_cookie(
             _SESSION_COOKIE, token,
             httponly=True, samesite="lax",
-            secure=True, path="/", max_age=_COOKIE_MAX_AGE,
+            secure=False, path="/", max_age=_COOKIE_MAX_AGE,
         )
         return {"ok": True, "email": user.email, "role": user.role}
 
