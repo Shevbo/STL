@@ -15,18 +15,31 @@ export class WsClient {
   private pending: WsIncoming[] = [];
   private rafId: number | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private sendQueue: object[] = [];
 
   constructor(private readonly url: string) {}
 
   send(msg: object): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(msg));
+    } else {
+      this.sendQueue.push(msg);
+    }
+  }
+
+  private flushQueue(): void {
+    while (this.sendQueue.length > 0 && this.ws && this.ws.readyState === WebSocket.OPEN) {
+      const msg = this.sendQueue.shift();
+      if (msg) this.ws.send(JSON.stringify(msg));
     }
   }
 
   connect(): void {
     this.ws = new WebSocket(this.url);
-    this.ws.onopen = () => servicesStore.set('md', 'ok');
+    this.ws.onopen = () => {
+      servicesStore.set('md', 'ok');
+      this.flushQueue();
+    };
     this.ws.onclose = () => {
       servicesStore.set('md', 'error');
       this.scheduleReconnect();
@@ -90,5 +103,6 @@ export class WsClient {
     if (this.reconnectTimer !== null) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
     this.ws?.close(1000);
     this.ws = null;
+    this.sendQueue = [];
   }
 }
