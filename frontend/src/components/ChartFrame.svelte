@@ -49,9 +49,6 @@
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let orderLines = new Map<string, any>();
 
-  // Store visible range for preserving zoom on timeframe change
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let savedVisibleRange: any = null;
 
   let ohlc = $derived.by(() => {
     return candlesStore.get(selectedSymbol);
@@ -120,12 +117,8 @@
       tvCandle.setData(bars);
       tvVolume?.setData(vols);
       lastOhlcLen = ohlc.length;
-      if (savedVisibleRange) {
-        tvChart.timeScale().setVisibleLogicalRange(savedVisibleRange);
-        savedVisibleRange = null;
-      } else {
-        tvChart.timeScale().fitContent();
-      }
+      tvChart.timeScale().fitContent();
+      tvChart.timeScale().scrollToPosition(9999, false);
     } else {
       console.log('[Chart] update last bar only');
       tvCandle.update(bars[bars.length - 1]);
@@ -176,10 +169,6 @@
 
   function changeTimeframe(tf: number) {
     if (tf === selectedTf) return;
-    // Save current visible range to preserve zoom/scale
-    if (tvChart) {
-      savedVisibleRange = tvChart.timeScale().getVisibleLogicalRange();
-    }
     selectedTf = tf;
     orderLines.forEach(line => tvCandle?.removePriceLine(line));
     orderLines.clear();
@@ -240,10 +229,13 @@
       grid: { vertLines: { color: '#1e1e3a' }, horzLines: { color: '#1e1e3a' } },
       timeScale: {
         borderColor: '#2d2d4a',
-        rightOffset: 0,
+        rightOffset: 10,
       },
       crosshair: { mode: 1 },
     });
+    tvChart.timeScale().applyOptions({
+      timeVisible: true,
+    } as any);
 
     tvCandle = tvChart.addCandlestickSeries({
       upColor: '#4caf50', downColor: '#f44336',
