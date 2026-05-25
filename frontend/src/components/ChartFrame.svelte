@@ -49,6 +49,10 @@
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let orderLines = new Map<string, any>();
 
+  // Store visible range for preserving zoom on timeframe change
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let savedVisibleRange: any = null;
+
   let ohlc = $derived.by(() => {
     return candlesStore.get(selectedSymbol);
   });
@@ -116,7 +120,12 @@
       tvCandle.setData(bars);
       tvVolume?.setData(vols);
       lastOhlcLen = ohlc.length;
-      tvChart.timeScale().fitContent();
+      if (savedVisibleRange) {
+        tvChart.timeScale().setVisibleLogicalRange(savedVisibleRange);
+        savedVisibleRange = null;
+      } else {
+        tvChart.timeScale().fitContent();
+      }
     } else {
       console.log('[Chart] update last bar only');
       tvCandle.update(bars[bars.length - 1]);
@@ -167,6 +176,10 @@
 
   function changeTimeframe(tf: number) {
     if (tf === selectedTf) return;
+    // Save current visible range to preserve zoom/scale
+    if (tvChart) {
+      savedVisibleRange = tvChart.timeScale().getVisibleLogicalRange();
+    }
     selectedTf = tf;
     orderLines.forEach(line => tvCandle?.removePriceLine(line));
     orderLines.clear();
@@ -225,7 +238,11 @@
       height: chartH,
       layout: { background: { color: '#0f0f1e' }, textColor: '#888' },
       grid: { vertLines: { color: '#1e1e3a' }, horzLines: { color: '#1e1e3a' } },
-      timeScale: { borderColor: '#2d2d4a' },
+      timeScale: {
+        borderColor: '#2d2d4a',
+        timeVisible: true,
+        secondsVisible: false,
+      },
       crosshair: { mode: 1 },
     });
 
