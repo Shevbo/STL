@@ -117,8 +117,17 @@
       tvCandle.setData(bars);
       tvVolume?.setData(vols);
       lastOhlcLen = ohlc.length;
+
+      const barsCount = Math.max(bars.length, 96);
       tvChart.timeScale().fitContent();
-      tvChart.timeScale().scrollToPosition(9999, false);
+      const visibleRange = tvChart.timeScale().getVisibleLogicalRange();
+      if (visibleRange) {
+        const barsToShow = Math.min(barsCount, 96);
+        tvChart.timeScale().setVisibleLogicalRange({
+          from: Math.max(0, (barsCount - barsToShow) as any),
+          to: (barsCount - 1) as any,
+        });
+      }
     } else {
       console.log('[Chart] update last bar only');
       tvCandle.update(bars[bars.length - 1]);
