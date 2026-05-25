@@ -244,16 +244,6 @@
       },
       crosshair: { mode: 1 },
     });
-    const timeFormatter = (time: unknown) => {
-      if (typeof time !== 'number') return '';
-      const d = new Date(time * 1000);
-      const month = String(d.getUTCMonth() + 1).padStart(2, '0');
-      const day = String(d.getUTCDate()).padStart(2, '0');
-      const hours = String(d.getUTCHours()).padStart(2, '0');
-      const mins = String(d.getUTCMinutes()).padStart(2, '0');
-      return `${month}-${day} ${hours}:${mins}`;
-    };
-    tvChart.timeScale().applyOptions({ tickMarkFormatter: timeFormatter as any });
 
     tvCandle = tvChart.addCandlestickSeries({
       upColor: '#4caf50', downColor: '#f44336',
