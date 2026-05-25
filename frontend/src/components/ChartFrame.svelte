@@ -240,11 +240,11 @@
       grid: { vertLines: { color: '#1e1e3a' }, horzLines: { color: '#1e1e3a' } },
       timeScale: {
         borderColor: '#2d2d4a',
-        timeVisible: true,
-        secondsVisible: false,
+        rightOffset: 0,
       },
       crosshair: { mode: 1 },
     });
+    tvChart.timeScale().applyOptions({ timeVisible: true, secondsVisible: false });
 
     tvCandle = tvChart.addCandlestickSeries({
       upColor: '#4caf50', downColor: '#f44336',
