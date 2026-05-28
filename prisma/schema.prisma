@@ -40,6 +40,8 @@ model Robot {
   liveTrades   LiveTrade[]
   liveMetrics  LiveMetric[]
   @@map("robots")
+  @@index([userEmail])
+  @@index([deployed])
 }
 
 model BacktestRun {
@@ -55,6 +57,8 @@ model BacktestRun {
   finishedAt DateTime?
   results    BacktestResult[]
   @@map("backtest_runs")
+  @@index([status])
+  @@index([robotId])
 }
 
 model BacktestResult {
@@ -84,6 +88,7 @@ model LiveTrade {
   status    String
   timestamp DateTime @default(now())
   @@map("live_trades")
+  @@index([robotId])
 }
 
 model LiveMetric {
@@ -95,4 +100,5 @@ model LiveMetric {
   positions Json     @default("{}")
   timestamp DateTime @default(now())
   @@map("live_metrics")
+  @@index([robotId, timestamp])
 }
