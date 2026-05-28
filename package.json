@@ -1,5 +1,9 @@
 {
   "devDependencies": {
     "@playwright/test": "^1.60.0"
+  },
+  "scripts": {
+    "db:generate": "cd prisma && npx prisma generate",
+    "db:migrate": "cd prisma && npx prisma migrate deploy"
   }
 }

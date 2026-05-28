@@ -1,0 +1,11 @@
+{
+  "name": "stl-prisma",
+  "private": true,
+  "devDependencies": {
+    "prisma": "^7.0.0"
+  },
+  "dependencies": {
+    "@prisma/client": "^7.0.0",
+    "@prisma/adapter-pg": "^7.0.0"
+  }
+}

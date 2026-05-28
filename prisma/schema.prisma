@@ -1,0 +1,98 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("LAB_DATABASE_URL")
+}
+
+model StlLink {
+  id          String   @id @default(cuid())
+  userEmail   String
+  broker      String   @default("finam")
+  exchange    String   @default("FORTS")
+  accountId   String
+  instruments String[]
+  operations  String   @default("RW")
+  enabled     Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  robots      Robot[]
+  @@map("stl_links")
+}
+
+model Robot {
+  id          String    @id @default(cuid())
+  userEmail   String
+  stlLinkId   String
+  stlLink     StlLink   @relation(fields: [stlLinkId], references: [id])
+  name        String
+  scriptCode  String
+  paramsJson  Json      @default("{}")
+  stateJson   Json      @default("{}")
+  schedule    String    @default("*/5 * * * *")
+  deployed    Boolean   @default(false)
+  deployedAt  DateTime?
+  version     Int       @default(1)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  backtestRuns BacktestRun[]
+  liveTrades   LiveTrade[]
+  liveMetrics  LiveMetric[]
+  @@map("robots")
+}
+
+model BacktestRun {
+  id         String    @id @default(cuid())
+  robotId    String
+  robot      Robot     @relation(fields: [robotId], references: [id])
+  paramsGrid Json
+  dateFrom   DateTime
+  dateTo     DateTime
+  status     String    @default("pending")
+  errorMsg   String?
+  createdAt  DateTime  @default(now())
+  finishedAt DateTime?
+  results    BacktestResult[]
+  @@map("backtest_runs")
+}
+
+model BacktestResult {
+  id          String      @id @default(cuid())
+  runId       String
+  run         BacktestRun @relation(fields: [runId], references: [id])
+  params      Json
+  trades      Json        @default("[]")
+  equityCurve Json        @default("[]")
+  sharpe      Float?
+  maxDrawdown Float?
+  winRate     Float?
+  totalReturn Float?
+  totalTrades Int?
+  @@map("backtest_results")
+}
+
+model LiveTrade {
+  id        String   @id @default(cuid())
+  robotId   String
+  robot     Robot    @relation(fields: [robotId], references: [id])
+  symbol    String
+  side      String
+  qty       Int
+  price     Decimal  @db.Decimal(18, 6)
+  orderId   String?
+  status    String
+  timestamp DateTime @default(now())
+  @@map("live_trades")
+}
+
+model LiveMetric {
+  id        String   @id @default(cuid())
+  robotId   String
+  robot     Robot    @relation(fields: [robotId], references: [id])
+  equity    Decimal  @db.Decimal(18, 2)
+  pnl       Decimal  @db.Decimal(18, 2)
+  positions Json     @default("{}")
+  timestamp DateTime @default(now())
+  @@map("live_metrics")
+}
