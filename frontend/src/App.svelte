@@ -12,6 +12,7 @@
   import OrderBook from './components/OrderBook.svelte';
   import BottomBar from './components/BottomBar.svelte';
   import LabBar from './components/LabBar.svelte';
+  import LabPanel from './components/LabPanel.svelte';
   import CodeEditor from './components/CodeEditor.svelte';
   import LoginDialog from './components/LoginDialog.svelte';
   import { WsClient } from '$lib/ws';
@@ -26,6 +27,7 @@
 
   let authed = $state(false);
   let labMode = $state(false);
+  let showLab = $state(false);
   let selectedRobotId = $state<string | null>(null);
   let backtestResult = $state<BacktestResult | null>(null);
   let editorPath = $state<string | null>(null);
@@ -184,7 +186,7 @@
   <LoginDialog {onLogin} />
 {:else}
 <div class="shell">
-  <TopBar {labMode} onToggleLab={() => labMode = !labMode} />
+  <TopBar {labMode} onToggleLab={() => labMode = !labMode} {showLab} onToggleLabPanel={() => showLab = !showLab} />
   <div class="body">
     <div class="left-col">
       <RobotsPanel selectedId={selectedRobotId} onSelect={(id) => selectedRobotId = id} />
@@ -218,6 +220,11 @@
       />
     </div>
   </div>
+  {#if showLab}
+    <div class="lab-panel-wrap">
+      <LabPanel />
+    </div>
+  {/if}
   {#if labMode}
     <LabBar
       onRunBacktest={handleRunBacktest}
@@ -258,4 +265,5 @@
   .chart-book-row { flex: 1; display: flex; min-height: 0; overflow: hidden; }
   .content { flex: 1; overflow-y: auto; background: #0f0f1e; display: flex; flex-direction: column; min-width: 0; }
   .right-col { width: 180px; flex-shrink: 0; background: #14142a; border-left: 1px solid #2d2d4a; display: flex; flex-direction: column; overflow-y: auto; }
+  .lab-panel-wrap { height: 340px; flex-shrink: 0; overflow: hidden; }
 </style>
