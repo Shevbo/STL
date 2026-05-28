@@ -2,7 +2,10 @@ from contextlib import asynccontextmanager
 
 import httpx
 import structlog
-from cuid2 import cuid
+from cuid2 import Cuid as _Cuid
+
+def cuid() -> str:
+    return _Cuid().generate()
 from fastapi import FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
