@@ -79,6 +79,12 @@ class BacktestRuntime:
         )
         self._orders.append(order)
         pos = self._positions.get(symbol, {"side": "flat", "qty": 0, "avg": 0.0})
+
+        # Track realized PnL on position close (sell)
+        if side == "sell" and pos["qty"] > 0:
+            realized_pnl = (fill_price - pos["avg"]) * min(qty, pos["qty"])
+            self._equity += realized_pnl
+
         if side == "buy":
             new_qty = pos["qty"] + qty
             pos = {"side": "long", "qty": new_qty, "avg": fill_price}
@@ -166,7 +172,7 @@ class LiveRuntime:
             if p.symbol == symbol:
                 return p
         return Position(symbol=symbol, account_id="", side="flat",
-                        quantity=0, current_price=Decimal(0), var_margin=Decimal(0))
+                        quantity=0, avg_price=Decimal(0), current_price=Decimal(0), var_margin=Decimal(0))
 
     async def get_account(self) -> AccountSummary:
         return await self._pos.get_account_summary()
