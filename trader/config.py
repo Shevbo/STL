@@ -23,3 +23,4 @@ class Settings(BaseSettings):
     shectory_auth_bridge_secret: str = ""
     shectory_local_user_email: str = ""
     shectory_local_user_password_sha256: str = ""
+    lab_db_url: str = ""

@@ -15,6 +15,9 @@ protobuf = ">=5.26,<6"
 googleapis-common-protos = ">=1.63"
 fastapi = "^0.111"
 uvicorn = {extras = ["standard"], version = "^0.30"}
+asyncpg = "^0.29"
+croniter = "^3.0"
+cuid2 = "^2.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.2"
