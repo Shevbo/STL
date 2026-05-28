@@ -92,6 +92,8 @@
   });
 
   let lastOhlcLen = 0;
+  let scrollPos = $state(100);
+  let maxVisibleBars = 96;
 
   // Task 2: sync OHLC + volume series
   $effect(() => {
@@ -118,21 +120,32 @@
       tvVolume?.setData(vols);
       lastOhlcLen = ohlc.length;
 
-      const barsCount = Math.max(bars.length, 96);
-      tvChart.timeScale().fitContent();
-      const visibleRange = tvChart.timeScale().getVisibleLogicalRange();
-      if (visibleRange) {
-        const barsToShow = Math.min(barsCount, 96);
-        tvChart.timeScale().setVisibleLogicalRange({
-          from: Math.max(0, (barsCount - barsToShow) as any),
-          to: (barsCount - 1) as any,
-        });
-      }
+      const barsToShow = Math.min(bars.length, maxVisibleBars);
+      const from = Math.max(0, bars.length - barsToShow);
+      const to = bars.length - 1;
+      tvChart.timeScale().setVisibleLogicalRange({ from, to });
+      scrollPos = 100;
     } else {
       console.log('[Chart] update last bar only');
       tvCandle.update(bars[bars.length - 1]);
       tvVolume?.update(vols[vols.length - 1]);
     }
+  });
+
+  // Task 7: sync horizontal scrollbar with chart visible range
+  $effect(() => {
+    if (!tvChart) return;
+    const unsubscribe = tvChart.timeScale().subscribeVisibleLogicalRangeChange((range: any) => {
+      if (!range || !ohlc.length) return;
+      const barsToShow = Math.min(ohlc.length, maxVisibleBars);
+      const maxFrom = Math.max(0, ohlc.length - barsToShow);
+      if (maxFrom === 0) {
+        scrollPos = 100;
+      } else {
+        scrollPos = Math.min(100, (range.from / maxFrom) * 100);
+      }
+    });
+    return () => unsubscribe?.();
   });
 
   // Task 6: order price lines
@@ -202,6 +215,16 @@
     orderbookStore.clear(oldSymbol);
     console.log('[Chart] calling onSubscribe for', sym);
     onSubscribe?.(sym, selectedTf);
+  }
+
+  function handleScroll(event: Event) {
+    if (!tvChart || !ohlc.length) return;
+    const percent = Number((event.target as HTMLInputElement).value);
+    const barsToShow = Math.min(ohlc.length, maxVisibleBars);
+    const maxFrom = Math.max(0, ohlc.length - barsToShow);
+    const from = Math.round((percent / 100) * maxFrom);
+    const to = Math.min(from + barsToShow - 1, ohlc.length - 1);
+    tvChart.timeScale().setVisibleLogicalRange({ from, to });
   }
 
   const TICK_H = 80;
@@ -327,6 +350,17 @@
   <div class="chart-area">
     <div class="tick-strip" bind:this={tickEl}></div>
     <div class="ohlc-area" bind:this={ohlcAreaEl}></div>
+    <div class="scrollbar-container">
+      <input
+        type="range"
+        class="chart-scrollbar"
+        min="0"
+        max="100"
+        value={scrollPos}
+        onchange={handleScroll}
+        oninput={handleScroll}
+      />
+    </div>
   </div>
 </div>
 
@@ -356,4 +390,22 @@
   .chart-area { flex: 1; position: relative; overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
   .tick-strip { flex-shrink: 0; height: 80px; position: relative; z-index: 1; }
   .ohlc-area { flex: 1; min-height: 0; position: relative; }
+  .scrollbar-container { flex-shrink: 0; padding: 2px 0; background: #0f0f1e; }
+  .chart-scrollbar {
+    width: 100%; height: 12px; cursor: pointer;
+    appearance: none; background: transparent;
+  }
+  .chart-scrollbar::-webkit-slider-thumb {
+    appearance: none;
+    width: 20px; height: 12px; background: #4caf50; border-radius: 2px; cursor: pointer;
+  }
+  .chart-scrollbar::-moz-range-thumb {
+    width: 20px; height: 12px; background: #4caf50; border-radius: 2px; cursor: pointer; border: none;
+  }
+  .chart-scrollbar::-webkit-slider-runnable-track {
+    background: #1e1e3a; height: 4px; border-radius: 2px;
+  }
+  .chart-scrollbar::-moz-range-track {
+    background: transparent;
+  }
 </style>
