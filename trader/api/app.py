@@ -53,6 +53,23 @@ async def lifespan(app: FastAPI):
         account_id=account_id,
     )
 
+    # LAB: init DB pool and scheduler
+    from trader.db import init_pool, close_pool, get_pool
+    from trader.lab.scheduler import RobotScheduler
+    if settings.lab_db_url:
+        await init_pool(settings.lab_db_url)
+        scheduler = RobotScheduler(
+            db_pool=get_pool(),
+            tx_client=tx,
+            pos_client=pos,
+        )
+        await scheduler.start()
+        db_pool = get_pool()
+    else:
+        scheduler = RobotScheduler(db_pool=None)
+        db_pool = None
+        log.warning("lab.db_url_not_set", msg="LAB features disabled")
+
     hub = WsHub(
         feed,
         pos_client=pos,
@@ -79,9 +96,15 @@ async def lifespan(app: FastAPI):
     app.state.settings = settings
     app.state.auth = auth
     app.state.account_id = account_id
+    app.state.scheduler = scheduler
+    app.state.db_pool = db_pool
 
     yield
 
+    await scheduler.stop_all()
+    if settings.lab_db_url:
+        from trader.db import close_pool
+        await close_pool()
     await hub.stop()
     await feed.aclose()
     await auth.aclose()
