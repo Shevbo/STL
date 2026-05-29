@@ -61,13 +61,16 @@ async def lifespan(app: FastAPI):
     from trader.lab.scheduler import RobotScheduler
     if settings.lab_db_url:
         await init_pool(settings.lab_db_url)
+        db_pool = get_pool()
+        # Ensure ohlcv_bars table exists (idempotent)
+        from trader.lab.market_store import ensure_ohlcv_table
+        await ensure_ohlcv_table(db_pool)
         scheduler = RobotScheduler(
-            db_pool=get_pool(),
+            db_pool=db_pool,
             tx_client=tx,
             pos_client=pos,
         )
         await scheduler.start()
-        db_pool = get_pool()
     else:
         scheduler = RobotScheduler(db_pool=None)
         db_pool = None
@@ -174,36 +177,66 @@ async def _run_backtest_task(run_id: str, body: dict, pool, app_state) -> None:
 
 
 async def _fetch_bars_for_backtest(symbol: str, date_from: str, date_to: str, app_state) -> list:
-    from trader.lab.runtime import Bar
-    token = await app_state.auth.get_token()
-    url = f"{app_state.settings.finam_api_base_url}/v1/bars"
-    async with httpx.AsyncClient(http2=True) as client:
-        resp = await client.get(
-            url,
-            headers={"Authorization": f"Bearer {token}"},
-            params={
-                "symbol": symbol,
-                "timeframe": "TIME_FRAME_M1",
-                "from": date_from,
-                "to": date_to,
-            },
-            timeout=30.0,
-        )
-        resp.raise_for_status()
-        raw = resp.json()
-    bars = []
-    for b in raw.get("bars", []):
-        def _f(v):
-            return float(v["value"] if isinstance(v, dict) else v)
-        bars.append(Bar(
-            time=int(b["time"]) if isinstance(b["time"], (int, float)) else int(b.get("timestamp", 0)),
-            open=_f(b["open"]),
-            high=_f(b["high"]),
-            low=_f(b["low"]),
-            close=_f(b["close"]),
-            volume=int(b.get("volume", 0)),
-        ))
+    """
+    Returns minute bars for backtest.
+    1. Try DB cache (ohlcv_bars).
+    2. Fall back to MOEX ISS public API (free, no auth needed).
+    """
+    from datetime import date as _date
+    from trader.lab.iss_loader import load_bars_iss
+    from trader.lab.market_store import get_bars, upsert_bars
+
+    def _parse_date(s: str) -> _date:
+        # accept ISO datetime or date string
+        return _date.fromisoformat(s[:10])
+
+    d_from = _parse_date(date_from)
+    d_to = _parse_date(date_to)
+    pool = getattr(app_state, "db_pool", None)
+
+    # 1. Check DB cache
+    if pool:
+        cached = await get_bars(pool, symbol, d_from, d_to)
+        if cached:
+            return cached
+
+    # 2. Fetch from MOEX ISS
+    log.info("backtest.fetch_iss", symbol=symbol, from_date=str(d_from), to_date=str(d_to))
+    bars = await load_bars_iss(symbol, d_from, d_to, interval=1)
+
+    # 3. Save to DB for future reuse
+    if pool and bars:
+        await upsert_bars(pool, symbol, bars)
+
     return bars
+
+
+async def _market_update_task(symbols: list[str], date_from: str, date_to: str, pool) -> None:
+    """Background: download ISS bars for multiple symbols and cache in DB."""
+    from datetime import date as _date
+    from trader.lab.iss_loader import load_bars_iss
+    from trader.lab.market_store import upsert_bars, ensure_ohlcv_table
+
+    def _parse(s: str) -> _date:
+        return _date.fromisoformat(s[:10])
+
+    d_from = _parse(date_from)
+    d_to = _parse(date_to)
+
+    if pool:
+        await ensure_ohlcv_table(pool)
+
+    for sym in symbols:
+        try:
+            log.info("market.update.start", symbol=sym)
+            bars = await load_bars_iss(sym, d_from, d_to, interval=1)
+            if pool and bars:
+                n = await upsert_bars(pool, sym, bars)
+                log.info("market.update.done", symbol=sym, bars=n)
+            else:
+                log.warning("market.update.empty", symbol=sym)
+        except Exception as exc:
+            log.error("market.update.error", symbol=sym, error=str(exc))
 
 
 class LoginRequest(BaseModel):
@@ -466,6 +499,58 @@ def create_app() -> FastAPI:
             "SELECT * FROM backtest_results WHERE run_id=$1 ORDER BY total_return DESC NULLS LAST",
             run_id,
         )
+        return [dict(r) for r in rows]
+
+    # ── Market Data (MOEX ISS cache) ──────────────────────────────────────────
+
+    @fastapi_app.post("/api/v1/market/update", status_code=202)
+    async def market_update(body: dict, request: Request):
+        """
+        Trigger ISS download for a list of symbols and date range.
+        Saves to ohlcv_bars DB cache. Runs in background.
+        Body: { "symbols": ["RIM6","SIM6"], "dateFrom": "2026-01-01", "dateTo": "2026-05-01" }
+        """
+        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        import asyncio as _asyncio
+
+        symbols = body.get("symbols", [])
+        date_from = body.get("dateFrom", "")
+        date_to = body.get("dateTo", "")
+        if not symbols or not date_from or not date_to:
+            raise HTTPException(status_code=422, detail="symbols, dateFrom, dateTo required")
+
+        pool = request.app.state.db_pool
+        _asyncio.create_task(
+            _market_update_task(symbols, date_from, date_to, pool)
+        )
+        return {"status": "started", "symbols": symbols, "dateFrom": date_from, "dateTo": date_to}
+
+    @fastapi_app.get("/api/v1/market/coverage")
+    async def market_coverage(request: Request, symbol: str | None = None):
+        """
+        Return available data coverage per symbol.
+        Query param: ?symbol=RIM6 (optional, returns all if omitted).
+        """
+        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        pool = request.app.state.db_pool
+        if pool is None:
+            return []
+        if symbol:
+            from trader.lab.market_store import get_coverage
+            cov = await get_coverage(pool, symbol)
+            return [{"symbol": symbol, **cov}] if cov else []
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT symbol, interval_min,
+                       MIN(ts)::date AS min_date,
+                       MAX(ts)::date AS max_date,
+                       COUNT(*) AS cnt
+                FROM ohlcv_bars
+                GROUP BY symbol, interval_min
+                ORDER BY symbol
+                """
+            )
         return [dict(r) for r in rows]
 
     @fastapi_app.exception_handler(Exception)

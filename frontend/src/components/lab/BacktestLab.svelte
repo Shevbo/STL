@@ -11,6 +11,9 @@
   let results = $state<any[]>([]);
   let running = $state(false);
   let error = $state('');
+  let loadingData = $state(false);
+  let dataStatus = $state('');
+  let coverage = $state<any[]>([]);
 
   async function loadRobots() {
     const res = await fetchWithAuth('/api/v1/robots');
@@ -78,7 +81,38 @@
     await fetchWithAuth(`/api/v1/robots/${selectedRobotId}/deploy`, { method: 'POST' });
   }
 
-  $effect(() => { loadRobots(); });
+  async function loadData() {
+    const robot = robots.find(r => r.id === selectedRobotId);
+    const symbol = robot?.params_json?.symbol || '';
+    if (!symbol) { error = 'Robot has no symbol in params_json'; return; }
+    loadingData = true;
+    dataStatus = 'Requesting ISS download…';
+    error = '';
+    try {
+      const res = await fetchWithAuth('/api/v1/market/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          symbols: [symbol],
+          dateFrom: new Date(dateFrom).toISOString(),
+          dateTo: new Date(dateTo).toISOString(),
+        }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      dataStatus = `Download started for ${symbol}. Refresh coverage in ~30s.`;
+      setTimeout(loadCoverage, 5000);
+    } catch (e) {
+      error = String(e);
+    }
+    loadingData = false;
+  }
+
+  async function loadCoverage() {
+    const res = await fetchWithAuth('/api/v1/market/coverage');
+    coverage = res.ok ? await res.json() : [];
+  }
+
+  $effect(() => { loadRobots(); loadCoverage(); });
 </script>
 
 <div class="backtest-lab">
@@ -96,6 +130,25 @@
       Params grid (JSON)
       <textarea bind:value={paramsGrid} rows="4"></textarea>
     </label>
+    <div class="data-section">
+      <div class="section-title">Market Data (ISS MOEX)</div>
+      {#if coverage.length}
+        <div class="coverage">
+          {#each coverage as c}
+            <span class="cov-item">{c.symbol}: {c.min_date} — {c.max_date} ({c.cnt ?? c.count} bars)</span>
+          {/each}
+        </div>
+      {:else}
+        <div class="no-data">No cached data yet</div>
+      {/if}
+      <button class="load-btn" onclick={loadData} disabled={loadingData}>
+        {loadingData ? 'Loading…' : 'Load from ISS'}
+      </button>
+      {#if dataStatus}<div class="data-status">{dataStatus}</div>{/if}
+    </div>
+
+    <div class="divider"></div>
+
     <button onclick={runBacktest} disabled={running}>
       {running ? `Running… (${status})` : 'Run Backtest'}
     </button>
@@ -149,6 +202,14 @@
   }
   button:disabled { opacity: 0.5; cursor: default; }
   .error { color: #f44336; font-size: 11px; }
+  .data-section { background: #0a0a15; border: 1px solid #2d2d4a; border-radius: 4px; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+  .section-title { font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; }
+  .coverage { display: flex; flex-direction: column; gap: 2px; }
+  .cov-item { font-size: 10px; color: #4caf50; font-family: monospace; }
+  .no-data { font-size: 10px; color: #444; font-style: italic; }
+  .load-btn { background: #1a1a2e; border-color: #3d3d5a; color: #aaa; padding: 4px 10px; font-size: 10px; }
+  .data-status { font-size: 10px; color: #888; }
+  .divider { height: 1px; background: #2d2d4a; margin: 4px 0; }
   .results { flex: 1; overflow: auto; padding: 16px; }
   .disclaimer { font-size: 10px; color: #666; margin-bottom: 8px; }
   table { width: 100%; border-collapse: collapse; font-size: 11px; }
