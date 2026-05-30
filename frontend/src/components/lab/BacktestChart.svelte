@@ -41,6 +41,20 @@
   let error = $state('');
   let stats = $state<any>(null);
   let ledger = $state<any[]>([]);
+  let crossLabel = $state('');   // datetime under cursor (answers "what date")
+  let resampleMin = $state(60);  // selected candle interval in minutes
+
+  const INTERVALS = [
+    { label: '1м', v: 1 }, { label: '5м', v: 5 }, { label: '15м', v: 15 },
+    { label: '30м', v: 30 }, { label: '1ч', v: 60 }, { label: '2ч', v: 120 },
+    { label: '4ч', v: 240 }, { label: '12ч', v: 720 }, { label: '1д', v: 1440 },
+  ];
+
+  function pickInterval(v: number) {
+    if (v === resampleMin) return;
+    resampleMin = v;
+    loadData();
+  }
 
   // params as object
   let params = $derived(
@@ -127,12 +141,13 @@
   // ── chart init ─────────────────────────────────────────────────────
   onMount(async () => {
     const { createChart } = await import('lightweight-charts');
+    // Fixed price-scale width so BOTH charts' time axes line up vertically.
     const chartOpts = {
       layout: { background: { color: '#0a0a15' }, textColor: '#666' },
       grid: { vertLines: { color: '#1a1a2e' }, horzLines: { color: '#1a1a2e' } },
       timeScale: { borderColor: '#2d2d4a', timeVisible: true, rightOffset: 2 },
       crosshair: { mode: 1 },
-      rightPriceScale: { borderColor: '#2d2d4a' },
+      rightPriceScale: { borderColor: '#2d2d4a', minimumWidth: 80 },
     };
 
     tvCandle = createChart(candleEl, {
@@ -155,10 +170,22 @@
       width: equityEl.clientWidth || 600,
       height: equityEl.clientHeight || 160,
     });
-    equitySeries = tvEquity.addAreaSeries({
-      lineColor: '#4caf50', topColor: '#4caf5030', bottomColor: '#4caf5000',
+    // Baseline series: green above starting equity, red below — убыток сразу виден.
+    equitySeries = tvEquity.addBaselineSeries({
+      baseValue: { type: 'price', price: 100000 },  // updated to real start in loadData
+      topLineColor: '#4caf50', topFillColor1: '#4caf5040', topFillColor2: '#4caf5008',
+      bottomLineColor: '#f44336', bottomFillColor1: '#f4433608', bottomFillColor2: '#f4433640',
       lineWidth: 1, priceFormat: { type: 'price', precision: 0, minMove: 1 },
     });
+
+    // Crosshair → show full datetime so the date is always clear, even zoomed in.
+    const fmtFull = (ts: number) => new Date(ts * 1000).toLocaleString('ru-RU', {
+      timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', year: '2-digit',
+      hour: '2-digit', minute: '2-digit',
+    });
+    const onCross = (p: any) => { crossLabel = (p && p.time) ? fmtFull(p.time) : ''; };
+    tvCandle.subscribeCrosshairMove(onCross);
+    tvEquity.subscribeCrosshairMove(onCross);
 
     // time-scale sync by TIME range (series have different point densities:
     // candles are hourly-resampled, equity is per-minute, so logical-index sync misaligns).
@@ -186,11 +213,8 @@
   async function loadData() {
     loading = true; error = ''; syncReady = false;
     try {
-      const daySpan = (new Date(dateTo).getTime() - new Date(dateFrom).getTime()) / 86400000;
-      const resample = daySpan > 30 ? 60 : 5;
-
       const res = await fetchWithAuth(
-        `/api/v1/market/bars?symbol=${encodeURIComponent(symbol)}&date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}&resample_min=${resample}`
+        `/api/v1/market/bars?symbol=${encodeURIComponent(symbol)}&date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}&resample_min=${resampleMin}`
       );
       if (!res.ok) throw new Error(await res.text());
       const bars: any[] = await res.json();
@@ -222,17 +246,19 @@
       })).sort((a, b) => (a.time as number) - (b.time as number));
       candleSeries.setMarkers(markers);
 
-      // equity
+      // equity — baseline at starting equity so green=profit / red=loss
       const eq: any[] = Array.isArray(result?.equity_curve)
         ? result.equity_curve
         : (typeof result?.equity_curve === 'string' ? JSON.parse(result.equity_curve) : []);
       if (eq.length) {
+        const startEq = eq[0].equity;
+        equitySeries.applyOptions({ baseValue: { type: 'price', price: startEq } });
         equitySeries.setData(eq.map(p => ({ time: p.time, value: p.equity })));
       }
 
-      // analytics for stats + table
+      // analytics for stats + table (table newest-first)
       stats = analyze(trades, eq);
-      ledger = buildLedger(trades);
+      ledger = buildLedger(trades).reverse();
 
       // fit whole period on both (each shows its full data range)
       tvCandle.timeScale().fitContent();
@@ -286,6 +312,16 @@
         {#if k !== 'symbol'}<span class="bt-param">{k}={v}</span>{/if}
       {/each}
     </span>
+
+    <!-- interval selector -->
+    <div class="bt-intervals">
+      {#each INTERVALS as iv}
+        <button class:active={resampleMin === iv.v} onclick={() => pickInterval(iv.v)}>{iv.label}</button>
+      {/each}
+    </div>
+
+    <!-- datetime under cursor -->
+    {#if crossLabel}<span class="bt-cross">{crossLabel}</span>{/if}
   </div>
 
   <!-- candle area with overlays -->
@@ -359,6 +395,17 @@
   .bt-param {
     font-size: 10px; font-family: monospace; color: #888;
     background: #1a1a2e; border-radius: 2px; padding: 1px 5px;
+  }
+  .bt-intervals { display: flex; gap: 1px; margin-left: auto; }
+  .bt-intervals button {
+    background: transparent; color: #555; border: 1px solid transparent;
+    font-size: 10px; padding: 1px 6px; border-radius: 3px; cursor: pointer;
+  }
+  .bt-intervals button:hover { color: #aaa; }
+  .bt-intervals button.active { color: #4caf50; border-color: #4caf5066; }
+  .bt-cross {
+    font-size: 11px; font-family: monospace; color: #6aa8ff;
+    padding-left: 8px; white-space: nowrap;
   }
 
   .bt-candle-area { position: relative; flex: 1; min-height: 0; }

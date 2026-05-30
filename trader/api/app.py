@@ -610,25 +610,25 @@ def create_app() -> FastAPI:
         ts_from = _parse(date_from)
         ts_to   = _parse(date_to)
 
+        # Epoch-based bucketing works for ANY bucket size (minutes..days),
+        # unlike date_trunc('hour') which caps at 60-min granularity.
+        bucket_secs = max(1, int(resample_min)) * 60
         async with pool.acquire() as conn:
             rows = await conn.fetch(
-                f"""
+                """
                 SELECT
-                    EXTRACT(EPOCH FROM
-                        date_trunc('hour', ts) +
-                        (EXTRACT(MINUTE FROM ts)::int / $4 * $4) * interval '1 minute'
-                    )::bigint AS bucket,
-                    (array_agg(open  ORDER BY ts))[1]  AS open,
-                    MAX(high)                            AS high,
-                    MIN(low)                             AS low,
+                    (FLOOR(EXTRACT(EPOCH FROM ts) / $4) * $4)::bigint AS bucket,
+                    (array_agg(open  ORDER BY ts))[1]      AS open,
+                    MAX(high)                              AS high,
+                    MIN(low)                               AS low,
                     (array_agg(close ORDER BY ts DESC))[1] AS close,
-                    SUM(volume)                          AS volume
+                    SUM(volume)                            AS volume
                 FROM ohlcv_bars
                 WHERE symbol=$1 AND interval_min=1 AND ts BETWEEN $2 AND $3
                 GROUP BY bucket
                 ORDER BY bucket
                 """,
-                symbol, ts_from, ts_to, resample_min,
+                symbol, ts_from, ts_to, bucket_secs,
             )
         return [
             {"time": r["bucket"], "open": r["open"], "high": r["high"],
