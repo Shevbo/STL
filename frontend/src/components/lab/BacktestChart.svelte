@@ -63,7 +63,12 @@
       rightPriceScale: { borderColor: '#2d2d4a', minimumWidth: 84 },
     };
 
-    tvCandle = createChart(candleEl, { ...chartOpts, width: candleEl.clientWidth || 600, height: candleEl.clientHeight || 280 });
+    // Top chart: hide its time axis — the single shared axis lives on the equity chart below.
+    tvCandle = createChart(candleEl, {
+      ...chartOpts,
+      timeScale: { ...chartOpts.timeScale, visible: false },
+      width: candleEl.clientWidth || 600, height: candleEl.clientHeight || 280,
+    });
     candleSeries = tvCandle.addCandlestickSeries({
       upColor: '#26a65b', downColor: '#c0392b',
       borderUpColor: '#26a65b', borderDownColor: '#c0392b',

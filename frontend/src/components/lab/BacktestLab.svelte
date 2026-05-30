@@ -1,7 +1,10 @@
 <script lang="ts">
   import { fetchWithAuth } from '../../lib/fetch-auth';
   import BacktestChart from './BacktestChart.svelte';
+  import Optimizer from './Optimizer.svelte';
   import { toFills, replay } from '../../lib/lab-analytics';
+
+  let centerMode = $state<'chart' | 'optimize'>('chart');
 
   const TYPE_LABEL: Record<string, string> = {
     open: 'Открытие', average: 'Усреднение', close: 'Закрытие', reverse: 'Закр+Реверс',
@@ -274,22 +277,38 @@
     {/if}
   </div>
 
-  <!-- ── Center: chart ──────────────────────────────────────────── -->
+  <!-- ── Center: chart / optimizer ──────────────────────────────── -->
   <div class="chart-area">
-    {#if selectedResult}
-      <BacktestChart
-        result={selectedResult}
-        symbol={selectedSymbol}
-        strategy={selectedStrategy}
-        dateFrom={new Date(dateFrom).toISOString()}
-        dateTo={new Date(dateTo).toISOString()}
-      />
-    {:else}
-      <div class="chart-placeholder">
-        <div class="ph-icon">📈</div>
-        <div class="ph-text">Запустите бэктест и выберите строку результатов</div>
-      </div>
-    {/if}
+    <div class="center-tabs">
+      <button class:active={centerMode === 'chart'} onclick={() => centerMode = 'chart'}>График</button>
+      <button class:active={centerMode === 'optimize'} onclick={() => centerMode = 'optimize'}>Перебор параметров</button>
+    </div>
+
+    <div class="center-body">
+      {#if centerMode === 'optimize'}
+        <Optimizer
+          robotId={selectedRobotId}
+          strategy={selectedStrategy}
+          baseParams={(() => { const r = robots.find(x => x.id === selectedRobotId); return (typeof r?.params_json === 'object' ? r.params_json : {}); })()}
+          dateFrom={new Date(dateFrom).toISOString()}
+          dateTo={new Date(dateTo).toISOString()}
+          onSelectResult={(r) => { selectedResult = r; centerMode = 'chart'; }}
+        />
+      {:else if selectedResult}
+        <BacktestChart
+          result={selectedResult}
+          symbol={selectedSymbol}
+          strategy={selectedStrategy}
+          dateFrom={new Date(dateFrom).toISOString()}
+          dateTo={new Date(dateTo).toISOString()}
+        />
+      {:else}
+        <div class="chart-placeholder">
+          <div class="ph-icon">📈</div>
+          <div class="ph-text">Запустите бэктест и выберите строку, либо откройте «Перебор параметров»</div>
+        </div>
+      {/if}
+    </div>
   </div>
 
 </div>
@@ -348,7 +367,12 @@
   .deploy-btn:hover { background: #4caf5025; color: #4caf50; }
 
   /* Center chart area */
-  .chart-area { flex: 1; min-width: 0; overflow: hidden; border-left: 1px solid #2d2d4a; }
+  .chart-area { flex: 1; min-width: 0; overflow: hidden; border-left: 1px solid #2d2d4a; display: flex; flex-direction: column; }
+  .center-tabs { display: flex; gap: 2px; padding: 4px 8px; background: #0f0f1e; border-bottom: 1px solid #1a1a2e; flex-shrink: 0; }
+  .center-tabs button { padding: 3px 12px; background: transparent; color: #555; border: 1px solid transparent; font-size: 11px; border-radius: 3px; cursor: pointer; }
+  .center-tabs button:hover { color: #aaa; }
+  .center-tabs button.active { color: #4caf50; border-color: #4caf5066; }
+  .center-body { flex: 1; min-height: 0; overflow: hidden; }
   .chart-placeholder {
     display: flex; flex-direction: column; align-items: center; justify-content: center;
     height: 100%; gap: 12px; color: #333;
