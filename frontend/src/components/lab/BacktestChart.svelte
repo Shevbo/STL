@@ -35,6 +35,7 @@
   let volumeSeries: any = null;
   let equitySeries: any = null;
   let syncing = false;
+  let syncReady = false;   // enable cross-chart sync only after both have data
 
   let loading = $state(true);
   let error = $state('');
@@ -163,9 +164,9 @@
     // candles are hourly-resampled, equity is per-minute, so logical-index sync misaligns).
     const link = (from: any, to: any) =>
       from.timeScale().subscribeVisibleTimeRangeChange((r: any) => {
-        if (syncing || !r) return;
+        if (!syncReady || syncing || !r || r.from == null || r.to == null) return;
         syncing = true;
-        try { to.timeScale().setVisibleRange(r); } finally { syncing = false; }
+        try { to.timeScale().setVisibleRange(r); } catch { /* transient */ } finally { syncing = false; }
       });
     link(tvCandle, tvEquity);
     link(tvEquity, tvCandle);
@@ -183,7 +184,7 @@
 
   // ── data loading ─────────────────────────────────────────────────────
   async function loadData() {
-    loading = true; error = '';
+    loading = true; error = ''; syncReady = false;
     try {
       const daySpan = (new Date(dateTo).getTime() - new Date(dateFrom).getTime()) / 86400000;
       const resample = daySpan > 30 ? 60 : 5;
@@ -236,6 +237,7 @@
       // fit whole period on both (each shows its full data range)
       tvCandle.timeScale().fitContent();
       tvEquity.timeScale().fitContent();
+      syncReady = true;   // enable pan/zoom sync now that both have data
     } catch (e) {
       error = String(e);
     }
