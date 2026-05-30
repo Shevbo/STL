@@ -5,9 +5,16 @@
 
   type Tab = 'live' | 'market' | 'backtest';
   let activeTab = $state<Tab>('live');
+  let fullscreen = $state(false);
+
+  function onKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape' && fullscreen) fullscreen = false;
+  }
 </script>
 
-<div class="lab-panel">
+<svelte:window onkeydown={onKeydown} />
+
+<div class="lab-panel" class:fullscreen>
   <div class="lab-tabs">
     <button class:active={activeTab === 'live'} onclick={() => activeTab = 'live'}>
       Live Robots
@@ -17,6 +24,13 @@
     </button>
     <button class:active={activeTab === 'backtest'} onclick={() => activeTab = 'backtest'}>
       Backtest Lab
+    </button>
+    <button
+      class="fullscreen-btn"
+      title={fullscreen ? 'Свернуть (Esc)' : 'Развернуть на весь экран'}
+      onclick={() => fullscreen = !fullscreen}
+    >
+      {fullscreen ? '⊟ Свернуть' : '⛶ Во весь экран'}
     </button>
   </div>
 
@@ -36,6 +50,10 @@
     display: flex; flex-direction: column; height: 100%;
     background: #0f0f1e; border-top: 2px solid #4caf50;
   }
+  .lab-panel.fullscreen {
+    position: fixed; inset: 0; z-index: 1000;
+    height: 100vh; width: 100vw; border-top: none;
+  }
   .lab-tabs {
     display: flex; gap: 2px; padding: 4px 8px;
     background: #1a1a2e; border-bottom: 1px solid #2d2d4a; flex-shrink: 0;
@@ -46,5 +64,10 @@
   }
   .lab-tabs button:hover { color: #aaa; }
   .lab-tabs button.active { color: #4caf50; border-color: #4caf5066; }
+  .fullscreen-btn {
+    margin-left: auto; color: #888 !important;
+    border-color: #2d2d4a !important;
+  }
+  .fullscreen-btn:hover { color: #4caf50 !important; border-color: #4caf5066 !important; }
   .lab-content { flex: 1; overflow: hidden; min-height: 0; }
 </style>
