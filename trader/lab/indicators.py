@@ -24,3 +24,18 @@ def rsi(prices: list[float], period: int = 14) -> float:
         return 100.0
     rs = avg_gain / avg_loss
     return 100.0 - (100.0 / (1 + rs))
+
+
+def atr(highs: list[float], lows: list[float], closes: list[float], period: int = 14) -> float:
+    """Average True Range (Wilder smoothing)."""
+    n = len(closes)
+    if n < period + 1 or len(highs) != n or len(lows) != n:
+        raise ValueError(f"Need at least {period + 1} bars for atr(period={period})")
+    trs = []
+    for i in range(1, n):
+        h, low, pc = highs[i], lows[i], closes[i - 1]
+        trs.append(max(h - low, abs(h - pc), abs(low - pc)))
+    avg = sum(trs[:period]) / period
+    for i in range(period, len(trs)):
+        avg = (avg * (period - 1) + trs[i]) / period
+    return avg

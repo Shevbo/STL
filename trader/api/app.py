@@ -499,6 +499,20 @@ def create_app() -> FastAPI:
                 "script_code": "from trader.lab.strategies.rsi_mean_reversion import on_bar, on_start, on_stop",
                 "default_params": {"symbol": "RIM6", "period": 14, "oversold": 30, "overbought": 70},
             },
+            {
+                "id": "supertrend",
+                "name": "SuperTrend (ATR)",
+                "description": "Трендследящая по полосам ATR. Лонг при пробое верхней полосы, шорт при пробое нижней. Торгует в обе стороны.",
+                "source": "https://github.com/jigneshpylab/ZerodhaPythonScripts",
+                "params_schema": [
+                    {"key": "symbol",     "label": "Инструмент",    "type": "text",   "default": "RIM6", "hint": "FORTS тикер"},
+                    {"key": "atr_period", "label": "Период ATR",    "type": "number", "default": 10, "min": 5,  "max": 50, "hint": "Окно расчёта ATR"},
+                    {"key": "multiplier", "label": "Множитель ×10", "type": "number", "default": 30, "min": 10, "max": 60, "hint": "Ширина полос = (множитель/10) × ATR"},
+                    {"key": "qty",        "label": "Контрактов",    "type": "number", "default": 1,  "min": 1,  "max": 10, "hint": "Лотность на сделку"},
+                ],
+                "script_code": "from trader.lab.strategies.supertrend import on_bar, on_start, on_stop",
+                "default_params": {"symbol": "RIM6", "atr_period": 10, "multiplier": 30, "qty": 1},
+            },
         ]
 
     # ── LAB: STL Links ───────────────────────────────────────────────
