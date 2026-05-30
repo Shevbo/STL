@@ -170,17 +170,10 @@ async def main() -> None:
 
     modules = {sid: importlib.import_module(spec["module"]) for sid, spec in SPECS.items()}
 
-    # build tasks
-    tasks = []
-    for sid, spec in SPECS.items():
-        for sym in bars_by_symbol:
-            combos = build_combos(spec, sym)
-            tasks.append({"sid": sid, "sym": sym, "combos": combos, "i": 0})
-            log(f"task {sid}/{sym}: {len(combos)} combos queued")
-
     t0 = time.monotonic()
     done = 0
     cand = 0
+    seen: set[str] = set()      # dedupe params across generations
     rows_buf = []
 
     async def flush():
@@ -196,52 +189,80 @@ async def main() -> None:
             )
         rows_buf.clear()
 
-    while True:
-        elapsed = time.monotonic() - t0
-        if elapsed >= TIME_LIMIT:
-            log(f"time budget reached ({elapsed:.0f}s)")
+    # Generation loop: each generation draws a FRESH random ~1/3 subset of every
+    # task's grid. Over many generations this is Monte-Carlo coverage of the full
+    # space (random search) until the 5h budget — honoring both "every 3rd by
+    # random" and "large grids -> random param choice". Dedupe via `seen`.
+    generation = 0
+    stop = False
+    while not stop:
+        if time.monotonic() - t0 >= TIME_LIMIT:
             break
-        any_work = False
-        for task in tasks:
-            if task["i"] >= len(task["combos"]):
-                continue
+        generation += 1
+        tasks = []
+        for sid, spec in SPECS.items():
+            for sym in bars_by_symbol:
+                combos = build_combos(spec, sym)
+                tasks.append({"sid": sid, "sym": sym, "combos": combos, "i": 0})
+        log(f"--- generation {generation}: {sum(len(t['combos']) for t in tasks)} combos "
+            f"across {len(tasks)} tasks (unique so far={len(seen)}) ---")
+
+        seen_at_gen_start = len(seen)
+        gen_active = True
+        while gen_active:
             if time.monotonic() - t0 >= TIME_LIMIT:
+                log(f"time budget reached ({int(time.monotonic()-t0)}s)")
+                stop = True
                 break
-            any_work = True
-            sid, sym = task["sid"], task["sym"]
-            mod = modules[sid]
-            bars = bars_by_symbol[sym]
-            batch = task["combos"][task["i"]: task["i"] + BATCH]
-            task["i"] += len(batch)
-            for params in batch:
-                try:
-                    r = await run_single_backtest(mod, bars, sym, params, INITIAL_EQUITY)
-                except Exception:
+            gen_active = False
+            for task in tasks:
+                if task["i"] >= len(task["combos"]):
                     continue
-                m = {
-                    "total_return": r.get("total_return"),
-                    "sharpe": r.get("sharpe"),
-                    "max_drawdown": r.get("max_drawdown"),
-                    "win_rate": r.get("win_rate"),
-                    "total_trades": r.get("total_trades"),
-                }
-                c = is_candidate(m)
-                if c:
-                    cand += 1
-                rows_buf.append((
-                    stamp, sid, sym, json.dumps(params),
-                    m["total_return"], m["sharpe"], m["max_drawdown"],
-                    m["win_rate"], m["total_trades"], score_of(m), c,
-                ))
-                done += 1
-            if len(rows_buf) >= 100:
-                await flush()
-            if done % 200 == 0 and done:
-                log(f"done={done} candidates={cand} elapsed={int(time.monotonic()-t0)}s "
-                    f"({task['sid']}/{task['sym']} {task['i']}/{len(task['combos'])})")
-        if not any_work:
-            log("all tasks exhausted")
-            break
+                if time.monotonic() - t0 >= TIME_LIMIT:
+                    stop = True
+                    break
+                gen_active = True
+                sid, sym = task["sid"], task["sym"]
+                mod = modules[sid]
+                bars = bars_by_symbol[sym]
+                batch = task["combos"][task["i"]: task["i"] + BATCH]
+                task["i"] += len(batch)
+                for params in batch:
+                    key = f"{sid}|{sym}|{sorted(params.items())}"
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    try:
+                        r = await run_single_backtest(mod, bars, sym, params, INITIAL_EQUITY)
+                    except Exception:
+                        continue
+                    m = {
+                        "total_return": r.get("total_return"),
+                        "sharpe": r.get("sharpe"),
+                        "max_drawdown": r.get("max_drawdown"),
+                        "win_rate": r.get("win_rate"),
+                        "total_trades": r.get("total_trades"),
+                    }
+                    c = is_candidate(m)
+                    if c:
+                        cand += 1
+                    rows_buf.append((
+                        stamp, sid, sym, json.dumps(params),
+                        m["total_return"], m["sharpe"], m["max_drawdown"],
+                        m["win_rate"], m["total_trades"], score_of(m), c,
+                    ))
+                    done += 1
+                if len(rows_buf) >= 100:
+                    await flush()
+                if done % 500 == 0 and done:
+                    log(f"gen={generation} done={done} unique={len(seen)} candidates={cand} "
+                        f"elapsed={int(time.monotonic()-t0)}s")
+
+        new_this_gen = len(seen) - seen_at_gen_start
+        log(f"generation {generation} added {new_this_gen} new unique combos")
+        if new_this_gen == 0:
+            log("parameter space exhausted — full coverage achieved, stopping early")
+            stop = True
 
     await flush()
     # final summary: top candidates
