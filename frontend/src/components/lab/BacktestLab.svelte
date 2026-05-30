@@ -206,7 +206,7 @@
                 <td>{r.win_rate != null ? (r.win_rate * 100).toFixed(0) + '%' : '—'}</td>
                 <td>{r.total_trades ?? 0}</td>
                 <td>
-                  <button class="deploy-btn" onclick|stopPropagation={() => deployResult(r.params)}>
+                  <button class="deploy-btn" onclick={(e) => { e.stopPropagation(); deployResult(r.params); }}>
                     ▶
                   </button>
                 </td>
