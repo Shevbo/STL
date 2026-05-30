@@ -156,8 +156,8 @@ async def _run_backtest_task(run_id: str, body: dict, pool, app_state) -> None:
                        (id, run_id, params, trades, equity_curve, sharpe, max_drawdown, win_rate, total_return, total_trades)
                        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)""",
                     res_id, run_id,
-                    json.dumps(params), json.dumps(result["trades"]),
-                    json.dumps(result["equity_curve"]),
+                    params, result["trades"],        # pass dicts directly — asyncpg codec handles JSONB
+                    result["equity_curve"],
                     result.get("sharpe"), result.get("max_drawdown"),
                     result.get("win_rate"), result.get("total_return"),
                     result.get("total_trades"),
@@ -461,7 +461,7 @@ def create_app() -> FastAPI:
             """INSERT INTO robots (id, user_email, stl_link_id, name, script_code, params_json, schedule)
                VALUES ($1,$2,$3,$4,$5,$6,$7)""",
             new_id, body["userEmail"], body["stlLinkId"], body["name"],
-            body["scriptCode"], json.dumps(body.get("paramsJson", {})),
+            body["scriptCode"], body.get("paramsJson", {}),
             body.get("schedule", "*/5 * * * *"),
         )
         return {"id": new_id}
@@ -522,7 +522,7 @@ def create_app() -> FastAPI:
         await pool.execute(
             """INSERT INTO backtest_runs (id, robot_id, params_grid, date_from, date_to)
                VALUES ($1,$2,$3,$4,$5)""",
-            run_id, body["robotId"], json.dumps(body.get("paramsGrid", {})),
+            run_id, body["robotId"], body.get("paramsGrid", {}),
             _parse_dt(body["dateFrom"]), _parse_dt(body["dateTo"]),
         )
         _asyncio.create_task(
