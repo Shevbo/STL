@@ -159,12 +159,13 @@
       lineWidth: 1, priceFormat: { type: 'price', precision: 0, minMove: 1 },
     });
 
-    // time-scale sync (guarded against feedback loop)
+    // time-scale sync by TIME range (series have different point densities:
+    // candles are hourly-resampled, equity is per-minute, so logical-index sync misaligns).
     const link = (from: any, to: any) =>
-      from.timeScale().subscribeVisibleLogicalRangeChange((r: any) => {
+      from.timeScale().subscribeVisibleTimeRangeChange((r: any) => {
         if (syncing || !r) return;
         syncing = true;
-        try { to.timeScale().setVisibleLogicalRange(r); } finally { syncing = false; }
+        try { to.timeScale().setVisibleRange(r); } finally { syncing = false; }
       });
     link(tvCandle, tvEquity);
     link(tvEquity, tvCandle);
@@ -232,11 +233,9 @@
       stats = analyze(trades, eq);
       ledger = buildLedger(trades);
 
-      // fit whole period on both, then mirror range to equity
+      // fit whole period on both (each shows its full data range)
       tvCandle.timeScale().fitContent();
       tvEquity.timeScale().fitContent();
-      const lr = tvCandle.timeScale().getVisibleLogicalRange();
-      if (lr) { syncing = true; try { tvEquity.timeScale().setVisibleLogicalRange(lr); } finally { syncing = false; } }
     } catch (e) {
       error = String(e);
     }
