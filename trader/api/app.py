@@ -371,6 +371,51 @@ def create_app() -> FastAPI:
             log.error("api.instrument_params_error", exc=str(exc), symbol=symbol)
             raise HTTPException(status_code=502, detail="Finam API unavailable")
 
+    # ── LAB: Strategy templates ──────────────────────────────────────
+    @fastapi_app.get("/api/v1/strategies")
+    async def list_strategies(request: Request):
+        """Return available built-in strategy templates with param schemas."""
+        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        from trader.lab.strategies.donchian_breakout import STRATEGY_META as donchian_meta
+        return [
+            {
+                "id": "donchian_breakout",
+                "name": donchian_meta["name"],
+                "description": donchian_meta["description"],
+                "source": donchian_meta["source"],
+                "params_schema": donchian_meta["params_schema"],
+                "script_code": "from trader.lab.strategies.donchian_breakout import on_bar, on_start, on_stop",
+                "default_params": {p["key"]: p["default"] for p in donchian_meta["params_schema"]},
+            },
+            {
+                "id": "ema_crossover",
+                "name": "EMA Crossover",
+                "description": "Покупка при пересечении быстрой EMA вверх, продажа при обратном кресте.",
+                "source": "Built-in reference strategy",
+                "params_schema": [
+                    {"key": "symbol",      "label": "Инструмент",      "type": "text",   "default": "RIM6", "hint": "FORTS тикер"},
+                    {"key": "fast_period", "label": "Быстрая EMA (N)", "type": "number", "default": 9,      "min": 2,  "max": 50,  "hint": "Период быстрой EMA"},
+                    {"key": "slow_period", "label": "Медленная EMA (M)","type": "number", "default": 21,     "min": 5,  "max": 200, "hint": "Период медленной EMA"},
+                ],
+                "script_code": "from trader.lab.strategies.ema_crossover import on_bar, on_start, on_stop",
+                "default_params": {"symbol": "RIM6", "fast_period": 9, "slow_period": 21},
+            },
+            {
+                "id": "rsi_mean_reversion",
+                "name": "RSI Mean Reversion",
+                "description": "Покупка при перепроданности (RSI < 30), продажа при перекупленности (RSI > 70).",
+                "source": "Built-in reference strategy",
+                "params_schema": [
+                    {"key": "symbol",     "label": "Инструмент",  "type": "text",   "default": "RIM6", "hint": "FORTS тикер"},
+                    {"key": "period",     "label": "Период RSI",  "type": "number", "default": 14,     "min": 5,  "max": 100, "hint": "Период расчёта RSI"},
+                    {"key": "oversold",   "label": "Перепродан",  "type": "number", "default": 30,     "min": 10, "max": 45,  "hint": "Вход: RSI ниже этого уровня"},
+                    {"key": "overbought", "label": "Перекуплен",  "type": "number", "default": 70,     "min": 55, "max": 90,  "hint": "Выход: RSI выше этого уровня"},
+                ],
+                "script_code": "from trader.lab.strategies.rsi_mean_reversion import on_bar, on_start, on_stop",
+                "default_params": {"symbol": "RIM6", "period": 14, "oversold": 30, "overbought": 70},
+            },
+        ]
+
     # ── LAB: STL Links ───────────────────────────────────────────────
     @fastapi_app.get("/api/v1/stl-links")
     async def list_stl_links(request: Request):
