@@ -134,3 +134,60 @@ async def run_backtest_isolated(
     if not result.get("ok"):
         raise RuntimeError(result.get("error", "Unknown backtest error"))
     return result["result"]
+
+
+def _subprocess_run_many(script_code: str, bars_data: list[dict], symbol: str,
+                         param_sets: list[dict], result_queue: multiprocessing.Queue) -> None:
+    """Run MANY param combos in ONE subprocess — bars pickled once, not per combo."""
+    import asyncio
+    import types
+
+    bars = [Bar(**b) for b in bars_data]
+    mod = types.ModuleType("robot_script")
+    exec(compile(script_code, "<robot>", "exec"), mod.__dict__)
+
+    async def _run_all():
+        out = []
+        for ps in param_sets:
+            try:
+                r = await run_single_backtest(mod, bars, symbol, ps)
+                out.append({"ok": True, "params": ps, "result": r})
+            except Exception as exc:
+                out.append({"ok": False, "params": ps, "error": str(exc)})
+        return out
+
+    try:
+        result_queue.put({"ok": True, "results": asyncio.run(_run_all())})
+    except Exception as exc:
+        result_queue.put({"ok": False, "error": str(exc)})
+
+
+async def run_backtest_grid(
+    script_code: str,
+    bars: list[Bar],
+    symbol: str,
+    param_sets: list[dict],
+    timeout: float = 600,
+) -> list[dict[str, Any]]:
+    """
+    Run a whole parameter grid in ONE subprocess (bars serialized once).
+    Returns list of {ok, params, result|error} in input order.
+    """
+    bars_data = [
+        {"time": b.time, "open": b.open, "high": b.high,
+         "low": b.low, "close": b.close, "volume": b.volume}
+        for b in bars
+    ]
+    q: multiprocessing.Queue = multiprocessing.Queue()
+    proc = multiprocessing.Process(
+        target=_subprocess_run_many,
+        args=(script_code, bars_data, symbol, param_sets, q),
+        daemon=True,
+    )
+    proc.start()
+    loop = asyncio.get_event_loop()
+    payload = await loop.run_in_executor(None, q.get, True, timeout)
+    proc.join(timeout=5)
+    if not payload.get("ok"):
+        raise RuntimeError(payload.get("error", "Unknown grid error"))
+    return payload["results"]
