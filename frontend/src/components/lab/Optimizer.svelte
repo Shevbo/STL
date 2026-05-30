@@ -24,14 +24,18 @@
 
   // grid spec per param: { enabled, from, to, step }
   let grid = $state<Record<string, any>>({});
+  let seededFor = '';   // strategy id the grid was seeded for
 
-  // seed grid spec whenever the strategy changes
+  // Seed grid when the strategy changes. Depend ONLY on strategy id (not on
+  // `grid`) — reading grid here would create an update-depth-exceeded loop.
   $effect(() => {
+    const sid = strategy?.id ?? '';
+    const ps = (strategy?.params_schema ?? []).filter((p: any) => p.type === 'number');
+    if (sid === seededFor) return;
     const g: Record<string, any> = {};
-    for (const p of numericParams) {
-      const cur = grid[p.key];
+    for (const p of ps) {
       const def = Number(baseParams[p.key] ?? p.default ?? 0);
-      g[p.key] = cur ?? {
+      g[p.key] = {
         enabled: true,
         from: p.min ?? def,
         to: p.max ?? def,
@@ -39,6 +43,7 @@
       };
     }
     grid = g;
+    seededFor = sid;
   });
 
   let running = $state(false);

@@ -120,8 +120,7 @@ async def lifespan(app: FastAPI):
 async def _run_backtest_task(run_id: str, body: dict, pool, app_state) -> None:
     import json
     import itertools
-    from trader.lab.backtest import run_backtest_isolated
-    from trader.lab.runtime import Bar
+    from trader.lab.backtest import run_backtest_grid
 
     try:
         await pool.execute(
@@ -144,27 +143,34 @@ async def _run_backtest_task(run_id: str, body: dict, pool, app_state) -> None:
         keys = list(grid.keys())
         values = [grid[k] if isinstance(grid[k], list) else [grid[k]] for k in keys]
         combos = list(itertools.product(*values))
+        param_sets = [{**base_params, **dict(zip(keys, combo))} for combo in combos]
+        symbol = body.get("symbol", base_params.get("symbol", ""))
 
-        for combo in combos:
-            params = {**base_params, **dict(zip(keys, combo))}
-            try:
-                result = await run_backtest_isolated(
-                    script_code, bars, params.get("symbol", ""), params
-                )
-                res_id = cuid()
-                await pool.execute(
-                    """INSERT INTO backtest_results
-                       (id, run_id, params, trades, equity_curve, sharpe, max_drawdown, win_rate, total_return, total_trades)
-                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)""",
-                    res_id, run_id,
-                    params, result["trades"],        # pass dicts directly — asyncpg codec handles JSONB
-                    result["equity_curve"],
-                    result.get("sharpe"), result.get("max_drawdown"),
-                    result.get("win_rate"), result.get("total_return"),
-                    result.get("total_trades"),
-                )
-            except Exception as exc:
-                log.warning("backtest.combo_failed", error=str(exc), params=params)
+        # Run the whole grid in ONE subprocess (bars serialized once, not per combo).
+        # Scale timeout with combo count.
+        graded = await run_backtest_grid(
+            script_code, bars, symbol, param_sets,
+            timeout=max(120, 8 * len(param_sets)),
+        )
+
+        for entry in graded:
+            if not entry.get("ok"):
+                log.warning("backtest.combo_failed", error=entry.get("error"), params=entry.get("params"))
+                continue
+            params = entry["params"]
+            result = entry["result"]
+            res_id = cuid()
+            await pool.execute(
+                """INSERT INTO backtest_results
+                   (id, run_id, params, trades, equity_curve, sharpe, max_drawdown, win_rate, total_return, total_trades)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)""",
+                res_id, run_id,
+                params, result["trades"],
+                result["equity_curve"],
+                result.get("sharpe"), result.get("max_drawdown"),
+                result.get("win_rate"), result.get("total_return"),
+                result.get("total_trades"),
+            )
 
         await pool.execute(
             "UPDATE backtest_runs SET status='done', finished_at=now() WHERE id=$1",
