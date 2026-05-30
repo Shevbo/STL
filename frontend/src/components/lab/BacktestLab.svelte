@@ -17,6 +17,8 @@
   let coverage = $state<any[]>([]);
   let selectedResult = $state<any | null>(null);
 
+  let strategies = $state<any[]>([]);
+
   let selectedSymbol = $derived(
     (() => {
       const robot = robots.find(r => r.id === selectedRobotId);
@@ -25,10 +27,24 @@
     })()
   );
 
+  // Match the strategy template behind the selected robot (by script_code containing its id)
+  let selectedStrategy = $derived(
+    (() => {
+      const robot = robots.find(r => r.id === selectedRobotId);
+      const code = robot?.script_code ?? '';
+      return strategies.find(s => code.includes(s.id)) ?? null;
+    })()
+  );
+
   async function loadRobots() {
     const res = await fetchWithAuth('/api/v1/robots');
     robots = res.ok ? await res.json() : [];
     if (robots.length && !selectedRobotId) selectedRobotId = robots[0].id;
+  }
+
+  async function loadStrategies() {
+    const res = await fetchWithAuth('/api/v1/strategies');
+    strategies = res.ok ? await res.json() : [];
   }
 
   async function runBacktest() {
@@ -122,7 +138,7 @@
     coverage = res.ok ? await res.json() : [];
   }
 
-  $effect(() => { loadRobots(); loadCoverage(); });
+  $effect(() => { loadRobots(); loadCoverage(); loadStrategies(); });
 </script>
 
 <div class="backtest-lab">
@@ -224,6 +240,7 @@
       <BacktestChart
         result={selectedResult}
         symbol={selectedSymbol}
+        strategy={selectedStrategy}
         dateFrom={new Date(dateFrom).toISOString()}
         dateTo={new Date(dateTo).toISOString()}
       />
