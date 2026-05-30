@@ -140,7 +140,7 @@
     <label>To   <input type="date" bind:value={dateTo} /></label>
     <label>
       Params grid (JSON)
-      <textarea bind:value={paramsGrid} rows="4" placeholder='{"entry_period":[20,40]}'></textarea>
+      <textarea bind:value={paramsGrid} rows="4" placeholder="{`{\"entry_period\":[20,40]}`}"></textarea>
     </label>
 
     <!-- Market data -->
