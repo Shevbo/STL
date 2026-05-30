@@ -82,22 +82,33 @@ class BacktestRuntime:
         self._orders.append(order)
         pos = self._positions.get(symbol, {"side": "flat", "qty": 0, "avg": 0.0})
 
-        # Track realized PnL on position close (sell)
-        if side == "sell" and pos["qty"] > 0:
-            realized_pnl = (fill_price - pos["avg"]) * min(qty, pos["qty"])
-            self._equity += realized_pnl
+        # Work in SIGNED position space so buy/sell handle long, short and
+        # flips symmetrically. (Old code always grew a long on buy → a buy that
+        # should cover a short instead doubled the position.)
+        signed = pos["qty"] if pos["side"] == "long" else (-pos["qty"] if pos["side"] == "short" else 0)
+        avg = pos["avg"]
+        delta = qty if side == "buy" else -qty
+        new_signed = signed + delta
 
-        if side == "buy":
-            new_qty = pos["qty"] + qty
-            pos = {"side": "long", "qty": new_qty, "avg": fill_price}
+        # Realized PnL when the trade reduces the existing position (closing part/all).
+        if signed != 0 and (signed > 0) != (delta > 0):
+            closed = min(qty, abs(signed))
+            if signed > 0:                       # closing a long
+                self._equity += (fill_price - avg) * closed
+            else:                                # closing a short
+                self._equity += (avg - fill_price) * closed
+
+        if new_signed == 0:
+            pos = {"side": "flat", "qty": 0, "avg": 0.0}
+        elif (signed >= 0) == (new_signed > 0) and signed != 0 and (signed > 0) == (delta > 0):
+            # Same-direction increase → weighted-average entry price.
+            total = abs(signed) + qty
+            avg = (avg * abs(signed) + fill_price * qty) / total
+            pos = {"side": "long" if new_signed > 0 else "short", "qty": abs(new_signed), "avg": avg}
         else:
-            new_qty = pos["qty"] - qty
-            if new_qty > 0:
-                pos = {"side": "long", "qty": new_qty, "avg": pos["avg"]}
-            elif new_qty < 0:
-                pos = {"side": "short", "qty": abs(new_qty), "avg": fill_price}
-            else:
-                pos = {"side": "flat", "qty": 0, "avg": 0.0}
+            # Opened fresh, or flipped through zero → entry at fill price.
+            pos = {"side": "long" if new_signed > 0 else "short", "qty": abs(new_signed), "avg": fill_price}
+
         self._positions[symbol] = pos
         return order
 
