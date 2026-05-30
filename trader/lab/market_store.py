@@ -133,3 +133,51 @@ async def get_coverage(
         "max_date": row["max_ts"].date().isoformat(),
         "count": int(row["cnt"]),
     }
+
+
+# ── instrument metadata mirror (DB cache of Finam params) ─────────────────────
+
+async def ensure_instrument_meta_table(pool: "asyncpg.Pool") -> None:
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS instrument_meta (
+                symbol           TEXT PRIMARY KEY,
+                ticker           TEXT,
+                name             TEXT,
+                lot              DOUBLE PRECISION,
+                price_step       DOUBLE PRECISION,
+                price_step_value DOUBLE PRECISION,
+                initial_margin   DOUBLE PRECISION,
+                raw              JSONB,
+                updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+            );
+        """)
+
+
+async def get_instrument_meta(pool: "asyncpg.Pool", symbol: str) -> dict | None:
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT * FROM instrument_meta WHERE symbol=$1", symbol)
+    if not row:
+        return None
+    d = dict(row)
+    if d.get("updated_at") is not None:
+        d["updated_at"] = d["updated_at"].isoformat()
+    return d
+
+
+async def upsert_instrument_meta(pool: "asyncpg.Pool", meta: dict) -> None:
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO instrument_meta
+                (symbol, ticker, name, lot, price_step, price_step_value, initial_margin, raw, updated_at)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8, now())
+            ON CONFLICT (symbol) DO UPDATE SET
+                ticker=EXCLUDED.ticker, name=EXCLUDED.name, lot=EXCLUDED.lot,
+                price_step=EXCLUDED.price_step, price_step_value=EXCLUDED.price_step_value,
+                initial_margin=EXCLUDED.initial_margin, raw=EXCLUDED.raw, updated_at=now()
+            """,
+            meta.get("symbol"), meta.get("ticker"), meta.get("name"),
+            meta.get("lot"), meta.get("price_step"), meta.get("price_step_value"),
+            meta.get("initial_margin"), meta.get("raw", {}),
+        )

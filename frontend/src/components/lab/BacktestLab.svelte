@@ -1,6 +1,20 @@
 <script lang="ts">
   import { fetchWithAuth } from '../../lib/fetch-auth';
   import BacktestChart from './BacktestChart.svelte';
+  import { toFills, replay } from '../../lib/lab-analytics';
+
+  const TYPE_LABEL: Record<string, string> = {
+    open: 'Открытие', average: 'Усреднение', close: 'Закрытие', reverse: 'Закр+Реверс',
+  };
+  const fmtT = (ts: number) => new Date(ts * 1000).toLocaleString('ru-RU', {
+    timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+  });
+  const fmtP = (v: number) => (v >= 0 ? '+' : '') + Math.round(v);
+
+  // trades ledger for the selected result (newest first)
+  let ledger = $derived(
+    selectedResult ? replay(toFills(selectedResult.trades)).ledger.slice().reverse() : []
+  );
 
   let robots = $state<any[]>([]);
   let selectedRobotId = $state('');
@@ -232,6 +246,32 @@
         </table>
       </div>
     {/if}
+
+    <!-- Virtual trades ledger (bottom of left panel) -->
+    {#if ledger.length}
+      <div class="trades-section">
+        <div class="section-title">Виртуальные сделки ({ledger.length})</div>
+        <div class="trades-scroll">
+          <table class="trades-table">
+            <thead>
+              <tr><th>Время</th><th>Напр.</th><th>Кол</th><th>Цена</th><th>Тип</th><th>Рез.</th></tr>
+            </thead>
+            <tbody>
+              {#each ledger as t}
+                <tr>
+                  <td>{fmtT(t.time)}</td>
+                  <td class:buy={t.side === 'buy'} class:sell={t.side === 'sell'}>{t.side === 'buy' ? 'Купить' : 'Продать'}</td>
+                  <td>{t.qty}</td>
+                  <td>{Math.round(t.price)}</td>
+                  <td class="ttype">{TYPE_LABEL[t.type] ?? t.type}</td>
+                  <td class:pos={t.pnl > 0} class:neg={t.pnl < 0}>{t.pnl != null ? fmtP(t.pnl) : ''}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    {/if}
   </div>
 
   <!-- ── Center: chart ──────────────────────────────────────────── -->
@@ -283,7 +323,17 @@
   .divider { height: 1px; background: #2d2d4a; margin: 4px 0; }
 
   /* Results table */
-  .results-section { display: flex; flex-direction: column; gap: 6px; flex: 1; min-height: 0; overflow: hidden; }
+  .results-section { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; max-height: 28%; overflow: auto; }
+
+  /* Virtual trades ledger */
+  .trades-section { display: flex; flex-direction: column; gap: 4px; flex: 1; min-height: 120px; overflow: hidden; }
+  .trades-scroll { overflow: auto; border: 1px solid #1a1a2e; border-radius: 3px; }
+  .trades-table { width: 100%; border-collapse: collapse; font-size: 9px; }
+  .trades-table th { position: sticky; top: 0; background: #0f0f1e; color: #555; text-align: left; padding: 2px 4px; white-space: nowrap; border-bottom: 1px solid #1a1a2e; }
+  .trades-table td { padding: 1px 4px; border-bottom: 1px solid #12121c; color: #aaa; white-space: nowrap; cursor: default; }
+  .trades-table td.buy { color: #4caf50; }
+  .trades-table td.sell { color: #f44336; }
+  .trades-table .ttype { color: #777; }
   .disclaimer { font-size: 10px; color: #666; }
   table { width: 100%; border-collapse: collapse; font-size: 10px; }
   th { text-align: left; padding: 4px 6px; background: #0f0f1e; color: #555; border-bottom: 1px solid #2d2d4a; white-space: nowrap; }

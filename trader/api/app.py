@@ -62,9 +62,10 @@ async def lifespan(app: FastAPI):
     if settings.lab_db_url:
         await init_pool(settings.lab_db_url)
         db_pool = get_pool()
-        # Ensure ohlcv_bars table exists (idempotent)
-        from trader.lab.market_store import ensure_ohlcv_table
+        # Ensure cache tables exist (idempotent)
+        from trader.lab.market_store import ensure_ohlcv_table, ensure_instrument_meta_table
         await ensure_ohlcv_table(db_pool)
+        await ensure_instrument_meta_table(db_pool)
         scheduler = RobotScheduler(
             db_pool=db_pool,
             tx_client=tx,
@@ -370,6 +371,84 @@ def create_app() -> FastAPI:
         except Exception as exc:
             log.error("api.instrument_params_error", exc=str(exc), symbol=symbol)
             raise HTTPException(status_code=502, detail="Finam API unavailable")
+
+    @fastapi_app.get("/api/v1/instruments/{symbol:path}/meta")
+    async def get_instrument_meta_cached(symbol: str, request: Request):
+        """
+        DB-mirrored instrument meta (lot, price step, step value, initial margin).
+        Returns cached row if present; otherwise fetches from Finam once, parses
+        defensively, stores in instrument_meta, and returns it. Never 502s — if
+        Finam is unavailable, returns whatever fields could be derived (or nulls).
+        """
+        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        from trader.lab.market_store import (
+            ensure_instrument_meta_table, get_instrument_meta, upsert_instrument_meta,
+        )
+        pool = request.app.state.db_pool
+        if pool is not None:
+            await ensure_instrument_meta_table(pool)
+            cached = await get_instrument_meta(pool, symbol)
+            if cached and cached.get("initial_margin") is not None:
+                return cached
+
+        settings: Settings = request.app.state.settings
+        auth_client: AsyncAuthClient = request.app.state.auth
+        meta = {"symbol": symbol, "ticker": None, "name": None, "lot": None,
+                "price_step": None, "price_step_value": None, "initial_margin": None, "raw": {}}
+
+        def _num(v):
+            if v is None:
+                return None
+            if isinstance(v, dict):
+                v = v.get("value", v.get("units"))
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return None
+
+        try:
+            token = await auth_client.get_token()
+            headers = {"Authorization": f"Bearer {token}"}
+            account_id: str = request.app.state.account_id
+            qp = {"account_id": account_id} if account_id else {}
+            async with httpx.AsyncClient(http2=True) as client:
+                # /params holds margin/step; /assets/{symbol} holds lot/ticker/name
+                rp = await client.get(
+                    f"{settings.finam_api_base_url}/v1/assets/{symbol}/params",
+                    headers=headers, params=qp, timeout=10.0,
+                )
+                params_raw = rp.json() if rp.status_code == 200 else {}
+                ra = await client.get(
+                    f"{settings.finam_api_base_url}/v1/assets/{symbol}",
+                    headers=headers, params=qp, timeout=10.0,
+                )
+                asset_raw = ra.json() if ra.status_code == 200 else {}
+
+            meta["raw"] = {"params": params_raw, "asset": asset_raw}
+            # Defensive field extraction across possible Finam shapes
+            for key in ("initial_margin", "initialMargin", "imLong", "longInitialMargin",
+                        "margin_buy", "marginBuy", "go", "guarantee"):
+                val = _num(params_raw.get(key)) if isinstance(params_raw, dict) else None
+                if val:
+                    meta["initial_margin"] = val
+                    break
+            for src in (params_raw, asset_raw):
+                if not isinstance(src, dict):
+                    continue
+                meta["price_step"] = meta["price_step"] or _num(src.get("min_step") or src.get("price_step") or src.get("step"))
+                meta["price_step_value"] = meta["price_step_value"] or _num(src.get("step_price") or src.get("price_step_value") or src.get("step_value"))
+                meta["lot"] = meta["lot"] or _num(src.get("lot_size") or src.get("lot"))
+                meta["ticker"] = meta["ticker"] or src.get("ticker") or src.get("code")
+                meta["name"] = meta["name"] or src.get("name") or src.get("short_name")
+        except Exception as exc:
+            log.warning("api.instrument_meta_fetch_failed", symbol=symbol, error=str(exc))
+
+        if pool is not None:
+            try:
+                await upsert_instrument_meta(pool, meta)
+            except Exception as exc:
+                log.warning("api.instrument_meta_store_failed", symbol=symbol, error=str(exc))
+        return meta
 
     # ── LAB: Strategy templates ──────────────────────────────────────
     @fastapi_app.get("/api/v1/strategies")
