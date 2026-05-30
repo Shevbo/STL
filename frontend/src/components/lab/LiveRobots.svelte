@@ -96,7 +96,7 @@
             </span>
           </div>
           <div class="info-item">
-            <span class="info-label">Расписание</span>
+            <span class="info-label">Торговое окно</span>
             <code class="info-value">{selected.schedule}</code>
           </div>
           <div class="info-item">

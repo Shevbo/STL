@@ -462,21 +462,31 @@ def create_app() -> FastAPI:
                VALUES ($1,$2,$3,$4,$5,$6,$7)""",
             new_id, body["userEmail"], body["stlLinkId"], body["name"],
             body["scriptCode"], body.get("paramsJson", {}),
-            body.get("schedule", "*/5 * * * *"),
+            body.get("schedule", "09:00-23:55"),
         )
         return {"id": new_id}
 
     @fastapi_app.put("/api/v1/robots/{robot_id}")
     async def update_robot(robot_id: str, body: dict, request: Request):
         require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
-        import json
         pool = request.app.state.db_pool
+        # Build a partial update — only set fields present in body.
+        sets, args = [], []
+        field_map = {
+            "name": "name", "scriptCode": "script_code",
+            "paramsJson": "params_json", "schedule": "schedule",
+        }
+        for body_key, col in field_map.items():
+            if body_key in body:
+                args.append(body[body_key])
+                sets.append(f"{col}=${len(args)}")
+        if not sets:
+            return {"ok": True}
+        sets.append("updated_at=now()")
+        args.append(robot_id)
         await pool.execute(
-            """UPDATE robots SET name=$1, script_code=$2, params_json=$3,
-               schedule=$4, updated_at=now() WHERE id=$5""",
-            body.get("name"), body.get("scriptCode"),
-            json.dumps(body.get("paramsJson", {})),
-            body.get("schedule", "*/5 * * * *"), robot_id,
+            f"UPDATE robots SET {', '.join(sets)} WHERE id=${len(args)}",
+            *args,
         )
         return {"ok": True}
 

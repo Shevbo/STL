@@ -20,8 +20,20 @@
 
   let name = $state(robot?.name ?? '');
   let stlLinkId = $state(robot?.stl_link_id ?? '');
-  let schedule = $state(robot?.schedule ?? '*/5 * * * *');
   let paramValues = $state<Record<string, any>>({});
+
+  // Trading window (time-of-day when robot is active). Stored as "HH:MM-HH:MM".
+  function parseWindow(s: string | undefined): [string, string] {
+    if (s && /^\d{2}:\d{2}-\d{2}:\d{2}$/.test(s)) {
+      const [a, b] = s.split('-');
+      return [a, b];
+    }
+    return ['09:00', '23:55'];  // default trading window
+  }
+  let [initFrom, initTo] = parseWindow(robot?.schedule);
+  let tradeFrom = $state(initFrom);
+  let tradeTo = $state(initTo);
+  let schedule = $derived(`${tradeFrom}-${tradeTo}`);
 
   let saving = $state(false);
   let error = $state('');
@@ -63,7 +75,9 @@
     if (robot) {
       name = robot.name ?? '';
       stlLinkId = robot.stl_link_id ?? '';
-      schedule = robot.schedule ?? '*/5 * * * *';
+      const [wf, wt] = parseWindow(robot.schedule);
+      tradeFrom = wf;
+      tradeTo = wt;
       paramValues = { ...(robot.params_json ?? {}) };
       imported = true;
     }
@@ -111,14 +125,6 @@
   }
 
   // ── schedule helpers ────────────────────────────────────────────────
-  const SCHEDULES = [
-    { label: 'Каждую минуту',  value: '* * * * *' },
-    { label: 'Каждые 5 мин',   value: '*/5 * * * *' },
-    { label: 'Каждые 15 мин',  value: '*/15 * * * *' },
-    { label: 'Каждый час',     value: '0 * * * *' },
-    { label: 'Торговый день 10:00', value: '0 10 * * 1-5' },
-  ];
-
   $effect(() => { loadStrategies(); loadStlLinks(); });
 </script>
 
@@ -181,13 +187,15 @@
       </div>
 
       <div class="field">
-        <label>Расписание</label>
-        <select bind:value={schedule}>
-          {#each SCHEDULES as s}
-            <option value={s.value}>{s.label} <span class="cron">({s.value})</span></option>
-          {/each}
-        </select>
-        <div class="hint">Cron: {schedule}</div>
+        <label>Торговое окно (время работы робота)</label>
+        <div class="window-row">
+          <input type="time" bind:value={tradeFrom} />
+          <span class="window-dash">—</span>
+          <input type="time" bind:value={tradeTo} />
+        </div>
+        <div class="hint">
+          Робот торгует только в этом окне (МСК). Вне окна — не торгует. По умолчанию 09:00–23:55.
+        </div>
       </div>
     </div>
 
@@ -286,9 +294,11 @@
     padding: 5px 8px; font-size: 12px; border-radius: 3px; outline: none;
   }
   input:focus, select:focus { border-color: #4caf5066; }
-  .hint { font-size: 10px; color: #444; font-family: monospace; }
+  .hint { font-size: 10px; color: #666; }
   .warn { font-size: 11px; color: #f4433699; padding: 4px 8px; background: #1a0a0a; border-radius: 3px; }
-  .cron { font-family: monospace; font-size: 10px; }
+  .window-row { display: flex; align-items: center; gap: 8px; }
+  .window-row input { flex: 1; }
+  .window-dash { color: #555; }
 
   /* Actions */
   .actions { display: flex; gap: 8px; margin-top: 8px; }

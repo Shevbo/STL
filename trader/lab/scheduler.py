@@ -1,14 +1,37 @@
 import asyncio
+import json
 import types
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone, timedelta
 from typing import Any
 
 import structlog
-from croniter import croniter
 
 log = structlog.get_logger()
 
-_MAX_ACTIVE_ROBOTS = 1  # MVP v1: one robot at a time
+_MAX_ACTIVE_ROBOTS = 1   # MVP v1: one robot at a time
+_TICK_SECONDS = 60       # robot wakes once per minute bar
+_MSK = timezone(timedelta(hours=3))  # Moscow time, no DST since 2014
+
+
+def _parse_window(schedule: str | None) -> tuple[time, time]:
+    """Parse 'HH:MM-HH:MM' trading window. Defaults to 09:00-23:55."""
+    if schedule and "-" in schedule:
+        try:
+            a, b = schedule.split("-", 1)
+            ah, am = (int(x) for x in a.strip().split(":"))
+            bh, bm = (int(x) for x in b.strip().split(":"))
+            return time(ah, am), time(bh, bm)
+        except Exception:
+            pass
+    return time(9, 0), time(23, 55)
+
+
+def _within_window(now_msk: datetime, win_from: time, win_to: time) -> bool:
+    t = now_msk.timetz().replace(tzinfo=None)
+    if win_from <= win_to:
+        return win_from <= t <= win_to
+    # Overnight window (e.g. 23:00-02:00)
+    return t >= win_from or t <= win_to
 
 
 class RobotScheduler:
@@ -33,10 +56,12 @@ class RobotScheduler:
             log.warning("lab.scheduler.max_robots_reached", robot_id=robot.id)
             return
         task = asyncio.create_task(
-            self._cron_loop(robot), name=f"robot-{robot.id}"
+            self._window_loop(robot), name=f"robot-{robot.id}"
         )
         self._tasks[robot.id] = task
-        log.info("lab.scheduler.robot_started", robot_id=robot.id)
+        win_from, win_to = _parse_window(robot.schedule)
+        log.info("lab.scheduler.robot_started", robot_id=robot.id,
+                 window=f"{win_from}-{win_to}")
 
     async def deploy_robot(self, robot) -> None:
         if robot.id in self._tasks:
@@ -53,28 +78,32 @@ class RobotScheduler:
                 pass
         log.info("lab.scheduler.robot_stopped", robot_id=robot_id)
 
-    async def _cron_loop(self, robot) -> None:
-        cron = croniter(robot.schedule, datetime.now(timezone.utc))
+    async def _window_loop(self, robot) -> None:
+        """
+        Tick once per minute. Run the robot's on_bar only when the current
+        Moscow time is inside the robot's trading window. Outside the window
+        the robot stays idle (does not trade).
+        """
+        win_from, win_to = _parse_window(robot.schedule)
         while True:
-            next_run = cron.get_next(datetime)
-            now = datetime.now(timezone.utc)
-            wait = (next_run - now).total_seconds()
-            if wait > 0:
-                await asyncio.sleep(wait)
-            try:
-                await self._run_robot_task(robot)
-            except Exception as exc:
-                log.error("lab.scheduler.robot_error",
-                          robot_id=robot.id, error=str(exc))
+            now_msk = datetime.now(_MSK)
+            if _within_window(now_msk, win_from, win_to):
+                try:
+                    await self._run_robot_task(robot)
+                except Exception as exc:
+                    log.error("lab.scheduler.robot_error",
+                              robot_id=robot.id, error=str(exc))
+            # Sleep to the next minute boundary
+            await asyncio.sleep(_TICK_SECONDS)
 
     async def _run_robot_task(self, robot) -> None:
-        from trader.lab.runtime import LiveRuntime
+        """Execute one robot tick (one bar)."""
+        from trader.lab.runtime import LiveRuntime  # avoid import cycle
         mod = types.ModuleType("robot_script")
         exec(compile(robot.script_code, f"<robot:{robot.id}>", "exec"), mod.__dict__)
         runtime = LiveRuntime(
             robot_id=robot.id, pool=self._pool,
-            tx_client=self._tx_client,
-            pos_client=self._pos_client,
+            tx_client=self._tx_client, pos_client=self._pos_client,
         )
         if hasattr(mod, "on_bar"):
             await mod.on_bar(runtime, robot.params_json)
@@ -87,7 +116,6 @@ class RobotScheduler:
 
 def _row_to_robot(row) -> Any:
     from trader.lab.models import Robot
-    import json
     return Robot(
         id=row["id"],
         user_email=row["user_email"],
