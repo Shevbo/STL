@@ -1,11 +1,12 @@
 <script lang="ts">
   import { fetchWithAuth } from '../../lib/fetch-auth';
+  import BacktestChart from './BacktestChart.svelte';
 
   let robots = $state<any[]>([]);
   let selectedRobotId = $state('');
   let dateFrom = $state('2026-01-01');
   let dateTo = $state('2026-05-01');
-  let paramsGrid = $state('{"fast_period": [5, 9, 14], "slow_period": [20, 30]}');
+  let paramsGrid = $state('{}');
   let runId = $state('');
   let status = $state('');
   let results = $state<any[]>([]);
@@ -14,6 +15,15 @@
   let loadingData = $state(false);
   let dataStatus = $state('');
   let coverage = $state<any[]>([]);
+  let selectedResult = $state<any | null>(null);
+
+  let selectedSymbol = $derived(
+    (() => {
+      const robot = robots.find(r => r.id === selectedRobotId);
+      const pj = robot?.params_json;
+      return (typeof pj === 'object' ? pj?.symbol : null) ?? 'RIM6';
+    })()
+  );
 
   async function loadRobots() {
     const res = await fetchWithAuth('/api/v1/robots');
@@ -116,6 +126,8 @@
 </script>
 
 <div class="backtest-lab">
+
+  <!-- ── Left: controls ─────────────────────────────────────────── -->
   <div class="controls">
     <h3>Backtest Lab</h3>
     <label>
@@ -125,11 +137,13 @@
       </select>
     </label>
     <label>From <input type="date" bind:value={dateFrom} /></label>
-    <label>To <input type="date" bind:value={dateTo} /></label>
+    <label>To   <input type="date" bind:value={dateTo} /></label>
     <label>
       Params grid (JSON)
-      <textarea bind:value={paramsGrid} rows="4"></textarea>
+      <textarea bind:value={paramsGrid} rows="4" placeholder='{"entry_period":[20,40]}'></textarea>
     </label>
+
+    <!-- Market data -->
     <div class="data-section">
       <div class="section-title">Market Data (ISS MOEX)</div>
       {#if coverage.length}
@@ -153,34 +167,74 @@
       {running ? `Running… (${status})` : 'Run Backtest'}
     </button>
     {#if error}<div class="error">{error}</div>{/if}
+
+    <!-- Results table -->
+    {#if results.length}
+      <div class="results-section">
+        <div class="section-title">
+          Results ({results.length}) — click to view chart
+        </div>
+        <div class="disclaimer">⚠ Results may differ from live (no slippage model)</div>
+        <table>
+          <thead>
+            <tr>
+              <th>Params</th><th>Return</th><th>Sharpe</th><th>MaxDD</th><th>Win%</th><th>N</th><th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each results as r}
+              {@const isSelected = selectedResult === r}
+              <tr
+                class:selected={isSelected}
+                onclick={() => selectedResult = r}
+                role="button"
+                tabindex="0"
+                onkeydown={(e) => e.key === 'Enter' && (selectedResult = r)}
+              >
+                <td class="params-cell">
+                  {#each Object.entries(typeof r.params === 'object' ? r.params : {}) as [k,v]}
+                    {#if k !== 'symbol'}<span class="param-tag">{k}={v}</span>{/if}
+                  {/each}
+                </td>
+                <td class:pos={r.total_return > 0} class:neg={r.total_return < 0}>
+                  {r.total_return != null ? (r.total_return * 100).toFixed(2) + '%' : '—'}
+                </td>
+                <td class:pos={(r.sharpe ?? 0) > 0} class:neg={(r.sharpe ?? 0) < 0}>
+                  {r.sharpe?.toFixed(2) ?? '—'}
+                </td>
+                <td>{r.max_drawdown != null ? (r.max_drawdown * 100).toFixed(1) + '%' : '—'}</td>
+                <td>{r.win_rate != null ? (r.win_rate * 100).toFixed(0) + '%' : '—'}</td>
+                <td>{r.total_trades ?? 0}</td>
+                <td>
+                  <button class="deploy-btn" onclick|stopPropagation={() => deployResult(r.params)}>
+                    ▶
+                  </button>
+                </td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    {/if}
   </div>
 
-  {#if results.length}
-    <div class="results">
-      <p class="disclaimer">Results may differ from live due to slippage and latency.</p>
-      <table>
-        <thead>
-          <tr>
-            <th>Params</th><th>Sharpe</th><th>Max DD</th>
-            <th>Win Rate</th><th>Return</th><th>Trades</th><th>Deploy</th>
-          </tr>
-        </thead>
-        <tbody>
-          {#each results as r}
-            <tr>
-              <td class="params-cell">{JSON.stringify(r.params)}</td>
-              <td>{r.sharpe?.toFixed(2) ?? '—'}</td>
-              <td>{r.max_drawdown != null ? (r.max_drawdown * 100).toFixed(1) + '%' : '—'}</td>
-              <td>{r.win_rate != null ? (r.win_rate * 100).toFixed(0) + '%' : '—'}</td>
-              <td>{r.total_return != null ? (r.total_return * 100).toFixed(2) + '%' : '—'}</td>
-              <td>{r.total_trades ?? 0}</td>
-              <td><button onclick={() => deployResult(r.params)}>Deploy</button></td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
-    </div>
-  {/if}
+  <!-- ── Center: chart ──────────────────────────────────────────── -->
+  <div class="chart-area">
+    {#if selectedResult}
+      <BacktestChart
+        result={selectedResult}
+        symbol={selectedSymbol}
+        dateFrom={new Date(dateFrom).toISOString()}
+        dateTo={new Date(dateTo).toISOString()}
+      />
+    {:else}
+      <div class="chart-placeholder">
+        <div class="ph-icon">📈</div>
+        <div class="ph-text">Запустите бэктест и выберите строку результатов</div>
+      </div>
+    {/if}
+  </div>
+
 </div>
 
 <style>
@@ -210,10 +264,28 @@
   .load-btn { background: #1a1a2e; border-color: #3d3d5a; color: #aaa; padding: 4px 10px; font-size: 10px; }
   .data-status { font-size: 10px; color: #888; }
   .divider { height: 1px; background: #2d2d4a; margin: 4px 0; }
-  .results { flex: 1; overflow: auto; padding: 16px; }
-  .disclaimer { font-size: 10px; color: #666; margin-bottom: 8px; }
-  table { width: 100%; border-collapse: collapse; font-size: 11px; }
-  th { text-align: left; padding: 6px 8px; background: #1a1a2e; color: #888; border-bottom: 1px solid #2d2d4a; }
-  td { padding: 4px 8px; border-bottom: 1px solid #1e1e3a; color: #ccc; }
-  td.params-cell { font-family: monospace; font-size: 10px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* Results table */
+  .results-section { display: flex; flex-direction: column; gap: 6px; flex: 1; min-height: 0; overflow: hidden; }
+  .disclaimer { font-size: 10px; color: #666; }
+  table { width: 100%; border-collapse: collapse; font-size: 10px; }
+  th { text-align: left; padding: 4px 6px; background: #0f0f1e; color: #555; border-bottom: 1px solid #2d2d4a; white-space: nowrap; }
+  td { padding: 3px 6px; border-bottom: 1px solid #14141f; color: #ccc; cursor: pointer; }
+  tr:hover td { background: #1a1a2e; }
+  tr.selected td { background: #0d1a0d; }
+  .params-cell { min-width: 80px; }
+  .param-tag { display: inline-block; background: #1a1a2e; border-radius: 2px; padding: 1px 4px; margin: 1px; font-size: 9px; font-family: monospace; white-space: nowrap; }
+  .pos { color: #4caf50; }
+  .neg { color: #f44336; }
+  .deploy-btn { padding: 1px 6px; font-size: 10px; background: #4caf5010; border: 1px solid #4caf5033; color: #4caf5099; cursor: pointer; border-radius: 2px; }
+  .deploy-btn:hover { background: #4caf5025; color: #4caf50; }
+
+  /* Center chart area */
+  .chart-area { flex: 1; min-width: 0; overflow: hidden; border-left: 1px solid #2d2d4a; }
+  .chart-placeholder {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    height: 100%; gap: 12px; color: #333;
+  }
+  .ph-icon { font-size: 48px; }
+  .ph-text { font-size: 13px; color: #444; text-align: center; }
 </style>

@@ -575,6 +575,57 @@ def create_app() -> FastAPI:
         )
         return {"status": "started", "symbols": symbols, "dateFrom": date_from, "dateTo": date_to}
 
+    @fastapi_app.get("/api/v1/market/bars")
+    async def market_bars(
+        request: Request,
+        symbol: str,
+        date_from: str,
+        date_to: str,
+        resample_min: int = 60,   # aggregate 1-min bars into N-min candles
+    ):
+        """
+        Return OHLCV bars from cache, resampled for display.
+        resample_min=60 → hourly candles (good for 1-3 month view).
+        resample_min=5  → 5-min candles.
+        """
+        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        from datetime import datetime as _dt
+        pool = request.app.state.db_pool
+        if pool is None:
+            return []
+
+        def _parse(s: str) -> _dt:
+            return _dt.fromisoformat(s.replace("Z", "+00:00"))
+
+        ts_from = _parse(date_from)
+        ts_to   = _parse(date_to)
+
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"""
+                SELECT
+                    EXTRACT(EPOCH FROM
+                        date_trunc('hour', ts) +
+                        (EXTRACT(MINUTE FROM ts)::int / $4 * $4) * interval '1 minute'
+                    )::bigint AS bucket,
+                    (array_agg(open  ORDER BY ts))[1]  AS open,
+                    MAX(high)                            AS high,
+                    MIN(low)                             AS low,
+                    (array_agg(close ORDER BY ts DESC))[1] AS close,
+                    SUM(volume)                          AS volume
+                FROM ohlcv_bars
+                WHERE symbol=$1 AND interval_min=1 AND ts BETWEEN $2 AND $3
+                GROUP BY bucket
+                ORDER BY bucket
+                """,
+                symbol, ts_from, ts_to, resample_min,
+            )
+        return [
+            {"time": r["bucket"], "open": r["open"], "high": r["high"],
+             "low": r["low"], "close": r["close"], "volume": int(r["volume"])}
+            for r in rows
+        ]
+
     @fastapi_app.get("/api/v1/market/coverage")
     async def market_coverage(request: Request, symbol: str | None = None):
         """

@@ -25,6 +25,7 @@ class Order:
     price: float
     status: str
     fill_price: float | None = None
+    fill_time: int | None = None    # unix timestamp of fill bar
 
 
 class STLRuntime(Protocol):
@@ -75,7 +76,8 @@ class BacktestRuntime:
         fill_price = next_bar.open
         order = Order(
             order_id=order_id, symbol=symbol, side=side,
-            qty=qty, price=price, status="filled", fill_price=fill_price,
+            qty=qty, price=price, status="filled",
+            fill_price=fill_price, fill_time=next_bar.time,
         )
         self._orders.append(order)
         pos = self._positions.get(symbol, {"side": "flat", "qty": 0, "avg": 0.0})

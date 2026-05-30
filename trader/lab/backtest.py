@@ -84,7 +84,7 @@ async def run_single_backtest(
         await strategy_module.on_stop(runtime, params)
 
     trades = [
-        {"side": o.side, "price": o.fill_price or o.price, "qty": o.qty}
+        {"side": o.side, "price": o.fill_price or o.price, "qty": o.qty, "time": o.fill_time}
         for o in await runtime.get_orders()
     ]
     metrics = compute_metrics(trades, initial_equity)
