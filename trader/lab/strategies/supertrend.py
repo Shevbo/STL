@@ -56,25 +56,35 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
     lower_prev = basis_prev - mult * a_prev
 
     cur_close = closes[-1]
-    prev_close = closes[-2]
+
+    # Persisted trend direction: +1 up, -1 down, 0 not set yet.
+    # Enter ONLY on an actual trend change, then hold until it reverses —
+    # otherwise the band test fires every bar and the position keeps growing.
+    trend = int(stl.get_state("trend", 0))
+
+    new_trend = trend
+    if cur_close > upper_prev:
+        new_trend = 1
+    elif cur_close < lower_prev:
+        new_trend = -1
+
+    if new_trend == trend:
+        return  # trend unchanged → hold, no new orders
 
     pos = await stl.get_position(symbol)
 
-    # Trend flip UP: price crosses above prior upper band → go/stay long
-    if prev_close <= upper_prev < cur_close:
+    if new_trend == 1:
         if pos.side == "short":
-            await stl.place_order(symbol, "buy", pos.quantity, cur_close)   # close short
-        if pos.side != "long":
-            await stl.place_order(symbol, "buy", qty, cur_close)            # open long
-            stl.log(f"ST flip UP — long @ {cur_close:.0f} (upper={upper_prev:.0f})")
-
-    # Trend flip DOWN: price crosses below prior lower band → go/stay short
-    elif prev_close >= lower_prev > cur_close:
+            await stl.place_order(symbol, "buy", pos.quantity, cur_close)   # cover short
+        await stl.place_order(symbol, "buy", qty, cur_close)                # open long
+        stl.log(f"ST flip UP — long @ {cur_close:.0f} (upper={upper_prev:.0f})")
+    elif new_trend == -1:
         if pos.side == "long":
             await stl.place_order(symbol, "sell", pos.quantity, cur_close)  # close long
-        if pos.side != "short":
-            await stl.place_order(symbol, "sell", qty, cur_close)           # open short
-            stl.log(f"ST flip DOWN — short @ {cur_close:.0f} (lower={lower_prev:.0f})")
+        await stl.place_order(symbol, "sell", qty, cur_close)               # open short
+        stl.log(f"ST flip DOWN — short @ {cur_close:.0f} (lower={lower_prev:.0f})")
+
+    stl.set_state("trend", new_trend)
 
 
 async def on_stop(stl: STLRuntime, params: dict) -> None:
