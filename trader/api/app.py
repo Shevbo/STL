@@ -512,13 +512,18 @@ def create_app() -> FastAPI:
         require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
         import json
         import asyncio as _asyncio
+        from datetime import datetime as _dt
         pool = request.app.state.db_pool
         run_id = cuid()
+
+        def _parse_dt(s: str) -> _dt:
+            return _dt.fromisoformat(s.replace("Z", "+00:00"))
+
         await pool.execute(
             """INSERT INTO backtest_runs (id, robot_id, params_grid, date_from, date_to)
                VALUES ($1,$2,$3,$4,$5)""",
-            run_id, body["robotId"], json.dumps(body["paramsGrid"]),
-            body["dateFrom"], body["dateTo"],
+            run_id, body["robotId"], json.dumps(body.get("paramsGrid", {})),
+            _parse_dt(body["dateFrom"]), _parse_dt(body["dateTo"]),
         )
         _asyncio.create_task(
             _run_backtest_task(run_id, body, pool, request.app.state)
