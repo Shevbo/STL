@@ -218,7 +218,15 @@ async def main() -> None:
     log(f"=== campaign {stamp} | budget {HOURS}h ===")
 
     dsn = Settings().lab_db_url
-    pool = await asyncpg.create_pool(dsn, min_size=2, max_size=6)
+    # Same JSON codec as trader/db.py — lets us pass dicts to JSONB columns
+    # (refresh_instrument_spec writes `raw` as dict). Without it: "expected str, got dict".
+    import json as _json
+
+    async def _init_codec(conn):
+        for tname in ("jsonb", "json"):
+            await conn.set_type_codec(tname, encoder=_json.dumps, decoder=_json.loads, schema="pg_catalog")
+
+    pool = await asyncpg.create_pool(dsn, min_size=2, max_size=6, init=_init_codec)
     await ensure_table(pool)
 
     # load data + per-symbol contract spec (point_value / margin from MOEX ISS)
@@ -321,7 +329,7 @@ async def main() -> None:
                     if c:
                         cand += 1
                     rows_buf.append((
-                        stamp, sid, sym, json.dumps(params),
+                        stamp, sid, sym, params,   # dict → JSONB via codec
                         m["total_return"], m["sharpe"], m["max_drawdown"],
                         m["win_rate"], m["total_trades"], score_of(m), c,
                         r.get("net_profit"), r.get("recovery_factor"),
