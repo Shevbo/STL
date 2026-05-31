@@ -152,39 +152,104 @@ class BacktestRuntime:
 
 
 class LiveRuntime:
-    """STL runtime for live trading — wraps existing trader clients."""
+    """
+    STL runtime for live trading — wraps existing trader clients.
 
-    def __init__(self, robot_id: str, pool, tx_client=None, pos_client=None) -> None:
+    Market data (get_bars/get_quote) comes from MOEX ISS (free, fresh) — same
+    source as the backtest, so live behaviour matches backtest behaviour. We do
+    not depend on WsHub being subscribed to the robot's symbol.
+
+    SAFETY: `paper` mode (default True) does NOT send orders to Finam. It records
+    intended fills into live_trades with status='paper' so the robot can be proven
+    against live data at zero financial risk. Real trading requires paper=False,
+    set only after explicit user confirmation.
+    """
+
+    def __init__(self, robot_id: str, pool, tx_client=None, pos_client=None,
+                 paper: bool = True) -> None:
         self._robot_id = robot_id
         self._pool = pool
         self._tx = tx_client
         self._pos = pos_client
+        self._paper = paper
         self._state: dict[str, Any] = {}
-        self._state_loaded = False
+        self._bars_cache: list[Bar] | None = None
+        self._bars_symbol: str | None = None
 
     async def get_bars(self, symbol: str, tf: int, n: int) -> list[Bar]:
-        raise NotImplementedError("Wire to WsHub bars cache in Task 11")
+        # Fetch a recent minute window from ISS, slice the last n. Cached per tick
+        # so multiple get_bars calls in one on_bar don't re-hit ISS.
+        if self._bars_cache is not None and self._bars_symbol == symbol:
+            return self._bars_cache[-n:] if n else self._bars_cache
+        from datetime import date, timedelta
+        from trader.lab.iss_loader import load_bars_iss
+        # ~900 trading minutes/day; cover n minutes + buffer, min 3 calendar days
+        days = max(3, (n // 800) + 3)
+        today = date.today()
+        try:
+            bars = await load_bars_iss(symbol, today - timedelta(days=days), today, interval=1)
+        except Exception:
+            bars = []
+        self._bars_cache = bars
+        self._bars_symbol = symbol
+        return bars[-n:] if n else bars
 
     async def get_quote(self, symbol: str) -> Any:
-        raise NotImplementedError("Wire to feed in Task 11")
+        bars = await self.get_bars(symbol, tf=1, n=1)
+        if bars:
+            c = bars[-1].close
+            return {"bid": c, "ask": c, "last": c}
+        return {"bid": 0.0, "ask": 0.0, "last": 0.0}
 
     async def get_orderbook(self, symbol: str) -> Any:
-        raise NotImplementedError("Wire to book_stream in Task 11")
+        return {"bids": [], "asks": []}
 
     async def place_order(self, symbol: str, side: str, qty: int, price: float) -> Order:
+        from uuid import uuid4
+        if self._paper:
+            # Virtual fill — record, do NOT touch the broker.
+            oid = "paper-" + uuid4().hex[:10]
+            await self._record_trade(symbol, side, qty, price, oid, "paper")
+            self.log(f"[PAPER] {side} {qty} {symbol} @ {price:.0f}")
+            return Order(order_id=oid, symbol=symbol, side=side, qty=qty,
+                         price=price, status="paper", fill_price=price)
+        # REAL order to Finam.
         from trader.tx.models import OrderRequest
         req = OrderRequest(symbol=symbol, side=side, quantity=qty, price=price)
         resp = await self._tx.place_order(req)
+        await self._record_trade(symbol, side, qty, price, resp.order_id, resp.status)
+        self.log(f"[LIVE] {side} {qty} {symbol} @ {price:.0f} -> {resp.status}")
         return Order(order_id=resp.order_id, symbol=symbol, side=side,
                      qty=qty, price=price, status=resp.status)
 
+    async def _record_trade(self, symbol, side, qty, price, order_id, status) -> None:
+        if self._pool is None:
+            return
+        from uuid import uuid4
+        try:
+            async with self._pool.acquire() as conn:
+                await conn.execute(
+                    """INSERT INTO live_trades
+                       (id, robot_id, symbol, side, qty, price, order_id, status, timestamp)
+                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8, now())""",
+                    uuid4().hex, self._robot_id, symbol, side, qty,
+                    Decimal(str(price)), order_id, status,
+                )
+        except Exception as exc:
+            import structlog
+            structlog.get_logger().warning("live.record_trade_failed", error=str(exc))
+
     async def cancel_order(self, order_id: str) -> None:
-        raise NotImplementedError("Wire to TxClient in Task 11")
+        return  # market-style robots don't hold resting orders
 
     async def get_orders(self) -> list[Order]:
-        raise NotImplementedError("Wire to TxClient in Task 11")
+        return []  # no resting-order tracking for these robots
 
     async def get_position(self, symbol: str) -> Position:
+        # In paper mode the broker position is irrelevant — reconstruct from
+        # our recorded paper fills so the robot sees its own virtual position.
+        if self._paper:
+            return await self._paper_position(symbol)
         portfolio = await self._pos.get_portfolio()
         for p in portfolio:
             if p.symbol == symbol:
@@ -192,7 +257,27 @@ class LiveRuntime:
         return Position(symbol=symbol, account_id="", side="flat",
                         quantity=0, avg_price=Decimal(0), current_price=Decimal(0), var_margin=Decimal(0))
 
+    async def _paper_position(self, symbol: str) -> Position:
+        signed = 0
+        if self._pool is not None:
+            async with self._pool.acquire() as conn:
+                rows = await conn.fetch(
+                    """SELECT side, qty FROM live_trades
+                       WHERE robot_id=$1 AND symbol=$2 AND status='paper'
+                       ORDER BY timestamp""",
+                    self._robot_id, symbol,
+                )
+            for r in rows:
+                signed += r["qty"] if r["side"] == "buy" else -r["qty"]
+        side = "long" if signed > 0 else ("short" if signed < 0 else "flat")
+        return Position(symbol=symbol, account_id="paper", side=side,
+                        quantity=abs(signed), avg_price=Decimal(0),
+                        current_price=Decimal(0), var_margin=Decimal(0))
+
     async def get_account(self) -> AccountSummary:
+        if self._paper:
+            return AccountSummary(deposit=Decimal("100000"), free=Decimal("100000"),
+                                  in_position=Decimal("0"), variation_margin=Decimal("0"))
         return await self._pos.get_account_summary()
 
     def get_state(self, key: str, default: Any = None) -> Any:

@@ -101,9 +101,13 @@ class RobotScheduler:
         from trader.lab.runtime import LiveRuntime  # avoid import cycle
         mod = types.ModuleType("robot_script")
         exec(compile(robot.script_code, f"<robot:{robot.id}>", "exec"), mod.__dict__)
+        # paper by default; real trading only when state_json.live_real is true
+        state = robot.state_json if isinstance(robot.state_json, dict) else {}
+        paper = not bool(state.get("live_real", False))
         runtime = LiveRuntime(
             robot_id=robot.id, pool=self._pool,
             tx_client=self._tx_client, pos_client=self._pos_client,
+            paper=paper,
         )
         if hasattr(mod, "on_bar"):
             await mod.on_bar(runtime, robot.params_json)
