@@ -224,6 +224,22 @@ class LiveRuntime:
                          price=price, status="paper", fill_price=price)
         # REAL order to Finam — use the @MIC-qualified symbol the broker expects.
         fin_sym = self._finam_symbol(symbol)
+
+        # Preflight: if this SELL would open/increase a short, confirm the account
+        # actually permits shorting this instrument. Avoids the [666] reject loop
+        # when Finam margin-short isn't enabled yet.
+        if side == "sell":
+            try:
+                cur = await self.get_position(symbol)
+                cur_signed = cur.quantity if cur.side == "long" else (-cur.quantity if cur.side == "short" else 0)
+                if cur_signed - qty < 0 and not await self._shortable(fin_sym):
+                    self.log(f"[LIVE] SKIP short {qty} {fin_sym}: shorting NOT_AVAILABLE on this account "
+                             f"(enable margin short in Finam to trade both sides)", level="warning")
+                    return Order(order_id="skipped-noshort", symbol=symbol, side=side,
+                                 qty=qty, price=price, status="skipped")
+            except Exception:
+                pass  # preflight is best-effort; never block on it
+
         from trader.tx.models import OrderRequest
         req = OrderRequest(symbol=fin_sym, side=side, quantity=qty, price=price)
         try:
@@ -242,6 +258,30 @@ class LiveRuntime:
         self.log(f"[LIVE] {side} {qty} {fin_sym} @ {price:.0f} -> {resp.status}")
         return Order(order_id=resp.order_id, symbol=symbol, side=side,
                      qty=qty, price=price, status=resp.status)
+
+    async def _shortable(self, fin_sym: str) -> bool:
+        """
+        Query Finam /params for the account: is this instrument shortable?
+        Reuses the positions client's token + http (it holds account_id/base_url).
+        Returns True on any uncertainty so we never wrongly block a valid order.
+        """
+        if self._pos is None:
+            return True
+        try:
+            token = await self._pos._get_token()
+            acc = self._pos._account_id
+            resp = await self._pos._http.get(
+                f"/v1/assets/{fin_sym}/params",
+                headers={"Authorization": f"Bearer {token}"},
+                params={"account_id": acc}, timeout=10.0,
+            )
+            if resp.status_code != 200:
+                return True
+            d = resp.json()
+            val = (d.get("shortable") or {}).get("value")
+            return val != "NOT_AVAILABLE"
+        except Exception:
+            return True
 
     async def _record_trade(self, symbol, side, qty, price, order_id, status) -> None:
         if self._pool is None:
