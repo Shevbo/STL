@@ -175,6 +175,7 @@
   <!-- grid builder -->
   <div class="opt-builder">
     <div class="ob-title">Перебор параметров</div>
+    <div class="ob-preamble">Доходность — от первоначальных инвестиций 100 000 ₽, в рублях (стоимость пункта и ГО с MOEX ISS). При усреднении ГО растёт пропорционально числу контрактов.</div>
     {#if numericParams.length === 0}
       <div class="ob-empty">У стратегии нет числовых параметров</div>
     {:else}
@@ -279,7 +280,8 @@
   .opt-root { display: flex; flex-direction: column; height: 100%; overflow: auto; background: #0a0a15; padding: 12px; gap: 14px; }
 
   .opt-builder { background: #0f0f1e; border: 1px solid #2d2d4a; border-radius: 5px; padding: 10px; }
-  .ob-title { font-size: 12px; color: #4caf50; font-weight: 600; margin-bottom: 8px; }
+  .ob-title { font-size: 12px; color: #4caf50; font-weight: 600; margin-bottom: 4px; }
+  .ob-preamble { font-size: 10px; color: #777; line-height: 1.4; margin-bottom: 8px; }
   .ob-empty { font-size: 11px; color: #666; }
   .ob-grid { width: 100%; border-collapse: collapse; font-size: 11px; }
   .ob-grid th { text-align: left; color: #666; padding: 3px 6px; font-weight: 400; }

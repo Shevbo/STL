@@ -207,7 +207,7 @@
         <div class="section-title">
           Results ({results.length}) — click to view chart
         </div>
-        <div class="disclaimer">⚠ Results may differ from live (no slippage model)</div>
+        <div class="disclaimer">Доходность рассчитана от первоначальных инвестиций 100 000 ₽, в рублях (реальная стоимость пункта и ГО с MOEX ISS). При усреднении ГО растёт пропорционально. ⚠ Результаты могут отличаться от live (без модели проскальзывания).</div>
         <table>
           <thead>
             <tr>
