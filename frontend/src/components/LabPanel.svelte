@@ -1,9 +1,10 @@
 <script lang="ts">
   import LiveRobots from './lab/LiveRobots.svelte';
   import BacktestLab from './lab/BacktestLab.svelte';
+  import Botstore from './lab/Botstore.svelte';
   import ChartFrame from './ChartFrame.svelte';
 
-  type Tab = 'live' | 'market' | 'backtest';
+  type Tab = 'live' | 'market' | 'backtest' | 'botstore';
   let activeTab = $state<Tab>('live');
   let fullscreen = $state(false);
 
@@ -24,6 +25,9 @@
     </button>
     <button class:active={activeTab === 'backtest'} onclick={() => activeTab = 'backtest'}>
       Backtest Lab
+    </button>
+    <button class:active={activeTab === 'botstore'} onclick={() => activeTab = 'botstore'}>
+      Botstore
     </button>
     <button
       class="fullscreen-btn"
