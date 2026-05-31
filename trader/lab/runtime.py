@@ -204,6 +204,15 @@ class LiveRuntime:
     async def get_orderbook(self, symbol: str) -> Any:
         return {"bids": [], "asks": []}
 
+    @staticmethod
+    def _finam_symbol(symbol: str) -> str:
+        """
+        ISS uses bare ticker (RIM6); Finam Trade API expects symbol@MIC
+        (RIM6@RTSX) — same form the account positions use. Append @RTSX for
+        bare FORTS tickers so orders net against existing positions correctly.
+        """
+        return symbol if "@" in symbol else f"{symbol}@RTSX"
+
     async def place_order(self, symbol: str, side: str, qty: int, price: float) -> Order:
         from uuid import uuid4
         if self._paper:
@@ -213,12 +222,24 @@ class LiveRuntime:
             self.log(f"[PAPER] {side} {qty} {symbol} @ {price:.0f}")
             return Order(order_id=oid, symbol=symbol, side=side, qty=qty,
                          price=price, status="paper", fill_price=price)
-        # REAL order to Finam.
+        # REAL order to Finam — use the @MIC-qualified symbol the broker expects.
+        fin_sym = self._finam_symbol(symbol)
         from trader.tx.models import OrderRequest
-        req = OrderRequest(symbol=symbol, side=side, quantity=qty, price=price)
-        resp = await self._tx.place_order(req)
+        req = OrderRequest(symbol=fin_sym, side=side, quantity=qty, price=price)
+        try:
+            resp = await self._tx.place_order(req)
+        except Exception as exc:
+            msg = str(exc)
+            # Translate Finam's server-side risk rejection into a clear log.
+            if "[666]" in msg or "uncovered" in msg.lower() or "непокрыт" in msg.lower():
+                self.log(f"[LIVE] BROKER REJECT (uncovered-position risk) {side} {qty} {fin_sym}: "
+                         f"check Finam account risk level / margin permission", level="error")
+            else:
+                self.log(f"[LIVE] order failed {side} {qty} {fin_sym}: {msg}", level="error")
+            await self._record_trade(symbol, side, qty, price, "rejected", "rejected")
+            raise
         await self._record_trade(symbol, side, qty, price, resp.order_id, resp.status)
-        self.log(f"[LIVE] {side} {qty} {symbol} @ {price:.0f} -> {resp.status}")
+        self.log(f"[LIVE] {side} {qty} {fin_sym} @ {price:.0f} -> {resp.status}")
         return Order(order_id=resp.order_id, symbol=symbol, side=side,
                      qty=qty, price=price, status=resp.status)
 
