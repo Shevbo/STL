@@ -93,6 +93,54 @@ def log(msg: str) -> None:
     print(f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
+# ── pull in the whole strategy library (12+ classic robots) ───────────────────
+# Each library robot becomes a SPEC: param space auto-derived from its schema
+# (numeric fields → range(min, max+1)), validity = strategy-specific guards,
+# and an on_bar built from make_on_bar.
+def _add_library_specs():
+    from trader.lab.strategies.library import REGISTRY, make_on_bar
+
+    # cross-field validity guards by strategy id (skip nonsensical combos)
+    guards = {
+        "macd_cross":   lambda p: p["fast"] < p["slow"],
+        "triple_sma":   lambda p: p["fast"] < p["mid"] < p["slow"],
+        "ema_atr":      lambda p: p["fast"] < p["slow"],
+        "rsi_trend":    lambda p: p["oversold"] < p["overbought"],
+        "stochastic":   lambda p: p["oversold"] < p["overbought"],
+        "williams_r":   lambda p: p["overbought"] < p["oversold"],  # OB is the low band here
+    }
+
+    class _Shim:
+        """Module-like object exposing on_bar for run_single_backtest."""
+        def __init__(self, rid):
+            self.on_bar = make_on_bar(rid)
+
+    lib_modules = {}
+    for rid, s in REGISTRY.items():
+        space = {}
+        for p in s["params_schema"]:
+            if p["type"] != "number":
+                continue
+            if p["key"] == "qty":
+                continue  # keep qty fixed at 1 for the sweep
+            lo, hi = int(p["min"]), int(p["max"])
+            # coarse step for wide ranges to keep the grid sane (random search caps anyway)
+            span = hi - lo
+            step = 1 if span <= 40 else max(1, span // 40)
+            space[p["key"]] = range(lo, hi + 1, step)
+        SPECS[rid] = {
+            "module": None,                 # uses shim, not import
+            "space": space,
+            "valid": guards.get(rid, lambda p: True),
+            "base": {"qty": 1},
+        }
+        lib_modules[rid] = _Shim(rid)
+    return lib_modules
+
+
+_LIB_MODULES = _add_library_specs()
+
+
 def build_combos(spec: dict, symbol: str) -> list[dict]:
     keys = list(spec["space"].keys())
     vals = [list(spec["space"][k]) for k in keys]
@@ -168,7 +216,10 @@ async def main() -> None:
         if b:
             bars_by_symbol[sym] = b
 
-    modules = {sid: importlib.import_module(spec["module"]) for sid, spec in SPECS.items()}
+    modules = {}
+    for sid, spec in SPECS.items():
+        modules[sid] = _LIB_MODULES[sid] if spec["module"] is None else importlib.import_module(spec["module"])
+    log(f"strategies loaded: {len(modules)} ({', '.join(modules)})")
 
     t0 = time.monotonic()
     done = 0

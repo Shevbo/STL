@@ -1,0 +1,261 @@
+"""
+Strategy library — a registry of classic indicator-based robots.
+
+These patterns are exactly what the 1000+ Pine/Lua/StockSharp scripts in the
+public sources implement (MACD, Bollinger, Stochastic, CCI, Keltner, ...).
+Each robot is a SIGNAL function: given recent bars + params it returns the
+DESIRED signed position (+1 long / -1 short / 0 flat / None = hold).
+A shared `make_on_bar` turns any signal into a STL on_bar that places orders.
+
+Combined with the optimizer's parameter sweep, this registry yields hundreds of
+thousands of concrete robot variants from a compact, auditable code base.
+"""
+from __future__ import annotations
+
+from trader.lab import indicators as I
+from trader.lab.runtime import STLRuntime
+
+# registry: id -> dict(name, source, params_schema, signal, warmup, default_params)
+REGISTRY: dict[str, dict] = {}
+
+
+def register(rid, name, source, params_schema, signal, warmup):
+    REGISTRY[rid] = {
+        "id": rid, "name": name, "source": source,
+        "params_schema": params_schema, "signal": signal, "warmup": warmup,
+        "default_params": {p["key"]: p["default"] for p in params_schema},
+    }
+
+
+def make_on_bar(rid: str):
+    """Build a STL on_bar(stl, params) from a registered signal function."""
+    spec = REGISTRY[rid]
+    signal = spec["signal"]
+    warmup = spec["warmup"]
+
+    async def on_bar(stl: STLRuntime, params: dict) -> None:
+        symbol = params["symbol"]
+        qty = int(params.get("qty", 1))
+        need = warmup(params)
+        bars = await stl.get_bars(symbol, tf=1, n=need)
+        if len(bars) < need:
+            return
+        want = signal(bars, params)        # +1 / -1 / 0 / None
+        if want is None:
+            return
+        pos = await stl.get_position(symbol)
+        cur = 1 if pos.side == "long" else (-1 if pos.side == "short" else 0)
+        if want == cur:
+            return
+        # close opposite leg, then open desired
+        if cur != 0:
+            side = "sell" if cur > 0 else "buy"
+            await stl.place_order(symbol, side, pos.quantity, bars[-1].close)
+        if want != 0:
+            side = "buy" if want > 0 else "sell"
+            await stl.place_order(symbol, side, qty, bars[-1].close)
+
+    return on_bar
+
+
+# ── helpers for schema ────────────────────────────────────────────────────────
+def P(key, label, default, lo, hi, hint=""):
+    return {"key": key, "label": label, "type": "number", "default": default, "min": lo, "max": hi, "hint": hint}
+
+
+SYM = {"key": "symbol", "label": "Инструмент", "type": "text", "default": "RIM6", "hint": "FORTS тикер"}
+GH = "https://github.com/topics/trading-strategies"
+
+# ════════════════════════════════════════════════════════════════════════════
+#  STRATEGY SIGNALS  (closes = [b.close ...]; highs/lows similar)
+# ════════════════════════════════════════════════════════════════════════════
+
+def _c(bars): return [b.close for b in bars]
+def _h(bars): return [b.high for b in bars]
+def _l(bars): return [b.low for b in bars]
+
+
+# 1. MACD crossover (long+short)
+def sig_macd(bars, p):
+    closes = _c(bars)
+    m, s = I.macd(closes, int(p["fast"]), int(p["slow"]), int(p["signal"]))
+    return 1 if m > s else -1
+register("macd_cross", "MACD Crossover",
+         "https://github.com/topics/macd",
+         [SYM, P("fast", "Быстрая EMA", 12, 3, 30), P("slow", "Медленная EMA", 26, 10, 60),
+          P("signal", "Сигнальная", 9, 3, 30), P("qty", "Контрактов", 1, 1, 10)],
+         sig_macd, lambda p: int(p["slow"]) + int(p["signal"]) + 2)
+
+
+# 2. Bollinger Bands mean-reversion
+def sig_bollinger_mr(bars, p):
+    closes = _c(bars)
+    lo, mid, up = I.bollinger(closes, int(p["period"]), float(p["mult"]) / 10)
+    c = closes[-1]
+    if c < lo: return 1
+    if c > up: return -1
+    return 0
+register("bollinger_mr", "Bollinger Mean-Reversion",
+         "https://github.com/topics/bollinger-bands",
+         [SYM, P("period", "Период", 20, 5, 60), P("mult", "Сигма ×10", 20, 10, 40, "20=2.0σ"),
+          P("qty", "Контрактов", 1, 1, 10)],
+         sig_bollinger_mr, lambda p: int(p["period"]) + 2)
+
+
+# 3. Bollinger breakout (trend)
+def sig_bollinger_bo(bars, p):
+    closes = _c(bars)
+    lo, mid, up = I.bollinger(closes, int(p["period"]), float(p["mult"]) / 10)
+    c = closes[-1]
+    if c > up: return 1
+    if c < lo: return -1
+    return None
+register("bollinger_bo", "Bollinger Breakout",
+         "https://github.com/topics/bollinger-bands",
+         [SYM, P("period", "Период", 20, 5, 60), P("mult", "Сигма ×10", 20, 10, 40),
+          P("qty", "Контрактов", 1, 1, 10)],
+         sig_bollinger_bo, lambda p: int(p["period"]) + 2)
+
+
+# 4. Stochastic oscillator
+def sig_stochastic(bars, p):
+    k = I.stochastic(_h(bars), _l(bars), _c(bars), int(p["period"]))
+    if k < float(p["oversold"]): return 1
+    if k > float(p["overbought"]): return -1
+    return 0
+register("stochastic", "Stochastic Oscillator",
+         "https://github.com/topics/stochastic",
+         [SYM, P("period", "Период", 14, 5, 40), P("oversold", "Перепродан", 20, 5, 40),
+          P("overbought", "Перекуплен", 80, 60, 95), P("qty", "Контрактов", 1, 1, 10)],
+         sig_stochastic, lambda p: int(p["period"]) + 2)
+
+
+# 5. CCI (Commodity Channel Index)
+def sig_cci(bars, p):
+    v = I.cci(_h(bars), _l(bars), _c(bars), int(p["period"]))
+    th = float(p["threshold"])
+    if v < -th: return 1
+    if v > th: return -1
+    return 0
+register("cci", "CCI Reversal",
+         "https://github.com/topics/cci",
+         [SYM, P("period", "Период", 20, 5, 50), P("threshold", "Порог", 100, 50, 200),
+          P("qty", "Контрактов", 1, 1, 10)],
+         sig_cci, lambda p: int(p["period"]) + 2)
+
+
+# 6. Williams %R
+def sig_williams(bars, p):
+    v = I.williams_r(_h(bars), _l(bars), _c(bars), int(p["period"]))
+    if v < -float(p["oversold"]): return 1
+    if v > -float(p["overbought"]): return -1
+    return 0
+register("williams_r", "Williams %R",
+         "https://github.com/topics/williams-r",
+         [SYM, P("period", "Период", 14, 5, 40), P("oversold", "Перепродан", 80, 60, 95),
+          P("overbought", "Перекуплен", 20, 5, 40), P("qty", "Контрактов", 1, 1, 10)],
+         sig_williams, lambda p: int(p["period"]) + 2)
+
+
+# 7. Momentum
+def sig_momentum(bars, p):
+    v = I.momentum(_c(bars), int(p["period"]))
+    if v > 0: return 1
+    if v < 0: return -1
+    return 0
+register("momentum", "Momentum",
+         "https://github.com/topics/momentum-trading",
+         [SYM, P("period", "Период", 10, 2, 60), P("qty", "Контрактов", 1, 1, 10)],
+         sig_momentum, lambda p: int(p["period"]) + 2)
+
+
+# 8. ROC threshold
+def sig_roc(bars, p):
+    v = I.roc(_c(bars), int(p["period"]))
+    th = float(p["threshold"]) / 100
+    if v > th: return 1
+    if v < -th: return -1
+    return 0
+register("roc", "Rate of Change",
+         "https://github.com/topics/trading-strategies",
+         [SYM, P("period", "Период", 12, 2, 60), P("threshold", "Порог %×100", 50, 5, 300, "50=0.5%"),
+          P("qty", "Контрактов", 1, 1, 10)],
+         sig_roc, lambda p: int(p["period"]) + 2)
+
+
+# 9. Triple SMA (fast/mid/slow alignment)
+def sig_triple_sma(bars, p):
+    closes = _c(bars)
+    f = I.sma(closes, int(p["fast"]))
+    m = I.sma(closes, int(p["mid"]))
+    s = I.sma(closes, int(p["slow"]))
+    if f > m > s: return 1
+    if f < m < s: return -1
+    return 0
+register("triple_sma", "Triple SMA Alignment",
+         "https://github.com/topics/moving-average",
+         [SYM, P("fast", "Быстрая SMA", 5, 2, 30), P("mid", "Средняя SMA", 20, 10, 60),
+          P("slow", "Медленная SMA", 50, 30, 200), P("qty", "Контрактов", 1, 1, 10)],
+         sig_triple_sma, lambda p: int(p["slow"]) + 2)
+
+
+# 10. Keltner channel breakout
+def sig_keltner(bars, p):
+    lo, mid, up = I.keltner(_h(bars), _l(bars), _c(bars),
+                            int(p["ema_period"]), int(p["atr_period"]), float(p["mult"]) / 10)
+    c = _c(bars)[-1]
+    if c > up: return 1
+    if c < lo: return -1
+    return None
+register("keltner_bo", "Keltner Breakout",
+         "https://github.com/topics/keltner-channel",
+         [SYM, P("ema_period", "EMA период", 20, 5, 60), P("atr_period", "ATR период", 10, 5, 40),
+          P("mult", "Множитель ×10", 20, 10, 40), P("qty", "Контрактов", 1, 1, 10)],
+         sig_keltner, lambda p: max(int(p["ema_period"]), int(p["atr_period"])) + 2)
+
+
+# 11. RSI + trend filter (RSI pullback in EMA-trend)
+def sig_rsi_trend(bars, p):
+    closes = _c(bars)
+    r = I.rsi(closes, int(p["rsi_period"]))
+    trend = closes[-1] > I.ema_last(closes, int(p["ema_period"]))
+    if trend and r < float(p["oversold"]): return 1
+    if not trend and r > float(p["overbought"]): return -1
+    return 0
+register("rsi_trend", "RSI + Trend Filter",
+         "https://github.com/topics/rsi",
+         [SYM, P("rsi_period", "RSI период", 14, 5, 40), P("ema_period", "EMA фильтр", 50, 20, 200),
+          P("oversold", "Перепродан", 40, 20, 50), P("overbought", "Перекуплен", 60, 50, 80),
+          P("qty", "Контрактов", 1, 1, 10)],
+         sig_rsi_trend, lambda p: max(int(p["rsi_period"]), int(p["ema_period"])) + 2)
+
+
+# 12. Dual EMA + ATR breakout combo
+def sig_ema_atr(bars, p):
+    closes = _c(bars)
+    fast = I.ema_last(closes, int(p["fast"]))
+    slow = I.ema_last(closes, int(p["slow"]))
+    a = I.atr(_h(bars), _l(bars), closes, int(p["atr_period"]))
+    c = closes[-1]
+    if fast > slow and c > slow + float(p["mult"]) / 10 * a: return 1
+    if fast < slow and c < slow - float(p["mult"]) / 10 * a: return -1
+    return 0
+register("ema_atr", "EMA Trend + ATR Filter",
+         "https://github.com/topics/trading-strategies",
+         [SYM, P("fast", "Быстрая EMA", 9, 3, 40), P("slow", "Медленная EMA", 30, 15, 120),
+          P("atr_period", "ATR период", 14, 5, 40), P("mult", "ATR множ ×10", 5, 1, 30),
+          P("qty", "Контрактов", 1, 1, 10)],
+         sig_ema_atr, lambda p: int(p["slow"]) + 2)
+
+
+def list_strategies() -> list[dict]:
+    """Public listing for the API (without the signal callable)."""
+    out = []
+    for rid, s in REGISTRY.items():
+        out.append({
+            "id": rid, "name": s["name"], "source": s["source"],
+            "params_schema": s["params_schema"],
+            "script_code": f"from trader.lab.strategies.library import make_on_bar; on_bar = make_on_bar('{rid}')",
+            "default_params": s["default_params"],
+        })
+    return out
