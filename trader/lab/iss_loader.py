@@ -343,3 +343,59 @@ async def load_bars_iss(
             return await loader.fetch_contract_bars(symbol, date_from, date_to, interval)
         else:
             return await loader.fetch_continuous_bars(symbol, date_from, date_to, interval)
+
+
+async def fetch_contract_spec(symbol: str) -> dict | None:
+    """
+    Fetch FORTS contract spec from MOEX ISS (free, no auth).
+    Returns dict with real ruble economics:
+      initial_margin  – ГО per 1 contract, RUB
+      min_step        – price step in index points
+      step_price      – RUB value of one min_step
+      point_value     – RUB per 1 index point = step_price / min_step
+      name, lot
+    point_value is the key fix: backtest PnL must be (exit-entry) * point_value
+    to be in RUBLES, not raw index points.
+    """
+    url = (
+        "https://iss.moex.com/iss/engines/futures/markets/forts/securities/"
+        f"{symbol}.json?iss.meta=off&iss.only=securities"
+    )
+    try:
+        async with httpx.AsyncClient(
+            timeout=15.0,
+            headers={"User-Agent": "STL-IssLoader/1.0", "Accept": "application/json"},
+        ) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            j = resp.json()
+        data = j.get("securities", {}).get("data") or []
+        cols = j.get("securities", {}).get("columns") or []
+        if not data:
+            return None
+        d = dict(zip(cols, data[0]))
+
+        def _f(key):
+            v = d.get(key)
+            try:
+                return float(v) if v is not None else None
+            except (TypeError, ValueError):
+                return None
+
+        min_step = _f("MINSTEP")
+        step_price = _f("STEPPRICE")
+        point_value = (step_price / min_step) if (min_step and step_price) else None
+        return {
+            "symbol": symbol,
+            "name": d.get("SHORTNAME") or d.get("SECNAME") or symbol,
+            "ticker": d.get("SECID") or symbol,
+            "lot": _f("LOTVOLUME") or 1.0,
+            "min_step": min_step,
+            "step_price": step_price,
+            "point_value": point_value,
+            "initial_margin": _f("INITIALMARGIN"),
+            "last_price": _f("LASTSETTLEPRICE") or _f("PREVPRICE"),
+            "raw": d,
+        }
+    except Exception:
+        return None

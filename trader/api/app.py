@@ -146,11 +146,22 @@ async def _run_backtest_task(run_id: str, body: dict, pool, app_state) -> None:
         param_sets = [{**base_params, **dict(zip(keys, combo))} for combo in combos]
         symbol = body.get("symbol", base_params.get("symbol", ""))
 
+        # Real ruble economics: point_value (= step_price/min_step) from MOEX ISS,
+        # cached in instrument_meta. Without it PnL is in index points, not rubles.
+        point_value = 1.0
+        try:
+            from trader.lab.market_store import refresh_instrument_spec
+            spec = await refresh_instrument_spec(pool, symbol)
+            point_value = (spec or {}).get("point_value") or 1.0
+        except Exception as exc:
+            log.warning("backtest.point_value_failed", symbol=symbol, error=str(exc))
+
         # Run the whole grid in ONE subprocess (bars serialized once, not per combo).
         # Scale timeout with combo count.
         graded = await run_backtest_grid(
             script_code, bars, symbol, param_sets,
             timeout=max(120, 8 * len(param_sets)),
+            point_value=point_value,
         )
 
         for entry in graded:
@@ -462,7 +473,7 @@ def create_app() -> FastAPI:
         """Return available built-in strategy templates with param schemas."""
         require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
         from trader.lab.strategies.donchian_breakout import STRATEGY_META as donchian_meta
-        return [
+        core = [
             {
                 "id": "donchian_breakout",
                 "name": donchian_meta["name"],
@@ -514,6 +525,83 @@ def create_app() -> FastAPI:
                 "default_params": {"symbol": "RIM6", "atr_period": 10, "multiplier": 30, "qty": 1},
             },
         ]
+        # append the whole strategy LIBRARY (12+ classic robots)
+        try:
+            from trader.lab.strategies.library import list_strategies as _lib_list
+            core.extend(_lib_list())
+        except Exception as exc:
+            log.error("api.library_list_failed", error=str(exc))
+        return core
+
+    # ── LAB: Botstore (robot catalog + leaderboard summary) ──────────
+    @fastapi_app.get("/api/v1/botstore")
+    async def botstore(request: Request):
+        """
+        Catalog of all portable robots with their best backtest result found
+        during background optimization campaigns. One row per (strategy, symbol):
+        best return on found params, # param variants tested, last run, period,
+        drawdown, recovery factor, initial equity used.
+        """
+        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        pool = request.app.state.db_pool
+
+        # robot catalog (strategy templates)
+        try:
+            from trader.lab.strategies.library import list_strategies as _lib_list
+            templates = _lib_list()
+        except Exception:
+            templates = []
+        core_ids = {
+            "ema_crossover": "EMA Crossover", "rsi_mean_reversion": "RSI Mean Reversion",
+            "donchian_breakout": "Donchian Breakout", "supertrend": "SuperTrend (ATR)",
+        }
+        names = {t["id"]: t["name"] for t in templates}
+        names.update(core_ids)
+
+        rows = []
+        if pool is not None:
+            rows = await pool.fetch("""
+                SELECT DISTINCT ON (strategy, symbol)
+                       strategy, symbol, params, total_return, max_drawdown,
+                       recovery_factor, sharpe, win_rate, total_trades, net_profit,
+                       point_value, initial_margin, initial_equity, date_from, date_to,
+                       created_at
+                FROM optimization_leaderboard
+                ORDER BY strategy, symbol, score DESC NULLS LAST
+            """)
+            counts = await pool.fetch("""
+                SELECT strategy, count(*) AS variants, max(created_at) AS last_run
+                FROM optimization_leaderboard GROUP BY strategy
+            """)
+        else:
+            counts = []
+        variants_by = {c["strategy"]: c["variants"] for c in counts}
+        lastrun_by = {c["strategy"]: c["last_run"] for c in counts}
+
+        best_by_strat: dict[str, list] = {}
+        for r in rows:
+            d = dict(r)
+            for k in ("date_from", "date_to", "created_at"):
+                if d.get(k) is not None:
+                    d[k] = d[k].isoformat()
+            best_by_strat.setdefault(r["strategy"], []).append(d)
+
+        catalog = []
+        all_ids = set(names) | set(variants_by) | set(best_by_strat)
+        for sid in sorted(all_ids):
+            lr = lastrun_by.get(sid)
+            catalog.append({
+                "id": sid,
+                "name": names.get(sid, sid),
+                "variants_tested": variants_by.get(sid, 0),
+                "last_run": lr.isoformat() if lr else None,
+                "results": best_by_strat.get(sid, []),
+            })
+        return {
+            "initial_equity": 100000,
+            "robots_count": len(catalog),
+            "catalog": catalog,
+        }
 
     # ── LAB: STL Links ───────────────────────────────────────────────
     @fastapi_app.get("/api/v1/stl-links")

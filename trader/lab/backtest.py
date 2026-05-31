@@ -7,34 +7,48 @@ from typing import Any
 from trader.lab.runtime import BacktestRuntime, Bar
 
 
-def compute_metrics(trades: list[dict], initial_equity: float) -> dict[str, Any]:
+def compute_metrics(trades: list[dict], initial_equity: float,
+                    point_value: float = 1.0) -> dict[str, Any]:
+    """
+    Round-trip metrics. PnL per pair is multiplied by point_value so all money
+    figures are in RUBLES (RIM6 ~1.42 ₽/point). Handles both long (buy→sell) and
+    short (sell→buy) round-trips by tracking signed entry.
+    """
+    empty = {"total_trades": 0, "win_rate": 0.0, "total_return": 0.0,
+             "sharpe": None, "max_drawdown": 0.0, "recovery_factor": None,
+             "net_profit": 0.0}
     if not trades:
-        return {
-            "total_trades": 0, "win_rate": 0.0,
-            "total_return": 0.0, "sharpe": None, "max_drawdown": 0.0,
-        }
-    pairs = []
-    buy_price = None
+        return empty
+
+    pairs = []          # realized PnL per closed round-trip, in RUB
+    entry = None        # (signed_qty, price)
     for t in trades:
-        if t["side"] == "buy":
-            buy_price = t["price"]
-        elif t["side"] == "sell" and buy_price is not None:
-            pairs.append(t["price"] - buy_price)
-            buy_price = None
+        q = t["qty"] * (1 if t["side"] == "buy" else -1)
+        if entry is None:
+            entry = [q, t["price"]]
+            continue
+        eq, ep = entry
+        if (eq > 0) == (q > 0):          # same direction → average in
+            tot = eq + q
+            ep = (ep * eq + t["price"] * q) / tot if tot != 0 else t["price"]
+            entry = [tot, ep]
+        else:                            # opposite → close
+            closed = min(abs(eq), abs(q))
+            pnl = (t["price"] - ep) * (1 if eq > 0 else -1) * closed * point_value
+            pairs.append(pnl)
+            rem = eq + q
+            entry = [rem, t["price"]] if rem != 0 else None
 
     if not pairs:
-        return {
-            "total_trades": 0, "win_rate": 0.0,
-            "total_return": 0.0, "sharpe": None, "max_drawdown": 0.0,
-        }
+        return empty
 
     wins = sum(1 for p in pairs if p > 0)
     win_rate = wins / len(pairs)
-    total_pnl = sum(pairs)
-    total_return = total_pnl / initial_equity
+    net_profit = sum(pairs)
+    total_return = net_profit / initial_equity
 
     if len(pairs) > 1:
-        mean_r = sum(pairs) / len(pairs)
+        mean_r = net_profit / len(pairs)
         std_r = math.sqrt(sum((p - mean_r) ** 2 for p in pairs) / len(pairs))
         sharpe = (mean_r / std_r * math.sqrt(252)) if std_r > 0 else None
     else:
@@ -42,14 +56,16 @@ def compute_metrics(trades: list[dict], initial_equity: float) -> dict[str, Any]
 
     equity = initial_equity
     peak = equity
-    max_dd = 0.0
+    max_dd_money = 0.0
     for p in pairs:
         equity += p
         if equity > peak:
             peak = equity
-        dd = (peak - equity) / peak if peak > 0 else 0.0
-        if dd > max_dd:
-            max_dd = dd
+        dd = peak - equity
+        if dd > max_dd_money:
+            max_dd_money = dd
+    max_dd = max_dd_money / initial_equity if initial_equity else 0.0
+    recovery = (net_profit / max_dd_money) if max_dd_money > 0 else None
 
     return {
         "total_trades": len(pairs),
@@ -57,6 +73,8 @@ def compute_metrics(trades: list[dict], initial_equity: float) -> dict[str, Any]
         "total_return": total_return,
         "sharpe": sharpe,
         "max_drawdown": max_dd,
+        "recovery_factor": recovery,
+        "net_profit": net_profit,
     }
 
 
@@ -66,8 +84,10 @@ async def run_single_backtest(
     symbol: str,
     params: dict,
     initial_equity: float = 100_000.0,
+    point_value: float = 1.0,
 ) -> dict[str, Any]:
-    runtime = BacktestRuntime(bars=bars, symbol=symbol, initial_equity=initial_equity)
+    runtime = BacktestRuntime(bars=bars, symbol=symbol,
+                              initial_equity=initial_equity, point_value=point_value)
 
     if hasattr(strategy_module, "on_start"):
         await strategy_module.on_start(runtime, params)
@@ -87,7 +107,7 @@ async def run_single_backtest(
         {"side": o.side, "price": o.fill_price or o.price, "qty": o.qty, "time": o.fill_time}
         for o in await runtime.get_orders()
     ]
-    metrics = compute_metrics(trades, initial_equity)
+    metrics = compute_metrics(trades, initial_equity, point_value)
     return {"trades": trades, "equity_curve": equity_curve, **metrics}
 
 
@@ -137,7 +157,8 @@ async def run_backtest_isolated(
 
 
 def _subprocess_run_many(script_code: str, bars_data: list[dict], symbol: str,
-                         param_sets: list[dict], result_queue: multiprocessing.Queue) -> None:
+                         param_sets: list[dict], result_queue: multiprocessing.Queue,
+                         point_value: float = 1.0) -> None:
     """Run MANY param combos in ONE subprocess — bars pickled once, not per combo."""
     import asyncio
     import types
@@ -150,7 +171,7 @@ def _subprocess_run_many(script_code: str, bars_data: list[dict], symbol: str,
         out = []
         for ps in param_sets:
             try:
-                r = await run_single_backtest(mod, bars, symbol, ps)
+                r = await run_single_backtest(mod, bars, symbol, ps, point_value=point_value)
                 out.append({"ok": True, "params": ps, "result": r})
             except Exception as exc:
                 out.append({"ok": False, "params": ps, "error": str(exc)})
@@ -168,6 +189,7 @@ async def run_backtest_grid(
     symbol: str,
     param_sets: list[dict],
     timeout: float = 600,
+    point_value: float = 1.0,
 ) -> list[dict[str, Any]]:
     """
     Run a whole parameter grid in ONE subprocess (bars serialized once).
@@ -181,7 +203,7 @@ async def run_backtest_grid(
     q: multiprocessing.Queue = multiprocessing.Queue()
     proc = multiprocessing.Process(
         target=_subprocess_run_many,
-        args=(script_code, bars_data, symbol, param_sets, q),
+        args=(script_code, bars_data, symbol, param_sets, q, point_value),
         daemon=True,
     )
     proc.start()

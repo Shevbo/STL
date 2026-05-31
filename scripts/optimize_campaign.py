@@ -176,11 +176,23 @@ async def ensure_table(pool) -> None:
                 total_trades  INTEGER,
                 score         DOUBLE PRECISION,
                 candidate     BOOLEAN DEFAULT false,
+                net_profit       DOUBLE PRECISION,
+                recovery_factor  DOUBLE PRECISION,
+                point_value      DOUBLE PRECISION,
+                initial_margin   DOUBLE PRECISION,
+                initial_equity   DOUBLE PRECISION,
+                date_from        DATE,
+                date_to          DATE,
                 created_at    TIMESTAMPTZ DEFAULT now()
             );
             CREATE INDEX IF NOT EXISTS idx_lb_score ON optimization_leaderboard(score DESC);
             CREATE INDEX IF NOT EXISTS idx_lb_candidate ON optimization_leaderboard(candidate, score DESC);
         """)
+        # add columns if table pre-existed
+        for col, typ in [("net_profit", "DOUBLE PRECISION"), ("recovery_factor", "DOUBLE PRECISION"),
+                         ("point_value", "DOUBLE PRECISION"), ("initial_margin", "DOUBLE PRECISION"),
+                         ("initial_equity", "DOUBLE PRECISION"), ("date_from", "DATE"), ("date_to", "DATE")]:
+            await conn.execute(f"ALTER TABLE optimization_leaderboard ADD COLUMN IF NOT EXISTS {col} {typ};")
 
 
 async def ensure_bars(pool, symbol: str) -> list:
@@ -209,12 +221,20 @@ async def main() -> None:
     pool = await asyncpg.create_pool(dsn, min_size=2, max_size=6)
     await ensure_table(pool)
 
-    # load data + strategy modules
+    # load data + per-symbol contract spec (point_value / margin from MOEX ISS)
+    from trader.lab.market_store import refresh_instrument_spec
     bars_by_symbol: dict[str, list] = {}
+    pv_by_symbol: dict[str, float] = {}
+    margin_by_symbol: dict[str, float] = {}
     for sym in SYMBOLS:
         b = await ensure_bars(pool, sym)
         if b:
             bars_by_symbol[sym] = b
+            spec = await refresh_instrument_spec(pool, sym)
+            pv = (spec or {}).get("point_value") or 1.0
+            pv_by_symbol[sym] = pv
+            margin_by_symbol[sym] = (spec or {}).get("initial_margin")
+            log(f"{sym}: point_value={pv} margin={margin_by_symbol[sym]}")
 
     modules = {}
     for sid, spec in SPECS.items():
@@ -234,8 +254,10 @@ async def main() -> None:
             await conn.executemany(
                 """INSERT INTO optimization_leaderboard
                    (campaign_run, strategy, symbol, params, total_return, sharpe,
-                    max_drawdown, win_rate, total_trades, score, candidate)
-                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)""",
+                    max_drawdown, win_rate, total_trades, score, candidate,
+                    net_profit, recovery_factor, point_value, initial_margin,
+                    initial_equity, date_from, date_to)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)""",
                 rows_buf,
             )
         rows_buf.clear()
@@ -283,8 +305,9 @@ async def main() -> None:
                     if key in seen:
                         continue
                     seen.add(key)
+                    pv = pv_by_symbol.get(sym, 1.0)
                     try:
-                        r = await run_single_backtest(mod, bars, sym, params, INITIAL_EQUITY)
+                        r = await run_single_backtest(mod, bars, sym, params, INITIAL_EQUITY, point_value=pv)
                     except Exception:
                         continue
                     m = {
@@ -301,6 +324,9 @@ async def main() -> None:
                         stamp, sid, sym, json.dumps(params),
                         m["total_return"], m["sharpe"], m["max_drawdown"],
                         m["win_rate"], m["total_trades"], score_of(m), c,
+                        r.get("net_profit"), r.get("recovery_factor"),
+                        pv, margin_by_symbol.get(sym), INITIAL_EQUITY,
+                        DATE_FROM, DATE_TO,
                     ))
                     done += 1
                 if len(rows_buf) >= 100:

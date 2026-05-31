@@ -147,11 +147,37 @@ async def ensure_instrument_meta_table(pool: "asyncpg.Pool") -> None:
                 lot              DOUBLE PRECISION,
                 price_step       DOUBLE PRECISION,
                 price_step_value DOUBLE PRECISION,
+                point_value      DOUBLE PRECISION,
                 initial_margin   DOUBLE PRECISION,
                 raw              JSONB,
                 updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
             );
         """)
+        # add column if table pre-existed without it
+        await conn.execute(
+            "ALTER TABLE instrument_meta ADD COLUMN IF NOT EXISTS point_value DOUBLE PRECISION;"
+        )
+
+
+async def refresh_instrument_spec(pool: "asyncpg.Pool", symbol: str) -> dict | None:
+    """Fetch live spec from MOEX ISS and upsert into instrument_meta. Returns the meta."""
+    from trader.lab.iss_loader import fetch_contract_spec
+    spec = await fetch_contract_spec(symbol)
+    if not spec:
+        return await get_instrument_meta(pool, symbol)
+    meta = {
+        "symbol": symbol,
+        "ticker": spec.get("ticker"),
+        "name": spec.get("name"),
+        "lot": spec.get("lot"),
+        "price_step": spec.get("min_step"),
+        "price_step_value": spec.get("step_price"),
+        "point_value": spec.get("point_value"),
+        "initial_margin": spec.get("initial_margin"),
+        "raw": spec.get("raw", {}),
+    }
+    await upsert_instrument_meta(pool, meta)
+    return await get_instrument_meta(pool, symbol)
 
 
 async def get_instrument_meta(pool: "asyncpg.Pool", symbol: str) -> dict | None:
@@ -170,14 +196,15 @@ async def upsert_instrument_meta(pool: "asyncpg.Pool", meta: dict) -> None:
         await conn.execute(
             """
             INSERT INTO instrument_meta
-                (symbol, ticker, name, lot, price_step, price_step_value, initial_margin, raw, updated_at)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8, now())
+                (symbol, ticker, name, lot, price_step, price_step_value, point_value, initial_margin, raw, updated_at)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, now())
             ON CONFLICT (symbol) DO UPDATE SET
                 ticker=EXCLUDED.ticker, name=EXCLUDED.name, lot=EXCLUDED.lot,
                 price_step=EXCLUDED.price_step, price_step_value=EXCLUDED.price_step_value,
+                point_value=EXCLUDED.point_value,
                 initial_margin=EXCLUDED.initial_margin, raw=EXCLUDED.raw, updated_at=now()
             """,
             meta.get("symbol"), meta.get("ticker"), meta.get("name"),
             meta.get("lot"), meta.get("price_step"), meta.get("price_step_value"),
-            meta.get("initial_margin"), meta.get("raw", {}),
+            meta.get("point_value"), meta.get("initial_margin"), meta.get("raw", {}),
         )

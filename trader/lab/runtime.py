@@ -43,10 +43,14 @@ class STLRuntime(Protocol):
 
 
 class BacktestRuntime:
-    def __init__(self, bars: list[Bar], symbol: str, initial_equity: float) -> None:
+    def __init__(self, bars: list[Bar], symbol: str, initial_equity: float,
+                 point_value: float = 1.0) -> None:
         self._bars = bars
         self._symbol = symbol
         self._equity = initial_equity
+        # RUB value of one index point (= step_price / min_step). Without it,
+        # PnL is in raw index points, not rubles. RIM6 ≈ 1.42 ₽/point.
+        self._point_value = point_value or 1.0
         self._cursor = min(4, len(bars) - 1)
         self._positions: dict[str, dict] = {}
         self._orders: list[Order] = []
@@ -91,12 +95,13 @@ class BacktestRuntime:
         new_signed = signed + delta
 
         # Realized PnL when the trade reduces the existing position (closing part/all).
+        # Multiply by point_value → result in RUBLES, not raw index points.
         if signed != 0 and (signed > 0) != (delta > 0):
             closed = min(qty, abs(signed))
             if signed > 0:                       # closing a long
-                self._equity += (fill_price - avg) * closed
+                self._equity += (fill_price - avg) * closed * self._point_value
             else:                                # closing a short
-                self._equity += (avg - fill_price) * closed
+                self._equity += (avg - fill_price) * closed * self._point_value
 
         if new_signed == 0:
             pos = {"side": "flat", "qty": 0, "avg": 0.0}
