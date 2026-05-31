@@ -10,9 +10,10 @@
   import { toFills, replay, computeStats, aggregateMarkers, buildConnectors } from '../../lib/lab-analytics';
 
   let {
-    result, symbol, strategy = null, dateFrom, dateTo,
+    result, symbol, strategy = null, dateFrom, dateTo, pointValue = 1,
   }: {
     result: any; symbol: string; strategy?: any; dateFrom: string; dateTo: string;
+    pointValue?: number;
   } = $props();
 
   let containerEl: HTMLDivElement;
@@ -157,6 +158,16 @@
       }
 
       stats = computeStats(fills, roundTrips, eq);
+      // Per-round-trip stats come back in index points. For a live robot we get a
+      // point_value so the overlay reads in rubles; backtests pass 1 (unchanged).
+      if (pointValue !== 1 && stats) {
+        stats = {
+          ...stats,
+          avgPerTrade: stats.avgPerTrade * pointValue,
+          maxProfit: stats.maxProfit * pointValue,
+          maxLoss: stats.maxLoss * pointValue,
+        };
+      }
 
       // Lock BOTH charts to the SAME time window = candle span. Prevents the
       // equity chart from "detaching" when the interval/zoom changes.

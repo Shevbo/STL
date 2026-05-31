@@ -2,11 +2,13 @@
 <script lang="ts">
   import { fetchWithAuth } from '../../lib/fetch-auth';
   import RobotEditor from './RobotEditor.svelte';
+  import RobotWindow from './RobotWindow.svelte';
 
   let robots = $state<any[]>([]);
   let selected = $state<any | null>(null);
   let loading = $state(true);
   let mode = $state<'list' | 'edit' | 'new'>('list');
+  let windowRobotId = $state<string | null>(null);  // dbl-click → detail window
 
   async function load() {
     loading = true;
@@ -48,7 +50,9 @@
         class:selected={selected?.id === r.id && mode === 'list'}
         role="button"
         tabindex="0"
+        title="Двойной клик — окно робота"
         onclick={() => { selected = r; mode = 'list'; }}
+        ondblclick={() => { windowRobotId = r.id; }}
         onkeydown={(e) => e.key === 'Enter' && (selected = r, mode = 'list')}
       >
         <span class="status-dot" class:live={r.deployed}></span>
@@ -138,6 +142,10 @@
     {/if}
   </div>
 </div>
+
+{#if windowRobotId}
+  <RobotWindow robotId={windowRobotId} onClose={() => windowRobotId = null} />
+{/if}
 
 <style>
   .live-robots { display: flex; height: 100%; overflow: hidden; }

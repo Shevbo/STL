@@ -703,6 +703,91 @@ def create_app() -> FastAPI:
         await request.app.state.scheduler.stop_robot(robot_id)
         return {"ok": True}
 
+    @fastapi_app.get("/api/v1/robots/{robot_id}/live")
+    async def robot_live(robot_id: str, request: Request):
+        """
+        Everything the robot detail window needs in one call:
+        robot row, traded symbol, all recorded orders/fills (live_trades),
+        ruble economics (point_value, initial_margin), paper/real flag, and a
+        chart date range. Fills feed the chart markers + history table; the
+        frontend computes round-trips and ruble equity from them.
+        """
+        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        import json as _json
+        from datetime import date as _date, timedelta as _td
+        pool = request.app.state.db_pool
+        if pool is None:
+            raise HTTPException(status_code=503, detail="DB unavailable")
+        row = await pool.fetchrow("SELECT * FROM robots WHERE id=$1", robot_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="Robot not found")
+        robot = dict(row)
+
+        def _as_dict(v):
+            if isinstance(v, dict):
+                return v
+            if isinstance(v, str):
+                try:
+                    return _json.loads(v)
+                except Exception:
+                    return {}
+            return {}
+
+        params = _as_dict(robot.get("params_json"))
+        state = _as_dict(robot.get("state_json"))
+        symbol = params.get("symbol") or "RIM6"
+        paper = not bool(state.get("live_real", False))
+
+        trade_rows = await pool.fetch(
+            """SELECT side, qty, price, order_id, status, timestamp
+               FROM live_trades WHERE robot_id=$1 ORDER BY timestamp""",
+            robot_id,
+        )
+        trades = [
+            {
+                "time": int(r["timestamp"].timestamp()),
+                "iso": r["timestamp"].isoformat(),
+                "side": r["side"],
+                "qty": int(r["qty"]),
+                "price": float(r["price"]),
+                "order_id": r["order_id"],
+                "status": r["status"],
+            }
+            for r in trade_rows
+        ]
+
+        # ruble economics from instrument_meta (cache; refresh once if missing)
+        from trader.lab.market_store import (
+            ensure_instrument_meta_table, get_instrument_meta, refresh_instrument_spec,
+        )
+        await ensure_instrument_meta_table(pool)
+        meta = await get_instrument_meta(pool, symbol)
+        if not meta or meta.get("point_value") is None:
+            try:
+                meta = await refresh_instrument_spec(pool, symbol)
+            except Exception:
+                meta = meta or {}
+        point_value = (meta or {}).get("point_value") or 1.0
+        initial_margin = (meta or {}).get("initial_margin")
+
+        # chart date range: cover trades + recent context, clamp to today
+        today = _date.today()
+        if trades:
+            first_day = _date.fromtimestamp(trades[0]["time"])
+            date_from = min(first_day - _td(days=1), _date(2026, 3, 1))
+        else:
+            date_from = _date(2026, 3, 1)
+        return {
+            "robot": robot,
+            "symbol": symbol,
+            "paper": paper,
+            "trades": trades,
+            "point_value": point_value,
+            "initial_margin": initial_margin,
+            "date_from": date_from.isoformat(),
+            "date_to": today.isoformat(),
+        }
+
     # ── LAB: Backtest ────────────────────────────────────────────────
     @fastapi_app.post("/api/v1/backtest/run", status_code=202)
     async def run_backtest(body: dict, request: Request):
