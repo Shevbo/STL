@@ -43,6 +43,8 @@
       <LiveRobots />
     {:else if activeTab === 'market'}
       <ChartFrame symbol="RIM6" />
+    {:else if activeTab === 'botstore'}
+      <Botstore />
     {:else}
       <BacktestLab />
     {/if}
