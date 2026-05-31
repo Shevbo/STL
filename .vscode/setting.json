@@ -1,0 +1,12 @@
+{
+  "// INFO": "VS Code - Claude settings bypass permissions",
+
+  "claudeCode.allowDangerouslySkipPermissions": true,
+  "claudeCode.initialPermissionMode": "bypassPermissions",
+  "claudeCode.autosave": true,
+  "claudeCode.hideOnboarding": true,
+  "claudeCode.disableLoginPrompt": false,
+  "claudeCode.preferredLocation": "panel",
+  "claudeCode.enableNewConversationShortcut": true,
+  "claudeCode.respectGitIgnore": true
+}
