@@ -96,8 +96,11 @@
       lineWidth: 1, priceFormat: { type: 'price', precision: 0, minMove: 1 },
     });
 
+    // Bar epochs carry Moscow wall-clock already (ISS times stamped as UTC by the
+    // loader), so the axis renders correct MSK numbers in UTC. Format the crosshair
+    // in UTC too — using Europe/Moscow here would add +3h and desync from the axis.
     const fmtFull = (ts: number) => new Date(ts * 1000).toLocaleString('ru-RU', {
-      timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit',
+      timeZone: 'UTC', day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit',
     });
     const onCross = (p: any) => { crossLabel = (p && p.time) ? fmtFull(p.time) : ''; };
     tvCandle.subscribeCrosshairMove(onCross);

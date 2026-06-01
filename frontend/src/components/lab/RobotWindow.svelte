@@ -21,10 +21,18 @@
 
   const INITIAL_EQUITY = 100000;
   const EXECUTED = new Set(['paper', 'filled', 'submitted', 'executed']);
+  // Candle epochs carry Moscow wall-clock stamped as UTC (ISS convention), but
+  // live_trades.timestamp is real UTC. Shift fill times +3h onto the candle's
+  // axis so markers/equity land on the right candle. History table keeps the
+  // real timestamp (formatted to MSK separately) — this offset is chart-only.
+  const MSK_OFFSET = 3 * 3600;
 
   // Fills that actually changed the position (exclude rejected/skipped).
   let chartFills = $derived(
-    live ? toFills((live.trades ?? []).filter((t: any) => EXECUTED.has(t.status))) : []
+    live
+      ? toFills((live.trades ?? []).filter((t: any) => EXECUTED.has(t.status)))
+          .map((f: any) => ({ ...f, time: f.time + MSK_OFFSET }))
+      : []
   );
   let replayed = $derived(replay(chartFills));
   let pv = $derived(live?.point_value ?? 1);
