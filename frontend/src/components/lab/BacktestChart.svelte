@@ -51,7 +51,10 @@
   let tip = $state<{ x: number; y: number; lines: string[] } | null>(null);
 
   // Custom horizontal scrollbar (lightweight-charts has no scrollbar widget).
-  let dataFrom = 0, dataTo = 0;                          // full data time span
+  // Works in LOGICAL (bar-index) space — the chart pans/zooms by bar index, and
+  // bars are NOT evenly spaced in time (gaps/weekends), so a time-based thumb
+  // distorts the window. barCount = total bars; thumb maps over [0, barCount].
+  let barCount = 0;
   let scrollThumb = $state({ left: 0, width: 100 });     // percent
   let draggingBar = false, dragStartX = 0, dragStartLeft = 0;
 
@@ -152,17 +155,22 @@
     tvCandle.subscribeCrosshairMove(onCross);
     tvEquity.subscribeCrosshairMove((p: any) => { crossLabel = (p && p.time) ? fmtTs(p.time) : ''; });
 
-    // Lock both axes together by visible TIME range so they pan/zoom as one,
-    // and reflect the visible window in the custom scrollbar thumb.
+    // Lock both axes together by visible TIME range so they pan/zoom as one.
     const link = (from: any, to: any) =>
       from.timeScale().subscribeVisibleTimeRangeChange((r: any) => {
         if (!syncReady || syncing || !r || r.from == null || r.to == null) return;
         syncing = true;
         try { to.timeScale().setVisibleRange(r); } catch { /* transient */ } finally { syncing = false; }
-        updateThumb(r);
       });
     link(tvCandle, tvEquity);
     link(tvEquity, tvCandle);
+
+    // Drive the scrollbar thumb from the LOGICAL (bar-index) range — robust to
+    // uneven bar spacing, unlike time coordinates.
+    tvCandle.timeScale().subscribeVisibleLogicalRangeChange((lr: any) => {
+      if (!syncReady || draggingBar || !lr) return;
+      updateThumb(lr);
+    });
 
     // Shift+wheel = horizontal pan (QUIK). Plain wheel is left to handleScale (zoom).
     candleEl.addEventListener('wheel', onWheelPan, { passive: false });
@@ -187,32 +195,34 @@
     ts.scrollToPosition(pos + (ev.deltaY > 0 ? -3 : 3), false);
   }
 
-  // Reflect the visible window as a thumb over the full data span.
-  function updateThumb(r: { from: number; to: number }) {
-    const span = dataTo - dataFrom;
-    if (span <= 0) { scrollThumb = { left: 0, width: 100 }; return; }
-    const left = Math.max(0, ((r.from - dataFrom) / span) * 100);
-    const width = Math.min(100 - left, ((r.to - r.from) / span) * 100);
+  // Reflect the visible window as a thumb over [0, barCount] in LOGICAL space.
+  // The logical range can extend past the data (rightOffset, partial bars), so
+  // clamp into the data bounds before mapping to percent.
+  function updateThumb(lr: { from: number; to: number }) {
+    if (barCount <= 0) { scrollThumb = { left: 0, width: 100 }; return; }
+    const from = Math.max(0, lr.from);
+    const to = Math.min(barCount, lr.to);
+    const left = Math.max(0, (from / barCount) * 100);
+    const width = Math.min(100 - left, ((to - from) / barCount) * 100);
     scrollThumb = { left, width: Math.max(2, width) };
   }
 
-  // Drag the scrollbar thumb → scroll the visible window across the data span.
+  // Drag the scrollbar thumb → shift the visible LOGICAL range across the bars.
   function onBarDown(ev: PointerEvent) {
     draggingBar = true; dragStartX = ev.clientX; dragStartLeft = scrollThumb.left;
     (ev.target as HTMLElement).setPointerCapture?.(ev.pointerId);
   }
   function onBarMove(ev: PointerEvent) {
-    if (!draggingBar || !scrollTrackEl || !tvCandle) return;
+    if (!draggingBar || !scrollTrackEl || !tvCandle || barCount <= 0) return;
     const trackW = scrollTrackEl.clientWidth || 1;
     const dPct = ((ev.clientX - dragStartX) / trackW) * 100;
     const newLeft = Math.max(0, Math.min(100 - scrollThumb.width, dragStartLeft + dPct));
-    const span = dataTo - dataFrom;
-    const visSpan = (scrollThumb.width / 100) * span;
-    const from = dataFrom + (newLeft / 100) * span;
+    // Keep the current window WIDTH (zoom) constant; only move its start bar.
+    const winBars = (scrollThumb.width / 100) * barCount;
+    const fromBar = (newLeft / 100) * barCount;
     syncing = true;
     try {
-      tvCandle.timeScale().setVisibleRange({ from, to: from + visSpan });
-      tvEquity.timeScale().setVisibleRange({ from, to: from + visSpan });
+      tvCandle.timeScale().setVisibleLogicalRange({ from: fromBar, to: fromBar + winBars });
     } catch { /* transient */ } finally { syncing = false; }
     scrollThumb = { ...scrollThumb, left: newLeft };
   }
@@ -290,6 +300,7 @@
 
       candleSeries.setData(bars.map(b => ({ time: b.time, open: b.open, high: b.high, low: b.low, close: b.close })));
       volumeSeries.setData(bars.map(b => ({ time: b.time, value: b.volume, color: b.close >= b.open ? '#26a65b20' : '#c0392b20' })));
+      barCount = bars.length;
 
       const fills = toFills(result?.trades);
       const { roundTrips } = replay(fills);
@@ -329,14 +340,15 @@
       }
 
       const tFrom = bars[0].time, tTo = bars[bars.length - 1].time;
-      dataFrom = tFrom; dataTo = tTo;
       syncing = true;
       try {
         tvCandle.timeScale().setVisibleRange({ from: tFrom, to: tTo });
         tvEquity.timeScale().setVisibleRange({ from: tFrom, to: tTo });
       } finally { syncing = false; }
       syncReady = true;
-      scrollThumb = { left: 0, width: 100 };
+      // Initialise the thumb from the actual logical range now shown.
+      const lr = tvCandle.timeScale().getVisibleLogicalRange();
+      if (lr) updateThumb(lr); else scrollThumb = { left: 0, width: 100 };
       drawOrderLines();
     } catch (e) {
       error = String(e);
