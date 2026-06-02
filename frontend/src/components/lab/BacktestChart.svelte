@@ -32,6 +32,7 @@
   let containerEl: HTMLDivElement;
   let candleEl: HTMLDivElement;
   let equityEl: HTMLDivElement;
+  let scrollTrackEl: HTMLDivElement;
 
   let tvCandle: any = null, tvEquity: any = null;
   let candleSeries: any = null, volumeSeries: any = null;
@@ -48,6 +49,11 @@
   let resampleMin = $state(defaultInterval);
   let margin = $state<number | null>(null);
   let tip = $state<{ x: number; y: number; lines: string[] } | null>(null);
+
+  // Custom horizontal scrollbar (lightweight-charts has no scrollbar widget).
+  let dataFrom = 0, dataTo = 0;                          // full data time span
+  let scrollThumb = $state({ left: 0, width: 100 });     // percent
+  let draggingBar = false, dragStartX = 0, dragStartLeft = 0;
 
   const INTERVALS = [
     { label: '1м', v: 1 }, { label: '5м', v: 5 }, { label: '15м', v: 15 },
@@ -83,12 +89,19 @@
       timeScale: { borderColor: '#2d2d4a', timeVisible: true, rightOffset: 4 },
       crosshair: { mode: 1 },
       rightPriceScale: { borderColor: '#2d2d4a', minimumWidth: 84 },
-      // QUIK-like interactions: wheel zooms candle width, drag pans horizontally.
+      // QUIK-like interactions: wheel zooms candle width; click-drag on the chart
+      // PANS horizontally (pressedMouseMove). Dragging must NOT rescale — only the
+      // price axis (right edge) rescales on drag, never the chart body.
       handleScroll: { mouseWheel: false, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
-      handleScale: { mouseWheel: true, pinch: true, axisPressedMouseMove: true, axisDoubleClickReset: true },
+      handleScale: {
+        mouseWheel: true, pinch: true,
+        axisPressedMouseMove: { time: false, price: true },
+        axisDoubleClickReset: true,
+      },
     };
 
-    // Top chart: hide its own axis — the single shared axis lives on the equity chart.
+    // Top chart hides its own axis — the single shared time axis lives on the
+    // equity chart below; horizontal scrolling uses the custom scrollbar + drag.
     tvCandle = createChart(candleEl, {
       ...chartOpts,
       timeScale: { ...chartOpts.timeScale, visible: false },
@@ -139,12 +152,14 @@
     tvCandle.subscribeCrosshairMove(onCross);
     tvEquity.subscribeCrosshairMove((p: any) => { crossLabel = (p && p.time) ? fmtTs(p.time) : ''; });
 
-    // Lock both axes together by visible TIME range so they pan/zoom as one.
+    // Lock both axes together by visible TIME range so they pan/zoom as one,
+    // and reflect the visible window in the custom scrollbar thumb.
     const link = (from: any, to: any) =>
       from.timeScale().subscribeVisibleTimeRangeChange((r: any) => {
         if (!syncReady || syncing || !r || r.from == null || r.to == null) return;
         syncing = true;
         try { to.timeScale().setVisibleRange(r); } catch { /* transient */ } finally { syncing = false; }
+        updateThumb(r);
       });
     link(tvCandle, tvEquity);
     link(tvEquity, tvCandle);
@@ -172,11 +187,55 @@
     ts.scrollToPosition(pos + (ev.deltaY > 0 ? -3 : 3), false);
   }
 
+  // Reflect the visible window as a thumb over the full data span.
+  function updateThumb(r: { from: number; to: number }) {
+    const span = dataTo - dataFrom;
+    if (span <= 0) { scrollThumb = { left: 0, width: 100 }; return; }
+    const left = Math.max(0, ((r.from - dataFrom) / span) * 100);
+    const width = Math.min(100 - left, ((r.to - r.from) / span) * 100);
+    scrollThumb = { left, width: Math.max(2, width) };
+  }
+
+  // Drag the scrollbar thumb → scroll the visible window across the data span.
+  function onBarDown(ev: PointerEvent) {
+    draggingBar = true; dragStartX = ev.clientX; dragStartLeft = scrollThumb.left;
+    (ev.target as HTMLElement).setPointerCapture?.(ev.pointerId);
+  }
+  function onBarMove(ev: PointerEvent) {
+    if (!draggingBar || !scrollTrackEl || !tvCandle) return;
+    const trackW = scrollTrackEl.clientWidth || 1;
+    const dPct = ((ev.clientX - dragStartX) / trackW) * 100;
+    const newLeft = Math.max(0, Math.min(100 - scrollThumb.width, dragStartLeft + dPct));
+    const span = dataTo - dataFrom;
+    const visSpan = (scrollThumb.width / 100) * span;
+    const from = dataFrom + (newLeft / 100) * span;
+    syncing = true;
+    try {
+      tvCandle.timeScale().setVisibleRange({ from, to: from + visSpan });
+      tvEquity.timeScale().setVisibleRange({ from, to: from + visSpan });
+    } catch { /* transient */ } finally { syncing = false; }
+    scrollThumb = { ...scrollThumb, left: newLeft };
+  }
+  function onBarUp(ev: PointerEvent) {
+    draggingBar = false;
+    (ev.target as HTMLElement).releasePointerCapture?.(ev.pointerId);
+  }
+
+  const fmtDur = (secs: number) => {
+    const m = Math.round(secs / 60);
+    if (m < 60) return `${m} мин`;
+    const h = Math.floor(m / 60), mm = m % 60;
+    if (h < 24) return `${h} ч ${mm} мин`;
+    const d = Math.floor(h / 24);
+    return `${d} дн ${h % 24} ч`;
+  };
+
   function hitTestTooltip(p: any) {
-    if (!p || !p.point || p.time == null || !markIndex.length) { tip = null; return; }
+    if (!p || !p.point || p.time == null) { tip = null; return; }
     const ts = tvCandle.timeScale();
-    const px = p.point.x;
-    // find nearest marker by time, then check pixel distance in x and y
+    const px = p.point.x, py = p.point.y;
+
+    // 1) trade triangle near the cursor (x within 9px, y within 14px)?
     let best: any = null, bestDx = Infinity;
     for (const m of markIndex) {
       const mx = ts.timeToCoordinate(m.time);
@@ -184,18 +243,33 @@
       const dx = Math.abs(mx - px);
       if (dx < bestDx) { bestDx = dx; best = m; }
     }
-    if (!best || bestDx > 9) { tip = null; return; }
-    const my = candleSeries.priceToCoordinate(best.price);
-    if (my == null || Math.abs(my - p.point.y) > 14) { tip = null; return; }
-    tip = {
-      x: ts.timeToCoordinate(best.time) ?? px,
-      y: my,
-      lines: [
-        best.label,
-        `${best.side === 'buy' ? 'Покупка' : 'Продажа'} @ ${Math.round(best.price).toLocaleString('ru-RU')}`,
-        fmtTs(best.rawTime),
-      ],
-    };
+    if (best && bestDx <= 9) {
+      const my = candleSeries.priceToCoordinate(best.price);
+      if (my != null && Math.abs(my - py) <= 14) {
+        const lines = [
+          best.label,
+          `${best.side === 'buy' ? 'Покупка' : 'Продажа'} @ ${Math.round(best.price).toLocaleString('ru-RU')}`,
+          fmtTs(best.rawTime),
+        ];
+        if (best.close) {
+          lines.push(`В позиции: ${fmtDur(best.close.holdSecs)}`);
+          lines.push(`Макс. контрактов: ${best.close.maxContracts}`);
+          lines.push(`Фин. результат: ${fmtMoney(best.close.pnl)} ₽`);
+        }
+        tip = { x: ts.timeToCoordinate(best.time) ?? px, y: my, lines };
+        return;
+      }
+    }
+
+    // 2) order / planned price line near the cursor (y within 6px)?
+    for (const li of lineIndex) {
+      const ly = candleSeries.priceToCoordinate(li.price);
+      if (ly != null && Math.abs(ly - py) <= 6) {
+        tip = { x: px, y: ly, lines: [li.text] };
+        return;
+      }
+    }
+    tip = null;
   }
 
   onDestroy(() => {
@@ -219,7 +293,7 @@
 
       const fills = toFills(result?.trades);
       const { roundTrips } = replay(fills);
-      const events = tradeEvents(fills, resampleMin * 60);
+      const events = tradeEvents(fills, resampleMin * 60, pointValue);
 
       // triangles at exact fill price + hover index
       const pm = priceMarkers(events, { buy: BUY_COLOR, sell: SELL_COLOR });
@@ -229,8 +303,10 @@
       sellMarkSeries.setMarkers(pm.sell.markers);
       markIndex = pm.index;
 
-      // dashed connectors run open → FULL close per position episode
-      const episodes = positionEpisodes(fills);
+      // dashed connectors run open → FULL close per episode; a still-open episode
+      // extends to the last bar so its (e.g. green) line is visible.
+      const lastBar = bars[bars.length - 1];
+      const episodes = positionEpisodes(fills, lastBar.time, lastBar.close);
       longSeries.setData(buildConnectors(episodes, 'long'));
       shortSeries.setData(buildConnectors(episodes, 'short'));
 
@@ -253,12 +329,14 @@
       }
 
       const tFrom = bars[0].time, tTo = bars[bars.length - 1].time;
+      dataFrom = tFrom; dataTo = tTo;
       syncing = true;
       try {
         tvCandle.timeScale().setVisibleRange({ from: tFrom, to: tTo });
         tvEquity.timeScale().setVisibleRange({ from: tFrom, to: tTo });
       } finally { syncing = false; }
       syncReady = true;
+      scrollThumb = { left: 0, width: 100 };
       drawOrderLines();
     } catch (e) {
       error = String(e);
@@ -267,24 +345,29 @@
   }
 
   // Horizontal price lines: resting orders (solid) + planned algo triggers (dotted),
-  // green = buy, red = sell, so you see where the robot acts / plans to act.
+  // green = buy, red = sell. No on-chart titles (axis labels off) — the description
+  // shows only on hover (see hitTestTooltip → lineIndex).
+  let lineIndex: Array<{ price: number; text: string }> = [];
   function drawOrderLines() {
     if (!candleSeries) return;
     for (const pl of orderPriceLines) { try { candleSeries.removePriceLine(pl); } catch { /* gone */ } }
-    orderPriceLines = [];
+    orderPriceLines = []; lineIndex = [];
     for (const o of openOrders ?? []) {
       const buy = o.side === 'buy';
       orderPriceLines.push(candleSeries.createPriceLine({
         price: o.price, color: buy ? BUY_COLOR : SELL_COLOR, lineWidth: 2, lineStyle: 0,
-        axisLabelVisible: true, title: `${buy ? 'BUY' : 'SELL'} ${o.qty || ''}`.trim(),
+        axisLabelVisible: false, title: '',
       }));
+      lineIndex.push({ price: o.price, text: `Заявка ${buy ? 'BUY' : 'SELL'} ${o.qty || ''} @ ${Math.round(o.price).toLocaleString('ru-RU')}`.trim() });
     }
     for (const o of plannedOrders ?? []) {
       const buy = o.side === 'buy';
       orderPriceLines.push(candleSeries.createPriceLine({
         price: o.price, color: buy ? BUY_COLOR : SELL_COLOR, lineWidth: 1, lineStyle: 1,  // dotted = plan
-        axisLabelVisible: true, title: `план ${buy ? 'BUY' : 'SELL'} ${o.qty || ''}`.trim(),
+        axisLabelVisible: false, title: '',
       }));
+      const why = (o as any).reason ? ` — ${(o as any).reason}` : '';
+      lineIndex.push({ price: o.price, text: `План ${buy ? 'BUY' : 'SELL'} ${o.qty || ''} @ ${Math.round(o.price).toLocaleString('ru-RU')}${why}`.trim() });
     }
   }
 
@@ -346,7 +429,17 @@
 
   <div class="bt-equity-label">График доходности робота</div>
   <div class="equity" bind:this={equityEl}></div>
-  <div class="bt-hint">Колесо — масштаб свечи · Shift+колесо или перетаскивание — прокрутка · полоса внизу — скролл</div>
+
+  <!-- Custom horizontal scrollbar: drag the thumb to scroll across the data span. -->
+  <div class="bt-scrollbar" bind:this={scrollTrackEl}>
+    <div
+      class="bt-thumb" role="scrollbar" tabindex="0" aria-controls="bt-chart" aria-valuenow={Math.round(scrollThumb.left)}
+      style="left:{scrollThumb.left}%; width:{scrollThumb.width}%;"
+      onpointerdown={onBarDown} onpointermove={onBarMove} onpointerup={onBarUp}
+    ></div>
+  </div>
+
+  <div class="bt-hint">Колесо — масштаб свечи · Shift+колесо или перетаскивание графика — прокрутка · полоса ниже — скролл</div>
 </div>
 
 <style>
@@ -399,6 +492,18 @@
     background: #0f0f1e; border-top: 1px solid #1a1a2e; border-bottom: 1px solid #1a1a2e; flex-shrink: 0;
   }
   .equity { flex: 0 0 22%; min-height: 0; }
+
+  .bt-scrollbar {
+    position: relative; height: 12px; margin: 3px 10px; flex-shrink: 0;
+    background: #14141f; border: 1px solid #2d2d4a; border-radius: 6px;
+  }
+  .bt-thumb {
+    position: absolute; top: 1px; bottom: 1px; min-width: 16px;
+    background: #3a3a5a; border-radius: 5px; cursor: grab;
+  }
+  .bt-thumb:hover { background: #4caf5066; }
+  .bt-thumb:active { cursor: grabbing; background: #4caf5088; }
+
   .bt-hint { padding: 2px 10px; font-size: 9px; color: #555; background: #0f0f1e; border-top: 1px solid #1a1a2e; flex-shrink: 0; }
 
   .overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: #0a0a15cc; z-index: 10; font-size: 12px; color: #666; }

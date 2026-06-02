@@ -124,10 +124,16 @@ export interface TradeEvent {
   time: number;           // bucketed (chart) time
   rawTime: number;        // original fill time
   side: 'buy' | 'sell';
-  qty: number;
+  qty: number;            // contracts this fill moved
   price: number;
   kind: 'open' | 'average' | 'partial' | 'full' | 'reverse';
-  label: string;          // RU label e.g. "Открытие позиции 1"
+  posAfter: number;       // signed total position after this fill
+  label: string;          // RU label e.g. "Открытие позиции 1 (всего в поз. 1)"
+  close?: {               // present on partial/full/reverse (a closing fill)
+    holdSecs: number;     // time in position from episode open to this close
+    maxContracts: number; // max abs position reached during the episode
+    pnl: number;          // realized result of the closed portion (rubles)
+  };
 }
 
 const KIND_LABEL: Record<TradeEvent['kind'], string> = {
@@ -138,29 +144,44 @@ const KIND_LABEL: Record<TradeEvent['kind'], string> = {
   reverse: 'Реверс',
 };
 
-// Walk fills, classify each by what it does to the running position, and bucket
-// its time to candle time. `qty` in the label is the contracts that fill moved.
-export function tradeEvents(trades: Fill[], bucketSecs: number): TradeEvent[] {
-  let pos = 0;
+// Walk fills, classify each by what it does to the running position, bucket time
+// to candle time, and on closing fills compute hold time, max contracts in the
+// episode, and realized PnL (rubles, via pointValue).
+export function tradeEvents(trades: Fill[], bucketSecs: number, pointValue = 1): TradeEvent[] {
+  let pos = 0, avg = 0, epStart = 0, epMaxAbs = 0;
   const out: TradeEvent[] = [];
   const sorted = [...trades].sort((a, b) => a.time - b.time);
   for (const t of sorted) {
     const q = Number(t.qty) || 1;
     const signed = t.side === 'buy' ? q : -q;
     let kind: TradeEvent['kind'];
-    if (pos === 0) kind = 'open';
-    else if (Math.sign(pos) === Math.sign(signed)) kind = 'average';
-    else {
-      // opposite side: closes some/all, maybe reverses
-      if (q < Math.abs(pos)) kind = 'partial';
-      else if (q === Math.abs(pos)) kind = 'full';
-      else kind = 'reverse';
+    let close: TradeEvent['close'];
+
+    if (pos === 0) {
+      kind = 'open'; avg = t.price; epStart = t.time; epMaxAbs = q; pos = signed;
+    } else if (Math.sign(pos) === Math.sign(signed)) {
+      kind = 'average';
+      avg = (avg * Math.abs(pos) + t.price * q) / (Math.abs(pos) + q);
+      pos += signed; epMaxAbs = Math.max(epMaxAbs, Math.abs(pos));
+    } else {
+      const dir = Math.sign(pos);
+      const closeQty = Math.min(Math.abs(pos), q);
+      const pnlPts = dir > 0 ? (t.price - avg) * closeQty : (avg - t.price) * closeQty;
+      close = { holdSecs: t.time - epStart, maxContracts: epMaxAbs, pnl: pnlPts * pointValue };
+      if (q < Math.abs(pos)) { kind = 'partial'; pos += signed; }
+      else if (q === Math.abs(pos)) { kind = 'full'; pos = 0; avg = 0; }
+      else {
+        kind = 'reverse'; pos += signed;        // flips through zero
+        avg = t.price; epStart = t.time; epMaxAbs = Math.abs(pos);
+      }
     }
-    pos += signed;
+
+    const totalInPos = Math.abs(pos);
     out.push({
       time: Math.floor(t.time / bucketSecs) * bucketSecs,
       rawTime: t.time, side: t.side, qty: q, price: t.price,
-      kind, label: `${KIND_LABEL[kind]} ${q}`,
+      kind, posAfter: pos, close,
+      label: `${KIND_LABEL[kind]} ${q} (всего в поз. ${totalInPos})`,
     });
   }
   return out;
@@ -177,7 +198,7 @@ export function priceMarkers(
 ): {
   buy: { points: any[]; markers: any[] };
   sell: { points: any[]; markers: any[] };
-  index: Array<{ time: number; price: number; side: 'buy' | 'sell'; label: string; rawTime: number }>;
+  index: Array<{ time: number; price: number; side: 'buy' | 'sell'; label: string; rawTime: number; close?: TradeEvent['close'] }>;
 } {
   const buy = { points: [] as any[], markers: [] as any[] };
   const sell = { points: [] as any[], markers: [] as any[] };
@@ -188,12 +209,12 @@ export function priceMarkers(
       let tt = e.time; if (tt <= lastBuyT) tt = lastBuyT + 1; lastBuyT = tt;
       buy.points.push({ time: tt, value: e.price });
       buy.markers.push({ time: tt, position: 'inBar', color: colors.buy, shape: 'arrowUp', size: 1 });
-      index.push({ time: tt, price: e.price, side: 'buy', label: e.label, rawTime: e.rawTime });
+      index.push({ time: tt, price: e.price, side: 'buy', label: e.label, rawTime: e.rawTime, close: e.close });
     } else {
       let tt = e.time; if (tt <= lastSellT) tt = lastSellT + 1; lastSellT = tt;
       sell.points.push({ time: tt, value: e.price });
       sell.markers.push({ time: tt, position: 'inBar', color: colors.sell, shape: 'arrowDown', size: 1 });
-      index.push({ time: tt, price: e.price, side: 'sell', label: e.label, rawTime: e.rawTime });
+      index.push({ time: tt, price: e.price, side: 'sell', label: e.label, rawTime: e.rawTime, close: e.close });
     }
   }
   return { buy, sell, index };
@@ -205,19 +226,22 @@ export function priceMarkers(
 export interface Episode {
   dir: 'long' | 'short';
   tIn: number; pIn: number;   // open time/price
-  tOut: number; pOut: number; // full-close time/price
+  tOut: number; pOut: number; // full-close time/price (or last point if still open)
+  open?: boolean;             // true = position still open, tOut/pOut is the latest fill
 }
 
-export function positionEpisodes(trades: Fill[]): Episode[] {
+// `lastTime`/`lastPrice` extend a still-open episode to the right edge so its
+// dashed connector is visible (e.g. a freshly opened position not yet closed).
+export function positionEpisodes(trades: Fill[], lastTime?: number, lastPrice?: number): Episode[] {
   const eps: Episode[] = [];
-  let pos = 0, tIn = 0, pIn = 0;
+  let pos = 0, tIn = 0, pIn = 0, lastT = 0, lastP = 0;
   const sorted = [...trades].sort((a, b) => a.time - b.time);
   for (const t of sorted) {
     const q = Number(t.qty) || 1;
     const signed = t.side === 'buy' ? q : -q;
+    lastT = t.time; lastP = t.price;
     if (pos === 0) { pos = signed; tIn = t.time; pIn = t.price; continue; }
     if (Math.sign(pos) === Math.sign(signed)) { pos += signed; continue; } // average
-    // opposite side
     const dir = pos > 0 ? 'long' : 'short';
     const newPos = pos + signed;
     if (newPos === 0) {                       // full close
@@ -229,6 +253,13 @@ export function positionEpisodes(trades: Fill[]): Episode[] {
     } else {                                   // partial close, position remains
       pos = newPos;
     }
+  }
+  if (pos !== 0) {  // still-open episode → draw to the latest known point
+    const dir = pos > 0 ? 'long' : 'short';
+    eps.push({
+      dir, tIn, pIn,
+      tOut: lastTime ?? lastT, pOut: lastPrice ?? lastP, open: true,
+    });
   }
   return eps;
 }
