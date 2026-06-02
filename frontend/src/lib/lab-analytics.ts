@@ -140,9 +140,12 @@ export interface TradeEvent {
 }
 
 // Outcome label for a closing fill: TP = closed in profit, SL = closed in loss.
+// exitLabel is the human headline, e.g. "Частичный TP" / "Полный SL".
 function exitLabel(pnl: number, partial: boolean): { exit: 'TP' | 'SL'; partial: boolean; exitLabel: string } {
   const exit: 'TP' | 'SL' = pnl >= 0 ? 'TP' : 'SL';
-  return { exit, partial, exitLabel: `${exit} (${partial ? 'частичный' : 'полный'})` };
+  const kind = partial ? 'Частичный' : 'Полный';
+  const full = exit === 'TP' ? 'Take-Profit' : 'Stop-Loss';
+  return { exit, partial, exitLabel: `${kind} ${exit} · ${partial ? 'част. ' : ''}${full}` };
 }
 
 const KIND_LABEL: Record<TradeEvent['kind'], string> = {

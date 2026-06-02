@@ -51,7 +51,7 @@
   let crossLabel = $state('');
   let resampleMin = $state(defaultInterval);
   let margin = $state<number | null>(null);
-  let tip = $state<{ x: number; y: number; lines: string[] } | null>(null);
+  let tip = $state<{ x: number; y: number; head?: string; headKind?: 'tp' | 'sl' | 'neutral'; lines: string[] } | null>(null);
 
   // Custom horizontal scrollbar (lightweight-charts has no scrollbar widget).
   // Works in LOGICAL (bar-index) space — the chart pans/zooms by bar index, and
@@ -257,18 +257,25 @@
     if (best && bestDx <= 9) {
       const my = candleSeries.priceToCoordinate(best.price);
       if (my != null && Math.abs(my - py) <= 14) {
-        const lines = [
-          best.label,
-          `${best.side === 'buy' ? 'Покупка' : 'Продажа'} @ ${Math.round(best.price).toLocaleString('ru-RU')}`,
-          fmtTs(best.rawTime),
-        ];
+        let head: string, headKind: 'tp' | 'sl' | 'neutral' = 'neutral';
+        const lines: string[] = [];
         if (best.close) {
-          lines.push(`Выход: ${best.close.exitLabel}`);
+          // Exit fills: make the TP/SL type the headline so it's unmistakable.
+          head = best.close.exitLabel;                 // "Частичный TP · ..." etc.
+          headKind = best.close.exit === 'TP' ? 'tp' : 'sl';
+          lines.push(best.label);                      // "Полн. закрытие N (всего в поз. V)"
+          lines.push(`${best.side === 'buy' ? 'Покупка' : 'Продажа'} @ ${Math.round(best.price).toLocaleString('ru-RU')}`);
+          lines.push(fmtTs(best.rawTime));
           lines.push(`В позиции: ${fmtDur(best.close.holdSecs)}`);
           lines.push(`Макс. контрактов: ${best.close.maxContracts}`);
           lines.push(`Фин. результат: ${fmtMoney(best.close.pnl)} ₽`);
+        } else {
+          // Entry / averaging fills.
+          head = best.label;
+          lines.push(`${best.side === 'buy' ? 'Покупка' : 'Продажа'} @ ${Math.round(best.price).toLocaleString('ru-RU')}`);
+          lines.push(fmtTs(best.rawTime));
         }
-        tip = { x: ts.timeToCoordinate(best.time) ?? px, y: my, lines };
+        tip = { x: ts.timeToCoordinate(best.time) ?? px, y: my, head, headKind, lines };
         return;
       }
     }
@@ -414,8 +421,11 @@
 
     {#if tip}
       <div class="trade-tip" style="left:{tip.x + 12}px; top:{tip.y - 8}px;">
-        {#each tip.lines as l, i}
-          <div class={i === 0 ? 'tt-head' : 'tt-sub'}>{l}</div>
+        {#if tip.head}
+          <div class="tt-head tt-{tip.headKind ?? 'neutral'}">{tip.head}</div>
+        {/if}
+        {#each tip.lines as l}
+          <div class="tt-sub">{l}</div>
         {/each}
       </div>
     {/if}
@@ -496,7 +506,10 @@
     padding: 5px 8px; font-size: 10px; white-space: nowrap;
     box-shadow: 0 4px 12px #000000aa;
   }
-  .tt-head { color: #fff; font-weight: 600; margin-bottom: 2px; }
+  .tt-head { color: #fff; font-weight: 700; margin-bottom: 3px; font-size: 11px; }
+  .tt-head.tt-tp { color: #19e36a; }
+  .tt-head.tt-sl { color: #ff3b3b; }
+  .tt-head.tt-neutral { color: #fff; }
   .tt-sub { color: #aaa; font-family: monospace; }
 
   .stats-overlay {
