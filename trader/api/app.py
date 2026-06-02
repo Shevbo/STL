@@ -773,10 +773,13 @@ def create_app() -> FastAPI:
         # chart date range: cover trades + recent context, clamp to today
         today = _date.today()
         if trades:
+            # Start the chart one day before the first trade so the robot's
+            # activity fills the view, instead of a 3-month wall of old candles.
             first_day = _date.fromtimestamp(trades[0]["time"])
-            date_from = min(first_day - _td(days=1), _date(2026, 3, 1))
+            date_from = first_day - _td(days=1)
         else:
-            date_from = _date(2026, 3, 1)
+            # No trades yet — show the last ~10 days of context.
+            date_from = today - _td(days=10)
         return {
             "robot": robot,
             "symbol": symbol,
@@ -902,11 +905,37 @@ def create_app() -> FastAPI:
                 """,
                 symbol, ts_from, ts_to, bucket_secs,
             )
-        return [
-            {"time": r["bucket"], "open": r["open"], "high": r["high"],
-             "low": r["low"], "close": r["close"], "volume": int(r["volume"])}
-            for r in rows
-        ]
+        if rows:
+            return [
+                {"time": r["bucket"], "open": r["open"], "high": r["high"],
+                 "low": r["low"], "close": r["close"], "volume": int(r["volume"])}
+                for r in rows
+            ]
+
+        # Cache miss (e.g. range newer than last ISS sync). Fetch live from ISS
+        # and resample in Python so the chart is never blank/stale. Same epoch
+        # convention as the cache (ISS times stamped UTC), so markers stay aligned.
+        try:
+            from trader.lab.iss_loader import load_bars_iss
+            iss_bars = await load_bars_iss(symbol, ts_from.date(), ts_to.date(), interval=1)
+        except Exception as exc:
+            log.warning("api.market_bars_iss_fallback_failed", symbol=symbol, exc=str(exc))
+            return []
+        buckets: dict[int, dict] = {}
+        for b in iss_bars:
+            if not (ts_from.timestamp() <= b.time <= ts_to.timestamp()):
+                continue
+            key = (b.time // bucket_secs) * bucket_secs
+            agg = buckets.get(key)
+            if agg is None:
+                buckets[key] = {"time": key, "open": b.open, "high": b.high,
+                                "low": b.low, "close": b.close, "volume": b.volume}
+            else:
+                agg["high"] = max(agg["high"], b.high)
+                agg["low"] = min(agg["low"], b.low)
+                agg["close"] = b.close
+                agg["volume"] += b.volume
+        return [buckets[k] for k in sorted(buckets)]
 
     @fastapi_app.get("/api/v1/market/coverage")
     async def market_coverage(request: Request, symbol: str | None = None):

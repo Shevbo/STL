@@ -7,7 +7,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { fetchWithAuth } from '../../lib/fetch-auth';
-  import { toFills, replay, computeStats, aggregateMarkers, buildConnectors } from '../../lib/lab-analytics';
+  import { toFills, replay, computeStats, perFillMarkers, buildConnectors } from '../../lib/lab-analytics';
 
   let {
     result, symbol, strategy = null, dateFrom, dateTo, pointValue = 1,
@@ -144,8 +144,8 @@
       const fills = toFills(result?.trades);
       const { roundTrips } = replay(fills);
 
-      // per-candle aggregated markers
-      candleSeries.setMarkers(aggregateMarkers(fills, resampleMin * 60));
+      // one triangle per fill (QUIK-style), bucketed to candle time
+      candleSeries.setMarkers(perFillMarkers(fills, resampleMin * 60));
 
       // dashed open→close connectors
       longSeries.setData(buildConnectors(roundTrips, 'long'));

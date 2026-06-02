@@ -119,40 +119,19 @@ export function computeStats(trades: Fill[], roundTrips: RoundTrip[], equity: an
   };
 }
 
-// Collapse fills into per-candle markers. Many fills in one candle → single
-// marker labelled with the count.
-export function aggregateMarkers(trades: Fill[], bucketSecs: number): any[] {
-  const buckets = new Map<number, Fill[]>();
-  for (const t of trades) {
-    const b = Math.floor(t.time / bucketSecs) * bucketSecs;
-    (buckets.get(b) ?? buckets.set(b, []).get(b)!).push(t);
-  }
-  const markers: any[] = [];
-  for (const [b, fills] of buckets) {
-    if (fills.length === 1) {
-      const t = fills[0];
-      markers.push({
-        time: b,
-        position: t.side === 'buy' ? 'belowBar' : 'aboveBar',
-        color: t.side === 'buy' ? '#4caf50' : '#f44336',
-        shape: t.side === 'buy' ? 'arrowUp' : 'arrowDown',
-        text: `${t.side === 'buy' ? '▲' : '▼'}${Math.round(t.price)}`,
-        size: 1,
-      });
-    } else {
-      const buys = fills.filter(f => f.side === 'buy').length;
-      const sells = fills.length - buys;
-      const netBuy = buys >= sells;
-      markers.push({
-        time: b,
-        position: netBuy ? 'belowBar' : 'aboveBar',
-        color: '#e0a020',
-        shape: 'circle',
-        text: `${fills.length} сд`,
-        size: 1,
-      });
-    }
-  }
+// One marker per fill, QUIK-style: green up-triangle for a buy (below the bar),
+// red down-triangle for a sell (above the bar). No aggregation, no count badges,
+// no price text. Markers must be bucketed to the chart's candle time so each one
+// sits ON its candle; lightweight-charts stacks multiple markers on the same bar.
+export function perFillMarkers(trades: Fill[], bucketSecs: number): any[] {
+  const markers = trades.map(t => ({
+    time: Math.floor(t.time / bucketSecs) * bucketSecs,
+    position: t.side === 'buy' ? 'belowBar' : 'aboveBar',
+    color: t.side === 'buy' ? '#26a65b' : '#f44336',
+    shape: t.side === 'buy' ? 'arrowUp' : 'arrowDown',
+    size: 2,
+  }));
+  // lightweight-charts requires markers sorted by time (stable per same time).
   markers.sort((a, b) => a.time - b.time);
   return markers;
 }
