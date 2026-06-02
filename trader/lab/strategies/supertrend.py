@@ -68,6 +68,25 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
     elif cur_close < lower_prev:
         new_trend = -1
 
+    # Publish the next planned operation: the price level at which the trend would
+    # flip and the robot would act. Drawn as a dotted line in the robot window.
+    #   holding long  → flips SHORT if price drops below the lower band → planned sell
+    #   holding short → flips LONG  if price rises above the upper band → planned buy
+    #   flat/unknown  → both bands are candidate triggers
+    plan: list = []
+    if trend == 1:
+        plan.append({"side": "sell", "price": round(lower_prev), "qty": qty,
+                     "reason": "флип в шорт при пробое нижней полосы"})
+    elif trend == -1:
+        plan.append({"side": "buy", "price": round(upper_prev), "qty": qty,
+                     "reason": "флип в лонг при пробое верхней полосы"})
+    else:
+        plan.append({"side": "buy", "price": round(upper_prev), "qty": qty,
+                     "reason": "вход в лонг при пробое верхней полосы"})
+        plan.append({"side": "sell", "price": round(lower_prev), "qty": qty,
+                     "reason": "вход в шорт при пробое нижней полосы"})
+    stl.set_state("plan", plan)
+
     if new_trend == trend:
         return  # trend unchanged → hold, no new orders
 

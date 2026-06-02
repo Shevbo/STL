@@ -737,6 +737,9 @@ def create_app() -> FastAPI:
         state = _as_dict(robot.get("state_json"))
         symbol = params.get("symbol") or "RIM6"
         paper = not bool(state.get("live_real", False))
+        # Planned operations the strategy published into its state (price triggers
+        # where it intends to act next). Drawn as dotted lines in the robot window.
+        planned_orders = state.get("plan") if isinstance(state.get("plan"), list) else []
 
         trade_rows = await pool.fetch(
             """SELECT side, qty, price, order_id, status, timestamp
@@ -824,6 +827,7 @@ def create_app() -> FastAPI:
             "point_value": point_value,
             "initial_margin": initial_margin,
             "open_orders": open_orders,
+            "planned_orders": planned_orders,
             "date_from": date_from.isoformat(),
             "date_to": today.isoformat(),
         }

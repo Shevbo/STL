@@ -128,6 +128,7 @@
             pointValue={pv}
             defaultInterval={5}
             openOrders={live.open_orders ?? []}
+            plannedOrders={live.planned_orders ?? []}
           />
         </div>
 
