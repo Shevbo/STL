@@ -127,6 +127,7 @@
             dateTo={live.date_to}
             pointValue={pv}
             defaultInterval={5}
+            openOrders={live.open_orders ?? []}
           />
         </div>
 

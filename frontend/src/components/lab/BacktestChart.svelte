@@ -11,9 +11,11 @@
 
   let {
     result, symbol, strategy = null, dateFrom, dateTo, pointValue = 1, defaultInterval = 60,
+    openOrders = [],
   }: {
     result: any; symbol: string; strategy?: any; dateFrom: string; dateTo: string;
     pointValue?: number; defaultInterval?: number;
+    openOrders?: Array<{ side: string; price: number; qty: number; order_id?: string }>;
   } = $props();
 
   let containerEl: HTMLDivElement;
@@ -24,6 +26,7 @@
   let candleSeries: any = null, volumeSeries: any = null;
   let longSeries: any = null, shortSeries: any = null, equitySeries: any = null;
   let buyMarkSeries: any = null, sellMarkSeries: any = null;  // hidden price anchors for trade triangles
+  let orderPriceLines: any[] = [];  // horizontal lines for resting (placed) orders
   let syncing = false, syncReady = false;
 
   let loading = $state(true);
@@ -71,10 +74,11 @@
       timeScale: { ...chartOpts.timeScale, visible: false },
       width: candleEl.clientWidth || 600, height: candleEl.clientHeight || 280,
     });
+    // Candles dimmed ~40% (toward background) so the trade triangles read clearly.
     candleSeries = tvCandle.addCandlestickSeries({
-      upColor: '#26a65b', downColor: '#c0392b',
-      borderUpColor: '#26a65b', borderDownColor: '#c0392b',
-      wickUpColor: '#26a65b', wickDownColor: '#c0392b',
+      upColor: '#1a6b3d', downColor: '#7d2a22',
+      borderUpColor: '#1a6b3d', borderDownColor: '#7d2a22',
+      wickUpColor: '#1a6b3d', wickDownColor: '#7d2a22',
     });
     volumeSeries = tvCandle.addHistogramSeries({ priceScaleId: 'vol', color: '#4caf5020', priceFormat: { type: 'volume' } });
     tvCandle.priceScale('vol').applyOptions({ scaleMargins: { top: 0.88, bottom: 0 } });
@@ -203,7 +207,27 @@
     loading = false;
   }
 
+  // Draw a horizontal price line per resting (placed) order: green = buy, red =
+  // sell, so you see where the robot plans to operate. Cleared + redrawn on change.
+  function drawOrderLines() {
+    if (!candleSeries) return;
+    for (const pl of orderPriceLines) { try { candleSeries.removePriceLine(pl); } catch { /* gone */ } }
+    orderPriceLines = [];
+    for (const o of openOrders ?? []) {
+      const buy = o.side === 'buy';
+      orderPriceLines.push(candleSeries.createPriceLine({
+        price: o.price,
+        color: buy ? '#26a65b' : '#f44336',
+        lineWidth: 1,
+        lineStyle: 2,  // dashed
+        axisLabelVisible: true,
+        title: `${buy ? 'BUY' : 'SELL'} ${o.qty || ''}`.trim(),
+      }));
+    }
+  }
+
   $effect(() => { if (result && candleSeries) loadData(); });
+  $effect(() => { openOrders; if (candleSeries) drawOrderLines(); });
 </script>
 
 <div class="bt-root" bind:this={containerEl}>

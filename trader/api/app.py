@@ -770,6 +770,42 @@ def create_app() -> FastAPI:
         point_value = (meta or {}).get("point_value") or 1.0
         initial_margin = (meta or {}).get("initial_margin")
 
+        # Open (resting) orders the robot has placed on the exchange, drawn as
+        # horizontal price lines on the chart. Paper mode fills instantly so there
+        # are none; only real-mode resting orders appear. Best-effort: never 500.
+        open_orders: list[dict] = []
+        pos = getattr(request.app.state, "pos", None)
+        if not paper and pos is not None:
+            try:
+                token = await pos._get_token()
+                acc = pos._account_id
+                fin_sym = symbol if "@" in symbol else f"{symbol}@RTSX"
+                resp = await pos._http.get(
+                    f"/v1/accounts/{acc}/orders",
+                    headers={"Authorization": f"Bearer {token}"}, timeout=10.0,
+                )
+                if resp.status_code == 200:
+                    for o in (resp.json().get("orders") or []):
+                        order = o.get("order") or {}
+                        st = o.get("status", "")
+                        if st not in ("ORDER_STATUS_NEW", "ORDER_STATUS_PENDING_NEW",
+                                      "ORDER_STATUS_PARTIALLY_FILLED"):
+                            continue
+                        if order.get("symbol") not in (fin_sym, symbol):
+                            continue
+                        lp = (order.get("limit_price") or {}).get("value")
+                        if lp is None:
+                            continue
+                        side = order.get("side", "")
+                        open_orders.append({
+                            "side": "buy" if "BUY" in side else "sell",
+                            "price": float(lp),
+                            "qty": int(float((order.get("quantity") or {}).get("value", 0) or 0)),
+                            "order_id": o.get("order_id", ""),
+                        })
+            except Exception as exc:
+                log.warning("api.robot_live_open_orders_failed", robot_id=robot_id, exc=str(exc))
+
         # chart date range: cover trades + recent context, clamp to today
         today = _date.today()
         if trades:
@@ -787,6 +823,7 @@ def create_app() -> FastAPI:
             "trades": trades,
             "point_value": point_value,
             "initial_margin": initial_margin,
+            "open_orders": open_orders,
             "date_from": date_from.isoformat(),
             "date_to": today.isoformat(),
         }
