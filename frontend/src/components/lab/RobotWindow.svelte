@@ -147,6 +147,7 @@
               <div class="kv"><span class="k">ГО / контракт</span>
                 <span class="v">{live.initial_margin != null ? Math.round(live.initial_margin).toLocaleString('ru-RU') + ' ₽' : '—'}</span></div>
               <div class="kv"><span class="k">пункт = ₽</span><span class="v">{pv}</span></div>
+              <div class="kv"><span class="k">комиссия</span><span class="v">4 ₽ / заявка (тейкер)</span></div>
             </div>
 
             <div class="panel-title res-title">Текущий результат</div>
