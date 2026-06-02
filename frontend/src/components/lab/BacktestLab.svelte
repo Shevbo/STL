@@ -44,6 +44,18 @@
     })()
   );
 
+  // Ruble economics for the chart (so backtest stats + TP/SL read in rubles, like
+  // the robot window). Fetched per symbol from the cached instrument meta.
+  let pointValue = $state(1);
+  $effect(() => {
+    const sym = selectedSymbol;
+    pointValue = 1;
+    fetchWithAuth(`/api/v1/instruments/${encodeURIComponent(sym)}/meta`)
+      .then(r => r.ok ? r.json() : null)
+      .then(m => { if (m?.point_value) pointValue = m.point_value; })
+      .catch(() => { /* keep 1 */ });
+  });
+
   // Match the strategy template behind the selected robot (by script_code containing its id)
   let selectedStrategy = $derived(
     (() => {
@@ -301,6 +313,7 @@
           strategy={selectedStrategy}
           dateFrom={new Date(dateFrom).toISOString()}
           dateTo={new Date(dateTo).toISOString()}
+          pointValue={pointValue}
         />
       {:else}
         <div class="chart-placeholder">
