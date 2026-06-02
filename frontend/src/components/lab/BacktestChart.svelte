@@ -210,7 +210,7 @@
   // Drag the scrollbar thumb → shift the visible LOGICAL range across the bars.
   function onBarDown(ev: PointerEvent) {
     draggingBar = true; dragStartX = ev.clientX; dragStartLeft = scrollThumb.left;
-    (ev.target as HTMLElement).setPointerCapture?.(ev.pointerId);
+    try { (ev.target as HTMLElement).setPointerCapture?.(ev.pointerId); } catch { /* no active pointer */ }
   }
   function onBarMove(ev: PointerEvent) {
     if (!draggingBar || !scrollTrackEl || !tvCandle || barCount <= 0) return;
@@ -228,7 +228,7 @@
   }
   function onBarUp(ev: PointerEvent) {
     draggingBar = false;
-    (ev.target as HTMLElement).releasePointerCapture?.(ev.pointerId);
+    try { (ev.target as HTMLElement).releasePointerCapture?.(ev.pointerId); } catch { /* no active pointer */ }
   }
 
   const fmtDur = (secs: number) => {
