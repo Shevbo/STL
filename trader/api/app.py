@@ -829,7 +829,10 @@ def create_app() -> FastAPI:
             "open_orders": open_orders,
             "planned_orders": planned_orders,
             "date_from": date_from.isoformat(),
-            "date_to": today.isoformat(),
+            # +1 day so TODAY's intraday bars are included — date_to is parsed as
+            # midnight, and `ts BETWEEN from AND to` would otherwise drop everything
+            # after 00:00 today (leaving candles ending yesterday while trades go on).
+            "date_to": (today + _td(days=1)).isoformat(),
         }
 
     # ── LAB: Backtest ────────────────────────────────────────────────
