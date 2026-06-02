@@ -12,7 +12,7 @@
   import { fetchWithAuth } from '../../lib/fetch-auth';
   import {
     toFills, replay, computeStats, tradeEvents, priceMarkers,
-    positionEpisodes, buildConnectors,
+    positionEpisodes, buildConnectors, exitStats,
   } from '../../lib/lab-analytics';
 
   let {
@@ -26,8 +26,10 @@
   } = $props();
 
   // Trade triangle colors — distinct teal/rose tonality, brighter than candles.
-  const BUY_COLOR = '#2ee6a6';   // teal-green
-  const SELL_COLOR = '#ff5c8a';  // rose-red
+  const BUY_COLOR = '#2ee6a6';   // teal-green (entry / averaging, buy side)
+  const SELL_COLOR = '#ff5c8a';  // rose-red (entry / averaging, sell side)
+  const TP_COLOR = '#19e36a';    // bright green — closing fill in profit (take-profit)
+  const SL_COLOR = '#ff3b3b';    // bright red — closing fill in loss (stop-loss)
 
   let containerEl: HTMLDivElement;
   let candleEl: HTMLDivElement;
@@ -39,12 +41,13 @@
   let longSeries: any = null, shortSeries: any = null, equitySeries: any = null;
   let buyMarkSeries: any = null, sellMarkSeries: any = null;
   let orderPriceLines: any[] = [];
-  let markIndex: Array<{ time: number; price: number; side: 'buy' | 'sell'; label: string; rawTime: number }> = [];
+  let markIndex: Array<{ time: number; price: number; side: 'buy' | 'sell'; label: string; rawTime: number; close?: any }> = [];
   let syncReady = false;
 
   let loading = $state(true);
   let error = $state('');
   let stats = $state<any>(null);
+  let exits = $state<any>(null);   // TP/SL exit analytics
   let crossLabel = $state('');
   let resampleMin = $state(defaultInterval);
   let margin = $state<number | null>(null);
@@ -260,6 +263,7 @@
           fmtTs(best.rawTime),
         ];
         if (best.close) {
+          lines.push(`Выход: ${best.close.exitLabel}`);
           lines.push(`В позиции: ${fmtDur(best.close.holdSecs)}`);
           lines.push(`Макс. контрактов: ${best.close.maxContracts}`);
           lines.push(`Фин. результат: ${fmtMoney(best.close.pnl)} ₽`);
@@ -304,8 +308,9 @@
       const { roundTrips } = replay(fills);
       const events = tradeEvents(fills, resampleMin * 60, pointValue);
 
-      // triangles at exact fill price + hover index
-      const pm = priceMarkers(events, { buy: BUY_COLOR, sell: SELL_COLOR });
+      // triangles at exact fill price + hover index; closing fills tinted TP/SL
+      const pm = priceMarkers(events, { buy: BUY_COLOR, sell: SELL_COLOR, tp: TP_COLOR, sl: SL_COLOR });
+      exits = exitStats(events);
       buyMarkSeries.setData(pm.buy.points);
       sellMarkSeries.setData(pm.sell.points);
       buyMarkSeries.setMarkers(pm.buy.markers);
@@ -394,6 +399,7 @@
     </span>
     <span class="bt-legend">
       <span class="lg lg-long">▲ покупка</span><span class="lg lg-short">▼ продажа</span>
+      <span class="lg lg-tp">■ TP</span><span class="lg lg-sl">■ SL</span>
     </span>
     <div class="bt-intervals">
       {#each INTERVALS as iv}
@@ -425,6 +431,18 @@
         <div class="st-row"><span>Макс. прибыль</span><b class="pos">{fmtMoney(stats.maxProfit)}</b></div>
         <div class="st-row"><span>Макс. убыток</span><b class="neg">{fmtMoney(stats.maxLoss)}</b></div>
         <div class="st-row"><span>Фактор восст.</span><b>{stats.recovery != null ? stats.recovery.toFixed(2) : '—'}</b></div>
+        {#if exits && (exits.tp + exits.sl) > 0}
+          <div class="st-sep"></div>
+          <div class="st-row"><span>Выходы TP / SL</span>
+            <b><span class="pos">{exits.tp}</span> / <span class="neg">{exits.sl}</span></b>
+            <span class="st-sub">{(exits.winRateByExit * 100).toFixed(0)}% TP</span></div>
+          <div class="st-row"><span>· полные</span>
+            <span class="st-sub">TP {exits.tpFull} / SL {exits.slFull}</span></div>
+          <div class="st-row"><span>· частичные</span>
+            <span class="st-sub">TP {exits.tpPartial} / SL {exits.slPartial}</span></div>
+          <div class="st-row"><span>Прибыль TP</span><b class="pos">{fmtMoney(exits.tpPnl)}</b></div>
+          <div class="st-row"><span>Убыток SL</span><b class="neg">{fmtMoney(exits.slPnl)}</b></div>
+        {/if}
       </div>
     {/if}
 
@@ -461,6 +479,7 @@
   .bt-param { font-size: 10px; font-family: monospace; color: #888; background: #1a1a2e; border-radius: 2px; padding: 1px 5px; white-space: nowrap; }
   .bt-legend { display: flex; gap: 8px; font-size: 10px; flex-shrink: 0; }
   .lg-long { color: #2ee6a6; } .lg-short { color: #ff5c8a; }
+  .lg-tp { color: #19e36a; } .lg-sl { color: #ff3b3b; }
   /* Interval selector pinned to the right, never wraps. */
   .bt-intervals { display: flex; gap: 1px; margin-left: auto; flex-shrink: 0; }
   .bt-intervals button { background: transparent; color: #555; border: 1px solid transparent; font-size: 10px; padding: 2px 7px; border-radius: 3px; cursor: pointer; }
@@ -490,6 +509,7 @@
   .st-row span:first-child { flex: 1; }
   .st-row b { color: #ccc; font-size: 11px; }
   .st-sub { color: #555; font-size: 9px; }
+  .st-sep { height: 1px; background: #2d2d4a; margin: 3px 0; }
   .pos { color: #4caf50; } .neg { color: #f44336; }
 
   .bt-equity-label {

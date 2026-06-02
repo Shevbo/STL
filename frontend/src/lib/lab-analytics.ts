@@ -133,7 +133,16 @@ export interface TradeEvent {
     holdSecs: number;     // time in position from episode open to this close
     maxContracts: number; // max abs position reached during the episode
     pnl: number;          // realized result of the closed portion (rubles)
+    exit: 'TP' | 'SL';    // profit → take-profit, loss → stop-loss
+    partial: boolean;     // true = part of the position closed, rest still open
+    exitLabel: string;    // RU: "TP (частичный)" / "SL (полный)" etc.
   };
+}
+
+// Outcome label for a closing fill: TP = closed in profit, SL = closed in loss.
+function exitLabel(pnl: number, partial: boolean): { exit: 'TP' | 'SL'; partial: boolean; exitLabel: string } {
+  const exit: 'TP' | 'SL' = pnl >= 0 ? 'TP' : 'SL';
+  return { exit, partial, exitLabel: `${exit} (${partial ? 'частичный' : 'полный'})` };
 }
 
 const KIND_LABEL: Record<TradeEvent['kind'], string> = {
@@ -167,11 +176,13 @@ export function tradeEvents(trades: Fill[], bucketSecs: number, pointValue = 1):
       const dir = Math.sign(pos);
       const closeQty = Math.min(Math.abs(pos), q);
       const pnlPts = dir > 0 ? (t.price - avg) * closeQty : (avg - t.price) * closeQty;
-      close = { holdSecs: t.time - epStart, maxContracts: epMaxAbs, pnl: pnlPts * pointValue };
-      if (q < Math.abs(pos)) { kind = 'partial'; pos += signed; }
+      const pnl = pnlPts * pointValue;
+      const isPartial = q < Math.abs(pos);
+      close = { holdSecs: t.time - epStart, maxContracts: epMaxAbs, pnl, ...exitLabel(pnl, isPartial) };
+      if (isPartial) { kind = 'partial'; pos += signed; }
       else if (q === Math.abs(pos)) { kind = 'full'; pos = 0; avg = 0; }
       else {
-        kind = 'reverse'; pos += signed;        // flips through zero
+        kind = 'reverse'; pos += signed;        // flips through zero (full close + new open)
         avg = t.price; epStart = t.time; epMaxAbs = Math.abs(pos);
       }
     }
@@ -187,14 +198,41 @@ export function tradeEvents(trades: Fill[], bucketSecs: number, pointValue = 1):
   return out;
 }
 
+// Aggregate exit analytics over all closing fills: counts + rubles for TP/SL,
+// split into full and partial exits. Used by the stats overlay.
+export interface ExitStats {
+  tp: number; sl: number;            // count of profitable / losing closes
+  tpPartial: number; slPartial: number;
+  tpFull: number; slFull: number;
+  tpPnl: number; slPnl: number;      // summed rubles
+  winRateByExit: number;             // tp / (tp+sl), 0..1
+}
+
+export function exitStats(events: TradeEvent[]): ExitStats {
+  const s: ExitStats = { tp: 0, sl: 0, tpPartial: 0, slPartial: 0, tpFull: 0, slFull: 0, tpPnl: 0, slPnl: 0, winRateByExit: 0 };
+  for (const e of events) {
+    if (!e.close) continue;
+    if (e.close.exit === 'TP') {
+      s.tp++; s.tpPnl += e.close.pnl; e.close.partial ? s.tpPartial++ : s.tpFull++;
+    } else {
+      s.sl++; s.slPnl += e.close.pnl; e.close.partial ? s.slPartial++ : s.slFull++;
+    }
+  }
+  const tot = s.tp + s.sl;
+  s.winRateByExit = tot ? s.tp / tot : 0;
+  return s;
+}
+
 // Trade triangles placed STRICTLY at the trade price via an invisible anchor line
 // series + `inBar` markers (lightweight-charts markers can't take a free price).
 // Buy = up-triangle, sell = down-triangle. Colors passed in. Returns per-side
 // points/markers plus a flat `index` (bucketed time + price + label) for hover.
 // Times nudged +1s on collision so each fill keeps a unique point.
+// colors.buy/sell tint entries+averages; a CLOSING fill is tinted by outcome
+// (colors.tp green / colors.sl red) so take-profit vs stop-loss exits stand out.
 export function priceMarkers(
   events: TradeEvent[],
-  colors: { buy: string; sell: string },
+  colors: { buy: string; sell: string; tp: string; sl: string },
 ): {
   buy: { points: any[]; markers: any[] };
   sell: { points: any[]; markers: any[] };
@@ -205,15 +243,16 @@ export function priceMarkers(
   const index: any[] = [];
   let lastBuyT = -Infinity, lastSellT = -Infinity;
   for (const e of events) {
+    const exitColor = e.close ? (e.close.exit === 'TP' ? colors.tp : colors.sl) : null;
     if (e.side === 'buy') {
       let tt = e.time; if (tt <= lastBuyT) tt = lastBuyT + 1; lastBuyT = tt;
       buy.points.push({ time: tt, value: e.price });
-      buy.markers.push({ time: tt, position: 'inBar', color: colors.buy, shape: 'arrowUp', size: 1 });
+      buy.markers.push({ time: tt, position: 'inBar', color: exitColor ?? colors.buy, shape: 'arrowUp', size: 1 });
       index.push({ time: tt, price: e.price, side: 'buy', label: e.label, rawTime: e.rawTime, close: e.close });
     } else {
       let tt = e.time; if (tt <= lastSellT) tt = lastSellT + 1; lastSellT = tt;
       sell.points.push({ time: tt, value: e.price });
-      sell.markers.push({ time: tt, position: 'inBar', color: colors.sell, shape: 'arrowDown', size: 1 });
+      sell.markers.push({ time: tt, position: 'inBar', color: exitColor ?? colors.sell, shape: 'arrowDown', size: 1 });
       index.push({ time: tt, price: e.price, side: 'sell', label: e.label, rawTime: e.rawTime, close: e.close });
     }
   }
