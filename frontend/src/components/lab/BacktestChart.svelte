@@ -40,7 +40,7 @@
   let buyMarkSeries: any = null, sellMarkSeries: any = null;
   let orderPriceLines: any[] = [];
   let markIndex: Array<{ time: number; price: number; side: 'buy' | 'sell'; label: string; rawTime: number }> = [];
-  let syncing = false, syncReady = false;
+  let syncReady = false;
 
   let loading = $state(true);
   let error = $state('');
@@ -89,12 +89,16 @@
     const chartOpts = {
       layout: { background: { color: '#0a0a15' }, textColor: '#666' },
       grid: { vertLines: { color: '#15152470' }, horzLines: { color: '#15152470' } },
-      timeScale: { borderColor: '#2d2d4a', timeVisible: true, rightOffset: 4 },
+      // fixLeftEdge/fixRightEdge clamp panning+zoom to the data so there are never
+      // empty gaps on the left/right when you zoom out — data always fills the view.
+      timeScale: {
+        borderColor: '#2d2d4a', timeVisible: true, rightOffset: 0,
+        fixLeftEdge: true, fixRightEdge: true,
+      },
       crosshair: { mode: 1 },
       rightPriceScale: { borderColor: '#2d2d4a', minimumWidth: 84 },
-      // QUIK-like interactions: wheel zooms candle width; click-drag on the chart
-      // PANS horizontally (pressedMouseMove). Dragging must NOT rescale — only the
-      // price axis (right edge) rescales on drag, never the chart body.
+      // QUIK-like: wheel zooms candle width; click-drag pans horizontally. Only the
+      // price axis rescales on drag (never the chart body / time axis).
       handleScroll: { mouseWheel: false, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
       handleScale: {
         mouseWheel: true, pinch: true,
@@ -103,8 +107,8 @@
       },
     };
 
-    // Top chart hides its own axis — the single shared time axis lives on the
-    // equity chart below; horizontal scrolling uses the custom scrollbar + drag.
+    // Top chart is the ONLY interactive one. Its axis is hidden — the visible time
+    // axis lives on the equity chart below, which mirrors the candle range one-way.
     tvCandle = createChart(candleEl, {
       ...chartOpts,
       timeScale: { ...chartOpts.timeScale, visible: false },
@@ -135,9 +139,12 @@
     buyMarkSeries = tvCandle.addLineSeries(markAnchor);
     sellMarkSeries = tvCandle.addLineSeries(markAnchor);
 
-    // Equity chart carries the single visible time axis (scrollbar lives here).
+    // Equity chart shows the visible time axis but is NON-interactive: it only
+    // mirrors the candle chart's range (one-way). Making it interactive created a
+    // two-way sync loop that drifted the candle width while dragging.
     tvEquity = createChart(equityEl, {
       ...chartOpts,
+      handleScroll: false, handleScale: false,
       width: equityEl.clientWidth || 600, height: equityEl.clientHeight || 150,
     });
     equitySeries = tvEquity.addBaselineSeries({
@@ -155,21 +162,13 @@
     tvCandle.subscribeCrosshairMove(onCross);
     tvEquity.subscribeCrosshairMove((p: any) => { crossLabel = (p && p.time) ? fmtTs(p.time) : ''; });
 
-    // Lock both axes together by visible TIME range so they pan/zoom as one.
-    const link = (from: any, to: any) =>
-      from.timeScale().subscribeVisibleTimeRangeChange((r: any) => {
-        if (!syncReady || syncing || !r || r.from == null || r.to == null) return;
-        syncing = true;
-        try { to.timeScale().setVisibleRange(r); } catch { /* transient */ } finally { syncing = false; }
-      });
-    link(tvCandle, tvEquity);
-    link(tvEquity, tvCandle);
-
-    // Drive the scrollbar thumb from the LOGICAL (bar-index) range — robust to
-    // uneven bar spacing, unlike time coordinates.
+    // ONE-WAY sync: equity mirrors the candle chart's logical range. Logical (not
+    // time) range avoids drift from uneven bar spacing, and one-way avoids the
+    // feedback loop that rescaled candle width during a drag.
     tvCandle.timeScale().subscribeVisibleLogicalRangeChange((lr: any) => {
-      if (!syncReady || draggingBar || !lr) return;
-      updateThumb(lr);
+      if (!lr) return;
+      try { tvEquity.timeScale().setVisibleLogicalRange(lr); } catch { /* transient */ }
+      if (syncReady && !draggingBar) updateThumb(lr);
     });
 
     // Shift+wheel = horizontal pan (QUIK). Plain wheel is left to handleScale (zoom).
@@ -220,10 +219,9 @@
     // Keep the current window WIDTH (zoom) constant; only move its start bar.
     const winBars = (scrollThumb.width / 100) * barCount;
     const fromBar = (newLeft / 100) * barCount;
-    syncing = true;
     try {
       tvCandle.timeScale().setVisibleLogicalRange({ from: fromBar, to: fromBar + winBars });
-    } catch { /* transient */ } finally { syncing = false; }
+    } catch { /* transient */ }
     scrollThumb = { ...scrollThumb, left: newLeft };
   }
   function onBarUp(ev: PointerEvent) {
@@ -339,14 +337,9 @@
         };
       }
 
-      const tFrom = bars[0].time, tTo = bars[bars.length - 1].time;
-      syncing = true;
-      try {
-        tvCandle.timeScale().setVisibleRange({ from: tFrom, to: tTo });
-        tvEquity.timeScale().setVisibleRange({ from: tFrom, to: tTo });
-      } finally { syncing = false; }
+      // Fit all data into the view (equity mirrors via one-way logical sync).
+      tvCandle.timeScale().fitContent();
       syncReady = true;
-      // Initialise the thumb from the actual logical range now shown.
       const lr = tvCandle.timeScale().getVisibleLogicalRange();
       if (lr) updateThumb(lr); else scrollThumb = { left: 0, width: 100 };
       drawOrderLines();
