@@ -126,6 +126,7 @@
             dateFrom={live.date_from}
             dateTo={live.date_to}
             pointValue={pv}
+            defaultInterval={5}
           />
         </div>
 

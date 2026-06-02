@@ -7,13 +7,13 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { fetchWithAuth } from '../../lib/fetch-auth';
-  import { toFills, replay, computeStats, perFillMarkers, buildConnectors } from '../../lib/lab-analytics';
+  import { toFills, replay, computeStats, priceMarkers, buildConnectors } from '../../lib/lab-analytics';
 
   let {
-    result, symbol, strategy = null, dateFrom, dateTo, pointValue = 1,
+    result, symbol, strategy = null, dateFrom, dateTo, pointValue = 1, defaultInterval = 60,
   }: {
     result: any; symbol: string; strategy?: any; dateFrom: string; dateTo: string;
-    pointValue?: number;
+    pointValue?: number; defaultInterval?: number;
   } = $props();
 
   let containerEl: HTMLDivElement;
@@ -23,13 +23,14 @@
   let tvCandle: any = null, tvEquity: any = null;
   let candleSeries: any = null, volumeSeries: any = null;
   let longSeries: any = null, shortSeries: any = null, equitySeries: any = null;
+  let buyMarkSeries: any = null, sellMarkSeries: any = null;  // hidden price anchors for trade triangles
   let syncing = false, syncReady = false;
 
   let loading = $state(true);
   let error = $state('');
   let stats = $state<any>(null);
   let crossLabel = $state('');
-  let resampleMin = $state(60);
+  let resampleMin = $state(defaultInterval);
   let margin = $state<number | null>(null);  // initial margin per contract (₽)
 
   const INTERVALS = [
@@ -88,6 +89,16 @@
       lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
     });
 
+    // Invisible anchor series carrying trade prices. `inBar` markers attached to
+    // these render exactly at the fill price (QUIK-style point), not below/above
+    // the candle. lineWidth/visible 0 so only the triangles show.
+    const markAnchor = {
+      lineVisible: false, pointMarkersVisible: false,
+      lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
+    };
+    buyMarkSeries = tvCandle.addLineSeries(markAnchor);
+    sellMarkSeries = tvCandle.addLineSeries(markAnchor);
+
     tvEquity = createChart(equityEl, { ...chartOpts, width: equityEl.clientWidth || 600, height: equityEl.clientHeight || 150 });
     equitySeries = tvEquity.addBaselineSeries({
       baseValue: { type: 'price', price: 100000 },
@@ -144,8 +155,13 @@
       const fills = toFills(result?.trades);
       const { roundTrips } = replay(fills);
 
-      // one triangle per fill (QUIK-style), bucketed to candle time
-      candleSeries.setMarkers(perFillMarkers(fills, resampleMin * 60));
+      // one triangle per fill, placed at the exact trade price via hidden anchor
+      // series (buy = green ▲, sell = red ▼). Bucketed to candle time.
+      const pm = priceMarkers(fills, resampleMin * 60);
+      buyMarkSeries.setData(pm.buy.points);
+      sellMarkSeries.setData(pm.sell.points);
+      buyMarkSeries.setMarkers(pm.buy.markers);
+      sellMarkSeries.setMarkers(pm.sell.markers);
 
       // dashed open→close connectors
       longSeries.setData(buildConnectors(roundTrips, 'long'));

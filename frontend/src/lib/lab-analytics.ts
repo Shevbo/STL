@@ -119,21 +119,35 @@ export function computeStats(trades: Fill[], roundTrips: RoundTrip[], equity: an
   };
 }
 
-// One marker per fill, QUIK-style: green up-triangle for a buy (below the bar),
-// red down-triangle for a sell (above the bar). No aggregation, no count badges,
-// no price text. Markers must be bucketed to the chart's candle time so each one
-// sits ON its candle; lightweight-charts stacks multiple markers on the same bar.
-export function perFillMarkers(trades: Fill[], bucketSecs: number): any[] {
-  const markers = trades.map(t => ({
-    time: Math.floor(t.time / bucketSecs) * bucketSecs,
-    position: t.side === 'buy' ? 'belowBar' : 'aboveBar',
-    color: t.side === 'buy' ? '#26a65b' : '#f44336',
-    shape: t.side === 'buy' ? 'arrowUp' : 'arrowDown',
-    size: 2,
-  }));
-  // lightweight-charts requires markers sorted by time (stable per same time).
-  markers.sort((a, b) => a.time - b.time);
-  return markers;
+// One triangle per fill, placed STRICTLY at the trade price (not below/above the
+// bar). lightweight-charts markers can't take an arbitrary price, so we anchor an
+// invisible line series at exactly (bucketed-time, fill-price) and attach an
+// `inBar` marker — which renders on the series point, i.e. at the trade price.
+// Green up-triangle = buy, red down-triangle = sell. Returns per-side {points,
+// markers}; caller feeds points to a hidden line series and markers via setMarkers.
+// Times are bucketed to candle time and nudged +1s on collision so each fill keeps
+// its own point/triangle (line series needs strictly ascending unique times).
+export function priceMarkers(trades: Fill[], bucketSecs: number): {
+  buy: { points: any[]; markers: any[] };
+  sell: { points: any[]; markers: any[] };
+} {
+  const buy = { points: [] as any[], markers: [] as any[] };
+  const sell = { points: [] as any[], markers: [] as any[] };
+  let lastBuyT = -Infinity, lastSellT = -Infinity;
+  const sorted = [...trades].sort((a, b) => a.time - b.time);
+  for (const t of sorted) {
+    const bt = Math.floor(t.time / bucketSecs) * bucketSecs;
+    if (t.side === 'buy') {
+      let tt = bt; if (tt <= lastBuyT) tt = lastBuyT + 1; lastBuyT = tt;
+      buy.points.push({ time: tt, value: t.price });
+      buy.markers.push({ time: tt, position: 'inBar', color: '#26a65b', shape: 'arrowUp', size: 1 });
+    } else {
+      let tt = bt; if (tt <= lastSellT) tt = lastSellT + 1; lastSellT = tt;
+      sell.points.push({ time: tt, value: t.price });
+      sell.markers.push({ time: tt, position: 'inBar', color: '#f44336', shape: 'arrowDown', size: 1 });
+    }
+  }
+  return { buy, sell };
 }
 
 // Build dashed open→close connector points for one LineSeries per direction.
