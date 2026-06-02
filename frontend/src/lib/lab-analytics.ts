@@ -156,11 +156,16 @@ const KIND_LABEL: Record<TradeEvent['kind'], string> = {
   reverse: 'Реверс',
 };
 
+// Flat taker commission per order, rubles (FORTS, limit-only). Mirrors backend.
+export const TAKER_COMMISSION = 4;
+
 // Walk fills, classify each by what it does to the running position, bucket time
 // to candle time, and on closing fills compute hold time, max contracts in the
-// episode, and realized PnL (rubles, via pointValue).
-export function tradeEvents(trades: Fill[], bucketSecs: number, pointValue = 1): TradeEvent[] {
-  let pos = 0, avg = 0, epStart = 0, epMaxAbs = 0;
+// episode, and realized PnL (rubles, via pointValue) NET of commission. Each fill
+// is a taker order costing `commission`; the entry/averaging fees are carried and
+// charged to the round-trip on its close (same accounting as backend compute_metrics).
+export function tradeEvents(trades: Fill[], bucketSecs: number, pointValue = 1, commission = TAKER_COMMISSION): TradeEvent[] {
+  let pos = 0, avg = 0, epStart = 0, epMaxAbs = 0, carriedFee = 0;
   const out: TradeEvent[] = [];
   const sorted = [...trades].sort((a, b) => a.time - b.time);
   for (const t of sorted) {
@@ -171,22 +176,25 @@ export function tradeEvents(trades: Fill[], bucketSecs: number, pointValue = 1):
 
     if (pos === 0) {
       kind = 'open'; avg = t.price; epStart = t.time; epMaxAbs = q; pos = signed;
+      carriedFee = commission;                  // opening fill's fee
     } else if (Math.sign(pos) === Math.sign(signed)) {
       kind = 'average';
       avg = (avg * Math.abs(pos) + t.price * q) / (Math.abs(pos) + q);
       pos += signed; epMaxAbs = Math.max(epMaxAbs, Math.abs(pos));
+      carriedFee += commission;                 // averaging fill's fee
     } else {
       const dir = Math.sign(pos);
       const closeQty = Math.min(Math.abs(pos), q);
       const pnlPts = dir > 0 ? (t.price - avg) * closeQty : (avg - t.price) * closeQty;
-      const pnl = pnlPts * pointValue;
+      // Net of: this closing fill's fee + carried entry/averaging fees.
+      const pnl = pnlPts * pointValue - commission - carriedFee;
       const isPartial = q < Math.abs(pos);
       close = { holdSecs: t.time - epStart, maxContracts: epMaxAbs, pnl, ...exitLabel(pnl, isPartial) };
       if (isPartial) { kind = 'partial'; pos += signed; }
-      else if (q === Math.abs(pos)) { kind = 'full'; pos = 0; avg = 0; }
+      else if (q === Math.abs(pos)) { kind = 'full'; pos = 0; avg = 0; carriedFee = 0; }
       else {
         kind = 'reverse'; pos += signed;        // flips through zero (full close + new open)
-        avg = t.price; epStart = t.time; epMaxAbs = Math.abs(pos);
+        avg = t.price; epStart = t.time; epMaxAbs = Math.abs(pos); carriedFee = commission;
       }
     }
 

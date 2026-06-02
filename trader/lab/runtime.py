@@ -5,6 +5,10 @@ from uuid import uuid4
 
 from trader.pos.models import AccountSummary, Position
 
+# FORTS taker commission per order, rubles. We only place LIMIT orders (market
+# orders are disallowed), and every fill is a taker fill that costs this flat fee.
+TAKER_COMMISSION = 4.0
+
 
 @dataclass
 class Bar:
@@ -84,6 +88,8 @@ class BacktestRuntime:
             fill_price=fill_price, fill_time=next_bar.time,
         )
         self._orders.append(order)
+        # Every fill is a taker order → flat commission off equity.
+        self._equity -= TAKER_COMMISSION
         pos = self._positions.get(symbol, {"side": "flat", "qty": 0, "avg": 0.0})
 
         # Work in SIGNED position space so buy/sell handle long, short and

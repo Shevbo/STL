@@ -23,6 +23,9 @@ class TxClient:
         self._http = httpx.AsyncClient(http2=True, base_url=base_url)
 
     async def place_order(self, req: OrderRequest) -> OrderResponse:
+        # Market orders are disallowed — only limit (taker) orders are permitted.
+        if req.order_type != "limit" or req.price is None:
+            raise ValueError("Only limit orders are allowed (no market orders); price required")
         token = await self._get_token()
         headers = {"Authorization": f"Bearer {token}"}
         body: dict = {

@@ -4,15 +4,19 @@ import multiprocessing
 from types import ModuleType
 from typing import Any
 
-from trader.lab.runtime import BacktestRuntime, Bar
+from trader.lab.runtime import BacktestRuntime, Bar, TAKER_COMMISSION
 
 
 def compute_metrics(trades: list[dict], initial_equity: float,
-                    point_value: float = 1.0) -> dict[str, Any]:
+                    point_value: float = 1.0,
+                    commission: float = TAKER_COMMISSION) -> dict[str, Any]:
     """
     Round-trip metrics. PnL per pair is multiplied by point_value so all money
     figures are in RUBLES (RIM6 ~1.42 ₽/point). Handles both long (buy→sell) and
-    short (sell→buy) round-trips by tracking signed entry.
+    short (sell→buy) round-trips by tracking signed entry. Each order is a taker
+    fill costing `commission` rubles: the entry fill's fee and the closing fill's
+    fee are both charged to the round-trip it belongs to, so per-pair PnL and all
+    aggregates (net_profit, win_rate, drawdown) are net of commission.
     """
     empty = {"total_trades": 0, "win_rate": 0.0, "total_return": 0.0,
              "sharpe": None, "max_drawdown": 0.0, "recovery_factor": None,
@@ -20,24 +24,26 @@ def compute_metrics(trades: list[dict], initial_equity: float,
     if not trades:
         return empty
 
-    pairs = []          # realized PnL per closed round-trip, in RUB
-    entry = None        # (signed_qty, price)
+    pairs = []          # realized PnL per closed round-trip, in RUB, NET of fees
+    entry = None        # (signed_qty, price, fee_carried) — entry commission carried to the close
     for t in trades:
         q = t["qty"] * (1 if t["side"] == "buy" else -1)
         if entry is None:
-            entry = [q, t["price"]]
+            entry = [q, t["price"], commission]   # this opening fill's fee
             continue
-        eq, ep = entry
+        eq, ep, fee = entry
         if (eq > 0) == (q > 0):          # same direction → average in
             tot = eq + q
             ep = (ep * eq + t["price"] * q) / tot if tot != 0 else t["price"]
-            entry = [tot, ep]
+            entry = [tot, ep, fee + commission]   # averaging fill adds a fee
         else:                            # opposite → close
             closed = min(abs(eq), abs(q))
-            pnl = (t["price"] - ep) * (1 if eq > 0 else -1) * closed * point_value
-            pairs.append(pnl)
+            gross = (t["price"] - ep) * (1 if eq > 0 else -1) * closed * point_value
+            # Net of: this closing fill's fee + the carried entry/averaging fees.
+            pairs.append(gross - commission - fee)
             rem = eq + q
-            entry = [rem, t["price"]] if rem != 0 else None
+            # Leftover (reverse/partial) carries one fee for its remaining entry.
+            entry = [rem, t["price"], commission] if rem != 0 else None
 
     if not pairs:
         return empty

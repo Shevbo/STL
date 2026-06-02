@@ -340,13 +340,18 @@
       }
 
       stats = computeStats(fills, roundTrips, eq);
-      if (pointValue !== 1 && stats) {
-        stats = {
-          ...stats,
-          avgPerTrade: stats.avgPerTrade * pointValue,
-          maxProfit: stats.maxProfit * pointValue,
-          maxLoss: stats.maxLoss * pointValue,
-        };
+      // Money stats from the NET per-close PnLs (rubles, commission-deducted) in
+      // `events`, so avg/max/min match the TP/SL analytics and the equity curve.
+      if (stats) {
+        const closes = events.filter(e => e.close).map(e => e.close!.pnl);
+        if (closes.length) {
+          stats = {
+            ...stats,
+            avgPerTrade: closes.reduce((a, b) => a + b, 0) / closes.length,
+            maxProfit: Math.max(...closes),
+            maxLoss: Math.min(...closes),
+          };
+        }
       }
 
       // Fit all data into the view (equity mirrors via one-way logical sync).
@@ -453,6 +458,7 @@
           <div class="st-row"><span>Прибыль TP</span><b class="pos">{fmtMoney(exits.tpPnl)}</b></div>
           <div class="st-row"><span>Убыток SL</span><b class="neg">{fmtMoney(exits.slPnl)}</b></div>
         {/if}
+        <div class="st-foot">Суммы в ₽, за вычетом комиссии 4 ₽/заявка (тейкер)</div>
       </div>
     {/if}
 
@@ -523,6 +529,7 @@
   .st-row b { color: #ccc; font-size: 11px; }
   .st-sub { color: #555; font-size: 9px; }
   .st-sep { height: 1px; background: #2d2d4a; margin: 3px 0; }
+  .st-foot { font-size: 8px; color: #555; margin-top: 4px; font-style: italic; }
   .pos { color: #4caf50; } .neg { color: #f44336; }
 
   .bt-equity-label {

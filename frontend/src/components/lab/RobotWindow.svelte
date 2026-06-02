@@ -10,7 +10,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { fetchWithAuth } from '../../lib/fetch-auth';
-  import { toFills, replay, computeStats } from '../../lib/lab-analytics';
+  import { toFills, replay, computeStats, tradeEvents } from '../../lib/lab-analytics';
   import BacktestChart from './BacktestChart.svelte';
 
   let { robotId, onClose }: { robotId: string; onClose: () => void } = $props();
@@ -36,14 +36,18 @@
   );
   let replayed = $derived(replay(chartFills));
   let pv = $derived(live?.point_value ?? 1);
+  // Net per-close events (rubles, commission deducted) — single source for money.
+  let events = $derived(tradeEvents(chartFills, 60, pv));
+  let closes = $derived(events.filter(e => e.close).map(e => e.close!));
 
-  // Ruble equity curve from realized round-trip PnL (points × point_value).
+  // Ruble equity curve from realized close PnL (NET of commission).
   let equityCurve = $derived.by(() => {
-    const rts = replayed.roundTrips;
     if (!chartFills.length) return [];
     const pts: any[] = [{ time: chartFills[0].time, equity: INITIAL_EQUITY }];
     let cum = 0;
-    for (const r of rts) { cum += r.pnl; pts.push({ time: r.tOut, equity: INITIAL_EQUITY + cum * pv }); }
+    for (const e of events) {
+      if (e.close) { cum += e.close.pnl; pts.push({ time: e.rawTime, equity: INITIAL_EQUITY + cum }); }
+    }
     return pts;
   });
 
@@ -52,21 +56,21 @@
     live ? { trades: chartFills, equity_curve: equityCurve, params: live.robot?.params_json ?? {} } : null
   );
 
-  // Current result summary (rubles).
+  // Current result summary (rubles, net of commission).
   let summary = $derived.by(() => {
     const s = computeStats(chartFills, replayed.roundTrips, equityCurve);
     let signed = 0;
     for (const f of chartFills) signed += f.side === 'buy' ? f.qty : -f.qty;
-    const wins = replayed.roundTrips.filter(r => r.pnl > 0).length;
+    const wins = closes.filter(c => c.pnl > 0).length;
     const net = equityCurve.length ? equityCurve[equityCurve.length - 1].equity - equityCurve[0].equity : 0;
     return {
       net,
       retPct: (net / INITIAL_EQUITY) * 100,
       position: signed,
-      roundTrips: s.roundTrips,
+      roundTrips: closes.length,
       longRT: s.longRT,
       shortRT: s.shortRT,
-      winRate: s.roundTrips ? (wins / s.roundTrips) * 100 : 0,
+      winRate: closes.length ? (wins / closes.length) * 100 : 0,
       orders: (live?.trades ?? []).length,
     };
   });
