@@ -248,13 +248,61 @@ register("ema_atr", "EMA Trend + ATR Filter",
          sig_ema_atr, lambda p: int(p["slow"]) + 2)
 
 
+# ── Param descriptions (по ключу) + краткое описание стратегий ──────────────────
+# Generic but accurate per-parameter explanations, injected into every schema so
+# each field gets an (i) tooltip. Keyed by param `key`.
+PARAM_DESC: dict[str, str] = {
+    "symbol": "Торгуемый фьючерс FORTS (тикер@тип). От инструмента зависят стоимость пункта и ГО.",
+    "qty": "Сколько контрактов в сделке. Влияет на размер позиции, ГО и риск пропорционально.",
+    "period": "Длина окна индикатора в барах. Меньше — быстрее реакция и больше сигналов/шума; больше — глаже и позже вход.",
+    "fast": "Период быстрой линии. Чем меньше, тем чувствительнее к развороту, но больше ложных сигналов.",
+    "slow": "Период медленной линии. Задаёт «несущий» тренд; больше — реже и крупнее сделки.",
+    "mid": "Период средней линии. Используется как промежуточный фильтр выравнивания тренда.",
+    "signal": "Период сигнальной линии MACD. Сглаживает MACD; пересечение даёт вход/выход.",
+    "mult": "Множитель ширины канала (хранится ×10: 20 = 2.0). Больше — полосы дальше, реже сигналы.",
+    "threshold": "Порог срабатывания индикатора. Дальше от нуля — реже, но более «уверенные» сигналы.",
+    "oversold": "Уровень перепроданности: ниже него — сигнал на покупку (вход в лонг).",
+    "overbought": "Уровень перекупленности: выше него — сигнал на продажу (вход в шорт).",
+    "rsi_period": "Период RSI. Короче — резче колебания осциллятора, больше входов.",
+    "ema_period": "Период EMA-фильтра тренда. Длиннее — более устойчивый, но запаздывающий фильтр.",
+    "atr_period": "Окно расчёта ATR (волатильности). Влияет на ширину канала/фильтра в пунктах.",
+}
+
+STRATEGY_DESC: dict[str, str] = {
+    "macd_cross": "Пересечение MACD и сигнальной линии: лонг при MACD выше сигнальной, шорт — ниже. Трендовая, в обе стороны.",
+    "bollinger_mr": "Возврат к среднему по полосам Боллинджера: покупка ниже нижней полосы, продажа выше верхней. Контртренд.",
+    "bollinger_bo": "Пробой полос Боллинджера: лонг при пробое верхней, шорт — нижней. Трендовая, ловит импульс.",
+    "stochastic": "Стохастик-осциллятор: покупка из зоны перепроданности, продажа из перекупленности. Контртренд.",
+    "cci": "CCI (индекс товарного канала): разворот от экстремальных значений ±порог. Контртренд.",
+    "williams_r": "Williams %R: осциллятор перекупленности/перепроданности. Покупка снизу, продажа сверху диапазона. Контртренд.",
+    "momentum": "Моментум: лонг при положительном импульсе цены, шорт — при отрицательном. Трендовая.",
+    "roc": "Rate of Change: вход по скорости изменения цены выше/ниже порога. Трендовая.",
+    "triple_sma": "Выравнивание трёх SMA: лонг при быстрая>средняя>медленная, шорт — наоборот. Трендовый фильтр.",
+    "keltner_bo": "Пробой канала Кельтнера (EMA ± множитель×ATR): лонг вверх, шорт вниз. Трендовая.",
+    "rsi_trend": "RSI с фильтром тренда по EMA: покупка на откате в восходящем тренде, продажа — в нисходящем.",
+    "ema_atr": "Двойная EMA + подтверждение прорыва на ATR: вход по направлению тренда при достаточном импульсе.",
+}
+
+
 def list_strategies() -> list[dict]:
-    """Public listing for the API (without the signal callable)."""
+    """Public listing for the API (without the signal callable). Injects per-param
+    descriptions (for the (i) tooltips) and a short strategy description."""
     out = []
     for rid, s in REGISTRY.items():
+        # enrich each param with a desc (and a hint fallback) by key
+        schema = []
+        for p in s["params_schema"]:
+            q = dict(p)
+            d = PARAM_DESC.get(q["key"])
+            if d and not q.get("desc"):
+                q["desc"] = d
+            if d and not q.get("hint"):
+                q["hint"] = d
+            schema.append(q)
         out.append({
             "id": rid, "name": s["name"], "source": s["source"],
-            "params_schema": s["params_schema"],
+            "description": STRATEGY_DESC.get(rid, ""),
+            "params_schema": schema,
             "script_code": f"from trader.lab.strategies.library import make_on_bar; on_bar = make_on_bar('{rid}')",
             "default_params": s["default_params"],
         })
