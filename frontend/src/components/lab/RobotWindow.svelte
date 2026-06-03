@@ -36,6 +36,15 @@
   );
   let replayed = $derived(replay(chartFills));
   let pv = $derived(live?.point_value ?? 1);
+
+  // Param key → schema entry (label, hint, desc) for the (i) popovers.
+  let schemaByKey = $derived.by(() => {
+    const m: Record<string, any> = {};
+    for (const p of (live?.strategy?.params_schema ?? [])) m[p.key] = p;
+    return m;
+  });
+  let openInfo = $state<string | null>(null);
+  let hoverInfo = $state<string | null>(null);
   // Net per-close events (rubles, commission deducted) — single source for money.
   let events = $derived(tradeEvents(chartFills, 60, pv));
   let closes = $derived(events.filter(e => e.close).map(e => e.close!));
@@ -139,10 +148,40 @@
         <!-- bottom: params + current result (left) | trade history (right) -->
         <div class="win-bottom">
           <div class="panel left">
+            {#if live.strategy}
+              <div class="panel-title">О стратегии</div>
+              <div class="about-box">
+                <div class="about-name">{live.strategy.name}</div>
+                {#if live.strategy.description}<div class="about-desc">{live.strategy.description}</div>{/if}
+                {#if live.strategy.source}
+                  <a class="about-link" href={live.strategy.source} target="_blank" rel="noopener">Подробное описание робота ↗</a>
+                {/if}
+              </div>
+            {/if}
+
             <div class="panel-title">Параметры</div>
             <div class="kv-grid">
               {#each Object.entries(live.robot?.params_json ?? {}) as [k, v]}
-                <div class="kv"><span class="k">{k}</span><span class="v">{v}</span></div>
+                {@const sp = schemaByKey[k]}
+                <div class="kv">
+                  <span class="k">
+                    {sp?.label ?? k}
+                    {#if sp?.desc || sp?.hint}
+                      <span class="kv-i" role="button" tabindex="0" aria-label="Описание"
+                        onclick={() => openInfo = openInfo === k ? null : k}
+                        onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && (openInfo = openInfo === k ? null : k)}
+                        onmouseenter={() => hoverInfo = k} onmouseleave={() => hoverInfo = null}
+                      >ⓘ</span>
+                    {/if}
+                    {#if (sp?.desc || sp?.hint) && (openInfo === k || hoverInfo === k)}
+                      <div class="kv-popover">
+                        <div class="pp-title">{sp.label ?? k}</div>
+                        <div class="pp-body">{sp.desc || sp.hint}</div>
+                      </div>
+                    {/if}
+                  </span>
+                  <span class="v">{v}</span>
+                </div>
               {/each}
               <div class="kv"><span class="k">ГО / контракт</span>
                 <span class="v">{live.initial_margin != null ? Math.round(live.initial_margin).toLocaleString('ru-RU') + ' ₽' : '—'}</span></div>
@@ -249,8 +288,28 @@
 
   .kv-grid { display: flex; flex-direction: column; gap: 3px; }
   .kv { display: flex; justify-content: space-between; padding: 3px 7px; background: #0f0f1e; border-radius: 3px; }
-  .kv .k { font-size: 11px; color: #888; }
+  .kv .k { font-size: 11px; color: #888; position: relative; }
   .kv .v { font-size: 11px; color: #4caf50; font-family: monospace; }
+
+  .about-box { background: #0a1a0a; border: 1px solid #1e3a1e; border-radius: 4px; padding: 8px 10px; margin-bottom: 12px; }
+  .about-name { font-size: 12px; color: #4caf50; font-weight: 600; margin-bottom: 4px; }
+  .about-desc { font-size: 10px; color: #999; line-height: 1.5; margin-bottom: 6px; }
+  .about-link { font-size: 10px; color: #6aa8ff; text-decoration: none; }
+  .about-link:hover { text-decoration: underline; }
+
+  .kv-i {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 13px; height: 13px; margin-left: 4px; border-radius: 50%;
+    font-size: 9px; color: #6aa8ff; border: 1px solid #6aa8ff66; cursor: help; user-select: none;
+  }
+  .kv-i:hover { background: #6aa8ff22; }
+  .kv-popover {
+    position: absolute; left: 0; top: 100%; margin-top: 4px; z-index: 30;
+    width: 230px; background: #12121f; border: 1px solid #3d3d5a; border-radius: 4px;
+    padding: 7px 9px; box-shadow: 0 4px 16px #000000aa;
+  }
+  .pp-title { font-size: 11px; color: #fff; font-weight: 600; margin-bottom: 3px; }
+  .pp-body { font-size: 10px; color: #bbb; line-height: 1.5; }
 
   .result-grid { display: flex; flex-direction: column; gap: 4px; }
   .r-row { display: flex; align-items: baseline; gap: 6px; font-size: 11px; color: #999; }

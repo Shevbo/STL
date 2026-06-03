@@ -513,13 +513,34 @@ def create_app() -> FastAPI:
             {
                 "id": "supertrend",
                 "name": "SuperTrend (ATR)",
-                "description": "Трендследящая по полосам ATR. Лонг при пробое верхней полосы, шорт при пробое нижней. Торгует в обе стороны.",
+                "description": (
+                    "Трендследящая стратегия на полосах ATR (индикатор SuperTrend, Olivier Seban). "
+                    "Строит верхнюю и нижнюю полосы вокруг средней цены на расстоянии множитель×ATR. "
+                    "Когда цена пробивает верхнюю полосу — тренд считается восходящим, робот держит лонг; "
+                    "пробой нижней полосы — нисходящий тренд, робот переворачивается в шорт. Всегда в рынке "
+                    "после прогрева, торгует в обе стороны. Хорошо работает на трендовых движениях, теряет на "
+                    "боковике (частые ложные перевороты)."
+                ),
                 "source": "https://github.com/jigneshpylab/ZerodhaPythonScripts",
                 "params_schema": [
-                    {"key": "symbol",     "label": "Инструмент",    "type": "text",   "default": "RIM6", "hint": "FORTS тикер"},
-                    {"key": "atr_period", "label": "Период ATR",    "type": "number", "default": 10, "min": 5,  "max": 50, "hint": "Окно расчёта ATR"},
-                    {"key": "multiplier", "label": "Множитель ×10", "type": "number", "default": 30, "min": 10, "max": 60, "hint": "Ширина полос = (множитель/10) × ATR"},
-                    {"key": "qty",        "label": "Контрактов",    "type": "number", "default": 1,  "min": 1,  "max": 10, "hint": "Лотность на сделку"},
+                    {"key": "symbol",     "label": "Инструмент",    "type": "text",   "default": "RIM6",
+                     "hint": "FORTS тикер",
+                     "desc": "Торгуемый фьючерс FORTS, например RIM6 (фьючерс на индекс РТС, июнь). "
+                             "От инструмента зависят стоимость пункта и ГО."},
+                    {"key": "atr_period", "label": "Период ATR",    "type": "number", "default": 10, "min": 5,  "max": 50,
+                     "hint": "Окно расчёта ATR",
+                     "desc": "Сколько баров берётся для расчёта средней истинной волатильности (ATR). "
+                             "Меньше — полосы быстрее реагируют, больше сделок и шума; больше — "
+                             "глаже, меньше ложных переворотов, но позже вход."},
+                    {"key": "multiplier", "label": "Множитель ×10", "type": "number", "default": 30, "min": 10, "max": 60,
+                     "hint": "Ширина полос = (множитель/10) × ATR",
+                     "desc": "Во сколько ATR отстоят полосы от цены. Хранится ×10 (30 = 3.0). Меньше — "
+                             "полосы ближе, чаще перевороты; больше — дальше, реже и крупнее сделки, "
+                             "позиция дольше держится в тренде."},
+                    {"key": "qty",        "label": "Контрактов",    "type": "number", "default": 1,  "min": 1,  "max": 10,
+                     "hint": "Лотность на сделку",
+                     "desc": "Сколько контрактов в одной сделке. Влияет на размер позиции, ГО и риск "
+                             "пропорционально. Робот не усредняет — держит ровно qty в каждую сторону."},
                 ],
                 "script_code": "from trader.lab.strategies.supertrend import on_bar, on_start, on_stop",
                 "default_params": {"symbol": "RIM6", "atr_period": 10, "multiplier": 30, "qty": 1},
@@ -741,6 +762,16 @@ def create_app() -> FastAPI:
         # where it intends to act next). Drawn as dotted lines in the robot window.
         planned_orders = state.get("plan") if isinstance(state.get("plan"), list) else []
 
+        # Strategy template behind this robot (matched by script_code), so the
+        # window can show param descriptions + a landing link. Best-effort.
+        strategy = None
+        try:
+            templates = await list_strategies(request)
+            code = robot.get("script_code") or ""
+            strategy = next((t for t in templates if t.get("id") and t["id"] in code), None)
+        except Exception:
+            strategy = None
+
         trade_rows = await pool.fetch(
             """SELECT side, qty, price, order_id, status, timestamp
                FROM live_trades WHERE robot_id=$1 ORDER BY timestamp""",
@@ -828,6 +859,7 @@ def create_app() -> FastAPI:
             "initial_margin": initial_margin,
             "open_orders": open_orders,
             "planned_orders": planned_orders,
+            "strategy": strategy,
             "date_from": date_from.isoformat(),
             # +1 day so TODAY's intraday bars are included — date_to is parsed as
             # midnight, and `ts BETWEEN from AND to` would otherwise drop everything

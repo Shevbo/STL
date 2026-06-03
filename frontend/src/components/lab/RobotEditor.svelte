@@ -38,6 +38,8 @@
   let saving = $state(false);
   let error = $state('');
   let imported = $state(false);
+  let openInfo = $state<string | null>(null);   // param key whose (i) popover is pinned (click)
+  let hoverInfo = $state<string | null>(null);   // param key hovered (transient)
 
   // ── load strategies and stl links ───────────────────────────────────
   async function loadStrategies() {
@@ -199,6 +201,22 @@
       </div>
     </div>
 
+    <!-- Strategy "about" + landing link -->
+    {#if selectedStrategy}
+      <div class="section">
+        <div class="section-title">О стратегии</div>
+        <div class="about-box">
+          <div class="about-name">{selectedStrategy.name}</div>
+          {#if selectedStrategy.description}<div class="about-desc">{selectedStrategy.description}</div>{/if}
+          {#if selectedStrategy.source}
+            <a class="about-link" href={selectedStrategy.source} target="_blank" rel="noopener">
+              Подробное описание робота ↗
+            </a>
+          {/if}
+        </div>
+      </div>
+    {/if}
+
     <!-- Strategy parameters -->
     {#if selectedStrategy || robot}
       {@const schema = selectedStrategy?.params_schema ?? []}
@@ -206,10 +224,32 @@
         <div class="section">
           <div class="section-title">Параметры стратегии</div>
           {#each schema as p}
+            {@const info = p.desc || p.hint}
             <div class="field">
               <label>
                 {p.label}
+                {#if info}
+                  <span
+                    class="param-i"
+                    role="button"
+                    tabindex="0"
+                    aria-label="Описание параметра"
+                    onclick={(e) => { e.preventDefault(); openInfo = openInfo === p.key ? null : p.key; }}
+                    onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), openInfo = openInfo === p.key ? null : p.key)}
+                    onmouseenter={() => hoverInfo = p.key}
+                    onmouseleave={() => hoverInfo = null}
+                  >ⓘ</span>
+                {/if}
                 {#if p.hint}<span class="param-hint"> — {p.hint}</span>{/if}
+                {#if info && (openInfo === p.key || hoverInfo === p.key)}
+                  <div class="param-popover">
+                    <div class="pp-title">{p.label}</div>
+                    <div class="pp-body">{p.desc || p.hint}</div>
+                    {#if p.type === 'number' && (p.min != null || p.max != null)}
+                      <div class="pp-range">Диапазон: {p.min ?? '—'} … {p.max ?? '—'} · по умолчанию {p.default}</div>
+                    {/if}
+                  </div>
+                {/if}
               </label>
               {#if p.type === 'number'}
                 <input
@@ -313,4 +353,29 @@
     color: #666; cursor: pointer; border-radius: 4px; font-size: 12px;
   }
   .error { color: #f44336; font-size: 11px; padding: 8px; background: #1a0808; border-radius: 3px; }
+
+  /* Strategy "about" box + landing link */
+  .about-box { background: #0a1a0a; border: 1px solid #1e3a1e; border-radius: 4px; padding: 10px 12px; }
+  .about-name { font-size: 12px; color: #4caf50; font-weight: 600; margin-bottom: 4px; }
+  .about-desc { font-size: 11px; color: #aaa; line-height: 1.5; margin-bottom: 6px; }
+  .about-link { font-size: 11px; color: #6aa8ff; text-decoration: none; }
+  .about-link:hover { text-decoration: underline; }
+
+  /* Param (i) info icon + popover */
+  .field label { position: relative; }
+  .param-i {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 14px; height: 14px; margin-left: 4px; border-radius: 50%;
+    font-size: 10px; color: #6aa8ff; border: 1px solid #6aa8ff66;
+    cursor: help; vertical-align: middle; user-select: none;
+  }
+  .param-i:hover { background: #6aa8ff22; color: #9cc4ff; }
+  .param-popover {
+    position: absolute; left: 0; top: 100%; margin-top: 4px; z-index: 20;
+    width: 240px; background: #12121f; border: 1px solid #3d3d5a; border-radius: 4px;
+    padding: 8px 10px; box-shadow: 0 4px 16px #000000aa;
+  }
+  .pp-title { font-size: 11px; color: #fff; font-weight: 600; margin-bottom: 3px; }
+  .pp-body { font-size: 11px; color: #bbb; line-height: 1.5; }
+  .pp-range { font-size: 10px; color: #777; margin-top: 5px; font-family: monospace; }
 </style>
