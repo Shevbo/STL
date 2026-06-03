@@ -35,6 +35,7 @@
   let candleEl: HTMLDivElement;
   let equityEl: HTMLDivElement;
   let scrollTrackEl: HTMLDivElement;
+  let roRef: ResizeObserver | null = null;
 
   let tvCandle: any = null, tvEquity: any = null;
   let candleSeries: any = null, volumeSeries: any = null;
@@ -179,10 +180,12 @@
     equityEl.addEventListener('wheel', onWheelPan, { passive: false });
 
     const ro = new ResizeObserver(() => {
-      tvCandle?.applyOptions({ width: candleEl.clientWidth, height: candleEl.clientHeight });
-      tvEquity?.applyOptions({ width: equityEl.clientWidth, height: equityEl.clientHeight });
+      // Elements may be gone if the window closed mid-resize — guard against null.
+      if (candleEl) tvCandle?.applyOptions({ width: candleEl.clientWidth, height: candleEl.clientHeight });
+      if (equityEl) tvEquity?.applyOptions({ width: equityEl.clientWidth, height: equityEl.clientHeight });
     });
     ro.observe(containerEl);
+    roRef = ro;
 
     await loadMeta();
     await loadData();
@@ -292,6 +295,7 @@
   }
 
   onDestroy(() => {
+    roRef?.disconnect();
     candleEl?.removeEventListener('wheel', onWheelPan);
     equityEl?.removeEventListener('wheel', onWheelPan);
     tvCandle?.remove(); tvEquity?.remove();
@@ -413,10 +417,8 @@
       <span class="lg lg-long">▲ покупка</span><span class="lg lg-short">▼ продажа</span>
       <span class="lg lg-tp">■ TP</span><span class="lg lg-sl">■ SL</span>
     </span>
-    <!-- Crosshair date/time sits LEFT of the interval buttons and is always
-         reserved (fixed width), so showing it on hover never shifts the
-         interval block — which stays pinned at the right edge. -->
-    <span class="bt-cross">{crossLabel}</span>
+    <!-- Interval block pinned at the far right; the crosshair date/time is NOT
+         here (it would shift these buttons). It lives in an on-chart overlay. -->
     <div class="bt-intervals">
       {#each INTERVALS as iv}
         <button class:active={resampleMin === iv.v} onclick={() => pickInterval(iv.v)}>{iv.label}</button>
@@ -426,6 +428,9 @@
 
   <div class="bt-candle-area">
     <div class="candle" bind:this={candleEl}></div>
+
+    <!-- On-chart crosshair date/time (top-left), like TradingView/QUIK. -->
+    {#if crossLabel}<div class="cross-overlay">{crossLabel}</div>{/if}
 
     {#if tip}
       <div class="trade-tip" style="left:{tip.x + 12}px; top:{tip.y - 8}px;">
@@ -499,22 +504,22 @@
   .bt-legend { display: flex; gap: 8px; font-size: 10px; flex-shrink: 0; }
   .lg-long { color: #2ee6a6; } .lg-short { color: #ff5c8a; }
   .lg-tp { color: #19e36a; } .lg-sl { color: #ff3b3b; }
-  /* Crosshair label: pushed to the right via margin-left:auto, with a FIXED
-     reserved width so its appearance on hover never shifts the intervals.
-     Right-aligned text sits next to the interval block. */
-  .bt-cross {
-    margin-left: auto; flex: 0 0 116px; width: 116px; text-align: right;
-    font-size: 11px; font-family: monospace; color: #6aa8ff; white-space: nowrap;
-    overflow: hidden;
-  }
   /* Interval selector pinned to the far right, never wraps, never moves. */
-  .bt-intervals { display: flex; gap: 1px; flex-shrink: 0; }
+  .bt-intervals { display: flex; gap: 1px; flex-shrink: 0; margin-left: auto; }
   .bt-intervals button { background: transparent; color: #555; border: 1px solid transparent; font-size: 10px; padding: 2px 7px; border-radius: 3px; cursor: pointer; }
   .bt-intervals button:hover { color: #aaa; }
   .bt-intervals button.active { color: #4caf50; border-color: #4caf5066; background: #4caf5012; }
 
   .bt-candle-area { position: relative; flex: 1; min-height: 0; }
   .candle { position: absolute; inset: 0; }
+
+  /* On-chart crosshair date/time overlay (top-left). */
+  .cross-overlay {
+    position: absolute; top: 6px; left: 8px; z-index: 6;
+    font-size: 11px; font-family: monospace; color: #6aa8ff;
+    background: #0f0f1ecc; border: 1px solid #2d2d4a; border-radius: 3px;
+    padding: 2px 7px; pointer-events: none; white-space: nowrap;
+  }
 
   .trade-tip {
     position: absolute; z-index: 8; pointer-events: none;
@@ -549,15 +554,15 @@
   .equity { flex: 0 0 22%; min-height: 0; }
 
   .bt-scrollbar {
-    position: relative; height: 12px; margin: 3px 10px; flex-shrink: 0;
-    background: #14141f; border: 1px solid #2d2d4a; border-radius: 6px;
+    position: relative; height: 14px; margin: 4px 10px; flex-shrink: 0;
+    background: #1a1a2e; border: 1px solid #3a3a5a; border-radius: 7px;
   }
   .bt-thumb {
-    position: absolute; top: 1px; bottom: 1px; min-width: 16px;
-    background: #3a3a5a; border-radius: 5px; cursor: grab;
+    position: absolute; top: 1px; bottom: 1px; min-width: 24px;
+    background: #4a4a6e; border-radius: 6px; cursor: grab;
   }
-  .bt-thumb:hover { background: #4caf5066; }
-  .bt-thumb:active { cursor: grabbing; background: #4caf5088; }
+  .bt-thumb:hover { background: #4caf5088; }
+  .bt-thumb:active { cursor: grabbing; background: #4caf50aa; }
 
   .bt-hint { padding: 2px 10px; font-size: 9px; color: #555; background: #0f0f1e; border-top: 1px solid #1a1a2e; flex-shrink: 0; }
 

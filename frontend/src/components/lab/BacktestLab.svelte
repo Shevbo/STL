@@ -4,6 +4,8 @@
   import Optimizer from './Optimizer.svelte';
   import { toFills, replay } from '../../lib/lab-analytics';
 
+  let { preset = null }: { preset?: any } = $props();
+
   let centerMode = $state<'chart' | 'optimize'>('chart');
 
   const TYPE_LABEL: Record<string, string> = {
@@ -21,9 +23,11 @@
 
   let robots = $state<any[]>([]);
   let selectedRobotId = $state('');
-  let dateFrom = $state('2026-01-01');
-  let dateTo = $state('2026-05-01');
-  let paramsGrid = $state('{}');
+  let dateFrom = $state('2026-03-02');
+  let dateTo = $state('2026-05-24');
+  let paramValues = $state<Record<string, any>>({});  // structured param form values
+  let openInfo = $state<string | null>(null);
+  let hoverInfo = $state<string | null>(null);
   let runId = $state('');
   let status = $state('');
   let results = $state<any[]>([]);
@@ -37,11 +41,12 @@
   let strategies = $state<any[]>([]);
 
   let selectedSymbol = $derived(
-    (() => {
-      const robot = robots.find(r => r.id === selectedRobotId);
-      const pj = robot?.params_json;
-      return (typeof pj === 'object' ? pj?.symbol : null) ?? 'RIM6';
-    })()
+    paramValues.symbol
+      ?? (() => {
+        const robot = robots.find(r => r.id === selectedRobotId);
+        const pj = robot?.params_json;
+        return (typeof pj === 'object' ? pj?.symbol : null) ?? 'RIM6';
+      })()
   );
 
   // Ruble economics for the chart (so backtest stats + TP/SL read in rubles, like
@@ -81,8 +86,10 @@
     running = true;
     results = [];
     try {
-      const robot = robots.find(r => r.id === selectedRobotId);
-      const symbol = robot?.params_json?.symbol || '';
+      // Structured form → single-value param grid (each param fixed to its value).
+      const grid: Record<string, any> = {};
+      for (const [k, v] of Object.entries(paramValues)) grid[k] = v;
+      const symbol = paramValues.symbol || selectedSymbol || '';
       const res = await fetchWithAuth('/api/v1/backtest/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -91,7 +98,7 @@
           symbol,
           dateFrom: new Date(dateFrom).toISOString(),
           dateTo: new Date(dateTo).toISOString(),
-          paramsGrid: JSON.parse(paramsGrid),
+          paramsGrid: grid,
         }),
       });
       if (!res.ok) throw new Error(await res.text());
@@ -102,6 +109,31 @@
       error = String(e);
       running = false;
     }
+  }
+
+  // Seed the structured param form from the selected strategy defaults + robot
+  // params. Runs when robot/strategy changes (but not while a preset is applying).
+  let presetApplied = $state(false);
+  function seedParams() {
+    const robot = robots.find(r => r.id === selectedRobotId);
+    const schema = selectedStrategy?.params_schema ?? [];
+    const base: Record<string, any> = {};
+    for (const p of schema) base[p.key] = p.default;
+    const rp = (typeof robot?.params_json === 'object' ? robot.params_json : {}) ?? {};
+    paramValues = { ...base, ...rp };
+  }
+
+  // Apply a Botstore preset: pick the matching robot, fill params + period.
+  function applyPreset(p: any) {
+    if (!p || !robots.length) return;
+    const robot = robots.find(r => (r.script_code ?? '').includes(p.strategyId))
+      ?? robots.find(r => r.id === selectedRobotId);
+    if (robot) selectedRobotId = robot.id;
+    paramValues = { ...(p.params ?? {}) };
+    if (p.symbol) paramValues.symbol = p.symbol;
+    if (p.dateFrom) dateFrom = p.dateFrom.slice(0, 10);
+    if (p.dateTo) dateTo = p.dateTo.slice(0, 10);
+    presetApplied = true;
   }
 
   async function pollStatus() {
@@ -168,6 +200,22 @@
   }
 
   $effect(() => { loadRobots(); loadCoverage(); loadStrategies(); });
+
+  // Apply an incoming Botstore preset once robots are loaded.
+  $effect(() => {
+    if (preset && robots.length && strategies.length && !presetApplied) {
+      applyPreset(preset);
+    }
+  });
+
+  // Seed the structured form when the robot/strategy changes (unless a preset set it).
+  let lastSeededRobot = $state('');
+  $effect(() => {
+    const sid = selectedRobotId;
+    if (!sid || !selectedStrategy) return;
+    if (presetApplied) { presetApplied = false; lastSeededRobot = sid; return; }
+    if (sid !== lastSeededRobot) { seedParams(); lastSeededRobot = sid; }
+  });
 </script>
 
 <div class="backtest-lab">
@@ -176,17 +224,54 @@
   <div class="controls">
     <h3>Backtest Lab</h3>
     <label>
-      Robot
+      Робот
       <select bind:value={selectedRobotId}>
         {#each robots as r}<option value={r.id}>{r.name}</option>{/each}
       </select>
     </label>
-    <label>From <input type="date" bind:value={dateFrom} /></label>
-    <label>To   <input type="date" bind:value={dateTo} /></label>
-    <label>
-      Params grid (JSON)
-      <textarea bind:value={paramsGrid} rows="4" placeholder="{`{\"entry_period\":[20,40]}`}"></textarea>
-    </label>
+
+    <!-- Structured parameters: instrument + each strategy param with (i) info -->
+    {#if selectedStrategy}
+      <div class="param-form">
+        <div class="section-title">Параметры</div>
+        {#each (selectedStrategy.params_schema ?? []) as p}
+          {@const info = p.desc || p.hint}
+          <div class="pf-row">
+            <span class="pf-label">
+              {p.label}
+              {#if info}
+                <span class="pf-i" role="button" tabindex="0" aria-label="Описание"
+                  onclick={() => openInfo = openInfo === p.key ? null : p.key}
+                  onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && (openInfo = openInfo === p.key ? null : p.key)}
+                  onmouseenter={() => hoverInfo = p.key} onmouseleave={() => hoverInfo = null}
+                >ⓘ</span>
+              {/if}
+              {#if info && (openInfo === p.key || hoverInfo === p.key)}
+                <div class="pf-popover">
+                  <div class="pp-title">{p.label}</div>
+                  <div class="pp-body">{p.desc || p.hint}</div>
+                  {#if p.type === 'number' && (p.min != null || p.max != null)}
+                    <div class="pp-range">Диапазон: {p.min ?? '—'} … {p.max ?? '—'} · по умолч. {p.default}</div>
+                  {/if}
+                </div>
+              {/if}
+            </span>
+            {#if p.type === 'number'}
+              <input type="number" min={p.min} max={p.max} bind:value={paramValues[p.key]} placeholder={String(p.default)} />
+            {:else}
+              <input type="text" bind:value={paramValues[p.key]} placeholder={String(p.default)} />
+            {/if}
+          </div>
+        {/each}
+      </div>
+    {/if}
+
+    <label>Период бэктеста</label>
+    <div class="period-row">
+      <input type="date" bind:value={dateFrom} />
+      <span class="period-dash">—</span>
+      <input type="date" bind:value={dateTo} />
+    </div>
 
     <!-- Market data -->
     <div class="data-section">
@@ -347,6 +432,28 @@
   .error { color: #f44336; font-size: 11px; }
   .data-section { background: #0a0a15; border: 1px solid #2d2d4a; border-radius: 4px; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
   .section-title { font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; }
+
+  /* Structured param form */
+  .param-form { display: flex; flex-direction: column; gap: 6px; }
+  .pf-row { display: flex; flex-direction: column; gap: 3px; }
+  .pf-label { font-size: 11px; color: #888; position: relative; }
+  .pf-i {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 13px; height: 13px; margin-left: 4px; border-radius: 50%;
+    font-size: 9px; color: #6aa8ff; border: 1px solid #6aa8ff66; cursor: help; user-select: none;
+  }
+  .pf-i:hover { background: #6aa8ff22; }
+  .pf-popover {
+    position: absolute; left: 0; top: 100%; margin-top: 4px; z-index: 30;
+    width: 240px; background: #12121f; border: 1px solid #3d3d5a; border-radius: 4px;
+    padding: 8px 10px; box-shadow: 0 4px 16px #000000aa;
+  }
+  .pp-title { font-size: 11px; color: #fff; font-weight: 600; margin-bottom: 3px; }
+  .pp-body { font-size: 11px; color: #bbb; line-height: 1.5; }
+  .pp-range { font-size: 10px; color: #777; margin-top: 5px; font-family: monospace; }
+  .period-row { display: flex; align-items: center; gap: 6px; }
+  .period-row input { flex: 1; }
+  .period-dash { color: #555; }
   .coverage { display: flex; flex-direction: column; gap: 2px; }
   .cov-item { font-size: 10px; color: #4caf50; font-family: monospace; }
   .no-data { font-size: 10px; color: #444; font-style: italic; }

@@ -7,6 +7,13 @@
   type Tab = 'live' | 'market' | 'backtest' | 'botstore';
   let activeTab = $state<Tab>('live');
   let fullscreen = $state(false);
+  // Preset handed from Botstore → Backtest Lab ("установить в Backtest Lab").
+  let backtestPreset = $state<any>(null);
+
+  function useInBacktest(preset: any) {
+    backtestPreset = preset;
+    activeTab = 'backtest';
+  }
 
   function onKeydown(e: KeyboardEvent) {
     if (e.key === 'Escape' && fullscreen) fullscreen = false;
@@ -44,9 +51,9 @@
     {:else if activeTab === 'market'}
       <ChartFrame symbol="RIM6" />
     {:else if activeTab === 'botstore'}
-      <Botstore />
+      <Botstore onUseInBacktest={useInBacktest} />
     {:else}
-      <BacktestLab />
+      <BacktestLab preset={backtestPreset} />
     {/if}
   </div>
 </div>

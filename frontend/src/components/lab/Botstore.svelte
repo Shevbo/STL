@@ -3,12 +3,28 @@
 <script lang="ts">
   import { fetchWithAuth } from '../../lib/fetch-auth';
 
+  let { onUseInBacktest }: { onUseInBacktest?: (preset: any) => void } = $props();
+
   let loading = $state(true);
   let error = $state('');
   let initialEquity = $state(100000);
   let catalog = $state<any[]>([]);
   let robotsCount = $state(0);
   let expanded = $state<Record<string, boolean>>({});
+
+  // Build a Backtest Lab preset from a catalog row + chosen result, and switch tab.
+  function useResult(robot: any, r: any, ev?: Event) {
+    ev?.stopPropagation();
+    if (!r) return;
+    onUseInBacktest?.({
+      strategyId: robot.id,
+      name: robot.name,
+      symbol: r.symbol,
+      params: r.params,
+      dateFrom: r.date_from,
+      dateTo: r.date_to,
+    });
+  }
 
   async function load() {
     loading = true; error = '';
@@ -77,6 +93,7 @@
             <th>Чистыми ₽</th>
             <th>Макс. просадка</th>
             <th>Фактор восст.</th>
+            <th></th>
           </tr>
         </thead>
         <tbody>
@@ -97,6 +114,12 @@
               <td class:pos={b?.net_profit > 0} class:neg={b?.net_profit < 0}>{b ? fmtMoney(b.net_profit) : '—'}</td>
               <td>{b ? fmtPct(b.max_drawdown) : '—'}</td>
               <td class:pos={b?.recovery_factor > 1}>{b ? fmtNum(b.recovery_factor) : '—'}</td>
+              <td>
+                {#if b}
+                  <button class="bs-use" title="Установить параметры в Backtest Lab"
+                    onclick={(e) => useResult(robot, b, e)}>→ в Backtest Lab</button>
+                {/if}
+              </td>
             </tr>
             {#if expanded[robot.id]}
               {#each (robot.results ?? []) as r}
@@ -109,6 +132,10 @@
                   <td class:pos={r.net_profit > 0} class:neg={r.net_profit < 0}>{fmtMoney(r.net_profit)}</td>
                   <td>{fmtPct(r.max_drawdown)}</td>
                   <td class:pos={r.recovery_factor > 1}>{fmtNum(r.recovery_factor)}</td>
+                  <td>
+                    <button class="bs-use" title="Установить параметры в Backtest Lab"
+                      onclick={(e) => useResult(robot, r, e)}>→ в Backtest Lab</button>
+                  </td>
                 </tr>
               {/each}
             {/if}
@@ -147,4 +174,9 @@
   .neg { color: #f44336; }
   .bs-refresh { align-self: flex-start; padding: 5px 14px; background: #1a1a2e; border: 1px solid #2d2d4a; color: #aaa; border-radius: 3px; font-size: 11px; cursor: pointer; }
   .bs-refresh:hover { color: #4caf50; border-color: #4caf5066; }
+  .bs-use {
+    padding: 2px 8px; background: #4caf5018; border: 1px solid #4caf5066; color: #4caf50;
+    border-radius: 3px; font-size: 10px; cursor: pointer; white-space: nowrap;
+  }
+  .bs-use:hover { background: #4caf5030; }
 </style>
