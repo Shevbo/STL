@@ -430,7 +430,8 @@
         <Optimizer
           robotId={selectedRobotId}
           strategy={selectedStrategy}
-          baseParams={(() => { const r = robots.find(x => x.id === selectedRobotId); return (typeof r?.params_json === 'object' ? r.params_json : {}); })()}
+          baseParams={paramValues}
+          instruments={instruments}
           dateFrom={new Date(dateFrom).toISOString()}
           dateTo={new Date(dateTo).toISOString()}
           onSelectResult={(r) => { selectedResult = r; centerMode = 'chart'; }}

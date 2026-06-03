@@ -7,15 +7,31 @@
   import { fetchWithAuth } from '../../lib/fetch-auth';
 
   let {
-    robotId, strategy = null, baseParams = {}, dateFrom, dateTo, onSelectResult,
+    robotId, strategy = null, baseParams = {}, dateFrom, dateTo, instruments = [], onSelectResult,
   }: {
     robotId: string;
     strategy?: any;
     baseParams?: Record<string, any>;
     dateFrom: string;
     dateTo: string;
+    instruments?: any[];
     onSelectResult?: (r: any) => void;
   } = $props();
+
+  // Explicit, editable instrument + period for the sweep (seeded from the props,
+  // but shown and changeable here so the optimizer is self-contained).
+  let symbol = $state('');
+  let optFrom = $state('');
+  let optTo = $state('');
+  let seededCtx = '';
+  $effect(() => {
+    const ctx = `${baseParams.symbol ?? ''}|${dateFrom}|${dateTo}`;
+    if (ctx === seededCtx) return;
+    symbol = baseParams.symbol ?? 'RIM6';
+    optFrom = (dateFrom ?? '').slice(0, 10);
+    optTo = (dateTo ?? '').slice(0, 10);
+    seededCtx = ctx;
+  });
 
   // numeric params from the strategy schema
   let numericParams = $derived(
@@ -85,13 +101,16 @@
     error = ''; results = []; running = true; progress = '';
     try {
       const pg = buildParamsGrid();
+      // Pin the instrument into the grid so every combo runs on the chosen symbol.
+      if (symbol) pg.symbol = [symbol] as any;
       const res = await fetchWithAuth('/api/v1/backtest/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           robotId,
-          symbol: baseParams.symbol,
-          dateFrom, dateTo,
+          symbol,
+          dateFrom: new Date(optFrom).toISOString(),
+          dateTo: new Date(optTo).toISOString(),
           paramsGrid: pg,
         }),
       });
@@ -176,6 +195,30 @@
   <div class="opt-builder">
     <div class="ob-title">Перебор параметров</div>
     <div class="ob-preamble">Доходность — от первоначальных инвестиций 100 000 ₽, в рублях (стоимость пункта и ГО с MOEX ISS). При усреднении ГО растёт пропорционально числу контрактов.</div>
+
+    <!-- Explicit instrument + period for the whole sweep -->
+    <div class="ob-ctx">
+      <label class="ob-ctx-field">
+        <span>Инструмент</span>
+        <select bind:value={symbol}>
+          {#if symbol && !instruments.some((i) => i.symbol === symbol)}
+            <option value={symbol}>{symbol}</option>
+          {/if}
+          {#each instruments as inst}
+            <option value={inst.symbol}>{inst.symbol} — {inst.name}</option>
+          {/each}
+        </select>
+      </label>
+      <label class="ob-ctx-field">
+        <span>Период бэктеста</span>
+        <div class="ob-period">
+          <input type="date" bind:value={optFrom} />
+          <span class="ob-dash">—</span>
+          <input type="date" bind:value={optTo} />
+        </div>
+      </label>
+    </div>
+
     {#if numericParams.length === 0}
       <div class="ob-empty">У стратегии нет числовых параметров</div>
     {:else}
@@ -283,6 +326,11 @@
   .ob-title { font-size: 12px; color: #4caf50; font-weight: 600; margin-bottom: 4px; }
   .ob-preamble { font-size: 10px; color: #777; line-height: 1.4; margin-bottom: 8px; }
   .ob-empty { font-size: 11px; color: #666; }
+  .ob-ctx { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 10px; }
+  .ob-ctx-field { display: flex; flex-direction: column; gap: 3px; font-size: 10px; color: #888; }
+  .ob-ctx-field select, .ob-ctx-field input { background: #0a0a15; border: 1px solid #2d2d4a; color: #ccc; padding: 3px 6px; font-size: 11px; border-radius: 3px; }
+  .ob-period { display: flex; align-items: center; gap: 6px; }
+  .ob-dash { color: #555; }
   .ob-grid { width: 100%; border-collapse: collapse; font-size: 11px; }
   .ob-grid th { text-align: left; color: #666; padding: 3px 6px; font-weight: 400; }
   .ob-grid td { padding: 3px 6px; }
