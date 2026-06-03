@@ -24,3 +24,6 @@ class Settings(BaseSettings):
     shectory_local_user_email: str = ""
     shectory_local_user_password_sha256: str = ""
     lab_db_url: str = ""
+    # Shared secret for the external optimization agent (Windows host) to claim
+    # jobs and post results. If empty, the agent endpoints are disabled.
+    opt_agent_token: SecretStr = SecretStr("")

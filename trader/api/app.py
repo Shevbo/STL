@@ -67,6 +67,18 @@ async def lifespan(app: FastAPI):
         from trader.lab.market_store import ensure_ohlcv_table, ensure_instrument_meta_table
         await ensure_ohlcv_table(db_pool)
         await ensure_instrument_meta_table(db_pool)
+        # Columns for the remote-agent job queue (idempotent).
+        for _ddl in (
+            "ALTER TABLE backtest_runs ADD COLUMN IF NOT EXISTS engine TEXT DEFAULT 'local'",
+            "ALTER TABLE backtest_runs ADD COLUMN IF NOT EXISTS symbol TEXT",
+            "ALTER TABLE backtest_runs ADD COLUMN IF NOT EXISTS job_body JSONB",
+            "ALTER TABLE backtest_runs ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ",
+            "ALTER TABLE backtest_runs ADD COLUMN IF NOT EXISTS agent_id TEXT",
+        ):
+            try:
+                await db_pool.execute(_ddl)
+            except Exception as _exc:
+                log.warning("lab.backtest_runs_migrate_failed", ddl=_ddl, error=str(_exc))
         scheduler = RobotScheduler(
             db_pool=db_pool,
             tx_client=tx,
@@ -153,10 +165,11 @@ async def _run_backtest_task(run_id: str, body: dict, pool, app_state) -> None:
         values = [grid[k] if isinstance(grid[k], list) else [grid[k]] for k in keys]
         combos = list(itertools.product(*values))
         param_sets = [{**base_params, **dict(zip(keys, combo))} for combo in combos]
-        if len(param_sets) > _MAX_COMBOS:
+        # Cap applies to LOCAL (VDS) runs only; remote runs go to the powerful host.
+        if body.get("engine") != "remote" and len(param_sets) > _MAX_COMBOS:
             raise ValueError(
                 f"Слишком много комбинаций: {len(param_sets)} > {_MAX_COMBOS}. "
-                f"Сузьте диапазоны/шаг перебора."
+                f"Переключите движок на «Мощный хост» или сузьте сетку."
             )
         symbol = body.get("symbol", base_params.get("symbol", ""))
 
@@ -968,16 +981,24 @@ def create_app() -> FastAPI:
         def _parse_dt(s: str) -> _dt:
             return _dt.fromisoformat(s.replace("Z", "+00:00"))
 
+        # engine: "local" → run on the VDS now (default); "remote" → enqueue for the
+        # external Windows agent to pick up (keeps heavy sweeps off the VDS entirely).
+        engine = body.get("engine", "local")
+        symbol = body.get("symbol", "")
         await pool.execute(
-            """INSERT INTO backtest_runs (id, robot_id, params_grid, date_from, date_to)
-               VALUES ($1,$2,$3,$4,$5)""",
+            """INSERT INTO backtest_runs
+                 (id, robot_id, params_grid, date_from, date_to, status, engine, symbol, job_body)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)""",
             run_id, body["robotId"], body.get("paramsGrid", {}),
             _parse_dt(body["dateFrom"]), _parse_dt(body["dateTo"]),
+            ("queued" if engine == "remote" else "pending"),
+            engine, symbol, json.dumps(body),
         )
-        _asyncio.create_task(
-            _run_backtest_task(run_id, body, pool, request.app.state)
-        )
-        return {"run_id": run_id}
+        if engine != "remote":
+            _asyncio.create_task(
+                _run_backtest_task(run_id, body, pool, request.app.state)
+            )
+        return {"run_id": run_id, "engine": engine}
 
     @fastapi_app.get("/api/v1/backtest/{run_id}/status")
     async def backtest_status(run_id: str, request: Request):
@@ -999,6 +1020,104 @@ def create_app() -> FastAPI:
             run_id,
         )
         return [dict(r) for r in rows]
+
+    # ── Optimization AGENT (external Windows host) ───────────────────────────
+    def _agent_auth(request: Request) -> None:
+        secret = request.app.state.settings.opt_agent_token.get_secret_value()
+        if not secret:
+            raise HTTPException(status_code=503, detail="Agent disabled (no token configured)")
+        got = request.headers.get("x-agent-token", "")
+        if got != secret:
+            raise HTTPException(status_code=401, detail="Bad agent token")
+
+    @fastapi_app.post("/api/v1/agent/claim")
+    async def agent_claim(body: dict, request: Request):
+        """Agent pulls the next queued remote run. Atomic claim via UPDATE..RETURNING
+        so two agents never grab the same job. Returns the full job_body + run_id,
+        plus the robot's script/base params and ruble economics so the agent is
+        self-contained. 204 if nothing queued."""
+        _agent_auth(request)
+        pool = request.app.state.db_pool
+        if pool is None:
+            raise HTTPException(status_code=503, detail="DB unavailable")
+        agent_id = body.get("agent_id", "agent")
+        row = await pool.fetchrow(
+            """UPDATE backtest_runs SET status='running', claimed_at=now(), agent_id=$1
+               WHERE id = (
+                 SELECT id FROM backtest_runs
+                 WHERE engine='remote' AND status='queued'
+                 ORDER BY created_at LIMIT 1
+                 FOR UPDATE SKIP LOCKED)
+               RETURNING id, robot_id, job_body, symbol""",
+            agent_id,
+        )
+        if not row:
+            return Response(status_code=204)
+        import json as _json
+        job = row["job_body"]
+        if isinstance(job, str):
+            job = _json.loads(job)
+        robot = await pool.fetchrow(
+            "SELECT script_code, params_json FROM robots WHERE id=$1", row["robot_id"]
+        )
+        base_params = robot["params_json"] if isinstance(robot["params_json"], dict) else _json.loads(robot["params_json"])
+        # ruble economics so the agent computes money-correct PnL
+        point_value = 1.0
+        try:
+            from trader.lab.market_store import refresh_instrument_spec
+            spec = await refresh_instrument_spec(pool, row["symbol"] or base_params.get("symbol", ""))
+            point_value = (spec or {}).get("point_value") or 1.0
+        except Exception:
+            pass
+        return {
+            "run_id": row["id"],
+            "symbol": row["symbol"] or base_params.get("symbol", ""),
+            "script_code": robot["script_code"],
+            "base_params": base_params,
+            "params_grid": job.get("paramsGrid", {}),
+            "date_from": job.get("dateFrom"),
+            "date_to": job.get("dateTo"),
+            "point_value": point_value,
+        }
+
+    @fastapi_app.post("/api/v1/agent/result")
+    async def agent_result(body: dict, request: Request):
+        """Agent posts computed results for a run. Bulk-inserts backtest_results and
+        marks the run done (or failed). Idempotent-ish: clears prior rows for the run."""
+        _agent_auth(request)
+        pool = request.app.state.db_pool
+        if pool is None:
+            raise HTTPException(status_code=503, detail="DB unavailable")
+        run_id = body.get("run_id")
+        if not run_id:
+            raise HTTPException(status_code=422, detail="run_id required")
+        if body.get("error"):
+            await pool.execute(
+                "UPDATE backtest_runs SET status='failed', error_msg=$1, finished_at=now() WHERE id=$2",
+                str(body["error"]), run_id,
+            )
+            return {"ok": True, "status": "failed"}
+        results = body.get("results", [])
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute("DELETE FROM backtest_results WHERE run_id=$1", run_id)
+                for entry in results:
+                    if not entry.get("ok"):
+                        continue
+                    r = entry["result"]
+                    await conn.execute(
+                        """INSERT INTO backtest_results
+                           (id, run_id, params, trades, equity_curve, sharpe, max_drawdown, win_rate, total_return, total_trades)
+                           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)""",
+                        cuid(), run_id, entry["params"],
+                        r.get("trades", []), r.get("equity_curve", []),
+                        r.get("sharpe"), r.get("max_drawdown"), r.get("win_rate"),
+                        r.get("total_return"), r.get("total_trades"),
+                    )
+                await conn.execute(
+                    "UPDATE backtest_runs SET status='done', finished_at=now() WHERE id=$1", run_id
+                )
+        return {"ok": True, "count": len(results)}
 
     # ── Market Data (MOEX ISS cache) ──────────────────────────────────────────
 

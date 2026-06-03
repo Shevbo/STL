@@ -29,6 +29,7 @@
   let paramValues = $state<Record<string, any>>({});  // structured param form values
   let openInfo = $state<string | null>(null);
   let hoverInfo = $state<string | null>(null);
+  let engine = $state<'local' | 'remote'>('local');  // VDS vs powerful host agent
   let runId = $state('');
   let status = $state('');
   let results = $state<any[]>([]);
@@ -108,6 +109,7 @@
           dateFrom: new Date(dateFrom).toISOString(),
           dateTo: new Date(dateTo).toISOString(),
           paramsGrid: grid,
+          engine,
         }),
       });
       if (!res.ok) throw new Error(await res.text());
@@ -337,6 +339,13 @@
 
     <div class="divider"></div>
 
+    <label>Движок расчёта</label>
+    <div class="engine-row">
+      <button class="eng-btn" class:active={engine === 'local'} onclick={() => engine = 'local'}>VDS (сервер)</button>
+      <button class="eng-btn" class:active={engine === 'remote'} onclick={() => engine = 'remote'}>Мощный хост</button>
+    </div>
+    <div class="hint">«Мощный хост» — расчёт на внешнем агенте (i9/128ГБ), не грузит торговый сервер. Требует запущенного агента.</div>
+
     <button onclick={runBacktest} disabled={running}>
       {running ? `Running… (${status})` : 'Run Backtest'}
     </button>
@@ -512,6 +521,11 @@
   .load-btn { background: #1a1a2e; border-color: #3d3d5a; color: #aaa; padding: 4px 10px; font-size: 10px; }
   .data-status { font-size: 10px; color: #888; }
   .divider { height: 1px; background: #2d2d4a; margin: 4px 0; }
+  .hint { font-size: 10px; color: #666; line-height: 1.4; }
+  .engine-row { display: flex; gap: 4px; }
+  .eng-btn { flex: 1; padding: 5px 8px; background: #0f0f1e; border: 1px solid #2d2d4a; color: #888; font-size: 11px; border-radius: 3px; cursor: pointer; }
+  .eng-btn:hover { color: #ccc; }
+  .eng-btn.active { background: #4caf5018; border-color: #4caf5066; color: #4caf50; }
 
   /* Results table */
   .results-section { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; max-height: 28%; overflow: auto; }

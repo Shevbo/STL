@@ -67,6 +67,7 @@
   let error = $state('');
   let results = $state<any[]>([]);
   let progress = $state('');
+  let engine = $state<'local' | 'remote'>('remote');  // sweeps default to the powerful host
   let sortKey = $state('total_return');
   let sortDir = $state<-1 | 1>(-1);
 
@@ -97,10 +98,13 @@
     return out;
   }
 
-  const MAX_COMBOS = 2000;   // mirror backend cap
+  const MAX_LOCAL = 2000;     // VDS guardrail (mirror backend); remote host = much higher
+  const MAX_REMOTE = 200000;
   async function runOptimization() {
-    if (comboCount > MAX_COMBOS) {
-      error = `Слишком много комбинаций: ${comboCount} > ${MAX_COMBOS}. Сузьте диапазоны или увеличьте шаг.`;
+    const cap = engine === 'remote' ? MAX_REMOTE : MAX_LOCAL;
+    if (comboCount > cap) {
+      error = `Слишком много комбинаций: ${comboCount} > ${cap}. ` +
+        (engine === 'local' ? 'Переключите на «Мощный хост» или сузьте сетку.' : 'Сузьте сетку.');
       return;
     }
     error = ''; results = []; running = true; progress = '';
@@ -117,6 +121,7 @@
           dateFrom: new Date(optFrom).toISOString(),
           dateTo: new Date(optTo).toISOString(),
           paramsGrid: pg,
+          engine,
         }),
       });
       if (!res.ok) throw new Error(await res.text());
@@ -220,6 +225,13 @@
           <input type="date" bind:value={optFrom} />
           <span class="ob-dash">—</span>
           <input type="date" bind:value={optTo} />
+        </div>
+      </label>
+      <label class="ob-ctx-field">
+        <span>Движок</span>
+        <div class="ob-engine">
+          <button class="oe-btn" class:active={engine === 'local'} onclick={() => engine = 'local'}>VDS</button>
+          <button class="oe-btn" class:active={engine === 'remote'} onclick={() => engine = 'remote'}>Мощный хост</button>
         </div>
       </label>
     </div>
@@ -336,6 +348,10 @@
   .ob-ctx-field select, .ob-ctx-field input { background: #0a0a15; border: 1px solid #2d2d4a; color: #ccc; padding: 3px 6px; font-size: 11px; border-radius: 3px; }
   .ob-period { display: flex; align-items: center; gap: 6px; }
   .ob-dash { color: #555; }
+  .ob-engine { display: flex; gap: 3px; }
+  .oe-btn { padding: 3px 9px; background: #0a0a15; border: 1px solid #2d2d4a; color: #888; font-size: 11px; border-radius: 3px; cursor: pointer; }
+  .oe-btn:hover { color: #ccc; }
+  .oe-btn.active { background: #4caf5018; border-color: #4caf5066; color: #4caf50; }
   .ob-grid { width: 100%; border-collapse: collapse; font-size: 11px; }
   .ob-grid th { text-align: left; color: #666; padding: 3px 6px; font-weight: 400; }
   .ob-grid td { padding: 3px 6px; }
