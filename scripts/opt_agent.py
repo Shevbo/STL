@@ -30,6 +30,13 @@ import time
 from concurrent.futures import ProcessPoolExecutor
 from datetime import date, datetime
 
+# Force UTF-8 console so status lines (→ × …) print on Windows cp1251 terminals.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import httpx  # noqa: E402
