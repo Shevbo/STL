@@ -724,6 +724,32 @@ def create_app() -> FastAPI:
         await request.app.state.scheduler.stop_robot(robot_id)
         return {"ok": True}
 
+    @fastapi_app.delete("/api/v1/robots/{robot_id}")
+    async def delete_robot(robot_id: str, request: Request):
+        """Remove a robot from the platform: stop it, drop its FK-dependent rows
+        (trades, metrics, backtest runs+results), then delete the robot itself."""
+        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        pool = request.app.state.db_pool
+        if pool is None:
+            raise HTTPException(status_code=503, detail="DB unavailable")
+        try:
+            await request.app.state.scheduler.stop_robot(robot_id)
+        except Exception:
+            pass  # best-effort; robot may not be running
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute("DELETE FROM live_trades WHERE robot_id=$1", robot_id)
+                await conn.execute("DELETE FROM live_metrics WHERE robot_id=$1", robot_id)
+                # backtest_results reference backtest_runs.run_id → delete children first
+                await conn.execute(
+                    """DELETE FROM backtest_results WHERE run_id IN
+                       (SELECT id FROM backtest_runs WHERE robot_id=$1)""", robot_id)
+                await conn.execute("DELETE FROM backtest_runs WHERE robot_id=$1", robot_id)
+                res = await conn.execute("DELETE FROM robots WHERE id=$1", robot_id)
+        if res.endswith("0"):
+            raise HTTPException(status_code=404, detail="Robot not found")
+        return {"ok": True}
+
     @fastapi_app.get("/api/v1/robots/{robot_id}/live")
     async def robot_live(robot_id: str, request: Request):
         """
