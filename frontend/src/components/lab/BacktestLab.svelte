@@ -40,6 +40,7 @@
   let selectedResult = $state<any | null>(null);
 
   let strategies = $state<any[]>([]);
+  let instruments = $state<any[]>([]);   // FORTS top by turnover (dropdown)
 
   let selectedSymbol = $derived(
     paramValues.symbol
@@ -80,6 +81,13 @@
   async function loadStrategies() {
     const res = await fetchWithAuth('/api/v1/strategies');
     strategies = res.ok ? await res.json() : [];
+  }
+
+  async function loadInstruments() {
+    try {
+      const res = await fetchWithAuth('/api/v1/forts-instruments');
+      instruments = res.ok ? await res.json() : [];
+    } catch { instruments = []; }
   }
 
   async function runBacktest() {
@@ -160,6 +168,10 @@
   async function loadResults() {
     const res = await fetchWithAuth(`/api/v1/backtest/${runId}/results`);
     results = res.ok ? await res.json() : [];
+    // Auto-select the top result so the chart appears immediately (single-param
+    // run → one row; grid → best by return, already sorted server-side).
+    selectedResult = results.length ? results[0] : null;
+    if (selectedResult) centerMode = 'chart';
   }
 
   async function deployResult(params: any) {
@@ -202,7 +214,7 @@
     coverage = res.ok ? await res.json() : [];
   }
 
-  $effect(() => { loadRobots(); loadCoverage(); loadStrategies(); });
+  $effect(() => { loadRobots(); loadCoverage(); loadStrategies(); loadInstruments(); });
 
   // Apply an incoming Botstore preset once robots are loaded. Writes happen inside
   // untrack so mutating paramValues/selectedRobotId doesn't retrigger this effect.
@@ -240,12 +252,24 @@
       </select>
     </label>
 
-    <!-- Structured parameters: instrument + each strategy param with (i) info -->
+    <!-- Strategy "about" + author link -->
+    {#if selectedStrategy}
+      <div class="about-box">
+        <div class="about-name">{selectedStrategy.name}</div>
+        {#if selectedStrategy.description}<div class="about-desc">{selectedStrategy.description}</div>{/if}
+        {#if selectedStrategy.source}
+          <a class="about-link" href={selectedStrategy.source} target="_blank" rel="noopener">Подробное описание робота ↗</a>
+        {/if}
+      </div>
+    {/if}
+
+    <!-- Structured parameters: instrument dropdown + each strategy param with (i) -->
     {#if selectedStrategy}
       <div class="param-form">
         <div class="section-title">Параметры</div>
         {#each (selectedStrategy.params_schema ?? []) as p}
           {@const info = p.desc || p.hint}
+          {@const isSymbol = p.key === 'symbol'}
           <div class="pf-row">
             <span class="pf-label">
               {p.label}
@@ -266,7 +290,17 @@
                 </div>
               {/if}
             </span>
-            {#if p.type === 'number'}
+            {#if isSymbol}
+              <select bind:value={paramValues[p.key]}>
+                <!-- keep the current value even if not in the top-turnover list -->
+                {#if paramValues[p.key] && !instruments.some(i => i.symbol === paramValues[p.key])}
+                  <option value={paramValues[p.key]}>{paramValues[p.key]}</option>
+                {/if}
+                {#each instruments as inst}
+                  <option value={inst.symbol}>{inst.symbol} — {inst.name}</option>
+                {/each}
+              </select>
+            {:else if p.type === 'number'}
               <input type="number" min={p.min} max={p.max} bind:value={paramValues[p.key]} placeholder={String(p.default)} />
             {:else}
               <input type="text" bind:value={paramValues[p.key]} placeholder={String(p.default)} />
@@ -442,6 +476,13 @@
   .error { color: #f44336; font-size: 11px; }
   .data-section { background: #0a0a15; border: 1px solid #2d2d4a; border-radius: 4px; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
   .section-title { font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; }
+
+  /* Strategy about box */
+  .about-box { background: #0a1a0a; border: 1px solid #1e3a1e; border-radius: 4px; padding: 8px 10px; }
+  .about-name { font-size: 12px; color: #4caf50; font-weight: 600; margin-bottom: 4px; }
+  .about-desc { font-size: 10px; color: #999; line-height: 1.5; margin-bottom: 6px; }
+  .about-link { font-size: 10px; color: #6aa8ff; text-decoration: none; }
+  .about-link:hover { text-decoration: underline; }
 
   /* Structured param form */
   .param-form { display: flex; flex-direction: column; gap: 6px; }

@@ -554,6 +554,54 @@ def create_app() -> FastAPI:
             log.error("api.library_list_failed", error=str(exc))
         return core
 
+    @fastapi_app.get("/api/v1/forts-instruments")
+    async def forts_instruments(request: Request):
+        """Top FORTS futures by today's turnover (front contract per asset), from
+        MOEX ISS (free). Used to populate the instrument dropdown in Backtest Lab."""
+        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        import httpx as _httpx
+        url = ("https://iss.moex.com/iss/engines/futures/markets/forts/securities.json"
+               "?iss.meta=off&iss.only=securities,marketdata"
+               "&securities.columns=SECID,SHORTNAME,ASSETCODE,LASTTRADEDATE"
+               "&marketdata.columns=SECID,VALTODAY")
+        try:
+            async with _httpx.AsyncClient(timeout=15.0,
+                    headers={"User-Agent": "STL/1.0", "Accept": "application/json"}) as c:
+                j = (await c.get(url)).json()
+        except Exception as exc:
+            log.warning("api.forts_instruments_failed", exc=str(exc))
+            return []
+        sec = j.get("securities", {})
+        scols, sdata = sec.get("columns", []), sec.get("data", [])
+        md = j.get("marketdata", {})
+        mcols, mdata = md.get("columns", []), md.get("data", [])
+        turnover = {}
+        for row in mdata:
+            r = dict(zip(mcols, row))
+            turnover[r.get("SECID")] = r.get("VALTODAY") or 0
+        # Keep, per ASSETCODE, the front contract (nearest LASTTRADEDATE) and sum
+        # turnover across that asset's contracts so liquidity ranks the asset.
+        by_asset: dict = {}
+        for row in sdata:
+            r = dict(zip(scols, row))
+            secid, asset, ltd = r.get("SECID"), r.get("ASSETCODE"), r.get("LASTTRADEDATE")
+            if not secid or not asset:
+                continue
+            vt = turnover.get(secid, 0) or 0
+            cur = by_asset.get(asset)
+            if cur is None:
+                by_asset[asset] = {"front": secid, "front_ltd": ltd,
+                                   "name": r.get("SHORTNAME", secid), "turnover": vt}
+            else:
+                cur["turnover"] += vt
+                if ltd and (cur["front_ltd"] is None or ltd < cur["front_ltd"]):
+                    cur["front"], cur["front_ltd"], cur["name"] = secid, ltd, r.get("SHORTNAME", secid)
+        ranked = sorted(by_asset.values(), key=lambda x: x["turnover"], reverse=True)
+        return [
+            {"symbol": a["front"], "name": a["name"], "turnover": a["turnover"]}
+            for a in ranked[:25] if a["turnover"] > 0
+        ]
+
     # ── LAB: Botstore (robot catalog + leaderboard summary) ──────────
     @fastapi_app.get("/api/v1/botstore")
     async def botstore(request: Request):
