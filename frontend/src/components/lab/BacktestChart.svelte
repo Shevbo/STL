@@ -413,12 +413,15 @@
       <span class="lg lg-long">▲ покупка</span><span class="lg lg-short">▼ продажа</span>
       <span class="lg lg-tp">■ TP</span><span class="lg lg-sl">■ SL</span>
     </span>
+    <!-- Crosshair date/time sits LEFT of the interval buttons and is always
+         reserved (fixed width), so showing it on hover never shifts the
+         interval block — which stays pinned at the right edge. -->
+    <span class="bt-cross">{crossLabel}</span>
     <div class="bt-intervals">
       {#each INTERVALS as iv}
         <button class:active={resampleMin === iv.v} onclick={() => pickInterval(iv.v)}>{iv.label}</button>
       {/each}
     </div>
-    {#if crossLabel}<span class="bt-cross">{crossLabel}</span>{/if}
   </div>
 
   <div class="bt-candle-area">
@@ -496,12 +499,19 @@
   .bt-legend { display: flex; gap: 8px; font-size: 10px; flex-shrink: 0; }
   .lg-long { color: #2ee6a6; } .lg-short { color: #ff5c8a; }
   .lg-tp { color: #19e36a; } .lg-sl { color: #ff3b3b; }
-  /* Interval selector pinned to the right, never wraps. */
-  .bt-intervals { display: flex; gap: 1px; margin-left: auto; flex-shrink: 0; }
+  /* Crosshair label: pushed to the right via margin-left:auto, with a FIXED
+     reserved width so its appearance on hover never shifts the intervals.
+     Right-aligned text sits next to the interval block. */
+  .bt-cross {
+    margin-left: auto; flex: 0 0 116px; width: 116px; text-align: right;
+    font-size: 11px; font-family: monospace; color: #6aa8ff; white-space: nowrap;
+    overflow: hidden;
+  }
+  /* Interval selector pinned to the far right, never wraps, never moves. */
+  .bt-intervals { display: flex; gap: 1px; flex-shrink: 0; }
   .bt-intervals button { background: transparent; color: #555; border: 1px solid transparent; font-size: 10px; padding: 2px 7px; border-radius: 3px; cursor: pointer; }
   .bt-intervals button:hover { color: #aaa; }
   .bt-intervals button.active { color: #4caf50; border-color: #4caf5066; background: #4caf5012; }
-  .bt-cross { font-size: 11px; font-family: monospace; color: #6aa8ff; padding-left: 8px; white-space: nowrap; flex-shrink: 0; }
 
   .bt-candle-area { position: relative; flex: 1; min-height: 0; }
   .candle { position: absolute; inset: 0; }
