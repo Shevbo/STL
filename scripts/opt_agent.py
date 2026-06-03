@@ -57,11 +57,25 @@ def _run_chunk(args: tuple) -> list[dict]:
     mod = _types.ModuleType("robot_script")
     exec(compile(script_code, "<robot>", "exec"), mod.__dict__)
 
+    def _downsample(curve: list, cap: int = 1500) -> list:
+        # Keep metrics exact (already computed); shrink the equity curve for transport.
+        # The chart resamples anyway, so ~1500 points is plenty. Always keep last point.
+        n = len(curve)
+        if n <= cap:
+            return curve
+        step = n / cap
+        out = [curve[int(i * step)] for i in range(cap)]
+        if out[-1] is not curve[-1]:
+            out.append(curve[-1])
+        return out
+
     async def _all():
         out = []
         for ps in param_sets:
             try:
                 r = await run_single_backtest(mod, bars, symbol, ps, point_value=point_value)
+                if isinstance(r.get("equity_curve"), list):
+                    r["equity_curve"] = _downsample(r["equity_curve"])
                 out.append({"ok": True, "params": ps, "result": r})
             except Exception as exc:  # noqa: BLE001
                 out.append({"ok": False, "params": ps, "error": str(exc)})
