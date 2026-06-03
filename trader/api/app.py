@@ -117,12 +117,20 @@ async def lifespan(app: FastAPI):
     await auth.aclose()
 
 
+# Only ONE backtest/sweep runs at a time. Concurrent runs used to stack heavy
+# subprocesses and drive the VDS load average into the hundreds; serializing them
+# keeps the box responsive. Hard cap on combos as a second guardrail.
+_BACKTEST_LOCK = asyncio.Lock()
+_MAX_COMBOS = 2000
+
+
 async def _run_backtest_task(run_id: str, body: dict, pool, app_state) -> None:
     import json
     import itertools
     from trader.lab.backtest import run_backtest_grid
 
-    try:
+    async with _BACKTEST_LOCK:
+      try:
         await pool.execute(
             "UPDATE backtest_runs SET status='running' WHERE id=$1", run_id
         )
@@ -144,6 +152,11 @@ async def _run_backtest_task(run_id: str, body: dict, pool, app_state) -> None:
         values = [grid[k] if isinstance(grid[k], list) else [grid[k]] for k in keys]
         combos = list(itertools.product(*values))
         param_sets = [{**base_params, **dict(zip(keys, combo))} for combo in combos]
+        if len(param_sets) > _MAX_COMBOS:
+            raise ValueError(
+                f"Слишком много комбинаций: {len(param_sets)} > {_MAX_COMBOS}. "
+                f"Сузьте диапазоны/шаг перебора."
+            )
         symbol = body.get("symbol", base_params.get("symbol", ""))
 
         # Real ruble economics: point_value (= step_price/min_step) from MOEX ISS,
@@ -187,7 +200,7 @@ async def _run_backtest_task(run_id: str, body: dict, pool, app_state) -> None:
             "UPDATE backtest_runs SET status='done', finished_at=now() WHERE id=$1",
             run_id,
         )
-    except Exception as exc:
+      except Exception as exc:
         await pool.execute(
             "UPDATE backtest_runs SET status='failed', error_msg=$1 WHERE id=$2",
             str(exc), run_id,

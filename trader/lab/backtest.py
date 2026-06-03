@@ -1,10 +1,36 @@
 import asyncio
 import math
 import multiprocessing
+import os
 from types import ModuleType
 from typing import Any
 
 from trader.lab.runtime import BacktestRuntime, Bar, TAKER_COMMISSION
+
+
+def _demote_to_background() -> None:
+    """Make THIS process a background CPU/IO citizen so a heavy param sweep never
+    starves interactive services (sshd, nginx, uvicorn). Called at the start of
+    every backtest subprocess. All best-effort — never raises."""
+    # Lowest CPU scheduling priority (nice 19).
+    try:
+        os.nice(19)
+    except Exception:
+        pass
+    # Linux: SCHED_IDLE — only runs when nothing else wants the CPU.
+    try:
+        if hasattr(os, "SCHED_IDLE") and hasattr(os, "sched_setscheduler"):
+            os.sched_setscheduler(0, os.SCHED_IDLE, os.sched_param(0))  # type: ignore[attr-defined]
+    except Exception:
+        pass
+    # Lowest IO priority (idle class) via ionice, if available.
+    try:
+        import psutil  # type: ignore
+        p = psutil.Process()
+        if hasattr(psutil, "IOPRIO_CLASS_IDLE"):
+            p.ionice(psutil.IOPRIO_CLASS_IDLE)
+    except Exception:
+        pass
 
 
 def compute_metrics(trades: list[dict], initial_equity: float,
@@ -122,6 +148,7 @@ def _subprocess_run(script_code: str, bars_data: list[dict], symbol: str,
     import asyncio
     import types
 
+    _demote_to_background()
     bars = [Bar(**b) for b in bars_data]
     mod = types.ModuleType("robot_script")
     exec(compile(script_code, "<robot>", "exec"), mod.__dict__)
@@ -165,22 +192,28 @@ async def run_backtest_isolated(
 def _subprocess_run_many(script_code: str, bars_data: list[dict], symbol: str,
                          param_sets: list[dict], result_queue: multiprocessing.Queue,
                          point_value: float = 1.0) -> None:
-    """Run MANY param combos in ONE subprocess — bars pickled once, not per combo."""
+    """Run MANY param combos in ONE subprocess — bars pickled once, not per combo.
+    Runs as a background-priority process and yields the CPU between combos so the
+    box stays responsive during a big sweep."""
     import asyncio
     import types
 
+    _demote_to_background()
     bars = [Bar(**b) for b in bars_data]
     mod = types.ModuleType("robot_script")
     exec(compile(script_code, "<robot>", "exec"), mod.__dict__)
 
     async def _run_all():
         out = []
-        for ps in param_sets:
+        for i, ps in enumerate(param_sets):
             try:
                 r = await run_single_backtest(mod, bars, symbol, ps, point_value=point_value)
                 out.append({"ok": True, "params": ps, "result": r})
             except Exception as exc:
                 out.append({"ok": False, "params": ps, "error": str(exc)})
+            # Briefly yield every few combos so a long grid can't peg a core.
+            if (i & 7) == 7:
+                await asyncio.sleep(0)
         return out
 
     try:

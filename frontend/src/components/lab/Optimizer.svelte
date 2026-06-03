@@ -97,7 +97,12 @@
     return out;
   }
 
+  const MAX_COMBOS = 2000;   // mirror backend cap
   async function runOptimization() {
+    if (comboCount > MAX_COMBOS) {
+      error = `Слишком много комбинаций: ${comboCount} > ${MAX_COMBOS}. Сузьте диапазоны или увеличьте шаг.`;
+      return;
+    }
     error = ''; results = []; running = true; progress = '';
     try {
       const pg = buildParamsGrid();
