@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import { fetchWithAuth } from '../../lib/fetch-auth';
   import BacktestChart from './BacktestChart.svelte';
   import Optimizer from './Optimizer.svelte';
@@ -113,7 +114,9 @@
 
   // Seed the structured param form from the selected strategy defaults + robot
   // params. Runs when robot/strategy changes (but not while a preset is applying).
-  let presetApplied = $state(false);
+  // Plain vars (not $state) — they are control flags, not reactive UI, and writing
+  // them inside an effect must not retrigger it.
+  let presetApplied = false;
   function seedParams() {
     const robot = robots.find(r => r.id === selectedRobotId);
     const schema = selectedStrategy?.params_schema ?? [];
@@ -201,20 +204,27 @@
 
   $effect(() => { loadRobots(); loadCoverage(); loadStrategies(); });
 
-  // Apply an incoming Botstore preset once robots are loaded.
+  // Apply an incoming Botstore preset once robots are loaded. Writes happen inside
+  // untrack so mutating paramValues/selectedRobotId doesn't retrigger this effect.
+  let presetDone = false;
   $effect(() => {
-    if (preset && robots.length && strategies.length && !presetApplied) {
-      applyPreset(preset);
+    void preset; void robots.length; void strategies.length;
+    if (preset && robots.length && strategies.length && !presetDone) {
+      presetDone = true;
+      untrack(() => applyPreset(preset));
     }
   });
 
   // Seed the structured form when the robot/strategy changes (unless a preset set it).
-  let lastSeededRobot = $state('');
+  let lastSeededRobot = '';
   $effect(() => {
     const sid = selectedRobotId;
-    if (!sid || !selectedStrategy) return;
-    if (presetApplied) { presetApplied = false; lastSeededRobot = sid; return; }
-    if (sid !== lastSeededRobot) { seedParams(); lastSeededRobot = sid; }
+    const strat = selectedStrategy;
+    if (!sid || !strat) return;
+    untrack(() => {
+      if (presetApplied) { presetApplied = false; lastSeededRobot = sid; return; }
+      if (sid !== lastSeededRobot) { seedParams(); lastSeededRobot = sid; }
+    });
   });
 </script>
 
