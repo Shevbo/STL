@@ -62,14 +62,13 @@ async def test_place_order_sends_account_id(client):
 
 
 @respx.mock
-async def test_place_market_order_no_price(client):
+async def test_place_market_order_rejected(client):
+    # Market orders are disallowed — only limit (taker) orders are permitted.
     route = respx.post(ORDERS_URL).mock(return_value=httpx.Response(200, json=ORDER_RESPONSE))
     req = OrderRequest(symbol="GZM6@RTSX", side="buy", quantity=1, order_type="market")
-    await client.place_order(req)
-
-    body = json.loads(route.calls[0].request.content)
-    assert "limit_price" not in body
-    assert body["type"] == "ORDER_TYPE_MARKET"
+    with pytest.raises(ValueError):
+        await client.place_order(req)
+    assert route.call_count == 0  # never reaches the broker
 
 
 @respx.mock

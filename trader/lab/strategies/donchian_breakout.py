@@ -44,7 +44,6 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
     current = bars[-1]
 
     entry_high = max(b.high for b in history[-entry_period:])
-    entry_low  = min(b.low  for b in history[-entry_period:])
 
     # Exit channel (shorter period) — safe minimum
     xp = min(exit_period, len(history))

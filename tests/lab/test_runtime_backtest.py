@@ -1,5 +1,4 @@
 import pytest
-from decimal import Decimal
 from trader.lab.runtime import BacktestRuntime, Bar
 
 

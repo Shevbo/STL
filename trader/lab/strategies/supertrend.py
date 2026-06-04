@@ -46,11 +46,9 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
     lows = [b.low for b in bars]
     closes = [b.close for b in bars]
 
-    # ATR on the two most recent windows to detect a band cross between prev and cur bar.
-    a_cur = atr(highs, lows, closes, atr_period)
+    # ATR on the previous window — used to detect a band cross at the current bar.
     a_prev = atr(highs[:-1], lows[:-1], closes[:-1], atr_period)
 
-    basis_cur = (highs[-1] + lows[-1]) / 2.0
     basis_prev = (highs[-2] + lows[-2]) / 2.0
     upper_prev = basis_prev + mult * a_prev
     lower_prev = basis_prev - mult * a_prev

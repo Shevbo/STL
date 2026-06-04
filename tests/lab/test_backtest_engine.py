@@ -14,16 +14,31 @@ def make_bars(n=100, trend="up") -> list[Bar]:
 
 
 def test_compute_metrics_winning():
+    # Two +5-point round-trips. With commission=0 this is pure gross logic.
     trades = [
         {"side": "buy", "price": 100.0, "qty": 1},
         {"side": "sell", "price": 105.0, "qty": 1},
         {"side": "buy", "price": 103.0, "qty": 1},
         {"side": "sell", "price": 108.0, "qty": 1},
     ]
-    metrics = compute_metrics(trades, initial_equity=100_000.0)
+    metrics = compute_metrics(trades, initial_equity=100_000.0, commission=0.0)
     assert metrics["total_trades"] == 2
     assert metrics["win_rate"] == pytest.approx(1.0)
     assert metrics["total_return"] > 0
+
+
+def test_compute_metrics_commission_reduces_pnl():
+    # Same two +5-point round-trips; the taker commission must lower net profit.
+    trades = [
+        {"side": "buy", "price": 100.0, "qty": 1},
+        {"side": "sell", "price": 105.0, "qty": 1},
+        {"side": "buy", "price": 103.0, "qty": 1},
+        {"side": "sell", "price": 108.0, "qty": 1},
+    ]
+    gross = compute_metrics(trades, initial_equity=100_000.0, commission=0.0)
+    net = compute_metrics(trades, initial_equity=100_000.0, commission=4.0)
+    # 2 round-trips × (entry+exit fee) = 2 × 8 = 16 rubles off the gross.
+    assert net["net_profit"] == pytest.approx(gross["net_profit"] - 16.0)
 
 
 def test_compute_metrics_empty():

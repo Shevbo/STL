@@ -737,7 +737,6 @@ def create_app() -> FastAPI:
     @fastapi_app.post("/api/v1/robots", status_code=201)
     async def create_robot(body: dict, request: Request):
         require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
-        import json
         pool = request.app.state.db_pool
         new_id = cuid()
         await pool.execute(

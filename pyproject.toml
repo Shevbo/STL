@@ -30,7 +30,13 @@ pytest-timeout = "^2"
 grpcio-tools = ">=1.63,<2"
 
 [tool.ruff]
-exclude = ["trader/proto/gen/**"]
+exclude = ["trader/proto/gen/**", "trader/proto/**"]
+
+[tool.ruff.lint]
+# E701 (compact `if cond: return x` in strategy signal fns) and E402 (deliberate
+# lazy/conditional imports inside endpoints + the cuid() helper sitting between
+# imports) are intentional here. Keep the real-bug F-series rules ON.
+ignore = ["E701", "E402"]
 
 [build-system]
 requires = ["poetry-core"]

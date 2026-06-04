@@ -53,7 +53,7 @@ async def upsert_bars(
         for b in bars
     ]
     async with pool.acquire() as conn:
-        result = await conn.executemany(
+        await conn.executemany(
             """
             INSERT INTO ohlcv_bars (symbol, interval_min, ts, open, high, low, close, volume)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)

@@ -9,8 +9,6 @@ Mirrors the core logic of docs/Source_update.ps1:
 
 from __future__ import annotations
 
-import asyncio
-import math
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
@@ -186,7 +184,6 @@ class IssLoader:
                 meta = await self.get_security_meta(secid)
                 # Which years match this digit?
                 years = [y for y in range(min_year, max_year + 1) if y % 10 == digit]
-                found = False
                 for year in sorted(years, reverse=True):
                     if meta and meta["LastDel"].year != year:
                         continue
@@ -214,7 +211,6 @@ class IssLoader:
                         "fetch_from": rng_from,
                         "fetch_till": rng_till,
                     })
-                    found = True
                     break
 
         if not plans:
@@ -306,7 +302,6 @@ class IssLoader:
                 return None
             active_to = meta["LastTrade"]
             ld = meta["LastDel"]
-            ld_first = date(ld.year, ld.month, 1)
             ld_back_m = ld.month - 10
             ld_back_y = ld.year
             while ld_back_m <= 0:

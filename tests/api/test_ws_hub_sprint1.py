@@ -24,13 +24,14 @@ def make_mock_feed():
 # --- _TIMEFRAME_NAMES and _TF_HISTORY_DAYS coverage ---
 
 def test_timeframe_names_has_required_values():
+    # Finam REST /bars supports only M1, M5, M15, D, W, MN — coarser intraday
+    # frames (M30/H1/H2/H4) intentionally fall back to M15, H8 to D.
     assert _TIMEFRAME_NAMES[1] == "TIME_FRAME_M1"
     assert _TIMEFRAME_NAMES[5] == "TIME_FRAME_M5"
     assert _TIMEFRAME_NAMES[9] == "TIME_FRAME_M15"
-    assert _TIMEFRAME_NAMES[11] == "TIME_FRAME_M30"
-    assert _TIMEFRAME_NAMES[12] == "TIME_FRAME_H1"
-    assert _TIMEFRAME_NAMES[13] == "TIME_FRAME_H2"
-    assert _TIMEFRAME_NAMES[15] == "TIME_FRAME_H4"
+    assert _TIMEFRAME_NAMES[11] == "TIME_FRAME_M15"   # M30 → M15 (unsupported by REST)
+    assert _TIMEFRAME_NAMES[12] == "TIME_FRAME_M15"   # H1  → M15
+    assert _TIMEFRAME_NAMES[15] == "TIME_FRAME_M15"   # H4  → M15
     assert _TIMEFRAME_NAMES[19] == "TIME_FRAME_D"
 
 
@@ -197,7 +198,8 @@ async def test_fetch_history_default_tf_from_hub():
 
         await hub._fetch_history("GZM6@RTSX")
 
-    assert captured_params.get("timeframe") == "TIME_FRAME_H1"
+    # hub timeframe=12 (H1) maps to M15 — Finam REST /bars doesn't support H1.
+    assert captured_params.get("timeframe") == "TIME_FRAME_M15"
 
 
 # --- _fetch_orders ---

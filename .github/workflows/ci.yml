@@ -21,10 +21,10 @@ jobs:
         run: pip install poetry
 
       - name: Install dependencies
-        run: poetry install
+        run: poetry install --no-root
 
       - name: Lint
         run: poetry run ruff check trader/ tests/
 
       - name: Unit tests (no integration)
-        run: poetry run pytest -m "not integration" -v
+        run: poetry run pytest -m "not integration" -q --timeout=60
