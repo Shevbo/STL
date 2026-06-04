@@ -67,6 +67,28 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import httpx  # noqa: E402
 
 
+def _patch_httpx_insecure() -> None:
+    """Make every httpx.AsyncClient skip TLS verification by default. Needed behind
+    a TLS-INTERCEPTING corporate proxy (e.g. local 127.0.0.1:port) that re-signs
+    certs with a CA Python doesn't trust — otherwise both agent calls and the ISS
+    bar fetch fail with 'self signed certificate'. Idempotent."""
+    if getattr(httpx.AsyncClient, "_stl_insecure", False):
+        return
+    _orig = httpx.AsyncClient.__init__
+
+    def _init(self, *a, **kw):
+        kw.setdefault("verify", False)
+        _orig(self, *a, **kw)
+
+    httpx.AsyncClient.__init__ = _init
+    httpx.AsyncClient._stl_insecure = True
+    try:
+        import warnings
+        warnings.filterwarnings("ignore", message="Unverified HTTPS")
+    except Exception:
+        pass
+
+
 # ── worker (separate process) ─────────────────────────────────────────────────
 def _run_chunk(args: tuple) -> list[dict]:
     """Run a chunk of param-sets in a worker process. Self-contained: rebuilds the
@@ -76,6 +98,9 @@ def _run_chunk(args: tuple) -> list[dict]:
     from trader.lab.backtest import run_single_backtest, _demote_to_background
     from trader.lab.runtime import Bar
 
+    # Workers inherit env; honor the insecure flag for the ISS fetch they do.
+    if os.environ.get("OPT_AGENT_INSECURE"):
+        _patch_httpx_insecure()
     script_code, bars_data, symbol, param_sets, point_value = args
     _demote_to_background()  # be a polite background citizen on the shared host too
     bars = [Bar(**b) for b in bars_data]
@@ -262,6 +287,9 @@ def main():
     ap.add_argument("--proxy", default=os.environ.get("OPT_AGENT_PROXY", ""),
                     help="HTTP(S) proxy URL for outbound, e.g. http://proxy.corp:8080 "
                          "(falls back to HTTPS_PROXY/HTTP_PROXY env)")
+    ap.add_argument("--insecure", action="store_true",
+                    default=bool(os.environ.get("OPT_AGENT_INSECURE")),
+                    help="skip TLS verification (behind a TLS-intercepting proxy)")
     ap.add_argument("--log", default=os.environ.get("OPT_AGENT_LOG",
                     os.path.join(os.environ.get("TEMP", "."), "shectory_opt_agent.log")))
     args = ap.parse_args()
@@ -270,6 +298,10 @@ def main():
     if not args.token:
         print("ERROR: set OPT_AGENT_TOKEN (env) or --token", file=sys.stderr)
         sys.exit(2)
+    if args.insecure:
+        os.environ["OPT_AGENT_INSECURE"] = "1"   # so spawned workers inherit it
+        _patch_httpx_insecure()
+        print("WARNING: TLS verification DISABLED (--insecure)", flush=True)
     asyncio.run(Agent(args.api, args.token, args.workers, args.poll, args.proxy).run())
 
 
