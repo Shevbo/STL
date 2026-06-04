@@ -147,15 +147,24 @@ async def _run_backtest_task(run_id: str, body: dict, pool, app_state) -> None:
         await pool.execute(
             "UPDATE backtest_runs SET status='running' WHERE id=$1", run_id
         )
-        robot_row = await pool.fetchrow(
-            "SELECT script_code, params_json FROM robots WHERE id=$1", body["robotId"]
-        )
-        script_code = robot_row["script_code"]
-        base_params = (
-            robot_row["params_json"]
-            if isinstance(robot_row["params_json"], dict)
-            else json.loads(robot_row["params_json"])
-        )
+        # A run may carry its OWN script_code + base_params (e.g. opening a chart for
+        # a Botstore library strategy that has no installed robot). Otherwise fall
+        # back to the referenced robots row.
+        script_code = body.get("scriptCode")
+        base_params = body.get("baseParams")
+        if not script_code or base_params is None:
+            robot_row = await pool.fetchrow(
+                "SELECT script_code, params_json FROM robots WHERE id=$1", body["robotId"]
+            )
+            script_code = script_code or robot_row["script_code"]
+            if base_params is None:
+                base_params = (
+                    robot_row["params_json"]
+                    if isinstance(robot_row["params_json"], dict)
+                    else json.loads(robot_row["params_json"])
+                )
+        if isinstance(base_params, str):
+            base_params = json.loads(base_params)
         bars = await _fetch_bars_for_backtest(
             body.get("symbol", base_params.get("symbol", "")),
             body["dateFrom"], body["dateTo"], app_state,
@@ -223,13 +232,19 @@ async def _run_backtest_task(run_id: str, body: dict, pool, app_state) -> None:
 
 async def _fetch_bars_for_backtest(symbol: str, date_from: str, date_to: str, app_state) -> list:
     """
-    Returns minute bars for backtest.
-    1. Try DB cache (ohlcv_bars).
-    2. Fall back to MOEX ISS public API (free, no auth needed).
+    Returns minute bars for backtest, ALWAYS fresh through the requested end date.
+
+    The cache (ohlcv_bars) may stop short of date_to (a past campaign cached only up
+    to its own end). We must never silently return a stale tail — the chart and the
+    backtest both need data through "yesterday". So:
+      1. Read the cache for the full range.
+      2. If the cache is empty, or its newest bar is older than date_to, fetch the
+         MISSING tail from MOEX ISS and upsert it.
+      3. Return the now-complete range from cache.
     """
     from datetime import date as _date
     from trader.lab.iss_loader import load_bars_iss
-    from trader.lab.market_store import get_bars, upsert_bars
+    from trader.lab.market_store import get_bars, get_coverage, upsert_bars
 
     def _parse_date(s: str) -> _date:
         # accept ISO datetime or date string
@@ -239,21 +254,32 @@ async def _fetch_bars_for_backtest(symbol: str, date_from: str, date_to: str, ap
     d_to = _parse_date(date_to)
     pool = getattr(app_state, "db_pool", None)
 
-    # 1. Check DB cache
-    if pool:
-        cached = await get_bars(pool, symbol, d_from, d_to)
-        if cached:
-            return cached
+    if not pool:
+        log.info("backtest.fetch_iss_nopool", symbol=symbol, from_date=str(d_from), to_date=str(d_to))
+        return await load_bars_iss(symbol, d_from, d_to, interval=1)
 
-    # 2. Fetch from MOEX ISS
-    log.info("backtest.fetch_iss", symbol=symbol, from_date=str(d_from), to_date=str(d_to))
-    bars = await load_bars_iss(symbol, d_from, d_to, interval=1)
+    # 1. What do we already have?
+    cov = await get_coverage(pool, symbol)
+    cached_max = _date.fromisoformat(cov["max_date"]) if cov else None
 
-    # 3. Save to DB for future reuse
-    if pool and bars:
-        await upsert_bars(pool, symbol, bars)
+    # 2. Decide what tail (if any) we must pull. Fetch from the day after the last
+    #    cached bar (or the full range if nothing cached) up to d_to.
+    need_from = None
+    if cached_max is None:
+        need_from = d_from
+    elif cached_max < d_to:
+        need_from = max(d_from, cached_max)   # overlap one day to avoid gaps
+    if need_from is not None:
+        log.info("backtest.fetch_iss", symbol=symbol, from_date=str(need_from), to_date=str(d_to))
+        try:
+            fresh = await load_bars_iss(symbol, need_from, d_to, interval=1)
+            if fresh:
+                await upsert_bars(pool, symbol, fresh)
+        except Exception as exc:
+            log.warning("backtest.fetch_iss_failed", symbol=symbol, error=str(exc))
 
-    return bars
+    # 3. Return the complete range from cache.
+    return await get_bars(pool, symbol, d_from, d_to)
 
 
 async def _market_update_task(symbols: list[str], date_from: str, date_to: str, pool) -> None:
@@ -699,6 +725,50 @@ def create_app() -> FastAPI:
             "catalog": catalog,
         }
 
+    @fastapi_app.get("/api/v1/botstore/{strategy}/results")
+    async def botstore_strategy_results(strategy: str, request: Request):
+        """
+        FULL detail for one tested strategy: every (symbol × param-combo) row from the
+        optimization leaderboard, so the UI can render per-instrument tables and let the
+        user drill into any single combo. Also returns the campaign period so a drill-in
+        chart knows the test window (its end is later extended to yesterday).
+        """
+        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        pool = request.app.state.db_pool
+        if pool is None:
+            return {"strategy": strategy, "rows": [], "period": None}
+        rows = await pool.fetch(
+            """
+            SELECT campaign_run, symbol, params, total_return, sharpe, max_drawdown,
+                   win_rate, total_trades, net_profit, recovery_factor, score,
+                   candidate, created_at
+            FROM optimization_leaderboard
+            WHERE strategy=$1
+            ORDER BY symbol, score DESC NULLS LAST
+            """,
+            strategy,
+        )
+        out = []
+        campaigns = set()
+        for r in rows:
+            d = dict(r)
+            if d.get("created_at") is not None:
+                d["created_at"] = d["created_at"].isoformat()
+            if d.get("campaign_run"):
+                campaigns.add(d["campaign_run"])
+            out.append(d)
+
+        period = None
+        if campaigns:
+            patterns = [c + "-%" for c in campaigns]
+            prow = await pool.fetchrow(
+                "SELECT MIN(date_from) AS df, MAX(date_to) AS dt FROM backtest_runs WHERE id LIKE ANY($1)",
+                patterns,
+            )
+            if prow and prow["df"] and prow["dt"]:
+                period = {"date_from": prow["df"].isoformat(), "date_to": prow["dt"].isoformat()}
+        return {"strategy": strategy, "rows": out, "period": period}
+
     # ── LAB: STL Links ───────────────────────────────────────────────
     @fastapi_app.get("/api/v1/stl-links")
     async def list_stl_links(request: Request):
@@ -984,11 +1054,21 @@ def create_app() -> FastAPI:
         # external Windows agent to pick up (keeps heavy sweeps off the VDS entirely).
         engine = body.get("engine", "local")
         symbol = body.get("symbol", "")
+        # robot_id is a FK. An on-demand library run (scriptCode supplied, e.g. opening
+        # a chart from the Botstore detail table) has no installed robot → resolve to
+        # any valid robot row just to satisfy the constraint; script_code drives the run.
+        robot_id = body.get("robotId")
+        if body.get("scriptCode"):
+            valid = await pool.fetchval("SELECT id FROM robots WHERE id=$1", robot_id) if robot_id else None
+            if not valid:
+                robot_id = await pool.fetchval("SELECT id FROM robots ORDER BY created_at LIMIT 1")
+        if not robot_id:
+            raise HTTPException(status_code=422, detail="robotId required (no robot available as FK)")
         await pool.execute(
             """INSERT INTO backtest_runs
                  (id, robot_id, params_grid, date_from, date_to, status, engine, symbol, job_body)
                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)""",
-            run_id, body["robotId"], body.get("paramsGrid", {}),
+            run_id, robot_id, body.get("paramsGrid", {}),
             _parse_dt(body["dateFrom"]), _parse_dt(body["dateTo"]),
             ("queued" if engine == "remote" else "pending"),
             engine, symbol, json.dumps(body),
