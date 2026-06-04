@@ -1057,10 +1057,20 @@ def create_app() -> FastAPI:
         job = row["job_body"]
         if isinstance(job, str):
             job = _json.loads(job)
-        robot = await pool.fetchrow(
-            "SELECT script_code, params_json FROM robots WHERE id=$1", row["robot_id"]
-        )
-        base_params = robot["params_json"] if isinstance(robot["params_json"], dict) else _json.loads(robot["params_json"])
+        # Campaign jobs carry their own script_code + base_params in job_body (so a
+        # sweep can cover all library strategies without a robots row). UI jobs don't
+        # → fall back to the robot referenced by robot_id.
+        script_code = job.get("script_code")
+        base_params = job.get("base_params")
+        if not script_code or base_params is None:
+            robot = await pool.fetchrow(
+                "SELECT script_code, params_json FROM robots WHERE id=$1", row["robot_id"]
+            )
+            if robot:
+                script_code = script_code or robot["script_code"]
+                if base_params is None:
+                    base_params = robot["params_json"] if isinstance(robot["params_json"], dict) else _json.loads(robot["params_json"])
+        base_params = base_params or {}
         # ruble economics so the agent computes money-correct PnL
         point_value = 1.0
         try:
@@ -1072,7 +1082,7 @@ def create_app() -> FastAPI:
         return {
             "run_id": row["id"],
             "symbol": row["symbol"] or base_params.get("symbol", ""),
-            "script_code": robot["script_code"],
+            "script_code": script_code,
             "base_params": base_params,
             "params_grid": job.get("paramsGrid", {}),
             "date_from": job.get("dateFrom"),
@@ -1098,6 +1108,29 @@ def create_app() -> FastAPI:
             )
             return {"ok": True, "status": "failed"}
         results = body.get("results", [])
+        import json as _json
+        # If this run is part of a campaign (job_body has script_code), also mirror
+        # results into optimization_leaderboard so Botstore shows the hit-parade.
+        meta = await pool.fetchrow("SELECT symbol, job_body FROM backtest_runs WHERE id=$1", run_id)
+        strat_id = None
+        campaign = None
+        if meta and meta["job_body"]:
+            jb = meta["job_body"]
+            if isinstance(jb, str):
+                jb = _json.loads(jb)
+            sc = jb.get("script_code", "") or ""
+            # script_code = "...make_on_bar('rsi_trend')" → extract the strategy id
+            import re as _re
+            m = _re.search(r"make_on_bar\('([a-z_]+)'\)", sc)
+            strat_id = m.group(1) if m else None
+            campaign = run_id.rsplit("-", 2)[0] if run_id.startswith("camp-") else None
+
+        def _score(r):
+            return (r.get("sharpe") or 0) + 3 * (r.get("total_return") or 0) - 2 * (r.get("max_drawdown") or 0)
+        def _cand(r):
+            return ((r.get("total_return") or 0) > 0 and (r.get("sharpe") or -9) >= 0.5
+                    and (r.get("max_drawdown") or 9) <= 0.15 and 30 <= (r.get("total_trades") or 0) <= 3000)
+
         async with pool.acquire() as conn:
             async with conn.transaction():
                 await conn.execute("DELETE FROM backtest_results WHERE run_id=$1", run_id)
@@ -1114,6 +1147,21 @@ def create_app() -> FastAPI:
                         r.get("sharpe"), r.get("max_drawdown"), r.get("win_rate"),
                         r.get("total_return"), r.get("total_trades"),
                     )
+                    if strat_id:
+                        try:
+                            await conn.execute(
+                                """INSERT INTO optimization_leaderboard
+                                     (id, campaign_run, strategy, symbol, params, total_return, sharpe,
+                                      max_drawdown, win_rate, total_trades, score, candidate,
+                                      net_profit, recovery_factor)
+                                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)""",
+                                cuid(), campaign, strat_id, meta["symbol"], entry["params"],
+                                r.get("total_return"), r.get("sharpe"), r.get("max_drawdown"),
+                                r.get("win_rate"), r.get("total_trades"), _score(r), _cand(r),
+                                r.get("net_profit"), r.get("recovery_factor"),
+                            )
+                        except Exception as exc:
+                            log.warning("agent.leaderboard_insert_failed", run_id=run_id, error=str(exc))
                 await conn.execute(
                     "UPDATE backtest_runs SET status='done', finished_at=now() WHERE id=$1", run_id
                 )
