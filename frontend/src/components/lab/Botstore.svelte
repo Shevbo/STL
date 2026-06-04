@@ -519,7 +519,7 @@
   .dp-hint { font-size: 11px; color: #6aa8ff; padding: 6px 12px; background: #0c1020; border-bottom: 1px solid #1e1e3a; flex-shrink: 0; }
   .dp-body { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 16px; }
 
-  .dp-spec { border: 1px solid #24406a; border-radius: 5px; background: #0c1322; overflow: hidden; }
+  .dp-spec { flex-shrink: 0; border: 1px solid #24406a; border-radius: 5px; background: #0c1322; overflow: hidden; }
   .dp-spec-title { font-size: 12px; color: #9cf; font-weight: 600; padding: 8px 10px; border-bottom: 1px solid #1a2a44; }
   .dp-spec-why { font-size: 11px; color: #89a; line-height: 1.55; padding: 8px 10px; border-bottom: 1px solid #14223a; }
   .dp-spec-table { width: 100%; border-collapse: collapse; font-size: 11px; }
@@ -531,7 +531,7 @@
   .ps-key { font-family: monospace; font-size: 9px; color: #567; margin-left: 6px; }
   .ps-desc { color: #9ab; max-width: 520px; line-height: 1.4; }
 
-  .dp-inst { border: 1px solid #1e1e3a; border-radius: 5px; overflow: hidden; }
+  .dp-inst { flex-shrink: 0; border: 1px solid #1e1e3a; border-radius: 5px; overflow: hidden; }
   .dp-inst-head { display: flex; align-items: baseline; gap: 10px; padding: 7px 10px; background: #0f0f1e; border-bottom: 1px solid #1e1e3a; }
   .dp-inst-sym { font-family: monospace; font-size: 13px; color: #6aa8ff; font-weight: 600; }
   .dp-inst-cnt { font-size: 10px; color: #777; }
