@@ -1,5 +1,6 @@
 import pytest
 from trader.lab.backtest import run_single_backtest, compute_metrics
+from trader.lab.commission import commission_for
 from trader.lab.runtime import Bar
 
 
@@ -13,32 +14,29 @@ def make_bars(n=100, trend="up") -> list[Bar]:
             for i, p in enumerate(prices)]
 
 
+_TRADES = [
+    {"side": "buy", "price": 100.0, "qty": 1},
+    {"side": "sell", "price": 105.0, "qty": 1},
+    {"side": "buy", "price": 103.0, "qty": 1},
+    {"side": "sell", "price": 108.0, "qty": 1},
+]
+
+
 def test_compute_metrics_winning():
-    # Two +5-point round-trips. With commission=0 this is pure gross logic.
-    trades = [
-        {"side": "buy", "price": 100.0, "qty": 1},
-        {"side": "sell", "price": 105.0, "qty": 1},
-        {"side": "buy", "price": 103.0, "qty": 1},
-        {"side": "sell", "price": 108.0, "qty": 1},
-    ]
-    metrics = compute_metrics(trades, initial_equity=100_000.0, commission=0.0)
+    # Two +5-point round-trips. Commission is tiny vs the 5-point gross, so both win.
+    metrics = compute_metrics(_TRADES, initial_equity=100_000.0)
     assert metrics["total_trades"] == 2
     assert metrics["win_rate"] == pytest.approx(1.0)
     assert metrics["total_return"] > 0
 
 
-def test_compute_metrics_commission_reduces_pnl():
-    # Same two +5-point round-trips; the taker commission must lower net profit.
-    trades = [
-        {"side": "buy", "price": 100.0, "qty": 1},
-        {"side": "sell", "price": 105.0, "qty": 1},
-        {"side": "buy", "price": 103.0, "qty": 1},
-        {"side": "sell", "price": 108.0, "qty": 1},
-    ]
-    gross = compute_metrics(trades, initial_equity=100_000.0, commission=0.0)
-    net = compute_metrics(trades, initial_equity=100_000.0, commission=4.0)
-    # 2 round-trips × (entry+exit fee) = 2 × 8 = 16 rubles off the gross.
-    assert net["net_profit"] == pytest.approx(gross["net_profit"] - 16.0)
+def test_compute_metrics_taker_commission_reduces_pnl():
+    # Net profit = 10 gross points − the taker commission on all four fills.
+    pv = 1.0
+    fees = sum(commission_for("RIM6", t["price"], t["qty"], pv, taker=True) for t in _TRADES)
+    net = compute_metrics(_TRADES, initial_equity=100_000.0, point_value=pv, symbol="RIM6")
+    assert net["net_profit"] == pytest.approx(10.0 * pv - fees)
+    assert fees > 0
 
 
 def test_compute_metrics_empty():

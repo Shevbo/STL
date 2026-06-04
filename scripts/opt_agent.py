@@ -118,13 +118,23 @@ def _chunked(seq: list, n: int) -> list[list]:
 
 # ── agent ─────────────────────────────────────────────────────────────────────
 class Agent:
-    def __init__(self, api: str, token: str, workers: int, poll: float):
+    def __init__(self, api: str, token: str, workers: int, poll: float, proxy: str = ""):
         self.api = api.rstrip("/")
         self.token = token
         self.workers = workers
         self.poll = poll
+        # Corporate networks often block direct outbound :443 ("All connection
+        # attempts failed"). Route httpx through the proxy if given (or via the
+        # standard HTTPS_PROXY env var, which httpx reads by default).
+        self.proxy = proxy or os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY") or ""
         self.agent_id = f"{socket.gethostname()}:{os.getpid()}"
         self.h = {"X-Agent-Token": token, "Content-Type": "application/json"}
+
+    def _client(self) -> httpx.AsyncClient:
+        kw: dict = {"timeout": 30}
+        if self.proxy:
+            kw["proxy"] = self.proxy
+        return httpx.AsyncClient(**kw)
 
     async def claim(self, client: httpx.AsyncClient):
         r = await client.post(f"{self.api}/api/v1/agent/claim",
@@ -198,10 +208,10 @@ class Agent:
     async def _loop_once(self):
         """One full life of the agent: a process pool + http client + claim loop.
         Returns only on a fatal error (pool/client death); the outer run() restarts."""
-        print(f"agent {self.agent_id} → {self.api}  workers={self.workers}  poll={self.poll}s",
-              flush=True)
+        print(f"agent {self.agent_id} → {self.api}  workers={self.workers}  poll={self.poll}s"
+              + (f"  proxy={self.proxy}" if self.proxy else ""), flush=True)
         with ProcessPoolExecutor(max_workers=self.workers) as pool:
-            async with httpx.AsyncClient() as client:
+            async with self._client() as client:
                 idle_note = True
                 while True:
                     try:
@@ -249,6 +259,9 @@ def main():
     ap.add_argument("--workers", type=int,
                     default=int(os.environ.get("OPT_AGENT_WORKERS", "0")) or max(1, (os.cpu_count() or 4) - 2))
     ap.add_argument("--poll", type=float, default=float(os.environ.get("OPT_AGENT_POLL", "5")))
+    ap.add_argument("--proxy", default=os.environ.get("OPT_AGENT_PROXY", ""),
+                    help="HTTP(S) proxy URL for outbound, e.g. http://proxy.corp:8080 "
+                         "(falls back to HTTPS_PROXY/HTTP_PROXY env)")
     ap.add_argument("--log", default=os.environ.get("OPT_AGENT_LOG",
                     os.path.join(os.environ.get("TEMP", "."), "shectory_opt_agent.log")))
     args = ap.parse_args()
@@ -257,7 +270,7 @@ def main():
     if not args.token:
         print("ERROR: set OPT_AGENT_TOKEN (env) or --token", file=sys.stderr)
         sys.exit(2)
-    asyncio.run(Agent(args.api, args.token, args.workers, args.poll).run())
+    asyncio.run(Agent(args.api, args.token, args.workers, args.poll, args.proxy).run())
 
 
 if __name__ == "__main__":

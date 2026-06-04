@@ -17,12 +17,14 @@
 
   let {
     result, symbol, strategy = null, dateFrom, dateTo, pointValue = 1, defaultInterval = 60,
-    openOrders = [], plannedOrders = [],
+    openOrders = [], plannedOrders = [], taker = true,
   }: {
     result: any; symbol: string; strategy?: any; dateFrom: string; dateTo: string;
     pointValue?: number; defaultInterval?: number;
     openOrders?: Array<{ side: string; price: number; qty: number; order_id?: string }>;
     plannedOrders?: Array<{ side: string; price: number; qty: number; reason?: string }>;
+    // taker=true → backtest (exchange fee + broker); false → live (maker, broker only).
+    taker?: boolean;
   } = $props();
 
   // Trade triangle colors — distinct teal/rose tonality, brighter than candles.
@@ -317,7 +319,8 @@
 
       const fills = toFills(result?.trades);
       const { roundTrips } = replay(fills);
-      const events = tradeEvents(fills, resampleMin * 60, pointValue);
+      // taker prop decides model: backtest = taker (exchange+broker), live = maker.
+      const events = tradeEvents(fills, resampleMin * 60, pointValue, symbol, taker);
 
       // triangles at exact fill price + hover index; closing fills tinted TP/SL
       const pm = priceMarkers(events, { buy: BUY_COLOR, sell: SELL_COLOR, tp: TP_COLOR, sl: SL_COLOR });
@@ -466,7 +469,7 @@
           <div class="st-row"><span>Прибыль TP</span><b class="pos">{fmtMoney(exits.tpPnl)}</b></div>
           <div class="st-row"><span>Убыток SL</span><b class="neg">{fmtMoney(exits.slPnl)}</b></div>
         {/if}
-        <div class="st-foot">Суммы в ₽, за вычетом комиссии 4 ₽/заявка (тейкер)</div>
+        <div class="st-foot">Суммы в ₽, за вычетом комиссии: {taker ? 'тейкер (биржа + брокер 0,45 ₽)' : 'мейкер (брокер 0,45 ₽/контракт)'}</div>
       </div>
     {/if}
 

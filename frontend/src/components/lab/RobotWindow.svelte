@@ -46,7 +46,8 @@
   let openInfo = $state<string | null>(null);
   let hoverInfo = $state<string | null>(null);
   // Net per-close events (rubles, commission deducted) — single source for money.
-  let events = $derived(tradeEvents(chartFills, 60, pv));
+  // Live = MAKER model (limit orders rest in book): only broker fee, no exchange fee.
+  let events = $derived(tradeEvents(chartFills, 60, pv, live?.symbol ?? '', false));
   let closes = $derived(events.filter(e => e.close).map(e => e.close!));
 
   // Ruble equity curve from realized close PnL (NET of commission).
@@ -140,6 +141,7 @@
             dateTo={live.date_to}
             pointValue={pv}
             defaultInterval={5}
+            taker={false}
             openOrders={live.open_orders ?? []}
             plannedOrders={live.planned_orders ?? []}
           />

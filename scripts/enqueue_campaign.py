@@ -38,8 +38,15 @@ DATE_TO = "2026-05-24T00:00:00Z"
 FK_ROBOT_ID = "robot-supertrend-rts-01"
 
 
-async def top_instruments(n: int) -> list[str]:
-    """Top-n FORTS futures by today's turnover (front contract per asset), via ISS."""
+# Assets that MUST be in every campaign regardless of turnover ranking. RTS (the
+# RI index future) is required in all backtests of all strategies.
+ALWAYS_ASSETS = ["RTS"]
+
+
+async def top_instruments(n: int, always: list[str] | None = None) -> list[str]:
+    """Top-n FORTS futures by today's turnover (front contract per asset), via ISS.
+    Front contracts of `always` assets (e.g. RTS/RI) are force-included even if
+    they fall outside the top-n, so RI is in every campaign."""
     import httpx
     url = ("https://iss.moex.com/iss/engines/futures/markets/forts/securities.json"
            "?iss.meta=off&iss.only=securities,marketdata"
@@ -59,13 +66,19 @@ async def top_instruments(n: int) -> list[str]:
         vt = turn.get(sid, 0) or 0
         cur = by_asset.get(asset)
         if cur is None:
-            by_asset[asset] = {"front": sid, "ltd": ltd, "turn": vt}
+            by_asset[asset] = {"asset": asset, "front": sid, "ltd": ltd, "turn": vt}
         else:
             cur["turn"] += vt
             if ltd and (cur["ltd"] is None or ltd < cur["ltd"]):
                 cur["front"], cur["ltd"] = sid, ltd
     ranked = sorted(by_asset.values(), key=lambda x: x["turn"], reverse=True)
-    return [a["front"] for a in ranked[:n] if a["turn"] > 0]
+    syms = [a["front"] for a in ranked[:n] if a["turn"] > 0]
+    # Force-include the front contract of every `always` asset (dedup, keep order).
+    for asset in (always or []):
+        a = by_asset.get(asset)
+        if a and a["front"] not in syms:
+            syms.append(a["front"])
+    return syms
 
 
 def build_grid(strat: dict, cap: int) -> dict:
@@ -102,7 +115,7 @@ async def main():
     async with pool.acquire() as conn:
         await conn.set_type_codec("jsonb", encoder=json.dumps, decoder=json.loads, schema="pg_catalog")
 
-    syms = await top_instruments(args.instruments)
+    syms = await top_instruments(args.instruments, always=ALWAYS_ASSETS)
     strategies = list_strategies()
     print(f"campaign {args.campaign}: {len(strategies)} strategies × {len(syms)} symbols")
     print("symbols:", ", ".join(syms))

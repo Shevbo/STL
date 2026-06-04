@@ -5,7 +5,8 @@ import os
 from types import ModuleType
 from typing import Any
 
-from trader.lab.runtime import BacktestRuntime, Bar, TAKER_COMMISSION
+from trader.lab.commission import commission_for
+from trader.lab.runtime import BacktestRuntime, Bar
 
 
 def _demote_to_background() -> None:
@@ -35,14 +36,16 @@ def _demote_to_background() -> None:
 
 def compute_metrics(trades: list[dict], initial_equity: float,
                     point_value: float = 1.0,
-                    commission: float = TAKER_COMMISSION) -> dict[str, Any]:
+                    symbol: str = "") -> dict[str, Any]:
     """
     Round-trip metrics. PnL per pair is multiplied by point_value so all money
     figures are in RUBLES (RIM6 ~1.42 ₽/point). Handles both long (buy→sell) and
-    short (sell→buy) round-trips by tracking signed entry. Each order is a taker
-    fill costing `commission` rubles: the entry fill's fee and the closing fill's
-    fee are both charged to the round-trip it belongs to, so per-pair PnL and all
-    aggregates (net_profit, win_rate, drawdown) are net of commission.
+    short (sell→buy) round-trips by tracking signed entry. Backtests model every
+    fill as a TAKER order, so each fill's commission = MOEX exchange fee (by
+    instrument group, on notional) + broker fee. The entry fill's fee and the
+    closing fill's fee are both charged to the round-trip they belong to, so
+    per-pair PnL and all aggregates (net_profit, win_rate, drawdown) are net of
+    commission. (Live trading is maker-only — see LiveRuntime.)
     """
     empty = {"total_trades": 0, "win_rate": 0.0, "total_return": 0.0,
              "sharpe": None, "max_drawdown": 0.0, "recovery_factor": None,
@@ -54,22 +57,23 @@ def compute_metrics(trades: list[dict], initial_equity: float,
     entry = None        # (signed_qty, price, fee_carried) — entry commission carried to the close
     for t in trades:
         q = t["qty"] * (1 if t["side"] == "buy" else -1)
+        c = commission_for(symbol, t["price"], t["qty"], point_value, taker=True)
         if entry is None:
-            entry = [q, t["price"], commission]   # this opening fill's fee
+            entry = [q, t["price"], c]            # this opening fill's fee
             continue
         eq, ep, fee = entry
         if (eq > 0) == (q > 0):          # same direction → average in
             tot = eq + q
             ep = (ep * eq + t["price"] * q) / tot if tot != 0 else t["price"]
-            entry = [tot, ep, fee + commission]   # averaging fill adds a fee
+            entry = [tot, ep, fee + c]            # averaging fill adds a fee
         else:                            # opposite → close
             closed = min(abs(eq), abs(q))
             gross = (t["price"] - ep) * (1 if eq > 0 else -1) * closed * point_value
             # Net of: this closing fill's fee + the carried entry/averaging fees.
-            pairs.append(gross - commission - fee)
+            pairs.append(gross - c - fee)
             rem = eq + q
             # Leftover (reverse/partial) carries one fee for its remaining entry.
-            entry = [rem, t["price"], commission] if rem != 0 else None
+            entry = [rem, t["price"], c] if rem != 0 else None
 
     if not pairs:
         return empty
@@ -139,7 +143,7 @@ async def run_single_backtest(
         {"side": o.side, "price": o.fill_price or o.price, "qty": o.qty, "time": o.fill_time}
         for o in await runtime.get_orders()
     ]
-    metrics = compute_metrics(trades, initial_equity, point_value)
+    metrics = compute_metrics(trades, initial_equity, point_value, symbol=symbol)
     return {"trades": trades, "equity_curve": equity_curve, **metrics}
 
 

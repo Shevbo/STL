@@ -156,45 +156,79 @@ const KIND_LABEL: Record<TradeEvent['kind'], string> = {
   reverse: 'Реверс',
 };
 
-// Flat taker commission per order, rubles (FORTS, limit-only). Mirrors backend.
-export const TAKER_COMMISSION = 4;
+// FORTS commission model — mirrors trader/lab/commission.py.
+//   taker (backtest, market/cross spread) = MOEX exchange fee (by group, on
+//     notional) + broker fee.
+//   maker (live, limit resting in book)    = broker fee only.
+const BROKER_FEE_PER_CONTRACT = 0.45;
+const MOEX_TAKER_RATE: Record<string, number> = {
+  fx: 0.0000462, index: 0.0000660, stock: 0.0001980,
+  commodity: 0.0001320, rate: 0.0001650,
+};
+const TICKER_GROUP: Record<string, string> = {
+  RI: 'index', MX: 'index', MM: 'index', RV: 'index',
+  SI: 'fx', EU: 'fx', CR: 'fx', CN: 'fx', ED: 'fx', UC: 'fx',
+  AE: 'fx', GB: 'fx', JP: 'fx', TR: 'fx',
+  GZ: 'stock', SR: 'stock', VB: 'stock', LK: 'stock', GM: 'stock',
+  RN: 'stock', MN: 'stock', NK: 'stock', TT: 'stock', AF: 'stock',
+  FE: 'stock', CH: 'stock', PL: 'stock', TN: 'stock', MG: 'stock',
+  SG: 'stock', BS: 'stock', YN: 'stock', PO: 'stock', HY: 'stock',
+  BR: 'commodity', GD: 'commodity', SV: 'commodity', PD: 'commodity',
+  PT: 'commodity', NG: 'commodity', CU: 'commodity', AL: 'commodity',
+  GL: 'commodity', SA: 'commodity', SL: 'commodity',
+};
+function feeGroup(symbol: string): string {
+  const base = (symbol || '').split('@')[0].split('-')[0].trim().toUpperCase().slice(0, 2);
+  return TICKER_GROUP[base] ?? 'index';
+}
+// Commission (rubles) for ONE fill of qty contracts of symbol.
+export function commissionFor(symbol: string, price: number, qty: number, pointValue = 1, taker = true): number {
+  const q = Math.abs(qty) || 1;
+  const broker = BROKER_FEE_PER_CONTRACT * q;
+  if (!taker) return broker;
+  const notional = Math.abs(price) * (pointValue || 1);
+  const rate = MOEX_TAKER_RATE[feeGroup(symbol)] ?? MOEX_TAKER_RATE.index;
+  return broker + rate * notional * q;
+}
 
 // Walk fills, classify each by what it does to the running position, bucket time
 // to candle time, and on closing fills compute hold time, max contracts in the
-// episode, and realized PnL (rubles, via pointValue) NET of commission. Each fill
-// is a taker order costing `commission`; the entry/averaging fees are carried and
-// charged to the round-trip on its close (same accounting as backend compute_metrics).
-export function tradeEvents(trades: Fill[], bucketSecs: number, pointValue = 1, commission = TAKER_COMMISSION): TradeEvent[] {
+// episode, and realized PnL (rubles, via pointValue) NET of commission. Each fill's
+// commission uses the taker/maker model above (backtest=taker, live=maker); the
+// entry/averaging fees are carried and charged to the round-trip on its close
+// (same accounting as backend compute_metrics).
+export function tradeEvents(trades: Fill[], bucketSecs: number, pointValue = 1, symbol = '', taker = true): TradeEvent[] {
   let pos = 0, avg = 0, epStart = 0, epMaxAbs = 0, carriedFee = 0;
   const out: TradeEvent[] = [];
   const sorted = [...trades].sort((a, b) => a.time - b.time);
   for (const t of sorted) {
     const q = Number(t.qty) || 1;
     const signed = t.side === 'buy' ? q : -q;
+    const c = commissionFor(symbol, t.price, q, pointValue, taker);
     let kind: TradeEvent['kind'];
     let close: TradeEvent['close'];
 
     if (pos === 0) {
       kind = 'open'; avg = t.price; epStart = t.time; epMaxAbs = q; pos = signed;
-      carriedFee = commission;                  // opening fill's fee
+      carriedFee = c;                           // opening fill's fee
     } else if (Math.sign(pos) === Math.sign(signed)) {
       kind = 'average';
       avg = (avg * Math.abs(pos) + t.price * q) / (Math.abs(pos) + q);
       pos += signed; epMaxAbs = Math.max(epMaxAbs, Math.abs(pos));
-      carriedFee += commission;                 // averaging fill's fee
+      carriedFee += c;                          // averaging fill's fee
     } else {
       const dir = Math.sign(pos);
       const closeQty = Math.min(Math.abs(pos), q);
       const pnlPts = dir > 0 ? (t.price - avg) * closeQty : (avg - t.price) * closeQty;
       // Net of: this closing fill's fee + carried entry/averaging fees.
-      const pnl = pnlPts * pointValue - commission - carriedFee;
+      const pnl = pnlPts * pointValue - c - carriedFee;
       const isPartial = q < Math.abs(pos);
       close = { holdSecs: t.time - epStart, maxContracts: epMaxAbs, pnl, ...exitLabel(pnl, isPartial) };
       if (isPartial) { kind = 'partial'; pos += signed; }
       else if (q === Math.abs(pos)) { kind = 'full'; pos = 0; avg = 0; carriedFee = 0; }
       else {
         kind = 'reverse'; pos += signed;        // flips through zero (full close + new open)
-        avg = t.price; epStart = t.time; epMaxAbs = Math.abs(pos); carriedFee = commission;
+        avg = t.price; epStart = t.time; epMaxAbs = Math.abs(pos); carriedFee = c;
       }
     }
 
