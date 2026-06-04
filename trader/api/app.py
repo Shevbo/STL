@@ -280,6 +280,20 @@ def _campaign_candidate(r: dict) -> bool:
             and (r.get("max_drawdown") or 9) <= 0.15 and 30 <= (r.get("total_trades") or 0) <= 3000)
 
 
+def _is_sweep_run(run_id: str) -> bool:
+    """A sweep run (metrics-only, mirrored to the leaderboard): plain campaign
+    (camp-...) or adaptive optimizer (opt-...). UI chart runs use a bare cuid."""
+    return bool(run_id) and (run_id.startswith("camp-") or run_id.startswith("opt-"))
+
+
+def _sweep_campaign(run_id: str) -> str | None:
+    """Campaign id = first 3 dash-parts of a sweep run_id (e.g. opt-20260605-1200)."""
+    if not _is_sweep_run(run_id):
+        return None
+    parts = run_id.split("-")
+    return "-".join(parts[:3]) if len(parts) >= 3 else run_id
+
+
 async def _run_remote_job_on_vds(row, app_state) -> None:
     """Compute one queued remote sweep job locally on the VDS, metrics-only into the
     leaderboard (same shape as the agent). Serialized + capped + idle-priority."""
@@ -307,11 +321,17 @@ async def _run_remote_job_on_vds(row, app_state) -> None:
                     "finished_at=now() WHERE id=$1", run_id)
                 return
 
-            grid = job.get("paramsGrid", {})
-            keys = list(grid.keys())
-            values = [grid[k] if isinstance(grid[k], list) else [grid[k]] for k in keys]
-            combos = list(itertools.product(*values))
-            param_sets = [{**base_params, **dict(zip(keys, c))} for c in combos][:_FB_MAX_COMBOS]
+            # Explicit combos (random explore / unioned refine grids) take priority;
+            # otherwise expand the product grid. Cap either way.
+            ps_list = job.get("param_sets")
+            if ps_list:
+                param_sets = [{**base_params, **ps} for ps in ps_list][:_FB_MAX_COMBOS]
+            else:
+                grid = job.get("paramsGrid", {})
+                keys = list(grid.keys())
+                values = [grid[k] if isinstance(grid[k], list) else [grid[k]] for k in keys]
+                combos = list(itertools.product(*values))
+                param_sets = [{**base_params, **dict(zip(keys, c))} for c in combos][:_FB_MAX_COMBOS]
 
             bars = await asyncio.wait_for(
                 _fetch_bars_for_backtest(symbol, job.get("dateFrom"), job.get("dateTo"), app_state),
@@ -338,10 +358,7 @@ async def _run_remote_job_on_vds(row, app_state) -> None:
 
             m = _re.search(r"make_on_bar\('([a-z_]+)'\)", script_code or "")
             strat_id = m.group(1) if m else None
-            campaign = None
-            if run_id.startswith("camp-"):
-                parts = run_id.split("-")
-                campaign = "-".join(parts[:3]) if len(parts) >= 3 else run_id
+            campaign = _sweep_campaign(run_id)
             if strat_id:
                 async with pool.acquire() as conn:
                     async with conn.transaction():
@@ -1349,6 +1366,9 @@ def create_app() -> FastAPI:
             "symbol": row["symbol"] or base_params.get("symbol", ""),
             "script_code": script_code,
             "base_params": base_params,
+            # Explicit combos (random explore / unioned refine grids) — when present
+            # the agent runs them directly instead of expanding params_grid.
+            "param_sets": job.get("param_sets"),
             "params_grid": job.get("paramsGrid", {}),
             "date_from": job.get("dateFrom"),
             "date_to": job.get("dateTo"),
@@ -1388,12 +1408,8 @@ def create_app() -> FastAPI:
             import re as _re
             m = _re.search(r"make_on_bar\('([a-z_]+)'\)", sc)
             strat_id = m.group(1) if m else None
-            # run_id = "camp-YYYYMMDD-HHMM-<strat>-<sym>" → campaign = first 3 parts.
-            if run_id.startswith("camp-"):
-                parts = run_id.split("-")
-                campaign = "-".join(parts[:3]) if len(parts) >= 3 else run_id
-            else:
-                campaign = None
+            # sweep run_id = "<camp|opt>-YYYYMMDD-HHMM-..." → campaign = first 3 parts.
+            campaign = _sweep_campaign(run_id)
 
         def _score(r):
             return (r.get("sharpe") or 0) + 3 * (r.get("total_return") or 0) - 2 * (r.get("max_drawdown") or 0)
@@ -1403,9 +1419,10 @@ def create_app() -> FastAPI:
 
         # Campaign runs (strat_id set) write ONLY the compact leaderboard row — the
         # bulky per-combo trades/equity arrays would hammer the small VDS Postgres
-        # (this is what overloaded the box). UI/chart runs (no strat_id) keep full
-        # backtest_results so the chart can render trades + equity.
-        is_campaign = bool(strat_id)
+        # (this is what overloaded the box). A sweep run (camp-/opt-) stores metrics
+        # only; a UI/chart run (bare cuid) keeps full backtest_results so the chart
+        # can render trades + equity even though its script_code also has make_on_bar.
+        is_campaign = bool(strat_id) and _is_sweep_run(run_id)
         async with pool.acquire() as conn:
             async with conn.transaction():
                 if not is_campaign:

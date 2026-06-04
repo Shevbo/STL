@@ -200,7 +200,14 @@ class Agent:
             bars_data = [{"time": b.time, "open": b.open, "high": b.high,
                           "low": b.low, "close": b.close, "volume": b.volume} for b in bars]
 
-            param_sets = self._expand(job["base_params"], job["params_grid"])
+            # Explicit combos (random explore / unioned refine grids) run as-is;
+            # otherwise expand the product grid.
+            ps_list = job.get("param_sets")
+            if ps_list:
+                base = job.get("base_params", {})
+                param_sets = [{**base, **ps} for ps in ps_list]
+            else:
+                param_sets = self._expand(job["base_params"], job["params_grid"])
             print(f"[{run_id}] {symbol} {len(bars)} bars × {len(param_sets)} combos "
                   f"on {self.workers} workers", flush=True)
 
@@ -215,9 +222,9 @@ class Agent:
             ok = sum(1 for r in results if r.get("ok"))
             print(f"[{run_id}] done {ok}/{len(results)} in {dt:.1f}s "
                   f"({len(results)/dt:.0f} combos/s)", flush=True)
-            # Campaign runs only need metrics for the leaderboard — strip the bulky
-            # trades + equity_curve arrays so we don't flood the small VDS Postgres.
-            if run_id.startswith("camp-"):
+            # Sweep runs (camp-/opt-) only need metrics for the leaderboard — strip the
+            # bulky trades + equity_curve arrays so we don't flood the small VDS Postgres.
+            if run_id.startswith("camp-") or run_id.startswith("opt-"):
                 for e in results:
                     if e.get("ok"):
                         e["result"].pop("trades", None)
