@@ -82,6 +82,13 @@
   const fmtTs = (ts: number) => new Date(ts * 1000).toLocaleString('ru-RU', {
     timeZone: 'UTC', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
   });
+  const fmtDay = (ts: number) => new Date(ts * 1000).toLocaleDateString('ru-RU', {
+    timeZone: 'UTC', day: '2-digit', month: '2-digit', year: '2-digit',
+  });
+  let periodLabel = $state('');   // actual loaded data span, shown in the header
+
+  // Reset zoom to show the WHOLE test period (all bars) on screen.
+  function fitAll() { try { tvCandle?.timeScale().fitContent(); } catch { /* not ready */ } }
 
   async function loadMeta() {
     try {
@@ -316,6 +323,7 @@
       candleSeries.setData(bars.map(b => ({ time: b.time, open: b.open, high: b.high, low: b.low, close: b.close })));
       volumeSeries.setData(bars.map(b => ({ time: b.time, value: b.volume, color: b.close >= b.open ? '#26a65b20' : '#c0392b20' })));
       barCount = bars.length;
+      periodLabel = `${fmtDay(bars[0].time)} — ${fmtDay(bars[bars.length - 1].time)}`;
 
       const fills = toFills(result?.trades);
       const { roundTrips } = replay(fills);
@@ -342,8 +350,22 @@
         ? result.equity_curve
         : (typeof result?.equity_curve === 'string' ? JSON.parse(result.equity_curve) : []);
       if (eq.length) {
-        equitySeries.applyOptions({ baseValue: { type: 'price', price: eq[0].equity } });
-        equitySeries.setData(eq.map(p => ({ time: p.time, value: p.equity })));
+        // Align equity to the CANDLE bucket times: lightweight-charts spaces bars by
+        // index (not by time), so two charts only line up if they share the exact
+        // same time/index set. Carry the last equity value forward onto each candle
+        // time → one equity point per candle → axis + curve match the price chart
+        // pixel-for-pixel across the whole period (no more scale "чехарда").
+        const sorted = [...eq].sort((a, b) => a.time - b.time);
+        const base = sorted[0].equity;
+        let j = 0, lastEq = base;
+        const aligned = bars.map(b => {
+          while (j < sorted.length && sorted[j].time <= b.time) { lastEq = sorted[j].equity; j++; }
+          return { time: b.time, value: lastEq };
+        });
+        equitySeries.applyOptions({ baseValue: { type: 'price', price: base } });
+        equitySeries.setData(aligned);
+      } else {
+        equitySeries.setData([]);
       }
 
       stats = computeStats(fills, roundTrips, eq);
@@ -408,6 +430,7 @@
   <!-- Pinned control header: never wraps, fixed position above the chart. -->
   <div class="bt-header">
     <span class="bt-symbol">{symbol}</span>
+    {#if periodLabel}<span class="bt-period" title="Период теста">{periodLabel}</span>{/if}
     {#if strategy}
       <a class="bt-strategy" href={strategy.source} target="_blank" rel="noopener">{strategy.name} ↗</a>
     {/if}
@@ -423,6 +446,7 @@
     <!-- Interval block pinned at the far right; the crosshair date/time is NOT
          here (it would shift these buttons). It lives in an on-chart overlay. -->
     <div class="bt-intervals">
+      <button class="bt-fit" title="Показать весь период теста" onclick={fitAll}>Весь период</button>
       {#each INTERVALS as iv}
         <button class:active={resampleMin === iv.v} onclick={() => pickInterval(iv.v)}>{iv.label}</button>
       {/each}
@@ -500,6 +524,7 @@
     min-height: 30px;
   }
   .bt-symbol { font-size: 13px; color: #4caf50; font-weight: 600; flex-shrink: 0; }
+  .bt-period { font-size: 10px; color: #9ab; background: #12203a; border: 1px solid #24406a; border-radius: 3px; padding: 1px 7px; white-space: nowrap; flex-shrink: 0; }
   .bt-strategy { font-size: 11px; color: #6aa8ff; text-decoration: none; flex-shrink: 0; }
   .bt-strategy:hover { text-decoration: underline; }
   .bt-params { display: flex; gap: 4px; overflow: hidden; flex-shrink: 1; min-width: 0; }
@@ -512,6 +537,8 @@
   .bt-intervals button { background: transparent; color: #555; border: 1px solid transparent; font-size: 10px; padding: 2px 7px; border-radius: 3px; cursor: pointer; }
   .bt-intervals button:hover { color: #aaa; }
   .bt-intervals button.active { color: #4caf50; border-color: #4caf5066; background: #4caf5012; }
+  .bt-intervals button.bt-fit { color: #9ab; border-color: #24406a; background: #12203a; margin-right: 6px; }
+  .bt-intervals button.bt-fit:hover { color: #cfe; border-color: #6aa8ff66; }
 
   .bt-candle-area { position: relative; flex: 1; min-height: 0; }
   .candle { position: absolute; inset: 0; }
