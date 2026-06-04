@@ -37,6 +37,31 @@ try:
 except Exception:
     pass
 
+
+def _tee_log(path: str) -> None:
+    """Mirror stdout/stderr to a rotating-ish log file (truncate if >5MB) so the
+    agent is observable when launched headless by Task Scheduler (no console)."""
+    try:
+        if os.path.exists(path) and os.path.getsize(path) > 5_000_000:
+            open(path, "w").close()
+        f = open(path, "a", encoding="utf-8", errors="replace", buffering=1)
+
+        class _Tee:
+            def __init__(self, *streams): self.streams = streams
+            def write(self, s):
+                for st in self.streams:
+                    try: st.write(s); st.flush()
+                    except Exception: pass
+            def flush(self):
+                for st in self.streams:
+                    try: st.flush()
+                    except Exception: pass
+        sys.stdout = _Tee(sys.stdout, f)
+        sys.stderr = _Tee(sys.stderr, f)
+    except Exception:
+        pass
+
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import httpx  # noqa: E402
@@ -163,7 +188,9 @@ class Agent:
             except Exception:
                 pass
 
-    async def run(self):
+    async def _loop_once(self):
+        """One full life of the agent: a process pool + http client + claim loop.
+        Returns only on a fatal error (pool/client death); the outer run() restarts."""
         print(f"agent {self.agent_id} → {self.api}  workers={self.workers}  poll={self.poll}s",
               flush=True)
         with ProcessPoolExecutor(max_workers=self.workers) as pool:
@@ -172,7 +199,7 @@ class Agent:
                 while True:
                     try:
                         job = await self.claim(client)
-                    except Exception as exc:  # noqa: BLE001
+                    except Exception as exc:  # noqa: BLE001 — DNS/network/5xx: keep polling
                         print(f"claim error: {exc}", flush=True)
                         await asyncio.sleep(self.poll)
                         continue
@@ -183,7 +210,29 @@ class Agent:
                         await asyncio.sleep(self.poll)
                         continue
                     idle_note = True
-                    await self.process(client, job, pool)
+                    try:
+                        await self.process(client, job, pool)
+                    except Exception as exc:  # noqa: BLE001 — never let one job kill the loop
+                        print(f"process error (continuing): {exc}", flush=True)
+                        await asyncio.sleep(self.poll)
+
+    async def run(self):
+        """Supervisor: the agent must NEVER exit on its own. Any fatal error in a
+        loop life (pool crash, client teardown) is caught and the loop restarts
+        after a short backoff. Stop only via Ctrl+C / process kill."""
+        backoff = 5
+        while True:
+            try:
+                await self._loop_once()
+            except KeyboardInterrupt:
+                print("stopped (KeyboardInterrupt)", flush=True)
+                return
+            except Exception as exc:  # noqa: BLE001
+                print(f"FATAL loop error, restarting in {backoff}s: {exc}", flush=True)
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 60)
+            else:
+                backoff = 5
 
 
 def main():
@@ -193,7 +242,11 @@ def main():
     ap.add_argument("--workers", type=int,
                     default=int(os.environ.get("OPT_AGENT_WORKERS", "0")) or max(1, (os.cpu_count() or 4) - 2))
     ap.add_argument("--poll", type=float, default=float(os.environ.get("OPT_AGENT_POLL", "5")))
+    ap.add_argument("--log", default=os.environ.get("OPT_AGENT_LOG",
+                    os.path.join(os.environ.get("TEMP", "."), "shectory_opt_agent.log")))
     args = ap.parse_args()
+    if args.log:
+        _tee_log(args.log)
     if not args.token:
         print("ERROR: set OPT_AGENT_TOKEN (env) or --token", file=sys.stderr)
         sys.exit(2)
