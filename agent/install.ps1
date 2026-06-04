@@ -19,7 +19,8 @@ param(
   [string]$Token = "",
   [string]$Api = "https://stl.shectory.ru",
   [int]$Workers = 0,          # 0 = auto (cores - 2)
-  [string]$Python = ""        # path to python.exe; auto-detected if empty
+  [string]$Python = "",       # path to python.exe; auto-detected if empty
+  [string]$Proxy = ""         # http://[user:pass@]host:port — if pip must go via proxy
 )
 
 $ErrorActionPreference = "Stop"
@@ -53,8 +54,18 @@ if ($venvBroken) {
   & $Python -m venv $venv
 }
 Write-Host "Installing requirements…"
-& $venvPy -m pip install --quiet --upgrade pip
-& $venvPy -m pip install --quiet -r (Join-Path $agentDir "requirements.txt")
+# Corporate proxies often do TLS interception (self-signed cert in chain) → pip
+# SSLError. --trusted-host skips cert check for PyPI; --proxy routes via the proxy.
+$pipArgs = @("--trusted-host","pypi.org","--trusted-host","files.pythonhosted.org","--trusted-host","pypi.python.org")
+if ($Proxy) { $pipArgs += @("--proxy",$Proxy) }
+elseif ($env:HTTPS_PROXY) { $pipArgs += @("--proxy",$env:HTTPS_PROXY) }
+elseif ($env:HTTP_PROXY)  { $pipArgs += @("--proxy",$env:HTTP_PROXY) }
+& $venvPy -m pip install @pipArgs --disable-pip-version-check -r (Join-Path $agentDir "requirements.txt")
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "pip failed. If behind a proxy, re-run with -Proxy http://user:pass@host:port" -ForegroundColor Yellow
+  Write-Host "Or pre-install offline: copy httpx+pydantic wheels and 'pip install <wheel>'." -ForegroundColor Yellow
+  exit 1
+}
 
 # 3. token + api into user env
 if (-not $Token) { $Token = [Environment]::GetEnvironmentVariable("OPT_AGENT_TOKEN","User") }
