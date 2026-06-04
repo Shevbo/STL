@@ -1135,22 +1135,29 @@ def create_app() -> FastAPI:
             return ((r.get("total_return") or 0) > 0 and (r.get("sharpe") or -9) >= 0.5
                     and (r.get("max_drawdown") or 9) <= 0.15 and 30 <= (r.get("total_trades") or 0) <= 3000)
 
+        # Campaign runs (strat_id set) write ONLY the compact leaderboard row — the
+        # bulky per-combo trades/equity arrays would hammer the small VDS Postgres
+        # (this is what overloaded the box). UI/chart runs (no strat_id) keep full
+        # backtest_results so the chart can render trades + equity.
+        is_campaign = bool(strat_id)
         async with pool.acquire() as conn:
             async with conn.transaction():
-                await conn.execute("DELETE FROM backtest_results WHERE run_id=$1", run_id)
+                if not is_campaign:
+                    await conn.execute("DELETE FROM backtest_results WHERE run_id=$1", run_id)
                 for entry in results:
                     if not entry.get("ok"):
                         continue
                     r = entry["result"]
-                    await conn.execute(
-                        """INSERT INTO backtest_results
-                           (id, run_id, params, trades, equity_curve, sharpe, max_drawdown, win_rate, total_return, total_trades)
-                           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)""",
-                        cuid(), run_id, entry["params"],
-                        r.get("trades", []), r.get("equity_curve", []),
-                        r.get("sharpe"), r.get("max_drawdown"), r.get("win_rate"),
-                        r.get("total_return"), r.get("total_trades"),
-                    )
+                    if not is_campaign:
+                        await conn.execute(
+                            """INSERT INTO backtest_results
+                               (id, run_id, params, trades, equity_curve, sharpe, max_drawdown, win_rate, total_return, total_trades)
+                               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)""",
+                            cuid(), run_id, entry["params"],
+                            r.get("trades", []), r.get("equity_curve", []),
+                            r.get("sharpe"), r.get("max_drawdown"), r.get("win_rate"),
+                            r.get("total_return"), r.get("total_trades"),
+                        )
                     if strat_id:
                         try:
                             await conn.execute(

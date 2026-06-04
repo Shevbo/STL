@@ -180,6 +180,13 @@ class Agent:
             ok = sum(1 for r in results if r.get("ok"))
             print(f"[{run_id}] done {ok}/{len(results)} in {dt:.1f}s "
                   f"({len(results)/dt:.0f} combos/s)", flush=True)
+            # Campaign runs only need metrics for the leaderboard — strip the bulky
+            # trades + equity_curve arrays so we don't flood the small VDS Postgres.
+            if run_id.startswith("camp-"):
+                for e in results:
+                    if e.get("ok"):
+                        e["result"].pop("trades", None)
+                        e["result"].pop("equity_curve", None)
             await self.post_result(client, {"run_id": run_id, "results": results})
         except Exception as exc:  # noqa: BLE001
             print(f"[{run_id}] FAILED: {exc}", flush=True)
