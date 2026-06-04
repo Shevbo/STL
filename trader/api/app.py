@@ -119,6 +119,20 @@ async def lifespan(app: FastAPI):
     app.state.scheduler = scheduler
     app.state.db_pool = db_pool
 
+    # A restart kills any in-flight local backtest task, but its DB row stays
+    # status='running' forever (orphan) and — worse — a hung task holds the
+    # in-process backtest lock. On a clean start there are no live local tasks,
+    # so any leftover 'running' local run is an orphan: fail it so the UI stops
+    # polling it and the catalog/leaderboard stay truthful.
+    if db_pool is not None:
+        try:
+            await db_pool.execute(
+                "UPDATE backtest_runs SET status='failed', error_msg='orphaned by restart', "
+                "finished_at=now() WHERE engine='local' AND status='running'"
+            )
+        except Exception as exc:
+            log.warning("startup.orphan_reset_failed", error=str(exc))
+
     yield
 
     await scheduler.stop_all()
@@ -165,9 +179,15 @@ async def _run_backtest_task(run_id: str, body: dict, pool, app_state) -> None:
                 )
         if isinstance(base_params, str):
             base_params = json.loads(base_params)
-        bars = await _fetch_bars_for_backtest(
-            body.get("symbol", base_params.get("symbol", "")),
-            body["dateFrom"], body["dateTo"], app_state,
+        # Hard timeout: an uncached symbol pulls months of 1-min bars from ISS, and a
+        # slow/hung ISS response would otherwise pin this task (and the backtest lock)
+        # forever, blocking every later local run and leaving the chart spinning.
+        bars = await asyncio.wait_for(
+            _fetch_bars_for_backtest(
+                body.get("symbol", base_params.get("symbol", "")),
+                body["dateFrom"], body["dateTo"], app_state,
+            ),
+            timeout=150,
         )
         grid = body.get("paramsGrid", {})
         keys = list(grid.keys())
