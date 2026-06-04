@@ -140,10 +140,31 @@
       for (const k of Object.keys(r.params ?? {})) if (k !== 'symbol') set.add(k);
     return [...set];
   });
-  function labelOf(key: string) {
-    const p = (detail?.schema ?? []).find((s: any) => s.key === key);
-    return p?.label || key;
+  function schemaOf(key: string) {
+    return (detail?.schema ?? []).find((s: any) => s.key === key) ?? {};
   }
+  function labelOf(key: string) { return schemaOf(key)?.label || key; }
+  function descOf(key: string) { const s = schemaOf(key); return s?.desc || s?.hint || ''; }
+
+  // Per-parameter sweep spec, derived from the ACTUAL tested values across all
+  // instruments: range (от…до), typical step, and how many distinct values ran.
+  let paramSpecs = $derived.by(() => {
+    const rows = detail?.rows ?? [];
+    return paramCols.map(key => {
+      const vals = [...new Set(rows.map(r => Number(r.params?.[key])).filter(v => Number.isFinite(v)))].sort((a, b) => a - b);
+      const sc = schemaOf(key);
+      let step: number | null = null;   // smallest positive gap between tested values
+      for (let i = 1; i < vals.length; i++) {
+        const d = vals[i] - vals[i - 1];
+        if (d > 0 && (step == null || d < step)) step = d;
+      }
+      return {
+        key, label: sc?.label || key, desc: sc?.desc || sc?.hint || '',
+        min: vals.length ? vals[0] : sc?.min, max: vals.length ? vals[vals.length - 1] : sc?.max,
+        step, count: vals.length, values: vals,
+      };
+    });
+  });
   function cellVal(r: any, col: string) {
     return (r.params && col in r.params) ? r.params[col] : r[col];
   }
@@ -323,6 +344,34 @@
         {:else if detail.rows.length === 0}
           <div class="bs-empty">Для этой стратегии ещё нет результатов кампаний.</div>
         {:else}
+          <!-- Parameter glossary + sweep spec (from .. to .. step .. why) -->
+          <div class="dp-spec">
+            <div class="dp-spec-title">Параметры и сетка перебора</div>
+            <div class="dp-spec-why">
+              Диапазон каждого числового параметра берётся из схемы стратегии (мин…макс),
+              разбивается на ~4–5 шагов; комбинации затем случайно прорежены до лимита на стратегию.
+              Это грубый разведочный скан пространства параметров (in-sample), чтобы найти
+              перспективные зоны для последующего точечного уточнения и форвард-теста — не готовая
+              оптимизация. Каждый прогон считается с тейкерной комиссией (биржа + брокер 0,45 ₽).
+            </div>
+            <table class="dp-spec-table">
+              <thead>
+                <tr><th>Параметр</th><th>Что задаёт</th><th class="num">От</th><th class="num">До</th><th class="num">Шаг</th><th class="num">Значений</th></tr>
+              </thead>
+              <tbody>
+                {#each paramSpecs as p}
+                  <tr>
+                    <td class="ps-name">{p.label}<span class="ps-key">{p.key}</span></td>
+                    <td class="ps-desc">{p.desc || '—'}</td>
+                    <td class="num">{p.min ?? '—'}</td>
+                    <td class="num">{p.max ?? '—'}</td>
+                    <td class="num">{p.step ?? '—'}</td>
+                    <td class="num">{p.count || '—'}</td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
           {#each Object.entries(bySymbol) as [sym, rows]}
             <div class="dp-inst">
               <div class="dp-inst-head">
@@ -334,7 +383,7 @@
                   <thead>
                     <tr>
                       {#each paramCols as col}
-                        <th class="num" onclick={() => setSort(col)}>{labelOf(col)}{sortBy.col === col ? (sortBy.dir === 1 ? ' ▲' : ' ▼') : ''}</th>
+                        <th class="num" title={descOf(col)} onclick={() => setSort(col)}>{labelOf(col)}{sortBy.col === col ? (sortBy.dir === 1 ? ' ▲' : ' ▼') : ''}</th>
                       {/each}
                       <th class="num" onclick={() => setSort('total_return')}>Доходность{sortBy.col === 'total_return' ? (sortBy.dir === 1 ? ' ▲' : ' ▼') : ''}</th>
                       <th class="num" onclick={() => setSort('net_profit')}>Прибыль ₽{sortBy.col === 'net_profit' ? (sortBy.dir === 1 ? ' ▲' : ' ▼') : ''}</th>
@@ -469,6 +518,18 @@
   .dp-sub { font-size: 11px; color: #888; }
   .dp-hint { font-size: 11px; color: #6aa8ff; padding: 6px 12px; background: #0c1020; border-bottom: 1px solid #1e1e3a; flex-shrink: 0; }
   .dp-body { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 16px; }
+
+  .dp-spec { border: 1px solid #24406a; border-radius: 5px; background: #0c1322; overflow: hidden; }
+  .dp-spec-title { font-size: 12px; color: #9cf; font-weight: 600; padding: 8px 10px; border-bottom: 1px solid #1a2a44; }
+  .dp-spec-why { font-size: 11px; color: #89a; line-height: 1.55; padding: 8px 10px; border-bottom: 1px solid #14223a; }
+  .dp-spec-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  .dp-spec-table th { text-align: left; padding: 5px 10px; color: #789; font-weight: 500; background: #0a1120; border-bottom: 1px solid #14223a; }
+  .dp-spec-table th.num, .dp-spec-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .dp-spec-table td { padding: 5px 10px; color: #aaa; border-bottom: 1px solid #101a2e; vertical-align: top; }
+  .dp-spec-table tr:last-child td { border-bottom: none; }
+  .ps-name { color: #cde; white-space: nowrap; }
+  .ps-key { font-family: monospace; font-size: 9px; color: #567; margin-left: 6px; }
+  .ps-desc { color: #9ab; max-width: 520px; line-height: 1.4; }
 
   .dp-inst { border: 1px solid #1e1e3a; border-radius: 5px; overflow: hidden; }
   .dp-inst-head { display: flex; align-items: baseline; gap: 10px; padding: 7px 10px; background: #0f0f1e; border-bottom: 1px solid #1e1e3a; }
