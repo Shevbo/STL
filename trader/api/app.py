@@ -1123,7 +1123,12 @@ def create_app() -> FastAPI:
             import re as _re
             m = _re.search(r"make_on_bar\('([a-z_]+)'\)", sc)
             strat_id = m.group(1) if m else None
-            campaign = run_id.rsplit("-", 2)[0] if run_id.startswith("camp-") else None
+            # run_id = "camp-YYYYMMDD-HHMM-<strat>-<sym>" → campaign = first 3 parts.
+            if run_id.startswith("camp-"):
+                parts = run_id.split("-")
+                campaign = "-".join(parts[:3]) if len(parts) >= 3 else run_id
+            else:
+                campaign = None
 
         def _score(r):
             return (r.get("sharpe") or 0) + 3 * (r.get("total_return") or 0) - 2 * (r.get("max_drawdown") or 0)
@@ -1151,11 +1156,11 @@ def create_app() -> FastAPI:
                         try:
                             await conn.execute(
                                 """INSERT INTO optimization_leaderboard
-                                     (id, campaign_run, strategy, symbol, params, total_return, sharpe,
+                                     (campaign_run, strategy, symbol, params, total_return, sharpe,
                                       max_drawdown, win_rate, total_trades, score, candidate,
                                       net_profit, recovery_factor)
-                                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)""",
-                                cuid(), campaign, strat_id, meta["symbol"], entry["params"],
+                                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)""",
+                                campaign, strat_id, meta["symbol"], entry["params"],
                                 r.get("total_return"), r.get("sharpe"), r.get("max_drawdown"),
                                 r.get("win_rate"), r.get("total_trades"), _score(r), _cand(r),
                                 r.get("net_profit"), r.get("recovery_factor"),
