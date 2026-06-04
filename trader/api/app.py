@@ -1,4 +1,5 @@
 import asyncio
+import os
 from contextlib import asynccontextmanager
 
 import httpx
@@ -133,7 +134,13 @@ async def lifespan(app: FastAPI):
         except Exception as exc:
             log.warning("startup.orphan_reset_failed", error=str(exc))
 
+    # VDS fallback sweeper: drains queued remote sweeps locally (throttled) only when
+    # the i9 agent is down. No-op while the agent claims jobs promptly.
+    fallback_task = asyncio.create_task(_vds_fallback_sweeper(app.state))
+
     yield
+
+    fallback_task.cancel()
 
     await scheduler.stop_all()
     if settings.lab_db_url:
@@ -149,6 +156,20 @@ async def lifespan(app: FastAPI):
 # keeps the box responsive. Hard cap on combos as a second guardrail.
 _BACKTEST_LOCK = asyncio.Lock()
 _MAX_COMBOS = 2000
+
+# ── VDS fallback sweeper ──────────────────────────────────────────────────────
+# When the external i9 agent is DOWN, queued remote sweep jobs would sit forever.
+# This drains them on the VDS itself, but ONLY with spare capacity, so it can never
+# repeat the overload that knocked the box over: it skips while load is high (a
+# resource ceiling), runs ONE job at a time under the shared backtest lock, the
+# grid subprocess is already nice(19)+SCHED_IDLE+ionice, and combos are capped.
+# Jobs the real agent claims (within seconds) never go stale, so this only fires
+# when nothing is claiming — i.e. the i9 is unavailable.
+_FB_ENABLED = os.environ.get("VDS_FALLBACK_ENABLED", "1") not in ("0", "false", "False")
+_FB_POLL_SEC = int(os.environ.get("VDS_FALLBACK_POLL_SEC", "45"))
+_FB_MAX_LOAD = float(os.environ.get("VDS_FALLBACK_MAX_LOAD", "2.0"))   # 4-core box; leaves headroom
+_FB_STALE_SEC = int(os.environ.get("VDS_FALLBACK_STALE_SEC", "180"))   # untaken this long → agent down
+_FB_MAX_COMBOS = int(os.environ.get("VDS_FALLBACK_MAX_COMBOS", "150")) # cap per job on the VDS
 
 
 async def _run_backtest_task(run_id: str, body: dict, pool, app_state) -> None:
@@ -248,6 +269,151 @@ async def _run_backtest_task(run_id: str, body: dict, pool, app_state) -> None:
             "UPDATE backtest_runs SET status='failed', error_msg=$1 WHERE id=$2",
             str(exc), run_id,
         )
+
+
+def _campaign_score(r: dict) -> float:
+    return (r.get("sharpe") or 0) + 3 * (r.get("total_return") or 0) - 2 * (r.get("max_drawdown") or 0)
+
+
+def _campaign_candidate(r: dict) -> bool:
+    return ((r.get("total_return") or 0) > 0 and (r.get("sharpe") or -9) >= 0.5
+            and (r.get("max_drawdown") or 9) <= 0.15 and 30 <= (r.get("total_trades") or 0) <= 3000)
+
+
+async def _run_remote_job_on_vds(row, app_state) -> None:
+    """Compute one queued remote sweep job locally on the VDS, metrics-only into the
+    leaderboard (same shape as the agent). Serialized + capped + idle-priority."""
+    import itertools
+    import json as _json
+    import re as _re
+    from trader.lab.backtest import run_backtest_grid
+
+    pool = app_state.db_pool
+    run_id = row["id"]
+    symbol = row["symbol"] or ""
+    try:
+        async with _BACKTEST_LOCK:
+            job = row["job_body"]
+            if isinstance(job, str):
+                job = _json.loads(job)
+            symbol = symbol or job.get("symbol", "")
+            script_code = job.get("script_code")
+            base_params = job.get("base_params") or {}
+            if isinstance(base_params, str):
+                base_params = _json.loads(base_params)
+            if not script_code:   # only campaign-style jobs (self-contained) are handled
+                await pool.execute(
+                    "UPDATE backtest_runs SET status='failed', error_msg='vds fallback: no script_code', "
+                    "finished_at=now() WHERE id=$1", run_id)
+                return
+
+            grid = job.get("paramsGrid", {})
+            keys = list(grid.keys())
+            values = [grid[k] if isinstance(grid[k], list) else [grid[k]] for k in keys]
+            combos = list(itertools.product(*values))
+            param_sets = [{**base_params, **dict(zip(keys, c))} for c in combos][:_FB_MAX_COMBOS]
+
+            bars = await asyncio.wait_for(
+                _fetch_bars_for_backtest(symbol, job.get("dateFrom"), job.get("dateTo"), app_state),
+                timeout=150,
+            )
+            if not bars:
+                await pool.execute(
+                    "UPDATE backtest_runs SET status='failed', error_msg='vds fallback: no bars', "
+                    "finished_at=now() WHERE id=$1", run_id)
+                return
+
+            point_value = 1.0
+            try:
+                from trader.lab.market_store import refresh_instrument_spec
+                spec = await refresh_instrument_spec(pool, symbol)
+                point_value = (spec or {}).get("point_value") or 1.0
+            except Exception:
+                pass
+
+            graded = await run_backtest_grid(
+                script_code, bars, symbol, param_sets,
+                timeout=max(120, 8 * len(param_sets)), point_value=point_value,
+            )
+
+            m = _re.search(r"make_on_bar\('([a-z_]+)'\)", script_code or "")
+            strat_id = m.group(1) if m else None
+            campaign = None
+            if run_id.startswith("camp-"):
+                parts = run_id.split("-")
+                campaign = "-".join(parts[:3]) if len(parts) >= 3 else run_id
+            if strat_id:
+                async with pool.acquire() as conn:
+                    async with conn.transaction():
+                        for entry in graded:
+                            if not entry.get("ok"):
+                                continue
+                            r = entry["result"]
+                            try:
+                                await conn.execute(
+                                    """INSERT INTO optimization_leaderboard
+                                         (campaign_run, strategy, symbol, params, total_return, sharpe,
+                                          max_drawdown, win_rate, total_trades, score, candidate,
+                                          net_profit, recovery_factor)
+                                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)""",
+                                    campaign, strat_id, symbol, entry["params"],
+                                    r.get("total_return"), r.get("sharpe"), r.get("max_drawdown"),
+                                    r.get("win_rate"), r.get("total_trades"),
+                                    _campaign_score(r), _campaign_candidate(r),
+                                    r.get("net_profit"), r.get("recovery_factor"),
+                                )
+                            except Exception as exc:
+                                log.warning("vds_fallback.leaderboard_insert_failed", run_id=run_id, error=str(exc))
+            await pool.execute(
+                "UPDATE backtest_runs SET status='done', finished_at=now() WHERE id=$1", run_id)
+            log.info("vds_fallback.done", run_id=run_id, symbol=symbol, combos=len(param_sets))
+    except Exception as exc:  # noqa: BLE001
+        try:
+            await pool.execute(
+                "UPDATE backtest_runs SET status='failed', error_msg=$1, finished_at=now() WHERE id=$2",
+                f"vds fallback: {exc}", run_id)
+        except Exception:
+            pass
+
+
+async def _vds_fallback_sweeper(app_state) -> None:
+    """Background loop: drain stale queued remote jobs on the VDS when the i9 agent is
+    down — but only with spare capacity (load ceiling), one at a time, idle priority."""
+    if not _FB_ENABLED:
+        return
+    pool = getattr(app_state, "db_pool", None)
+    if pool is None:
+        return
+    await asyncio.sleep(60)   # let startup settle before doing any work
+    while True:
+        try:
+            await asyncio.sleep(_FB_POLL_SEC)
+            # Resource ceiling: only ever use spare CPU. Over the cap → wait.
+            try:
+                if os.getloadavg()[0] > _FB_MAX_LOAD:
+                    continue
+            except OSError:
+                pass
+            # Claim ONE remote job no agent has taken for _FB_STALE_SEC (→ agent down).
+            row = await pool.fetchrow(
+                """UPDATE backtest_runs SET status='running', claimed_at=now(), agent_id='vds-fallback'
+                   WHERE id = (
+                     SELECT id FROM backtest_runs
+                     WHERE engine='remote' AND status='queued'
+                       AND created_at < now() - make_interval(secs => $1::int)
+                     ORDER BY created_at LIMIT 1
+                     FOR UPDATE SKIP LOCKED)
+                   RETURNING id, job_body, symbol""",
+                _FB_STALE_SEC,
+            )
+            if not row:
+                continue
+            log.info("vds_fallback.claim", run_id=row["id"], symbol=row["symbol"])
+            await _run_remote_job_on_vds(row, app_state)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — never let the loop die
+            log.warning("vds_fallback.loop_error", error=str(exc))
 
 
 async def _fetch_bars_for_backtest(symbol: str, date_from: str, date_to: str, app_state) -> list:
