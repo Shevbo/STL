@@ -41,9 +41,15 @@ if (-not $Python -or -not (Test-Path $Python)) {
 }
 Write-Host "python: $Python"
 
-# 2. venv + deps
-if (-not (Test-Path $venvPy)) {
-  Write-Host "Creating venv…"
+# 2. venv + deps. If a venv was COPIED from another machine its pyvenv.cfg/exe
+# point at a foreign python — detect that and recreate from THIS machine's python.
+$venvBroken = $true
+if (Test-Path $venvPy) {
+  try { & $venvPy -c "import sys" 2>$null; if ($LASTEXITCODE -eq 0) { $venvBroken = $false } } catch {}
+}
+if ($venvBroken) {
+  if (Test-Path $venv) { Write-Host "Recreating venv (was foreign/broken)…"; Remove-Item -Recurse -Force $venv }
+  else { Write-Host "Creating venv…" }
   & $Python -m venv $venv
 }
 Write-Host "Installing requirements…"
@@ -75,17 +81,44 @@ $settings = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New
             -StartWhenAvailable
 $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
 
-Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
-Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings `
-  -Principal $principal -Description "Shectory LAB optimization agent (param-sweep offload)" | Out-Null
-Write-Host "Registered scheduled task '$taskName' (start at logon, auto-restart)."
-
-# 5. start it now
 if ($Workers -gt 0) { [Environment]::SetEnvironmentVariable("OPT_AGENT_WORKERS", "$Workers", "User") }
-Start-ScheduledTask -TaskName $taskName
-Start-Sleep -Seconds 6
-$state = (Get-ScheduledTask -TaskName $taskName).State
-Write-Host "Task state: $state" -ForegroundColor Green
+
+# Autostart via Scheduled Task; if denied (policy/rights) fall back to a Startup-
+# folder launcher (no admin needed). Either way the agent runs at next logon.
+$autostart = "none"
+try {
+  Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+  Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings `
+    -Principal $principal -Description "Shectory LAB optimization agent (param-sweep offload)" -ErrorAction Stop | Out-Null
+  $autostart = "task"
+  Write-Host "Registered scheduled task '$taskName' (start at logon, auto-restart)."
+} catch {
+  Write-Host "Scheduled Task denied ($($_.Exception.Message.Trim())). Using Startup-folder autostart instead." -ForegroundColor Yellow
+  $startup = [Environment]::GetFolderPath("Startup")
+  $vbs = Join-Path $startup "ShectoryOptAgent.vbs"
+  # VBScript launches start.cmd hidden (no console window) at logon.
+  $startCmd = Join-Path $agentDir "start.cmd"
+  @"
+Set s = CreateObject("WScript.Shell")
+s.Run "cmd /c """"$startCmd""""", 0, False
+"@ | Set-Content -Path $vbs -Encoding ASCII
+  $autostart = "startup-folder"
+  Write-Host "Installed Startup launcher: $vbs"
+}
+
+# 5. start it now (works regardless of autostart method)
+if ($autostart -eq "task") {
+  Start-ScheduledTask -TaskName $taskName
+} else {
+  Start-Process -FilePath $venvPy -ArgumentList "scripts\opt_agent.py" -WorkingDirectory $repo -WindowStyle Hidden | Out-Null
+}
+Start-Sleep -Seconds 8
+$running = [bool](Get-Process python -ErrorAction SilentlyContinue)
+Write-Host ("Agent running: $running  (autostart=$autostart)") -ForegroundColor Green
 Write-Host ""
-Write-Host "Done. Logs: $env:TEMP\shectory_opt_agent.log" -ForegroundColor Cyan
-Write-Host "Manage: Task Scheduler → '$taskName'  (or: Stop-ScheduledTask/Start-ScheduledTask -TaskName $taskName)"
+Write-Host "Done. Log: $env:TEMP\shectory_opt_agent.log" -ForegroundColor Cyan
+if ($autostart -eq "task") {
+  Write-Host "Manage: Start/Stop-ScheduledTask -TaskName $taskName"
+} else {
+  Write-Host "Autostart at logon via Startup folder. To stop now: Get-Process python | Stop-Process"
+}
