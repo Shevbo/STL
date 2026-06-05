@@ -344,8 +344,9 @@ async def _sweep_run_stats(pool) -> dict:
 
 
 def _agent_alive(app_state) -> bool:
-    """True if an external agent (i9) hit /claim recently (heartbeat < 30s). Used to
-    route on-demand chart backtests to the i9 instead of loading the VDS."""
+    """In-memory heartbeat: an external agent (i9) hit /claim within 30s. Covers an
+    IDLE agent (it polls /claim every few seconds). A BUSY agent computing a job does
+    NOT poll meanwhile, so also check the DB — see _agent_alive_db."""
     t = getattr(app_state, "last_agent_seen", None)
     if t is None:
         return False
@@ -353,6 +354,26 @@ def _agent_alive(app_state) -> bool:
         return (asyncio.get_event_loop().time() - t) < 30
     except Exception:
         return False
+
+
+async def _agent_alive_db(pool) -> bool:
+    """DB signal: the i9 agent claimed a job in the last 5 min (covers a BUSY agent
+    mid-computation that isn't polling /claim). agent_id 'vds-fallback' is the VDS
+    itself, not the i9 — excluded."""
+    if pool is None:
+        return False
+    try:
+        return bool(await pool.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM backtest_runs WHERE agent_id IS NOT NULL "
+            "AND agent_id <> 'vds-fallback' AND claimed_at > now() - interval '5 minutes')"
+        ))
+    except Exception:
+        return False
+
+
+async def _agent_alive_any(app_state, pool) -> bool:
+    """i9 alive if EITHER signal fires (idle poll heartbeat OR a recent job claim)."""
+    return _agent_alive(app_state) or await _agent_alive_db(pool)
 
 
 def _top3_by_netprofit(rows: list) -> list:
@@ -1344,7 +1365,7 @@ def create_app() -> FastAPI:
         # "auto" → i9 if it's alive (keeps load off the important host), else VDS.
         engine = body.get("engine", "local")
         if engine == "auto":
-            engine = "remote" if _agent_alive(request.app.state) else "local"
+            engine = "remote" if await _agent_alive_any(request.app.state, pool) else "local"
         symbol = body.get("symbol", "")
         # A remote on-demand chart run must be self-contained for the agent: carry
         # snake_case script_code/base_params + a single combo (param_sets=[{}]).
@@ -1397,7 +1418,7 @@ def create_app() -> FastAPI:
         d["runner"] = ("i9" if (aid and aid != "vds-fallback") else
                        "VDS (фоновый)" if aid == "vds-fallback" else
                        "VDS" if d.get("engine") == "local" else "очередь")
-        d["agent_alive"] = _agent_alive(request.app.state)
+        d["agent_alive"] = await _agent_alive_any(request.app.state, pool)
         try:
             la = os.getloadavg()
             d["vds_load"] = round(la[0], 2)
