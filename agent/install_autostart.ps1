@@ -35,8 +35,13 @@ $installed = $false
 try {
   # Execute the .cmd DIRECTLY (not `cmd /c "<path>"`): the repo path contains "&"
   # (Shectory Trade & Lab), which cmd /c parses as a command separator → exit 1.
-  # As a program path it's passed literally, no shell parsing.
-  $action  = New-ScheduledTaskAction -Execute $wrapper -Argument $AgentArgs -WorkingDirectory $repo
+  # As a program path it's passed literally, no shell parsing. -Argument must be
+  # omitted when empty (New-ScheduledTaskAction rejects an empty string).
+  if ($AgentArgs) {
+    $action = New-ScheduledTaskAction -Execute $wrapper -Argument $AgentArgs -WorkingDirectory $repo
+  } else {
+    $action = New-ScheduledTaskAction -Execute $wrapper -WorkingDirectory $repo
+  }
   $trigger = New-ScheduledTaskTrigger -AtLogOn
   $set     = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
               -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 9999 `
@@ -54,20 +59,21 @@ try {
 if (-not $installed) {
   # Startup-folder VBS that launches the wrapper HIDDEN at logon (no admin needed).
   $vbs = $startupVbs
-  # Run the .cmd DIRECTLY (quoted) — NOT via cmd /c — so the "&" in the repo path
-  # isn't parsed as a command separator.
-  $runArg = ('""{0}"" {1}' -f $wrapper, $AgentArgs).Trim()
+  # VBS launches the .cmd DIRECTLY, hidden (window style 0), at logon. """ = a literal
+  # quote in VBS, so the path (with "&") is properly quoted and not shell-parsed.
   $vbsBody = @"
 Set sh = CreateObject("WScript.Shell")
 sh.CurrentDirectory = "$repo"
-sh.Run "$runArg", 0, False
+sh.Run """$wrapper"" $AgentArgs", 0, False
 "@
   Set-Content -Path $vbs -Value $vbsBody -Encoding ASCII
   Write-Host "OK: Startup launcher written to $vbs (runs hidden at next logon)."
-  # launch now too
-  $sh = New-Object -ComObject WScript.Shell
-  $sh.CurrentDirectory = $repo
-  $sh.Run($runArg, 0, $false) | Out-Null
+  # launch now too (Start-Process handles the '&' path cleanly, no shell parsing)
+  if ($AgentArgs) {
+    Start-Process -FilePath $wrapper -WorkingDirectory $repo -WindowStyle Hidden -ArgumentList $AgentArgs | Out-Null
+  } else {
+    Start-Process -FilePath $wrapper -WorkingDirectory $repo -WindowStyle Hidden | Out-Null
+  }
   Write-Host "Started now (hidden)."
 }
 
