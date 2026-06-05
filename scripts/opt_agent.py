@@ -373,15 +373,23 @@ class Agent:
 
     @staticmethod
     def _reexec():
-        """Replace this process with a fresh one running the just-updated code, same
-        args. If exec is flaky (Windows), the Scheduled Task / manual relaunch picks up
-        the new code from disk anyway."""
-        print("re-exec with updated code…", flush=True)
+        """Restart into the just-updated code. Windows os.execv in a console does NOT
+        survive (returns to the shell), so the SUPPORTED path is a wrapper
+        (agent/run_agent.cmd) that relaunches on exit code 42. Without a wrapper, try
+        in-place execv (works on POSIX); if that fails, exit 42 so a wrapper/Task can
+        relaunch."""
+        print("restart for self-update…", flush=True)
         try:
             sys.stdout.flush(); sys.stderr.flush()
         except Exception:
             pass
-        os.execv(sys.executable, [sys.executable] + sys.argv)
+        if os.environ.get("OPT_AGENT_WRAPPED"):
+            os._exit(42)                       # wrapper relaunches with fresh code
+        try:
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+        except Exception as exc:
+            print(f"execv failed ({exc}); exiting 42 — relaunch the agent (use run_agent.cmd)", flush=True)
+            os._exit(42)
 
 
 def main():
