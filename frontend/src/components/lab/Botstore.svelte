@@ -665,9 +665,9 @@
   .ag-sub { font-size: 10px; color: #678; }
   .ag-right { margin-left: auto; }
   .ag-badge { font-size: 9px; color: #ffb86b; border: 1px solid #ffb86b55; border-radius: 3px; padding: 1px 6px; }
-  .ag-prog { position: relative; flex: 1; min-width: 200px; height: 16px; background: #0a1120; border: 1px solid #1a2a44; border-radius: 3px; overflow: hidden; }
+  .ag-prog { position: relative; flex: 1; min-width: 200px; height: 16px; display: flex; align-items: center; background: #0a1120; border: 1px solid #1a2a44; border-radius: 3px; overflow: hidden; }
   .ag-prog-bar { position: absolute; inset: 0 auto 0 0; background: #1f5e3a; }
-  .ag-prog-lbl { position: relative; font-size: 9px; color: #cfe; line-height: 16px; padding-left: 8px; white-space: nowrap; }
+  .ag-prog-lbl { position: relative; font-size: 9px; color: #cfe; line-height: 1; padding-left: 8px; white-space: nowrap; }
   .ag-recent { display: flex; flex-wrap: wrap; gap: 4px 8px; font-size: 10px; color: #89a; }
   .ag-job { font-family: monospace; white-space: nowrap; }
   .ag-jst { font-weight: 700; }
@@ -702,9 +702,9 @@
   /* .bs-list is a flex column → without this, cards compress and clip the progress
      bar / hit-parade. flex-shrink:0 lets each card take its natural height. */
   .cc-sweep { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
-  .cc-prog { position: relative; flex: 1; height: 13px; background: #15152a; border-radius: 3px; overflow: hidden; }
+  .cc-prog { position: relative; flex: 1; height: 16px; display: flex; align-items: center; background: #15152a; border-radius: 3px; overflow: hidden; }
   .cc-prog-bar { position: absolute; inset: 0 auto 0 0; background: #1f5e3a; }
-  .cc-prog-lbl { position: relative; font-size: 9px; color: #cfe; line-height: 13px; padding-left: 6px; }
+  .cc-prog-lbl { position: relative; font-size: 9px; color: #cfe; line-height: 1; padding-left: 6px; }
   .cc-mt { font-size: 9px; color: #89a; white-space: nowrap; }
   .cc-top3 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 5px; margin-top: 5px; font-size: 10px; }
   .cc-medal { font-size: 10px; }
@@ -717,9 +717,9 @@
   .dps-item { display: flex; align-items: center; gap: 6px; }
   .dps-k { font-size: 10px; color: #789; text-transform: uppercase; letter-spacing: .3px; }
   .dps-v { font-size: 12px; color: #cde; }
-  .dps-prog { position: relative; width: 200px; height: 16px; background: #15152a; border-radius: 3px; overflow: hidden; }
+  .dps-prog { position: relative; width: 200px; height: 16px; display: flex; align-items: center; background: #15152a; border-radius: 3px; overflow: hidden; }
   .dps-prog-bar { position: absolute; inset: 0 auto 0 0; background: #1f5e3a; }
-  .dps-prog-lbl { position: relative; font-size: 10px; color: #cfe; line-height: 16px; padding-left: 8px; }
+  .dps-prog-lbl { position: relative; font-size: 10px; color: #cfe; line-height: 1; padding-left: 8px; }
   .dps-top3 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 5px; font-size: 12px; }
   .dps-medal { font-size: 12px; }
   .dps-t3sym { color: #6aa8ff; font-family: monospace; }
