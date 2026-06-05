@@ -1097,7 +1097,7 @@ def create_app() -> FastAPI:
         require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
         pool = request.app.state.db_pool
         out = {"online": False, "agent_id": None, "last_seen": None, "vds_fallback": False,
-               "vds_load": None, "campaign": None, "counts": {}, "pct": 0,
+               "vds_load": None, "campaign": None, "current": None, "counts": {}, "pct": 0,
                "throughput_per_min": 0, "recent": []}
         try:
             la = os.getloadavg()
@@ -1132,6 +1132,12 @@ def create_app() -> FastAPI:
             out["counts"] = counts
             tot = sum(counts.values())
             out["pct"] = round(100 * (counts["done"] + counts["failed"]) / tot) if tot else 0
+            # what is being swept right now (strategy + instrument of the running job)
+            run_now = next((r for r in cur if r["status"] == "running"), None)
+            if run_now:
+                pn = run_now["id"].split("-")
+                out["current"] = {"strategy": pn[-2] if len(pn) >= 2 else "",
+                                  "symbol": pn[-1] if pn else ""}
             # throughput: jobs finished in the last minute (any sweep)
             import datetime as _dt
             now = _dt.datetime.now(_dt.timezone.utc)
@@ -1150,6 +1156,81 @@ def create_app() -> FastAPI:
                              ("VDS" if r["agent_id"] == "vds-fallback" else "?"),
                     "finished_at": r["finished_at"].isoformat(),
                 })
+        return out
+
+    @fastapi_app.get("/api/v1/agent/campaign")
+    async def agent_campaign(request: Request, id: str = ""):
+        """Detail of one sweep campaign for the click-to-expand view: meta (strategies,
+        instruments, rounds), the sampling spec, and a 2D density heatmap of the swept
+        results over total_return x recovery_factor (from optimization_leaderboard)."""
+        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        import json as _json
+        pool = request.app.state.db_pool
+        out = {"campaign": id, "combos": 0, "strategies": [], "symbols": [], "rounds": [],
+               "return_range": None, "rf_range": None, "grid": [], "grid_w": 0, "grid_h": 0,
+               "max_count": 0, "best": [], "started": None}
+        if pool is None or not id:
+            return out
+        rows = await pool.fetch(
+            "SELECT total_return, recovery_factor, net_profit, sharpe, max_drawdown, "
+            "strategy, symbol, params, created_at FROM optimization_leaderboard "
+            "WHERE campaign_run=$1 LIMIT 80000", id)
+        out["combos"] = len(rows)
+        if not rows:
+            return out
+        out["strategies"] = sorted({r["strategy"] for r in rows if r["strategy"]})
+        out["symbols"] = sorted({r["symbol"] for r in rows if r["symbol"]})
+        out["started"] = min(r["created_at"] for r in rows).isoformat()
+        rounds_rows = await pool.fetch(
+            "SELECT DISTINCT split_part(id,'-',4) AS rd FROM backtest_runs WHERE id LIKE $1", id + "-%")
+        out["rounds"] = sorted([x["rd"] for x in rounds_rows if x["rd"] and x["rd"].startswith("r")])
+
+        rets = sorted(r["total_return"] for r in rows if r["total_return"] is not None)
+        rfs = sorted(r["recovery_factor"] for r in rows if r["recovery_factor"] is not None)
+
+        def _pct(arr, q):
+            if not arr:
+                return 0.0
+            return arr[min(len(arr) - 1, max(0, int(q * (len(arr) - 1))))]
+
+        # clip axes to 2nd..98th percentile so a few blow-ups don't squash the map
+        r_lo, r_hi = _pct(rets, 0.02), _pct(rets, 0.98)
+        f_lo, f_hi = _pct(rfs, 0.02), _pct(rfs, 0.98)
+        if r_hi <= r_lo:
+            r_hi = r_lo + 1e-9
+        if f_hi <= f_lo:
+            f_hi = f_lo + 1e-9
+        GW, GH = 24, 16
+
+        def _bin(v, lo, hi, n):
+            k = int((v - lo) / (hi - lo) * n)
+            return 0 if k < 0 else (n - 1 if k >= n else k)
+
+        grid = [[0] * GW for _ in range(GH)]
+        for r in rows:
+            if r["total_return"] is None or r["recovery_factor"] is None:
+                continue
+            col = _bin(r["total_return"], r_lo, r_hi, GW)
+            # RF row 0 = TOP of the heatmap = highest RF, so invert
+            row = GH - 1 - _bin(r["recovery_factor"], f_lo, f_hi, GH)
+            grid[row][col] += 1
+        out["grid"] = grid
+        out["grid_w"], out["grid_h"] = GW, GH
+        out["max_count"] = max((max(g) for g in grid), default=0)
+        out["return_range"] = [r_lo, r_hi]
+        out["rf_range"] = [f_lo, f_hi]
+
+        best = sorted([r for r in rows if r["net_profit"] is not None],
+                      key=lambda r: r["net_profit"], reverse=True)[:6]
+        for r in best:
+            p = r["params"]
+            if isinstance(p, str):
+                p = _json.loads(p)
+            out["best"].append({
+                "strategy": r["strategy"], "symbol": r["symbol"],
+                "total_return": r["total_return"], "recovery_factor": r["recovery_factor"],
+                "net_profit": r["net_profit"], "params": p,
+            })
         return out
 
     # ── LAB: STL Links ───────────────────────────────────────────────

@@ -324,12 +324,67 @@
       if (r.ok) activity = await r.json();
     } catch { /* keep last */ }
   }
+  // map a strategy id (macd_cross) to its robot display name
+  function robotName(stratId: string) {
+    return catalog.find((r: any) => r.id === stratId)?.name ?? stratId;
+  }
 
   $effect(() => {
     load();
     loadActivity();
     activityTimer = setInterval(loadActivity, 5000);
     return () => clearInterval(activityTimer);
+  });
+
+  // ── Campaign detail modal: params, ranges, sampling method, return×RF heatmap ──
+  let campaign = $state<any | null>(null);
+  let campaignLoading = $state(false);
+  let heatCanvas = $state<HTMLCanvasElement | null>(null);
+  async function openCampaign(id: string) {
+    if (!id) return;
+    campaignLoading = true; campaign = null; notice = '';
+    try {
+      const r = await fetchWithAuth(`/api/v1/agent/campaign?id=${encodeURIComponent(id)}`);
+      if (r.ok) campaign = await r.json();
+      else notice = 'Кампания недоступна';
+    } catch (e) { notice = 'Ошибка загрузки кампании: ' + String(e); }
+    campaignLoading = false;
+  }
+  function closeCampaign() { campaign = null; }
+
+  function heatColor(n: number, mx: number) {
+    if (n <= 0) return '#0c0c18';
+    const t = Math.log(1 + n) / Math.log(1 + mx);     // log scale: counts span orders
+    const r = Math.round(18 + t * 36), g = Math.round(36 + t * 184), b = Math.round(54 + t * 56);
+    return `rgb(${r},${g},${b})`;
+  }
+  function drawHeatmap(cv: HTMLCanvasElement, c: any) {
+    const GW = c.grid_w, GH = c.grid_h, mx = c.max_count || 1;
+    const cell = 22, padL = 46, padB = 30, padT = 6, padR = 6;
+    cv.width = padL + GW * cell + padR;
+    cv.height = padT + GH * cell + padB;
+    const ctx = cv.getContext('2d'); if (!ctx) return;
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    for (let row = 0; row < GH; row++)
+      for (let col = 0; col < GW; col++) {
+        ctx.fillStyle = heatColor(c.grid[row][col], mx);
+        ctx.fillRect(padL + col * cell, padT + row * cell, cell - 1, cell - 1);
+      }
+    ctx.fillStyle = '#8aa'; ctx.font = '9px sans-serif';
+    const [rlo, rhi] = c.return_range ?? [0, 1], [flo, fhi] = c.rf_range ?? [0, 1];
+    ctx.textAlign = 'center';
+    for (let t = 0; t <= 4; t++)
+      ctx.fillText((rlo + (rhi - rlo) * t / 4 >= 0 ? '+' : '') + ((rlo + (rhi - rlo) * t / 4) * 100).toFixed(0) + '%',
+                   padL + GW * cell * t / 4, cv.height - 16);
+    ctx.fillText('доходность →', padL + GW * cell / 2, cv.height - 3);
+    ctx.textAlign = 'right';
+    for (let t = 0; t <= 4; t++)
+      ctx.fillText((fhi - (fhi - flo) * t / 4).toFixed(1), padL - 5, padT + GH * cell * t / 4 + 3);
+    ctx.save(); ctx.translate(9, padT + GH * cell / 2); ctx.rotate(-Math.PI / 2);
+    ctx.textAlign = 'center'; ctx.fillText('Recovery Factor →', 0, 0); ctx.restore();
+  }
+  $effect(() => {
+    if (campaign?.grid?.length && heatCanvas) drawHeatmap(heatCanvas, campaign);
   });
 </script>
 
@@ -358,8 +413,16 @@
       </div>
       {#if activity.campaign}
         <div class="ag-row">
-          <span class="ag-sub">кампания {activity.campaign}</span>
-          <div class="ag-prog" title="готово {activity.counts.done} · ошибок {activity.counts.failed} · в очереди {activity.counts.queued} · считается {activity.counts.running}">
+          <button class="ag-camp" onclick={() => openCampaign(activity.campaign)}
+                  title="Открыть детали кампании: параметры, диапазоны, метод выборки, тепловая карта">
+            кампания {activity.campaign} <span class="ag-info">ⓘ детали</span>
+          </button>
+          {#if activity.current}
+            <span class="ag-now" title="Что считается прямо сейчас">
+              ● сейчас: <b>{robotName(activity.current.strategy)}</b> · <span class="mono">{activity.current.symbol}</span>
+            </span>
+          {/if}
+          <div class="ag-prog ag-right-prog" title="готово {activity.counts.done} · ошибок {activity.counts.failed} · в очереди {activity.counts.queued} · считается {activity.counts.running}">
             <div class="ag-prog-bar" style="width:{activity.pct}%"></div>
             <span class="ag-prog-lbl">{activity.pct}% · done {activity.counts.done}/{(activity.counts.done||0)+(activity.counts.failed||0)+(activity.counts.queued||0)+(activity.counts.running||0)} · queued {activity.counts.queued} · running {activity.counts.running}</span>
           </div>
@@ -394,11 +457,15 @@
           {#each catalog as robot}
             {@const b = best(robot)}
             <div class="cat-card" class:sel={selectedCat === robot.id}
+                 class:sweeping={activity?.current?.strategy === robot.id}
                  role="button" tabindex="0" title="Открыть детали тестирования"
                  onclick={() => { selectedCat = robot.id; openDetail(robot); }}
                  onkeydown={(e) => e.key === 'Enter' && (selectedCat = robot.id, openDetail(robot))}>
               <div class="cc-top">
                 <span class="cc-name">{robot.name}</span>
+                {#if activity?.current?.strategy === robot.id}
+                  <span class="cc-sweeping" title="По этому роботу сейчас идёт перебор">● перебор {activity.current.symbol}</span>
+                {/if}
                 <span class="cc-variants">{(robot.variants_tested || 0).toLocaleString('ru-RU')} вар.</span>
               </div>
               <div class="cc-metrics">
@@ -646,6 +713,86 @@
       </div>
     </div>
   {/if}
+
+  <!-- CAMPAIGN DETAIL: meta, sampling method, return×RF heatmap, best combos -->
+  {#if campaign || campaignLoading}
+    <div class="chart-modal" role="dialog" tabindex="-1">
+      <div class="cmp-box">
+        <div class="cm-head">
+          <span class="cm-title">
+            Кампания перебора
+            {#if campaign}<span class="cm-params">{campaign.campaign}</span>{/if}
+          </span>
+          <button class="cm-close" onclick={closeCampaign}>✕</button>
+        </div>
+        <div class="cmp-body">
+          {#if campaignLoading}
+            <div class="bs-msg">Загрузка деталей кампании…</div>
+          {:else if campaign && campaign.combos === 0}
+            <div class="bs-msg">Пока нет результатов: кампания только стартовала.</div>
+          {:else if campaign}
+            <div class="cmp-meta">
+              <div><span class="cmp-k">старт</span><span class="cmp-v">{fmtDate(campaign.started)}</span></div>
+              <div><span class="cmp-k">комбинаций</span><span class="cmp-v">{campaign.combos.toLocaleString('ru-RU')}</span></div>
+              <div><span class="cmp-k">раунды</span><span class="cmp-v">{campaign.rounds?.length ? campaign.rounds.join(' → ') : 'r0'}</span></div>
+              <div><span class="cmp-k">стратегий</span><span class="cmp-v">{campaign.strategies.length}</span></div>
+              <div><span class="cmp-k">инструментов</span><span class="cmp-v">{campaign.symbols.length}</span></div>
+            </div>
+
+            <div class="cmp-method">
+              <b>Метод — адаптивный перебор «широко → точно»:</b>
+              <div><b>r0 (разведка):</b> случайная выборка по широким диапазонам каждого параметра (Latin-подобный random search) — быстро покрывает всё пространство большим шагом, не застревая в одной зоне.</div>
+              <div><b>r1–r2 (уточнение):</b> вокруг победителей r0 (отбор по Recovery Factor × доходность) окно диапазона сужается вдвое каждый раунд, шаг мельче — детальная проработка перспективных зон.</div>
+              <div class="cmp-note">Случайная выборка в огромных диапазонах + сужение к лучшим точкам: тратим прогоны там, где результат, а не на сетку из заведомо плохих комбинаций.</div>
+            </div>
+
+            <div class="cmp-chips">
+              <span class="cmp-k">роботы:</span>
+              {#each campaign.strategies as s}<span class="cmp-chip">{robotName(s)}</span>{/each}
+            </div>
+            <div class="cmp-chips">
+              <span class="cmp-k">инструменты:</span>
+              {#each campaign.symbols as s}<span class="cmp-chip mono">{s}</span>{/each}
+            </div>
+
+            <div class="cmp-heat">
+              <div class="cmp-h-title">Тепловая карта результатов: доходность × Recovery Factor
+                <span class="cmp-sub2">(плотность {campaign.combos.toLocaleString('ru-RU')} комбинаций; ярче = больше перебранных вариантов в зоне; оси обрезаны по 2–98 перцентилю)</span>
+              </div>
+              <canvas bind:this={heatCanvas} class="cmp-canvas"></canvas>
+              <div class="cmp-legend">
+                <span>мало</span>
+                <span class="cmp-grad"></span>
+                <span>много комбинаций</span>
+                <span class="cmp-hint2">правый-верх = высокая доходность + высокий RF (искомая зона)</span>
+              </div>
+            </div>
+
+            {#if campaign.best?.length}
+              <div class="cmp-best">
+                <div class="cmp-h-title">Лучшие по финрезу</div>
+                <table class="cmp-bt">
+                  <thead><tr><th>робот</th><th>инстр.</th><th>финрез</th><th>доходн.</th><th>RF</th><th>параметры</th></tr></thead>
+                  <tbody>
+                    {#each campaign.best as b}
+                      <tr>
+                        <td class="cmp-l">{robotName(b.strategy)}</td>
+                        <td class="mono">{b.symbol}</td>
+                        <td class:pos={b.net_profit > 0} class:neg={b.net_profit < 0}>{fmtMoney(b.net_profit)}</td>
+                        <td class:pos={b.total_return > 0} class:neg={b.total_return < 0}>{fmtPct(b.total_return)}</td>
+                        <td>{fmtNum(b.recovery_factor)}</td>
+                        <td class="cmp-params-cell mono">{JSON.stringify(b.params)}</td>
+                      </tr>
+                    {/each}
+                  </tbody>
+                </table>
+              </div>
+            {/if}
+          {/if}
+        </div>
+      </div>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -804,4 +951,51 @@
   .cm-line.warn { color: #ffb86b; }
   .cm-p { font-family: monospace; font-size: 11px; color: #789; }
   .cm-hint { font-size: 11px; color: #667; line-height: 1.5; margin-top: 4px; }
+
+  .mono { font-family: monospace; }
+
+  /* agent panel: clickable campaign + current target */
+  .ag-camp { background: #102038; border: 1px solid #2a4a72; color: #bcd; font-size: 11px;
+             padding: 2px 8px; border-radius: 4px; cursor: pointer; }
+  .ag-camp:hover { background: #16294a; border-color: #3a5a90; }
+  .ag-info { color: #6aa8ff; font-size: 10px; }
+  .ag-now { font-size: 11px; color: #ffd27a; white-space: nowrap; }
+  .ag-now b { color: #ffe9b0; }
+  .ag-right-prog { margin-left: auto; }
+
+  /* catalog card: highlight the robot currently being swept */
+  .cat-card.sweeping { border-color: #ffb86b88; box-shadow: 0 0 0 1px #ffb86b44, 0 0 10px #ffb86b22; }
+  .cc-sweeping { font-size: 9px; color: #ffb86b; border: 1px solid #ffb86b55; border-radius: 3px;
+                 padding: 0 5px; white-space: nowrap; animation: cc-pulse 1.6s ease-in-out infinite; }
+  @keyframes cc-pulse { 0%,100% { opacity: 0.55; } 50% { opacity: 1; } }
+
+  /* campaign modal */
+  .cmp-box { width: min(960px, 96vw); max-height: 90vh; background: #0a0a15; border: 1px solid #2d2d4a;
+             border-radius: 6px; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 10px 40px rgba(0,0,0,0.6); }
+  .cmp-body { padding: 14px 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
+  .cmp-meta { display: flex; flex-wrap: wrap; gap: 8px 22px; }
+  .cmp-meta > div { display: flex; flex-direction: column; }
+  .cmp-k { font-size: 10px; color: #678; text-transform: uppercase; letter-spacing: 0.04em; }
+  .cmp-v { font-size: 13px; color: #cde; }
+  .cmp-method { font-size: 12px; color: #9ab; line-height: 1.5; background: #0c1322; border: 1px solid #1a2a44;
+                border-radius: 5px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; }
+  .cmp-method b { color: #cde; }
+  .cmp-note { color: #789; font-size: 11px; font-style: italic; margin-top: 2px; }
+  .cmp-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; font-size: 11px; }
+  .cmp-chip { background: #141428; border: 1px solid #2a2a48; border-radius: 3px; padding: 1px 7px; color: #bcd; font-size: 10px; }
+  .cmp-heat { display: flex; flex-direction: column; gap: 6px; }
+  .cmp-h-title { font-size: 12px; color: #cde; font-weight: 600; }
+  .cmp-sub2 { font-size: 10px; color: #678; font-weight: 400; }
+  .cmp-canvas { background: #0c0c18; border: 1px solid #1e1e3a; border-radius: 4px; max-width: 100%; }
+  .cmp-legend { display: flex; align-items: center; gap: 8px; font-size: 10px; color: #789; }
+  .cmp-grad { width: 90px; height: 10px; border-radius: 2px;
+              background: linear-gradient(90deg, #0c0c18, rgb(54,220,110)); border: 1px solid #1e1e3a; }
+  .cmp-hint2 { margin-left: auto; color: #ffb86b; }
+  .cmp-best { display: flex; flex-direction: column; gap: 6px; }
+  .cmp-bt { width: 100%; border-collapse: collapse; font-size: 11px; }
+  .cmp-bt th { text-align: right; padding: 4px 8px; color: #788; font-weight: 500; border-bottom: 1px solid #1e1e3a; }
+  .cmp-bt th:first-child, .cmp-bt th:nth-child(2) { text-align: left; }
+  .cmp-bt td { text-align: right; padding: 4px 8px; color: #abc; border-bottom: 1px solid #14142a; font-variant-numeric: tabular-nums; }
+  .cmp-l { text-align: left !important; color: #cde; }
+  .cmp-params-cell { text-align: left !important; color: #667; font-size: 9px; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>
