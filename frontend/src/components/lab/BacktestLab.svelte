@@ -375,6 +375,7 @@
           <tbody>
             {#each results as r}
               {@const isSelected = selectedResult === r}
+              {@const cb = commOf(r)}
               <tr
                 class:selected={isSelected}
                 onclick={() => selectedResult = r}
@@ -390,7 +391,6 @@
                 <td class:pos={r.total_return > 0} class:neg={r.total_return < 0}>
                   {r.total_return != null ? (r.total_return * 100).toFixed(2) + '%' : '—'}
                 </td>
-                {@const cb = commOf(r)}
                 <td class="comm-cell neg" title="брокер {Math.round(cb.broker)} + биржа {Math.round(cb.exchange)} ₽ ({cb.fills} филлов, {(cb.rate*100).toFixed(4)}% от номинала)">
                   −{Math.round(cb.total).toLocaleString('ru-RU')}
                 </td>
