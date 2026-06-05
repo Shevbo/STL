@@ -33,7 +33,10 @@ try { Get-Process -Name python -ErrorAction SilentlyContinue |
 
 $installed = $false
 try {
-  $action  = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c $cmdLine" -WorkingDirectory $repo
+  # Execute the .cmd DIRECTLY (not `cmd /c "<path>"`): the repo path contains "&"
+  # (Shectory Trade & Lab), which cmd /c parses as a command separator → exit 1.
+  # As a program path it's passed literally, no shell parsing.
+  $action  = New-ScheduledTaskAction -Execute $wrapper -Argument $AgentArgs -WorkingDirectory $repo
   $trigger = New-ScheduledTaskTrigger -AtLogOn
   $set     = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
               -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 9999 `
@@ -51,20 +54,23 @@ try {
 if (-not $installed) {
   # Startup-folder VBS that launches the wrapper HIDDEN at logon (no admin needed).
   $vbs = $startupVbs
+  # Run the .cmd DIRECTLY (quoted) — NOT via cmd /c — so the "&" in the repo path
+  # isn't parsed as a command separator.
+  $runArg = ('""{0}"" {1}' -f $wrapper, $AgentArgs).Trim()
   $vbsBody = @"
 Set sh = CreateObject("WScript.Shell")
 sh.CurrentDirectory = "$repo"
-sh.Run "cmd /c ""$cmdLine""", 0, False
+sh.Run "$runArg", 0, False
 "@
   Set-Content -Path $vbs -Value $vbsBody -Encoding ASCII
   Write-Host "OK: Startup launcher written to $vbs (runs hidden at next logon)."
   # launch now too
   $sh = New-Object -ComObject WScript.Shell
   $sh.CurrentDirectory = $repo
-  $sh.Run("cmd /c ""$cmdLine""", 0, $false) | Out-Null
+  $sh.Run($runArg, 0, $false) | Out-Null
   Write-Host "Started now (hidden)."
 }
 
 Write-Host ""
-Write-Host "Watch the agent log:  Get-Content `$env:TEMP\shectory_opt_agent.log -Wait -Tail 20"
+Write-Host "Watch the agent log:  Get-Content `"$repo\agent\agent.log`" -Wait -Tail 20"
 Write-Host "Stop:                 Stop-ScheduledTask -TaskName $TaskName ; or kill the python/.venv process"
