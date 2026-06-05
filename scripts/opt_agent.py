@@ -68,8 +68,9 @@ import httpx  # noqa: E402
 
 # ── self-update ────────────────────────────────────────────────────────────────
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-GITHUB_TARBALL = os.environ.get(
-    "OPT_AGENT_TARBALL", "https://github.com/Shevbo/STL/archive/refs/heads/main.tar.gz")
+# Per-file updates come from raw.githubusercontent (reachable from the i9; the codeload
+# tarball host is intermittently blocked there).
+RAW_BASE = os.environ.get("OPT_AGENT_RAW_BASE", "https://raw.githubusercontent.com/Shevbo/STL/main")
 TOKEN_FILE = os.path.join(REPO_ROOT, ".agent_update_token")
 
 
@@ -199,48 +200,38 @@ class Agent:
             return None
 
     async def _self_update(self, token: str) -> bool:
-        """Pull the latest repo tarball from GitHub and replace trader/ + opt_agent.py
-        in place. Best-effort: on any failure keep running the current code."""
-        import io
-        import shutil
-        import tarfile
-        import tempfile
-        print(f"self-update → pulling latest code (token={token})", flush=True)
-        tmp = None
+        """Pull fresh code per-file from raw.githubusercontent (reachable from the i9;
+        the codeload tarball is intermittently blocked there). Files to update come from
+        agent/update_manifest.txt. Best-effort: on ANY failure keep the current code and
+        leave applied_token unchanged so it retries next cycle. Short timeouts so a flaky
+        network never blocks the loop for long."""
+        print(f"self-update → fetching files (token={token})", flush=True)
         try:
             async with self._client() as client:
-                r = await client.get(GITHUB_TARBALL, follow_redirects=True, timeout=180)
-                r.raise_for_status()
-                data = r.content
-            tmp = tempfile.mkdtemp(prefix="stl_update_")
-            with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tf:
-                tf.extractall(tmp)
-            roots = [os.path.join(tmp, d) for d in os.listdir(tmp)
-                     if os.path.isdir(os.path.join(tmp, d))]
-            if not roots:
-                raise RuntimeError("empty tarball")
-            src = roots[0]
-            # replace the python package + the agent script (everything the agent runs)
-            shutil.copytree(os.path.join(src, "trader"), os.path.join(REPO_ROOT, "trader"),
-                            dirs_exist_ok=True)
-            for f in ("opt_agent.py", "optimize_adaptive.py"):
-                s = os.path.join(src, "scripts", f)
-                if os.path.exists(s):
-                    shutil.copy2(s, os.path.join(REPO_ROOT, "scripts", f))
+                mr = await client.get(f"{RAW_BASE}/agent/update_manifest.txt",
+                                      follow_redirects=True, timeout=20)
+                mr.raise_for_status()
+                files = [ln.strip() for ln in mr.text.splitlines()
+                         if ln.strip() and not ln.startswith("#")]
+                if not files:
+                    raise RuntimeError("empty manifest")
+                blobs = {}
+                for rel in files:                       # download ALL first, then write
+                    r = await client.get(f"{RAW_BASE}/{rel}", follow_redirects=True, timeout=20)
+                    r.raise_for_status()
+                    blobs[rel] = r.content
+            for rel, content in blobs.items():
+                dst = os.path.join(REPO_ROOT, *rel.split("/"))
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                with open(dst, "wb") as f:
+                    f.write(content)
             _write_token(token)
             self.applied_token = token
-            print("self-update → files replaced; re-exec", flush=True)
+            print(f"self-update → {len(blobs)} files updated; restart", flush=True)
             return True
         except Exception as exc:  # noqa: BLE001
             print(f"self-update FAILED (keeping current code): {exc}", flush=True)
             return False
-        finally:
-            if tmp:
-                try:
-                    import shutil as _sh
-                    _sh.rmtree(tmp, ignore_errors=True)
-                except Exception:
-                    pass
 
     async def claim(self, client: httpx.AsyncClient):
         r = await client.post(f"{self.api}/api/v1/agent/claim",

@@ -25,7 +25,7 @@ EXPLORE="${OPT_LOOP_EXPLORE:-300}"
 ROUNDS="${OPT_LOOP_ROUNDS:-2}"
 seed=$(( (RANDOM << 15) ^ RANDOM ))
 
-log() { echo "[$(date -u +%FT%TZ)] $*" >> "$LOG"; }
+log() { echo "[$(TZ='Europe/Moscow' date '+%Y-%m-%d %H:%M:%S МСК')] $*" >> "$LOG"; }
 log "optimize_loop started (instruments=$INSTRUMENTS explore=$EXPLORE rounds=$ROUNDS)"
 
 while true; do
