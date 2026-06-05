@@ -9,6 +9,12 @@ setlocal
 cd /d "%~dp0.."
 set OPT_AGENT_WRAPPED=1
 
+REM A Scheduled Task / Startup launch may not inherit user env vars added mid-session.
+REM Pull them straight from the persistent user environment (HKCU\Environment) if unset.
+REM (Reads the EXISTING value — stores no secret anywhere new.)
+if not defined OPT_AGENT_TOKEN for /f "tokens=2,*" %%a in ('reg query "HKCU\Environment" /v OPT_AGENT_TOKEN 2^>nul ^| find "REG_SZ"') do set "OPT_AGENT_TOKEN=%%b"
+if not defined STL_API for /f "tokens=2,*" %%a in ('reg query "HKCU\Environment" /v STL_API 2^>nul ^| find "REG_SZ"') do set "STL_API=%%b"
+
 :loop
 agent\.venv\Scripts\python.exe scripts\opt_agent.py %*
 if %ERRORLEVEL%==42 (

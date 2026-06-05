@@ -23,9 +23,11 @@ Write-Host "wrapper: $wrapper  args: '$AgentArgs'"
 # cmd line the task / launcher runs (headless, stays alive across self-updates)
 $cmdLine = "`"$wrapper`" $AgentArgs".Trim()
 
-# stop any current instance / task first
+# stop any current instance / task / startup launcher first (avoid double-launch)
+$startupVbs = Join-Path ([Environment]::GetFolderPath("Startup")) "ShectoryOptAgent.vbs"
 try { Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue } catch {}
 try { Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue } catch {}
+try { Remove-Item $startupVbs -Force -ErrorAction SilentlyContinue } catch {}
 try { Get-Process -Name python -ErrorAction SilentlyContinue |
         Where-Object { $_.Path -like "*\.venv\*" } | Stop-Process -Force -ErrorAction SilentlyContinue } catch {}
 
@@ -48,8 +50,7 @@ try {
 
 if (-not $installed) {
   # Startup-folder VBS that launches the wrapper HIDDEN at logon (no admin needed).
-  $startup = [Environment]::GetFolderPath("Startup")
-  $vbs = Join-Path $startup "ShectoryOptAgent.vbs"
+  $vbs = $startupVbs
   $vbsBody = @"
 Set sh = CreateObject("WScript.Shell")
 sh.CurrentDirectory = "$repo"
