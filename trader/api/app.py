@@ -134,6 +134,15 @@ async def lifespan(app: FastAPI):
         except Exception as exc:
             log.warning("startup.orphan_reset_failed", error=str(exc))
 
+        # Agent control channel (self-update flag the agent polls). Bump update_token
+        # to make the agent pull fresh code and re-exec itself.
+        try:
+            await db_pool.execute(
+                "CREATE TABLE IF NOT EXISTS agent_control (key TEXT PRIMARY KEY, value TEXT)"
+            )
+        except Exception as exc:
+            log.warning("startup.agent_control_table_failed", error=str(exc))
+
     # VDS fallback sweeper: drains queued remote sweeps locally (throttled) only when
     # the i9 agent is down. No-op while the agent claims jobs promptly.
     fallback_task = asyncio.create_task(_vds_fallback_sweeper(app.state))
@@ -1516,6 +1525,22 @@ def create_app() -> FastAPI:
             "date_to": job.get("dateTo"),
             "point_value": point_value,
         }
+
+    @fastapi_app.get("/api/v1/agent/control")
+    async def agent_control(request: Request):
+        """Self-update channel: the agent polls this; when `update_token` differs from
+        the one it last applied, it pulls fresh code and re-execs. Bump the token with:
+        psql -c "INSERT INTO agent_control(key,value) VALUES('update_token', now()::text)
+                 ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value" """
+        _agent_auth(request)
+        pool = request.app.state.db_pool
+        token = None
+        if pool is not None:
+            try:
+                token = await pool.fetchval("SELECT value FROM agent_control WHERE key='update_token'")
+            except Exception:
+                token = None
+        return {"update_token": token}
 
     @fastapi_app.post("/api/v1/agent/result")
     async def agent_result(body: dict, request: Request):

@@ -66,6 +66,32 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import httpx  # noqa: E402
 
+# ── self-update ────────────────────────────────────────────────────────────────
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+GITHUB_TARBALL = os.environ.get(
+    "OPT_AGENT_TARBALL", "https://github.com/Shevbo/STL/archive/refs/heads/main.tar.gz")
+TOKEN_FILE = os.path.join(REPO_ROOT, ".agent_update_token")
+
+
+class _Restart(Exception):
+    """Raised after a self-update to break the loop and re-exec the process."""
+
+
+def _read_token() -> str:
+    try:
+        with open(TOKEN_FILE, encoding="utf-8") as f:
+            return f.read().strip()
+    except Exception:
+        return ""
+
+
+def _write_token(tok: str) -> None:
+    try:
+        with open(TOKEN_FILE, "w", encoding="utf-8") as f:
+            f.write(tok or "")
+    except Exception:
+        pass
+
 
 def _patch_httpx_insecure() -> None:
     """Make every httpx.AsyncClient skip TLS verification by default. Needed behind
@@ -154,12 +180,67 @@ class Agent:
         self.proxy = proxy or os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY") or ""
         self.agent_id = f"{socket.gethostname()}:{os.getpid()}"
         self.h = {"X-Agent-Token": token, "Content-Type": "application/json"}
+        self.applied_token = _read_token()   # last self-update token applied
 
     def _client(self) -> httpx.AsyncClient:
         kw: dict = {"timeout": 30}
         if self.proxy:
             kw["proxy"] = self.proxy
         return httpx.AsyncClient(**kw)
+
+    async def control(self, client: httpx.AsyncClient):
+        """Poll the self-update flag. Returns the server's update_token (or None)."""
+        try:
+            r = await client.get(f"{self.api}/api/v1/agent/control", headers=self.h, timeout=15)
+            if r.status_code != 200:
+                return None
+            return (r.json() or {}).get("update_token")
+        except Exception:
+            return None
+
+    async def _self_update(self, token: str) -> bool:
+        """Pull the latest repo tarball from GitHub and replace trader/ + opt_agent.py
+        in place. Best-effort: on any failure keep running the current code."""
+        import io
+        import shutil
+        import tarfile
+        import tempfile
+        print(f"self-update → pulling latest code (token={token})", flush=True)
+        tmp = None
+        try:
+            async with self._client() as client:
+                r = await client.get(GITHUB_TARBALL, follow_redirects=True, timeout=180)
+                r.raise_for_status()
+                data = r.content
+            tmp = tempfile.mkdtemp(prefix="stl_update_")
+            with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tf:
+                tf.extractall(tmp)
+            roots = [os.path.join(tmp, d) for d in os.listdir(tmp)
+                     if os.path.isdir(os.path.join(tmp, d))]
+            if not roots:
+                raise RuntimeError("empty tarball")
+            src = roots[0]
+            # replace the python package + the agent script (everything the agent runs)
+            shutil.copytree(os.path.join(src, "trader"), os.path.join(REPO_ROOT, "trader"),
+                            dirs_exist_ok=True)
+            for f in ("opt_agent.py", "optimize_adaptive.py"):
+                s = os.path.join(src, "scripts", f)
+                if os.path.exists(s):
+                    shutil.copy2(s, os.path.join(REPO_ROOT, "scripts", f))
+            _write_token(token)
+            self.applied_token = token
+            print("self-update → files replaced; re-exec", flush=True)
+            return True
+        except Exception as exc:  # noqa: BLE001
+            print(f"self-update FAILED (keeping current code): {exc}", flush=True)
+            return False
+        finally:
+            if tmp:
+                try:
+                    import shutil as _sh
+                    _sh.rmtree(tmp, ignore_errors=True)
+                except Exception:
+                    pass
 
     async def claim(self, client: httpx.AsyncClient):
         r = await client.post(f"{self.api}/api/v1/agent/claim",
@@ -246,6 +327,11 @@ class Agent:
             async with self._client() as client:
                 idle_note = True
                 while True:
+                    # self-update check (each cycle, lightweight GET)
+                    tok = await self.control(client)
+                    if tok and tok != self.applied_token:
+                        if await self._self_update(tok):
+                            return "RESTART"   # exits pool/client cleanly, run() re-execs
                     try:
                         job = await self.claim(client)
                     except Exception as exc:  # noqa: BLE001 — DNS/network/5xx: keep polling
@@ -272,7 +358,9 @@ class Agent:
         backoff = 5
         while True:
             try:
-                await self._loop_once()
+                res = await self._loop_once()
+                if res == "RESTART":
+                    self._reexec()   # never returns
             except KeyboardInterrupt:
                 print("stopped (KeyboardInterrupt)", flush=True)
                 return
@@ -282,6 +370,18 @@ class Agent:
                 backoff = min(backoff * 2, 60)
             else:
                 backoff = 5
+
+    @staticmethod
+    def _reexec():
+        """Replace this process with a fresh one running the just-updated code, same
+        args. If exec is flaky (Windows), the Scheduled Task / manual relaunch picks up
+        the new code from disk anyway."""
+        print("re-exec with updated code…", flush=True)
+        try:
+            sys.stdout.flush(); sys.stderr.flush()
+        except Exception:
+            pass
+        os.execv(sys.executable, [sys.executable] + sys.argv)
 
 
 def main():
