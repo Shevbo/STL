@@ -234,6 +234,43 @@
   function daysAgo(n: number) { const d = new Date(); d.setDate(d.getDate() - n); return d; }
   const ruStatus = (s: string) => ({ queued: 'в очереди', pending: 'запуск', running: 'считается', done: 'готово', failed: 'ошибка' } as any)[s] || s || '…';
 
+  // One run+poll attempt on a given engine. Returns the result row, sets chartStatus
+  // live, throws on failure (the agent's error text bubbles up).
+  async function _runAndPoll(engine: string, scriptCode: string, params: any, symbol: string,
+                             dateFrom: string, dateTo: string, t0: number) {
+    const res = await fetchWithAuth('/api/v1/backtest/run', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scriptCode, baseParams: { ...params, symbol }, symbol, paramsGrid: {}, engine, dateFrom, dateTo }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const { run_id } = await res.json();
+    for (let i = 0; i < 180; i++) {           // up to 6 min
+      await new Promise(r => setTimeout(r, 2000));
+      let sd: any;
+      try {
+        const sr = await fetchWithAuth(`/api/v1/backtest/${run_id}/status`);
+        if (!sr.ok) throw new Error('status ' + sr.status);
+        sd = await sr.json();
+      } catch {
+        chartStatus = { ...chartStatus, vds_down: true, elapsed: Math.round((Date.now() - t0) / 1000) };
+        continue;
+      }
+      chartStatus = {
+        runner: sd.runner, status: sd.status, elapsed: Math.round((Date.now() - t0) / 1000),
+        vds_load: sd.vds_load, agent_alive: sd.agent_alive, vds_down: false,
+      };
+      if (sd.status === 'done') {
+        const rr = await fetchWithAuth(`/api/v1/backtest/${run_id}/results`);
+        const rows = rr.ok ? await rr.json() : [];
+        const result = rows[0] ?? null;
+        if (!result) throw new Error('Прогон завершён, но результат пуст');
+        return result;
+      }
+      if (sd.status === 'failed') throw new Error(sd.error_msg || 'Бэктест завершился ошибкой (см. логи VDS)');
+    }
+    throw new Error('Бэктест не вернул результат за 6 мин (таймаут ожидания)');
+  }
+
   async function openChart(symbol: string, params: any) {
     if (!detail) return;
     chartErr = ''; chartLoading = true; chart = null;
@@ -243,50 +280,26 @@
     try {
       const tmpl = tmplOf(detail.id);
       if (!tmpl) throw new Error('Нет шаблона стратегии для прогона');
-      // Reproduce the EXACT window the leaderboard used, so the chart's result MATCHES
-      // the table number (same code, params, period, commission). Using "to yesterday"
-      // here would silently diverge (forward days) and look like a bug.
+      // Reproduce the EXACT leaderboard window so the chart MATCHES the table number.
       const dateFrom = detail.period?.date_from ?? toISO(daysAgo(95));
       const dateTo = detail.period?.date_to ?? toISO(yesterday());
-      // engine 'auto' → i9 agent if it's online (keeps load off the VDS), else VDS
-      // (low priority). The backend decides and reports back where it runs.
-      const res = await fetchWithAuth('/api/v1/backtest/run', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          scriptCode: tmpl.script_code,
-          baseParams: { ...params, symbol },
-          symbol, paramsGrid: {}, engine: 'auto',
-          dateFrom, dateTo,
-        }),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      const { run_id } = await res.json();
-      let result: any = null;
-      for (let i = 0; i < 180; i++) {           // up to 6 min
-        await new Promise(r => setTimeout(r, 2000));
-        let sd: any;
-        try {
-          const sr = await fetchWithAuth(`/api/v1/backtest/${run_id}/status`);
-          if (!sr.ok) throw new Error('status ' + sr.status);
-          sd = await sr.json();
-        } catch {
-          // VDS not answering the poll — surface it, keep trying (box may be busy).
-          chartStatus = { ...chartStatus, vds_down: true, elapsed: Math.round((Date.now() - t0) / 1000) };
-          continue;
+      const sc = tmpl.script_code;
+      let result: any;
+      try {
+        // Prefer the i9 agent (keeps load off the VDS); backend picks remote if alive.
+        result = await _runAndPoll('auto', sc, params, symbol, dateFrom, dateTo, t0);
+      } catch (e1) {
+        // i9 flaps its corporate network (ISS unreachable → "All connection attempts
+        // failed"). Fall back to the VDS, which has cached bars + reliable ISS.
+        const msg = String(e1);
+        const netFail = /connection|All connection attempts|ISS|timeout|таймаут|connect/i.test(msg);
+        if (chartStatus?.runner === 'i9' || netFail) {
+          chartStatus = { ...chartStatus, runner: 'VDS (фолбэк)', status: 'queued', vds_down: false };
+          result = await _runAndPoll('local', sc, params, symbol, dateFrom, dateTo, t0);
+        } else {
+          throw e1;
         }
-        chartStatus = {
-          runner: sd.runner, status: sd.status, elapsed: Math.round((Date.now() - t0) / 1000),
-          vds_load: sd.vds_load, agent_alive: sd.agent_alive, vds_down: false,
-        };
-        if (sd.status === 'done') {
-          const rr = await fetchWithAuth(`/api/v1/backtest/${run_id}/results`);
-          const rows = rr.ok ? await rr.json() : [];
-          result = rows[0] ?? null;
-          break;
-        }
-        if (sd.status === 'failed') throw new Error(sd.error_msg || 'Бэктест завершился ошибкой (см. логи VDS)');
       }
-      if (!result) throw new Error('Бэктест не вернул результат за 6 мин (таймаут ожидания)');
       let pv = 1;
       try {
         const mr = await fetchWithAuth(`/api/v1/instruments/${encodeURIComponent(symbol)}/meta`);
