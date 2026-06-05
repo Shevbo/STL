@@ -16,7 +16,8 @@ if not defined OPT_AGENT_TOKEN for /f "tokens=2,*" %%a in ('reg query "HKCU\Envi
 if not defined STL_API for /f "tokens=2,*" %%a in ('reg query "HKCU\Environment" /v STL_API 2^>nul ^| find "REG_SZ"') do set "STL_API=%%b"
 
 :loop
-agent\.venv\Scripts\python.exe scripts\opt_agent.py %*
+REM fixed log path (task %TEMP% differs from your shell's), findable at agent\agent.log
+agent\.venv\Scripts\python.exe scripts\opt_agent.py --log "%~dp0agent.log" %*
 if %ERRORLEVEL%==42 (
   echo [wrapper] self-update applied - restarting agent...
   REM ping as a headless-safe sleep (timeout needs a console)

@@ -45,6 +45,18 @@ def _log(msg: str) -> None:
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}", flush=True)
 
 
+def _user_env(name: str) -> str:
+    """Read a persistent user env var straight from HKCU\\Environment. A Scheduled Task
+    / headless launch may not inherit env vars added mid-session, so winreg is the
+    reliable way to get OPT_AGENT_TOKEN/STL_API on Windows."""
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as k:
+            return str(winreg.QueryValueEx(k, name)[0])
+    except Exception:
+        return ""
+
+
 def _tee_log(path: str) -> None:
     """Mirror stdout/stderr to a rotating-ish log file (truncate if >5MB) so the
     agent is observable when launched headless by Task Scheduler (no console)."""
@@ -408,6 +420,14 @@ def main():
     args = ap.parse_args()
     if args.log:
         _tee_log(args.log)
+    # Headless (Scheduled Task / Startup) may not inherit the user env — fall back to
+    # reading the persisted token/API straight from the registry.
+    if not args.token:
+        args.token = _user_env("OPT_AGENT_TOKEN")
+    if not os.environ.get("STL_API") and "--api" not in sys.argv:
+        api_reg = _user_env("STL_API")
+        if api_reg:
+            args.api = api_reg
     if not args.token:
         print("ERROR: set OPT_AGENT_TOKEN (env) or --token", file=sys.stderr)
         sys.exit(2)
