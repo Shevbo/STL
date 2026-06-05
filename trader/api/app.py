@@ -1583,7 +1583,10 @@ def create_app() -> FastAPI:
                             r.get("sharpe"), r.get("max_drawdown"), r.get("win_rate"),
                             r.get("total_return"), r.get("total_trades"),
                         )
-                    if strat_id:
+                    # Mirror to the leaderboard ONLY for real sweeps (camp-/opt-, which
+                    # have a non-null campaign_run). A UI/chart run has strat_id too but
+                    # campaign=None → inserting NULL campaign_run aborts the txn → 500.
+                    if is_campaign:
                         try:
                             await conn.execute(
                                 """INSERT INTO optimization_leaderboard
