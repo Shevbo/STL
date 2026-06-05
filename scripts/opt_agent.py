@@ -38,6 +38,13 @@ except Exception:
     pass
 
 
+def _log(msg: str) -> None:
+    """Print with a local date/time prefix (the i9 runs on MSK), so every job line is
+    timestamped in the console/log."""
+    from datetime import datetime
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}", flush=True)
+
+
 def _tee_log(path: str) -> None:
     """Mirror stdout/stderr to a rotating-ish log file (truncate if >5MB) so the
     agent is observable when launched headless by Task Scheduler (no console)."""
@@ -280,8 +287,8 @@ class Agent:
                 param_sets = [{**base, **ps} for ps in ps_list]
             else:
                 param_sets = self._expand(job["base_params"], job["params_grid"])
-            print(f"[{run_id}] {symbol} {len(bars)} bars × {len(param_sets)} combos "
-                  f"on {self.workers} workers", flush=True)
+            _log(f"[{run_id}] {symbol} {len(bars)} bars × {len(param_sets)} combos "
+                 f"on {self.workers} workers")
 
             chunks = _chunked(param_sets, self.workers)
             args = [(job["script_code"], bars_data, symbol, ch, job["point_value"]) for ch in chunks]
@@ -292,8 +299,8 @@ class Agent:
             results = [r for chunk in chunk_results for r in chunk]
             dt = time.time() - t0
             ok = sum(1 for r in results if r.get("ok"))
-            print(f"[{run_id}] done {ok}/{len(results)} in {dt:.1f}s "
-                  f"({len(results)/dt:.0f} combos/s)", flush=True)
+            _log(f"[{run_id}] done {ok}/{len(results)} in {dt:.1f}s "
+                 f"({len(results)/dt:.0f} combos/s)")
             # Sweep runs (camp-/opt-) only need metrics for the leaderboard — strip the
             # bulky trades + equity_curve arrays so we don't flood the small VDS Postgres.
             if run_id.startswith("camp-") or run_id.startswith("opt-"):
@@ -303,7 +310,7 @@ class Agent:
                         e["result"].pop("equity_curve", None)
             await self.post_result(client, {"run_id": run_id, "results": results})
         except Exception as exc:  # noqa: BLE001
-            print(f"[{run_id}] FAILED: {exc}", flush=True)
+            _log(f"[{run_id}] FAILED: {exc}")
             try:
                 await self.post_result(client, {"run_id": run_id, "error": str(exc)})
             except Exception:
@@ -312,8 +319,8 @@ class Agent:
     async def _loop_once(self):
         """One full life of the agent: a process pool + http client + claim loop.
         Returns only on a fatal error (pool/client death); the outer run() restarts."""
-        print(f"agent {self.agent_id} → {self.api}  workers={self.workers}  poll={self.poll}s"
-              + (f"  proxy={self.proxy}" if self.proxy else ""), flush=True)
+        _log(f"agent {self.agent_id} → {self.api}  workers={self.workers}  poll={self.poll}s"
+             + (f"  proxy={self.proxy}" if self.proxy else ""))
         with ProcessPoolExecutor(max_workers=self.workers) as pool:
             async with self._client() as client:
                 idle_note = True
@@ -326,12 +333,12 @@ class Agent:
                     try:
                         job = await self.claim(client)
                     except Exception as exc:  # noqa: BLE001 — DNS/network/5xx: keep polling
-                        print(f"claim error: {exc}", flush=True)
+                        _log(f"claim error: {exc}")
                         await asyncio.sleep(self.poll)
                         continue
                     if job is None:
                         if idle_note:
-                            print("idle… waiting for jobs", flush=True)
+                            _log("idle… waiting for jobs")
                             idle_note = False
                         await asyncio.sleep(self.poll)
                         continue
@@ -339,7 +346,7 @@ class Agent:
                     try:
                         await self.process(client, job, pool)
                     except Exception as exc:  # noqa: BLE001 — never let one job kill the loop
-                        print(f"process error (continuing): {exc}", flush=True)
+                        _log(f"process error (continuing): {exc}")
                         await asyncio.sleep(self.poll)
 
     async def run(self):
