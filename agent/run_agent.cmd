@@ -13,7 +13,8 @@ set OPT_AGENT_WRAPPED=1
 agent\.venv\Scripts\python.exe scripts\opt_agent.py %*
 if %ERRORLEVEL%==42 (
   echo [wrapper] self-update applied - restarting agent...
-  timeout /t 2 /nobreak >nul
+  REM ping as a headless-safe sleep (timeout needs a console)
+  ping -n 3 127.0.0.1 >nul 2>&1
   goto loop
 )
 echo [wrapper] agent exited (code %ERRORLEVEL%) - not restarting.
