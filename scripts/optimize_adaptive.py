@@ -195,7 +195,11 @@ async def _winners(pool, campaign, strat_id, symbol, args) -> list[dict]:
     )
     cand = [dict(r) for r in rows if passes(dict(r), args)]
     cand.sort(key=winner_score, reverse=True)
-    return cand[: args.top]
+    cand = cand[: args.top]
+    for c in cand:                       # defensive: params must be a dict for refine_grid
+        if isinstance(c.get("params"), str):
+            c["params"] = json.loads(c["params"])
+    return cand
 
 
 async def main():
@@ -218,9 +222,15 @@ async def main():
 
     rng = random.Random(args.seed)
     s = Settings()
-    pool = await asyncpg.create_pool(s.lab_db_url)
-    async with pool.acquire() as conn:
+
+    # JSON codec on EVERY pooled connection (init=), so JSONB params/job_body decode to
+    # dicts no matter which connection serves the query. (Setting it on one acquired
+    # connection left pool.fetch() returning params as raw strings → refine crashed
+    # with "'str' object has no attribute 'get'".)
+    async def _init_codec(conn):
         await conn.set_type_codec("jsonb", encoder=json.dumps, decoder=json.loads, schema="pg_catalog")
+
+    pool = await asyncpg.create_pool(s.lab_db_url, init=_init_codec)
 
     syms = await top_instruments(args.instruments, always=ALWAYS_ASSETS)
     strategies = list_strategies()
