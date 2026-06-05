@@ -294,6 +294,61 @@ def _sweep_campaign(run_id: str) -> str | None:
     return "-".join(parts[:3]) if len(parts) >= 3 else run_id
 
 
+async def _sweep_run_stats(pool) -> dict:
+    """Per-strategy sweep progress from backtest_runs: completion % of the LATEST
+    campaign, machine time split i9 vs VDS-fallback (seconds), last run time. The
+    strategy is the 2nd-to-last dash token of a sweep run_id (<camp|opt>-...-strat-sym)."""
+    if pool is None:
+        return {}
+    runs = await pool.fetch(
+        "SELECT id, status, agent_id, claimed_at, finished_at, created_at "
+        "FROM backtest_runs WHERE id LIKE 'opt-%' OR id LIKE 'camp-%'"
+    )
+    from collections import defaultdict
+    items: dict = defaultdict(list)
+    for r in runs:
+        parts = r["id"].split("-")
+        if len(parts) < 5:
+            continue
+        items[parts[-2]].append(("-".join(parts[:3]), r))
+    out: dict = {}
+    for strat, lst in items.items():
+        latest = max(c for c, _ in lst)
+        cur = [r for c, r in lst if c == latest]
+        total = len(cur)
+        finished = sum(1 for r in cur if r["status"] in ("done", "failed"))
+        i9_s = vds_s = 0.0
+        last = None
+        for _c, r in lst:
+            ca, fi = r["claimed_at"], r["finished_at"]
+            if ca and fi and fi > ca:
+                secs = (fi - ca).total_seconds()
+                if r["agent_id"] == "vds-fallback":
+                    vds_s += secs
+                elif r["agent_id"]:
+                    i9_s += secs
+            t = fi or r["created_at"]
+            if t and (last is None or t > last):
+                last = t
+        out[strat] = {
+            "pct": round(100 * finished / total) if total else 0,
+            "finished": finished, "total": total, "campaign": latest,
+            "machine_secs_i9": round(i9_s), "machine_secs_vds": round(vds_s),
+            "last_run": last.isoformat() if last else None,
+        }
+    return out
+
+
+def _top3_by_netprofit(rows: list) -> list:
+    """Top-3 instruments by best net profit, from per-symbol best rows."""
+    ranked = sorted(
+        rows, key=lambda d: (d.get("net_profit") if d.get("net_profit") is not None else -1e18),
+        reverse=True,
+    )[:3]
+    return [{"symbol": d.get("symbol"), "net_profit": d.get("net_profit"),
+             "total_return": d.get("total_return")} for d in ranked]
+
+
 async def _run_remote_job_on_vds(row, app_state) -> None:
     """Compute one queued remote sweep job locally on the VDS, metrics-only into the
     leaderboard (same shape as the agent). Serialized + capped + idle-priority."""
@@ -911,6 +966,9 @@ def create_app() -> FastAPI:
                     d[k] = d[k].isoformat()
             best_by_strat.setdefault(r["strategy"], []).append(d)
 
+        # Adaptive sweep progress + machine time per strategy (from backtest_runs).
+        sweep_by = await _sweep_run_stats(pool)
+
         catalog = []
         all_ids = set(names) | set(variants_by) | set(best_by_strat)
         for sid in sorted(all_ids):
@@ -921,6 +979,8 @@ def create_app() -> FastAPI:
                 "variants_tested": variants_by.get(sid, 0),
                 "last_run": lr.isoformat() if lr else None,
                 "results": best_by_strat.get(sid, []),
+                "sweep": sweep_by.get(sid),                       # % done, machine time, last
+                "top3": _top3_by_netprofit(best_by_strat.get(sid, [])),  # hit-parade
             })
         return {
             "initial_equity": 100000,
@@ -970,7 +1030,18 @@ def create_app() -> FastAPI:
             )
             if prow and prow["df"] and prow["dt"]:
                 period = {"date_from": prow["df"].isoformat(), "date_to": prow["dt"].isoformat()}
-        return {"strategy": strategy, "rows": out, "period": period}
+
+        # Sweep progress/machine-time for this strategy + top-3 instruments by net profit
+        # (best row per symbol).
+        sweep = (await _sweep_run_stats(pool)).get(strategy)
+        best_per_sym: dict = {}
+        for d in out:
+            sym = d.get("symbol")
+            cur = best_per_sym.get(sym)
+            if cur is None or (d.get("net_profit") or -1e18) > (cur.get("net_profit") or -1e18):
+                best_per_sym[sym] = d
+        top3 = _top3_by_netprofit(list(best_per_sym.values()))
+        return {"strategy": strategy, "rows": out, "period": period, "sweep": sweep, "top3": top3}
 
     # ── LAB: STL Links ───────────────────────────────────────────────
     @fastapi_app.get("/api/v1/stl-links")

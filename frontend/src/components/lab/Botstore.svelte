@@ -20,8 +20,32 @@
 
   const fmtPct = (v: any) => v != null ? (v * 100).toFixed(2) + '%' : '—';
   const fmtMoney = (v: any) => v != null ? Math.round(v).toLocaleString('ru-RU') + ' ₽' : '—';
+  const fmtMoneyShort = (v: any) => {
+    if (v == null) return '—';
+    const a = Math.abs(v), s = v < 0 ? '-' : '+';
+    if (a >= 1000) return s + (a / 1000).toFixed(a >= 10000 ? 0 : 1) + 'k ₽';
+    return s + Math.round(a) + ' ₽';
+  };
   const fmtNum = (v: any, d = 2) => v != null ? Number(v).toFixed(d) : '—';
   const fmtDate = (v: any) => v ? new Date(v).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+  // Machine time: seconds → compact "Xч Yм" / "Yм" / "Zс".
+  const fmtDur = (secs: any) => {
+    const s = Math.round(Number(secs) || 0);
+    if (s <= 0) return '0с';
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+    if (h > 0) return `${h}ч${m ? ' ' + m + 'м' : ''}`;
+    if (m > 0) return `${m}м`;
+    return `${s}с`;
+  };
+  // Combined machine time across i9 + VDS fallback, with a per-source breakdown.
+  const machineLabel = (sw: any) => {
+    if (!sw) return '—';
+    const i9 = sw.machine_secs_i9 || 0, vds = sw.machine_secs_vds || 0;
+    const parts: string[] = [];
+    if (i9) parts.push(`i9 ${fmtDur(i9)}`);
+    if (vds) parts.push(`VDS ${fmtDur(vds)}`);
+    return parts.length ? parts.join(' · ') : '0с';
+  };
 
   function best(robot: any) {
     const rs = robot.results ?? [];
@@ -103,9 +127,16 @@
   }
 
   // ── Detail tab: all tested instruments × params for one strategy ──────────────
-  let detail = $state<any | null>(null);          // {id, name, rows, period, schema}
+  let detail = $state<any | null>(null);          // {id, name, rows, period, schema, sweep, top3}
   let detailLoading = $state(false);
-  let sortBy = $state<{ col: string; dir: 1 | -1 }>({ col: 'score', dir: -1 });
+  let sortBy = $state<{ col: string; dir: 1 | -1 }>({ col: 'net_profit', dir: -1 });
+  let expanded = $state<Set<string>>(new Set());   // instrument symbols shown in full
+  const COLLAPSED_ROWS = 5;
+  function toggleExpand(sym: string) {
+    const s = new Set(expanded);
+    s.has(sym) ? s.delete(sym) : s.add(sym);
+    expanded = s;
+  }
 
   function tmplOf(id: string) { return strategies.find(s => s.id === id); }
 
@@ -119,8 +150,11 @@
         id: robot.id, name: robot.name,
         rows: data.rows ?? [], period: data.period,
         schema: tmpl?.params_schema ?? [],
+        sweep: data.sweep ?? robot.sweep ?? null,
+        top3: data.top3 ?? robot.top3 ?? [],
       };
-      sortBy = { col: 'score', dir: -1 };
+      sortBy = { col: 'net_profit', dir: -1 };   // default: by financial result
+      expanded = new Set();
     } catch (e) {
       notice = 'Ошибка загрузки деталей: ' + String(e);
     }
@@ -128,11 +162,18 @@
   }
   function closeDetail() { detail = null; }
 
-  // rows grouped by instrument, each group sorted by the active column
-  let bySymbol = $derived.by(() => {
-    const m: Record<string, any[]> = {};
-    for (const r of (detail?.rows ?? [])) (m[r.symbol] ??= []).push(r);
-    return m;
+  // Instrument tables: groups ordered top→bottom by best financial result (net_profit),
+  // rows within each ordered by the active sort column (default net_profit desc).
+  let instrumentTables = $derived.by(() => {
+    const groups: Record<string, any[]> = {};
+    for (const r of (detail?.rows ?? [])) (groups[r.symbol] ??= []).push(r);
+    const arr = Object.entries(groups).map(([sym, rows]) => ({
+      sym,
+      rows: sortRows(rows),
+      best: Math.max(...rows.map(r => (r.net_profit ?? -Infinity))),
+    }));
+    arr.sort((a, b) => b.best - a.best);
+    return arr;
   });
   let paramCols = $derived.by(() => {
     const set = new Set<string>();
@@ -285,8 +326,31 @@
                 <span class="cc-rf">RF {fmtNum(b?.recovery_factor)}</span>
               </div>
               {#if b?.params}<div class="cc-params">{JSON.stringify(b.params)}</div>{/if}
+
+              <!-- adaptive sweep status: % complete + machine time -->
+              {#if robot.sweep}
+                <div class="cc-sweep">
+                  <div class="cc-prog" title="Завершено {robot.sweep.finished}/{robot.sweep.total} задач последнего перебора">
+                    <div class="cc-prog-bar" style="width:{robot.sweep.pct}%"></div>
+                    <span class="cc-prog-lbl">перебор {robot.sweep.pct}%</span>
+                  </div>
+                  <span class="cc-mt" title="Машинное время перебора параметров">⏱ {machineLabel(robot.sweep)}</span>
+                </div>
+              {/if}
+
+              <!-- hit-parade: top-3 instruments by net result -->
+              {#if robot.top3?.length}
+                <div class="cc-top3">
+                  {#each robot.top3 as t, i}
+                    <span class="cc-medal">{['🥇','🥈','🥉'][i]}</span>
+                    <span class="cc-t3sym">{t.symbol}</span>
+                    <span class="cc-t3pnl" class:pos={t.net_profit > 0} class:neg={t.net_profit < 0}>{fmtMoneyShort(t.net_profit)}</span>
+                  {/each}
+                </div>
+              {/if}
+
               <div class="cc-foot">
-                <span class="cc-run">прогон {fmtDate(robot.last_run)}</span>
+                <span class="cc-run">перебор {fmtDate(robot.sweep?.last_run ?? robot.last_run)}</span>
                 <button class="cc-install" disabled={busy} onclick={(e) => { e.stopPropagation(); install(robot); }}>
                   Установить на платформу →
                 </button>
@@ -333,11 +397,38 @@
         <button class="dp-back" onclick={closeDetail}>← Назад к каталогу</button>
         <span class="dp-title">{detail.name}</span>
         <span class="dp-sub">
-          инструментов: {Object.keys(bySymbol).length} · вариантов: {detail.rows.length}
+          инструментов: {instrumentTables.length} · вариантов: {detail.rows.length}
           {#if detail.period}· период {fmtDate(detail.period.date_from)} — {fmtDate(detail.period.date_to)}{/if}
         </span>
       </div>
-      <div class="dp-hint">Клик по строке — открыть бэктест на этом инструменте с этими параметрами (данные догружаются по вчерашний день).</div>
+
+      <!-- adaptive sweep status: % complete · machine time · last run · top-3 -->
+      {#if detail.sweep || detail.top3?.length}
+        <div class="dp-status">
+          {#if detail.sweep}
+            <div class="dps-item">
+              <div class="dps-prog" title="Завершено {detail.sweep.finished}/{detail.sweep.total} задач">
+                <div class="dps-prog-bar" style="width:{detail.sweep.pct}%"></div>
+                <span class="dps-prog-lbl">перебор {detail.sweep.pct}%</span>
+              </div>
+            </div>
+            <div class="dps-item"><span class="dps-k">машинное время</span><span class="dps-v">{machineLabel(detail.sweep)}</span></div>
+            <div class="dps-item"><span class="dps-k">последний перебор</span><span class="dps-v">{fmtDate(detail.sweep.last_run)}</span></div>
+          {/if}
+          {#if detail.top3?.length}
+            <div class="dps-top3">
+              <span class="dps-k">топ инструментов:</span>
+              {#each detail.top3 as t, i}
+                <span class="dps-medal">{['🥇','🥈','🥉'][i]}</span>
+                <span class="dps-t3sym">{t.symbol}</span>
+                <span class="dps-t3pnl" class:pos={t.net_profit > 0} class:neg={t.net_profit < 0}>{fmtMoneyShort(t.net_profit)}</span>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      {/if}
+
+      <div class="dp-hint">Клик по строке — открыть бэктест на этом инструменте с этими параметрами (данные догружаются по вчерашний день). Таблицы и строки отсортированы по финрезу; каждая свёрнута до {COLLAPSED_ROWS} строк.</div>
       <div class="dp-body">
         {#if detailLoading}
           <div class="bs-msg">Загрузка деталей…</div>
@@ -372,11 +463,12 @@
               </tbody>
             </table>
           </div>
-          {#each Object.entries(bySymbol) as [sym, rows]}
+          {#each instrumentTables as { sym, rows, best }}
             <div class="dp-inst">
               <div class="dp-inst-head">
                 <span class="dp-inst-sym">{sym}</span>
                 <span class="dp-inst-cnt">{rows.length} вар.</span>
+                <span class="dp-inst-best" class:pos={best > 0} class:neg={best < 0}>лучший {fmtMoneyShort(best)}</span>
               </div>
               <div class="dp-table-wrap">
                 <table class="dp-table">
@@ -395,7 +487,7 @@
                     </tr>
                   </thead>
                   <tbody>
-                    {#each sortRows(rows) as r}
+                    {#each (expanded.has(sym) ? rows : rows.slice(0, COLLAPSED_ROWS)) as r}
                       <tr class="dp-row" class:cand={r.candidate}
                           onclick={() => openChart(sym, r.params)} title="Открыть бэктест">
                         {#each paramCols as col}
@@ -413,6 +505,11 @@
                   </tbody>
                 </table>
               </div>
+              {#if rows.length > COLLAPSED_ROWS}
+                <button class="dp-expand" onclick={() => toggleExpand(sym)}>
+                  {expanded.has(sym) ? '▴ свернуть' : `▾ показать все (${rows.length})`}
+                </button>
+              {/if}
             </div>
           {/each}
         {/if}
@@ -486,6 +583,36 @@
   .cc-install { padding: 3px 9px; background: #4caf5018; border: 1px solid #4caf5066; color: #4caf50; border-radius: 3px; font-size: 10px; cursor: pointer; white-space: nowrap; }
   .cc-install:hover { background: #4caf5030; }
   .cc-install:disabled { opacity: 0.5; cursor: default; }
+
+  /* card: sweep status + hit-parade */
+  .cc-sweep { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+  .cc-prog { position: relative; flex: 1; height: 13px; background: #15152a; border-radius: 3px; overflow: hidden; }
+  .cc-prog-bar { position: absolute; inset: 0 auto 0 0; background: #1f5e3a; }
+  .cc-prog-lbl { position: relative; font-size: 9px; color: #cfe; line-height: 13px; padding-left: 6px; }
+  .cc-mt { font-size: 9px; color: #89a; white-space: nowrap; }
+  .cc-top3 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 5px; margin-top: 5px; font-size: 10px; }
+  .cc-medal { font-size: 10px; }
+  .cc-t3sym { color: #6aa8ff; font-family: monospace; }
+  .cc-t3pnl { margin-right: 6px; font-variant-numeric: tabular-nums; }
+
+  /* detail: status block */
+  .dp-status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; padding: 8px 12px;
+               background: #0c1322; border-bottom: 1px solid #1a2a44; flex-shrink: 0; }
+  .dps-item { display: flex; align-items: center; gap: 6px; }
+  .dps-k { font-size: 10px; color: #789; text-transform: uppercase; letter-spacing: .3px; }
+  .dps-v { font-size: 12px; color: #cde; }
+  .dps-prog { position: relative; width: 200px; height: 16px; background: #15152a; border-radius: 3px; overflow: hidden; }
+  .dps-prog-bar { position: absolute; inset: 0 auto 0 0; background: #1f5e3a; }
+  .dps-prog-lbl { position: relative; font-size: 10px; color: #cfe; line-height: 16px; padding-left: 8px; }
+  .dps-top3 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 5px; font-size: 12px; }
+  .dps-medal { font-size: 12px; }
+  .dps-t3sym { color: #6aa8ff; font-family: monospace; }
+  .dps-t3pnl { margin-right: 8px; font-variant-numeric: tabular-nums; }
+
+  .dp-inst-best { font-size: 10px; margin-left: auto; font-variant-numeric: tabular-nums; }
+  .dp-expand { width: 100%; padding: 5px; background: #0c0c18; border: none; border-top: 1px solid #14142a;
+               color: #6aa8ff; font-size: 11px; cursor: pointer; }
+  .dp-expand:hover { background: #12122a; color: #9cf; }
 
   /* installed card */
   .inst-card { background: #0f0f1e; border: 1px solid #2d2d4a; border-radius: 4px; padding: 8px 10px; }
