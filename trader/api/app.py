@@ -1089,6 +1089,69 @@ def create_app() -> FastAPI:
         top3 = _top3_by_netprofit(list(best_per_sym.values()))
         return {"strategy": strategy, "rows": out, "period": period, "sweep": sweep, "top3": top3}
 
+    @fastapi_app.get("/api/v1/agent/activity")
+    async def agent_activity(request: Request):
+        """Live picture of the background optimizer for the Botstore panel: is the i9
+        agent online, the current campaign's progress, throughput, and the last few
+        processed jobs. So the user can watch the headless agent from the web UI."""
+        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        pool = request.app.state.db_pool
+        out = {"online": False, "agent_id": None, "last_seen": None, "vds_fallback": False,
+               "vds_load": None, "campaign": None, "counts": {}, "pct": 0,
+               "throughput_per_min": 0, "recent": []}
+        try:
+            la = os.getloadavg()
+            out["vds_load"] = round(la[0], 2)
+        except Exception:
+            pass
+        if pool is None:
+            return out
+        out["online"] = await _agent_alive_any(request.app.state, pool)
+        # last claim by the real i9 agent + by the VDS fallback
+        i9 = await pool.fetchrow(
+            "SELECT agent_id, max(claimed_at) AS t FROM backtest_runs "
+            "WHERE agent_id IS NOT NULL AND agent_id <> 'vds-fallback' GROUP BY agent_id ORDER BY t DESC LIMIT 1")
+        if i9:
+            out["agent_id"] = i9["agent_id"]
+            out["last_seen"] = i9["t"].isoformat() if i9["t"] else None
+        fb = await pool.fetchval(
+            "SELECT max(claimed_at) FROM backtest_runs WHERE agent_id='vds-fallback' "
+            "AND claimed_at > now() - interval '3 minutes'")
+        out["vds_fallback"] = fb is not None
+
+        rows = await pool.fetch(
+            "SELECT id, status, agent_id, finished_at FROM backtest_runs "
+            "WHERE id LIKE 'opt-%' OR id LIKE 'camp-%' ORDER BY created_at DESC LIMIT 500")
+        if rows:
+            latest = _sweep_campaign(rows[0]["id"])
+            out["campaign"] = latest
+            cur = [r for r in rows if _sweep_campaign(r["id"]) == latest]
+            from collections import Counter
+            c = Counter(r["status"] for r in cur)
+            counts = {k: c.get(k, 0) for k in ("done", "failed", "queued", "running")}
+            out["counts"] = counts
+            tot = sum(counts.values())
+            out["pct"] = round(100 * (counts["done"] + counts["failed"]) / tot) if tot else 0
+            # throughput: jobs finished in the last minute (any sweep)
+            import datetime as _dt
+            now = _dt.datetime.now(_dt.timezone.utc)
+            out["throughput_per_min"] = sum(
+                1 for r in rows if r["finished_at"] and (now - r["finished_at"]).total_seconds() <= 60)
+            # recent finished jobs (strategy/symbol parsed from run_id: ...-strat-sym)
+            fin = [r for r in rows if r["finished_at"]]
+            fin.sort(key=lambda r: r["finished_at"], reverse=True)
+            for r in fin[:8]:
+                parts = r["id"].split("-")
+                out["recent"].append({
+                    "strategy": parts[-2] if len(parts) >= 2 else r["id"],
+                    "symbol": parts[-1] if len(parts) >= 1 else "",
+                    "status": r["status"],
+                    "agent": "i9" if (r["agent_id"] and r["agent_id"] != "vds-fallback") else
+                             ("VDS" if r["agent_id"] == "vds-fallback" else "?"),
+                    "finished_at": r["finished_at"].isoformat(),
+                })
+        return out
+
     # ── LAB: STL Links ───────────────────────────────────────────────
     @fastapi_app.get("/api/v1/stl-links")
     async def list_stl_links(request: Request):

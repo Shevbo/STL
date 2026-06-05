@@ -314,7 +314,23 @@
   }
   function closeChart() { chart = null; chartErr = ''; chartJob = null; chartStatus = null; }
 
-  $effect(() => { load(); });
+  // ── Agent activity panel (background optimizer status) ───────────────────────
+  let activity = $state<any | null>(null);
+  let activityTimer: any = null;
+  const fmtClock = (iso: any) => iso ? new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—';
+  async function loadActivity() {
+    try {
+      const r = await fetchWithAuth('/api/v1/agent/activity');
+      if (r.ok) activity = await r.json();
+    } catch { /* keep last */ }
+  }
+
+  $effect(() => {
+    load();
+    loadActivity();
+    activityTimer = setInterval(loadActivity, 5000);
+    return () => clearInterval(activityTimer);
+  });
 </script>
 
 <div class="bs-root">
@@ -328,6 +344,39 @@
     </div>
     {#if notice}<div class="bs-notice">{notice}</div>{/if}
   </div>
+
+  <!-- Agent / background-optimizer live status (so you can watch the headless agent) -->
+  {#if activity}
+    <div class="ag-panel">
+      <div class="ag-row">
+        <span class="ag-dot" class:on={activity.online}></span>
+        <span class="ag-title">Агент i9: <b class={activity.online ? 'pos' : 'neg'}>{activity.online ? 'онлайн' : 'офлайн'}</b></span>
+        {#if activity.agent_id}<span class="ag-sub">{activity.agent_id}</span>{/if}
+        <span class="ag-sub">посл. активность {fmtClock(activity.last_seen)}</span>
+        {#if activity.vds_fallback}<span class="ag-badge">VDS-фолбэк активен</span>{/if}
+        <span class="ag-sub ag-right">VDS loadavg {activity.vds_load ?? '—'} · {activity.throughput_per_min} задач/мин</span>
+      </div>
+      {#if activity.campaign}
+        <div class="ag-row">
+          <span class="ag-sub">кампания {activity.campaign}</span>
+          <div class="ag-prog" title="готово {activity.counts.done} · ошибок {activity.counts.failed} · в очереди {activity.counts.queued} · считается {activity.counts.running}">
+            <div class="ag-prog-bar" style="width:{activity.pct}%"></div>
+            <span class="ag-prog-lbl">{activity.pct}% · done {activity.counts.done}/{(activity.counts.done||0)+(activity.counts.failed||0)+(activity.counts.queued||0)+(activity.counts.running||0)} · queued {activity.counts.queued} · running {activity.counts.running}</span>
+          </div>
+        </div>
+      {/if}
+      {#if activity.recent?.length}
+        <div class="ag-recent">
+          {#each activity.recent as r}
+            <span class="ag-job" title="{r.agent} · {fmtClock(r.finished_at)}">
+              <span class="ag-jst" class:pos={r.status==='done'} class:neg={r.status==='failed'}>{r.status==='done' ? '✓' : '✗'}</span>
+              {r.strategy}·{r.symbol}
+            </span>
+          {/each}
+        </div>
+      {/if}
+    </div>
+  {/if}
 
   {#if loading}
     <div class="bs-msg">Загрузка…</div>
@@ -606,6 +655,22 @@
   .bs-note { font-size: 11px; color: #888; line-height: 1.5; }
   .bs-note b { color: #ccc; }
   .bs-notice { margin-top: 6px; font-size: 11px; color: #6aa8ff; }
+
+  /* agent activity panel */
+  .ag-panel { background: #0c1322; border: 1px solid #24406a; border-radius: 5px; padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
+  .ag-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 11px; color: #9ab; }
+  .ag-dot { width: 8px; height: 8px; border-radius: 50%; background: #f44336; box-shadow: 0 0 5px #f4433688; flex-shrink: 0; }
+  .ag-dot.on { background: #4caf50; box-shadow: 0 0 5px #4caf5088; }
+  .ag-title { font-size: 12px; color: #cde; }
+  .ag-sub { font-size: 10px; color: #678; }
+  .ag-right { margin-left: auto; }
+  .ag-badge { font-size: 9px; color: #ffb86b; border: 1px solid #ffb86b55; border-radius: 3px; padding: 1px 6px; }
+  .ag-prog { position: relative; flex: 1; min-width: 200px; height: 16px; background: #0a1120; border: 1px solid #1a2a44; border-radius: 3px; overflow: hidden; }
+  .ag-prog-bar { position: absolute; inset: 0 auto 0 0; background: #1f5e3a; }
+  .ag-prog-lbl { position: relative; font-size: 9px; color: #cfe; line-height: 16px; padding-left: 8px; white-space: nowrap; }
+  .ag-recent { display: flex; flex-wrap: wrap; gap: 4px 8px; font-size: 10px; color: #89a; }
+  .ag-job { font-family: monospace; white-space: nowrap; }
+  .ag-jst { font-weight: 700; }
 
   .bs-msg { font-size: 12px; color: #666; padding: 20px; text-align: center; }
   .bs-msg.err { color: #f44336; }
