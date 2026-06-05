@@ -203,13 +203,17 @@ async def _run_backtest_task(run_id: str, body: dict, pool, app_state) -> None:
         # Hard timeout: an uncached symbol pulls months of 1-min bars from ISS, and a
         # slow/hung ISS response would otherwise pin this task (and the backtest lock)
         # forever, blocking every later local run and leaving the chart spinning.
-        bars = await asyncio.wait_for(
-            _fetch_bars_for_backtest(
-                body.get("symbol", base_params.get("symbol", "")),
-                body["dateFrom"], body["dateTo"], app_state,
-            ),
-            timeout=150,
-        )
+        _sym = body.get("symbol", base_params.get("symbol", ""))
+        try:
+            bars = await asyncio.wait_for(
+                _fetch_bars_for_backtest(_sym, body["dateFrom"], body["dateTo"], app_state),
+                timeout=150,
+            )
+        except asyncio.TimeoutError:
+            raise ValueError(
+                f"загрузка истории {_sym} с MOEX ISS не уложилась в 150с "
+                f"(инструмент не кэширован, медленный ответ ISS) — попробуйте ещё раз"
+            )
         grid = body.get("paramsGrid", {})
         keys = list(grid.keys())
         values = [grid[k] if isinstance(grid[k], list) else [grid[k]] for k in keys]
@@ -337,6 +341,18 @@ async def _sweep_run_stats(pool) -> dict:
             "last_run": last.isoformat() if last else None,
         }
     return out
+
+
+def _agent_alive(app_state) -> bool:
+    """True if an external agent (i9) hit /claim recently (heartbeat < 30s). Used to
+    route on-demand chart backtests to the i9 instead of loading the VDS."""
+    t = getattr(app_state, "last_agent_seen", None)
+    if t is None:
+        return False
+    try:
+        return (asyncio.get_event_loop().time() - t) < 30
+    except Exception:
+        return False
 
 
 def _top3_by_netprofit(rows: list) -> list:
@@ -1324,10 +1340,19 @@ def create_app() -> FastAPI:
         def _parse_dt(s: str) -> _dt:
             return _dt.fromisoformat(s.replace("Z", "+00:00"))
 
-        # engine: "local" → run on the VDS now (default); "remote" → enqueue for the
-        # external Windows agent to pick up (keeps heavy sweeps off the VDS entirely).
+        # engine: "local" → run on the VDS now; "remote" → enqueue for the i9 agent;
+        # "auto" → i9 if it's alive (keeps load off the important host), else VDS.
         engine = body.get("engine", "local")
+        if engine == "auto":
+            engine = "remote" if _agent_alive(request.app.state) else "local"
         symbol = body.get("symbol", "")
+        # A remote on-demand chart run must be self-contained for the agent: carry
+        # snake_case script_code/base_params + a single combo (param_sets=[{}]).
+        if engine == "remote" and body.get("scriptCode"):
+            body = {**body, "engine": "remote",
+                    "script_code": body.get("scriptCode"),
+                    "base_params": {**(body.get("baseParams") or {})},
+                    "param_sets": [{}], "paramsGrid": {}}
         # robot_id is a FK. An on-demand library run (scriptCode supplied, e.g. opening
         # a chart from the Botstore detail table) has no installed robot → resolve to
         # any valid robot row just to satisfy the constraint; script_code drives the run.
@@ -1358,11 +1383,27 @@ def create_app() -> FastAPI:
         require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
         pool = request.app.state.db_pool
         row = await pool.fetchrow(
-            "SELECT status, error_msg, finished_at FROM backtest_runs WHERE id=$1", run_id
+            "SELECT status, error_msg, finished_at, engine, agent_id, claimed_at, created_at "
+            "FROM backtest_runs WHERE id=$1", run_id
         )
         if not row:
             raise HTTPException(status_code=404, detail="Run not found")
-        return dict(row)
+        d = dict(row)
+        for k in ("finished_at", "claimed_at", "created_at"):
+            if d.get(k) is not None:
+                d[k] = d[k].isoformat()
+        # where it runs + the host's pulse, so the UI can reassure the user it's alive.
+        aid = d.get("agent_id") or ""
+        d["runner"] = ("i9" if (aid and aid != "vds-fallback") else
+                       "VDS (фоновый)" if aid == "vds-fallback" else
+                       "VDS" if d.get("engine") == "local" else "очередь")
+        d["agent_alive"] = _agent_alive(request.app.state)
+        try:
+            la = os.getloadavg()
+            d["vds_load"] = round(la[0], 2)
+        except Exception:
+            d["vds_load"] = None
+        return d
 
     @fastapi_app.get("/api/v1/backtest/{run_id}/results")
     async def backtest_results(run_id: str, request: Request):
@@ -1394,12 +1435,21 @@ def create_app() -> FastAPI:
         if pool is None:
             raise HTTPException(status_code=503, detail="DB unavailable")
         agent_id = body.get("agent_id", "agent")
+        # Heartbeat: any /claim means an external agent (i9) is alive → on-demand chart
+        # runs can be routed to it instead of loading the VDS.
+        try:
+            request.app.state.last_agent_seen = asyncio.get_event_loop().time()
+        except Exception:
+            pass
+        # Interactive UI runs (bare cuid, NOT camp-/opt-) jump ahead of sweep jobs so a
+        # chart opens fast even mid-campaign.
         row = await pool.fetchrow(
             """UPDATE backtest_runs SET status='running', claimed_at=now(), agent_id=$1
                WHERE id = (
                  SELECT id FROM backtest_runs
                  WHERE engine='remote' AND status='queued'
-                 ORDER BY created_at LIMIT 1
+                 ORDER BY (id LIKE 'opt-%' OR id LIKE 'camp-%'), created_at
+                 LIMIT 1
                  FOR UPDATE SKIP LOCKED)
                RETURNING id, robot_id, job_body, symbol""",
             agent_id,

@@ -226,47 +226,67 @@
   let chart = $state<any | null>(null);   // {symbol, params, result, pointValue, dateFrom, dateTo}
   let chartLoading = $state(false);
   let chartErr = $state('');
+  let chartJob = $state<any | null>(null);     // {symbol, params} shown during the run
+  let chartStatus = $state<any | null>(null);  // live: {runner, status, elapsed, vds_load, agent_alive, vds_down}
 
   const toISO = (d: Date) => d.toISOString();
   function yesterday() { const d = new Date(); d.setDate(d.getDate() - 1); return d; }
   function daysAgo(n: number) { const d = new Date(); d.setDate(d.getDate() - n); return d; }
+  const ruStatus = (s: string) => ({ queued: 'в очереди', pending: 'запуск', running: 'считается', done: 'готово', failed: 'ошибка' } as any)[s] || s || '…';
 
   async function openChart(symbol: string, params: any) {
     if (!detail) return;
     chartErr = ''; chartLoading = true; chart = null;
+    chartJob = { symbol, params };
+    chartStatus = { runner: '…', status: 'queued', elapsed: 0, vds_load: null, agent_alive: null, vds_down: false };
+    const t0 = Date.now();
     try {
       const tmpl = tmplOf(detail.id);
       if (!tmpl) throw new Error('Нет шаблона стратегии для прогона');
-      // Test window = campaign start … YESTERDAY (always pull fresh data to date).
+      // Reproduce the EXACT window the leaderboard used, so the chart's result MATCHES
+      // the table number (same code, params, period, commission). Using "to yesterday"
+      // here would silently diverge (forward days) and look like a bug.
       const dateFrom = detail.period?.date_from ?? toISO(daysAgo(95));
-      const dateTo = toISO(yesterday());
+      const dateTo = detail.period?.date_to ?? toISO(yesterday());
+      // engine 'auto' → i9 agent if it's online (keeps load off the VDS), else VDS
+      // (low priority). The backend decides and reports back where it runs.
       const res = await fetchWithAuth('/api/v1/backtest/run', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           scriptCode: tmpl.script_code,
           baseParams: { ...params, symbol },
-          symbol, paramsGrid: {}, engine: 'local',
+          symbol, paramsGrid: {}, engine: 'auto',
           dateFrom, dateTo,
         }),
       });
       if (!res.ok) throw new Error(await res.text());
       const { run_id } = await res.json();
       let result: any = null;
-      for (let i = 0; i < 150; i++) {
+      for (let i = 0; i < 180; i++) {           // up to 6 min
         await new Promise(r => setTimeout(r, 2000));
-        const sr = await fetchWithAuth(`/api/v1/backtest/${run_id}/status`);
-        const sd = await sr.json();
+        let sd: any;
+        try {
+          const sr = await fetchWithAuth(`/api/v1/backtest/${run_id}/status`);
+          if (!sr.ok) throw new Error('status ' + sr.status);
+          sd = await sr.json();
+        } catch {
+          // VDS not answering the poll — surface it, keep trying (box may be busy).
+          chartStatus = { ...chartStatus, vds_down: true, elapsed: Math.round((Date.now() - t0) / 1000) };
+          continue;
+        }
+        chartStatus = {
+          runner: sd.runner, status: sd.status, elapsed: Math.round((Date.now() - t0) / 1000),
+          vds_load: sd.vds_load, agent_alive: sd.agent_alive, vds_down: false,
+        };
         if (sd.status === 'done') {
           const rr = await fetchWithAuth(`/api/v1/backtest/${run_id}/results`);
           const rows = rr.ok ? await rr.json() : [];
           result = rows[0] ?? null;
           break;
         }
-        if (sd.status === 'failed') throw new Error(sd.error_msg || 'Бэктест завершился ошибкой');
+        if (sd.status === 'failed') throw new Error(sd.error_msg || 'Бэктест завершился ошибкой (см. логи VDS)');
       }
-      if (!result) throw new Error('Бэктест не вернул результат (таймаут)');
-      // point_value → ruble PnL on the chart. Fetched AFTER the run, which populates
-      // instrument_meta (via ISS spec), so it reliably has the value.
+      if (!result) throw new Error('Бэктест не вернул результат за 6 мин (таймаут ожидания)');
       let pv = 1;
       try {
         const mr = await fetchWithAuth(`/api/v1/instruments/${encodeURIComponent(symbol)}/meta`);
@@ -277,8 +297,9 @@
       chartErr = String(e);
     }
     chartLoading = false;
+    chartStatus = null;
   }
-  function closeChart() { chart = null; chartErr = ''; }
+  function closeChart() { chart = null; chartErr = ''; chartJob = null; chartStatus = null; }
 
   $effect(() => { load(); });
 </script>
@@ -428,7 +449,7 @@
         </div>
       {/if}
 
-      <div class="dp-hint">Клик по строке — открыть бэктест на этом инструменте с этими параметрами (данные догружаются по вчерашний день). Таблицы и строки отсортированы по финрезу; каждая свёрнута до {COLLAPSED_ROWS} строк.</div>
+      <div class="dp-hint">Клик по строке — открыть бэктест за тот же период перебора (число на графике совпадёт с таблицей). Таблицы и строки отсортированы по финрезу; каждая свёрнута до {COLLAPSED_ROWS} строк.</div>
       <div class="dp-body">
         {#if detailLoading}
           <div class="bs-msg">Загрузка деталей…</div>
@@ -523,16 +544,31 @@
       <div class="cm-box">
         <div class="cm-head">
           <span class="cm-title">
-            Бэктест · {chart?.symbol ?? ''}
-            {#if chart}<span class="cm-params">{JSON.stringify(chart.params)}</span>{/if}
+            Бэктест · {chart?.symbol ?? chartJob?.symbol ?? ''}
+            {#if chart || chartJob}<span class="cm-params">{JSON.stringify(chart?.params ?? chartJob?.params)}</span>{/if}
           </span>
           <button class="cm-close" onclick={closeChart}>✕</button>
         </div>
         <div class="cm-body">
           {#if chartLoading}
-            <div class="bs-msg">Прогоняю бэктест (данные по вчерашний день)…</div>
+            <div class="cm-status">
+              <div class="cm-spin">Прогоняю бэктест…</div>
+              <div class="cm-line">Инструмент: <b>{chartJob?.symbol}</b> · <span class="cm-p">{JSON.stringify(chartJob?.params)}</span></div>
+              <div class="cm-line">Где считается: <b>{chartStatus?.runner ?? '…'}</b> · {ruStatus(chartStatus?.status)} · прошло {chartStatus?.elapsed ?? 0}с</div>
+              <div class="cm-line" class:warn={chartStatus?.vds_down}>
+                {#if chartStatus?.vds_down}
+                  ⚠ VDS не отвечает на опрос (возможно перегрузка) — продолжаю ждать…
+                {:else}
+                  VDS жив · loadavg {chartStatus?.vds_load ?? '—'} · i9-агент {chartStatus?.agent_alive ? 'онлайн' : 'офлайн'}
+                {/if}
+              </div>
+              <div class="cm-hint">Считается на i9 (если онлайн) или на VDS в фоне (низкий приоритет), важный хост не нагружается. Обычно 10–60с; первый прогон по некэшированному инструменту — до ~2.5 мин (тянет историю с ISS).</div>
+            </div>
           {:else if chartErr}
-            <div class="bs-msg err">{chartErr}</div>
+            <div class="cm-status">
+              <div class="bs-msg err">{chartErr}</div>
+              <div class="cm-hint">Если это таймаут загрузки истории — инструмент просто не кэширован, попробуйте открыть ещё раз (данные уже подтянулись). VDS остаётся жив, перебор продолжается.</div>
+            </div>
           {:else if chart}
             <BacktestChart
               result={chart.result}
@@ -568,7 +604,7 @@
   .bs-empty { font-size: 11px; color: #555; padding: 16px; text-align: center; font-style: italic; }
 
   /* catalog card */
-  .cat-card { background: #0f0f1e; border: 1px solid #2d2d4a; border-radius: 4px; padding: 8px 10px; cursor: pointer; }
+  .cat-card { flex-shrink: 0; background: #0f0f1e; border: 1px solid #2d2d4a; border-radius: 4px; padding: 8px 10px; cursor: pointer; }
   .cat-card:hover { border-color: #3d3d5a; }
   .cat-card.sel { border-color: #4caf5066; background: #0c160c; }
   .cc-top { display: flex; justify-content: space-between; align-items: baseline; }
@@ -585,6 +621,8 @@
   .cc-install:disabled { opacity: 0.5; cursor: default; }
 
   /* card: sweep status + hit-parade */
+  /* .bs-list is a flex column → without this, cards compress and clip the progress
+     bar / hit-parade. flex-shrink:0 lets each card take its natural height. */
   .cc-sweep { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
   .cc-prog { position: relative; flex: 1; height: 13px; background: #15152a; border-radius: 3px; overflow: hidden; }
   .cc-prog-bar { position: absolute; inset: 0 auto 0 0; background: #1f5e3a; }
@@ -615,7 +653,7 @@
   .dp-expand:hover { background: #12122a; color: #9cf; }
 
   /* installed card */
-  .inst-card { background: #0f0f1e; border: 1px solid #2d2d4a; border-radius: 4px; padding: 8px 10px; }
+  .inst-card { flex-shrink: 0; background: #0f0f1e; border: 1px solid #2d2d4a; border-radius: 4px; padding: 8px 10px; }
   .ic-top { display: flex; align-items: center; gap: 7px; }
   .ic-dot { width: 6px; height: 6px; border-radius: 50%; background: #333; flex-shrink: 0; }
   .ic-dot.live { background: #4caf50; box-shadow: 0 0 4px #4caf5088; }
@@ -681,4 +719,11 @@
   .cm-close { width: 26px; height: 26px; background: #1a1a2e; border: 1px solid #2d2d4a; color: #aaa; border-radius: 3px; font-size: 13px; cursor: pointer; flex-shrink: 0; }
   .cm-close:hover { color: #f44336; border-color: #f4433655; }
   .cm-body { flex: 1; min-height: 0; position: relative; }
+  .cm-status { display: flex; flex-direction: column; gap: 8px; padding: 28px; max-width: 720px; margin: 0 auto; }
+  .cm-spin { font-size: 14px; color: #4caf50; font-weight: 600; }
+  .cm-line { font-size: 12px; color: #aaa; }
+  .cm-line b { color: #cfe; }
+  .cm-line.warn { color: #ffb86b; }
+  .cm-p { font-family: monospace; font-size: 11px; color: #789; }
+  .cm-hint { font-size: 11px; color: #667; line-height: 1.5; margin-top: 4px; }
 </style>

@@ -191,6 +191,36 @@ export function commissionFor(symbol: string, price: number, qty: number, pointV
   return broker + rate * notional * q;
 }
 
+export interface CommissionBreakdown {
+  broker: number;     // Σ broker fee (Finam 0.45 ₽/contract)
+  exchange: number;   // Σ MOEX exchange fee (taker only; 0 for maker)
+  total: number;
+  fills: number;      // number of order fills charged
+  contracts: number;  // Σ contracts across fills
+  rate: number;       // exchange rate applied (fraction of notional), for transparency
+  group: string;      // MOEX fee group of the instrument
+}
+
+// Total broker vs exchange commission across all fills — so the UI can SHOW the split
+// and the user can verify it's the real broker/exchange tariff, not a guess.
+export function commissionBreakdown(
+  trades: Fill[], pointValue = 1, symbol = '', taker = true,
+): CommissionBreakdown {
+  let broker = 0, exchange = 0, fills = 0, contracts = 0;
+  for (const t of trades) {
+    const q = Math.abs(Number(t.qty) || 1);
+    const full = commissionFor(symbol, t.price, q, pointValue, taker);
+    const brk = BROKER_FEE_PER_CONTRACT * q;
+    broker += brk; exchange += full - brk;
+    fills++; contracts += q;
+  }
+  return {
+    broker, exchange, total: broker + exchange, fills, contracts,
+    rate: taker ? (MOEX_TAKER_RATE[feeGroup(symbol)] ?? MOEX_TAKER_RATE.index) : 0,
+    group: feeGroup(symbol),
+  };
+}
+
 // Walk fills, classify each by what it does to the running position, bucket time
 // to candle time, and on closing fills compute hold time, max contracts in the
 // episode, and realized PnL (rubles, via pointValue) NET of commission. Each fill's

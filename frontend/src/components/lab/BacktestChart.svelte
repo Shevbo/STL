@@ -12,7 +12,7 @@
   import { fetchWithAuth } from '../../lib/fetch-auth';
   import {
     toFills, replay, computeStats, tradeEvents, priceMarkers,
-    positionEpisodes, buildConnectors, exitStats,
+    positionEpisodes, buildConnectors, exitStats, commissionBreakdown, commissionFor,
   } from '../../lib/lab-analytics';
 
   let {
@@ -51,6 +51,11 @@
   let error = $state('');
   let stats = $state<any>(null);
   let exits = $state<any>(null);   // TP/SL exit analytics
+  let commission = $state<any>(null);   // broker/exchange commission breakdown
+  let netResult = $state(0);            // Σ realized close PnL (₽, net of commission)
+  let statsExpanded = $state(false);    // report collapsed to 2 lines by default
+  let showTrades = $state(false);       // trades-table overlay
+  let tradeRows = $state<any[]>([]);    // per-trade rows for the table
   let crossLabel = $state('');
   let resampleMin = $state(defaultInterval);
   let margin = $state<number | null>(null);
@@ -78,6 +83,13 @@
 
   const fmtMoney = (v: number) =>
     (v >= 0 ? '+' : '') + v.toLocaleString('ru-RU', { maximumFractionDigits: 0 });
+  const fmtRub = (v: number) => Math.round(v).toLocaleString('ru-RU') + ' ₽';
+  // Commission for one fill, using this chart's instrument + taker/maker mode.
+  const commissionForFill = (price: number, qty: number) => commissionFor(symbol, price, qty, pointValue, taker);
+  const KIND_RU: Record<string, string> = {
+    open: 'Открытие', average: 'Усреднение', partial: 'Част. закрытие',
+    full: 'Полн. закрытие', reverse: 'Реверс',
+  };
   // Bar epochs carry Moscow wall-clock stamped as UTC, so format in UTC to match axis.
   const fmtTs = (ts: number) => new Date(ts * 1000).toLocaleString('ru-RU', {
     timeZone: 'UTC', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
@@ -381,7 +393,19 @@
             maxLoss: Math.min(...closes),
           };
         }
+        netResult = closes.reduce((a, b) => a + b, 0);   // net of commission
       }
+      // Broker vs exchange commission split (transparency).
+      commission = commissionBreakdown(fills, pointValue, symbol, taker);
+      // Per-trade rows for the trades table (one row per fill, with role + close PnL).
+      tradeRows = events.map((e, i) => ({
+        n: i + 1, time: e.rawTime, kind: e.kind, side: e.side, qty: e.qty, price: e.price,
+        posAfter: e.posAfter,
+        comm: commissionForFill(e.price, e.qty),
+        pnl: e.close ? e.close.pnl : null,
+        exit: e.close ? e.close.exit : null,
+        label: e.label,
+      }));
 
       // Fit all data into the view (equity mirrors via one-way logical sync).
       tvCandle.timeScale().fitContent();
@@ -471,29 +495,89 @@
     {/if}
 
     {#if stats}
-      <div class="stats-overlay">
-        <div class="st-row"><span>Всего сделок</span><b>{stats.roundTrips}</b>
-          <span class="st-sub">(L {stats.longRT} / S {stats.shortRT})</span></div>
-        <div class="st-row"><span>Макс. позиция</span><b>{stats.maxAbsPos} конт.</b>
-          <span class="st-sub">ГО: {margin != null ? fmtMoney(stats.maxAbsPos * margin).replace('+','') + ' ₽' : '—'}</span></div>
-        <div class="st-row"><span>Средн. на сделку</span>
-          <b class:pos={stats.avgPerTrade > 0} class:neg={stats.avgPerTrade < 0}>{fmtMoney(stats.avgPerTrade)}</b></div>
-        <div class="st-row"><span>Макс. прибыль</span><b class="pos">{fmtMoney(stats.maxProfit)}</b></div>
-        <div class="st-row"><span>Макс. убыток</span><b class="neg">{fmtMoney(stats.maxLoss)}</b></div>
-        <div class="st-row"><span>Фактор восст.</span><b>{stats.recovery != null ? stats.recovery.toFixed(2) : '—'}</b></div>
-        {#if exits && (exits.tp + exits.sl) > 0}
-          <div class="st-sep"></div>
-          <div class="st-row"><span>Выходы TP / SL</span>
-            <b><span class="pos">{exits.tp}</span> / <span class="neg">{exits.sl}</span></b>
-            <span class="st-sub">{(exits.winRateByExit * 100).toFixed(0)}% TP</span></div>
-          <div class="st-row"><span>· полные</span>
-            <span class="st-sub">TP {exits.tpFull} / SL {exits.slFull}</span></div>
-          <div class="st-row"><span>· частичные</span>
-            <span class="st-sub">TP {exits.tpPartial} / SL {exits.slPartial}</span></div>
-          <div class="st-row"><span>Прибыль TP</span><b class="pos">{fmtMoney(exits.tpPnl)}</b></div>
-          <div class="st-row"><span>Убыток SL</span><b class="neg">{fmtMoney(exits.slPnl)}</b></div>
+      <div class="stats-overlay" class:open={statsExpanded}>
+        <!-- collapsed: 2 lines. click to expand (frees up chart area). -->
+        <button class="st-toggle" onclick={() => statsExpanded = !statsExpanded}
+                title={statsExpanded ? 'Свернуть отчёт' : 'Развернуть отчёт'}>
+          <div class="st-head">
+            <span>Результат</span>
+            <b class:pos={netResult > 0} class:neg={netResult < 0}>{fmtMoney(netResult)} ₽</b>
+            <span class="st-chev">{statsExpanded ? '▴' : '▾'}</span>
+          </div>
+          <div class="st-head2">
+            <span>{stats.roundTrips} сделок · комиссия {commission ? fmtRub(commission.total) : '—'}</span>
+          </div>
+        </button>
+
+        {#if statsExpanded}
+          <div class="st-body">
+            <div class="st-row"><span>Всего сделок</span><b>{stats.roundTrips}</b>
+              <span class="st-sub">(L {stats.longRT} / S {stats.shortRT})</span></div>
+            <div class="st-row"><span>Макс. позиция</span><b>{stats.maxAbsPos} конт.</b>
+              <span class="st-sub">ГО: {margin != null ? fmtMoney(stats.maxAbsPos * margin).replace('+','') + ' ₽' : '—'}</span></div>
+            <div class="st-row"><span>Средн. на сделку</span>
+              <b class:pos={stats.avgPerTrade > 0} class:neg={stats.avgPerTrade < 0}>{fmtMoney(stats.avgPerTrade)}</b></div>
+            <div class="st-row"><span>Макс. прибыль</span><b class="pos">{fmtMoney(stats.maxProfit)}</b></div>
+            <div class="st-row"><span>Макс. убыток</span><b class="neg">{fmtMoney(stats.maxLoss)}</b></div>
+            <div class="st-row"><span>Фактор восст.</span><b>{stats.recovery != null ? stats.recovery.toFixed(2) : '—'}</b></div>
+
+            {#if commission}
+              <div class="st-sep"></div>
+              <div class="st-row st-comm-h"><span>Комиссия ({taker ? 'тейкер' : 'мейкер'})</span><b class="neg">−{fmtRub(commission.total)}</b></div>
+              <div class="st-row"><span>· брокеру (Finam 0,45/конт.)</span><b class="neg">−{fmtRub(commission.broker)}</b></div>
+              <div class="st-row"><span>· бирже (MOEX{taker ? ` ${(commission.rate * 100).toFixed(4)}%` : ', мейкер 0'})</span><b class="neg">−{fmtRub(commission.exchange)}</b></div>
+              <div class="st-row"><span>· филлов / контрактов</span><span class="st-sub">{commission.fills} / {commission.contracts}</span></div>
+            {/if}
+
+            {#if exits && (exits.tp + exits.sl) > 0}
+              <div class="st-sep"></div>
+              <div class="st-row"><span>Выходы TP / SL</span>
+                <b><span class="pos">{exits.tp}</span> / <span class="neg">{exits.sl}</span></b>
+                <span class="st-sub">{(exits.winRateByExit * 100).toFixed(0)}% TP</span></div>
+              <div class="st-row"><span>· полные</span>
+                <span class="st-sub">TP {exits.tpFull} / SL {exits.slFull}</span></div>
+              <div class="st-row"><span>· частичные</span>
+                <span class="st-sub">TP {exits.tpPartial} / SL {exits.slPartial}</span></div>
+              <div class="st-row"><span>Прибыль TP</span><b class="pos">{fmtMoney(exits.tpPnl)}</b></div>
+              <div class="st-row"><span>Убыток SL</span><b class="neg">{fmtMoney(exits.slPnl)}</b></div>
+            {/if}
+
+            <button class="st-trades-btn" onclick={() => showTrades = true}>Открыть таблицу сделок бэктеста →</button>
+            <div class="st-foot">Суммы в ₽, чистыми (за вычетом комиссии {taker ? 'тейкер: биржа + брокер' : 'мейкер: только брокер'}).</div>
+          </div>
         {/if}
-        <div class="st-foot">Суммы в ₽, за вычетом комиссии: {taker ? 'тейкер (биржа + брокер 0,45 ₽)' : 'мейкер (брокер 0,45 ₽/контракт)'}</div>
+      </div>
+    {/if}
+
+    <!-- full per-trade table (all details), opened from the report -->
+    {#if showTrades}
+      <div class="trades-pane">
+        <div class="tp-head">
+          <span class="tp-title">Сделки бэктеста · {symbol} · {tradeRows.length} филлов</span>
+          <button class="tp-close" onclick={() => showTrades = false}>✕</button>
+        </div>
+        <div class="tp-wrap">
+          <table class="tp-table">
+            <thead>
+              <tr><th>#</th><th>Время (UTC)</th><th>Тип</th><th>Сторона</th><th class="num">Кол.</th><th class="num">Цена</th><th class="num">Комиссия</th><th class="num">Поз. после</th><th class="num">Результат ₽</th></tr>
+            </thead>
+            <tbody>
+              {#each tradeRows as r}
+                <tr>
+                  <td>{r.n}</td>
+                  <td>{fmtTs(r.time)}</td>
+                  <td>{KIND_RU[r.kind] ?? r.kind}</td>
+                  <td class={r.side === 'buy' ? 'pos' : 'neg'}>{r.side === 'buy' ? 'покупка' : 'продажа'}</td>
+                  <td class="num">{r.qty}</td>
+                  <td class="num">{Math.round(r.price).toLocaleString('ru-RU')}</td>
+                  <td class="num neg">−{fmtRub(r.comm)}</td>
+                  <td class="num">{r.posAfter}</td>
+                  <td class="num" class:pos={r.pnl > 0} class:neg={r.pnl < 0}>{r.pnl != null ? fmtMoney(r.pnl) : '—'}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
       </div>
     {/if}
 
@@ -566,16 +650,40 @@
   .stats-overlay {
     position: absolute; top: 6px; right: 92px; z-index: 5;
     background: #0f0f1ed9; border: 1px solid #2d2d4a; border-radius: 4px;
-    padding: 6px 8px; display: flex; flex-direction: column; gap: 2px;
-    backdrop-filter: blur(2px); min-width: 210px;
+    padding: 5px 7px; display: flex; flex-direction: column; gap: 2px;
+    backdrop-filter: blur(2px); min-width: 210px; max-width: 260px;
   }
+  /* collapsed 2-line header (default) — clickable to expand */
+  .st-toggle { display: block; width: 100%; background: none; border: none; padding: 0; cursor: pointer; text-align: left; }
+  .st-head { display: flex; align-items: baseline; gap: 6px; font-size: 11px; color: #999; }
+  .st-head span:first-child { flex: 1; }
+  .st-head b { font-size: 13px; }
+  .st-chev { color: #6aa8ff; font-size: 11px; }
+  .st-head2 { font-size: 9px; color: #667; margin-top: 1px; }
+  .st-body { display: flex; flex-direction: column; gap: 2px; margin-top: 5px; border-top: 1px solid #2d2d4a; padding-top: 5px; }
   .st-row { display: flex; align-items: baseline; gap: 6px; font-size: 10px; color: #888; }
   .st-row span:first-child { flex: 1; }
   .st-row b { color: #ccc; font-size: 11px; }
+  .st-comm-h b { font-size: 12px; }
   .st-sub { color: #555; font-size: 9px; }
   .st-sep { height: 1px; background: #2d2d4a; margin: 3px 0; }
+  .st-trades-btn { margin-top: 6px; padding: 4px 8px; background: #12203a; border: 1px solid #24406a; color: #9cf; border-radius: 3px; font-size: 10px; cursor: pointer; }
+  .st-trades-btn:hover { border-color: #6aa8ff66; color: #cfe; }
   .st-foot { font-size: 8px; color: #555; margin-top: 4px; font-style: italic; }
   .pos { color: #4caf50; } .neg { color: #f44336; }
+
+  /* full trades table overlay */
+  .trades-pane { position: absolute; inset: 0; z-index: 12; background: #0a0a15f2; display: flex; flex-direction: column; }
+  .tp-head { display: flex; align-items: center; justify-content: space-between; padding: 7px 10px; border-bottom: 1px solid #1e1e3a; flex-shrink: 0; }
+  .tp-title { font-size: 12px; color: #cde; font-weight: 600; }
+  .tp-close { width: 24px; height: 24px; background: #1a1a2e; border: 1px solid #2d2d4a; color: #aaa; border-radius: 3px; cursor: pointer; }
+  .tp-close:hover { color: #f44336; border-color: #f4433655; }
+  .tp-wrap { flex: 1; overflow: auto; }
+  .tp-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  .tp-table th { position: sticky; top: 0; background: #0c0c18; color: #789; font-weight: 500; text-align: left; padding: 5px 10px; border-bottom: 1px solid #1e1e3a; white-space: nowrap; }
+  .tp-table th.num, .tp-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .tp-table td { padding: 4px 10px; color: #aaa; border-bottom: 1px solid #14142a; white-space: nowrap; }
+  .tp-table tr:hover td { background: #12122a; }
 
   .bt-equity-label {
     padding: 3px 10px; font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.5px;

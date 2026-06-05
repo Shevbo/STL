@@ -3,7 +3,7 @@
   import { fetchWithAuth } from '../../lib/fetch-auth';
   import BacktestChart from './BacktestChart.svelte';
   import Optimizer from './Optimizer.svelte';
-  import { toFills, replay } from '../../lib/lab-analytics';
+  import { toFills, replay, commissionBreakdown } from '../../lib/lab-analytics';
 
   let { preset = null }: { preset?: any } = $props();
 
@@ -16,6 +16,14 @@
     timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
   });
   const fmtP = (v: number) => (v >= 0 ? '+' : '') + Math.round(v);
+
+  // Commission (broker+exchange, taker — manual backtests model taker) for a result
+  // row, so the user can verify the fee is computed from the real broker/exchange
+  // tariff. Uses the same shared model as the chart and the backend.
+  function commOf(r: any) {
+    const sym = (typeof r.params === 'object' ? r.params?.symbol : null) || paramValues.symbol || selectedSymbol || '';
+    return commissionBreakdown(toFills(r.trades), pointValue, sym, true);
+  }
 
   // trades ledger for the selected result (newest first)
   let ledger = $derived(
@@ -361,7 +369,7 @@
         <table>
           <thead>
             <tr>
-              <th>Params</th><th>Return</th><th>Sharpe</th><th>MaxDD</th><th>Win%</th><th>N</th><th></th>
+              <th>Params</th><th>Return</th><th>Комиссия ₽</th><th>Sharpe</th><th>MaxDD</th><th>Win%</th><th>N</th><th></th>
             </tr>
           </thead>
           <tbody>
@@ -381,6 +389,10 @@
                 </td>
                 <td class:pos={r.total_return > 0} class:neg={r.total_return < 0}>
                   {r.total_return != null ? (r.total_return * 100).toFixed(2) + '%' : '—'}
+                </td>
+                {@const cb = commOf(r)}
+                <td class="comm-cell neg" title="брокер {Math.round(cb.broker)} + биржа {Math.round(cb.exchange)} ₽ ({cb.fills} филлов, {(cb.rate*100).toFixed(4)}% от номинала)">
+                  −{Math.round(cb.total).toLocaleString('ru-RU')}
                 </td>
                 <td class:pos={(r.sharpe ?? 0) > 0} class:neg={(r.sharpe ?? 0) < 0}>
                   {r.sharpe?.toFixed(2) ?? '—'}
