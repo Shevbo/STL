@@ -57,6 +57,31 @@ def _user_env(name: str) -> str:
         return ""
 
 
+# Keep the sweep on SPARE CPU so it never lags the user's foreground work. The main
+# process runs below-normal; each compute worker runs at IDLE priority (Windows: only
+# when cores are otherwise free; POSIX: nice 19). User keeps all cores, zero felt lag.
+_PRIO_BELOW_NORMAL = 0x00004000
+_PRIO_IDLE = 0x00000040
+
+
+def _set_priority(idle: bool = False) -> None:
+    try:
+        if sys.platform == "win32":
+            import ctypes
+            cls = _PRIO_IDLE if idle else _PRIO_BELOW_NORMAL
+            ctypes.windll.kernel32.SetPriorityClass(
+                ctypes.windll.kernel32.GetCurrentProcess(), cls)
+        else:
+            os.nice(19 if idle else 10)
+    except Exception:
+        pass
+
+
+def _worker_init() -> None:
+    # pool workers are pure CPU crunch → IDLE priority (use only spare cores)
+    _set_priority(idle=True)
+
+
 def _tee_log(path: str) -> None:
     """Mirror stdout/stderr to a rotating-ish log file (truncate if >5MB) so the
     agent is observable when launched headless by Task Scheduler (no console)."""
@@ -333,7 +358,8 @@ class Agent:
         Returns only on a fatal error (pool/client death); the outer run() restarts."""
         _log(f"agent {self.agent_id} → {self.api}  workers={self.workers}  poll={self.poll}s"
              + (f"  proxy={self.proxy}" if self.proxy else ""))
-        with ProcessPoolExecutor(max_workers=self.workers) as pool:
+        _set_priority(idle=False)        # main process: below-normal (yields to the user)
+        with ProcessPoolExecutor(max_workers=self.workers, initializer=_worker_init) as pool:
             async with self._client() as client:
                 idle_note = True
                 while True:
