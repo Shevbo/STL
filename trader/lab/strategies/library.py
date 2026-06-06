@@ -19,11 +19,12 @@ from trader.lab.runtime import STLRuntime
 REGISTRY: dict[str, dict] = {}
 
 
-def register(rid, name, source, params_schema, signal, warmup):
+def register(rid, name, source, params_schema, signal, warmup, avg=None):
     # Append the shared position-management (averaging/TP) params to EVERY strategy
     # so the optimizer can explore them on any robot. Defaults = off (no behaviour
-    # change). AVG_PARAMS is defined below, before any register() call runs.
-    schema = list(params_schema) + AVG_PARAMS
+    # change). A robot may pass its own `avg` set (e.g. an "M1" variant that forces
+    # averaging on). AVG_PARAMS is defined below, before any register() call runs.
+    schema = list(params_schema) + (avg if avg is not None else AVG_PARAMS)
     REGISTRY[rid] = {
         "id": rid, "name": name, "source": source,
         "params_schema": schema, "signal": signal, "warmup": warmup,
@@ -110,6 +111,15 @@ AVG_PARAMS = [
     P("tp_atr", "Тейк-профит ×ATR/10 (0=по сигналу)", 0, 0, 60),
     P("avg_atr_n", "ATR период (усреднение)", 14, 5, 40),
 ]
+# "M1" variants: averaging FORCED on (min ≥ 2 contracts, step always > 0), so the
+# modification always averages-instead-of-SL — distinct from the plain robot which
+# can sweep averaging off.
+AVG_PARAMS_FORCED = [
+    P("avg_max", "Усреднение: макс контрактов", 5, 2, 10),
+    P("avg_step_atr", "Усреднение: шаг ×ATR/10", 10, 5, 30),
+    P("tp_atr", "Тейк-профит ×ATR/10 (0=по сигналу)", 0, 0, 60),
+    P("avg_atr_n", "ATR период (усреднение)", 14, 5, 40),
+]
 
 # ════════════════════════════════════════════════════════════════════════════
 #  STRATEGY SIGNALS  (closes = [b.close ...]; highs/lows similar)
@@ -160,6 +170,12 @@ register("bollinger_bo", "Bollinger Breakout",
          [SYM, P("period", "Период", 20, 5, 60), P("mult", "Сигма ×10", 20, 10, 40),
           P("qty", "Контрактов", 1, 1, 10)],
          sig_bollinger_bo, lambda p: int(p["period"]) + 2)
+# M1 = Bollinger Breakout с усреднением вместо стоп-лосса (модификация для прокачки).
+register("bollinger_bo_m1", "Bollinger Breakout M1",
+         "https://github.com/topics/bollinger-bands",
+         [SYM, P("period", "Период", 20, 5, 60), P("mult", "Сигма ×10", 20, 10, 40),
+          P("qty", "Контрактов", 1, 1, 10)],
+         sig_bollinger_bo, lambda p: int(p["period"]) + 2, avg=AVG_PARAMS_FORCED)
 
 
 # 4. Stochastic oscillator
