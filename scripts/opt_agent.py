@@ -172,7 +172,7 @@ def _run_chunk(args: tuple) -> list[dict]:
     # Workers inherit env; honor the insecure flag for the ISS fetch they do.
     if os.environ.get("OPT_AGENT_INSECURE"):
         _patch_httpx_insecure()
-    script_code, bars_data, symbol, param_sets, point_value = args
+    script_code, bars_data, symbol, param_sets, point_value, initial_margin = args
     _demote_to_background()  # be a polite background citizen on the shared host too
     bars = [Bar(**b) for b in bars_data]
     mod = _types.ModuleType("robot_script")
@@ -194,7 +194,8 @@ def _run_chunk(args: tuple) -> list[dict]:
         out = []
         for ps in param_sets:
             try:
-                r = await run_single_backtest(mod, bars, symbol, ps, point_value=point_value)
+                r = await run_single_backtest(mod, bars, symbol, ps, point_value=point_value,
+                                              initial_margin=initial_margin)
                 if isinstance(r.get("equity_curve"), list):
                     r["equity_curve"] = _downsample(r["equity_curve"])
                 out.append({"ok": True, "params": ps, "result": r})
@@ -328,7 +329,8 @@ class Agent:
                  f"on {self.workers} workers")
 
             chunks = _chunked(param_sets, self.workers)
-            args = [(job["script_code"], bars_data, symbol, ch, job["point_value"]) for ch in chunks]
+            im = job.get("initial_margin", 0) or 0
+            args = [(job["script_code"], bars_data, symbol, ch, job["point_value"], im) for ch in chunks]
             loop = asyncio.get_event_loop()
             t0 = time.time()
             futs = [loop.run_in_executor(pool, _run_chunk, a) for a in args]

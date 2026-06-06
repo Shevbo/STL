@@ -243,10 +243,12 @@ async def _run_backtest_task(run_id: str, body: dict, pool, app_state) -> None:
         # Real ruble economics: point_value (= step_price/min_step) from MOEX ISS,
         # cached in instrument_meta. Without it PnL is in index points, not rubles.
         point_value = 1.0
+        initial_margin = 0.0
         try:
             from trader.lab.market_store import refresh_instrument_spec
             spec = await refresh_instrument_spec(pool, symbol)
             point_value = (spec or {}).get("point_value") or 1.0
+            initial_margin = (spec or {}).get("initial_margin") or 0.0
         except Exception as exc:
             log.warning("backtest.point_value_failed", symbol=symbol, error=str(exc))
 
@@ -255,7 +257,7 @@ async def _run_backtest_task(run_id: str, body: dict, pool, app_state) -> None:
         graded = await run_backtest_grid(
             script_code, bars, symbol, param_sets,
             timeout=max(120, 8 * len(param_sets)),
-            point_value=point_value,
+            point_value=point_value, initial_margin=initial_margin,
         )
 
         for entry in graded:
@@ -449,16 +451,19 @@ async def _run_remote_job_on_vds(row, app_state) -> None:
                 return
 
             point_value = 1.0
+            initial_margin = 0.0
             try:
                 from trader.lab.market_store import refresh_instrument_spec
                 spec = await refresh_instrument_spec(pool, symbol)
                 point_value = (spec or {}).get("point_value") or 1.0
+                initial_margin = (spec or {}).get("initial_margin") or 0.0
             except Exception:
                 pass
 
             graded = await run_backtest_grid(
                 script_code, bars, symbol, param_sets,
                 timeout=max(120, 8 * len(param_sets)), point_value=point_value,
+                initial_margin=initial_margin,
             )
 
             m = _re.search(r"make_on_bar\('([a-z_]+)'\)", script_code or "")
@@ -1679,12 +1684,14 @@ def create_app() -> FastAPI:
                 if base_params is None:
                     base_params = robot["params_json"] if isinstance(robot["params_json"], dict) else _json.loads(robot["params_json"])
         base_params = base_params or {}
-        # ruble economics so the agent computes money-correct PnL
+        # ruble economics so the agent computes money-correct PnL + real-ГО return
         point_value = 1.0
+        initial_margin = 0.0
         try:
             from trader.lab.market_store import refresh_instrument_spec
             spec = await refresh_instrument_spec(pool, row["symbol"] or base_params.get("symbol", ""))
             point_value = (spec or {}).get("point_value") or 1.0
+            initial_margin = (spec or {}).get("initial_margin") or 0.0
         except Exception:
             pass
         return {
@@ -1699,6 +1706,7 @@ def create_app() -> FastAPI:
             "date_from": job.get("dateFrom"),
             "date_to": job.get("dateTo"),
             "point_value": point_value,
+            "initial_margin": initial_margin,
         }
 
     @fastapi_app.get("/api/v1/agent/control")

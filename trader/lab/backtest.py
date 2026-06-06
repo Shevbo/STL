@@ -36,7 +36,8 @@ def _demote_to_background() -> None:
 
 def compute_metrics(trades: list[dict], initial_equity: float,
                     point_value: float = 1.0,
-                    symbol: str = "") -> dict[str, Any]:
+                    symbol: str = "",
+                    initial_margin: float = 0.0) -> dict[str, Any]:
     """
     Round-trip metrics. PnL per pair is multiplied by point_value so all money
     figures are in RUBLES (RIM6 ~1.42 ₽/point). Handles both long (buy→sell) and
@@ -46,12 +47,27 @@ def compute_metrics(trades: list[dict], initial_equity: float,
     closing fill's fee are both charged to the round-trip they belong to, so
     per-pair PnL and all aggregates (net_profit, win_rate, drawdown) are net of
     commission. (Live trading is maker-only — see LiveRuntime.)
+
+    Return/drawdown are measured against the REAL capital at risk, not a flat
+    100k: margin_used = peak_contracts × initial_margin (ГО per contract from
+    MOEX ISS). So a robot that averages up to 10 RTS contracts is scored on
+    ~10×ГО, not on 100k. Falls back to initial_equity when ГО is unknown.
     """
     empty = {"total_trades": 0, "win_rate": 0.0, "total_return": 0.0,
              "sharpe": None, "max_drawdown": 0.0, "recovery_factor": None,
-             "net_profit": 0.0}
+             "net_profit": 0.0, "peak_contracts": 0, "margin_used": 0.0}
     if not trades:
         return empty
+
+    # Peak simultaneous contracts over the run → real margin (ГО) committed.
+    _signed = 0
+    peak_contracts = 0
+    for t in trades:
+        _signed += t["qty"] * (1 if t["side"] == "buy" else -1)
+        peak_contracts = max(peak_contracts, abs(_signed))
+    margin_used = (peak_contracts * initial_margin) if (initial_margin and peak_contracts) else initial_equity
+    if margin_used <= 0:
+        margin_used = initial_equity
 
     pairs = []          # realized PnL per closed round-trip, in RUB, NET of fees
     entry = None        # (signed_qty, price, fee_carried) — entry commission carried to the close
@@ -81,7 +97,7 @@ def compute_metrics(trades: list[dict], initial_equity: float,
     wins = sum(1 for p in pairs if p > 0)
     win_rate = wins / len(pairs)
     net_profit = sum(pairs)
-    total_return = net_profit / initial_equity
+    total_return = net_profit / margin_used
 
     if len(pairs) > 1:
         mean_r = net_profit / len(pairs)
@@ -100,7 +116,7 @@ def compute_metrics(trades: list[dict], initial_equity: float,
         dd = peak - equity
         if dd > max_dd_money:
             max_dd_money = dd
-    max_dd = max_dd_money / initial_equity if initial_equity else 0.0
+    max_dd = max_dd_money / margin_used if margin_used else 0.0
     recovery = (net_profit / max_dd_money) if max_dd_money > 0 else None
 
     return {
@@ -111,6 +127,8 @@ def compute_metrics(trades: list[dict], initial_equity: float,
         "max_drawdown": max_dd,
         "recovery_factor": recovery,
         "net_profit": net_profit,
+        "peak_contracts": peak_contracts,
+        "margin_used": margin_used,
     }
 
 
@@ -121,6 +139,7 @@ async def run_single_backtest(
     params: dict,
     initial_equity: float = 100_000.0,
     point_value: float = 1.0,
+    initial_margin: float = 0.0,
 ) -> dict[str, Any]:
     runtime = BacktestRuntime(bars=bars, symbol=symbol,
                               initial_equity=initial_equity, point_value=point_value)
@@ -143,7 +162,8 @@ async def run_single_backtest(
         {"side": o.side, "price": o.fill_price or o.price, "qty": o.qty, "time": o.fill_time}
         for o in await runtime.get_orders()
     ]
-    metrics = compute_metrics(trades, initial_equity, point_value, symbol=symbol)
+    metrics = compute_metrics(trades, initial_equity, point_value, symbol=symbol,
+                              initial_margin=initial_margin)
     return {"trades": trades, "equity_curve": equity_curve, **metrics}
 
 
@@ -195,7 +215,7 @@ async def run_backtest_isolated(
 
 def _subprocess_run_many(script_code: str, bars_data: list[dict], symbol: str,
                          param_sets: list[dict], result_queue: multiprocessing.Queue,
-                         point_value: float = 1.0) -> None:
+                         point_value: float = 1.0, initial_margin: float = 0.0) -> None:
     """Run MANY param combos in ONE subprocess — bars pickled once, not per combo.
     Runs as a background-priority process and yields the CPU between combos so the
     box stays responsive during a big sweep."""
@@ -211,7 +231,8 @@ def _subprocess_run_many(script_code: str, bars_data: list[dict], symbol: str,
         out = []
         for i, ps in enumerate(param_sets):
             try:
-                r = await run_single_backtest(mod, bars, symbol, ps, point_value=point_value)
+                r = await run_single_backtest(mod, bars, symbol, ps, point_value=point_value,
+                                              initial_margin=initial_margin)
                 out.append({"ok": True, "params": ps, "result": r})
             except Exception as exc:
                 out.append({"ok": False, "params": ps, "error": str(exc)})
@@ -233,6 +254,7 @@ async def run_backtest_grid(
     param_sets: list[dict],
     timeout: float = 600,
     point_value: float = 1.0,
+    initial_margin: float = 0.0,
 ) -> list[dict[str, Any]]:
     """
     Run a whole parameter grid in ONE subprocess (bars serialized once).
@@ -246,7 +268,7 @@ async def run_backtest_grid(
     q: multiprocessing.Queue = multiprocessing.Queue()
     proc = multiprocessing.Process(
         target=_subprocess_run_many,
-        args=(script_code, bars_data, symbol, param_sets, q, point_value),
+        args=(script_code, bars_data, symbol, param_sets, q, point_value, initial_margin),
         daemon=True,
     )
     proc.start()

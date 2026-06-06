@@ -20,10 +20,14 @@ REGISTRY: dict[str, dict] = {}
 
 
 def register(rid, name, source, params_schema, signal, warmup):
+    # Append the shared position-management (averaging/TP) params to EVERY strategy
+    # so the optimizer can explore them on any robot. Defaults = off (no behaviour
+    # change). AVG_PARAMS is defined below, before any register() call runs.
+    schema = list(params_schema) + AVG_PARAMS
     REGISTRY[rid] = {
         "id": rid, "name": name, "source": source,
-        "params_schema": params_schema, "signal": signal, "warmup": warmup,
-        "default_params": {p["key"]: p["default"] for p in params_schema},
+        "params_schema": schema, "signal": signal, "warmup": warmup,
+        "default_params": {p["key"]: p["default"] for p in schema},
     }
 
 
@@ -35,25 +39,55 @@ def make_on_bar(rid: str):
 
     async def on_bar(stl: STLRuntime, params: dict) -> None:
         symbol = params["symbol"]
-        qty = int(params.get("qty", 1))
-        need = warmup(params)
+        unit = max(1, int(params.get("qty", 1)))
+        avg_max = max(unit, int(params.get("avg_max", 1) or 1))   # max contracts to hold
+        k_step = float(params.get("avg_step_atr", 0) or 0) / 10.0  # add per k_step×ATR adverse
+        tp = float(params.get("tp_atr", 0) or 0) / 10.0           # take-profit in ×ATR (0=off)
+        atr_n = int(params.get("avg_atr_n", 14) or 14)
+        atr_active = (k_step > 0) or (tp > 0)        # ATR only needed for averaging/TP
+        need = max(warmup(params), atr_n + 1) if atr_active else warmup(params)
         bars = await stl.get_bars(symbol, tf=1, n=need)
         if len(bars) < need:
             return
         want = signal(bars, params)        # +1 / -1 / 0 / None
-        if want is None:
-            return
+        price = bars[-1].close
         pos = await stl.get_position(symbol)
-        cur = 1 if pos.side == "long" else (-1 if pos.side == "short" else 0)
-        if want == cur:
+        cur = pos.quantity if pos.side == "long" else (-pos.quantity if pos.side == "short" else 0)
+        avg = float(pos.avg_price)
+        cur_dir = 1 if cur > 0 else (-1 if cur < 0 else 0)
+
+        # 1) Signal flip / flat → close the whole position (and open the new side).
+        if cur != 0 and want is not None and (want == 0 or (want > 0) != (cur > 0)):
+            await stl.place_order(symbol, "sell" if cur > 0 else "buy", abs(cur), price)
+            if want != 0:
+                await stl.place_order(symbol, "buy" if want > 0 else "sell", unit, price)
             return
-        # close opposite leg, then open desired
-        if cur != 0:
-            side = "sell" if cur > 0 else "buy"
-            await stl.place_order(symbol, side, pos.quantity, bars[-1].close)
-        if want != 0:
-            side = "buy" if want > 0 else "sell"
-            await stl.place_order(symbol, side, qty, bars[-1].close)
+        # 2) Flat → open a fresh base position on a signal.
+        if cur == 0:
+            if want is not None and want != 0:
+                await stl.place_order(symbol, "buy" if want > 0 else "sell", unit, price)
+            return
+        # 3) Holding (signal agrees or is None) → manage take-profit + averaging by ATR.
+        if not ((tp > 0) or (k_step > 0 and abs(cur) < avg_max)):
+            return
+        atrv = I.atr(_h(bars), _l(bars), _c(bars), atr_n)
+        if atrv <= 0:
+            return
+        if tp > 0:    # take-profit measured from the (averaged) entry
+            if cur_dir > 0 and price >= avg + tp * atrv:
+                await stl.place_order(symbol, "sell", abs(cur), price)
+                return
+            if cur_dir < 0 and price <= avg - tp * atrv:
+                await stl.place_order(symbol, "buy", abs(cur), price)
+                return
+        if k_step > 0 and abs(cur) < avg_max:   # average in: add a unit on adverse move
+            add = min(unit, avg_max - abs(cur))
+            if cur_dir > 0 and price <= avg - k_step * atrv:
+                await stl.place_order(symbol, "buy", add, price)
+                return
+            if cur_dir < 0 and price >= avg + k_step * atrv:
+                await stl.place_order(symbol, "sell", add, price)
+                return
 
     return on_bar
 
@@ -65,6 +99,17 @@ def P(key, label, default, lo, hi, hint=""):
 
 SYM = {"key": "symbol", "label": "Инструмент", "type": "text", "default": "RIM6", "hint": "FORTS тикер"}
 GH = "https://github.com/topics/trading-strategies"
+
+# Position-management modifier injected into EVERY strategy (see register), so the
+# optimizer can explore averaging-instead-of-SL on any robot. Defaults = OFF:
+# avg_max=1 (no adds) + tp_atr=0 (exit on signal only) == original behaviour.
+# *_atr params are integers stored ×10 (10 = 1.0×ATR) for the integer sweep.
+AVG_PARAMS = [
+    P("avg_max", "Усреднение: макс контрактов", 1, 1, 10),
+    P("avg_step_atr", "Усреднение: шаг ×ATR/10 (0=выкл)", 0, 0, 30),
+    P("tp_atr", "Тейк-профит ×ATR/10 (0=по сигналу)", 0, 0, 60),
+    P("avg_atr_n", "ATR период (усреднение)", 14, 5, 40),
+]
 
 # ════════════════════════════════════════════════════════════════════════════
 #  STRATEGY SIGNALS  (closes = [b.close ...]; highs/lows similar)
@@ -266,6 +311,10 @@ PARAM_DESC: dict[str, str] = {
     "rsi_period": "Период RSI. Короче — резче колебания осциллятора, больше входов.",
     "ema_period": "Период EMA-фильтра тренда. Длиннее — более устойчивый, но запаздывающий фильтр.",
     "atr_period": "Окно расчёта ATR (волатильности). Влияет на ширину канала/фильтра в пунктах.",
+    "avg_max": "Усреднение вместо стоп-лосса: максимум контрактов в позиции. 1 = выкл (обычный режим). >1 — добор против движения до N, улучшая среднюю. Реальный ГО считается от пика контрактов.",
+    "avg_step_atr": "Шаг добора в долях ATR (хранится ×10: 10 = 1.0×ATR). Добираем контракт, когда цена ушла против средней на этот шаг. 0 = усреднение выключено.",
+    "tp_atr": "Тейк-профит в долях ATR от средней цены (×10: 20 = 2.0×ATR). 0 = выход только по сигналу. Часто фиксирует отскок усреднённой позиции.",
+    "avg_atr_n": "Период ATR для шага усреднения и тейка. Короче — чувствительнее к текущей волатильности.",
 }
 
 STRATEGY_DESC: dict[str, str] = {
