@@ -17,7 +17,7 @@
 
   let {
     result, symbol, strategy = null, dateFrom, dateTo, pointValue = 1, defaultInterval = 60,
-    openOrders = [], plannedOrders = [], taker = true,
+    openOrders = [], plannedOrders = [], taker = true, runParams = {}, paramSchema = [], onRerun = null,
   }: {
     result: any; symbol: string; strategy?: any; dateFrom: string; dateTo: string;
     pointValue?: number; defaultInterval?: number;
@@ -25,7 +25,27 @@
     plannedOrders?: Array<{ side: string; price: number; qty: number; reason?: string }>;
     // taker=true → backtest (exchange fee + broker); false → live (maker, broker only).
     taker?: boolean;
+    // Editable params panel: current params + their schema (labels) + a re-run callback.
+    runParams?: Record<string, any>;
+    paramSchema?: Array<{ key: string; label?: string }>;
+    onRerun?: ((p: Record<string, any>) => void) | null;
   } = $props();
+
+  // ── Editable parameters panel (collapsed by default; edit → re-run backtest) ──
+  let paramsOpen = $state(false);
+  let editParams = $state<Record<string, any>>({});
+  $effect(() => { editParams = { ...(params || {}) }; });   // resync when a new result loads
+  const labelFor = (k: string) => paramSchema.find((s) => s.key === k)?.label || k;
+  const editKeys = $derived(Object.keys(editParams).filter((k) => k !== 'symbol'));
+  function applyParams() {
+    if (!onRerun) return;
+    const out: Record<string, any> = { ...editParams };
+    for (const k of Object.keys(out)) {                     // numeric fields → numbers
+      if (typeof params[k] === 'number') out[k] = Number(out[k]);
+    }
+    onRerun(out);
+  }
+  const paramsDirty = $derived(editKeys.some((k) => String(editParams[k]) !== String((params || {})[k])));
 
   // Trade triangle colors — distinct teal/rose tonality, brighter than candles.
   const BUY_COLOR = '#2ee6a6';   // teal-green (entry / averaging, buy side)
@@ -77,8 +97,9 @@
   function pickInterval(v: number) { if (v !== resampleMin) { resampleMin = v; loadData(); } }
 
   let params = $derived(
-    typeof result?.params === 'object' ? result.params
-      : (typeof result?.params === 'string' ? JSON.parse(result.params) : {})
+    (result?.params && typeof result.params === 'object') ? result.params
+      : (typeof result?.params === 'string' ? JSON.parse(result.params)
+         : (runParams || {}))
   );
 
   const fmtMoney = (v: number) =>
@@ -458,11 +479,6 @@
     {#if strategy}
       <a class="bt-strategy" href={strategy.source} target="_blank" rel="noopener">{strategy.name} ↗</a>
     {/if}
-    <span class="bt-params">
-      {#each Object.entries(params) as [k, v]}
-        {#if k !== 'symbol'}<span class="bt-param">{k}={v}</span>{/if}
-      {/each}
-    </span>
     <span class="bt-legend">
       <span class="lg lg-long">▲ покупка</span><span class="lg lg-short">▼ продажа</span>
       <span class="lg lg-tp">■ TP</span><span class="lg lg-sl">■ SL</span>
@@ -480,7 +496,39 @@
   <div class="bt-candle-area">
     <div class="candle" bind:this={candleEl}></div>
 
-    <!-- On-chart crosshair date/time (top-left), like TradingView/QUIK. -->
+    <!-- Editable params frame (top-left), collapsed until clicked. Edit a value and
+         "Пересчитать" re-runs the backtest with the new params. -->
+    <div class="bc-params" class:open={paramsOpen}
+         onpointerdown={(e) => e.stopPropagation()} onwheel={(e) => e.stopPropagation()}>
+      <button class="bc-params-h" onclick={() => paramsOpen = !paramsOpen}
+              title="Параметры прогона — клик чтобы развернуть/свернуть">
+        ⚙ Параметры {paramsOpen ? '▾' : '▸'}
+      </button>
+      {#if paramsOpen}
+        <div class="bc-params-body">
+          {#each editKeys as k}
+            <label class="bc-prow" title={labelFor(k)}>
+              <span class="bc-pk">{labelFor(k)}</span>
+              {#if typeof params[k] === 'number'}
+                <input class="bc-pv" type="number" step="any" bind:value={editParams[k]}
+                       onkeydown={(e) => e.key === 'Enter' && applyParams()} />
+              {:else}
+                <input class="bc-pv" type="text" bind:value={editParams[k]}
+                       onkeydown={(e) => e.key === 'Enter' && applyParams()} />
+              {/if}
+            </label>
+          {/each}
+          {#if onRerun}
+            <button class="bc-apply" class:dirty={paramsDirty} onclick={applyParams}>
+              Пересчитать бэктест
+            </button>
+          {/if}
+        </div>
+      {/if}
+    </div>
+
+    <!-- On-chart crosshair date/time, like TradingView/QUIK (shifted right to clear
+         the params frame). -->
     {#if crossLabel}<div class="cross-overlay">{crossLabel}</div>{/if}
 
     {#if tip}
@@ -627,13 +675,31 @@
   .bt-candle-area { position: relative; flex: 1; min-height: 0; }
   .candle { position: absolute; inset: 0; }
 
-  /* On-chart crosshair date/time overlay (top-left). */
+  /* On-chart crosshair date/time overlay — shifted right to clear the params frame. */
   .cross-overlay {
-    position: absolute; top: 6px; left: 8px; z-index: 6;
+    position: absolute; top: 6px; left: 156px; z-index: 6;
     font-size: 11px; font-family: monospace; color: #6aa8ff;
     background: #0f0f1ecc; border: 1px solid #2d2d4a; border-radius: 3px;
     padding: 2px 7px; pointer-events: none; white-space: nowrap;
   }
+
+  /* Editable params frame (top-left, collapsible). */
+  .bc-params { position: absolute; top: 6px; left: 8px; z-index: 8; width: 142px;
+    background: #0c0c18ee; border: 1px solid #2d2d4a; border-radius: 4px; overflow: hidden; }
+  .bc-params.open { box-shadow: 0 6px 22px rgba(0,0,0,0.5); }
+  .bc-params-h { width: 100%; text-align: left; background: #14223a; border: none;
+    color: #cde; font-size: 11px; padding: 4px 8px; cursor: pointer; }
+  .bc-params-h:hover { background: #1a2b48; }
+  .bc-params-body { display: flex; flex-direction: column; gap: 3px; padding: 6px; max-height: 60vh; overflow-y: auto; }
+  .bc-prow { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+  .bc-pk { font-size: 9px; color: #9ab; line-height: 1.1; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bc-pv { width: 52px; flex-shrink: 0; background: #0a1120; border: 1px solid #24406a; color: #cfe;
+    font-size: 10px; border-radius: 3px; padding: 1px 4px; text-align: right; }
+  .bc-pv:focus { outline: none; border-color: #4a7ad0; }
+  .bc-apply { margin-top: 4px; background: #1f5e3a; border: 1px solid #2e8b57; color: #cfe;
+    font-size: 10px; border-radius: 3px; padding: 3px 6px; cursor: pointer; }
+  .bc-apply:hover { background: #267346; }
+  .bc-apply.dirty { background: #8a5a1f; border-color: #c8862f; }
 
   .trade-tip {
     position: absolute; z-index: 8; pointer-events: none;

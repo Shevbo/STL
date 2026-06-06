@@ -707,6 +707,9 @@
               pointValue={chart.pointValue}
               defaultInterval={60}
               taker={true}
+              runParams={chart.params}
+              paramSchema={detail?.schema ?? []}
+              onRerun={(p) => openChart(chart.symbol, p)}
             />
           {/if}
         </div>
