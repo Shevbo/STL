@@ -41,8 +41,14 @@ import asyncpg  # noqa: E402
 from trader.config import Settings                              # noqa: E402
 from trader.lab.strategies.library import list_strategies      # noqa: E402
 
-DATE_FROM = "2026-03-02T00:00:00Z"
-DATE_TO = "2026-05-24T00:00:00Z"
+# Rolling window: always sweep the most recent ~3 months ending YESTERDAY, so every
+# campaign uses FRESH data. The agent imports any missing tail from ISS up to date_to,
+# so a moving date_to is also what pulls in new ticks. (Was hardcoded -> data went
+# stale at 2026-05-24 and no new ticks were ever imported.)
+from datetime import date as _date, timedelta as _timedelta  # noqa: E402
+_TODAY = _date.today()
+DATE_FROM = (_TODAY - _timedelta(days=92)).isoformat() + "T00:00:00Z"
+DATE_TO = _TODAY.isoformat() + "T00:00:00Z"
 FK_ROBOT_ID = "robot-supertrend-rts-01"   # FK filler; the agent uses job_body.script_code
 ALWAYS_ASSETS = ["RTS"]                    # RTS/RI forced into every campaign
 
