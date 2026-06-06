@@ -146,10 +146,14 @@ async def lifespan(app: FastAPI):
     # VDS fallback sweeper: drains queued remote sweeps locally (throttled) only when
     # the i9 agent is down. No-op while the agent claims jobs promptly.
     fallback_task = asyncio.create_task(_vds_fallback_sweeper(app.state))
+    # Self-heal: re-queue sweep jobs orphaned in 'running' by a dead claimer, so one
+    # stuck job can't freeze a whole campaign (no r1/r2) the way it did overnight.
+    reaper_task = asyncio.create_task(_orphan_reaper(app.state))
 
     yield
 
     fallback_task.cancel()
+    reaper_task.cancel()
 
     await scheduler.stop_all()
     if settings.lab_db_url:
@@ -532,6 +536,33 @@ async def _vds_fallback_sweeper(app_state) -> None:
             raise
         except Exception as exc:  # noqa: BLE001 — never let the loop die
             log.warning("vds_fallback.loop_error", error=str(exc))
+
+
+async def _orphan_reaper(app_state) -> None:
+    """Re-queue sweep jobs stuck in 'running' because their claimer (agent or fallback)
+    died mid-job. A SINGLE orphan otherwise blocks the orchestrator from ever finishing
+    a round -> no r1/r2, the whole campaign freezes (this stalled it overnight). A sweep
+    job runs in well under a minute, so >8 min in 'running' means the claimer is gone.
+    Re-queued jobs are then re-claimed by the agent (or the VDS fallback when it's down),
+    so the campaign self-heals with no manual SQL."""
+    pool = getattr(app_state, "db_pool", None)
+    if pool is None:
+        return
+    await asyncio.sleep(90)
+    while True:
+        try:
+            res = await pool.execute(
+                "UPDATE backtest_runs SET status='queued', agent_id=NULL, claimed_at=NULL "
+                "WHERE (id LIKE 'opt-%' OR id LIKE 'camp-%') AND status='running' "
+                "AND claimed_at < now() - interval '8 minutes'"
+            )
+            if res and res != "UPDATE 0":
+                log.info("orphan_reaper.requeued", result=res)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — never let the loop die
+            log.warning("orphan_reaper.failed", error=str(exc))
+        await asyncio.sleep(180)
 
 
 async def _fetch_bars_for_backtest(symbol: str, date_from: str, date_to: str, app_state) -> list:
