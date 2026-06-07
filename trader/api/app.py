@@ -183,6 +183,7 @@ _FB_POLL_SEC = int(os.environ.get("VDS_FALLBACK_POLL_SEC", "45"))
 _FB_MAX_LOAD = float(os.environ.get("VDS_FALLBACK_MAX_LOAD", "2.0"))   # 4-core box; leaves headroom
 _FB_STALE_SEC = int(os.environ.get("VDS_FALLBACK_STALE_SEC", "180"))   # untaken this long → agent down
 _FB_MAX_COMBOS = int(os.environ.get("VDS_FALLBACK_MAX_COMBOS", "150")) # cap per job on the VDS
+_FB_MIN_FREE_MB = int(os.environ.get("VDS_FALLBACK_MIN_FREE_MB", "1200"))  # skip if RAM below this
 
 
 async def _run_backtest_task(run_id: str, body: dict, pool, app_state) -> None:
@@ -463,7 +464,7 @@ async def _run_remote_job_on_vds(row, app_state) -> None:
             graded = await run_backtest_grid(
                 script_code, bars, symbol, param_sets,
                 timeout=max(120, 8 * len(param_sets)), point_value=point_value,
-                initial_margin=initial_margin,
+                initial_margin=initial_margin, metrics_only=True,   # sweeps: never hold equity → no OOM
             )
 
             m = _re.search(r"make_on_bar\('([a-z_]+)'\)", script_code or "")
@@ -520,6 +521,16 @@ async def _vds_fallback_sweeper(app_state) -> None:
                 if os.getloadavg()[0] > _FB_MAX_LOAD:
                     continue
             except OSError:
+                pass
+            # Memory ceiling: never let the fallback push the box toward OOM. If less
+            # than _FB_MIN_FREE_MB is available, skip this round (the agent will catch up).
+            try:
+                with open("/proc/meminfo") as _mi:
+                    avail_kb = next((int(ln.split()[1]) for ln in _mi if ln.startswith("MemAvailable")), 0)
+                if avail_kb and avail_kb < _FB_MIN_FREE_MB * 1024:
+                    log.warning("vds_fallback.low_memory_skip", avail_mb=avail_kb // 1024)
+                    continue
+            except Exception:
                 pass
             # Claim ONE remote job no agent has taken for _FB_STALE_SEC (→ agent down).
             row = await pool.fetchrow(

@@ -215,10 +215,15 @@ async def run_backtest_isolated(
 
 def _subprocess_run_many(script_code: str, bars_data: list[dict], symbol: str,
                          param_sets: list[dict], result_queue: multiprocessing.Queue,
-                         point_value: float = 1.0, initial_margin: float = 0.0) -> None:
+                         point_value: float = 1.0, initial_margin: float = 0.0,
+                         metrics_only: bool = False) -> None:
     """Run MANY param combos in ONE subprocess — bars pickled once, not per combo.
     Runs as a background-priority process and yields the CPU between combos so the
-    box stays responsive during a big sweep."""
+    box stays responsive during a big sweep. metrics_only=True drops the per-combo
+    trades + equity_curve arrays IN THIS SUBPROCESS so they never cross back to the
+    caller — a sweep over a 3-month 1-min series builds ~50k equity points per combo;
+    × hundreds of combos that ballooned the web process to OOM. Sweeps need metrics
+    only (leaderboard), so they pass metrics_only=True."""
     import asyncio
     import types
 
@@ -233,6 +238,9 @@ def _subprocess_run_many(script_code: str, bars_data: list[dict], symbol: str,
             try:
                 r = await run_single_backtest(mod, bars, symbol, ps, point_value=point_value,
                                               initial_margin=initial_margin)
+                if metrics_only:
+                    r.pop("trades", None)
+                    r.pop("equity_curve", None)
                 out.append({"ok": True, "params": ps, "result": r})
             except Exception as exc:
                 out.append({"ok": False, "params": ps, "error": str(exc)})
@@ -255,6 +263,7 @@ async def run_backtest_grid(
     timeout: float = 600,
     point_value: float = 1.0,
     initial_margin: float = 0.0,
+    metrics_only: bool = False,
 ) -> list[dict[str, Any]]:
     """
     Run a whole parameter grid in ONE subprocess (bars serialized once).
@@ -268,7 +277,7 @@ async def run_backtest_grid(
     q: multiprocessing.Queue = multiprocessing.Queue()
     proc = multiprocessing.Process(
         target=_subprocess_run_many,
-        args=(script_code, bars_data, symbol, param_sets, q, point_value, initial_margin),
+        args=(script_code, bars_data, symbol, param_sets, q, point_value, initial_margin, metrics_only),
         daemon=True,
     )
     proc.start()
