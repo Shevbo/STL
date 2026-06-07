@@ -40,7 +40,14 @@ def make_on_bar(rid: str):
 
     async def on_bar(stl: STLRuntime, params: dict) -> None:
         symbol = params["symbol"]
-        unit = max(1, int(params.get("qty", 1)))
+        base_unit = max(1, int(params.get("qty", 1)))
+        # Betting system (+N after a loss, reset on a win): the entry size grows by
+        # bet_step contracts after each losing CLOSED trade and resets to base after a
+        # win (sequence 1,2,3,...). bet_step=0 → off. Capped at bet_max extra.
+        bet_step = int(params.get("bet_step", 0) or 0)
+        bet_max = int(params.get("bet_max", 10) or 10)
+        bet_extra = int(stl.get_state("bet_extra", 0) or 0) if bet_step > 0 else 0
+        unit = base_unit + bet_extra                             # current entry size
         avg_max = max(unit, int(params.get("avg_max", 1) or 1))   # max contracts to hold
         k_step = float(params.get("avg_step_atr", 0) or 0) / 10.0  # add per k_step×ATR adverse
         tp = float(params.get("tp_atr", 0) or 0) / 10.0           # take-profit in ×ATR (0=off)
@@ -59,9 +66,12 @@ def make_on_bar(rid: str):
 
         # 1) Signal flip / flat → close the whole position (and open the new side).
         if cur != 0 and want is not None and (want == 0 or (want > 0) != (cur > 0)):
+            if bet_step > 0:                      # closed-trade result drives the betting system
+                bet_extra = min(bet_extra + bet_step, bet_max) if (price - avg) * cur_dir < 0 else 0
+                stl.set_state("bet_extra", bet_extra)
             await stl.place_order(symbol, "sell" if cur > 0 else "buy", abs(cur), price)
             if want != 0:
-                await stl.place_order(symbol, "buy" if want > 0 else "sell", unit, price)
+                await stl.place_order(symbol, "buy" if want > 0 else "sell", base_unit + bet_extra, price)
             return
         # 2) Flat → open a fresh base position on a signal.
         if cur == 0:
@@ -74,11 +84,15 @@ def make_on_bar(rid: str):
         atrv = I.atr(_h(bars), _l(bars), _c(bars), atr_n)
         if atrv <= 0:
             return
-        if tp > 0:    # take-profit measured from the (averaged) entry
+        if tp > 0:    # take-profit measured from the (averaged) entry (a TP is a win)
             if cur_dir > 0 and price >= avg + tp * atrv:
+                if bet_step > 0:
+                    stl.set_state("bet_extra", 0)
                 await stl.place_order(symbol, "sell", abs(cur), price)
                 return
             if cur_dir < 0 and price <= avg - tp * atrv:
+                if bet_step > 0:
+                    stl.set_state("bet_extra", 0)
                 await stl.place_order(symbol, "buy", abs(cur), price)
                 return
         if k_step > 0 and abs(cur) < avg_max:   # average in: add a unit on adverse move
@@ -176,6 +190,22 @@ register("bollinger_bo_m1", "Bollinger Breakout M1",
          [SYM, P("period", "Период", 20, 5, 60), P("mult", "Сигма ×10", 20, 10, 40),
           P("qty", "Контрактов", 1, 1, 10)],
          sig_bollinger_bo, lambda p: int(p["period"]) + 2, avg=AVG_PARAMS_FORCED)
+
+
+def sig_2ema(bars, p):
+    # Two-EMA crossover: EMA1 above EMA2 → long, below → short. Always in market;
+    # the flip logic opens/closes on the cross. (Reverse of the public DeskBot 2EMA.)
+    closes = _c(bars)
+    f = I.ema_last(closes, int(p["ema1"]))
+    s = I.ema_last(closes, int(p["ema2"]))
+    return 1 if f > s else -1
+register("shectory_2ema", "Shectory-2EMA",
+         "https://github.com/topics/moving-average-crossover",
+         [SYM, P("ema1", "EMA1 (быстрая)", 10, 3, 60), P("ema2", "EMA2 (медленная)", 140, 20, 400),
+          P("qty", "Базовый объём", 1, 1, 20),
+          P("bet_step", "Система ставок +N после убытка (0=выкл)", 1, 0, 5),
+          P("bet_max", "Макс добавка по ставкам", 10, 1, 30)],
+         sig_2ema, lambda p: int(p["ema2"]) + 2)
 
 
 # 4. Stochastic oscillator
@@ -331,6 +361,10 @@ PARAM_DESC: dict[str, str] = {
     "avg_step_atr": "Шаг добора в долях ATR (хранится ×10: 10 = 1.0×ATR). Добираем контракт, когда цена ушла против средней на этот шаг. 0 = усреднение выключено.",
     "tp_atr": "Тейк-профит в долях ATR от средней цены (×10: 20 = 2.0×ATR). 0 = выход только по сигналу. Часто фиксирует отскок усреднённой позиции.",
     "avg_atr_n": "Период ATR для шага усреднения и тейка. Короче — чувствительнее к текущей волатильности.",
+    "ema1": "Быстрая EMA. Пересекает медленную снизу вверх → сигнал в лонг, сверху вниз → в шорт.",
+    "ema2": "Медленная EMA. Задаёт несущий тренд; пересечение быстрой с ней даёт вход/разворот.",
+    "bet_step": "Система ставок: после убыточной сделки следующий объём +N контрактов; после прибыльной — сброс к базовому (1,2,3,…). 0 = выкл.",
+    "bet_max": "Потолок добавки по системе ставок — сколько максимум контрактов добавить сверх базового (защита от разгона мартингейла).",
 }
 
 STRATEGY_DESC: dict[str, str] = {

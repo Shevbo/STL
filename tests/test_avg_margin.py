@@ -63,6 +63,42 @@ def test_averaging_adds_contracts_on_adverse_move():
     assert pos.quantity <= 4               # never exceeds avg_max
 
 
+def test_betting_system_grows_after_loss_and_off_when_disabled():
+    from trader.lab.runtime import BacktestRuntime
+    # Controlled signal (long while close>=100, else short, warmup=1) on a path that
+    # forces late entries → losing flips, so the betting size must grow above base.
+    L.register("t_thresh", "Tx", "x",
+               [L.SYM, L.P("qty", "q", 1, 1, 20), L.P("bet_step", "b", 1, 0, 5),
+                L.P("bet_max", "m", 10, 1, 30)],
+               lambda bars, p: 1 if bars[-1].close >= 100 else -1, lambda p: 1)
+    on_bar = L.make_on_bar("t_thresh")
+    prices = [100, 100, 100, 100, 100, 110, 90, 90, 110, 110, 90, 90, 110, 110]
+
+    def run(bet):
+        rt = BacktestRuntime(bars=_bars(prices), symbol="RIM6", initial_equity=50_000_000, point_value=1.0)
+        params = {"symbol": "RIM6", "qty": 1, "bet_step": bet, "bet_max": 10}
+
+        async def go():
+            while True:
+                await on_bar(rt, params)
+                if not rt.advance():
+                    break
+        asyncio.run(go())
+        return asyncio.run(rt.get_orders())
+
+    on_orders = run(1)
+    off_orders = run(0)
+    assert max((o.qty for o in on_orders), default=0) >= 2   # betting added size after losses
+    assert max((o.qty for o in off_orders), default=0) == 1  # disabled → always base size
+
+
+def test_2ema_registered_with_betting():
+    r = L.REGISTRY["shectory_2ema"]
+    assert r["name"] == "Shectory-2EMA"
+    keys = {p["key"] for p in r["params_schema"]}
+    assert {"ema1", "ema2", "bet_step", "bet_max"} <= keys
+
+
 def test_avg_off_by_default_behaves_like_plain_flip():
     L.register("t_flip", "T", "x",
                [L.SYM, L.P("qty", "q", 1, 1, 10)], lambda bars, p: 1, lambda p: 2)
