@@ -469,7 +469,7 @@ async def _run_remote_job_on_vds(row, app_state) -> None:
                 initial_margin=initial_margin, metrics_only=True,   # sweeps: never hold equity → no OOM
             )
 
-            m = _re.search(r"make_on_bar\('([a-z_]+)'\)", script_code or "")
+            m = _re.search(r"make_on_bar\('([a-z0-9_]+)'\)", script_code or "")
             strat_id = m.group(1) if m else None
             campaign = _sweep_campaign(run_id)
             if strat_id:
@@ -1769,7 +1769,7 @@ def create_app() -> FastAPI:
             sc = jb.get("script_code", "") or ""
             # script_code = "...make_on_bar('rsi_trend')" → extract the strategy id
             import re as _re
-            m = _re.search(r"make_on_bar\('([a-z_]+)'\)", sc)
+            m = _re.search(r"make_on_bar\('([a-z0-9_]+)'\)", sc)
             strat_id = m.group(1) if m else None
             # sweep run_id = "<camp|opt>-YYYYMMDD-HHMM-..." → campaign = first 3 parts.
             campaign = _sweep_campaign(run_id)
