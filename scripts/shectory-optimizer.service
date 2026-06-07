@@ -1,0 +1,22 @@
+[Unit]
+Description=Shectory adaptive optimizer supervisor (continuous parameter sweep)
+After=network-online.target postgresql.service shectory-trader.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/apps/shectory-trader
+# optimize_loop.sh is an infinite supervisor loop; it sources ~/.shectory_trade.env
+# and exports PATH/PYTHONPATH itself. Run it directly so it survives reboots/crashes.
+ExecStart=/bin/bash /home/ubuntu/apps/shectory-trader/scripts/optimize_loop.sh
+Restart=always
+RestartSec=30
+# Lowest priority — the sweep must never compete with the API/DB on the small VDS.
+Nice=19
+IOSchedulingClass=idle
+EnvironmentFile=-/home/ubuntu/.shectory_trade.env
+Environment=PYTHONPATH=/home/ubuntu/apps/shectory-trader
+
+[Install]
+WantedBy=multi-user.target

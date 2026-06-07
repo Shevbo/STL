@@ -181,7 +181,9 @@ _MAX_COMBOS = 2000
 _FB_ENABLED = os.environ.get("VDS_FALLBACK_ENABLED", "1") not in ("0", "false", "False")
 _FB_POLL_SEC = int(os.environ.get("VDS_FALLBACK_POLL_SEC", "45"))
 _FB_MAX_LOAD = float(os.environ.get("VDS_FALLBACK_MAX_LOAD", "2.0"))   # 4-core box; leaves headroom
-_FB_STALE_SEC = int(os.environ.get("VDS_FALLBACK_STALE_SEC", "180"))   # untaken this long → agent down
+_FB_STALE_SEC = int(os.environ.get("VDS_FALLBACK_STALE_SEC", "600"))   # untaken this long → agent down
+# (10 min: ride out brief i9 network blips without loading the VDS — the agent
+#  retries and resumes on its own; the VDS only takes over on a real outage.)
 _FB_MAX_COMBOS = int(os.environ.get("VDS_FALLBACK_MAX_COMBOS", "150")) # cap per job on the VDS
 _FB_MIN_FREE_MB = int(os.environ.get("VDS_FALLBACK_MIN_FREE_MB", "1200"))  # skip if RAM below this
 
