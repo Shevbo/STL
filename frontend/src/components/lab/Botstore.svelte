@@ -317,12 +317,25 @@
   // ── Agent activity panel (background optimizer status) ───────────────────────
   let activity = $state<any | null>(null);
   let activityTimer: any = null;
+  let pauseBusy = $state(false);
   const fmtClock = (iso: any) => iso ? new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—';
   async function loadActivity() {
     try {
       const r = await fetchWithAuth('/api/v1/agent/activity');
       if (r.ok) activity = await r.json();
     } catch { /* keep last */ }
+  }
+  async function togglePause(engine: string, pause: boolean) {
+    pauseBusy = true;
+    try {
+      const ep = pause ? '/api/v1/agent/pause' : '/api/v1/agent/resume';
+      await fetchWithAuth(ep, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ engine }),
+      });
+      await loadActivity();
+    } catch { /* keep current state */ }
+    pauseBusy = false;
   }
   // map a strategy id (macd_cross) to its robot display name
   function robotName(stratId: string) {
@@ -409,7 +422,29 @@
         {#if activity.agent_id}<span class="ag-sub">{activity.agent_id}</span>{/if}
         <span class="ag-sub">посл. активность {fmtClock(activity.last_seen)}</span>
         {#if activity.vds_fallback}<span class="ag-badge">VDS-фолбэк активен</span>{/if}
+        <span class="ag-ctrl">
+          <button class="ag-btn start" class:dim={activity.paused_remote}
+                  disabled={pauseBusy} onclick={() => togglePause('remote', false)}
+                  title="Возобновить перебор на i9">▶</button>
+          <button class="ag-btn stop" class:dim={!activity.paused_remote}
+                  disabled={pauseBusy} onclick={() => togglePause('remote', true)}
+                  title="Приостановить перебор на i9">⏹</button>
+        </span>
         <span class="ag-sub ag-right">VDS loadavg {activity.vds_load ?? '—'} · {activity.throughput_per_min} задач/мин</span>
+      </div>
+      <div class="ag-row">
+        <span class="ag-sub">VDS-воркеры:</span>
+        <span class="ag-sub" class:pos={!activity.paused_local} class:neg={activity.paused_local}>
+          {activity.paused_local ? 'на паузе' : 'активны'}
+        </span>
+        <span class="ag-ctrl">
+          <button class="ag-btn start" class:dim={activity.paused_local}
+                  disabled={pauseBusy} onclick={() => togglePause('local', false)}
+                  title="Возобновить перебор на VDS">▶</button>
+          <button class="ag-btn stop" class:dim={!activity.paused_local}
+                  disabled={pauseBusy} onclick={() => togglePause('local', true)}
+                  title="Приостановить перебор на VDS">⏹</button>
+        </span>
       </div>
       {#if activity.campaign}
         <div class="ag-row">
@@ -956,6 +991,18 @@
   .cm-hint { font-size: 11px; color: #667; line-height: 1.5; margin-top: 4px; }
 
   .mono { font-family: monospace; }
+
+  /* agent pause/resume buttons */
+  .ag-ctrl { display: flex; gap: 2px; margin: 0 4px; }
+  .ag-btn { width: 26px; height: 20px; padding: 0; border-radius: 3px; font-size: 10px;
+            cursor: pointer; display: flex; align-items: center; justify-content: center;
+            border: 1px solid transparent; line-height: 1; }
+  .ag-btn.start { background: #1a3a1a; border-color: #2d5a2d; color: #4caf50; }
+  .ag-btn.start:hover { background: #254a25; }
+  .ag-btn.stop { background: #3a1a1a; border-color: #5a2d2d; color: #f44336; }
+  .ag-btn.stop:hover { background: #4a1a1a; }
+  .ag-btn.dim { opacity: 0.35; }
+  .ag-btn:disabled { opacity: 0.25; cursor: default; }
 
   /* agent panel: clickable campaign + current target */
   .ag-camp { background: #102038; border: 1px solid #2a4a72; color: #bcd; font-size: 11px;

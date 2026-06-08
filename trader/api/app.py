@@ -534,6 +534,9 @@ async def _vds_fallback_sweeper(app_state) -> None:
                     continue
             except Exception:
                 pass
+            # Honour pause flag for local/VDS engine — skip if paused.
+            if await _agent_is_paused(pool, "local"):
+                continue
             # Claim ONE remote job no agent has taken for _FB_STALE_SEC (→ agent down).
             row = await pool.fetchrow(
                 """UPDATE backtest_runs SET status='running', claimed_at=now(), agent_id='vds-fallback'
@@ -1147,7 +1150,7 @@ def create_app() -> FastAPI:
         pool = request.app.state.db_pool
         out = {"online": False, "agent_id": None, "last_seen": None, "vds_fallback": False,
                "vds_load": None, "campaign": None, "current": None, "counts": {}, "pct": 0,
-               "throughput_per_min": 0, "recent": []}
+               "throughput_per_min": 0, "recent": [], "paused_remote": False, "paused_local": False}
         try:
             la = os.getloadavg()
             out["vds_load"] = round(la[0], 2)
@@ -1156,6 +1159,8 @@ def create_app() -> FastAPI:
         if pool is None:
             return out
         out["online"] = await _agent_alive_any(request.app.state, pool)
+        out["paused_remote"] = await _agent_is_paused(pool, "remote")
+        out["paused_local"] = await _agent_is_paused(pool, "local")
         # last claim by the real i9 agent + by the VDS fallback
         i9 = await pool.fetchrow(
             "SELECT agent_id, max(claimed_at) AS t FROM backtest_runs "
@@ -1647,17 +1652,44 @@ def create_app() -> FastAPI:
         if got != secret:
             raise HTTPException(status_code=401, detail="Bad agent token")
 
+    async def _agent_is_paused(pool, engine: str) -> bool:
+        """Check if sweep engine (remote=i9, local=VDS) is paused."""
+        if pool is None:
+            return False
+        try:
+            v = await pool.fetchval("SELECT value FROM agent_control WHERE key=$1", f"pause_{engine}")
+            return v == "1"
+        except Exception:
+            return False
+
+    async def _agent_set_pause(pool, engine: str, paused: bool) -> None:
+        """Set or clear the pause flag for an engine."""
+        if pool is None:
+            return
+        key = f"pause_{engine}"
+        if paused:
+            await pool.execute(
+                "INSERT INTO agent_control(key, value) VALUES($1, '1')"
+                " ON CONFLICT (key) DO UPDATE SET value='1'",
+                key)
+        else:
+            await pool.execute("DELETE FROM agent_control WHERE key=$1", key)
+
     @fastapi_app.post("/api/v1/agent/claim")
     async def agent_claim(body: dict, request: Request):
         """Agent pulls the next queued remote run. Atomic claim via UPDATE..RETURNING
         so two agents never grab the same job. Returns the full job_body + run_id,
         plus the robot's script/base params and ruble economics so the agent is
-        self-contained. 204 if nothing queued."""
+        self-contained. 204 if nothing queued or sweep is paused."""
         _agent_auth(request)
         pool = request.app.state.db_pool
         if pool is None:
             raise HTTPException(status_code=503, detail="DB unavailable")
+        # Honour pause flag: the agent stays alive but idles — current job finishes.
         agent_id = body.get("agent_id", "agent")
+        engine = "local" if agent_id == "vds-fallback" else "remote"
+        if await _agent_is_paused(pool, engine):
+            return Response(status_code=204)
         # Heartbeat: any /claim means an external agent (i9) is alive → on-demand chart
         # runs can be routed to it instead of loading the VDS.
         try:
@@ -1826,6 +1858,35 @@ def create_app() -> FastAPI:
                     "UPDATE backtest_runs SET status='done', finished_at=now() WHERE id=$1", run_id
                 )
         return {"ok": True, "count": len(results)}
+
+    # ── Agent pause / resume (web UI controls for Botstore) ──────────────────
+
+    @fastapi_app.post("/api/v1/agent/pause")
+    async def agent_pause(body: dict, request: Request):
+        """Pause the sweep agent for an engine (remote=i9, local=VDS).
+        The agent stays alive but idles — current job finishes gracefully."""
+        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        engine = body.get("engine", "remote")
+        if engine not in ("remote", "local"):
+            raise HTTPException(status_code=422, detail="engine must be 'remote' or 'local'")
+        pool = request.app.state.db_pool
+        if pool is None:
+            raise HTTPException(status_code=503, detail="DB unavailable")
+        await _agent_set_pause(pool, engine, True)
+        return {"ok": True, "engine": engine, "paused": True}
+
+    @fastapi_app.post("/api/v1/agent/resume")
+    async def agent_resume(body: dict, request: Request):
+        """Resume the sweep agent for an engine."""
+        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        engine = body.get("engine", "remote")
+        if engine not in ("remote", "local"):
+            raise HTTPException(status_code=422, detail="engine must be 'remote' or 'local'")
+        pool = request.app.state.db_pool
+        if pool is None:
+            raise HTTPException(status_code=503, detail="DB unavailable")
+        await _agent_set_pause(pool, engine, False)
+        return {"ok": True, "engine": engine, "paused": False}
 
     # ── Market Data (MOEX ISS cache) ──────────────────────────────────────────
 
