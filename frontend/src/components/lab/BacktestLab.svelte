@@ -89,18 +89,39 @@
         results: c.results ?? [],
         sweep: c.sweep,
       }));
-      // Merge installed robots as catalog entries too
-      const instEntries = installed.map((r: any) => ({
-        id: r.id,
-        name: r.name,
-        description: 'Установленный робот',
-        source: 'installed',
-        scriptCode: r.script_code,
-        params_schema: [],
-        robotId: r.id,
-        params_json: r.params_json,
-      }));
-      catalog = [...instEntries, ...botCatalog];
+      // Merge installed robots: try to match to a botstore catalog entry via
+      // the strategy id embedded in script_code (e.g. make_on_bar('bollinger_bo_m1')).
+      for (const r of (robs ?? [])) {
+        const code = r.script_code ?? '';
+        // Try library pattern:  make_on_bar('xxx')
+        let stratId = '';
+        const m1 = code.match(/make_on_bar\('([a-z0-9_]+)'\)/);
+        if (m1) stratId = m1[1];
+        // Try standalone pattern: from trader.lab.strategies.xxx import
+        if (!stratId) {
+          const m2 = code.match(/from trader\.lab\.strategies\.([a-z0-9_]+) import/);
+          if (m2) stratId = m2[1];
+        }
+        const catEntry = botCatalog.find((c: any) => c.id === stratId);
+        if (catEntry) {
+          // Enrich the botstore entry with installed runtime data
+          catEntry.scriptCode = r.script_code;
+          catEntry.robotId = r.id;
+          catEntry.source = 'both';
+          catEntry.params_json = r.params_json;
+        } else if (stratId) {
+          // Installed robot has a known strategy but not in botstore catalog
+          botCatalog.push({
+            id: stratId, name: r.name,
+            description: '', source: 'installed',
+            scriptCode: r.script_code, robotId: r.id,
+            params_schema: [], params_json: r.params_json,
+            results: [], sweep: undefined, source_url: '',
+          });
+        }
+        // If no stratId match (custom script), skip — not useful for backtest lab
+      }
+      catalog = botCatalog;
       if (catalog.length && !selectedStrategyId) selectStrategy(catalog[0]);
     } catch { catalog = []; }
   }
@@ -119,40 +140,46 @@
     sweepRanges = {};
     roundResults = [[], [], []];
     leaderId = null; leaderResult = null; error = '';
-    // Load params schema from strategies endpoint or from installed robot
-    if (s.source === 'installed') {
-      // Build schema from installed robot's params_json keys
-      const pj = typeof s.params_json === 'object' ? s.params_json : {};
+
+    // 1) If we have an installed robot, seed params from its params_json
+    const pj = (s.source === 'installed' || s.source === 'both') && typeof s.params_json === 'object'
+      ? s.params_json : null;
+
+    // 2) Load full template from /api/v1/strategies (for store + both)
+    if (s.source === 'store' || s.source === 'both') {
+      try {
+        const r = await fetchWithAuth('/api/v1/strategies');
+        const strats = r.ok ? await r.json() : [];
+        const tmpl = strats.find((t: any) => t.id === s.id);
+        if (tmpl) {
+          if (!s.scriptCode) s.scriptCode = tmpl.script_code;
+          s.description = tmpl.description ?? s.description;
+          s.source_url = tmpl.source;
+          s.params_schema = (tmpl.params_schema ?? []).map((p: any) => ({ ...p }));
+          // Fill defaults from template
+          for (const p of s.params_schema) {
+            paramValues[p.key] = pj?.[p.key] ?? tmpl.default_params?.[p.key] ?? p.default;
+          }
+        }
+      } catch { /* keep partial */ }
+    }
+
+    // 3) Fallback: build minimal schema from installed params_json
+    if (!s.params_schema?.length && pj) {
       const keys = Object.keys(pj);
       s.params_schema = keys.filter(k => k !== 'symbol').map(k => ({
         key: k, label: k, type: typeof pj[k] === 'number' ? 'number' : 'text',
         default: pj[k], min: undefined, max: undefined, desc: '', hint: '',
       }));
-      // Add symbol if present
       if (pj.symbol) {
         s.params_schema.unshift({ key: 'symbol', label: 'Инструмент', type: 'text', default: pj.symbol, desc: '', hint: '' });
       }
       for (const p of s.params_schema) {
         paramValues[p.key] = pj[p.key] ?? p.default;
       }
-    } else {
-      // Load full strategy template
-      try {
-        const r = await fetchWithAuth('/api/v1/strategies');
-        const strats = r.ok ? await r.json() : [];
-        const tmpl = strats.find((t: any) => t.id === s.id);
-        if (tmpl) {
-          s.scriptCode = tmpl.script_code;
-          s.description = tmpl.description ?? s.description;
-          s.params_schema = tmpl.params_schema ?? [];
-          s.source_url = tmpl.source;
-          for (const p of s.params_schema) {
-            paramValues[p.key] = tmpl.default_params?.[p.key] ?? p.default;
-          }
-        }
-      } catch { /* keep empty */ }
     }
-    // Seed sweep ranges for numeric params
+
+    // 4) Seed sweep ranges for numeric params
     for (const p of s.params_schema ?? []) {
       if (p.type === 'number' && p.key !== 'qty' && p.key !== 'symbol') {
         const d = paramValues[p.key] ?? p.default;
@@ -335,10 +362,13 @@
           <div class="btl-info-body">{strategyInfo.description}</div>
           {#if strategyInfo.source_url}
             <a class="btl-info-link" href={strategyInfo.source_url} target="_blank" rel="noopener">Источник на GitHub ↗</a>
-          {:else if strategyInfo.source === 'installed'}
-            <span class="btl-info-link">Установленный робот — стратегия загружена из скрипта</span>
-          {:else}
-            <span class="btl-info-link">Стратегия из библиотеки — без внешнего источника</span>
+          {/if}
+          {#if strategyInfo.source === 'installed'}
+            <span class="btl-info-link">Установленный робот — скрипт загружен из кода</span>
+          {:else if strategyInfo.source === 'both'}
+            <span class="btl-info-link">Установлен на платформе + есть в каталоге</span>
+          {:else if !strategyInfo.source_url}
+            <span class="btl-info-link">Стратегия из библиотеки</span>
           {/if}
         </div>
       {/if}
