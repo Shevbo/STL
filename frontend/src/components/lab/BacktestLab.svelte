@@ -83,6 +83,7 @@
         name: c.name,
         description: c.description ?? '',
         source: 'store',
+        source_url: c.source ?? '',
         scriptCode: null, // will be resolved from strategies endpoint
         params_schema: [],
         results: c.results ?? [],
@@ -559,9 +560,9 @@
   .btl-cat-sweep { font-size: 8px; color: #4caf50; background: #4caf5018; padding: 1px 5px; border-radius: 3px; }
   .btl-cat-i { font-size: 10px; color: #4a6a8a; cursor: pointer; padding: 1px 3px; }
   .btl-cat-i:hover { color: #6aafff; }
-  .btl-cat-pop { margin-top: 6px; padding: 8px 10px; background: #0a0a18; border: 1px solid #2a3a5a; border-radius: 4px; }
-  .btl-cat-pop-t { font-size: 11px; color: #4caf50; font-weight: 600; margin-bottom: 4px; }
-  .btl-cat-pop-d { font-size: 10px; color: #889; line-height: 1.5; }
+  .btl-cat-pop { margin-top: 6px; padding: 10px 12px; background: #0a0f1e; border: 1px solid #2a4a6a; border-radius: 4px; position: relative; z-index: 5; }
+  .btl-cat-pop-t { font-size: 11px; color: #4caf50; font-weight: 600; margin-bottom: 6px; }
+  .btl-cat-pop-d { font-size: 10px; color: #aab; line-height: 1.6; white-space: pre-line; }
   .btl-cat-pop-link { font-size: 9px; color: #4a6a8a; margin-top: 4px; display: inline-block; text-decoration: none; }
   .btl-cat-pop-link:hover { color: #6aafff; }
   .btl-cat-desc { font-size: 9px; color: #667; margin-top: 3px; line-height: 1.3; }
@@ -578,7 +579,7 @@
   .btl-pf-label { font-size: 11px; color: #aaa; }
   .btl-pf-i { font-size: 10px; color: #4a6a8a; cursor: help; }
   .btl-pf-i:hover { color: #6aafff; }
-  .btl-pf-desc { font-size: 8px; color: #4a6a8a; line-height: 1.3; margin-bottom: 3px; }
+  .btl-pf-desc { font-size: 9px; color: #7a9abb; line-height: 1.5; margin-bottom: 3px; white-space: pre-line; }
 
   /* Inputs */
   .btl-inp {

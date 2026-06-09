@@ -1117,6 +1117,8 @@ def create_app() -> FastAPI:
             "donchian_breakout": "Donchian Breakout", "supertrend": "SuperTrend (ATR)",
         }
         names = {t["id"]: t["name"] for t in templates}
+        descs = {t["id"]: t.get("description", "") for t in templates}
+        sources = {t["id"]: t.get("source", "") for t in templates}
         names.update(core_ids)
 
         rows = []
@@ -1157,6 +1159,8 @@ def create_app() -> FastAPI:
             catalog.append({
                 "id": sid,
                 "name": names.get(sid, sid),
+                "description": descs.get(sid, ""),
+                "source": sources.get(sid, ""),
                 "variants_tested": variants_by.get(sid, 0),
                 "last_run": lr.isoformat() if lr else None,
                 "results": best_by_strat.get(sid, []),
