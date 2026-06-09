@@ -20,10 +20,22 @@
   async function deploy(id: string) {
     await fetchWithAuth(`/api/v1/robots/${id}/deploy`, { method: 'POST' });
     await load();
+    // Refresh selected from the updated list so button reacts immediately.
+    selected = robots.find(r => r.id === selected?.id) ?? selected;
+    if (selected) selected.deployed = true;
   }
 
   async function undeploy(id: string) {
     await fetchWithAuth(`/api/v1/robots/${id}/undeploy`, { method: 'POST' });
+    await load();
+    selected = robots.find(r => r.id === selected?.id) ?? selected;
+    if (selected) selected.deployed = false;
+  }
+
+  async function removeRobot(id: string) {
+    if (!confirm('Удалить робота из реестра? Все сделки и метрики будут удалены безвозвратно.')) return;
+    await fetchWithAuth(`/api/v1/robots/${id}`, { method: 'DELETE' });
+    selected = null;
     await load();
   }
 
@@ -89,6 +101,7 @@
             {:else}
               <button class="icon-btn deploy" onclick={() => deploy(selected.id)}>▶ Deploy</button>
             {/if}
+            <button class="icon-btn del" onclick={() => removeRobot(selected.id)}>🗑 Удалить</button>
           </div>
         </div>
 
@@ -180,6 +193,9 @@
   .icon-btn.edit { background: #1a1a2e; border-color: #3d3d5a; color: #aaa; }
   .icon-btn.deploy { background: #0a1a0a; border-color: #4caf5066; color: #4caf50; }
   .icon-btn.stop { background: #1a0a0a; border-color: #f4433666; color: #f44336; }
+  .icon-btn.del { background: #1a0808; border-color: #f4433644; color: #f4433688; }
+  .icon-btn.del:hover { background: #2a0a0a; color: #f44336; }
+  .icon-btn:hover { opacity: 0.85; }
 
   .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
   .info-item { background: #0a0a15; border: 1px solid #1e1e3a; border-radius: 4px; padding: 8px; }

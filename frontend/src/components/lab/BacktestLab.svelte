@@ -12,6 +12,10 @@
   const TYPE_LABEL: Record<string, string> = {
     open: 'Открытие', average: 'Усреднение', close: 'Закрытие', reverse: 'Закр+Реверс',
   };
+  function cartesian(arrays: number[][]): number[][] {
+    if (!arrays.length) return [[]];
+    return arrays.reduce((acc, cur) => acc.flatMap(a => cur.map(c => [...a, c])), [[]] as number[][]);
+  }
   const fmtT = (ts: number) => new Date(ts * 1000).toLocaleString('ru-RU', {
     timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
   });
@@ -35,6 +39,8 @@
   let dateFrom = $state('2026-03-02');
   let dateTo = $state('2026-05-24');
   let paramValues = $state<Record<string, any>>({});  // structured param form values
+  let sweepMode = $state(false);                        // grid sweep: from-to per param
+  let sweepRanges = $state<Record<string, {from:number,to:number,step:number}>>({});
   let openInfo = $state<string | null>(null);
   let hoverInfo = $state<string | null>(null);
   let engine = $state<'local' | 'remote'>('local');  // VDS vs powerful host agent
@@ -43,6 +49,7 @@
   let results = $state<any[]>([]);
   let running = $state(false);
   let error = $state('');
+  let runPhase = $state('');                             // human-readable step during run
   let loadingData = $state(false);
   let dataStatus = $state('');
   let coverage = $state<any[]>([]);
@@ -102,27 +109,51 @@
   async function runBacktest() {
     error = '';
     running = true;
+    runPhase = 'Подготовка…';
     results = [];
     try {
-      // Structured form → single-value param grid (each param fixed to its value).
-      const grid: Record<string, any> = {};
-      for (const [k, v] of Object.entries(paramValues)) grid[k] = v;
       const symbol = paramValues.symbol || selectedSymbol || '';
+      let body: Record<string, any>;
+      if (sweepMode) {
+        // Build a product grid from per-param ranges + fixed values.
+        const dims: Record<string, number[]> = {};
+        for (const [k, v] of Object.entries(paramValues)) {
+          const r = sweepRanges[k];
+          if (r && r.from !== r.to) {
+            // Range sweep: generate values from → to step
+            dims[k] = [];
+            for (let x = r.from; x <= r.to; x += (r.step || 1)) dims[k].push(x);
+          } else {
+            dims[k] = [v];  // fixed value
+          }
+        }
+        const keys = Object.keys(dims);
+        const combos = cartesian(keys.map(k => dims[k]));
+        runPhase = `Сетка: ${combos.length} комбинаций по ${keys.length} параметрам…`;
+        body = { robotId: selectedRobotId, symbol, dateFrom: new Date(dateFrom).toISOString(),
+                 dateTo: new Date(dateTo).toISOString(), paramSets: combos.map(c => {
+                   const p: Record<string,any> = {};
+                   keys.forEach((k,i) => p[k] = c[i]);
+                   if (!p.symbol) p.symbol = symbol;
+                   return p;
+                 }), engine };
+      } else {
+        // Single param set (fixed values).
+        const grid: Record<string, any> = {};
+        for (const [k, v] of Object.entries(paramValues)) grid[k] = v;
+        runPhase = `Одиночный прогон на ${symbol}…`;
+        body = { robotId: selectedRobotId, symbol, dateFrom: new Date(dateFrom).toISOString(),
+                 dateTo: new Date(dateTo).toISOString(), paramsGrid: grid, engine };
+      }
       const res = await fetchWithAuth('/api/v1/backtest/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          robotId: selectedRobotId,
-          symbol,
-          dateFrom: new Date(dateFrom).toISOString(),
-          dateTo: new Date(dateTo).toISOString(),
-          paramsGrid: grid,
-          engine,
-        }),
+        body: JSON.stringify(body),
       });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       runId = data.run_id;
+      runPhase = `Расчёт запущен (ID: ${runId.slice(0,8)}…)…`;
       await pollStatus();
     } catch (e) {
       error = String(e);
@@ -277,6 +308,11 @@
     {#if selectedStrategy}
       <div class="param-form">
         <div class="section-title">Параметры</div>
+        <!-- Sweep mode toggle: switch between single-value and from-to grid -->
+        <label class="sweep-toggle">
+          <input type="checkbox" bind:checked={sweepMode} />
+          <span>Перебрать параметры (сетка от-до по каждому)</span>
+        </label>
         {#each (selectedStrategy.params_schema ?? []) as p}
           {@const info = p.desc || p.hint}
           {@const isSymbol = p.key === 'symbol'}
@@ -302,7 +338,6 @@
             </span>
             {#if isSymbol}
               <select bind:value={paramValues[p.key]}>
-                <!-- keep the current value even if not in the top-turnover list -->
                 {#if paramValues[p.key] && !instruments.some(i => i.symbol === paramValues[p.key])}
                   <option value={paramValues[p.key]}>{paramValues[p.key]}</option>
                 {/if}
@@ -311,9 +346,31 @@
                 {/each}
               </select>
             {:else if p.type === 'number'}
-              <input type="number" min={p.min} max={p.max} bind:value={paramValues[p.key]} placeholder={String(p.default)} />
+              {#if sweepMode}
+                {@const r = sweepRanges[p.key] ?? {}}
+                <div class="sweep-row">
+                  <span class="sw-lbl">от</span>
+                  <input type="number" class="sw-inp" min={p.min} max={p.max}
+                         value={r.from ?? paramValues[p.key] ?? p.default}
+                         onchange={(e) => {sweepRanges[p.key]={...sweepRanges[p.key],from:Number(e.currentTarget.value)}; sweepRanges = sweepRanges;}} />
+                  <span class="sw-lbl">до</span>
+                  <input type="number" class="sw-inp" min={p.min} max={p.max}
+                         value={r.to ?? paramValues[p.key] ?? p.default}
+                         onchange={(e) => {sweepRanges[p.key]={...sweepRanges[p.key],to:Number(e.currentTarget.value)}; sweepRanges = sweepRanges;}} />
+                  <span class="sw-lbl">шаг</span>
+                  <input type="number" class="sw-inp" min="1" max="100"
+                         value={r.step ?? 1}
+                         onchange={(e) => {sweepRanges[p.key]={...sweepRanges[p.key],step:Number(e.currentTarget.value)}; sweepRanges = sweepRanges;}} />
+                </div>
+              {:else}
+                <input type="number" min={p.min} max={p.max} bind:value={paramValues[p.key]} placeholder={String(p.default)} />
+              {/if}
             {:else}
               <input type="text" bind:value={paramValues[p.key]} placeholder={String(p.default)} />
+            {/if}
+            <!-- Always-visible parameter hint -->
+            {#if p.desc || p.hint}
+              <div class="pf-desc">{p.desc || p.hint}</div>
             {/if}
           </div>
         {/each}
@@ -355,8 +412,15 @@
     <div class="hint">«Мощный хост» — расчёт на внешнем агенте (i9/128ГБ), не грузит торговый сервер. Требует запущенного агента.</div>
 
     <button onclick={runBacktest} disabled={running}>
-      {running ? `Running… (${status})` : 'Run Backtest'}
+      {running ? `Идёт расчёт… ${runPhase}` : (sweepMode ? 'Запустить перебор' : 'Run Backtest')}
     </button>
+    {#if running}
+      <div class="run-info">
+        <div class="ri-phase">{runPhase}</div>
+        <div class="ri-hint">Бэктест: последовательный прогон каждой комбинации параметров на исторических барах.
+          Результаты появятся в таблице ниже по мере завершения.</div>
+      </div>
+    {/if}
     {#if error}<div class="error">{error}</div>{/if}
 
     <!-- Results table -->
@@ -534,6 +598,17 @@
   .data-status { font-size: 10px; color: #888; }
   .divider { height: 1px; background: #2d2d4a; margin: 4px 0; }
   .hint { font-size: 10px; color: #666; line-height: 1.4; }
+  /* Sweep mode */
+  .sweep-toggle { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #4caf50; cursor: pointer; margin-bottom: 6px; }
+  .sweep-toggle input { accent-color: #4caf50; }
+  .sweep-row { display: flex; align-items: center; gap: 4px; }
+  .sw-lbl { font-size: 9px; color: #666; min-width: 18px; }
+  .sw-inp { width: 58px; background: #0f0f1e; border: 1px solid #4caf5044; color: #4caf50; font-size: 10px; padding: 2px 4px; border-radius: 2px; }
+  .pf-desc { font-size: 8px; color: #4a6a8a; line-height: 1.3; margin-top: 1px; }
+  /* Run feedback */
+  .run-info { margin-top: 8px; padding: 8px 10px; background: #0d1a1a; border: 1px solid #1e3e3e; border-radius: 4px; }
+  .ri-phase { font-size: 12px; color: #4caf50; font-weight: 600; }
+  .ri-hint { font-size: 9px; color: #668; margin-top: 4px; line-height: 1.4; }
   .engine-row { display: flex; gap: 4px; }
   .eng-btn { flex: 1; padding: 5px 8px; background: #0f0f1e; border: 1px solid #2d2d4a; color: #888; font-size: 11px; border-radius: 3px; cursor: pointer; }
   .eng-btn:hover { color: #ccc; }

@@ -271,6 +271,11 @@
                   placeholder={String(p.default)}
                 />
               {/if}
+              <!-- Always-visible parameter description helps the user understand
+                   what each knob does BEFORE clicking Deploy. -->
+              {#if p.desc || p.hint}
+                <div class="param-desc">{p.desc || p.hint}</div>
+              {/if}
             </div>
           {/each}
         </div>
@@ -334,6 +339,7 @@
   .field { display: flex; flex-direction: column; gap: 4px; }
   .field label { font-size: 11px; color: #888; }
   .param-hint { color: #555; font-style: italic; }
+  .param-desc { font-size: 9px; color: #5a7a9a; margin-top: 1px; line-height: 1.3; max-width: 320px; }
   input, select {
     background: #0a0a15; border: 1px solid #2d2d4a; color: #ccc;
     padding: 5px 8px; font-size: 12px; border-radius: 3px; outline: none;
