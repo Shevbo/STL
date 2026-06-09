@@ -40,6 +40,7 @@ class RobotScheduler:
         self._tx_client = tx_client
         self._pos_client = pos_client
         self._tasks: dict[str, asyncio.Task] = {}
+        self._robot_states: dict[str, dict] = {}  # in-memory robot state across ticks
 
     async def start(self) -> None:
         """Load deployed robots from DB and start them."""
@@ -55,6 +56,9 @@ class RobotScheduler:
         if len(self._tasks) >= _MAX_ACTIVE_ROBOTS:
             log.warning("lab.scheduler.max_robots_reached", robot_id=robot.id)
             return
+        # Seed in-memory state from DB so the robot remembers its trend across ticks.
+        s = robot.state_json if isinstance(robot.state_json, dict) else {}
+        self._robot_states[robot.id] = s
         task = asyncio.create_task(
             self._window_loop(robot), name=f"robot-{robot.id}"
         )
@@ -101,17 +105,21 @@ class RobotScheduler:
         from trader.lab.runtime import LiveRuntime  # avoid import cycle
         mod = types.ModuleType("robot_script")
         exec(compile(robot.script_code, f"<robot:{robot.id}>", "exec"), mod.__dict__)
-        # paper by default; real trading only when state_json.live_real is true
         state = robot.state_json if isinstance(robot.state_json, dict) else {}
+        # Restore previous in-memory state so the robot remembers its trend/position
+        # across ticks. Without this, every tick starts with amnesia → repeated entries.
+        prev_state = self._robot_states.get(robot.id, state)
         paper = not bool(state.get("live_real", False))
         runtime = LiveRuntime(
             robot_id=robot.id, pool=self._pool,
             tx_client=self._tx_client, pos_client=self._pos_client,
-            paper=paper,
+            paper=paper, initial_state=prev_state,
         )
         if hasattr(mod, "on_bar"):
             await mod.on_bar(runtime, robot.params_json)
         await runtime.flush_state()
+        # Update in-memory state so the next tick sees the fresh trend/position state.
+        self._robot_states[robot.id] = runtime._state
 
     async def stop_all(self) -> None:
         for robot_id in list(self._tasks):

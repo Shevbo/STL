@@ -169,13 +169,13 @@ class LiveRuntime:
     """
 
     def __init__(self, robot_id: str, pool, tx_client=None, pos_client=None,
-                 paper: bool = True) -> None:
+                 paper: bool = True, initial_state: dict[str, Any] | None = None) -> None:
         self._robot_id = robot_id
         self._pool = pool
         self._tx = tx_client
         self._pos = pos_client
         self._paper = paper
-        self._state: dict[str, Any] = {}
+        self._state: dict[str, Any] = dict(initial_state or {})
         self._bars_cache: list[Bar] | None = None
         self._bars_symbol: str | None = None
 
