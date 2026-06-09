@@ -51,6 +51,11 @@ model BacktestRun {
   dateFrom   DateTime
   dateTo     DateTime
   status     String    @default("pending")
+  engine     String?   @map("engine")
+  symbol     String?   @map("symbol")
+  jobBody    Json?     @map("job_body")
+  claimedAt  DateTime? @map("claimed_at")
+  agentId    String?   @map("agent_id")
   errorMsg   String?
   createdAt  DateTime  @default(now())
   finishedAt DateTime?
@@ -61,17 +66,20 @@ model BacktestRun {
 }
 
 model BacktestResult {
-  id          String      @id @default(cuid())
-  runId       String
-  run         BacktestRun @relation(fields: [runId], references: [id])
-  params      Json
-  trades      Json        @default("[]")
-  equityCurve Json        @default("[]")
-  sharpe      Float?
-  maxDrawdown Float?
-  winRate     Float?
-  totalReturn Float?
-  totalTrades Int?
+  id             String      @id @default(cuid())
+  runId          String
+  run            BacktestRun @relation(fields: [runId], references: [id])
+  params         Json
+  trades         Json        @default("[]")
+  equityCurve    Json        @default("[]")
+  sharpe         Float?
+  maxDrawdown    Float?
+  winRate        Float?
+  totalReturn    Float?
+  totalTrades    Int?
+  netProfit      Float?      @map("net_profit")
+  recoveryFactor Float?      @map("recovery_factor")
+  pointValue     Float?      @map("point_value")
   @@map("backtest_results")
 }
 

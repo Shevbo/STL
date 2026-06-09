@@ -1917,13 +1917,12 @@ def create_app() -> FastAPI:
                         await conn.execute(
                             """INSERT INTO backtest_results
                                (id, run_id, params, trades, equity_curve, sharpe, max_drawdown, win_rate,
-                                total_return, total_trades, net_profit, recovery_factor)
-                               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)""",
+                                total_return, total_trades)
+                               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)""",
                             cuid(), run_id, entry["params"],
                             r.get("trades", []), r.get("equity_curve", []),
                             r.get("sharpe"), r.get("max_drawdown"), r.get("win_rate"),
                             r.get("total_return"), r.get("total_trades"),
-                            r.get("net_profit"), r.get("recovery_factor"),
                         )
                     # Mirror to the leaderboard ONLY for real sweeps (camp-/opt-, which
                     # have a non-null campaign_run). A UI/chart run has strat_id too but
