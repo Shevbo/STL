@@ -73,7 +73,7 @@
       case 'left': leftW = clamp(dragStart.val + dx, 120, 420); break;
       case 'right': rightW = clamp(dragStart.val - dx, 130, 420); break;
       case 'book': bookW = clamp(dragStart.val - dx, 140, 500); break;
-      case 'pos': posH = clamp(dragStart.val + dy, 80, 400); break;
+      case 'pos': posH = clamp(dragStart.val - dy, 80, 400); break;
       case 'lab': labH = clamp(dragStart.val - dy, 120, 700); break;
       case 'leftSplit': {
         const el = document.querySelector('.left-col') as HTMLElement | null;
