@@ -1888,6 +1888,13 @@ def create_app() -> FastAPI:
         # only; a UI/chart run (bare cuid) keeps full backtest_results so the chart
         # can render trades + equity even though its script_code also has make_on_bar.
         is_campaign = bool(strat_id) and _is_sweep_run(run_id)
+        # Multi-combo runs: strip bulky trades+equity to avoid DB bloat + nginx 413.
+        # The leaderboard only needs metrics; single-combo chart runs keep full data.
+        if len(results) > 1:
+            for entry in results:
+                if entry.get("ok") and entry.get("result"):
+                    entry["result"].pop("trades", None)
+                    entry["result"].pop("equity_curve", None)
         async with pool.acquire() as conn:
             async with conn.transaction():
                 if not is_campaign:
