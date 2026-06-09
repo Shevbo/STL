@@ -1,150 +1,223 @@
 <script lang="ts">
-  import { untrack } from 'svelte';
   import { fetchWithAuth } from '../../lib/fetch-auth';
   import BacktestChart from './BacktestChart.svelte';
-  import Optimizer from './Optimizer.svelte';
-  import { toFills, replay, commissionBreakdown } from '../../lib/lab-analytics';
+  import { toFills, commissionBreakdown } from '../../lib/lab-analytics';
 
-  let { preset = null }: { preset?: any } = $props();
+  // ── Strategy catalog (botstore + installed robots merged) ──────────────
+  let catalog = $state<any[]>([]);
+  let installed = $state<any[]>([]);
+  let instruments = $state<any[]>([]);
+  let selectedStrategyId = $state('');
+  let selectedStrategy = $derived(catalog.find((s: any) => s.id === selectedStrategyId) ?? null);
 
-  let centerMode = $state<'chart' | 'optimize'>('chart');
+  // ── Parameter form ─────────────────────────────────────────────────────
+  let paramValues = $state<Record<string, any>>({});
+  let sweepRanges = $state<Record<string, { from: number; to: number; step: number }>>({});
+  let dateFrom = $state('2026-03-02');
+  let dateTo = $state('2026-05-24');
+  let engine = $state<'auto' | 'local' | 'remote'>('auto');
 
-  const TYPE_LABEL: Record<string, string> = {
-    open: 'Открытие', average: 'Усреднение', close: 'Закрытие', reverse: 'Закр+Реверс',
-  };
+  // ── Sweep rounds ───────────────────────────────────────────────────────
+  const ROUNDS = [
+    { id: 'r0', label: 'R0 Random Explore', desc: 'Случайный поиск по всей сетке', max: 500 },
+    { id: 'r1', label: 'R1 RF×Return Refine', desc: 'Уточнение лучших RF×Return моделью', max: 300 },
+    { id: 'r2', label: 'R2 RF×Return Refine', desc: 'Финальный отбор по RF×Return', max: 200 },
+  ];
+  let activeRound = $state(0);
+  let roundResults = $state<any[][]>([[], [], []]);
+  let running = $state(false);
+  let runPhase = $state('');
+  let error = $state('');
+  let polling = $state<any>(null);
+
+  // ── Leader ──────────────────────────────────────────────────────────────
+  let leaderId = $state<string | null>(null);
+  let leaderResult = $state<any | null>(null);
+
+  // ── Helpers ─────────────────────────────────────────────────────────────
+  const fmtMoney = (v: number | null | undefined) =>
+    v != null ? (v >= 0 ? '+' : '') + Math.round(v).toLocaleString('ru') + ' ₽' : '—';
+  const fmtPct = (v: number | null | undefined) =>
+    v != null ? (v >= 0 ? '+' : '') + (v * 100).toFixed(1) + '%' : '—';
+  const fmtD = (v: number | null | undefined) => v != null ? v.toFixed(2) : '—';
+  const fmtN = (v: number | null | undefined) => v != null ? Math.round(v) : 0;
+
   function cartesian(arrays: number[][]): number[][] {
     if (!arrays.length) return [[]];
     return arrays.reduce((acc, cur) => acc.flatMap(a => cur.map(c => [...a, c])), [[]] as number[][]);
   }
-  const fmtT = (ts: number) => new Date(ts * 1000).toLocaleString('ru-RU', {
-    timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
-  });
-  const fmtP = (v: number) => (v >= 0 ? '+' : '') + Math.round(v);
 
-  // Commission (broker+exchange, taker — manual backtests model taker) for a result
-  // row, so the user can verify the fee is computed from the real broker/exchange
-  // tariff. Uses the same shared model as the chart and the backend.
-  function commOf(r: any) {
-    const sym = (typeof r.params === 'object' ? r.params?.symbol : null) || paramValues.symbol || selectedSymbol || '';
-    return commissionBreakdown(toFills(r.trades), pointValue, sym, true);
+  function comboCount(): number {
+    let n = 1;
+    const schema = selectedStrategy?.params_schema ?? [];
+    for (const p of schema) {
+      if (p.type !== 'number' || p.key === 'symbol') continue;
+      const r = sweepRanges[p.key];
+      if (r && r.from !== r.to && r.step > 0) {
+        n *= Math.floor((r.to - r.from) / r.step) + 1;
+      }
+    }
+    return n;
   }
 
-  // trades ledger for the selected result (newest first)
-  let ledger = $derived(
-    selectedResult ? replay(toFills(selectedResult.trades)).ledger.slice().reverse() : []
-  );
-
-  let robots = $state<any[]>([]);
-  let selectedRobotId = $state('');
-  let dateFrom = $state('2026-03-02');
-  let dateTo = $state('2026-05-24');
-  let paramValues = $state<Record<string, any>>({});  // structured param form values
-  let sweepMode = $state(false);                        // grid sweep: from-to per param
-  let sweepRanges = $state<Record<string, {from:number,to:number,step:number}>>({});
-  let openInfo = $state<string | null>(null);
-  let hoverInfo = $state<string | null>(null);
-  let engine = $state<'local' | 'remote'>('local');  // VDS vs powerful host agent
-  let runId = $state('');
-  let status = $state('');
-  let results = $state<any[]>([]);
-  let running = $state(false);
-  let error = $state('');
-  let runPhase = $state('');                             // human-readable step during run
-  let loadingData = $state(false);
-  let dataStatus = $state('');
-  let coverage = $state<any[]>([]);
-  let selectedResult = $state<any | null>(null);
-
-  let strategies = $state<any[]>([]);
-  let instruments = $state<any[]>([]);   // FORTS top by turnover (dropdown)
-
-  let selectedSymbol = $derived(
-    paramValues.symbol
-      ?? (() => {
-        const robot = robots.find(r => r.id === selectedRobotId);
-        const pj = robot?.params_json;
-        return (typeof pj === 'object' ? pj?.symbol : null) ?? 'RIM6';
-      })()
-  );
-
-  // Ruble economics for the chart (so backtest stats + TP/SL read in rubles, like
-  // the robot window). Fetched per symbol from the cached instrument meta.
-  let pointValue = $state(1);
-  $effect(() => {
-    const sym = selectedSymbol;
-    pointValue = 1;
-    fetchWithAuth(`/api/v1/instruments/${encodeURIComponent(sym)}/meta`)
-      .then(r => r.ok ? r.json() : null)
-      .then(m => { if (m?.point_value) pointValue = m.point_value; })
-      .catch(() => { /* keep 1 */ });
-  });
-
-  // Match the strategy template behind the selected robot (by script_code containing its id)
-  let selectedStrategy = $derived(
-    (() => {
-      const robot = robots.find(r => r.id === selectedRobotId);
-      const code = robot?.script_code ?? '';
-      return strategies.find(s => code.includes(s.id)) ?? null;
-    })()
-  );
-
-  async function loadRobots() {
-    const res = await fetchWithAuth('/api/v1/robots');
-    robots = res.ok ? await res.json() : [];
-    if (robots.length && !selectedRobotId) selectedRobotId = robots[0].id;
+  function profitRF(r: any): number {
+    return (r.net_profit ?? r.total_return ?? 0) * (r.recovery_factor ?? 1);
   }
 
-  async function loadStrategies() {
-    const res = await fetchWithAuth('/api/v1/strategies');
-    strategies = res.ok ? await res.json() : [];
+  function leaderboard(): any[] {
+    const all = roundResults.flat().filter(r => r?.result);
+    return all.sort((a, b) => profitRF(b.result) - profitRF(a.result));
+  }
+
+  // ── Load catalog (botstore + installed robots) ─────────────────────────
+  async function loadCatalog() {
+    try {
+      const [bs, robs] = await Promise.all([
+        fetchWithAuth('/api/v1/botstore').then(r => r.ok ? r.json() : null),
+        fetchWithAuth('/api/v1/robots').then(r => r.ok ? r.json() : []),
+      ]);
+      installed = robs ?? [];
+      const botCatalog = (bs?.catalog ?? []).map((c: any) => ({
+        id: c.id,
+        name: c.name,
+        description: c.description ?? '',
+        source: 'store',
+        scriptCode: null, // will be resolved from strategies endpoint
+        params_schema: [],
+        results: c.results ?? [],
+        sweep: c.sweep,
+      }));
+      // Merge installed robots as catalog entries too
+      const instEntries = installed.map((r: any) => ({
+        id: r.id,
+        name: r.name,
+        description: 'Установленный робот',
+        source: 'installed',
+        scriptCode: r.script_code,
+        params_schema: [],
+        robotId: r.id,
+        params_json: r.params_json,
+      }));
+      catalog = [...instEntries, ...botCatalog];
+      if (catalog.length && !selectedStrategyId) selectStrategy(catalog[0]);
+    } catch { catalog = []; }
   }
 
   async function loadInstruments() {
     try {
-      const res = await fetchWithAuth('/api/v1/forts-instruments');
-      instruments = res.ok ? await res.json() : [];
+      const r = await fetchWithAuth('/api/v1/forts-instruments');
+      instruments = r.ok ? await r.json() : [];
     } catch { instruments = []; }
   }
 
-  async function runBacktest() {
-    error = '';
-    running = true;
-    runPhase = 'Подготовка…';
-    results = [];
-    try {
-      const symbol = paramValues.symbol || selectedSymbol || '';
-      let body: Record<string, any>;
-      if (sweepMode) {
-        // Build a product grid from per-param ranges + fixed values.
-        const dims: Record<string, number[]> = {};
-        for (const [k, v] of Object.entries(paramValues)) {
-          const r = sweepRanges[k];
-          if (r && r.from !== r.to) {
-            // Range sweep: generate values from → to step
-            dims[k] = [];
-            for (let x = r.from; x <= r.to; x += (r.step || 1)) dims[k].push(x);
-          } else {
-            dims[k] = [v];  // fixed value
+  // Load full strategy details (params_schema) when a catalog entry is selected
+  async function selectStrategy(s: any) {
+    selectedStrategyId = s.id;
+    paramValues = {};
+    sweepRanges = {};
+    roundResults = [[], [], []];
+    leaderId = null; leaderResult = null; error = '';
+    // Load params schema from strategies endpoint or from installed robot
+    if (s.source === 'installed') {
+      // Build schema from installed robot's params_json keys
+      const pj = typeof s.params_json === 'object' ? s.params_json : {};
+      const keys = Object.keys(pj);
+      s.params_schema = keys.filter(k => k !== 'symbol').map(k => ({
+        key: k, label: k, type: typeof pj[k] === 'number' ? 'number' : 'text',
+        default: pj[k], min: undefined, max: undefined, desc: '', hint: '',
+      }));
+      // Add symbol if present
+      if (pj.symbol) {
+        s.params_schema.unshift({ key: 'symbol', label: 'Инструмент', type: 'text', default: pj.symbol, desc: '', hint: '' });
+      }
+      for (const p of s.params_schema) {
+        paramValues[p.key] = pj[p.key] ?? p.default;
+      }
+    } else {
+      // Load full strategy template
+      try {
+        const r = await fetchWithAuth('/api/v1/strategies');
+        const strats = r.ok ? await r.json() : [];
+        const tmpl = strats.find((t: any) => t.id === s.id);
+        if (tmpl) {
+          s.scriptCode = tmpl.script_code;
+          s.description = tmpl.description ?? s.description;
+          s.params_schema = tmpl.params_schema ?? [];
+          s.source_url = tmpl.source;
+          for (const p of s.params_schema) {
+            paramValues[p.key] = tmpl.default_params?.[p.key] ?? p.default;
           }
         }
-        const keys = Object.keys(dims);
-        const combos = cartesian(keys.map(k => dims[k]));
-        runPhase = `Сетка: ${combos.length} комбинаций по ${keys.length} параметрам…`;
-        body = { robotId: selectedRobotId, symbol, dateFrom: new Date(dateFrom).toISOString(),
-                 dateTo: new Date(dateTo).toISOString(), paramSets: combos.map(c => {
-                   const p: Record<string,any> = {};
-                   keys.forEach((k,i) => p[k] = c[i]);
-                   if (!p.symbol) p.symbol = symbol;
-                   return p;
-                 }), engine };
-      } else {
-        // Single param set (fixed values).
-        const grid: Record<string, any> = {};
-        for (const [k, v] of Object.entries(paramValues)) grid[k] = v;
-        runPhase = `Одиночный прогон на ${symbol}…`;
-        body = { robotId: selectedRobotId, symbol, dateFrom: new Date(dateFrom).toISOString(),
-                 dateTo: new Date(dateTo).toISOString(), paramsGrid: grid, engine };
+      } catch { /* keep empty */ }
+    }
+    // Seed sweep ranges for numeric params
+    for (const p of s.params_schema ?? []) {
+      if (p.type === 'number' && p.key !== 'qty' && p.key !== 'symbol') {
+        const d = paramValues[p.key] ?? p.default;
+        sweepRanges[p.key] = { from: d, to: d, step: 1 };
       }
+    }
+  }
+
+  // ── Run sweep round ────────────────────────────────────────────────────
+  async function runRound(ri: number) {
+    error = '';
+    running = true;
+    activeRound = ri;
+    const sym = paramValues.symbol || 'RIM6';
+    const schema = selectedStrategy?.params_schema ?? [];
+    // Build param combos from sweep ranges
+    const dims: Record<string, number[]> = {};
+    for (const p of schema) {
+      if (p.type !== 'number' || p.key === 'symbol') {
+        dims[p.key] = [paramValues[p.key]];
+        continue;
+      }
+      const r = sweepRanges[p.key];
+      if (r && r.from !== r.to && r.step > 0) {
+        const vals: number[] = [];
+        for (let x = r.from; x <= r.to; x += r.step) vals.push(x);
+        dims[p.key] = vals;
+      } else {
+        dims[p.key] = [paramValues[p.key] ?? p.default];
+      }
+    }
+    const keys = Object.keys(dims);
+    let combos = cartesian(keys.map(k => dims[k]));
+    const maxC = ROUNDS[ri].max;
+    // R0: random shuffle + cap; R1/R2: take all (already refined)
+    if (ri === 0 && combos.length > maxC) {
+      // Fisher-Yates shuffle then slice
+      for (let i = combos.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [combos[i], combos[j]] = [combos[j], combos[i]];
+      }
+      combos = combos.slice(0, maxC);
+    } else if (combos.length > maxC) {
+      combos = combos.slice(0, maxC);
+    }
+    const paramSets = combos.map(c => {
+      const p: Record<string, any> = {};
+      keys.forEach((k, i) => p[k] = c[i]);
+      if (!p.symbol) p.symbol = sym;
+      return p;
+    });
+
+    const scriptCode = selectedStrategy?.scriptCode ?? selectedStrategy?.script_code;
+    const body: any = {
+      symbol: sym,
+      dateFrom: new Date(dateFrom).toISOString(),
+      dateTo: new Date(dateTo).toISOString(),
+      paramSets,
+      engine,
+      robotId: selectedStrategy?.robotId || (installed[0]?.id ?? ''),
+    };
+    if (scriptCode) {
+      body.scriptCode = scriptCode;
+      body.baseParams = { symbol: sym };
+    }
+    runPhase = `${ROUNDS[ri].label}: ${paramSets.length} вариантов → отправка…`;
+    try {
       const res = await fetchWithAuth('/api/v1/backtest/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -152,348 +225,254 @@
       });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
-      runId = data.run_id;
-      runPhase = `Расчёт запущен (ID: ${runId.slice(0,8)}…)…`;
-      await pollStatus();
-    } catch (e) {
+      runPhase = `${ROUNDS[ri].label}: расчёт ${paramSets.length} вариантов (${data.engine})…`;
+      await pollRun(data.run_id, ri, paramSets);
+    } catch (e: any) {
       error = String(e);
       running = false;
     }
   }
 
-  // Seed the structured param form from the selected strategy defaults + robot
-  // params. Runs when robot/strategy changes (but not while a preset is applying).
-  // Plain vars (not $state) — they are control flags, not reactive UI, and writing
-  // them inside an effect must not retrigger it.
-  let presetApplied = false;
-  function seedParams() {
-    const robot = robots.find(r => r.id === selectedRobotId);
-    const schema = selectedStrategy?.params_schema ?? [];
-    const base: Record<string, any> = {};
-    for (const p of schema) base[p.key] = p.default;
-    const rp = (typeof robot?.params_json === 'object' ? robot.params_json : {}) ?? {};
-    paramValues = { ...base, ...rp };
+  async function pollRun(runId: string, ri: number, paramSets: any[]) {
+    let attempts = 0;
+    polling = setInterval(async () => {
+      attempts++;
+      try {
+        const sr = await fetchWithAuth(`/api/v1/backtest/${runId}/status`);
+        if (!sr.ok) return;
+        const st = await sr.json();
+        const pct = st.progress_pct ?? (st.done ? 100 : Math.min(99, attempts * 3));
+        runPhase = `${ROUNDS[ri].label}: ${st.status ?? 'расчёт'} · ${pct}% · попытка ${attempts}`;
+        if (st.status === 'done' || st.status === 'failed') {
+          clearInterval(polling);
+          polling = null;
+          // Fetch results
+          const rr = await fetchWithAuth(`/api/v1/backtest/${runId}/results`);
+          if (rr.ok) {
+            const rd = await rr.json();
+            // API returns flat array of result rows. Each row has params + metrics + trades.
+            const items = (Array.isArray(rd) ? rd : (rd.results ?? rd.combos ?? [])).map((c: any) => ({
+              params: c.params ?? {},
+              result: c,
+            }));
+            roundResults[ri] = items;
+            // Auto-select leader
+            const lb = [...items].sort((a, b) => profitRF(b.result) - profitRF(a.result));
+            if (lb.length && profitRF(lb[0].result) > 0) {
+              leaderId = JSON.stringify(lb[0].params);
+              leaderResult = lb[0];
+            }
+          }
+          runPhase = `${ROUNDS[ri].label}: готово — ${roundResults[ri].length} результатов`;
+          running = false;
+        }
+      } catch { /* keep polling */ }
+    }, 1500);
   }
 
-  // Apply a Botstore preset: pick the matching robot, fill params + period.
-  function applyPreset(p: any) {
-    if (!p || !robots.length) return;
-    const robot = robots.find(r => (r.script_code ?? '').includes(p.strategyId))
-      ?? robots.find(r => r.id === selectedRobotId);
-    if (robot) selectedRobotId = robot.id;
-    paramValues = { ...(p.params ?? {}) };
-    if (p.symbol) paramValues.symbol = p.symbol;
-    if (p.dateFrom) dateFrom = p.dateFrom.slice(0, 10);
-    if (p.dateTo) dateTo = p.dateTo.slice(0, 10);
-    presetApplied = true;
+  function stopRun() {
+    if (polling) { clearInterval(polling); polling = null; }
+    running = false;
+    runPhase = 'Остановлено';
   }
 
-  async function pollStatus() {
-    while (true) {
-      await new Promise(r => setTimeout(r, 2000));
-      const res = await fetchWithAuth(`/api/v1/backtest/${runId}/status`);
-      const data = await res.json();
-      status = data.status;
-      if (data.status === 'done') {
-        await loadResults();
-        running = false;
-        return;
-      } else if (data.status === 'failed') {
-        error = data.error_msg || 'Backtest failed';
-        running = false;
-        return;
-      }
-    }
+  function clearRounds() {
+    roundResults = [[], [], []];
+    leaderId = null; leaderResult = null;
+    runPhase = ''; error = '';
   }
 
-  async function loadResults() {
-    const res = await fetchWithAuth(`/api/v1/backtest/${runId}/results`);
-    results = res.ok ? await res.json() : [];
-    // Auto-select the top result so the chart appears immediately (single-param
-    // run → one row; grid → best by return, already sorted server-side).
-    selectedResult = results.length ? results[0] : null;
-    if (selectedResult) centerMode = 'chart';
-  }
-
-  async function deployResult(params: any) {
-    await fetchWithAuth(`/api/v1/robots/${selectedRobotId}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ paramsJson: params }),
-    });
-    await fetchWithAuth(`/api/v1/robots/${selectedRobotId}/deploy`, { method: 'POST' });
-  }
-
-  async function loadData() {
-    const robot = robots.find(r => r.id === selectedRobotId);
-    const symbol = robot?.params_json?.symbol || '';
-    if (!symbol) { error = 'Robot has no symbol in params_json'; return; }
-    loadingData = true;
-    dataStatus = 'Requesting ISS download…';
-    error = '';
-    try {
-      const res = await fetchWithAuth('/api/v1/market/update', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          symbols: [symbol],
-          dateFrom: new Date(dateFrom).toISOString(),
-          dateTo: new Date(dateTo).toISOString(),
-        }),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      dataStatus = `Download started for ${symbol}. Refresh coverage in ~30s.`;
-      setTimeout(loadCoverage, 5000);
-    } catch (e) {
-      error = String(e);
-    }
-    loadingData = false;
-  }
-
-  async function loadCoverage() {
-    const res = await fetchWithAuth('/api/v1/market/coverage');
-    coverage = res.ok ? await res.json() : [];
-  }
-
-  $effect(() => { loadRobots(); loadCoverage(); loadStrategies(); loadInstruments(); });
-
-  // Apply an incoming Botstore preset once robots are loaded. Writes happen inside
-  // untrack so mutating paramValues/selectedRobotId doesn't retrigger this effect.
-  let presetDone = false;
-  $effect(() => {
-    void preset; void robots.length; void strategies.length;
-    if (preset && robots.length && strategies.length && !presetDone) {
-      presetDone = true;
-      untrack(() => applyPreset(preset));
-    }
-  });
-
-  // Seed the structured form when the robot/strategy changes (unless a preset set it).
-  let lastSeededRobot = '';
-  $effect(() => {
-    const sid = selectedRobotId;
-    const strat = selectedStrategy;
-    if (!sid || !strat) return;
-    untrack(() => {
-      if (presetApplied) { presetApplied = false; lastSeededRobot = sid; return; }
-      if (sid !== lastSeededRobot) { seedParams(); lastSeededRobot = sid; }
-    });
-  });
+  // ── Init ────────────────────────────────────────────────────────────────
+  $effect(() => { loadCatalog(); loadInstruments(); });
 </script>
 
-<div class="backtest-lab">
-
-  <!-- ── Left: controls ─────────────────────────────────────────── -->
-  <div class="controls">
-    <h3>Backtest Lab</h3>
-    <label>
-      Робот
-      <select bind:value={selectedRobotId}>
-        {#each robots as r}<option value={r.id}>{r.name}</option>{/each}
-      </select>
-    </label>
-
-    <!-- Strategy "about" + author link -->
-    {#if selectedStrategy}
-      <div class="about-box">
-        <div class="about-name">{selectedStrategy.name}</div>
-        {#if selectedStrategy.description}<div class="about-desc">{selectedStrategy.description}</div>{/if}
-        {#if selectedStrategy.source}
-          <a class="about-link" href={selectedStrategy.source} target="_blank" rel="noopener">Подробное описание робота ↗</a>
-        {/if}
+<div class="btl">
+  <!-- ── LEFT: Config panel ──────────────────────────────────────────── -->
+  <div class="btl-config">
+    <div class="btl-section">
+      <div class="btl-sec-title">Стратегия</div>
+      <div class="btl-cat-list">
+        {#each catalog as s}
+          {@const active = selectedStrategyId === s.id}
+          <button class="btl-cat-card" class:active
+                  onclick={() => selectStrategy(s)}>
+            <div class="btl-cat-name">
+              {s.name}
+              {#if s.sweep?.pct > 0}
+                <span class="btl-cat-sweep">перебор {s.sweep.pct}%</span>
+              {/if}
+            </div>
+            {#if s.description}<div class="btl-cat-desc">{s.description}</div>{/if}
+            {#if s.source === 'store' && s.results?.length}
+              <div class="btl-cat-top3">
+                {#each s.results.slice(0, 3) as r}
+                  <span class="btl-t3sym">{r.symbol}</span>
+                  <span class="btl-t3pnl" class:pos={r.net_profit > 0} class:neg={r.net_profit < 0}>{fmtMoney(r.net_profit)}</span>
+                {/each}
+              </div>
+            {/if}
+            {#if s.source === 'installed'}<span class="btl-cat-badge">установлен</span>{/if}
+          </button>
+        {/each}
       </div>
-    {/if}
+    </div>
 
-    <!-- Structured parameters: instrument dropdown + each strategy param with (i) -->
     {#if selectedStrategy}
-      <div class="param-form">
-        <div class="section-title">Параметры</div>
-        <!-- Sweep mode toggle: switch between single-value and from-to grid -->
-        <label class="sweep-toggle">
-          <input type="checkbox" bind:checked={sweepMode} />
-          <span>Перебрать параметры (сетка от-до по каждому)</span>
-        </label>
+      <div class="btl-section">
+        <div class="btl-sec-title">
+          Параметры
+          {#if selectedStrategy.source_url}
+            <a class="btl-src-link" href={selectedStrategy.source_url} target="_blank" rel="noopener">источник ↗</a>
+          {/if}
+        </div>
         {#each (selectedStrategy.params_schema ?? []) as p}
-          {@const info = p.desc || p.hint}
           {@const isSymbol = p.key === 'symbol'}
-          <div class="pf-row">
-            <span class="pf-label">
-              {p.label}
-              {#if info}
-                <span class="pf-i" role="button" tabindex="0" aria-label="Описание"
-                  onclick={() => openInfo = openInfo === p.key ? null : p.key}
-                  onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && (openInfo = openInfo === p.key ? null : p.key)}
-                  onmouseenter={() => hoverInfo = p.key} onmouseleave={() => hoverInfo = null}
-                >ⓘ</span>
+          <div class="btl-pf">
+            <div class="btl-pf-head">
+              <span class="btl-pf-label">{p.label}</span>
+              {#if p.desc || p.hint}
+                <span class="btl-pf-i" title={p.desc || p.hint}>ⓘ</span>
               {/if}
-              {#if info && (openInfo === p.key || hoverInfo === p.key)}
-                <div class="pf-popover">
-                  <div class="pp-title">{p.label}</div>
-                  <div class="pp-body">{p.desc || p.hint}</div>
-                  {#if p.type === 'number' && (p.min != null || p.max != null)}
-                    <div class="pp-range">Диапазон: {p.min ?? '—'} … {p.max ?? '—'} · по умолч. {p.default}</div>
-                  {/if}
-                </div>
-              {/if}
-            </span>
+            </div>
+            {#if p.desc || p.hint}
+              <div class="btl-pf-desc">{p.desc || p.hint}</div>
+            {/if}
             {#if isSymbol}
-              <select bind:value={paramValues[p.key]}>
-                {#if paramValues[p.key] && !instruments.some(i => i.symbol === paramValues[p.key])}
-                  <option value={paramValues[p.key]}>{paramValues[p.key]}</option>
-                {/if}
+              <select bind:value={paramValues[p.key]} class="btl-inp btl-sel">
                 {#each instruments as inst}
                   <option value={inst.symbol}>{inst.symbol} — {inst.name}</option>
                 {/each}
               </select>
             {:else if p.type === 'number'}
-              {#if sweepMode}
-                {@const r = sweepRanges[p.key] ?? {}}
-                <div class="sweep-row">
-                  <span class="sw-lbl">от</span>
-                  <input type="number" class="sw-inp" min={p.min} max={p.max}
-                         value={r.from ?? paramValues[p.key] ?? p.default}
-                         onchange={(e) => {sweepRanges[p.key]={...sweepRanges[p.key],from:Number(e.currentTarget.value)}; sweepRanges = sweepRanges;}} />
-                  <span class="sw-lbl">до</span>
-                  <input type="number" class="sw-inp" min={p.min} max={p.max}
-                         value={r.to ?? paramValues[p.key] ?? p.default}
-                         onchange={(e) => {sweepRanges[p.key]={...sweepRanges[p.key],to:Number(e.currentTarget.value)}; sweepRanges = sweepRanges;}} />
-                  <span class="sw-lbl">шаг</span>
-                  <input type="number" class="sw-inp" min="1" max="100"
-                         value={r.step ?? 1}
-                         onchange={(e) => {sweepRanges[p.key]={...sweepRanges[p.key],step:Number(e.currentTarget.value)}; sweepRanges = sweepRanges;}} />
-                </div>
-              {:else}
-                <input type="number" min={p.min} max={p.max} bind:value={paramValues[p.key]} placeholder={String(p.default)} />
-              {/if}
+              {@const r = sweepRanges[p.key] ?? {}}
+              <div class="btl-range">
+                <input type="number" class="btl-inp btl-rng" min={p.min} max={p.max}
+                       value={paramValues[p.key] ?? p.default}
+                       onchange={(e) => paramValues[p.key] = Number(e.currentTarget.value)}
+                       title="Значение (если не перебирается)" />
+                <span class="btl-rng-lbl">от</span>
+                <input type="number" class="btl-inp btl-rng" min={p.min} max={p.max}
+                       value={r.from ?? paramValues[p.key] ?? p.default}
+                       onchange={(e) => {sweepRanges[p.key] = {...sweepRanges[p.key], from: Number(e.currentTarget.value)}; sweepRanges = sweepRanges;}}
+                       title="Начало диапазона перебора" />
+                <span class="btl-rng-lbl">до</span>
+                <input type="number" class="btl-inp btl-rng" min={p.min} max={p.max}
+                       value={r.to ?? paramValues[p.key] ?? p.default}
+                       onchange={(e) => {sweepRanges[p.key] = {...sweepRanges[p.key], to: Number(e.currentTarget.value)}; sweepRanges = sweepRanges;}}
+                       title="Конец диапазона перебора" />
+                <span class="btl-rng-lbl">шаг</span>
+                <input type="number" class="btl-inp btl-rng btl-step" min="1"
+                       value={r.step ?? 1}
+                       onchange={(e) => {sweepRanges[p.key] = {...sweepRanges[p.key], step: Math.max(1, Number(e.currentTarget.value))}; sweepRanges = sweepRanges;}}
+                       title="Шаг перебора" />
+              </div>
             {:else}
-              <input type="text" bind:value={paramValues[p.key]} placeholder={String(p.default)} />
-            {/if}
-            <!-- Always-visible parameter hint -->
-            {#if p.desc || p.hint}
-              <div class="pf-desc">{p.desc || p.hint}</div>
+              <input type="text" class="btl-inp" bind:value={paramValues[p.key]} placeholder={String(p.default)} />
             {/if}
           </div>
         {/each}
       </div>
-    {/if}
 
-    <label>Период бэктеста</label>
-    <div class="period-row">
-      <input type="date" bind:value={dateFrom} />
-      <span class="period-dash">—</span>
-      <input type="date" bind:value={dateTo} />
-    </div>
+      <div class="btl-section">
+        <div class="btl-sec-title">Период бэктеста</div>
+        <div class="btl-dates">
+          <input type="date" bind:value={dateFrom} class="btl-inp" />
+          <span class="btl-date-dash">—</span>
+          <input type="date" bind:value={dateTo} class="btl-inp" />
+        </div>
+      </div>
 
-    <!-- Market data -->
-    <div class="data-section">
-      <div class="section-title">Market Data (ISS MOEX)</div>
-      {#if coverage.length}
-        <div class="coverage">
-          {#each coverage as c}
-            <span class="cov-item">{c.symbol}: {c.min_date} — {c.max_date} ({c.cnt ?? c.count} bars)</span>
+      <div class="btl-section">
+        <div class="btl-sec-title">Движок</div>
+        <div class="btl-engines">
+          {#each [['auto','Авто (i9 если жив)'],['local','VDS (сервер)'],['remote','Мощный хост (i9)']] as [v, label]}
+            <button class="btl-eng" class:active={engine === v} onclick={() => engine = v as any}>{label}</button>
           {/each}
         </div>
-      {:else}
-        <div class="no-data">No cached data yet</div>
-      {/if}
-      <button class="load-btn" onclick={loadData} disabled={loadingData}>
-        {loadingData ? 'Loading…' : 'Load from ISS'}
-      </button>
-      {#if dataStatus}<div class="data-status">{dataStatus}</div>{/if}
-    </div>
-
-    <div class="divider"></div>
-
-    <label>Движок расчёта</label>
-    <div class="engine-row">
-      <button class="eng-btn" class:active={engine === 'local'} onclick={() => engine = 'local'}>VDS (сервер)</button>
-      <button class="eng-btn" class:active={engine === 'remote'} onclick={() => engine = 'remote'}>Мощный хост</button>
-    </div>
-    <div class="hint">«Мощный хост» — расчёт на внешнем агенте (i9/128ГБ), не грузит торговый сервер. Требует запущенного агента.</div>
-
-    <button onclick={runBacktest} disabled={running}>
-      {running ? `Идёт расчёт… ${runPhase}` : (sweepMode ? 'Запустить перебор' : 'Run Backtest')}
-    </button>
-    {#if running}
-      <div class="run-info">
-        <div class="ri-phase">{runPhase}</div>
-        <div class="ri-hint">Бэктест: последовательный прогон каждой комбинации параметров на исторических барах.
-          Результаты появятся в таблице ниже по мере завершения.</div>
       </div>
-    {/if}
-    {#if error}<div class="error">{error}</div>{/if}
 
-    <!-- Results table -->
-    {#if results.length}
-      <div class="results-section">
-        <div class="section-title">
-          Results ({results.length}) — click to view chart
+      <!-- Combo count + run -->
+      <div class="btl-actions">
+        <div class="btl-cc">Комбинаций в сетке: <b>{comboCount()}</b></div>
+        <div class="btl-rounds">
+          {#each ROUNDS as rd, i}
+            <button class="btl-rbtn" disabled={running || comboCount() === 0}
+                    class:current={activeRound === i && running}
+                    class:done={roundResults[i].length > 0}
+                    onclick={() => runRound(i)}>
+              <span class="btl-rbtn-lbl">{rd.label}</span>
+              <span class="btl-rbtn-desc">{rd.desc}</span>
+              {#if roundResults[i].length}
+                <span class="btl-rbtn-n">{roundResults[i].length} рез.</span>
+              {/if}
+            </button>
+          {/each}
         </div>
-        <div class="disclaimer">Доходность рассчитана от первоначальных инвестиций 100 000 ₽, в рублях (реальная стоимость пункта и ГО с MOEX ISS). При усреднении ГО растёт пропорционально. ⚠ Результаты могут отличаться от live (без модели проскальзывания).</div>
-        <table>
-          <thead>
-            <tr>
-              <th>Params</th><th>Return</th><th>Комиссия ₽</th><th>Sharpe</th><th>MaxDD</th><th>Win%</th><th>N</th><th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {#each results as r}
-              {@const isSelected = selectedResult === r}
-              {@const cb = commOf(r)}
-              <tr
-                class:selected={isSelected}
-                onclick={() => selectedResult = r}
-                role="button"
-                tabindex="0"
-                onkeydown={(e) => e.key === 'Enter' && (selectedResult = r)}
-              >
-                <td class="params-cell">
-                  {#each Object.entries(typeof r.params === 'object' ? r.params : {}) as [k,v]}
-                    {#if k !== 'symbol'}<span class="param-tag">{k}={v}</span>{/if}
-                  {/each}
-                </td>
-                <td class:pos={r.total_return > 0} class:neg={r.total_return < 0}>
-                  {r.total_return != null ? (r.total_return * 100).toFixed(2) + '%' : '—'}
-                </td>
-                <td class="comm-cell neg" title="брокер {Math.round(cb.broker)} + биржа {Math.round(cb.exchange)} ₽ ({cb.fills} филлов, {(cb.rate*100).toFixed(4)}% от номинала)">
-                  −{Math.round(cb.total).toLocaleString('ru-RU')}
-                </td>
-                <td class:pos={(r.sharpe ?? 0) > 0} class:neg={(r.sharpe ?? 0) < 0}>
-                  {r.sharpe?.toFixed(2) ?? '—'}
-                </td>
-                <td>{r.max_drawdown != null ? (r.max_drawdown * 100).toFixed(1) + '%' : '—'}</td>
-                <td>{r.win_rate != null ? (r.win_rate * 100).toFixed(0) + '%' : '—'}</td>
-                <td>{r.total_trades ?? 0}</td>
-                <td>
-                  <button class="deploy-btn" onclick={(e) => { e.stopPropagation(); deployResult(r.params); }}>
-                    ▶
-                  </button>
-                </td>
-              </tr>
-            {/each}
-          </tbody>
-        </table>
+        {#if running}
+          <button class="btl-stop" onclick={stopRun}>⏹ Стоп</button>
+        {/if}
+        <button class="btl-clear" onclick={clearRounds}>Очистить</button>
+      </div>
+    {/if}
+  </div>
+
+  <!-- ── RIGHT: Results ───────────────────────────────────────────────── -->
+  <div class="btl-results">
+    {#if running || runPhase}
+      <div class="btl-progress">
+        <div class="btl-prog-bar">
+          <div class="btl-prog-fill" style="width:{(() => {
+            const all = roundResults.flat().length;
+            return Math.min(100, Math.max(0, running ? 50 : (all > 0 ? 100 : 0)));
+          })()}%"></div>
+        </div>
+        <div class="btl-prog-text">{runPhase}</div>
       </div>
     {/if}
 
-    <!-- Virtual trades ledger (bottom of left panel) -->
-    {#if ledger.length}
-      <div class="trades-section">
-        <div class="section-title">Виртуальные сделки ({ledger.length})</div>
-        <div class="trades-scroll">
-          <table class="trades-table">
+    {#if error}
+      <div class="btl-error">{error}</div>
+    {/if}
+
+    {#if leaderboard().length}
+      {@const lb = leaderboard()}
+      <div class="btl-section">
+        <div class="btl-sec-title">
+          🏆 Хит-парад
+          <span class="btl-sec-sub">сортировка: прибыль × recovery factor ↓</span>
+        </div>
+        <div class="btl-leader-wrap">
+          <table class="btl-table">
             <thead>
-              <tr><th>Время</th><th>Напр.</th><th>Кол</th><th>Цена</th><th>Тип</th><th>Рез.</th></tr>
+              <tr>
+                <th>#</th>
+                <th>Инстр.</th>
+                <th>Параметры</th>
+                <th>Чистая прибыль</th>
+                <th>Доходность</th>
+                <th>Шарп</th>
+                <th>RF</th>
+                <th>Просадка</th>
+                <th>Сделок</th>
+                <th>Прибыль×RF</th>
+              </tr>
             </thead>
             <tbody>
-              {#each ledger as t}
-                <tr>
-                  <td>{fmtT(t.time)}</td>
-                  <td class:buy={t.side === 'buy'} class:sell={t.side === 'sell'}>{t.side === 'buy' ? 'Купить' : 'Продать'}</td>
-                  <td>{t.qty}</td>
-                  <td>{Math.round(t.price)}</td>
-                  <td class="ttype">{TYPE_LABEL[t.type] ?? t.type}</td>
-                  <td class:pos={t.pnl > 0} class:neg={t.pnl < 0}>{t.pnl != null ? fmtP(t.pnl) : ''}</td>
+              {#each lb.slice(0, 50) as row, i}
+                {@const r = row.result}
+                {@const isLeader = JSON.stringify(row.params) === leaderId}
+                <tr class="btl-row" class:btl-leader={isLeader}
+                    onclick={() => { leaderId = JSON.stringify(row.params); leaderResult = row; }}>
+                  <td class="btl-rank">{i + 1}</td>
+                  <td class="btl-sym">{paramValues.symbol ?? r.symbol ?? '—'}</td>
+                  <td class="btl-params">{Object.entries(row.params).filter(([k]) => k !== 'symbol').map(([k,v]) => `${k}=${v}`).join(', ')}</td>
+                  <td class="btl-num" class:pos={r.net_profit > 0} class:neg={r.net_profit < 0}>{fmtMoney(r.net_profit)}</td>
+                  <td class="btl-num" class:pos={r.total_return > 0} class:neg={r.total_return < 0}>{fmtPct(r.total_return)}</td>
+                  <td class="btl-num">{fmtD(r.sharpe)}</td>
+                  <td class="btl-num">{fmtD(r.recovery_factor)}</td>
+                  <td class="btl-num" class:neg={(r.max_drawdown ?? 0) > 0.1}>{fmtPct(r.max_drawdown)}</td>
+                  <td class="btl-num">{fmtN(r.total_trades)}</td>
+                  <td class="btl-num btl-score" class:pos={profitRF(r) > 0}>{fmtMoney(profitRF(r))}</td>
                 </tr>
               {/each}
             </tbody>
@@ -501,155 +480,157 @@
         </div>
       </div>
     {/if}
-  </div>
 
-  <!-- ── Center: chart / optimizer ──────────────────────────────── -->
-  <div class="chart-area">
-    <div class="center-tabs">
-      <button class:active={centerMode === 'chart'} onclick={() => centerMode = 'chart'}>График</button>
-      <button class:active={centerMode === 'optimize'} onclick={() => centerMode = 'optimize'}>Перебор параметров</button>
-    </div>
-
-    <div class="center-body">
-      {#if centerMode === 'optimize'}
-        <Optimizer
-          robotId={selectedRobotId}
-          strategy={selectedStrategy}
-          baseParams={paramValues}
-          instruments={instruments}
-          dateFrom={new Date(dateFrom).toISOString()}
-          dateTo={new Date(dateTo).toISOString()}
-          onSelectResult={(r) => { selectedResult = r; centerMode = 'chart'; }}
-        />
-      {:else if selectedResult}
-        <BacktestChart
-          result={selectedResult}
-          symbol={selectedSymbol}
-          strategy={selectedStrategy}
-          dateFrom={new Date(dateFrom).toISOString()}
-          dateTo={new Date(dateTo).toISOString()}
-          pointValue={pointValue}
-        />
-      {:else}
-        <div class="chart-placeholder">
-          <div class="ph-icon">📈</div>
-          <div class="ph-text">Запустите бэктест и выберите строку, либо откройте «Перебор параметров»</div>
+    {#if leaderResult}
+      <div class="btl-section">
+        <div class="btl-sec-title">📈 Лидер: прибыль×RF</div>
+        <div class="btl-chart-wrap">
+          <BacktestChart
+            result={leaderResult}
+            symbol={paramValues.symbol ?? 'RIM6'}
+            dateFrom={dateFrom}
+            dateTo={dateTo}
+          />
         </div>
-      {/if}
-    </div>
-  </div>
+      </div>
+    {/if}
 
+    {#if !leaderboard().length && !running}
+      <div class="btl-empty">
+        <div class="btl-empty-icon">🧪</div>
+        <div class="btl-empty-text">Выбери стратегию, настрой диапазоны параметров<br>и запусти R0 → R1 → R2 перебор</div>
+      </div>
+    {/if}
+  </div>
 </div>
 
 <style>
-  .backtest-lab { display: flex; height: 100%; }
-  .controls {
-    width: 300px; padding: 16px; border-right: 1px solid #2d2d4a;
-    display: flex; flex-direction: column; gap: 10px; flex-shrink: 0; overflow-y: auto;
-  }
-  h3 { color: #4caf50; margin: 0 0 8px; font-size: 13px; }
-  label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: #888; }
-  select, input, textarea {
-    background: #0f0f1e; border: 1px solid #2d2d4a; color: #ccc;
-    padding: 4px 6px; font-size: 11px; border-radius: 3px;
-  }
-  textarea { font-family: monospace; resize: vertical; }
-  button {
-    padding: 6px 12px; background: #4caf5020; border: 1px solid #4caf5066;
-    color: #4caf50; cursor: pointer; border-radius: 3px; font-size: 11px;
-  }
-  button:disabled { opacity: 0.5; cursor: default; }
-  .error { color: #f44336; font-size: 11px; }
-  .data-section { background: #0a0a15; border: 1px solid #2d2d4a; border-radius: 4px; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
-  .section-title { font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; }
+  .btl { display: flex; height: 100%; overflow: hidden; gap: 0; }
 
-  /* Strategy about box */
-  .about-box { background: #0a1a0a; border: 1px solid #1e3a1e; border-radius: 4px; padding: 8px 10px; }
-  .about-name { font-size: 12px; color: #4caf50; font-weight: 600; margin-bottom: 4px; }
-  .about-desc { font-size: 10px; color: #999; line-height: 1.5; margin-bottom: 6px; }
-  .about-link { font-size: 10px; color: #6aa8ff; text-decoration: none; }
-  .about-link:hover { text-decoration: underline; }
-
-  /* Structured param form */
-  .param-form { display: flex; flex-direction: column; gap: 6px; }
-  .pf-row { display: flex; flex-direction: column; gap: 3px; }
-  .pf-label { font-size: 11px; color: #888; position: relative; }
-  .pf-i {
-    display: inline-flex; align-items: center; justify-content: center;
-    width: 13px; height: 13px; margin-left: 4px; border-radius: 50%;
-    font-size: 9px; color: #6aa8ff; border: 1px solid #6aa8ff66; cursor: help; user-select: none;
+  /* ── Config panel ──────────────────────────────────────────────────── */
+  .btl-config {
+    width: 380px; flex-shrink: 0; overflow-y: auto; overflow-x: hidden;
+    background: #0c0c1a; border-right: 1px solid #1e1e3a;
+    display: flex; flex-direction: column; gap: 1px;
+    padding-bottom: 20px;
   }
-  .pf-i:hover { background: #6aa8ff22; }
-  .pf-popover {
-    position: absolute; left: 0; top: 100%; margin-top: 4px; z-index: 30;
-    width: 240px; background: #12121f; border: 1px solid #3d3d5a; border-radius: 4px;
-    padding: 8px 10px; box-shadow: 0 4px 16px #000000aa;
+  .btl-section { padding: 12px 14px; border-bottom: 1px solid #15152a; }
+  .btl-sec-title {
+    font-size: 10px; color: #4caf50; text-transform: uppercase; letter-spacing: 1px;
+    margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;
   }
-  .pp-title { font-size: 11px; color: #fff; font-weight: 600; margin-bottom: 3px; }
-  .pp-body { font-size: 11px; color: #bbb; line-height: 1.5; }
-  .pp-range { font-size: 10px; color: #777; margin-top: 5px; font-family: monospace; }
-  .period-row { display: flex; align-items: center; gap: 6px; }
-  .period-row input { flex: 1; }
-  .period-dash { color: #555; }
-  .coverage { display: flex; flex-direction: column; gap: 2px; }
-  .cov-item { font-size: 10px; color: #4caf50; font-family: monospace; }
-  .no-data { font-size: 10px; color: #444; font-style: italic; }
-  .load-btn { background: #1a1a2e; border-color: #3d3d5a; color: #aaa; padding: 4px 10px; font-size: 10px; }
-  .data-status { font-size: 10px; color: #888; }
-  .divider { height: 1px; background: #2d2d4a; margin: 4px 0; }
-  .hint { font-size: 10px; color: #666; line-height: 1.4; }
-  /* Sweep mode */
-  .sweep-toggle { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #4caf50; cursor: pointer; margin-bottom: 6px; }
-  .sweep-toggle input { accent-color: #4caf50; }
-  .sweep-row { display: flex; align-items: center; gap: 4px; }
-  .sw-lbl { font-size: 9px; color: #666; min-width: 18px; }
-  .sw-inp { width: 58px; background: #0f0f1e; border: 1px solid #4caf5044; color: #4caf50; font-size: 10px; padding: 2px 4px; border-radius: 2px; }
-  .pf-desc { font-size: 8px; color: #4a6a8a; line-height: 1.3; margin-top: 1px; }
-  /* Run feedback */
-  .run-info { margin-top: 8px; padding: 8px 10px; background: #0d1a1a; border: 1px solid #1e3e3e; border-radius: 4px; }
-  .ri-phase { font-size: 12px; color: #4caf50; font-weight: 600; }
-  .ri-hint { font-size: 9px; color: #668; margin-top: 4px; line-height: 1.4; }
-  .engine-row { display: flex; gap: 4px; }
-  .eng-btn { flex: 1; padding: 5px 8px; background: #0f0f1e; border: 1px solid #2d2d4a; color: #888; font-size: 11px; border-radius: 3px; cursor: pointer; }
-  .eng-btn:hover { color: #ccc; }
-  .eng-btn.active { background: #4caf5018; border-color: #4caf5066; color: #4caf50; }
+  .btl-sec-sub { font-size: 9px; color: #556; text-transform: none; letter-spacing: 0; }
+  .btl-src-link { font-size: 9px; color: #4a6a8a; text-decoration: none; }
+  .btl-src-link:hover { color: #6aafff; }
 
-  /* Results table */
-  .results-section { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; max-height: 28%; overflow: auto; }
-
-  /* Virtual trades ledger */
-  .trades-section { display: flex; flex-direction: column; gap: 4px; flex: 1; min-height: 120px; overflow: hidden; }
-  .trades-scroll { overflow: auto; border: 1px solid #1a1a2e; border-radius: 3px; }
-  .trades-table { width: 100%; border-collapse: collapse; font-size: 9px; }
-  .trades-table th { position: sticky; top: 0; background: #0f0f1e; color: #555; text-align: left; padding: 2px 4px; white-space: nowrap; border-bottom: 1px solid #1a1a2e; }
-  .trades-table td { padding: 1px 4px; border-bottom: 1px solid #12121c; color: #aaa; white-space: nowrap; cursor: default; }
-  .trades-table td.buy { color: #4caf50; }
-  .trades-table td.sell { color: #f44336; }
-  .trades-table .ttype { color: #777; }
-  .disclaimer { font-size: 10px; color: #666; }
-  table { width: 100%; border-collapse: collapse; font-size: 10px; }
-  th { text-align: left; padding: 4px 6px; background: #0f0f1e; color: #555; border-bottom: 1px solid #2d2d4a; white-space: nowrap; }
-  td { padding: 3px 6px; border-bottom: 1px solid #14141f; color: #ccc; cursor: pointer; }
-  tr:hover td { background: #1a1a2e; }
-  tr.selected td { background: #0d1a0d; }
-  .params-cell { min-width: 80px; }
-  .param-tag { display: inline-block; background: #1a1a2e; border-radius: 2px; padding: 1px 4px; margin: 1px; font-size: 9px; font-family: monospace; white-space: nowrap; }
-  .pos { color: #4caf50; }
-  .neg { color: #f44336; }
-  .deploy-btn { padding: 1px 6px; font-size: 10px; background: #4caf5010; border: 1px solid #4caf5033; color: #4caf5099; cursor: pointer; border-radius: 2px; }
-  .deploy-btn:hover { background: #4caf5025; color: #4caf50; }
-
-  /* Center chart area */
-  .chart-area { flex: 1; min-width: 0; overflow: hidden; border-left: 1px solid #2d2d4a; display: flex; flex-direction: column; }
-  .center-tabs { display: flex; gap: 2px; padding: 4px 8px; background: #0f0f1e; border-bottom: 1px solid #1a1a2e; flex-shrink: 0; }
-  .center-tabs button { padding: 3px 12px; background: transparent; color: #555; border: 1px solid transparent; font-size: 11px; border-radius: 3px; cursor: pointer; }
-  .center-tabs button:hover { color: #aaa; }
-  .center-tabs button.active { color: #4caf50; border-color: #4caf5066; }
-  .center-body { flex: 1; min-height: 0; overflow: hidden; }
-  .chart-placeholder {
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
-    height: 100%; gap: 12px; color: #333;
+  /* Strategy cards */
+  .btl-cat-list { display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow-y: auto; }
+  .btl-cat-card {
+    background: #0a0a18; border: 1px solid #1a1a32; border-radius: 4px;
+    padding: 8px 10px; cursor: pointer; text-align: left; width: 100%;
+    transition: border-color 0.15s, background 0.15s;
   }
-  .ph-icon { font-size: 48px; }
-  .ph-text { font-size: 13px; color: #444; text-align: center; }
+  .btl-cat-card:hover { border-color: #2a3a5a; }
+  .btl-cat-card.active { border-color: #4caf5066; background: #0a1a0f; }
+  .btl-cat-name { font-size: 12px; color: #ccc; font-weight: 600; display: flex; justify-content: space-between; }
+  .btl-cat-sweep { font-size: 8px; color: #4caf50; background: #4caf5018; padding: 1px 5px; border-radius: 3px; }
+  .btl-cat-desc { font-size: 9px; color: #667; margin-top: 3px; line-height: 1.3; }
+  .btl-cat-top3 { display: flex; gap: 12px; margin-top: 4px; }
+  .btl-t3sym { font-size: 9px; color: #888; }
+  .btl-t3pnl { font-size: 9px; font-family: monospace; }
+  .btl-t3pnl.pos { color: #4caf50; }
+  .btl-t3pnl.neg { color: #f44336; }
+  .btl-cat-badge { font-size: 8px; color: #4caf50; background: #4caf5018; padding: 1px 5px; border-radius: 3px; margin-top: 4px; display: inline-block; }
+
+  /* Param fields */
+  .btl-pf { margin-bottom: 10px; }
+  .btl-pf-head { display: flex; align-items: center; gap: 4px; margin-bottom: 2px; }
+  .btl-pf-label { font-size: 11px; color: #aaa; }
+  .btl-pf-i { font-size: 10px; color: #4a6a8a; cursor: help; }
+  .btl-pf-i:hover { color: #6aafff; }
+  .btl-pf-desc { font-size: 8px; color: #4a6a8a; line-height: 1.3; margin-bottom: 3px; }
+
+  /* Inputs */
+  .btl-inp {
+    background: #0a0a18; border: 1px solid #1e1e3a; color: #ccc;
+    padding: 4px 6px; font-size: 11px; border-radius: 3px; width: 100%;
+  }
+  .btl-inp:focus { border-color: #4caf5066; outline: none; }
+  .btl-sel { cursor: pointer; }
+  .btl-range { display: flex; align-items: center; gap: 3px; }
+  .btl-rng { width: 62px; }
+  .btl-step { width: 44px; }
+  .btl-rng-lbl { font-size: 8px; color: #556; text-transform: uppercase; min-width: 16px; text-align: center; }
+
+  /* Dates */
+  .btl-dates { display: flex; align-items: center; gap: 8px; }
+  .btl-dates .btl-inp { width: auto; flex: 1; }
+  .btl-date-dash { color: #555; }
+
+  /* Engines */
+  .btl-engines { display: flex; gap: 4px; }
+  .btl-eng {
+    flex: 1; padding: 6px 4px; font-size: 10px; cursor: pointer; border-radius: 3px;
+    background: #0a0a18; border: 1px solid #1e1e3a; color: #888; text-align: center;
+    transition: all 0.15s;
+  }
+  .btl-eng:hover { border-color: #3a3a5a; color: #aaa; }
+  .btl-eng.active { border-color: #4caf5066; color: #4caf50; background: #0a1a0f; }
+
+  /* Actions */
+  .btl-actions { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+  .btl-cc { font-size: 12px; color: #aaa; }
+  .btl-cc b { color: #4caf50; font-family: monospace; font-size: 14px; }
+  .btl-rounds { display: flex; flex-direction: column; gap: 4px; }
+  .btl-rbtn {
+    padding: 8px 10px; border-radius: 4px; cursor: pointer; text-align: left; border: 1px solid #1e1e3a;
+    background: #0a0a18; transition: all 0.15s; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px;
+  }
+  .btl-rbtn:hover:not(:disabled) { border-color: #4caf5066; background: #0a1a0f; }
+  .btl-rbtn.current { border-color: #4caf50; background: #0a1a0f; animation: pulse 1.5s infinite; }
+  .btl-rbtn.done { border-color: #2a4a2a; opacity: 0.8; }
+  .btl-rbtn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btl-rbtn-lbl { font-size: 11px; color: #4caf50; font-weight: 600; }
+  .btl-rbtn-desc { font-size: 9px; color: #667; }
+  .btl-rbtn-n { font-size: 9px; color: #4caf50; margin-left: auto; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.7} }
+  .btl-stop { padding: 6px 12px; background: #2a0a0a; border: 1px solid #f44336; color: #f44336; border-radius: 4px; cursor: pointer; font-size: 11px; }
+  .btl-clear { padding: 4px 8px; background: transparent; border: 1px solid #2a2a3a; color: #666; border-radius: 3px; cursor: pointer; font-size: 10px; }
+
+  /* ── Results panel ──────────────────────────────────────────────────── */
+  .btl-results { flex: 1; overflow-y: auto; min-width: 0; padding: 12px; display: flex; flex-direction: column; gap: 12px; }
+  .btl-progress { margin-bottom: 4px; }
+  .btl-prog-bar { height: 3px; background: #1a1a32; border-radius: 2px; overflow: hidden; margin-bottom: 4px; }
+  .btl-prog-fill { height: 100%; background: #4caf50; transition: width 0.5s; border-radius: 2px; }
+  .btl-prog-text { font-size: 12px; color: #4caf50; font-weight: 600; }
+  .btl-error { padding: 8px 12px; background: #1a0808; border: 1px solid #f4433644; color: #f44336; border-radius: 4px; font-size: 11px; }
+
+  /* Leaderboard table */
+  .btl-leader-wrap { overflow-x: auto; max-height: 320px; overflow-y: auto; }
+  .btl-table { width: 100%; border-collapse: collapse; font-size: 10px; }
+  .btl-table th {
+    position: sticky; top: 0; background: #0c0c1a; color: #556;
+    font-size: 9px; text-transform: uppercase; letter-spacing: 0.5px; padding: 6px 8px;
+    text-align: left; border-bottom: 1px solid #1e1e3a;
+  }
+  .btl-table td { padding: 5px 8px; border-bottom: 1px solid #111128; color: #888; }
+  .btl-row { cursor: pointer; transition: background 0.1s; }
+  .btl-row:hover { background: #0a0a18; }
+  .btl-leader { background: #0a1a0f !important; border-left: 2px solid #4caf50; }
+  .btl-rank { color: #556; font-family: monospace; width: 24px; }
+  .btl-sym { color: #4caf50; font-family: monospace; font-weight: 600; }
+  .btl-params { font-family: monospace; font-size: 9px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .btl-num { font-family: monospace; text-align: right; }
+  .btl-num.pos { color: #4caf50; }
+  .btl-num.neg { color: #f44336; }
+  .btl-score { font-weight: 700; font-size: 11px; }
+  .btl-score.pos { color: #4caf50; }
+
+  /* Chart */
+  .btl-chart-wrap { height: 360px; }
+
+  /* Empty */
+  .btl-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 12px; color: #445; }
+  .btl-empty-icon { font-size: 48px; opacity: 0.4; }
+  .btl-empty-text { font-size: 13px; text-align: center; line-height: 1.5; }
 </style>
