@@ -16,6 +16,7 @@
   let dateFrom = $state('2026-03-02');
   let dateTo = $state('2026-05-24');
   let engine = $state<'auto' | 'local' | 'remote'>('auto');
+  let strategyInfo = $state<any | null>(null);  // popover: show desc for a strategy
 
   // ── Sweep rounds ───────────────────────────────────────────────────────
   const ROUNDS = [
@@ -297,12 +298,33 @@
           <button class="btl-cat-card" class:active
                   onclick={() => selectStrategy(s)}>
             <div class="btl-cat-name">
-              {s.name}
-              {#if s.sweep?.pct > 0}
-                <span class="btl-cat-sweep">перебор {s.sweep.pct}%</span>
-              {/if}
+              <span>{s.name}</span>
+              <span class="btl-cat-actions">
+                {#if s.sweep?.pct > 0}
+                  <span class="btl-cat-sweep">перебор {s.sweep.pct}%</span>
+                {/if}
+                {#if s.description}
+                  <span class="btl-cat-i" role="button" tabindex="0" title="Описание стратегии"
+                        onclick={(e) => { e.stopPropagation(); strategyInfo = strategyInfo?.id === s.id ? null : s; }}
+                        onkeydown={(e) => (e.key === 'Enter') && (e.stopPropagation(), strategyInfo = strategyInfo?.id === s.id ? null : s)}
+                  >ⓘ</span>
+                {/if}
+              </span>
             </div>
-            {#if s.description}<div class="btl-cat-desc">{s.description}</div>{/if}
+            {#if s.description && strategyInfo?.id === s.id}
+              <div class="btl-cat-pop" onclick={(e) => e.stopPropagation()}>
+                <div class="btl-cat-pop-t">{s.name}</div>
+                <div class="btl-cat-pop-d">{s.description}</div>
+                {#if s.source_url}
+                  <a class="btl-cat-pop-link" href={s.source_url} target="_blank" rel="noopener" onclick={(e) => e.stopPropagation()}>Источник на GitHub ↗</a>
+                {:else if s.source === 'installed'}
+                  <span class="btl-cat-pop-link">Установленный робот — стратегия загружена из скрипта</span>
+                {:else}
+                  <span class="btl-cat-pop-link">Стратегия из библиотеки — без внешнего источника</span>
+                {/if}
+              </div>
+            {/if}
+            {#if s.description}<div class="btl-cat-desc">{s.description.slice(0, 100)}{s.description.length > 100 ? '…' : ''}</div>{/if}
             {#if s.source === 'store' && s.results?.length}
               <div class="btl-cat-top3">
                 {#each s.results.slice(0, 3) as r}
@@ -532,8 +554,16 @@
   }
   .btl-cat-card:hover { border-color: #2a3a5a; }
   .btl-cat-card.active { border-color: #4caf5066; background: #0a1a0f; }
-  .btl-cat-name { font-size: 12px; color: #ccc; font-weight: 600; display: flex; justify-content: space-between; }
+  .btl-cat-name { font-size: 12px; color: #ccc; font-weight: 600; display: flex; justify-content: space-between; align-items: center; }
+  .btl-cat-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
   .btl-cat-sweep { font-size: 8px; color: #4caf50; background: #4caf5018; padding: 1px 5px; border-radius: 3px; }
+  .btl-cat-i { font-size: 10px; color: #4a6a8a; cursor: pointer; padding: 1px 3px; }
+  .btl-cat-i:hover { color: #6aafff; }
+  .btl-cat-pop { margin-top: 6px; padding: 8px 10px; background: #0a0a18; border: 1px solid #2a3a5a; border-radius: 4px; }
+  .btl-cat-pop-t { font-size: 11px; color: #4caf50; font-weight: 600; margin-bottom: 4px; }
+  .btl-cat-pop-d { font-size: 10px; color: #889; line-height: 1.5; }
+  .btl-cat-pop-link { font-size: 9px; color: #4a6a8a; margin-top: 4px; display: inline-block; text-decoration: none; }
+  .btl-cat-pop-link:hover { color: #6aafff; }
   .btl-cat-desc { font-size: 9px; color: #667; margin-top: 3px; line-height: 1.3; }
   .btl-cat-top3 { display: flex; gap: 12px; margin-top: 4px; }
   .btl-t3sym { font-size: 9px; color: #888; }

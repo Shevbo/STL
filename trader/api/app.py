@@ -986,6 +986,16 @@ def create_app() -> FastAPI:
             core.extend(_lib_list())
         except Exception as exc:
             log.error("api.library_list_failed", error=str(exc))
+        # Enrich ALL params with human-readable desc from the shared dictionary if the
+        # strategy author didn't provide one. Makes param tooltips consistent.
+        try:
+            from trader.lab.strategies.library import PARAM_DESC as _pd
+        except Exception:
+            _pd = {}
+        for s in core:
+            for p in s.get("params_schema", []):
+                if not p.get("desc") and _pd.get(p["key"]):
+                    p["desc"] = _pd[p["key"]]
         return core
 
     @fastapi_app.get("/api/v1/forts-instruments")
