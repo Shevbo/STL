@@ -189,12 +189,21 @@
       }
     }
 
-    // 4) Seed sweep ranges for numeric params
+    // 4) Seed sweep ranges for numeric params — sensible defaults, don't overwrite restored state
     for (const p of s.params_schema ?? []) {
-      if (p.type === 'number' && p.key !== 'qty' && p.key !== 'symbol') {
-        const d = paramValues[p.key] ?? p.default;
-        sweepRanges[p.key] = { from: d, to: d, step: 1 };
-      }
+      if (p.type !== 'number' || p.key === 'symbol') continue;
+      if (keepState && sweepRanges[p.key]) continue; // keep restored ranges
+      const d = paramValues[p.key] ?? p.default;
+      const lo = p.min ?? 1;
+      const hi = p.max ?? 9999;
+      // Pick a reasonable sub-range around the default, within min/max
+      const half = Math.max(1, Math.round((hi - lo) * 0.25));
+      const from = Math.max(lo, d - half);
+      const to = Math.min(hi, d + half);
+      // Step: aim for ~5-8 points in the range
+      const span = to - from;
+      const step = span <= 5 ? 1 : span <= 20 ? Math.max(1, Math.round(span / 5)) : Math.max(1, Math.round(span / 8));
+      sweepRanges[p.key] = { from, to, step };
     }
   }
 
