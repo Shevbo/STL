@@ -259,7 +259,7 @@
       </div>
       <!-- left-col vertical split handle -->
       <div class="dh dh-h" title="Размер панелей"
-           onpointerdown={(e) => { const el = (e.target as HTMLElement).previousElementSibling as HTMLElement | null; onPointerDown('leftSplit', e, 0, el?.offsetHeight ?? 0); }}>
+           onpointerdown={(e) => { const top = (e.currentTarget as HTMLElement).previousElementSibling as HTMLElement | null; onPointerDown('leftSplit', e, 0, top?.offsetHeight ?? 0); }}>
         <div class="dh-dot"></div>
       </div>
       <div class="l-bot" style="flex:{100 - leftTopPct}">
@@ -313,7 +313,7 @@
       </div>
       <!-- right-col vertical split handle -->
       <div class="dh dh-h" title="Размер панелей"
-           onpointerdown={(e) => { const el = (e.target as HTMLElement).previousElementSibling as HTMLElement | null; onPointerDown('rightSplit', e, 0, el?.offsetHeight ?? 0); }}>
+           onpointerdown={(e) => { const top = (e.currentTarget as HTMLElement).previousElementSibling as HTMLElement | null; onPointerDown('rightSplit', e, 0, top?.offsetHeight ?? 0); }}>
         <div class="dh-dot"></div>
       </div>
       <div class="r-bot" style="flex:{100 - rightTopPct}">
@@ -405,6 +405,7 @@
   .dh-dot {
     width: 24px; height: 3px; border-radius: 2px;
     background: #3d3d5a; transition: background 0.15s, width 0.15s;
+    pointer-events: none;
   }
   .dh:hover .dh-dot { background: #6aa8ff; width: 36px; }
 </style>
