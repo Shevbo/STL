@@ -46,7 +46,11 @@
     const res = await fetchWithAuth('/api/v1/strategies');
     strategies = res.ok ? await res.json() : [];
     if (!robot && strategies.length) {
-      applyStrategyDefaults(strategies[0]);
+      // Set defaults from the first strategy but don't pre-fill name —
+      // the user must pick a strategy or type a name explicitly.
+      const first = strategies[0];
+      selectedStrategyId = first.id;
+      paramValues = { ...first.default_params };
     }
   }
 
@@ -58,7 +62,8 @@
 
   function applyStrategyDefaults(strategy: any) {
     selectedStrategyId = strategy.id;
-    if (!name) name = strategy.name;
+    // Always update name on explicit card click so it matches the strategy.
+    name = strategy.name;
     paramValues = { ...strategy.default_params };
   }
 
