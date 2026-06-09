@@ -1,7 +1,7 @@
 """Averaging-to-N modifier + real-ГО return metric."""
 import asyncio
 
-from trader.lab.backtest import compute_metrics, run_single_backtest
+from trader.lab.backtest import compute_metrics
 from trader.lab.runtime import Bar
 from trader.lab.strategies import library as L
 
