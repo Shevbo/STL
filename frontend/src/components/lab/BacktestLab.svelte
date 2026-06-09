@@ -15,7 +15,7 @@
   let sweepRanges = $state<Record<string, { from: number; to: number; step: number }>>({});
   let dateFrom = $state('2026-03-02');
   let dateTo = $state('2026-05-24');
-  let engine = $state<'auto' | 'local' | 'remote'>('auto');
+  let engine = $state<'auto' | 'local' | 'remote'>('local');
   let strategyInfo = $state<any | null>(null);  // popover: show desc for a strategy
 
   // ── Sweep rounds ───────────────────────────────────────────────────────
@@ -245,7 +245,8 @@
       body.scriptCode = scriptCode;
       body.baseParams = { symbol: sym };
     }
-    runPhase = `${ROUNDS[ri].label}: ${paramSets.length} вариантов → отправка…`;
+    const engLabel = engine === 'auto' ? 'авто' : engine === 'remote' ? 'i9' : 'VDS';
+    runPhase = `${ROUNDS[ri].label}: ${paramSets.length} вариантов → ${engLabel}…`;
     try {
       const res = await fetchWithAuth('/api/v1/backtest/run', {
         method: 'POST',
@@ -254,7 +255,8 @@
       });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
-      runPhase = `${ROUNDS[ri].label}: расчёт ${paramSets.length} вариантов (${data.engine})…`;
+      const actualEng = data.engine === 'remote' ? 'i9 (очередь)' : data.engine === 'local' ? 'VDS' : data.engine;
+      runPhase = `${ROUNDS[ri].label}: ${paramSets.length} вариантов · ${actualEng}…`;
       await pollRun(data.run_id, ri, paramSets);
     } catch (e: any) {
       error = String(e);
@@ -264,28 +266,42 @@
 
   async function pollRun(runId: string, ri: number, paramSets: any[]) {
     let attempts = 0;
+    const MAX_ATTEMPTS = 600; // 15 min timeout
     polling = setInterval(async () => {
       attempts++;
+      if (attempts > MAX_ATTEMPTS) {
+        clearInterval(polling); polling = null;
+        runPhase = `${ROUNDS[ri].label}: таймаут (>15 мин) — проверь агента или запусти локально`;
+        error = 'Таймаут ожидания. Если движок "Авто" или "Мощный хост" — агент i9 может быть неактивен. Переключи на VDS (сервер).';
+        running = false;
+        return;
+      }
       try {
         const sr = await fetchWithAuth(`/api/v1/backtest/${runId}/status`);
         if (!sr.ok) return;
         const st = await sr.json();
-        const pct = st.progress_pct ?? (st.done ? 100 : Math.min(99, attempts * 3));
-        runPhase = `${ROUNDS[ri].label}: ${st.status ?? 'расчёт'} · ${pct}% · попытка ${attempts}`;
+        const pct = st.progress_pct ?? (st.status === 'done' ? 100 : (st.status === 'queued' ? 0 : Math.min(99, attempts * 2)));
+        const statusLabel = st.status === 'queued' ? 'в очереди (ждёт агента)' :
+                            st.status === 'running' ? 'считается' :
+                            st.status === 'pending' ? 'запускается' : (st.status ?? '?');
+        runPhase = `${ROUNDS[ri].label}: ${statusLabel} · ${pct}% [${Math.floor(attempts/40)}м]`;
         if (st.status === 'done' || st.status === 'failed') {
           clearInterval(polling);
           polling = null;
-          // Fetch results
+          if (st.status === 'failed') {
+            error = `Расчёт не удался: ${st.error_msg ?? 'неизвестная ошибка'}`;
+            runPhase = `${ROUNDS[ri].label}: ошибка`;
+            running = false;
+            return;
+          }
           const rr = await fetchWithAuth(`/api/v1/backtest/${runId}/results`);
           if (rr.ok) {
             const rd = await rr.json();
-            // API returns flat array of result rows. Each row has params + metrics + trades.
             const items = (Array.isArray(rd) ? rd : (rd.results ?? rd.combos ?? [])).map((c: any) => ({
               params: c.params ?? {},
               result: c,
             }));
             roundResults[ri] = items;
-            // Auto-select leader
             const lb = [...items].sort((a, b) => profitRF(b.result) - profitRF(a.result));
             if (lb.length && profitRF(lb[0].result) > 0) {
               leaderId = JSON.stringify(lb[0].params);

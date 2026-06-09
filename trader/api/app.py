@@ -1661,13 +1661,19 @@ def create_app() -> FastAPI:
         if engine == "auto":
             engine = "remote" if await _agent_alive_any(request.app.state, pool) else "local"
         symbol = body.get("symbol", "")
-        # A remote on-demand chart run must be self-contained for the agent: carry
-        # snake_case script_code/base_params + a single combo (param_sets=[{}]).
+        # Remote agent expects snake_case fields. An on-demand chart run (single
+        # backtest) has no combos → default to one empty set. A sweep run already
+        # carries paramSets/paramsGrid → translate field names for the agent.
         if engine == "remote" and body.get("scriptCode"):
             body = {**body, "engine": "remote",
                     "script_code": body.get("scriptCode"),
-                    "base_params": {**(body.get("baseParams") or {})},
-                    "param_sets": [{}], "paramsGrid": {}}
+                    "base_params": {**(body.get("baseParams") or {})}}
+            has_combos = body.get("paramSets") or body.get("paramsGrid")
+            if not has_combos:
+                body["param_sets"] = [{}]
+                body["paramsGrid"] = {}
+            elif body.get("paramSets"):
+                body["param_sets"] = body.pop("paramSets")
         # robot_id is a FK. An on-demand library run (scriptCode supplied, e.g. opening
         # a chart from the Botstore detail table) has no installed robot → resolve to
         # any valid robot row just to satisfy the constraint; script_code drives the run.
