@@ -312,19 +312,6 @@
                 {/if}
               </span>
             </div>
-            {#if s.description && strategyInfo?.id === s.id}
-              <div class="btl-cat-pop" onclick={(e) => e.stopPropagation()}>
-                <div class="btl-cat-pop-t">{s.name}</div>
-                <div class="btl-cat-pop-d">{s.description}</div>
-                {#if s.source_url}
-                  <a class="btl-cat-pop-link" href={s.source_url} target="_blank" rel="noopener" onclick={(e) => e.stopPropagation()}>Источник на GitHub ↗</a>
-                {:else if s.source === 'installed'}
-                  <span class="btl-cat-pop-link">Установленный робот — стратегия загружена из скрипта</span>
-                {:else}
-                  <span class="btl-cat-pop-link">Стратегия из библиотеки — без внешнего источника</span>
-                {/if}
-              </div>
-            {/if}
             {#if s.description}<div class="btl-cat-desc">{s.description.slice(0, 100)}{s.description.length > 100 ? '…' : ''}</div>{/if}
             {#if s.source === 'store' && s.results?.length}
               <div class="btl-cat-top3">
@@ -338,6 +325,23 @@
           </button>
         {/each}
       </div>
+      <!-- Strategy info popover — rendered OUTSIDE the scrollable list -->
+      {#if strategyInfo}
+        <div class="btl-info-box">
+          <div class="btl-info-head">
+            <span class="btl-info-title">{strategyInfo.name}</span>
+            <button class="btl-info-close" onclick={() => strategyInfo = null}>✕</button>
+          </div>
+          <div class="btl-info-body">{strategyInfo.description}</div>
+          {#if strategyInfo.source_url}
+            <a class="btl-info-link" href={strategyInfo.source_url} target="_blank" rel="noopener">Источник на GitHub ↗</a>
+          {:else if strategyInfo.source === 'installed'}
+            <span class="btl-info-link">Установленный робот — стратегия загружена из скрипта</span>
+          {:else}
+            <span class="btl-info-link">Стратегия из библиотеки — без внешнего источника</span>
+          {/if}
+        </div>
+      {/if}
     </div>
 
     {#if selectedStrategy}
@@ -552,6 +556,7 @@
     background: #0a0a18; border: 1px solid #1a1a32; border-radius: 4px;
     padding: 8px 10px; cursor: pointer; text-align: left; width: 100%;
     transition: border-color 0.15s, background 0.15s;
+    position: relative;
   }
   .btl-cat-card:hover { border-color: #2a3a5a; }
   .btl-cat-card.active { border-color: #4caf5066; background: #0a1a0f; }
@@ -560,12 +565,16 @@
   .btl-cat-sweep { font-size: 8px; color: #4caf50; background: #4caf5018; padding: 1px 5px; border-radius: 3px; }
   .btl-cat-i { font-size: 10px; color: #4a6a8a; cursor: pointer; padding: 1px 3px; }
   .btl-cat-i:hover { color: #6aafff; }
-  .btl-cat-pop { margin-top: 6px; padding: 10px 12px; background: #0a0f1e; border: 1px solid #2a4a6a; border-radius: 4px; position: relative; z-index: 5; }
-  .btl-cat-pop-t { font-size: 11px; color: #4caf50; font-weight: 600; margin-bottom: 6px; }
-  .btl-cat-pop-d { font-size: 10px; color: #aab; line-height: 1.6; white-space: pre-line; }
-  .btl-cat-pop-link { font-size: 9px; color: #4a6a8a; margin-top: 4px; display: inline-block; text-decoration: none; }
-  .btl-cat-pop-link:hover { color: #6aafff; }
   .btl-cat-desc { font-size: 9px; color: #667; margin-top: 3px; line-height: 1.3; }
+  /* Strategy info box (below list, full-width) */
+  .btl-info-box { margin-top: 8px; padding: 12px 14px; background: #0a0f1e; border: 1px solid #2a4a6a; border-radius: 4px; }
+  .btl-info-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .btl-info-title { font-size: 12px; color: #4caf50; font-weight: 600; }
+  .btl-info-close { background: none; border: none; color: #556; cursor: pointer; font-size: 14px; padding: 0 4px; }
+  .btl-info-close:hover { color: #f44336; }
+  .btl-info-body { font-size: 10px; color: #aab; line-height: 1.6; white-space: pre-line; }
+  .btl-info-link { font-size: 9px; color: #4a6a8a; margin-top: 8px; display: inline-block; text-decoration: none; }
+  .btl-info-link:hover { color: #6aafff; }
   .btl-cat-top3 { display: flex; gap: 12px; margin-top: 4px; }
   .btl-t3sym { font-size: 9px; color: #888; }
   .btl-t3pnl { font-size: 9px; font-family: monospace; }
