@@ -394,6 +394,31 @@ async def _agent_alive_any(app_state, pool) -> bool:
     return _agent_alive(app_state) or await _agent_alive_db(pool)
 
 
+async def _agent_is_paused(pool, engine: str) -> bool:
+    """Check if sweep engine (remote=i9, local=VDS) is paused via agent_control."""
+    if pool is None:
+        return False
+    try:
+        v = await pool.fetchval("SELECT value FROM agent_control WHERE key=$1", f"pause_{engine}")
+        return v == "1"
+    except Exception:
+        return False
+
+
+async def _agent_set_pause(pool, engine: str, paused: bool) -> None:
+    """Set or clear the pause flag for an engine."""
+    if pool is None:
+        return
+    key = f"pause_{engine}"
+    if paused:
+        await pool.execute(
+            "INSERT INTO agent_control(key, value) VALUES($1, '1')"
+            " ON CONFLICT (key) DO UPDATE SET value='1'",
+            key)
+    else:
+        await pool.execute("DELETE FROM agent_control WHERE key=$1", key)
+
+
 def _top3_by_netprofit(rows: list) -> list:
     """Top-3 instruments by best net profit, from per-symbol best rows."""
     ranked = sorted(
@@ -1651,29 +1676,6 @@ def create_app() -> FastAPI:
         got = request.headers.get("x-agent-token", "")
         if got != secret:
             raise HTTPException(status_code=401, detail="Bad agent token")
-
-    async def _agent_is_paused(pool, engine: str) -> bool:
-        """Check if sweep engine (remote=i9, local=VDS) is paused."""
-        if pool is None:
-            return False
-        try:
-            v = await pool.fetchval("SELECT value FROM agent_control WHERE key=$1", f"pause_{engine}")
-            return v == "1"
-        except Exception:
-            return False
-
-    async def _agent_set_pause(pool, engine: str, paused: bool) -> None:
-        """Set or clear the pause flag for an engine."""
-        if pool is None:
-            return
-        key = f"pause_{engine}"
-        if paused:
-            await pool.execute(
-                "INSERT INTO agent_control(key, value) VALUES($1, '1')"
-                " ON CONFLICT (key) DO UPDATE SET value='1'",
-                key)
-        else:
-            await pool.execute("DELETE FROM agent_control WHERE key=$1", key)
 
     @fastapi_app.post("/api/v1/agent/claim")
     async def agent_claim(body: dict, request: Request):
