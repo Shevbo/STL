@@ -340,9 +340,11 @@ class Agent:
             ok = sum(1 for r in results if r.get("ok"))
             _log(f"[{run_id}] done {ok}/{len(results)} in {dt:.1f}s "
                  f"({len(results)/dt:.0f} combos/s)")
-            # Sweep runs (camp-/opt-) only need metrics for the leaderboard — strip the
-            # bulky trades + equity_curve arrays so we don't flood the small VDS Postgres.
-            if run_id.startswith("camp-") or run_id.startswith("opt-"):
+            # Multi-combo sweeps only need metrics for the leaderboard — strip the
+            # bulky trades + equity_curve arrays so we don't flood the small VDS
+            # Postgres AND don't hit nginx body-size limits (413 Entity Too Large).
+            # Keep full data for single-combo runs (chart can render trades).
+            if len(param_sets) > 1:
                 for e in results:
                     if e.get("ok"):
                         e["result"].pop("trades", None)
