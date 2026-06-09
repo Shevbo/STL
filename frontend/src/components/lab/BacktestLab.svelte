@@ -122,7 +122,14 @@
         // If no stratId match (custom script), skip — not useful for backtest lab
       }
       catalog = botCatalog;
-      if (catalog.length && !selectedStrategyId) selectStrategy(catalog[0]);
+      // Restore previous session: strategy, params, ranges, results
+      const restored = restoreBtlState();
+      if (restored && selectedStrategyId) {
+        const s = catalog.find((c: any) => c.id === selectedStrategyId);
+        if (s) await selectStrategy(s, true);  // keepState=true — don't clear results
+      } else if (catalog.length) {
+        selectStrategy(catalog[0]);
+      }
     } catch { catalog = []; }
   }
 
@@ -134,12 +141,15 @@
   }
 
   // Load full strategy details (params_schema) when a catalog entry is selected
-  async function selectStrategy(s: any) {
+  async function selectStrategy(s: any, keepState = false) {
     selectedStrategyId = s.id;
-    paramValues = {};
-    sweepRanges = {};
-    roundResults = [[], [], []];
-    leaderId = null; leaderResult = null; error = '';
+    if (!keepState) {
+      paramValues = {};
+      sweepRanges = {};
+      roundResults = [[], [], []];
+      leaderId = null; leaderResult = null;
+    }
+    error = '';
 
     // 1) If we have an installed robot, seed params from its params_json
     const pj = (s.source === 'installed' || s.source === 'both') && typeof s.params_json === 'object'
@@ -326,6 +336,44 @@
     leaderId = null; leaderResult = null;
     runPhase = ''; error = '';
   }
+
+  // ── Persist sweep state across reloads ───────────────────────────────────
+  const LS_BTL = 'btl_state';
+  function saveBtlState() {
+    try {
+      const st = { selectedStrategyId, paramValues, sweepRanges, dateFrom, dateTo, engine, roundResults, activeRound };
+      localStorage.setItem(LS_BTL, JSON.stringify(st));
+    } catch {}
+  }
+  function restoreBtlState() {
+    try {
+      const raw = localStorage.getItem(LS_BTL);
+      if (!raw) return;
+      const st = JSON.parse(raw);
+      if (st.selectedStrategyId) selectedStrategyId = st.selectedStrategyId;
+      if (st.paramValues) paramValues = st.paramValues;
+      if (st.sweepRanges) sweepRanges = st.sweepRanges;
+      if (st.dateFrom) dateFrom = st.dateFrom;
+      if (st.dateTo) dateTo = st.dateTo;
+      if (st.engine) engine = st.engine;
+      if (st.roundResults) roundResults = st.roundResults;
+      if (st.activeRound != null) activeRound = st.activeRound;
+      // Re-select leader from restored results
+      const lb = leaderboard();
+      if (lb.length && profitRF(lb[0].result) > 0) {
+        leaderId = JSON.stringify(lb[0].params);
+        leaderResult = lb[0];
+      }
+      return true;
+    } catch { return false; }
+  }
+
+  // Save state whenever it changes
+  $effect(() => {
+    // Trigger reactivity on all tracked state
+    void (selectedStrategyId, paramValues, sweepRanges, dateFrom, dateTo, engine, roundResults.length);
+    if (catalog.length) saveBtlState();
+  });
 
   // ── Init ────────────────────────────────────────────────────────────────
   $effect(() => { loadCatalog(); loadInstruments(); });
