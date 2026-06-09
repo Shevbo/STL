@@ -75,6 +75,10 @@ async def lifespan(app: FastAPI):
             "ALTER TABLE backtest_runs ADD COLUMN IF NOT EXISTS job_body JSONB",
             "ALTER TABLE backtest_runs ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ",
             "ALTER TABLE backtest_runs ADD COLUMN IF NOT EXISTS agent_id TEXT",
+            # Columns the agent/optimizer writes into backtest_results for sweeps
+            "ALTER TABLE backtest_results ADD COLUMN IF NOT EXISTS net_profit DOUBLE PRECISION",
+            "ALTER TABLE backtest_results ADD COLUMN IF NOT EXISTS recovery_factor DOUBLE PRECISION",
+            "ALTER TABLE backtest_results ADD COLUMN IF NOT EXISTS point_value DOUBLE PRECISION",
         ):
             try:
                 await db_pool.execute(_ddl)
@@ -1888,11 +1892,17 @@ def create_app() -> FastAPI:
         # only; a UI/chart run (bare cuid) keeps full backtest_results so the chart
         # can render trades + equity even though its script_code also has make_on_bar.
         is_campaign = bool(strat_id) and _is_sweep_run(run_id)
-        # Multi-combo runs: strip bulky trades+equity to avoid DB bloat + nginx 413.
-        # The leaderboard only needs metrics; single-combo chart runs keep full data.
+        # Multi-combo runs: keep trades+equity only for the BEST result (by profit×RF)
+        # so the leader chart has data. Strip from the rest to avoid DB bloat + nginx 413.
         if len(results) > 1:
-            for entry in results:
-                if entry.get("ok") and entry.get("result"):
+            best_idx = max(
+                range(len(results)),
+                key=lambda i: (results[i].get("result", {}).get("net_profit", 0)
+                               * results[i].get("result", {}).get("recovery_factor", 1))
+                if results[i].get("ok") else -1e18
+            )
+            for i, entry in enumerate(results):
+                if i != best_idx and entry.get("ok") and entry.get("result"):
                     entry["result"].pop("trades", None)
                     entry["result"].pop("equity_curve", None)
         async with pool.acquire() as conn:
@@ -1906,12 +1916,14 @@ def create_app() -> FastAPI:
                     if not is_campaign:
                         await conn.execute(
                             """INSERT INTO backtest_results
-                               (id, run_id, params, trades, equity_curve, sharpe, max_drawdown, win_rate, total_return, total_trades)
-                               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)""",
+                               (id, run_id, params, trades, equity_curve, sharpe, max_drawdown, win_rate,
+                                total_return, total_trades, net_profit, recovery_factor)
+                               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)""",
                             cuid(), run_id, entry["params"],
                             r.get("trades", []), r.get("equity_curve", []),
                             r.get("sharpe"), r.get("max_drawdown"), r.get("win_rate"),
                             r.get("total_return"), r.get("total_trades"),
+                            r.get("net_profit"), r.get("recovery_factor"),
                         )
                     # Mirror to the leaderboard ONLY for real sweeps (camp-/opt-, which
                     # have a non-null campaign_run). A UI/chart run has strat_id too but
