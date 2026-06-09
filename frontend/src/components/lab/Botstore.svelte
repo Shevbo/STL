@@ -80,7 +80,9 @@
   async function install(robot: any) {
     const b = best(robot);
     const tmpl = strategies.find(s => s.id === robot.id);
-    if (!tmpl) { notice = `Нет шаблона стратегии для ${robot.name}`; return; }
+    // Diagnostic: log what the UI matched so we can trace install mismatches.
+    console.log('[botstore] install', { catId: robot.id, catName: robot.name, tmplId: tmpl?.id, tmplName: tmpl?.name, scriptCode: tmpl?.script_code?.slice(0, 60) });
+    if (!tmpl) { notice = `Нет шаблона стратегии для "${robot.name}" (id=${robot.id}). Обновлений в списке стратегий: ${strategies.length}.`; return; }
     if (!stlLinks.length) { notice = 'Нет STL Link (коннектора счёта). Создайте его сначала.'; return; }
     busy = true; notice = '';
     try {
@@ -117,6 +119,20 @@
       await load();
     } catch (e) {
       notice = 'Ошибка удаления: ' + String(e);
+    }
+    busy = false;
+  }
+
+  async function toggleDeploy(r: any) {
+    busy = true; notice = '';
+    const action = r.deployed ? 'undeploy' : 'deploy';
+    try {
+      const res = await fetchWithAuth(`/api/v1/robots/${r.id}/${action}`, { method: 'POST' });
+      if (!res.ok) throw new Error(await res.text());
+      notice = r.deployed ? `Остановлен: ${r.name}` : `Запущен: ${r.name}`;
+      await load();
+    } catch (e) {
+      notice = 'Ошибка: ' + String(e);
     }
     busy = false;
   }
@@ -564,8 +580,13 @@
                 <span class="ic-sched">окно {r.schedule}</span>
               </div>
               <div class="ic-params">{JSON.stringify(r.params_json)}</div>
+              <div class="ic-src" title={r.script_code}>{(r.script_code ?? '').slice(0, 80)}{(r.script_code ?? '').length > 80 ? '…' : ''}</div>
               <div class="ic-foot">
-                <button class="ic-remove" disabled={busy} onclick={() => remove(r)}>Удалить с платформы</button>
+                <button class="ic-undeploy" disabled={busy} onclick={() => toggleDeploy(r)}
+                        title={r.deployed ? 'Остановить робота' : 'Запустить робота'}>
+                  {r.deployed ? '⏹ STOP' : '▶ START'}
+                </button>
+                <button class="ic-remove" disabled={busy} onclick={() => remove(r)}>🗑 Удалить</button>
               </div>
             </div>
           {/each}
@@ -926,7 +947,11 @@
   .ic-meta { display: flex; gap: 10px; margin-top: 4px; font-size: 10px; color: #888; }
   .ic-inst { color: #6aa8ff; font-family: monospace; }
   .ic-params { margin-top: 4px; font-family: monospace; font-size: 9px; color: #666; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .ic-foot { display: flex; justify-content: flex-end; margin-top: 6px; }
+  .ic-src { margin-top: 2px; font-family: monospace; font-size: 8px; color: #445; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ic-foot { display: flex; justify-content: flex-end; gap: 6px; margin-top: 6px; }
+  .ic-undeploy { padding: 3px 9px; background: #1a1a2e; border: 1px solid #4caf5066; color: #4caf50; border-radius: 3px; font-size: 10px; cursor: pointer; }
+  .ic-undeploy:hover { background: #1a2a1a; }
+  .ic-undeploy:disabled { opacity: 0.5; cursor: default; }
   .ic-remove { padding: 3px 9px; background: #1a0a0a; border: 1px solid #f4433655; color: #f44336; border-radius: 3px; font-size: 10px; cursor: pointer; }
   .ic-remove:hover { background: #2a1010; }
   .ic-remove:disabled { opacity: 0.5; cursor: default; }
