@@ -8,104 +8,168 @@ datasource db {
 
 model StlLink {
   id          String   @id @default(cuid())
-  userEmail   String
+  user_email  String
   broker      String   @default("finam")
   exchange    String   @default("FORTS")
-  accountId   String
-  instruments String[]
+  accountId   String   @map("account_id")
+  instruments String[] @default([])
   operations  String   @default("RW")
   enabled     Boolean  @default(true)
-  createdAt   DateTime @default(now())
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   robots      Robot[]
+
   @@map("stl_links")
 }
 
 model Robot {
-  id          String    @id @default(cuid())
-  userEmail   String
-  stlLinkId   String
-  stlLink     StlLink   @relation(fields: [stlLinkId], references: [id])
-  name        String
-  scriptCode  String
-  paramsJson  Json      @default("{}")
-  stateJson   Json      @default("{}")
-  schedule    String    @default("*/5 * * * *")
-  deployed    Boolean   @default(false)
-  deployedAt  DateTime?
-  version     Int       @default(1)
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id           String        @id @default(cuid())
+  userEmail    String        @map("user_email")
+  stlLinkId    String        @map("stl_link_id")
+  name         String
+  scriptCode   String        @map("script_code")
+  paramsJson   Json          @default("{}") @map("params_json")
+  stateJson    Json          @default("{}") @map("state_json")
+  schedule     String        @default("*/5 * * * *")
+  deployed     Boolean       @default(false)
+  deployedAt   DateTime?     @map("deployed_at") @db.Timestamptz(6)
+  version      Int           @default(1)
+  createdAt    DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
   backtestRuns BacktestRun[]
-  liveTrades   LiveTrade[]
   liveMetrics  LiveMetric[]
+  liveTrades   LiveTrade[]
+  stlLink      StlLink       @relation(fields: [stlLinkId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([deployed], map: "idx_robots_deployed")
+  @@index([userEmail], map: "idx_robots_user_email")
   @@map("robots")
-  @@index([userEmail])
-  @@index([deployed])
 }
 
 model BacktestRun {
-  id         String    @id @default(cuid())
-  robotId    String
-  robot      Robot     @relation(fields: [robotId], references: [id])
-  paramsGrid Json
-  dateFrom   DateTime
-  dateTo     DateTime
-  status     String    @default("pending")
-  engine     String?   @map("engine")
-  symbol     String?   @map("symbol")
-  jobBody    Json?     @map("job_body")
-  claimedAt  DateTime? @map("claimed_at")
-  agentId    String?   @map("agent_id")
-  errorMsg   String?
-  createdAt  DateTime  @default(now())
-  finishedAt DateTime?
+  id         String           @id @default(cuid())
+  robotId    String           @map("robot_id")
+  paramsGrid Json             @map("params_grid")
+  dateFrom   DateTime         @map("date_from") @db.Timestamptz(6)
+  dateTo     DateTime         @map("date_to") @db.Timestamptz(6)
+  status     String           @default("pending")
+  errorMsg   String?          @map("error_msg")
+  createdAt  DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  finishedAt DateTime?        @map("finished_at") @db.Timestamptz(6)
+  engine     String?          @default("local") @map("engine")
+  symbol     String?          @map("symbol")
+  jobBody    Json?            @map("job_body")
+  claimedAt  DateTime?        @map("claimed_at") @db.Timestamptz(6)
+  agentId    String?          @map("agent_id")
   results    BacktestResult[]
+  robot      Robot            @relation(fields: [robotId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([robotId], map: "idx_backtest_runs_robot_id")
+  @@index([status], map: "idx_backtest_runs_status")
   @@map("backtest_runs")
-  @@index([status])
-  @@index([robotId])
 }
 
 model BacktestResult {
-  id             String      @id @default(cuid())
-  runId          String
-  run            BacktestRun @relation(fields: [runId], references: [id])
-  params         Json
-  trades         Json        @default("[]")
-  equityCurve    Json        @default("[]")
-  sharpe         Float?
-  maxDrawdown    Float?
-  winRate        Float?
-  totalReturn    Float?
-  totalTrades    Int?
+  id          String      @id @default(cuid())
+  runId       String      @map("run_id")
+  params      Json
+  trades      Json        @default("[]")
+  equityCurve Json        @default("[]") @map("equity_curve")
+  sharpe      Float?
+  maxDrawdown Float?      @map("max_drawdown")
+  winRate     Float?      @map("win_rate")
+  totalReturn Float?      @map("total_return")
+  totalTrades Int?        @map("total_trades")
   netProfit      Float?      @map("net_profit")
   recoveryFactor Float?      @map("recovery_factor")
   pointValue     Float?      @map("point_value")
+  run         BacktestRun @relation(fields: [runId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
   @@map("backtest_results")
 }
 
 model LiveTrade {
   id        String   @id @default(cuid())
-  robotId   String
-  robot     Robot    @relation(fields: [robotId], references: [id])
+  robotId   String   @map("robot_id")
   symbol    String
   side      String
   qty       Int
   price     Decimal  @db.Decimal(18, 6)
-  orderId   String?
+  orderId   String?  @map("order_id")
   status    String
-  timestamp DateTime @default(now())
+  timestamp DateTime @default(now()) @db.Timestamptz(6)
+  robot     Robot    @relation(fields: [robotId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([robotId], map: "idx_live_trades_robot_id")
   @@map("live_trades")
-  @@index([robotId])
 }
 
 model LiveMetric {
   id        String   @id @default(cuid())
-  robotId   String
-  robot     Robot    @relation(fields: [robotId], references: [id])
+  robotId   String   @map("robot_id")
   equity    Decimal  @db.Decimal(18, 2)
   pnl       Decimal  @db.Decimal(18, 2)
   positions Json     @default("{}")
-  timestamp DateTime @default(now())
+  timestamp DateTime @default(now()) @db.Timestamptz(6)
+  robot     Robot    @relation(fields: [robotId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([robotId, timestamp], map: "idx_live_metrics_robot_ts")
   @@map("live_metrics")
-  @@index([robotId, timestamp])
+}
+
+model agent_control {
+  key   String  @id
+  value String?
+}
+
+model instrument_meta {
+  symbol           String   @id
+  ticker           String?
+  name             String?
+  lot              Float?
+  price_step       Float?
+  price_step_value Float?
+  initial_margin   Float?
+  raw              Json?
+  updated_at       DateTime @default(now()) @db.Timestamptz(6)
+  point_value      Float?
+}
+
+model ohlcv_bars {
+  symbol       String
+  interval_min Int      @default(1)
+  ts           DateTime @db.Timestamptz(6)
+  open         Float
+  high         Float
+  low          Float
+  close        Float
+  volume       BigInt
+
+  @@id([symbol, interval_min, ts])
+  @@index([symbol, interval_min, ts], map: "idx_ohlcv_bars_symbol_ts")
+}
+
+model optimization_leaderboard {
+  id              BigInt    @id @default(autoincrement())
+  campaign_run    String
+  strategy        String
+  symbol          String
+  params          Json
+  total_return    Float?
+  sharpe          Float?
+  max_drawdown    Float?
+  win_rate        Float?
+  total_trades    Int?
+  score           Float?
+  candidate       Boolean?  @default(false)
+  created_at      DateTime? @default(now()) @db.Timestamptz(6)
+  net_profit      Float?
+  recovery_factor Float?
+  point_value     Float?
+  initial_margin  Float?
+  initial_equity  Float?
+  date_from       DateTime? @db.Date
+  date_to         DateTime? @db.Date
+
+  @@index([candidate, score(sort: Desc)], map: "idx_lb_candidate")
+  @@index([score(sort: Desc)], map: "idx_lb_score")
 }
