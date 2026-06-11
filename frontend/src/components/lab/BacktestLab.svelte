@@ -65,8 +65,15 @@
     return n;
   }
 
+  // Ranking score "прибыль × recovery factor". Naive net×RF is broken because for a
+  // losing robot RF = net/dd is also negative, so net×RF = net²/dd > 0 → catastrophes
+  // rank at the top. Winners: net × max(RF, 0) (reward profit AND recovery). Losers
+  // (net ≤ 0): score = net itself, so they sort strictly below every winner.
   function profitRF(r: any): number {
-    return (r.net_profit ?? r.total_return ?? 0) * (r.recovery_factor ?? 1);
+    const np = r.net_profit ?? r.total_return ?? 0;
+    if (np <= 0) return np;
+    const rf = r.recovery_factor ?? 0;
+    return np * Math.max(rf, 0.01);
   }
 
   function leaderboard(): any[] {
