@@ -19,10 +19,12 @@
   let strategyInfo = $state<any | null>(null);  // popover: show desc for a strategy
 
   // ── Sweep rounds ───────────────────────────────────────────────────────
+  // maxLocal = cap on the small VDS (one subprocess, serial — keep modest so a run
+  // finishes in minutes). maxRemote = cap on the i9 agent (16 workers — handles 10x).
   const ROUNDS = [
-    { id: 'r0', label: 'R0 Random Explore', desc: 'Случайный поиск по всей сетке', max: 500 },
-    { id: 'r1', label: 'R1 RF×Return Refine', desc: 'Уточнение лучших RF×Return моделью', max: 300 },
-    { id: 'r2', label: 'R2 RF×Return Refine', desc: 'Финальный отбор по RF×Return', max: 200 },
+    { id: 'r0', label: 'R0 Random Explore', desc: 'Случайный поиск по сетке', maxLocal: 80, maxRemote: 800 },
+    { id: 'r1', label: 'R1 RF×Return Refine', desc: 'Уточнение лучших', maxLocal: 60, maxRemote: 400 },
+    { id: 'r2', label: 'R2 RF×Return Refine', desc: 'Финальный отбор', maxLocal: 40, maxRemote: 250 },
   ];
   let activeRound = $state(0);
   let roundResults = $state<any[][]>([[], [], []]);
@@ -234,7 +236,8 @@
     }
     const keys = Object.keys(dims);
     let combos = cartesian(keys.map(k => dims[k]));
-    const maxC = ROUNDS[ri].max;
+    // VDS runs serially in one subprocess → small cap; i9 has 16 workers → large.
+    const maxC = engine === 'local' ? ROUNDS[ri].maxLocal : ROUNDS[ri].maxRemote;
     // R0: random shuffle + cap; R1/R2: take all (already refined)
     if (ri === 0 && combos.length > maxC) {
       // Fisher-Yates shuffle then slice
