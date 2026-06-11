@@ -1914,13 +1914,17 @@ def create_app() -> FastAPI:
         is_campaign = bool(strat_id) and _is_sweep_run(run_id)
         # Multi-combo runs: keep trades+equity only for the BEST result (by profit×RF)
         # so the leader chart has data. Strip from the rest to avoid DB bloat + nginx 413.
+        def _best_score(e: dict) -> float:
+            # Mirror the frontend profit×RF ranking; tolerate None (recovery_factor is
+            # None when there's no drawdown). Losers (np<=0) score below all winners.
+            if not e.get("ok"):
+                return -1e18
+            rr = e.get("result") or {}
+            np = rr.get("net_profit") or rr.get("total_return") or 0
+            rf = rr.get("recovery_factor") or 0
+            return np * max(rf, 0.01) if np > 0 else np
         if len(results) > 1:
-            best_idx = max(
-                range(len(results)),
-                key=lambda i: (results[i].get("result", {}).get("net_profit", 0)
-                               * results[i].get("result", {}).get("recovery_factor", 1))
-                if results[i].get("ok") else -1e18
-            )
+            best_idx = max(range(len(results)), key=lambda i: _best_score(results[i]))
             for i, entry in enumerate(results):
                 if i != best_idx and entry.get("ok") and entry.get("result"):
                     entry["result"].pop("trades", None)
