@@ -283,14 +283,16 @@ async def _run_backtest_task(run_id: str, body: dict, pool, app_state) -> None:
             res_id = cuid()
             await pool.execute(
                 """INSERT INTO backtest_results
-                   (id, run_id, params, trades, equity_curve, sharpe, max_drawdown, win_rate, total_return, total_trades)
-                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)""",
+                   (id, run_id, params, trades, equity_curve, sharpe, max_drawdown, win_rate,
+                    total_return, total_trades, net_profit, recovery_factor, point_value)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)""",
                 res_id, run_id,
                 params, result["trades"],
                 result["equity_curve"],
                 result.get("sharpe"), result.get("max_drawdown"),
                 result.get("win_rate"), result.get("total_return"),
                 result.get("total_trades"),
+                result.get("net_profit"), result.get("recovery_factor"), point_value,
             )
 
         await pool.execute(
