@@ -390,7 +390,7 @@
           if (st.status === 'done' || st.status === 'failed') {
             clearInterval(chartPoll); chartPoll = null;
             if (st.status === 'done') {
-              const rr = await fetchWithAuth(`/api/v1/backtest/${run_id}/results`);
+              const rr = await fetchWithAuth(`/api/v1/backtest/${run_id}/results?full=1`);
               if (rr.ok) {
                 const rd = await rr.json();
                 const full = (Array.isArray(rd) ? rd : (rd.results ?? []))[0];

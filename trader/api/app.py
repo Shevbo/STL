@@ -1740,13 +1740,24 @@ def create_app() -> FastAPI:
         return d
 
     @fastapi_app.get("/api/v1/backtest/{run_id}/results")
-    async def backtest_results(run_id: str, request: Request):
+    async def backtest_results(run_id: str, request: Request, full: int = 0):
         require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
         pool = request.app.state.db_pool
-        rows = await pool.fetch(
-            "SELECT * FROM backtest_results WHERE run_id=$1 ORDER BY total_return DESC NULLS LAST",
-            run_id,
-        )
+        # Default: metrics-only (no trades/equity_curve) so the hit-parade list loads
+        # fast — a 100+ combo sweep otherwise returns many MB and hangs the UI. The
+        # chart fetches one row with full=1 (or re-runs a single backtest) on demand.
+        if full:
+            rows = await pool.fetch(
+                "SELECT * FROM backtest_results WHERE run_id=$1 ORDER BY total_return DESC NULLS LAST",
+                run_id,
+            )
+        else:
+            rows = await pool.fetch(
+                "SELECT id, run_id, params, sharpe, max_drawdown, win_rate, total_return, "
+                "total_trades, net_profit, recovery_factor, point_value "
+                "FROM backtest_results WHERE run_id=$1 ORDER BY total_return DESC NULLS LAST",
+                run_id,
+            )
         return [dict(r) for r in rows]
 
     # ── Optimization AGENT (external Windows host) ───────────────────────────
