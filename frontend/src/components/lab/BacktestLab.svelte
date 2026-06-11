@@ -34,6 +34,8 @@
   // ── Leader ──────────────────────────────────────────────────────────────
   let leaderId = $state<string | null>(null);
   let leaderResult = $state<any | null>(null);
+  let chartLoading = $state(false);
+  let chartPoll = $state<any>(null);
 
   // ── Helpers ─────────────────────────────────────────────────────────────
   const fmtMoney = (v: number | null | undefined) =>
@@ -323,8 +325,7 @@
             roundResults[ri] = items;
             const lb = [...items].sort((a, b) => profitRF(b.result) - profitRF(a.result));
             if (lb.length && profitRF(lb[0].result) > 0) {
-              leaderId = JSON.stringify(lb[0].params);
-              leaderResult = lb[0];
+              selectLeader(lb[0]);   // auto-show best; fetches trades if stripped
             }
           }
           runPhase = `${ROUNDS[ri].label}: готово — ${roundResults[ri].length} результатов`;
@@ -344,6 +345,62 @@
     roundResults = [[], [], []];
     leaderId = null; leaderResult = null;
     runPhase = ''; error = '';
+  }
+
+  // Click a hit-parade row → show its chart. Sweep results keep trades only for the
+  // best combo (to dodge nginx 413), so for any row without trades we run ONE fast
+  // single backtest on the VDS to get full trades + equity + fresh net_profit/RF.
+  async function selectLeader(row: any) {
+    leaderId = JSON.stringify(row.params);
+    const hasTrades = Array.isArray(row.result?.trades) && row.result.trades.length > 0;
+    if (hasTrades) { leaderResult = row; return; }
+    // Run a single backtest for these exact params.
+    if (chartPoll) { clearInterval(chartPoll); chartPoll = null; }
+    chartLoading = true;
+    leaderResult = row;   // show metrics immediately; chart fills once trades arrive
+    const sym = row.params.symbol || paramValues.symbol || 'RIM6';
+    const scriptCode = selectedStrategy?.scriptCode ?? selectedStrategy?.script_code;
+    const body: any = {
+      symbol: sym,
+      dateFrom: new Date(dateFrom).toISOString(),
+      dateTo: new Date(dateTo).toISOString(),
+      paramSets: [{ ...row.params, symbol: sym }],
+      engine: 'local',   // single combo → fast on VDS, full trades, no 413
+      robotId: selectedStrategy?.robotId || (installed[0]?.id ?? ''),
+    };
+    if (scriptCode) { body.scriptCode = scriptCode; body.baseParams = { symbol: sym }; }
+    try {
+      const res = await fetchWithAuth('/api/v1/backtest/run', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const { run_id } = await res.json();
+      let attempts = 0;
+      chartPoll = setInterval(async () => {
+        attempts++;
+        if (attempts > 120) { clearInterval(chartPoll); chartPoll = null; chartLoading = false; return; }
+        try {
+          const sr = await fetchWithAuth(`/api/v1/backtest/${run_id}/status`);
+          if (!sr.ok) return;
+          const st = await sr.json();
+          if (st.status === 'done' || st.status === 'failed') {
+            clearInterval(chartPoll); chartPoll = null;
+            if (st.status === 'done') {
+              const rr = await fetchWithAuth(`/api/v1/backtest/${run_id}/results`);
+              if (rr.ok) {
+                const rd = await rr.json();
+                const full = (Array.isArray(rd) ? rd : (rd.results ?? []))[0];
+                if (full) leaderResult = { params: row.params, result: full };
+              }
+            }
+            chartLoading = false;
+          }
+        } catch { /* keep polling */ }
+      }, 1500);
+    } catch {
+      chartLoading = false;
+    }
   }
 
   // ── Persist sweep state across reloads ───────────────────────────────────
@@ -367,12 +424,9 @@
       if (st.engine) engine = st.engine;
       if (st.roundResults) roundResults = st.roundResults;
       if (st.activeRound != null) activeRound = st.activeRound;
-      // Re-select leader from restored results
+      // Re-select leader from restored results (fetches trades if stripped)
       const lb = leaderboard();
-      if (lb.length && profitRF(lb[0].result) > 0) {
-        leaderId = JSON.stringify(lb[0].params);
-        leaderResult = lb[0];
-      }
+      if (lb.length && profitRF(lb[0].result) > 0) selectLeader(lb[0]);
       return true;
     } catch { return false; }
   }
@@ -592,7 +646,7 @@
                 {@const r = row.result}
                 {@const isLeader = JSON.stringify(row.params) === leaderId}
                 <tr class="btl-row" class:btl-leader={isLeader}
-                    onclick={() => { leaderId = JSON.stringify(row.params); leaderResult = row; }}>
+                    onclick={() => selectLeader(row)}>
                   <td class="btl-rank">{i + 1}</td>
                   <td class="btl-sym">{paramValues.symbol ?? r.symbol ?? '—'}</td>
                   <td class="btl-params">{Object.entries(row.params).filter(([k]) => k !== 'symbol').map(([k,v]) => `${k}=${v}`).join(', ')}</td>
@@ -611,16 +665,21 @@
       </div>
     {/if}
 
-    {#if leaderResult}
+    {#if leaderResult?.result}
       <div class="btl-section">
-        <div class="btl-sec-title">📈 Лидер: прибыль×RF</div>
+        <div class="btl-sec-title">
+          📈 Лидер: прибыль×RF
+          {#if chartLoading}<span class="btl-sec-sub">загрузка сделок для графика…</span>{/if}
+        </div>
         <div class="btl-chart-wrap">
-          <BacktestChart
-            result={leaderResult}
-            symbol={paramValues.symbol ?? 'RIM6'}
-            dateFrom={dateFrom}
-            dateTo={dateTo}
-          />
+          {#key JSON.stringify(leaderResult.params)}
+            <BacktestChart
+              result={leaderResult.result}
+              symbol={paramValues.symbol ?? (leaderResult.result.params?.symbol) ?? 'RIM6'}
+              dateFrom={dateFrom}
+              dateTo={dateTo}
+            />
+          {/key}
         </div>
       </div>
     {/if}
