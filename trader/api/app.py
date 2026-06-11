@@ -234,11 +234,18 @@ async def _run_backtest_task(run_id: str, body: dict, pool, app_state) -> None:
                 f"загрузка истории {_sym} с MOEX ISS не уложилась в 150с "
                 f"(инструмент не кэширован, медленный ответ ISS) — попробуйте ещё раз"
             )
-        grid = body.get("paramsGrid", {})
-        keys = list(grid.keys())
-        values = [grid[k] if isinstance(grid[k], list) else [grid[k]] for k in keys]
-        combos = list(itertools.product(*values))
-        param_sets = [{**base_params, **dict(zip(keys, combo))} for combo in combos]
+        # Explicit combos (BacktestLab sweep: paramSets/param_sets) take priority;
+        # otherwise expand the product grid (paramsGrid). Without this the VDS task
+        # ignored an explicit sweep and ran a single base-params combo → 0 results.
+        ps_list = body.get("paramSets") or body.get("param_sets")
+        if ps_list:
+            param_sets = [{**base_params, **ps} for ps in ps_list]
+        else:
+            grid = body.get("paramsGrid", {})
+            keys = list(grid.keys())
+            values = [grid[k] if isinstance(grid[k], list) else [grid[k]] for k in keys]
+            combos = list(itertools.product(*values))
+            param_sets = [{**base_params, **dict(zip(keys, combo))} for combo in combos]
         # Cap applies to LOCAL (VDS) runs only; remote runs go to the powerful host.
         if body.get("engine") != "remote" and len(param_sets) > _MAX_COMBOS:
             raise ValueError(
