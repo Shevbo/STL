@@ -443,7 +443,7 @@ register("pivot_reversal", "Pivot Points Reversal",
          "https://github.com/SkrimerForever/moex-trading-bot",
          [SYM, P("level", "Уровень (1=R1/S1, 2=R2/S2)", 1, 1, 2),
           P("qty", "Контрактов", 1, 1, 10)],
-         sig_pivot, lambda p: 1500)   # ~1 trading day of 1-min bars for prev-day HLC
+         sig_pivot, lambda p: 2200)   # ≥2 FORTS days of 1-min bars → full prev-day HLC
 
 
 # ── Param descriptions (по ключу) + краткое описание стратегий ──────────────────
