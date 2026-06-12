@@ -142,6 +142,7 @@ AVG_PARAMS_FORCED = [
 def _c(bars): return [b.close for b in bars]
 def _h(bars): return [b.high for b in bars]
 def _l(bars): return [b.low for b in bars]
+def _o(bars): return [b.open for b in bars]
 
 
 # 1. MACD crossover (long+short)
@@ -339,6 +340,112 @@ register("ema_atr", "EMA Trend + ATR Filter",
          sig_ema_atr, lambda p: int(p["slow"]) + 2)
 
 
+# ════════════════════════════════════════════════════════════════════════════
+#  ICT / SMART-MONEY strategies — ported from SkrimerForever/moex-trading-bot
+#  (MOEX hackathon Go bot). Re-implemented here as pure OHLCV signal functions;
+#  no external code is executed. Formulas match that repo's features/ict_structure.go,
+#  features/pivot_points.go and the deterministic strategy.
+# ════════════════════════════════════════════════════════════════════════════
+
+# 13. Fair Value Gap (FVG) — 3-bar imbalance momentum.
+#   Bullish FVG: low[i] > high[i-2]  → gap up   → лонг (импульс вверх).
+#   Bearish FVG: high[i] < low[i-2]  → gap down → шорт.
+#   Confirmed only if the current body moves in the gap direction by ≥ min_frac.
+def sig_fvg(bars, p):
+    h, l, c, o = _h(bars), _l(bars), _c(bars), _o(bars)
+    if len(c) < 3:
+        return None
+    min_frac = float(p.get("min_frac", 5)) / 10000.0   # ×10000: 5 = 0.05%
+    body = (c[-1] - o[-1]) / c[-1] if c[-1] else 0.0
+    if l[-1] > h[-3] and body >= min_frac:
+        return 1
+    if h[-1] < l[-3] and -body >= min_frac:
+        return -1
+    return None
+register("fvg", "Fair Value Gap (ICT)",
+         "https://github.com/SkrimerForever/moex-trading-bot",
+         [SYM, P("min_frac", "Мин. тело ×10000 (5=0.05%)", 5, 0, 50),
+          P("qty", "Контрактов", 1, 1, 10)],
+         sig_fvg, lambda p: 4)
+
+
+# 14. Order Block — last counter-trend candle before a strong impulse, then retest.
+#   Find an impulse in the last `lookback` bars where |body|/close ≥ impulse_frac.
+#   Bullish impulse → order block = последняя медвежья свеча перед ним; лонг, когда
+#   текущая цена возвращается в её зону [low, high]. Bearish — зеркально.
+def sig_order_block(bars, p):
+    h, l, c, o = _h(bars), _l(bars), _c(bars), _o(bars)
+    look = int(p.get("lookback", 20))
+    if len(c) < look + 3:
+        return None
+    impulse_frac = float(p.get("impulse_frac", 30)) / 10000.0   # ×10000: 30 = 0.30%
+    price = c[-1]
+    # scan recent bars (excluding the very last, which is the retest bar) for an impulse
+    for i in range(len(c) - 2, len(c) - look - 1, -1):
+        body = (c[i] - o[i]) / c[i] if c[i] else 0.0
+        if body >= impulse_frac:                       # bullish impulse
+            for j in range(i - 1, max(i - look, 0) - 1, -1):
+                if c[j] < o[j]:                        # last down candle = bull OB
+                    if l[j] <= price <= h[j]:
+                        return 1
+                    break
+            break
+        if -body >= impulse_frac:                      # bearish impulse
+            for j in range(i - 1, max(i - look, 0) - 1, -1):
+                if c[j] > o[j]:                        # last up candle = bear OB
+                    if l[j] <= price <= h[j]:
+                        return -1
+                    break
+            break
+    return None
+register("order_block", "Order Block (ICT)",
+         "https://github.com/SkrimerForever/moex-trading-bot",
+         [SYM, P("lookback", "Окно поиска импульса", 20, 5, 60),
+          P("impulse_frac", "Импульс ×10000 (30=0.3%)", 30, 5, 100),
+          P("qty", "Контрактов", 1, 1, 10)],
+         sig_order_block, lambda p: int(p.get("lookback", 20)) + 3)
+
+
+# 15. Pivot Points reversal — classic floor-trader pivots from the PREVIOUS day.
+#   P=(H+L+C)/3, R1=2P−L, S1=2P−H, R2=P+(H−L), S2=P−(H−L) on prior session.
+#   Mean-reversion: цена ≤ S1 → перепродано → лонг; цена ≥ R1 → перекуплено → шорт.
+def _prev_day_hlc(bars):
+    """High/low/close of the calendar day before the last bar's day. Bars carry MSK
+    wall-clock stamped as UTC, so the UTC date == the trading date for grouping."""
+    from datetime import datetime, timezone
+    last_day = datetime.fromtimestamp(bars[-1].time, tz=timezone.utc).date()
+    prev = [b for b in bars
+            if datetime.fromtimestamp(b.time, tz=timezone.utc).date() < last_day]
+    if not prev:
+        return None
+    last_prev_day = datetime.fromtimestamp(prev[-1].time, tz=timezone.utc).date()
+    day = [b for b in prev
+           if datetime.fromtimestamp(b.time, tz=timezone.utc).date() == last_prev_day]
+    return max(b.high for b in day), min(b.low for b in day), day[-1].close
+
+def sig_pivot(bars, p):
+    hlc = _prev_day_hlc(bars)
+    if hlc is None:
+        return 0
+    ph, pl, pc = hlc
+    pivot = (ph + pl + pc) / 3.0
+    rng = ph - pl
+    lvl = int(p.get("level", 1))                       # 1 → R1/S1, 2 → R2/S2
+    r = pivot + rng if lvl == 2 else 2 * pivot - pl
+    s = pivot - rng if lvl == 2 else 2 * pivot - ph
+    price = _c(bars)[-1]
+    if price <= s:
+        return 1
+    if price >= r:
+        return -1
+    return 0
+register("pivot_reversal", "Pivot Points Reversal",
+         "https://github.com/SkrimerForever/moex-trading-bot",
+         [SYM, P("level", "Уровень (1=R1/S1, 2=R2/S2)", 1, 1, 2),
+          P("qty", "Контрактов", 1, 1, 10)],
+         sig_pivot, lambda p: 1500)   # ~1 trading day of 1-min bars for prev-day HLC
+
+
 # ── Param descriptions (по ключу) + краткое описание стратегий ──────────────────
 # Generic but accurate per-parameter explanations, injected into every schema so
 # each field gets an (i) tooltip. Keyed by param `key`.
@@ -371,6 +478,11 @@ PARAM_DESC: dict[str, str] = {
     # Donchian params
     "entry_period": "Период входа в барах (N). Робот покупает когда цена пробивает максимум за последние N баров. 20 — классика Turtle Trading. Больше N — вход по более сильному пробою, реже сделки, но крупнее движение.",
     "exit_period": "Период выхода в барах (M). Робот продаёт когда цена падает ниже минимума за последние M баров. M < N обычно (например 10 при N=20). Меньше M — быстрее выход при развороте, меньше прибыль, но и меньше потерь.",
+    # ICT / smart-money params (SkrimerForever/moex-trading-bot)
+    "min_frac": "Минимальный размер тела свечи, подтверждающего разрыв (Fair Value Gap). Хранится ×10000: 5 = 0.05% от цены. Чем больше — тем сильнее должен быть импульс, чтобы вход состоялся; меньше ложных входов, но и реже.",
+    "lookback": "Окно поиска импульсной свечи для Order Block, в барах. Робот сканирует последние N баров назад в поисках сильного движения и предшествующей ему контр-свечи (зоны заказов). Больше — ловит более старые зоны.",
+    "impulse_frac": "Порог импульса для Order Block: |тело| / цена. Хранится ×10000: 30 = 0.30%. Свеча считается импульсной, если её тело больше этого порога. Больше — только мощные движения формируют зону, реже сигналы.",
+    "level": "Какой уровень разворотных пивотов использовать: 1 = R1/S1 (ближние, чаще срабатывают), 2 = R2/S2 (дальние, реже, но сильнее экстремум). Уровни считаются от вчерашних High/Low/Close.",
 }
 
 STRATEGY_DESC: dict[str, str] = {
@@ -580,6 +692,55 @@ STRATEGY_DESC: dict[str, str] = {
         "• При убыточном закрытии: bet_extra += bet_step.\n\n"
         "ДЛЯ ЧЕГО: долгосрочный тренд-фолловер с «доливкой» после убытков. Медленная\n"
         "EMA=140 даёт сильный фильтр — мало сделок, крупные движения."
+    ),
+    "fvg": (
+        "Fair Value Gap (ICT) — вход по ценовому разрыву (имбалансу).\n"
+        "Порт из SkrimerForever/moex-trading-bot (MOEX-хакатон).\n\n"
+        "КАК РАБОТАЕТ:\n"
+        "1. Смотрятся 3 последние свечи. Разрыв (FVG) — когда между свечой i и i-2 есть\n"
+        "   незаполненный «зазор» цены (рынок прошёл импульсом, не торгуясь в этой зоне).\n"
+        "2. Бычий FVG: low[i] > high[i-2] (зазор вверх) → лонг.\n"
+        "3. Медвежий FVG: high[i] < low[i-2] (зазор вниз) → шорт.\n"
+        "4. Подтверждение: тело текущей свечи в сторону разрыва ≥ min_frac (фильтр шума).\n\n"
+        "ЛОГИКА СДЕЛОК:\n"
+        "• Бычий FVG → закрывает шорт, открывает лонг.\n"
+        "• Медвежий FVG → закрывает лонг, открывает шорт.\n"
+        "• Нет разрыва → держим позицию (None).\n\n"
+        "ДЛЯ ЧЕГО: ловит сильные импульсные движения «умных денег», оставляющие\n"
+        "имбаланс. Работает на трендовых рывках; на спокойном рынке сигналов мало."
+    ),
+    "order_block": (
+        "Order Block (ICT) — вход от зоны заказов крупного игрока.\n"
+        "Порт из SkrimerForever/moex-trading-bot.\n\n"
+        "КАК РАБОТАЕТ:\n"
+        "1. В последних lookback барах ищется импульсная свеча: |тело|/цена ≥ impulse_frac.\n"
+        "2. Order Block = последняя ПРОТИВОПОЛОЖНАЯ свеча перед импульсом:\n"
+        "   • Бычий импульс → последняя медвежья свеча = зона поддержки (бычий OB).\n"
+        "   • Медвежий импульс → последняя бычья свеча = зона сопротивления (медвежий OB).\n"
+        "3. Когда цена возвращается (ретест) в диапазон [low, high] этой свечи —\n"
+        "   вход в сторону импульса.\n\n"
+        "ЛОГИКА СДЕЛОК:\n"
+        "• Цена в бычьем OB → лонг. Цена в медвежьем OB → шорт.\n"
+        "• Иначе ждём (None).\n\n"
+        "ДЛЯ ЧЕГО: торгует откаты к институциональным зонам перед продолжением\n"
+        "движения. Меньше сделок, вход по «следам» крупного объёма."
+    ),
+    "pivot_reversal": (
+        "Pivot Points Reversal — разворот от классических floor-пивотов.\n"
+        "Порт из SkrimerForever/moex-trading-bot.\n\n"
+        "КАК РАБОТАЕТ:\n"
+        "1. По вчерашним High/Low/Close считается опорный уровень:\n"
+        "   P = (H + L + C) / 3.\n"
+        "2. Сопротивление R1 = 2P − L, поддержка S1 = 2P − H.\n"
+        "   Дальние: R2 = P + (H−L), S2 = P − (H−L). Уровень выбирается параметром level.\n"
+        "3. Контртренд: цена ≤ S (поддержка) → перепродано → лонг;\n"
+        "   цена ≥ R (сопротивление) → перекуплено → шорт; между уровнями → выход.\n\n"
+        "ЛОГИКА СДЕЛОК:\n"
+        "• Пробитие/касание поддержки → лонг (ждём отскок).\n"
+        "• Касание сопротивления → шорт.\n"
+        "• Внутри коридора → закрываем позицию.\n\n"
+        "ДЛЯ ЧЕГО: классика интрадей-трейдинга. Хорошо в диапазонные дни; на сильном\n"
+        "тренде уровни пробиваются (контртренд проигрывает)."
     ),
 }
 
