@@ -1,1 +1,3 @@
 scripts/opt_agent.py
+trader/lab/strategies/library.py
+trader/lab/indicators.py
