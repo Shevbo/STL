@@ -613,10 +613,20 @@ async def _orphan_reaper(app_state) -> None:
             res = await pool.execute(
                 "UPDATE backtest_runs SET status='queued', agent_id=NULL, claimed_at=NULL "
                 "WHERE (id LIKE 'opt-%' OR id LIKE 'camp-%') AND status='running' "
+                "AND (agent_id IS NULL OR agent_id <> 'vds-fallback') "
                 "AND claimed_at < now() - interval '8 minutes'"
             )
             if res and res != "UPDATE 0":
                 log.info("orphan_reaper.requeued", result=res)
+            # VDS-fallback jobs are slow (full grid) — give them 90 min before reaping.
+            res2 = await pool.execute(
+                "UPDATE backtest_runs SET status='queued', agent_id=NULL, claimed_at=NULL "
+                "WHERE (id LIKE 'opt-%' OR id LIKE 'camp-%') AND status='running' "
+                "AND agent_id = 'vds-fallback' "
+                "AND claimed_at < now() - interval '90 minutes'"
+            )
+            if res2 and res2 != "UPDATE 0":
+                log.info("orphan_reaper.vds_fallback_requeued", result=res2)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 — never let the loop die
