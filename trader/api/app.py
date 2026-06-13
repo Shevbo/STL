@@ -503,7 +503,7 @@ async def _run_remote_job_on_vds(row, app_state) -> None:
 
             graded = await run_backtest_grid(
                 script_code, bars, symbol, param_sets,
-                timeout=max(120, 8 * len(param_sets)), point_value=point_value,
+                timeout=max(300, 30 * len(param_sets)), point_value=point_value,
                 initial_margin=initial_margin, metrics_only=True,   # sweeps: never hold equity → no OOM
             )
 
@@ -539,7 +539,7 @@ async def _run_remote_job_on_vds(row, app_state) -> None:
         try:
             await pool.execute(
                 "UPDATE backtest_runs SET status='failed', error_msg=$1, finished_at=now() WHERE id=$2",
-                f"vds fallback: {exc}", run_id)
+                f"vds fallback: {type(exc).__name__}: {exc}", run_id)
         except Exception:
             pass
 
