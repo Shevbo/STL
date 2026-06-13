@@ -15,6 +15,11 @@ REM (Reads the EXISTING value — stores no secret anywhere new.)
 if not defined OPT_AGENT_TOKEN for /f "tokens=2,*" %%a in ('reg query "HKCU\Environment" /v OPT_AGENT_TOKEN 2^>nul ^| find "REG_SZ"') do set "OPT_AGENT_TOKEN=%%b"
 if not defined STL_API for /f "tokens=2,*" %%a in ('reg query "HKCU\Environment" /v STL_API 2^>nul ^| find "REG_SZ"') do set "STL_API=%%b"
 
+REM Prevent machine sleep while the agent is running (silent; no-op if already off).
+powercfg /change standby-timeout-ac 0 >nul 2>&1
+powercfg /change standby-timeout-dc 0 >nul 2>&1
+powercfg /change monitor-timeout-ac 0 >nul 2>&1
+
 :loop
 REM fixed log path (task %TEMP% differs from your shell's), findable at agent\agent.log
 agent\.venv\Scripts\python.exe scripts\opt_agent.py --log "%~dp0agent.log" %*
