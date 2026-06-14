@@ -107,7 +107,7 @@ class QuoteStream:
             try:
                 force = attempt > 0  # force-refresh token after first failure
                 token = await self._get_token(force)
-                metadata = [("authorization", token)]
+                metadata = [("authorization", f"Bearer {token}")]
                 stub = MarketDataServiceStub(self._channel)
                 req = SubscribeQuoteRequest(symbols=[symbol])
                 async for resp in stub.SubscribeQuote(req, metadata=metadata):
@@ -216,7 +216,7 @@ class BarsStream:
             try:
                 force = attempt > 0
                 token = await self._get_token(force)
-                metadata = [("authorization", token)]
+                metadata = [("authorization", f"Bearer {token}")]
                 stub = MarketDataServiceStub(self._channel)
                 req = SubscribeBarsRequest(symbol=symbol, timeframe=timeframe)
                 async for resp in stub.SubscribeBars(req, metadata=metadata):
@@ -331,7 +331,7 @@ class OrderBookStream:
             try:
                 force = attempt > 0
                 token = await self._get_token(force)
-                metadata = [("authorization", token)]
+                metadata = [("authorization", f"Bearer {token}")]
                 stub = MarketDataServiceStub(self._channel)
                 req = SubscribeOrderBookRequest(symbol=symbol)
                 async for resp in stub.SubscribeOrderBook(req, metadata=metadata):
