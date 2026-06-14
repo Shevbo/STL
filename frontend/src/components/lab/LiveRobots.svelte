@@ -3,12 +3,14 @@
   import { fetchWithAuth } from '../../lib/fetch-auth';
   import RobotEditor from './RobotEditor.svelte';
   import RobotWindow from './RobotWindow.svelte';
+  import Showcase from './Showcase.svelte';
 
   let robots = $state<any[]>([]);
   let selected = $state<any | null>(null);
   let loading = $state(true);
   let mode = $state<'list' | 'edit' | 'new'>('list');
   let windowRobotId = $state<string | null>(null);  // dbl-click → detail window
+  let view = $state<'robots' | 'showcase'>('robots');
 
   async function load() {
     loading = true;
@@ -49,6 +51,18 @@
 </script>
 
 <div class="live-robots">
+  <!-- Tab bar -->
+  <div class="tab-bar">
+    <button class="tab-btn" class:active={view === 'robots'} onclick={() => view = 'robots'}>Роботы</button>
+    <button class="tab-btn showcase-tab" class:active={view === 'showcase'} onclick={() => view = 'showcase'}>Витрина</button>
+  </div>
+
+  {#if view === 'showcase'}
+    <div class="showcase-wrap">
+      <Showcase />
+    </div>
+  {:else}
+  <div class="robots-inner">
   <!-- Left: robot list -->
   <div class="robot-list">
     <div class="list-header">
@@ -128,6 +142,13 @@
           {/if}
         </div>
 
+        {#if selected.retire_comment}
+          <div class="retire-block">
+            <div class="retire-label">На доработку:</div>
+            <div class="retire-text">{selected.retire_comment}</div>
+          </div>
+        {/if}
+
         <div class="params-section">
           <div class="params-title">Параметры</div>
           <div class="params-grid">
@@ -154,6 +175,8 @@
       </div>
     {/if}
   </div>
+  </div>
+  {/if}
 </div>
 
 {#if windowRobotId}
@@ -161,7 +184,18 @@
 {/if}
 
 <style>
-  .live-robots { display: flex; height: 100%; overflow: hidden; }
+  .live-robots { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
+
+  /* Tab bar */
+  .tab-bar { display: flex; border-bottom: 1px solid #2d2d4a; flex-shrink: 0; }
+  .tab-btn { padding: 6px 14px; font-size: 11px; color: #666; background: none; border: none; border-bottom: 2px solid transparent; cursor: pointer; transition: color 0.15s; }
+  .tab-btn:hover { color: #aaa; }
+  .tab-btn.active { color: #ccc; border-bottom-color: #4caf50; }
+  .showcase-tab.active { border-bottom-color: #00e676; color: #00e676; }
+
+  /* Robots tab inner layout */
+  .showcase-wrap { flex: 1; min-height: 0; overflow: hidden; }
+  .robots-inner { display: flex; flex: 1; min-height: 0; overflow: hidden; }
 
   /* List */
   .robot-list { width: 220px; border-right: 1px solid #2d2d4a; display: flex; flex-direction: column; flex-shrink: 0; }
@@ -219,4 +253,8 @@
   .empty-icon { font-size: 40px; }
   .empty-text { font-size: 13px; }
   .new-btn-big { padding: 8px 20px; background: #4caf5020; border: 1px solid #4caf5066; color: #4caf50; cursor: pointer; border-radius: 4px; font-size: 12px; }
+
+  .retire-block { background: #1a1000; border: 1px solid #ff980044; border-radius: 4px; padding: 10px 12px; }
+  .retire-label { font-size: 10px; color: #ff9800; text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 5px; }
+  .retire-text { font-size: 12px; color: #ffb74d; line-height: 1.5; }
 </style>

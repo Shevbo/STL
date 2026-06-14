@@ -643,6 +643,8 @@
                 <th>Инстр.</th>
                 <th>Параметры</th>
                 <th>Чистая прибыль</th>
+                <th class="th-hl">% год (ГО)</th>
+                <th class="th-hl">% год (без пл.)</th>
                 <th>Доходность</th>
                 <th>Шарп</th>
                 <th>RF</th>
@@ -661,6 +663,8 @@
                   <td class="btl-sym">{paramValues.symbol ?? r.symbol ?? '—'}</td>
                   <td class="btl-params">{Object.entries(row.params).filter(([k]) => k !== 'symbol').map(([k,v]) => `${k}=${v}`).join(', ')}</td>
                   <td class="btl-num" class:pos={r.net_profit > 0} class:neg={r.net_profit < 0}>{fmtMoney(r.net_profit)}</td>
+                  <td class="btl-num btl-ann" class:pos={(r.ann_return_go ?? 0) > 0} class:neg={(r.ann_return_go ?? 0) < 0}>{fmtPct(r.ann_return_go)}</td>
+                  <td class="btl-num btl-ann" class:pos={(r.ann_return_full ?? 0) > 0} class:neg={(r.ann_return_full ?? 0) < 0}>{fmtPct(r.ann_return_full)}</td>
                   <td class="btl-num" class:pos={r.total_return > 0} class:neg={r.total_return < 0}>{fmtPct(r.total_return)}</td>
                   <td class="btl-num">{fmtD(r.sharpe)}</td>
                   <td class="btl-num">{fmtD(r.recovery_factor)}</td>
@@ -836,6 +840,10 @@
   .btl-num.neg { color: #f44336; }
   .btl-score { font-weight: 700; font-size: 12px; }
   .btl-score.pos { color: #4caf50; }
+  .btl-ann { font-weight: 700; font-size: 12px; }
+  .btl-ann.pos { color: #00e676; text-shadow: 0 0 6px #00e67644; }
+  .btl-ann.neg { color: #ff5252; text-shadow: 0 0 6px #ff525244; }
+  .th-hl { color: #00e676; }
 
   /* Chart */
   .btl-chart-wrap { height: 400px; }

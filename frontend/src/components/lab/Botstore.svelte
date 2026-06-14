@@ -683,6 +683,8 @@
                       {#each paramCols as col}
                         <th class="num" title={descOf(col)} onclick={() => setSort(col)}>{labelOf(col)}{sortBy.col === col ? (sortBy.dir === 1 ? ' ▲' : ' ▼') : ''}</th>
                       {/each}
+                      <th class="num th-hl" onclick={() => setSort('ann_return_go')}>% год (ГО){sortBy.col === 'ann_return_go' ? (sortBy.dir === 1 ? ' ▲' : ' ▼') : ''}</th>
+                      <th class="num th-hl" onclick={() => setSort('ann_return_full')}>% год (без пл.){sortBy.col === 'ann_return_full' ? (sortBy.dir === 1 ? ' ▲' : ' ▼') : ''}</th>
                       <th class="num" onclick={() => setSort('total_return')}>Доходность{sortBy.col === 'total_return' ? (sortBy.dir === 1 ? ' ▲' : ' ▼') : ''}</th>
                       <th class="num" onclick={() => setSort('net_profit')}>Прибыль ₽{sortBy.col === 'net_profit' ? (sortBy.dir === 1 ? ' ▲' : ' ▼') : ''}</th>
                       <th class="num" onclick={() => setSort('max_drawdown')}>Просадка{sortBy.col === 'max_drawdown' ? (sortBy.dir === 1 ? ' ▲' : ' ▼') : ''}</th>
@@ -699,6 +701,8 @@
                         {#each paramCols as col}
                           <td class="num">{fmtNum(r.params?.[col], 0)}</td>
                         {/each}
+                        <td class="num ann" class:pos={(r.ann_return_go ?? 0) > 0} class:neg={(r.ann_return_go ?? 0) < 0}>{fmtPct(r.ann_return_go)}</td>
+                        <td class="num ann" class:pos={(r.ann_return_full ?? 0) > 0} class:neg={(r.ann_return_full ?? 0) < 0}>{fmtPct(r.ann_return_full)}</td>
                         <td class="num" class:pos={r.total_return > 0} class:neg={r.total_return < 0}>{fmtPct(r.total_return)}</td>
                         <td class="num" class:pos={r.net_profit > 0} class:neg={r.net_profit < 0}>{fmtMoney(r.net_profit)}</td>
                         <td class="num">{fmtPct(r.max_drawdown)}</td>
@@ -997,6 +1001,10 @@
   .dp-row:hover td { background: #12122a; }
   .dp-row.cand td { background: #0c160c; }
   .dp-row.cand:hover td { background: #112811; }
+  .ann { font-weight: 700; font-size: 12px; }
+  .ann.pos { color: #00e676; text-shadow: 0 0 6px #00e67644; }
+  .ann.neg { color: #ff5252; text-shadow: 0 0 6px #ff525244; }
+  .th-hl { color: #00e676; }
 
   /* backtest window modal */
   .chart-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 40; padding: 24px; }

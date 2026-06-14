@@ -409,33 +409,19 @@ register("order_block", "Order Block (ICT)",
 # 15. Pivot Points reversal — classic floor-trader pivots from the PREVIOUS day.
 #   P=(H+L+C)/3, R1=2P−L, S1=2P−H, R2=P+(H−L), S2=P−(H−L) on prior session.
 #   Mean-reversion: цена ≤ S1 → перепродано → лонг; цена ≥ R1 → перекуплено → шорт.
-_DAY_SECS = 86400
-
 def _prev_day_hlc(bars):
-    """High/low/close of the calendar day before the last bar's day. Single backward
-    pass with integer day-buckets (time // 86400) and early exit — NO per-bar datetime
-    objects, so it stays fast when called on every bar of a long backtest. Bars carry
-    MSK wall-clock stamped as UTC, so the UTC day-bucket == the trading day."""
-    n = len(bars)
-    if n < 2:
+    """High/low/close of the calendar day before the last bar's day. Bars carry MSK
+    wall-clock stamped as UTC, so the UTC date == the trading date for grouping."""
+    from datetime import datetime, timezone
+    last_day = datetime.fromtimestamp(bars[-1].time, tz=timezone.utc).date()
+    prev = [b for b in bars
+            if datetime.fromtimestamp(b.time, tz=timezone.utc).date() < last_day]
+    if not prev:
         return None
-    cur_day = bars[-1].time // _DAY_SECS
-    i = n - 1
-    # skip the current (last) day
-    while i >= 0 and bars[i].time // _DAY_SECS == cur_day:
-        i -= 1
-    if i < 0:
-        return None
-    prev_day = bars[i].time // _DAY_SECS
-    close = bars[i].close                    # last bar of the previous day
-    hi = bars[i].high
-    lo = bars[i].low
-    while i >= 0 and bars[i].time // _DAY_SECS == prev_day:
-        b = bars[i]
-        if b.high > hi: hi = b.high
-        if b.low < lo: lo = b.low
-        i -= 1
-    return hi, lo, close
+    last_prev_day = datetime.fromtimestamp(prev[-1].time, tz=timezone.utc).date()
+    day = [b for b in prev
+           if datetime.fromtimestamp(b.time, tz=timezone.utc).date() == last_prev_day]
+    return max(b.high for b in day), min(b.low for b in day), day[-1].close
 
 def sig_pivot(bars, p):
     hlc = _prev_day_hlc(bars)

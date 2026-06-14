@@ -191,12 +191,16 @@
     }
   }
 
+  const pct = (v: any, dec = 1) => v != null ? (v * 100).toFixed(dec) + '%' : '—';
   const COLS = [
-    { k: 'total_return', label: 'Доход%', fmt: (v: any) => v != null ? (v * 100).toFixed(2) + '%' : '—' },
-    { k: 'sharpe',       label: 'Sharpe', fmt: (v: any) => v != null ? v.toFixed(2) : '—' },
-    { k: 'max_drawdown', label: 'Просад%', fmt: (v: any) => v != null ? (v * 100).toFixed(1) + '%' : '—' },
-    { k: 'win_rate',     label: 'Win%',   fmt: (v: any) => v != null ? (v * 100).toFixed(0) + '%' : '—' },
-    { k: 'total_trades', label: 'Сделок', fmt: (v: any) => v ?? 0 },
+    { k: 'ann_return_go',   label: '% год (ГО)',      fmt: (v: any) => pct(v, 0), highlight: true },
+    { k: 'ann_return_full', label: '% год (без пл.)', fmt: (v: any) => pct(v, 0), highlight: true },
+    { k: 'net_profit',      label: 'Прибыль ₽',      fmt: (v: any) => v != null ? Math.round(v).toLocaleString('ru') + ' ₽' : '—' },
+    { k: 'total_return',    label: 'Доход%',          fmt: (v: any) => pct(v, 2) },
+    { k: 'sharpe',          label: 'Sharpe',          fmt: (v: any) => v != null ? v.toFixed(2) : '—' },
+    { k: 'max_drawdown',    label: 'Просад%',         fmt: (v: any) => pct(v, 1) },
+    { k: 'win_rate',        label: 'Win%',            fmt: (v: any) => pct(v, 0) },
+    { k: 'total_trades',    label: 'Сделок',          fmt: (v: any) => v ?? 0 },
   ];
 </script>
 
@@ -294,7 +298,8 @@
                 {#each sweptKeys as k}<td class="pv">{paramVal(r, k)}</td>{/each}
                 {#each COLS as c}
                   <td class:pos={c.k !== 'max_drawdown' && (r[c.k] ?? 0) > 0}
-                      class:neg={c.k !== 'max_drawdown' && (r[c.k] ?? 0) < 0}>
+                      class:neg={c.k !== 'max_drawdown' && (r[c.k] ?? 0) < 0}
+                      class:hl={c.highlight}>
                     {c.fmt(r[c.k])}
                   </td>
                 {/each}
@@ -378,6 +383,11 @@
   .or-table tr.best td { background: #0d1f0d; }
   .or-table .pv { color: #6aa8ff; font-family: monospace; }
   .pos { color: #4caf50; } .neg { color: #f44336; }
+  .hl { font-weight: 700; font-size: 12px; }
+  .hl.pos { color: #00e676; text-shadow: 0 0 6px #00e67644; }
+  .hl.neg { color: #ff5252; text-shadow: 0 0 6px #ff525244; }
+  .or-table th:nth-child(-n+2) { color: #00e676; }
+  .ob-preamble { display: none; }
 
   .heat-wrap { display: flex; flex-direction: column; gap: 6px; }
   .heat-title { font-size: 11px; color: #888; }

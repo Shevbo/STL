@@ -79,6 +79,7 @@ async def lifespan(app: FastAPI):
             "ALTER TABLE backtest_results ADD COLUMN IF NOT EXISTS net_profit DOUBLE PRECISION",
             "ALTER TABLE backtest_results ADD COLUMN IF NOT EXISTS recovery_factor DOUBLE PRECISION",
             "ALTER TABLE backtest_results ADD COLUMN IF NOT EXISTS point_value DOUBLE PRECISION",
+            "ALTER TABLE robots ADD COLUMN IF NOT EXISTS retire_comment TEXT",
         ):
             try:
                 await db_pool.execute(_ddl)
@@ -522,13 +523,14 @@ async def _run_remote_job_on_vds(row, app_state) -> None:
                                     """INSERT INTO optimization_leaderboard
                                          (campaign_run, strategy, symbol, params, total_return, sharpe,
                                           max_drawdown, win_rate, total_trades, score, candidate,
-                                          net_profit, recovery_factor)
-                                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)""",
+                                          net_profit, recovery_factor, ann_return_go, ann_return_full)
+                                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)""",
                                     campaign, strat_id, symbol, entry["params"],
                                     r.get("total_return"), r.get("sharpe"), r.get("max_drawdown"),
                                     r.get("win_rate"), r.get("total_trades"),
                                     _campaign_score(r), _campaign_candidate(r),
                                     r.get("net_profit"), r.get("recovery_factor"),
+                                    r.get("ann_return_go"), r.get("ann_return_full"),
                                 )
                             except Exception as exc:
                                 log.warning("vds_fallback.leaderboard_insert_failed", run_id=run_id, error=str(exc))
@@ -1212,7 +1214,7 @@ def create_app() -> FastAPI:
             """
             SELECT campaign_run, symbol, params, total_return, sharpe, max_drawdown,
                    win_rate, total_trades, net_profit, recovery_factor, score,
-                   candidate, created_at
+                   candidate, created_at, ann_return_go, ann_return_full
             FROM optimization_leaderboard
             WHERE strategy=$1
             ORDER BY symbol, score DESC NULLS LAST
@@ -1492,9 +1494,124 @@ def create_app() -> FastAPI:
     async def undeploy_robot(robot_id: str, request: Request):
         require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
         pool = request.app.state.db_pool
-        await pool.execute("UPDATE robots SET deployed=false WHERE id=$1", robot_id)
+        body = {}
+        try:
+            body = await request.json()
+        except Exception:
+            pass
+        comment = body.get("comment") or None
+        await pool.execute(
+            "UPDATE robots SET deployed=false, retire_comment=$2 WHERE id=$1",
+            robot_id, comment,
+        )
         await request.app.state.scheduler.stop_robot(robot_id)
         return {"ok": True}
+
+    @fastapi_app.get("/api/v1/robots/showcase")
+    async def robots_showcase(request: Request):
+        """All deployed robots + their trades for the showcase dashboard.
+        Returns robots with point_value/initial_margin so the frontend can
+        compute P&L without a per-robot API call."""
+        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        import json as _json
+        pool = request.app.state.db_pool
+        if pool is None:
+            raise HTTPException(status_code=503, detail="DB unavailable")
+        from trader.lab.market_store import ensure_instrument_meta_table, get_instrument_meta
+
+        rows = await pool.fetch(
+            """SELECT id, name, params_json, state_json, deployed_at, retire_comment,
+                      deployed, schedule
+               FROM robots ORDER BY deployed DESC, deployed_at DESC NULLS LAST""",
+        )
+
+        await ensure_instrument_meta_table(pool)
+
+        result = []
+        for row in rows:
+            d = dict(row)
+            params = d.get("params_json") or {}
+            if isinstance(params, str):
+                try:
+                    params = _json.loads(params)
+                except Exception:
+                    params = {}
+            state = d.get("state_json") or {}
+            if isinstance(state, str):
+                try:
+                    state = _json.loads(state)
+                except Exception:
+                    state = {}
+            symbol = params.get("symbol") or ""
+            paper = not bool(state.get("live_real", False))
+            meta = await get_instrument_meta(pool, symbol) or {}
+            point_value = meta.get("point_value") or 1.0
+            initial_margin = meta.get("initial_margin") or 0.0
+
+            trade_rows = await pool.fetch(
+                """SELECT side, qty, price, status, timestamp
+                   FROM live_trades WHERE robot_id=$1 ORDER BY timestamp""",
+                d["id"],
+            )
+            trades = [
+                {
+                    "time": int(r["timestamp"].timestamp()),
+                    "side": r["side"],
+                    "qty": int(r["qty"]),
+                    "price": float(r["price"]),
+                    "status": r["status"],
+                }
+                for r in trade_rows
+            ]
+
+            result.append({
+                "id": d["id"],
+                "name": d["name"],
+                "symbol": symbol,
+                "schedule": d.get("schedule") or "",
+                "deployed": d.get("deployed", False),
+                "deployed_at": d["deployed_at"].isoformat() if d.get("deployed_at") else None,
+                "retire_comment": d.get("retire_comment"),
+                "paper": paper,
+                "point_value": point_value,
+                "initial_margin": initial_margin,
+                "params": params,
+                "trades": trades,
+            })
+        return result
+
+    @fastapi_app.get("/api/v1/robots/live-feed")
+    async def robots_live_feed(request: Request, limit: int = 100):
+        """Last N trades across all deployed robots for the global feed."""
+        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        pool = request.app.state.db_pool
+        if pool is None:
+            raise HTTPException(status_code=503, detail="DB unavailable")
+        rows = await pool.fetch(
+            """SELECT lt.side, lt.qty, lt.price, lt.status, lt.timestamp,
+                      lt.symbol, lt.robot_id,
+                      r.name as robot_name
+               FROM live_trades lt
+               JOIN robots r ON r.id = lt.robot_id
+               WHERE r.deployed = true
+               ORDER BY lt.timestamp DESC
+               LIMIT $1""",
+            min(limit, 500),
+        )
+        return [
+            {
+                "time": int(r["timestamp"].timestamp()),
+                "iso": r["timestamp"].isoformat(),
+                "robot_id": r["robot_id"],
+                "robot_name": r["robot_name"],
+                "symbol": r["symbol"],
+                "side": r["side"],
+                "qty": int(r["qty"]),
+                "price": float(r["price"]),
+                "status": r["status"],
+            }
+            for r in rows
+        ]
 
     @fastapi_app.delete("/api/v1/robots/{robot_id}")
     async def delete_robot(robot_id: str, request: Request):
@@ -1968,12 +2085,13 @@ def create_app() -> FastAPI:
                                 """INSERT INTO optimization_leaderboard
                                      (campaign_run, strategy, symbol, params, total_return, sharpe,
                                       max_drawdown, win_rate, total_trades, score, candidate,
-                                      net_profit, recovery_factor)
-                                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)""",
+                                      net_profit, recovery_factor, ann_return_go, ann_return_full)
+                                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)""",
                                 campaign, strat_id, meta["symbol"], entry["params"],
                                 r.get("total_return"), r.get("sharpe"), r.get("max_drawdown"),
                                 r.get("win_rate"), r.get("total_trades"), _score(r), _cand(r),
                                 r.get("net_profit"), r.get("recovery_factor"),
+                                r.get("ann_return_go"), r.get("ann_return_full"),
                             )
                         except Exception as exc:
                             log.warning("agent.leaderboard_insert_failed", run_id=run_id, error=str(exc))

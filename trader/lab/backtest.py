@@ -37,7 +37,8 @@ def _demote_to_background() -> None:
 def compute_metrics(trades: list[dict], initial_equity: float,
                     point_value: float = 1.0,
                     symbol: str = "",
-                    initial_margin: float = 0.0) -> dict[str, Any]:
+                    initial_margin: float = 0.0,
+                    bars_days: float = 0.0) -> dict[str, Any]:
     """
     Round-trip metrics. PnL per pair is multiplied by point_value so all money
     figures are in RUBLES (RIM6 ~1.42 ₽/point). Handles both long (buy→sell) and
@@ -52,10 +53,15 @@ def compute_metrics(trades: list[dict], initial_equity: float,
     100k: margin_used = peak_contracts × initial_margin (ГО per contract from
     MOEX ISS). So a robot that averages up to 10 RTS contracts is scored on
     ~10×ГО, not on 100k. Falls back to initial_equity when ГО is unknown.
+
+    Two annualized return flavors (require bars_days > 0):
+      ann_return_go    — % p.a. on margin (ГО mode, with leverage)
+      ann_return_full  — % p.a. on full notional (peak_contracts × avg_entry_price × point_value)
     """
     empty = {"total_trades": 0, "win_rate": 0.0, "total_return": 0.0,
              "sharpe": None, "max_drawdown": 0.0, "recovery_factor": None,
-             "net_profit": 0.0, "peak_contracts": 0, "margin_used": 0.0}
+             "net_profit": 0.0, "peak_contracts": 0, "margin_used": 0.0,
+             "ann_return_go": None, "ann_return_full": None}
     if not trades:
         return empty
 
@@ -71,17 +77,24 @@ def compute_metrics(trades: list[dict], initial_equity: float,
 
     pairs = []          # realized PnL per closed round-trip, in RUB, NET of fees
     entry = None        # (signed_qty, price, fee_carried) — entry commission carried to the close
+    # Track weighted-average entry price across all round-trips for notional calc.
+    _entry_price_sum = 0.0
+    _entry_qty_sum = 0
     for t in trades:
         q = t["qty"] * (1 if t["side"] == "buy" else -1)
         c = commission_for(symbol, t["price"], t["qty"], point_value, taker=True)
         if entry is None:
             entry = [q, t["price"], c]            # this opening fill's fee
+            _entry_price_sum += t["price"] * t["qty"]
+            _entry_qty_sum += t["qty"]
             continue
         eq, ep, fee = entry
         if (eq > 0) == (q > 0):          # same direction → average in
             tot = eq + q
             ep = (ep * eq + t["price"] * q) / tot if tot != 0 else t["price"]
             entry = [tot, ep, fee + c]            # averaging fill adds a fee
+            _entry_price_sum += t["price"] * t["qty"]
+            _entry_qty_sum += t["qty"]
         else:                            # opposite → close
             closed = min(abs(eq), abs(q))
             gross = (t["price"] - ep) * (1 if eq > 0 else -1) * closed * point_value
@@ -89,7 +102,12 @@ def compute_metrics(trades: list[dict], initial_equity: float,
             pairs.append(gross - c - fee)
             rem = eq + q
             # Leftover (reverse/partial) carries one fee for its remaining entry.
-            entry = [rem, t["price"], c] if rem != 0 else None
+            if rem != 0:
+                entry = [rem, t["price"], c]
+                _entry_price_sum += t["price"] * abs(rem)
+                _entry_qty_sum += abs(rem)
+            else:
+                entry = None
 
     if not pairs:
         return empty
@@ -98,6 +116,20 @@ def compute_metrics(trades: list[dict], initial_equity: float,
     win_rate = wins / len(pairs)
     net_profit = sum(pairs)
     total_return = net_profit / margin_used
+
+    # Notional = peak_contracts × avg_entry_price × point_value.
+    avg_entry_price = (_entry_price_sum / _entry_qty_sum) if _entry_qty_sum else 0.0
+    notional = (peak_contracts * avg_entry_price * point_value) if avg_entry_price else 0.0
+    return_full = (net_profit / notional) if notional > 0 else None
+
+    # Annualize: compound (1+r)^(365/days) − 1. Require ≥7 days to avoid noise.
+    def _annualize(r):
+        if r is None or bars_days < 7:
+            return None
+        return (1.0 + r) ** (365.0 / bars_days) - 1.0
+
+    ann_return_go = _annualize(total_return)
+    ann_return_full = _annualize(return_full)
 
     if len(pairs) > 1:
         mean_r = net_profit / len(pairs)
@@ -129,6 +161,8 @@ def compute_metrics(trades: list[dict], initial_equity: float,
         "net_profit": net_profit,
         "peak_contracts": peak_contracts,
         "margin_used": margin_used,
+        "ann_return_go": ann_return_go,
+        "ann_return_full": ann_return_full,
     }
 
 
@@ -162,8 +196,9 @@ async def run_single_backtest(
         {"side": o.side, "price": o.fill_price or o.price, "qty": o.qty, "time": o.fill_time}
         for o in await runtime.get_orders()
     ]
+    bars_days = (bars[-1].time - bars[0].time) / 86400.0 if len(bars) > 1 else 0.0
     metrics = compute_metrics(trades, initial_equity, point_value, symbol=symbol,
-                              initial_margin=initial_margin)
+                              initial_margin=initial_margin, bars_days=bars_days)
     return {"trades": trades, "equity_curve": equity_curve, **metrics}
 
 
