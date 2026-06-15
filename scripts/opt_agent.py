@@ -174,6 +174,8 @@ def _run_chunk(args: tuple) -> list[dict]:
         _patch_httpx_insecure()
     script_code, bars_data, symbol, param_sets, point_value, initial_margin = args
     _demote_to_background()  # be a polite background citizen on the shared host too
+    from trader.lab.script_guard import validate_script
+    validate_script(script_code)
     bars = [Bar(**b) for b in bars_data]
     mod = _types.ModuleType("robot_script")
     exec(compile(script_code, "<robot>", "exec"), mod.__dict__)

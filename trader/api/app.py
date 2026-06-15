@@ -1,4 +1,5 @@
 import asyncio
+import hmac
 import os
 from contextlib import asynccontextmanager
 
@@ -30,9 +31,37 @@ _SESSION_COOKIE = "shectory_session"
 _COOKIE_MAX_AGE = 60 * 60 * 24 * 30
 
 
+def _auth(request: Request) -> str:
+    """Shorthand for the per-endpoint auth plumbing (returns the caller's email).
+
+    Collapses the bridge-secret + request plumbing that was pasted into ~28 routes.
+    """
+    return require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+
+
+def _validate_script_or_400(script_code: str | None) -> None:
+    """Reject a strategy script with a forbidden construct before it is stored/run."""
+    if not script_code:
+        return
+    from trader.lab.script_guard import ScriptValidationError, validate_script
+    try:
+        validate_script(script_code)
+    except ScriptValidationError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid strategy script: {exc}") from exc
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = Settings()
+    if not settings.shectory_auth_bridge_secret:
+        from trader.auth.guard import _dev_bypass
+        if _dev_bypass():
+            log.warning("auth.dev_bypass_enabled",
+                        msg="SHECTORY_AUTH_DEV_BYPASS set - all requests authenticate as debug")
+        else:
+            log.error("auth.no_bridge_secret",
+                      msg="shectory_auth_bridge_secret empty - all protected routes will deny. "
+                          "Set the secret, or SHECTORY_AUTH_DEV_BYPASS=1 for local dev.")
     auth = AsyncAuthClient(
         secret_token=settings.finam_secret_token.get_secret_value(),
         base_url=settings.finam_api_base_url,
@@ -275,25 +304,31 @@ async def _run_backtest_task(run_id: str, body: dict, pool, app_state) -> None:
             point_value=point_value, initial_margin=initial_margin,
         )
 
+        # Batch all combo rows into one executemany instead of one round-trip per
+        # combo. A grid sweep produces hundreds of combos; per-row awaited INSERTs
+        # held the backtest lock while hammering the small VDS Postgres.
+        rows = []
         for entry in graded:
             if not entry.get("ok"):
                 log.warning("backtest.combo_failed", error=entry.get("error"), params=entry.get("params"))
                 continue
             params = entry["params"]
             result = entry["result"]
-            res_id = cuid()
-            await pool.execute(
-                """INSERT INTO backtest_results
-                   (id, run_id, params, trades, equity_curve, sharpe, max_drawdown, win_rate,
-                    total_return, total_trades, net_profit, recovery_factor, point_value)
-                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)""",
-                res_id, run_id,
-                params, result["trades"],
-                result["equity_curve"],
+            rows.append((
+                cuid(), run_id,
+                params, result["trades"], result["equity_curve"],
                 result.get("sharpe"), result.get("max_drawdown"),
                 result.get("win_rate"), result.get("total_return"),
                 result.get("total_trades"),
                 result.get("net_profit"), result.get("recovery_factor"), point_value,
+            ))
+        if rows:
+            await pool.executemany(
+                """INSERT INTO backtest_results
+                   (id, run_id, params, trades, equity_curve, sharpe, max_drawdown, win_rate,
+                    total_return, total_trades, net_profit, recovery_factor, point_value)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)""",
+                rows,
             )
 
         await pool.execute(
@@ -512,28 +547,31 @@ async def _run_remote_job_on_vds(row, app_state) -> None:
             strat_id = m.group(1) if m else None
             campaign = _sweep_campaign(run_id)
             if strat_id:
-                async with pool.acquire() as conn:
-                    async with conn.transaction():
-                        for entry in graded:
-                            if not entry.get("ok"):
-                                continue
-                            r = entry["result"]
-                            try:
-                                await conn.execute(
-                                    """INSERT INTO optimization_leaderboard
-                                         (campaign_run, strategy, symbol, params, total_return, sharpe,
-                                          max_drawdown, win_rate, total_trades, score, candidate,
-                                          net_profit, recovery_factor, ann_return_go, ann_return_full)
-                                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)""",
-                                    campaign, strat_id, symbol, entry["params"],
-                                    r.get("total_return"), r.get("sharpe"), r.get("max_drawdown"),
-                                    r.get("win_rate"), r.get("total_trades"),
-                                    _campaign_score(r), _campaign_candidate(r),
-                                    r.get("net_profit"), r.get("recovery_factor"),
-                                    r.get("ann_return_go"), r.get("ann_return_full"),
-                                )
-                            except Exception as exc:
-                                log.warning("vds_fallback.leaderboard_insert_failed", run_id=run_id, error=str(exc))
+                lb_rows = [
+                    (
+                        campaign, strat_id, symbol, entry["params"],
+                        entry["result"].get("total_return"), entry["result"].get("sharpe"),
+                        entry["result"].get("max_drawdown"), entry["result"].get("win_rate"),
+                        entry["result"].get("total_trades"),
+                        _campaign_score(entry["result"]), _campaign_candidate(entry["result"]),
+                        entry["result"].get("net_profit"), entry["result"].get("recovery_factor"),
+                        entry["result"].get("ann_return_go"), entry["result"].get("ann_return_full"),
+                    )
+                    for entry in graded if entry.get("ok")
+                ]
+                if lb_rows:
+                    try:
+                        async with pool.acquire() as conn:
+                            await conn.executemany(
+                                """INSERT INTO optimization_leaderboard
+                                     (campaign_run, strategy, symbol, params, total_return, sharpe,
+                                      max_drawdown, win_rate, total_trades, score, candidate,
+                                      net_profit, recovery_factor, ann_return_go, ann_return_full)
+                                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)""",
+                                lb_rows,
+                            )
+                    except Exception as exc:
+                        log.warning("vds_fallback.leaderboard_insert_failed", run_id=run_id, error=str(exc))
             await pool.execute(
                 "UPDATE backtest_runs SET status='done', finished_at=now() WHERE id=$1", run_id)
             log.info("vds_fallback.done", run_id=run_id, symbol=symbol, combos=len(param_sets))
@@ -744,7 +782,10 @@ def create_app() -> FastAPI:
             httponly=True, samesite="lax",
             secure=False, path="/", max_age=_COOKIE_MAX_AGE,
         )
-        return {"ok": True, "email": user.email, "role": user.role, "token": token}
+        # Do NOT return the token in the body. The session lives in the HttpOnly
+        # cookie set above; returning it would let the SPA stash it in localStorage,
+        # which defeats HttpOnly and exposes a 30-day token to any XSS.
+        return {"ok": True, "email": user.email, "role": user.role}
 
     @fastapi_app.get("/api/auth/me")
     async def auth_me(request: Request):
@@ -768,11 +809,16 @@ def create_app() -> FastAPI:
     @fastapi_app.post("/api/v1/orders", response_model=OrderResponse)
     async def place_order(body: OrderRequest, request: Request):
         import httpx as _httpx
-        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        _auth(request)
         try:
             return await request.app.state.tx.place_order(body)
         except _httpx.HTTPStatusError as exc:
-            msg = exc.response.text
+            # Log the raw broker response server-side only; do not reflect it to the
+            # client verbatim (it can carry internal request/account context). Return
+            # just the broker's curated `message` field, or a generic fallback.
+            log.warning("orders.broker_error", status=exc.response.status_code,
+                        body=exc.response.text)
+            msg = "Broker rejected the order"
             try:
                 resp_json = exc.response.json()
                 msg = resp_json.get("message", msg)
@@ -790,12 +836,12 @@ def create_app() -> FastAPI:
 
     @fastapi_app.get("/api/v1/portfolio", response_model=list[Position])
     async def get_portfolio(request: Request):
-        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        _auth(request)
         return await request.app.state.pos.get_portfolio()
 
     @fastapi_app.get("/api/v1/instruments")
     async def list_instruments(request: Request):
-        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        _auth(request)
         settings: Settings = request.app.state.settings
         auth_client: AsyncAuthClient = request.app.state.auth
         try:
@@ -825,7 +871,7 @@ def create_app() -> FastAPI:
 
     @fastapi_app.get("/api/v1/instruments/{symbol:path}/params")
     async def get_instrument_params(symbol: str, request: Request):
-        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        _auth(request)
         settings: Settings = request.app.state.settings
         auth_client: AsyncAuthClient = request.app.state.auth
         try:
@@ -856,7 +902,7 @@ def create_app() -> FastAPI:
         defensively, stores in instrument_meta, and returns it. Never 502s — if
         Finam is unavailable, returns whatever fields could be derived (or nulls).
         """
-        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        _auth(request)
         from trader.lab.market_store import (
             ensure_instrument_meta_table, get_instrument_meta, upsert_instrument_meta,
         )
@@ -926,11 +972,20 @@ def create_app() -> FastAPI:
                 log.warning("api.instrument_meta_store_failed", symbol=symbol, error=str(exc))
         return meta
 
+    # ── LAB: fee model (single source of truth for the frontend) ─────
+    @fastapi_app.get("/api/v1/lab/fee-config")
+    async def lab_fee_config(request: Request):
+        """Expose the FORTS commission constants so the frontend renders commission
+        with the SAME model as the backend instead of a hand-copied duplicate."""
+        _require_any_auth(request)
+        from trader.lab.commission import fee_config
+        return fee_config()
+
     # ── LAB: Strategy templates ──────────────────────────────────────
     @fastapi_app.get("/api/v1/strategies")
     async def list_strategies(request: Request):
         """Return available built-in strategy templates with param schemas."""
-        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        _require_any_auth(request)
         from trader.lab.strategies.donchian_breakout import STRATEGY_META as donchian_meta
         core = [
             {
@@ -1075,7 +1130,7 @@ def create_app() -> FastAPI:
     async def forts_instruments(request: Request):
         """Top FORTS futures by today's turnover (front contract per asset), from
         MOEX ISS (free). Used to populate the instrument dropdown in Backtest Lab."""
-        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        _auth(request)
         import httpx as _httpx
         url = ("https://iss.moex.com/iss/engines/futures/markets/forts/securities.json"
                "?iss.meta=off&iss.only=securities,marketdata"
@@ -1128,7 +1183,7 @@ def create_app() -> FastAPI:
         best return on found params, # param variants tested, last run, period,
         drawdown, recovery factor, initial equity used.
         """
-        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        _auth(request)
         pool = request.app.state.db_pool
 
         # robot catalog (strategy templates)
@@ -1206,7 +1261,7 @@ def create_app() -> FastAPI:
         user drill into any single combo. Also returns the campaign period so a drill-in
         chart knows the test window (its end is later extended to yesterday).
         """
-        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        _auth(request)
         pool = request.app.state.db_pool
         if pool is None:
             return {"strategy": strategy, "rows": [], "period": None}
@@ -1258,7 +1313,7 @@ def create_app() -> FastAPI:
         """Live picture of the background optimizer for the Botstore panel: is the i9
         agent online, the current campaign's progress, throughput, and the last few
         processed jobs. So the user can watch the headless agent from the web UI."""
-        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        _auth(request)
         pool = request.app.state.db_pool
         out = {"online": False, "agent_id": None, "last_seen": None, "vds_fallback": False,
                "vds_load": None, "campaign": None, "current": None, "counts": {}, "pct": 0,
@@ -1329,7 +1384,7 @@ def create_app() -> FastAPI:
         """Detail of one sweep campaign for the click-to-expand view: meta (strategies,
         instruments, rounds), the sampling spec, and a 2D density heatmap of the swept
         results over total_return x recovery_factor (from optimization_leaderboard)."""
-        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        _auth(request)
         import json as _json
         pool = request.app.state.db_pool
         out = {"campaign": id, "combos": 0, "strategies": [], "symbols": [], "rounds": [],
@@ -1402,7 +1457,7 @@ def create_app() -> FastAPI:
     # ── LAB: STL Links ───────────────────────────────────────────────
     @fastapi_app.get("/api/v1/stl-links")
     async def list_stl_links(request: Request):
-        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        _auth(request)
         pool = request.app.state.db_pool
         if pool is None:
             return []
@@ -1411,7 +1466,7 @@ def create_app() -> FastAPI:
 
     @fastapi_app.post("/api/v1/stl-links", status_code=201)
     async def create_stl_link(body: dict, request: Request):
-        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        _auth(request)
         pool = request.app.state.db_pool
         new_id = cuid()
         await pool.execute(
@@ -1427,7 +1482,7 @@ def create_app() -> FastAPI:
     # ── LAB: Robots ──────────────────────────────────────────────────
     @fastapi_app.get("/api/v1/robots")
     async def list_robots(request: Request):
-        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        _auth(request)
         pool = request.app.state.db_pool
         if pool is None:
             return []
@@ -1436,7 +1491,8 @@ def create_app() -> FastAPI:
 
     @fastapi_app.post("/api/v1/robots", status_code=201)
     async def create_robot(body: dict, request: Request):
-        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        _auth(request)
+        _validate_script_or_400(body.get("scriptCode"))
         pool = request.app.state.db_pool
         new_id = cuid()
         await pool.execute(
@@ -1450,7 +1506,7 @@ def create_app() -> FastAPI:
 
     @fastapi_app.put("/api/v1/robots/{robot_id}")
     async def update_robot(robot_id: str, body: dict, request: Request):
-        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        _auth(request)
         pool = request.app.state.db_pool
         # Build a partial update — only set fields present in body.
         sets, args = [], []
@@ -1458,6 +1514,8 @@ def create_app() -> FastAPI:
             "name": "name", "scriptCode": "script_code",
             "paramsJson": "params_json", "schedule": "schedule",
         }
+        if "scriptCode" in body:
+            _validate_script_or_400(body["scriptCode"])
         for body_key, col in field_map.items():
             if body_key in body:
                 args.append(body[body_key])
@@ -1474,7 +1532,7 @@ def create_app() -> FastAPI:
 
     @fastapi_app.post("/api/v1/robots/{robot_id}/deploy")
     async def deploy_robot(robot_id: str, request: Request):
-        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        _auth(request)
         import json
         pool = request.app.state.db_pool
         await pool.execute(
@@ -1492,7 +1550,7 @@ def create_app() -> FastAPI:
 
     @fastapi_app.post("/api/v1/robots/{robot_id}/undeploy")
     async def undeploy_robot(robot_id: str, request: Request):
-        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        _auth(request)
         pool = request.app.state.db_pool
         body = {}
         try:
@@ -1512,7 +1570,7 @@ def create_app() -> FastAPI:
         """All deployed robots + their trades for the showcase dashboard.
         Returns robots with point_value/initial_margin so the frontend can
         compute P&L without a per-robot API call."""
-        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        _auth(request)
         import json as _json
         pool = request.app.state.db_pool
         if pool is None:
@@ -1583,7 +1641,7 @@ def create_app() -> FastAPI:
     @fastapi_app.get("/api/v1/robots/live-feed")
     async def robots_live_feed(request: Request, limit: int = 100):
         """Last N trades across all deployed robots for the global feed."""
-        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        _auth(request)
         pool = request.app.state.db_pool
         if pool is None:
             raise HTTPException(status_code=503, detail="DB unavailable")
@@ -1617,7 +1675,7 @@ def create_app() -> FastAPI:
     async def delete_robot(robot_id: str, request: Request):
         """Remove a robot from the platform: stop it, drop its FK-dependent rows
         (trades, metrics, backtest runs+results), then delete the robot itself."""
-        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        _auth(request)
         pool = request.app.state.db_pool
         if pool is None:
             raise HTTPException(status_code=503, detail="DB unavailable")
@@ -1648,7 +1706,7 @@ def create_app() -> FastAPI:
         chart date range. Fills feed the chart markers + history table; the
         frontend computes round-trips and ruble equity from them.
         """
-        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        _auth(request)
         import json as _json
         from datetime import date as _date, timedelta as _td
         pool = request.app.state.db_pool
@@ -1785,7 +1843,7 @@ def create_app() -> FastAPI:
     # ── LAB: Backtest ────────────────────────────────────────────────
     @fastapi_app.post("/api/v1/backtest/run", status_code=202)
     async def run_backtest(body: dict, request: Request):
-        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        _require_any_auth(request)
         import json
         import asyncio as _asyncio
         from datetime import datetime as _dt
@@ -1841,7 +1899,7 @@ def create_app() -> FastAPI:
 
     @fastapi_app.get("/api/v1/backtest/{run_id}/status")
     async def backtest_status(run_id: str, request: Request):
-        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        _auth(request)
         pool = request.app.state.db_pool
         row = await pool.fetchrow(
             "SELECT status, error_msg, finished_at, engine, agent_id, claimed_at, created_at "
@@ -1868,7 +1926,7 @@ def create_app() -> FastAPI:
 
     @fastapi_app.get("/api/v1/backtest/{run_id}/results")
     async def backtest_results(run_id: str, request: Request, full: int = 0):
-        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        _auth(request)
         pool = request.app.state.db_pool
         # Default: metrics-only (no trades/equity_curve) so the hit-parade list loads
         # fast — a 100+ combo sweep otherwise returns many MB and hangs the UI. The
@@ -1893,8 +1951,18 @@ def create_app() -> FastAPI:
         if not secret:
             raise HTTPException(status_code=503, detail="Agent disabled (no token configured)")
         got = request.headers.get("x-agent-token", "")
-        if got != secret:
+        if not hmac.compare_digest(got, secret):
             raise HTTPException(status_code=401, detail="Bad agent token")
+
+    def _require_any_auth(request: Request) -> None:
+        """Accept either a browser session token OR an X-Agent-Token (for CLI campaign tools)."""
+        from trader.auth.guard import auth_ok
+        if auth_ok(request.app.state.settings.shectory_auth_bridge_secret, request):
+            return
+        secret = request.app.state.settings.opt_agent_token.get_secret_value()
+        if secret and hmac.compare_digest(request.headers.get("x-agent-token", ""), secret):
+            return
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
     @fastapi_app.post("/api/v1/agent/claim")
     async def agent_claim(body: dict, request: Request):
@@ -1974,6 +2042,17 @@ def create_app() -> FastAPI:
             "point_value": point_value,
             "initial_margin": initial_margin,
         }
+
+    @fastapi_app.get("/api/v1/agent/done-pairs")
+    async def agent_done_pairs(request: Request):
+        """Return all (strategy, symbol) pairs that already have results in the leaderboard.
+        Used by campaign scripts to skip already-tested combinations."""
+        _agent_auth(request)
+        pool = request.app.state.db_pool
+        rows = await pool.fetch(
+            "SELECT DISTINCT strategy, symbol FROM optimization_leaderboard"
+        )
+        return [{"strategy": r["strategy"], "symbol": r["symbol"]} for r in rows]
 
     @fastapi_app.get("/api/v1/agent/control")
     async def agent_control(request: Request):
@@ -2056,45 +2135,58 @@ def create_app() -> FastAPI:
                 if i != best_idx and entry.get("ok") and entry.get("result"):
                     entry["result"].pop("trades", None)
                     entry["result"].pop("equity_curve", None)
+        # Build all rows first, then one executemany per table instead of a round-trip
+        # per combo (hundreds of awaited INSERTs on the small VDS Postgres).
+        ok = [e for e in results if e.get("ok")]
+        result_rows = [
+            (
+                cuid(), run_id, e["params"],
+                e["result"].get("trades", []), e["result"].get("equity_curve", []),
+                e["result"].get("sharpe"), e["result"].get("max_drawdown"),
+                e["result"].get("win_rate"), e["result"].get("total_return"),
+                e["result"].get("total_trades"),
+                e["result"].get("net_profit"), e["result"].get("recovery_factor"),
+            )
+            for e in ok
+        ] if not is_campaign else []
+        # Mirror to the leaderboard ONLY for real sweeps (camp-/opt-, non-null
+        # campaign_run). A UI/chart run has strat_id but campaign=None → NULL
+        # campaign_run would abort the txn.
+        lb_rows = [
+            (
+                campaign, strat_id, meta["symbol"], e["params"],
+                e["result"].get("total_return"), e["result"].get("sharpe"),
+                e["result"].get("max_drawdown"), e["result"].get("win_rate"),
+                e["result"].get("total_trades"), _score(e["result"]), _cand(e["result"]),
+                e["result"].get("net_profit"), e["result"].get("recovery_factor"),
+                e["result"].get("ann_return_go"), e["result"].get("ann_return_full"),
+            )
+            for e in ok
+        ] if is_campaign else []
         async with pool.acquire() as conn:
             async with conn.transaction():
                 if not is_campaign:
                     await conn.execute("DELETE FROM backtest_results WHERE run_id=$1", run_id)
-                for entry in results:
-                    if not entry.get("ok"):
-                        continue
-                    r = entry["result"]
-                    if not is_campaign:
-                        await conn.execute(
+                    if result_rows:
+                        await conn.executemany(
                             """INSERT INTO backtest_results
                                (id, run_id, params, trades, equity_curve, sharpe, max_drawdown, win_rate,
                                 total_return, total_trades, net_profit, recovery_factor)
                                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)""",
-                            cuid(), run_id, entry["params"],
-                            r.get("trades", []), r.get("equity_curve", []),
-                            r.get("sharpe"), r.get("max_drawdown"), r.get("win_rate"),
-                            r.get("total_return"), r.get("total_trades"),
-                            r.get("net_profit"), r.get("recovery_factor"),
+                            result_rows,
                         )
-                    # Mirror to the leaderboard ONLY for real sweeps (camp-/opt-, which
-                    # have a non-null campaign_run). A UI/chart run has strat_id too but
-                    # campaign=None → inserting NULL campaign_run aborts the txn → 500.
-                    if is_campaign:
-                        try:
-                            await conn.execute(
-                                """INSERT INTO optimization_leaderboard
-                                     (campaign_run, strategy, symbol, params, total_return, sharpe,
-                                      max_drawdown, win_rate, total_trades, score, candidate,
-                                      net_profit, recovery_factor, ann_return_go, ann_return_full)
-                                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)""",
-                                campaign, strat_id, meta["symbol"], entry["params"],
-                                r.get("total_return"), r.get("sharpe"), r.get("max_drawdown"),
-                                r.get("win_rate"), r.get("total_trades"), _score(r), _cand(r),
-                                r.get("net_profit"), r.get("recovery_factor"),
-                                r.get("ann_return_go"), r.get("ann_return_full"),
-                            )
-                        except Exception as exc:
-                            log.warning("agent.leaderboard_insert_failed", run_id=run_id, error=str(exc))
+                if lb_rows:
+                    try:
+                        await conn.executemany(
+                            """INSERT INTO optimization_leaderboard
+                                 (campaign_run, strategy, symbol, params, total_return, sharpe,
+                                  max_drawdown, win_rate, total_trades, score, candidate,
+                                  net_profit, recovery_factor, ann_return_go, ann_return_full)
+                               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)""",
+                            lb_rows,
+                        )
+                    except Exception as exc:
+                        log.warning("agent.leaderboard_insert_failed", run_id=run_id, error=str(exc))
                 await conn.execute(
                     "UPDATE backtest_runs SET status='done', finished_at=now() WHERE id=$1", run_id
                 )
@@ -2106,7 +2198,7 @@ def create_app() -> FastAPI:
     async def agent_pause(body: dict, request: Request):
         """Pause the sweep agent for an engine (remote=i9, local=VDS).
         The agent stays alive but idles — current job finishes gracefully."""
-        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        _auth(request)
         engine = body.get("engine", "remote")
         if engine not in ("remote", "local"):
             raise HTTPException(status_code=422, detail="engine must be 'remote' or 'local'")
@@ -2119,7 +2211,7 @@ def create_app() -> FastAPI:
     @fastapi_app.post("/api/v1/agent/resume")
     async def agent_resume(body: dict, request: Request):
         """Resume the sweep agent for an engine."""
-        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        _auth(request)
         engine = body.get("engine", "remote")
         if engine not in ("remote", "local"):
             raise HTTPException(status_code=422, detail="engine must be 'remote' or 'local'")
@@ -2138,7 +2230,7 @@ def create_app() -> FastAPI:
         Saves to ohlcv_bars DB cache. Runs in background.
         Body: { "symbols": ["RIM6","SIM6"], "dateFrom": "2026-01-01", "dateTo": "2026-05-01" }
         """
-        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        _auth(request)
         import asyncio as _asyncio
 
         symbols = body.get("symbols", [])
@@ -2166,7 +2258,7 @@ def create_app() -> FastAPI:
         resample_min=60 → hourly candles (good for 1-3 month view).
         resample_min=5  → 5-min candles.
         """
-        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        _auth(request)
         from datetime import datetime as _dt
         pool = request.app.state.db_pool
         if pool is None:
@@ -2236,7 +2328,7 @@ def create_app() -> FastAPI:
         Return available data coverage per symbol.
         Query param: ?symbol=RIM6 (optional, returns all if omitted).
         """
-        require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+        _auth(request)
         pool = request.app.state.db_pool
         if pool is None:
             return []

@@ -156,38 +156,61 @@ const KIND_LABEL: Record<TradeEvent['kind'], string> = {
   reverse: 'Реверс',
 };
 
-// FORTS commission model — mirrors trader/lab/commission.py.
-//   taker (backtest, market/cross spread) = MOEX exchange fee (by group, on
-//     notional) + broker fee.
-//   maker (live, limit resting in book)    = broker fee only.
-const BROKER_FEE_PER_CONTRACT = 0.45;
-const MOEX_TAKER_RATE: Record<string, number> = {
-  fx: 0.0000462, index: 0.0000660, stock: 0.0001980,
-  commodity: 0.0001320, rate: 0.0001650,
+// FORTS commission model. The backend (trader/lab/commission.py) is the single
+// source of truth: applyFeeConfig() overrides these at runtime from
+// GET /api/v1/lab/fee-config (call loadFeeConfig() once at app startup). The
+// literals below are only a fallback if that fetch has not run / failed, so the
+// chart never disagrees silently with the leaderboard after a tariff change.
+export interface FeeConfig {
+  brokerFeePerContract: number;
+  moexTakerRate: Record<string, number>;
+  tickerGroup: Record<string, string>;
+  defaultGroup: string;
+}
+
+let FEE: FeeConfig = {
+  brokerFeePerContract: 0.45,
+  moexTakerRate: {
+    fx: 0.0000462, index: 0.0000660, stock: 0.0001980,
+    commodity: 0.0001320, rate: 0.0001650,
+  },
+  tickerGroup: {
+    RI: 'index', MX: 'index', MM: 'index', RV: 'index',
+    SI: 'fx', EU: 'fx', CR: 'fx', CN: 'fx', ED: 'fx', UC: 'fx',
+    AE: 'fx', GB: 'fx', JP: 'fx', TR: 'fx',
+    GZ: 'stock', SR: 'stock', VB: 'stock', LK: 'stock', GM: 'stock',
+    RN: 'stock', MN: 'stock', NK: 'stock', TT: 'stock', AF: 'stock',
+    FE: 'stock', CH: 'stock', PL: 'stock', TN: 'stock', MG: 'stock',
+    SG: 'stock', BS: 'stock', YN: 'stock', PO: 'stock', HY: 'stock',
+    BR: 'commodity', GD: 'commodity', SV: 'commodity', PD: 'commodity',
+    PT: 'commodity', NG: 'commodity', CU: 'commodity', AL: 'commodity',
+    GL: 'commodity', SA: 'commodity', SL: 'commodity',
+  },
+  defaultGroup: 'index',
 };
-const TICKER_GROUP: Record<string, string> = {
-  RI: 'index', MX: 'index', MM: 'index', RV: 'index',
-  SI: 'fx', EU: 'fx', CR: 'fx', CN: 'fx', ED: 'fx', UC: 'fx',
-  AE: 'fx', GB: 'fx', JP: 'fx', TR: 'fx',
-  GZ: 'stock', SR: 'stock', VB: 'stock', LK: 'stock', GM: 'stock',
-  RN: 'stock', MN: 'stock', NK: 'stock', TT: 'stock', AF: 'stock',
-  FE: 'stock', CH: 'stock', PL: 'stock', TN: 'stock', MG: 'stock',
-  SG: 'stock', BS: 'stock', YN: 'stock', PO: 'stock', HY: 'stock',
-  BR: 'commodity', GD: 'commodity', SV: 'commodity', PD: 'commodity',
-  PT: 'commodity', NG: 'commodity', CU: 'commodity', AL: 'commodity',
-  GL: 'commodity', SA: 'commodity', SL: 'commodity',
-};
+
+/** Override the fee model with the backend's authoritative config. */
+export function applyFeeConfig(cfg: Partial<FeeConfig> | null | undefined): void {
+  if (!cfg) return;
+  FEE = {
+    brokerFeePerContract: cfg.brokerFeePerContract ?? FEE.brokerFeePerContract,
+    moexTakerRate: cfg.moexTakerRate ?? FEE.moexTakerRate,
+    tickerGroup: cfg.tickerGroup ?? FEE.tickerGroup,
+    defaultGroup: cfg.defaultGroup ?? FEE.defaultGroup,
+  };
+}
+
 function feeGroup(symbol: string): string {
   const base = (symbol || '').split('@')[0].split('-')[0].trim().toUpperCase().slice(0, 2);
-  return TICKER_GROUP[base] ?? 'index';
+  return FEE.tickerGroup[base] ?? FEE.defaultGroup;
 }
 // Commission (rubles) for ONE fill of qty contracts of symbol.
 export function commissionFor(symbol: string, price: number, qty: number, pointValue = 1, taker = true): number {
   const q = Math.abs(qty) || 1;
-  const broker = BROKER_FEE_PER_CONTRACT * q;
+  const broker = FEE.brokerFeePerContract * q;
   if (!taker) return broker;
   const notional = Math.abs(price) * (pointValue || 1);
-  const rate = MOEX_TAKER_RATE[feeGroup(symbol)] ?? MOEX_TAKER_RATE.index;
+  const rate = FEE.moexTakerRate[feeGroup(symbol)] ?? FEE.moexTakerRate[FEE.defaultGroup];
   return broker + rate * notional * q;
 }
 
@@ -210,13 +233,13 @@ export function commissionBreakdown(
   for (const t of trades) {
     const q = Math.abs(Number(t.qty) || 1);
     const full = commissionFor(symbol, t.price, q, pointValue, taker);
-    const brk = BROKER_FEE_PER_CONTRACT * q;
+    const brk = FEE.brokerFeePerContract * q;
     broker += brk; exchange += full - brk;
     fills++; contracts += q;
   }
   return {
     broker, exchange, total: broker + exchange, fills, contracts,
-    rate: taker ? (MOEX_TAKER_RATE[feeGroup(symbol)] ?? MOEX_TAKER_RATE.index) : 0,
+    rate: taker ? (FEE.moexTakerRate[feeGroup(symbol)] ?? FEE.moexTakerRate[FEE.defaultGroup]) : 0,
     group: feeGroup(symbol),
   };
 }

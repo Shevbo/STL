@@ -21,6 +21,43 @@ _MONTH_LETTERS = "FGHJKMNQUVXZ"  # Jan-Dec per FORTS convention
 _PAGE = 500
 
 
+async def top_instruments(n: int, always: list[str] | None = None) -> list[str]:
+    """Top-n FORTS futures by today's turnover (front contract per asset), via ISS.
+
+    Front contracts of `always` assets (e.g. RTS/RI) are force-included. Shared by
+    the campaign-enqueue scripts (was copy-pasted in optimize_adaptive + enqueue_campaign)."""
+    url = ("https://iss.moex.com/iss/engines/futures/markets/forts/securities.json"
+           "?iss.meta=off&iss.only=securities,marketdata"
+           "&securities.columns=SECID,ASSETCODE,LASTTRADEDATE"
+           "&marketdata.columns=SECID,VALTODAY")
+    async with httpx.AsyncClient(timeout=20, headers={"User-Agent": "STL/1.0"}) as c:
+        j = (await c.get(url)).json()
+    sec, md = j.get("securities", {}), j.get("marketdata", {})
+    turn = {dict(zip(md["columns"], r)).get("SECID"): (dict(zip(md["columns"], r)).get("VALTODAY") or 0)
+            for r in md.get("data", [])}
+    by_asset: dict = {}
+    for row in sec.get("data", []):
+        d = dict(zip(sec["columns"], row))
+        sid, asset, ltd = d.get("SECID"), d.get("ASSETCODE"), d.get("LASTTRADEDATE")
+        if not sid or not asset:
+            continue
+        vt = turn.get(sid, 0) or 0
+        cur = by_asset.get(asset)
+        if cur is None:
+            by_asset[asset] = {"front": sid, "ltd": ltd, "turn": vt}
+        else:
+            cur["turn"] += vt
+            if ltd and (cur["ltd"] is None or ltd < cur["ltd"]):
+                cur["front"], cur["ltd"] = sid, ltd
+    ranked = sorted(by_asset.values(), key=lambda x: x["turn"], reverse=True)
+    syms = [a["front"] for a in ranked[:n] if a["turn"] > 0]
+    for asset in (always or []):
+        a = by_asset.get(asset)
+        if a and a["front"] not in syms:
+            syms.append(a["front"])
+    return syms
+
+
 def _to_date(s: str) -> date:
     return datetime.strptime(s, "%Y-%m-%d").date()
 

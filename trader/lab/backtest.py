@@ -7,6 +7,7 @@ from typing import Any
 
 from trader.lab.commission import commission_for
 from trader.lab.runtime import BacktestRuntime, Bar
+from trader.lab.script_guard import validate_script
 
 
 def _demote_to_background() -> None:
@@ -208,6 +209,7 @@ def _subprocess_run(script_code: str, bars_data: list[dict], symbol: str,
     import types
 
     _demote_to_background()
+    validate_script(script_code)
     bars = [Bar(**b) for b in bars_data]
     mod = types.ModuleType("robot_script")
     exec(compile(script_code, "<robot>", "exec"), mod.__dict__)
@@ -263,6 +265,7 @@ def _subprocess_run_many(script_code: str, bars_data: list[dict], symbol: str,
     import types
 
     _demote_to_background()
+    validate_script(script_code)
     bars = [Bar(**b) for b in bars_data]
     mod = types.ModuleType("robot_script")
     exec(compile(script_code, "<robot>", "exec"), mod.__dict__)

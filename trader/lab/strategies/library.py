@@ -12,6 +12,8 @@ thousands of concrete robot variants from a compact, auditable code base.
 """
 from __future__ import annotations
 
+from functools import lru_cache
+
 from trader.lab import indicators as I
 from trader.lab.runtime import STLRuntime
 
@@ -409,19 +411,42 @@ register("order_block", "Order Block (ICT)",
 # 15. Pivot Points reversal — classic floor-trader pivots from the PREVIOUS day.
 #   P=(H+L+C)/3, R1=2P−L, S1=2P−H, R2=P+(H−L), S2=P−(H−L) on prior session.
 #   Mean-reversion: цена ≤ S1 → перепродано → лонг; цена ≥ R1 → перекуплено → шорт.
+@lru_cache(maxsize=None)
+def _date_of(ts: int):
+    """ts -> UTC calendar date. Memoized: the pivot strategy requests a 2200-bar
+    window every bar, so the same timestamps were re-converted millions of times
+    (a 3-month sweep built ~400M datetime objects per combo). lru_cache makes each
+    timestamp convert once. Pure function of ts, so this changes no result."""
+    from datetime import datetime, timezone
+    return datetime.fromtimestamp(ts, tz=timezone.utc).date()
+
+
 def _prev_day_hlc(bars):
     """High/low/close of the calendar day before the last bar's day. Bars carry MSK
-    wall-clock stamped as UTC, so the UTC date == the trading date for grouping."""
-    from datetime import datetime, timezone
-    last_day = datetime.fromtimestamp(bars[-1].time, tz=timezone.utc).date()
-    prev = [b for b in bars
-            if datetime.fromtimestamp(b.time, tz=timezone.utc).date() < last_day]
-    if not prev:
+    wall-clock stamped as UTC, so the UTC date == the trading date for grouping.
+
+    Scans backward from the end and stops once the previous trading day is fully
+    collected, instead of two full passes over the whole (up to 2200-bar) window."""
+    last_day = _date_of(bars[-1].time)
+    i = len(bars) - 1
+    while i >= 0 and _date_of(bars[i].time) == last_day:   # skip the current day
+        i -= 1
+    if i < 0:
         return None
-    last_prev_day = datetime.fromtimestamp(prev[-1].time, tz=timezone.utc).date()
-    day = [b for b in prev
-           if datetime.fromtimestamp(b.time, tz=timezone.utc).date() == last_prev_day]
-    return max(b.high for b in day), min(b.low for b in day), day[-1].close
+    prev_day = _date_of(bars[i].time)
+    # Scanning back, the first prev-day bar hit is that day's LAST bar -> its close.
+    close = bars[i].close
+    hi = bars[i].high
+    lo = bars[i].low
+    i -= 1
+    while i >= 0 and _date_of(bars[i].time) == prev_day:
+        b = bars[i]
+        if b.high > hi:
+            hi = b.high
+        if b.low < lo:
+            lo = b.low
+        i -= 1
+    return hi, lo, close
 
 def sig_pivot(bars, p):
     hlc = _prev_day_hlc(bars)
@@ -743,6 +768,25 @@ STRATEGY_DESC: dict[str, str] = {
         "тренде уровни пробиваются (контртренд проигрывает)."
     ),
 }
+
+
+def numeric_params(strat: dict) -> list[dict]:
+    """Tunable numeric params of a strategy (excludes qty/symbol). Each: {key, lo, hi}.
+
+    Single source for the campaign scripts that derive a sweep space from a strategy
+    schema (was copy-pasted across optimize_adaptive / enqueue_campaign / queue_campaign).
+    Step/grid heuristics stay per-script — those are intentionally different (wide
+    random net vs local refine vs coarse grid), not duplicates."""
+    out = []
+    for p in strat["params_schema"]:
+        if p.get("type") != "number" or p["key"] == "qty":
+            continue
+        lo = int(p.get("min", p["default"]))
+        hi = int(p.get("max", p["default"]))
+        if hi < lo:
+            lo, hi = hi, lo
+        out.append({"key": p["key"], "lo": lo, "hi": hi})
+    return out
 
 
 def list_strategies() -> list[dict]:

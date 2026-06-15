@@ -17,14 +17,9 @@ export class WsClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private sendQueue: object[] = [];
   private baseUrl: string;
-  private token: string | null = null;
 
   constructor(private readonly url: string) {
     this.baseUrl = url;
-    const storedToken = typeof window !== 'undefined' ? localStorage.getItem('authToken') : null;
-    if (storedToken) {
-      this.token = storedToken;
-    }
   }
 
   send(msg: object): void {
@@ -43,12 +38,9 @@ export class WsClient {
   }
 
   connect(): void {
-    let connectUrl = this.baseUrl;
-    if (this.token) {
-      const separator = connectUrl.includes('?') ? '&' : '?';
-      connectUrl = `${connectUrl}${separator}token=${encodeURIComponent(this.token)}`;
-    }
-    this.ws = new WebSocket(connectUrl);
+    // No token in the URL: the same-origin WS handshake carries the HttpOnly session
+    // cookie automatically, so the token never lands in nginx access logs.
+    this.ws = new WebSocket(this.baseUrl);
     this.ws.onopen = () => {
       servicesStore.set('md', 'ok');
       this.flushQueue();

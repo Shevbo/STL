@@ -8,7 +8,7 @@ import structlog
 from starlette.websockets import WebSocketDisconnect
 
 from trader.md.feed import MarketDataFeed
-from trader.pos.models import Position
+from trader.util import unwrap_decimal
 
 log = structlog.get_logger()
 
@@ -38,9 +38,7 @@ _TF_HISTORY_DAYS: dict[int, int] = {
 
 
 def _dec_field(obj) -> float:
-    if isinstance(obj, dict):
-        return float(obj.get("value", 0) or 0)
-    return float(obj or 0)
+    return unwrap_decimal(obj, as_float=True)
 
 
 class WsHub:
@@ -71,6 +69,15 @@ class WsHub:
         self._bars_task: asyncio.Task | None = None
         self._book_task: asyncio.Task | None = None
         self._bars_history: list[dict] = []
+        # One long-lived HTTP/2 client reused across polls. Creating a fresh client
+        # per request (every 5s) repeated the TLS+HTTP/2 handshake and defeated
+        # connection pooling. Lazily created on the event loop on first use.
+        self._http: httpx.AsyncClient | None = None
+
+    def _client(self) -> httpx.AsyncClient:
+        if self._http is None:
+            self._http = httpx.AsyncClient(http2=True)
+        return self._http
 
     async def start(self, symbols: list[str]) -> None:
         for symbol in symbols:
@@ -105,6 +112,9 @@ class WsHub:
             await self._bars_stream.close()
         if self._book_stream:
             await self._book_stream.close()
+        if self._http is not None:
+            await self._http.aclose()
+            self._http = None
 
     async def connect(self, websocket) -> None:
         await websocket.accept()
@@ -243,13 +253,20 @@ class WsHub:
     async def _pos_poll_loop(self, poll_interval: float = 5.0) -> None:
         while True:
             await asyncio.sleep(poll_interval)
+            # Nobody is listening — skip the whole round of broker calls until a
+            # client connects. No point polling positions/orders into the void.
+            if not self._clients:
+                continue
             try:
-                positions: list[Position] = await self._pos_client.get_portfolio()
+                # Portfolio + account summary are independent — fetch concurrently.
+                positions, summary = await asyncio.gather(
+                    self._pos_client.get_portfolio(),
+                    self._pos_client.get_account_summary(),
+                )
                 await self._broadcast({
                     "type": "position_update",
                     "positions": [p.model_dump(mode="json") for p in positions],
                 })
-                summary = await self._pos_client.get_account_summary()
                 await self._broadcast({
                     "type": "account",
                     "deposit": float(summary.deposit),
@@ -327,37 +344,31 @@ class WsHub:
         try:
             token = await self._get_token(False)
             headers = {"Authorization": f"Bearer {token}"}
-            async with httpx.AsyncClient(http2=True) as client:
-                resp = await client.get(
-                    f"{self._base_url}/v1/instruments/{symbol}/bars",
-                    params=params,
-                    headers=headers,
-                    timeout=15.0,
-                )
-                resp.raise_for_status()
-                body = resp.json()
+            resp = await self._client().get(
+                f"{self._base_url}/v1/instruments/{symbol}/bars",
+                params=params,
+                headers=headers,
+                timeout=15.0,
+            )
+            resp.raise_for_status()
+            body = resp.json()
 
-                def flt(v) -> float:
-                    if isinstance(v, dict):
-                        return float(v.get("value", 0) or 0)
-                    return float(v or 0)
-
-                result = []
-                for b in body.get("bars", []):
-                    ts_str = b.get("timestamp", "")
-                    if not ts_str:
-                        continue
-                    t = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-                    result.append({
-                        "time": int(t.timestamp()),
-                        "open": flt(b.get("open")),
-                        "high": flt(b.get("high")),
-                        "low": flt(b.get("low")),
-                        "close": flt(b.get("close")),
-                        "volume": flt(b.get("volume")),
-                    })
-                log.info("ws_hub.history_loaded", symbol=symbol, tf=tf_name, count=len(result))
-                return result
+            result = []
+            for b in body.get("bars", []):
+                ts_str = b.get("timestamp", "")
+                if not ts_str:
+                    continue
+                t = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                result.append({
+                    "time": int(t.timestamp()),
+                    "open": _dec_field(b.get("open")),
+                    "high": _dec_field(b.get("high")),
+                    "low": _dec_field(b.get("low")),
+                    "close": _dec_field(b.get("close")),
+                    "volume": _dec_field(b.get("volume")),
+                })
+            log.info("ws_hub.history_loaded", symbol=symbol, tf=tf_name, count=len(result))
+            return result
         except Exception as exc:
             log.error("ws_hub.fetch_history_failed", symbol=symbol, timeframe=tf_name, exc=str(exc), exc_type=type(exc).__name__)
             return []
@@ -366,14 +377,13 @@ class WsHub:
         try:
             token = await self._get_token(False)
             headers = {"Authorization": f"Bearer {token}"}
-            async with httpx.AsyncClient(http2=True) as client:
-                resp = await client.get(
-                    f"{self._base_url}/v1/accounts/{self._account_id}/orders/",
-                    headers=headers,
-                    timeout=5.0,
-                )
-                resp.raise_for_status()
-                body = resp.json()
+            resp = await self._client().get(
+                f"{self._base_url}/v1/accounts/{self._account_id}/orders/",
+                headers=headers,
+                timeout=5.0,
+            )
+            resp.raise_for_status()
+            body = resp.json()
             result = []
             for o in body.get("orders", []):
                 status = o.get("status", "")
@@ -415,18 +425,17 @@ class WsHub:
             start = now - timedelta(hours=24)
             token = await self._get_token(False)
             headers = {"Authorization": f"Bearer {token}"}
-            async with httpx.AsyncClient(http2=True) as client:
-                resp = await client.get(
-                    f"{self._base_url}/v1/accounts/{self._account_id}/trades",
-                    params={
-                        "interval.start_time": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                        "interval.end_time": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                    },
-                    headers=headers,
-                    timeout=5.0,
-                )
-                resp.raise_for_status()
-                body = resp.json()
+            resp = await self._client().get(
+                f"{self._base_url}/v1/accounts/{self._account_id}/trades",
+                params={
+                    "interval.start_time": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "interval.end_time": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                },
+                headers=headers,
+                timeout=5.0,
+            )
+            resp.raise_for_status()
+            body = resp.json()
             result = []
             for t in body.get("trades", []):
                 side = "buy" if "BUY" in t.get("side", "") else "sell"

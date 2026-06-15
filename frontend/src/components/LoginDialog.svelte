@@ -22,10 +22,7 @@
         error = data.detail ?? 'Ошибка входа';
         return;
       }
-      const data = await res.json() as { token?: string };
-      if (data.token) {
-        localStorage.setItem('authToken', data.token);
-      }
+      // Session is set as an HttpOnly cookie by the server; nothing to store here.
       onLogin();
     } catch {
       error = 'Нет связи с сервером';

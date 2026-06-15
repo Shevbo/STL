@@ -272,6 +272,7 @@ async def test_pos_poll_loop_broadcasts_account_message():
         variation_margin=Decimal("-11344.44"),
     ))
     hub = WsHub(feed, pos_client=pos_client)
+    hub._clients[object()] = asyncio.Queue()  # poll loop is a no-op with no clients
 
     broadcasts: list[dict] = []
     hub._broadcast = AsyncMock(side_effect=broadcasts.append)
@@ -304,6 +305,7 @@ async def test_pos_poll_loop_continues_after_error():
         variation_margin=Decimal("0"),
     ))
     hub = WsHub(feed, pos_client=pos_client)
+    hub._clients[object()] = asyncio.Queue()  # poll loop is a no-op with no clients
 
     broadcasts: list[dict] = []
     hub._broadcast = AsyncMock(side_effect=broadcasts.append)

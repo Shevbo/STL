@@ -49,6 +49,17 @@ _TICKER_GROUP = {
 }
 
 
+def fee_config() -> dict:
+    """The full fee model as plain data, so the frontend can render commission with
+    the SAME constants instead of a hand-copied duplicate (single source of truth)."""
+    return {
+        "brokerFeePerContract": BROKER_FEE_PER_CONTRACT,
+        "moexTakerRate": dict(MOEX_TAKER_RATE),
+        "tickerGroup": dict(_TICKER_GROUP),
+        "defaultGroup": _DEFAULT_GROUP,
+    }
+
+
 def _base_ticker(symbol: str) -> str:
     """RIM6 -> RI, Si-6.26 / SiM6 -> SI, GZM6 -> GZ. Returns upper 2-letter prefix."""
     s = (symbol or "").split("@")[0].split("-")[0].strip().upper()

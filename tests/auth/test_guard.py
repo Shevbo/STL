@@ -53,7 +53,13 @@ def test_verify_token_expired():
 
 # --- auth_ok / require_auth ---
 
-def test_auth_ok_no_secret_always_passes():
+def test_auth_ok_no_secret_fails_closed(monkeypatch):
+    monkeypatch.delenv("SHECTORY_AUTH_DEV_BYPASS", raising=False)
+    assert auth_ok("", _req()) is False
+
+
+def test_auth_ok_no_secret_dev_bypass_passes(monkeypatch):
+    monkeypatch.setenv("SHECTORY_AUTH_DEV_BYPASS", "1")
     assert auth_ok("", _req()) is True
 
 
@@ -84,7 +90,13 @@ def test_require_auth_raises_401():
 
 # --- ws_auth_ok ---
 
-def test_ws_auth_ok_no_secret():
+def test_ws_auth_ok_no_secret_fails_closed(monkeypatch):
+    monkeypatch.delenv("SHECTORY_AUTH_DEV_BYPASS", raising=False)
+    assert ws_auth_ok("", _ws()) is False
+
+
+def test_ws_auth_ok_no_secret_dev_bypass(monkeypatch):
+    monkeypatch.setenv("SHECTORY_AUTH_DEV_BYPASS", "1")
     assert ws_auth_ok("", _ws()) is True
 
 

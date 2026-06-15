@@ -1,9 +1,49 @@
+import asyncio
+import time as _time
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Protocol
 from uuid import uuid4
 
 from trader.pos.models import AccountSummary, Position
+
+# Process-level bars cache shared across ALL live robots and ticks. The scheduler
+# rebuilds a LiveRuntime every minute per robot, so the per-instance cache was empty
+# each tick: 12 robots on one symbol meant 12 identical multi-page ISS downloads
+# every 60s. Keyed by (symbol, days, interval) with a short TTL; an in-flight future
+# collapses the simultaneous tick-boundary requests into a single fetch.
+_BARS_TTL = 55.0  # seconds; just under the 60s robot tick so each tick fetches once
+_BARS_CACHE: dict[tuple, tuple[float, list]] = {}
+_BARS_INFLIGHT: dict[tuple, "asyncio.Future"] = {}
+
+
+async def _load_bars_shared(symbol: str, days: int, interval: int) -> list:
+    key = (symbol, days, interval)
+    now = _time.monotonic()
+    hit = _BARS_CACHE.get(key)
+    if hit is not None and now - hit[0] < _BARS_TTL:
+        return hit[1]
+    inflight = _BARS_INFLIGHT.get(key)
+    if inflight is not None:
+        return await inflight
+    loop = asyncio.get_event_loop()
+    fut: asyncio.Future = loop.create_future()
+    _BARS_INFLIGHT[key] = fut
+    try:
+        from datetime import date, timedelta
+        from trader.lab.iss_loader import load_bars_iss
+        today = date.today()
+        try:
+            bars = await load_bars_iss(symbol, today - timedelta(days=days), today, interval=interval)
+        except Exception:
+            bars = []
+        if bars:  # don't cache an empty/failed fetch — let the next tick retry
+            _BARS_CACHE[key] = (now, bars)
+        if not fut.done():
+            fut.set_result(bars)
+        return bars
+    finally:
+        _BARS_INFLIGHT.pop(key, None)
 
 @dataclass
 class Bar:
@@ -180,19 +220,13 @@ class LiveRuntime:
         self._bars_symbol: str | None = None
 
     async def get_bars(self, symbol: str, tf: int, n: int) -> list[Bar]:
-        # Fetch a recent minute window from ISS, slice the last n. Cached per tick
-        # so multiple get_bars calls in one on_bar don't re-hit ISS.
+        # Within one on_bar, reuse the instance slice; across robots/ticks, the
+        # process-level _load_bars_shared cache dedups the ISS fetch.
         if self._bars_cache is not None and self._bars_symbol == symbol:
             return self._bars_cache[-n:] if n else self._bars_cache
-        from datetime import date, timedelta
-        from trader.lab.iss_loader import load_bars_iss
         # ~900 trading minutes/day; cover n minutes + buffer, min 3 calendar days
         days = max(3, (n // 800) + 3)
-        today = date.today()
-        try:
-            bars = await load_bars_iss(symbol, today - timedelta(days=days), today, interval=1)
-        except Exception:
-            bars = []
+        bars = await _load_bars_shared(symbol, days, interval=1)
         self._bars_cache = bars
         self._bars_symbol = symbol
         return bars[-n:] if n else bars

@@ -7,6 +7,8 @@ import grpc
 import grpc.aio
 import structlog
 
+from trader.util import unwrap_decimal
+
 # Bootstrap grpc namespace so generated stubs are importable as grpc.tradeapi.*
 _GEN_GRPC = str(
     __import__("pathlib").Path(__file__).parent.parent / "proto" / "gen" / "grpc"
@@ -45,9 +47,7 @@ def bar_from_proto(pb) -> dict:
     ts = pb.timestamp.ToDatetime(tzinfo=timezone.utc)
 
     def flt(v) -> float:
-        if hasattr(v, "value"):
-            return float(v.value or "0")
-        return 0.0
+        return unwrap_decimal(v, as_float=True) if hasattr(v, "value") else 0.0
 
     return {
         "time": int(ts.timestamp()),

@@ -6,14 +6,13 @@ import httpx
 import structlog
 
 from trader.pos.models import AccountSummary, Position
+from trader.util import unwrap_decimal
 
 log = structlog.get_logger()
 
 
 def _dec(obj) -> Decimal:
-    if isinstance(obj, dict):
-        return Decimal(str(obj.get("value", "0") or "0"))
-    return Decimal(str(obj or "0"))
+    return unwrap_decimal(obj)
 
 
 class PositionsClient:

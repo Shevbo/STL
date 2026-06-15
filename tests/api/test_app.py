@@ -32,7 +32,10 @@ def mock_auth():
 
 
 @pytest.fixture
-async def client(mock_tx, mock_pos, mock_auth):
+async def client(mock_tx, mock_pos, mock_auth, monkeypatch):
+    # These tests exercise endpoint logic, not auth; the guard now fails closed on an
+    # empty bridge secret, so opt into the local-dev bypass for the empty-secret app.
+    monkeypatch.setenv("SHECTORY_AUTH_DEV_BYPASS", "1")
     app = create_app()
     app.state.tx = mock_tx
     app.state.pos = mock_pos

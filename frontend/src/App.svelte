@@ -21,7 +21,7 @@
   import { quotesStore } from '$lib/stores/quotes.svelte';
   import { positionsStore } from '$lib/stores/positions.svelte';
   import { instrumentStore } from '$lib/stores/instrument.svelte';
-  import { placeOrder } from '$lib/api';
+  import { placeOrder, loadFeeConfig } from '$lib/api';
   import { fetchWithAuth } from '$lib/fetch-auth';
   import type { Strategy, BacktestResult, OrderRequest } from '$lib/types';
 
@@ -162,6 +162,7 @@
       authed = true;
       startWs();
       loadInstruments();
+      loadFeeConfig();
     }
   });
   onDestroy(() => {

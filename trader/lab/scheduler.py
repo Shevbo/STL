@@ -45,6 +45,10 @@ class RobotScheduler:
         self._pos_client = pos_client
         self._tasks: dict[str, asyncio.Task] = {}
         self._robot_states: dict[str, dict] = {}  # in-memory robot state across ticks
+        # Compiled module cache: robot.id -> (script_hash, module). Validating +
+        # compiling the script every minute tick is wasted work; the code never
+        # changes between ticks. Re-compiles only when the script text changes.
+        self._compiled: dict[str, tuple[int, types.ModuleType]] = {}
 
     async def start(self) -> None:
         """Load deployed robots from DB and start them."""
@@ -107,8 +111,17 @@ class RobotScheduler:
     async def _run_robot_task(self, robot) -> None:
         """Execute one robot tick (one bar)."""
         from trader.lab.runtime import LiveRuntime  # avoid import cycle
-        mod = types.ModuleType("robot_script")
-        exec(compile(robot.script_code, f"<robot:{robot.id}>", "exec"), mod.__dict__)
+        from trader.lab.script_guard import validate_script
+        # Validate + compile once per script version, reuse the module across ticks.
+        script_hash = hash(robot.script_code)
+        cached = self._compiled.get(robot.id)
+        if cached is None or cached[0] != script_hash:
+            validate_script(robot.script_code)
+            mod = types.ModuleType("robot_script")
+            exec(compile(robot.script_code, f"<robot:{robot.id}>", "exec"), mod.__dict__)
+            self._compiled[robot.id] = (script_hash, mod)
+        else:
+            mod = cached[1]
         state = robot.state_json if isinstance(robot.state_json, dict) else {}
         # Restore previous in-memory state so the robot remembers its trend/position
         # across ticks. Without this, every tick starts with amnesia → repeated entries.
