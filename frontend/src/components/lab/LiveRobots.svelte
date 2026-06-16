@@ -70,22 +70,24 @@
       <button class="new-btn" onclick={() => { selected = null; mode = 'new'; }}>+</button>
     </div>
     {#if loading}<div class="loading">Loading…</div>{/if}
-    {#each robots as r}
-      <div
-        class="robot-row"
-        class:selected={selected?.id === r.id && mode === 'list'}
-        role="button"
-        tabindex="0"
-        title="Двойной клик — окно робота"
-        onclick={() => { selected = r; mode = 'list'; }}
-        ondblclick={() => { windowRobotId = r.id; }}
-        onkeydown={(e) => e.key === 'Enter' && (selected = r, mode = 'list')}
-      >
-        <span class="status-dot" class:live={r.deployed}></span>
-        <span class="name">{r.name}</span>
-        <span class="status-badge" class:deployed={r.deployed}>{r.deployed ? 'LIVE' : 'off'}</span>
-      </div>
-    {/each}
+    <div class="robot-rows">
+      {#each robots as r}
+        <div
+          class="robot-row"
+          class:selected={selected?.id === r.id && mode === 'list'}
+          role="button"
+          tabindex="0"
+          title="Двойной клик — окно робота"
+          onclick={() => { selected = r; mode = 'list'; }}
+          ondblclick={() => { windowRobotId = r.id; }}
+          onkeydown={(e) => e.key === 'Enter' && (selected = r, mode = 'list')}
+        >
+          <span class="status-dot" class:live={r.deployed}></span>
+          <span class="name">{r.name}</span>
+          <span class="status-badge" class:deployed={r.deployed}>{r.deployed ? 'LIVE' : 'off'}</span>
+        </div>
+      {/each}
+    </div>
   </div>
 
   <!-- Right panel -->
@@ -198,8 +200,9 @@
   .robots-inner { display: flex; flex: 1; min-height: 0; overflow: hidden; }
 
   /* List */
-  .robot-list { width: 220px; border-right: 1px solid #2d2d4a; display: flex; flex-direction: column; flex-shrink: 0; }
-  .list-header { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; border-bottom: 1px solid #2d2d4a; }
+  .robot-list { width: 220px; border-right: 1px solid #2d2d4a; display: flex; flex-direction: column; flex-shrink: 0; min-height: 0; }
+  .robot-rows { flex: 1; overflow-y: auto; min-height: 0; }
+  .list-header { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; border-bottom: 1px solid #2d2d4a; flex-shrink: 0; }
   .list-title { font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; }
   .new-btn { background: #4caf5020; border: 1px solid #4caf5066; color: #4caf50; font-size: 16px; width: 24px; height: 24px; border-radius: 3px; cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0; }
 

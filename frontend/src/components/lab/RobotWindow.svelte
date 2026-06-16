@@ -27,6 +27,32 @@
   // real timestamp (formatted to MSK separately) — this offset is chart-only.
   const MSK_OFFSET = 3 * 3600;
 
+  // Resizable frames: chart vs bottom (vertical), left panel vs trades (horizontal).
+  let chartFrac = $state(0.62);          // chart height as fraction of the body
+  let leftW = $state(320);               // left panel width in px
+  let drag: { kind: 'chart' | 'left'; x: number; y: number; frac: number; w: number; body: HTMLElement | null } | null = null;
+  function startDrag(kind: 'chart' | 'left', e: PointerEvent) {
+    const body = (e.currentTarget as HTMLElement).closest('.win-body') as HTMLElement | null;
+    drag = { kind, x: e.clientX, y: e.clientY, frac: chartFrac, w: leftW, body };
+    window.addEventListener('pointermove', onDragMove);
+    window.addEventListener('pointerup', onDragUp);
+    e.preventDefault();
+  }
+  function onDragMove(e: PointerEvent) {
+    if (!drag) return;
+    if (drag.kind === 'chart' && drag.body) {
+      const h = drag.body.clientHeight || 1;
+      chartFrac = Math.min(0.85, Math.max(0.25, drag.frac + (e.clientY - drag.y) / h));
+    } else if (drag.kind === 'left') {
+      leftW = Math.min(560, Math.max(220, drag.w + (e.clientX - drag.x)));
+    }
+  }
+  function onDragUp() {
+    drag = null;
+    window.removeEventListener('pointermove', onDragMove);
+    window.removeEventListener('pointerup', onDragUp);
+  }
+
   // Fills that actually changed the position (exclude rejected/skipped).
   let chartFills = $derived(
     live
@@ -155,7 +181,7 @@
     {:else if live}
       <div class="win-body">
         <!-- chart: candles + order/trade markers + equity + result overlay -->
-        <div class="chart-wrap">
+        <div class="chart-wrap" style="flex: 0 0 {chartFrac * 100}%">
           <BacktestChart
             result={chartResult}
             symbol={live.symbol}
@@ -169,9 +195,12 @@
           />
         </div>
 
+        <!-- drag handle: resize chart vs tables -->
+        <div class="rw-hsplit" title="Потяните — высота графика" onpointerdown={(e) => startDrag('chart', e)}></div>
+
         <!-- bottom: params + current result (left) | trade history (right) -->
         <div class="win-bottom">
-          <div class="panel left">
+          <div class="panel left" style="flex: 0 0 {leftW}px">
             {#if live.strategy}
               <div class="panel-title">О стратегии</div>
               <div class="about-box">
@@ -228,6 +257,9 @@
             </div>
             <div class="basis">Доход от первоначальных инвестиций {INITIAL_EQUITY.toLocaleString('ru-RU')} ₽</div>
           </div>
+
+          <!-- drag handle: resize left panel vs trades -->
+          <div class="rw-vsplit" title="Потяните — ширина панели" onpointerdown={(e) => startDrag('left', e)}></div>
 
           <div class="panel right">
             <div class="panel-title">История сделок ({(live.trades ?? []).length})</div>
@@ -302,9 +334,15 @@
   .state.err { color: #f4433699; padding: 20px; text-align: center; }
 
   .win-body { flex: 1; display: flex; flex-direction: column; min-height: 0; }
-  .chart-wrap { flex: 1 1 62%; min-height: 0; border-bottom: 1px solid #1a1a2e; }
+  .chart-wrap { flex: 0 0 62%; min-height: 0; }
 
-  .win-bottom { flex: 0 0 34%; display: flex; min-height: 0; }
+  .win-bottom { flex: 1 1 0; display: flex; min-height: 0; }
+
+  /* Resize handles */
+  .rw-hsplit { flex: 0 0 6px; cursor: row-resize; background: #1a1a2e; border-top: 1px solid #0a0a15; border-bottom: 1px solid #0a0a15; }
+  .rw-hsplit:hover { background: #2d4a2d; }
+  .rw-vsplit { flex: 0 0 6px; cursor: col-resize; background: #1a1a2e; align-self: stretch; }
+  .rw-vsplit:hover { background: #2d4a2d; }
   .panel { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
   .panel.left { flex: 0 0 320px; border-right: 1px solid #1a1a2e; padding: 10px 12px; overflow-y: auto; }
   .panel.right { flex: 1; min-width: 0; }

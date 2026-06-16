@@ -16,9 +16,7 @@
   const REFRESH_MS = 60_000;
 
   let robots = $state<any[]>([]);
-  let feed = $state<any[]>([]);
   let loading = $state(true);
-  let feedLoading = $state(true);
   let lastUpdate = $state<Date | null>(null);
 
   // Retire modal state
@@ -26,7 +24,7 @@
   let retireComment = $state('');
   let retiring = $state(false);
 
-  function computePnl(robot: any): { net: number; retPct: number; position: number; trades: number } {
+  function computePnl(robot: any): { net: number; retPct: number; position: number; trades: number; margin: number } {
     const fills = toFills(
       (robot.trades ?? []).filter((t: any) => EXECUTED.has(t.status))
     );
@@ -37,11 +35,14 @@
     for (const e of events) if (e.close) cum += e.close.pnl;
     let pos = 0;
     for (const f of fills) pos += f.side === 'buy' ? f.qty : -f.qty;
+    // Engaged ГО (initial margin) = per-contract margin × contracts currently held.
+    const margin = (robot.initial_margin ?? 0) * Math.abs(pos);
     return {
       net: cum,
       retPct: (cum / INITIAL_EQUITY) * 100,
       position: pos,
       trades: fills.length,
+      margin,
     };
   }
 
@@ -51,6 +52,41 @@
           .sort((a, b) => b.net - a.net)
   );
 
+  // Totals across LIVE (deployed) robots — summary row at the top.
+  let totals = $derived.by(() => {
+    const live = summaries.filter(s => s.robot.deployed);
+    const net = live.reduce((a, s) => a + s.net, 0);
+    const trades = live.reduce((a, s) => a + s.trades, 0);
+    const margin = live.reduce((a, s) => a + s.margin, 0);
+    const count = live.length;
+    return { net, trades, margin, count, retPct: count ? (net / (INITIAL_EQUITY * count)) * 100 : 0 };
+  });
+
+  // Global trades feed built from each robot's fills, so every row carries its
+  // type (TP/SL/AVG/реверс/вход) and, on TP/SL, the round-trip P&L.
+  let enrichedFeed = $derived.by(() => {
+    const rows: any[] = [];
+    for (const r of robots) {
+      const fills = toFills((r.trades ?? []).filter((t: any) => EXECUTED.has(t.status)));
+      const evs = tradeEvents(fills, 60, r.point_value ?? 1, r.symbol ?? '', false);
+      for (const e of evs) {
+        rows.push({
+          time: e.rawTime, robot_name: r.name, symbol: r.symbol,
+          side: e.side, qty: e.qty, price: e.price, kind: e.kind, close: e.close,
+        });
+      }
+    }
+    rows.sort((a, b) => b.time - a.time);
+    return rows.slice(0, 100);
+  });
+
+  function tradeTypeLabel(row: any): { text: string; cls: string } {
+    if (row.close) return { text: row.close.exit, cls: row.close.exit === 'TP' ? 'tt-tp' : 'tt-sl' };
+    if (row.kind === 'average') return { text: 'AVG', cls: 'tt-avg' };
+    if (row.kind === 'reverse') return { text: 'реверс', cls: 'tt-rev' };
+    return { text: 'вход', cls: 'tt-open' };
+  }
+
   async function load() {
     loading = true;
     const res = await fetchWithAuth('/api/v1/robots/showcase');
@@ -59,13 +95,6 @@
       lastUpdate = new Date();
     }
     loading = false;
-  }
-
-  async function loadFeed() {
-    feedLoading = true;
-    const res = await fetchWithAuth('/api/v1/robots/live-feed?limit=100');
-    if (res.ok) feed = await res.json();
-    feedLoading = false;
   }
 
   async function openRetire(robot: any) {
@@ -83,14 +112,14 @@
     });
     retiring = false;
     retireTarget = null;
-    await Promise.all([load(), loadFeed()]);
+    await load();
   }
 
   const fmtMoney = (v: number) =>
     (v >= 0 ? '+' : '') + Math.round(v).toLocaleString('ru-RU') + ' ₽';
   const fmtPct = (v: number) => (v >= 0 ? '+' : '') + v.toFixed(1) + '%';
-  const fmtTime = (iso: string) =>
-    new Date(iso).toLocaleString('ru-RU', {
+  const fmtUnix = (sec: number) =>
+    new Date(sec * 1000).toLocaleString('ru-RU', {
       timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit',
       hour: '2-digit', minute: '2-digit',
     });
@@ -104,8 +133,8 @@
   let timer: ReturnType<typeof setInterval>;
 
   onMount(() => {
-    Promise.all([load(), loadFeed()]);
-    timer = setInterval(() => Promise.all([load(), loadFeed()]), REFRESH_MS);
+    load();
+    timer = setInterval(load, REFRESH_MS);
   });
 
   onDestroy(() => clearInterval(timer));
@@ -147,13 +176,27 @@
       {#if lastUpdate}
         <span class="sc-updated">обновлено {lastUpdate.toLocaleTimeString('ru-RU')}</span>
       {/if}
-      <button class="sc-refresh" onclick={() => Promise.all([load(), loadFeed()])}>↺ Обновить</button>
+      <button class="sc-refresh" onclick={load}>↺ Обновить</button>
     </div>
+  </div>
+
+  <!-- Totals across LIVE robots -->
+  <div class="sc-totals">
+    <span class="tot-label">Итого LIVE ({totals.count}):</span>
+    <span class="tot-item">P&amp;L
+      <b class:pos={totals.net > 0} class:neg={totals.net < 0}>{fmtMoney(totals.net)}</b>
+      <span class="tot-pct" class:pos={totals.net > 0} class:neg={totals.net < 0}>({fmtPct(totals.retPct)})</span>
+    </span>
+    <span class="tot-item">Сделок <b>{totals.trades}</b></span>
+    <span class="tot-item">ГО <b>{Math.round(totals.margin).toLocaleString('ru-RU')} ₽</b></span>
   </div>
 
   <!-- Robot summary table -->
   <div class="sc-section">
-    <div class="sc-section-title">Роботы ({summaries.filter(s => s.robot.deployed).length} активных)</div>
+    <div class="sc-section-title">
+      Роботы ({summaries.filter(s => s.robot.deployed).length} активных)
+      <span class="sc-hint">· P&amp;L % — доход от стартового капитала {INITIAL_EQUITY.toLocaleString('ru-RU')} ₽ на робота · ГО — задействованное гарантийное обеспечение текущей позиции</span>
+    </div>
     {#if loading}
       <div class="sc-loading">Загрузка…</div>
     {:else}
@@ -165,6 +208,7 @@
               <th>Инструмент</th>
               <th class="num">P&amp;L ₽</th>
               <th class="num">P&amp;L %</th>
+              <th class="num">ГО ₽</th>
               <th class="num">Позиция</th>
               <th class="num">Сделок</th>
               <th class="num">Дней</th>
@@ -191,6 +235,9 @@
                 </td>
                 <td class="num sc-pct" class:pos={s.net > 0} class:neg={s.net < 0}>
                   {s.trades > 0 ? fmtPct(s.retPct) : '—'}
+                </td>
+                <td class="num sc-go">
+                  {s.margin > 0 ? Math.round(s.margin).toLocaleString('ru-RU') : '—'}
                 </td>
                 <td class="num" class:pos={s.position > 0} class:neg={s.position < 0}>
                   {s.position !== 0 ? (s.position > 0 ? '+' : '') + s.position + ' к' : '—'}
@@ -224,9 +271,9 @@
   <!-- Live trades feed -->
   <div class="sc-section sc-feed-section">
     <div class="sc-section-title">Лента сделок (последние 100)</div>
-    {#if feedLoading}
+    {#if loading}
       <div class="sc-loading">Загрузка…</div>
-    {:else if feed.length === 0}
+    {:else if enrichedFeed.length === 0}
       <div class="sc-empty">Сделок пока нет</div>
     {:else}
       <div class="sc-feed-wrap">
@@ -236,22 +283,29 @@
               <th>Время (МСК)</th>
               <th>Робот</th>
               <th>Инструмент</th>
+              <th>Тип</th>
               <th>Сторона</th>
               <th class="num">Кол-во</th>
               <th class="num">Цена</th>
+              <th class="num">Фин. рез</th>
             </tr>
           </thead>
           <tbody>
-            {#each feed as t}
+            {#each enrichedFeed as t}
+              {@const tt = tradeTypeLabel(t)}
               <tr>
-                <td class="sc-time">{fmtTime(t.iso)}</td>
+                <td class="sc-time">{fmtUnix(t.time)}</td>
                 <td class="sc-rname">{t.robot_name}</td>
                 <td class="sc-sym">{t.symbol}</td>
+                <td><span class="tt-badge {tt.cls}">{tt.text}</span></td>
                 <td class="sc-side" class:buy={t.side === 'buy'} class:sell={t.side === 'sell'}>
                   {t.side === 'buy' ? 'Покупка' : 'Продажа'}
                 </td>
                 <td class="num">{t.qty}</td>
                 <td class="num sc-price">{t.price.toLocaleString('ru-RU')}</td>
+                <td class="num sc-price" class:pos={t.close && t.close.pnl > 0} class:neg={t.close && t.close.pnl < 0}>
+                  {t.close ? fmtMoney(t.close.pnl) : '—'}
+                </td>
               </tr>
             {/each}
           </tbody>
@@ -305,8 +359,28 @@
 
   .sc-pnl { font-weight: 700; font-size: 12px; }
   .sc-pct { font-size: 11px; }
+  .sc-go { color: #b8b8d0; font-family: monospace; }
   .pos { color: #00e676; text-shadow: 0 0 6px #00e67644; }
   .neg { color: #ff5252; text-shadow: 0 0 6px #ff525244; }
+
+  /* Totals band */
+  .sc-totals {
+    display: flex; align-items: baseline; gap: 18px; flex-wrap: wrap;
+    padding: 7px 14px; background: #0b0b16; border-bottom: 1px solid #2d2d4a; flex-shrink: 0;
+  }
+  .tot-label { font-size: 10px; color: #4a4a6a; text-transform: uppercase; letter-spacing: 0.4px; }
+  .tot-item { font-size: 11px; color: #889; }
+  .tot-item b { font-size: 13px; color: #ccc; font-family: monospace; margin-left: 4px; }
+  .tot-pct { font-size: 11px; }
+  .sc-hint { font-size: 9px; color: #445; text-transform: none; letter-spacing: 0; font-weight: 400; }
+
+  /* Trade-type badges */
+  .tt-badge { font-size: 9px; padding: 1px 6px; border-radius: 2px; background: #1a1a2e; color: #888; font-weight: 600; }
+  .tt-tp { background: #11271a; color: #4caf50; }
+  .tt-sl { background: #2a1414; color: #ff6b6b; }
+  .tt-avg { background: #2a2410; color: #ffb300; }
+  .tt-rev { background: #1a1430; color: #b388ff; }
+  .tt-open { background: #14222a; color: #6aa8ff; }
 
   .sc-side.buy { color: #4caf50; }
   .sc-side.sell { color: #f44336; }
