@@ -50,6 +50,28 @@
   let events = $derived(tradeEvents(chartFills, 60, pv, live?.symbol ?? '', false));
   let closes = $derived(events.filter(e => e.close).map(e => e.close!));
 
+  // Map each executed fill back to its lifecycle event so the history table can
+  // show the trade TYPE (TP/SL/AVG/вход/реверс) and, on TP/SL, the round-trip P&L.
+  // chartFills are shifted +MSK_OFFSET, so events.rawTime == rawTrade.time + offset.
+  let eventByKey = $derived.by(() => {
+    const m = new Map<string, (typeof events)[number]>();
+    for (const e of events) m.set(`${e.rawTime}_${e.side}_${e.qty}_${e.price}`, e);
+    return m;
+  });
+  function tradeEvent(t: any) {
+    if (t.status === 'rejected' || t.status === 'skipped') return null;
+    return eventByKey.get(`${t.time + MSK_OFFSET}_${t.side}_${Number(t.qty) || 1}_${t.price}`) ?? null;
+  }
+  // Type badge: TP/SL (closing fill, profit/loss), AVG (averaging), вход (open),
+  // реверс (flip-through-zero open leg without its own close), — for rejected.
+  function tradeTypeLabel(ev: any): { text: string; cls: string } {
+    if (!ev) return { text: '—', cls: 'tt-none' };
+    if (ev.close) return { text: ev.close.exit, cls: ev.close.exit === 'TP' ? 'tt-tp' : 'tt-sl' };
+    if (ev.kind === 'average') return { text: 'AVG', cls: 'tt-avg' };
+    if (ev.kind === 'reverse') return { text: 'реверс', cls: 'tt-rev' };
+    return { text: 'вход', cls: 'tt-open' };
+  }
+
   // Ruble equity curve from realized close PnL (NET of commission).
   let equityCurve = $derived.by(() => {
     if (!chartFills.length) return [];
@@ -215,16 +237,21 @@
               {:else}
                 <table>
                   <thead>
-                    <tr><th>Время (МСК)</th><th>Сторона</th><th>Кол-во</th><th>Цена</th><th>Статус</th></tr>
+                    <tr><th>Время (МСК)</th><th>Тип</th><th>Сторона</th><th>Кол-во</th><th>Цена</th><th class="num">Фин. рез</th><th>Статус</th></tr>
                   </thead>
                   <tbody>
                     {#each [...live.trades].reverse() as t}
+                      {@const ev = tradeEvent(t)}
+                      {@const tt = tradeTypeLabel(ev)}
                       <tr class:rejected={t.status === 'rejected' || t.status === 'skipped'}>
                         <td class="mono">{fmtTime(t.iso)}</td>
+                        <td><span class="tt-badge {tt.cls}">{tt.text}</span></td>
                         <td class:buy={t.side === 'buy'} class:sell={t.side === 'sell'}>
                           {t.side === 'buy' ? '▲ buy' : '▼ sell'}</td>
                         <td class="mono">{t.qty}</td>
                         <td class="mono">{Math.round(t.price).toLocaleString('ru-RU')}</td>
+                        <td class="num mono" class:pos={ev?.close && ev.close.pnl > 0} class:neg={ev?.close && ev.close.pnl < 0}>
+                          {ev?.close ? fmtMoney(ev.close.pnl) + ' ₽' : '—'}</td>
                         <td><span class="st-badge st-{t.status}">{t.status}</span></td>
                       </tr>
                     {/each}
@@ -333,6 +360,14 @@
   tbody tr.rejected td { opacity: 0.5; }
   .mono { font-family: monospace; }
   td.buy { color: #4caf50; } td.sell { color: #f44336; }
+  thead th.num, tbody td.num { text-align: right; }
+  .tt-badge { font-size: 9px; padding: 1px 6px; border-radius: 2px; background: #1a1a2e; color: #888; font-weight: 600; }
+  .tt-tp { background: #11271a; color: #4caf50; }
+  .tt-sl { background: #2a1414; color: #ff6b6b; }
+  .tt-avg { background: #2a2410; color: #ffb300; }
+  .tt-rev { background: #1a1430; color: #b388ff; }
+  .tt-open { background: #14222a; color: #6aa8ff; }
+  .tt-none { background: transparent; color: #555; }
   .st-badge { font-size: 9px; padding: 1px 6px; border-radius: 2px; background: #1a1a2e; color: #888; }
   .st-paper { background: #1a2a1a; color: #4caf50; }
   .st-rejected, .st-skipped { background: #2a1414; color: #ff6b6b; }

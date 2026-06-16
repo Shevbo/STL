@@ -6,6 +6,10 @@
   import { onMount, onDestroy } from 'svelte';
   import { fetchWithAuth } from '../../lib/fetch-auth';
   import { toFills, tradeEvents } from '../../lib/lab-analytics';
+  import RobotWindow from './RobotWindow.svelte';
+
+  // Robot whose chart + trades window is open (double-click a row to open).
+  let windowRobotId = $state<string | null>(null);
 
   const INITIAL_EQUITY = 100_000;
   const EXECUTED = new Set(['paper', 'filled', 'submitted', 'executed']);
@@ -107,6 +111,11 @@
   onDestroy(() => clearInterval(timer));
 </script>
 
+<!-- Per-robot chart + trades window (double-click a row) -->
+{#if windowRobotId}
+  <RobotWindow robotId={windowRobotId} onClose={() => windowRobotId = null} />
+{/if}
+
 <!-- Retire confirm modal -->
 {#if retireTarget}
   <div class="modal-overlay" onclick={() => retireTarget = null} role="dialog" aria-modal="true">
@@ -166,7 +175,9 @@
           <tbody>
             {#each summaries as s}
               {@const r = s.robot}
-              <tr class="sc-row" class:stopped={!r.deployed}>
+              <tr class="sc-row" class:stopped={!r.deployed}
+                  title="Двойной клик — график и сделки робота"
+                  ondblclick={() => windowRobotId = r.id}>
                 <td class="sc-name">
                   <span class="dot" class:live={r.deployed}></span>
                   {r.name}
@@ -195,7 +206,7 @@
                     <span class="badge-off">off</span>
                   {/if}
                 </td>
-                <td>
+                <td ondblclick={(e) => e.stopPropagation()}>
                   {#if r.deployed}
                     <button class="btn-stop" onclick={() => openRetire(r)}>Стоп</button>
                   {:else if r.retire_comment}
@@ -279,6 +290,8 @@
   }
   .sc-table th.num, .sc-table td.num { text-align: right; }
   .sc-table td { padding: 7px 10px; border-bottom: 1px solid #0f0f1e; color: #aaa; }
+  .sc-row { cursor: pointer; }
+  .sc-row:hover td { background: #12121f; }
   .sc-row.stopped td { opacity: 0.55; }
 
   .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #333; margin-right: 5px; vertical-align: middle; }
