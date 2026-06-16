@@ -11,7 +11,6 @@
   // Robot whose chart + trades window is open (double-click a row to open).
   let windowRobotId = $state<string | null>(null);
 
-  const INITIAL_EQUITY = 100_000;
   const EXECUTED = new Set(['paper', 'filled', 'submitted', 'executed']);
   const REFRESH_MS = 60_000;
 
@@ -33,13 +32,18 @@
     const events = tradeEvents(fills, 60, pv, sym, false);
     let cum = 0;
     for (const e of events) if (e.close) cum += e.close.pnl;
-    let pos = 0;
-    for (const f of fills) pos += f.side === 'buy' ? f.qty : -f.qty;
-    // Engaged ГО (initial margin) = per-contract margin × contracts currently held.
-    const margin = (robot.initial_margin ?? 0) * Math.abs(pos);
+    // Running position + the peak number of contracts ever held (averaging grows it).
+    let pos = 0, peak = 0;
+    for (const f of fills) {
+      pos += f.side === 'buy' ? f.qty : -f.qty;
+      peak = Math.max(peak, Math.abs(pos));
+    }
+    // ГО (margin at risk) = per-contract initial margin × peak contracts. This is the
+    // capital the robot ties up; P&L % is return on THIS, not on any start capital.
+    const margin = (robot.initial_margin ?? 0) * peak;
     return {
       net: cum,
-      retPct: (cum / INITIAL_EQUITY) * 100,
+      retPct: margin > 0 ? (cum / margin) * 100 : 0,
       position: pos,
       trades: fills.length,
       margin,
@@ -59,7 +63,7 @@
     const trades = live.reduce((a, s) => a + s.trades, 0);
     const margin = live.reduce((a, s) => a + s.margin, 0);
     const count = live.length;
-    return { net, trades, margin, count, retPct: count ? (net / (INITIAL_EQUITY * count)) * 100 : 0 };
+    return { net, trades, margin, count, retPct: margin > 0 ? (net / margin) * 100 : 0 };
   });
 
   // Global trades feed built from each robot's fills, so every row carries its
@@ -195,7 +199,7 @@
   <div class="sc-section">
     <div class="sc-section-title">
       Роботы ({summaries.filter(s => s.robot.deployed).length} активных)
-      <span class="sc-hint">· P&amp;L % — доход от стартового капитала {INITIAL_EQUITY.toLocaleString('ru-RU')} ₽ на робота · ГО — задействованное гарантийное обеспечение текущей позиции</span>
+      <span class="sc-hint">· ГО — макс. задействованное гарантийное обеспечение (ГО/контракт × пик контрактов) · P&amp;L % = доход / ГО</span>
     </div>
     {#if loading}
       <div class="sc-loading">Загрузка…</div>

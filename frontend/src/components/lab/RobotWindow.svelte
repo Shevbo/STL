@@ -19,7 +19,6 @@
   let error = $state('');
   let live = $state<any>(null);
 
-  const INITIAL_EQUITY = 100000;
   const EXECUTED = new Set(['paper', 'filled', 'submitted', 'executed']);
   // Candle epochs carry Moscow wall-clock stamped as UTC (ISS convention), but
   // live_trades.timestamp is real UTC. Shift fill times +3h onto the candle's
@@ -98,13 +97,14 @@
     return { text: 'вход', cls: 'tt-open' };
   }
 
-  // Ruble equity curve from realized close PnL (NET of commission).
+  // Cumulative realized P&L curve in rubles (NET of commission), starting at 0 —
+  // there is no start capital; the curve is running profit/loss, not account equity.
   let equityCurve = $derived.by(() => {
     if (!chartFills.length) return [];
-    const pts: any[] = [{ time: chartFills[0].time, equity: INITIAL_EQUITY }];
+    const pts: any[] = [{ time: chartFills[0].time, equity: 0 }];
     let cum = 0;
     for (const e of events) {
-      if (e.close) { cum += e.close.pnl; pts.push({ time: e.rawTime, equity: INITIAL_EQUITY + cum }); }
+      if (e.close) { cum += e.close.pnl; pts.push({ time: e.rawTime, equity: cum }); }
     }
     return pts;
   });
@@ -121,9 +121,13 @@
     for (const f of chartFills) signed += f.side === 'buy' ? f.qty : -f.qty;
     const wins = closes.filter(c => c.pnl > 0).length;
     const net = equityCurve.length ? equityCurve[equityCurve.length - 1].equity - equityCurve[0].equity : 0;
+    // ГО (margin at risk) = per-contract initial margin × peak contracts held.
+    // P&L % is return on THIS, not on any fictional start capital.
+    const go = (live?.initial_margin ?? 0) * (s.maxAbsPos || 0);
     return {
       net,
-      retPct: (net / INITIAL_EQUITY) * 100,
+      go,
+      retPct: go > 0 ? (net / go) * 100 : 0,
       position: signed,
       roundTrips: closes.length,
       longRT: s.longRT,
@@ -246,7 +250,9 @@
             <div class="result-grid">
               <div class="r-row"><span>Доход</span>
                 <b class:pos={summary.net > 0} class:neg={summary.net < 0}>{fmtMoney(summary.net)} ₽</b>
-                <span class="sub">({summary.retPct >= 0 ? '+' : ''}{summary.retPct.toFixed(2)}%)</span></div>
+                <span class="sub">({summary.retPct >= 0 ? '+' : ''}{summary.retPct.toFixed(2)}% от ГО)</span></div>
+              <div class="r-row"><span>ГО (макс. задейств.)</span>
+                <b>{summary.go > 0 ? Math.round(summary.go).toLocaleString('ru-RU') + ' ₽' : '—'}</b></div>
               <div class="r-row"><span>Позиция сейчас</span>
                 <b class:pos={summary.position > 0} class:neg={summary.position < 0}>
                   {summary.position > 0 ? '+' : ''}{summary.position} конт.</b></div>
@@ -255,7 +261,7 @@
               <div class="r-row"><span>Win rate</span><b>{summary.winRate.toFixed(0)}%</b></div>
               <div class="r-row"><span>Всего заявок</span><b>{summary.orders}</b></div>
             </div>
-            <div class="basis">Доход от первоначальных инвестиций {INITIAL_EQUITY.toLocaleString('ru-RU')} ₽</div>
+            <div class="basis">P&L % — доход относительно макс. задействованного ГО (ГО/контракт × пик контрактов)</div>
           </div>
 
           <!-- drag handle: resize left panel vs trades -->
