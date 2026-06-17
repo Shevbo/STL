@@ -8,11 +8,11 @@ import structlog
 
 log = structlog.get_logger()
 
-# Paper robots are light (one ISS fetch, cached per tick, + a signal compute per
-# minute), so several winners can run in parallel. Raised from 1 so post-sweep
-# winners can all be deployed to paper at once. Override with LAB_MAX_ROBOTS.
+# Paper robots are light (ISS fetch shared per symbol via the bar cache + a signal
+# compute per minute), so many can run in parallel. Default 50 so a full showcase
+# of paper robots all tick at once. Override with LAB_MAX_ROBOTS.
 import os as _os
-_MAX_ACTIVE_ROBOTS = int(_os.environ.get("LAB_MAX_ROBOTS", "12"))
+_MAX_ACTIVE_ROBOTS = int(_os.environ.get("LAB_MAX_ROBOTS", "50"))
 _TICK_SECONDS = 60       # robot wakes once per minute bar
 _MSK = timezone(timedelta(hours=3))  # Moscow time, no DST since 2014
 
