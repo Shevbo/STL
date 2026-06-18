@@ -400,16 +400,20 @@
     z-index: 10;
   }
   .dh:hover, .dh:active { background: #4caf5055; }
+  /* Expand the grab band (~±6px) via a pseudo-element so the thin visible line
+     is still easy to grab with the mouse, even next to the chart's own border. */
   .dh-v {
-    width: 4px; cursor: col-resize;
+    width: 4px; cursor: col-resize; position: relative; touch-action: none;
     border-left: 1px solid #2d2d4a; border-right: 1px solid #2d2d4a;
   }
+  .dh-v::after { content: ''; position: absolute; top: 0; bottom: 0; left: -6px; right: -6px; }
   .dh-v.dh-right { position: absolute; right: -3px; top: 0; bottom: 0; width: 5px; border: none; }
   .dh-h {
-    height: 5px; cursor: row-resize;
+    height: 5px; cursor: row-resize; position: relative; touch-action: none;
     display: flex; align-items: center; justify-content: center;
     border-top: 1px solid #2d2d4a; border-bottom: 1px solid #2d2d4a;
   }
+  .dh-h::after { content: ''; position: absolute; left: 0; right: 0; top: -6px; bottom: -6px; }
   .dh-dot {
     width: 24px; height: 3px; border-radius: 2px;
     background: #3d3d5a; transition: background 0.15s, width 0.15s;
