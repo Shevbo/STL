@@ -61,7 +61,12 @@
   function onPointerDown(handle: string, e: PointerEvent, cur: number, cur2 = 0) {
     dragHandle = handle;
     dragStart = { x: e.clientX, y: e.clientY, val: cur, val2: cur2 };
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    try { (e.target as HTMLElement).setPointerCapture(e.pointerId); } catch { /* ignore */ }
+    // Listen on window for the whole drag: when the cursor crosses the chart
+    // canvas (lightweight-charts captures pointer events), .shell stops getting
+    // pointermove and the vertical chart/positions border would freeze otherwise.
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
     e.preventDefault();
   }
 
@@ -93,6 +98,8 @@
   }
 
   function onPointerUp(_e: PointerEvent) {
+    window.removeEventListener('pointermove', onPointerMove);
+    window.removeEventListener('pointerup', onPointerUp);
     if (!dragHandle) return;
     dragHandle = null;
     // persist
