@@ -367,7 +367,11 @@
 <style>
   .frame {
     display: flex; flex-direction: column;
-    min-height: 320px; border-bottom: 1px solid #2d2d4a;
+    /* Fill the whole chart container. Without flex:1 the frame stayed at its
+       320px min-height, leaving a big empty gap below the chart whose top edge
+       looked like a draggable border but had no handle — the real resize handle
+       sat at the bottom of that gap. */
+    flex: 1; min-height: 320px; border-bottom: 1px solid #2d2d4a;
   }
   .frame-header {
     display: flex; align-items: center; gap: 8px;
