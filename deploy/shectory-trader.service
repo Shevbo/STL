@@ -8,7 +8,10 @@ User=ubuntu
 Group=ubuntu
 WorkingDirectory=/home/ubuntu/apps/shectory-trader
 
-# pydantic-settings loads ~/.shectory_trade.env automatically
+# pydantic-settings loads ~/.shectory_trade.env for the Settings class, but code
+# that reads os.environ directly (LAB_MAX_ROBOTS, team-46 LINEMAN_BASE_URL) needs
+# the vars in the process env too — so load the same dotenv into the environment.
+EnvironmentFile=-/home/ubuntu/.shectory_trade.env
 ExecStart=/bin/bash -c 'exec $(/home/ubuntu/.local/bin/poetry env info --path)/bin/uvicorn trader.api.app:app --host 127.0.0.1 --port 8000 --workers 1'
 
 Restart=on-failure
