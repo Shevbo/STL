@@ -3,7 +3,7 @@
 ## Overview
 - **Shectory Trader**: execution platform for FORTS ММВБ via Finam Trade API (Python/FastAPI)
 - **Shectory Lab**: strategy framework (future; connects to Trader via M8 Trader API)
-- VDS: shectory-work (Ubuntu), deployed as systemd service
+- Deploy: hoster (Ubuntu) — systemd shectory-trader.service (FastAPI/uvicorn :8000) + shectory-optimizer.service; app dir ~/apps/shectory-trader (dev: Windows C:\Dev\Shectory Trade & Lab; canonical remote github.com/Shevbo/STL.git)
 
 ## Tech Stack
 - Python 3.12, FastAPI, asyncio
@@ -14,7 +14,7 @@
 
 ## Commands
 ```bash
-cd ~/workspaces/Shectory\ Trade\ \&\ Lab
+cd ~/apps/shectory-trader                           # hoster; local dev: C:\Dev\Shectory Trade & Lab
 
 poetry install                                      # install deps
 poetry run pytest -m "not integration" -v           # unit tests (no credentials needed)
