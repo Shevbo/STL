@@ -153,7 +153,10 @@ class TradesStream:
                 token = await self._get_token(attempt > 0)
                 metadata = [("authorization", f"Bearer {token}")]
                 stub = MarketDataServiceStub(self._channel)
-                req = SubscribeLatestTradesRequest(symbol=symbol)
+                # Finam gRPC wants the @RTSX form (RIM6@RTSX); OrderFlow keys by the
+                # bare ticker (RIM6) so OFI lookups in the engine match the bars.
+                fin_sym = symbol if "@" in symbol else f"{symbol}@RTSX"
+                req = SubscribeLatestTradesRequest(symbol=fin_sym)
                 async for resp in stub.SubscribeLatestTrades(req, metadata=metadata):
                     for pb_trade in resp.trades:
                         ts, price, size, side = _trade_to_tuple(pb_trade)

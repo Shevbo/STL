@@ -177,6 +177,32 @@ async def lifespan(app: FastAPI):
         except Exception as exc:
             log.warning("startup.agent_control_table_failed", error=str(exc))
 
+    # AI46 (team-46) — privileged backend strategy in PAPER mode, env-gated.
+    # OFF by default: a plain deploy is a no-op until AI46_ENABLED is set on the host.
+    # Symbols: AI46_SYMBOLS (comma list) overrides; otherwise top-N FORTS front
+    # contracts by today's turnover (AI46_SYMBOL_COUNT, default 20).
+    ai46 = None
+    if os.environ.get("AI46_ENABLED", "0") not in ("0", "", "false", "False"):
+        try:
+            from trader.lab.ai46.service import Ai46Service
+            syms_env = os.environ.get("AI46_SYMBOLS", "").strip()
+            if syms_env:
+                ai46_symbols = [s.strip() for s in syms_env.split(",") if s.strip()]
+            else:
+                from trader.lab.iss_loader import top_instruments
+                ai46_symbols = await top_instruments(int(os.environ.get("AI46_SYMBOL_COUNT", "20")))
+            ai46 = Ai46Service(
+                db_pool, auth.get_token, ai46_symbols,
+                llm_enabled=os.environ.get("AI46_LLM_ENABLED", "1") not in ("0", "false", "False"),
+                order_flow_live=os.environ.get("AI46_ORDER_FLOW", "1") not in ("0", "false", "False"),
+            )
+            await ai46.start()
+            log.info("ai46.lifespan_started", symbols=ai46_symbols)
+        except Exception as exc:
+            log.error("ai46.lifespan_start_failed", error=str(exc))
+            ai46 = None
+    app.state.ai46 = ai46
+
     # VDS fallback sweeper: drains queued remote sweeps locally (throttled) only when
     # the i9 agent is down. No-op while the agent claims jobs promptly.
     fallback_task = asyncio.create_task(_vds_fallback_sweeper(app.state))
@@ -189,6 +215,8 @@ async def lifespan(app: FastAPI):
     fallback_task.cancel()
     reaper_task.cancel()
 
+    if ai46 is not None:
+        await ai46.stop()
     await scheduler.stop_all()
     if settings.lab_db_url:
         from trader.db import close_pool
