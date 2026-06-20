@@ -27,9 +27,12 @@ set -euo pipefail
 export PATH="/home/ubuntu/.local/bin:$PATH"
 cd /home/ubuntu/apps/shectory-trader
 
-# Обновить код из git
+# Обновить код из git. Ремоут на хостере называется origin (так его создаёт
+# git clone из фолбэка ниже). Раньше тут был `git pull github main`, но remote
+# `github` на хостере не существует, поэтому pull всегда падал и каждый деплой
+# делал полный rm -rf + git clone. Тянем из origin: быстрый incremental pull.
 echo "  Обновление кода из GitHub..."
-if ! git pull github main; then
+if ! git pull origin main; then
   echo "  ✗ git pull failed, trying to re-clone..."
   cd /home/ubuntu/apps
   rm -rf shectory-trader
