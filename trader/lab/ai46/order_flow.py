@@ -16,6 +16,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 
 from trader.lab.ai46 import features as F
+from trader.util import unwrap_decimal
 
 # Side enum int values from the marketdata proto (Trade.side).
 _SIDE_BUY = 1   # SIDE_BUY
@@ -104,10 +105,9 @@ class OrderFlow:
 def _trade_to_tuple(pb_trade) -> tuple[int, float, float, int]:
     """(unix_seconds, price, size, side_enum) from a proto Trade."""
     ts = int(pb_trade.timestamp.ToDatetime().timestamp())
-    price = F.unwrap_decimal(pb_trade.price, as_float=True) if hasattr(pb_trade.price, "value") \
-        else float(pb_trade.price or 0)
-    size = F.unwrap_decimal(pb_trade.size, as_float=True) if hasattr(pb_trade.size, "value") \
-        else float(pb_trade.size or 0)
+    # unwrap_decimal handles all Finam shapes (proto .value wrapper, dict, bare scalar).
+    price = unwrap_decimal(pb_trade.price, as_float=True)
+    size = unwrap_decimal(pb_trade.size, as_float=True)
     return ts, price, size, int(pb_trade.side)
 
 
