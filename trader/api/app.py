@@ -177,6 +177,29 @@ async def lifespan(app: FastAPI):
         except Exception as exc:
             log.warning("startup.agent_control_table_failed", error=str(exc))
 
+        # Generic agent task queue: dispatch ANY repo module.func to the i9's cores
+        # without rebuilding the agent. A task carries module/func + args (a list ⇒
+        # fanned across the agent's process pool). Lets the i9 run team-46 sweeps and
+        # future offloaded compute via the same self-updating agent.
+        try:
+            await db_pool.execute(
+                """CREATE TABLE IF NOT EXISTS agent_tasks (
+                     id TEXT PRIMARY KEY,
+                     kind TEXT DEFAULT 'task',
+                     module TEXT NOT NULL,
+                     func TEXT NOT NULL,
+                     args JSONB,
+                     status TEXT DEFAULT 'queued',
+                     agent_id TEXT,
+                     result JSONB,
+                     error TEXT,
+                     created_at TIMESTAMPTZ DEFAULT now(),
+                     claimed_at TIMESTAMPTZ,
+                     finished_at TIMESTAMPTZ)"""
+            )
+        except Exception as exc:
+            log.warning("startup.agent_tasks_table_failed", error=str(exc))
+
     # AI46 (team-46) — privileged backend strategy in PAPER mode, env-gated.
     # OFF by default: a plain deploy is a no-op until AI46_ENABLED is set on the host.
     # Symbols: AI46_SYMBOLS (comma list) overrides; otherwise top-N FORTS front
@@ -2097,6 +2120,101 @@ def create_app() -> FastAPI:
             except Exception:
                 token = None
         return {"update_token": token}
+
+    # ── Generic agent task queue (run any repo module.func on the i9) ────────
+    @fastapi_app.post("/api/v1/agent/task/enqueue")
+    async def agent_task_enqueue(body: dict, request: Request):
+        """Queue a generic task for the i9 agent: {module, func, args, id?}. args may be
+        a list (fanned across the agent's process pool). Auth: session or X-Agent-Token."""
+        _require_any_auth(request)
+        pool = request.app.state.db_pool
+        if pool is None:
+            raise HTTPException(status_code=503, detail="DB unavailable")
+        module, func = body.get("module"), body.get("func")
+        if not module or not func:
+            raise HTTPException(status_code=422, detail="module and func required")
+        import json as _json
+        tid = body.get("id") or ("task-" + cuid())
+        await pool.execute(
+            """INSERT INTO agent_tasks (id, module, func, args, status)
+               VALUES ($1,$2,$3,$4::jsonb,'queued')
+               ON CONFLICT (id) DO UPDATE SET module=EXCLUDED.module, func=EXCLUDED.func,
+                 args=EXCLUDED.args, status='queued', result=NULL, error=NULL,
+                 claimed_at=NULL, finished_at=NULL, created_at=now()""",
+            tid, module, func, _json.dumps(body.get("args")),
+        )
+        return {"ok": True, "task_id": tid}
+
+    @fastapi_app.post("/api/v1/agent/task/claim")
+    async def agent_task_claim(body: dict, request: Request):
+        """Agent claims the next queued task atomically (UPDATE..RETURNING). 204 if none."""
+        _agent_auth(request)
+        pool = request.app.state.db_pool
+        if pool is None:
+            raise HTTPException(status_code=503, detail="DB unavailable")
+        try:
+            request.app.state.last_agent_seen = asyncio.get_event_loop().time()
+        except Exception:
+            pass
+        row = await pool.fetchrow(
+            """UPDATE agent_tasks SET status='running', claimed_at=now(), agent_id=$1
+               WHERE id = (SELECT id FROM agent_tasks WHERE status='queued'
+                           ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED)
+               RETURNING id, module, func, args""",
+            body.get("agent_id", "agent"),
+        )
+        if not row:
+            return Response(status_code=204)
+        import json as _json
+        args = row["args"]
+        if isinstance(args, str):
+            args = _json.loads(args)
+        return {"task_id": row["id"], "module": row["module"], "func": row["func"], "args": args}
+
+    @fastapi_app.post("/api/v1/agent/task/result")
+    async def agent_task_result(body: dict, request: Request):
+        """Agent posts a task result {task_id, results|error}."""
+        _agent_auth(request)
+        pool = request.app.state.db_pool
+        if pool is None:
+            raise HTTPException(status_code=503, detail="DB unavailable")
+        tid = body.get("task_id")
+        if not tid:
+            raise HTTPException(status_code=422, detail="task_id required")
+        import json as _json
+        if body.get("error"):
+            await pool.execute(
+                "UPDATE agent_tasks SET status='failed', error=$1, finished_at=now() WHERE id=$2",
+                str(body["error"]), tid)
+            return {"ok": True, "status": "failed"}
+        await pool.execute(
+            "UPDATE agent_tasks SET status='done', result=$1::jsonb, finished_at=now() WHERE id=$2",
+            _json.dumps(body.get("results")), tid)
+        return {"ok": True, "status": "done"}
+
+    @fastapi_app.get("/api/v1/agent/task/{task_id}")
+    async def agent_task_get(task_id: str, request: Request):
+        """Read a task's status + result."""
+        _require_any_auth(request)
+        pool = request.app.state.db_pool
+        if pool is None:
+            raise HTTPException(status_code=503, detail="DB unavailable")
+        row = await pool.fetchrow(
+            "SELECT id, status, agent_id, error, result, created_at, claimed_at, finished_at "
+            "FROM agent_tasks WHERE id=$1", task_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="task not found")
+        import json as _json
+        res = row["result"]
+        if isinstance(res, str):
+            res = _json.loads(res)
+        return {
+            "task_id": row["id"], "status": row["status"], "agent_id": row["agent_id"],
+            "error": row["error"], "result": res,
+            "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+            "claimed_at": row["claimed_at"].isoformat() if row["claimed_at"] else None,
+            "finished_at": row["finished_at"].isoformat() if row["finished_at"] else None,
+        }
 
     @fastapi_app.post("/api/v1/agent/result")
     async def agent_result(body: dict, request: Request):

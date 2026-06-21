@@ -94,8 +94,11 @@ def _tee_log(path: str) -> None:
             def __init__(self, *streams): self.streams = streams
             def write(self, s):
                 for st in self.streams:
-                    try: st.write(s); st.flush()
-                    except Exception: pass
+                    try:
+                        st.write(s)
+                        st.flush()
+                    except Exception:
+                        pass
             def flush(self):
                 for st in self.streams:
                     try: st.flush()
@@ -215,6 +218,19 @@ def _chunked(seq: list, n: int) -> list[list]:
     return [seq[i:i + size] for i in range(0, len(seq), size)]
 
 
+# ── generic task worker (separate process) ─────────────────────────────────────
+def _run_task_unit(module: str, func: str, arg):
+    """Import a repo module and call func(arg) in a worker. Lets the agent run ANY
+    committed task (e.g. team-46 sweep) on the i9's cores without an agent rebuild —
+    the task code arrives via self-update from the repo."""
+    import importlib
+    _set_priority(idle=True)
+    if os.environ.get("OPT_AGENT_INSECURE"):
+        _patch_httpx_insecure()
+    mod = importlib.import_module(module)
+    return getattr(mod, func)(arg)
+
+
 # ── agent ─────────────────────────────────────────────────────────────────────
 class Agent:
     def __init__(self, api: str, token: str, workers: int, poll: float, proxy: str = ""):
@@ -293,6 +309,37 @@ class Agent:
                               json=payload, headers=self.h, timeout=120)
         r.raise_for_status()
         return r.json()
+
+    # ── generic tasks ───────────────────────────────────────────────────────
+    async def claim_task(self, client: httpx.AsyncClient):
+        r = await client.post(f"{self.api}/api/v1/agent/task/claim",
+                              json={"agent_id": self.agent_id}, headers=self.h, timeout=30)
+        if r.status_code == 204:
+            return None
+        r.raise_for_status()
+        return r.json()
+
+    async def post_task_result(self, client: httpx.AsyncClient, payload: dict):
+        r = await client.post(f"{self.api}/api/v1/agent/task/result",
+                              json=payload, headers=self.h, timeout=180)
+        r.raise_for_status()
+        return r.json()
+
+    async def process_task(self, client: httpx.AsyncClient, task: dict, pool: ProcessPoolExecutor):
+        tid, module, func = task["task_id"], task["module"], task["func"]
+        args = task.get("args")
+        if not isinstance(args, list):
+            args = [args]
+        _log(f"[task {tid}] {module}.{func} × {len(args)} units on {self.workers} workers")
+        loop = asyncio.get_event_loop()
+        t0 = time.time()
+        futs = [loop.run_in_executor(pool, _run_task_unit, module, func, a) for a in args]
+        done = await asyncio.gather(*futs, return_exceptions=True)
+        results = [({"error": f"{type(r).__name__}: {r}"} if isinstance(r, Exception) else r)
+                   for r in done]
+        ok = sum(1 for r in results if not (isinstance(r, dict) and r.get("error")))
+        _log(f"[task {tid}] done {ok}/{len(results)} in {time.time()-t0:.1f}s")
+        await self.post_task_result(client, {"task_id": tid, "results": results})
 
     @staticmethod
     def _parse_date(s: str) -> date:
@@ -374,6 +421,19 @@ class Agent:
                     if tok and tok != self.applied_token:
                         if await self._self_update(tok):
                             return "RESTART"   # exits pool/client cleanly, run() re-execs
+                    # Generic offloaded tasks take priority over grid campaign jobs.
+                    try:
+                        task = await self.claim_task(client)
+                    except Exception as exc:  # noqa: BLE001
+                        task = None
+                        _log(f"task claim error: {exc}")
+                    if task is not None:
+                        idle_note = True
+                        try:
+                            await self.process_task(client, task, pool)
+                        except Exception as exc:  # noqa: BLE001 — never let one task kill the loop
+                            _log(f"task error (continuing): {exc}")
+                        continue
                     try:
                         job = await self.claim(client)
                     except Exception as exc:  # noqa: BLE001 — DNS/network/5xx: keep polling
@@ -422,7 +482,8 @@ class Agent:
         relaunch."""
         print("restart for self-update…", flush=True)
         try:
-            sys.stdout.flush(); sys.stderr.flush()
+            sys.stdout.flush()
+            sys.stderr.flush()
         except Exception:
             pass
         if os.environ.get("OPT_AGENT_WRAPPED"):
