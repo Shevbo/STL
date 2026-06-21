@@ -81,12 +81,26 @@ class _Leg:
 
 class ContrarianSession:
     def __init__(self, ticker: str, *, executor=None, risk=None, gate=None,
-                 primary_size_base: float = SIZE_BASE) -> None:
+                 primary_size_base: float = SIZE_BASE,
+                 min_agreement: float = MIN_AGREEMENT,
+                 long_ofi_boost: float = LONG_OFI_BOOST,
+                 monitoring_dur: float = MONITORING_DUR,
+                 primary_hold: float = PRIMARY_HOLD,
+                 wait_reversal: float = WAIT_REVERSAL,
+                 reversal_hold: float = REVERSAL_HOLD,
+                 reversal_sigs: int = REVERSAL_SIGS) -> None:
         self.ticker = ticker
         self.exec = executor or _DefaultExecutor()
         self.risk = risk or _DefaultRisk()
         self.gate = gate or _default_gate
         self.size_base = primary_size_base
+        self.min_agreement = min_agreement
+        self.long_ofi_boost = long_ofi_boost
+        self.monitoring_dur = monitoring_dur
+        self.primary_hold = primary_hold
+        self.wait_reversal = wait_reversal
+        self.reversal_hold = reversal_hold
+        self.reversal_sigs = reversal_sigs
         self.state = MONITORING
         self.primary = "short"
         self.event_id = ""
@@ -102,7 +116,7 @@ class ContrarianSession:
     def start(self, now: float, sig_ofi: float, long_agr: float, short_agr: float,
               event_id: str = "") -> None:
         self.event_id = event_id
-        self.primary = decide_primary_direction(sig_ofi, long_agr, short_agr)
+        self.primary = decide_primary_direction(sig_ofi, long_agr, short_agr, self.long_ofi_boost)
         allowed, mult = self.risk.regime_role("contrarian")
         if not allowed:
             self.state = DONE
@@ -130,13 +144,13 @@ class ContrarianSession:
             return self.state
 
         if self.state == MONITORING:
-            if now - self._phase_start < MONITORING_DUR:
+            if now - self._phase_start < self.monitoring_dur:
                 return self.state
             if is_panic(feat.hmm_state, feat.volume_ratio):
                 self.state = DONE
                 return self.state
             agr = feat.agreement_ratio(self.primary)
-            if agr < MIN_AGREEMENT:
+            if agr < self.min_agreement:
                 self.state = DONE
                 return self.state
             size = self.size_base * agr * self._role_mult
@@ -152,7 +166,7 @@ class ContrarianSession:
                 self._close_leg(self._primary, soft=False)
                 self.state = ABORT
                 return self.state
-            if now - self._phase_start >= PRIMARY_HOLD:
+            if now - self._phase_start >= self.primary_hold:
                 self._close_leg(self._primary, soft=True)
                 self.state = WAITING_REVERSAL
                 self._phase_start = now
@@ -160,19 +174,19 @@ class ContrarianSession:
             return self.state
 
         if self.state == WAITING_REVERSAL:
-            if self._confirmations >= REVERSAL_SIGS:
+            if self._confirmations >= self.reversal_sigs:
                 rev = "long" if self.primary == "short" else "short"
                 agr = feat.agreement_ratio(rev)
-                if agr < MIN_AGREEMENT:
+                if agr < self.min_agreement:
                     self.state = DONE
                     return self.state
-                size = SIZE_BASE * agr * self._role_mult
+                size = self.size_base * agr * self._role_mult
                 if self._open_leg(self._reversal, rev, size, 0.015, 0.02, "contrarian reversal entry", agr):
                     self.state = REVERSAL_ACTIVE
                     self._phase_start = now
                 else:
                     self.state = DONE
-            elif now - self._phase_start >= WAIT_REVERSAL:
+            elif now - self._phase_start >= self.wait_reversal:
                 self.state = DONE
             return self.state
 
@@ -180,7 +194,7 @@ class ContrarianSession:
             if self._aborted:
                 self._close_leg(self._reversal, soft=False)
                 self.state = DONE
-            elif now - self._phase_start >= REVERSAL_HOLD:
+            elif now - self._phase_start >= self.reversal_hold:
                 self._close_leg(self._reversal, soft=True)
                 self.state = DONE
             return self.state

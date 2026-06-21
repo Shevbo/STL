@@ -19,6 +19,16 @@ _TF_SECONDS = {"1m": 60, "10m": 600, "1h": 3600, "1d": 86400}
 
 
 @dataclass
+class _Bundle:
+    """Slow-moving features cached on the refresh interval (per symbol)."""
+    t: float
+    directions: dict
+    hmm_state: str
+    garch_vol: float
+    vwap: float
+
+
+@dataclass
 class MarketFeatures(DET.TickerFeatures):
     """detector.TickerFeatures + the extra fields/methods contrarian needs."""
     directions: dict = field(default_factory=dict)   # tf -> "long"|"short"|"flat"
@@ -71,40 +81,72 @@ def _direction(highs, lows, closes) -> str:
 
 
 class FeatureEngine:
-    """Stateless compute: bars_1m + order flow -> MarketFeatures."""
+    """bars_1m + order flow -> MarketFeatures.
+
+    model_refresh_secs > 0 caches the HMM regime + GARCH vol per symbol and only
+    re-fits them when that many seconds of data-time have passed. Live uses 0
+    (re-fit every tick). A backtest replaying months of history sets it (e.g.
+    1800s) so Baum-Welch / Nelder-Mead don't run on every step — the dominant
+    cost. Cheap features (directions, OFI, VWAP, price change) stay per-tick.
+    """
+
+    def __init__(self, model_refresh_secs: float = 0.0, model_window: int = 0,
+                 model_iter: int = 40) -> None:
+        self._refresh = model_refresh_secs
+        self._model_window = model_window          # 0 = all returns (live); >0 cap for backtest
+        self._model_iter = model_iter              # HMM Baum-Welch iterations (live 40)
+        self._model_cache: dict[str, _Bundle] = {}
+
+    def _bundle(self, symbol: str, bars_1m: list, data_time: float) -> _Bundle:
+        """Per-TF directions, HMM regime, GARCH vol, VWAP. Cached on the refresh
+        interval; recomputed every call when _refresh == 0 (live behaviour)."""
+        if self._refresh > 0:
+            c = self._model_cache.get(symbol)
+            if c is not None and (data_time - c.t) < self._refresh:
+                return c
+        closes = [b.close for b in bars_1m]
+        directions: dict[str, str] = {}
+        for tf in _FRAMES:
+            h, lo, cc, _v = _aggregate(bars_1m, _TF_SECONDS[tf])
+            directions[tf] = _direction(h, lo, cc) if len(cc) >= 22 else "flat"
+        rets = MOD._log_returns(closes)
+        m_rets = rets[-self._model_window:] if self._model_window else rets
+        hmm = MOD.hmm_regime(m_rets, n_iter=self._model_iter)
+        garch = MOD.garch11_forecast(m_rets)
+        highs = [b.high for b in bars_1m]
+        lows = [b.low for b in bars_1m]
+        vols = [float(b.volume) for b in bars_1m]
+        bundle = _Bundle(
+            t=data_time, directions=directions,
+            hmm_state=hmm.state if hmm else "flat",
+            garch_vol=garch.forecast_vol if garch else 0.0,
+            vwap=F.vwap(highs, lows, closes, vols),
+        )
+        self._model_cache[symbol] = bundle
+        return bundle
 
     def compute(self, symbol: str, bars_1m: list, order_flow=None) -> MarketFeatures | None:
         if not bars_1m or len(bars_1m) < 2:
             return None
-        closes_1m = [b.close for b in bars_1m]
-        vols_1m = [float(b.volume) for b in bars_1m]
-        highs_1m = [b.high for b in bars_1m]
-        lows_1m = [b.low for b in bars_1m]
-
-        directions: dict[str, str] = {}
-        for tf in _FRAMES:
-            h, lo, c, v = _aggregate(bars_1m, _TF_SECONDS[tf])
-            directions[tf] = _direction(h, lo, c) if len(c) >= 22 else "flat"
-
-        rets = MOD._log_returns(closes_1m)
-        hmm = MOD.hmm_regime(rets)
-        garch = MOD.garch11_forecast(rets)
-        prev = closes_1m[-2]
-        price_change_1m = ((closes_1m[-1] - prev) / prev * 100.0) if prev else 0.0
-
+        b = self._bundle(symbol, bars_1m, bars_1m[-1].time)
+        # Cheap, fast-moving fields recomputed every call (O(1) / O(period)), so a
+        # throttled bundle does not stale the price-shock / vol-spike / OFI triggers.
+        last, prev = bars_1m[-1], bars_1m[-2]
+        price_change_1m = ((last.close - prev.close) / prev.close * 100.0) if prev.close else 0.0
+        vol_tail = [float(x.volume) for x in bars_1m[-21:]]   # volume_ratio uses last period+1
         ofi5m = order_flow.ofi(symbol, 300) if order_flow is not None else 0.0
 
         mf = MarketFeatures(
             ofi5m=ofi5m,
-            volume_ratio=F.volume_ratio(vols_1m, 20),
+            volume_ratio=F.volume_ratio(vol_tail, 20),
             price_change_1m=price_change_1m,
-            hmm_state=hmm.state if hmm else "flat",
+            hmm_state=b.hmm_state,
             cross_asset_signal="",                      # multi-asset: out of scope
-            dir_1h=directions["1h"],
-            dir_10m=directions["10m"],
-            directions=directions,
-            garch_vol=garch.forecast_vol if garch else 0.0,
-            vwap=F.vwap(highs_1m, lows_1m, closes_1m, vols_1m),
+            dir_1h=b.directions["1h"],
+            dir_10m=b.directions["10m"],
+            directions=b.directions,
+            garch_vol=b.garch_vol,
+            vwap=b.vwap,
         )
         # tf_agreement in the OFI-inferred direction (engine.go snapshotSignal).
         infer = "short" if mf.ofi5m < -0.1 else "long"

@@ -17,6 +17,7 @@ from trader.lab.ai46 import llm as LLM
 from trader.lab.ai46.engine import FeatureEngine
 from trader.lab.ai46.execution import PaperExecutor, RiskManager
 from trader.lab.ai46.order_flow import OrderFlow
+from trader.lab.ai46.params import BotParams
 
 # Detector signal types that launch / feed a contrarian session.
 _ENTRY_SIGNALS = {DET.OFI_ANOMALY, DET.PRICE_SHOCK, DET.VOL_SPIKE, DET.NEWS, DET.TREND_FLIP}
@@ -24,14 +25,17 @@ _ENTRY_SIGNALS = {DET.OFI_ANOMALY, DET.PRICE_SHOCK, DET.VOL_SPIKE, DET.NEWS, DET
 
 class Ai46Runner:
     def __init__(self, symbols, *, klod=None, feature_engine=None,
-                 executor=None, risk=None, order_flow=None) -> None:
+                 executor=None, risk=None, order_flow=None, params=None) -> None:
+        self.params = params or BotParams()
         self.symbols = list(symbols)
         self.klod = klod or LLM.KlodClient(enabled=False)   # degraded until wired
         self.fe = feature_engine or FeatureEngine()
         self.exec = executor or PaperExecutor()
-        self.risk = risk or RiskManager(self.exec)
+        self.risk = risk or RiskManager(self.exec, max_positions=self.params.max_positions,
+                                        max_exposure=self.params.max_exposure)
         self.flow = order_flow or OrderFlow()
-        self.detector = DET.Detector()
+        self.detector = DET.Detector(ofi_thr=self.params.ofi_thr, vol_thr=self.params.vol_thr,
+                                     shock_z=self.params.shock_z, cooldown=self.params.cooldown)
         self.sessions: dict[str, C.ContrarianSession] = {}
         self._gate: dict[str, tuple[bool, float]] = {}   # ticker -> (proceed, size_factor)
 
@@ -43,9 +47,9 @@ class Ai46Runner:
 
     def _about_to_enter(self, s: C.ContrarianSession, now: float) -> bool:
         if s.state == C.MONITORING:
-            return now - s._phase_start >= C.MONITORING_DUR
+            return now - s._phase_start >= s.monitoring_dur
         if s.state == C.WAITING_REVERSAL:
-            return s._confirmations >= C.REVERSAL_SIGS
+            return s._confirmations >= s.reversal_sigs
         return False
 
     async def _refresh_gate(self, sym: str, feat) -> None:
@@ -79,8 +83,13 @@ class Ai46Runner:
                 if s.type not in _ENTRY_SIGNALS:
                     continue
                 if sess is None or sess.state in (C.DONE, C.ABORT):
-                    sess = C.ContrarianSession(sym, executor=self.exec, risk=self.risk,
-                                               gate=self._make_gate(sym))
+                    p = self.params
+                    sess = C.ContrarianSession(
+                        sym, executor=self.exec, risk=self.risk, gate=self._make_gate(sym),
+                        primary_size_base=p.size_base, min_agreement=p.min_agreement,
+                        long_ofi_boost=p.long_ofi_boost, monitoring_dur=p.monitoring_dur,
+                        primary_hold=p.primary_hold, wait_reversal=p.wait_reversal,
+                        reversal_hold=p.reversal_hold, reversal_sigs=p.reversal_sigs)
                     sess.start(now, s.ofi, feat.agreement_ratio("long"),
                                feat.agreement_ratio("short"), s.type)
                     self.sessions[sym] = sess

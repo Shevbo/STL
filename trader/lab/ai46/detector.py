@@ -60,10 +60,15 @@ class _Roll:
 
 
 class Detector:
-    def __init__(self) -> None:
+    def __init__(self, *, ofi_thr: float = 0.7, vol_thr: float = 3.0,
+                 shock_z: float = 2.0, cooldown: float = _EMIT_COOLDOWN) -> None:
         self._price_stats: dict[str, _Roll] = {}
         self._last_emit: dict[str, float] = {}
         self._last_dir: dict[str, str] = {}
+        self.ofi_thr = ofi_thr
+        self.vol_thr = vol_thr
+        self.shock_z = shock_z
+        self.cooldown = cooldown
 
     def _snapshot(self, ticker: str, f: TickerFeatures, now: float) -> Signal:
         return Signal(
@@ -93,15 +98,15 @@ class Detector:
             if self._allow(ticker, sig.type, now):
                 out.append(sig)
 
-        # Trigger 4: |OFI| > 0.7
-        if f.ofi5m > 0.7 or f.ofi5m < -0.7:
+        # Trigger 4: |OFI| > threshold
+        if f.ofi5m > self.ofi_thr or f.ofi5m < -self.ofi_thr:
             s = self._snapshot(ticker, f, now)
             s.type = OFI_ANOMALY
             s.category = self.classify(f, 0)
             consider(s)
 
-        # Trigger 3: volume > 3× avg
-        if f.volume_ratio > 3.0:
+        # Trigger 3: volume > threshold × avg
+        if f.volume_ratio > self.vol_thr:
             s = self._snapshot(ticker, f, now)
             s.type = VOL_SPIKE
             s.category = self.classify(f, 0)
@@ -126,7 +131,7 @@ class Detector:
             st.std = variance ** 0.5
             if st.std > 0:
                 z = abs(pc - st.mean) / st.std
-                if z > 2:
+                if z > self.shock_z:
                     s = self._snapshot(ticker, f, now)
                     s.type = PRICE_SHOCK
                     s.sigma = z
@@ -159,7 +164,7 @@ class Detector:
     def _allow(self, ticker: str, etype: str, now: float) -> bool:
         key = f"{ticker}:{etype}"
         last = self._last_emit.get(key)
-        if last is not None and now - last < _EMIT_COOLDOWN:
+        if last is not None and now - last < self.cooldown:
             return False
         self._last_emit[key] = now
         return True
