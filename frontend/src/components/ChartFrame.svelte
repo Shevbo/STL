@@ -95,13 +95,14 @@
   let scrollPos = $state(100);
   let maxVisibleBars = 96;
 
-  // Task 2: sync OHLC + volume series
+  // Task 2: sync OHLC + volume series.
+  // Only a FRESH dataset (first load / symbol / timeframe change) resets the view to
+  // the last N bars. New bars are applied with update() so the user's wheel zoom /
+  // scroll and the auto-scaled price axis are preserved (previously every new bar did
+  // setData(all) + forced the range back to the last 96, which threw away the zoom
+  // and made "compress with the wheel" appear to do nothing).
   $effect(() => {
-    console.log('[Chart] $effect fired: tvCandle=', !!tvCandle, 'ohlc.length=', ohlc.length, 'lastOhlcLen=', lastOhlcLen);
-    if (!tvCandle || !ohlc.length) {
-      console.log('[Chart] Early return: tvCandle=', !!tvCandle, 'ohlc.length=', ohlc.length);
-      return;
-    }
+    if (!tvCandle || !ohlc.length) return;
     const bars = ohlc.map(b => ({
       time: b.time as number,
       open: b.open as number,
@@ -114,22 +115,26 @@
       value: b.volume as number,
       color: (b.close as number) >= (b.open as number) ? '#4caf5040' : '#f4433640',
     }));
-    if (ohlc.length !== lastOhlcLen) {
-      console.log('[Chart] setData: bars=', bars.length, 'vols=', vols.length);
+    const fresh = lastOhlcLen === 0 || ohlc.length < lastOhlcLen;
+    if (fresh) {
       tvCandle.setData(bars);
       tvVolume?.setData(vols);
-      lastOhlcLen = ohlc.length;
-
       const barsToShow = Math.min(bars.length, maxVisibleBars);
-      const from = Math.max(0, bars.length - barsToShow);
-      const to = bars.length - 1;
-      tvChart.timeScale().setVisibleLogicalRange({ from, to });
+      tvChart.timeScale().setVisibleLogicalRange({
+        from: Math.max(0, bars.length - barsToShow), to: bars.length - 1,
+      });
       scrollPos = 100;
+    } else if (ohlc.length === lastOhlcLen + 1) {
+      tvCandle.update(bars[bars.length - 1]);      // one new bar appended
+      tvVolume?.update(vols[vols.length - 1]);
+    } else if (ohlc.length > lastOhlcLen) {
+      tvCandle.setData(bars);                       // multi-bar catch-up; keep view
+      tvVolume?.setData(vols);
     } else {
-      console.log('[Chart] update last bar only');
-      tvCandle.update(bars[bars.length - 1]);
+      tvCandle.update(bars[bars.length - 1]);       // same length: last bar refreshed
       tvVolume?.update(vols[vols.length - 1]);
     }
+    lastOhlcLen = ohlc.length;
   });
 
   // Task 7: sync horizontal scrollbar with chart visible range
@@ -263,6 +268,13 @@
         borderColor: '#2d2d4a',
         rightOffset: 10,
       },
+      // Auto-fit the price axis to whatever bars are in view, so zooming the time
+      // axis out (wheel) extends the price scale to the older/higher candles.
+      rightPriceScale: { borderColor: '#2d2d4a', autoScale: true },
+      // Be explicit about wheel zoom + drag scroll (defaults, but guard against
+      // any global override swallowing the wheel).
+      handleScale: { mouseWheel: true, pinch: true, axisPressedMouseMove: true },
+      handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
       crosshair: { mode: 1 },
     });
     tvChart.timeScale().applyOptions({
