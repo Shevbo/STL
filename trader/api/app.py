@@ -232,11 +232,15 @@ async def lifespan(app: FastAPI):
     # Self-heal: re-queue sweep jobs orphaned in 'running' by a dead claimer, so one
     # stuck job can't freeze a whole campaign (no r1/r2) the way it did overnight.
     reaper_task = asyncio.create_task(_orphan_reaper(app.state))
+    # Generic agent-task fallback: VDS runs queued agent_tasks only when the i9 is
+    # truly down (pi ICMP) and the VDS is idle.
+    task_fallback_task = asyncio.create_task(_agent_task_fallback(app.state))
 
     yield
 
     fallback_task.cancel()
     reaper_task.cancel()
+    task_fallback_task.cancel()
 
     if ai46 is not None:
         await ai46.stop()
@@ -688,6 +692,114 @@ async def _vds_fallback_sweeper(app_state) -> None:
             log.warning("vds_fallback.loop_error", error=str(exc))
 
 
+async def _i9_pingable(pool) -> "bool | None":
+    """Latest pi-reported i9 ICMP status: True=up, False=down, None=no fresh report."""
+    if pool is None:
+        return None
+    try:
+        v = await pool.fetchval("SELECT value FROM agent_control WHERE key='i9_ping'")
+        if not v:
+            return None
+        import json as _json
+        import time as _time
+        d = _json.loads(v)
+        if _time.time() - float(d.get("ts", 0)) > 300:   # stale report -> unknown
+            return None
+        return bool(d.get("pingable"))
+    except Exception:
+        return None
+
+
+async def _run_agent_task_on_vds(row, app_state) -> None:
+    """Run a queued agent_task locally on the VDS, ONE unit at a time, idle-priority,
+    pausing while the box is busy — safe for the small shared VDS."""
+    pool = app_state.db_pool
+    tid, module, func, args = row["id"], row["module"], row["func"], row["args"]
+    if isinstance(args, str):
+        import json as _json
+        args = _json.loads(args)
+    if not isinstance(args, list):
+        args = [args]
+    try:
+        import importlib
+        from trader.lab.backtest import _demote_to_background
+        fn = getattr(importlib.import_module(module), func)
+        loop = asyncio.get_event_loop()
+        results = []
+        for a in args:
+            for _ in range(180):                  # wait out any load spike before each unit
+                try:
+                    if os.getloadavg()[0] <= _FB_MAX_LOAD:
+                        break
+                except OSError:
+                    break
+                await asyncio.sleep(5)
+
+            def _one(aa=a):
+                _demote_to_background()
+                return fn(aa)
+            try:
+                r = await loop.run_in_executor(None, _one)
+            except Exception as exc:  # noqa: BLE001
+                r = {"error": f"{type(exc).__name__}: {exc}"}
+            results.append(r)
+        await pool.execute(
+            "UPDATE agent_tasks SET status='done', result=$1, finished_at=now() WHERE id=$2",
+            results, tid)
+        log.info("agent_task_fallback.done", task=tid, units=len(args))
+    except Exception as exc:  # noqa: BLE001
+        try:
+            await pool.execute(
+                "UPDATE agent_tasks SET status='failed', error=$1, finished_at=now() WHERE id=$2",
+                f"vds-fallback: {type(exc).__name__}: {exc}", tid)
+        except Exception:
+            pass
+
+
+async def _agent_task_fallback(app_state) -> None:
+    """VDS runs queued agent_tasks ONLY when the i9 is unreachable (pi ICMP says down)
+    AND the VDS is idle. If the i9 pings but its agent is silent, that's the agent's
+    problem (its scheduled task restarts it) — the VDS stays out of it."""
+    if not _FB_ENABLED:
+        return
+    pool = getattr(app_state, "db_pool", None)
+    if pool is None:
+        return
+    await asyncio.sleep(80)
+    while True:
+        try:
+            await asyncio.sleep(_FB_POLL_SEC)
+            if await _i9_pingable(pool) is not False:   # up or unknown -> leave it to the i9
+                continue
+            try:
+                if os.getloadavg()[0] > _FB_MAX_LOAD:
+                    continue
+            except OSError:
+                pass
+            try:
+                with open("/proc/meminfo") as _mi:
+                    avail_kb = next((int(ln.split()[1]) for ln in _mi if ln.startswith("MemAvailable")), 0)
+                if avail_kb and avail_kb < _FB_MIN_FREE_MB * 1024:
+                    continue
+            except Exception:
+                pass
+            row = await pool.fetchrow(
+                """UPDATE agent_tasks SET status='running', claimed_at=now(), agent_id='vds-fallback-task'
+                   WHERE id = (SELECT id FROM agent_tasks WHERE status='queued'
+                               AND created_at < now() - make_interval(secs => $1::int)
+                               ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED)
+                   RETURNING id, module, func, args""",
+                _FB_STALE_SEC)
+            if not row:
+                continue
+            log.info("agent_task_fallback.claim", task=row["id"])
+            await _run_agent_task_on_vds(row, app_state)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            log.warning("agent_task_fallback.loop_error", error=str(exc))
+
+
 async def _orphan_reaper(app_state) -> None:
     """Re-queue sweep jobs stuck in 'running' because their claimer (agent or fallback)
     died mid-job. A SINGLE orphan otherwise blocks the orchestrator from ever finishing
@@ -718,6 +830,15 @@ async def _orphan_reaper(app_state) -> None:
             )
             if res2 and res2 != "UPDATE 0":
                 log.info("orphan_reaper.vds_fallback_requeued", result=res2)
+            # Generic agent_tasks: a legit i9 task is ~1-2h; >3h 'running' means the
+            # claimer (i9 agent) died -> re-queue so a recovered i9 or the VDS fallback
+            # can take it again.
+            res3 = await pool.execute(
+                "UPDATE agent_tasks SET status='queued', agent_id=NULL, claimed_at=NULL "
+                "WHERE status='running' AND claimed_at < now() - interval '3 hours'"
+            )
+            if res3 and res3 != "UPDATE 0":
+                log.info("orphan_reaper.agent_tasks_requeued", result=res3)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 — never let the loop die
@@ -2178,15 +2299,16 @@ def create_app() -> FastAPI:
         module, func = body.get("module"), body.get("func")
         if not module or not func:
             raise HTTPException(status_code=422, detail="module and func required")
-        import json as _json
         tid = body.get("id") or ("task-" + cuid())
+        # asyncpg jsonb codec (db._setup_json_codec) json.dumps the python object —
+        # pass it directly, no manual json.dumps/::jsonb (that double-encoded it).
         await pool.execute(
             """INSERT INTO agent_tasks (id, module, func, args, status)
-               VALUES ($1,$2,$3,$4::jsonb,'queued')
+               VALUES ($1,$2,$3,$4,'queued')
                ON CONFLICT (id) DO UPDATE SET module=EXCLUDED.module, func=EXCLUDED.func,
                  args=EXCLUDED.args, status='queued', result=NULL, error=NULL,
                  claimed_at=NULL, finished_at=NULL, created_at=now()""",
-            tid, module, func, _json.dumps(body.get("args")),
+            tid, module, func, body.get("args"),
         )
         return {"ok": True, "task_id": tid}
 
@@ -2226,15 +2348,15 @@ def create_app() -> FastAPI:
         tid = body.get("task_id")
         if not tid:
             raise HTTPException(status_code=422, detail="task_id required")
-        import json as _json
         if body.get("error"):
             await pool.execute(
                 "UPDATE agent_tasks SET status='failed', error=$1, finished_at=now() WHERE id=$2",
                 str(body["error"]), tid)
             return {"ok": True, "status": "failed"}
+        # jsonb codec encodes the object — pass directly (no json.dumps/::jsonb).
         await pool.execute(
-            "UPDATE agent_tasks SET status='done', result=$1::jsonb, finished_at=now() WHERE id=$2",
-            _json.dumps(body.get("results")), tid)
+            "UPDATE agent_tasks SET status='done', result=$1, finished_at=now() WHERE id=$2",
+            body.get("results"), tid)
         return {"ok": True, "status": "done"}
 
     @fastapi_app.get("/api/v1/agent/task/{task_id}")
@@ -2260,6 +2382,25 @@ def create_app() -> FastAPI:
             "claimed_at": row["claimed_at"].isoformat() if row["claimed_at"] else None,
             "finished_at": row["finished_at"].isoformat() if row["finished_at"] else None,
         }
+
+    @fastapi_app.post("/api/v1/agent/i9-status")
+    async def agent_i9_status(body: dict, request: Request):
+        """The LAN-side pi reports whether the i9 host answers ICMP ping. Stored in
+        agent_control(key='i9_ping'). The VDS task-fallback uses this: it only takes
+        over when the i9 is truly unreachable (not pingable), never when the i9 is up
+        but its agent merely hiccupped."""
+        _agent_auth(request)
+        pool = request.app.state.db_pool
+        if pool is None:
+            raise HTTPException(status_code=503, detail="DB unavailable")
+        import json as _json
+        import time as _time
+        val = _json.dumps({"pingable": bool(body.get("pingable")), "ts": _time.time(),
+                           "src": str(body.get("src", "pi"))})
+        await pool.execute(
+            "INSERT INTO agent_control(key,value) VALUES('i9_ping',$1) "
+            "ON CONFLICT (key) DO UPDATE SET value=$1", val)
+        return {"ok": True, "pingable": bool(body.get("pingable"))}
 
     @fastapi_app.get("/api/v1/agent/bars/{key}")
     async def agent_bars(key: str, request: Request):
