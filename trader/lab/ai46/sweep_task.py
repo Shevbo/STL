@@ -13,11 +13,29 @@ import pickle
 import tempfile
 from datetime import date
 
+import httpx
+
 from trader.lab.ai46.backtest import Ai46Backtester
 from trader.lab.ai46.params import BotParams
 from trader.lab.iss_loader import load_bars_iss
+from trader.lab.runtime import Bar
 
 _CACHE = os.path.join(tempfile.gettempdir(), "ai46_bt_cache")
+
+
+def _hoster_bars(key: str) -> list:
+    """Pre-fetched bars served by the hoster (fast). The agent's own continuous-roll
+    fetch from ISS enumerates ~120 contracts and hangs on its network, so bars are
+    prepared centrally and pulled over the (proven-fast) i9->hoster link instead."""
+    api = os.environ.get("STL_API", "https://stl.shectory.ru").rstrip("/")
+    tok = os.environ.get("OPT_AGENT_TOKEN", "")
+    # TLS verification stays ON by default; if the i9 sits behind a TLS-intercepting
+    # proxy, the agent's existing --insecure / OPT_AGENT_INSECURE path globally relaxes
+    # httpx in the worker (_run_task_unit) — we don't weaken it here.
+    r = httpx.get(f"{api}/api/v1/agent/bars/{key}",
+                  headers={"X-Agent-Token": tok}, timeout=120)
+    r.raise_for_status()
+    return r.json().get("rows", [])
 
 
 def _cached_bars(key: str, date_from: str, date_to: str) -> list:
@@ -29,8 +47,25 @@ def _cached_bars(key: str, date_from: str, date_to: str) -> list:
                 return pickle.load(f)
         except Exception:  # noqa: BLE001 — corrupt cache → refetch
             pass
-    bars = asyncio.run(load_bars_iss(key, date.fromisoformat(date_from),
-                                     date.fromisoformat(date_to), interval=1))
+
+    bars: list = []
+    try:
+        rows = _hoster_bars(key)            # primary: served by the hoster
+        bars = [Bar(time=r[0], open=r[1], high=r[2], low=r[3], close=r[4], volume=r[5])
+                for r in rows]
+    except Exception:  # noqa: BLE001 — fall back to ISS with a hard timeout
+        bars = []
+    if not bars:
+        async def _iss():
+            return await asyncio.wait_for(
+                load_bars_iss(key, date.fromisoformat(date_from),
+                              date.fromisoformat(date_to), interval=1),
+                timeout=180,
+            )
+        try:
+            bars = asyncio.run(_iss())
+        except Exception:  # noqa: BLE001 — never hang the worker
+            bars = []
     try:
         tmp = path + ".tmp"
         with open(tmp, "wb") as f:

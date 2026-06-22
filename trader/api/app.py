@@ -2261,6 +2261,22 @@ def create_app() -> FastAPI:
             "finished_at": row["finished_at"].isoformat() if row["finished_at"] else None,
         }
 
+    @fastapi_app.get("/api/v1/agent/bars/{key}")
+    async def agent_bars(key: str, request: Request):
+        """Serve pre-fetched 1m bars to the i9 agent so it doesn't re-fetch a slow
+        continuous series from ISS itself (the 120-contract roll enumeration hangs on
+        the agent's network). Files live in agent_bars/<key>.json = {"key","rows":
+        [[time,open,high,low,close,volume],...]}, uploaded out-of-band."""
+        _agent_auth(request)
+        import json as _json
+        import os as _os
+        safe = "".join(c for c in key if c.isalnum())
+        path = _os.path.join("agent_bars", f"{safe}.json")
+        if not _os.path.exists(path):
+            raise HTTPException(status_code=404, detail=f"bars not found for {safe}")
+        with open(path, encoding="utf-8") as f:
+            return _json.load(f)
+
     @fastapi_app.post("/api/v1/agent/result")
     async def agent_result(body: dict, request: Request):
         """Agent posts computed results for a run. Bulk-inserts backtest_results and
