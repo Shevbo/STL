@@ -892,7 +892,57 @@ def create_app() -> FastAPI:
 
     @fastapi_app.get("/api/v1/instruments")
     async def list_instruments(request: Request):
+        """Instrument dropdown for the main chart. Primary source is MOEX ISS (free):
+        the front contract per FORTS asset, ranked by today's turnover, with @RTSX
+        appended to match the Finam streaming symbol format. ISS is always current, so
+        the list survives quarterly contract expiration automatically (the old Finam
+        /v1/assets path returned an expired set and 502'd, leaving an empty dropdown).
+        Falls back to Finam /v1/assets if ISS is unreachable; never 502s the dropdown."""
         _auth(request)
+        import httpx as _httpx
+        url = ("https://iss.moex.com/iss/engines/futures/markets/forts/securities.json"
+               "?iss.meta=off&iss.only=securities,marketdata"
+               "&securities.columns=SECID,SHORTNAME,ASSETCODE,LASTTRADEDATE"
+               "&marketdata.columns=SECID,VALTODAY")
+        try:
+            async with _httpx.AsyncClient(timeout=15.0,
+                    headers={"User-Agent": "STL/1.0", "Accept": "application/json"}) as c:
+                j = (await c.get(url)).json()
+            sec = j.get("securities", {})
+            scols, sdata = sec.get("columns", []), sec.get("data", [])
+            md = j.get("marketdata", {})
+            mcols, mdata = md.get("columns", []), md.get("data", [])
+            turnover = {}
+            for row in mdata:
+                r = dict(zip(mcols, row))
+                turnover[r.get("SECID")] = r.get("VALTODAY") or 0
+            # Front contract per asset (nearest LASTTRADEDATE), turnover summed per asset.
+            by_asset: dict = {}
+            for row in sdata:
+                r = dict(zip(scols, row))
+                secid, asset, ltd = r.get("SECID"), r.get("ASSETCODE"), r.get("LASTTRADEDATE")
+                if not secid or not asset:
+                    continue
+                vt = turnover.get(secid, 0) or 0
+                cur = by_asset.get(asset)
+                if cur is None:
+                    by_asset[asset] = {"front": secid, "ltd": ltd,
+                                       "name": r.get("SHORTNAME", secid), "turnover": vt}
+                else:
+                    cur["turnover"] += vt
+                    if ltd and (cur["ltd"] is None or ltd < cur["ltd"]):
+                        cur["front"], cur["ltd"], cur["name"] = secid, ltd, r.get("SHORTNAME", secid)
+            ranked = sorted(by_asset.values(), key=lambda x: x["turnover"], reverse=True)
+            instruments = [
+                {"symbol": f"{a['front']}@RTSX", "ticker": a["front"], "name": a["name"]}
+                for a in ranked if a["front"]
+            ][:60]
+            if instruments:
+                return {"instruments": instruments}
+        except Exception as exc:
+            log.warning("api.instruments_iss_failed", exc=str(exc))
+
+        # Fallback: Finam /v1/assets (@RTSX filter) — the original behaviour.
         settings: Settings = request.app.state.settings
         auth_client: AsyncAuthClient = request.app.state.auth
         try:
@@ -901,24 +951,19 @@ def create_app() -> FastAPI:
             async with httpx.AsyncClient(http2=True) as client:
                 resp = await client.get(
                     f"{settings.finam_api_base_url}/v1/assets",
-                    headers=headers,
-                    timeout=10.0,
+                    headers=headers, timeout=10.0,
                 )
                 resp.raise_for_status()
                 body = resp.json()
             instruments = [
-                {
-                    "symbol": a.get("symbol", ""),
-                    "ticker": a.get("ticker", a.get("code", "")),
-                    "name": a.get("name", a.get("short_name", "")),
-                }
-                for a in body.get("assets", [])
-                if "@RTSX" in a.get("symbol", "")
+                {"symbol": a.get("symbol", ""), "ticker": a.get("ticker", a.get("code", "")),
+                 "name": a.get("name", a.get("short_name", ""))}
+                for a in body.get("assets", []) if "@RTSX" in a.get("symbol", "")
             ]
             return {"instruments": instruments}
         except Exception as exc:
             log.error("api.instruments_error", exc=str(exc))
-            raise HTTPException(status_code=502, detail="Finam API unavailable")
+            return {"instruments": []}   # never 502 — chart keeps working with current symbol
 
     @fastapi_app.get("/api/v1/instruments/{symbol:path}/params")
     async def get_instrument_params(symbol: str, request: Request):

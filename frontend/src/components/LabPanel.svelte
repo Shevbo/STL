@@ -3,9 +3,13 @@
   import BacktestLab from './lab/BacktestLab.svelte';
   import Botstore from './lab/Botstore.svelte';
   import ChartFrame from './ChartFrame.svelte';
+  import { instrumentStore } from '$lib/stores/instrument.svelte';
 
   type Tab = 'live' | 'market' | 'backtest' | 'botstore';
   let activeTab = $state<Tab>('live');
+  // Market Browser default: top current FORTS contract from the live instrument list
+  // (survives expiration). Falls back only if the list hasn't loaded yet.
+  let marketSymbol = $derived(instrumentStore.list[0]?.symbol ?? 'IMOEXF@RTSX');
   let fullscreen = $state(false);
   // Reserved: preset handed to Backtest Lab (currently always null; Botstore now
   // installs robots directly instead of pushing a preset).
@@ -45,7 +49,7 @@
     {#if activeTab === 'live'}
       <LiveRobots />
     {:else if activeTab === 'market'}
-      <ChartFrame symbol="RIM6" />
+      <ChartFrame symbol={marketSymbol} />
     {:else if activeTab === 'botstore'}
       <Botstore />
     {:else}
