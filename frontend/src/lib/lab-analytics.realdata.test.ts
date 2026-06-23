@@ -49,16 +49,30 @@ describe('real FVG RI robot — rolledPnl reproduces the molecule numbers', () =
     expect(Math.round(r.byContract.reduce((a, c) => a + c.net, 0))).toBe(77586);
   });
 
-  it('position rectangles never span the roll — each box stays within one contract price band', () => {
+  it('position rectangles: entry/exit vertices are the actual fill prices (not avg), per-contract, P&L sums to the total', () => {
     const r = rolledPnl(fills, PV, false);
     const last = fills[fills.length - 1];
     const rects = positionRects(r.events, last.time, last.price);
     expect(rects.length).toBeGreaterThan(5);
-    // RIM6 ~107-110k, RIU6 ~95-104k. A box spanning the roll would jump ~12k; within a
-    // contract, entry→exit moves are small. This proves boxes are per-contract.
+
+    // Fixture opens: buy 1 @109050 (LONG) then sell 1 @109030 (close). The first box must
+    // be a LONG whose vertices are EXACTLY those fill prices — proving avg never moves them.
+    const first = rects[0];
+    expect(first.dir).toBe('long');
+    expect(first.pIn).toBe(109050);     // entry vertex = entry fill price
+    expect(first.pOut).toBe(109030);    // exit vertex  = close fill price
+
+    // Both directions occur (so the green/red mapping is actually exercised).
+    expect(rects.some(b => b.dir === 'long')).toBe(true);
+    expect(rects.some(b => b.dir === 'short')).toBe(true);
+
+    // Per-contract: no box spans the RIM6→RIU6 roll (would jump ~12k).
     expect(Math.max(...rects.map(b => Math.abs(b.pIn - b.pOut)))).toBeLessThan(6000);
-    expect(rects.filter(b => b.open).length).toBe(1);          // one live (open) box = current RIU6 short
-    for (const b of rects) { expect(b.pIn).toBeGreaterThan(80000); expect(b.pOut).toBeGreaterThan(80000); }
+    expect(rects.filter(b => b.open).length).toBe(1);          // one live (open) box
+
+    // Strong invariant: every realized close lands in exactly one box ⇒ Σ box P&L == net.
+    const sumPnl = rects.reduce((a, b) => a + b.pnl, 0);
+    expect(Math.round(sumPnl)).toBe(Math.round(r.net));
   });
 
   it('the NAIVE single-book replay reproduces the +228,528 phantom (3.0x) — the bug we are removing', () => {

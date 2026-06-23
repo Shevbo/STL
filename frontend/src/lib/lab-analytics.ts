@@ -501,26 +501,36 @@ export function rolledPnl(
 // extends to lastTime/lastPrice (the live position).
 export interface PositionRect {
   dir: 'long' | 'short';
-  tIn: number; pIn: number;     // open time / volume-weighted entry (avg cost)
-  tOut: number; pOut: number;   // close time / exit price (last fill if still open)
-  open?: boolean;
+  tIn: number; pIn: number;     // ENTRY vertex: entry-fill time / entry-fill PRICE (not avg)
+  tOut: number; pOut: number;   // EXIT vertex: close-fill time / close-fill price
+  pnl: number;                  // realized P&L of the whole episode (₽, net of commission)
+  open?: boolean;               // true = position still open (exit vertex = latest point)
 }
 
+// One rectangle per position EPISODE. Its diagonal runs ENTRY vertex -> EXIT vertex:
+//   - entry vertex = the OPEN fill (its exact time + price). Averaging fills inside the
+//     episode do NOT move the vertices (they only show as arrows inside the box).
+//   - exit vertex  = the closing fill (full close or reverse), its exact time + price.
+// dir = side of the position (long = opened by a buy, short = by a sell). pnl = the
+// episode's realized result. A still-open episode extends to lastTime/lastPrice.
 export function positionRects(events: TradeEvent[], lastTime?: number, lastPrice?: number): PositionRect[] {
   const rects: PositionRect[] = [];
-  let pos = 0, avg = 0, tIn = 0, dir: 'long' | 'short' = 'long';
+  let pos = 0, pIn = 0, tIn = 0, dir: 'long' | 'short' = 'long', epPnl = 0;
   for (const e of events) {
     const q = Number(e.qty) || 1;
     const signed = e.side === 'buy' ? q : -q;
-    if (e.kind === 'open') { pos = signed; avg = e.price; tIn = e.time; dir = signed > 0 ? 'long' : 'short'; continue; }
-    if (e.kind === 'average') { avg = (avg * Math.abs(pos) + e.price * q) / (Math.abs(pos) + q); pos += signed; continue; }
-    if (e.kind === 'partial') { pos += signed; continue; }   // rect stays open until the full close
-    // full close or reverse: close the current episode's rectangle
-    rects.push({ dir, tIn, pIn: avg, tOut: e.time, pOut: e.price });
-    if (e.kind === 'reverse') { pos += signed; avg = e.price; tIn = e.time; dir = pos > 0 ? 'long' : 'short'; }
-    else { pos = 0; avg = 0; }
+    if (e.kind === 'open') {
+      pos = signed; pIn = e.price; tIn = e.time; dir = signed > 0 ? 'long' : 'short'; epPnl = 0; continue;
+    }
+    if (e.kind === 'average') { pos += signed; continue; }    // AVG never moves the vertices
+    if (e.kind === 'partial') { pos += signed; if (e.close) epPnl += e.close.pnl; continue; }
+    // full close or reverse: finalise this episode's rectangle
+    if (e.close) epPnl += e.close.pnl;
+    rects.push({ dir, tIn, pIn, tOut: e.time, pOut: e.price, pnl: epPnl });
+    if (e.kind === 'reverse') { pos += signed; pIn = e.price; tIn = e.time; dir = pos > 0 ? 'long' : 'short'; epPnl = 0; }
+    else { pos = 0; }
   }
-  if (pos !== 0) rects.push({ dir, tIn, pIn: avg, tOut: lastTime ?? tIn, pOut: lastPrice ?? avg, open: true });
+  if (pos !== 0) rects.push({ dir, tIn, pIn, tOut: lastTime ?? tIn, pOut: lastPrice ?? pIn, pnl: epPnl, open: true });
   return rects;
 }
 

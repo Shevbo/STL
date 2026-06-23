@@ -342,6 +342,20 @@
         return;
       }
     }
+
+    // 3) inside a position rectangle that is too small for an inline P&L label?
+    for (const r of rectPx) {
+      if (r.showLabel) continue;   // big enough: P&L is already drawn in the box
+      if (px >= r.left && px <= r.left + r.width && py >= r.top && py <= r.top + r.height) {
+        tip = {
+          x: r.left + r.width / 2, y: r.top + r.height / 2,
+          head: `${r.dir === 'long' ? 'Лонг' : 'Шорт'}${r.open ? ' (открыта)' : ''}`,
+          headKind: r.pnl >= 0 ? 'tp' : 'sl',
+          lines: [`Результат сделки: ${fmtMoney(r.pnl)} ₽`],
+        };
+        return;
+      }
+    }
     tip = null;
   }
 
@@ -383,7 +397,8 @@
   // are off-screen still renders (the container clips it) instead of vanishing.
   let posRects: any[] = [];
   let barTimes: number[] = [];
-  let rectPx = $state<Array<{ left: number; top: number; width: number; height: number; dir: string; open: boolean }>>([]);
+  let rectPx = $state<Array<{ left: number; top: number; width: number; height: number;
+    dir: string; open: boolean; pnl: number; label: string; showLabel: boolean }>>([]);
   function idxForTime(t: number): number {
     const n = barTimes.length;
     if (!n) return 0;
@@ -403,11 +418,12 @@
       const y1 = candleSeries.priceToCoordinate(r.pIn);
       const y2 = candleSeries.priceToCoordinate(r.pOut);
       if (x1 == null || x2 == null || y1 == null || y2 == null) continue;
-      out.push({
-        left: Math.min(x1, x2), top: Math.min(y1, y2),
-        width: Math.max(2, Math.abs(x2 - x1)), height: Math.max(2, Math.abs(y2 - y1)),
-        dir: r.dir, open: !!r.open,
-      });
+      const left = Math.min(x1, x2), top = Math.min(y1, y2);
+      const width = Math.max(2, Math.abs(x2 - x1)), height = Math.max(2, Math.abs(y2 - y1));
+      const label = `${r.pnl >= 0 ? '+' : ''}${Math.round(r.pnl).toLocaleString('ru-RU')} ₽`;
+      // Inline label only when there is room; otherwise it shows on hover (hitTest).
+      out.push({ left, top, width, height, dir: r.dir, open: !!r.open, pnl: r.pnl,
+                 label, showLabel: width >= label.length * 6 + 6 && height >= 13 });
     }
     rectPx = out;
   }
@@ -572,12 +588,17 @@
   <div class="bt-candle-area">
     <div class="candle" bind:this={candleEl}></div>
 
-    <!-- Position rectangles: open→close hold, entry(avg)→exit levels; green long / red
-         short; dashed border = still-open (live) position. AVG arrows show through. -->
+    <!-- Position rectangles: diagonal = entry vertex → exit vertex (exact fill prices,
+         AVG never moves them); green long / red short; dashed border = still-open. The
+         episode P&L sits in the centre (or on hover when the box is too small). -->
     <div class="pos-rects">
       {#each rectPx as r}
         <div class="pos-rect {r.dir}" class:open={r.open}
-             style="left:{r.left}px; top:{r.top}px; width:{r.width}px; height:{r.height}px;"></div>
+             style="left:{r.left}px; top:{r.top}px; width:{r.width}px; height:{r.height}px;">
+          {#if r.showLabel}
+            <span class="pr-pnl" class:pos={r.pnl > 0} class:neg={r.pnl < 0}>{r.label}</span>
+          {/if}
+        </div>
       {/each}
     </div>
 
@@ -763,10 +784,19 @@
   /* Position rectangles overlay — above candles, below tooltips; never intercepts
      pointer events (pan/zoom/hover pass through to the chart). */
   .pos-rects { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 3; }
-  .pos-rect { position: absolute; border: 1px solid; border-radius: 1px; box-sizing: border-box; }
-  .pos-rect.long  { background: #2ee6a618; border-color: #2ee6a688; }
-  .pos-rect.short { background: #ff5c8a18; border-color: #ff5c8a88; }
+  .pos-rect {
+    position: absolute; border: 1px solid; border-radius: 1px; box-sizing: border-box;
+    display: flex; align-items: center; justify-content: center;
+  }
+  /* Long = green, short = red (clearly distinct hues, not teal/rose). */
+  .pos-rect.long  { background: #00e67622; border-color: #00e676aa; }
+  .pos-rect.short { background: #ff525222; border-color: #ff5252aa; }
   .pos-rect.open  { border-style: dashed; }
+  .pr-pnl {
+    font-size: 9px; font-family: monospace; font-weight: 700; white-space: nowrap;
+    padding: 0 3px; border-radius: 2px; background: #0a0a15cc; color: #ccc;
+  }
+  .pr-pnl.pos { color: #00e676; } .pr-pnl.neg { color: #ff5252; }
 
   /* On-chart crosshair date/time overlay — shifted right to clear the params frame. */
   .cross-overlay {
