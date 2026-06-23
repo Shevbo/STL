@@ -354,14 +354,14 @@ register("ema_atr", "EMA Trend + ATR Filter",
 #   Bearish FVG: high[i] < low[i-2]  → gap down → шорт.
 #   Confirmed only if the current body moves in the gap direction by ≥ min_frac.
 def sig_fvg(bars, p):
-    h, l, c, o = _h(bars), _l(bars), _c(bars), _o(bars)
+    h, lo, c, o = _h(bars), _l(bars), _c(bars), _o(bars)
     if len(c) < 3:
         return None
     min_frac = float(p.get("min_frac", 5)) / 10000.0   # ×10000: 5 = 0.05%
     body = (c[-1] - o[-1]) / c[-1] if c[-1] else 0.0
-    if l[-1] > h[-3] and body >= min_frac:
+    if lo[-1] > h[-3] and body >= min_frac:
         return 1
-    if h[-1] < l[-3] and -body >= min_frac:
+    if h[-1] < lo[-3] and -body >= min_frac:
         return -1
     return None
 register("fvg", "Fair Value Gap (ICT)",
@@ -376,7 +376,7 @@ register("fvg", "Fair Value Gap (ICT)",
 #   Bullish impulse → order block = последняя медвежья свеча перед ним; лонг, когда
 #   текущая цена возвращается в её зону [low, high]. Bearish — зеркально.
 def sig_order_block(bars, p):
-    h, l, c, o = _h(bars), _l(bars), _c(bars), _o(bars)
+    h, lo, c, o = _h(bars), _l(bars), _c(bars), _o(bars)
     look = int(p.get("lookback", 20))
     if len(c) < look + 3:
         return None
@@ -388,14 +388,14 @@ def sig_order_block(bars, p):
         if body >= impulse_frac:                       # bullish impulse
             for j in range(i - 1, max(i - look, 0) - 1, -1):
                 if c[j] < o[j]:                        # last down candle = bull OB
-                    if l[j] <= price <= h[j]:
+                    if lo[j] <= price <= h[j]:
                         return 1
                     break
             break
         if -body >= impulse_frac:                      # bearish impulse
             for j in range(i - 1, max(i - look, 0) - 1, -1):
                 if c[j] > o[j]:                        # last up candle = bear OB
-                    if l[j] <= price <= h[j]:
+                    if lo[j] <= price <= h[j]:
                         return -1
                     break
             break
@@ -498,7 +498,6 @@ PARAM_DESC: dict[str, str] = {
     "bet_step": "Система увеличения ставок после убытков: после каждой убыточной сделки следующий вход увеличивается на N контрактов (1→2→3…). После прибыльной сделки сбрасывается к базовому объёму. 0 = система выключена, всегда входим базовым qty.",
     "bet_max": "Максимальная добавка контрактов по системе ставок. Например, bet_max=10 при базовом qty=1 означает «не больше 1+10=11 контрактов за раз». Защита от бесконечного роста ставок при длинной серии убытков.",
     # SuperTrend / standalone strategy params
-    "atr_period": "Период ATR для расчёта полос SuperTrend. Сколько баров используется для вычисления средней волатильности. 10 — стандарт. Больше — полосы глаже и дальше от цены, перевороты реже, но и вход позже.",
     "multiplier": "Множитель ширины полос SuperTrend. Хранится ×10: 30 = 3.0×ATR. Это расстояние от средней цены до верхней/нижней полосы в единицах ATR. Больше множитель — полосы дальше, тренд держится дольше, меньше ложных переворотов, но и реакция на разворот медленнее.",
     # Donchian params
     "entry_period": "Период входа в барах (N). Робот покупает когда цена пробивает максимум за последние N баров. 20 — классика Turtle Trading. Больше N — вход по более сильному пробою, реже сделки, но крупнее движение.",
