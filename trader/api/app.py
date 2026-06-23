@@ -1985,7 +1985,7 @@ def create_app() -> FastAPI:
             strategy = None
 
         trade_rows = await pool.fetch(
-            """SELECT side, qty, price, order_id, status, timestamp
+            """SELECT symbol, side, qty, price, order_id, status, timestamp
                FROM live_trades WHERE robot_id=$1 ORDER BY timestamp""",
             robot_id,
         )
@@ -1993,6 +1993,7 @@ def create_app() -> FastAPI:
             {
                 "time": int(r["timestamp"].timestamp()),
                 "iso": r["timestamp"].isoformat(),
+                "symbol": r["symbol"],
                 "side": r["side"],
                 "qty": int(r["qty"]),
                 "price": float(r["price"]),
@@ -2062,13 +2063,13 @@ def create_app() -> FastAPI:
         else:
             # No trades yet — show the last ~10 days of context.
             date_from = today - _td(days=10)
-        # The robot's params.symbol is the CURRENT contract (rolled M6->U6 by the
-        # migration), but historical fills span the contract(s) actually traded. Chart
-        # the CONTINUOUS base series (e.g. RIU6 -> RI) so every fill sits on the front
-        # contract's bars for its day — otherwise old RIM6 fills (~107k) float above
-        # the current RIU6 chart (~94k). Perpetuals (no month letter) chart as-is.
-        from trader.lab.iss_loader import is_specific_contract as _is_spec
-        chart_symbol = symbol[:-2] if _is_spec(symbol) else symbol
+        # A rolled robot trades two contracts over its life (e.g. RIM6 then RIU6) at
+        # very different price levels (basis). live_trades records the contract per
+        # fill, so chart the CURRENT contract (the latest fill's symbol) and let the
+        # frontend show only that contract's markers — old-contract fills belong to an
+        # expired instrument and would float off the chart. params.symbol is the same
+        # current contract after the M6->U6 migration; latest-fill is authoritative.
+        chart_symbol = (trades[-1].get("symbol") if trades else None) or symbol
         return {
             "robot": robot,
             "symbol": symbol,

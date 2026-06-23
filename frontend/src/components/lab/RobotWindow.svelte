@@ -59,6 +59,16 @@
           .map((f: any) => ({ ...f, time: f.time + MSK_OFFSET }))
       : []
   );
+  // Chart markers use ONLY the currently-charted contract's fills. A rolled robot
+  // (e.g. RIM6 -> RIU6) traded two instruments at different price levels; old-contract
+  // fills would float off the current contract's bars. Summary/equity/history use ALL.
+  let chartMarkerFills = $derived(
+    live
+      ? toFills((live.trades ?? []).filter((t: any) =>
+          EXECUTED.has(t.status) && (!live.chart_symbol || t.symbol === live.chart_symbol)))
+          .map((f: any) => ({ ...f, time: f.time + MSK_OFFSET }))
+      : []
+  );
   let replayed = $derived(replay(chartFills));
   let pv = $derived(live?.point_value ?? 1);
 
@@ -111,7 +121,7 @@
 
   // Synthetic "result" so BacktestChart renders candles + markers + connectors + equity.
   let chartResult = $derived(
-    live ? { trades: chartFills, equity_curve: equityCurve, params: live.robot?.params_json ?? {} } : null
+    live ? { trades: chartMarkerFills, equity_curve: equityCurve, params: live.robot?.params_json ?? {} } : null
   );
 
   // Current result summary (rubles, net of commission).
