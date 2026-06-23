@@ -2651,6 +2651,42 @@ def create_app() -> FastAPI:
         # Epoch-based bucketing works for ANY bucket size (minutes..days),
         # unlike date_trunc('hour') which caps at 60-min granularity.
         bucket_secs = max(1, int(resample_min)) * 60
+
+        # Fast path: full pre-cached continuous base series (agent_bars/<symbol>.json),
+        # resampled in Python. Preferred over ohlcv_bars, which for a base code holds
+        # only a sparse partial set (a few bars) and would otherwise be returned as a
+        # false "cache hit". This also avoids the slow ISS continuous-roll on open and
+        # gives the robot window the rolled series whose prices match historical fills.
+        import os as _os
+        _ab = _os.path.join("agent_bars", f"{symbol}.json")
+        if _os.path.exists(_ab):
+            try:
+                import json as _json
+                lo, hi = ts_from.timestamp(), ts_to.timestamp()
+                rows_raw = _json.load(open(_ab, encoding="utf-8")).get("rows", [])
+                buckets: dict[int, dict] = {}
+                for r in rows_raw:
+                    t = r[0]
+                    if not (lo <= t <= hi):
+                        continue
+                    key = (int(t) // bucket_secs) * bucket_secs
+                    agg = buckets.get(key)
+                    if agg is None:
+                        buckets[key] = {"time": key, "open": r[1], "high": r[2],
+                                        "low": r[3], "close": r[4], "volume": r[5]}
+                    else:
+                        agg["high"] = max(agg["high"], r[2])
+                        agg["low"] = min(agg["low"], r[3])
+                        agg["close"] = r[4]
+                        agg["volume"] += r[5]
+                out = [buckets[k] for k in sorted(buckets)]
+                if out:
+                    for b in out:
+                        b["volume"] = int(b["volume"])
+                    return out
+            except Exception as exc:  # noqa: BLE001 — fall through to cache/ISS
+                log.warning("api.market_bars_agent_failed", symbol=symbol, exc=str(exc))
+
         async with pool.acquire() as conn:
             rows = await conn.fetch(
                 """
