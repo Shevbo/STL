@@ -56,7 +56,10 @@
   let quote = $derived(quotesStore.get(selectedSymbol));
   let orders = $derived(ordersStore.forSymbol(selectedSymbol));
   let trades = $derived(tradesStore.forSymbol(selectedSymbol));
-  let instruments = $derived(instrumentStore.list);
+  // Sorted alphabetically by ticker for the dropdown (list arrives ranked by turnover).
+  let instruments = $derived(
+    [...instrumentStore.list].sort((a, b) => a.ticker.localeCompare(b.ticker))
+  );
 
   const MAX_TICKS = 500;
   let tickTimes: number[] = [];

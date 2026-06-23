@@ -870,6 +870,28 @@ async def _fetch_bars_for_backtest(symbol: str, date_from: str, date_to: str, ap
     d_to = _parse_date(date_to)
     pool = getattr(app_state, "db_pool", None)
 
+    # Fast path: a pre-cached continuous base series served from agent_bars/<symbol>.json
+    # (1m, rolled). Avoids the slow ISS continuous-roll enumeration on every robot-window
+    # / backtest open (the cause of the long open + black-screen). Falls through if absent.
+    import os as _os
+    _ab = _os.path.join("agent_bars", f"{symbol}.json")
+    if _os.path.exists(_ab):
+        try:
+            import json as _json
+            from datetime import datetime as _dt
+            from datetime import timezone as _tz
+
+            from trader.lab.runtime import Bar as _Bar
+            lo = _dt(d_from.year, d_from.month, d_from.day, tzinfo=_tz.utc).timestamp()
+            hi = _dt(d_to.year, d_to.month, d_to.day, 23, 59, 59, tzinfo=_tz.utc).timestamp()
+            rows = _json.load(open(_ab, encoding="utf-8")).get("rows", [])
+            out = [_Bar(time=r[0], open=r[1], high=r[2], low=r[3], close=r[4], volume=r[5])
+                   for r in rows if lo <= r[0] <= hi]
+            if out:
+                return out
+        except Exception as exc:  # noqa: BLE001 — fall through to ISS/cache on any issue
+            log.warning("backtest.agent_bars_failed", symbol=symbol, error=str(exc))
+
     if not pool:
         log.info("backtest.fetch_iss_nopool", symbol=symbol, from_date=str(d_from), to_date=str(d_to))
         return await load_bars_iss(symbol, d_from, d_to, interval=1)
@@ -2040,9 +2062,17 @@ def create_app() -> FastAPI:
         else:
             # No trades yet — show the last ~10 days of context.
             date_from = today - _td(days=10)
+        # The robot's params.symbol is the CURRENT contract (rolled M6->U6 by the
+        # migration), but historical fills span the contract(s) actually traded. Chart
+        # the CONTINUOUS base series (e.g. RIU6 -> RI) so every fill sits on the front
+        # contract's bars for its day — otherwise old RIM6 fills (~107k) float above
+        # the current RIU6 chart (~94k). Perpetuals (no month letter) chart as-is.
+        from trader.lab.iss_loader import is_specific_contract as _is_spec
+        chart_symbol = symbol[:-2] if _is_spec(symbol) else symbol
         return {
             "robot": robot,
             "symbol": symbol,
+            "chart_symbol": chart_symbol,
             "paper": paper,
             "trades": trades,
             "point_value": point_value,

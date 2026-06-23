@@ -188,7 +188,7 @@
         <div class="chart-wrap" style="flex: 0 0 {chartFrac * 100}%">
           <BacktestChart
             result={chartResult}
-            symbol={live.symbol}
+            symbol={live.chart_symbol ?? live.symbol}
             dateFrom={live.date_from}
             dateTo={live.date_to}
             pointValue={pv}
