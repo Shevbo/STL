@@ -199,7 +199,10 @@ async def test_list_instruments_returns_rtsx_filtered(client):
     assert "SBER@MISX" not in symbols
 
 
-async def test_list_instruments_502_on_finam_error(client):
+async def test_list_instruments_degrades_to_empty_on_total_source_failure(client):
+    # ISS is the primary source, Finam /v1/assets the fallback. If BOTH are down the
+    # dropdown degrades gracefully to an empty list with 200 (never 502) so the chart
+    # keeps working with the current symbol — see the endpoint docstring.
     with patch("trader.api.app.httpx.AsyncClient") as mock_cls:
         mock_http = AsyncMock()
         mock_http.__aenter__ = AsyncMock(return_value=mock_http)
@@ -209,7 +212,8 @@ async def test_list_instruments_502_on_finam_error(client):
 
         resp = await client.get("/api/v1/instruments")
 
-    assert resp.status_code == 502
+    assert resp.status_code == 200
+    assert resp.json() == {"instruments": []}
 
 
 # --- GET /api/v1/instruments/{symbol}/params ---

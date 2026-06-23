@@ -37,6 +37,15 @@ def make_mock_qs(quote_frames: list[dict] | None = None):
     return qs
 
 
+async def _wait_for_state(feed, target, timeout: float = 2.0) -> FeedState:
+    """Poll feed.state until it reaches target or timeout. Avoids racy fixed sleeps."""
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + timeout
+    while feed.state != target and loop.time() < deadline:
+        await asyncio.sleep(0.005)
+    return feed.state
+
+
 # --- latest() ---
 
 async def test_latest_returns_none_before_first_tick():
@@ -173,13 +182,12 @@ async def test_watchdog_recovers_to_live_on_heartbeat():
     feed = MarketDataFeed(qs, watchdog_secs=0.05)
     await feed.start(get_token=AsyncMock(return_value="tok"))
     feed._state = FeedState.LIVE
-    await asyncio.sleep(0.1)  # → STALE (at least one timeout cycle)
-    assert feed.state == FeedState.STALE
+    # No heartbeats → watchdog times out → STALE
+    assert await _wait_for_state(feed, FeedState.STALE) == FeedState.STALE
 
-    # Simulate a heartbeat arriving and close before watchdog can time out again
+    # A heartbeat arrives → watchdog recovers to LIVE
     feed._heartbeat.set()
-    await asyncio.sleep(0.01)  # yield to let watchdog pick up the heartbeat
-    assert feed.state == FeedState.LIVE
+    assert await _wait_for_state(feed, FeedState.LIVE) == FeedState.LIVE
     await feed.aclose()
 
 

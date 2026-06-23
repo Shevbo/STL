@@ -122,7 +122,12 @@ class QuoteStream:
                     for pb_quote in resp.quote:
                         self._put_data(quote_from_proto(pb_quote))
                         self.messages_received += 1
-                attempt = 0  # clean stream exit — reconnect immediately, no delay
+                # Clean stream exit (server closed the stream): reset error backoff,
+                # then pause briefly before reconnecting. A zero-delay reconnect here
+                # busy-loops the event loop and hammers the server if it keeps
+                # closing the stream immediately.
+                attempt = 0
+                await asyncio.sleep(_backoff(0))
             except grpc.aio.AioRpcError as exc:
                 if not self._running:
                     return
