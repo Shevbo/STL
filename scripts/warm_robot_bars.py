@@ -17,13 +17,18 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sys
 import time
 from datetime import date, timedelta
 
-import asyncpg
+# Repo root on sys.path so `import trader` works under cron (poetry install --no-root
+# does not install the project package, and scripts/ alone is on the default path).
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from trader.config import Settings
-from trader.lab.iss_loader import is_specific_contract, load_bars_iss
+import asyncpg  # noqa: E402
+
+from trader.config import Settings  # noqa: E402
+from trader.lab.iss_loader import is_specific_contract, load_bars_iss  # noqa: E402
 
 OUT_DIR = "agent_bars"
 LOOKBACK_DAYS = 75   # covers a live contract's traded life with margin to pan back
