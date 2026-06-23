@@ -340,17 +340,24 @@ export function priceMarkers(
   const sell = { points: [] as any[], markers: [] as any[] };
   const index: any[] = [];
   let lastBuyT = -Infinity, lastSellT = -Infinity;
+  // Dim an entry color for AVERAGING fills (faded vs a bright fresh entry). Hex → +alpha.
+  const dim = (c: string) => (c.length === 7 ? c + '70' : c);
   for (const e of events) {
-    const exitColor = e.close ? (e.close.exit === 'TP' ? colors.tp : colors.sl) : null;
+    // Closing fills are tinted by outcome (TP green / SL red). Entries are bright;
+    // averaging fills are dim+smaller so a fresh entry visually dominates the adds.
+    const base = e.side === 'buy' ? colors.buy : colors.sell;
+    const isAvg = e.kind === 'average';
+    const color = e.close ? (e.close.exit === 'TP' ? colors.tp : colors.sl) : (isAvg ? dim(base) : base);
+    const size = e.close ? 1 : (isAvg ? 1 : 2);   // bright entry larger, AVG smaller
     if (e.side === 'buy') {
       let tt = e.time; if (tt <= lastBuyT) tt = lastBuyT + 1; lastBuyT = tt;
       buy.points.push({ time: tt, value: e.price });
-      buy.markers.push({ time: tt, position: 'inBar', color: exitColor ?? colors.buy, shape: 'arrowUp', size: 1 });
+      buy.markers.push({ time: tt, position: 'inBar', color, shape: 'arrowUp', size });
       index.push({ time: tt, price: e.price, side: 'buy', label: e.label, rawTime: e.rawTime, close: e.close });
     } else {
       let tt = e.time; if (tt <= lastSellT) tt = lastSellT + 1; lastSellT = tt;
       sell.points.push({ time: tt, value: e.price });
-      sell.markers.push({ time: tt, position: 'inBar', color: exitColor ?? colors.sell, shape: 'arrowDown', size: 1 });
+      sell.markers.push({ time: tt, position: 'inBar', color, shape: 'arrowDown', size });
       index.push({ time: tt, price: e.price, side: 'sell', label: e.label, rawTime: e.rawTime, close: e.close });
     }
   }
@@ -399,6 +406,122 @@ export function positionEpisodes(trades: Fill[], lastTime?: number, lastPrice?: 
     });
   }
   return eps;
+}
+
+// ─── Per-contract (roll-aware) P&L ──────────────────────────────────────────
+// A robot that rolled (RIM6 → RIU6 → …) traded DISTINCT instruments at very
+// different price levels. Realized P&L MUST be computed per contract and summed —
+// pairing a fill on one contract against a fill on another invents phantom profit
+// (a RIM6 sell @110 910 "closed" by a RIU6 buy @94 780 → fake +16 000/contract).
+// At expiry the old contract is force-closed and a same-size position opens on the
+// next one, so each contract's book is self-contained: replay it alone, sum across.
+export type RawFill = Fill & { symbol?: string };
+
+export interface ContractPnl {
+  symbol: string;
+  net: number;            // Σ realized close pnl (₽, net of commission) on this contract
+  closes: number;         // round trips closed on this contract
+  peakContracts: number;  // max abs contracts held on this contract (margin at risk)
+  position: number;       // signed position still open on this contract at the end
+  events: TradeEvent[];
+}
+
+export interface RolledPnl {
+  net: number;            // Σ realized pnl over all contracts (₽, net of commission)
+  closes: number;         // total round trips
+  peakContracts: number;  // max contracts held on any single contract (never summed across)
+  position: number;       // open position on the CURRENT (latest-traded) contract
+  currentSymbol: string;
+  byContract: ContractPnl[];
+  events: TradeEvent[];   // every fill's event, contract-correct lifecycle, time-ordered
+}
+
+// Group fills by contract symbol, replay each group independently, sum the realized
+// P&L. `taker` selects the fee model (live = maker/false, backtest = taker/true).
+//   pointValue: a number (one ₽/point for all) OR a {symbol: pv} map. A rolled robot's
+//     contracts have slightly different point values, so the map is molecule-exact.
+//   opts.settleCarried (default true): a position left open on an EXPIRED (non-current)
+//     contract is force-closed at that contract's last traded price — the exchange cash-
+//     settles at expiry, and the robot reopens the same size on the next contract. The
+//     CURRENT contract's open position is kept unrealized (it is the live position).
+export function rolledPnl(
+  fills: RawFill[],
+  pointValue: number | Record<string, number> = 1,
+  taker = false,
+  opts: { settleCarried?: boolean; bucketSecs?: number } = {},
+): RolledPnl {
+  const { settleCarried = true, bucketSecs = 60 } = opts;
+  const pvFor = (s: string): number =>
+    typeof pointValue === 'number' ? pointValue : (pointValue[s] ?? pointValue[''] ?? 1);
+
+  const groups = new Map<string, RawFill[]>();
+  const order: string[] = [];                 // contracts in first-seen (chronological) order
+  const sorted = [...fills].sort((a, b) => a.time - b.time);
+  for (const f of sorted) {
+    const s = f.symbol || '';
+    if (!groups.has(s)) { groups.set(s, []); order.push(s); }
+    groups.get(s)!.push(f);
+  }
+  const currentSymbol = order.length ? order[order.length - 1] : '';
+
+  const byContract: ContractPnl[] = [];
+  let net = 0, closes = 0, peak = 0;
+  const allEvents: TradeEvent[] = [];
+  for (const s of order) {
+    const gf = groups.get(s)!;
+    let pos = 0, cPeak = 0;
+    for (const f of gf) {
+      pos += f.side === 'buy' ? (Number(f.qty) || 1) : -(Number(f.qty) || 1);
+      cPeak = Math.max(cPeak, Math.abs(pos));
+    }
+    // Force-close a carried position on an expired contract at its last traded price.
+    let seq = gf;
+    if (settleCarried && s !== currentSymbol && pos !== 0) {
+      const last = gf[gf.length - 1];
+      seq = [...gf, { symbol: s, time: last.time + 1, price: last.price,
+                      qty: Math.abs(pos), side: pos > 0 ? 'sell' : 'buy' }];
+    }
+    const evs = tradeEvents(seq, bucketSecs, pvFor(s), s, taker);
+    let cNet = 0, cCloses = 0;
+    for (const e of evs) if (e.close) { cNet += e.close.pnl; cCloses++; }
+    const endPos = (settleCarried && s !== currentSymbol) ? 0 : pos;
+    byContract.push({ symbol: s, net: cNet, closes: cCloses, peakContracts: cPeak, position: endPos, events: evs });
+    net += cNet; closes += cCloses; peak = Math.max(peak, cPeak);
+    allEvents.push(...evs);
+  }
+  allEvents.sort((a, b) => a.rawTime - b.rawTime);
+  const cur = byContract.find(c => c.symbol === currentSymbol);
+  return { net, closes, peakContracts: peak, position: cur?.position ?? 0, currentSymbol, byContract, events: allEvents };
+}
+
+// One RECTANGLE per position episode (open → full close), for the chart overlay:
+// x spans hold time (open→close), y spans the entry level (avg cost) → exit level.
+// Long = green, short = red. Built from roll-aware events, so episodes never span the
+// roll (a contract's synthetic settle closes its book). A still-open final episode
+// extends to lastTime/lastPrice (the live position).
+export interface PositionRect {
+  dir: 'long' | 'short';
+  tIn: number; pIn: number;     // open time / volume-weighted entry (avg cost)
+  tOut: number; pOut: number;   // close time / exit price (last fill if still open)
+  open?: boolean;
+}
+
+export function positionRects(events: TradeEvent[], lastTime?: number, lastPrice?: number): PositionRect[] {
+  const rects: PositionRect[] = [];
+  let pos = 0, avg = 0, tIn = 0, dir: 'long' | 'short' = 'long';
+  for (const e of events) {
+    const q = Number(e.qty) || 1;
+    const signed = e.side === 'buy' ? q : -q;
+    if (e.kind === 'open') { pos = signed; avg = e.price; tIn = e.time; dir = signed > 0 ? 'long' : 'short'; continue; }
+    if (e.kind === 'average') { avg = (avg * Math.abs(pos) + e.price * q) / (Math.abs(pos) + q); pos += signed; continue; }
+    if (e.kind === 'partial') { pos += signed; continue; }   // rect stays open until the full close
+    // full close or reverse: close the current episode's rectangle
+    rects.push({ dir, tIn, pIn: avg, tOut: e.time, pOut: e.price });
+    if (e.kind === 'reverse') { pos += signed; avg = e.price; tIn = e.time; dir = pos > 0 ? 'long' : 'short'; }
+    else { pos = 0; avg = 0; }
+  }
+  if (pos !== 0) rects.push({ dir, tIn, pIn: avg, tOut: lastTime ?? tIn, pOut: lastPrice ?? avg, open: true });
+  return rects;
 }
 
 // Dashed connector points for one LineSeries per direction, from episode open to

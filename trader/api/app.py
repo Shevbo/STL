@@ -1846,13 +1846,14 @@ def create_app() -> FastAPI:
             initial_margin = meta.get("initial_margin") or 0.0
 
             trade_rows = await pool.fetch(
-                """SELECT side, qty, price, status, timestamp
+                """SELECT symbol, side, qty, price, status, timestamp
                    FROM live_trades WHERE robot_id=$1 ORDER BY timestamp""",
                 d["id"],
             )
             trades = [
                 {
                     "time": int(r["timestamp"].timestamp()),
+                    "symbol": r["symbol"],
                     "side": r["side"],
                     "qty": int(r["qty"]),
                     "price": float(r["price"]),
@@ -1860,6 +1861,18 @@ def create_app() -> FastAPI:
                 }
                 for r in trade_rows
             ]
+
+            # Per-contract point values for rolled robots (P&L is computed per contract).
+            point_values = {symbol: point_value} if point_value else {}
+            initial_margins = {symbol: initial_margin} if initial_margin else {}
+            for fsym in {t["symbol"] for t in trades if t.get("symbol")}:
+                if fsym in point_values:
+                    continue
+                fmeta = await get_instrument_meta(pool, fsym) or {}
+                if fmeta.get("point_value") is not None:
+                    point_values[fsym] = fmeta["point_value"]
+                if fmeta.get("initial_margin") is not None:
+                    initial_margins[fsym] = fmeta["initial_margin"]
 
             result.append({
                 "id": d["id"],
@@ -1872,6 +1885,8 @@ def create_app() -> FastAPI:
                 "paper": paper,
                 "point_value": point_value,
                 "initial_margin": initial_margin,
+                "point_values": point_values,
+                "initial_margins": initial_margins,
                 "params": params,
                 "trades": trades,
             })
@@ -2017,6 +2032,23 @@ def create_app() -> FastAPI:
         point_value = (meta or {}).get("point_value") or 1.0
         initial_margin = (meta or {}).get("initial_margin")
 
+        # Per-contract economics. A rolled robot (RIM6 -> RIU6) traded two instruments
+        # with slightly different point values / margins; the frontend computes P&L per
+        # contract, so it needs each contract's own numbers (cached in instrument_meta).
+        point_values: dict[str, float] = {}
+        initial_margins: dict[str, float] = {}
+        for fsym in {t["symbol"] for t in trades if t.get("symbol")}:
+            fmeta = await get_instrument_meta(pool, fsym)
+            if not fmeta or fmeta.get("point_value") is None:
+                try:
+                    fmeta = await refresh_instrument_spec(pool, fsym)
+                except Exception:
+                    fmeta = fmeta or {}
+            if fmeta and fmeta.get("point_value") is not None:
+                point_values[fsym] = fmeta["point_value"]
+            if fmeta and fmeta.get("initial_margin") is not None:
+                initial_margins[fsym] = fmeta["initial_margin"]
+
         # Open (resting) orders the robot has placed on the exchange, drawn as
         # horizontal price lines on the chart. Paper mode fills instantly so there
         # are none; only real-mode resting orders appear. Best-effort: never 500.
@@ -2078,6 +2110,8 @@ def create_app() -> FastAPI:
             "trades": trades,
             "point_value": point_value,
             "initial_margin": initial_margin,
+            "point_values": point_values,
+            "initial_margins": initial_margins,
             "open_orders": open_orders,
             "planned_orders": planned_orders,
             "strategy": strategy,

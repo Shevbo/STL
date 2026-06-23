@@ -11,18 +11,25 @@
   import { onMount, onDestroy } from 'svelte';
   import { fetchWithAuth } from '../../lib/fetch-auth';
   import {
-    toFills, replay, computeStats, tradeEvents, priceMarkers,
-    positionEpisodes, buildConnectors, exitStats, commissionBreakdown, commissionFor,
+    toFills, rolledPnl, priceMarkers,
+    positionRects, exitStats, commissionBreakdown, commissionFor,
   } from '../../lib/lab-analytics';
 
   let {
     result, symbol, strategy = null, dateFrom, dateTo, pointValue = 1, defaultInterval = 60,
     openOrders = [], plannedOrders = [], taker = true, runParams = {}, paramSchema = [], onRerun = null,
+    segments = null, pointValues = null,
   }: {
     result: any; symbol: string; strategy?: any; dateFrom: string; dateTo: string;
     pointValue?: number; defaultInterval?: number;
     openOrders?: Array<{ side: string; price: number; qty: number; order_id?: string }>;
     plannedOrders?: Array<{ side: string; price: number; qty: number; reason?: string }>;
+    // A rolled robot's continuous chart: fetch each contract's bars over its own window
+    // and concatenate on the time axis (real prices, a visible step at the roll). fromTs/
+    // toTs are in CHART-AXIS time (bar epochs) so bars are filtered to their contract.
+    segments?: Array<{ symbol: string; dateFrom: string; dateTo: string; fromTs: number; toTs: number }> | null;
+    // Per-contract point values {symbol: pv} for molecule-exact rolled P&L (else pointValue).
+    pointValues?: Record<string, number> | null;
     // taker=true → backtest (exchange fee + broker); false → live (maker, broker only).
     taker?: boolean;
     // Editable params panel: current params + their schema (labels) + a re-run callback.
@@ -215,6 +222,7 @@
       if (!lr) return;
       try { tvEquity.timeScale().setVisibleLogicalRange(lr); } catch { /* transient */ }
       if (syncReady && !draggingBar) updateThumb(lr);
+      updateRects();   // boxes track the candles on pan/zoom
     });
 
     // Shift+wheel = horizontal pan (QUIK). Plain wheel is left to handleScale (zoom).
@@ -225,6 +233,7 @@
       // Elements may be gone if the window closed mid-resize — guard against null.
       if (candleEl) tvCandle?.applyOptions({ width: candleEl.clientWidth, height: candleEl.clientHeight });
       if (equityEl) tvEquity?.applyOptions({ width: equityEl.clientWidth, height: equityEl.clientHeight });
+      updateRects();
     });
     ro.observe(containerEl);
     roRef = ro;
@@ -343,27 +352,87 @@
     tvCandle?.remove(); tvEquity?.remove();
   });
 
+  async function fetchBars(sym: string, from: string, to: string): Promise<any[]> {
+    const res = await fetchWithAuth(
+      `/api/v1/market/bars?symbol=${encodeURIComponent(sym)}&date_from=${encodeURIComponent(from)}&date_to=${encodeURIComponent(to)}&resample_min=${resampleMin}`
+    );
+    if (!res.ok) throw new Error(await res.text());
+    return await res.json();
+  }
+
+  // Continuous chart: for a rolled robot, fetch each contract's bars over its own
+  // window (fromTs..toTs in chart-axis time) and concatenate — real prices, a visible
+  // step at the roll, no overlap. Single-contract (backtest) falls back to one fetch.
+  async function loadBars(): Promise<any[]> {
+    if (segments && segments.length > 1) {
+      const all: any[] = [];
+      for (const seg of segments) {
+        const part = await fetchBars(seg.symbol, seg.dateFrom, seg.dateTo);
+        for (const b of part) if (b.time >= seg.fromTs && b.time < seg.toTs) all.push(b);
+      }
+      all.sort((a, b) => a.time - b.time);
+      const out: any[] = []; let lastT = -Infinity;
+      for (const b of all) if (b.time !== lastT) { out.push(b); lastT = b.time; }   // unique ascending times
+      return out;
+    }
+    return await fetchBars(symbol, dateFrom, dateTo);
+  }
+
+  // Position rectangles (chart-axis time → pixels), recomputed on every pan/zoom so the
+  // boxes track the candles. Uses logical (bar-index) coordinates so a box whose ends
+  // are off-screen still renders (the container clips it) instead of vanishing.
+  let posRects: any[] = [];
+  let barTimes: number[] = [];
+  let rectPx = $state<Array<{ left: number; top: number; width: number; height: number; dir: string; open: boolean }>>([]);
+  function idxForTime(t: number): number {
+    const n = barTimes.length;
+    if (!n) return 0;
+    if (t <= barTimes[0]) return 0;
+    if (t >= barTimes[n - 1]) return n - 1;
+    let lo = 0, hi = n - 1;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (barTimes[mid] < t) lo = mid + 1; else hi = mid; }
+    return lo;
+  }
+  function updateRects() {
+    if (!tvCandle || !candleSeries || !posRects.length) { rectPx = []; return; }
+    const ts = tvCandle.timeScale();
+    const out: any[] = [];
+    for (const r of posRects) {
+      const x1 = ts.logicalToCoordinate(idxForTime(r.tIn) as any);
+      const x2 = ts.logicalToCoordinate(idxForTime(r.tOut) as any);
+      const y1 = candleSeries.priceToCoordinate(r.pIn);
+      const y2 = candleSeries.priceToCoordinate(r.pOut);
+      if (x1 == null || x2 == null || y1 == null || y2 == null) continue;
+      out.push({
+        left: Math.min(x1, x2), top: Math.min(y1, y2),
+        width: Math.max(2, Math.abs(x2 - x1)), height: Math.max(2, Math.abs(y2 - y1)),
+        dir: r.dir, open: !!r.open,
+      });
+    }
+    rectPx = out;
+  }
+
   async function loadData() {
     loading = true; error = ''; syncReady = false;
     try {
-      const res = await fetchWithAuth(
-        `/api/v1/market/bars?symbol=${encodeURIComponent(symbol)}&date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}&resample_min=${resampleMin}`
-      );
-      if (!res.ok) throw new Error(await res.text());
-      const bars: any[] = await res.json();
+      const bars: any[] = await loadBars();
       if (!bars.length) { error = `Нет данных для ${symbol}. Загрузите через "Load from ISS".`; loading = false; return; }
 
       candleSeries.setData(bars.map(b => ({ time: b.time, open: b.open, high: b.high, low: b.low, close: b.close })));
       volumeSeries.setData(bars.map(b => ({ time: b.time, value: b.volume, color: b.close >= b.open ? '#26a65b20' : '#c0392b20' })));
       barCount = bars.length;
+      barTimes = bars.map(b => b.time);
       periodLabel = `${fmtDay(bars[0].time)} — ${fmtDay(bars[bars.length - 1].time)}`;
 
       const fills = toFills(result?.trades);
-      const { roundTrips } = replay(fills);
-      // taker prop decides model: backtest = taker (exchange+broker), live = maker.
-      const events = tradeEvents(fills, resampleMin * 60, pointValue, symbol, taker);
+      // Roll-aware: P&L summed PER CONTRACT with each contract's own point value (a
+      // single-contract backtest collapses to a plain replay). taker → backtest fee
+      // model (exchange+broker), maker → live (broker only).
+      const pvArg = (pointValues && Object.keys(pointValues).length) ? pointValues : pointValue;
+      const rolled = rolledPnl(fills, pvArg, taker, { bucketSecs: resampleMin * 60 });
+      const events = rolled.events;
 
-      // triangles at exact fill price + hover index; closing fills tinted TP/SL
+      // triangles at exact fill price + hover index; bright entry / dim AVG / TP-SL close
       const pm = priceMarkers(events, { buy: BUY_COLOR, sell: SELL_COLOR, tp: TP_COLOR, sl: SL_COLOR });
       exits = exitStats(events);
       buyMarkSeries.setData(pm.buy.points);
@@ -372,12 +441,14 @@
       sellMarkSeries.setMarkers(pm.sell.markers);
       markIndex = pm.index;
 
-      // dashed connectors run open → FULL close per episode; a still-open episode
-      // extends to the last bar so its (e.g. green) line is visible.
+      // Position RECTANGLES per episode (replaces the old dashed connectors): box from
+      // open→close, entry(avg)→exit levels, green long / red short, AVG markers visible
+      // inside. Built from roll-aware events so a box never spans the roll. The line
+      // series stay empty (kept only to preserve series z-order).
       const lastBar = bars[bars.length - 1];
-      const episodes = positionEpisodes(fills, lastBar.time, lastBar.close);
-      longSeries.setData(buildConnectors(episodes, 'long'));
-      shortSeries.setData(buildConnectors(episodes, 'short'));
+      posRects = positionRects(events, lastBar.time, lastBar.close);
+      longSeries.setData([]);
+      shortSeries.setData([]);
 
       const eq: any[] = Array.isArray(result?.equity_curve)
         ? result.equity_curve
@@ -401,21 +472,25 @@
         equitySeries.setData([]);
       }
 
-      stats = computeStats(fills, roundTrips, eq);
-      // Money stats from the NET per-close PnLs (rubles, commission-deducted) in
-      // `events`, so avg/max/min match the TP/SL analytics and the equity curve.
-      if (stats) {
-        const closes = events.filter(e => e.close).map(e => e.close!.pnl);
-        if (closes.length) {
-          stats = {
-            ...stats,
-            avgPerTrade: closes.reduce((a, b) => a + b, 0) / closes.length,
-            maxProfit: Math.max(...closes),
-            maxLoss: Math.min(...closes),
-          };
-        }
-        netResult = closes.reduce((a, b) => a + b, 0);   // net of commission
-      }
+      // All round-trip / money stats from the roll-aware result — single source of
+      // truth, identical to the robot summary and the showcase (no more disagreement).
+      const closesPnl = events.filter(e => e.close).map(e => e.close!.pnl);
+      let maxDD = 0, peakEq = -Infinity;
+      for (const p of (eq as any[])) { if (p.equity > peakEq) peakEq = p.equity; maxDD = Math.max(maxDD, peakEq - p.equity); }
+      stats = {
+        fills: fills.length,
+        roundTrips: rolled.closes,
+        longRT: events.filter(e => e.close && e.side === 'sell').length,   // sold to close a long
+        shortRT: events.filter(e => e.close && e.side === 'buy').length,   // bought to close a short
+        maxAbsPos: rolled.peakContracts,
+        avgPerTrade: closesPnl.length ? closesPnl.reduce((a, b) => a + b, 0) / closesPnl.length : 0,
+        maxProfit: closesPnl.length ? Math.max(...closesPnl) : 0,
+        maxLoss: closesPnl.length ? Math.min(...closesPnl) : 0,
+        netProfit: rolled.net,
+        maxDDmoney: maxDD,
+        recovery: maxDD > 0 ? rolled.net / maxDD : null,
+      };
+      netResult = rolled.net;   // net of commission, roll-aware
       // Broker vs exchange commission split (transparency).
       commission = commissionBreakdown(fills, pointValue, symbol, taker);
       // Per-trade rows for the trades table (one row per fill, with role + close PnL).
@@ -434,6 +509,7 @@
       const lr = tvCandle.timeScale().getVisibleLogicalRange();
       if (lr) updateThumb(lr); else scrollThumb = { left: 0, width: 100 };
       drawOrderLines();
+      updateRects();
     } catch (e) {
       error = String(e);
     }
@@ -495,6 +571,15 @@
 
   <div class="bt-candle-area">
     <div class="candle" bind:this={candleEl}></div>
+
+    <!-- Position rectangles: open→close hold, entry(avg)→exit levels; green long / red
+         short; dashed border = still-open (live) position. AVG arrows show through. -->
+    <div class="pos-rects">
+      {#each rectPx as r}
+        <div class="pos-rect {r.dir}" class:open={r.open}
+             style="left:{r.left}px; top:{r.top}px; width:{r.width}px; height:{r.height}px;"></div>
+      {/each}
+    </div>
 
     <!-- Editable params frame (top-left), collapsed until clicked. Edit a value and
          "Пересчитать" re-runs the backtest with the new params. -->
@@ -674,6 +759,14 @@
 
   .bt-candle-area { position: relative; flex: 1; min-height: 0; }
   .candle { position: absolute; inset: 0; }
+
+  /* Position rectangles overlay — above candles, below tooltips; never intercepts
+     pointer events (pan/zoom/hover pass through to the chart). */
+  .pos-rects { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 3; }
+  .pos-rect { position: absolute; border: 1px solid; border-radius: 1px; box-sizing: border-box; }
+  .pos-rect.long  { background: #2ee6a618; border-color: #2ee6a688; }
+  .pos-rect.short { background: #ff5c8a18; border-color: #ff5c8a88; }
+  .pos-rect.open  { border-style: dashed; }
 
   /* On-chart crosshair date/time overlay — shifted right to clear the params frame. */
   .cross-overlay {

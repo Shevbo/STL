@@ -10,7 +10,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { fetchWithAuth } from '../../lib/fetch-auth';
-  import { toFills, replay, computeStats, tradeEvents } from '../../lib/lab-analytics';
+  import { toFills, rolledPnl } from '../../lib/lab-analytics';
   import BacktestChart from './BacktestChart.svelte';
 
   let { robotId, onClose }: { robotId: string; onClose: () => void } = $props();
@@ -59,18 +59,35 @@
           .map((f: any) => ({ ...f, time: f.time + MSK_OFFSET }))
       : []
   );
-  // Chart markers use ONLY the currently-charted contract's fills. A rolled robot
-  // (e.g. RIM6 -> RIU6) traded two instruments at different price levels; old-contract
-  // fills would float off the current contract's bars. Summary/equity/history use ALL.
-  let chartMarkerFills = $derived(
-    live
-      ? toFills((live.trades ?? []).filter((t: any) =>
-          EXECUTED.has(t.status) && (!live.chart_symbol || t.symbol === live.chart_symbol)))
-          .map((f: any) => ({ ...f, time: f.time + MSK_OFFSET }))
-      : []
-  );
-  let replayed = $derived(replay(chartFills));
+  // Continuous chart across the roll: one bar-window per contract, concatenated on the
+  // time axis at REAL prices (a visible step at the roll). fromTs/toTs are in chart-axis
+  // time (fill epoch + MSK_OFFSET) so each contract's bars are clipped to its own span.
+  // Returns null for a single-contract robot → BacktestChart does its normal one fetch.
+  let segments = $derived.by(() => {
+    const ex = (live?.trades ?? []).filter((t: any) => EXECUTED.has(t.status) && t.symbol);
+    if (!ex.length) return null;
+    const order: string[] = []; const firstT: Record<string, number> = {};
+    for (const t of [...ex].sort((a: any, b: any) => a.time - b.time))
+      if (!(t.symbol in firstT)) { firstT[t.symbol] = t.time; order.push(t.symbol); }
+    if (order.length < 2) return null;
+    const isoDay = (sec: number) => new Date(sec * 1000).toISOString().slice(0, 10);
+    return order.map((sym, i) => {
+      const endSec = i + 1 < order.length ? firstT[order[i + 1]] : null;
+      return {
+        symbol: sym,
+        dateFrom: isoDay(firstT[sym] - 86400),
+        dateTo: endSec ? isoDay(endSec + 86400) : live.date_to,
+        fromTs: i === 0 ? 0 : firstT[sym] + MSK_OFFSET,
+        toTs: endSec ? endSec + MSK_OFFSET : Number.MAX_SAFE_INTEGER,
+      };
+    });
+  });
   let pv = $derived(live?.point_value ?? 1);
+  // Per-contract point values for a rolled robot; fall back to the single value.
+  let pvMap = $derived(
+    live?.point_values && Object.keys(live.point_values).length
+      ? live.point_values : (live?.point_value ?? 1)
+  );
 
   // Param key → schema entry (label, hint, desc) for the (i) popovers.
   let schemaByKey = $derived.by(() => {
@@ -80,9 +97,11 @@
   });
   let openInfo = $state<string | null>(null);
   let hoverInfo = $state<string | null>(null);
-  // Net per-close events (rubles, commission deducted) — single source for money.
-  // Live = MAKER model (limit orders rest in book): only broker fee, no exchange fee.
-  let events = $derived(tradeEvents(chartFills, 60, pv, live?.symbol ?? '', false));
+  // Roll-aware analytics: P&L summed PER CONTRACT (RIM6 + RIU6 separately), never
+  // cross-paired (that invents phantom profit). Single source of truth for money,
+  // lifecycle, equity, and the summary. Live = MAKER model (broker fee only).
+  let rolled = $derived(rolledPnl(chartFills, pvMap, false, { bucketSecs: 60 }));
+  let events = $derived(rolled.events);
   let closes = $derived(events.filter(e => e.close).map(e => e.close!));
 
   // Map each executed fill back to its lifecycle event so the history table can
@@ -120,28 +139,29 @@
   });
 
   // Synthetic "result" so BacktestChart renders candles + markers + connectors + equity.
+  // trades = ALL fills (every contract); the chart shows the whole history across the
+  // roll, and BacktestChart computes the same roll-aware per-contract analytics.
   let chartResult = $derived(
-    live ? { trades: chartMarkerFills, equity_curve: equityCurve, params: live.robot?.params_json ?? {} } : null
+    live ? { trades: chartFills, equity_curve: equityCurve, params: live.robot?.params_json ?? {} } : null
   );
 
-  // Current result summary (rubles, net of commission).
+  // Current result summary (rubles, net of commission) — all roll-aware.
   let summary = $derived.by(() => {
-    const s = computeStats(chartFills, replayed.roundTrips, equityCurve);
-    let signed = 0;
-    for (const f of chartFills) signed += f.side === 'buy' ? f.qty : -f.qty;
     const wins = closes.filter(c => c.pnl > 0).length;
-    const net = equityCurve.length ? equityCurve[equityCurve.length - 1].equity - equityCurve[0].equity : 0;
-    // ГО (margin at risk) = per-contract initial margin × peak contracts held.
-    // P&L % is return on THIS, not on any fictional start capital.
-    const go = (live?.initial_margin ?? 0) * (s.maxAbsPos || 0);
+    // A closing fill that SELLS closed a long; one that BUYS closed a short.
+    const longRT = events.filter(e => e.close && e.side === 'sell').length;
+    const shortRT = events.filter(e => e.close && e.side === 'buy').length;
+    // ГО (margin at risk) = current contract's per-contract margin × peak contracts
+    // held on a single contract (never the doubled 9+9). Return is on THIS.
+    const go = (live?.initial_margins?.[rolled.currentSymbol] ?? live?.initial_margin ?? 0) * rolled.peakContracts;
     return {
-      net,
+      net: rolled.net,
       go,
-      retPct: go > 0 ? (net / go) * 100 : 0,
-      position: signed,
-      roundTrips: closes.length,
-      longRT: s.longRT,
-      shortRT: s.shortRT,
+      retPct: go > 0 ? (rolled.net / go) * 100 : 0,
+      position: rolled.position,
+      roundTrips: rolled.closes,
+      longRT,
+      shortRT,
       winRate: closes.length ? (wins / closes.length) * 100 : 0,
       orders: (live?.trades ?? []).length,
     };
@@ -202,6 +222,8 @@
             dateFrom={live.date_from}
             dateTo={live.date_to}
             pointValue={pv}
+            pointValues={live.point_values ?? null}
+            segments={segments}
             defaultInterval={5}
             taker={false}
             openOrders={live.open_orders ?? []}

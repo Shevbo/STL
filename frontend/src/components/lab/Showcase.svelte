@@ -5,7 +5,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { fetchWithAuth } from '../../lib/fetch-auth';
-  import { toFills, tradeEvents } from '../../lib/lab-analytics';
+  import { toFills, rolledPnl } from '../../lib/lab-analytics';
   import RobotWindow from './RobotWindow.svelte';
 
   // Robot whose chart + trades window is open (double-click a row to open).
@@ -23,29 +23,28 @@
   let retireComment = $state('');
   let retiring = $state(false);
 
+  // Per-contract point value map for rolled robots; fall back to the single value.
+  function pvMap(robot: any): number | Record<string, number> {
+    return robot.point_values && Object.keys(robot.point_values).length
+      ? robot.point_values : (robot.point_value ?? 1);
+  }
+
   function computePnl(robot: any): { net: number; retPct: number; position: number; trades: number; margin: number } {
     const fills = toFills(
       (robot.trades ?? []).filter((t: any) => EXECUTED.has(t.status))
     );
-    const pv = robot.point_value ?? 1;
-    const sym = robot.symbol ?? '';
-    const events = tradeEvents(fills, 60, pv, sym, false);
-    let cum = 0;
-    for (const e of events) if (e.close) cum += e.close.pnl;
-    // Running position + the peak number of contracts ever held (averaging grows it).
-    let pos = 0, peak = 0;
-    for (const f of fills) {
-      pos += f.side === 'buy' ? f.qty : -f.qty;
-      peak = Math.max(peak, Math.abs(pos));
-    }
-    // ГО (margin at risk) = per-contract initial margin × peak contracts. This is the
-    // capital the robot ties up; P&L % is return on THIS, not on any start capital.
-    const margin = (robot.initial_margin ?? 0) * peak;
+    // Roll-aware: P&L is summed PER CONTRACT (RIM6 + RIU6 separately). Replaying both
+    // as one book pairs a RIM6 sell against a RIU6 buy → phantom profit. peakContracts
+    // is the max on a single contract (never 9+9=18), so ГО is not doubled.
+    const r = rolledPnl(fills, pvMap(robot), false);
+    // ГО (margin at risk) = current contract's per-contract margin × peak contracts.
+    const curMargin = robot.initial_margins?.[r.currentSymbol] ?? robot.initial_margin ?? 0;
+    const margin = curMargin * r.peakContracts;
     return {
-      net: cum,
-      retPct: margin > 0 ? (cum / margin) * 100 : 0,
-      position: pos,
-      trades: fills.length,
+      net: r.net,
+      retPct: margin > 0 ? (r.net / margin) * 100 : 0,
+      position: r.position,
+      trades: r.closes,
       margin,
     };
   }
@@ -72,7 +71,7 @@
     const rows: any[] = [];
     for (const r of robots) {
       const fills = toFills((r.trades ?? []).filter((t: any) => EXECUTED.has(t.status)));
-      const evs = tradeEvents(fills, 60, r.point_value ?? 1, r.symbol ?? '', false);
+      const evs = rolledPnl(fills, pvMap(r), false).events;
       for (const e of evs) {
         rows.push({
           time: e.rawTime, robot_name: r.name, symbol: r.symbol,
