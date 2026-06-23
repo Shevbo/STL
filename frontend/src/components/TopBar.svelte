@@ -3,9 +3,7 @@
   import { accountStore } from '$lib/stores/account.svelte';
   import { servicesStore } from '$lib/stores/services.svelte';
 
-  let { labMode, onToggleLab, showLab, onToggleLabPanel }: {
-    labMode: boolean;
-    onToggleLab: () => void;
+  let { showLab, onToggleLabPanel }: {
     showLab?: boolean;
     onToggleLabPanel?: () => void;
   } = $props();
@@ -28,8 +26,7 @@
     </span>
   </div>
   <div class="controls">
-    <button class="lab-btn" class:active={labMode} onclick={onToggleLab}>Lab</button>
-    <button class="lab-btn lab-panel-btn" class:active={showLab} onclick={onToggleLabPanel}>LAB</button>
+    <button class="lab-btn lab-panel-btn" class:active={showLab} onclick={onToggleLabPanel}>Бэктест</button>
     <span
       class="dot"
       class:ok={mdStatus === 'ok'}

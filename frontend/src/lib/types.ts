@@ -67,20 +67,6 @@ export interface TradeFill {
   time: number; // unix seconds
 }
 
-export interface BacktestResult {
-  equityCurve: Array<{ time: number; value: number }>;
-  totalPnl: number;
-  tradeCount: number;
-}
-
-export interface Strategy {
-  id: string;
-  name: string;
-  symbol: string;
-  params: Record<string, unknown>;
-  scriptPath?: string;
-}
-
 export type ServiceId = 'auth' | 'md' | 'tx' | 'oms' | 'pos' | 'audit';
 export type ServiceStatus = 'ok' | 'warn' | 'error';
 

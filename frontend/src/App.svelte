@@ -11,26 +11,20 @@
   import PositionsTable from './components/PositionsTable.svelte';
   import OrderBook from './components/OrderBook.svelte';
   import BottomBar from './components/BottomBar.svelte';
-  import LabBar from './components/LabBar.svelte';
   import LabPanel from './components/LabPanel.svelte';
-  import CodeEditor from './components/CodeEditor.svelte';
   import LoginDialog from './components/LoginDialog.svelte';
   import { WsClient } from '$lib/ws';
-  import { OfflinePlayer } from '$lib/offline-player';
   import { robotsStore } from '$lib/stores/robots.svelte';
   import { quotesStore } from '$lib/stores/quotes.svelte';
   import { positionsStore } from '$lib/stores/positions.svelte';
   import { instrumentStore } from '$lib/stores/instrument.svelte';
   import { placeOrder, loadFeeConfig } from '$lib/api';
   import { fetchWithAuth } from '$lib/fetch-auth';
-  import type { Strategy, BacktestResult, OrderRequest } from '$lib/types';
+  import type { OrderRequest } from '$lib/types';
 
   let authed = $state(false);
-  let labMode = $state(false);
   let showLab = $state(false);
   let selectedRobotId = $state<string | null>(null);
-  let backtestResult = $state<BacktestResult | null>(null);
-  let editorPath = $state<string | null>(null);
   let events = $state<string[]>([]);
   let pendingOrder = $state<OrderRequest | null>(null);
 
@@ -123,7 +117,6 @@
   let currentQuote = $derived(quotesStore.get(effectiveSymbol));
 
   let ws: WsClient;
-  let offlinePlayer: OfflinePlayer | null = null;
 
   function onLogin() {
     authed = true;
@@ -174,7 +167,6 @@
   });
   onDestroy(() => {
     ws?.disconnect();
-    offlinePlayer?.stop();
   });
 
   async function handleConfirmOrder(order: OrderRequest): Promise<void> {
@@ -188,66 +180,6 @@
     }
   }
 
-  async function handleRunBacktest(symbol: string, from: string, to: string, stratId: string): Promise<void> {
-    const res = await fetchWithAuth(`/api/backtest?symbol=${symbol}&from=${from}&to=${to}&strategy=${stratId}`);
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-    backtestResult = await res.json() as BacktestResult;
-  }
-
-  function handleLoadStrategy(s: Strategy): void {
-    events = [...events, `${new Date().toLocaleTimeString()} Загружена стратегия: ${s.name}`];
-  }
-
-  function handleOpenEditor(path: string): void {
-    editorPath = path;
-  }
-
-  function handleExportRobot(s: Strategy): void {
-    const blob = new Blob([JSON.stringify(s, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = `${s.name}.json`; a.click();
-    URL.revokeObjectURL(url);
-    events = [...events, `${new Date().toLocaleTimeString()} Экспортирован робот: ${s.name}`];
-  }
-
-  async function handleToggleOffline(enabled: boolean): Promise<void> {
-    if (enabled) {
-      const input = document.createElement('input');
-      input.type = 'file'; input.accept = '.json';
-      input.onchange = async () => {
-        const file = input.files?.[0];
-        if (!file) return;
-        ws.disconnect();
-        offlinePlayer = new OfflinePlayer();
-        await offlinePlayer.load(file);
-        offlinePlayer.play();
-        events = [...events, `${new Date().toLocaleTimeString()} Offline: ${file.name}`];
-      };
-      input.click();
-    } else {
-      offlinePlayer?.stop();
-      offlinePlayer = null;
-      ws.connect();
-      events = [...events, `${new Date().toLocaleTimeString()} Online режим`];
-    }
-  }
-
-  async function handleEditorSave(path: string, content: string): Promise<void> {
-    const res = await fetchWithAuth(`/api/scripts/${encodeURIComponent(path)}`, {
-      method: 'PUT', body: content,
-      headers: { 'Content-Type': 'text/plain' },
-    });
-    if (!res.ok) throw new Error(`Save failed: ${res.status}`);
-  }
-
-  async function handleEditorRun(path: string, content: string): Promise<void> {
-    await handleEditorSave(path, content);
-    await handleRunBacktest(
-      selectedRobot?.symbol ?? 'GZM6@RTSX', '2026-01-01', '2026-05-01', 's1',
-    );
-  }
-
   // п.6: клик по стакану → открыть диалог заявки с quantity=1
   function handleBookOrder(partial: Omit<OrderRequest, 'quantity'>): void {
     pendingOrder = { ...partial, quantity: 1 };
@@ -258,7 +190,7 @@
   <LoginDialog {onLogin} />
 {:else}
 <div class="shell" onpointermove={onPointerMove} onpointerup={onPointerUp} onpointerleave={onPointerUp}>
-  <TopBar {labMode} onToggleLab={() => labMode = !labMode} {showLab} onToggleLabPanel={() => showLab = !showLab} />
+  <TopBar {showLab} onToggleLabPanel={() => showLab = !showLab} />
   <div class="body">
     <!-- LEFT COLUMN -->
     <div class="left-col" style="width:{leftW}px">
@@ -343,24 +275,7 @@
       <LabPanel />
     </div>
   {/if}
-  {#if labMode}
-    <LabBar
-      onRunBacktest={handleRunBacktest}
-      onLoadStrategy={handleLoadStrategy}
-      onOpenEditor={handleOpenEditor}
-      onExportRobot={handleExportRobot}
-      onToggleOffline={handleToggleOffline}
-    />
-  {/if}
   <BottomBar {events} />
-  {#if editorPath}
-    <CodeEditor
-      scriptPath={editorPath}
-      onSave={handleEditorSave}
-      onRun={handleEditorRun}
-      onClose={() => editorPath = null}
-    />
-  {/if}
   {#if pendingOrder}
     <OrderConfirmDialog
       order={pendingOrder}
