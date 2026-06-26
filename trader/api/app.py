@@ -956,6 +956,11 @@ class LoginRequest(BaseModel):
 def create_app() -> FastAPI:
     fastapi_app = FastAPI(lifespan=lifespan)
 
+    # Gzip responses (the showcase ships ~2 MB of JSON; uncompressed it crawls over the
+    # VDS uplink — minutes. JSON compresses ~9x, so this alone is a ~10x transfer win).
+    from fastapi.middleware.gzip import GZipMiddleware
+    fastapi_app.add_middleware(GZipMiddleware, minimum_size=1024)
+
     @fastapi_app.post("/api/auth/login")
     async def login(body: LoginRequest, request: Request, response: Response):
         settings: Settings = request.app.state.settings
