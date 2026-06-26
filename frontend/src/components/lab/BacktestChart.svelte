@@ -115,7 +115,7 @@
   // Commission for one fill, using this chart's instrument + taker/maker mode.
   const commissionForFill = (price: number, qty: number) => commissionFor(symbol, price, qty, pointValue, taker);
   const KIND_RU: Record<string, string> = {
-    open: 'Открытие', average: 'Усреднение', partial: 'Част. закрытие',
+    open: 'Открытие', average: 'Усреднение', enforce: 'Усиление', partial: 'Част. закрытие',
     full: 'Полн. закрытие', reverse: 'Реверс',
   };
   // Bar epochs carry Moscow wall-clock stamped as UTC, so format in UTC to match axis.

@@ -123,10 +123,13 @@ export function computeStats(trades: Fill[], roundTrips: RoundTrip[], equity: an
 export interface TradeEvent {
   time: number;           // bucketed (chart) time
   rawTime: number;        // original fill time
+  id?: string;            // source fill's order_id (unique) — for unambiguous row mapping
   side: 'buy' | 'sell';
   qty: number;            // contracts this fill moved
   price: number;
-  kind: 'open' | 'average' | 'partial' | 'full' | 'reverse';
+  // average = add at a price BETTER than avg entry (price moved AGAINST → улучшаем среднюю);
+  // enforce = add at a price WORSE than avg entry (price moved in our favour → усиление).
+  kind: 'open' | 'average' | 'enforce' | 'partial' | 'full' | 'reverse';
   posAfter: number;       // signed total position after this fill
   label: string;          // RU label e.g. "Открытие позиции 1 (всего в поз. 1)"
   close?: {               // present on partial/full/reverse (a closing fill)
@@ -151,6 +154,7 @@ function exitLabel(pnl: number, partial: boolean): { exit: 'TP' | 'SL'; partial:
 const KIND_LABEL: Record<TradeEvent['kind'], string> = {
   open: 'Открытие позиции',
   average: 'Усреднение',
+  enforce: 'Усиление',
   partial: 'Част. закрытие',
   full: 'Полн. закрытие',
   reverse: 'Реверс',
@@ -265,10 +269,14 @@ export function tradeEvents(trades: Fill[], bucketSecs: number, pointValue = 1, 
       kind = 'open'; avg = t.price; epStart = t.time; epMaxAbs = q; pos = signed;
       carriedFee = c;                           // opening fill's fee
     } else if (Math.sign(pos) === Math.sign(signed)) {
-      kind = 'average';
+      // Adding to the position. AVG (усреднение) = price moved AGAINST us, the add is at a
+      // BETTER price than the avg entry (improves the average). ENF (усиление) = price moved
+      // in our FAVOUR, the add is at a WORSE price than the avg (scaling into a winner).
+      const inFavour = pos > 0 ? t.price > avg : t.price < avg;
+      kind = inFavour ? 'enforce' : 'average';
       avg = (avg * Math.abs(pos) + t.price * q) / (Math.abs(pos) + q);
       pos += signed; epMaxAbs = Math.max(epMaxAbs, Math.abs(pos));
-      carriedFee += c;                          // averaging fill's fee
+      carriedFee += c;                          // add fill's fee
     } else {
       const dir = Math.sign(pos);
       const closeQty = Math.min(Math.abs(pos), q);
@@ -288,7 +296,8 @@ export function tradeEvents(trades: Fill[], bucketSecs: number, pointValue = 1, 
     const totalInPos = Math.abs(pos);
     out.push({
       time: Math.floor(t.time / bucketSecs) * bucketSecs,
-      rawTime: t.time, side: t.side, qty: q, price: t.price,
+      rawTime: t.time, id: (t as any).order_id ?? (t as any).id,
+      side: t.side, qty: q, price: t.price,
       kind, posAfter: pos, close,
       label: `${KIND_LABEL[kind]} ${q} (всего в поз. ${totalInPos})`,
     });
@@ -343,12 +352,13 @@ export function priceMarkers(
   // Dim an entry color for AVERAGING fills (faded vs a bright fresh entry). Hex → +alpha.
   const dim = (c: string) => (c.length === 7 ? c + '70' : c);
   for (const e of events) {
-    // Closing fills are tinted by outcome (TP green / SL red). Entries are bright;
-    // averaging fills are dim+smaller so a fresh entry visually dominates the adds.
+    // Closing fills are tinted by outcome (TP green / SL red). Fresh entry = bright+large.
+    // AVG (add against us) = dim+small. ENF (add into a winner) = full colour but small.
     const base = e.side === 'buy' ? colors.buy : colors.sell;
-    const isAvg = e.kind === 'average';
-    const color = e.close ? (e.close.exit === 'TP' ? colors.tp : colors.sl) : (isAvg ? dim(base) : base);
-    const size = e.close ? 1 : (isAvg ? 1 : 2);   // bright entry larger, AVG smaller
+    const isAdd = e.kind === 'average' || e.kind === 'enforce';
+    const color = e.close ? (e.close.exit === 'TP' ? colors.tp : colors.sl)
+      : (e.kind === 'average' ? dim(base) : base);
+    const size = e.close ? 1 : (isAdd ? 1 : 2);   // fresh entry larger; adds smaller
     if (e.side === 'buy') {
       let tt = e.time; if (tt <= lastBuyT) tt = lastBuyT + 1; lastBuyT = tt;
       buy.points.push({ time: tt, value: e.price });
@@ -522,7 +532,7 @@ export function positionRects(events: TradeEvent[], lastTime?: number, lastPrice
     if (e.kind === 'open') {
       pos = signed; pIn = e.price; tIn = e.time; dir = signed > 0 ? 'long' : 'short'; epPnl = 0; continue;
     }
-    if (e.kind === 'average') { pos += signed; continue; }    // AVG never moves the vertices
+    if (e.kind === 'average' || e.kind === 'enforce') { pos += signed; continue; }   // adds never move the vertices
     if (e.kind === 'partial') { pos += signed; if (e.close) epPnl += e.close.pnl; continue; }
     // full close or reverse: finalise this episode's rectangle
     if (e.close) epPnl += e.close.pnl;

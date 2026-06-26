@@ -86,6 +86,7 @@
   function tradeTypeLabel(row: any): { text: string; cls: string } {
     if (row.close) return { text: row.close.exit, cls: row.close.exit === 'TP' ? 'tt-tp' : 'tt-sl' };
     if (row.kind === 'average') return { text: 'AVG', cls: 'tt-avg' };
+    if (row.kind === 'enforce') return { text: 'ENF', cls: 'tt-enf' };
     if (row.kind === 'reverse') return { text: 'реверс', cls: 'tt-rev' };
     return { text: 'вход', cls: 'tt-open' };
   }
@@ -382,6 +383,7 @@
   .tt-tp { background: #11271a; color: #4caf50; }
   .tt-sl { background: #2a1414; color: #ff6b6b; }
   .tt-avg { background: #2a2410; color: #ffb300; }
+  .tt-enf { background: #0e2a18; color: #36d57a; }
   .tt-rev { background: #1a1430; color: #b388ff; }
   .tt-open { background: #14222a; color: #6aa8ff; }
 

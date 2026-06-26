@@ -104,17 +104,18 @@
   let events = $derived(rolled.events);
   let closes = $derived(events.filter(e => e.close).map(e => e.close!));
 
-  // Map each executed fill back to its lifecycle event so the history table can
-  // show the trade TYPE (TP/SL/AVG/вход/реверс) and, on TP/SL, the round-trip P&L.
-  // chartFills are shifted +MSK_OFFSET, so events.rawTime == rawTrade.time + offset.
-  let eventByKey = $derived.by(() => {
+  // Map each executed fill back to its lifecycle event by its UNIQUE order_id. A value
+  // key (time+side+qty+price) collides when one signal both closes and reopens at the
+  // same instant/price (a reverse recorded as two identical fills) — the close (SL/TP)
+  // would be dropped and the row mislabelled "вход" with no P&L. order_id is unique.
+  let eventById = $derived.by(() => {
     const m = new Map<string, (typeof events)[number]>();
-    for (const e of events) m.set(`${e.rawTime}_${e.side}_${e.qty}_${e.price}`, e);
+    for (const e of events) if (e.id != null) m.set(String(e.id), e);
     return m;
   });
   function tradeEvent(t: any) {
     if (t.status === 'rejected' || t.status === 'skipped') return null;
-    return eventByKey.get(`${t.time + MSK_OFFSET}_${t.side}_${Number(t.qty) || 1}_${t.price}`) ?? null;
+    return (t.order_id != null ? eventById.get(String(t.order_id)) : null) ?? null;
   }
   // Type badge: TP/SL (closing fill, profit/loss), AVG (averaging), вход (open),
   // реверс (flip-through-zero open leg without its own close), — for rejected.
@@ -122,6 +123,7 @@
     if (!ev) return { text: '—', cls: 'tt-none' };
     if (ev.close) return { text: ev.close.exit, cls: ev.close.exit === 'TP' ? 'tt-tp' : 'tt-sl' };
     if (ev.kind === 'average') return { text: 'AVG', cls: 'tt-avg' };
+    if (ev.kind === 'enforce') return { text: 'ENF', cls: 'tt-enf' };
     if (ev.kind === 'reverse') return { text: 'реверс', cls: 'tt-rev' };
     return { text: 'вход', cls: 'tt-open' };
   }
@@ -441,6 +443,7 @@
   .tt-tp { background: #11271a; color: #4caf50; }
   .tt-sl { background: #2a1414; color: #ff6b6b; }
   .tt-avg { background: #2a2410; color: #ffb300; }
+  .tt-enf { background: #0e2a18; color: #36d57a; }
   .tt-rev { background: #1a1430; color: #b388ff; }
   .tt-open { background: #14222a; color: #6aa8ff; }
   .tt-none { background: transparent; color: #555; }
