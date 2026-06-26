@@ -788,8 +788,10 @@
     display: flex; align-items: center; justify-content: center;
   }
   /* Long = green, short = red (clearly distinct hues, not teal/rose). */
-  .pos-rect.long  { background: #00e67622; border-color: #00e676aa; }
-  .pos-rect.short { background: #ff525222; border-color: #ff5252aa; }
+  /* Faint by default so a busy always-in-market robot (150 boxes tiling) reads as soft
+     position bands, not a dominant grid; the P&L still shows on hover / in big boxes. */
+  .pos-rect.long  { background: #00e67612; border-color: #00e67655; }
+  .pos-rect.short { background: #ff525212; border-color: #ff525255; }
   .pos-rect.open  { border-style: dashed; }
   .pr-pnl {
     font-size: 9px; font-family: monospace; font-weight: 700; white-space: nowrap;
