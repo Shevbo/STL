@@ -393,28 +393,28 @@
   }
 
   // Position rectangles (chart-axis time → pixels), recomputed on every pan/zoom so the
-  // boxes track the candles. Uses logical (bar-index) coordinates so a box whose ends
-  // are off-screen still renders (the container clips it) instead of vanishing.
+  // boxes track the candles. X uses timeToCoordinate — the SAME mapping lightweight-charts
+  // uses for the markers — so a box aligns with its own arrows at every timeframe. (A
+  // bar-index mapping drifts: the time scale's logical space also includes the marker
+  // anchor points, so a candle index != a logical index, and the gap changes per interval.)
+  // Off-screen ends are clamped to the edge so partly-visible boxes still draw (container clips).
   let posRects: any[] = [];
-  let barTimes: number[] = [];
   let rectPx = $state<Array<{ left: number; top: number; width: number; height: number;
     dir: string; open: boolean; pnl: number; label: string; showLabel: boolean }>>([]);
-  function idxForTime(t: number): number {
-    const n = barTimes.length;
-    if (!n) return 0;
-    if (t <= barTimes[0]) return 0;
-    if (t >= barTimes[n - 1]) return n - 1;
-    let lo = 0, hi = n - 1;
-    while (lo < hi) { const mid = (lo + hi) >> 1; if (barTimes[mid] < t) lo = mid + 1; else hi = mid; }
-    return lo;
-  }
   function updateRects() {
     if (!tvCandle || !candleSeries || !posRects.length) { rectPx = []; return; }
     const ts = tvCandle.timeScale();
+    const vr: any = ts.getVisibleRange();              // { from, to } in chart-axis time, or null
+    const W = candleEl?.clientWidth ?? 1200;
+    const xFor = (t: number): number | null => {
+      const c = ts.timeToCoordinate(t as any);
+      if (c != null) return c as number;
+      if (!vr) return null;
+      return t < (vr.from as number) ? -20 : W + 20;   // off-screen → clamp to the correct edge
+    };
     const out: any[] = [];
     for (const r of posRects) {
-      const x1 = ts.logicalToCoordinate(idxForTime(r.tIn) as any);
-      const x2 = ts.logicalToCoordinate(idxForTime(r.tOut) as any);
+      const x1 = xFor(r.tIn), x2 = xFor(r.tOut);
       const y1 = candleSeries.priceToCoordinate(r.pIn);
       const y2 = candleSeries.priceToCoordinate(r.pOut);
       if (x1 == null || x2 == null || y1 == null || y2 == null) continue;
@@ -437,7 +437,6 @@
       candleSeries.setData(bars.map(b => ({ time: b.time, open: b.open, high: b.high, low: b.low, close: b.close })));
       volumeSeries.setData(bars.map(b => ({ time: b.time, value: b.volume, color: b.close >= b.open ? '#26a65b20' : '#c0392b20' })));
       barCount = bars.length;
-      barTimes = bars.map(b => b.time);
       periodLabel = `${fmtDay(bars[0].time)} — ${fmtDay(bars[bars.length - 1].time)}`;
 
       const fills = toFills(result?.trades);

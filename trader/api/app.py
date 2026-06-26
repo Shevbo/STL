@@ -1990,12 +1990,20 @@ def create_app() -> FastAPI:
         planned_orders = state.get("plan") if isinstance(state.get("plan"), list) else []
 
         # Strategy template behind this robot (matched by script_code), so the
-        # window can show param descriptions + a landing link. Best-effort.
+        # window can show param descriptions + a landing link. Best-effort. Prefer the
+        # EXACT id from make_on_bar('<id>'); else the most specific (longest) id that
+        # appears in the code, so 'bollinger_bo_m1' wins over its prefix 'bollinger_bo'.
         strategy = None
         try:
+            import re as _re
             templates = await list_strategies(request)
             code = robot.get("script_code") or ""
-            strategy = next((t for t in templates if t.get("id") and t["id"] in code), None)
+            m = _re.search(r"make_on_bar\(\s*['\"]([^'\"]+)['\"]", code)
+            if m:
+                strategy = next((t for t in templates if t.get("id") == m.group(1)), None)
+            if strategy is None:
+                cands = [t for t in templates if t.get("id") and t["id"] in code]
+                strategy = max(cands, key=lambda t: len(t["id"]), default=None)
         except Exception:
             strategy = None
 

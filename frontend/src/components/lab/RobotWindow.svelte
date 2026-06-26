@@ -177,6 +177,29 @@
       hour: '2-digit', minute: '2-digit', second: '2-digit',
     });
 
+  // Export the full history (chronological) to CSV so the P&L can be audited offline.
+  // ';'-separated + UTF-8 BOM = opens cleanly in Excel (RU locale). The Фин. рез column
+  // sums to the robot's net realized P&L (only TP/SL/реверс rows carry a value).
+  function downloadCsv() {
+    const head = ['Время (МСК)', 'Тип', 'Сторона', 'Кол-во', 'Цена', 'Контракт', 'Фин. рез (₽)', 'Статус', 'order_id'];
+    const q = (v: any) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const lines = [head.map(q).join(';')];
+    for (const t of (live?.trades ?? [])) {            // API order = chronological ascending
+      const ev = tradeEvent(t);
+      lines.push([
+        fmtTime(t.iso), tradeTypeLabel(ev).text, t.side, t.qty, Math.round(t.price),
+        t.symbol ?? '', ev?.close ? Math.round(ev.close.pnl) : '', t.status, t.order_id ?? '',
+      ].map(q).join(';'));
+    }
+    const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${(live?.robot?.name ?? 'robot').replace(/[^\w\-]+/g, '_')}_trades.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   async function load() {
     loading = true; error = '';
     try {
@@ -302,7 +325,12 @@
           <div class="rw-vsplit" title="Потяните — ширина панели" onpointerdown={(e) => startDrag('left', e)}></div>
 
           <div class="panel right">
-            <div class="panel-title">История сделок ({(live.trades ?? []).length})</div>
+            <div class="panel-title hist-head">
+              <span>История сделок ({(live.trades ?? []).length})</span>
+              {#if (live.trades ?? []).length}
+                <button class="csv-btn" onclick={downloadCsv} title="Выгрузить таблицу сделок в CSV (для сверки P&L)">⭳ CSV</button>
+              {/if}
+            </div>
             <div class="history-scroll">
               {#if (live.trades ?? []).length === 0}
                 <div class="empty">Сделок пока нет. Робот ждёт сигнала.</div>
@@ -391,6 +419,12 @@
     font-size: 10px; color: #555; text-transform: uppercase; letter-spacing: 0.5px;
     margin-bottom: 6px;
   }
+  .hist-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-right: 10px; }
+  .csv-btn {
+    font-size: 10px; color: #6aa8ff; background: #12203a; border: 1px solid #24406a;
+    border-radius: 3px; padding: 2px 8px; cursor: pointer; letter-spacing: 0; text-transform: none;
+  }
+  .csv-btn:hover { border-color: #6aa8ff66; color: #cfe; }
   .res-title { margin-top: 14px; }
 
   .kv-grid { display: flex; flex-direction: column; gap: 3px; }
