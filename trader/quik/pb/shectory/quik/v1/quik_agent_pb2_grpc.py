@@ -5,7 +5,7 @@ import warnings
 
 from shectory.quik.v1 import quik_agent_pb2 as shectory_dot_quik_dot_v1_dot_quik__agent__pb2
 
-GRPC_GENERATED_VERSION = '1.81.0'
+GRPC_GENERATED_VERSION = '1.70.0'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
@@ -18,14 +18,14 @@ except ImportError:
 if _version_not_supported:
     raise RuntimeError(
         f'The grpc package installed is at version {GRPC_VERSION},'
-        + ' but the generated code in shectory/quik/v1/quik_agent_pb2_grpc.py depends on'
+        + f' but the generated code in shectory/quik/v1/quik_agent_pb2_grpc.py depends on'
         + f' grpcio>={GRPC_GENERATED_VERSION}.'
         + f' Please upgrade your grpc module to grpcio>={GRPC_GENERATED_VERSION}'
         + f' or downgrade your generated code using grpcio-tools<={GRPC_VERSION}.'
     )
 
 
-class QuikAgentLinkStub:
+class QuikAgentLinkStub(object):
     """---- Session: single bidi stream, agent -> STL = AgentMessage, STL -> agent = OrchestratorMessage.
     """
 
@@ -42,7 +42,7 @@ class QuikAgentLinkStub:
                 _registered_method=True)
 
 
-class QuikAgentLinkServicer:
+class QuikAgentLinkServicer(object):
     """---- Session: single bidi stream, agent -> STL = AgentMessage, STL -> agent = OrchestratorMessage.
     """
 
@@ -68,7 +68,7 @@ def add_QuikAgentLinkServicer_to_server(servicer, server):
 
 
  # This class is part of an EXPERIMENTAL API.
-class QuikAgentLink:
+class QuikAgentLink(object):
     """---- Session: single bidi stream, agent -> STL = AgentMessage, STL -> agent = OrchestratorMessage.
     """
 
