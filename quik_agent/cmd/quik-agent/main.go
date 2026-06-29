@@ -310,6 +310,9 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 	bridge := trade.NewBridge(cfg.TradeBridgePort, nil, func(f string, a ...any) {
 		fmt.Printf("trade-bridge: "+f+"\n", a...)
 	})
+	if cfg.TradeQueueDir != "" {
+		bridge.SetQueueDir(cfg.TradeQueueDir) // file-queue transport (no LuaSocket)
+	}
 	mgr := trade.NewManager(trade.ManagerConfig{
 		ClassCode: cfg.TradeClassCode,
 		Account:   tradeAccount,

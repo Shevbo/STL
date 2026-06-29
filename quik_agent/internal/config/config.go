@@ -65,6 +65,10 @@ type Config struct {
 	// TradeBridgePort is the loopback TCP port the agent serves for the QUIK Lua
 	// script (the Lua connects as client). Default 50063.
 	TradeBridgePort int `json:"trade_bridge_port"`
+	// TradeQueueDir, when set, switches the Lua bridge from TCP to a shared-directory
+	// file queue (cmd.jsonl out, evt.jsonl in) — used when the QUIK terminal has no
+	// LuaSocket. Must match the Lua script's CONFIG.QUEUE_DIR. Empty => TCP.
+	TradeQueueDir string `json:"trade_queue_dir"`
 	// TradeClassCode is the QUIK CLASSCODE for placements, e.g. SPBFUT.
 	TradeClassCode string `json:"trade_class_code"`
 	// TradeAccountEnv is the NAME of the env var holding the trade account code.

@@ -116,8 +116,19 @@ type Bridge struct {
 	mu   sync.Mutex
 	conn net.Conn // current Lua client, or nil when none connected
 
+	// File-queue fallback (used when QUIK has no LuaSocket). When queueDir != "",
+	// the bridge appends commands to <dir>/cmd.jsonl and tails <dir>/evt.jsonl by
+	// byte offset instead of using TCP. Same newline-JSON schema. See PHASE2.md.
+	queueDir string
+	cmdMu    sync.Mutex // serializes appends to cmd.jsonl
+	evtOff   int64      // bytes consumed from evt.jsonl
+
 	transSeq atomic.Int64
 }
+
+// SetQueueDir switches the bridge to the file-queue transport (no TCP). Call before
+// Run. dir must match the Lua script's CONFIG.QUEUE_DIR.
+func (b *Bridge) SetQueueDir(dir string) { b.queueDir = dir }
 
 // NewBridge builds a bridge bound to 127.0.0.1:port. handler may be set later via
 // SetHandler (the manager wires itself in after construction). logf may be nil.
@@ -144,8 +155,12 @@ func (b *Bridge) SetHandler(h BridgeHandler) {
 // and order events.
 func (b *Bridge) NextTransID() int64 { return b.transSeq.Add(1) }
 
-// Connected reports whether a Lua client is currently attached.
+// Connected reports whether a Lua client is currently attached. In file-queue mode
+// the transport is the filesystem, so it is always "connected".
 func (b *Bridge) Connected() bool {
+	if b.queueDir != "" {
+		return true
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.conn != nil
@@ -155,6 +170,9 @@ func (b *Bridge) Connected() bool {
 // ever serves loopback. A new connection replaces any previous one. Run blocks; start
 // it in a goroutine.
 func (b *Bridge) Run(ctx context.Context) error {
+	if b.queueDir != "" {
+		return b.runFileQueue(ctx)
+	}
 	lc := net.ListenConfig{}
 	ln, err := lc.Listen(ctx, "tcp", b.addr)
 	if err != nil {
@@ -279,6 +297,9 @@ var errNoLua = fmt.Errorf("trade bridge: no Lua client connected")
 // send writes one JSON object + newline to the current Lua client. It fails fast if
 // no client is attached so the manager can reject the command instead of blocking.
 func (b *Bridge) send(v any) error {
+	if b.queueDir != "" {
+		return b.appendCmd(v)
+	}
 	b.mu.Lock()
 	conn := b.conn
 	b.mu.Unlock()
