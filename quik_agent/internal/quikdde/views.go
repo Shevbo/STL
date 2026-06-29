@@ -197,8 +197,8 @@ func (p *Provider) OrderBook(code string) (Book, bool) {
 		return Book{}, false
 	}
 	priceC := colIndex(columns, "цена", "price")
-	bidQC := colIndex(columns, "спрос", "bid", "купить", "покупка")
-	askQC := colIndex(columns, "предложен", "ask", "продать", "продажа", "offer")
+	bidQC := colIndexExcl(columns, []string{"своя"}, "спрос", "bid", "купить", "покупка")
+	askQC := colIndexExcl(columns, []string{"своя"}, "предложен", "ask", "продать", "продажа", "offer")
 	if priceC < 0 {
 		return Book{}, false
 	}

@@ -194,6 +194,33 @@ func colIndex(columns []string, subs ...string) int {
 	return -1
 }
 
+// colIndexExcl is colIndex but skips columns whose header contains any of the
+// exclude substrings. QUIK order books carry "Своя покупка"/"Своя продажа" (own
+// orders, usually zero) BEFORE the market "Покупка"/"Продажа" depth columns; a
+// plain substring match on "покупка" would pick the own-orders column and yield an
+// empty bid side. Excluding "своя" makes the market depth columns win.
+func colIndexExcl(columns []string, exclude []string, subs ...string) int {
+	for i, h := range columns {
+		hl := strings.ToLower(strings.TrimSpace(h))
+		skip := false
+		for _, e := range exclude {
+			if e != "" && strings.Contains(hl, strings.ToLower(e)) {
+				skip = true
+				break
+			}
+		}
+		if skip {
+			continue
+		}
+		for _, s := range subs {
+			if s != "" && strings.Contains(hl, strings.ToLower(s)) {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
 func cellAt(row []string, idx int) string {
 	if idx < 0 || idx >= len(row) {
 		return ""
