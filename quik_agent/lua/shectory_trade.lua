@@ -365,7 +365,13 @@ function fq.connect()
   fq.evt_path = CONFIG.QUEUE_DIR .. sep .. "evt.jsonl"
   -- ensure evt file exists
   local ef = io.open(fq.evt_path, "a"); if ef then ef:close() end
-  log("file-queue ready: " .. fq.cmd_path)
+  -- Read only commands appended AFTER we start: seek cmd.jsonl to its current end so a
+  -- Lua restart never REPLAYS the previous session's commands (replaying a stale
+  -- cmd.jsonl re-placed an old order runaway on a live account). The agent also
+  -- truncates the queue on its own start.
+  local cf = io.open(fq.cmd_path, "r")
+  if cf then cf:seek("end"); fq.cmd_offset = cf:seek(); cf:close() else fq.cmd_offset = 0 end
+  log("file-queue ready: " .. fq.cmd_path .. " (offset=" .. fq.cmd_offset .. ")")
   return true
 end
 function fq.close() fq.cmd_path = nil end
@@ -381,6 +387,10 @@ function fq.recv_lines()
   if not fq.cmd_path then return lines end
   local f = io.open(fq.cmd_path, "r")
   if not f then return lines end
+  -- Truncation detection: if cmd.jsonl is now smaller than our offset, the agent
+  -- truncated/rotated it on a fresh session -> re-read from the start, never seek past EOF.
+  local size = f:seek("end")
+  if size < fq.cmd_offset then fq.cmd_offset = 0 end
   f:seek("set", fq.cmd_offset)
   for line in f:lines() do
     line = string.gsub(line, "\r$", "")

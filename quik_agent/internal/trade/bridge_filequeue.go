@@ -25,20 +25,18 @@ func (b *Bridge) runFileQueue(ctx context.Context) error {
 	if err := os.MkdirAll(b.queueDir, 0o755); err != nil {
 		return err
 	}
-	// Ensure both files exist so the first poll/append never errors.
+	// Fresh session: TRUNCATE both files. A previous run's command lines must never be
+	// replayed — a Lua restart re-reading a stale cmd.jsonl re-placed an old order
+	// runaway on a live account. The agent owns the queue lifecycle and resets it here.
 	for _, p := range []string{b.cmdPath(), b.evtPath()} {
-		f, err := os.OpenFile(p, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+		f, err := os.OpenFile(p, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
 		if err != nil {
 			return err
 		}
 		_ = f.Close()
 	}
-	// Start at the current end of evt.jsonl: we only care about events produced after
-	// the agent starts, not stale lines from a previous run.
-	if fi, err := os.Stat(b.evtPath()); err == nil {
-		b.evtOff = fi.Size()
-	}
-	b.logf("trade bridge: file-queue mode, dir=%s (cmd.jsonl out, evt.jsonl in)", b.queueDir)
+	b.evtOff = 0
+	b.logf("trade bridge: file-queue mode, dir=%s (truncated fresh; cmd.jsonl out, evt.jsonl in)", b.queueDir)
 
 	tick := time.NewTicker(20 * time.Millisecond)
 	defer tick.Stop()
@@ -55,6 +53,11 @@ func (b *Bridge) runFileQueue(ctx context.Context) error {
 // drainEvents reads any complete new lines appended to evt.jsonl since evtOff and
 // dispatches them. A trailing partial line (no newline yet) is left for the next tick.
 func (b *Bridge) drainEvents() {
+	// If evt.jsonl shrank below our offset, the Lua truncated/rotated it: re-sync from
+	// the start instead of seeking past EOF forever.
+	if fi, err := os.Stat(b.evtPath()); err == nil && fi.Size() < b.evtOff {
+		b.evtOff = 0
+	}
 	f, err := os.Open(b.evtPath())
 	if err != nil {
 		return
