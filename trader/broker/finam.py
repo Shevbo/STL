@@ -357,6 +357,8 @@ class FinamBroker(BrokerInterface):
 
 
 @register("finam")
-def _build_finam(settings: Any, **inject: Any) -> FinamBroker:
-    """Registry factory: build a FinamBroker from settings (config by NAME)."""
-    return FinamBroker(settings, **inject)
+def _build_finam(settings: Any, **_inject: Any) -> FinamBroker:
+    """Registry factory: build a FinamBroker from settings (config by NAME). The Finam
+    adapter needs no injected deps (it builds from settings), so any injection bag passed
+    by the caller (e.g. the QUIK stores) is accepted and ignored."""
+    return FinamBroker(settings)
