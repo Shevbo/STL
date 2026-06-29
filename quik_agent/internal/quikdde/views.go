@@ -2,6 +2,7 @@ package quikdde
 
 import (
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -59,6 +60,17 @@ const (
 	SheetQuotes     = "quotes"
 	SheetOrderBook  = "orderbook"
 )
+
+// IsReservedSheet reports whether name is one of the typed sheet names handled by
+// the structured views (securities/quotes/params/orderbook). The generic order-book
+// auto-detection skips these so they are never mistaken for a per-code стакан.
+func IsReservedSheet(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case SheetParams, SheetSecurities, SheetQuotes, SheetOrderBook:
+		return true
+	}
+	return false
+}
 
 // Securities returns the securities reference built from the "securities" sheet
 // (falls back to the "params" sheet, which on FORTS also carries step columns).
@@ -174,7 +186,13 @@ func (p *Provider) Ticks() []Tick {
 // QUIK's стакан export is a flat table of (price, bid qty, ask qty) rows; a level
 // with a non-zero bid quantity is a bid, a non-zero ask quantity is an ask.
 func (p *Provider) OrderBook(code string) (Book, bool) {
-	columns, rows, ts := p.Sheet(SheetOrderBook)
+	// Practical naming: a стакан is exported on a sheet named by the instrument
+	// code (e.g. "RIU6"), since one fixed "orderbook" sheet cannot hold many books.
+	// Read the per-code sheet first; fall back to the legacy "orderbook" sheet.
+	columns, rows, ts := p.Sheet(code)
+	if columns == nil {
+		columns, rows, ts = p.Sheet(SheetOrderBook)
+	}
 	if columns == nil {
 		return Book{}, false
 	}

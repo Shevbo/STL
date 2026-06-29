@@ -195,6 +195,15 @@ class QuikAgentLinkServicer(pb_grpc.QuikAgentLinkServicer):
                     self.store.set_params(agent_id, _params_to_dict(msg.params))
                 elif field == "diagnostics":
                     self.store.set_diagnostics(agent_id, _diag_to_dict(msg.diagnostics))
+                elif field == "raw_table":
+                    rt = msg.raw_table
+                    self.store.set_raw_table(
+                        agent_id,
+                        rt.name,
+                        list(rt.columns),
+                        [list(r.cells) for r in rt.rows],
+                        rt.received_at_unix_ms,
+                    )
                 elif field == "alert":
                     a = msg.alert
                     alert_dict = {

@@ -72,12 +72,69 @@ func (l *Link) flushMarketData(stream quikv1.QuikAgentLink_SessionClient) error 
 		}
 	}
 
+	sent := map[string]bool{}
+	// Explicit subscriptions first.
 	for code := range subs {
-		if book, ok := l.opt.Provider.OrderBook(code); ok {
+		if book, ok := l.opt.Provider.OrderBook(code); ok && len(book.Bids)+len(book.Asks) > 0 {
 			if err := l.sendOrderBook(stream, book); err != nil {
 				return err
 			}
+			sent[code] = true
 		}
+	}
+	// Auto-detect: a стакан is exported on a sheet named by the instrument code
+	// (e.g. "RIU6"). Any non-reserved sheet that parses as a book with at least one
+	// level is sent. The level check filters non-book sheets (deals, custom tables)
+	// that may have a price column but no bid/ask quantities.
+	for _, name := range l.opt.Provider.SheetNames() {
+		if sent[name] || quikdde.IsReservedSheet(name) {
+			continue
+		}
+		if book, ok := l.opt.Provider.OrderBook(name); ok && len(book.Bids)+len(book.Asks) > 0 {
+			if err := l.sendOrderBook(stream, book); err != nil {
+				return err
+			}
+			sent[name] = true
+		}
+	}
+	return nil
+}
+
+// flushRawTables pushes EVERY QUIK DDE sheet to STL as a generic RawTable, so any
+// table the user exports (including "deals") shows up downstream without an
+// allowlist. This is additive to the typed sends (securities/tick/order_book/
+// params); STL dedupes by name. A sheet is only sent when its lastMutationMs
+// changed since the last send (first observation always sends), to avoid
+// re-streaming unchanged tables. rawSent is reset per session in runOnce.
+func (l *Link) flushRawTables(stream quikv1.QuikAgentLink_SessionClient) error {
+	if l.rawSent == nil {
+		l.rawSent = map[string]int64{}
+	}
+	for _, name := range l.opt.Provider.SheetNames() {
+		columns, dataRows, lastMutationMs := l.opt.Provider.Sheet(name)
+		if columns == nil {
+			continue // unknown or empty sheet
+		}
+		if prev, ok := l.rawSent[name]; ok && prev == lastMutationMs {
+			continue // unchanged since last send
+		}
+		rows := make([]*quikv1.TableRow, 0, len(dataRows))
+		for _, dr := range dataRows {
+			rows = append(rows, &quikv1.TableRow{Cells: dr})
+		}
+		if err := l.sendMsg(stream, &quikv1.AgentMessage{
+			Payload: &quikv1.AgentMessage_RawTable{
+				RawTable: &quikv1.RawTable{
+					Name:             name,
+					Columns:          columns,
+					Rows:             rows,
+					ReceivedAtUnixMs: lastMutationMs,
+				},
+			},
+		}); err != nil {
+			return err
+		}
+		l.rawSent[name] = lastMutationMs
 	}
 	return nil
 }

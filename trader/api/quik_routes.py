@@ -86,6 +86,32 @@ async def quik_params(request: Request, agent_id: str | None = None):
     return store.params(agent_id) if store else None
 
 
+# ---- generic QUIK tables (any DDE sheet exported by the agent, read-only) ----
+
+@router.get("/tables")
+async def quik_tables(request: Request, agent_id: str | None = None):
+    """List available raw tables (summaries) across agents or one agent.
+
+    Each item: {agent_id, name, columns_count, rows_count, received_at_unix_ms}.
+    """
+    _auth(request)
+    store = _store(request)
+    if store is None:
+        return {"tables": []}
+    return {"tables": store.list_raw_tables(agent_id)}
+
+
+@router.get("/tables/{name}")
+async def quik_table(name: str, request: Request, agent_id: str | None = None):
+    """Full raw table by name: {columns, rows, received_at_unix_ms}."""
+    _auth(request)
+    store = _store(request)
+    tbl = store.get_raw_table(name, agent_id) if store else None
+    if tbl is None:
+        raise HTTPException(status_code=404, detail=f"no table {name}")
+    return tbl
+
+
 # ---- "Интерфейс биржи" exchange-interface selector (data source only) ----
 
 class ExchangeInterface(BaseModel):

@@ -85,6 +85,11 @@ type Link struct {
 	startedAt time.Time
 	reconnects uint32
 
+	// rawSent tracks the last-sent lastMutationMs per sheet name so unchanged
+	// RawTables are not re-sent. Accessed only from the sendLoop goroutine (one
+	// per session), so no extra locking is needed. Reset per session in runOnce.
+	rawSent map[string]int64
+
 	// hmon tracks channel-state transitions to raise Alerts. Accessed only from
 	// the sendLoop goroutine (one per session), so no extra locking is needed.
 	hmon *health.Monitor
@@ -241,6 +246,10 @@ func (l *Link) runOnce(ctx context.Context) error {
 	if err := l.sendRegister(stream); err != nil {
 		return fmt.Errorf("register: %w", err)
 	}
+
+	// Fresh per-session change-detection state: a reconnect re-sends every sheet
+	// once so STL has a full picture again.
+	l.rawSent = map[string]int64{}
 
 	// Receiver loop runs in its own goroutine; sender loop drives heartbeats and
 	// market-data flushes. Either ending tears down the session.

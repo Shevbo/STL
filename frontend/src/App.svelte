@@ -12,6 +12,7 @@
   import OrderBook from './components/OrderBook.svelte';
   import BottomBar from './components/BottomBar.svelte';
   import LabPanel from './components/LabPanel.svelte';
+  import QuikTables from './components/QuikTables.svelte';
   import LoginDialog from './components/LoginDialog.svelte';
   import { WsClient } from '$lib/ws';
   import { robotsStore } from '$lib/stores/robots.svelte';
@@ -24,6 +25,7 @@
 
   let authed = $state(false);
   let showLab = $state(false);
+  let showQuikTables = $state(false);
   let selectedRobotId = $state<string | null>(null);
   let events = $state<string[]>([]);
   let pendingOrder = $state<OrderRequest | null>(null);
@@ -190,7 +192,12 @@
   <LoginDialog {onLogin} />
 {:else}
 <div class="shell" onpointermove={onPointerMove} onpointerup={onPointerUp} onpointerleave={onPointerUp}>
-  <TopBar {showLab} onToggleLabPanel={() => showLab = !showLab} />
+  <TopBar
+    {showLab}
+    onToggleLabPanel={() => showLab = !showLab}
+    {showQuikTables}
+    onToggleQuikTables={() => showQuikTables = !showQuikTables}
+  />
   <div class="body">
     <!-- LEFT COLUMN -->
     <div class="left-col" style="width:{leftW}px">
@@ -275,6 +282,11 @@
       <LabPanel />
     </div>
   {/if}
+  {#if showQuikTables}
+    <div class="quik-tables-wrap" style="height:{labH}px">
+      <QuikTables />
+    </div>
+  {/if}
   <BottomBar {events} />
   {#if pendingOrder}
     <OrderConfirmDialog
@@ -305,6 +317,7 @@
   }
   .positions-wrap { flex-shrink: 0; overflow: hidden; }
   .lab-panel-wrap { overflow: hidden; }
+  .quik-tables-wrap { overflow: hidden; flex-shrink: 0; border-top: 1px solid #2d2d4a; }
 
   /* ── Drag handles ─────────────────────────────────────────────── */
   .dh {

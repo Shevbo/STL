@@ -28,7 +28,24 @@ message AgentMessage {
     ParamsSnapshot params = 7;      // price step / step cost -> commission
     Diagnostics diagnostics = 8;    // channel health snapshot
     Alert alert = 9;                // out-of-band event (also fanned to TG)
+    RawTable raw_table = 10;        // any QUIK DDE sheet, verbatim (generic passthrough)
   }
+}
+
+// Generic passthrough of ANY QUIK DDE sheet the user exports (e.g. deals, or any
+// custom table). Columns are the QUIK column headers; rows are stringified cells
+// in column order. This is additive to the typed views (Securities/Tick/OrderBook/
+// Params) — every merged sheet, including the typed ones, is also sent raw so STL
+// can show any table the user wants without an allowlist.
+message TableRow {
+  repeated string cells = 1;
+}
+
+message RawTable {
+  string name = 1;                  // QUIK "Лист" name (the sheet/item), e.g. "deals"
+  repeated string columns = 2;      // header row
+  repeated TableRow rows = 3;
+  int64 received_at_unix_ms = 4;
 }
 
 message Register {

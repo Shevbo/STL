@@ -35,6 +35,9 @@ class AgentState:
     ticks: dict[str, dict[str, Any]] = field(default_factory=dict)
     # security code -> latest OrderBook dict
     order_books: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # table name -> latest RawTable dict
+    # {"columns": [...], "rows": [[...]], "received_at_unix_ms": int, "last_seen": ts}
+    raw_tables: dict[str, dict[str, Any]] = field(default_factory=dict)
     # link bookkeeping
     last_seen_ms: int = field(default_factory=_now_ms)
     connected_at_ms: int = field(default_factory=_now_ms)
@@ -132,6 +135,26 @@ class QuikAgentStore:
         with self._lock:
             self._agents.setdefault(agent_id, AgentState(agent_id=agent_id)).order_books[code] = ob
 
+    def set_raw_table(
+        self,
+        agent_id: str,
+        name: str,
+        columns: list[str],
+        rows: list[list[str]],
+        received_at_unix_ms: int,
+    ) -> None:
+        """Store the latest generic QUIK table verbatim under its sheet name."""
+        if not name:
+            return
+        with self._lock:
+            st = self._agents.setdefault(agent_id, AgentState(agent_id=agent_id))
+            st.raw_tables[name] = {
+                "columns": list(columns),
+                "rows": [list(r) for r in rows],
+                "received_at_unix_ms": received_at_unix_ms,
+                "last_seen": _now_ms(),
+            }
+
     def remove_agent(self, agent_id: str) -> None:
         with self._lock:
             self._agents.pop(agent_id, None)
@@ -165,6 +188,7 @@ class QuikAgentStore:
                     "securities_count": len(st.securities),
                     "tick_codes": sorted(st.ticks.keys()),
                     "order_book_codes": sorted(st.order_books.keys()),
+                    "raw_table_names": sorted(st.raw_tables.keys()),
                 })
             return out
 
@@ -187,6 +211,57 @@ class QuikAgentStore:
         with self._lock:
             st = self._pick(agent_id)
             return st.params if st else None
+
+    def list_raw_tables(self, agent_id: str | None = None) -> list[dict[str, Any]]:
+        """Summaries of generic tables. When agent_id is None, list across agents.
+
+        Each summary: {agent_id, name, columns_count, rows_count, received_at_unix_ms}.
+        """
+        with self._lock:
+            if agent_id is not None:
+                agents = [self._agents[agent_id]] if agent_id in self._agents else []
+            else:
+                agents = list(self._agents.values())
+            out: list[dict[str, Any]] = []
+            for st in agents:
+                for name, tbl in st.raw_tables.items():
+                    out.append({
+                        "agent_id": st.agent_id,
+                        "name": name,
+                        "columns_count": len(tbl.get("columns", [])),
+                        "rows_count": len(tbl.get("rows", [])),
+                        "received_at_unix_ms": tbl.get("received_at_unix_ms", 0),
+                    })
+            return out
+
+    def get_raw_table(self, name: str, agent_id: str | None = None) -> dict[str, Any] | None:
+        """Full table: {columns, rows, received_at_unix_ms}.
+
+        With agent_id, looks only at that agent. Without, picks the single agent
+        when unambiguous, else searches all agents for the first matching name.
+        """
+        with self._lock:
+            if agent_id is not None:
+                st = self._agents.get(agent_id)
+                tbl = st.raw_tables.get(name) if st else None
+                return self._table_view(tbl)
+            st = self._pick(agent_id)
+            if st is not None and name in st.raw_tables:
+                return self._table_view(st.raw_tables[name])
+            for st in self._agents.values():
+                if name in st.raw_tables:
+                    return self._table_view(st.raw_tables[name])
+            return None
+
+    @staticmethod
+    def _table_view(tbl: dict[str, Any] | None) -> dict[str, Any] | None:
+        if tbl is None:
+            return None
+        return {
+            "columns": tbl.get("columns", []),
+            "rows": tbl.get("rows", []),
+            "received_at_unix_ms": tbl.get("received_at_unix_ms", 0),
+        }
 
     def _pick(self, agent_id: str | None) -> AgentState | None:
         """Pick a named agent, or the single connected one when unambiguous."""

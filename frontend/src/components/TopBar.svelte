@@ -4,9 +4,11 @@
   import { servicesStore } from '$lib/stores/services.svelte';
   import ExchangeInterface from './ExchangeInterface.svelte';
 
-  let { showLab, onToggleLabPanel }: {
+  let { showLab, onToggleLabPanel, showQuikTables, onToggleQuikTables }: {
     showLab?: boolean;
     onToggleLabPanel?: () => void;
+    showQuikTables?: boolean;
+    onToggleQuikTables?: () => void;
   } = $props();
 
   let acc = $derived(accountStore.data);
@@ -28,6 +30,7 @@
   </div>
   <div class="controls">
     <ExchangeInterface />
+    <button class="lab-btn" class:active={showQuikTables} onclick={onToggleQuikTables}>Таблицы QUIK</button>
     <button class="lab-btn lab-panel-btn" class:active={showLab} onclick={onToggleLabPanel}>Бэктест</button>
     <span
       class="dot"

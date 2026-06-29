@@ -47,6 +47,20 @@ func (l *Link) sendLoop(ctx context.Context, stream quikv1.QuikAgentLink_Session
 			if err := l.flushMarketData(stream); err != nil {
 				return err
 			}
+			// Reference data (securities + params) is populated by DDE AFTER the
+			// initial startup flush, so re-send it every poll; otherwise the first
+			// (empty) snapshot would stick and /securities + /params stay empty.
+			if err := l.flushSecurities(stream, true); err != nil {
+				return err
+			}
+			if err := l.flushParams(stream); err != nil {
+				return err
+			}
+			// Additive generic passthrough: push every QUIK DDE sheet as a
+			// RawTable so any table the user exports shows up in STL.
+			if err := l.flushRawTables(stream); err != nil {
+				return err
+			}
 		}
 	}
 }
