@@ -5,7 +5,14 @@ STL over one long-lived bidi gRPC stream. The agent **dials out** to STL, so the
 Windows box stays behind NAT with no inbound port.
 
 **Phase 1 is READ-ONLY.** No order placement, move, cancel, or market trade exists
-anywhere in this code. The DDE channel is inbound only (QUIK -> agent).
+in the Phase 1 paths. The DDE channel is inbound only (QUIK -> agent).
+
+**Phase 2 (orders) is HUMAN-INITIATED ONLY** and **OFF by default**: the master flag
+`quik_trading_enabled` defaults to `false`, so the agent rejects every order/cancel/
+execution command until it is explicitly enabled. There is no strategy or signal
+generation — the agent only places and maker-works a human-decided, operator-confirmed
+order, and re-enforces hard limits as a second line on top of STL. See
+[Phase 2: orders & maker execution](#phase-2-orders--maker-execution).
 
 Ported from PiranhaAI `local_agent_go` (the `quikdde` DDE/DDEML reader and the
 self-update restart helper). Adapted to module `shectory/quik_agent`.
@@ -19,7 +26,8 @@ quik_agent/
     config/                     agent_config.json + first-run wizard
     commission/                 coef = step_cost / price_step (+ table tests)
     quikdde/                    DDE reader (Windows) + in-memory Provider views
-    link/                       gRPC bidi client (dial out to STL)
+    link/                       gRPC bidi client (dial out to STL) + Phase 2 trade Emitter
+    trade/                      Phase 2: TCP bridge to QUIK Lua, order manager, hard limits, 1b maker loop
     health/                     channel-state machine + Diagnostics/Alert builder (pure logic)
     watchdog/                   DDE-liveness supervisor: read-only restart on staleness
     service/                    Windows service install/uninstall/start/stop + console fallback
@@ -124,6 +132,7 @@ quotes, and order book tables.
 | `SHECTORY_DDE_VERBOSE=1` | per-packet DDE noise |
 | `SHECTORY_AGENT_TG_BOT_TOKEN` | NAME of Telegram bot token for the LOCAL link-down fallback (value never hardcoded) |
 | `SHECTORY_AGENT_TG_CHAT_ID` | NAME of the Telegram chat id for the LOCAL link-down fallback |
+| `<trade_account_env>` (default `STL_QUIK_TRADE_ACCOUNT`) | Phase 2: trade account VALUE (read by name only; never stored in config). Empty => Lua fills the account. |
 
 The two `SHECTORY_AGENT_TG_*` vars are read by **name** only. If either is unset the
 local notifier is a no-op. They are used **only** as a fallback when the gRPC link
@@ -157,6 +166,108 @@ Release endpoints expected at `SHECTORY_AGENT_RELEASE_URL`:
 
 - `GET /agent_release?arch=<amd64|386>` -> decimal build_rev in the body
 - `GET /agent_release/zip?arch=<amd64|386>` -> the update ZIP (contains the exe)
+
+## Phase 2: orders & maker execution
+
+**Guard 3 — human-only, irreversible.** The agent NEVER places or cancels an order
+without an explicit, confirmed command from STL, and the master flag is **OFF by
+default**. No auto-trading, no signals. Every placement is operator-confirmed in the
+STL UI; the agent re-checks the same hard limits as a second line of defense.
+
+### Trade bridge (agent <-> QUIK Lua)
+
+The agent serves a loopback TCP server on `127.0.0.1:<trade_bridge_port>` (default
+`50063`). The QUIK **QLua** script connects as a **client** (LuaSocket) and reconnects
+on drop; the agent tolerates disconnect/reconnect and keeps only the newest connection.
+Protocol is **newline-delimited JSON**, one object per line:
+
+- agent -> Lua:
+  - `{"cmd":"place","trans_id":N,"client_id":"..","class":"SPBFUT","sec":"RIU6","op":"B|S","price":"..","qty":K,"type":"L","account":".."}`
+  - `{"cmd":"cancel","trans_id":N,"order_num":"..","class":"SPBFUT","sec":"RIU6"}`
+- Lua -> agent (from QUIK callbacks):
+  - `{"event":"trans_reply","trans_id":N,"result_code":I,"order_num":"..","text":".."}`
+  - `{"event":"order","order_num":"..","trans_id":N,"state":"active|filled|cancelled|rejected","balance":B,"qty":Q,"price":"..","text":".."}`
+  - `{"event":"trade","order_num":"..","qty":Q,"price":"..","ts":..}`
+
+`trans_id` is the agent-assigned correlation id (`place`/`cancel` map to QUIK
+`sendTransaction` NEW_ORDER / KILL_ORDER). The agent maps `client_id <-> trans_id <->
+order_num` and translates Lua events into `OrderUpdate` / `TransReply` /
+`ExecutionUpdate` frames back to STL over the existing gRPC stream.
+
+### gRPC commands (STL -> agent)
+
+`PlaceOrder`, `CancelOrder`, `KillSwitch`, `StartExecution`, `StopExecution` (see
+`proto/shectory/quik/v1/quik_agent.proto`). They are dispatched to the order manager
+in `internal/trade`; Phase 1 read-only paths are untouched. **KillSwitch** cancels all
+working orders, stops every running execution, and **blocks new placements** until
+explicitly cleared.
+
+### Hard limits (agent-enforced, BEFORE anything reaches QUIK)
+
+A request failing ANY limit is rejected in the agent with an `OrderUpdate` `REJECTED`
++ reason; nothing is sent to Lua. Empty whitelist / zero daily cap **fail closed**.
+
+| limit (config) | default | meaning |
+| --- | --- | --- |
+| `quik_trading_enabled` | `false` | **master flag**; when off ALL order commands are rejected |
+| `max_contracts_per_order` | `2` | max quantity of a single placement |
+| `max_working_contracts` | `2` | max total resting quantity across all open orders |
+| `price_collar_frac` | `0.002` | max adverse fractional deviation (0.2%) for the collar |
+| `instrument_whitelist` | `["RIU6"]` | only these codes are tradable (anything else rejected) |
+| `daily_order_cap` | `50` | max placements per calendar day (agent local time) |
+
+### 1b maker-working loop (`StartExecution`)
+
+Sub-second, runs in the agent off the **local** quikdde order book (no STL round-trip
+per tick). Decision rules:
+
+- **Join, never cross**: quote our own side's touch (best bid for BUY, best ask for
+  SELL). Always maker, never taker. `allow_cross` defaults to `false`.
+- **Re-quote** (cancel/replace) only when the touch moves **>= 1 price step** AND no
+  more often than **every 200 ms** (anti-flicker).
+- **Collar stop**: never quote/fill beyond `worst_price`. If the market runs past the
+  collar, STOP, cancel the remainder, emit `ExecutionUpdate` `state=collar_hit`. No
+  chasing.
+- **Partial accumulation** toward `target_quantity`; finish at target (`done`) or
+  collar. `StopExecution` stops it (`stopped`).
+
+### Account / secrets
+
+The trade **account** is read from the env var named by `trade_account_env` (VALUE
+never stored in the config or the binary — same pattern as the Bearer token). The
+`trade_class_code` (default `SPBFUT`) is the QUIK CLASSCODE for placements.
+
+### Config knobs (additive — old `agent_config.json` files still load)
+
+```json
+{
+  "quik_trading_enabled": false,
+  "trade_bridge_port": 50063,
+  "trade_class_code": "SPBFUT",
+  "trade_account_env": "STL_QUIK_TRADE_ACCOUNT",
+  "max_contracts_per_order": 2,
+  "max_working_contracts": 2,
+  "price_collar_frac": 0.002,
+  "instrument_whitelist": ["RIU6"],
+  "daily_order_cap": 50
+}
+```
+
+Absent fields fall back to the defaults above (an explicit `"instrument_whitelist": []`
+is honored as fail-closed). `quik_trading_enabled` has no default beyond its safe
+zero value `false`.
+
+### Phase 2 tests (no QUIK / no network)
+
+```bat
+cd quik_agent
+go test ./internal/trade/...
+```
+
+`limits_test.go` is table-driven over every hard limit + the daily cap rollover +
+collar math. `execution_test.go` covers the maker decision rules (join-not-cross,
+re-quote threshold, collar stop, no-book) and partial accumulation / requote / stop —
+all without a live order book.
 
 ## Resilience (Windows service, watchdog, diagnostics)
 

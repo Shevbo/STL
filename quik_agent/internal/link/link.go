@@ -72,6 +72,26 @@ type Options struct {
 	// link is down (so a link outage can still be signalled). When nil it is a
 	// no-op (notify.Nop()).
 	Notifier notify.Notifier
+
+	// ---- Phase 2: order / execution (sub-agent A, additive) ----
+
+	// Trade is the order manager. When nil (Phase 1 build), every Phase 2
+	// OrchestratorMessage (place/cancel/kill/start/stop) is dropped, so the agent
+	// stays strictly read-only. When set, the manager enforces the hard limits +
+	// master flag before anything reaches QUIK. The link feeds itself as the Emitter
+	// to the manager so OrderUpdate/TransReply/ExecutionUpdate ride the live stream.
+	Trade TradeManager
+}
+
+// TradeManager is the subset of the order manager the link drives. internal/trade
+// *Manager satisfies it. Kept as an interface so the link does not import the trade
+// package's concrete type and Phase 1 builds without it.
+type TradeManager interface {
+	PlaceOrder(*quikv1.PlaceOrder)
+	CancelOrder(*quikv1.CancelOrder)
+	KillSwitch(*quikv1.KillSwitch)
+	StartExecution(*quikv1.StartExecution)
+	StopExecution(*quikv1.StopExecution)
 }
 
 // Link owns the connection lifecycle and reconnect loop.
@@ -93,6 +113,16 @@ type Link struct {
 	// hmon tracks channel-state transitions to raise Alerts. Accessed only from
 	// the sendLoop goroutine (one per session), so no extra locking is needed.
 	hmon *health.Monitor
+
+	// curStream is the live session stream for the trade Emitter, which is called
+	// from the manager's own goroutines (not the send/recv loops). Guarded by
+	// streamMu. nil between sessions; Emit* drop quietly when nil.
+	streamMu  sync.Mutex
+	curStream quikv1.QuikAgentLink_SessionClient
+
+	// sendMu serializes stream.Send across the sendLoop and the trade Emitter
+	// goroutines (a gRPC client stream allows only one concurrent Send).
+	sendMu sync.Mutex
 }
 
 // New builds a Link. The token is taken from opt.Token (the caller reads it from
@@ -251,6 +281,10 @@ func (l *Link) runOnce(ctx context.Context) error {
 	// once so STL has a full picture again.
 	l.rawSent = map[string]int64{}
 
+	// Publish the live stream for the trade Emitter; clear it when the session ends.
+	l.setStream(stream)
+	defer l.setStream(nil)
+
 	// Receiver loop runs in its own goroutine; sender loop drives heartbeats and
 	// market-data flushes. Either ending tears down the session.
 	errCh := make(chan error, 2)
@@ -282,8 +316,11 @@ func (l *Link) sendRegister(stream quikv1.QuikAgentLink_SessionClient) error {
 	return stream.Send(msg)
 }
 
-// sendMsg sends a fully built AgentMessage with the next sequence number.
+// sendMsg sends a fully built AgentMessage with the next sequence number. sendMu
+// serializes Send across the sendLoop and the trade Emitter goroutines.
 func (l *Link) sendMsg(stream quikv1.QuikAgentLink_SessionClient, msg *quikv1.AgentMessage) error {
+	l.sendMu.Lock()
+	defer l.sendMu.Unlock()
 	msg.Seq = l.nextSeq()
 	return stream.Send(msg)
 }

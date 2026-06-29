@@ -53,3 +53,17 @@ class Settings(BaseSettings):
     # Directory holding agent self-update releases: <arch>.rev (build_rev int) and
     # <arch>.zip (update archive). Served by trader/api/quik_release.py.
     quik_agent_release_dir: str = "agent_release"
+
+    # ---- Phase 2: QUIK orders (HUMAN-INITIATED only) ----
+    # Master flag. OFF by default: every mutating order route is rejected until an
+    # operator explicitly enables trading on the host. The agent enforces the same
+    # flag (defense in depth). Never auto-flipped.
+    quik_trading_enabled: bool = False
+    # Hard limits — STL enforces these BEFORE sending to the agent (the agent
+    # re-enforces them as a second line). Defaults agreed with the operator (PHASE2.md).
+    quik_max_contracts_per_order: int = 2
+    quik_max_working_contracts: int = 2
+    quik_price_collar_frac: float = 0.002
+    # Comma-separated instrument whitelist; anything else is rejected.
+    quik_instrument_whitelist: str = "RIU6"
+    quik_daily_order_cap: int = 50

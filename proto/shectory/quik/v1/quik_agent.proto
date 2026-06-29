@@ -29,6 +29,9 @@ message AgentMessage {
     Diagnostics diagnostics = 8;    // channel health snapshot
     Alert alert = 9;                // out-of-band event (also fanned to TG)
     RawTable raw_table = 10;        // any QUIK DDE sheet, verbatim (generic passthrough)
+    OrderUpdate order_update = 11;   // Phase 2: order lifecycle (place/cancel/fill)
+    TransReply trans_reply = 12;     // Phase 2: QUIK transaction reply (code + text)
+    ExecutionUpdate execution_update = 13; // Phase 2 (1b): maker-working progress
   }
 }
 
@@ -148,6 +151,11 @@ message OrchestratorMessage {
   oneof payload {
     Ack ack = 1;                  // echoes a received AgentMessage.seq
     Command command = 2;
+    PlaceOrder place_order = 3;     // Phase 2 1a: place ONE limit order
+    CancelOrder cancel_order = 4;   // Phase 2 1a: cancel by client/order id
+    KillSwitch kill_switch = 5;     // Phase 2: cancel all + block new
+    StartExecution start_execution = 6; // Phase 2 1b: start maker-working an order
+    StopExecution stop_execution = 7;   // Phase 2 1b: stop a working execution
   }
 }
 
@@ -171,4 +179,94 @@ message Command {
   CommandType type = 2;
   // free-form args, e.g. {"code":"RIU6","depth":"10"}
   map<string, string> args = 3;
+}
+
+// ===================== Phase 2: orders & execution =====================
+// All order flow is HUMAN-INITIATED (STL UI + confirm). The agent enforces hard
+// limits (max qty, price collar, whitelist, daily cap) as a second line on top of
+// STL's. No strategy/signal generation here — only placement and maker-working of a
+// human-decided order. Transport to QUIK is the QLua sendTransaction bridge.
+
+enum Side {
+  SIDE_UNSPECIFIED = 0;
+  SIDE_BUY = 1;
+  SIDE_SELL = 2;
+}
+
+// 1a: place ONE limit order. The agent rejects (before QUIK) if it violates limits.
+message PlaceOrder {
+  string client_id = 1;   // STL-generated id to correlate updates
+  string code = 2;        // instrument (must be whitelisted)
+  Side side = 3;
+  double price = 4;       // limit price
+  int64 quantity = 5;     // contracts
+  double collar = 6;      // max adverse deviation from price (fraction, e.g. 0.002)
+}
+
+message CancelOrder {
+  string client_id = 1;
+  string order_id = 2;    // QUIK order id (or empty to use client_id mapping)
+}
+
+message KillSwitch {
+  string reason = 1;      // cancel ALL working orders + block new until cleared
+}
+
+// 1b: maker-working — passively fill target_quantity near the touch without crossing
+// the spread, re-quoting on touch moves, stopping at worst_price (collar). Runs in
+// the agent (sub-second, local order book). allow_cross enables a taker fallback
+// (default false = pure maker).
+message StartExecution {
+  string client_id = 1;
+  string code = 2;
+  Side side = 3;
+  int64 target_quantity = 4;
+  double worst_price = 5;   // hard collar bound; never quote/fill beyond this
+  bool allow_cross = 6;     // taker fallback; default false
+}
+
+message StopExecution {
+  string client_id = 1;
+}
+
+enum OrderState {
+  ORDER_STATE_UNSPECIFIED = 0;
+  ORDER_STATE_PENDING = 1;    // sent to QUIK, awaiting reply
+  ORDER_STATE_ACTIVE = 2;     // resting in the book
+  ORDER_STATE_PARTIAL = 3;    // partially filled
+  ORDER_STATE_FILLED = 4;
+  ORDER_STATE_CANCELLED = 5;
+  ORDER_STATE_REJECTED = 6;
+}
+
+message OrderUpdate {
+  string client_id = 1;
+  string order_id = 2;
+  string code = 3;
+  Side side = 4;
+  OrderState state = 5;
+  double price = 6;
+  int64 quantity = 7;
+  int64 filled = 8;
+  string text = 9;          // exchange/QUIK text on reject/cancel
+  int64 ts_unix_ms = 10;
+}
+
+message TransReply {
+  string client_id = 1;
+  int64 trans_id = 2;
+  int32 result_code = 3;    // QUIK OnTransReply result code
+  string text = 4;
+  int64 ts_unix_ms = 5;
+}
+
+message ExecutionUpdate {
+  string client_id = 1;
+  string code = 2;
+  int64 target = 3;
+  int64 filled = 4;
+  double avg_price = 5;
+  string state = 6;         // working | done | stopped | collar_hit | rejected
+  string text = 7;
+  int64 ts_unix_ms = 8;
 }

@@ -33,6 +33,7 @@ import (
 	"shectory/quik_agent/internal/quikdde"
 	"shectory/quik_agent/internal/selfupdate"
 	"shectory/quik_agent/internal/service"
+	"shectory/quik_agent/internal/trade"
 	"shectory/quik_agent/internal/watchdog"
 )
 
@@ -288,6 +289,43 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 			os.Exit(0)
 		},
 	})
+
+	// ---- Phase 2: order / execution layer (HUMAN-INITIATED, master flag default off).
+	// The link is the trade.Emitter; the manager enforces the hard limits + master
+	// flag BEFORE anything reaches the Lua bridge. The bridge serves a loopback TCP
+	// port the QUIK Lua script connects to. With quik_trading_enabled=false (default)
+	// every order command is rejected, so this is inert unless explicitly enabled.
+	tradeAccount := ""
+	if cfg.TradeAccountEnv != "" {
+		tradeAccount = os.Getenv(cfg.TradeAccountEnv) // VALUE never stored in config
+	}
+	guard := trade.NewGuard(trade.Limits{
+		TradingEnabled:       cfg.QuikTradingEnabled,
+		MaxContractsPerOrder: cfg.MaxContractsPerOrder,
+		MaxWorkingContracts:  cfg.MaxWorkingContracts,
+		PriceCollarFrac:      cfg.PriceCollarFrac,
+		InstrumentWhitelist:  cfg.InstrumentWhitelist,
+		DailyOrderCap:        cfg.DailyOrderCap,
+	})
+	bridge := trade.NewBridge(cfg.TradeBridgePort, nil, func(f string, a ...any) {
+		fmt.Printf("trade-bridge: "+f+"\n", a...)
+	})
+	mgr := trade.NewManager(trade.ManagerConfig{
+		ClassCode: cfg.TradeClassCode,
+		Account:   tradeAccount,
+	}, bridge, guard, lk, func(f string, a ...any) {
+		fmt.Printf("trade: "+f+"\n", a...)
+	})
+	bridge.SetHandler(mgr)                       // Lua events -> manager
+	mgr.SetBookSource(ctx, quikdde.Default)      // local book for the 1b maker loop
+	lk.SetTrade(mgr)                             // STL Phase 2 commands -> manager
+	go func() {
+		if err := bridge.Run(ctx); err != nil && ctx.Err() == nil {
+			fmt.Println("trade-bridge:", err)
+		}
+	}()
+	fmt.Printf("  trade:   bridge :%d  enabled=%v  whitelist=%v  (human-initiated only)\n",
+		cfg.TradeBridgePort, cfg.QuikTradingEnabled, cfg.InstrumentWhitelist)
 
 	if err := lk.Run(ctx); err != nil && ctx.Err() == nil {
 		return fmt.Errorf("link: %w", err)

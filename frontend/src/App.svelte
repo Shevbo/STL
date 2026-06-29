@@ -13,6 +13,7 @@
   import BottomBar from './components/BottomBar.svelte';
   import LabPanel from './components/LabPanel.svelte';
   import QuikTables from './components/QuikTables.svelte';
+  import Orders from './components/Orders.svelte';
   import LoginDialog from './components/LoginDialog.svelte';
   import { WsClient } from '$lib/ws';
   import { robotsStore } from '$lib/stores/robots.svelte';
@@ -26,6 +27,7 @@
   let authed = $state(false);
   let showLab = $state(false);
   let showQuikTables = $state(false);
+  let showQuikOrders = $state(false);
   let selectedRobotId = $state<string | null>(null);
   let events = $state<string[]>([]);
   let pendingOrder = $state<OrderRequest | null>(null);
@@ -197,6 +199,8 @@
     onToggleLabPanel={() => showLab = !showLab}
     {showQuikTables}
     onToggleQuikTables={() => showQuikTables = !showQuikTables}
+    {showQuikOrders}
+    onToggleQuikOrders={() => showQuikOrders = !showQuikOrders}
   />
   <div class="body">
     <!-- LEFT COLUMN -->
@@ -285,6 +289,11 @@
   {#if showQuikTables}
     <div class="quik-tables-wrap" style="height:{labH}px">
       <QuikTables />
+    </div>
+  {/if}
+  {#if showQuikOrders}
+    <div class="quik-tables-wrap" style="height:{labH}px">
+      <Orders />
     </div>
   {/if}
   <BottomBar {events} />

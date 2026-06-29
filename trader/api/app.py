@@ -158,12 +158,17 @@ async def lifespan(app: FastAPI):
     # default: a plain deploy does not open the gRPC port until QUIK_AGENT_ENABLED.
     quik_store = None
     quik_server = None
+    quik_order_store = None
     if settings.quik_agent_enabled:
         try:
             from trader.quik.alerts import AlertForwarder
+            from trader.quik.orders import OrderStore
             from trader.quik.server import QuikAgentServer
             from trader.quik.store import QuikAgentStore
             quik_store = QuikAgentStore(link_fresh_sec=settings.quik_agent_link_fresh_sec)
+            # Phase 2 order/execution state. The server stores incoming order
+            # updates here; the API reads it + re-checks limits before sending.
+            quik_order_store = OrderStore()
             quik_alerts = AlertForwarder(
                 tg_token=settings.quik_alert_tg_token.get_secret_value(),
                 tg_chat_id=settings.quik_alert_tg_chat_id,
@@ -175,6 +180,7 @@ async def lifespan(app: FastAPI):
                 agent_secret=settings.quik_agent_token.get_secret_value(),
                 portal_secret=settings.shectory_auth_bridge_secret,
                 alert_forwarder=quik_alerts,
+                order_store=quik_order_store,
             )
             await quik_server.start()
             log.info("quik.lifespan_started", listen=settings.quik_agent_grpc_listen)
@@ -182,8 +188,10 @@ async def lifespan(app: FastAPI):
             log.error("quik.lifespan_start_failed", error=str(exc))
             quik_store = None
             quik_server = None
+            quik_order_store = None
     app.state.quik_store = quik_store
     app.state.quik_server = quik_server
+    app.state.quik_order_store = quik_order_store
 
     # A restart kills any in-flight local backtest task, but its DB row stays
     # status='running' forever (orphan) and — worse — a hung task holds the
@@ -999,6 +1007,9 @@ def create_app() -> FastAPI:
     fastapi_app.include_router(quik_router)
     from trader.api.quik_release import router as quik_release_router
     fastapi_app.include_router(quik_release_router)
+    # QUIK orders (sprint02 Phase 2): HUMAN-INITIATED placement + kill-switch.
+    from trader.api.quik_orders import router as quik_orders_router
+    fastapi_app.include_router(quik_orders_router)
 
     @fastapi_app.post("/api/auth/login")
     async def login(body: LoginRequest, request: Request, response: Response):

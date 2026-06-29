@@ -119,18 +119,30 @@ class QuikAgentLinkServicer(pb_grpc.QuikAgentLinkServicer):
         portal_secret: str,
         command_queues: dict[str, asyncio.Queue] | None = None,
         alert_forwarder=None,
+        order_store=None,
     ) -> None:
         self.store = store
         self.agent_secret = agent_secret
         self.portal_secret = portal_secret
-        # agent_id -> queue of pb.Command to send down the stream.
+        # agent_id -> queue of OrchestratorMessage to send down the stream. Each
+        # entry is a fully-built OrchestratorMessage (command OR Phase 2 order).
         self.command_queues = command_queues if command_queues is not None else {}
         # Optional AlertForwarder (Telegram + CRITICAL SMS stub). None disables it.
         self.alert_forwarder = alert_forwarder
+        # Phase 2 order/execution state store. None disables order tracking.
+        self.order_store = order_store
 
     def enqueue_command(self, agent_id: str, command: "pb.Command") -> None:
+        """Enqueue a read-only Phase 1 Command (wrapped in OrchestratorMessage)."""
         q = self.command_queues.setdefault(agent_id, asyncio.Queue())
-        q.put_nowait(command)
+        q.put_nowait(pb.OrchestratorMessage(command=command))
+
+    def enqueue_order(self, agent_id: str, message: "pb.OrchestratorMessage") -> None:
+        """Enqueue a pre-built Phase 2 order OrchestratorMessage (place/cancel/
+        kill-switch/start/stop). HUMAN-INITIATED only — the API builds these after
+        re-checking the hard limits + master flag (Guard 3)."""
+        q = self.command_queues.setdefault(agent_id, asyncio.Queue())
+        q.put_nowait(message)
 
     async def Session(
         self,
@@ -156,8 +168,8 @@ class QuikAgentLinkServicer(pb_grpc.QuikAgentLinkServicer):
 
         async def _drain_commands() -> AsyncIterator["pb.OrchestratorMessage"]:
             while True:
-                command = await cmd_q.get()
-                yield pb.OrchestratorMessage(command=command)
+                message = await cmd_q.get()
+                yield message
 
         cmd_task: asyncio.Task | None = None
         try:
@@ -217,6 +229,15 @@ class QuikAgentLinkServicer(pb_grpc.QuikAgentLinkServicer):
                     if self.alert_forwarder is not None:
                         asyncio.ensure_future(
                             self.alert_forwarder.forward(alert_dict, agent_id))
+                elif field == "order_update" and self.order_store is not None:
+                    # Phase 2: order lifecycle (place/cancel/fill). Store only —
+                    # STL never originates an order in response (Guard 3).
+                    self.order_store.apply_order_update(agent_id, msg.order_update)
+                elif field == "trans_reply" and self.order_store is not None:
+                    self.order_store.apply_trans_reply(agent_id, msg.trans_reply)
+                elif field == "execution_update" and self.order_store is not None:
+                    self.order_store.apply_execution_update(
+                        agent_id, msg.execution_update)
 
                 self.store.touch(agent_id, msg.seq)
 
@@ -227,10 +248,10 @@ class QuikAgentLinkServicer(pb_grpc.QuikAgentLinkServicer):
                 # Ack every received frame.
                 yield pb.OrchestratorMessage(ack=pb.Ack(ack_seq=msg.seq))
 
-                # Flush any commands enqueued for this agent.
+                # Flush any commands/orders enqueued for this agent.
                 while not cmd_q.empty():
-                    command = cmd_q.get_nowait()
-                    yield pb.OrchestratorMessage(command=command)
+                    message = cmd_q.get_nowait()
+                    yield message
         except asyncio.CancelledError:
             raise
         except grpc.aio.AioRpcError as exc:
@@ -260,12 +281,15 @@ class QuikAgentServer:
         agent_secret: str,
         portal_secret: str,
         alert_forwarder=None,
+        order_store=None,
     ) -> None:
         self.listen = listen
         self.store = store
+        self.order_store = order_store
         self._server: grpc.aio.Server | None = None
         self.servicer = QuikAgentLinkServicer(
-            store, agent_secret, portal_secret, alert_forwarder=alert_forwarder)
+            store, agent_secret, portal_secret,
+            alert_forwarder=alert_forwarder, order_store=order_store)
 
     async def start(self) -> None:
         self._server = grpc.aio.server()
@@ -281,3 +305,7 @@ class QuikAgentServer:
 
     def enqueue_command(self, agent_id: str, command: "pb.Command") -> None:
         self.servicer.enqueue_command(agent_id, command)
+
+    def enqueue_order(self, agent_id: str, message: "pb.OrchestratorMessage") -> None:
+        """Enqueue a Phase 2 order OrchestratorMessage onto the agent's stream."""
+        self.servicer.enqueue_order(agent_id, message)

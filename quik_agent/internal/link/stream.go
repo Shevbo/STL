@@ -84,6 +84,32 @@ func (l *Link) recvLoop(stream quikv1.QuikAgentLink_SessionClient, cancel contex
 			_ = p.Ack.GetAckSeq()
 		case *quikv1.OrchestratorMessage_Command:
 			l.handleCommand(stream, p.Command)
+		// ---- Phase 2: order / execution commands (HUMAN-INITIATED only) ----
+		// Each is dispatched to the trade manager, which enforces the hard limits
+		// (master flag, whitelist, qty caps, collar, daily cap, kill-switch block)
+		// BEFORE anything reaches the Lua bridge. When no manager is wired (Phase 1
+		// build or trading off), these are dropped. OrderUpdate/TransReply/
+		// ExecutionUpdate are emitted by the manager via the trade emitter (below).
+		case *quikv1.OrchestratorMessage_PlaceOrder:
+			if l.opt.Trade != nil {
+				l.opt.Trade.PlaceOrder(p.PlaceOrder)
+			}
+		case *quikv1.OrchestratorMessage_CancelOrder:
+			if l.opt.Trade != nil {
+				l.opt.Trade.CancelOrder(p.CancelOrder)
+			}
+		case *quikv1.OrchestratorMessage_KillSwitch:
+			if l.opt.Trade != nil {
+				l.opt.Trade.KillSwitch(p.KillSwitch)
+			}
+		case *quikv1.OrchestratorMessage_StartExecution:
+			if l.opt.Trade != nil {
+				l.opt.Trade.StartExecution(p.StartExecution)
+			}
+		case *quikv1.OrchestratorMessage_StopExecution:
+			if l.opt.Trade != nil {
+				l.opt.Trade.StopExecution(p.StopExecution)
+			}
 		}
 	}
 }

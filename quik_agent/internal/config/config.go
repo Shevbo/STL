@@ -51,6 +51,40 @@ type Config struct {
 	// DiagIntervalSec: cadence at which Diagnostics frames are emitted. Defaults
 	// to the heartbeat cadence when unset.
 	DiagIntervalSec int `json:"diag_interval_sec"`
+
+	// ---- Phase 2: order / execution (sub-agent A, additive) ----
+	// All optional; absent fields fall back to the defaults below so older
+	// agent_config.json files keep loading unchanged. The master flag
+	// QuikTradingEnabled defaults to FALSE: with it off, every order command is
+	// rejected by the agent (Guard 3, defense in depth on top of STL).
+
+	// QuikTradingEnabled is the master order flag. false (default) => the agent
+	// rejects ALL place/cancel/execution commands. Must be explicitly set true (and
+	// orders are still human-initiated + per-order limit-checked).
+	QuikTradingEnabled bool `json:"quik_trading_enabled"`
+	// TradeBridgePort is the loopback TCP port the agent serves for the QUIK Lua
+	// script (the Lua connects as client). Default 50063.
+	TradeBridgePort int `json:"trade_bridge_port"`
+	// TradeClassCode is the QUIK CLASSCODE for placements, e.g. SPBFUT.
+	TradeClassCode string `json:"trade_class_code"`
+	// TradeAccountEnv is the NAME of the env var holding the trade account code.
+	// Like the token, the account VALUE is never stored in the config; only the env
+	// var name is. Empty => no account is sent (Lua may fill it).
+	TradeAccountEnv string `json:"trade_account_env"`
+
+	// ---- hard limits (agent-enforced, second line on top of STL) ----
+	// MaxContractsPerOrder caps a single placement's quantity. Default 2.
+	MaxContractsPerOrder int64 `json:"max_contracts_per_order"`
+	// MaxWorkingContracts caps total resting quantity across all open orders. Default 2.
+	MaxWorkingContracts int64 `json:"max_working_contracts"`
+	// PriceCollarFrac is the max adverse fractional deviation from the order/arrival
+	// price. Default 0.002 (0.2%).
+	PriceCollarFrac float64 `json:"price_collar_frac"`
+	// InstrumentWhitelist lists the only codes the agent will trade. Default
+	// ["RIU6"]. Anything else is rejected.
+	InstrumentWhitelist []string `json:"instrument_whitelist"`
+	// DailyOrderCap caps placements per calendar day. Default 50.
+	DailyOrderCap int `json:"daily_order_cap"`
 }
 
 // ConfigPath returns the default config path next to the executable.
@@ -79,6 +113,32 @@ func (c *Config) applyDefaults() {
 	}
 	if c.DiagIntervalSec <= 0 {
 		c.DiagIntervalSec = c.HeartbeatSec
+	}
+
+	// ---- Phase 2 defaults (additive). QuikTradingEnabled intentionally has NO
+	// default: its zero value (false) is the safe master-off state. ----
+	if c.TradeBridgePort <= 0 {
+		c.TradeBridgePort = 50063
+	}
+	if c.TradeClassCode == "" {
+		c.TradeClassCode = "SPBFUT"
+	}
+	if c.MaxContractsPerOrder <= 0 {
+		c.MaxContractsPerOrder = 2
+	}
+	if c.MaxWorkingContracts <= 0 {
+		c.MaxWorkingContracts = 2
+	}
+	if c.PriceCollarFrac <= 0 {
+		c.PriceCollarFrac = 0.002
+	}
+	// nil (field absent) => default whitelist; an explicit [] in JSON stays empty
+	// (fail-closed: nothing tradable) so an operator can lock trading down.
+	if c.InstrumentWhitelist == nil {
+		c.InstrumentWhitelist = []string{"RIU6"}
+	}
+	if c.DailyOrderCap <= 0 {
+		c.DailyOrderCap = 50
 	}
 }
 
