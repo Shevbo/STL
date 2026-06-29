@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"time"
 
 	"shectory/quik_agent/internal/health"
@@ -114,6 +115,9 @@ func (l *Link) handleCommand(stream quikv1.QuikAgentLink_SessionClient, cmd *qui
 				_ = l.sendAlert(stream, quikv1.AlertSeverity_ALERT_SEVERITY_WARN, "SELF_UPDATE_FAILED", err.Error())
 			} else if staged {
 				_ = l.sendAlert(stream, quikv1.AlertSeverity_ALERT_SEVERITY_INFO, "SELF_UPDATE_STAGED", "restarting into new build")
+				// The restart helper (.bat) waits for THIS process to exit before
+				// swapping the exe; mirror the on-start path and exit so it proceeds.
+				os.Exit(0)
 			}
 		}
 	case quikv1.CommandType_COMMAND_TYPE_RESTART:
