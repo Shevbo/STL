@@ -997,6 +997,8 @@ def create_app() -> FastAPI:
     # QUIK agent link routes (sprint02 Phase 1: read-only status + data source).
     from trader.api.quik_routes import router as quik_router
     fastapi_app.include_router(quik_router)
+    from trader.api.quik_release import router as quik_release_router
+    fastapi_app.include_router(quik_release_router)
 
     @fastapi_app.post("/api/auth/login")
     async def login(body: LoginRequest, request: Request, response: Response):

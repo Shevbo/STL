@@ -50,3 +50,6 @@ class Settings(BaseSettings):
     # De-dupe cooldown: suppress a repeated (agent, code, severity) alert within
     # this many seconds. Recovery alerts always pass.
     quik_alert_cooldown_sec: int = 60
+    # Directory holding agent self-update releases: <arch>.rev (build_rev int) and
+    # <arch>.zip (update archive). Served by trader/api/quik_release.py.
+    quik_agent_release_dir: str = "agent_release"
