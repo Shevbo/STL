@@ -1,0 +1,28 @@
+# buf code generation for the QUIK agent Go stubs (CI alternative to gen.bat).
+#
+# The proto declares `option go_package = "shectory/quik/v1;quikv1"`. Managed
+# mode rewrites that import path to `shectory/quik_agent/internal/pb` and the
+# `module=` plugin opt strips the module prefix, so the two generated files land
+# FLAT in internal/pb (package name stays `quikv1`), identical to gen.bat.
+#
+# Run from quik_agent/ with the proto module mounted at ../proto:
+#   buf generate ../proto --path shectory/quik/v1/quik_agent.proto
+# Requires: buf, protoc-gen-go, protoc-gen-go-grpc on PATH.
+version: v1
+managed:
+  enabled: true
+  go_package_prefix:
+    # Rewrites the proto's go_package import path to this prefix. Combined with
+    # the module= plugin opt below, files land flat in internal/pb. If your buf
+    # version nests output differently, prefer the canonical gen.bat (protoc).
+    default: shectory/quik_agent/internal/pb
+plugins:
+  - plugin: go
+    out: .
+    opt:
+      - module=shectory/quik_agent
+  - plugin: go-grpc
+    out: .
+    opt:
+      - module=shectory/quik_agent
+      - require_unimplemented_servers=false

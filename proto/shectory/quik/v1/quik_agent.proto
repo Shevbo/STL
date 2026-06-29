@@ -1,0 +1,157 @@
+syntax = "proto3";
+
+// Contract between the local QUIK agent (Windows, Go) and the STL orchestrator
+// (FastAPI). sprint02 Phase 1 = read-only. No order transactions in this contract.
+// Transport: the agent DIALS OUT to STL and opens one long-lived bidi stream
+// (Session). This keeps the Windows box behind NAT/firewall with no inbound port.
+// Auth: Bearer token in gRPC metadata key "authorization" ("Bearer <token>"),
+// verified the same way as the Showcase link. Token comes from keymaster, not code.
+package shectory.quik.v1;
+
+option go_package = "shectory/quik/v1;quikv1";
+
+// ---- Session: single bidi stream, agent -> STL = AgentMessage, STL -> agent = OrchestratorMessage.
+service QuikAgentLink {
+  rpc Session(stream AgentMessage) returns (stream OrchestratorMessage);
+}
+
+// ===================== Agent -> STL =====================
+message AgentMessage {
+  // monotonically increasing per session; STL echoes it back in Ack.
+  uint64 seq = 1;
+  oneof payload {
+    Register register = 2;          // first frame after dial
+    Heartbeat heartbeat = 3;        // liveness + link metrics
+    SecuritiesSnapshot securities = 4;  // FORTS reference data (full or delta)
+    MarketDataTick tick = 5;        // last / quote / open interest
+    OrderBook order_book = 6;       // стакан, top-N levels
+    ParamsSnapshot params = 7;      // price step / step cost -> commission
+    Diagnostics diagnostics = 8;    // channel health snapshot
+    Alert alert = 9;                // out-of-band event (also fanned to TG)
+  }
+}
+
+message Register {
+  string agent_version = 1;
+  string host_name = 2;
+  string quik_data_root = 3;
+  int32 timezone_offset_min = 4;
+  uint32 build_rev = 5;            // for self-update comparison
+}
+
+message Heartbeat {
+  int64 sent_at_unix_ms = 1;
+  bool dde_alive = 2;
+  bool quik_alive = 3;
+  int64 last_tick_age_ms = 4;     // staleness of freshest DDE tick
+}
+
+// ----- read-only market data -----
+message Security {
+  string code = 1;                // e.g. RIU6
+  string name = 2;
+  string class_code = 3;          // FORTS class
+  double price_step = 4;          // "Шаг цены"
+  double step_cost = 5;           // "Ст. шага цены"
+  int64 received_at_unix_ms = 6;
+}
+
+message SecuritiesSnapshot {
+  repeated Security items = 1;
+  bool is_full = 2;               // true = full replace, false = delta
+}
+
+message MarketDataTick {
+  string code = 1;
+  double last = 2;
+  double bid = 3;
+  double ask = 4;
+  int64 open_interest = 5;
+  int64 exchange_ts_unix_ms = 6;  // from QUIK if available
+  int64 received_at_unix_ms = 7;  // when agent read it from DDE
+}
+
+message OrderBookLevel {
+  double price = 1;
+  int64 quantity = 2;
+}
+
+message OrderBook {
+  string code = 1;
+  repeated OrderBookLevel bids = 2;  // sorted best-first
+  repeated OrderBookLevel asks = 3;  // sorted best-first
+  int64 received_at_unix_ms = 4;
+}
+
+message ParamRow {
+  string code = 1;
+  double price_step = 2;
+  double step_cost = 3;
+  double coef = 4;                // step_cost / price_step
+}
+
+message ParamsSnapshot {
+  repeated ParamRow rows = 1;
+  int64 received_at_unix_ms = 2;
+}
+
+// ----- health / alerting -----
+enum ChannelState {
+  CHANNEL_STATE_UNSPECIFIED = 0;
+  CHANNEL_STATE_UP = 1;
+  CHANNEL_STATE_DEGRADED = 2;
+  CHANNEL_STATE_DOWN = 3;
+}
+
+message Diagnostics {
+  ChannelState dde = 1;
+  ChannelState quik = 2;
+  ChannelState link = 3;
+  int64 last_tick_age_ms = 4;
+  uint32 reconnects_since_start = 5;
+  int64 uptime_sec = 6;
+}
+
+enum AlertSeverity {
+  ALERT_SEVERITY_UNSPECIFIED = 0;
+  ALERT_SEVERITY_INFO = 1;
+  ALERT_SEVERITY_WARN = 2;
+  ALERT_SEVERITY_CRITICAL = 3;     // CRITICAL is the one that also gets SMS-dubbed (Phase 2 wires the gateway)
+}
+
+message Alert {
+  AlertSeverity severity = 1;
+  string code = 2;                // machine code, e.g. DDE_DOWN, QUIK_DOWN, LINK_DOWN
+  string message = 3;             // human text for Telegram
+  int64 raised_at_unix_ms = 4;
+}
+
+// ===================== STL -> agent =====================
+message OrchestratorMessage {
+  oneof payload {
+    Ack ack = 1;                  // echoes a received AgentMessage.seq
+    Command command = 2;
+  }
+}
+
+message Ack {
+  uint64 ack_seq = 1;
+}
+
+// Phase 1 commands are read-only control only. No order placement here.
+enum CommandType {
+  COMMAND_TYPE_UNSPECIFIED = 0;
+  COMMAND_TYPE_SUBSCRIBE = 1;     // start streaming a code's ticks/order book
+  COMMAND_TYPE_UNSUBSCRIBE = 2;
+  COMMAND_TYPE_REQUEST_DIAGNOSTICS = 3;
+  COMMAND_TYPE_REQUEST_SECURITIES = 4;
+  COMMAND_TYPE_SELF_UPDATE = 5;   // orchestrator-triggered update check
+  COMMAND_TYPE_RESTART = 6;       // graceful agent restart
+}
+
+message Command {
+  string id = 1;
+  CommandType type = 2;
+  // free-form args, e.g. {"code":"RIU6","depth":"10"}
+  map<string, string> args = 3;
+}

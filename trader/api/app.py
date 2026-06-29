@@ -154,6 +154,37 @@ async def lifespan(app: FastAPI):
     app.state.scheduler = scheduler
     app.state.db_pool = db_pool
 
+    # QUIK agent link (sprint02 Phase 1, read-only data source + status). Off by
+    # default: a plain deploy does not open the gRPC port until QUIK_AGENT_ENABLED.
+    quik_store = None
+    quik_server = None
+    if settings.quik_agent_enabled:
+        try:
+            from trader.quik.alerts import AlertForwarder
+            from trader.quik.server import QuikAgentServer
+            from trader.quik.store import QuikAgentStore
+            quik_store = QuikAgentStore(link_fresh_sec=settings.quik_agent_link_fresh_sec)
+            quik_alerts = AlertForwarder(
+                tg_token=settings.quik_alert_tg_token.get_secret_value(),
+                tg_chat_id=settings.quik_alert_tg_chat_id,
+                cooldown_sec=settings.quik_alert_cooldown_sec,
+            )
+            quik_server = QuikAgentServer(
+                listen=settings.quik_agent_grpc_listen,
+                store=quik_store,
+                agent_secret=settings.quik_agent_token.get_secret_value(),
+                portal_secret=settings.shectory_auth_bridge_secret,
+                alert_forwarder=quik_alerts,
+            )
+            await quik_server.start()
+            log.info("quik.lifespan_started", listen=settings.quik_agent_grpc_listen)
+        except Exception as exc:
+            log.error("quik.lifespan_start_failed", error=str(exc))
+            quik_store = None
+            quik_server = None
+    app.state.quik_store = quik_store
+    app.state.quik_server = quik_server
+
     # A restart kills any in-flight local backtest task, but its DB row stays
     # status='running' forever (orphan) and — worse — a hung task holds the
     # in-process backtest lock. On a clean start there are no live local tasks,
@@ -244,6 +275,8 @@ async def lifespan(app: FastAPI):
 
     if ai46 is not None:
         await ai46.stop()
+    if quik_server is not None:
+        await quik_server.stop()
     await scheduler.stop_all()
     if settings.lab_db_url:
         from trader.db import close_pool
@@ -960,6 +993,10 @@ def create_app() -> FastAPI:
     # VDS uplink — minutes. JSON compresses ~9x, so this alone is a ~10x transfer win).
     from fastapi.middleware.gzip import GZipMiddleware
     fastapi_app.add_middleware(GZipMiddleware, minimum_size=1024)
+
+    # QUIK agent link routes (sprint02 Phase 1: read-only status + data source).
+    from trader.api.quik_routes import router as quik_router
+    fastapi_app.include_router(quik_router)
 
     @fastapi_app.post("/api/auth/login")
     async def login(body: LoginRequest, request: Request, response: Response):

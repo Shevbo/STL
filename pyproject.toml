@@ -30,7 +30,7 @@ pytest-timeout = "^2"
 grpcio-tools = ">=1.63,<2"
 
 [tool.ruff]
-exclude = ["trader/proto/gen/**", "trader/proto/**"]
+exclude = ["trader/proto/gen/**", "trader/proto/**", "trader/quik/pb/**"]
 
 [tool.ruff.lint]
 # E701 (compact `if cond: return x` in strategy signal fns) and E402 (deliberate

@@ -2,6 +2,7 @@
 <script lang="ts">
   import { accountStore } from '$lib/stores/account.svelte';
   import { servicesStore } from '$lib/stores/services.svelte';
+  import ExchangeInterface from './ExchangeInterface.svelte';
 
   let { showLab, onToggleLabPanel }: {
     showLab?: boolean;
@@ -26,6 +27,7 @@
     </span>
   </div>
   <div class="controls">
+    <ExchangeInterface />
     <button class="lab-btn lab-panel-btn" class:active={showLab} onclick={onToggleLabPanel}>Бэктест</button>
     <span
       class="dot"
