@@ -46,19 +46,31 @@ def _limits(request: Request) -> OrderLimits:
 
 
 def _resolve_agent(request: Request, agent_id: str | None) -> str:
-    """Pick the target agent: the explicit one, or the single connected agent."""
+    """Pick the target agent: the explicit one, else the single LIVE (green) agent.
+
+    The in-memory store accumulates stale entries (a pre-Register subject id, dead
+    probes, old sessions). Prefer the single agent whose link is fresh (green) so the
+    UI need not pass agent_id when exactly one agent is actually connected.
+    """
     store = getattr(request.app.state, "quik_store", None)
     if agent_id:
         return agent_id
-    ids = store.agent_ids() if store is not None else []
+    if store is None:
+        raise HTTPException(status_code=409, detail="Нет подключённого QUIK агента.")
+    green = [r["agent_id"] for r in store.status() if r.get("link") == "green"]
+    if len(green) == 1:
+        return green[0]
+    ids = store.agent_ids()
     if len(ids) == 1:
         return ids[0]
     if not ids:
         raise HTTPException(status_code=409, detail="Нет подключённого QUIK агента.")
-    raise HTTPException(
-        status_code=400,
-        detail="Подключено несколько агентов — укажите agent_id.",
+    detail = (
+        "Несколько живых агентов — укажите agent_id."
+        if len(green) > 1
+        else "Подключено несколько агентов — укажите agent_id."
     )
+    raise HTTPException(status_code=400, detail=detail)
 
 
 def _require_wired(request: Request):
