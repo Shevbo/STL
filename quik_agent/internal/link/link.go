@@ -89,6 +89,7 @@ type Options struct {
 type TradeManager interface {
 	PlaceOrder(*quikv1.PlaceOrder)
 	CancelOrder(*quikv1.CancelOrder)
+	ReplaceOrder(*quikv1.ReplaceOrder)
 	KillSwitch(*quikv1.KillSwitch)
 	StartExecution(*quikv1.StartExecution)
 	StopExecution(*quikv1.StopExecution)

@@ -156,6 +156,7 @@ message OrchestratorMessage {
     KillSwitch kill_switch = 5;     // Phase 2: cancel all + block new
     StartExecution start_execution = 6; // Phase 2 1b: start maker-working an order
     StopExecution stop_execution = 7;   // Phase 2 1b: stop a working execution
+    ReplaceOrder replace_order = 8;     // native atomic move (QUIK MOVE_ORDERS)
   }
 }
 
@@ -206,6 +207,16 @@ message PlaceOrder {
 message CancelOrder {
   string client_id = 1;
   string order_id = 2;    // QUIK order id (or empty to use client_id mapping)
+}
+
+// Native atomic move: change a resting order's price (and optionally qty) in ONE QUIK
+// MOVE_ORDERS transaction. NOT an internal cancel+place. The agent emits OrderUpdate for
+// the moved order (its order_id may change per the broker). new_quantity 0 = keep.
+message ReplaceOrder {
+  string client_id = 1;
+  string order_id = 2;
+  double new_price = 3;
+  int64 new_quantity = 4; // 0 = keep current quantity
 }
 
 message KillSwitch {

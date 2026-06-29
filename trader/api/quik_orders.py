@@ -23,6 +23,7 @@ from trader.quik.limits import (
     OrderLimits,
     check_master_flag,
     validate_place,
+    validate_replace,
     validate_start_execution,
 )
 
@@ -100,6 +101,14 @@ class PlaceBody(BaseModel):
 class CancelBody(BaseModel):
     client_id: str
     order_id: str | None = None
+    agent_id: str | None = None
+
+
+class ReplaceBody(BaseModel):
+    client_id: str
+    order_id: str | None = None
+    new_price: float
+    new_quantity: int = 0  # 0 = keep current quantity
     agent_id: str | None = None
 
 
@@ -217,6 +226,54 @@ async def cancel(body: CancelBody, request: Request):
     except LimitError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     msg = order_msgs.build_cancel_order(body.client_id, body.order_id or "")
+    srv.enqueue_order(agent, msg)
+    return {"ok": True, "agent_id": agent, "client_id": body.client_id}
+
+
+@router.post("/replace")
+async def replace(body: ReplaceBody, request: Request):
+    """Native atomic MOVE: re-price (and optionally re-size) a resting order in ONE
+    QUIK MOVE_ORDERS transaction (no cancel+place window). Re-checks the master flag +
+    the collar on the new price (vs the resting price) + the per-order qty cap, then
+    enqueues ReplaceOrder. HUMAN-INITIATED (UI confirm). A move does NOT consume the
+    daily cap (it re-prices an existing order)."""
+    _auth(request)
+    ost, srv = _require_wired(request)
+    lim = _limits(request)
+    agent = _resolve_agent(request, body.agent_id)
+
+    if ost.is_blocked(agent):
+        raise HTTPException(
+            status_code=409,
+            detail="Kill-switch активен: перестановка заявок заблокирована.",
+        )
+
+    # Reference price + side from the resting order (for the collar check). When the
+    # order is not (yet) known locally, reference is 0 -> the agent still re-checks the
+    # collar against the live resting price (defense in depth).
+    rec = next(
+        (o for o in ost.working_orders(agent) if o["client_id"] == body.client_id),
+        None,
+    )
+    reference_price = float(rec["price"]) if rec else 0.0
+    side = rec["side"] if rec else ""
+
+    try:
+        validate_replace(
+            lim,
+            new_price=body.new_price,
+            new_quantity=body.new_quantity,
+            reference_price=reference_price,
+            side=side,
+        )
+    except LimitError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    msg = order_msgs.build_replace_order(
+        client_id=body.client_id, order_id=body.order_id or "",
+        new_price=body.new_price, new_quantity=body.new_quantity,
+    )
+    ost.register_replace(agent, body.client_id, body.new_price, body.new_quantity)
     srv.enqueue_order(agent, msg)
     return {"ok": True, "agent_id": agent, "client_id": body.client_id}
 

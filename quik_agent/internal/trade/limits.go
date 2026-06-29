@@ -50,6 +50,7 @@ const (
 	ReasonDailyCap        RejectReason = "daily_order_cap reached"
 	ReasonBlocked         RejectReason = "blocked by kill-switch (cleared explicitly)"
 	ReasonCollarHit       RejectReason = "price beyond collar"
+	ReasonNoWorkingOrder  RejectReason = "no working order to move (not yet acknowledged by QUIK)"
 )
 
 // Guard tracks per-day placement counts and resting quantity so the cap and the

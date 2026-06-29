@@ -98,6 +98,10 @@ func (l *Link) recvLoop(stream quikv1.QuikAgentLink_SessionClient, cancel contex
 			if l.opt.Trade != nil {
 				l.opt.Trade.CancelOrder(p.CancelOrder)
 			}
+		case *quikv1.OrchestratorMessage_ReplaceOrder:
+			if l.opt.Trade != nil {
+				l.opt.Trade.ReplaceOrder(p.ReplaceOrder)
+			}
 		case *quikv1.OrchestratorMessage_KillSwitch:
 			if l.opt.Trade != nil {
 				l.opt.Trade.KillSwitch(p.KillSwitch)

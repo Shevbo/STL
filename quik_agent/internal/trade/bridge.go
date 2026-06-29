@@ -50,6 +50,21 @@ type cancelCmd struct {
 	Sec      string `json:"sec"`
 }
 
+// moveCmd is agent -> Lua: a MOVE_ORDERS transaction request (native atomic move).
+// It re-prices (and optionally re-sizes) a resting order in ONE QUIK transaction — no
+// cancel+place window. Qty 0 = keep the current quantity. The resulting OnOrder/
+// OnTransReply may carry a NEW order_num (QUIK assigns a fresh key on a move), which the
+// Lua relays back as an `order` event so the manager can re-key the working order.
+type moveCmd struct {
+	Cmd      string `json:"cmd"` // "move"
+	TransID  int64  `json:"trans_id"`
+	OrderNum string `json:"order_num"` // the resting order's current QUIK key
+	Class    string `json:"class"`
+	Sec      string `json:"sec"`
+	Price    string `json:"price"` // new limit price (string, QUIK transaction field)
+	Qty      int64  `json:"qty"`   // new quantity; 0 = keep current
+}
+
 // luaEvent is Lua -> agent: any of trans_reply / order / trade. A single struct with
 // the union of fields keeps decoding to one json.Unmarshal per line; the Event field
 // selects which fields are meaningful.
@@ -337,4 +352,12 @@ func (b *Bridge) Place(p placeCmd) error {
 func (b *Bridge) Cancel(c cancelCmd) error {
 	c.Cmd = "cancel"
 	return b.send(c)
+}
+
+// Move sends a MOVE_ORDERS transaction to Lua (native atomic re-quote). The caller
+// (manager) has already assigned the trans_id, resolved the resting order_num, and
+// passed every hard limit (collar on the new price, qty within the per-order cap).
+func (b *Bridge) Move(m moveCmd) error {
+	m.Cmd = "move"
+	return b.send(m)
 }

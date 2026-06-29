@@ -180,6 +180,25 @@ class OrderStore:
                 price=price, quantity=quantity, state="pending",
             )
 
+    # ---- register a native MOVE locally (optimistic) before the agent confirms ----
+    def register_replace(
+        self, agent_id: str, client_id: str, new_price: float,
+        new_quantity: int = 0,
+    ) -> None:
+        """Reflect a native MOVE on the local record (optimistic). Price is updated;
+        quantity only when new_quantity > 0 (0 = keep). order_id is left unchanged —
+        QUIK assigns a new one on the move, which arrives via the next OrderUpdate. A
+        move does NOT count against the daily cap (it re-prices, it does not place)."""
+        with self._lock:
+            b = self._bucket(agent_id)
+            rec = b.orders.get(client_id)
+            if rec is None:
+                return
+            rec.price = float(new_price)
+            if int(new_quantity) > 0:
+                rec.quantity = int(new_quantity)
+            rec.ts_unix_ms = _now_ms()
+
     # ---- writes from incoming agent messages ----
     def apply_order_update(self, agent_id: str, ou: "pb.OrderUpdate") -> None:
         with self._lock:
@@ -292,6 +311,20 @@ def build_place_order(
 def build_cancel_order(client_id: str, order_id: str = "") -> "pb.OrchestratorMessage":
     return pb.OrchestratorMessage(
         cancel_order=pb.CancelOrder(client_id=client_id, order_id=order_id or "")
+    )
+
+
+def build_replace_order(
+    client_id: str, order_id: str, new_price: float, new_quantity: int = 0,
+) -> "pb.OrchestratorMessage":
+    """Native atomic move: re-price (and optionally re-size) a resting order in ONE
+    QUIK MOVE_ORDERS transaction. new_quantity 0 = keep current quantity. The agent
+    re-checks the collar on new_price and never widens qty past the per-order cap."""
+    return pb.OrchestratorMessage(
+        replace_order=pb.ReplaceOrder(
+            client_id=client_id, order_id=order_id or "",
+            new_price=float(new_price), new_quantity=int(new_quantity),
+        )
     )
 
 

@@ -9,6 +9,11 @@ import (
 	"shectory/quik_agent/internal/quikdde"
 )
 
+// staticBook is a fixed BookSource for driving step() in tests.
+type staticBook struct{ b quikdde.Book }
+
+func (s staticBook) OrderBook(string) (quikdde.Book, bool) { return s.b, true }
+
 func book(bids, asks [][2]float64) quikdde.Book {
 	b := quikdde.Book{Code: "RIU6"}
 	for _, lv := range bids {
@@ -127,12 +132,18 @@ func TestDecideNoBook(t *testing.T) {
 	}
 }
 
-// fakePlacer records child placements and exec updates for accumulation tests.
+// fakePlacer records child placements, moves, and exec updates for the loop tests.
 type fakePlacer struct {
-	placed  []float64
+	placed  []float64        // prices of NEW child placements (placeChild)
+	moves   []moveRecord     // native atomic re-quotes (moveChild)
 	cancels int
 	updates []*quikv1.ExecutionUpdate
 	nextID  int
+}
+
+type moveRecord struct {
+	childID string
+	price   float64
 }
 
 func (f *fakePlacer) placeChild(_, _ string, _ bool, price float64, _ int64) (string, error) {
@@ -140,9 +151,12 @@ func (f *fakePlacer) placeChild(_, _ string, _ bool, price float64, _ int64) (st
 	f.placed = append(f.placed, price)
 	return fmt.Sprintf("child%d", f.nextID), nil
 }
-func (f *fakePlacer) cancelChild(string)                  { f.cancels++ }
-func (f *fakePlacer) emitExec(u *quikv1.ExecutionUpdate)  { f.updates = append(f.updates, u) }
-func (f *fakePlacer) nowMs() int64                        { return 0 }
+func (f *fakePlacer) moveChild(childID string, price float64) {
+	f.moves = append(f.moves, moveRecord{childID: childID, price: price})
+}
+func (f *fakePlacer) cancelChild(string)                 { f.cancels++ }
+func (f *fakePlacer) emitExec(u *quikv1.ExecutionUpdate) { f.updates = append(f.updates, u) }
+func (f *fakePlacer) nowMs() int64                       { return 0 }
 
 func TestPartialAccumulation(t *testing.T) {
 	fp := &fakePlacer{}
@@ -177,43 +191,99 @@ func TestPartialAccumulation(t *testing.T) {
 	}
 }
 
-// TestSingleChildDiscipline verifies cancel-before-replace: a re-quote cancels the
-// current child and does NOT place a new one until that child's terminal event lands.
-// Never two live children — the core fix for the live runaway.
+// TestSingleChildDiscipline verifies the MOVE-based re-quote keeps exactly ONE live
+// child: the first quote is a placement; a subsequent touch move re-prices the SAME
+// child via a native MOVE (no new placement, no cancel). The single-live-child invariant
+// holds throughout — never zero, never two — without the cancel-before-place barrier.
 func TestSingleChildDiscipline(t *testing.T) {
 	fp := &fakePlacer{}
 	p := makerBuy()
 	p.minRequote = 0 // isolate the discipline from the rate-limit
 	e := &execution{p: p, placer: fp, logf: func(string, ...any) {}}
 
+	// First ever quote: a real placement creates the single child.
 	e.placeNew(99990, 3)
 	if len(fp.placed) != 1 || fp.placed[0] != 99990 {
 		t.Fatalf("first place = %v, want [99990]", fp.placed)
 	}
 	first := e.childID
-
-	// Re-quote: cancels the current child, sets pendingCancel, places NOTHING new.
-	e.cancelForRequote()
-	if fp.cancels != 1 {
-		t.Fatalf("cancelForRequote cancels = %d, want 1", fp.cancels)
-	}
-	if len(fp.placed) != 1 {
-		t.Fatalf("must NOT place while cancel in flight, placed = %v", fp.placed)
-	}
-	// A placeNew now is refused (pendingCancel barrier).
-	e.placeNew(100000, 3)
-	if len(fp.placed) != 1 {
-		t.Fatalf("placeNew during pendingCancel must be a no-op, placed = %v", fp.placed)
+	if first == "" {
+		t.Fatalf("expected a live child after first place")
 	}
 
-	// Cancel confirms for the CURRENT child -> state clears -> next place allowed.
+	// Touch moved: re-quote via MOVE. Same child, no new placement, no cancel.
+	e.moveQuote(100000)
+	if len(fp.moves) != 1 || fp.moves[0].price != 100000 || fp.moves[0].childID != first {
+		t.Fatalf("re-quote moves = %+v, want one MOVE of %q to 100000", fp.moves, first)
+	}
+	if len(fp.placed) != 1 {
+		t.Fatalf("MOVE must NOT place a new child, placed = %v", fp.placed)
+	}
+	if fp.cancels != 0 {
+		t.Fatalf("MOVE must NOT cancel, cancels = %d", fp.cancels)
+	}
+	if e.childID != first {
+		t.Fatalf("child id changed across MOVE: %q -> %q", first, e.childID)
+	}
+	if e.lastPrice != 100000 {
+		t.Fatalf("lastPrice after MOVE = %v, want 100000", e.lastPrice)
+	}
+
+	// Another move to the same price is a no-op (already resting there).
+	e.moveQuote(100000)
+	if len(fp.moves) != 1 {
+		t.Fatalf("MOVE to identical price must be a no-op, moves = %+v", fp.moves)
+	}
+
+	// The child terminating (fill/cancel) clears the handle, so the next tick re-PLACES.
 	e.onOrderEvent(&workingOrder{clientID: first, done: true})
-	if e.pendingCancel || e.childID != "" {
-		t.Fatalf("after current-child cancel: pendingCancel=%v childID=%q, want cleared", e.pendingCancel, e.childID)
+	if e.childID != "" || e.haveQuote {
+		t.Fatalf("after terminal child: childID=%q haveQuote=%v, want cleared", e.childID, e.haveQuote)
 	}
-	e.placeNew(100000, 3)
-	if len(fp.placed) != 2 || fp.placed[1] != 100000 {
-		t.Fatalf("after confirm, place = %v, want last 100000", fp.placed)
+	e.placeNew(100010, 3)
+	if len(fp.placed) != 2 || fp.placed[1] != 100010 {
+		t.Fatalf("after child terminated, place = %v, want last 100010", fp.placed)
+	}
+}
+
+// TestMovedTouchIssuesMove drives step() with a moved touch and asserts the live child is
+// re-quoted via a native MOVE (not a cancel+place). It is the end-to-end check that the
+// 1b loop chose the atomic path.
+func TestMovedTouchIssuesMove(t *testing.T) {
+	fp := &fakePlacer{}
+	p := makerBuy()
+	p.minRequote = 0
+	clk := time.Unix(1000, 0)
+	e := &execution{
+		p:      p,
+		book:   staticBook{b: sampleBook()},
+		placer: fp,
+		logf:   func(string, ...any) {},
+		nowFn:  func() time.Time { return clk },
+	}
+
+	// First step with no child -> places at the best bid (99990).
+	if term := e.step(); term {
+		t.Fatalf("first step should not be terminal")
+	}
+	if len(fp.placed) != 1 || fp.placed[0] != 99990 {
+		t.Fatalf("first step place = %v, want [99990]", fp.placed)
+	}
+
+	// Touch moves up one step; next step MOVES the live child, no new place/cancel.
+	clk = clk.Add(time.Second)
+	e.book = staticBook{b: book([][2]float64{{100000, 5}}, [][2]float64{{100010, 4}})}
+	if term := e.step(); term {
+		t.Fatalf("requote step should not be terminal")
+	}
+	if len(fp.moves) != 1 || fp.moves[0].price != 100000 {
+		t.Fatalf("moved touch should issue a MOVE to 100000, moves = %+v", fp.moves)
+	}
+	if len(fp.placed) != 1 {
+		t.Fatalf("moved touch must NOT place a new child, placed = %v", fp.placed)
+	}
+	if fp.cancels != 0 {
+		t.Fatalf("moved touch must NOT cancel, cancels = %d", fp.cancels)
 	}
 }
 

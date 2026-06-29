@@ -12,6 +12,8 @@
       {"cmd":"place","trans_id":N,"client_id":"..","class":"SPBFUT","sec":"RIU6",
        "op":"B|S","price":"..","qty":K,"type":"L","account":".."}
       {"cmd":"cancel","trans_id":N,"order_num":"..","class":"SPBFUT","sec":"RIU6"}
+      {"cmd":"move","trans_id":N,"order_num":"..","class":"SPBFUT","sec":"RIU6",
+       "price":"..","qty":K}   -- native atomic re-price; qty 0 = keep current
     Lua -> agent:
       {"event":"trans_reply","trans_id":N,"result_code":I,"order_num":"..","text":".."}
       {"event":"order","order_num":"..","trans_id":N,
@@ -540,6 +542,52 @@ local function handle_cancel(cmd)
   end
 end
 
+-- Native atomic move: re-price (and optionally re-size) a resting order in ONE QUIK
+-- MOVE_ORDERS transaction. MODE=0 moves only the FIRST order leg (the one we name).
+-- FIRST_ORDER_NEW_QUANTITY="0" tells QUIK to KEEP the current quantity. QUIK assigns a
+-- NEW order number on a successful move; that arrives via OnTransReply/OnOrder (keyed by
+-- our TRANS_ID), so the manager re-keys the working order from the emitted `order` event.
+local function handle_move(cmd)
+  local trans_id  = cmd.trans_id
+  local order_num = cmd.order_num
+  if type(trans_id) ~= "number" then
+    log("move: missing/invalid trans_id; ignoring"); return
+  end
+  if not order_num or order_num == "" then
+    log("move trans_id=" .. trans_id .. ": missing order_num")
+    emit_trans_reply(trans_id, -1, "", "lua: move missing order_num")
+    return
+  end
+  local account = CONFIG.ACCOUNT
+  -- qty 0 (or absent) => keep current quantity. QUIK MOVE_ORDERS treats
+  -- FIRST_ORDER_NEW_QUANTITY="0" as "leave the unfilled quantity unchanged".
+  local new_qty = tonumber(cmd.qty) or 0
+  if new_qty < 0 then new_qty = 0 end
+
+  local trans = {
+    ACTION                   = "MOVE_ORDERS",
+    TRANS_ID                 = tostring(trans_id),
+    MODE                     = "0",                 -- move only the first (named) order
+    CLASSCODE                = tostring(cmd.class or ""),
+    SECCODE                  = tostring(cmd.sec or ""),
+    FIRST_ORDER_NUMBER       = tostring(order_num),
+    FIRST_ORDER_NEW_PRICE    = price_to_str(cmd.price),
+    FIRST_ORDER_NEW_QUANTITY = tostring(new_qty),   -- "0" = keep current quantity
+  }
+  if account ~= "" then trans.ACCOUNT = tostring(account) end
+
+  log(string.format("move trans_id=%d order_num=%s -> @%s x%s",
+    trans_id, tostring(order_num), trans.FIRST_ORDER_NEW_PRICE, trans.FIRST_ORDER_NEW_QUANTITY))
+
+  local res = sendTransaction(trans)
+  if res ~= nil and res ~= "" then
+    log("MOVE_ORDERS rejected: " .. tostring(res))
+    -- Surface the immediate reject so the manager keeps the OLD order as the working
+    -- one (the move did not take effect; the resting order_num is unchanged).
+    emit_trans_reply(trans_id, -1, tostring(order_num), "lua/MOVE_ORDERS: " .. tostring(res))
+  end
+end
+
 local function dispatch_command(line)
   local cmd = json.decode(line)
   if type(cmd) ~= "table" then
@@ -550,6 +598,8 @@ local function dispatch_command(line)
     handle_place(cmd)
   elseif cmd.cmd == "cancel" then
     handle_cancel(cmd)
+  elseif cmd.cmd == "move" then
+    handle_move(cmd)
   elseif cmd.cmd == "ping" then
     emit({ event = "pong", ts = os.time() })
   else

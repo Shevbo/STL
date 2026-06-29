@@ -128,6 +128,57 @@ def validate_place(
     check_daily_cap(limits, placed_today)
 
 
+def check_replace_price_collar(
+    limits: OrderLimits, *, reference_price: float, new_price: float, side: str,
+) -> None:
+    """The new price of a native MOVE must stay within the hard collar of a reference
+    price (the order's current resting price). For a BUY, prices ABOVE
+    reference*(1+frac) are adverse; for a SELL, prices BELOW reference*(1-frac) are.
+    frac<=0 or a non-positive reference disables the check. This mirrors the agent's
+    CheckCollar (defense in depth); the agent re-checks against the live resting price.
+    """
+    frac = float(limits.price_collar_frac)
+    ref = float(reference_price)
+    if frac <= 0 or ref <= 0:
+        return
+    s = (side or "").strip().lower()
+    if s == "buy":
+        if new_price > ref * (1 + frac):
+            raise LimitError(
+                f"Новая цена {new_price} выше коллара "
+                f"{ref * (1 + frac):.6g} (ref {ref}, frac {frac})."
+            )
+    elif s == "sell":
+        if new_price < ref * (1 - frac):
+            raise LimitError(
+                f"Новая цена {new_price} ниже коллара "
+                f"{ref * (1 - frac):.6g} (ref {ref}, frac {frac})."
+            )
+
+
+def validate_replace(
+    limits: OrderLimits,
+    *,
+    new_price: float,
+    new_quantity: int,
+    reference_price: float,
+    side: str,
+) -> None:
+    """Limits for a native atomic MOVE (replace_order). Re-checks the master flag, a
+    positive new price, the collar on the new price (vs the resting reference price),
+    and that a positive new quantity does not exceed the per-order cap. new_quantity 0
+    means "keep current" and skips the qty check. A move does NOT consume the daily cap
+    (it re-prices an existing order, it does not place a new one)."""
+    check_master_flag(limits)
+    if float(new_price) <= 0:
+        raise LimitError("Цена должна быть > 0.")
+    check_replace_price_collar(
+        limits, reference_price=reference_price, new_price=new_price, side=side,
+    )
+    if int(new_quantity) > 0:
+        check_quantity(limits, new_quantity)
+
+
 def validate_start_execution(
     limits: OrderLimits,
     *,

@@ -25,6 +25,7 @@ from trader.quik.limits import (
     LimitError,
     OrderLimits,
     validate_place,
+    validate_replace,
 )
 from trader.quik.orders import OrderStore
 from trader.quik.server import QuikAgentLinkServicer
@@ -155,6 +156,75 @@ def test_build_kill_switch_message_shape():
     msg = order_msgs.build_kill_switch("panic")
     assert msg.WhichOneof("payload") == "kill_switch"
     assert msg.kill_switch.reason == "panic"
+
+
+def test_build_replace_order_message_shape():
+    msg = order_msgs.build_replace_order("c1", "ORD-7", 99980.0, 0)
+    assert msg.WhichOneof("payload") == "replace_order"
+    assert msg.replace_order.client_id == "c1"
+    assert msg.replace_order.order_id == "ORD-7"
+    assert msg.replace_order.new_price == 99980.0
+    assert msg.replace_order.new_quantity == 0  # 0 = keep current
+
+
+# ---- replace (native MOVE) limit re-checks ----
+
+def test_replace_master_flag_off_rejects():
+    lim = _limits(trading_enabled=False)
+    with pytest.raises(LimitError, match="отключена"):
+        validate_replace(
+            lim, new_price=99980.0, new_quantity=0,
+            reference_price=99990.0, side="buy",
+        )
+
+
+def test_replace_collar_on_new_price_rejects_buy():
+    # frac 0.002, ref 100000 -> buy collar at 100200; 100300 is beyond.
+    lim = _limits(price_collar_frac=0.002)
+    with pytest.raises(LimitError, match="выше коллара"):
+        validate_replace(
+            lim, new_price=100300.0, new_quantity=0,
+            reference_price=100000.0, side="buy",
+        )
+
+
+def test_replace_collar_on_new_price_rejects_sell():
+    lim = _limits(price_collar_frac=0.002)
+    with pytest.raises(LimitError, match="ниже коллара"):
+        validate_replace(
+            lim, new_price=99700.0, new_quantity=0,
+            reference_price=100000.0, side="sell",
+        )
+
+
+def test_replace_new_quantity_over_cap_rejects():
+    lim = _limits(max_contracts_per_order=2)
+    with pytest.raises(LimitError, match="превышает лимит на заявку"):
+        validate_replace(
+            lim, new_price=99990.0, new_quantity=3,
+            reference_price=99990.0, side="buy",
+        )
+
+
+def test_replace_within_collar_keep_qty_passes():
+    lim = _limits(price_collar_frac=0.002)
+    # one-step move, qty kept (0) -> no raise.
+    validate_replace(
+        lim, new_price=100010.0, new_quantity=0,
+        reference_price=100000.0, side="buy",
+    )
+
+
+def test_register_replace_updates_price_optimistically():
+    ost = OrderStore()
+    aid = "WIN-QUIK01"
+    ost.register_pending(aid, "c1", "RIU6", "buy", 100000.0, 2)
+    ost.register_replace(aid, "c1", 100010.0, 0)
+    rows = ost.working_orders(aid)
+    assert rows[0]["price"] == 100010.0
+    assert rows[0]["quantity"] == 2  # qty 0 kept
+    # a move does NOT consume the daily cap
+    assert ost.placed_today(aid) == 0
 
 
 # ---- place -> OrderUpdate round-trip via a fake agent stream ----

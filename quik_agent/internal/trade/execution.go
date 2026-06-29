@@ -130,6 +130,10 @@ type execPlacer interface {
 	// placeChild submits one maker limit for the execution's remaining quantity at
 	// price, returning the client_id of the child order (for cancel/tracking).
 	placeChild(parentClientID, code string, buy bool, price float64, qty int64) (childID string, err error)
+	// moveChild re-prices a LIVE child order to a new join price in ONE native QUIK
+	// MOVE_ORDERS op (no cancel+place window). The child's client_id is unchanged; the
+	// underlying QUIK order number may change (the manager re-keys it). qty 0 = keep.
+	moveChild(childID string, price float64)
 	// cancelChild cancels a previously placed child order.
 	cancelChild(childID string)
 	// emitExec sends an ExecutionUpdate to STL.
@@ -220,8 +224,10 @@ func (e *execution) step() bool {
 		e.finish("done")
 		return true
 	}
-	// A cancel is in flight: do NOTHING until the child's terminal event clears it.
-	// This is the cancel-before-replace barrier that guarantees one live child.
+	// A cancel is in flight (e.g. a lagging cancel during teardown): do NOTHING until the
+	// child's terminal event clears it. Re-quotes now go through an atomic MOVE (no
+	// cancel), so pendingCancel is no longer set on the re-quote path — but the guard is
+	// kept so any in-flight cancel still parks the loop, preserving one live child.
 	if e.pendingCancel {
 		e.mu.Unlock()
 		return false
@@ -244,10 +250,15 @@ func (e *execution) step() bool {
 		return true
 	case decisionQuote:
 		if haveChild {
-			// Price moved: cancel the current child and WAIT. The next tick, after the
-			// cancel confirms (childID cleared), places the fresh quote. Never two live.
-			e.cancelForRequote()
+			// Price moved and the child is live: re-quote with a native atomic MOVE in
+			// ONE op (no cancel-before-place window, no pendingCancel dance). The same
+			// child stays live the whole time — the single-live-child invariant holds
+			// without ever passing through zero or two live orders. decide() only ever
+			// returns our own touch, so the move never crosses the spread.
+			e.moveQuote(dec.price)
 		} else {
+			// First quote, or the previous child terminated: place a fresh maker limit.
+			// placeNew remains the ONLY path that creates a child order.
 			e.placeNew(dec.price, remaining)
 		}
 		return false
@@ -293,18 +304,31 @@ func (e *execution) placeNew(price float64, remaining int64) {
 	e.mu.Unlock()
 }
 
-// cancelForRequote cancels the current child and sets pendingCancel so the loop waits
-// for the terminal event before placing the next quote (cancel-before-replace). Idempotent.
-func (e *execution) cancelForRequote() {
+// moveQuote re-prices the LIVE child to price via a native atomic MOVE_ORDERS — one op,
+// no cancel-before-place barrier. The child's client_id is unchanged (the manager re-keys
+// the underlying QUIK order number on the move), so the single-live-child invariant holds
+// throughout: there is never a zero- or two-live-order window. It does NOT place a new
+// child and does NOT touch placedCount (a move is not a placement). The anti-flicker
+// window is enforced here too (defence in depth; decide() also gates it). qty kept (0).
+func (e *execution) moveQuote(price float64) {
 	e.mu.Lock()
 	old := e.childID
 	if old == "" || e.pendingCancel || e.stopped {
 		e.mu.Unlock()
+		return // no live child to move, or a cancel/stop is in flight
+	}
+	if !e.lastQuoteAt.IsZero() && e.p.minRequote > 0 && e.now().Sub(e.lastQuoteAt) < e.p.minRequote {
+		e.mu.Unlock()
 		return
 	}
-	e.pendingCancel = true
+	if price == e.lastPrice {
+		e.mu.Unlock()
+		return // already resting here; nothing to move
+	}
+	e.lastPrice = price
+	e.lastQuoteAt = e.now()
 	e.mu.Unlock()
-	e.placer.cancelChild(old)
+	e.placer.moveChild(old, price)
 }
 
 // onTrade accumulates a partial fill toward target and emits progress. Called by the

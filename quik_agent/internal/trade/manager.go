@@ -3,6 +3,7 @@ package trade
 import (
 	"context"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,6 +28,7 @@ type bridgeAPI interface {
 	NextTransID() int64
 	Place(p placeCmd) error
 	Cancel(c cancelCmd) error
+	Move(m moveCmd) error
 	Connected() bool
 }
 
@@ -93,6 +95,13 @@ type Manager struct {
 	byTrans  map[int64]*workingOrder
 	byOrder  map[string]*workingOrder
 
+	// superseded holds OLD QUIK order numbers replaced by a native MOVE_ORDERS. QUIK
+	// cancels the old order leg and registers a new one (both under the move's TRANS_ID),
+	// so a "cancelled" OnOrder for the OLD leg would otherwise mark the working order done
+	// and break the maker loop. An OnOrder/OnTransReply for a superseded order number is
+	// dropped: the move replaced it. Cleared when its new order number is confirmed.
+	superseded map[string]bool
+
 	// exec holds running maker executions keyed by parent client_id (1b).
 	exec map[string]*execution
 }
@@ -111,10 +120,11 @@ func NewManager(cfg ManagerConfig, bridge bridgeAPI, guard *Guard, emit Emitter,
 		logf:     logf,
 		nowMsFn:  func() int64 { return time.Now().UnixMilli() },
 		execTick: 50 * time.Millisecond,
-		byClient: map[string]*workingOrder{},
-		byTrans:  map[int64]*workingOrder{},
-		byOrder:  map[string]*workingOrder{},
-		exec:     map[string]*execution{},
+		byClient:   map[string]*workingOrder{},
+		byTrans:    map[int64]*workingOrder{},
+		byOrder:    map[string]*workingOrder{},
+		superseded: map[string]bool{},
+		exec:       map[string]*execution{},
 	}
 }
 
@@ -216,6 +226,115 @@ func (m *Manager) CancelOrder(req *quikv1.CancelOrder) {
 		return
 	}
 	m.sendCancel(wo)
+}
+
+// ReplaceOrder handles a STL ReplaceOrder: a native atomic move of a resting order to a
+// new price (and optionally a new quantity) via ONE QUIK MOVE_ORDERS transaction — never
+// an internal cancel+place. It resolves the working order by order_id, then client_id,
+// re-checks the hard limits on the NEW price/qty (collar around the resting price; qty
+// never widened past the per-order cap), and only then issues the move. A move is
+// rejected when blocked by the kill-switch or when the master flag is off (a move can
+// raise exposure if it grows qty, so it is gated like a placement). On any violation it
+// emits an OrderUpdate REJECTED and sends nothing to Lua.
+func (m *Manager) ReplaceOrder(req *quikv1.ReplaceOrder) {
+	if req == nil {
+		return
+	}
+	m.mu.Lock()
+	blocked := m.blocked
+	m.mu.Unlock()
+
+	wo := m.resolveForCancel(req.GetClientId(), req.GetOrderId())
+	if wo == nil {
+		m.logf("trade: replace for unknown order (client=%q order=%q)",
+			req.GetClientId(), req.GetOrderId())
+		return
+	}
+	if blocked {
+		m.rejectReplace(wo, ReasonBlocked)
+		return
+	}
+	if !m.guard.Limits().TradingEnabled {
+		m.rejectReplace(wo, ReasonTradingDisabled)
+		return
+	}
+	m.sendMove(wo, req.GetNewPrice(), req.GetNewQuantity())
+}
+
+// rejectReplace emits an OrderUpdate REJECTED for a failed move WITHOUT changing the
+// resting order (the move never reached Lua; the old order is still working).
+func (m *Manager) rejectReplace(wo *workingOrder, reason RejectReason) {
+	m.logf("trade: ReplaceOrder REJECTED (client=%q order=%q): %s",
+		wo.clientID, wo.orderNum, reason)
+	m.emitOrderUpdate(wo, string(reason))
+}
+
+// sendMove validates the new price/qty and issues a MOVE_ORDERS to Lua. newQty 0 keeps
+// the current quantity; a positive newQty is clamped to the per-order cap (a move must
+// never widen quantity past the hard limit). The collar is checked around the order's
+// current resting price (our own reference, never crossing). The new TRANS_ID is mapped
+// to the same workingOrder so the move's OnTransReply/OnOrder (which may carry a NEW
+// order_num) re-keys it. The resting order is unchanged until QUIK confirms the move.
+func (m *Manager) sendMove(wo *workingOrder, newPrice float64, newQty int64) {
+	m.mu.Lock()
+	orderNum := wo.orderNum
+	code := wo.code
+	refPrice := wo.price
+	buy := isBuy(wo.side)
+	m.mu.Unlock()
+
+	if orderNum == "" {
+		// No QUIK key yet: cannot move. Defer is not meaningful for a re-quote (the price
+		// is already stale by the time a key arrives); reject and let the caller re-place.
+		m.logf("trade: move skipped — no order_num yet (client=%q trans=%d)", wo.clientID, wo.transID)
+		m.rejectReplace(wo, ReasonNoWorkingOrder)
+		return
+	}
+	if newPrice <= 0 || math.IsNaN(newPrice) || math.IsInf(newPrice, 0) {
+		m.rejectReplace(wo, ReasonPriceNonPositive)
+		return
+	}
+	// Collar on the NEW price, referenced to the order's current resting price. A move
+	// must never push the quote beyond the configured adverse fraction.
+	if ok, reason := CheckCollar(buy, refPrice, newPrice, m.guard.Limits().PriceCollarFrac); !ok {
+		m.rejectReplace(wo, reason)
+		return
+	}
+	// Quantity: 0 = keep. A positive new qty is clamped down to the per-order cap; it is
+	// NEVER widened past it.
+	qty := newQty
+	if qty < 0 {
+		qty = 0
+	}
+	if qty > 0 && m.guard.Limits().MaxContractsPerOrder > 0 && qty > m.guard.Limits().MaxContractsPerOrder {
+		qty = m.guard.Limits().MaxContractsPerOrder
+	}
+
+	transID := m.bridge.NextTransID()
+	m.mu.Lock()
+	// Map the new trans_id to the same working order so the move's reply / order event
+	// (which carries this trans_id and may carry a NEW order_num) resolves and re-keys it.
+	m.byTrans[transID] = wo
+	// The old leg dies as part of the move; flag it so its "cancelled" OnOrder (which
+	// rides the move's TRANS_ID) is dropped instead of marking the order done.
+	m.superseded[orderNum] = true
+	wo.transID = transID
+	wo.price = newPrice // optimistic; QUIK confirms via OnOrder
+	if qty > 0 {
+		wo.qty = qty
+	}
+	m.mu.Unlock()
+
+	if err := m.bridge.Move(moveCmd{
+		TransID:  transID,
+		OrderNum: orderNum,
+		Class:    m.cfg.ClassCode,
+		Sec:      code,
+		Price:    formatPrice(newPrice),
+		Qty:      qty,
+	}); err != nil {
+		m.logf("trade: move send failed (order=%s): %v", orderNum, err)
+	}
 }
 
 // KillSwitch cancels ALL working orders, stops every running execution, and sets the
@@ -422,6 +541,14 @@ func (m *Manager) placeChild(parentClientID, code string, buy bool, price float6
 	return childID, nil
 }
 
+// moveChild re-prices a live child order via a native atomic MOVE_ORDERS (the 1b loop's
+// re-quote path). It routes through ReplaceOrder so the same limit re-checks (collar on
+// the new price, qty never widened) and the order-number re-key apply. new_quantity 0
+// keeps the child's current quantity (a re-quote only changes price).
+func (m *Manager) moveChild(childID string, price float64) {
+	m.ReplaceOrder(&quikv1.ReplaceOrder{ClientId: childID, NewPrice: price, NewQuantity: 0})
+}
+
 // cancelChild cancels a child order placed by the maker loop.
 func (m *Manager) cancelChild(childID string) {
 	m.CancelOrder(&quikv1.CancelOrder{ClientId: childID})
@@ -501,9 +628,10 @@ func (m *Manager) resolveForCancel(clientID, orderID string) *workingOrder {
 func (m *Manager) OnTransReply(ev TransReplyEvent) {
 	m.mu.Lock()
 	wo := m.byTrans[ev.TransID]
-	if wo != nil && ev.OrderNum != "" && wo.orderNum == "" {
-		wo.orderNum = ev.OrderNum
-		m.byOrder[ev.OrderNum] = wo
+	if wo != nil && ev.OrderNum != "" && ev.OrderNum != wo.orderNum {
+		// First key, OR a re-key after a native MOVE_ORDERS (QUIK assigns a new order
+		// number on a move). Repoint byOrder from the old key to the new one.
+		m.rekeyOrderLocked(wo, ev.OrderNum)
 	}
 	clientID := ""
 	if wo != nil {
@@ -541,15 +669,27 @@ func (m *Manager) OnTransReply(ev TransReplyEvent) {
 // order surfaces as PARTIAL.
 func (m *Manager) OnOrder(ev OrderEvent) {
 	m.mu.Lock()
+	// Drop the dying OLD leg of a native move: its order number was superseded by the
+	// new order the move created. Acting on its "cancelled" state would mark the working
+	// order done and break the re-quote.
+	if ev.OrderNum != "" && m.superseded[ev.OrderNum] {
+		// Consume the flag: a moved leg dies with a single terminal OnOrder. Clearing it
+		// here bounds the map and lets QUIK safely reuse the number later.
+		delete(m.superseded, ev.OrderNum)
+		m.mu.Unlock()
+		m.logf("trade: dropped superseded (moved) order leg num=%s", ev.OrderNum)
+		return
+	}
 	wo := m.lookupLocked(ev.OrderNum, ev.TransID)
 	if wo == nil {
 		m.mu.Unlock()
 		m.logf("trade: order event for untracked order (num=%s trans=%d)", ev.OrderNum, ev.TransID)
 		return
 	}
-	if ev.OrderNum != "" && wo.orderNum == "" {
-		wo.orderNum = ev.OrderNum
-		m.byOrder[ev.OrderNum] = wo
+	if ev.OrderNum != "" && ev.OrderNum != wo.orderNum {
+		// First key, OR a re-key after a native MOVE_ORDERS (new order number). The new
+		// leg is now the live one; the move is complete.
+		m.rekeyOrderLocked(wo, ev.OrderNum)
 	}
 	if ev.Qty > 0 {
 		wo.qty = ev.Qty
@@ -599,6 +739,21 @@ func (m *Manager) OnTrade(ev TradeEvent) {
 			ex.onTrade(ev.Qty, px)
 		}
 	}
+}
+
+// rekeyOrderLocked points byOrder at newOrderNum for wo, removing the stale key when the
+// order number changed (a native MOVE_ORDERS yields a fresh QUIK order number). Caller
+// holds m.mu. Safe for the first-key case (old orderNum empty).
+func (m *Manager) rekeyOrderLocked(wo *workingOrder, newOrderNum string) {
+	if wo.orderNum != "" && wo.orderNum != newOrderNum {
+		// Only drop the old mapping if it still points at THIS order (a later order could
+		// have reused the number in pathological cases).
+		if m.byOrder[wo.orderNum] == wo {
+			delete(m.byOrder, wo.orderNum)
+		}
+	}
+	wo.orderNum = newOrderNum
+	m.byOrder[newOrderNum] = wo
 }
 
 func (m *Manager) lookupLocked(orderNum string, transID int64) *workingOrder {

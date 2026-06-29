@@ -27,6 +27,7 @@ only placement and maker-working of a human-decided order. Live account, small s
 - agent -> Lua:
   - `{"cmd":"place","trans_id":N,"client_id":"..","class":"SPBFUT","sec":"RIU6","op":"B|S","price":"..","qty":K,"type":"L","account":".."}`
   - `{"cmd":"cancel","trans_id":N,"order_num":"..","class":"SPBFUT","sec":"RIU6"}`
+  - `{"cmd":"move","trans_id":N,"order_num":"..","class":"SPBFUT","sec":"RIU6","price":"..","qty":K}`  (native atomic re-price; qty 0 = keep current)
 - Lua -> agent (from QUIK callbacks):
   - `{"event":"trans_reply","trans_id":N,"result_code":I,"order_num":"..","text":".."}`
   - `{"event":"order","order_num":"..","trans_id":N,"state":"active|filled|cancelled|rejected","balance":B,"qty":Q,"price":"..","text":".."}`  (balance = unfilled remainder)
@@ -34,6 +35,13 @@ only placement and maker-working of a human-decided order. Live account, small s
 - The Lua maps `place` to `sendTransaction{TRANS_ID, ACTION=NEW_ORDER, CLASSCODE, SECCODE,
   OPERATION=B/S, PRICE, QUANTITY, TYPE=L, ACCOUNT, CLIENT_CODE}` and `cancel` to
   `ACTION=KILL_ORDER, ORDER_KEY=order_num`. TRANS_ID is the agent-assigned correlation id.
+- The Lua maps `move` to `sendTransaction{TRANS_ID, ACTION=MOVE_ORDERS, MODE=0, CLASSCODE,
+  SECCODE, FIRST_ORDER_NUMBER=order_num, FIRST_ORDER_NEW_PRICE=price,
+  FIRST_ORDER_NEW_QUANTITY=qty}` (FIRST_ORDER_NEW_QUANTITY="0" = keep current quantity).
+  QUIK cancels the old order leg and registers a NEW order number under the same TRANS_ID;
+  both ride the move's TRANS_ID, so the agent re-keys the working order from the new
+  `order` event and drops the old (superseded) leg's terminal event. This is the 1b maker
+  loop's re-quote path: ONE atomic op, no cancel+place window, never two/zero live orders.
 
 ## Hard limits (agent-enforced; STL enforces the same first)
 Config (extend internal/config + STL settings), defaults agreed with the operator:
