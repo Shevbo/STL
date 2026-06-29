@@ -193,6 +193,26 @@ async def lifespan(app: FastAPI):
     app.state.quik_server = quik_server
     app.state.quik_order_store = quik_order_store
 
+    # Broker abstraction (trader/broker): robots trade through BrokerInterface, the
+    # concrete adapter chosen from settings.exchange_interface. Built here with the QUIK
+    # stores injected and require_trade_ready=False so a partial adapter never breaks
+    # boot; the trade-ready gate is enforced when a robot actually trades. Best-effort.
+    app.state.broker = None
+    try:
+        from trader.broker.registry import get_broker
+
+        app.state.broker = get_broker(
+            settings,
+            require_trade_ready=False,
+            quik_store=quik_store,
+            quik_order_store=quik_order_store,
+            quik_server=quik_server,
+        )
+        log.info("broker.selected", interface=settings.exchange_interface,
+                 name=getattr(app.state.broker, "name", "?"))
+    except Exception as exc:  # noqa: BLE001 - never break boot on broker wiring
+        log.warning("broker.select_failed", error=str(exc))
+
     # A restart kills any in-flight local backtest task, but its DB row stays
     # status='running' forever (orphan) and — worse — a hung task holds the
     # in-process backtest lock. On a clean start there are no live local tasks,
