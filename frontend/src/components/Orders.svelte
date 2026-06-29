@@ -43,6 +43,11 @@
   // confirm dialog
   let confirming = $state(false);
 
+  // 1b maker execution
+  let execSide = $state<'buy' | 'sell'>('sell');
+  let execQty = $state<number>(1);
+  let execWorst = $state<number>(0);
+
   let tradingOn = $derived(!!cfg?.trading_enabled && !!cfg?.agent_wired);
 
   // Live (maker) estimate: limit order resting in the book → broker fee only.
@@ -116,6 +121,45 @@
       if (!r.ok) { msg = j.detail ?? 'Отмена отклонена.'; return; }
       await loadTables();
     } catch (e) { msg = 'Ошибка отмены: ' + e; }
+  }
+
+  async function startExecution() {
+    msg = '';
+    if (!tradingOn) return;
+    if (!code) { msg = 'Укажите инструмент.'; return; }
+    if (execQty <= 0) { msg = 'Кол-во должно быть > 0.'; return; }
+    if (execWorst <= 0) { msg = 'Укажите худшую цену (коллар).'; return; }
+    const human = execSide === 'buy' ? 'Покупка' : 'Продажа';
+    if (!confirm('1b мейкер-исполнение: ' + human + ' ' + execQty + ' ' + code +
+                 ', не хуже ' + execWorst + '. Агент встаёт у спрэда, не пересекает. Запустить?')) return;
+    try {
+      const r = await fetch('/api/v1/quik/orders/start-execution', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          client_id: newClientId(), code, side: execSide,
+          target_quantity: execQty, worst_price: execWorst, allow_cross: false,
+        }),
+      });
+      const j = await r.json().catch(() => ({}));
+      msg = r.ok ? '1b запущено: ' + (j.client_id ?? '') : (j.detail ?? '1b отклонено.');
+      await loadTables();
+    } catch (e) { msg = 'Ошибка 1b: ' + e; }
+  }
+
+  async function stopExecution(clientId: string) {
+    try {
+      const r = await fetch('/api/v1/quik/orders/stop-execution', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client_id: clientId }),
+      });
+      const j = await r.json().catch(() => ({}));
+      msg = r.ok ? '1b остановлено.' : (j.detail ?? 'Стоп не выполнен.');
+      await loadTables();
+    } catch (e) { msg = 'Ошибка стоп: ' + e; }
   }
 
   async function killSwitch() {
@@ -192,6 +236,28 @@
     <button class="place" onclick={openConfirm} disabled={!tradingOn}>Выставить</button>
   </div>
 
+  <!-- 1b maker execution: agent joins the touch, never crosses, holds the collar -->
+  <div class="ticket" class:off={!tradingOn}>
+    <span class="exec-lbl">Мейкер 1b:</span>
+    <label>
+      Сторона
+      <select bind:value={execSide} disabled={!tradingOn}>
+        <option value="buy">Покупка</option>
+        <option value="sell">Продажа</option>
+      </select>
+    </label>
+    <label>
+      Кол-во
+      <input type="number" min="1" max={cfg?.max_working_contracts ?? 2}
+             bind:value={execQty} disabled={!tradingOn} />
+    </label>
+    <label>
+      Худшая цена
+      <input type="number" step="any" bind:value={execWorst} disabled={!tradingOn} />
+    </label>
+    <button class="place" onclick={startExecution} disabled={!tradingOn}>Старт 1b</button>
+  </div>
+
   {#if cfg}
     <div class="limits">
       макс/заявка: {cfg.max_contracts_per_order} ·
@@ -242,7 +308,7 @@
     <table>
       <thead>
         <tr><th>Время</th><th>Инстр.</th><th>Цель</th><th>Исполн.</th>
-          <th>Ср. цена</th><th>Статус</th><th>Текст</th></tr>
+          <th>Ср. цена</th><th>Статус</th><th>Текст</th><th></th></tr>
       </thead>
       <tbody>
         {#each execs as e}
@@ -254,9 +320,14 @@
             <td>{e.avg_price}</td>
             <td>{e.state}</td>
             <td>{e.text}</td>
+            <td>
+              {#if e.state === 'working'}
+                <button class="x" onclick={() => stopExecution(e.client_id)} disabled={!tradingOn}>стоп</button>
+              {/if}
+            </td>
           </tr>
         {/each}
-        {#if !execs.length}<tr><td colspan="7" class="empty">нет исполнений</td></tr>{/if}
+        {#if !execs.length}<tr><td colspan="8" class="empty">нет исполнений</td></tr>{/if}
       </tbody>
     </table>
   </div>
@@ -319,6 +390,7 @@
     border-radius: 4px; padding: 4px 14px; cursor: pointer;
   }
   .place:disabled, .x:disabled { opacity: 0.4; cursor: not-allowed; }
+  .exec-lbl { align-self: center; font-size: 11px; font-weight: 600; opacity: 0.8; color: #9ab; }
   .limits { padding: 2px 8px; font-size: 11px; opacity: 0.6; }
   .msg { padding: 4px 8px; font-size: 11px; color: #ffd27f; }
   .section-title {
