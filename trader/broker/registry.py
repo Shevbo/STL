@@ -14,6 +14,7 @@ tokens) comes from ``settings`` / keymaster BY NAME — never hardcoded here.
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Callable
 from typing import Any
 
@@ -116,7 +117,19 @@ def get_broker(
     if key not in _REGISTRY:
         raise BrokerNotRegistered(name, registered_names())
 
-    broker = _REGISTRY[key](settings, **inject)
+    # Pass only the injected deps this adapter's factory actually accepts, so a caller
+    # can hand the same dependency bag (e.g. the QUIK stores) to any adapter; a Finam
+    # adapter that ignores them just does not receive them.
+    factory = _REGISTRY[key]
+    try:
+        params = inspect.signature(factory).parameters
+        if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
+            kwargs = inject
+        else:
+            kwargs = {k: v for k, v in inject.items() if k in params}
+    except (TypeError, ValueError):
+        kwargs = inject
+    broker = factory(settings, **kwargs)
 
     if require_trade_ready and not broker.is_trade_ready():
         raise BrokerNotTradeReady(broker.name, broker.missing_core())
