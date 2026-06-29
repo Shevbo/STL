@@ -43,6 +43,9 @@ type workingOrder struct {
 	balance  int64 // unfilled remainder reported by QUIK
 	state    quikv1.OrderState
 	done     bool // terminal (filled/cancelled/rejected)
+	// cancelRequested is set when a cancel was asked for before QUIK assigned an
+	// order_num; the cancel is fired as soon as the order_num arrives.
+	cancelRequested bool
 }
 
 func (w *workingOrder) restingQty() int64 {
@@ -455,10 +458,13 @@ func (m *Manager) sendCancel(wo *workingOrder) {
 	code := wo.code
 	m.mu.Unlock()
 	if orderNum == "" {
-		// QUIK has not yet acknowledged the order with a number; cannot KILL_ORDER
-		// without ORDER_KEY. The trans_reply / order event will land soon; the
-		// operator can retry, or the maker loop re-evaluates on the next tick.
-		m.logf("trade: cancel deferred — no order_num yet (client=%q trans=%d)", wo.clientID, wo.transID)
+		// QUIK has not assigned an order number yet; remember to cancel as soon as it
+		// does (OnTransReply/OnOrder fires it). Without this the maker loop's pending
+		// cancel could hang and freeze the execution.
+		m.mu.Lock()
+		wo.cancelRequested = true
+		m.mu.Unlock()
+		m.logf("trade: cancel deferred until order_num (client=%q trans=%d)", wo.clientID, wo.transID)
 		return
 	}
 	transID := m.bridge.NextTransID()
@@ -508,6 +514,10 @@ func (m *Manager) OnTransReply(ev TransReplyEvent) {
 		wo.state = quikv1.OrderState_ORDER_STATE_REJECTED
 		wo.done = true
 	}
+	deferredCancel := wo != nil && wo.cancelRequested && wo.orderNum != "" && !wo.done
+	if deferredCancel {
+		wo.cancelRequested = false
+	}
 	m.mu.Unlock()
 
 	_ = m.emit.EmitTransReply(&quikv1.TransReply{
@@ -519,6 +529,9 @@ func (m *Manager) OnTransReply(ev TransReplyEvent) {
 	})
 	if rejected {
 		m.emitOrderUpdate(wo, ev.Text)
+	}
+	if deferredCancel {
+		m.sendCancel(wo)
 	}
 }
 
@@ -555,9 +568,16 @@ func (m *Manager) OnOrder(ev OrderEvent) {
 	}
 	clientID := wo.clientID
 	ex := m.exec[clientID]
+	deferredCancel := wo.cancelRequested && wo.orderNum != "" && !wo.done
+	if deferredCancel {
+		wo.cancelRequested = false
+	}
 	m.mu.Unlock()
 
 	m.emitOrderUpdate(wo, ev.Text)
+	if deferredCancel {
+		m.sendCancel(wo)
+	}
 	if ex != nil {
 		ex.onOrderEvent(wo)
 	}

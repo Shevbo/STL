@@ -1,6 +1,7 @@
 package trade
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -137,7 +138,7 @@ type fakePlacer struct {
 func (f *fakePlacer) placeChild(_, _ string, _ bool, price float64, _ int64) (string, error) {
 	f.nextID++
 	f.placed = append(f.placed, price)
-	return "child", nil
+	return fmt.Sprintf("child%d", f.nextID), nil
 }
 func (f *fakePlacer) cancelChild(string)                  { f.cancels++ }
 func (f *fakePlacer) emitExec(u *quikv1.ExecutionUpdate)  { f.updates = append(f.updates, u) }
@@ -176,31 +177,73 @@ func TestPartialAccumulation(t *testing.T) {
 	}
 }
 
-func TestRequotePlacesAndCancels(t *testing.T) {
+// TestSingleChildDiscipline verifies cancel-before-replace: a re-quote cancels the
+// current child and does NOT place a new one until that child's terminal event lands.
+// Never two live children — the core fix for the live runaway.
+func TestSingleChildDiscipline(t *testing.T) {
 	fp := &fakePlacer{}
-	e := &execution{p: makerBuy(), placer: fp, logf: func(string, ...any) {}}
+	p := makerBuy()
+	p.minRequote = 0 // isolate the discipline from the rate-limit
+	e := &execution{p: p, placer: fp, logf: func(string, ...any) {}}
 
-	e.requote(99990, 3)
+	e.placeNew(99990, 3)
 	if len(fp.placed) != 1 || fp.placed[0] != 99990 {
-		t.Fatalf("first requote placed = %v, want [99990]", fp.placed)
+		t.Fatalf("first place = %v, want [99990]", fp.placed)
 	}
-	if fp.cancels != 0 {
-		t.Fatalf("first requote should not cancel, got %d", fp.cancels)
-	}
-	// Second requote cancels the resting child then places the new price.
-	e.requote(100000, 3)
+	first := e.childID
+
+	// Re-quote: cancels the current child, sets pendingCancel, places NOTHING new.
+	e.cancelForRequote()
 	if fp.cancels != 1 {
-		t.Fatalf("second requote cancels = %d, want 1", fp.cancels)
+		t.Fatalf("cancelForRequote cancels = %d, want 1", fp.cancels)
 	}
+	if len(fp.placed) != 1 {
+		t.Fatalf("must NOT place while cancel in flight, placed = %v", fp.placed)
+	}
+	// A placeNew now is refused (pendingCancel barrier).
+	e.placeNew(100000, 3)
+	if len(fp.placed) != 1 {
+		t.Fatalf("placeNew during pendingCancel must be a no-op, placed = %v", fp.placed)
+	}
+
+	// Cancel confirms for the CURRENT child -> state clears -> next place allowed.
+	e.onOrderEvent(&workingOrder{clientID: first, done: true})
+	if e.pendingCancel || e.childID != "" {
+		t.Fatalf("after current-child cancel: pendingCancel=%v childID=%q, want cleared", e.pendingCancel, e.childID)
+	}
+	e.placeNew(100000, 3)
 	if len(fp.placed) != 2 || fp.placed[1] != 100000 {
-		t.Fatalf("second requote placed = %v, want last 100000", fp.placed)
+		t.Fatalf("after confirm, place = %v, want last 100000", fp.placed)
+	}
+}
+
+// TestStaleChildEventIgnored is the anti-runaway guard: a terminal event for a PREVIOUS
+// child (a lagging cancel confirmation) must not reset the quote state. This was the bug
+// that spun the loop into placing dozens of orders.
+func TestStaleChildEventIgnored(t *testing.T) {
+	fp := &fakePlacer{}
+	p := makerBuy()
+	p.minRequote = 0
+	e := &execution{p: p, placer: fp, logf: func(string, ...any) {}}
+
+	e.placeNew(99990, 3)
+	cur := e.childID
+
+	// A done event for some OTHER (stale) child must be ignored.
+	e.onOrderEvent(&workingOrder{clientID: "child-stale", done: true})
+	if e.childID != cur || !e.haveQuote {
+		t.Fatalf("stale child event reset state: childID=%q haveQuote=%v (want unchanged)", e.childID, e.haveQuote)
+	}
+	// And no extra placement was triggered.
+	if len(fp.placed) != 1 {
+		t.Fatalf("stale event must not place, placed = %v", fp.placed)
 	}
 }
 
 func TestStopCancelsAndEmits(t *testing.T) {
 	fp := &fakePlacer{}
 	e := &execution{p: makerBuy(), placer: fp, logf: func(string, ...any) {}}
-	e.requote(99990, 3)
+	e.placeNew(99990, 3)
 	e.stop("operator")
 	if fp.cancels != 1 {
 		t.Fatalf("stop should cancel resting child, cancels=%d", fp.cancels)

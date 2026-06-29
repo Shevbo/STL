@@ -152,16 +152,23 @@ type execution struct {
 
 	cancel context.CancelFunc
 
-	mu          sync.Mutex
-	filled      int64
-	sumPxQty    float64 // for avg price
-	haveQuote   bool
-	childID     string
-	lastPrice   float64
-	lastQuoteAt time.Time
-	stopped     bool
-	stopReason  string
+	mu            sync.Mutex
+	filled        int64
+	sumPxQty      float64 // for avg price
+	haveQuote     bool
+	childID       string  // current child order's client_id ("" = none live)
+	pendingCancel bool    // a cancel was sent for childID; await its terminal event
+	lastPrice     float64
+	lastQuoteAt   time.Time
+	placedCount   int     // total child orders placed this execution (runaway backstop)
+	stopped       bool
+	stopReason    string
 }
+
+// maxChildPlacements caps how many child orders one execution may ever place. A
+// correct single-child loop places ~ (re-quotes + 1); this is a hard backstop against
+// any future logic bug causing a runaway. Tripping it stops the execution.
+const maxChildPlacements = 50
 
 func (e *execution) now() time.Time {
 	if e.nowFn != nil {
@@ -213,7 +220,13 @@ func (e *execution) step() bool {
 		e.finish("done")
 		return true
 	}
-	haveQuote := e.haveQuote
+	// A cancel is in flight: do NOTHING until the child's terminal event clears it.
+	// This is the cancel-before-replace barrier that guarantees one live child.
+	if e.pendingCancel {
+		e.mu.Unlock()
+		return false
+	}
+	haveChild := e.childID != ""
 	lastPrice := e.lastPrice
 	lastQuoteAt := e.lastQuoteAt
 	e.mu.Unlock()
@@ -222,7 +235,7 @@ func (e *execution) step() bool {
 	if !ok {
 		return false // no book this tick; wait
 	}
-	dec := decide(book, e.p, haveQuote, lastPrice, lastQuoteAt, e.now())
+	dec := decide(book, e.p, haveChild, lastPrice, lastQuoteAt, e.now())
 	switch dec.action {
 	case decisionNoBook, decisionHold:
 		return false
@@ -230,22 +243,43 @@ func (e *execution) step() bool {
 		e.finishCollar()
 		return true
 	case decisionQuote:
-		e.requote(dec.price, remaining)
+		if haveChild {
+			// Price moved: cancel the current child and WAIT. The next tick, after the
+			// cancel confirms (childID cleared), places the fresh quote. Never two live.
+			e.cancelForRequote()
+		} else {
+			e.placeNew(dec.price, remaining)
+		}
 		return false
 	}
 	return false
 }
 
-// requote cancels any resting child and places a fresh maker limit at price for the
-// remaining quantity. Pure-maker: price is always our own side's touch (join), never
-// the opposite side, so we never cross.
-func (e *execution) requote(price float64, remaining int64) {
+// placeNew places ONE fresh maker limit at price (our own side's touch, never
+// crossing) for the remaining quantity. Caller guarantees there is no live child and
+// no pending cancel. A hard placement backstop stops the execution if it ever exceeds
+// maxChildPlacements (defence against any future runaway).
+func (e *execution) placeNew(price float64, remaining int64) {
 	e.mu.Lock()
-	old := e.childID
-	e.mu.Unlock()
-	if old != "" {
-		e.placer.cancelChild(old)
+	if e.childID != "" || e.pendingCancel || e.stopped {
+		e.mu.Unlock()
+		return // invariant: never place while a child is live or a cancel is in flight
 	}
+	// Rate-limit re-places: after the first quote, never place again faster than
+	// minRequote. The first ever quote (lastQuoteAt zero) always passes.
+	if !e.lastQuoteAt.IsZero() && e.p.minRequote > 0 && e.now().Sub(e.lastQuoteAt) < e.p.minRequote {
+		e.mu.Unlock()
+		return
+	}
+	if e.placedCount >= maxChildPlacements {
+		e.mu.Unlock()
+		e.logf("exec %s: placement backstop hit (%d) — stopping", e.p.clientID, maxChildPlacements)
+		e.stop("placement_backstop")
+		return
+	}
+	e.placedCount++
+	e.mu.Unlock()
+
 	childID, err := e.placer.placeChild(e.p.clientID, e.p.code, e.p.buy, price, remaining)
 	if err != nil {
 		e.logf("exec %s: placeChild failed: %v", e.p.clientID, err)
@@ -257,6 +291,20 @@ func (e *execution) requote(price float64, remaining int64) {
 	e.lastPrice = price
 	e.lastQuoteAt = e.now()
 	e.mu.Unlock()
+}
+
+// cancelForRequote cancels the current child and sets pendingCancel so the loop waits
+// for the terminal event before placing the next quote (cancel-before-replace). Idempotent.
+func (e *execution) cancelForRequote() {
+	e.mu.Lock()
+	old := e.childID
+	if old == "" || e.pendingCancel || e.stopped {
+		e.mu.Unlock()
+		return
+	}
+	e.pendingCancel = true
+	e.mu.Unlock()
+	e.placer.cancelChild(old)
 }
 
 // onTrade accumulates a partial fill toward target and emits progress. Called by the
@@ -282,12 +330,19 @@ func (e *execution) onOrderEvent(wo *workingOrder) {
 	if wo == nil {
 		return
 	}
-	if wo.done {
-		e.mu.Lock()
-		e.haveQuote = false
-		e.childID = ""
+	e.mu.Lock()
+	// Only the CURRENT child drives state. A terminal event for a previous child (a
+	// lagging cancel confirmation) must NOT reset the quote — that was the runaway bug.
+	if wo.clientID != e.childID {
 		e.mu.Unlock()
+		return
 	}
+	if wo.done {
+		e.childID = ""
+		e.pendingCancel = false
+		e.haveQuote = false
+	}
+	e.mu.Unlock()
 }
 
 // stop halts the loop, cancels any resting child, and emits a terminal update. Called
