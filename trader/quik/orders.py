@@ -34,8 +34,15 @@ _STATE_NAME = {
     pb.ORDER_STATE_CANCELLED: "cancelled",
     pb.ORDER_STATE_REJECTED: "rejected",
 }
-# A working (resting) order still consumes the working-contracts budget.
+# A working (resting) order still consumes the working-contracts budget. "expired" is a
+# RECONCILIATION verdict (see reconcile_pending): a placement QUIK never acknowledged, so
+# it is NOT working and never a real (phantom) order.
 _WORKING_STATES = {"pending", "active", "partial"}
+
+# A placement that stays PENDING with no QUIK order_id longer than this is reconciled as
+# "expired" (QUIK assigns an order_id on registration; none after this window = never
+# registered = phantom). Healthy orders ack in ~1s.
+PENDING_RECONCILE_MS = 20_000
 
 
 def _now_ms() -> int:
@@ -167,6 +174,34 @@ class OrderStore:
                 for o in b.orders.values()
                 if o.state in _WORKING_STATES
             )
+
+    def reconcile_pending(
+        self, now_ms: int | None = None, expiry_ms: int = PENDING_RECONCILE_MS,
+    ) -> list[tuple[str, str]]:
+        """СВЕРКА against the QUIK contract: a placement still PENDING with NO order_id
+        after expiry_ms was never registered by QUIK (an order_id is assigned on
+        registration; none after the window => never reached the book => a PHANTOM).
+        Mark it terminal "expired" so it stops being shown/counted as a live order, and
+        return [(agent_id, client_id)] so the caller can fire a best-effort cancel
+        (safety: if it somehow DID register, the cancel removes it; for a true phantom the
+        cancel is a harmless no-op)."""
+        now = now_ms if now_ms is not None else _now_ms()
+        expired: list[tuple[str, str]] = []
+        with self._lock:
+            for aid, b in self._agents.items():
+                for rec in b.orders.values():
+                    if (
+                        rec.state == "pending"
+                        and not rec.order_id
+                        and (now - rec.ts_unix_ms) > expiry_ms
+                    ):
+                        rec.state = "expired"
+                        rec.text = (
+                            rec.text
+                            or "не зарегистрирована в QUIK (нет ответа); снята из работы"
+                        )
+                        expired.append((aid, rec.client_id))
+        return expired
 
     # ---- register a placement locally (PENDING) before the agent replies ----
     def register_pending(

@@ -309,12 +309,16 @@ async def lifespan(app: FastAPI):
     # Generic agent-task fallback: VDS runs queued agent_tasks only when the i9 is
     # truly down (pi ICMP) and the VDS is idle.
     task_fallback_task = asyncio.create_task(_agent_task_fallback(app.state))
+    # QUIK order reconciliation (СВЕРКА): expire phantom placements QUIK never acked and
+    # fire a best-effort cancel so STL never shows an order the broker does not have.
+    quik_reconcile_task = asyncio.create_task(_quik_order_reconcile(app.state))
 
     yield
 
     fallback_task.cancel()
     reaper_task.cancel()
     task_fallback_task.cancel()
+    quik_reconcile_task.cancel()
 
     if ai46 is not None:
         await ai46.stop()
@@ -920,6 +924,37 @@ async def _orphan_reaper(app_state) -> None:
         except Exception as exc:  # noqa: BLE001 — never let the loop die
             log.warning("orphan_reaper.failed", error=str(exc))
         await asyncio.sleep(180)
+
+
+async def _quik_order_reconcile(app_state) -> None:
+    """СВЕРКА of QUIK orders against the broker contract: a placement still PENDING with
+    no QUIK order_id past the reconcile window was never registered (QUIK assigns an
+    order_id on registration) — a PHANTOM that STL must not keep showing as live. Expire
+    it and fire a best-effort CancelOrder to the agent (no-op for a true phantom; if it
+    somehow DID register, the cancel removes it, so STL never hides a real order). Runs
+    every 5s. Best-effort; never raises into the loop."""
+    while True:
+        try:
+            ost = getattr(app_state, "quik_order_store", None)
+            srv = getattr(app_state, "quik_server", None)
+            if ost is not None:
+                from trader.quik import orders as _order_msgs
+
+                expired = ost.reconcile_pending()
+                for agent_id, client_id in expired:
+                    log.warning("quik.order_reconcile.expired",
+                                agent=agent_id, client_id=client_id)
+                    if srv is not None:
+                        try:
+                            srv.enqueue_order(
+                                agent_id, _order_msgs.build_cancel_order(client_id, ""))
+                        except Exception:  # noqa: BLE001
+                            pass
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — never let the loop die
+            log.warning("quik.order_reconcile.failed", error=str(exc))
+        await asyncio.sleep(5)
 
 
 async def _fetch_bars_for_backtest(symbol: str, date_from: str, date_to: str, app_state) -> list:
