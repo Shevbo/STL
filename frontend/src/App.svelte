@@ -14,6 +14,7 @@
   import LabPanel from './components/LabPanel.svelte';
   import QuikTables from './components/QuikTables.svelte';
   import Orders from './components/Orders.svelte';
+  import OrderViz from './components/OrderViz.svelte';
   import LoginDialog from './components/LoginDialog.svelte';
   import { WsClient } from '$lib/ws';
   import { robotsStore } from '$lib/stores/robots.svelte';
@@ -28,6 +29,10 @@
   let showLab = $state(false);
   let showQuikTables = $state(false);
   let showQuikOrders = $state(false);
+  // OrderViz: default = auto (self-shows on active orders). Operator can pin it
+  // open or hide it; "pin" forces it visible even with no active orders.
+  let orderVizPinned = $state(false);
+  let orderVizHidden = $state(false);
   let selectedRobotId = $state<string | null>(null);
   let events = $state<string[]>([]);
   let pendingOrder = $state<OrderRequest | null>(null);
@@ -296,6 +301,26 @@
       <Orders />
     </div>
   {/if}
+  <!-- OrderViz: slim auto-frame (~1/8 height). Self-shows when there is >=1 active
+       QUIK order; the pin button keeps it open, the ✕ inside hides it until the next
+       new order. The wrapper only takes space when the frame is actually shown. -->
+  {#if !orderVizHidden}
+    <div class="orderviz-wrap">
+      <OrderViz pinned={orderVizPinned} onClose={() => orderVizHidden = true} />
+    </div>
+  {/if}
+  <div class="orderviz-bar">
+    <button
+      class="ovz-toggle"
+      class:on={orderVizPinned}
+      title="Закрепить/открепить визуализацию заявки"
+      onclick={() => { orderVizPinned = !orderVizPinned; if (orderVizPinned) orderVizHidden = false; }}
+    >📌 Виз. заявки</button>
+    {#if orderVizHidden}
+      <button class="ovz-toggle" title="Показать визуализацию заявки"
+              onclick={() => orderVizHidden = false}>Показать</button>
+    {/if}
+  </div>
   <BottomBar {events} />
   {#if pendingOrder}
     <OrderConfirmDialog
@@ -327,6 +352,22 @@
   .positions-wrap { flex-shrink: 0; overflow: hidden; }
   .lab-panel-wrap { overflow: hidden; }
   .quik-tables-wrap { overflow: hidden; flex-shrink: 0; border-top: 1px solid #2d2d4a; }
+  /* OrderViz slim frame: ~1/8 of the viewport height (compact), self-hides when
+     empty so it never disrupts the main layout. */
+  .orderviz-wrap {
+    flex-shrink: 0; height: 12.5vh; min-height: 130px; max-height: 160px;
+    overflow: hidden; border-top: 1px solid #2d2d4a;
+  }
+  .orderviz-bar {
+    flex-shrink: 0; display: flex; gap: 6px; align-items: center;
+    padding: 2px 8px; background: #0f0f1e; border-top: 1px solid #1a1a2e;
+  }
+  .ovz-toggle {
+    background: #1a1a2e; color: #889; border: 1px solid #2d2d4a;
+    border-radius: 3px; font-size: 10px; padding: 1px 8px; cursor: pointer;
+  }
+  .ovz-toggle:hover { color: #cde; border-color: #6aa8ff55; }
+  .ovz-toggle.on { color: #4caf50; border-color: #4caf5066; background: #4caf5012; }
 
   /* ── Drag handles ─────────────────────────────────────────────── */
   .dh {
