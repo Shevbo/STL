@@ -65,12 +65,40 @@
       if (sym !== selectedSymbol || tf !== selectedTf) return;
       if (Array.isArray(bars) && bars.length) {
         candlesStore.setHistory(sym, bars);
+        // Draw DIRECTLY onto the series (mirrors the working MiniChart) instead of
+        // relying solely on the reactive ohlc-derived → effect chain, which did not
+        // repaint the main chart (it stayed blank while the identical REST data drew
+        // fine in the positions/orders grid). The reactive effect still appends live
+        // ws bars on top.
+        if (tvCandle && sym === selectedSymbol) {
+          drawBars(bars);
+        }
       }
     } catch (e) {
       console.warn('[Chart] REST history load failed', e);
     } finally {
       if (pendingHistory === key) pendingHistory = '';
     }
+  }
+
+  // Paint a full bar set onto the candle + volume series and frame the last ~96 bars.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function drawBars(bars: any[]) {
+    const candles = bars.map((b) => ({
+      time: b.time as number, open: +b.open, high: +b.high, low: +b.low, close: +b.close,
+    }));
+    const vols = bars.map((b) => ({
+      time: b.time as number, value: +(b.volume ?? 0),
+      color: +b.close >= +b.open ? '#4caf5040' : '#f4433640',
+    }));
+    tvCandle.setData(candles);
+    tvVolume?.setData(vols);
+    lastOhlcLen = candles.length;
+    const barsToShow = Math.min(candles.length, maxVisibleBars);
+    tvChart.timeScale().setVisibleLogicalRange({
+      from: Math.max(0, candles.length - barsToShow), to: candles.length - 1,
+    });
+    scrollPos = 100;
   }
 
   let selectedTf = $state(5);
