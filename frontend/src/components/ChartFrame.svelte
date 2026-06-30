@@ -90,9 +90,34 @@
   let tvCandle: any = null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let tvVolume: any = null;
+  // becomes true once the candlestick series exists; gates the history-load effect.
+  let chartReady = $state(false);
   // price lines map: order_id → priceLine
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let orderLines = new Map<string, any>();
+
+  // Load REST history whenever the EFFECTIVE symbol or timeframe changes — including a
+  // change driven by the `symbol` PROP (robot select / activeSymbol on the main screen),
+  // not just the in-component dropdown. Without this the chart went blank after a
+  // prop-driven symbol switch (candlesStore.get(newSymbol) was empty and nothing
+  // re-fetched it). chartReady gates it so the first run waits for the series.
+  let loadedKey = '';
+  $effect(() => {
+    const sym = selectedSymbol;
+    const tf = selectedTf;
+    if (!chartReady || !tvCandle || !sym) return;
+    const key = `${sym}@${tf}`;
+    if (key === loadedKey) return;
+    loadedKey = key;
+    // clear the previous symbol's drawing so stale candles/lines never linger
+    orderLines.forEach((line) => tvCandle?.removePriceLine(line));
+    orderLines.clear();
+    lastOhlcLen = 0;
+    tvCandle.setData([]);
+    tvVolume?.setData([]);
+    onSubscribe?.(sym, tf);
+    loadRestHistory(sym, tf);
+  });
 
 
   let ohlc = $derived.by(() => {
@@ -377,9 +402,10 @@
     });
     ro.observe(ohlcAreaEl);
 
-    // Initial history via the proven REST path. ws still subscribes for live bars,
-    // but the gRPC stream is unreliable per-symbol, so the first candles come here.
-    loadRestHistory(selectedSymbol, selectedTf);
+    // The series exist now: let the history-load effect run for the current symbol/tf
+    // (and for every later symbol/tf change, incl. prop-driven ones). The REST path is
+    // the proven source of the first candles; ws appends live bars on top.
+    chartReady = true;
   });
 
   onDestroy(() => {

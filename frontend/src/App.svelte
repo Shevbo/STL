@@ -16,6 +16,7 @@
   import QuikTables from './components/QuikTables.svelte';
   import Orders from './components/Orders.svelte';
   import OrderViz from './components/OrderViz.svelte';
+  import ChartsGrid from './components/ChartsGrid.svelte';
   import LoginDialog from './components/LoginDialog.svelte';
   import { WsClient } from '$lib/ws';
   import { robotsStore } from '$lib/stores/robots.svelte';
@@ -34,6 +35,7 @@
   let showLab = $state(false);
   let showQuikTables = $state(false);
   let showQuikOrders = $state(false);
+  let showCharts = $state(false);
   // OrderViz: default = auto (self-shows on active orders). Operator can pin it
   // open or hide it; "pin" forces it visible even with no active orders.
   let orderVizPinned = $state(false);
@@ -246,6 +248,8 @@
     onToggleQuikTables={() => showQuikTables = !showQuikTables}
     {showQuikOrders}
     onToggleQuikOrders={() => showQuikOrders = !showQuikOrders}
+    {showCharts}
+    onToggleCharts={() => showCharts = !showCharts}
   />
   <div class="body">
     <!-- LEFT COLUMN -->
@@ -339,6 +343,11 @@
   {#if showQuikOrders}
     <div class="quik-tables-wrap" style="height:{labH}px">
       <Orders />
+    </div>
+  {/if}
+  {#if showCharts}
+    <div class="quik-tables-wrap" style="height:{labH}px">
+      <ChartsGrid />
     </div>
   {/if}
   <!-- OrderViz: slim auto-frame (~1/8 height). Self-shows when there is >=1 active
