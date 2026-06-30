@@ -1,6 +1,7 @@
 <!-- frontend/src/components/ChartFrame.svelte -->
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
+  import { fetchWithAuth } from '$lib/fetch-auth';
   import { candlesStore } from '$lib/stores/candles.svelte';
   import { quotesStore } from '$lib/stores/quotes.svelte';
   import { ordersStore } from '$lib/stores/orders.svelte';
@@ -27,6 +28,50 @@
     { label: '4ч', value: 15 },
     { label: 'Д', value: 19 },
   ];
+
+  // Map the dropdown tf number to the Finam TIME_FRAME_* name the backend expects.
+  // Mirrors trader/api/ws_hub.py _TIMEFRAME_NAMES (REST has no M30/H*, collapses to M15/D).
+  const TF_NAMES: Record<number, string> = {
+    1: 'TIME_FRAME_M1',
+    5: 'TIME_FRAME_M5',
+    9: 'TIME_FRAME_M15',
+    11: 'TIME_FRAME_M15',
+    12: 'TIME_FRAME_M15',
+    13: 'TIME_FRAME_M15',
+    15: 'TIME_FRAME_M15',
+    17: 'TIME_FRAME_D',
+    19: 'TIME_FRAME_D',
+    20: 'TIME_FRAME_W',
+    21: 'TIME_FRAME_MN',
+  };
+
+  // Load chart history from the PROVEN Finam REST path (/api/v1/chart/bars). The
+  // ws/gRPC stream returns StatusCode.INTERNAL for some instruments (e.g. GZU6@RTSX),
+  // so the initial candles must not depend on it. ws 'ohlc_update' still appends live
+  // bars on top. A per-(symbol,tf) guard avoids racing the same fetch twice.
+  let pendingHistory = '';
+  async function loadRestHistory(sym: string, tf: number) {
+    const key = `${sym}@${tf}`;
+    if (pendingHistory === key) return;
+    pendingHistory = key;
+    try {
+      const tfName = TF_NAMES[tf] ?? 'TIME_FRAME_M5';
+      const r = await fetchWithAuth(
+        `/api/v1/chart/bars?symbol=${encodeURIComponent(sym)}&tf=${tfName}`,
+      );
+      if (!r.ok) return;
+      const bars = await r.json();
+      // Ignore a stale response if the user switched away mid-flight.
+      if (sym !== selectedSymbol || tf !== selectedTf) return;
+      if (Array.isArray(bars) && bars.length) {
+        candlesStore.setHistory(sym, bars);
+      }
+    } catch (e) {
+      console.warn('[Chart] REST history load failed', e);
+    } finally {
+      if (pendingHistory === key) pendingHistory = '';
+    }
+  }
 
   let selectedTf = $state(5);
   // User-chosen symbol override; null means "follow the prop"
@@ -204,6 +249,7 @@
     orderLines.clear();
     lastOhlcLen = 0;
     onSubscribe?.(selectedSymbol, tf);
+    loadRestHistory(selectedSymbol, tf);   // REST history for the new timeframe
   }
 
   function changeSymbol(sym: string) {
@@ -223,6 +269,9 @@
     orderbookStore.clear(oldSymbol);
     console.log('[Chart] calling onSubscribe for', sym);
     onSubscribe?.(sym, selectedTf);
+    // Always pull history from the proven REST path; works for every instrument
+    // (incl. GZU6@RTSX) regardless of the gRPC stream's per-symbol failures.
+    loadRestHistory(sym, selectedTf);
   }
 
   function handleScroll(event: Event) {
@@ -327,6 +376,10 @@
       });
     });
     ro.observe(ohlcAreaEl);
+
+    // Initial history via the proven REST path. ws still subscribes for live bars,
+    // but the gRPC stream is unreliable per-symbol, so the first candles come here.
+    loadRestHistory(selectedSymbol, selectedTf);
   });
 
   onDestroy(() => {

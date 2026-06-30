@@ -2854,6 +2854,83 @@ def create_app() -> FastAPI:
                 agg["volume"] += b.volume
         return [buckets[k] for k in sorted(buckets)]
 
+    @fastapi_app.get("/api/v1/chart/bars")
+    async def chart_bars(
+        request: Request,
+        symbol: str,
+        tf: str = "TIME_FRAME_M5",
+        days: int | None = None,
+    ):
+        """Chart history via the PROVEN Finam REST bars endpoint.
+
+        The live chart path uses the Finam gRPC market-data stream, which returns
+        StatusCode.INTERNAL for some instruments (e.g. GZU6@RTSX / GZM6@RTSX) while
+        working for RI/Si. The REST `/v1/instruments/{symbol}/bars` endpoint returns
+        bars for ALL of them, so we serve the initial chart history from REST and let
+        the ws path append live updates. Read-only market data, no orders.
+
+        Query params:
+          symbol — Finam symbol, e.g. GZU6@RTSX
+          tf     — TIME_FRAME_* name (default TIME_FRAME_M5)
+          days   — calendar days of history (default per-tf, ~500 bars)
+        Returns [{time, open, high, low, close, volume}]; [] on any error.
+        """
+        from datetime import datetime, timedelta, timezone
+
+        from trader.util import unwrap_decimal
+
+        # Calendar days back per timeframe to fetch ~500 bars (mirrors ws_hub).
+        _DAYS_BY_TF = {
+            "TIME_FRAME_M1": 3, "TIME_FRAME_M5": 10, "TIME_FRAME_M15": 60,
+            "TIME_FRAME_H1": 120, "TIME_FRAME_D": 730, "TIME_FRAME_W": 3650,
+            "TIME_FRAME_MN": 3650,
+        }
+        _auth(request)
+        settings: Settings = request.app.state.settings
+        auth_client: AsyncAuthClient = request.app.state.auth
+
+        tf_name = tf if tf.startswith("TIME_FRAME_") else "TIME_FRAME_M5"
+        days_back = days if days and days > 0 else _DAYS_BY_TF.get(tf_name, 30)
+        now = datetime.now(timezone.utc)
+        start = now - timedelta(days=days_back)
+        params = {
+            "timeframe": tf_name,
+            "interval.start_time": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "interval.end_time": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        try:
+            token = await auth_client.get_token()
+            headers = {"Authorization": f"Bearer {token}"}
+            async with httpx.AsyncClient(http2=True) as client:
+                resp = await client.get(
+                    f"{settings.finam_api_base_url}/v1/instruments/{symbol}/bars",
+                    params=params,
+                    headers=headers,
+                    timeout=15.0,
+                )
+                resp.raise_for_status()
+                body = resp.json()
+            result = []
+            for b in body.get("bars", []):
+                ts_str = b.get("timestamp", "")
+                if not ts_str:
+                    continue
+                t = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                result.append({
+                    "time": int(t.timestamp()),
+                    "open": unwrap_decimal(b.get("open"), as_float=True),
+                    "high": unwrap_decimal(b.get("high"), as_float=True),
+                    "low": unwrap_decimal(b.get("low"), as_float=True),
+                    "close": unwrap_decimal(b.get("close"), as_float=True),
+                    "volume": unwrap_decimal(b.get("volume"), as_float=True),
+                })
+            log.info("api.chart_bars_loaded", symbol=symbol, tf=tf_name, count=len(result))
+            return result
+        except Exception as exc:
+            log.error("api.chart_bars_failed", symbol=symbol, tf=tf_name,
+                      exc=str(exc), exc_type=type(exc).__name__)
+            return []
+
     @fastapi_app.get("/api/v1/market/coverage")
     async def market_coverage(request: Request, symbol: str | None = None):
         """
