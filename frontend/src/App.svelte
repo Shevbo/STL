@@ -128,8 +128,19 @@
   let selectedRobot = $derived(robots.find(r => r.id === selectedRobotId) ?? robots[0] ?? null);
   let positions = $derived(positionsStore.all);
 
-  // п.1: effectiveSymbol — то, что реально показано на экране
-  let effectiveSymbol = $derived(activeSymbol || selectedRobot?.symbol || '');
+  // п.1: effectiveSymbol — то, что реально показано на экране.
+  // Защита от мёртвых контрактов: робот может объявлять истёкший контракт (напр.
+  // июньский GZM6 в имени), что даёт пустой график и мёртвую подписку в Finam-фид.
+  // Если символ не в живом списке инструментов — детерминированно катим месяц M6->U6
+  // (тот же инструмент, активный квартал); если и это не живое — берём первый живой.
+  let liveSymbols = $derived(new Set(instrumentStore.list.map(i => i.symbol)));
+  function liveify(s: string): string {
+    if (!s || !liveSymbols.size || liveSymbols.has(s)) return s;
+    const rolled = s.replace(/M6(@|$)/, 'U6$1'); // June -> September (current active quarter)
+    if (liveSymbols.has(rolled)) return rolled;
+    return instrumentStore.list[0]?.symbol ?? s;
+  }
+  let effectiveSymbol = $derived(liveify(activeSymbol || selectedRobot?.symbol || ''));
   let currentQuote = $derived(quotesStore.get(effectiveSymbol));
 
   // QUIK market-data bridge: feed the QUIK agent's order book into orderbookStore so the
