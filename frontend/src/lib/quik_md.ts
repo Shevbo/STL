@@ -56,7 +56,9 @@ export function startQuikOrderbookBridge(getSymbol: () => string): () => void {
       const asks = (d.asks ?? []).map(map);
       if (bids.length || asks.length) {
         // Key by the FULL UI symbol so the main OrderBook (get(effectiveSymbol)) matches.
-        orderbookStore.set(sym, { bids, asks });
+        // setQuik claims the symbol so the Finam ws does not overwrite the live QUIK book
+        // (the two racing was the SRU6 стакан flicker).
+        orderbookStore.setQuik(sym, { bids, asks });
       }
     } catch { /* ignore transient */ }
   };

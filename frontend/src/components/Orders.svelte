@@ -152,6 +152,14 @@
       }
       if (o.state === 'filled') { msg = 'Заявка исполнена.'; return; }
     }
+    // Still pending after the watch window: QUIK never acked. A healthy order replies in
+    // ~1s; a stuck pending means the agent sent it but QUIK gave no OnTransReply/OnOrder
+    // (terminal/DDE/broker-link issue). Surface it LOUDLY — the order may NOT have
+    // reached the exchange, so the operator must verify in the QUIK terminal.
+    const last = orders.find((x) => x.client_id === clientId);
+    if (last && last.state === 'pending') {
+      msg = '⚠ ЗАВИСЛА в pending — QUIK не ответил. Проверь терминал QUIK (DDE/связь с брокером): заявка могла НЕ дойти до биржи.';
+    }
   }
 
   async function cancelOrder(o: OrderRow) {
@@ -228,10 +236,17 @@
     try { return new Date(ms).toLocaleTimeString('ru-RU'); } catch { return ''; }
   }
 
+  // A pending order older than this with no QUIK ack is "stuck" (QUIK gave no reply).
+  const STUCK_MS = 8000;
+  let nowMs = $state(Date.now());
+  function isStuck(o: OrderRow): boolean {
+    return o.state === 'pending' && !!o.ts_unix_ms && nowMs - o.ts_unix_ms > STUCK_MS;
+  }
+
   $effect(() => {
     loadConfig();
     loadTables();
-    const t = setInterval(async () => { await loadConfig(); await loadTables(); }, 4000);
+    const t = setInterval(async () => { nowMs = Date.now(); await loadConfig(); await loadTables(); }, 4000);
     return () => clearInterval(t);
   });
 </script>
@@ -343,8 +358,13 @@
             <td>{o.price}</td>
             <td>{o.quantity}</td>
             <td>{o.filled}</td>
-            <td class:rej={o.state === 'rejected'}>{o.state}</td>
-            <td class="txt" class:rej={o.state === 'rejected'} title={o.text ?? ''}>{o.text ?? ''}</td>
+            <td class:rej={o.state === 'rejected'} class:stuck={isStuck(o)}>
+              {isStuck(o) ? 'pending ⚠' : o.state}
+            </td>
+            <td class="txt" class:rej={o.state === 'rejected'} class:stuck={isStuck(o)}
+                title={isStuck(o) ? 'Нет ответа QUIK — проверь терминал' : (o.text ?? '')}>
+              {isStuck(o) ? 'завис: нет ответа QUIK — проверь терминал' : (o.text ?? '')}
+            </td>
             <td>{o.order_id}</td>
             <td>
               {#if o.state === 'active' || o.state === 'partial' || o.state === 'pending'}
@@ -471,6 +491,7 @@
   td.buy, b.buy { color: #4caf50; }
   td.sell, b.sell { color: #f44336; }
   td.rej { color: #ff6b6b; font-weight: 600; }
+  td.stuck { color: #ffb74d; font-weight: 600; }
   td.txt { max-width: 220px; overflow: hidden; text-overflow: ellipsis; opacity: 0.85; }
   .empty { opacity: 0.5; text-align: center; }
   .x {
