@@ -22,7 +22,7 @@
   type OrderRow = {
     client_id: string; code: string; side: string; price: number;
     quantity: number; filled: number; remaining: number; state: string;
-    order_id: string; ts_unix_ms: number; agent_id?: string;
+    order_id: string; ts_unix_ms: number; agent_id?: string; text?: string;
   };
   type ExecRow = {
     client_id: string; code: string; target: number; filled: number;
@@ -91,21 +91,46 @@
 
   async function confirmPlace() {
     confirming = false;
+    const cid = newClientId();
     try {
       const r = await fetch('/api/v1/quik/orders/place', {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          client_id: newClientId(), code, side, price, quantity: qty,
+          client_id: cid, code, side, price, quantity: qty,
         }),
       });
       const j = await r.json().catch(() => ({}));
-      if (!r.ok) { msg = j.detail ?? 'Заявка отклонена.'; return; }
-      msg = 'Заявка отправлена: ' + (j.client_id ?? '');
+      if (!r.ok) { msg = 'Заявка отклонена STL: ' + (j.detail ?? '(без причины)'); return; }
+      msg = 'Заявка отправлена агенту, ждём ответ QUIK…';
       await loadTables();
+      // The agent/QUIK reply (accept or reject) arrives asynchronously. Poll the
+      // working table briefly and surface the REJECT REASON prominently so a rejected
+      // order is never silent ("nothing happened"). The agent rejects e.g. with
+      // "instrument not whitelisted" when its own whitelist lacks the code.
+      watchPlacement(cid);
     } catch (e) {
       msg = 'Ошибка отправки: ' + e;
+    }
+  }
+
+  // Poll a few times for the just-placed order's terminal reply and reflect it in msg.
+  async function watchPlacement(clientId: string): Promise<void> {
+    for (let i = 0; i < 6; i++) {
+      await new Promise((res) => setTimeout(res, 600));
+      await loadTables();
+      const o = orders.find((x) => x.client_id === clientId);
+      if (!o) continue;
+      if (o.state === 'rejected') {
+        msg = 'Заявка ОТКЛОНЕНА: ' + (o.text || '(QUIK не указал причину)');
+        return;
+      }
+      if (o.state === 'active' || o.state === 'partial') {
+        msg = 'Заявка принята QUIK (в работе).';
+        return;
+      }
+      if (o.state === 'filled') { msg = 'Заявка исполнена.'; return; }
     }
   }
 
@@ -275,7 +300,7 @@
     <table>
       <thead>
         <tr><th>Время</th><th>Инстр.</th><th>Сторона</th><th>Цена</th>
-          <th>Кол-во</th><th>Исполн.</th><th>Статус</th><th>ID</th><th></th></tr>
+          <th>Кол-во</th><th>Исполн.</th><th>Статус</th><th>Текст</th><th>ID</th><th></th></tr>
       </thead>
       <tbody>
         {#each orders as o}
@@ -288,7 +313,8 @@
             <td>{o.price}</td>
             <td>{o.quantity}</td>
             <td>{o.filled}</td>
-            <td>{o.state}</td>
+            <td class:rej={o.state === 'rejected'}>{o.state}</td>
+            <td class="txt" class:rej={o.state === 'rejected'} title={o.text ?? ''}>{o.text ?? ''}</td>
             <td>{o.order_id}</td>
             <td>
               {#if o.state === 'active' || o.state === 'partial' || o.state === 'pending'}
@@ -297,7 +323,7 @@
             </td>
           </tr>
         {/each}
-        {#if !orders.length}<tr><td colspan="9" class="empty">нет заявок</td></tr>{/if}
+        {#if !orders.length}<tr><td colspan="10" class="empty">нет заявок</td></tr>{/if}
       </tbody>
     </table>
   </div>
@@ -409,6 +435,8 @@
   }
   td.buy, b.buy { color: #4caf50; }
   td.sell, b.sell { color: #f44336; }
+  td.rej { color: #ff6b6b; font-weight: 600; }
+  td.txt { max-width: 220px; overflow: hidden; text-overflow: ellipsis; opacity: 0.85; }
   .empty { opacity: 0.5; text-align: center; }
   .x {
     background: transparent; color: #f44336; border: 1px solid #5a2020;

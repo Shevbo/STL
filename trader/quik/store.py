@@ -264,9 +264,21 @@ class QuikAgentStore:
         }
 
     def _pick(self, agent_id: str | None) -> AgentState | None:
-        """Pick a named agent, or the single connected one when unambiguous."""
+        """Pick a named agent, or the single live one when unambiguous.
+
+        With no explicit id: the single connected agent, else the single link-GREEN
+        (fresh) one. The store accumulates stale entries (a pre-Register id, dead
+        probes, old sessions); preferring the lone green agent keeps the read routes
+        (стакан/tick/params) working without the UI having to pass agent_id, mirroring
+        the order API's _resolve_agent."""
         if agent_id is not None:
             return self._agents.get(agent_id)
         if len(self._agents) == 1:
             return next(iter(self._agents.values()))
+        green = [
+            st for st in self._agents.values()
+            if _link_lamp(st.last_seen_ms, self.link_fresh_sec) == "green"
+        ]
+        if len(green) == 1:
+            return green[0]
         return None

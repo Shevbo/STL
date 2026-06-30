@@ -41,3 +41,23 @@ def test_pick_single_agent_when_unambiguous():
     store.set_tick("second", {"code": "RIU6", "last": 2.0})
     assert store.tick("RIU6") is None
     assert store.tick("RIU6", "only")["last"] == 1.0
+
+
+def test_pick_prefers_single_green_when_others_stale():
+    """A stale (red) leftover agent must not block resolving the single live one.
+
+    The store accumulates stale entries (a pre-Register id, dead probes, old
+    sessions). When exactly one agent is link-green, an unspecified read resolves
+    it instead of returning None — otherwise the стакан/tick routes 404 even though
+    one agent is clearly live."""
+    store = QuikAgentStore(link_fresh_sec=1)
+    now_ms = int(time.time() * 1000)
+    # stale leftover (last seen long ago -> red)
+    stale = store.ensure_agent("stale")
+    stale.last_seen_ms = now_ms - 60_000
+    # live agent with fresh data (green)
+    store.set_order_book("live", {"code": "GZU6", "bids": [], "asks": []})
+    live = store.ensure_agent("live")
+    live.last_seen_ms = now_ms
+    assert store.order_book("GZU6") is not None
+    assert store.order_book("GZU6")["code"] == "GZU6"

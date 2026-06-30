@@ -27,6 +27,10 @@
   import type { OrderRequest } from '$lib/types';
 
   let authed = $state(false);
+  // Session check is in flight on first load. While checking we show a neutral splash
+  // (NOT the login form) so a normal F5 with a valid cookie does not flash the login
+  // screen. The login form only appears after the check completes with a real 401.
+  let checking = $state(true);
   let showLab = $state(false);
   let showQuikTables = $state(false);
   let showQuikOrders = $state(false);
@@ -175,9 +179,29 @@
   }
 
   onMount(async () => {
-    const res = await fetchWithAuth('/api/auth/me');
-    if (res.ok) {
-      authed = true;
+    // Resolve the session before deciding login vs app. A network error / transient
+    // server stall during reload must NOT drop the operator to the login screen with a
+    // valid 30-day cookie: retry a few times, and only treat an explicit 401 as
+    // "not authenticated". Anything else keeps us on the splash and retries.
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        const res = await fetchWithAuth('/api/auth/me');
+        if (res.ok) {
+          authed = true;
+          break;
+        }
+        if (res.status === 401) {
+          // Genuinely not logged in — show the login form.
+          break;
+        }
+        // 5xx / unexpected: server busy during reload, retry.
+      } catch {
+        // network error / aborted: retry rather than bounce to login.
+      }
+      await new Promise((r) => setTimeout(r, 800));
+    }
+    checking = false;
+    if (authed) {
       startWs();
       loadInstruments();
       loadFeeConfig();
@@ -204,7 +228,14 @@
   }
 </script>
 
-{#if !authed}
+{#if checking}
+  <div class="session-splash">
+    <div class="ss-card">
+      <div class="ss-spinner"></div>
+      <div class="ss-text">Проверка сессии…</div>
+    </div>
+  </div>
+{:else if !authed}
   <LoginDialog {onLogin} />
 {:else}
 <div class="shell" onpointermove={onPointerMove} onpointerup={onPointerUp} onpointerleave={onPointerUp}>
@@ -342,6 +373,19 @@
 {/if}
 
 <style>
+  .session-splash {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: #0f0f1e; color: #ccc; z-index: 2000;
+  }
+  .ss-card { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+  .ss-spinner {
+    width: 34px; height: 34px; border-radius: 50%;
+    border: 3px solid #2d2d4a; border-top-color: #4caf50;
+    animation: ss-spin 0.8s linear infinite;
+  }
+  .ss-text { font-size: 13px; opacity: 0.8; }
+  @keyframes ss-spin { to { transform: rotate(360deg); } }
+
   .shell { height: 100%; display: flex; flex-direction: column; }
   .body { flex: 1; display: flex; overflow: hidden; min-height: 0; }
   .left-col {
