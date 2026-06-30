@@ -957,6 +957,15 @@ async def _quik_order_reconcile(app_state) -> None:
         await asyncio.sleep(5)
 
 
+# Chart-history cache: (symbol, tf, days) -> (epoch_ms, bars). The Finam REST /bars
+# endpoint is intermittently slow per-symbol (e.g. SRU6 took ~24s while RIU6 took ~2s),
+# which left the chart frame blank for many seconds and queued the browser's other
+# requests behind it. A short cache makes repeat loads (zoom/symbol switch/poll) instant,
+# and on a slow/failed Finam fetch we serve the last good bars (STALE) instead of blank.
+_CHART_BARS_CACHE: dict[tuple, tuple[float, list]] = {}
+_CHART_BARS_TTL_MS = 30_000
+
+
 async def _fetch_bars_for_backtest(symbol: str, date_from: str, date_to: str, app_state) -> list:
     """
     Returns minute bars for backtest, ALWAYS fresh through the requested end date.
@@ -2987,6 +2996,14 @@ def create_app() -> FastAPI:
                 })
             return out
 
+        # Serve a fresh cache hit immediately — avoids a slow Finam round-trip on every
+        # zoom / symbol-switch / poll (the source of the "blank frame for minutes").
+        cache_key = (symbol, tf_name, windows[0])
+        now_ms = now.timestamp() * 1000
+        cached = _CHART_BARS_CACHE.get(cache_key)
+        if cached is not None and (now_ms - cached[0]) < _CHART_BARS_TTL_MS:
+            return cached[1]
+
         result: list[dict] = []
         for w in windows:
             try:
@@ -3001,7 +3018,16 @@ def create_app() -> FastAPI:
                     log.info("api.chart_bars_window_shrunk",
                              symbol=symbol, tf=tf_name, days=w)
                 break
-        log.info("api.chart_bars_loaded", symbol=symbol, tf=tf_name, count=len(result))
+        if result:
+            _CHART_BARS_CACHE[cache_key] = (now_ms, result)
+            log.info("api.chart_bars_loaded", symbol=symbol, tf=tf_name, count=len(result))
+            return result
+        # Finam returned nothing (slow/failed/flapping auth): serve the last good bars so
+        # the chart shows history instead of a blank frame.
+        if cached is not None:
+            log.warning("api.chart_bars_stale_served", symbol=symbol, tf=tf_name)
+            return cached[1]
+        log.info("api.chart_bars_loaded", symbol=symbol, tf=tf_name, count=0)
         return result
 
     @fastapi_app.get("/api/v1/market/coverage")

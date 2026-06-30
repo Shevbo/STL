@@ -51,10 +51,16 @@
   // so the initial candles must not depend on it. ws 'ohlc_update' still appends live
   // bars on top. A per-(symbol,tf) guard avoids racing the same fetch twice.
   let pendingHistory = '';
+  // Chart history can take seconds (the Finam REST /bars path is intermittently slow per
+  // symbol). Show a "loading" overlay instead of a blank frame while it's in flight and
+  // nothing is drawn yet.
+  let loadingBars = $state(false);
+  let hasBars = $state(false);
   async function loadRestHistory(sym: string, tf: number) {
     const key = `${sym}@${tf}`;
     if (pendingHistory === key) return;
     pendingHistory = key;
+    loadingBars = true;
     try {
       const tfName = TF_NAMES[tf] ?? 'TIME_FRAME_M5';
       const r = await fetchWithAuth(
@@ -79,6 +85,7 @@
       console.warn('[Chart] REST history load failed', e);
     } finally {
       if (pendingHistory === key) pendingHistory = '';
+      if (sym === selectedSymbol && tf === selectedTf) loadingBars = false;
     }
   }
 
@@ -94,6 +101,7 @@
     }));
     tvCandle.setData(candles);
     tvVolume?.setData(vols);
+    hasBars = candles.length > 0;
     lastOhlcLen = candles.length;
     const barsToShow = Math.min(candles.length, maxVisibleBars);
     tvChart.timeScale().setVisibleLogicalRange({
@@ -142,6 +150,7 @@
     orderLines.forEach((line) => tvCandle?.removePriceLine(line));
     orderLines.clear();
     lastOhlcLen = 0;
+    hasBars = false;
     tvCandle.setData([]);
     tvVolume?.setData([]);
     onSubscribe?.(sym, tf);
@@ -459,7 +468,11 @@
   </div>
   <div class="chart-area">
     <div class="tick-strip" bind:this={tickEl}></div>
-    <div class="ohlc-area" bind:this={ohlcAreaEl}></div>
+    <div class="ohlc-area" bind:this={ohlcAreaEl}>
+      {#if loadingBars && !hasBars}
+        <div class="chart-loading"><span class="cl-spin"></span>Загрузка истории…</div>
+      {/if}
+    </div>
     <div class="scrollbar-container">
       <input
         type="range"
@@ -504,6 +517,17 @@
   .chart-area { flex: 1; position: relative; overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
   .tick-strip { flex-shrink: 0; height: 80px; position: relative; z-index: 1; }
   .ohlc-area { flex: 1; min-height: 0; position: relative; }
+  .chart-loading {
+    position: absolute; inset: 0; z-index: 5; display: flex; gap: 10px;
+    align-items: center; justify-content: center; color: #889; font-size: 12px;
+    background: #0f0f1e; pointer-events: none;
+  }
+  .cl-spin {
+    width: 16px; height: 16px; border-radius: 50%;
+    border: 2px solid #2d2d4a; border-top-color: #6aa8ff;
+    animation: cl-spin 0.8s linear infinite;
+  }
+  @keyframes cl-spin { to { transform: rotate(360deg); } }
   .scrollbar-container { flex-shrink: 0; padding: 2px 0; background: #0f0f1e; }
   .chart-scrollbar {
     width: 100%; height: 12px; cursor: pointer;
