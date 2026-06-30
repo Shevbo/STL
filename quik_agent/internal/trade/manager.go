@@ -128,6 +128,44 @@ func NewManager(cfg ManagerConfig, bridge bridgeAPI, guard *Guard, emit Emitter,
 	}
 }
 
+// ApplyLimits adopts a limits set pushed by STL (whitelist + caps; the master flag is
+// never changed here — it stays dual). Logs the effective whitelist on a real change so
+// an operator can see the agent and STL converged. Guard 3: this only narrows/aligns the
+// hard limits, it never places or enables trading.
+func (m *Manager) ApplyLimits(req *quikv1.SetLimits) {
+	if req == nil {
+		return
+	}
+	changed := m.guard.ApplyPushed(
+		req.GetInstrumentWhitelist(),
+		req.GetMaxContractsPerOrder(),
+		req.GetMaxWorkingContracts(),
+		req.GetPriceCollarFrac(),
+		int(req.GetDailyOrderCap()),
+	)
+	lim := m.guard.Limits()
+	if changed {
+		m.logf("trade: limits synced from STL — whitelist=%v max_per=%d max_working=%d collar=%.4f daily_cap=%d",
+			lim.InstrumentWhitelist, lim.MaxContractsPerOrder, lim.MaxWorkingContracts,
+			lim.PriceCollarFrac, lim.DailyOrderCap)
+	}
+}
+
+// EffectiveLimits returns the agent's CURRENTLY effective limits as a LimitsState for
+// the agent->STL echo (so STL/UI can confirm a push applied and detect divergence).
+func (m *Manager) EffectiveLimits() *quikv1.LimitsState {
+	lim := m.guard.Limits()
+	return &quikv1.LimitsState{
+		TradingEnabled:       lim.TradingEnabled,
+		InstrumentWhitelist:  append([]string(nil), lim.InstrumentWhitelist...),
+		MaxContractsPerOrder: lim.MaxContractsPerOrder,
+		MaxWorkingContracts:  lim.MaxWorkingContracts,
+		PriceCollarFrac:      lim.PriceCollarFrac,
+		DailyOrderCap:        int32(lim.DailyOrderCap),
+		LastPushUnixMs:       m.guard.LastPushMs(),
+	}
+}
+
 // SetBookSource wires the LOCAL order book used by the 1b maker loop and the parent
 // context the loops run under (cancelled on shutdown). Until set, StartExecution is
 // rejected. *quikdde.Provider satisfies BookSource.

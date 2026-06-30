@@ -136,9 +136,16 @@ class StopExecBody(BaseModel):
 
 @router.get("/config")
 async def orders_config(request: Request):
-    """Limits + master-flag for the UI (renders the ticket + disabled state)."""
+    """Limits + master-flag for the UI (renders the ticket + disabled state).
+
+    Also returns the agent's CURRENTLY effective limits (agent_limits, echoed via
+    LimitsState) so the UI can confirm STL's whitelist/caps actually reached the agent
+    and flag a divergence instead of discovering it only on a rejected order.
+    """
     _auth(request)
     lim = _limits(request)
+    qstore = getattr(request.app.state, "quik_store", None)
+    agent_limits = qstore.limits_state(None) if qstore is not None else None
     return {
         "trading_enabled": lim.trading_enabled,
         "max_contracts_per_order": lim.max_contracts_per_order,
@@ -147,6 +154,7 @@ async def orders_config(request: Request):
         "instrument_whitelist": list(lim.instrument_whitelist),
         "daily_order_cap": lim.daily_order_cap,
         "agent_wired": _order_store(request) is not None,
+        "agent_limits": agent_limits,
     }
 
 

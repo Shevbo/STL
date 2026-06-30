@@ -16,6 +16,50 @@ func baseLimits() Limits {
 	}
 }
 
+func TestApplyPushedLimits(t *testing.T) {
+	g := NewGuard(baseLimits()) // whitelist [RIU6], caps 2/2, collar 0.002, daily 50
+
+	// Before: GZU6 is rejected (not in the agent's whitelist).
+	if g.Limits().whitelisted("GZU6") {
+		t.Fatal("GZU6 unexpectedly whitelisted before push")
+	}
+
+	// STL pushes a wider whitelist + same caps. The whitelist is REPLACED.
+	g.ApplyPushed([]string{"RIU6", "GZU6", "SiU6"}, 2, 2, 0.002, 50)
+	if !g.Limits().whitelisted("GZU6") {
+		t.Fatal("GZU6 should be whitelisted after push")
+	}
+	if g.LastPushMs() == 0 {
+		t.Fatal("LastPushMs should be set after a push")
+	}
+
+	// Caps are ceiling-only: a LOOSER push is ignored (config stays the hard cap).
+	g.ApplyPushed(nil, 99, 99, 0.5, 9999)
+	lim := g.Limits()
+	if lim.MaxContractsPerOrder != 2 || lim.MaxWorkingContracts != 2 ||
+		lim.PriceCollarFrac != 0.002 || lim.DailyOrderCap != 50 {
+		t.Fatalf("looser caps must be ignored, got %+v", lim)
+	}
+
+	// A TIGHTER push is adopted.
+	g.ApplyPushed(nil, 1, 1, 0.001, 10)
+	lim = g.Limits()
+	if lim.MaxContractsPerOrder != 1 || lim.MaxWorkingContracts != 1 ||
+		lim.PriceCollarFrac != 0.001 || lim.DailyOrderCap != 10 {
+		t.Fatalf("tighter caps must be adopted, got %+v", lim)
+	}
+
+	// An empty whitelist push is IGNORED (fail-safe), the master flag is untouched.
+	before := g.Limits().InstrumentWhitelist
+	g.ApplyPushed(nil, 0, 0, 0, 0)
+	if len(g.Limits().InstrumentWhitelist) != len(before) {
+		t.Fatal("empty whitelist push must not change the whitelist")
+	}
+	if !g.Limits().TradingEnabled {
+		t.Fatal("ApplyPushed must never change the master flag")
+	}
+}
+
 func TestCheckPlace(t *testing.T) {
 	cases := []struct {
 		name    string

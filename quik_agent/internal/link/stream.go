@@ -24,6 +24,11 @@ func (l *Link) sendLoop(ctx context.Context, stream quikv1.QuikAgentLink_Session
 	if err := l.flushParams(stream); err != nil {
 		return err
 	}
+	// Echo the agent's CURRENT (pre-push) limits at startup so STL sees them before its
+	// SetLimits round-trips; STL pushes its limits on Register and the agent re-echoes.
+	if err := l.sendLimitsState(stream); err != nil {
+		return err
+	}
 
 	hb := time.NewTicker(l.opt.HeartbeatInterval)
 	defer hb.Stop()
@@ -114,8 +119,26 @@ func (l *Link) recvLoop(stream quikv1.QuikAgentLink_SessionClient, cancel contex
 			if l.opt.Trade != nil {
 				l.opt.Trade.StopExecution(p.StopExecution)
 			}
+		case *quikv1.OrchestratorMessage_SetLimits:
+			// STL is the source of truth for the hard limits/whitelist. Adopt the push,
+			// then echo back the effective limits so STL can confirm convergence.
+			if l.opt.Trade != nil {
+				l.opt.Trade.ApplyLimits(p.SetLimits)
+				_ = l.sendLimitsState(stream)
+			}
 		}
 	}
+}
+
+// sendLimitsState echoes the agent's currently effective limits to STL (so STL/UI can
+// confirm a SetLimits push took effect and detect divergence). No-op without a manager.
+func (l *Link) sendLimitsState(stream quikv1.QuikAgentLink_SessionClient) error {
+	if l.opt.Trade == nil {
+		return nil
+	}
+	return l.sendMsg(stream, &quikv1.AgentMessage{
+		Payload: &quikv1.AgentMessage_LimitsState{LimitsState: l.opt.Trade.EffectiveLimits()},
+	})
 }
 
 func (l *Link) handleCommand(stream quikv1.QuikAgentLink_SessionClient, cmd *quikv1.Command) {

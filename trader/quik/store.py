@@ -29,6 +29,9 @@ class AgentState:
     diagnostics: dict[str, Any] | None = None
     params: dict[str, Any] | None = None
     last_alert: dict[str, Any] | None = None
+    # agent's CURRENTLY effective hard limits (echoed via LimitsState); lets STL/UI
+    # confirm a SetLimits push applied and surface a whitelist/cap divergence.
+    limits_state: dict[str, Any] | None = None
     # security code -> Security dict
     securities: dict[str, dict[str, Any]] = field(default_factory=dict)
     # security code -> latest MarketDataTick dict
@@ -111,6 +114,16 @@ class QuikAgentStore:
         with self._lock:
             self._agents.setdefault(agent_id, AgentState(agent_id=agent_id)).last_alert = alert
 
+    def set_limits_state(self, agent_id: str, limits: dict[str, Any]) -> None:
+        """Store the agent's echoed effective limits (whitelist + caps + last push ts)."""
+        with self._lock:
+            self._agents.setdefault(agent_id, AgentState(agent_id=agent_id)).limits_state = limits
+
+    def limits_state(self, agent_id: str | None = None) -> dict[str, Any] | None:
+        with self._lock:
+            st = self._pick(agent_id)
+            return st.limits_state if st else None
+
     def apply_securities(self, agent_id: str, items: list[dict[str, Any]], is_full: bool) -> None:
         with self._lock:
             st = self._agents.setdefault(agent_id, AgentState(agent_id=agent_id))
@@ -185,6 +198,7 @@ class QuikAgentStore:
                     "last_heartbeat": st.last_heartbeat,
                     "diagnostics": st.diagnostics,
                     "last_alert": st.last_alert,
+                    "limits_state": st.limits_state,
                     "securities_count": len(st.securities),
                     "tick_codes": sorted(st.ticks.keys()),
                     "order_book_codes": sorted(st.order_books.keys()),

@@ -93,6 +93,10 @@ type TradeManager interface {
 	KillSwitch(*quikv1.KillSwitch)
 	StartExecution(*quikv1.StartExecution)
 	StopExecution(*quikv1.StopExecution)
+	// ApplyLimits adopts a SetLimits pushed by STL (whitelist + caps; master flag stays
+	// dual). EffectiveLimits returns the agent's current limits for the agent->STL echo.
+	ApplyLimits(*quikv1.SetLimits)
+	EffectiveLimits() *quikv1.LimitsState
 }
 
 // Link owns the connection lifecycle and reconnect loop.

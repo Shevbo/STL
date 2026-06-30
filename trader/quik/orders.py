@@ -332,6 +332,24 @@ def build_kill_switch(reason: str) -> "pb.OrchestratorMessage":
     return pb.OrchestratorMessage(kill_switch=pb.KillSwitch(reason=reason or ""))
 
 
+def build_set_limits(
+    instrument_whitelist, max_contracts_per_order: int, max_working_contracts: int,
+    price_collar_frac: float, daily_order_cap: int,
+) -> "pb.OrchestratorMessage":
+    """STL -> agent: push the hard limits + whitelist (STL is the source of truth). The
+    agent adopts the whitelist and treats the caps as a ceiling it may only tighten; the
+    master flag (trading_enabled) is NOT pushed (stays dual). See proto SetLimits."""
+    return pb.OrchestratorMessage(
+        set_limits=pb.SetLimits(
+            instrument_whitelist=list(instrument_whitelist),
+            max_contracts_per_order=int(max_contracts_per_order),
+            max_working_contracts=int(max_working_contracts),
+            price_collar_frac=float(price_collar_frac),
+            daily_order_cap=int(daily_order_cap),
+        )
+    )
+
+
 def build_start_execution(
     client_id: str, code: str, side: str, target_quantity: int,
     worst_price: float, allow_cross: bool = False,

@@ -162,9 +162,23 @@ async def lifespan(app: FastAPI):
     if settings.quik_agent_enabled:
         try:
             from trader.quik.alerts import AlertForwarder
-            from trader.quik.orders import OrderStore
+            from trader.quik.orders import OrderStore, build_set_limits
+            from trader.quik.limits import OrderLimits
             from trader.quik.server import QuikAgentServer
             from trader.quik.store import QuikAgentStore
+
+            def _set_limits_msg():
+                """STL's effective hard limits as a SetLimits push (STL = source of
+                truth). Built fresh per connect so a config change propagates on the
+                agent's next reconnect without an exe/whitelist edit on the VDS."""
+                lim = OrderLimits.from_settings(settings)
+                return build_set_limits(
+                    instrument_whitelist=lim.instrument_whitelist,
+                    max_contracts_per_order=lim.max_contracts_per_order,
+                    max_working_contracts=lim.max_working_contracts,
+                    price_collar_frac=lim.price_collar_frac,
+                    daily_order_cap=lim.daily_order_cap,
+                )
             quik_store = QuikAgentStore(link_fresh_sec=settings.quik_agent_link_fresh_sec)
             # Phase 2 order/execution state. The server stores incoming order
             # updates here; the API reads it + re-checks limits before sending.
@@ -181,6 +195,7 @@ async def lifespan(app: FastAPI):
                 portal_secret=settings.shectory_auth_bridge_secret,
                 alert_forwarder=quik_alerts,
                 order_store=quik_order_store,
+                set_limits_provider=_set_limits_msg,
             )
             await quik_server.start()
             log.info("quik.lifespan_started", listen=settings.quik_agent_grpc_listen)

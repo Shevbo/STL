@@ -43,6 +43,25 @@ def test_pick_single_agent_when_unambiguous():
     assert store.tick("RIU6", "only")["last"] == 1.0
 
 
+def test_limits_state_store_and_status():
+    """The agent's echoed effective limits are stored and surfaced in status so the UI
+    can confirm a SetLimits push applied and flag a whitelist divergence."""
+    store = QuikAgentStore()
+    ls = {
+        "trading_enabled": True,
+        "instrument_whitelist": ["RIU6", "GZU6", "SiU6", "SRU6"],
+        "max_contracts_per_order": 2,
+        "max_working_contracts": 2,
+        "price_collar_frac": 0.002,
+        "daily_order_cap": 50,
+        "last_push_unix_ms": 1234567890,
+    }
+    store.set_limits_state("a1", ls)
+    assert store.limits_state("a1") == ls
+    assert store.limits_state()["instrument_whitelist"] == ls["instrument_whitelist"]
+    assert store.status("a1")[0]["limits_state"] == ls
+
+
 def test_pick_prefers_single_green_when_others_stale():
     """A stale (red) leftover agent must not block resolving the single live one.
 

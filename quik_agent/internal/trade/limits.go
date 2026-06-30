@@ -58,7 +58,12 @@ const (
 // owns one Guard and consults it under its own lock; the methods here only guard the
 // counters themselves.
 type Guard struct {
-	limits Limits
+	// limMu guards limits (mutated at runtime by ApplyPushed when STL pushes its
+	// limits). CheckPlace/CheckReplace snapshot it once via Limits() so a concurrent
+	// push cannot tear a read. lastPushMs records when a push was last applied.
+	limMu      sync.RWMutex
+	limits     Limits
+	lastPushMs int64
 
 	mu          sync.Mutex
 	day         string // YYYY-MM-DD of the current count window
@@ -72,8 +77,86 @@ func NewGuard(l Limits) *Guard {
 	return &Guard{limits: l, nowFn: time.Now}
 }
 
-// Limits returns the configured limits (read-only copy).
-func (g *Guard) Limits() Limits { return g.limits }
+// Limits returns the currently effective limits (a copy; the whitelist slice is
+// replaced wholesale by ApplyPushed, never mutated in place, so the copy is safe to
+// read without holding the lock).
+func (g *Guard) Limits() Limits {
+	g.limMu.RLock()
+	defer g.limMu.RUnlock()
+	return g.limits
+}
+
+// LastPushMs is the unix-ms of the last applied SetLimits (0 = never pushed).
+func (g *Guard) LastPushMs() int64 {
+	g.limMu.RLock()
+	defer g.limMu.RUnlock()
+	return g.lastPushMs
+}
+
+// ApplyPushed adopts limits pushed by STL (the source of truth). The whitelist is
+// REPLACED when non-empty (an empty push is ignored — fail-safe so a bad push never
+// silently disables every instrument). The numeric caps are CEILING-only: the agent
+// may only TIGHTEN its own configured caps, never loosen them, so its local config
+// stays a hard backstop (defense in depth). The master flag (TradingEnabled) is never
+// changed here — it stays dual. Returns true if anything changed. Values <= 0 for a
+// cap mean "no opinion" (keep the agent's configured cap).
+func (g *Guard) ApplyPushed(wl []string, maxPerOrder, maxWorking int64, collarFrac float64, dailyCap int) bool {
+	g.limMu.Lock()
+	defer g.limMu.Unlock()
+	changed := false
+	if len(wl) > 0 {
+		cleaned := make([]string, 0, len(wl))
+		for _, w := range wl {
+			if s := strings.TrimSpace(w); s != "" {
+				cleaned = append(cleaned, s)
+			}
+		}
+		if len(cleaned) > 0 && !sameWhitelist(g.limits.InstrumentWhitelist, cleaned) {
+			g.limits.InstrumentWhitelist = cleaned
+			changed = true
+		}
+	}
+	if maxPerOrder > 0 && (g.limits.MaxContractsPerOrder <= 0 || maxPerOrder < g.limits.MaxContractsPerOrder) {
+		g.limits.MaxContractsPerOrder = maxPerOrder
+		changed = true
+	}
+	if maxWorking > 0 && (g.limits.MaxWorkingContracts <= 0 || maxWorking < g.limits.MaxWorkingContracts) {
+		g.limits.MaxWorkingContracts = maxWorking
+		changed = true
+	}
+	if collarFrac > 0 && (g.limits.PriceCollarFrac <= 0 || collarFrac < g.limits.PriceCollarFrac) {
+		g.limits.PriceCollarFrac = collarFrac
+		changed = true
+	}
+	if dailyCap > 0 && (g.limits.DailyOrderCap <= 0 || dailyCap < g.limits.DailyOrderCap) {
+		g.limits.DailyOrderCap = dailyCap
+		changed = true
+	}
+	g.lastPushMs = g.now().UnixMilli()
+	return changed
+}
+
+// sameWhitelist reports whether two whitelists hold the same codes (order-insensitive,
+// case/space-insensitive) so a redundant push is a no-op.
+func sameWhitelist(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	norm := func(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
+	seen := make(map[string]int, len(a))
+	for _, x := range a {
+		seen[norm(x)]++
+	}
+	for _, y := range b {
+		seen[norm(y)]--
+	}
+	for _, v := range seen {
+		if v != 0 {
+			return false
+		}
+	}
+	return true
+}
 
 func (g *Guard) now() time.Time {
 	if g.nowFn != nil {
@@ -117,19 +200,20 @@ type PlaceCheck struct {
 // is checked first. Counting toward the daily cap happens in CommitPlace, only after
 // the manager has decided to actually send the order.
 func (g *Guard) CheckPlace(p PlaceCheck) (bool, RejectReason) {
-	if !g.limits.TradingEnabled {
+	lim := g.Limits() // snapshot once (a concurrent ApplyPushed must not tear this read)
+	if !lim.TradingEnabled {
 		return false, ReasonTradingDisabled
 	}
-	if !g.limits.whitelisted(p.Code) {
+	if !lim.whitelisted(p.Code) {
 		return false, ReasonNotWhitelisted
 	}
 	if p.Quantity <= 0 {
 		return false, ReasonQtyNonPositive
 	}
-	if g.limits.MaxContractsPerOrder > 0 && p.Quantity > g.limits.MaxContractsPerOrder {
+	if lim.MaxContractsPerOrder > 0 && p.Quantity > lim.MaxContractsPerOrder {
 		return false, ReasonQtyPerOrder
 	}
-	if g.limits.MaxWorkingContracts > 0 && p.CurrentWorking+p.Quantity > g.limits.MaxWorkingContracts {
+	if lim.MaxWorkingContracts > 0 && p.CurrentWorking+p.Quantity > lim.MaxWorkingContracts {
 		return false, ReasonWorkingCap
 	}
 	if p.Price <= 0 || math.IsNaN(p.Price) || math.IsInf(p.Price, 0) {
@@ -138,27 +222,28 @@ func (g *Guard) CheckPlace(p PlaceCheck) (bool, RejectReason) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.rollDay()
-	if g.placedToday >= g.dailyCap() {
+	if g.placedToday >= dailyCapOf(lim) {
 		return false, ReasonDailyCap
 	}
 	return true, ""
 }
 
-func (g *Guard) dailyCap() int {
-	if g.limits.DailyOrderCap < 0 {
+func dailyCapOf(l Limits) int {
+	if l.DailyOrderCap < 0 {
 		return 0
 	}
-	return g.limits.DailyOrderCap
+	return l.DailyOrderCap
 }
 
 // CommitPlace records one placement against the daily cap. Call it only once the
 // order is actually about to be sent to Lua (after CheckPlace passed). It re-checks
 // the cap atomically and returns false if the cap was hit in the meantime.
 func (g *Guard) CommitPlace() (bool, RejectReason) {
+	cap := dailyCapOf(g.Limits())
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.rollDay()
-	if g.placedToday >= g.dailyCap() {
+	if g.placedToday >= cap {
 		return false, ReasonDailyCap
 	}
 	g.placedToday++

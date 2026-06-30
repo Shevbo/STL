@@ -10,6 +10,15 @@
 <script lang="ts">
   import { commissionFor } from '$lib/lab-analytics';
 
+  type AgentLimits = {
+    trading_enabled: boolean;
+    instrument_whitelist: string[];
+    max_contracts_per_order: number;
+    max_working_contracts: number;
+    price_collar_frac: number;
+    daily_order_cap: number;
+    last_push_unix_ms: number;
+  };
   type Cfg = {
     trading_enabled: boolean;
     max_contracts_per_order: number;
@@ -18,6 +27,7 @@
     instrument_whitelist: string[];
     daily_order_cap: number;
     agent_wired: boolean;
+    agent_limits?: AgentLimits | null;
   };
   type OrderRow = {
     client_id: string; code: string; side: string; price: number;
@@ -49,6 +59,16 @@
   let execWorst = $state<number>(0);
 
   let tradingOn = $derived(!!cfg?.trading_enabled && !!cfg?.agent_wired);
+
+  // Whitelist sync: STL is the source of truth and pushes its whitelist to the agent
+  // on connect. Compare STL's whitelist to the agent's echoed effective whitelist so a
+  // divergence (an order would be rejected "instrument not whitelisted") is visible
+  // here instead of only on a rejected order.
+  const norm = (a: string[]) => [...(a ?? [])].map((s) => s.trim().toLowerCase()).sort();
+  let agentWl = $derived(cfg?.agent_limits?.instrument_whitelist ?? null);
+  let whitelistSynced = $derived(
+    !!agentWl && JSON.stringify(norm(cfg?.instrument_whitelist ?? [])) === JSON.stringify(norm(agentWl)),
+  );
 
   // Live (maker) estimate: limit order resting in the book → broker fee only.
   let notional = $derived(price * qty);
@@ -290,6 +310,16 @@
       коллар: {(cfg.price_collar_frac * 100).toFixed(2)}% ·
       дневной лимит: {cfg.daily_order_cap}
     </div>
+    <div class="sync">
+      {#if !cfg.agent_limits}
+        <span class="sync-dot unknown">●</span> лимиты агента: нет данных (агент не на сборке с синхронизацией)
+      {:else if whitelistSynced}
+        <span class="sync-dot ok">●</span> whitelist синхронизирован с агентом: {agentWl?.join(', ')}
+      {:else}
+        <span class="sync-dot warn">●</span> РАСХОЖДЕНИЕ whitelist — STL: [{cfg.instrument_whitelist.join(', ')}]
+        · агент: [{agentWl?.join(', ') ?? '—'}] (заявки вне списка агента отклонятся)
+      {/if}
+    </div>
   {/if}
 
   {#if msg}<div class="msg">{msg}</div>{/if}
@@ -418,6 +448,11 @@
   .place:disabled, .x:disabled { opacity: 0.4; cursor: not-allowed; }
   .exec-lbl { align-self: center; font-size: 11px; font-weight: 600; opacity: 0.8; color: #9ab; }
   .limits { padding: 2px 8px; font-size: 11px; opacity: 0.6; }
+  .sync { padding: 0 8px 3px; font-size: 11px; opacity: 0.85; }
+  .sync-dot { font-size: 10px; }
+  .sync-dot.ok { color: #4caf50; }
+  .sync-dot.warn { color: #ff6b6b; }
+  .sync-dot.unknown { color: #888; }
   .msg { padding: 4px 8px; font-size: 11px; color: #ffd27f; }
   .section-title {
     padding: 4px 8px; font-size: 11px; opacity: 0.7; text-transform: uppercase;

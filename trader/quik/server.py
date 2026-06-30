@@ -109,6 +109,18 @@ def _diag_to_dict(d) -> dict:
     }
 
 
+def _limits_state_to_dict(ls) -> dict:
+    return {
+        "trading_enabled": bool(ls.trading_enabled),
+        "instrument_whitelist": list(ls.instrument_whitelist),
+        "max_contracts_per_order": ls.max_contracts_per_order,
+        "max_working_contracts": ls.max_working_contracts,
+        "price_collar_frac": ls.price_collar_frac,
+        "daily_order_cap": ls.daily_order_cap,
+        "last_push_unix_ms": ls.last_push_unix_ms,
+    }
+
+
 class QuikAgentLinkServicer(pb_grpc.QuikAgentLinkServicer):
     """Servicer for the QuikAgentLink.Session bidi stream."""
 
@@ -120,10 +132,15 @@ class QuikAgentLinkServicer(pb_grpc.QuikAgentLinkServicer):
         command_queues: dict[str, asyncio.Queue] | None = None,
         alert_forwarder=None,
         order_store=None,
+        set_limits_provider=None,
     ) -> None:
         self.store = store
         self.agent_secret = agent_secret
         self.portal_secret = portal_secret
+        # Optional callable () -> pb.OrchestratorMessage: STL's hard limits/whitelist
+        # pushed to the agent on connect (after Register) so the two never diverge.
+        # None disables the push (the agent keeps its own agent_config.json limits).
+        self.set_limits_provider = set_limits_provider
         # agent_id -> queue of OrchestratorMessage to send down the stream. Each
         # entry is a fully-built OrchestratorMessage (command OR Phase 2 order).
         self.command_queues = command_queues if command_queues is not None else {}
@@ -189,6 +206,15 @@ class QuikAgentLinkServicer(pb_grpc.QuikAgentLinkServicer):
                         "timezone_offset_min": reg.timezone_offset_min,
                         "build_rev": reg.build_rev,
                     })
+                    # Push STL's hard limits/whitelist now that the agent is identified,
+                    # so the agent adopts them (no manual set_whitelist on the VDS). The
+                    # agent re-echoes its effective limits via LimitsState. Best-effort:
+                    # an older agent that does not know SetLimits ignores the unknown field.
+                    if self.set_limits_provider is not None:
+                        try:
+                            cmd_q.put_nowait(self.set_limits_provider())
+                        except Exception:  # noqa: BLE001 — never break the session on a push
+                            log.warning("quik.session.set_limits_push_failed", agent=agent_id)
                 elif field == "heartbeat":
                     hb = msg.heartbeat
                     self.store.set_heartbeat(agent_id, {
@@ -238,6 +264,11 @@ class QuikAgentLinkServicer(pb_grpc.QuikAgentLinkServicer):
                 elif field == "execution_update" and self.order_store is not None:
                     self.order_store.apply_execution_update(
                         agent_id, msg.execution_update)
+                elif field == "limits_state":
+                    # Agent echoed its effective limits (after a SetLimits push or at
+                    # startup). Store them so the UI can confirm sync + flag divergence.
+                    self.store.set_limits_state(
+                        agent_id, _limits_state_to_dict(msg.limits_state))
 
                 self.store.touch(agent_id, msg.seq)
 
@@ -282,6 +313,7 @@ class QuikAgentServer:
         portal_secret: str,
         alert_forwarder=None,
         order_store=None,
+        set_limits_provider=None,
     ) -> None:
         self.listen = listen
         self.store = store
@@ -289,7 +321,8 @@ class QuikAgentServer:
         self._server: grpc.aio.Server | None = None
         self.servicer = QuikAgentLinkServicer(
             store, agent_secret, portal_secret,
-            alert_forwarder=alert_forwarder, order_store=order_store)
+            alert_forwarder=alert_forwarder, order_store=order_store,
+            set_limits_provider=set_limits_provider)
 
     async def start(self) -> None:
         self._server = grpc.aio.server()

@@ -140,6 +140,61 @@ async def test_session_register_tick_orderbook_updates_store():
     assert ob["asks"][0]["quantity"] == 7
 
 
+async def test_session_pushes_set_limits_on_register():
+    """On Register, the server pushes STL's SetLimits (whitelist + caps) to the agent so
+    the two never diverge, and stores the agent's LimitsState echo. Source of truth = STL."""
+    from trader.quik.orders import build_set_limits
+
+    store = QuikAgentStore(link_fresh_sec=15)
+
+    def provider():
+        return build_set_limits(
+            instrument_whitelist=["RIU6", "GZU6", "SiU6", "SRU6"],
+            max_contracts_per_order=2, max_working_contracts=2,
+            price_collar_frac=0.002, daily_order_cap=50,
+        )
+
+    servicer = QuikAgentLinkServicer(
+        store, AGENT_SECRET, PORTAL_SECRET, set_limits_provider=provider)
+    server = grpc.aio.server()
+    pb_grpc.add_QuikAgentLinkServicer_to_server(servicer, server)
+    port = server.add_insecure_port("127.0.0.1:0")
+    await server.start()
+
+    pushed: list = []
+    try:
+        async with grpc.aio.insecure_channel(f"127.0.0.1:{port}") as channel:
+            stub = pb_grpc.QuikAgentLinkStub(channel)
+
+            async def gen():
+                yield pb.AgentMessage(seq=1, register=pb.Register(host_name="WIN-QUIK01"))
+                # echo the effective limits back (what a real agent does after applying)
+                yield pb.AgentMessage(seq=2, limits_state=pb.LimitsState(
+                    trading_enabled=True,
+                    instrument_whitelist=["RIU6", "GZU6", "SiU6", "SRU6"],
+                    max_contracts_per_order=2, max_working_contracts=2,
+                    price_collar_frac=0.002, daily_order_cap=50, last_push_unix_ms=111,
+                ))
+                await asyncio.sleep(0.3)
+
+            call = stub.Session(gen(), metadata=[("authorization", f"Bearer {AGENT_SECRET}")])
+            try:
+                async for msg in call:
+                    if msg.WhichOneof("payload") == "set_limits":
+                        pushed.append(list(msg.set_limits.instrument_whitelist))
+                        break
+            finally:
+                call.cancel()
+    finally:
+        await server.stop(0)
+
+    assert pushed and "GZU6" in pushed[0]
+    ls = store.limits_state("WIN-QUIK01")
+    assert ls is not None
+    assert ls["instrument_whitelist"] == ["RIU6", "GZU6", "SiU6", "SRU6"]
+    assert ls["last_push_unix_ms"] == 111
+
+
 async def test_session_rejects_missing_bearer():
     store = QuikAgentStore()
     server, port, _servicer = await _start_server(store)

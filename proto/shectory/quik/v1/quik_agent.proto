@@ -32,6 +32,7 @@ message AgentMessage {
     OrderUpdate order_update = 11;   // Phase 2: order lifecycle (place/cancel/fill)
     TransReply trans_reply = 12;     // Phase 2: QUIK transaction reply (code + text)
     ExecutionUpdate execution_update = 13; // Phase 2 (1b): maker-working progress
+    LimitsState limits_state = 14;   // agent's CURRENTLY EFFECTIVE hard limits (echo)
   }
 }
 
@@ -157,6 +158,7 @@ message OrchestratorMessage {
     StartExecution start_execution = 6; // Phase 2 1b: start maker-working an order
     StopExecution stop_execution = 7;   // Phase 2 1b: stop a working execution
     ReplaceOrder replace_order = 8;     // native atomic move (QUIK MOVE_ORDERS)
+    SetLimits set_limits = 9;           // push the hard limits + whitelist (STL = source of truth)
   }
 }
 
@@ -180,6 +182,37 @@ message Command {
   CommandType type = 2;
   // free-form args, e.g. {"code":"RIU6","depth":"10"}
   map<string, string> args = 3;
+}
+
+// ===================== Limits sync (STL is the source of truth) =====================
+// STL pushes its hard limits + whitelist to the agent so the two never diverge
+// silently (a STL whitelist that the agent lacked caused orders to be rejected
+// "instrument not whitelisted" BEFORE QUIK). Sent on connect (after Register) and
+// whenever STL's config changes. The agent ADOPTS the whitelist and treats the
+// numeric caps as a CEILING it may only tighten (it never loosens its own config
+// beyond these). The MASTER FLAG (trading_enabled) is deliberately NOT pushed: it
+// stays DUAL — both STL's flag and the agent's own local config must be true — so the
+// agent keeps an independent kill. An empty whitelist is IGNORED (fail-safe: a bad
+// push can never silently disable every instrument).
+message SetLimits {
+  repeated string instrument_whitelist = 1; // effective whitelist (replace; empty = ignore)
+  int64 max_contracts_per_order = 2;
+  int64 max_working_contracts = 3;
+  double price_collar_frac = 4;
+  int32 daily_order_cap = 5;
+}
+
+// Agent -> STL echo of the limits the agent is CURRENTLY enforcing (after applying
+// any SetLimits). Lets STL/UI confirm a push took effect and surface a divergence
+// (e.g. a whitelist mismatch) instead of discovering it only on a rejected order.
+message LimitsState {
+  bool trading_enabled = 1;                 // the agent's LOCAL master flag (its own config)
+  repeated string instrument_whitelist = 2;
+  int64 max_contracts_per_order = 3;
+  int64 max_working_contracts = 4;
+  double price_collar_frac = 5;
+  int32 daily_order_cap = 6;
+  int64 last_push_unix_ms = 7;              // when the agent last applied a SetLimits (0 = never)
 }
 
 // ===================== Phase 2: orders & execution =====================
