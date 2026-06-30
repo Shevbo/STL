@@ -11,6 +11,7 @@
   import PositionsTable from './components/PositionsTable.svelte';
   import OrderBook from './components/OrderBook.svelte';
   import BottomBar from './components/BottomBar.svelte';
+  import { startQuikOrderbookBridge } from './lib/quik_md';
   import LabPanel from './components/LabPanel.svelte';
   import QuikTables from './components/QuikTables.svelte';
   import Orders from './components/Orders.svelte';
@@ -124,6 +125,14 @@
   // п.1: effectiveSymbol — то, что реально показано на экране
   let effectiveSymbol = $derived(activeSymbol || selectedRobot?.symbol || '');
   let currentQuote = $derived(quotesStore.get(effectiveSymbol));
+
+  // QUIK market-data bridge: feed the QUIK agent's order book into orderbookStore so the
+  // main стакан shows QUIK instruments (GZU6 etc.). Started once; reads effectiveSymbol
+  // each tick. getSymbol closure is not tracked here, so this effect does not re-run.
+  $effect(() => {
+    const stop = startQuikOrderbookBridge(() => effectiveSymbol);
+    return stop;
+  });
 
   let ws: WsClient;
 
