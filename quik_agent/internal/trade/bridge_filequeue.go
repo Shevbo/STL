@@ -77,7 +77,7 @@ func (b *Bridge) drainEvents() {
 	complete := data[:idx+1]
 	b.evtOff += int64(len(complete))
 	for _, line := range bytes.Split(complete, []byte{'\n'}) {
-		line = bytes.TrimRight(line, "\r")
+		line = toUTF8(bytes.TrimRight(line, "\r"))
 		if len(line) == 0 {
 			continue
 		}

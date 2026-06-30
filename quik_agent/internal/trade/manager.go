@@ -675,7 +675,7 @@ func (m *Manager) OnTransReply(ev TransReplyEvent) {
 	if wo != nil {
 		clientID = wo.clientID
 	}
-	rejected := wo != nil && ev.ResultCode != 0
+	rejected := wo != nil && isTransReject(ev.ResultCode)
 	if rejected {
 		wo.state = quikv1.OrderState_ORDER_STATE_REJECTED
 		wo.done = true
@@ -854,6 +854,22 @@ func (m *Manager) emitOrderUpdate(wo *workingOrder, text string) {
 }
 
 // ---- pure helpers ----
+
+// isTransReject reports whether a QUIK OnTransReply status means the order was
+// REJECTED. QUIK's status is NOT a simple success=0 flag: it sends progress codes.
+// The non-reject statuses are 0 (sent to server), 1 (received by the QUIK server) and
+// 3 (transaction EXECUTED / order registered — "успешно зарегистрирована"). Everything
+// else (2 transmit error, 4 not executed, 5/6 failed checks, …) and any negative code
+// (the Lua relay's own errors) is a real rejection. Treating status 3 as a rejection
+// was the bug that flagged a successfully-registered order as "ОТКЛОНЕНА".
+func isTransReject(code int32) bool {
+	switch code {
+	case 0, 1, 3:
+		return false
+	default:
+		return true
+	}
+}
 
 func opFromSide(s quikv1.Side) string {
 	if s == quikv1.Side_SIDE_SELL {

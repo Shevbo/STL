@@ -8,6 +8,7 @@
   import { tradesStore } from '$lib/stores/trades.svelte';
   import { instrumentStore } from '$lib/stores/instrument.svelte';
   import { orderbookStore } from '$lib/stores/orderbook.svelte';
+  import { mskTickFormatter, mskCrosshairFormatter } from '$lib/chart-time';
 
   let {
     symbol,
@@ -354,9 +355,11 @@
       height: chartH,
       layout: { background: { color: '#0f0f1e' }, textColor: '#888' },
       grid: { vertLines: { color: '#1e1e3a' }, horzLines: { color: '#1e1e3a' } },
+      localization: { timeFormatter: mskCrosshairFormatter },
       timeScale: {
         borderColor: '#2d2d4a',
         rightOffset: 10,
+        tickMarkFormatter: mskTickFormatter,
       },
       // Auto-fit the price axis to whatever bars are in view, so zooming the time
       // axis out (wheel) extends the price scale to the older/higher candles.

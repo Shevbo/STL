@@ -20,7 +20,28 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
+
+	"golang.org/x/text/encoding/charmap"
 )
+
+// toUTF8 normalizes a Lua-emitted line to UTF-8. QUIK on Russian Windows hands its
+// result_msg / reject text to QLua in Windows-1251; the Lua relays those raw bytes, so
+// a line carrying Cyrillic is NOT valid UTF-8. json.Unmarshal would then replace each
+// such byte with U+FFFD (the � / ◇ mojibake the operator saw). We must convert BEFORE
+// decoding the JSON. ASCII-only lines (the common case) are already valid UTF-8 and
+// pass through untouched; only a non-UTF-8 line is decoded from Windows-1251 (which is
+// ASCII-compatible, so the JSON structure survives and the Cyrillic becomes correct).
+func toUTF8(line []byte) []byte {
+	if utf8.Valid(line) {
+		return line
+	}
+	out, err := charmap.Windows1251.NewDecoder().Bytes(line)
+	if err != nil {
+		return line
+	}
+	return out
+}
 
 // ---- wire types (newline-delimited JSON, one object per line) ----
 // These mirror the protocol in quik_agent/PHASE2.md. The agent is the TCP SERVER on
@@ -248,7 +269,7 @@ func (b *Bridge) readLoop(ctx context.Context, conn net.Conn) {
 		if ctx.Err() != nil {
 			return
 		}
-		line := sc.Bytes()
+		line := toUTF8(sc.Bytes())
 		if len(line) == 0 {
 			continue
 		}

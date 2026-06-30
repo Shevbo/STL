@@ -21,6 +21,7 @@
   Frontend only. No backend changes. No live orders placed here. -->
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
+  import { mskTickFormatter, mskCrosshairFormatter } from '$lib/chart-time';
 
   type OrderRow = {
     client_id: string; code: string; side: string; price: number;
@@ -237,7 +238,8 @@
         height: chartEl.clientHeight || 130,
         layout: { background: { color: '#0f0f1e' }, textColor: '#778' },
         grid: { vertLines: { color: '#1a1a2e' }, horzLines: { color: '#1a1a2e' } },
-        timeScale: { borderColor: '#2d2d4a', timeVisible: true, rightOffset: 4 },
+        localization: { timeFormatter: mskCrosshairFormatter },
+        timeScale: { borderColor: '#2d2d4a', timeVisible: true, rightOffset: 4, tickMarkFormatter: mskTickFormatter },
         rightPriceScale: { borderColor: '#2d2d4a', autoScale: true },
         crosshair: { mode: 1 },
         handleScroll: false, handleScale: false,

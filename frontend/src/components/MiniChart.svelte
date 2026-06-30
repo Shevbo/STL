@@ -7,6 +7,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { fetchWithAuth } from '$lib/fetch-auth';
   import { quotesStore } from '$lib/stores/quotes.svelte';
+  import { mskTickFormatter, mskCrosshairFormatter } from '$lib/chart-time';
 
   let {
     symbol,
@@ -80,7 +81,8 @@
       height: el.clientHeight || 150,
       layout: { background: { color: '#0f0f1e' }, textColor: '#778' },
       grid: { vertLines: { color: '#1a1a2e' }, horzLines: { color: '#1a1a2e' } },
-      timeScale: { borderColor: '#2d2d4a', timeVisible: true, rightOffset: 4 },
+      localization: { timeFormatter: mskCrosshairFormatter },
+      timeScale: { borderColor: '#2d2d4a', timeVisible: true, rightOffset: 4, tickMarkFormatter: mskTickFormatter },
       rightPriceScale: { borderColor: '#2d2d4a', autoScale: true },
       crosshair: { mode: 1 },
       handleScroll: { mouseWheel: true, pressedMouseMove: true },
