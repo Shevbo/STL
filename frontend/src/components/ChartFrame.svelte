@@ -295,36 +295,21 @@
     tvCandle.setMarkers(tradeMarkers);
   });
 
+  // changeTimeframe / changeSymbol ONLY update state. The single $effect above
+  // (keyed on selectedSymbol+selectedTf) does the clear + REST load + draw + subscribe.
+  // Previously these ALSO called loadRestHistory directly, which raced the effect's
+  // chart-clear: a fast (cached) response drew, then the effect wiped it -> blank on a
+  // timeframe switch. One loader, no race.
   function changeTimeframe(tf: number) {
     if (tf === selectedTf) return;
     selectedTf = tf;
-    orderLines.forEach(line => tvCandle?.removePriceLine(line));
-    orderLines.clear();
-    lastOhlcLen = 0;
-    onSubscribe?.(selectedSymbol, tf);
-    loadRestHistory(selectedSymbol, tf);   // REST history for the new timeframe
   }
 
   function changeSymbol(sym: string) {
     if (sym === selectedSymbol) return;
-    console.log('[Chart] changeSymbol: from', selectedSymbol, 'to', sym);
     const oldSymbol = selectedSymbol;
     symbolOverride = sym;
-    orderLines.forEach(line => tvCandle?.removePriceLine(line));
-    orderLines.clear();
-    lastOhlcLen = 0;
-    // Clear chart data and orderbook immediately when switching symbols
-    if (tvCandle) {
-      console.log('[Chart] clearing chart data');
-      tvCandle.setData([]);
-      tvVolume?.setData([]);
-    }
     orderbookStore.clear(oldSymbol);
-    console.log('[Chart] calling onSubscribe for', sym);
-    onSubscribe?.(sym, selectedTf);
-    // Always pull history from the proven REST path; works for every instrument
-    // (incl. GZU6@RTSX) regardless of the gRPC stream's per-symbol failures.
-    loadRestHistory(sym, selectedTf);
   }
 
   function handleScroll(event: Event) {

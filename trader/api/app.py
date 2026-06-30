@@ -2894,10 +2894,14 @@ def create_app() -> FastAPI:
 
         from trader.util import unwrap_decimal
 
-        # Calendar days back per timeframe to fetch ~500 bars (mirrors ws_hub).
+        # First-try calendar window per timeframe. Kept conservative: the Finam REST
+        # bars endpoint returns an EMPTY list when the window is too wide — either too
+        # many bars (~>2k) or a start before this contract's data (futures are young).
+        # M15/60d and D/730d both came back empty; 30d / 365d work. On an empty result
+        # we SHRINK the window and retry, so it self-heals for any contract/timeframe.
         _DAYS_BY_TF = {
-            "TIME_FRAME_M1": 3, "TIME_FRAME_M5": 10, "TIME_FRAME_M15": 60,
-            "TIME_FRAME_H1": 120, "TIME_FRAME_D": 730, "TIME_FRAME_W": 3650,
+            "TIME_FRAME_M1": 3, "TIME_FRAME_M5": 10, "TIME_FRAME_M15": 30,
+            "TIME_FRAME_H1": 45, "TIME_FRAME_D": 365, "TIME_FRAME_W": 1825,
             "TIME_FRAME_MN": 3650,
         }
         _auth(request)
@@ -2905,33 +2909,40 @@ def create_app() -> FastAPI:
         auth_client: AsyncAuthClient = request.app.state.auth
 
         tf_name = tf if tf.startswith("TIME_FRAME_") else "TIME_FRAME_M5"
-        days_back = days if days and days > 0 else _DAYS_BY_TF.get(tf_name, 30)
         now = datetime.now(timezone.utc)
-        start = now - timedelta(days=days_back)
-        params = {
-            "timeframe": tf_name,
-            "interval.start_time": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "interval.end_time": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        }
-        try:
+
+        if days and days > 0:
+            windows = [days]
+        else:
+            base = _DAYS_BY_TF.get(tf_name, 30)
+            windows = [base, max(1, base // 2), max(1, base // 4), max(1, base // 8)]
+        # de-dupe preserving order
+        seen: set[int] = set()
+        windows = [w for w in windows if not (w in seen or seen.add(w))]
+
+        async def _fetch(days_back: int) -> list[dict]:
+            start = now - timedelta(days=days_back)
+            params = {
+                "timeframe": tf_name,
+                "interval.start_time": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "interval.end_time": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            }
             token = await auth_client.get_token()
             headers = {"Authorization": f"Bearer {token}"}
             async with httpx.AsyncClient(http2=True) as client:
                 resp = await client.get(
                     f"{settings.finam_api_base_url}/v1/instruments/{symbol}/bars",
-                    params=params,
-                    headers=headers,
-                    timeout=15.0,
+                    params=params, headers=headers, timeout=15.0,
                 )
                 resp.raise_for_status()
                 body = resp.json()
-            result = []
+            out: list[dict] = []
             for b in body.get("bars", []):
                 ts_str = b.get("timestamp", "")
                 if not ts_str:
                     continue
                 t = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-                result.append({
+                out.append({
                     "time": int(t.timestamp()),
                     "open": unwrap_decimal(b.get("open"), as_float=True),
                     "high": unwrap_decimal(b.get("high"), as_float=True),
@@ -2939,12 +2950,24 @@ def create_app() -> FastAPI:
                     "close": unwrap_decimal(b.get("close"), as_float=True),
                     "volume": unwrap_decimal(b.get("volume"), as_float=True),
                 })
-            log.info("api.chart_bars_loaded", symbol=symbol, tf=tf_name, count=len(result))
-            return result
-        except Exception as exc:
-            log.error("api.chart_bars_failed", symbol=symbol, tf=tf_name,
-                      exc=str(exc), exc_type=type(exc).__name__)
-            return []
+            return out
+
+        result: list[dict] = []
+        for w in windows:
+            try:
+                result = await _fetch(w)
+            except Exception as exc:
+                log.error("api.chart_bars_failed", symbol=symbol, tf=tf_name,
+                          days=w, exc=str(exc), exc_type=type(exc).__name__)
+                result = []
+                continue
+            if result:
+                if w != windows[0]:
+                    log.info("api.chart_bars_window_shrunk",
+                             symbol=symbol, tf=tf_name, days=w)
+                break
+        log.info("api.chart_bars_loaded", symbol=symbol, tf=tf_name, count=len(result))
+        return result
 
     @fastapi_app.get("/api/v1/market/coverage")
     async def market_coverage(request: Request, symbol: str | None = None):
