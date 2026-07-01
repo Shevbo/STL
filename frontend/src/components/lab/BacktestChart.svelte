@@ -10,6 +10,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { fetchWithAuth } from '../../lib/fetch-auth';
+  import { mskTickFormatter, mskCrosshairFormatter } from '../../lib/chart-time';
   import {
     toFills, rolledPnl, priceMarkers,
     positionRects, exitStats, commissionBreakdown, commissionFor,
@@ -119,11 +120,13 @@
     full: 'Полн. закрытие', reverse: 'Реверс',
   };
   // Bar epochs carry Moscow wall-clock stamped as UTC, so format in UTC to match axis.
+  // Bar/trade times are true UTC epochs; FORTS is MSK, so render Moscow time everywhere
+  // (the table header says «МСК» and it must actually BE MSK, matching the live chart).
   const fmtTs = (ts: number) => new Date(ts * 1000).toLocaleString('ru-RU', {
-    timeZone: 'UTC', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+    timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
   });
   const fmtDay = (ts: number) => new Date(ts * 1000).toLocaleDateString('ru-RU', {
-    timeZone: 'UTC', day: '2-digit', month: '2-digit', year: '2-digit',
+    timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', year: '2-digit',
   });
   let periodLabel = $state('');   // actual loaded data span, shown in the header
 
@@ -144,9 +147,11 @@
       grid: { vertLines: { color: '#15152470' }, horzLines: { color: '#15152470' } },
       // fixLeftEdge/fixRightEdge clamp panning+zoom to the data so there are never
       // empty gaps on the left/right when you zoom out — data always fills the view.
+      localization: { timeFormatter: mskCrosshairFormatter },
       timeScale: {
         borderColor: '#2d2d4a', timeVisible: true, rightOffset: 0,
         fixLeftEdge: true, fixRightEdge: true,
+        tickMarkFormatter: mskTickFormatter,
       },
       crosshair: { mode: 1 },
       rightPriceScale: { borderColor: '#2d2d4a', minimumWidth: 84 },
@@ -360,6 +365,7 @@
   }
 
   onDestroy(() => {
+    cancelAnimationFrame(rectRaf);
     roRef?.disconnect();
     candleEl?.removeEventListener('wheel', onWheelPan);
     equityEl?.removeEventListener('wheel', onWheelPan);
@@ -426,6 +432,23 @@
                  label, showLabel: width >= label.length * 6 + 6 && height >= 13 });
     }
     rectPx = out;
+  }
+
+  // Reposition the boxes across the next few animation frames. On the FIRST render,
+  // priceToCoordinate() is still mapping against the pre-autoscale price range (fitContent
+  // + the price-scale autoscale only take effect on the next paint), so a single
+  // synchronous updateRects() placed the boxes on stale Y coordinates — they "floated"
+  // away from the candles until a manual zoom re-ran updateRects. Running it over ~6
+  // frames lets the scale settle so the boxes lock onto the candles immediately.
+  let rectRaf = 0;
+  function scheduleRects(times = 6) {
+    cancelAnimationFrame(rectRaf);
+    let n = 0;
+    const tick = () => {
+      updateRects();
+      if (++n < times) rectRaf = requestAnimationFrame(tick);
+    };
+    rectRaf = requestAnimationFrame(tick);
   }
 
   async function loadData() {
@@ -524,7 +547,7 @@
       const lr = tvCandle.timeScale().getVisibleLogicalRange();
       if (lr) updateThumb(lr); else scrollThumb = { left: 0, width: 100 };
       drawOrderLines();
-      updateRects();
+      scheduleRects();   // defer over frames so boxes lock onto candles on first render
     } catch (e) {
       error = String(e);
     }
