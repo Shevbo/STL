@@ -30,16 +30,18 @@
     { label: 'Д', value: 19 },
   ];
 
-  // Map the dropdown tf number to the Finam TIME_FRAME_* name the backend expects.
-  // Mirrors trader/api/ws_hub.py _TIMEFRAME_NAMES (REST has no M30/H*, collapses to M15/D).
+  // Map the dropdown tf number to the Finam TIME_FRAME_* name the /chart/bars endpoint
+  // serves. Verified live: Finam REST HAS M1/M5/M15/H1/H2/H4/D but NOT M30 (returns 0),
+  // so 1ч/2ч/4ч now resolve to their own hourly frames (previously all collapsed to M15,
+  // which made 30м/1ч/2ч/4ч look identical). 30м has no native Finam frame → M15.
   const TF_NAMES: Record<number, string> = {
     1: 'TIME_FRAME_M1',
     5: 'TIME_FRAME_M5',
     9: 'TIME_FRAME_M15',
-    11: 'TIME_FRAME_M15',
-    12: 'TIME_FRAME_M15',
-    13: 'TIME_FRAME_M15',
-    15: 'TIME_FRAME_M15',
+    11: 'TIME_FRAME_M15',   // 30м: Finam REST has no M30 → nearest lower frame
+    12: 'TIME_FRAME_H1',    // 1ч
+    13: 'TIME_FRAME_H2',    // 2ч
+    15: 'TIME_FRAME_H4',    // 4ч
     17: 'TIME_FRAME_D',
     19: 'TIME_FRAME_D',
     20: 'TIME_FRAME_W',

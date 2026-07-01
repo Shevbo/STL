@@ -91,16 +91,24 @@
     flex: 1; overflow: hidden; display: flex; flex-direction: column;
     min-height: 0;
   }
+  /* Both sides scroll vertically so all N levels are reachable (the box shows ~15-20 of
+     50); the best price stays anchored at the spread (asks bottom / bids top). */
   .ob-asks {
     flex: 1; display: flex; flex-direction: column; justify-content: flex-end;
-    overflow: hidden;
+    overflow-y: auto; overflow-x: hidden;
   }
   .ob-bids {
     flex: 1; display: flex; flex-direction: column;
-    overflow: hidden;
+    overflow-y: auto; overflow-x: hidden;
   }
+  .ob-asks::-webkit-scrollbar, .ob-bids::-webkit-scrollbar { width: 7px; }
+  .ob-asks::-webkit-scrollbar-thumb, .ob-bids::-webkit-scrollbar-thumb {
+    background: #2d2d4a; border-radius: 4px;
+  }
+  .ob-asks::-webkit-scrollbar-thumb:hover, .ob-bids::-webkit-scrollbar-thumb:hover { background: #3d3d5a; }
+  .ob-asks, .ob-bids { scrollbar-width: thin; scrollbar-color: #2d2d4a transparent; }
   .ob-row {
-    position: relative; display: flex; align-items: center;
+    position: relative; display: flex; align-items: center; flex-shrink: 0;
     height: 17px; padding: 0 6px; gap: 4px; overflow: hidden;
     cursor: pointer; background: transparent; border: none; width: 100%;
     text-align: left;
