@@ -48,6 +48,9 @@ type workingOrder struct {
 	// cancelRequested is set when a cancel was asked for before QUIK assigned an
 	// order_num; the cancel is fired as soon as the order_num arrives.
 	cancelRequested bool
+	// sentMs is when the placement was sent to Lua (agent clock). Used to expire a
+	// PENDING order QUIK never assigned an order_num to (a phantom left by a link drop).
+	sentMs int64
 }
 
 func (w *workingOrder) restingQty() int64 {
@@ -185,6 +188,12 @@ func (m *Manager) PlaceOrder(req *quikv1.PlaceOrder) {
 	if req == nil {
 		return
 	}
+	// Free phantom PENDING orders QUIK never acknowledged BEFORE counting the working
+	// budget, so a link-drop leftover cannot falsely block this placement with
+	// ReasonWorkingCap. Emit their terminal update outside the lock.
+	for _, wo := range m.reconcileStalePending() {
+		m.emitOrderUpdate(wo, string(ReasonStalePending))
+	}
 	m.mu.Lock()
 	blocked := m.blocked
 	working := m.totalWorkingLocked()
@@ -222,6 +231,7 @@ func (m *Manager) PlaceOrder(req *quikv1.PlaceOrder) {
 		qty:      req.GetQuantity(),
 		balance:  req.GetQuantity(),
 		state:    quikv1.OrderState_ORDER_STATE_PENDING,
+		sentMs:   m.nowMs(),
 	}
 	m.mu.Lock()
 	m.byClient[wo.clientID] = wo
@@ -816,6 +826,38 @@ func (m *Manager) totalWorkingLocked() int64 {
 		sum += wo.restingQty()
 	}
 	return sum
+}
+
+// staleAckTimeoutMs: a PENDING order QUIK never assigned an order_num to within this
+// window was never registered (a phantom left by a link drop). QUIK acks a real order in
+// ~1s, so 20s is safe. Such a phantom otherwise occupies the working-contracts budget
+// forever (its deferred cancel waits on an order_num that never arrives), which then
+// falsely blocks new placements with ReasonWorkingCap. Mirrors STL's reconcile_pending.
+const staleAckTimeoutMs = 20_000
+
+// reconcileStalePending marks phantom PENDING orders (no order_num past staleAckTimeoutMs)
+// terminal (REJECTED) and returns them so the caller can emit a final OrderUpdate OUTSIDE
+// the lock (emitOrderUpdate takes m.mu). Freeing them drops the working count so a
+// link-drop leftover cannot block real placements.
+func (m *Manager) reconcileStalePending() []*workingOrder {
+	now := m.nowMs()
+	var stale []*workingOrder
+	m.mu.Lock()
+	for _, wo := range m.byClient {
+		if wo.done || wo.state != quikv1.OrderState_ORDER_STATE_PENDING {
+			continue
+		}
+		if wo.orderNum != "" || wo.sentMs == 0 || now-wo.sentMs <= staleAckTimeoutMs {
+			continue
+		}
+		wo.state = quikv1.OrderState_ORDER_STATE_REJECTED
+		wo.done = true
+		stale = append(stale, wo)
+		m.logf("trade: pending order expired (client=%q code=%q): no QUIK order_num in %dms",
+			wo.clientID, wo.code, now-wo.sentMs)
+	}
+	m.mu.Unlock()
+	return stale
 }
 
 // ---- emit helpers ----

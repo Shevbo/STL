@@ -51,6 +51,7 @@ const (
 	ReasonBlocked         RejectReason = "blocked by kill-switch (cleared explicitly)"
 	ReasonCollarHit       RejectReason = "price beyond collar"
 	ReasonNoWorkingOrder  RejectReason = "no working order to move (not yet acknowledged by QUIK)"
+	ReasonStalePending    RejectReason = "expired: QUIK gave no order number (timed out); freed from working set"
 )
 
 // Guard tracks per-day placement counts and resting quantity so the cap and the
