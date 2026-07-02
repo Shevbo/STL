@@ -53,6 +53,23 @@
   // confirm dialog
   let confirming = $state(false);
 
+  // client_ids whose cancel was sent and not yet confirmed terminal by QUIK. Drives the
+  // per-row cancel button into a disabled "снимаю…" state so it cannot be double-clicked.
+  let cancelling = $state<Set<string>>(new Set());
+  const WORKING_STATES = new Set(['pending', 'active', 'partial']);
+  // Clear the cancelling flag once the order leaves the working states (cancelled /
+  // filled / rejected / expired) or drops off the list — the cancel took effect.
+  $effect(() => {
+    if (!cancelling.size) return;
+    let changed = false;
+    const next = new Set(cancelling);
+    for (const id of cancelling) {
+      const o = orders.find((x) => x.client_id === id);
+      if (!o || !WORKING_STATES.has(o.state)) { next.delete(id); changed = true; }
+    }
+    if (changed) cancelling = next;
+  });
+
   // 1b maker execution
   let execSide = $state<'buy' | 'sell'>('sell');
   let execQty = $state<number>(1);
@@ -163,6 +180,16 @@
   }
 
   async function cancelOrder(o: OrderRow) {
+    if (cancelling.has(o.client_id)) return;   // already sent — ignore repeat clicks
+    cancelling = new Set(cancelling).add(o.client_id);
+    msg = 'Снятие отправлено, ждём подтверждение QUIK…';
+    // Safety net: if no terminal update arrives, release the button after 15s so it never
+    // sticks disabled (the order stays visible with its real state either way).
+    setTimeout(() => {
+      if (cancelling.has(o.client_id)) {
+        const next = new Set(cancelling); next.delete(o.client_id); cancelling = next;
+      }
+    }, 15000);
     try {
       const r = await fetch('/api/v1/quik/orders/cancel', {
         method: 'POST',
@@ -171,9 +198,16 @@
         body: JSON.stringify({ client_id: o.client_id, order_id: o.order_id }),
       });
       const j = await r.json().catch(() => ({}));
-      if (!r.ok) { msg = j.detail ?? 'Отмена отклонена.'; return; }
-      await loadTables();
-    } catch (e) { msg = 'Ошибка отмены: ' + e; }
+      if (!r.ok) {
+        const next = new Set(cancelling); next.delete(o.client_id); cancelling = next;
+        msg = 'Снятие отклонено: ' + (j.detail ?? '(без причины)');
+        return;
+      }
+      await loadTables();   // the $effect clears the flag when the order goes terminal
+    } catch (e) {
+      const next = new Set(cancelling); next.delete(o.client_id); cancelling = next;
+      msg = 'Ошибка отмены: ' + e;
+    }
   }
 
   async function startExecution() {
@@ -368,7 +402,12 @@
             <td>{o.order_id}</td>
             <td>
               {#if o.state === 'active' || o.state === 'partial' || o.state === 'pending'}
-                <button class="x" onclick={() => cancelOrder(o)} disabled={!tradingOn}>×</button>
+                <button class="x" class:pending={cancelling.has(o.client_id)}
+                        title={cancelling.has(o.client_id) ? 'Снятие отправлено, ждём QUIK' : 'Снять заявку'}
+                        onclick={() => cancelOrder(o)}
+                        disabled={!tradingOn || cancelling.has(o.client_id)}>
+                  {cancelling.has(o.client_id) ? '…' : '×'}
+                </button>
               {/if}
             </td>
           </tr>
@@ -496,8 +535,13 @@
   .empty { opacity: 0.5; text-align: center; }
   .x {
     background: transparent; color: #f44336; border: 1px solid #5a2020;
-    border-radius: 3px; cursor: pointer; padding: 0 6px;
+    border-radius: 3px; cursor: pointer; padding: 0 6px; min-width: 22px;
   }
+  .x.pending {
+    color: #ffb300; border-color: #5a4a20; cursor: progress;
+    animation: xblink 1s ease-in-out infinite;
+  }
+  @keyframes xblink { 0%,100% { opacity: 0.5; } 50% { opacity: 1; } }
   .overlay {
     position: fixed; inset: 0; background: rgba(0, 0, 0, 0.6);
     display: flex; align-items: center; justify-content: center; z-index: 1000;

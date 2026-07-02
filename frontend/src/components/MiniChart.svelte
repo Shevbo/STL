@@ -34,21 +34,27 @@
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let series: any = null;
   let ready = $state(false);
+  let loading = $state(true);   // true until the first bars are drawn (shows an overlay)
+  let failed = $state(false);   // fetch returned nothing → show a retry hint
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let bars: any[] = [];
   let lastClose = $state<number | null>(null);
 
   let quote = $derived(quotesStore.get(symbol));
 
-  async function loadHistory() {
+  async function loadHistory(attempt = 0) {
+    loading = true; failed = false;
     try {
       const tfName = TF_NAMES[tf] ?? 'TIME_FRAME_M5';
       const r = await fetchWithAuth(
         `/api/v1/chart/bars?symbol=${encodeURIComponent(symbol)}&tf=${tfName}`,
       );
-      if (!r.ok) return;
-      const data = await r.json();
-      if (!Array.isArray(data) || !data.length) return;
+      const data = r.ok ? await r.json() : null;
+      if (!Array.isArray(data) || !data.length) {
+        // No data yet (slow Finam / transient): retry a couple of times, then show a hint.
+        if (attempt < 3) { setTimeout(() => loadHistory(attempt + 1), 1500); return; }
+        loading = false; failed = true; return;
+      }
       bars = data.map((b: Record<string, number>) => ({
         time: b.time, open: b.open, high: b.high, low: b.low, close: b.close,
       }));
@@ -57,7 +63,11 @@
         chart.timeScale().fitContent();
         lastClose = bars[bars.length - 1].close;
       }
-    } catch { /* ignore transient */ }
+      loading = false; failed = false;
+    } catch {
+      if (attempt < 3) { setTimeout(() => loadHistory(attempt + 1), 1500); return; }
+      loading = false; failed = true;
+    }
   }
 
   // nudge the last candle's close from the live quote (same as the main chart)
@@ -95,7 +105,11 @@
     });
     ready = true;
     const ro = new ResizeObserver(() => {
-      if (chart && el) chart.applyOptions({ width: el.clientWidth, height: el.clientHeight });
+      if (!chart || !el) return;
+      chart.applyOptions({ width: el.clientWidth, height: el.clientHeight });
+      // The chart may have been created before the grid cell had its final size (0 →
+      // fallback), which framed the candles into the wrong box; reframe once sized.
+      if (bars.length) chart.timeScale().fitContent();
     });
     ro.observe(el);
     roRef = ro;
@@ -123,7 +137,13 @@
     {/if}
     {#if lastClose !== null}<span class="mc-px">{lastClose.toLocaleString('ru-RU')}</span>{/if}
   </div>
-  <div class="mc-chart" bind:this={el}></div>
+  <div class="mc-chart" bind:this={el}>
+    {#if loading}
+      <div class="mc-ov"><span class="mc-spin"></span> загрузка…</div>
+    {:else if failed}
+      <button class="mc-ov mc-retry" onclick={() => loadHistory()}>нет данных · повторить</button>
+    {/if}
+  </div>
 </div>
 
 <style>
@@ -144,4 +164,16 @@
   .mc-badge.short { background: #f44336; }
   .mc-px { margin-left: auto; color: #cde; font-size: 11px; }
   .mc-chart { flex: 1; min-height: 0; position: relative; }
+  .mc-ov {
+    position: absolute; inset: 0; z-index: 2; display: flex; gap: 6px;
+    align-items: center; justify-content: center; font-size: 11px; color: #778;
+    background: #0f0f1ecc; border: none; font-family: inherit;
+  }
+  .mc-retry { cursor: pointer; color: #9ab; }
+  .mc-retry:hover { color: #cde; }
+  .mc-spin {
+    width: 12px; height: 12px; border-radius: 50%;
+    border: 2px solid #2d2d4a; border-top-color: #6aa8ff; animation: mcspin 0.8s linear infinite;
+  }
+  @keyframes mcspin { to { transform: rotate(360deg); } }
 </style>
