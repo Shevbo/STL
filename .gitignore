@@ -41,3 +41,6 @@ poetry.lock
 
 # Root npm lockfile (accidental)
 /package-lock.json
+
+# harness scratch (agent working notes)
+.harness/notes/

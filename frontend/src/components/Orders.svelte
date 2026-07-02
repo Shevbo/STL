@@ -42,6 +42,8 @@
   let cfg = $state<Cfg | null>(null);
   let orders = $state<OrderRow[]>([]);
   let execs = $state<ExecRow[]>([]);
+  // agent link + channel diagnostics for the preflight readiness strip (from /status)
+  let agentStatus = $state<any>(null);
   let msg = $state<string>('');
 
   // ticket fields
@@ -95,6 +97,23 @@
     !!agentWl && JSON.stringify(norm(cfg?.instrument_whitelist ?? [])) === JSON.stringify(norm(agentWl)),
   );
 
+  // Preflight readiness: the whole trading chain in one strip, so an operator sees
+  // go/no-go at a glance instead of chasing signals across screens. ChannelState UP = 1.
+  let greenAgent = $derived((agentStatus?.agents ?? []).find((a: any) => a.link === 'green') ?? null);
+  let preflight = $derived.by(() => {
+    const diag = greenAgent?.diagnostics ?? {};
+    const al = cfg?.agent_limits ?? null;
+    return [
+      { label: 'Агент', ok: !!greenAgent, hint: greenAgent ? 'link green' : 'нет green-агента' },
+      { label: 'DDE', ok: diag.dde === 1, hint: 'канал данных QUIK' },
+      { label: 'QUIK', ok: diag.quik === 1, hint: 'терминал QUIK' },
+      { label: 'Whitelist', ok: whitelistSynced, hint: 'STL = агент' },
+      { label: 'Флаг STL', ok: !!cfg?.trading_enabled, hint: 'quik_trading_enabled' },
+      { label: 'Флаг агента', ok: !!al?.trading_enabled, hint: 'agent_config трейд-флаг' },
+    ];
+  });
+  let readyToTrade = $derived(preflight.length > 0 && preflight.every((c) => c.ok));
+
   // Live (maker) estimate: limit order resting in the book → broker fee only.
   let notional = $derived(price * qty);
   let makerFee = $derived(code ? commissionFor(code, price, qty, 1, false) : 0);
@@ -112,12 +131,14 @@
 
   async function loadTables() {
     try {
-      const [ro, re] = await Promise.all([
+      const [ro, re, st] = await Promise.all([
         fetch('/api/v1/quik/orders/working', { credentials: 'include' }),
         fetch('/api/v1/quik/orders/executions', { credentials: 'include' }),
+        fetch('/api/v1/quik/status', { credentials: 'include' }),
       ]);
       if (ro.ok) orders = (await ro.json()).orders ?? [];
       if (re.ok) execs = (await re.json()).executions ?? [];
+      if (st.ok) agentStatus = await st.json();
     } catch (_) { /* keep previous */ }
   }
 
@@ -362,6 +383,14 @@
   </div>
 
   {#if cfg}
+    <div class="preflight" class:ready={readyToTrade}>
+      <span class="pf-verdict">{readyToTrade ? '✓ ГОТОВ к торговле' : '⚠ НЕ готов'}</span>
+      {#each preflight as c}
+        <span class="pf-chip" class:ok={c.ok} class:bad={!c.ok} title={c.hint}>
+          <span class="pf-dot">{c.ok ? '●' : '○'}</span>{c.label}
+        </span>
+      {/each}
+    </div>
     <div class="limits">
       макс/заявка: {cfg.max_contracts_per_order} ·
       макс в работе: {cfg.max_working_contracts} ·
@@ -517,6 +546,17 @@
   .exec-lbl { align-self: center; font-size: 11px; font-weight: 600; opacity: 0.8; color: #9ab; }
   .limits { padding: 2px 8px; font-size: 11px; opacity: 0.6; }
   .sync { padding: 0 8px 3px; font-size: 11px; opacity: 0.85; }
+  .preflight {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+    padding: 4px 8px; font-size: 11px; border-bottom: 1px solid #23233f;
+  }
+  .pf-verdict { font-weight: 700; color: #ff6b6b; }
+  .preflight.ready .pf-verdict { color: #4caf50; }
+  .pf-chip { display: inline-flex; align-items: center; gap: 3px; color: #889; }
+  .pf-chip.ok .pf-dot { color: #4caf50; }
+  .pf-chip.bad { color: #ff6b6b; }
+  .pf-chip.bad .pf-dot { color: #ff6b6b; }
+  .pf-dot { font-size: 9px; }
   .sync-dot { font-size: 10px; }
   .sync-dot.ok { color: #4caf50; }
   .sync-dot.warn { color: #ff6b6b; }
