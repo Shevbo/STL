@@ -65,7 +65,15 @@
     const next = new Set(cancelling);
     for (const id of cancelling) {
       const o = orders.find((x) => x.client_id === id);
-      if (!o || !WORKING_STATES.has(o.state)) { next.delete(id); changed = true; }
+      if (!o || !WORKING_STATES.has(o.state)) {
+        next.delete(id); changed = true;
+        // Replace the "ждём подтверждение" line with the actual outcome.
+        msg = !o || o.state === 'cancelled'
+          ? 'Заявка снята.'
+          : o.state === 'filled'
+            ? 'Заявка исполнилась до снятия.'
+            : 'Снятие: заявка ' + o.state + '.';
+      }
     }
     if (changed) cancelling = next;
   });
@@ -188,6 +196,7 @@
     setTimeout(() => {
       if (cancelling.has(o.client_id)) {
         const next = new Set(cancelling); next.delete(o.client_id); cancelling = next;
+        msg = 'Снятие: нет подтверждения QUIK за 15с — проверь терминал.';
       }
     }, 15000);
     try {
