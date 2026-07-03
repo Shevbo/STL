@@ -305,17 +305,24 @@
     const ts = tvCandle.timeScale();
     const px = p.point.x, py = p.point.y;
 
-    // 1) trade triangle near the cursor (x within 9px, y within 14px)?
-    let best: any = null, bestDx = Infinity;
+    // 1) nearest trade triangle to the cursor in BOTH axes. Many fills land on one bar
+    // (arrows stack at the same X); the old X-only pick returned a NEIGHBOUR's event, so
+    // the tooltip's side/price/time disagreed with the trade log. Score by dx+dy within
+    // thresholds so the arrow actually under the cursor wins.
+    let best: any = null, bestScore = Infinity, bestMy: number | null = null;
     for (const m of markIndex) {
       const mx = ts.timeToCoordinate(m.time);
       if (mx == null) continue;
       const dx = Math.abs(mx - px);
-      if (dx < bestDx) { bestDx = dx; best = m; }
+      if (dx > 9) continue;
+      const my = candleSeries.priceToCoordinate(m.price);
+      if (my == null) continue;
+      const dy = Math.abs(my - py);
+      if (dy > 14) continue;
+      const score = dx + dy;
+      if (score < bestScore) { bestScore = score; best = m; bestMy = my; }
     }
-    if (best && bestDx <= 9) {
-      const my = candleSeries.priceToCoordinate(best.price);
-      if (my != null && Math.abs(my - py) <= 14) {
+    if (best) {
         let head: string, headKind: 'tp' | 'sl' | 'neutral' = 'neutral';
         const lines: string[] = [];
         if (best.close) {
@@ -334,9 +341,8 @@
           lines.push(`${best.side === 'buy' ? 'Покупка' : 'Продажа'} @ ${Math.round(best.price).toLocaleString('ru-RU')}`);
           lines.push(fmtTs(best.rawTime));
         }
-        tip = { x: ts.timeToCoordinate(best.time) ?? px, y: my, head, headKind, lines };
+        tip = { x: ts.timeToCoordinate(best.time) ?? px, y: bestMy ?? py, head, headKind, lines };
         return;
-      }
     }
 
     // 2) order / planned price line near the cursor (y within 6px)?
