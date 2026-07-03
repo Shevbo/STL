@@ -519,6 +519,12 @@
         });
         equitySeries.applyOptions({ baseValue: { type: 'price', price: base } });
         equitySeries.setData(aligned);
+      } else if (bars.length) {
+        // No trades yet (a fresh / just-launched LIVE robot): draw a FLAT baseline across
+        // the candle times so the equity pane — which carries the shared VISIBLE time axis
+        // — still renders. An empty series left the WHOLE chart with no time axis at all.
+        equitySeries.applyOptions({ baseValue: { type: 'price', price: 100000 } });
+        equitySeries.setData(bars.map(b => ({ time: b.time as number, value: 100000 })));
       } else {
         equitySeries.setData([]);
       }
@@ -579,7 +585,7 @@
       const buy = o.side === 'buy';
       orderPriceLines.push(candleSeries.createPriceLine({
         price: o.price, color: buy ? BUY_COLOR : SELL_COLOR, lineWidth: 2, lineStyle: 0,
-        axisLabelVisible: false, title: '',
+        axisLabelVisible: true, title: `заявка ${buy ? 'BUY' : 'SELL'}${o.qty ? ' ' + o.qty : ''}`,
       }));
       lineIndex.push({ price: o.price, text: `Заявка ${buy ? 'BUY' : 'SELL'} ${o.qty || ''} @ ${Math.round(o.price).toLocaleString('ru-RU')}`.trim() });
     }
@@ -587,7 +593,7 @@
       const buy = o.side === 'buy';
       orderPriceLines.push(candleSeries.createPriceLine({
         price: o.price, color: buy ? BUY_COLOR : SELL_COLOR, lineWidth: 1, lineStyle: 1,  // dotted = plan
-        axisLabelVisible: false, title: '',
+        axisLabelVisible: true, title: `план ${buy ? 'BUY' : 'SELL'}`,
       }));
       const why = (o as any).reason ? ` — ${(o as any).reason}` : '';
       lineIndex.push({ price: o.price, text: `План ${buy ? 'BUY' : 'SELL'} ${o.qty || ''} @ ${Math.round(o.price).toLocaleString('ru-RU')}${why}`.trim() });

@@ -200,18 +200,26 @@
     URL.revokeObjectURL(url);
   }
 
-  async function load() {
-    loading = true; error = '';
+  async function load(silent = false) {
+    if (!silent) loading = true;
+    if (!silent) error = '';
     try {
       const res = await fetchWithAuth(`/api/v1/robots/${robotId}/live`);
       if (!res.ok) throw new Error(await res.text());
-      live = await res.json();
-    } catch (e) { error = String(e); }
-    loading = false;
+      live = await res.json();          // reassign → chart + tables + stats re-derive
+    } catch (e) { if (!silent) error = String(e); }
+    if (!silent) loading = false;
   }
 
   function onKey(e: KeyboardEvent) { if (e.key === 'Escape') onClose(); }
-  onMount(load);
+  // Live refresh: while the robot is deployed, silently re-pull its state so the screen
+  // "moves" (new candles / fills / position / equity) without a manual reload.
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
+  onMount(() => {
+    load();
+    pollTimer = setInterval(() => { if (live?.robot?.deployed) load(true); }, 15000);
+    return () => { if (pollTimer) clearInterval(pollTimer); };
+  });
 </script>
 
 <svelte:window onkeydown={onKey} />
