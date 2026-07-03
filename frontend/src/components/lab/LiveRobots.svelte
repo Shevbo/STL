@@ -4,13 +4,14 @@
   import RobotEditor from './RobotEditor.svelte';
   import RobotWindow from './RobotWindow.svelte';
   import Showcase from './Showcase.svelte';
+  import LiveScreen from './LiveScreen.svelte';
 
   let robots = $state<any[]>([]);
   let selected = $state<any | null>(null);
   let loading = $state(true);
   let mode = $state<'list' | 'edit' | 'new'>('list');
   let windowRobotId = $state<string | null>(null);  // dbl-click → detail window
-  let view = $state<'robots' | 'showcase'>('robots');
+  let view = $state<'robots' | 'showcase' | 'live'>('robots');
 
   async function load() {
     loading = true;
@@ -55,9 +56,14 @@
   <div class="tab-bar">
     <button class="tab-btn" class:active={view === 'robots'} onclick={() => view = 'robots'}>Роботы</button>
     <button class="tab-btn showcase-tab" class:active={view === 'showcase'} onclick={() => view = 'showcase'}>Витрина</button>
+    <button class="tab-btn live-tab" class:active={view === 'live'} onclick={() => view = 'live'}>LIVE</button>
   </div>
 
-  {#if view === 'showcase'}
+  {#if view === 'live'}
+    <div class="showcase-wrap">
+      <LiveScreen onOpen={(id) => windowRobotId = id} />
+    </div>
+  {:else if view === 'showcase'}
     <div class="showcase-wrap">
       <Showcase />
     </div>
@@ -194,6 +200,7 @@
   .tab-btn:hover { color: #aaa; }
   .tab-btn.active { color: #ccc; border-bottom-color: #4caf50; }
   .showcase-tab.active { border-bottom-color: #00e676; color: #00e676; }
+  .live-tab.active { border-bottom-color: #ff5252; color: #ff5252; }
 
   /* Robots tab inner layout */
   .showcase-wrap { flex: 1; min-height: 0; overflow: hidden; }

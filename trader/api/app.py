@@ -1,6 +1,7 @@
 import asyncio
 import hmac
 import os
+import time
 from contextlib import asynccontextmanager
 
 import httpx
@@ -153,6 +154,16 @@ async def lifespan(app: FastAPI):
     app.state.account_id = account_id
     app.state.scheduler = scheduler
     app.state.db_pool = db_pool
+
+    # Exchange-latency monitor: probes the Finam gateway every 5s over the SAME HTTP/2
+    # transport orders use, so the LIVE screen can show an objective ping + history.
+    from trader.latency import LatencyMonitor
+    latency_monitor = LatencyMonitor(
+        base_url=settings.finam_api_base_url,
+        get_token=auth.get_token,
+        db_pool=db_pool,
+    )
+    app.state.latency = latency_monitor
 
     # QUIK agent link (sprint02 Phase 1, read-only data source + status). Off by
     # default: a plain deploy does not open the gRPC port until QUIK_AGENT_ENABLED.
@@ -312,6 +323,8 @@ async def lifespan(app: FastAPI):
     # QUIK order reconciliation (СВЕРКА): expire phantom placements QUIK never acked and
     # fire a best-effort cancel so STL never shows an order the broker does not have.
     quik_reconcile_task = asyncio.create_task(_quik_order_reconcile(app.state))
+    # Exchange-latency sampler (5s clock probe -> in-memory ring + latency_samples table).
+    latency_task = asyncio.create_task(latency_monitor.run())
 
     yield
 
@@ -319,6 +332,8 @@ async def lifespan(app: FastAPI):
     reaper_task.cancel()
     task_fallback_task.cancel()
     quik_reconcile_task.cancel()
+    latency_task.cancel()
+    await latency_monitor.aclose()
 
     if ai46 is not None:
         await ai46.stop()
@@ -2028,6 +2043,29 @@ def create_app() -> FastAPI:
                 "trades": trades,
             })
         return result
+
+    @fastapi_app.get("/api/v1/live/latency")
+    async def live_latency(request: Request, minutes: int = 180):
+        """Exchange-link latency history for the LIVE screen: the objective RTT plus the
+        outbound/inbound split (T1 send, T2 = server clock, T3 receive) and a rolling
+        clock-offset estimate so the split can be shown offset-corrected."""
+        _auth(request)
+        from trader.latency import SAMPLE_INTERVAL_S, summarize
+        mon = getattr(request.app.state, "latency", None)
+        if mon is None:
+            return {"link": "finam", "interval_s": SAMPLE_INTERVAL_S,
+                    "theta_ms": 0.0, "summary": {}, "samples": []}
+        minutes = max(1, min(minutes, 60 * 24 * 7))   # clamp to a week
+        since = time.time() - minutes * 60
+        samples = await mon.history(since)
+        summ = summarize(samples)
+        return {
+            "link": "finam",
+            "interval_s": SAMPLE_INTERVAL_S,
+            "theta_ms": summ.get("theta_ms", 0.0),
+            "summary": summ,
+            "samples": samples,
+        }
 
     @fastapi_app.get("/api/v1/robots/live-feed")
     async def robots_live_feed(request: Request, limit: int = 100):

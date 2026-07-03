@@ -12,6 +12,7 @@
   import { fetchWithAuth } from '../../lib/fetch-auth';
   import { toFills, rolledPnl } from '../../lib/lab-analytics';
   import BacktestChart from './BacktestChart.svelte';
+  import LatencyPane from './LatencyPane.svelte';
 
   let { robotId, onClose }: { robotId: string; onClose: () => void } = $props();
 
@@ -264,6 +265,11 @@
           />
         </div>
 
+        <!-- exchange-latency history, aligned under the price chart's time axis -->
+        <div class="lat-wrap">
+          <LatencyPane minutes={360} />
+        </div>
+
         <!-- drag handle: resize chart vs tables -->
         <div class="rw-hsplit" title="Потяните — высота графика" onpointerdown={(e) => startDrag('chart', e)}></div>
 
@@ -412,6 +418,7 @@
 
   .win-body { flex: 1; display: flex; flex-direction: column; min-height: 0; }
   .chart-wrap { flex: 0 0 62%; min-height: 0; }
+  .lat-wrap { flex: 0 0 134px; min-height: 0; border-top: 1px solid #1a1a2e; }
 
   .win-bottom { flex: 1 1 0; display: flex; min-height: 0; }
 
