@@ -1,0 +1,133 @@
+import json
+
+import pytest
+
+from robot_runner.host import RobotHost
+
+
+class FakeBridge:
+    def __init__(self):
+        self.placed = []
+        self.reports = []
+
+    async def place_order(self, **kw):
+        self.placed.append(kw)
+
+    async def report_status(self, r):
+        self.reports.append(r)
+
+
+def _deploy_rc(robot_id="r1", strategy="fvg", paper=True):
+    """Duck-typed RunnerControl stand-in for handle_control."""
+    class Spec:
+        pass
+    spec = Spec()
+    spec.robot_id = robot_id
+    spec.strategy_id = strategy
+    spec.params_json = json.dumps({"symbol": "RIU6", "qty": 1, "min_frac": 12,
+                                   "tp_atr": 60, "avg_max": 1, "avg_atr_n": 5,
+                                   "avg_step_atr": 24})
+    spec.symbol = "RIU6"
+    spec.schedule = "00:00-23:59"
+    spec.max_position_contracts = 1
+    spec.paper = paper
+
+    class Deploy:
+        pass
+    d = Deploy()
+    d.spec = spec
+
+    class RC:
+        deploy = d
+
+        def WhichOneof(self, _):
+            return "deploy"
+    return RC()
+
+
+@pytest.mark.asyncio
+async def test_deploy_creates_robot_and_persists(tmp_path):
+    host = RobotHost(FakeBridge(), str(tmp_path))
+    await host.handle_control(_deploy_rc())
+    assert "r1" in host.robots
+    assert host.robots["r1"].spec["strategy_id"] == "fvg"
+    assert (tmp_path / "runner_state.json").exists()
+
+    # a second host instance resumes the robot's saved runtime state
+    host.robots["r1"].runtime.set_state("trend", "up")
+    host.robots["r1"].runtime.restore(position=1, avg=89000.0, realized=50.0)
+    host.persist()
+    host2 = RobotHost(FakeBridge(), str(tmp_path))
+    await host2.handle_control(_deploy_rc())
+    r2 = host2.robots["r1"]
+    assert r2.runtime.get_state("trend") == "up"
+    assert r2.runtime.signed_position() == 1
+    assert r2.runtime.realized_pnl() == 50.0
+
+
+@pytest.mark.asyncio
+async def test_tick_runs_strategy_once_per_closed_bar(tmp_path):
+    host = RobotHost(FakeBridge(), str(tmp_path))
+    await host.handle_control(_deploy_rc())
+    r = host.robots["r1"]
+    t0 = 1_751_500_000_000
+    # feed enough 1-min closed bars for FVG warmup
+    for i in range(10):
+        r.bars.on_tick(t0 + i * 60_000, 89_000 + i * 30)
+    ran = await host.tick_robot(r)   # True when on_bar executed
+    assert ran is True
+    assert r.last_bar_run == r.bars.last_bar_time
+    assert r.last_error == ""        # strategy ran clean (warmup path included)
+    # same bar -> no rerun (one on_bar per closed bar, backtest parity)
+    assert await host.tick_robot(r) is False
+    # new closed bar -> runs again
+    r.bars.on_tick(t0 + 10 * 60_000, 89_400)
+    r.bars.on_tick(t0 + 11 * 60_000, 89_500)
+    assert await host.tick_robot(r) is True
+
+
+@pytest.mark.asyncio
+async def test_kill_switch_pauses_everything_and_start_clears(tmp_path):
+    host = RobotHost(FakeBridge(), str(tmp_path))
+    await host.handle_control(_deploy_rc())
+    r = host.robots["r1"]
+    r.bars.on_tick(1_751_500_000_000, 89_000)
+    r.bars.on_tick(1_751_500_060_000, 89_100)
+
+    class Kill:
+        reason = "test"
+
+    class KillRC:
+        kill = Kill()
+
+        def WhichOneof(self, _):
+            return "kill"
+    await host.handle_control(KillRC())
+    assert host.killed is True
+    assert await host.tick_robot(r) is False
+
+    class Start:
+        robot_id = "r1"
+
+    class StartRC:
+        start = Start()
+
+        def WhichOneof(self, _):
+            return "start"
+    await host.handle_control(StartRC())
+    assert host.killed is False
+
+
+@pytest.mark.asyncio
+async def test_status_report_shape(tmp_path):
+    host = RobotHost(FakeBridge(), str(tmp_path))
+    await host.handle_control(_deploy_rc())
+    host.robots["r1"].runtime._apply_fill("buy", 1, 89000.0, symbol="RIU6")
+    rep = host.status_report()
+    assert len(rep.robots) == 1
+    st = rep.robots[0]
+    assert st.robot_id == "r1"
+    assert st.position == 1
+    assert st.running is True
+    assert len(st.recent_fills) == 1
+    assert st.recent_fills[0].price == 89000.0

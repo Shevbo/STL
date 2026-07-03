@@ -1,0 +1,200 @@
+"""RobotHost — schedules deployed robots, relays control, reports status.
+
+One on_bar per CLOSED 1-min bar per robot (backtest parity: the strategy sees
+the same bar cadence the backtester replays). Local persistence is the source
+of truth: specs live in the agent's robots.json (replayed as Deploy on every
+control-stream connect); runtime state (strategy state dict, position, avg,
+realized P&L) lives in <data_dir>/runner_state.json, written atomically.
+"""
+
+import asyncio
+import json
+import os
+import time
+from datetime import datetime
+
+import structlog
+
+from trader.lab.scheduler import _MSK, _parse_window, _within_window
+from trader.lab.strategies.library import make_on_bar
+from trader.quik.pb.shectory.quik.v1 import quik_agent_pb2 as pb
+
+from robot_runner.bars import BarBuilder
+from robot_runner.runtime import AgentRuntime
+
+log = structlog.get_logger()
+
+STATUS_INTERVAL_S = 15.0
+
+
+class HostedRobot:
+    def __init__(self, spec: dict, runtime: AgentRuntime, bars: BarBuilder) -> None:
+        self.spec = spec
+        self.runtime = runtime
+        self.bars = bars
+        self.paused = False
+        self.last_bar_run = 0        # newest closed-bar time already executed
+        self.on_bar = make_on_bar(spec["strategy_id"])
+        self.window = _parse_window(spec.get("schedule"))
+        self.last_error = ""
+
+
+class RobotHost:
+    def __init__(self, bridge, data_dir: str) -> None:
+        self._bridge = bridge
+        self._data_dir = data_dir
+        self._state_path = os.path.join(data_dir, "runner_state.json")
+        self.robots: dict[str, HostedRobot] = {}
+        self.killed = False
+        self._saved = self._load()
+
+    # ---- persistence ----
+
+    def _load(self) -> dict:
+        try:
+            with open(self._state_path, encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return {}
+
+    def persist(self) -> None:
+        out = {}
+        for rid, r in self.robots.items():
+            out[rid] = {"state": r.runtime.state,
+                        "position": r.runtime.signed_position(),
+                        "avg": r.runtime.avg_price(),
+                        "realized": r.runtime.realized_pnl()}
+        # keep saved state for robots not currently deployed (undeploy != wipe)
+        for rid, saved in self._saved.items():
+            out.setdefault(rid, saved)
+        tmp = self._state_path + ".tmp"
+        os.makedirs(self._data_dir, exist_ok=True)
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(out, f)
+        os.replace(tmp, self._state_path)
+        self._saved = out
+
+    # ---- control ----
+
+    async def handle_control(self, rc) -> None:
+        kind = rc.WhichOneof("payload") if hasattr(rc, "WhichOneof") else None
+        if kind == "deploy":
+            spec_pb = rc.deploy.spec
+            spec = {
+                "robot_id": spec_pb.robot_id,
+                "strategy_id": spec_pb.strategy_id,
+                "params": json.loads(spec_pb.params_json or "{}"),
+                "symbol": spec_pb.symbol,
+                "schedule": spec_pb.schedule,
+                "max_position": int(spec_pb.max_position_contracts or 1),
+                "paper": bool(spec_pb.paper),
+            }
+            saved = self._saved.get(spec["robot_id"], {})
+            # keep accumulated bars across a re-deploy (params change, STL reconnect)
+            bars = (self.robots[spec["robot_id"]].bars
+                    if spec["robot_id"] in self.robots else BarBuilder())
+            rt = AgentRuntime(spec["robot_id"], self._bridge, bars,
+                              max_position=spec["max_position"],
+                              paper=spec["paper"], state=saved.get("state"))
+            rt.restore(position=saved.get("position", 0),
+                       avg=saved.get("avg", 0.0),
+                       realized=saved.get("realized", 0.0))
+            self.robots[spec["robot_id"]] = HostedRobot(spec, rt, bars)
+            log.info("host.deployed", robot_id=spec["robot_id"],
+                     strategy=spec["strategy_id"], paper=spec["paper"],
+                     max_position=spec["max_position"])
+            self.persist()
+        elif kind == "undeploy":
+            self.robots.pop(rc.undeploy.robot_id, None)
+            self.persist()
+        elif kind == "set_params":
+            r = self.robots.get(rc.set_params.robot_id)
+            if r is not None:
+                r.spec["params"] = json.loads(rc.set_params.params_json or "{}")
+                log.info("host.params_updated", robot_id=rc.set_params.robot_id)
+        elif kind == "pause":
+            r = self.robots.get(rc.pause.robot_id)
+            if r is not None:
+                r.paused = True
+        elif kind == "start":
+            r = self.robots.get(rc.start.robot_id)
+            if r is not None:
+                r.paused = False
+            self.killed = False   # an explicit start clears a kill
+        elif kind == "kill":
+            self.killed = True    # block all new orders; agent cancels working ones
+            log.warning("host.kill_switch", reason=getattr(rc.kill, "reason", ""))
+
+    # ---- scheduling ----
+
+    async def tick_robot(self, r: HostedRobot) -> bool:
+        """Run on_bar once if there is a NEW closed bar, inside the window, not
+        paused/killed. Returns True when the strategy executed."""
+        if self.killed or r.paused:
+            return False
+        if not _within_window(datetime.now(_MSK), *r.window):
+            return False
+        last = r.bars.last_bar_time
+        if last == 0 or last == r.last_bar_run:
+            return False
+        try:
+            await r.on_bar(r.runtime, r.spec["params"])
+            r.last_error = ""
+        except Exception as exc:  # noqa: BLE001 — one robot's error never kills the host
+            r.last_error = str(exc)
+            log.error("host.on_bar_failed", robot_id=r.spec["robot_id"], error=str(exc))
+        r.last_bar_run = last
+        self.persist()
+        return True
+
+    def status_report(self) -> pb.RobotStatusReport:
+        robots = []
+        for rid, r in self.robots.items():
+            fills = [pb.RobotFill(
+                order_id=f["order_id"],
+                symbol=f["symbol"] or r.spec["symbol"],
+                side=pb.SIDE_BUY if f["side"] == "buy" else pb.SIDE_SELL,
+                qty=f["qty"], price=f["price"], status=f["status"],
+                ts_unix_ms=f["ts_ms"]) for f in r.runtime.recent_fills()]
+            robots.append(pb.RobotStatus(
+                robot_id=rid, running=not (self.killed or r.paused), paused=r.paused,
+                position=r.runtime.signed_position(), avg_price=r.runtime.avg_price(),
+                realized_pnl=r.runtime.realized_pnl(),
+                last_bar_unix=r.bars.last_bar_time,
+                heartbeat_unix_ms=int(time.time() * 1000),
+                recent_fills=fills, note=r.last_error))
+        return pb.RobotStatusReport(robots=robots,
+                                    sent_at_unix_ms=int(time.time() * 1000))
+
+    # ---- main loop ----
+
+    async def run(self) -> None:
+        async def consume_control():
+            async for rc in self._bridge.control("robot-runner/1"):
+                await self.handle_control(rc)
+
+        async def consume_ticks():
+            async for t in self._bridge.ticks([]):
+                for r in self.robots.values():
+                    if r.spec["symbol"] == t.code:
+                        r.bars.on_tick(t.received_at_unix_ms, t.last)
+
+        async def consume_events():
+            async for u in self._bridge.order_events("rr:"):
+                for r in self.robots.values():
+                    r.runtime.on_order_event(u)
+                self.persist()
+
+        async def schedule():
+            while True:
+                for r in list(self.robots.values()):
+                    await self.tick_robot(r)
+                await asyncio.sleep(1.0)   # cheap check; on_bar gated by new-closed-bar
+
+        async def report():
+            while True:
+                await self._bridge.report_status(self.status_report())
+                await asyncio.sleep(STATUS_INTERVAL_S)
+
+        await asyncio.gather(consume_control(), consume_ticks(),
+                             consume_events(), schedule(), report())
