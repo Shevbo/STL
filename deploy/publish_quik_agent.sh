@@ -28,10 +28,24 @@ go mod tidy >/dev/null 2>&1 || true
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "-X main.agentBuildRevStr=$REV" -o dist/quik-agent_amd64.exe ./cmd/quik-agent
 CGO_ENABLED=0 GOOS=windows GOARCH=386   go build -ldflags "-X main.agentBuildRevStr=$REV" -o dist/quik-agent.exe ./cmd/quik-agent
 
-# Flat zips: the exe sits at the archive root under its run name.
+# Flat zips: the exe sits at the archive root under its run name. When a bundled
+# robot-runner.exe has been staged into dist/ (built on Windows via
+# deploy/build_runner.sh and uploaded here), ship it in the SAME zip so the
+# agent's self-update delivers both binaries together (zero-touch satellite).
 cd dist
-python3 -c "import zipfile; z=zipfile.ZipFile('amd64.zip','w',zipfile.ZIP_DEFLATED); z.write('quik-agent_amd64.exe'); z.close()"
-python3 -c "import zipfile; z=zipfile.ZipFile('386.zip','w',zipfile.ZIP_DEFLATED); z.write('quik-agent.exe'); z.close()"
+python3 - <<'PYZ'
+import os, zipfile
+def zwrite(zname, names):
+    z = zipfile.ZipFile(zname, 'w', zipfile.ZIP_DEFLATED)
+    for n in names:
+        z.write(n)
+    z.close()
+extra = ['robot-runner.exe'] if os.path.exists('robot-runner.exe') else []
+if not extra:
+    print('[publish] note: dist/robot-runner.exe not staged - shipping agent only')
+zwrite('amd64.zip', ['quik-agent_amd64.exe'] + extra)
+zwrite('386.zip', ['quik-agent.exe'] + extra)
+PYZ
 cd ..
 
 cp dist/amd64.zip "$REL/amd64.zip"; printf '%s' "$REV" > "$REL/amd64.rev"
