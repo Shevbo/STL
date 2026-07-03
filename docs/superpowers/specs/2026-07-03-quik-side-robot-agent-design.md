@@ -125,6 +125,33 @@ closing positions on kill.
 - E2E on the QUIK VDS: paper-flag dry run against live QUIK data before arming real orders
   (even though rollout target is real, the smoke test uses the paper flag).
 
+## Zero-touch startup (no human factor)
+
+Operator requirement: satellite startup around QUIK must be maximally simple — no start
+order to remember, nothing to forget to activate.
+
+- **Single entrypoint.** The Go agent is the ONLY thing that starts. It supervises
+  everything else: launches the robot-runner as a child process, restarts it on crash,
+  verifies QUIK/DDE/bridge, loads persisted robots. One autostart entry on the VDS
+  (Windows service / logon task next to the QUIK terminal autostart) → whole stack up
+  after a reboot with zero manual steps.
+- **Order-independence.** Every link retries until its dependency appears: agent waits for
+  QUIK DDE (already does), runner reconnects to the agent bridge in a loop, agent redials
+  STL in a loop (already does). Starting things in any order — or a component dying and
+  coming back — converges to the same running state.
+- **Idempotent start.** Double-launch is a no-op (single-instance lock). Deployed robots
+  auto-resume from local persisted spec+state — no re-deploy from STL needed after reboot.
+- **Bundled artifact.** The runner ships as a single self-contained exe (PyInstaller-style)
+  published and self-updated ALONGSIDE the agent by `publish_quik_agent.sh` — no Python
+  install, venv, or pip steps on the VDS.
+- **Startup self-check + traffic light.** On start the agent runs a checklist (QUIK alive,
+  DDE alive, Lua bridge ok, runner healthy, robots loaded, master flag state) and reports
+  ONE aggregate readiness status locally (log/console) and to STL when connected. The LIVE
+  screen shows it; a not-ready component is named explicitly (e.g. "bridge: cmd.jsonl not
+  writable") instead of silent degradation.
+- The only deliberate manual act that remains is arming the master trading flag in
+  `agent_config.json` (by design — a human decision, not a startup step).
+
 ## Migration
 
 `live-fvg-RIU6` currently trades the Finam account from STL. Moving it to the agent changes
