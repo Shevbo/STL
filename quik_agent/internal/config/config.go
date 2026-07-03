@@ -89,6 +89,37 @@ type Config struct {
 	InstrumentWhitelist []string `json:"instrument_whitelist"`
 	// DailyOrderCap caps placements per calendar day. Default 50.
 	DailyOrderCap int `json:"daily_order_cap"`
+
+	// ---- Robot hosting (agent-side execution). All optional/additive. ----
+
+	// RunnerExe is an explicit path to the bundled robot-runner exe. Empty =>
+	// <exeDir>\robot-runner.exe when that file exists, else hosting is disabled.
+	RunnerExe string `json:"runner_exe"`
+	// RunnerBridgePort is the loopback gRPC port the agent serves for the runner.
+	RunnerBridgePort int `json:"runner_bridge_port"`
+	// RobotsDataSubdir is the subdirectory (under exeDir) holding robots.json +
+	// runner_state.json. Default "robots".
+	RobotsDataSubdir string `json:"robots_data_subdir"`
+}
+
+// RunnerExePath resolves the runner exe: explicit config path wins; else the
+// default name next to the agent exe; "" (hosting disabled) when neither exists.
+func (c *Config) RunnerExePath(exeDir string) string {
+	if c.RunnerExe != "" {
+		return c.RunnerExe
+	}
+	p := filepath.Join(exeDir, "robot-runner.exe")
+	if _, err := os.Stat(p); err == nil {
+		return p
+	}
+	return ""
+}
+
+// RobotsDataDir returns (and creates) the robot-hosting data directory.
+func (c *Config) RobotsDataDir(exeDir string) string {
+	d := filepath.Join(exeDir, c.RobotsDataSubdir)
+	_ = os.MkdirAll(d, 0o755)
+	return d
 }
 
 // ConfigPath returns the default config path next to the executable.
@@ -143,6 +174,14 @@ func (c *Config) applyDefaults() {
 	}
 	if c.DailyOrderCap <= 0 {
 		c.DailyOrderCap = 50
+	}
+
+	// ---- Robot hosting defaults ----
+	if c.RunnerBridgePort <= 0 {
+		c.RunnerBridgePort = 50071
+	}
+	if c.RobotsDataSubdir == "" {
+		c.RobotsDataSubdir = "robots"
 	}
 }
 

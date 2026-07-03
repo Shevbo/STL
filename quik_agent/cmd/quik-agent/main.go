@@ -31,6 +31,8 @@ import (
 	"shectory/quik_agent/internal/link"
 	"shectory/quik_agent/internal/notify"
 	"shectory/quik_agent/internal/quikdde"
+	"shectory/quik_agent/internal/robots"
+	"shectory/quik_agent/internal/runner"
 	"shectory/quik_agent/internal/selfupdate"
 	"shectory/quik_agent/internal/service"
 	"shectory/quik_agent/internal/trade"
@@ -329,6 +331,63 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 	}()
 	fmt.Printf("  trade:   bridge :%d  enabled=%v  whitelist=%v  (human-initiated only)\n",
 		cfg.TradeBridgePort, cfg.QuikTradingEnabled, cfg.InstrumentWhitelist)
+
+	// ---- Robot hosting: local store + runner bridge + supervised runner ----
+	// Zero-touch: the agent is the SINGLE entrypoint. It persists deployed
+	// RobotSpecs (auto-resume after reboot), serves the loopback bridge, and
+	// supervises the bundled robot-runner exe. STL is optional at runtime.
+	robotStore, rsErr := robots.NewStore(cfg.RobotsDataDir(opt.exeDir))
+	if rsErr != nil {
+		fmt.Println("robots: store error:", rsErr)
+	}
+	if robotStore != nil {
+		runnerSrv := runner.NewServer(runner.ServerCfg{
+			Store: robotStore,
+			Ticks: runner.ProviderTicks{P: quikdde.Default},
+			Orders: mgr, Status: lk,
+			Logf: func(f string, a ...any) { fmt.Printf("runner-bridge: "+f+"\n", a...) },
+		})
+		mgr.SetRunnerFan(runnerSrv.FanOrderEvent)
+		lk.SetRobots(robotStore, runnerSrv)
+		go func() {
+			addr := fmt.Sprintf("127.0.0.1:%d", cfg.RunnerBridgePort)
+			if err := runnerSrv.Serve(ctx, addr); err != nil && ctx.Err() == nil {
+				fmt.Println("runner-bridge:", err)
+			}
+		}()
+		if exe := cfg.RunnerExePath(opt.exeDir); exe != "" {
+			sup := runner.NewSupervisor(runner.SupervisorCfg{
+				Start: runner.ExecStart(exe, []string{
+					"--bridge", fmt.Sprintf("127.0.0.1:%d", cfg.RunnerBridgePort),
+					"--data", cfg.RobotsDataDir(opt.exeDir),
+				}, func(f string, a ...any) { fmt.Printf(f+"\n", a...) }),
+				Logf: func(f string, a ...any) { fmt.Printf("runner-sup: "+f+"\n", a...) },
+			})
+			go sup.Run(ctx)
+			fmt.Printf("  robots:  runner=%s  bridge=127.0.0.1:%d  persisted=%d\n",
+				exe, cfg.RunnerBridgePort, len(robotStore.All()))
+		} else {
+			fmt.Println("  robots:  robot-runner.exe not found — robot hosting disabled")
+		}
+		// Startup self-check traffic light: one aggregate readiness line after the
+		// stack settles, so an operator (or log reader) sees what's up in ONE place.
+		go func() {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(15 * time.Second):
+			}
+			ok := func(b bool) string {
+				if b {
+					return "ok"
+				}
+				return "DOWN"
+			}
+			fmt.Printf("ready: quik=%s dde=%s runner=%s robots=%d trading_enabled=%v\n",
+				ok(quikdde.Alive()), ok(quikdde.Default.LastMutationMs() > 0),
+				ok(runnerSrv.RunnerHealthy()), len(robotStore.All()), cfg.QuikTradingEnabled)
+		}()
+	}
 
 	if err := lk.Run(ctx); err != nil && ctx.Err() == nil {
 		return fmt.Errorf("link: %w", err)
