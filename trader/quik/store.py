@@ -32,6 +32,9 @@ class AgentState:
     # agent's CURRENTLY effective hard limits (echoed via LimitsState); lets STL/UI
     # confirm a SetLimits push applied and surface a whitelist/cap divergence.
     limits_state: dict[str, Any] | None = None
+    # last RobotStatusReport from the agent-hosted robot-runner (read-only mirror
+    # for the LIVE screen; the agent's local state is the runtime source of truth)
+    robot_report: dict[str, Any] | None = None
     # security code -> Security dict
     securities: dict[str, dict[str, Any]] = field(default_factory=dict)
     # security code -> latest MarketDataTick dict
@@ -123,6 +126,18 @@ class QuikAgentStore:
         with self._lock:
             st = self._pick(agent_id)
             return st.limits_state if st else None
+
+    def set_robot_report(self, agent_id: str, report: dict[str, Any]) -> None:
+        """Store the last RobotStatusReport from the agent-hosted robot-runner."""
+        report = dict(report)
+        report["received_at_ms"] = _now_ms()
+        with self._lock:
+            self._agents.setdefault(agent_id, AgentState(agent_id=agent_id)).robot_report = report
+
+    def robot_report(self, agent_id: str | None = None) -> dict[str, Any] | None:
+        with self._lock:
+            st = self._pick(agent_id)
+            return st.robot_report if st else None
 
     def apply_securities(self, agent_id: str, items: list[dict[str, Any]], is_full: bool) -> None:
         with self._lock:

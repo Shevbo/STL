@@ -1104,6 +1104,8 @@ def create_app() -> FastAPI:
     # QUIK orders (sprint02 Phase 2): HUMAN-INITIATED placement + kill-switch.
     from trader.api.quik_orders import router as quik_orders_router
     fastapi_app.include_router(quik_orders_router)
+    from trader.api.quik_robots import router as quik_robots_router
+    fastapi_app.include_router(quik_robots_router)
     # QA checklist web form (GET /qa) + verdict persistence.
     from trader.api.qa_routes import router as qa_router
     fastapi_app.include_router(qa_router)

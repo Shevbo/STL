@@ -269,6 +269,15 @@ class QuikAgentLinkServicer(pb_grpc.QuikAgentLinkServicer):
                     # startup). Store them so the UI can confirm sync + flag divergence.
                     self.store.set_limits_state(
                         agent_id, _limits_state_to_dict(msg.limits_state))
+                elif field == "robot_status_report":
+                    # Agent-hosted robots: store the latest status mirror for the
+                    # LIVE screen. Read-only — the agent is the runtime source of
+                    # truth; STL never counter-acts a report.
+                    from google.protobuf.json_format import MessageToDict
+                    self.store.set_robot_report(
+                        agent_id,
+                        MessageToDict(msg.robot_status_report,
+                                      preserving_proto_field_name=True))
 
                 self.store.touch(agent_id, msg.seq)
 
