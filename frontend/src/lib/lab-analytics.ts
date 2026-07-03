@@ -350,7 +350,6 @@ export function priceMarkers(
   const buy = { points: [] as any[], markers: [] as any[] };
   const sell = { points: [] as any[], markers: [] as any[] };
   const index: any[] = [];
-  let lastBuyT = -Infinity, lastSellT = -Infinity;
   // Dim an entry color for AVERAGING fills (faded vs a bright fresh entry). Hex → +alpha.
   const dim = (c: string) => (c.length === 7 ? c + '70' : c);
   for (const e of events) {
@@ -363,13 +362,16 @@ export function priceMarkers(
     const color = e.close ? (e.close.exit === 'TP' ? colors.tp : colors.sl)
       : (e.kind === 'average' ? dim(base) : base);
     const size = e.close ? 1 : (isAdd ? 1 : 2);   // fresh entry larger; adds smaller
+    // Use the bucketed time DIRECTLY (no +1s uniqueness nudge). Markers are attached to
+    // the candle series (setMarkers), which snaps them to the containing bar and allows
+    // several markers on one bar — so we never inject off-grid time points into the shared
+    // time scale (that interleave was what made arrows + boxes float off the candles).
+    const tt = e.time;
     if (e.side === 'buy') {
-      let tt = e.time; if (tt <= lastBuyT) tt = lastBuyT + 1; lastBuyT = tt;
       buy.points.push({ time: tt, value: e.price });
       buy.markers.push({ time: tt, position: 'inBar', color, shape: 'arrowUp', size });
       index.push({ time: tt, price: e.price, side: 'buy', label: e.label, rawTime: e.rawTime, id: e.id, close: e.close });
     } else {
-      let tt = e.time; if (tt <= lastSellT) tt = lastSellT + 1; lastSellT = tt;
       sell.points.push({ time: tt, value: e.price });
       sell.markers.push({ time: tt, position: 'inBar', color, shape: 'arrowDown', size });
       index.push({ time: tt, price: e.price, side: 'sell', label: e.label, rawTime: e.rawTime, id: e.id, close: e.close });

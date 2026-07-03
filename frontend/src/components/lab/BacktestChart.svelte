@@ -481,10 +481,15 @@
       // triangles at exact fill price + hover index; bright entry / dim AVG / TP-SL close
       const pm = priceMarkers(events, { buy: BUY_COLOR, sell: SELL_COLOR, tp: TP_COLOR, sl: SL_COLOR });
       exits = exitStats(events);
-      buyMarkSeries.setData(pm.buy.points);
-      sellMarkSeries.setData(pm.sell.points);
-      buyMarkSeries.setMarkers(pm.buy.markers);
-      sellMarkSeries.setMarkers(pm.sell.markers);
+      // Attach ALL markers to the CANDLE series so lightweight-charts snaps each to its
+      // containing bar. Feeding them to separate line series via setData added off-grid
+      // time points to the shared (index-based) time scale, which floated the arrows AND
+      // the P&L boxes away from the candles. Keep the anchor series empty.
+      buyMarkSeries.setData([]);
+      sellMarkSeries.setData([]);
+      candleSeries.setMarkers(
+        [...pm.buy.markers, ...pm.sell.markers].sort((a, b) => (a.time as number) - (b.time as number)),
+      );
       markIndex = pm.index;
 
       // Position RECTANGLES per episode (replaces the old dashed connectors): box from
