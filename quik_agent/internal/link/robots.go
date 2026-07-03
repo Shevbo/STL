@@ -1,0 +1,68 @@
+package link
+
+import (
+	quikv1 "shectory/quik_agent/internal/pb"
+	"shectory/quik_agent/internal/robots"
+)
+
+// Robot hosting: STL deploys RobotSpecs to the agent; the link persists them into
+// the local store (source of truth for zero-touch resume) and relays each command
+// to the runner bridge when a runner is attached. Status flows the other way:
+// runner -> bridge -> ForwardRobotStatus -> STL (dropped quietly between sessions —
+// the runner never blocks on STL availability).
+
+// RunnerControlSink is the runner-bridge subset the link relays commands into.
+// runner.Server satisfies it. Interface keeps link free of the runner package.
+type RunnerControlSink interface{ PushControl(*quikv1.RunnerControl) }
+
+// SetRobots wires the persisted store + runner bridge AFTER construction (same
+// pattern as SetTrade — main builds link, bridge, then connects them).
+func (l *Link) SetRobots(store *robots.Store, runner RunnerControlSink) {
+	l.opt.Robots = store
+	l.opt.Runner = runner
+}
+
+// handleRobotMsg persists a robot command and relays it to the runner.
+func (l *Link) handleRobotMsg(msg *quikv1.OrchestratorMessage) {
+	if l.opt.Robots == nil {
+		return
+	}
+	var rc *quikv1.RunnerControl
+	switch p := msg.GetPayload().(type) {
+	case *quikv1.OrchestratorMessage_DeployRobot:
+		_ = l.opt.Robots.Put(p.DeployRobot.GetSpec())
+		rc = &quikv1.RunnerControl{Payload: &quikv1.RunnerControl_Deploy{Deploy: p.DeployRobot}}
+	case *quikv1.OrchestratorMessage_UndeployRobot:
+		_ = l.opt.Robots.Delete(p.UndeployRobot.GetRobotId())
+		rc = &quikv1.RunnerControl{Payload: &quikv1.RunnerControl_Undeploy{Undeploy: p.UndeployRobot}}
+	case *quikv1.OrchestratorMessage_SetRobotParams:
+		if spec := l.opt.Robots.Get(p.SetRobotParams.GetRobotId()); spec != nil {
+			spec.ParamsJson = p.SetRobotParams.GetParamsJson()
+			_ = l.opt.Robots.Put(spec)
+		}
+		rc = &quikv1.RunnerControl{Payload: &quikv1.RunnerControl_SetParams{SetParams: p.SetRobotParams}}
+	case *quikv1.OrchestratorMessage_PauseRobot:
+		_ = l.opt.Robots.SetPaused(p.PauseRobot.GetRobotId(), true)
+		rc = &quikv1.RunnerControl{Payload: &quikv1.RunnerControl_Pause{Pause: p.PauseRobot}}
+	case *quikv1.OrchestratorMessage_StartRobot:
+		_ = l.opt.Robots.SetPaused(p.StartRobot.GetRobotId(), false)
+		rc = &quikv1.RunnerControl{Payload: &quikv1.RunnerControl_Start{Start: p.StartRobot}}
+	default:
+		return
+	}
+	if l.opt.Runner != nil && rc != nil {
+		l.opt.Runner.PushControl(rc)
+	}
+}
+
+// ForwardRobotStatus sends an agent-hosted robot status report to STL. Satisfies
+// runner.StatusSink. Dropped silently when no session is open (isolation).
+func (l *Link) ForwardRobotStatus(r *quikv1.RobotStatusReport) {
+	stream := l.currentStream()
+	if stream == nil {
+		return
+	}
+	_ = l.sendMsg(stream, &quikv1.AgentMessage{
+		Payload: &quikv1.AgentMessage_RobotStatusReport{RobotStatusReport: r},
+	})
+}

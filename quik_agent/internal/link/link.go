@@ -24,6 +24,7 @@ import (
 	"shectory/quik_agent/internal/notify"
 	quikv1 "shectory/quik_agent/internal/pb"
 	"shectory/quik_agent/internal/quikdde"
+	"shectory/quik_agent/internal/robots"
 )
 
 // Options configures the link.
@@ -81,6 +82,13 @@ type Options struct {
 	// master flag before anything reaches QUIK. The link feeds itself as the Emitter
 	// to the manager so OrderUpdate/TransReply/ExecutionUpdate ride the live stream.
 	Trade TradeManager
+
+	// ---- Robot hosting (agent-side execution) ----
+
+	// Robots is the persisted RobotSpec store; Runner relays STL control into the
+	// runner bridge. Both nil = robot hosting disabled (wired via SetRobots).
+	Robots *robots.Store
+	Runner RunnerControlSink
 }
 
 // TradeManager is the subset of the order manager the link drives. internal/trade

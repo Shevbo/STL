@@ -85,6 +85,11 @@ type Manager struct {
 	logf    func(string, ...any)
 	nowMsFn func() int64
 
+	// runnerFan, when set, receives a copy of every OrderUpdate so the local
+	// robot-runner sees its own order lifecycle (filtered by client_id prefix
+	// on the bridge side). Nil-safe; set via SetRunnerFan after construction.
+	runnerFan func(*quikv1.OrderUpdate)
+
 	// book + priceStep feed the 1b maker loop's LOCAL order book. Set after
 	// construction via SetBookSource; nil means executions cannot start.
 	book      BookSource
@@ -883,9 +888,19 @@ func (m *Manager) SweepStale() {
 
 // ---- emit helpers ----
 
+// SetRunnerFan registers a callback receiving every OrderUpdate (used to fan
+// events to the local robot-runner bridge). Optional; nil disables.
+func (m *Manager) SetRunnerFan(f func(*quikv1.OrderUpdate)) { m.runnerFan = f }
+
+func (m *Manager) fanToRunner(u *quikv1.OrderUpdate) {
+	if m.runnerFan != nil {
+		m.runnerFan(u)
+	}
+}
+
 func (m *Manager) rejectPlace(clientID, code string, side quikv1.Side, price float64, qty int64, reason RejectReason) {
 	m.logf("trade: PlaceOrder REJECTED (client=%q code=%q): %s", clientID, code, reason)
-	_ = m.emit.EmitOrderUpdate(&quikv1.OrderUpdate{
+	u := &quikv1.OrderUpdate{
 		ClientId: clientID,
 		Code:     code,
 		Side:     side,
@@ -895,7 +910,9 @@ func (m *Manager) rejectPlace(clientID, code string, side quikv1.Side, price flo
 		Filled:   0,
 		Text:     string(reason),
 		TsUnixMs: m.nowMs(),
-	})
+	}
+	_ = m.emit.EmitOrderUpdate(u)
+	m.fanToRunner(u)
 }
 
 func (m *Manager) emitOrderUpdate(wo *workingOrder, text string) {
@@ -914,6 +931,7 @@ func (m *Manager) emitOrderUpdate(wo *workingOrder, text string) {
 	}
 	m.mu.Unlock()
 	_ = m.emit.EmitOrderUpdate(upd)
+	m.fanToRunner(upd)
 }
 
 // ---- pure helpers ----

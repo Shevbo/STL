@@ -116,6 +116,12 @@ func (l *Link) recvLoop(stream quikv1.QuikAgentLink_SessionClient, cancel contex
 			if l.opt.Trade != nil {
 				l.opt.Trade.KillSwitch(p.KillSwitch)
 			}
+			// Also halt the hosted robots (block new strategy orders). Scope stays
+			// this agent only; positions are left open by design.
+			if l.opt.Runner != nil {
+				l.opt.Runner.PushControl(&quikv1.RunnerControl{
+					Payload: &quikv1.RunnerControl_Kill{Kill: p.KillSwitch}})
+			}
 		case *quikv1.OrchestratorMessage_StartExecution:
 			if l.opt.Trade != nil {
 				l.opt.Trade.StartExecution(p.StartExecution)
@@ -131,6 +137,13 @@ func (l *Link) recvLoop(stream quikv1.QuikAgentLink_SessionClient, cancel contex
 				l.opt.Trade.ApplyLimits(p.SetLimits)
 				_ = l.sendLimitsState(stream)
 			}
+		// ---- Robot hosting: persist + relay to the runner bridge ----
+		case *quikv1.OrchestratorMessage_DeployRobot,
+			*quikv1.OrchestratorMessage_UndeployRobot,
+			*quikv1.OrchestratorMessage_SetRobotParams,
+			*quikv1.OrchestratorMessage_PauseRobot,
+			*quikv1.OrchestratorMessage_StartRobot:
+			l.handleRobotMsg(msg)
 		}
 	}
 }
