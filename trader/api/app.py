@@ -2235,6 +2235,22 @@ def create_app() -> FastAPI:
         # Open (resting) orders the robot has placed on the exchange, drawn as
         # horizontal price lines on the chart. Paper mode fills instantly so there
         # are none; only real-mode resting orders appear. Best-effort: never 500.
+        # Net open position from recorded fills (rejected/skipped/cancelled excluded), so a
+        # resting order's role can be decoded: is a SELL a take-profit on a long, or a fresh
+        # short entry? FVG holds at most `avg_max` contracts, entering at the gap boundary.
+        _FILLED = {"filled", "paper", "executed", "partially_filled", "done"}
+        net_pos = 0
+        for t in trades:
+            if str(t.get("status", "")).lower() in _FILLED:
+                net_pos += t["qty"] if t["side"] == "buy" else -t["qty"]
+
+        def _order_role(side: str, net: int) -> str:
+            if net > 0:   # currently long
+                return "тейк / закрытие лонга" if side == "sell" else "усреднение лонга"
+            if net < 0:   # currently short
+                return "тейк / закрытие шорта" if side == "buy" else "усреднение шорта"
+            return "вход в лонг (по FVG)" if side == "buy" else "вход в шорт (по FVG)"
+
         open_orders: list[dict] = []
         pos = getattr(request.app.state, "pos", None)
         if not paper and pos is not None:
@@ -2259,11 +2275,13 @@ def create_app() -> FastAPI:
                         if lp is None:
                             continue
                         side = order.get("side", "")
+                        oside = "buy" if "BUY" in side else "sell"
                         open_orders.append({
-                            "side": "buy" if "BUY" in side else "sell",
+                            "side": oside,
                             "price": float(lp),
                             "qty": int(float((order.get("quantity") or {}).get("value", 0) or 0)),
                             "order_id": o.get("order_id", ""),
+                            "role": _order_role(oside, net_pos),
                         })
             except Exception as exc:
                 log.warning("api.robot_live_open_orders_failed", robot_id=robot_id, exc=str(exc))
@@ -2870,89 +2888,106 @@ def create_app() -> FastAPI:
         # unlike date_trunc('hour') which caps at 60-min granularity.
         bucket_secs = max(1, int(resample_min)) * 60
 
-        # Fast path: full pre-cached continuous base series (agent_bars/<symbol>.json),
-        # resampled in Python. Preferred over ohlcv_bars, which for a base code holds
-        # only a sparse partial set (a few bars) and would otherwise be returned as a
-        # false "cache hit". This also avoids the slow ISS continuous-roll on open and
-        # gives the robot window the rolled series whose prices match historical fills.
+        lo, hi = ts_from.timestamp(), ts_to.timestamp()
+        now_ts = time.time()
+        buckets: dict[int, dict] = {}
+        last_cached = 0.0   # newest raw-bar epoch present in the cache (for the tail top-up)
+
+        def _merge(t: float, o, h, l, c, v) -> None:
+            key = (int(t) // bucket_secs) * bucket_secs
+            agg = buckets.get(key)
+            if agg is None:
+                buckets[key] = {"time": key, "open": o, "high": h, "low": l, "close": c, "volume": v}
+            else:
+                agg["high"] = max(agg["high"], h)
+                agg["low"] = min(agg["low"], l)
+                agg["close"] = c
+                agg["volume"] += v
+
+        # 1) History from the pre-cached continuous base series (agent_bars/<symbol>.json),
+        # resampled in Python. Preferred over ohlcv_bars, which for a base code holds only a
+        # sparse partial set; also avoids the slow ISS continuous-roll on open and gives the
+        # robot window the rolled series whose prices match historical fills.
         import os as _os
         _ab = _os.path.join("agent_bars", f"{symbol}.json")
+        used_agent = False
         if _os.path.exists(_ab):
             try:
                 import json as _json
-                lo, hi = ts_from.timestamp(), ts_to.timestamp()
-                rows_raw = _json.load(open(_ab, encoding="utf-8")).get("rows", [])
-                buckets: dict[int, dict] = {}
-                for r in rows_raw:
+                for r in _json.load(open(_ab, encoding="utf-8")).get("rows", []):
                     t = r[0]
-                    if not (lo <= t <= hi):
-                        continue
-                    key = (int(t) // bucket_secs) * bucket_secs
-                    agg = buckets.get(key)
-                    if agg is None:
-                        buckets[key] = {"time": key, "open": r[1], "high": r[2],
-                                        "low": r[3], "close": r[4], "volume": r[5]}
-                    else:
-                        agg["high"] = max(agg["high"], r[2])
-                        agg["low"] = min(agg["low"], r[3])
-                        agg["close"] = r[4]
-                        agg["volume"] += r[5]
-                out = [buckets[k] for k in sorted(buckets)]
-                if out:
-                    for b in out:
-                        b["volume"] = int(b["volume"])
-                    return out
-            except Exception as exc:  # noqa: BLE001 — fall through to cache/ISS
+                    if t > last_cached:
+                        last_cached = t
+                    if lo <= t <= hi:
+                        _merge(t, r[1], r[2], r[3], r[4], r[5])
+                used_agent = True
+            except Exception as exc:  # noqa: BLE001 — fall through to the DB cache
                 log.warning("api.market_bars_agent_failed", symbol=symbol, exc=str(exc))
+        if not used_agent:
+            async with pool.acquire() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT
+                        (FLOOR(EXTRACT(EPOCH FROM ts) / $4) * $4)::bigint AS bucket,
+                        (array_agg(open  ORDER BY ts))[1]      AS open,
+                        MAX(high)                              AS high,
+                        MIN(low)                               AS low,
+                        (array_agg(close ORDER BY ts DESC))[1] AS close,
+                        SUM(volume)                            AS volume
+                    FROM ohlcv_bars
+                    WHERE symbol=$1 AND interval_min=1 AND ts BETWEEN $2 AND $3
+                    GROUP BY bucket
+                    ORDER BY bucket
+                    """,
+                    symbol, ts_from, ts_to, bucket_secs,
+                )
+            for r in rows:
+                b = int(r["bucket"])
+                buckets[b] = {"time": b, "open": r["open"], "high": r["high"],
+                              "low": r["low"], "close": r["close"], "volume": int(r["volume"])}
+                # Skip the whole last cached bucket on top-up so ISS never double-counts it.
+                if b + bucket_secs > last_cached:
+                    last_cached = b + bucket_secs
 
-        async with pool.acquire() as conn:
-            rows = await conn.fetch(
-                """
-                SELECT
-                    (FLOOR(EXTRACT(EPOCH FROM ts) / $4) * $4)::bigint AS bucket,
-                    (array_agg(open  ORDER BY ts))[1]      AS open,
-                    MAX(high)                              AS high,
-                    MIN(low)                               AS low,
-                    (array_agg(close ORDER BY ts DESC))[1] AS close,
-                    SUM(volume)                            AS volume
-                FROM ohlcv_bars
-                WHERE symbol=$1 AND interval_min=1 AND ts BETWEEN $2 AND $3
-                GROUP BY bucket
-                ORDER BY bucket
-                """,
-                symbol, ts_from, ts_to, bucket_secs,
-            )
-        if rows:
-            return [
-                {"time": r["bucket"], "open": r["open"], "high": r["high"],
-                 "low": r["low"], "close": r["close"], "volume": int(r["volume"])}
-                for r in rows
-            ]
+        # 2) Tail top-up from ISS. The static caches are built to (at most) yesterday's sync,
+        # and the old code only hit ISS on a TOTAL miss — so a LIVE robot window (date_to =
+        # today+1) showed candles ending days ago while trading (and the latency pane) were
+        # live. When the window reaches into the last ~2 days, fetch the missing tail
+        # (strictly after the newest cached bar) from ISS and merge it, so TODAY appears.
+        if hi >= now_ts - 2 * 86400 and hi > last_cached + 1:
+            try:
+                from datetime import datetime as _dt2, timezone as _tz2
+                from trader.lab.iss_loader import load_bars_iss
+                tail_lo = max(lo, last_cached + 1)
+                d0 = _dt2.fromtimestamp(tail_lo, _tz2.utc).date()
+                d1 = _dt2.fromtimestamp(hi, _tz2.utc).date()
+                for b in await load_bars_iss(symbol, d0, d1, interval=1):
+                    if tail_lo <= b.time <= hi:
+                        _merge(b.time, b.open, b.high, b.low, b.close, b.volume)
+            except Exception as exc:
+                log.warning("api.market_bars_tail_failed", symbol=symbol, exc=str(exc))
 
-        # Cache miss (e.g. range newer than last ISS sync). Fetch live from ISS
-        # and resample in Python so the chart is never blank/stale. Same epoch
-        # convention as the cache (ISS times stamped UTC), so markers stay aligned.
+        if buckets:
+            out = [buckets[k] for k in sorted(buckets)]
+            for bb in out:
+                bb["volume"] = int(bb["volume"])
+            return out
+
+        # 3) Nothing cached at all (e.g. a brand-new symbol): full ISS fetch so the chart is
+        # never blank. Same epoch convention as the cache (ISS times stamped UTC).
         try:
             from trader.lab.iss_loader import load_bars_iss
             iss_bars = await load_bars_iss(symbol, ts_from.date(), ts_to.date(), interval=1)
         except Exception as exc:
             log.warning("api.market_bars_iss_fallback_failed", symbol=symbol, exc=str(exc))
             return []
-        buckets: dict[int, dict] = {}
         for b in iss_bars:
-            if not (ts_from.timestamp() <= b.time <= ts_to.timestamp()):
-                continue
-            key = (b.time // bucket_secs) * bucket_secs
-            agg = buckets.get(key)
-            if agg is None:
-                buckets[key] = {"time": key, "open": b.open, "high": b.high,
-                                "low": b.low, "close": b.close, "volume": b.volume}
-            else:
-                agg["high"] = max(agg["high"], b.high)
-                agg["low"] = min(agg["low"], b.low)
-                agg["close"] = b.close
-                agg["volume"] += b.volume
-        return [buckets[k] for k in sorted(buckets)]
+            if lo <= b.time <= hi:
+                _merge(b.time, b.open, b.high, b.low, b.close, b.volume)
+        out = [buckets[k] for k in sorted(buckets)]
+        for bb in out:
+            bb["volume"] = int(bb["volume"])
+        return out
 
     @fastapi_app.get("/api/v1/chart/bars")
     async def chart_bars(

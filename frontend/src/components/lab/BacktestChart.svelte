@@ -22,7 +22,7 @@
   }: {
     result: any; symbol: string; strategy?: any; dateFrom: string; dateTo: string;
     pointValue?: number; defaultInterval?: number;
-    openOrders?: Array<{ side: string; price: number; qty: number; order_id?: string }>;
+    openOrders?: Array<{ side: string; price: number; qty: number; order_id?: string; role?: string }>;
     plannedOrders?: Array<{ side: string; price: number; qty: number; reason?: string }>;
     // A rolled robot's continuous chart: fetch each contract's bars over its own window
     // and concatenate on the time axis (real prices, a visible step at the roll). fromTs/
@@ -583,11 +583,15 @@
     orderPriceLines = []; lineIndex = [];
     for (const o of openOrders ?? []) {
       const buy = o.side === 'buy';
+      const role = o.role;                       // decoded intent (тейк/вход/усреднение)
+      const qtyTxt = o.qty ? ` ×${o.qty}` : '';
+      // Axis label = the signal role (falls back to bare side); colour already encodes buy/sell.
       orderPriceLines.push(candleSeries.createPriceLine({
         price: o.price, color: buy ? BUY_COLOR : SELL_COLOR, lineWidth: 2, lineStyle: 0,
-        axisLabelVisible: true, title: `заявка ${buy ? 'BUY' : 'SELL'}${o.qty ? ' ' + o.qty : ''}`,
+        axisLabelVisible: true, title: (role || `заявка ${buy ? 'BUY' : 'SELL'}`) + qtyTxt,
       }));
-      lineIndex.push({ price: o.price, text: `Заявка ${buy ? 'BUY' : 'SELL'} ${o.qty || ''} @ ${Math.round(o.price).toLocaleString('ru-RU')}`.trim() });
+      lineIndex.push({ price: o.price, text:
+        `${role ? role + ' — ' : ''}${buy ? 'покупка' : 'продажа'}${o.qty ? ' ' + o.qty + ' конт.' : ''} @ ${Math.round(o.price).toLocaleString('ru-RU')}`.trim() });
     }
     for (const o of plannedOrders ?? []) {
       const buy = o.side === 'buy';
