@@ -3,7 +3,9 @@
 # Tools are NOT auto-installed; missing ones fail with a hint.
 
 PROTO       := shectory/quik/v1/quik_agent.proto
+PROTO_RB    := shectory/quik/v1/runner_bridge.proto
 GO_MAP      := Mshectory/quik/v1/quik_agent.proto=shectory/quik_agent/internal/pb
+GO_MAP_RB   := Mshectory/quik/v1/runner_bridge.proto=shectory/quik_agent/internal/pb
 BUILD_REV   := $(shell git rev-parse --short HEAD 2>/dev/null || echo dev)
 PYTEST_ENV  := FINAM_SECRET_TOKEN=$${FINAM_SECRET_TOKEN:-dummy}
 
@@ -21,14 +23,14 @@ gen-go: ## Codegen proto -> quik_agent/internal/pb (package quikv1)
 	@command -v protoc-gen-go >/dev/null || { echo "missing protoc-gen-go -> go install google.golang.org/protobuf/cmd/protoc-gen-go@latest"; exit 1; }
 	@command -v protoc-gen-go-grpc >/dev/null || { echo "missing protoc-gen-go-grpc -> go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest"; exit 1; }
 	cd quik_agent && mkdir -p internal/pb && protoc -I ../proto \
-	  --go_out=. --go_opt=module=shectory/quik_agent --go_opt=$(GO_MAP) \
-	  --go-grpc_out=. --go-grpc_opt=module=shectory/quik_agent --go-grpc_opt=$(GO_MAP) --go-grpc_opt=require_unimplemented_servers=false \
-	  ../proto/$(PROTO)
+	  --go_out=. --go_opt=module=shectory/quik_agent --go_opt=$(GO_MAP) --go_opt=$(GO_MAP_RB) \
+	  --go-grpc_out=. --go-grpc_opt=module=shectory/quik_agent --go-grpc_opt=$(GO_MAP) --go-grpc_opt=$(GO_MAP_RB) --go-grpc_opt=require_unimplemented_servers=false \
+	  ../proto/$(PROTO) ../proto/$(PROTO_RB)
 
 gen-py: ## Codegen proto -> trader/quik/pb
 	@python -c "import grpc_tools" 2>/dev/null || { echo "missing grpcio-tools -> python -m pip install grpcio-tools"; exit 1; }
 	mkdir -p trader/quik/pb && python -m grpc_tools.protoc -Iproto \
-	  --python_out=trader/quik/pb --grpc_python_out=trader/quik/pb proto/$(PROTO)
+	  --python_out=trader/quik/pb --grpc_python_out=trader/quik/pb proto/$(PROTO) proto/$(PROTO_RB)
 
 tidy: ## go mod tidy in quik_agent
 	cd quik_agent && go mod tidy

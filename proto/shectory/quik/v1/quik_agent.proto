@@ -33,6 +33,7 @@ message AgentMessage {
     TransReply trans_reply = 12;     // Phase 2: QUIK transaction reply (code + text)
     ExecutionUpdate execution_update = 13; // Phase 2 (1b): maker-working progress
     LimitsState limits_state = 14;   // agent's CURRENTLY EFFECTIVE hard limits (echo)
+    RobotStatusReport robot_status_report = 15; // agent-hosted robot status mirror
   }
 }
 
@@ -159,6 +160,11 @@ message OrchestratorMessage {
     StopExecution stop_execution = 7;   // Phase 2 1b: stop a working execution
     ReplaceOrder replace_order = 8;     // native atomic move (QUIK MOVE_ORDERS)
     SetLimits set_limits = 9;           // push the hard limits + whitelist (STL = source of truth)
+    DeployRobot deploy_robot = 10;      // hand a robot's working logic to the agent
+    UndeployRobot undeploy_robot = 11;
+    SetRobotParams set_robot_params = 12;
+    PauseRobot pause_robot = 13;
+    StartRobot start_robot = 14;
   }
 }
 
@@ -213,6 +219,58 @@ message LimitsState {
   double price_collar_frac = 5;
   int32 daily_order_cap = 6;
   int64 last_push_unix_ms = 7;              // when the agent last applied a SetLimits (0 = never)
+}
+
+// ===================== Robot hosting (agent-side execution) =====================
+// STL "deploys" a robot's working logic to the agent. The agent persists the spec
+// locally and the bundled robot-runner executes it against local QUIK data + the
+// QUIK bridge — fully isolated from STL (trades even when STL is down). Local
+// state is the runtime source of truth; STL re-pushes config on reconnect and
+// receives status reports. Commands are optional and idempotent.
+
+message RobotSpec {
+  string robot_id = 1;
+  string strategy_id = 2;           // library id, e.g. "fvg" (make_on_bar id)
+  string params_json = 3;           // strategy params as JSON (includes symbol, qty)
+  string symbol = 4;                // traded instrument, e.g. RIU6
+  string schedule = 5;              // trading window "HH:MM-HH:MM" MSK
+  int64 max_position_contracts = 6; // hard cap on |position| (v1: 1)
+  bool paper = 7;                   // runner debug flag; false = real orders
+}
+
+message DeployRobot { RobotSpec spec = 1; }
+message UndeployRobot { string robot_id = 1; }
+message SetRobotParams { string robot_id = 1; string params_json = 2; }
+message PauseRobot { string robot_id = 1; }
+message StartRobot { string robot_id = 1; }
+
+message RobotFill {
+  string order_id = 1;
+  string symbol = 2;
+  Side side = 3;
+  int64 qty = 4;
+  double price = 5;
+  string status = 6;                // filled | rejected | skipped | paper
+  int64 ts_unix_ms = 7;
+}
+
+message RobotStatus {
+  string robot_id = 1;
+  bool running = 2;                 // scheduled and inside window loop
+  bool paused = 3;
+  int64 position = 4;               // signed contracts
+  double avg_price = 5;
+  double realized_pnl = 6;          // rubles, session
+  int64 last_bar_unix = 7;          // newest bar the strategy saw
+  int64 heartbeat_unix_ms = 8;      // runner's per-robot liveness
+  repeated RobotFill recent_fills = 9;   // last <=20
+  string note = 10;                 // last log / error line
+}
+
+message RobotStatusReport {
+  repeated RobotStatus robots = 1;
+  int64 sent_at_unix_ms = 2;
+  bool runner_healthy = 3;          // the supervised runner process is up + reporting
 }
 
 // ===================== Phase 2: orders & execution =====================

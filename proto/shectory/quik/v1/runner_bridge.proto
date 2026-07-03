@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+// LOCAL loopback contract between the Go quik-agent and the bundled Python
+// robot-runner on the SAME Windows VDS (127.0.0.1 only, no auth, never exposed).
+// The agent is the server. The runner consumes ticks + order events, places
+// orders (re-checked by the agent's Guard), receives relayed STL control
+// commands, and reports robot status (forwarded to STL by the agent).
+package shectory.quik.v1;
+
+import "shectory/quik/v1/quik_agent.proto";
+
+option go_package = "shectory/quik/v1;quikv1";
+
+service RunnerBridge {
+  rpc StreamTicks(TickFilter) returns (stream MarketDataTick);
+  rpc PlaceRunnerOrder(PlaceOrder) returns (BridgeAck);
+  rpc CancelRunnerOrder(CancelOrder) returns (BridgeAck);
+  rpc StreamOrderEvents(EventsFilter) returns (stream OrderUpdate);
+  rpc StreamControl(ControlHello) returns (stream RunnerControl);
+  rpc ReportStatus(RobotStatusReport) returns (BridgeAck);
+}
+
+message TickFilter { repeated string codes = 1; }         // empty = all whitelisted
+message EventsFilter { string client_prefix = 1; }        // runner's client_id prefix, e.g. "rr:"
+message ControlHello { string runner_version = 1; int32 pid = 2; }
+
+message RunnerControl {
+  oneof payload {
+    DeployRobot deploy = 1;
+    UndeployRobot undeploy = 2;
+    SetRobotParams set_params = 3;
+    PauseRobot pause = 4;
+    StartRobot start = 5;
+    KillSwitch kill = 6;
+  }
+}
+
+message BridgeAck { bool ok = 1; string error = 2; }
