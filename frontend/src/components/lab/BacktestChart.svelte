@@ -10,7 +10,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { fetchWithAuth } from '../../lib/fetch-auth';
-  import { mskTickFormatter, mskCrosshairFormatter } from '../../lib/chart-time';
   import {
     toFills, rolledPnl, priceMarkers,
     positionRects, exitStats, commissionBreakdown, commissionFor,
@@ -120,13 +119,17 @@
     full: 'Полн. закрытие', reverse: 'Реверс',
   };
   // Bar epochs carry Moscow wall-clock stamped as UTC, so format in UTC to match axis.
-  // Bar/trade times are true UTC epochs; FORTS is MSK, so render Moscow time everywhere
-  // (the table header says «МСК» and it must actually BE MSK, matching the live chart).
+  // Chart-axis epochs here are MSK WALL-CLOCK stamped as UTC (the /api/v1/market/bars
+  // loader stamps the Moscow ISS time as UTC; RobotWindow shifts fills +3h onto the same
+  // grid). So rendering these epochs AS UTC yields the correct MSK wall-clock — do NOT
+  // apply another Europe/Moscow / +3h shift (that double-counts and pushed every time 3h
+  // ahead). The axis default formatter also renders UTC, so axis/crosshair/tooltip/table
+  // all agree.
   const fmtTs = (ts: number) => new Date(ts * 1000).toLocaleString('ru-RU', {
-    timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+    timeZone: 'UTC', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
   });
   const fmtDay = (ts: number) => new Date(ts * 1000).toLocaleDateString('ru-RU', {
-    timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', year: '2-digit',
+    timeZone: 'UTC', day: '2-digit', month: '2-digit', year: '2-digit',
   });
   let periodLabel = $state('');   // actual loaded data span, shown in the header
 
@@ -147,11 +150,9 @@
       grid: { vertLines: { color: '#15152470' }, horzLines: { color: '#15152470' } },
       // fixLeftEdge/fixRightEdge clamp panning+zoom to the data so there are never
       // empty gaps on the left/right when you zoom out — data always fills the view.
-      localization: { timeFormatter: mskCrosshairFormatter },
       timeScale: {
         borderColor: '#2d2d4a', timeVisible: true, rightOffset: 0,
         fixLeftEdge: true, fixRightEdge: true,
-        tickMarkFormatter: mskTickFormatter,
       },
       crosshair: { mode: 1 },
       rightPriceScale: { borderColor: '#2d2d4a', minimumWidth: 84 },
@@ -341,6 +342,7 @@
           lines.push(`${best.side === 'buy' ? 'Покупка' : 'Продажа'} @ ${Math.round(best.price).toLocaleString('ru-RU')}`);
           lines.push(fmtTs(best.rawTime));
         }
+        if (best.id) lines.push(`ID: ${best.id}`);
         tip = { x: ts.timeToCoordinate(best.time) ?? px, y: bestMy ?? py, head, headKind, lines };
         return;
     }

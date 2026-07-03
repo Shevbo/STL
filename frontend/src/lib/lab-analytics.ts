@@ -124,6 +124,7 @@ export interface TradeEvent {
   time: number;           // bucketed (chart) time
   rawTime: number;        // original fill time
   id?: string;            // source fill's order_id (unique) — for unambiguous row mapping
+  synthetic?: boolean;    // fabricated roll force-close (no real fill / no table row) — no marker
   side: 'buy' | 'sell';
   qty: number;            // contracts this fill moved
   price: number;
@@ -297,6 +298,7 @@ export function tradeEvents(trades: Fill[], bucketSecs: number, pointValue = 1, 
     out.push({
       time: Math.floor(t.time / bucketSecs) * bucketSecs,
       rawTime: t.time, id: (t as any).order_id ?? (t as any).id,
+      synthetic: (t as any).synthetic || undefined,
       side: t.side, qty: q, price: t.price,
       kind, posAfter: pos, close,
       label: `${KIND_LABEL[kind]} ${q} (всего в поз. ${totalInPos})`,
@@ -343,7 +345,7 @@ export function priceMarkers(
 ): {
   buy: { points: any[]; markers: any[] };
   sell: { points: any[]; markers: any[] };
-  index: Array<{ time: number; price: number; side: 'buy' | 'sell'; label: string; rawTime: number; close?: TradeEvent['close'] }>;
+  index: Array<{ time: number; price: number; side: 'buy' | 'sell'; label: string; rawTime: number; id?: string; close?: TradeEvent['close'] }>;
 } {
   const buy = { points: [] as any[], markers: [] as any[] };
   const sell = { points: [] as any[], markers: [] as any[] };
@@ -352,6 +354,8 @@ export function priceMarkers(
   // Dim an entry color for AVERAGING fills (faded vs a bright fresh entry). Hex → +alpha.
   const dim = (c: string) => (c.length === 7 ? c + '70' : c);
   for (const e of events) {
+    // Synthetic roll force-close fills have no real trade / no table row — no arrow.
+    if (e.synthetic) continue;
     // Closing fills are tinted by outcome (TP green / SL red). Fresh entry = bright+large.
     // AVG (add against us) = dim+small. ENF (add into a winner) = full colour but small.
     const base = e.side === 'buy' ? colors.buy : colors.sell;
@@ -363,12 +367,12 @@ export function priceMarkers(
       let tt = e.time; if (tt <= lastBuyT) tt = lastBuyT + 1; lastBuyT = tt;
       buy.points.push({ time: tt, value: e.price });
       buy.markers.push({ time: tt, position: 'inBar', color, shape: 'arrowUp', size });
-      index.push({ time: tt, price: e.price, side: 'buy', label: e.label, rawTime: e.rawTime, close: e.close });
+      index.push({ time: tt, price: e.price, side: 'buy', label: e.label, rawTime: e.rawTime, id: e.id, close: e.close });
     } else {
       let tt = e.time; if (tt <= lastSellT) tt = lastSellT + 1; lastSellT = tt;
       sell.points.push({ time: tt, value: e.price });
       sell.markers.push({ time: tt, position: 'inBar', color, shape: 'arrowDown', size });
-      index.push({ time: tt, price: e.price, side: 'sell', label: e.label, rawTime: e.rawTime, close: e.close });
+      index.push({ time: tt, price: e.price, side: 'sell', label: e.label, rawTime: e.rawTime, id: e.id, close: e.close });
     }
   }
   return { buy, sell, index };
@@ -489,7 +493,8 @@ export function rolledPnl(
     if (settleCarried && s !== currentSymbol && pos !== 0) {
       const last = gf[gf.length - 1];
       seq = [...gf, { symbol: s, time: last.time + 1, price: last.price,
-                      qty: Math.abs(pos), side: pos > 0 ? 'sell' : 'buy' }];
+                      qty: Math.abs(pos), side: pos > 0 ? 'sell' : 'buy',
+                      order_id: `synthetic:${s}:${last.time + 1}`, synthetic: true } as any];
     }
     const evs = tradeEvents(seq, bucketSecs, pvFor(s), s, taker);
     let cNet = 0, cCloses = 0;

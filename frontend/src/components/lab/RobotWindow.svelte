@@ -337,7 +337,7 @@
               {:else}
                 <table>
                   <thead>
-                    <tr><th>Время (МСК)</th><th>Тип</th><th>Сторона</th><th>Кол-во</th><th>Цена</th><th class="num">Фин. рез</th><th>Статус</th></tr>
+                    <tr><th>Время (МСК)</th><th>Тип</th><th>Сторона</th><th>Кол-во</th><th>Цена</th><th class="num">Фин. рез</th><th>Статус</th><th>ID</th></tr>
                   </thead>
                   <tbody>
                     {#each [...live.trades].reverse() as t}
@@ -353,6 +353,7 @@
                         <td class="num mono" class:pos={ev?.close && ev.close.pnl > 0} class:neg={ev?.close && ev.close.pnl < 0}>
                           {ev?.close ? fmtMoney(ev.close.pnl) + ' ₽' : '—'}</td>
                         <td><span class="st-badge st-{t.status}">{t.status}</span></td>
+                        <td class="mono id-cell" title={t.order_id ?? ''}>{t.order_id ?? '—'}</td>
                       </tr>
                     {/each}
                   </tbody>
