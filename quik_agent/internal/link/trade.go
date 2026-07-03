@@ -65,3 +65,14 @@ func (l *Link) EmitExecutionUpdate(u *quikv1.ExecutionUpdate) error {
 		Payload: &quikv1.AgentMessage_ExecutionUpdate{ExecutionUpdate: u},
 	})
 }
+
+// EmitAlert sends an out-of-band Alert frame (trade.Emitter) — used when the trade
+// manager detects a silent failure (a placement QUIK never replied to), so STL surfaces
+// it (UI + Telegram) instead of the operator discovering it on a stuck order.
+func (l *Link) EmitAlert(sev quikv1.AlertSeverity, code, message string) error {
+	stream := l.currentStream()
+	if stream == nil {
+		return nil
+	}
+	return l.sendAlert(stream, sev, code, message)
+}

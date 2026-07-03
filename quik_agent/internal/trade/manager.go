@@ -20,6 +20,7 @@ type Emitter interface {
 	EmitOrderUpdate(*quikv1.OrderUpdate) error
 	EmitTransReply(*quikv1.TransReply) error
 	EmitExecutionUpdate(*quikv1.ExecutionUpdate) error
+	EmitAlert(sev quikv1.AlertSeverity, code, message string) error
 }
 
 // bridgeAPI is the slice of *Bridge the manager needs. It lets execution.go and tests
@@ -190,10 +191,8 @@ func (m *Manager) PlaceOrder(req *quikv1.PlaceOrder) {
 	}
 	// Free phantom PENDING orders QUIK never acknowledged BEFORE counting the working
 	// budget, so a link-drop leftover cannot falsely block this placement with
-	// ReasonWorkingCap. Emit their terminal update outside the lock.
-	for _, wo := range m.reconcileStalePending() {
-		m.emitOrderUpdate(wo, string(ReasonStalePending))
-	}
+	// ReasonWorkingCap. Also raises the QUIK_NO_REPLY alert if any were found.
+	m.SweepStale()
 	m.mu.Lock()
 	blocked := m.blocked
 	working := m.totalWorkingLocked()
@@ -858,6 +857,28 @@ func (m *Manager) reconcileStalePending() []*workingOrder {
 	}
 	m.mu.Unlock()
 	return stale
+}
+
+// SweepStale reconciles phantom PENDING orders, emits their terminal OrderUpdate, and
+// raises ONE alert if any were found — turning a silent QUIK/Lua no-reply into a visible
+// signal (STL UI + Telegram) instead of the operator discovering it on a stuck order.
+// Idempotent and cheap: the link calls it on every heartbeat, and PlaceOrder calls it
+// first so a link-drop leftover never blocks a fresh placement.
+func (m *Manager) SweepStale() {
+	stale := m.reconcileStalePending()
+	if len(stale) == 0 {
+		return
+	}
+	codes := make([]string, 0, len(stale))
+	for _, wo := range stale {
+		m.emitOrderUpdate(wo, string(ReasonStalePending))
+		codes = append(codes, wo.code)
+	}
+	msg := fmt.Sprintf(
+		"QUIK/Lua не ответил на %d заявк(и) за %ds %v — проверь торговый скрипт shectory_trade.lua и связь с брокером",
+		len(stale), staleAckTimeoutMs/1000, codes)
+	_ = m.emit.EmitAlert(quikv1.AlertSeverity_ALERT_SEVERITY_WARN, "QUIK_NO_REPLY", msg)
+	m.logf("trade: ALERT QUIK_NO_REPLY — %s", msg)
 }
 
 // ---- emit helpers ----

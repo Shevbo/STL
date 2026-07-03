@@ -97,6 +97,9 @@ type TradeManager interface {
 	// dual). EffectiveLimits returns the agent's current limits for the agent->STL echo.
 	ApplyLimits(*quikv1.SetLimits)
 	EffectiveLimits() *quikv1.LimitsState
+	// SweepStale expires phantom PENDING orders + raises QUIK_NO_REPLY; the link calls
+	// it periodically so a silent no-reply surfaces without waiting for the next order.
+	SweepStale()
 }
 
 // Link owns the connection lifecycle and reconnect loop.

@@ -43,6 +43,11 @@ func (l *Link) sendLoop(ctx context.Context, stream quikv1.QuikAgentLink_Session
 			if err := l.sendHeartbeat(stream); err != nil {
 				return err
 			}
+			// Proactively expire phantom placements + raise QUIK_NO_REPLY, so a silent
+			// no-reply surfaces on the heartbeat cadence, not only on the next order.
+			if l.opt.Trade != nil {
+				l.opt.Trade.SweepStale()
+			}
 			// Evaluate health once, raise transition alerts, then send diagnostics
 			// from the same snapshot so they stay consistent.
 			snap := l.evalAndAlert(stream)
