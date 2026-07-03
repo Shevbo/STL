@@ -2893,14 +2893,14 @@ def create_app() -> FastAPI:
         buckets: dict[int, dict] = {}
         last_cached = 0.0   # newest raw-bar epoch present in the cache (for the tail top-up)
 
-        def _merge(t: float, o, h, l, c, v) -> None:
+        def _merge(t: float, o, h, lo_, c, v) -> None:
             key = (int(t) // bucket_secs) * bucket_secs
             agg = buckets.get(key)
             if agg is None:
-                buckets[key] = {"time": key, "open": o, "high": h, "low": l, "close": c, "volume": v}
+                buckets[key] = {"time": key, "open": o, "high": h, "low": lo_, "close": c, "volume": v}
             else:
                 agg["high"] = max(agg["high"], h)
-                agg["low"] = min(agg["low"], l)
+                agg["low"] = min(agg["low"], lo_)
                 agg["close"] = c
                 agg["volume"] += v
 

@@ -38,12 +38,18 @@ make build      # cross-build windows exe (amd64+386)
 
 The orchestrator accepts work only when these stay green (or no redder than baseline):
 
-| Command | Baseline (2026-07-02) |
+| Command | Baseline (2026-07-03) |
 |---|---|
 | `python -m ruff check trader/ tests/` | **0 errors** ("All checks passed!") |
-| `python -m pytest -m "not integration" -q` | **330 passed**, 9 deselected (integration needs FINAM_SECRET_TOKEN) |
+| `python -m pytest -m "not integration" -q` | **335 passed**, 9 deselected (integration needs FINAM_SECRET_TOKEN) |
 | `cd frontend && node ./node_modules/vitest/vitest.mjs run` | **24 passed** (5 files) |
-| `cd quik_agent && go test ./...` | green (run on the hoster; the `trade` package is the hot path) |
+| `go test ./...` in `~/quik_build/quik_agent` ON THE HOSTER | green — `export PATH=$HOME/go-sdk/go/bin:$HOME/go/bin:$HOME/protoc/bin:$PATH` first (plain ssh has no go) |
+
+Active plan: `docs/superpowers/plans/2026-07-03-quik-side-robot-agent.md` (12 tasks). Its
+NEW verify loops as they come online: `python -m pytest tests/runner/ -q` (robot_runner),
+`go test ./internal/robots/ ./internal/runner/` (agent robot hosting). Go work cycle: edit
+locally in `quik_agent/`, scp the changed files (and proto) into hoster `~/quik_build/`,
+test there, commit locally.
 
 "Inherited red" vs "I broke it": the above is the green baseline — a failure you did not
 introduce is not a reason to stop, but never leave the base redder than you found it.
