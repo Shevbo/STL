@@ -1,4 +1,12 @@
-from robot_runner.bars import BarBuilder
+from robot_runner.bars import BarBuilder, pick_price
+
+
+def test_pick_price_fallback_chain():
+    assert pick_price(100.0, 99.0, 101.0) == 100.0      # last wins
+    assert pick_price(0.0, 87500.0, 87570.0) == 87535.0  # mid when no last
+    assert pick_price(0.0, 87510.0, 0.0) == 87510.0      # bid-only feed
+    assert pick_price(0.0, 0.0, 87570.0) == 87570.0      # ask-only
+    assert pick_price(0.0, 0.0, 0.0) == 0.0              # nothing usable
 
 
 def test_bar_builder_aggregates_minutes():

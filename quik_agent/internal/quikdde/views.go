@@ -153,7 +153,7 @@ func (p *Provider) Ticks() []Tick {
 	codeC := colIndex(columns, "код", "code", "бумаг", "инструмент")
 	lastC := colIndex(columns, "последн", "last", "цена послед")
 	bidC := colIndex(columns, "спрос", "bid", "лучший спрос", "покупка")
-	askC := colIndex(columns, "предложен", "ask", "offer", "продажа")
+	askC := colIndex(columns, "предложен", "предл", "ask", "offer", "продажа")
 	oiC := colIndex(columns, "откр. позиц", "открытые позиц", "open interest", "oi")
 	if codeC < 0 {
 		return nil

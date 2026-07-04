@@ -10,6 +10,18 @@ from collections import deque
 from trader.lab.runtime import Bar
 
 
+def pick_price(last: float, bid: float, ask: float) -> float:
+    """Bar price from a tick: trade price when the feed carries it, else the
+    mid, else whichever side exists. The QUIK DDE export may lack the
+    last-price column (params sheet has Спрос/Предл. only) — without this
+    fallback no bars would ever build. Returns 0.0 when nothing usable."""
+    if last > 0:
+        return last
+    if bid > 0 and ask > 0:
+        return (bid + ask) / 2.0
+    return bid if bid > 0 else (ask if ask > 0 else 0.0)
+
+
 class BarBuilder:
     def __init__(self, max_bars: int = 3000) -> None:
         self._bars: deque[Bar] = deque(maxlen=max_bars)

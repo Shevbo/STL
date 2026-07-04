@@ -19,7 +19,7 @@ from trader.lab.scheduler import _MSK, _parse_window, _within_window
 from trader.lab.strategies.library import make_on_bar
 from trader.quik.pb.shectory.quik.v1 import quik_agent_pb2 as pb
 
-from robot_runner.bars import BarBuilder
+from robot_runner.bars import BarBuilder, pick_price
 from robot_runner.runtime import AgentRuntime
 
 log = structlog.get_logger()
@@ -175,9 +175,12 @@ class RobotHost:
 
         async def consume_ticks():
             async for t in self._bridge.ticks([]):
+                price = pick_price(t.last, t.bid, t.ask)
+                if price <= 0:
+                    continue
                 for r in self.robots.values():
                     if r.spec["symbol"] == t.code:
-                        r.bars.on_tick(t.received_at_unix_ms, t.last)
+                        r.bars.on_tick(t.received_at_unix_ms, price)
 
         async def consume_events():
             async for u in self._bridge.order_events("rr:"):
