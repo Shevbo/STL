@@ -48,19 +48,40 @@
   const chartFills = $derived(
     toFills(trades.filter((t: any) => EXECUTED.has(t.status)))
       .map((f: any) => ({ ...f, time: f.time + MSK_OFFSET })));
-  const chartResult = $derived({ trades: chartFills, equity_curve: [], params });
 
-  const openOrders = $derived((robot?.working_orders ?? []).map((w: any) => ({
-    side: w.side === 'SIDE_SELL' ? 'sell' : 'buy',
-    price: Number(w.price ?? 0), qty: Number(w.qty ?? 0), order_id: w.order_id ?? '',
-  })));
-  const plannedOrders = $derived.by(() => {
-    const out: any[] = [];
+  // STABLE-IDENTITY chart props. BacktestChart fully reloads on every new `result`
+  // object; the 5s mirror poll must NOT recreate props unless the CONTENT changed
+  // (otherwise the chart lives in a permanent "загрузка" loop).
+  let chartResult = $state<any>(null);
+  let openOrders = $state<any[]>([]);
+  let plannedOrders = $state<any[]>([]);
+  let _fpChart = '';
+  let _fpOrders = '';
+  $effect(() => {
+    const fills = chartFills;
+    const fp = JSON.stringify([symbol, fills.length,
+      fills.at(-1)?.time ?? 0, fills.at(-1)?.price ?? 0, params]);
+    if (fp !== _fpChart) {
+      _fpChart = fp;
+      chartResult = { trades: fills, equity_curve: [], params };
+    }
+  });
+  $effect(() => {
+    const open = (robot?.working_orders ?? []).map((w: any) => ({
+      side: w.side === 'SIDE_SELL' ? 'sell' : 'buy',
+      price: Number(w.price ?? 0), qty: Number(w.qty ?? 0), order_id: w.order_id ?? '',
+    }));
+    const planned: any[] = [];
     for (const p of signal?.planned_orders ?? [])
-      out.push({ side: p.side, price: p.price, qty: p.qty, reason: p.reason });
+      planned.push({ side: p.side, price: p.price, qty: p.qty, reason: p.reason });
     for (const p of signal?.armed ?? [])
-      out.push({ side: p.side, price: p.price, qty: p.qty, reason: p.reason });
-    return out;
+      planned.push({ side: p.side, price: p.price, qty: p.qty, reason: p.reason });
+    const fp = JSON.stringify([open, planned]);
+    if (fp !== _fpOrders) {
+      _fpOrders = fp;
+      openOrders = open;
+      plannedOrders = planned;
+    }
   });
 
   const today = new Date();
@@ -131,6 +152,7 @@
   {/if}
 
   <div class="ars-chart">
+    {#if chartResult}
     <BacktestChart
       result={chartResult}
       {symbol}
@@ -141,6 +163,7 @@
       openOrders={openOrders}
       plannedOrders={plannedOrders}
     />
+    {/if}
   </div>
 
   <div class="ars-lat"><LatencyPane minutes={360} /></div>
