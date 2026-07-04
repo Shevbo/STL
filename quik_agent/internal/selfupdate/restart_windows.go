@@ -26,6 +26,12 @@ func spawnRestart(exeDir, restartName, stage, stageExe string) error {
 		"ping -n 5 127.0.0.1 >nul",
 		fmt.Sprintf(`copy /y "%s" "%s"`, stageExe, destExe),
 		"if errorlevel 1 goto :fail",
+		// Companion binaries shipped in the same release zip (zero-touch satellite:
+		// the bundled robot-runner rides the agent's own update channel).
+		fmt.Sprintf(`if exist "%s" copy /y "%s" "%s"`,
+			filepath.Join(stageQ, "robot-runner.exe"),
+			filepath.Join(stageQ, "robot-runner.exe"),
+			filepath.Join(exeDir, "robot-runner.exe")),
 		fmt.Sprintf(`if exist "%s" rd /s /q "%s"`, stageQ, stageQ),
 		fmt.Sprintf(`start "" /D "%s" "%s"`, exeDir, destExe),
 		`del "%~f0"`,
