@@ -20,6 +20,7 @@ from trader.lab.strategies.library import make_on_bar
 from trader.quik.pb.shectory.quik.v1 import quik_agent_pb2 as pb
 
 from robot_runner.bars import BarBuilder, pick_price
+from robot_runner.explain import explain
 from robot_runner.runtime import AgentRuntime
 
 log = structlog.get_logger()
@@ -156,13 +157,27 @@ class RobotHost:
                 side=pb.SIDE_BUY if f["side"] == "buy" else pb.SIDE_SELL,
                 qty=f["qty"], price=f["price"], status=f["status"],
                 ts_unix_ms=f["ts_ms"]) for f in r.runtime.recent_fills()]
+            working = [pb.RobotWorkingOrder(
+                client_id=w["client_id"], order_id=w["order_id"],
+                side=pb.SIDE_BUY if w["side"] == "buy" else pb.SIDE_SELL,
+                price=w["price"], qty=w["qty"], state=w["state"])
+                for w in r.runtime.working_orders()]
+            try:
+                sig = json.dumps(explain(r.spec["strategy_id"], r.bars.bars(),
+                                         r.spec["params"],
+                                         r.runtime.signed_position()),
+                                 ensure_ascii=False)
+            except Exception as exc:  # noqa: BLE001 — showcase must never break status
+                sig = json.dumps({"error": str(exc)}, ensure_ascii=False)
             robots.append(pb.RobotStatus(
                 robot_id=rid, running=not (self.killed or r.paused), paused=r.paused,
                 position=r.runtime.signed_position(), avg_price=r.runtime.avg_price(),
                 realized_pnl=r.runtime.realized_pnl(),
                 last_bar_unix=r.bars.last_bar_time,
                 heartbeat_unix_ms=int(time.time() * 1000),
-                recent_fills=fills, note=r.last_error))
+                recent_fills=fills, note=r.last_error,
+                signal_json=sig, working_orders=working,
+                bars_count=len(r.bars.bars())))
         return pb.RobotStatusReport(robots=robots,
                                     sent_at_unix_ms=int(time.time() * 1000))
 

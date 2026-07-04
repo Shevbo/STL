@@ -178,6 +178,13 @@ class AgentRuntime:
             except Exception:  # noqa: BLE001 — persistence must never break trading
                 pass
 
+    def working_orders(self) -> list[dict]:
+        """Resting/in-flight orders for the showcase (submitted/active/partial)."""
+        return [{"client_id": o.order_id, "order_id": o.order_id, "side": o.side,
+                 "price": o.price, "qty": o.qty, "state": o.status}
+                for o in self._orders.values()
+                if o.status in ("submitted", "active", "partial")]
+
     def signed_position(self) -> int:
         return self._signed
 

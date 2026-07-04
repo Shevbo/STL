@@ -254,6 +254,17 @@ message RobotFill {
   int64 ts_unix_ms = 7;
 }
 
+// A robot's resting/in-flight order (agent-hosted execution).
+message RobotWorkingOrder {
+  string client_id = 1;
+  string order_id = 2;
+  Side side = 3;
+  double price = 4;
+  int64 qty = 5;
+  string state = 6;                 // submitted | active | partial
+  int64 ts_unix_ms = 7;
+}
+
 message RobotStatus {
   string robot_id = 1;
   bool running = 2;                 // scheduled and inside window loop
@@ -265,6 +276,12 @@ message RobotStatus {
   int64 heartbeat_unix_ms = 8;      // runner's per-robot liveness
   repeated RobotFill recent_fills = 9;   // last <=20
   string note = 10;                 // last log / error line
+  // Strategy introspection for the showcase UI: JSON with the CURRENT signal
+  // internals — what the robot waits for, computed features (gaps/body/thresholds),
+  // desired position, and the orders it PLANS to fire on the next signal.
+  string signal_json = 11;
+  repeated RobotWorkingOrder working_orders = 12;
+  int32 bars_count = 13;            // closed bars accumulated (data feed sanity)
 }
 
 message RobotStatusReport {
