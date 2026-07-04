@@ -139,3 +139,13 @@ async def agent_robots(agent_id: str, request: Request):
     store = _store(request)
     report = store.robot_report(agent_id)
     return report or {"robots": [], "received_at_ms": None}
+
+
+@router.get("/robots-mirror")
+async def robots_mirror(request: Request, agent_id: str | None = None):
+    """Same mirror without a mandatory agent id: picks the single live agent
+    (store._pick semantics) — lets a per-robot showcase URL omit the agent."""
+    _auth(request)
+    store = _store(request)
+    report = store.robot_report(agent_id)
+    return report or {"robots": [], "received_at_ms": None}

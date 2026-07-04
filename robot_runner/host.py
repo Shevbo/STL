@@ -177,7 +177,11 @@ class RobotHost:
                 heartbeat_unix_ms=int(time.time() * 1000),
                 recent_fills=fills, note=r.last_error,
                 signal_json=sig, working_orders=working,
-                bars_count=len(r.bars.bars())))
+                bars_count=len(r.bars.bars()),
+                symbol=r.spec["symbol"], strategy_id=r.spec["strategy_id"],
+                paper=r.spec["paper"], schedule=r.spec["schedule"],
+                params_json=json.dumps(r.spec["params"], ensure_ascii=False),
+                max_position=r.spec["max_position"]))
         return pb.RobotStatusReport(robots=robots,
                                     sent_at_unix_ms=int(time.time() * 1000))
 

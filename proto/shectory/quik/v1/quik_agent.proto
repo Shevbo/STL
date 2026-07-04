@@ -282,6 +282,13 @@ message RobotStatus {
   string signal_json = 11;
   repeated RobotWorkingOrder working_orders = 12;
   int32 bars_count = 13;            // closed bars accumulated (data feed sanity)
+  // Spec echo so the showcase is self-sufficient (no DB row for agent robots).
+  string symbol = 14;
+  string strategy_id = 15;
+  bool paper = 16;
+  string schedule = 17;
+  string params_json = 18;
+  int64 max_position = 19;
 }
 
 message RobotStatusReport {

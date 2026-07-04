@@ -18,6 +18,7 @@
   import OrderViz from './components/OrderViz.svelte';
   import ChartsGrid from './components/ChartsGrid.svelte';
   import LoginDialog from './components/LoginDialog.svelte';
+  import AgentRobotScreen from './components/lab/AgentRobotScreen.svelte';
   import { WsClient } from '$lib/ws';
   import { robotsStore } from '$lib/stores/robots.svelte';
   import { quotesStore } from '$lib/stores/quotes.svelte';
@@ -28,6 +29,11 @@
   import type { OrderRequest } from '$lib/types';
 
   let authed = $state(false);
+  // Per-robot showcase deep link: /?agent_robot=<id>[&agent=<agent_id>] renders the
+  // full-page agent-robot screen instead of the trading shell.
+  const _qs = new URLSearchParams(window.location.search);
+  const agentRobotId = _qs.get('agent_robot');
+  const agentIdParam = _qs.get('agent');
   // Session check is in flight on first load. While checking we show a neutral splash
   // (NOT the login form) so a normal F5 with a valid cookie does not flash the login
   // screen. The login form only appears after the check completes with a real 401.
@@ -250,6 +256,8 @@
   </div>
 {:else if !authed}
   <LoginDialog {onLogin} />
+{:else if agentRobotId}
+  <AgentRobotScreen robotId={agentRobotId} agentId={agentIdParam} />
 {:else}
 <div class="shell" onpointermove={onPointerMove} onpointerup={onPointerUp} onpointerleave={onPointerUp}>
   <TopBar
