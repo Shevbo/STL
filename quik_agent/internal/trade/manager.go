@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -52,6 +53,10 @@ type workingOrder struct {
 	// sentMs is when the placement was sent to Lua (agent clock). Used to expire a
 	// PENDING order QUIK never assigned an order_num to (a phantom left by a link drop).
 	sentMs int64
+	// lastText is the most recent non-empty text carried by a TransReply/OnOrder event
+	// for this order (e.g. a rejection reason). Kept so PendingTransViews can surface
+	// WHY a trans is hung/rejected without re-deriving it from proto frames already sent.
+	lastText string
 }
 
 func (w *workingOrder) restingQty() int64 {
@@ -436,6 +441,76 @@ func (m *Manager) Blocked() bool {
 	return m.blocked
 }
 
+// ---- read-only views for the recon/status page (internal/recon wiring) ----
+
+// WorkingSnapshot is a read-only view of one live (non-terminal) working order, for the
+// recon comparator and the local status page. OrderNum is empty for an order QUIK has
+// not yet acknowledged (still PENDING).
+type WorkingSnapshot struct {
+	ClientID, OrderNum, Code string
+	Price                    float64
+	Qty, Balance             int64
+}
+
+// SnapshotWorking returns every live working order (done/terminal ones excluded),
+// sorted by OrderNum ascending (empty OrderNum sorts first). Read-only: it copies
+// fields under the lock and never returns a pointer into manager state.
+func (m *Manager) SnapshotWorking() []WorkingSnapshot {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]WorkingSnapshot, 0, len(m.byClient))
+	for _, wo := range m.byClient {
+		if wo.done {
+			continue
+		}
+		out = append(out, WorkingSnapshot{
+			ClientID: wo.clientID,
+			OrderNum: wo.orderNum,
+			Code:     wo.code,
+			Price:    wo.price,
+			Qty:      wo.qty,
+			Balance:  wo.balance,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].OrderNum < out[j].OrderNum })
+	return out
+}
+
+// PendingTransView is a read-only view of one transaction the operator should look at:
+// either still pending past the reconcile window (see reconcileStalePending /
+// staleAckTimeoutMs) or whose last known reply was a rejection. OK is always false —
+// PendingTransViews only ever returns entries worth surfacing.
+type PendingTransView struct {
+	TransID      int64
+	Status, Text string
+	OK           bool
+}
+
+// PendingTransViews returns, sorted by TransID ascending:
+//   - orders still PENDING (no order_num yet) sent more than staleAckTimeoutMs ago —
+//     the same window reconcileStalePending uses to expire a phantom placement, so this
+//     surfaces the incident BEFORE (or even if never) SweepStale runs, and
+//   - orders whose current state is REJECTED, carrying the last reply text.
+//
+// Read-only under the manager's lock; never mutates working-order state.
+func (m *Manager) PendingTransViews() []PendingTransView {
+	now := m.nowMs()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []PendingTransView
+	for transID, wo := range m.byTrans {
+		switch {
+		case wo.state == quikv1.OrderState_ORDER_STATE_PENDING && !wo.done &&
+			wo.orderNum == "" && wo.sentMs != 0 && now-wo.sentMs > staleAckTimeoutMs:
+			out = append(out, PendingTransView{TransID: transID, Status: "PENDING", Text: wo.lastText, OK: false})
+		case wo.state == quikv1.OrderState_ORDER_STATE_REJECTED:
+			out = append(out, PendingTransView{TransID: transID, Status: "REJECTED", Text: wo.lastText, OK: false})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].TransID < out[j].TransID })
+	return out
+}
+
 // ---- 1b maker execution ----
 
 // StartExecution begins passively working target_quantity near the touch (maker only,
@@ -688,6 +763,9 @@ func (m *Manager) OnTransReply(ev TransReplyEvent) {
 	clientID := ""
 	if wo != nil {
 		clientID = wo.clientID
+		if ev.Text != "" {
+			wo.lastText = ev.Text
+		}
 	}
 	rejected := wo != nil && isTransReject(ev.ResultCode)
 	if rejected {
@@ -757,6 +835,9 @@ func (m *Manager) OnOrder(ev OrderEvent) {
 		quikv1.OrderState_ORDER_STATE_CANCELLED,
 		quikv1.OrderState_ORDER_STATE_REJECTED:
 		wo.done = true
+	}
+	if ev.Text != "" {
+		wo.lastText = ev.Text
 	}
 	clientID := wo.clientID
 	ex := m.exec[clientID]
