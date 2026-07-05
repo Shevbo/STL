@@ -352,6 +352,58 @@ async def lifespan(app: FastAPI):
 # subprocesses and drive the VDS load average into the hundreds; serializing them
 # keeps the box responsive. Hard cap on combos as a second guardrail.
 _BACKTEST_LOCK = asyncio.Lock()
+
+# ── market_bars hot-path caches ─────────────────────────────────────────────
+# Every open showcase/robot tab polls the bar tail; without these, each request
+# re-parsed the multi-MB agent_bars JSON and re-hit ISS — enough parallel tabs
+# starved the event loop and the whole box (mirror timeouts, SSH banner drops).
+_ISS_TAIL_TTL = 10.0
+_ISS_TAIL_CACHE: dict[tuple, tuple[float, list]] = {}
+_ISS_TAIL_INFLIGHT: dict[tuple, "asyncio.Future"] = {}
+_AGENT_BARS_CACHE: dict[str, tuple[float, list]] = {}   # path -> (mtime, rows)
+
+
+async def _iss_tail_cached(symbol: str, d0, d1) -> list:
+    """ISS tail fetch with a short TTL + in-flight collapse: N tabs polling the
+    same symbol cost ONE ISS round-trip per TTL window."""
+    key = (symbol, d0.isoformat(), d1.isoformat())
+    now = time.monotonic()
+    hit = _ISS_TAIL_CACHE.get(key)
+    if hit is not None and now - hit[0] < _ISS_TAIL_TTL:
+        return hit[1]
+    fut = _ISS_TAIL_INFLIGHT.get(key)
+    if fut is not None:
+        return await fut
+    loop = asyncio.get_event_loop()
+    fut = loop.create_future()
+    _ISS_TAIL_INFLIGHT[key] = fut
+    try:
+        from trader.lab.iss_loader import load_bars_iss
+        try:
+            bars = await load_bars_iss(symbol, d0, d1, interval=1)
+        except Exception:  # noqa: BLE001 — a failed tail is just an empty tail
+            bars = []
+        if bars:
+            _ISS_TAIL_CACHE[key] = (now, bars)
+        if not fut.done():
+            fut.set_result(bars)
+        return bars
+    finally:
+        _ISS_TAIL_INFLIGHT.pop(key, None)
+
+
+def _agent_bars_rows(path: str) -> list:
+    """agent_bars/<symbol>.json rows, cached by file mtime (parse once, not per request)."""
+    import json as _json
+    import os as _os
+    mtime = _os.path.getmtime(path)
+    hit = _AGENT_BARS_CACHE.get(path)
+    if hit is not None and hit[0] == mtime:
+        return hit[1]
+    rows = _json.load(open(path, encoding="utf-8")).get("rows", [])
+    _AGENT_BARS_CACHE[path] = (mtime, rows)
+    return rows
+
 _MAX_COMBOS = 2000
 
 # ── VDS fallback sweeper ──────────────────────────────────────────────────────
@@ -2915,8 +2967,7 @@ def create_app() -> FastAPI:
         used_agent = False
         if _os.path.exists(_ab):
             try:
-                import json as _json
-                for r in _json.load(open(_ab, encoding="utf-8")).get("rows", []):
+                for r in _agent_bars_rows(_ab):
                     t = r[0]
                     if t > last_cached:
                         last_cached = t
@@ -2959,11 +3010,10 @@ def create_app() -> FastAPI:
         if hi >= now_ts - 2 * 86400 and hi > last_cached + 1:
             try:
                 from datetime import datetime as _dt2, timezone as _tz2
-                from trader.lab.iss_loader import load_bars_iss
                 tail_lo = max(lo, last_cached + 1)
                 d0 = _dt2.fromtimestamp(tail_lo, _tz2.utc).date()
                 d1 = _dt2.fromtimestamp(hi, _tz2.utc).date()
-                for b in await load_bars_iss(symbol, d0, d1, interval=1):
+                for b in await _iss_tail_cached(symbol, d0, d1):
                     if tail_lo <= b.time <= hi:
                         _merge(b.time, b.open, b.high, b.low, b.close, b.volume)
             except Exception as exc:
