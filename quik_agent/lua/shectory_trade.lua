@@ -614,6 +614,9 @@ end
 
 local function publish_acc_trades()  -- incremental: only rows we have not sent yet
   local n = getNumberOf("trades") or 0
+  -- Self-heal on table shrink (QUIK session/day rollover resets the trades table):
+  -- resync from index 0; downstream Go code dedupes by trade_num.
+  if n < acc.trd_seen then acc.trd_seen = 0 end
   if n <= acc.trd_seen then return end
   local rows = {}
   for i = acc.trd_seen, n - 1 do

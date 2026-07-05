@@ -15,6 +15,6 @@ return {
 
   -- MD_CODES    = "RIU6,GZU6,SiU6,SRU6",  -- инструменты для котировок/ленты
 
-  -- Account tables publish cadence for the agent showcase (ms). 0 keeps default 2000.
+  -- Account tables publish cadence for the agent showcase (ms). Default 2000 when unset.
   -- ACC_INTERVAL_MS = 2000,
 }
