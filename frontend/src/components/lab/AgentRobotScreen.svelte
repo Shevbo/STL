@@ -110,6 +110,19 @@
 
   const FETCH_TO = 2500;   // ms; a hung request must never freeze the update loops
 
+  // Exchange price step from a book ladder: min positive gap between adjacent
+  // levels of ONE side (levels are step-multiples; empty levels are omitted, so
+  // the minimum over the ladder converges to the true step).
+  function inferStep(prices: number[]): number {
+    const s = [...new Set(prices)].sort((a, b) => a - b);
+    let min = 0;
+    for (let i = 1; i < s.length; i++) {
+      const d = s[i] - s[i - 1];
+      if (d > 0 && (min === 0 || d < min)) min = d;
+    }
+    return min;
+  }
+
   async function load() {
     try {
       const q = agentId ? `?agent_id=${encodeURIComponent(agentId)}` : '';
@@ -137,18 +150,29 @@
       }
     } catch { /* fall through to the book */ }
     // The params-sheet tick has a history of dying while the per-code order-book
-    // sheets stay alive. When the tick is stale (>15s), take the book mid instead —
-    // the chart and the стакан then can NEVER diverge for long.
+    // sheets stay alive. When the tick is stale (>15s), take the book instead —
+    // the chart and the стакан then can NEVER diverge for long. The proxy price
+    // is QUANTIZED to the instrument's price step inferred from the book ladder:
+    // an off-grid "price" (89175 on a 10-step instrument) does not exist on the
+    // exchange and must never be drawn. No inferable step -> best bid (real level).
     if (!ms || Date.now() - ms > 15_000) {
       try {
         const res = await fetchWithAuth(`/api/v1/quik/orderbook/${encodeURIComponent(sym)}${q}`,
           { signal: AbortSignal.timeout(FETCH_TO) } as any);
         if (res.ok) {
           const d = await res.json();
-          const bb = Number(d.bids?.[0]?.price ?? 0), ba = Number(d.asks?.[0]?.price ?? 0);
+          const bidP = (d.bids ?? []).map((l: any) => Number(l.price)).filter((p: number) => p > 0);
+          const askP = (d.asks ?? []).map((l: any) => Number(l.price)).filter((p: number) => p > 0);
+          const step = Math.min(inferStep(bidP) || Infinity, inferStep(askP) || Infinity);
+          const bb = bidP[0] ?? 0, ba = askP[0] ?? 0;
           const bookMs = Number(d.received_at_unix_ms ?? 0);
-          const mid = bb > 0 && ba > 0 ? (bb + ba) / 2 : (bb || ba);
-          if (mid > 0 && bookMs > ms) { price = mid; ms = bookMs; }
+          let p = 0;
+          if (bb > 0 && ba > 0) {
+            p = Number.isFinite(step) && step > 0
+              ? Math.round((bb + ba) / 2 / step) * step
+              : bb;
+          } else { p = bb || ba; }
+          if (p > 0 && bookMs > ms) { price = p; ms = bookMs; }
         }
       } catch { /* next second retries */ }
     }

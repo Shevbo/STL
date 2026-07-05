@@ -15,6 +15,15 @@ import (
 type ProviderTicks struct{ P *quikdde.Provider }
 
 func (pt ProviderTicks) Snapshot() []*quikv1.MarketDataTick {
+	// Price step per code (from the params sheet's last-known state) — used to
+	// quantize the book mid onto the exchange grid. A half-step "price" like
+	// 89175 on a 10-step instrument does not exist and must never leave here.
+	steps := map[string]float64{}
+	for _, pr := range pt.P.Params() {
+		if pr.PriceStep > 0 {
+			steps[pr.Code] = pr.PriceStep
+		}
+	}
 	byCode := map[string]*quikv1.MarketDataTick{}
 	for _, tk := range pt.P.Ticks() {
 		byCode[tk.Code] = &quikv1.MarketDataTick{
@@ -49,11 +58,25 @@ func (pt ProviderTicks) Snapshot() []*quikv1.MarketDataTick {
 		if ex != nil && ex.ReceivedAtUnixMs >= book.ReceivedUnixMs {
 			continue // params tick is fresher — keep it
 		}
-		// last deliberately 0: a stale last carried from the dead params sheet
-		// would win pick_price() forever and pin the bars to an old price. With
-		// last=0 the runner builds bars from the FRESH book mid.
+		// A stale last carried from the dead params sheet would win pick_price()
+		// forever, so it is dropped. Instead: mid of the book QUANTIZED to the
+		// instrument's price step (an off-grid "price" does not exist on the
+		// exchange). No known step -> best bid (a real printed level).
+		var last float64
+		if bid > 0 && ask > 0 {
+			mid := (bid + ask) / 2
+			if step := steps[name]; step > 0 {
+				last = float64(int64(mid/step+0.5)) * step
+			} else {
+				last = bid
+			}
+		} else if bid > 0 {
+			last = bid
+		} else {
+			last = ask
+		}
 		byCode[name] = &quikv1.MarketDataTick{
-			Code: name, Bid: bid, Ask: ask,
+			Code: name, Last: last, Bid: bid, Ask: ask,
 			ReceivedAtUnixMs: book.ReceivedUnixMs,
 		}
 	}
