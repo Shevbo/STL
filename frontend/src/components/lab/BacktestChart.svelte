@@ -394,7 +394,7 @@
   // visible range survive. Dates are computed at refresh time (a tab left open
   // across midnight keeps moving). Fetch window = today±1d, cheap on the server.
   let lastBarTime = 0;                 // newest bar currently on the chart
-  let lastBar: any = null;             // full OHLCV of the newest bar (tick merge base)
+  let tailBar: any = null;             // full OHLCV of the newest bar (tick merge base)
   let lastEquityValue = 100000;        // carried onto appended bars (axis alignment)
   let liveTimer: ReturnType<typeof setInterval> | null = null;
   let tailBusy = false;
@@ -406,20 +406,20 @@
     const bucket = resampleMin * 60;
     const m = Math.floor(t / bucket) * bucket;
     if (m < lastBarTime) return;                 // tick from an already-closed bar
-    if (!lastBar || m > lastBar.time) {
-      if (lastBar && m > lastBar.time) {
+    if (!tailBar || m > tailBar.time) {
+      if (tailBar && m > tailBar.time) {
         equitySeries?.update({ time: m, value: lastEquityValue });
         barCount += 1;
       }
-      lastBar = { time: m, open: p, high: p, low: p, close: p, volume: 0 };
+      tailBar = { time: m, open: p, high: p, low: p, close: p, volume: 0 };
     } else {
-      lastBar.high = Math.max(lastBar.high, p);
-      lastBar.low = Math.min(lastBar.low, p);
-      lastBar.close = p;
+      tailBar.high = Math.max(tailBar.high, p);
+      tailBar.low = Math.min(tailBar.low, p);
+      tailBar.close = p;
     }
-    lastBarTime = lastBar.time;
-    candleSeries.update({ time: lastBar.time, open: lastBar.open, high: lastBar.high,
-                          low: lastBar.low, close: lastBar.close });
+    lastBarTime = tailBar.time;
+    candleSeries.update({ time: tailBar.time, open: tailBar.open, high: tailBar.high,
+                          low: tailBar.low, close: tailBar.close });
   }
 
   $effect(() => {
@@ -447,7 +447,7 @@
           barCount += 1;
           appended = true;
         }
-        lastBar = { ...b };            // server bar = authoritative tick-merge base
+        tailBar = { ...b };            // server bar = authoritative tick-merge base
       }
       if (appended) periodLabel = `${periodLabel.split(' — ')[0]} — ${fmtDay(lastBarTime)}`;
     } catch { /* transient network error — next tick retries */ }
@@ -544,7 +544,7 @@
       barCount = bars.length;
       periodLabel = `${fmtDay(bars[0].time)} — ${fmtDay(bars[bars.length - 1].time)}`;
       lastBarTime = bars[bars.length - 1].time;
-      lastBar = { ...bars[bars.length - 1] };
+      tailBar = { ...bars[bars.length - 1] };
 
       const fills = toFills(result?.trades);
       // Roll-aware: P&L summed PER CONTRACT with each contract's own point value (a
