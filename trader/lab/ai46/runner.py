@@ -29,7 +29,15 @@ class Ai46Runner:
         self.params = params or BotParams()
         self.symbols = list(symbols)
         self.klod = klod or LLM.KlodClient(enabled=False)   # degraded until wired
-        self.fe = feature_engine or FeatureEngine()
+        # HMM/GARCH re-fit throttle. Re-fitting Baum-Welch for 20 symbols EVERY
+        # 60s tick in pure Python kept the single-worker uvicorn event loop at
+        # ~100% CPU in bursts (py-spy: hmm_regime dominated the profile) and
+        # timed out the rest of the API. A market regime does not change per
+        # minute — default refresh 300s; cheap per-tick features (OFI/VWAP/
+        # price-shock) are computed every tick regardless.
+        import os as _os
+        _refresh = float(_os.environ.get("AI46_MODEL_REFRESH_SECS", "300"))
+        self.fe = feature_engine or FeatureEngine(model_refresh_secs=_refresh)
         self.exec = executor or PaperExecutor()
         self.risk = risk or RiskManager(self.exec, max_positions=self.params.max_positions,
                                         max_exposure=self.params.max_exposure)
