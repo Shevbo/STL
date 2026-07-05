@@ -6,12 +6,25 @@ import (
 	"shectory/quik_agent/internal/quikdde"
 )
 
-// flushSecurities sends a SecuritiesSnapshot built from the provider.
+// flushSecurities sends a SecuritiesSnapshot built from the provider. Skipped
+// when nothing changed since the last send: with poll_interval_sec=1 the old
+// unconditional full snapshot (~500 rows) every second burned STL CPU for no
+// information (the source sheets are mostly static, fully static with DDE off).
 func (l *Link) flushSecurities(stream quikv1.QuikAgentLink_SessionClient, full bool) error {
 	rows := l.opt.Provider.Securities()
 	if len(rows) == 0 {
 		return nil
 	}
+	var newest int64
+	for _, r := range rows {
+		if r.ReceivedUnixMs > newest {
+			newest = r.ReceivedUnixMs
+		}
+	}
+	if newest > 0 && newest == l.secSentMs {
+		return nil // unchanged since last send
+	}
+	l.secSentMs = newest
 	items := make([]*quikv1.Security, 0, len(rows))
 	for _, r := range rows {
 		items = append(items, &quikv1.Security{
@@ -36,6 +49,16 @@ func (l *Link) flushParams(stream quikv1.QuikAgentLink_SessionClient) error {
 	if len(rows) == 0 {
 		return nil
 	}
+	var newest int64
+	for _, r := range rows {
+		if r.ReceivedUnixMs > newest {
+			newest = r.ReceivedUnixMs
+		}
+	}
+	if newest > 0 && newest == l.paramsSentMs {
+		return nil // unchanged since last send
+	}
+	l.paramsSentMs = newest
 	var receivedAt int64
 	out := make([]*quikv1.ParamRow, 0, len(rows))
 	for _, r := range rows {
@@ -67,8 +90,16 @@ func (l *Link) flushMarketData(stream quikv1.QuikAgentLink_SessionClient) error 
 				continue
 			}
 		}
+		// Only changed ticks: at a 1s poll, re-sending ~490 unchanged rows every
+		// second was pure STL ingest burn.
+		if l.tickSentMs != nil && l.tickSentMs[tk.Code] >= tk.ReceivedUnixMs {
+			continue
+		}
 		if err := l.sendTick(stream, tk); err != nil {
 			return err
+		}
+		if l.tickSentMs != nil {
+			l.tickSentMs[tk.Code] = tk.ReceivedUnixMs
 		}
 	}
 

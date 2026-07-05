@@ -121,6 +121,13 @@ type Link struct {
 	startedAt time.Time
 	reconnects uint32
 
+	// secSentMs/paramsSentMs/tickSentMs gate the reference-data and tick flushes:
+	// only changed data is re-sent (poll runs every second now). Same goroutine
+	// discipline as rawSent; reset per session in runOnce.
+	secSentMs    int64
+	paramsSentMs int64
+	tickSentMs   map[string]int64
+
 	// rawSent tracks the last-sent lastMutationMs per sheet name so unchanged
 	// RawTables are not re-sent. Accessed only from the sendLoop goroutine (one
 	// per session), so no extra locking is needed. Reset per session in runOnce.
@@ -296,6 +303,8 @@ func (l *Link) runOnce(ctx context.Context) error {
 	// Fresh per-session change-detection state: a reconnect re-sends every sheet
 	// once so STL has a full picture again.
 	l.rawSent = map[string]int64{}
+	l.secSentMs, l.paramsSentMs = 0, 0
+	l.tickSentMs = map[string]int64{}
 
 	// Publish the live stream for the trade Emitter; clear it when the session ends.
 	l.setStream(stream)
