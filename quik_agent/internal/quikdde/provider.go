@@ -16,6 +16,10 @@ import (
 type Provider struct {
 	mu     sync.RWMutex
 	sheets map[string]*sheetGrid
+	// QLua market-data overlay (see luafeed.go) — primary for the trading path,
+	// with the DDE sheets as fallback; readers merge freshest-wins.
+	luaTicks map[string]luaTick
+	luaBooks map[string]Book
 }
 
 type sheetGrid struct {
@@ -173,6 +177,18 @@ func (p *Provider) LastMutationMs() int64 {
 	for _, g := range p.sheets {
 		if g.lastMutationMs > best {
 			best = g.lastMutationMs
+		}
+	}
+	// The QLua feed counts as data liveness too: with it flowing, the watchdog
+	// must not keep "restarting" a DDE that is intentionally idle/optional.
+	for _, t := range p.luaTicks {
+		if t.recvMs > best {
+			best = t.recvMs
+		}
+	}
+	for _, b := range p.luaBooks {
+		if b.ReceivedUnixMs > best {
+			best = b.ReceivedUnixMs
 		}
 	}
 	return best

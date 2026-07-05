@@ -90,7 +90,7 @@ type moveCmd struct {
 // the union of fields keeps decoding to one json.Unmarshal per line; the Event field
 // selects which fields are meaningful.
 type luaEvent struct {
-	Event      string `json:"event"`       // "trans_reply" | "order" | "trade"
+	Event      string `json:"event"`       // "trans_reply" | "order" | "trade" | "md" | "book"
 	TransID    int64  `json:"trans_id"`    // trans_reply, order
 	ResultCode int32  `json:"result_code"` // trans_reply
 	OrderNum   string `json:"order_num"`   // order, trade, trans_reply
@@ -98,8 +98,24 @@ type luaEvent struct {
 	Balance    int64  `json:"balance"`     // order: unfilled remainder
 	Qty        int64  `json:"qty"`         // order: original qty; trade: trade qty
 	Price      string `json:"price"`       // order/trade price
-	TS         int64  `json:"ts"`          // trade timestamp (epoch, source-defined)
+	TS         int64  `json:"ts"`          // trade/md timestamp (epoch, source-defined)
 	Text       string `json:"text"`        // trans_reply/order text
+
+	// market data (QLua getParamEx / getQuoteLevel2 publisher)
+	Code string      `json:"code"` // md, book
+	Last float64     `json:"last"` // md
+	Bid  float64     `json:"bid"`  // md
+	Ask  float64     `json:"ask"`  // md
+	Bids [][]float64 `json:"bids"` // book: [[price, qty] ...] best-first
+	Asks [][]float64 `json:"asks"` // book: [[price, qty] ...] best-first
+}
+
+// MDEvent is a QLua market-data snapshot (tick or book) for the MD sink.
+type MDEvent struct {
+	Code       string
+	Last, Bid, Ask float64
+	Bids, Asks [][]float64 // nil for a tick event
+	IsBook     bool
 }
 
 // BridgeHandler receives decoded Lua events. The order manager implements it. Calls
@@ -145,6 +161,7 @@ type TradeEvent struct {
 type Bridge struct {
 	addr    string
 	handler BridgeHandler
+	mdSink  func(MDEvent)
 	logf    func(string, ...any)
 
 	ln net.Listener
@@ -177,6 +194,14 @@ func NewBridge(port int, handler BridgeHandler, logf func(string, ...any)) *Brid
 		handler: handler,
 		logf:    logf,
 	}
+}
+
+// SetMDSink sets the market-data sink (md/book events from the QLua publisher).
+// Optional; nil drops MD events. Called on the bridge reader goroutine.
+func (b *Bridge) SetMDSink(f func(MDEvent)) {
+	b.mu.Lock()
+	b.mdSink = f
+	b.mu.Unlock()
 }
 
 // SetHandler sets/replaces the event handler. Safe to call before Run.
@@ -293,7 +318,20 @@ func (b *Bridge) readLoop(ctx context.Context, conn net.Conn) {
 func (b *Bridge) dispatch(ev luaEvent) {
 	b.mu.Lock()
 	h := b.handler
+	md := b.mdSink
 	b.mu.Unlock()
+	switch ev.Event {
+	case "md":
+		if md != nil {
+			md(MDEvent{Code: ev.Code, Last: ev.Last, Bid: ev.Bid, Ask: ev.Ask})
+		}
+		return
+	case "book":
+		if md != nil {
+			md(MDEvent{Code: ev.Code, Bids: ev.Bids, Asks: ev.Asks, IsBook: true})
+		}
+		return
+	}
 	if h == nil {
 		return
 	}

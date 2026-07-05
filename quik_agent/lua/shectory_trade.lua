@@ -52,6 +52,15 @@ local CONFIG = {
   RECONNECT_MS   = 2000,          -- delay between reconnect attempts
   POLL_SLEEP_MS  = 10,            -- main loop idle sleep
   LOG_TO_QUIK    = true,          -- mirror key events to the QUIK message() window
+
+  -- Market-data publisher (QLua getParamEx/getQuoteLevel2 -> agent). This makes the
+  -- agent INDEPENDENT of the fragile DDE export: no "Начать вывод", survives agent
+  -- restarts, auto-resumes with the transport. Empty MD_CODES disables it.
+  MD_CODES         = "RIU6,GZU6,SiU6,SRU6",  -- comma-separated instrument codes
+  MD_CLASS         = "SPBFUT",               -- QUIK class code for the instruments
+  MD_INTERVAL_MS   = 500,                    -- tick snapshot cadence
+  MD_BOOK_INTERVAL_MS = 1000,                -- order-book (L2) snapshot cadence
+  MD_BOOK_DEPTH    = 10,                     -- levels per side
 }
 
 ----------------------------------------------------------------------
@@ -452,6 +461,83 @@ local function emit_trade(order_num, qty, price, ts)
 end
 
 ----------------------------------------------------------------------
+-- Market-data publisher (QLua -> agent). Replaces the DDE dependency for the
+-- trading path: ticks via getParamEx, books via getQuoteLevel2, on a timer in
+-- main(). All calls are pcall-guarded — MD must never break order handling.
+----------------------------------------------------------------------
+local md = { codes = {}, last_tick_ms = 0, last_book_ms = 0 }
+for code in string.gmatch(CONFIG.MD_CODES or "", "([^,%s]+)") do
+  md.codes[#md.codes + 1] = code
+end
+
+local function now_ms()
+  return math.floor(os.time() * 1000)
+end
+
+local function param_num(code, name)
+  local ok, r = pcall(getParamEx, CONFIG.MD_CLASS, code, name)
+  if not ok or type(r) ~= "table" then return 0 end
+  local v = tonumber(r.param_value)
+  if v == nil or r.result ~= "1" then return 0 end
+  return v
+end
+
+local function publish_ticks()
+  local ts = now_ms()
+  for _, code in ipairs(md.codes) do
+    local last = param_num(code, "LAST")
+    local bid  = param_num(code, "BID")
+    local ask  = param_num(code, "OFFER")
+    if last > 0 or bid > 0 or ask > 0 then
+      emit({ event = "md", code = code, last = last, bid = bid, ask = ask, ts = ts })
+    end
+  end
+end
+
+local function publish_books()
+  local ts = now_ms()
+  for _, code in ipairs(md.codes) do
+    local ok, l2 = pcall(getQuoteLevel2, CONFIG.MD_CLASS, code)
+    if ok and type(l2) == "table" then
+      -- QUIK: bid = buy side ascending (best LAST), offer = sell side ascending (best FIRST)
+      local bids, asks = {}, {}
+      local bc = tonumber(l2.bid_count) or 0
+      local oc = tonumber(l2.offer_count) or 0
+      if type(l2.bid) == "table" then
+        local from = math.max(1, bc - CONFIG.MD_BOOK_DEPTH + 1)
+        for i = bc, from, -1 do                       -- best-first
+          local lv = l2.bid[i]
+          if lv then bids[#bids + 1] = { tonumber(lv.price) or 0, tonumber(lv.quantity) or 0 } end
+        end
+      end
+      if type(l2.offer) == "table" then
+        local to = math.min(oc, CONFIG.MD_BOOK_DEPTH)
+        for i = 1, to do                              -- best-first
+          local lv = l2.offer[i]
+          if lv then asks[#asks + 1] = { tonumber(lv.price) or 0, tonumber(lv.quantity) or 0 } end
+        end
+      end
+      if #bids > 0 or #asks > 0 then
+        emit({ event = "book", code = code, bids = bids, asks = asks, ts = ts })
+      end
+    end
+  end
+end
+
+local function md_pump()
+  if #md.codes == 0 or not transport.is_open() then return end
+  local t = now_ms()
+  if t - md.last_tick_ms >= CONFIG.MD_INTERVAL_MS then
+    md.last_tick_ms = t
+    pcall(publish_ticks)
+  end
+  if t - md.last_book_ms >= CONFIG.MD_BOOK_INTERVAL_MS then
+    md.last_book_ms = t
+    pcall(publish_books)
+  end
+end
+
+----------------------------------------------------------------------
 -- Command handlers (agent -> Lua -> QUIK)
 ----------------------------------------------------------------------
 
@@ -752,6 +838,8 @@ function main()
         dispatch_command(line)
       end
     end
+
+    md_pump()   -- market-data snapshots on their own cadence (no-op when disabled)
 
     -- idle sleep; QUIK provides sleep(ms). Guard in case it is absent.
     if sleep then

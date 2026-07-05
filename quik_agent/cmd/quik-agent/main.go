@@ -322,6 +322,25 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 		fmt.Printf("trade: "+f+"\n", a...)
 	})
 	bridge.SetHandler(mgr)                       // Lua events -> manager
+	// QLua market-data feed -> provider overlay: the PRIMARY data path for the
+	// trading stack (DDE stays as fallback/passthrough — it needs manual QUIK
+	// clicks and has repeatedly died in production).
+	bridge.SetMDSink(func(ev trade.MDEvent) {
+		if ev.IsBook {
+			toLvls := func(rows [][]float64) []quikdde.BookLevel {
+				out := make([]quikdde.BookLevel, 0, len(rows))
+				for _, r := range rows {
+					if len(r) >= 2 && r[0] > 0 && r[1] > 0 {
+						out = append(out, quikdde.BookLevel{Price: r[0], Quantity: int64(r[1])})
+					}
+				}
+				return out
+			}
+			quikdde.Default.SetLuaBook(ev.Code, toLvls(ev.Bids), toLvls(ev.Asks))
+			return
+		}
+		quikdde.Default.SetLuaTick(ev.Code, ev.Last, ev.Bid, ev.Ask)
+	})
 	mgr.SetBookSource(ctx, quikdde.Default)      // local book for the 1b maker loop
 	lk.SetTrade(mgr)                             // STL Phase 2 commands -> manager
 	go func() {

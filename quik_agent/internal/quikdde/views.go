@@ -148,7 +148,7 @@ func (p *Provider) Ticks() []Tick {
 		columns, rows, ts = p.Sheet(SheetParams)
 	}
 	if columns == nil {
-		return nil
+		return p.luaTicksMerged(nil)
 	}
 	codeC := colIndex(columns, "код", "code", "бумаг", "инструмент")
 	lastC := colIndex(columns, "последн", "last", "цена послед")
@@ -179,7 +179,7 @@ func (p *Provider) Ticks() []Tick {
 		}
 		out = append(out, tk)
 	}
-	return out
+	return p.luaTicksMerged(out)
 }
 
 // OrderBook returns the top-N book for one code from the "orderbook" sheet.
@@ -194,6 +194,9 @@ func (p *Provider) OrderBook(code string) (Book, bool) {
 		columns, rows, ts = p.Sheet(SheetOrderBook)
 	}
 	if columns == nil {
+		if lb, ok := p.luaBook(code, 0); ok {
+			return lb, true
+		}
 		return Book{}, false
 	}
 	priceC := colIndex(columns, "цена", "price")
@@ -218,6 +221,9 @@ func (p *Provider) OrderBook(code string) (Book, bool) {
 	// Best-first: bids descending by price, asks ascending by price.
 	sort.SliceStable(b.Bids, func(i, j int) bool { return b.Bids[i].Price > b.Bids[j].Price })
 	sort.SliceStable(b.Asks, func(i, j int) bool { return b.Asks[i].Price < b.Asks[j].Price })
+	if lb, ok := p.luaBook(code, b.ReceivedUnixMs); ok {
+		return lb, true
+	}
 	if len(b.Bids) == 0 && len(b.Asks) == 0 {
 		return Book{}, false
 	}
