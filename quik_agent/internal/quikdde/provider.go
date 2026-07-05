@@ -18,8 +18,9 @@ type Provider struct {
 	sheets map[string]*sheetGrid
 	// QLua market-data overlay (see luafeed.go) — primary for the trading path,
 	// with the DDE sheets as fallback; readers merge freshest-wins.
-	luaTicks map[string]luaTick
-	luaBooks map[string]Book
+	luaTicks  map[string]luaTick
+	luaBooks  map[string]Book
+	luaParams map[string]luaParam
 }
 
 type sheetGrid struct {

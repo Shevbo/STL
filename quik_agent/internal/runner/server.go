@@ -50,6 +50,7 @@ type Server struct {
 	mu           sync.Mutex
 	ctrlCh       chan *quikv1.RunnerControl // nil when no runner control stream
 	eventSubs    []chan *quikv1.OrderUpdate
+	tapeSubs     []chan *quikv1.TapeBatch
 	lastReport   time.Time
 	ctrlAttached bool
 }
@@ -196,6 +197,53 @@ func (s *Server) StreamControl(h *quikv1.ControlHello, stream quikv1.RunnerBridg
 			if err := stream.Send(rc); err != nil {
 				return err
 			}
+		}
+	}
+}
+
+func (s *Server) StreamTape(f *quikv1.TickFilter, stream quikv1.RunnerBridge_StreamTapeServer) error {
+	want := map[string]bool{}
+	for _, c := range f.GetCodes() {
+		want[c] = true
+	}
+	ch := make(chan *quikv1.TapeBatch, 256)
+	s.mu.Lock()
+	s.tapeSubs = append(s.tapeSubs, ch)
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		for i, c := range s.tapeSubs {
+			if c == ch {
+				s.tapeSubs = append(s.tapeSubs[:i], s.tapeSubs[i+1:]...)
+				break
+			}
+		}
+		s.mu.Unlock()
+	}()
+	for {
+		select {
+		case <-stream.Context().Done():
+			return nil
+		case b := <-ch:
+			if len(want) > 0 && !want[b.GetCode()] {
+				continue
+			}
+			if err := stream.Send(b); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+// FanTape forwards an all-trades batch to runner subscribers.
+func (s *Server) FanTape(b *quikv1.TapeBatch) {
+	s.mu.Lock()
+	subs := append([]chan *quikv1.TapeBatch(nil), s.tapeSubs...)
+	s.mu.Unlock()
+	for _, ch := range subs {
+		select {
+		case ch <- b:
+		default: // slow consumer: drop the batch, bars re-sync from the next one
 		}
 	}
 }

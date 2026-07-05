@@ -13,11 +13,27 @@ option go_package = "shectory/quik/v1;quikv1";
 
 service RunnerBridge {
   rpc StreamTicks(TickFilter) returns (stream MarketDataTick);
+  rpc StreamTape(TickFilter) returns (stream TapeBatch);
   rpc PlaceRunnerOrder(PlaceOrder) returns (BridgeAck);
   rpc CancelRunnerOrder(CancelOrder) returns (BridgeAck);
   rpc StreamOrderEvents(EventsFilter) returns (stream OrderUpdate);
   rpc StreamControl(ControlHello) returns (stream RunnerControl);
   rpc ReportStatus(RobotStatusReport) returns (BridgeAck);
+}
+
+// One exchange trade from the anonymized all-trades tape (QLua OnAllTrade).
+message TapeTrade {
+  double price = 1;
+  int64 qty = 2;
+  int32 side = 3;        // 1 = sell (aggressor), 2 = buy, 0 = unknown
+  int64 ts_unix_ms = 4;  // exchange/terminal trade time
+}
+
+// A batch of tape trades for one instrument (Lua flushes every ~300ms).
+message TapeBatch {
+  string code = 1;
+  repeated TapeTrade trades = 2;
+  int64 received_at_unix_ms = 3;
 }
 
 message TickFilter { repeated string codes = 1; }         // empty = all whitelisted

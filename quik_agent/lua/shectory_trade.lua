@@ -64,6 +64,24 @@ local CONFIG = {
 }
 
 ----------------------------------------------------------------------
+-- Local overrides sidecar: shectory_trade_config.lua NEXT TO this script,
+-- containing `return { ACCOUNT="...", USE_FILE_QUEUE=true, QUEUE_DIR="C:\\quik-bridge" }`.
+-- Survives script updates — the operator edits CONFIG exactly ONCE, in the
+-- sidecar, and future shectory_trade.lua replacements need no re-editing.
+----------------------------------------------------------------------
+do
+  local dir = ""
+  if getScriptPath then
+    local okp, sp = pcall(getScriptPath)
+    if okp and sp then dir = sp .. "\\" end
+  end
+  local okc, overrides = pcall(dofile, dir .. "shectory_trade_config.lua")
+  if okc and type(overrides) == "table" then
+    for k, v in pairs(overrides) do CONFIG[k] = v end
+  end
+end
+
+----------------------------------------------------------------------
 -- Runtime state
 ----------------------------------------------------------------------
 local running   = true
@@ -465,9 +483,11 @@ end
 -- trading path: ticks via getParamEx, books via getQuoteLevel2, on a timer in
 -- main(). All calls are pcall-guarded — MD must never break order handling.
 ----------------------------------------------------------------------
-local md = { codes = {}, last_tick_ms = 0, last_book_ms = 0 }
+local md = { codes = {}, code_set = {}, last_tick_ms = 0, last_book_ms = 0,
+             last_param_ms = 0, tape = {}, last_tape_ms = 0 }
 for code in string.gmatch(CONFIG.MD_CODES or "", "([^,%s]+)") do
   md.codes[#md.codes + 1] = code
+  md.code_set[code] = true
 end
 
 local function now_ms()
@@ -524,6 +544,43 @@ local function publish_books()
   end
 end
 
+-- Instrument reference params (price step / step cost / initial margin): with
+-- these published, the DDE export becomes COMPLETELY unnecessary. Once a minute.
+local function publish_params()
+  for _, code in ipairs(md.codes) do
+    local step = param_num(code, "SEC_PRICE_STEP")
+    local stepcost = param_num(code, "STEPPRICE")
+    local go = param_num(code, "BUYDEPO")
+    if step > 0 or stepcost > 0 then
+      emit({ event = "param", code = code, price_step = step,
+             step_cost = stepcost, margin = go })
+    end
+  end
+end
+
+-- Anonymized all-trades tape: OnAllTrade buffers, md_pump flushes batches.
+-- QLua serialises callbacks vs main(), so plain tables are safe here.
+function OnAllTrade(t)
+  if not t or not md.code_set[t.sec_code] then return end
+  local buf = md.tape[t.sec_code]
+  if buf == nil then buf = {}; md.tape[t.sec_code] = buf end
+  if #buf >= 2000 then return end   -- bound memory on a runaway burst
+  local side = 0
+  local fl = tonumber(t.flags) or 0
+  if math.floor(fl / 1) % 2 == 1 then side = 1 end       -- 0x1 = sell aggressor
+  if math.floor(fl / 2) % 2 == 1 then side = 2 end       -- 0x2 = buy aggressor
+  buf[#buf + 1] = { tonumber(t.price) or 0, tonumber(t.qty) or 0, side, now_ms() }
+end
+
+local function publish_tape()
+  for code, buf in pairs(md.tape) do
+    if #buf > 0 then
+      emit({ event = "tape", code = code, trades = buf })
+      md.tape[code] = {}
+    end
+  end
+end
+
 local function md_pump()
   if #md.codes == 0 or not transport.is_open() then return end
   local t = now_ms()
@@ -534,6 +591,14 @@ local function md_pump()
   if t - md.last_book_ms >= CONFIG.MD_BOOK_INTERVAL_MS then
     md.last_book_ms = t
     pcall(publish_books)
+  end
+  if t - md.last_tape_ms >= 300 then
+    md.last_tape_ms = t
+    pcall(publish_tape)
+  end
+  if t - md.last_param_ms >= 60000 then
+    md.last_param_ms = t
+    pcall(publish_params)
   end
 end
 

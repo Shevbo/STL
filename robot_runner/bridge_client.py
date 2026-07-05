@@ -47,6 +47,10 @@ class BridgeClient:
         return self._stream(
             lambda: self._stub.StreamTicks(rb.TickFilter(codes=codes)), "ticks")
 
+    def tape(self, codes: list[str]) -> AsyncIterator[rb.TapeBatch]:
+        return self._stream(
+            lambda: self._stub.StreamTape(rb.TickFilter(codes=codes)), "tape")
+
     def order_events(self, prefix: str) -> AsyncIterator[pb.OrderUpdate]:
         return self._stream(
             lambda: self._stub.StreamOrderEvents(rb.EventsFilter(client_prefix=prefix)),

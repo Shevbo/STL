@@ -30,6 +30,7 @@ import (
 	"shectory/quik_agent/internal/health"
 	"shectory/quik_agent/internal/link"
 	"shectory/quik_agent/internal/notify"
+	quikv1 "shectory/quik_agent/internal/pb"
 	"shectory/quik_agent/internal/quikdde"
 	"shectory/quik_agent/internal/robots"
 	"shectory/quik_agent/internal/runner"
@@ -38,6 +39,10 @@ import (
 	"shectory/quik_agent/internal/trade"
 	"shectory/quik_agent/internal/watchdog"
 )
+
+// runnerSrvTape forwards a tape batch to the runner bridge once it exists (the
+// MD sink is wired before the robot-hosting block; nil-safe indirection).
+var runnerSrvTape = func(trades []*quikv1.TapeTrade, code string) {}
 
 // agentBuildRev is the build revision, injected at build time via
 // -ldflags "-X main.agentBuildRevStr=<n>". Compared against the release source for
@@ -326,6 +331,26 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 	// trading stack (DDE stays as fallback/passthrough — it needs manual QUIK
 	// clicks and has repeatedly died in production).
 	bridge.SetMDSink(func(ev trade.MDEvent) {
+		if ev.IsParam {
+			quikdde.Default.SetLuaParam(ev.Code, ev.PriceStep, ev.StepCost, ev.Margin)
+			return
+		}
+		if ev.IsTape {
+			trades := make([]*quikv1.TapeTrade, 0, len(ev.Trades))
+			var lastPx float64
+			for _, r := range ev.Trades {
+				if len(r) >= 4 && r[0] > 0 {
+					trades = append(trades, &quikv1.TapeTrade{Price: r[0], Qty: int64(r[1]),
+						Side: int32(r[2]), TsUnixMs: int64(r[3])})
+					lastPx = r[0]
+				}
+			}
+			if len(trades) > 0 {
+				runnerSrvTape(trades, ev.Code)
+				quikdde.Default.SetLuaLast(ev.Code, lastPx) // /tick + UI follow the tape
+			}
+			return
+		}
 		if ev.IsBook {
 			toLvls := func(rows [][]float64) []quikdde.BookLevel {
 				out := make([]quikdde.BookLevel, 0, len(rows))
@@ -367,6 +392,10 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 			Logf: func(f string, a ...any) { fmt.Printf("runner-bridge: "+f+"\n", a...) },
 		})
 		mgr.SetRunnerFan(runnerSrv.FanOrderEvent)
+		runnerSrvTape = func(trades []*quikv1.TapeTrade, code string) {
+			runnerSrv.FanTape(&quikv1.TapeBatch{Code: code, Trades: trades,
+				ReceivedAtUnixMs: time.Now().UnixMilli()})
+		}
 		lk.SetRobots(robotStore, runnerSrv)
 		go func() {
 			addr := fmt.Sprintf("127.0.0.1:%d", cfg.RunnerBridgePort)

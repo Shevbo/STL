@@ -193,6 +193,15 @@ class RobotHost:
             async for rc in self._bridge.control("robot-runner/1"):
                 await self.handle_control(rc)
 
+        async def consume_tape():
+            # Exact bars: every exchange trade (price/qty) from the anonymized
+            # tape -> OHLCV identical to what the backtest replays.
+            async for b in self._bridge.tape([]):
+                for r in self.robots.values():
+                    if r.spec["symbol"] == b.code:
+                        for t in b.trades:
+                            r.bars.on_trade(t.ts_unix_ms, t.price, int(t.qty))
+
         async def consume_ticks():
             async for t in self._bridge.ticks([]):
                 price = pick_price(t.last, t.bid, t.ask)
@@ -219,5 +228,5 @@ class RobotHost:
                 await self._bridge.report_status(self.status_report())
                 await asyncio.sleep(STATUS_INTERVAL_S)
 
-        await asyncio.gather(consume_control(), consume_ticks(),
+        await asyncio.gather(consume_control(), consume_ticks(), consume_tape(),
                              consume_events(), schedule(), report())

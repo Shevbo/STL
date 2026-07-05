@@ -101,21 +101,31 @@ type luaEvent struct {
 	TS         int64  `json:"ts"`          // trade/md timestamp (epoch, source-defined)
 	Text       string `json:"text"`        // trans_reply/order text
 
-	// market data (QLua getParamEx / getQuoteLevel2 publisher)
-	Code string      `json:"code"` // md, book
-	Last float64     `json:"last"` // md
-	Bid  float64     `json:"bid"`  // md
-	Ask  float64     `json:"ask"`  // md
-	Bids [][]float64 `json:"bids"` // book: [[price, qty] ...] best-first
-	Asks [][]float64 `json:"asks"` // book: [[price, qty] ...] best-first
+	// market data (QLua getParamEx / getQuoteLevel2 / OnAllTrade publisher)
+	Code   string      `json:"code"`   // md, book, tape, param
+	Last   float64     `json:"last"`   // md
+	Bid    float64     `json:"bid"`    // md
+	Ask    float64     `json:"ask"`    // md
+	Bids   [][]float64 `json:"bids"`   // book: [[price, qty] ...] best-first
+	Asks   [][]float64 `json:"asks"`   // book: [[price, qty] ...] best-first
+	Trades [][]float64 `json:"trades"` // tape: [[price, qty, side, ts_ms] ...]
+	PriceStep float64  `json:"price_step"` // param
+	StepCost  float64  `json:"step_cost"`  // param
+	Margin    float64  `json:"margin"`     // param (initial margin, BUYDEPO)
 }
 
-// MDEvent is a QLua market-data snapshot (tick or book) for the MD sink.
+// MDEvent is a QLua market-data event (tick / book / tape / param) for the MD sink.
 type MDEvent struct {
-	Code       string
+	Code           string
 	Last, Bid, Ask float64
-	Bids, Asks [][]float64 // nil for a tick event
-	IsBook     bool
+	Bids, Asks     [][]float64 // book
+	Trades         [][]float64 // tape: [[price, qty, side, ts_ms] ...]
+	PriceStep      float64     // param
+	StepCost       float64     // param
+	Margin         float64     // param
+	IsBook         bool
+	IsTape         bool
+	IsParam        bool
 }
 
 // BridgeHandler receives decoded Lua events. The order manager implements it. Calls
@@ -329,6 +339,17 @@ func (b *Bridge) dispatch(ev luaEvent) {
 	case "book":
 		if md != nil {
 			md(MDEvent{Code: ev.Code, Bids: ev.Bids, Asks: ev.Asks, IsBook: true})
+		}
+		return
+	case "tape":
+		if md != nil {
+			md(MDEvent{Code: ev.Code, Trades: ev.Trades, IsTape: true})
+		}
+		return
+	case "param":
+		if md != nil {
+			md(MDEvent{Code: ev.Code, PriceStep: ev.PriceStep, StepCost: ev.StepCost,
+				Margin: ev.Margin, IsParam: true})
 		}
 		return
 	}

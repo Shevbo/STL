@@ -25,7 +25,7 @@ _sym_db = _symbol_database.Default()
 from shectory.quik.v1 import quik_agent_pb2 as shectory_dot_quik_dot_v1_dot_quik__agent__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n$shectory/quik/v1/runner_bridge.proto\x12\x10shectory.quik.v1\x1a!shectory/quik/v1/quik_agent.proto\"\x1b\n\nTickFilter\x12\r\n\x05\x63odes\x18\x01 \x03(\t\"%\n\x0c\x45ventsFilter\x12\x15\n\rclient_prefix\x18\x01 \x01(\t\"3\n\x0c\x43ontrolHello\x12\x16\n\x0erunner_version\x18\x01 \x01(\t\x12\x0b\n\x03pid\x18\x02 \x01(\x05\"\xc4\x02\n\rRunnerControl\x12/\n\x06\x64\x65ploy\x18\x01 \x01(\x0b\x32\x1d.shectory.quik.v1.DeployRobotH\x00\x12\x33\n\x08undeploy\x18\x02 \x01(\x0b\x32\x1f.shectory.quik.v1.UndeployRobotH\x00\x12\x36\n\nset_params\x18\x03 \x01(\x0b\x32 .shectory.quik.v1.SetRobotParamsH\x00\x12-\n\x05pause\x18\x04 \x01(\x0b\x32\x1c.shectory.quik.v1.PauseRobotH\x00\x12-\n\x05start\x18\x05 \x01(\x0b\x32\x1c.shectory.quik.v1.StartRobotH\x00\x12,\n\x04kill\x18\x06 \x01(\x0b\x32\x1c.shectory.quik.v1.KillSwitchH\x00\x42\t\n\x07payload\"&\n\tBridgeAck\x12\n\n\x02ok\x18\x01 \x01(\x08\x12\r\n\x05\x65rror\x18\x02 \x01(\t2\xfb\x03\n\x0cRunnerBridge\x12O\n\x0bStreamTicks\x12\x1c.shectory.quik.v1.TickFilter\x1a .shectory.quik.v1.MarketDataTick0\x01\x12M\n\x10PlaceRunnerOrder\x12\x1c.shectory.quik.v1.PlaceOrder\x1a\x1b.shectory.quik.v1.BridgeAck\x12O\n\x11\x43\x61ncelRunnerOrder\x12\x1d.shectory.quik.v1.CancelOrder\x1a\x1b.shectory.quik.v1.BridgeAck\x12T\n\x11StreamOrderEvents\x12\x1e.shectory.quik.v1.EventsFilter\x1a\x1d.shectory.quik.v1.OrderUpdate0\x01\x12R\n\rStreamControl\x12\x1e.shectory.quik.v1.ControlHello\x1a\x1f.shectory.quik.v1.RunnerControl0\x01\x12P\n\x0cReportStatus\x12#.shectory.quik.v1.RobotStatusReport\x1a\x1b.shectory.quik.v1.BridgeAckB\x19Z\x17shectory/quik/v1;quikv1b\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n$shectory/quik/v1/runner_bridge.proto\x12\x10shectory.quik.v1\x1a!shectory/quik/v1/quik_agent.proto\"I\n\tTapeTrade\x12\r\n\x05price\x18\x01 \x01(\x01\x12\x0b\n\x03qty\x18\x02 \x01(\x03\x12\x0c\n\x04side\x18\x03 \x01(\x05\x12\x12\n\nts_unix_ms\x18\x04 \x01(\x03\"c\n\tTapeBatch\x12\x0c\n\x04\x63ode\x18\x01 \x01(\t\x12+\n\x06trades\x18\x02 \x03(\x0b\x32\x1b.shectory.quik.v1.TapeTrade\x12\x1b\n\x13received_at_unix_ms\x18\x03 \x01(\x03\"\x1b\n\nTickFilter\x12\r\n\x05\x63odes\x18\x01 \x03(\t\"%\n\x0c\x45ventsFilter\x12\x15\n\rclient_prefix\x18\x01 \x01(\t\"3\n\x0c\x43ontrolHello\x12\x16\n\x0erunner_version\x18\x01 \x01(\t\x12\x0b\n\x03pid\x18\x02 \x01(\x05\"\xc4\x02\n\rRunnerControl\x12/\n\x06\x64\x65ploy\x18\x01 \x01(\x0b\x32\x1d.shectory.quik.v1.DeployRobotH\x00\x12\x33\n\x08undeploy\x18\x02 \x01(\x0b\x32\x1f.shectory.quik.v1.UndeployRobotH\x00\x12\x36\n\nset_params\x18\x03 \x01(\x0b\x32 .shectory.quik.v1.SetRobotParamsH\x00\x12-\n\x05pause\x18\x04 \x01(\x0b\x32\x1c.shectory.quik.v1.PauseRobotH\x00\x12-\n\x05start\x18\x05 \x01(\x0b\x32\x1c.shectory.quik.v1.StartRobotH\x00\x12,\n\x04kill\x18\x06 \x01(\x0b\x32\x1c.shectory.quik.v1.KillSwitchH\x00\x42\t\n\x07payload\"&\n\tBridgeAck\x12\n\n\x02ok\x18\x01 \x01(\x08\x12\r\n\x05\x65rror\x18\x02 \x01(\t2\xc6\x04\n\x0cRunnerBridge\x12O\n\x0bStreamTicks\x12\x1c.shectory.quik.v1.TickFilter\x1a .shectory.quik.v1.MarketDataTick0\x01\x12I\n\nStreamTape\x12\x1c.shectory.quik.v1.TickFilter\x1a\x1b.shectory.quik.v1.TapeBatch0\x01\x12M\n\x10PlaceRunnerOrder\x12\x1c.shectory.quik.v1.PlaceOrder\x1a\x1b.shectory.quik.v1.BridgeAck\x12O\n\x11\x43\x61ncelRunnerOrder\x12\x1d.shectory.quik.v1.CancelOrder\x1a\x1b.shectory.quik.v1.BridgeAck\x12T\n\x11StreamOrderEvents\x12\x1e.shectory.quik.v1.EventsFilter\x1a\x1d.shectory.quik.v1.OrderUpdate0\x01\x12R\n\rStreamControl\x12\x1e.shectory.quik.v1.ControlHello\x1a\x1f.shectory.quik.v1.RunnerControl0\x01\x12P\n\x0cReportStatus\x12#.shectory.quik.v1.RobotStatusReport\x1a\x1b.shectory.quik.v1.BridgeAckB\x19Z\x17shectory/quik/v1;quikv1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -33,16 +33,20 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'shectory.quik.v1.runner_bri
 if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
   _globals['DESCRIPTOR']._serialized_options = b'Z\027shectory/quik/v1;quikv1'
-  _globals['_TICKFILTER']._serialized_start=93
-  _globals['_TICKFILTER']._serialized_end=120
-  _globals['_EVENTSFILTER']._serialized_start=122
-  _globals['_EVENTSFILTER']._serialized_end=159
-  _globals['_CONTROLHELLO']._serialized_start=161
-  _globals['_CONTROLHELLO']._serialized_end=212
-  _globals['_RUNNERCONTROL']._serialized_start=215
-  _globals['_RUNNERCONTROL']._serialized_end=539
-  _globals['_BRIDGEACK']._serialized_start=541
-  _globals['_BRIDGEACK']._serialized_end=579
-  _globals['_RUNNERBRIDGE']._serialized_start=582
-  _globals['_RUNNERBRIDGE']._serialized_end=1089
+  _globals['_TAPETRADE']._serialized_start=93
+  _globals['_TAPETRADE']._serialized_end=166
+  _globals['_TAPEBATCH']._serialized_start=168
+  _globals['_TAPEBATCH']._serialized_end=267
+  _globals['_TICKFILTER']._serialized_start=269
+  _globals['_TICKFILTER']._serialized_end=296
+  _globals['_EVENTSFILTER']._serialized_start=298
+  _globals['_EVENTSFILTER']._serialized_end=335
+  _globals['_CONTROLHELLO']._serialized_start=337
+  _globals['_CONTROLHELLO']._serialized_end=388
+  _globals['_RUNNERCONTROL']._serialized_start=391
+  _globals['_RUNNERCONTROL']._serialized_end=715
+  _globals['_BRIDGEACK']._serialized_start=717
+  _globals['_BRIDGEACK']._serialized_end=755
+  _globals['_RUNNERBRIDGE']._serialized_start=758
+  _globals['_RUNNERBRIDGE']._serialized_end=1340
 # @@protoc_insertion_point(module_scope)

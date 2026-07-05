@@ -114,7 +114,7 @@ func (p *Provider) Securities() []SecurityRow {
 func (p *Provider) Params() []ParamRow {
 	columns, rows, ts := p.Sheet(SheetParams)
 	if columns == nil {
-		return nil
+		return p.luaParamsMerged(nil)
 	}
 	codeC := colIndex(columns, "код", "code", "бумаг", "инструмент")
 	stepC := colIndex(columns, "шаг цены", "мин. шаг", "price step", "pricestep")
@@ -137,7 +137,7 @@ func (p *Provider) Params() []ParamRow {
 		}
 		out = append(out, pr)
 	}
-	return out
+	return p.luaParamsMerged(out)
 }
 
 // Ticks returns last/bid/ask/OI samples from the "quotes" sheet (falls back to

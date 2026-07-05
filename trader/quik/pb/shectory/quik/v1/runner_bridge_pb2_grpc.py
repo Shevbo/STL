@@ -40,6 +40,11 @@ class RunnerBridgeStub(object):
                 request_serializer=shectory_dot_quik_dot_v1_dot_runner__bridge__pb2.TickFilter.SerializeToString,
                 response_deserializer=shectory_dot_quik_dot_v1_dot_quik__agent__pb2.MarketDataTick.FromString,
                 _registered_method=True)
+        self.StreamTape = channel.unary_stream(
+                '/shectory.quik.v1.RunnerBridge/StreamTape',
+                request_serializer=shectory_dot_quik_dot_v1_dot_runner__bridge__pb2.TickFilter.SerializeToString,
+                response_deserializer=shectory_dot_quik_dot_v1_dot_runner__bridge__pb2.TapeBatch.FromString,
+                _registered_method=True)
         self.PlaceRunnerOrder = channel.unary_unary(
                 '/shectory.quik.v1.RunnerBridge/PlaceRunnerOrder',
                 request_serializer=shectory_dot_quik_dot_v1_dot_quik__agent__pb2.PlaceOrder.SerializeToString,
@@ -71,6 +76,12 @@ class RunnerBridgeServicer(object):
     """Missing associated documentation comment in .proto file."""
 
     def StreamTicks(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def StreamTape(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -113,6 +124,11 @@ def add_RunnerBridgeServicer_to_server(servicer, server):
                     servicer.StreamTicks,
                     request_deserializer=shectory_dot_quik_dot_v1_dot_runner__bridge__pb2.TickFilter.FromString,
                     response_serializer=shectory_dot_quik_dot_v1_dot_quik__agent__pb2.MarketDataTick.SerializeToString,
+            ),
+            'StreamTape': grpc.unary_stream_rpc_method_handler(
+                    servicer.StreamTape,
+                    request_deserializer=shectory_dot_quik_dot_v1_dot_runner__bridge__pb2.TickFilter.FromString,
+                    response_serializer=shectory_dot_quik_dot_v1_dot_runner__bridge__pb2.TapeBatch.SerializeToString,
             ),
             'PlaceRunnerOrder': grpc.unary_unary_rpc_method_handler(
                     servicer.PlaceRunnerOrder,
@@ -167,6 +183,33 @@ class RunnerBridge(object):
             '/shectory.quik.v1.RunnerBridge/StreamTicks',
             shectory_dot_quik_dot_v1_dot_runner__bridge__pb2.TickFilter.SerializeToString,
             shectory_dot_quik_dot_v1_dot_quik__agent__pb2.MarketDataTick.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def StreamTape(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_stream(
+            request,
+            target,
+            '/shectory.quik.v1.RunnerBridge/StreamTape',
+            shectory_dot_quik_dot_v1_dot_runner__bridge__pb2.TickFilter.SerializeToString,
+            shectory_dot_quik_dot_v1_dot_runner__bridge__pb2.TapeBatch.FromString,
             options,
             channel_credentials,
             insecure,
