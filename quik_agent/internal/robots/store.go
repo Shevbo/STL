@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"google.golang.org/protobuf/encoding/protojson"
 
@@ -14,8 +15,10 @@ import (
 )
 
 type entry struct {
-	Spec   json.RawMessage `json:"spec"` // protojson-encoded RobotSpec
-	Paused bool            `json:"paused"`
+	Spec              json.RawMessage `json:"spec"` // protojson-encoded RobotSpec
+	Paused            bool            `json:"paused"`
+	DeployedAtMs      int64           `json:"deployed_at_ms"`
+	ParamsUpdatedAtMs int64           `json:"params_updated_at_ms"`
 }
 
 // Store is a mutex-guarded map of RobotSpecs mirrored to robots.json in dir.
@@ -25,6 +28,8 @@ type Store struct {
 	path   string
 	specs  map[string]*quikv1.RobotSpec
 	paused map[string]bool
+	times  map[string][2]int64 // [0]=deployedAtMs [1]=paramsUpdatedAtMs
+	nowMs  func() int64
 }
 
 func NewStore(dir string) (*Store, error) {
@@ -32,6 +37,8 @@ func NewStore(dir string) (*Store, error) {
 		path:   filepath.Join(dir, "robots.json"),
 		specs:  map[string]*quikv1.RobotSpec{},
 		paused: map[string]bool{},
+		times:  map[string][2]int64{},
+		nowMs:  func() int64 { return time.Now().UnixMilli() },
 	}
 	raw, err := os.ReadFile(s.path)
 	if err != nil {
@@ -51,6 +58,8 @@ func NewStore(dir string) (*Store, error) {
 		}
 		s.specs[id] = spec
 		s.paused[id] = e.Paused
+		// zero value on legacy entries predating these fields — "not set yet"
+		s.times[id] = [2]int64{e.DeployedAtMs, e.ParamsUpdatedAtMs}
 	}
 	return s, nil
 }
@@ -62,7 +71,8 @@ func (s *Store) flushLocked() error {
 		if err != nil {
 			return err
 		}
-		m[id] = entry{Spec: b, Paused: s.paused[id]}
+		t := s.times[id]
+		m[id] = entry{Spec: b, Paused: s.paused[id], DeployedAtMs: t[0], ParamsUpdatedAtMs: t[1]}
 	}
 	raw, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
@@ -78,8 +88,33 @@ func (s *Store) flushLocked() error {
 func (s *Store) Put(spec *quikv1.RobotSpec) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.specs[spec.GetRobotId()] = spec
+	id := spec.GetRobotId()
+	s.specs[id] = spec
+	if t := s.times[id]; t[0] == 0 { // treat missing/0 as "not deployed yet"
+		t[0] = s.nowMs()
+		s.times[id] = t
+	}
 	return s.flushLocked()
+}
+
+// TouchParams stamps ParamsUpdatedAtMs=now for robotID (called whenever the
+// runner/STL edits a deployed robot's params, distinct from the initial deploy).
+func (s *Store) TouchParams(robotID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t := s.times[robotID]
+	t[1] = s.nowMs()
+	s.times[robotID] = t
+	return s.flushLocked()
+}
+
+// Times returns the persisted deploy/params-edit timestamps for robotID (zero
+// value if never set, e.g. legacy entries predating these fields).
+func (s *Store) Times(robotID string) (deployedMs, paramsMs int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t := s.times[robotID]
+	return t[0], t[1]
 }
 
 func (s *Store) Delete(robotID string) error {
@@ -87,6 +122,7 @@ func (s *Store) Delete(robotID string) error {
 	defer s.mu.Unlock()
 	delete(s.specs, robotID)
 	delete(s.paused, robotID)
+	delete(s.times, robotID)
 	return s.flushLocked()
 }
 

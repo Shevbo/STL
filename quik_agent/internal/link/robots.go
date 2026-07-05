@@ -38,7 +38,8 @@ func (l *Link) handleRobotMsg(msg *quikv1.OrchestratorMessage) {
 	case *quikv1.OrchestratorMessage_SetRobotParams:
 		if spec := l.opt.Robots.Get(p.SetRobotParams.GetRobotId()); spec != nil {
 			spec.ParamsJson = p.SetRobotParams.GetParamsJson()
-			_ = l.opt.Robots.Put(spec)
+			_ = l.opt.Robots.Put(spec) // Put preserves DeployedAtMs once already set
+			_ = l.opt.Robots.TouchParams(p.SetRobotParams.GetRobotId())
 		}
 		rc = &quikv1.RunnerControl{Payload: &quikv1.RunnerControl_SetParams{SetParams: p.SetRobotParams}}
 	case *quikv1.OrchestratorMessage_PauseRobot:
