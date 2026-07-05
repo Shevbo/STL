@@ -57,6 +57,11 @@ type workingOrder struct {
 	// for this order (e.g. a rejection reason). Kept so PendingTransViews can surface
 	// WHY a trans is hung/rejected without re-deriving it from proto frames already sent.
 	lastText string
+	// rejectedMs is when this order's state became REJECTED (agent clock). byTrans is
+	// never pruned, so PendingTransViews bounds the rejected surface by recency using
+	// this stamp — otherwise one old rejection would pin the recon State to MISMATCH
+	// until process restart.
+	rejectedMs int64
 }
 
 func (w *workingOrder) restingQty() int64 {
@@ -265,6 +270,7 @@ func (m *Manager) PlaceOrder(req *quikv1.PlaceOrder) {
 		m.mu.Lock()
 		wo.state = quikv1.OrderState_ORDER_STATE_REJECTED
 		wo.done = true
+		wo.rejectedMs = m.nowMs()
 		m.mu.Unlock()
 		m.emitOrderUpdate(wo, "bridge send failed: "+err.Error())
 	}
@@ -472,7 +478,14 @@ func (m *Manager) SnapshotWorking() []WorkingSnapshot {
 			Balance:  wo.balance,
 		})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].OrderNum < out[j].OrderNum })
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].OrderNum != out[j].OrderNum {
+			return out[i].OrderNum < out[j].OrderNum
+		}
+		// Tiebreak: two live PENDING orders both have an empty OrderNum until QUIK
+		// acknowledges them; ClientID keeps the snapshot order deterministic.
+		return out[i].ClientID < out[j].ClientID
+	})
 	return out
 }
 
@@ -486,11 +499,19 @@ type PendingTransView struct {
 	OK           bool
 }
 
+// rejectedSurfaceWindowMs bounds how long a REJECTED transaction stays visible in
+// PendingTransViews. byTrans is never pruned, so without a recency bound one old
+// rejection would pin the recon State to MISMATCH until process restart. 15 minutes is
+// long enough for an operator to notice and act, short enough to self-clear.
+const rejectedSurfaceWindowMs = 15 * 60 * 1000
+
 // PendingTransViews returns, sorted by TransID ascending:
 //   - orders still PENDING (no order_num yet) sent more than staleAckTimeoutMs ago —
 //     the same window reconcileStalePending uses to expire a phantom placement, so this
 //     surfaces the incident BEFORE (or even if never) SweepStale runs, and
-//   - orders whose current state is REJECTED, carrying the last reply text.
+//   - orders whose state became REJECTED within the last rejectedSurfaceWindowMs,
+//     carrying the last reply text. Older rejections age out of the surface (byTrans
+//     itself is never pruned) so a stale rejection cannot pin recon to MISMATCH forever.
 //
 // Read-only under the manager's lock; never mutates working-order state.
 func (m *Manager) PendingTransViews() []PendingTransView {
@@ -503,7 +524,8 @@ func (m *Manager) PendingTransViews() []PendingTransView {
 		case wo.state == quikv1.OrderState_ORDER_STATE_PENDING && !wo.done &&
 			wo.orderNum == "" && wo.sentMs != 0 && now-wo.sentMs > staleAckTimeoutMs:
 			out = append(out, PendingTransView{TransID: transID, Status: "PENDING", Text: wo.lastText, OK: false})
-		case wo.state == quikv1.OrderState_ORDER_STATE_REJECTED:
+		case wo.state == quikv1.OrderState_ORDER_STATE_REJECTED &&
+			wo.rejectedMs != 0 && now-wo.rejectedMs <= rejectedSurfaceWindowMs:
 			out = append(out, PendingTransView{TransID: transID, Status: "REJECTED", Text: wo.lastText, OK: false})
 		}
 	}
@@ -771,6 +793,7 @@ func (m *Manager) OnTransReply(ev TransReplyEvent) {
 	if rejected {
 		wo.state = quikv1.OrderState_ORDER_STATE_REJECTED
 		wo.done = true
+		wo.rejectedMs = m.nowMs()
 	}
 	deferredCancel := wo != nil && wo.cancelRequested && wo.orderNum != "" && !wo.done
 	if deferredCancel {
@@ -835,6 +858,9 @@ func (m *Manager) OnOrder(ev OrderEvent) {
 		quikv1.OrderState_ORDER_STATE_CANCELLED,
 		quikv1.OrderState_ORDER_STATE_REJECTED:
 		wo.done = true
+	}
+	if wo.state == quikv1.OrderState_ORDER_STATE_REJECTED && wo.rejectedMs == 0 {
+		wo.rejectedMs = m.nowMs()
 	}
 	if ev.Text != "" {
 		wo.lastText = ev.Text
@@ -937,6 +963,7 @@ func (m *Manager) reconcileStalePending() []*workingOrder {
 		}
 		wo.state = quikv1.OrderState_ORDER_STATE_REJECTED
 		wo.done = true
+		wo.rejectedMs = now
 		stale = append(stale, wo)
 		m.logf("trade: pending order expired (client=%q code=%q): no QUIK order_num in %dms",
 			wo.clientID, wo.code, now-wo.sentMs)

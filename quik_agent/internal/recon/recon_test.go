@@ -227,6 +227,91 @@ func TestEvaluateClosePositionSuppressedByOrderFinding(t *testing.T) {
 	})
 }
 
+// TestEvaluateClosePositionCrossSymbolNotSuppressed: a MISSING order finding on symbol A
+// must suppress close_position for A only — an unexplained position mismatch on symbol B
+// still gets its close_position step.
+func TestEvaluateClosePositionCrossSymbolNotSuppressed(t *testing.T) {
+	in := Inputs{
+		Robots: []RobotView{
+			// Symbol A (RIU6): MISSING order explains its position mismatch.
+			{ID: "r1", Symbol: "RIU6", Position: 2, OrderNums: []string{"999"}},
+			// Symbol B (GZU6): plain unexplained position mismatch.
+			{ID: "r2", Symbol: "GZU6", Position: 1},
+		},
+		Acc: AccView{
+			Positions: []Position{
+				{Sec: "RIU6", Net: 10}, // mismatch on A, explained by MISSING 999
+				{Sec: "GZU6", Net: 4},  // mismatch on B, nothing explains it
+			},
+			PosAgeMs: 100, OrdAgeMs: 100,
+		},
+	}
+	rep := Evaluate(in)
+	if rep.State != "MISMATCH" || rep.Plan == nil {
+		t.Fatalf("%+v", rep)
+	}
+	var closeSteps []Step
+	for _, s := range rep.Plan.Steps {
+		if s.Kind == "close_position" {
+			closeSteps = append(closeSteps, s)
+		}
+	}
+	if len(closeSteps) != 1 || closeSteps[0].Symbol != "GZU6" || closeSteps[0].Qty != 3 {
+		t.Fatalf("close steps = %+v, want exactly one for GZU6 qty=3 (RIU6 suppressed, GZU6 not)", closeSteps)
+	}
+	// The MISSING finding for RIU6 still yields its fix_state step.
+	var haveFixState bool
+	for _, s := range rep.Plan.Steps {
+		if s.Kind == "fix_state" && s.RobotID == "r1" && s.Symbol == "RIU6" {
+			haveFixState = true
+		}
+	}
+	if !haveFixState {
+		t.Fatalf("steps = %+v, want a fix_state for r1/RIU6", rep.Plan.Steps)
+	}
+}
+
+// TestEvaluateHeterogeneousPlanStepOrder: one Evaluate producing all three step kinds
+// must emit them sorted by (Kind, Symbol, OrderNum, RobotID).
+func TestEvaluateHeterogeneousPlanStepOrder(t *testing.T) {
+	in := Inputs{
+		Robots: []RobotView{
+			// MISSING order on SiU6 -> fix_state (positions for SiU6 kept matching so the
+			// suppression rule stays out of the way of the close_position assertion).
+			{ID: "r1", Symbol: "SiU6", Position: 1, OrderNums: []string{"777"}},
+			// GZU6 robot with an unexplained position mismatch -> close_position.
+			{ID: "r2", Symbol: "GZU6", Position: 1},
+		},
+		Acc: AccView{
+			Positions: []Position{
+				{Sec: "SiU6", Net: 1}, // matches
+				{Sec: "GZU6", Net: 4}, // unexplained mismatch -> close_position
+			},
+			// Orphan active order on RIU6 -> cancel_order.
+			Orders:   []Order{{Num: "555", Sec: "RIU6", Active: true}},
+			PosAgeMs: 100, OrdAgeMs: 100,
+		},
+	}
+	rep := Evaluate(in)
+	if rep.State != "MISMATCH" || rep.Plan == nil {
+		t.Fatalf("%+v", rep)
+	}
+	if len(rep.Plan.Steps) != 3 {
+		t.Fatalf("steps = %+v, want exactly 3 (one of each kind)", rep.Plan.Steps)
+	}
+	// Sorted by Kind first: cancel_order < close_position < fix_state.
+	s := rep.Plan.Steps
+	if s[0].Kind != "cancel_order" || s[0].OrderNum != "555" || s[0].Symbol != "RIU6" {
+		t.Fatalf("steps[0] = %+v, want cancel_order 555 RIU6", s[0])
+	}
+	if s[1].Kind != "close_position" || s[1].Symbol != "GZU6" || s[1].Qty != 3 {
+		t.Fatalf("steps[1] = %+v, want close_position GZU6 qty=3", s[1])
+	}
+	if s[2].Kind != "fix_state" || s[2].RobotID != "r1" || s[2].OrderNum != "777" || s[2].Symbol != "SiU6" {
+		t.Fatalf("steps[2] = %+v, want fix_state r1/777/SiU6", s[2])
+	}
+}
+
 func positionMismatchRendered(rep Report, symbol string) bool {
 	for _, p := range rep.Positions {
 		if p.Symbol == symbol {

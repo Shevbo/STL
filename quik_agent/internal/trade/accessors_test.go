@@ -91,11 +91,11 @@ func TestPendingTransViewsHungPastReconcileWindow(t *testing.T) {
 		state: quikv1.OrderState_ORDER_STATE_ACTIVE,
 		qty:   1, balance: 1, sentMs: now - (staleAckTimeoutMs + 5_000),
 	}
-	// Rejected: last reply was a rejection — must appear regardless of age.
+	// Rejected recently: must appear (within the rejected surface window).
 	m.byTrans[4] = &workingOrder{
 		clientID: "rejected", transID: 4, code: "RIU6",
 		state: quikv1.OrderState_ORDER_STATE_REJECTED, done: true,
-		lastText: "collar breached", sentMs: now - 500,
+		lastText: "collar breached", sentMs: now - 500, rejectedMs: now - 500,
 	}
 
 	got := m.PendingTransViews()
@@ -108,6 +108,57 @@ func TestPendingTransViewsHungPastReconcileWindow(t *testing.T) {
 	}
 	if got[1].TransID != 4 || got[1].OK || got[1].Text != "collar breached" {
 		t.Fatalf("got[1] = %+v, want trans 4 (rejected) with its last text, OK=false", got[1])
+	}
+}
+
+// TestPendingTransViewsRejectedAgesOut: a rejection older than the surface window is
+// excluded (byTrans is never pruned — without the recency bound one old rejection would
+// pin the recon State to MISMATCH until process restart); a fresh one is included.
+func TestPendingTransViewsRejectedAgesOut(t *testing.T) {
+	m := NewManager(ManagerConfig{}, nil, NewGuard(baseLimits()), nil, nil)
+	now := int64(100_000_000)
+	m.nowMsFn = func() int64 { return now }
+
+	// Old rejection: outside the 15-minute window — must NOT appear.
+	m.byTrans[1] = &workingOrder{
+		clientID: "old", transID: 1, code: "RIU6",
+		state: quikv1.OrderState_ORDER_STATE_REJECTED, done: true,
+		lastText: "stale reject", rejectedMs: now - (rejectedSurfaceWindowMs + 1),
+	}
+	// Fresh rejection: just inside the window — must appear.
+	m.byTrans[2] = &workingOrder{
+		clientID: "fresh", transID: 2, code: "RIU6",
+		state: quikv1.OrderState_ORDER_STATE_REJECTED, done: true,
+		lastText: "fresh reject", rejectedMs: now - (rejectedSurfaceWindowMs - 1),
+	}
+
+	got := m.PendingTransViews()
+	if len(got) != 1 || got[0].TransID != 2 || got[0].Text != "fresh reject" || got[0].OK {
+		t.Fatalf("views = %+v, want only the fresh rejection (trans 2)", got)
+	}
+
+	// The fresh one ages out too once the window passes.
+	now += rejectedSurfaceWindowMs
+	if got := m.PendingTransViews(); len(got) != 0 {
+		t.Fatalf("views after window elapsed = %+v, want none", got)
+	}
+}
+
+// TestSnapshotWorkingTiebreaksByClientID: two live PENDING orders both have an empty
+// OrderNum until QUIK acknowledges them; ClientID must keep the order deterministic.
+func TestSnapshotWorkingTiebreaksByClientID(t *testing.T) {
+	m := NewManager(ManagerConfig{}, nil, NewGuard(baseLimits()), nil, nil)
+	m.byClient["p2"] = &workingOrder{
+		clientID: "p2", code: "RIU6", price: 100000, qty: 1, balance: 1,
+		state: quikv1.OrderState_ORDER_STATE_PENDING,
+	}
+	m.byClient["p1"] = &workingOrder{
+		clientID: "p1", code: "RIU6", price: 100000, qty: 1, balance: 1,
+		state: quikv1.OrderState_ORDER_STATE_PENDING,
+	}
+	got := m.SnapshotWorking()
+	if len(got) != 2 || got[0].ClientID != "p1" || got[1].ClientID != "p2" {
+		t.Fatalf("snapshot = %+v, want [p1 p2] (ClientID tiebreak on empty OrderNum)", got)
 	}
 }
 
