@@ -98,7 +98,7 @@ type luaEvent struct {
 	Balance    int64  `json:"balance"`     // order: unfilled remainder
 	Qty        int64  `json:"qty"`         // order: original qty; trade: trade qty
 	Price      string `json:"price"`       // order/trade price
-	TS         int64  `json:"ts"`          // trade/md timestamp (epoch, source-defined)
+	TS         int64  `json:"ts"`          // trade/md timestamp; pong: lua now_ms
 	Text       string `json:"text"`        // trans_reply/order text
 
 	// account snapshot / clock-sync (QLua acc_pos/acc_ord/acc_trd/pong publisher)

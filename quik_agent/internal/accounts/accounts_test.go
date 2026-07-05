@@ -101,6 +101,50 @@ func TestStoreAddTradesDedupeOnResend(t *testing.T) {
 	}
 }
 
+func TestStoreAddTradesDedupeSurvivesRingEviction(t *testing.T) {
+	now := int64(1000)
+	s := New(func() int64 { return now })
+	// 600 unique trades: t0..t99 get evicted by the 500-ring, t100..t599 remain.
+	var all []Trade
+	for i := 0; i < 600; i++ {
+		all = append(all, Trade{Num: fmt.Sprintf("t%d", i), OrderNum: "1", Sec: "RIU6", Price: 100, Qty: 1, TsMs: int64(i)})
+	}
+	s.AddTrades(all)
+
+	// Session rollover resend: trades #1-#50 (ALREADY EVICTED) plus one new trade.
+	resend := append([]Trade(nil), all[1:51]...)
+	resend = append(resend, Trade{Num: "t600", OrderNum: "1", Sec: "RIU6", Price: 102, Qty: 1, TsMs: 600})
+	s.AddTrades(resend)
+
+	snap := s.Snapshot()
+	if len(snap.Trades) != 500 {
+		t.Fatalf("got %d trades, want 500", len(snap.Trades))
+	}
+	// The genuinely new trade must be at the tail.
+	if snap.Trades[499].Num != "t600" {
+		t.Fatalf("tail = %s, want t600", snap.Trades[499].Num)
+	}
+	// Evicted trades must NOT re-enter, and the newest pre-resend trades must NOT be
+	// displaced: expect exactly t101..t599 then t600 (t100 dropped for t600's slot).
+	present := map[string]bool{}
+	for _, tr := range snap.Trades {
+		present[tr.Num] = true
+	}
+	for i := 1; i <= 50; i++ {
+		if present[fmt.Sprintf("t%d", i)] {
+			t.Fatalf("evicted trade t%d re-entered the ring on resend", i)
+		}
+	}
+	for i := 101; i <= 599; i++ {
+		if !present[fmt.Sprintf("t%d", i)] {
+			t.Fatalf("newer trade t%d was displaced by the resend", i)
+		}
+	}
+	if snap.Trades[0].Num != "t101" {
+		t.Fatalf("front = %s, want t101 (pure arrival order)", snap.Trades[0].Num)
+	}
+}
+
 func TestStoreAddTradesCapsAt500(t *testing.T) {
 	now := int64(1000)
 	s := New(func() int64 { return now })

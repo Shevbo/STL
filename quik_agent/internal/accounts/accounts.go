@@ -77,8 +77,8 @@ type Store struct {
 	orders []Order
 	ordAtMs int64
 
-	trades   []Trade
-	tradeIdx map[string]struct{} // Trade.Num currently present in `trades`
+	trades     []Trade
+	seenTrades map[string]struct{} // every accepted Trade.Num (survives ring eviction)
 
 	rttMs        int64
 	clockDriftMs int64
@@ -93,8 +93,8 @@ type Store struct {
 // (production wiring uses time.Now().UnixMilli; tests inject a fake clock).
 func New(now func() int64) *Store {
 	return &Store{
-		now:      now,
-		tradeIdx: make(map[string]struct{}),
+		now:        now,
+		seenTrades: make(map[string]struct{}),
 	}
 }
 
@@ -102,7 +102,7 @@ func New(now func() int64) *Store {
 func (s *Store) SetPositions(rows []Position) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.positions = rows
+	s.positions = append([]Position(nil), rows...) // defensive copy: caller may reuse rows
 	s.posAtMs = s.now()
 }
 
@@ -110,30 +110,44 @@ func (s *Store) SetPositions(rows []Position) {
 func (s *Store) SetOrders(rows []Order) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.orders = rows
+	s.orders = append([]Order(nil), rows...) // defensive copy: caller may reuse rows
 	s.ordAtMs = s.now()
 }
+
+// seenTradesCap bounds the persistent dedupe set. When exceeded, the set is reset to
+// the nums currently in the ring — a rare event (at most ~once a day on a very busy
+// account) that trades a brief dedupe-window narrowing for bounded memory.
+const seenTradesCap = 50_000
 
 // AddTrades merges newly seen trades into the ring, deduping by Trade.Num. This is
 // required because a QUIK session rollover resets the Lua trades cursor and RE-SENDS
 // the full trades table from scratch; without dedupe every rollover would duplicate
 // every historical trade still inside the ring window.
+//
+// The dedupe set is PERSISTENT (independent of the ring): a num that was accepted and
+// later evicted from the 500-ring stays suppressed. Otherwise a full-table resend
+// would re-append already-evicted old trades at the tail and the front-trim would
+// then evict genuinely newer trades by slice position. The ring therefore keeps pure
+// arrival order; evicted-and-resent nums never re-enter.
 func (s *Store) AddTrades(rows []Trade) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, tr := range rows {
-		if _, seen := s.tradeIdx[tr.Num]; seen {
+		if _, seen := s.seenTrades[tr.Num]; seen {
 			continue
 		}
 		s.trades = append(s.trades, tr)
-		s.tradeIdx[tr.Num] = struct{}{}
+		s.seenTrades[tr.Num] = struct{}{}
 	}
 	if len(s.trades) > tradesRing {
 		drop := len(s.trades) - tradesRing
-		for _, tr := range s.trades[:drop] {
-			delete(s.tradeIdx, tr.Num)
-		}
 		s.trades = append([]Trade(nil), s.trades[drop:]...)
+	}
+	if len(s.seenTrades) > seenTradesCap {
+		s.seenTrades = make(map[string]struct{}, tradesRing)
+		for _, tr := range s.trades {
+			s.seenTrades[tr.Num] = struct{}{}
+		}
 	}
 }
 
