@@ -102,14 +102,41 @@
       day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
   }
 
+  // Freshest tick, passed into the chart in CHART-AXIS time (bars are MSK-stamped
+  // epochs; tick received_at is true UTC ms -> shift +3h). Drives the forming candle.
+  let liveTick = $state<{ t: number; p: number } | null>(null);
+  let tickAge = $state<number | null>(null);
+  let mirrorAge = $state<number | null>(null);
+
+  const FETCH_TO = 2500;   // ms; a hung request must never freeze the update loops
+
   async function load() {
     try {
       const q = agentId ? `?agent_id=${encodeURIComponent(agentId)}` : '';
-      const res = await fetchWithAuth(`/api/v1/quik/robots-mirror${q}`);
+      const res = await fetchWithAuth(`/api/v1/quik/robots-mirror${q}`,
+        { signal: AbortSignal.timeout(FETCH_TO) } as any);
       if (!res.ok) { error = `mirror: HTTP ${res.status}`; return; }
       report = await res.json();
+      mirrorAge = report?.received_at_ms ? Math.round((Date.now() - Number(report.received_at_ms)) / 1000) : null;
       error = '';
-    } catch (e) { error = String(e); }
+    } catch (e) { error = `mirror: ${String(e).slice(0, 60)}`; }
+  }
+
+  async function pollTick() {
+    try {
+      const sym = symbol;
+      const q = agentId ? `?agent_id=${encodeURIComponent(agentId)}` : '';
+      const res = await fetchWithAuth(`/api/v1/quik/tick/${encodeURIComponent(sym)}${q}`,
+        { signal: AbortSignal.timeout(FETCH_TO) } as any);
+      if (!res.ok) return;
+      const d = await res.json();
+      const price = Number(d.last || 0) || ((Number(d.bid || 0) && Number(d.ask || 0))
+        ? (Number(d.bid) + Number(d.ask)) / 2 : Number(d.bid || d.ask || 0));
+      const ms = Number(d.received_at_unix_ms ?? 0);
+      tickAge = ms ? Math.max(0, Math.round((Date.now() - ms) / 1000)) : null;
+      if (price > 0 && ms > 0)
+        liveTick = { t: Math.floor(ms / 1000) + MSK_OFFSET, p: price };
+    } catch { /* transient — next second retries */ }
   }
 
   async function loadDesc() {
@@ -123,13 +150,15 @@
     } catch { /* description is optional */ }
   }
 
-  let timer: ReturnType<typeof setInterval> | null = null;
-  onMount(async () => {
-    await load();
-    await loadDesc();
-    timer = setInterval(load, 5000);
+  // Non-blocking startup: a hung first request must not delay the timers (that
+  // is exactly how the screen froze — onMount awaited a request that never
+  // resolved, so setInterval was never installed).
+  let timers: Array<ReturnType<typeof setInterval>> = [];
+  onMount(() => {
+    void load(); void loadDesc(); void pollTick();
+    timers = [setInterval(load, 2000), setInterval(pollTick, 1000)];
   });
-  onDestroy(() => { if (timer) clearInterval(timer); });
+  onDestroy(() => { for (const t of timers) clearInterval(t); });
 </script>
 
 <div class="ars">
@@ -149,6 +178,9 @@
         позиция {position > 0 ? '+' : ''}{position}</span>
       <span class="badge pnl" class:up={Number(robot.realized_pnl ?? 0) > 0} class:dn={Number(robot.realized_pnl ?? 0) < 0}>
         P&L {Math.round(Number(robot.realized_pnl ?? 0)).toLocaleString('ru-RU')} ₽</span>
+      <span class="badge" class:ok={tickAge !== null && tickAge <= 10} class:warn={tickAge === null || tickAge > 10}
+            title="возраст последнего тика QUIK (поток данных)">
+        тик {tickAge === null ? '—' : tickAge + 'с'}</span>
     {:else if report}
       <span class="badge warn">робот {robotId} не найден на агенте</span>
     {/if}
@@ -169,7 +201,8 @@
       dateFrom={dateFrom}
       dateTo={dateTo}
       defaultInterval={1}
-      live={15}
+      live={10}
+      liveTick={liveTick}
       taker={false}
       openOrders={openOrders}
       plannedOrders={plannedOrders}

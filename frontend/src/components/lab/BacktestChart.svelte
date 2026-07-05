@@ -18,7 +18,7 @@
   let {
     result, symbol, strategy = null, dateFrom, dateTo, pointValue = 1, defaultInterval = 60,
     openOrders = [], plannedOrders = [], taker = true, runParams = {}, paramSchema = [], onRerun = null,
-    segments = null, pointValues = null, live = 0,
+    segments = null, pointValues = null, live = 0, liveTick = null,
   }: {
     result: any; symbol: string; strategy?: any; dateFrom: string; dateTo: string;
     pointValue?: number; defaultInterval?: number;
@@ -39,6 +39,10 @@
     // live > 0: refresh the candle TAIL every `live` seconds via series.update()
     // (no setData, zoom preserved) so a LIVE robot's chart moves with the market.
     live?: number;
+    // Sub-bar reactivity: freshest tick in CHART-AXIS time ({t: seconds, p: price}).
+    // Merged into the FORMING candle via series.update() — the candle breathes with
+    // every tick instead of waiting for the next closed bar.
+    liveTick?: { t: number; p: number } | null;
   } = $props();
 
   // ── Editable parameters panel (collapsed by default; edit → re-run backtest) ──
@@ -390,9 +394,38 @@
   // visible range survive. Dates are computed at refresh time (a tab left open
   // across midnight keeps moving). Fetch window = today±1d, cheap on the server.
   let lastBarTime = 0;                 // newest bar currently on the chart
+  let lastBar: any = null;             // full OHLCV of the newest bar (tick merge base)
   let lastEquityValue = 100000;        // carried onto appended bars (axis alignment)
   let liveTimer: ReturnType<typeof setInterval> | null = null;
   let tailBusy = false;
+
+  // Merge one tick into the forming candle. Server bars stay authoritative
+  // (refreshTail overwrites); ticks only extend high/low/close between refreshes.
+  function applyLiveTick(t: number, p: number) {
+    if (!candleSeries || !lastBarTime || p <= 0 || resampleMin <= 0) return;
+    const bucket = resampleMin * 60;
+    const m = Math.floor(t / bucket) * bucket;
+    if (m < lastBarTime) return;                 // tick from an already-closed bar
+    if (!lastBar || m > lastBar.time) {
+      if (lastBar && m > lastBar.time) {
+        equitySeries?.update({ time: m, value: lastEquityValue });
+        barCount += 1;
+      }
+      lastBar = { time: m, open: p, high: p, low: p, close: p, volume: 0 };
+    } else {
+      lastBar.high = Math.max(lastBar.high, p);
+      lastBar.low = Math.min(lastBar.low, p);
+      lastBar.close = p;
+    }
+    lastBarTime = lastBar.time;
+    candleSeries.update({ time: lastBar.time, open: lastBar.open, high: lastBar.high,
+                          low: lastBar.low, close: lastBar.close });
+  }
+
+  $effect(() => {
+    const lt = liveTick;
+    if (lt && lt.p > 0 && syncReady) applyLiveTick(lt.t, lt.p);
+  });
 
   async function refreshTail() {
     if (!live || loading || tailBusy || !candleSeries || !lastBarTime) return;
@@ -414,6 +447,7 @@
           barCount += 1;
           appended = true;
         }
+        lastBar = { ...b };            // server bar = authoritative tick-merge base
       }
       if (appended) periodLabel = `${periodLabel.split(' — ')[0]} — ${fmtDay(lastBarTime)}`;
     } catch { /* transient network error — next tick retries */ }
@@ -510,6 +544,7 @@
       barCount = bars.length;
       periodLabel = `${fmtDay(bars[0].time)} — ${fmtDay(bars[bars.length - 1].time)}`;
       lastBarTime = bars[bars.length - 1].time;
+      lastBar = { ...bars[bars.length - 1] };
 
       const fills = toFills(result?.trades);
       // Roll-aware: P&L summed PER CONTRACT with each contract's own point value (a

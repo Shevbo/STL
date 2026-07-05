@@ -40,7 +40,7 @@
   }
 
   let timer: ReturnType<typeof setInterval> | null = null;
-  onMount(() => { load(); timer = setInterval(load, 1500); });
+  onMount(() => { load(); timer = setInterval(load, 1000); });
   onDestroy(() => { if (timer) clearInterval(timer); });
 
   const fmtP = (p: number) => Math.round(p).toLocaleString('ru-RU');
@@ -91,7 +91,7 @@
             justify-content: center; padding: 2px 0; }
   .row { position: relative; display: flex; justify-content: space-between; align-items: center;
          padding: 0 8px; height: 17px; font-family: monospace; font-size: 11px; }
-  .row .bar { position: absolute; right: 0; top: 1px; bottom: 1px; opacity: 0.16; border-radius: 1px; }
+  .row .bar { position: absolute; right: 0; top: 1px; bottom: 1px; opacity: 0.16; border-radius: 1px; transition: width 220ms ease; }
   .row.ask .bar { background: #ff5c8a; }
   .row.bid .bar { background: #2ee6a6; }
   .row .qty { color: #99a; z-index: 1; }

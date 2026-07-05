@@ -165,7 +165,8 @@ class RobotHost:
             try:
                 sig = json.dumps(explain(r.spec["strategy_id"], r.bars.bars(),
                                          r.spec["params"],
-                                         r.runtime.signed_position()),
+                                         r.runtime.signed_position(),
+                                         avg=r.runtime.avg_price()),
                                  ensure_ascii=False)
             except Exception as exc:  # noqa: BLE001 — showcase must never break status
                 sig = json.dumps({"error": str(exc)}, ensure_ascii=False)

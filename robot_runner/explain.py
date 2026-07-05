@@ -7,6 +7,7 @@ mirrors sig_fvg in trader/lab/strategies/library.py EXACTLY (same formulas) —
 it explains the real code, it does not approximate it.
 """
 
+from trader.lab import indicators as I
 from trader.lab.strategies.library import REGISTRY
 
 
@@ -99,7 +100,48 @@ def planned_orders(want, position: int, price: float, params: dict) -> list[dict
     return out
 
 
-def explain(strategy_id: str, bars, params: dict, position: int) -> dict:
+def management_levels(bars, params: dict, position: int, avg: float) -> list[dict]:
+    """PRICE-LEVEL orders the position-management layer is watching — the exact
+    mirror of make_on_bar part 3 (take-profit + ATR averaging). These are real
+    levels (unlike signal entries), so the UI draws them as chart lines; they
+    move as ATR changes per bar — the visible \"перестановка\"."""
+    if position == 0 or avg <= 0 or not bars:
+        return []
+    tp = float(params.get("tp_atr", 0) or 0) / 10.0
+    k_step = float(params.get("avg_step_atr", 0) or 0) / 10.0
+    avg_max = max(1, int(params.get("avg_max", 1) or 1))
+    atr_n = int(params.get("avg_atr_n", 14) or 14)
+    if not (tp > 0 or (k_step > 0 and abs(position) < avg_max)):
+        return []
+    if len(bars) < atr_n + 1:
+        return []
+    h = [b.high for b in bars]
+    lo = [b.low for b in bars]
+    c = [b.close for b in bars]
+    atrv = I.atr(h, lo, c, atr_n)
+    if atrv <= 0:
+        return []
+    cur_dir = 1 if position > 0 else -1
+    out: list[dict] = []
+    if tp > 0:
+        level = avg + tp * atrv if cur_dir > 0 else avg - tp * atrv
+        out.append({"side": "sell" if cur_dir > 0 else "buy", "qty": abs(position),
+                    "price": round(level, 2), "level": True,
+                    "reason": f"тейк-профит: avg {avg:.0f} {'+' if cur_dir > 0 else '−'} "
+                              f"{tp:g}×ATR({atr_n})={atrv:.0f}"})
+    if k_step > 0 and abs(position) < avg_max:
+        level = avg - k_step * atrv if cur_dir > 0 else avg + k_step * atrv
+        qty = max(1, int(params.get("qty", 1)))
+        add = min(qty, avg_max - abs(position))
+        out.append({"side": "buy" if cur_dir > 0 else "sell", "qty": add,
+                    "price": round(level, 2), "level": True,
+                    "reason": f"усреднение: avg {'−' if cur_dir > 0 else '+'} "
+                              f"{k_step:g}×ATR({atr_n})={atrv:.0f}"})
+    return out
+
+
+def explain(strategy_id: str, bars, params: dict, position: int,
+            avg: float = 0.0) -> dict:
     """Full introspection blob for RobotStatus.signal_json."""
     fn = _EXPLAINERS.get(strategy_id)
     d = fn(bars, params) if fn else _generic_explain(strategy_id, bars, params)
@@ -123,4 +165,7 @@ def explain(strategy_id: str, bars, params: dict, position: int) -> dict:
                 {"side": "sell", "qty": qty, "price": price,
                  "reason": "если подтвердится медвежий сигнал"},
             ]
+    # Position-management PRICE LEVELS (TP / averaging) — drawn as chart lines.
+    d["planned_orders"] = d.get("planned_orders", []) + management_levels(
+        bars, params, position, avg)
     return d
