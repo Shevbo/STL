@@ -48,7 +48,18 @@ message RunnerControl {
     PauseRobot pause = 4;
     StartRobot start = 5;
     KillSwitch kill = 6;
+    FixRobotState fix_state = 7;  // recon align: force runner state to QUIK fact
   }
 }
 
 message BridgeAck { bool ok = 1; string error = 2; }
+
+// Recon align step: overwrite a robot's position/avg to the QUIK fact. clear_working
+// drops the robot's belief in working orders (they were cancelled/never existed).
+message FixRobotState {
+  string robot_id = 1;
+  int64 set_position = 2;
+  double set_avg_price = 3;
+  bool clear_working = 4;
+  string note = 5;      // shown in the robot's journal
+}

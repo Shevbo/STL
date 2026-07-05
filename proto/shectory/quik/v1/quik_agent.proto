@@ -34,6 +34,7 @@ message AgentMessage {
     ExecutionUpdate execution_update = 13; // Phase 2 (1b): maker-working progress
     LimitsState limits_state = 14;   // agent's CURRENTLY EFFECTIVE hard limits (echo)
     RobotStatusReport robot_status_report = 15; // agent-hosted robot status mirror
+    AgentStatusSnapshot status_snapshot = 16; // local showcase JSON (opaque; STL serves verbatim)
   }
 }
 
@@ -295,6 +296,13 @@ message RobotStatusReport {
   repeated RobotStatus robots = 1;
   int64 sent_at_unix_ms = 2;
   bool runner_healthy = 3;          // the supervised runner process is up + reporting
+}
+
+// Agent -> STL: the local showcase snapshot as opaque JSON (schema owned by the
+// agent's internal/status package; STL stores + serves it verbatim, no parsing).
+message AgentStatusSnapshot {
+  string status_json = 1;
+  int64 generated_at_unix_ms = 2;
 }
 
 // ===================== Phase 2: orders & execution =====================
