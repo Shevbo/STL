@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 
 	quikv1 "shectory/quik_agent/internal/pb"
 	"shectory/quik_agent/internal/robots"
@@ -53,6 +54,7 @@ type Server struct {
 	tapeSubs     []chan *quikv1.TapeBatch
 	lastReport   time.Time
 	ctrlAttached bool
+	lastStatus   map[string]*quikv1.RobotStatus // robot_id -> newest status seen
 }
 
 func NewServer(cfg ServerCfg) *Server {
@@ -97,6 +99,15 @@ func (s *Server) CancelRunnerOrder(_ context.Context, c *quikv1.CancelOrder) (*q
 func (s *Server) ReportStatus(_ context.Context, r *quikv1.RobotStatusReport) (*quikv1.BridgeAck, error) {
 	s.mu.Lock()
 	s.lastReport = time.Now()
+	if s.lastStatus == nil {
+		s.lastStatus = map[string]*quikv1.RobotStatus{}
+	}
+	// Newest report wins per robot_id. A report that omits a robot leaves its
+	// previous entry in place — the status page decides staleness from
+	// heartbeat_unix_ms, not from whether this robot appeared in the latest report.
+	for _, rs := range r.GetRobots() {
+		s.lastStatus[rs.GetRobotId()] = rs
+	}
 	s.mu.Unlock()
 	r.RunnerHealthy = true
 	s.cfg.Status.ForwardRobotStatus(r)
@@ -285,4 +296,30 @@ func (s *Server) RunnerHealthy() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.ctrlAttached && time.Since(s.lastReport) < healthyWithin
+}
+
+// LastStatuses returns the newest known RobotStatus per robot_id, deep-copied
+// via proto.Clone so callers can freely mutate the result without racing the
+// server's internal state. A robot missing from the latest report keeps its
+// last-seen status here (see ReportStatus); this is a snapshot, not a
+// liveness check — use heartbeat_unix_ms for staleness.
+func (s *Server) LastStatuses() map[string]*quikv1.RobotStatus {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string]*quikv1.RobotStatus, len(s.lastStatus))
+	for id, rs := range s.lastStatus {
+		out[id] = proto.Clone(rs).(*quikv1.RobotStatus)
+	}
+	return out
+}
+
+// LastReportAgeMs returns milliseconds since the last ReportStatus call, or
+// -1 if the runner has never reported.
+func (s *Server) LastReportAgeMs() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lastReport.IsZero() {
+		return -1
+	}
+	return time.Since(s.lastReport).Milliseconds()
 }

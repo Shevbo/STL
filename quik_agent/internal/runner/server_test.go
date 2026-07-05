@@ -132,6 +132,55 @@ func TestControlRelayReplayAndOrderEventFan(t *testing.T) {
 	}
 }
 
+func TestLastStatusesNewestWinsPerRobotAndOmittedRobotKeepsPrevious(t *testing.T) {
+	srv, cli, _, _ := startTestServer(t)
+	ctx := context.Background()
+
+	if age := srv.LastReportAgeMs(); age != -1 {
+		t.Fatalf("no report yet -> LastReportAgeMs must be -1, got %d", age)
+	}
+
+	if _, err := cli.ReportStatus(ctx, &quikv1.RobotStatusReport{Robots: []*quikv1.RobotStatus{
+		{RobotId: "r1", Running: true, Position: 1},
+		{RobotId: "r2", Running: false, Position: 2},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	got := srv.LastStatuses()
+	if len(got) != 2 || got["r1"].GetPosition() != 1 || got["r2"].GetPosition() != 2 {
+		t.Fatalf("LastStatuses after first report = %+v", got)
+	}
+
+	// Mutating the returned map/messages must not affect internals (proto.Clone).
+	got["r1"].Position = 999
+	delete(got, "r2")
+
+	// Second report updates r1 (newest wins) and omits r2 entirely — r2 must
+	// survive from the previous report; staleness is the status page's job
+	// via heartbeat, not this server's.
+	if _, err := cli.ReportStatus(ctx, &quikv1.RobotStatusReport{Robots: []*quikv1.RobotStatus{
+		{RobotId: "r1", Running: true, Position: 5},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	got2 := srv.LastStatuses()
+	if len(got2) != 2 {
+		t.Fatalf("expected r1+r2 retained, got %+v", got2)
+	}
+	if got2["r1"].GetPosition() != 5 {
+		t.Fatalf("newest report must win for r1, got %+v", got2["r1"])
+	}
+	if got2["r2"].GetPosition() != 2 {
+		t.Fatalf("omitted robot r2 must keep its previous status, got %+v", got2["r2"])
+	}
+
+	if age := srv.LastReportAgeMs(); age < 0 {
+		t.Fatalf("after a report, LastReportAgeMs must be >= 0, got %d", age)
+	}
+}
+
 func TestRunnerHealthyLifecycle(t *testing.T) {
 	srv, cli, _, _ := startTestServer(t)
 	if srv.RunnerHealthy() {
