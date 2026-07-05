@@ -5,22 +5,61 @@ import (
 	"shectory/quik_agent/internal/quikdde"
 )
 
-// ProviderTicks adapts the quikdde Provider to the bridge's TickSource. Same
-// read path the STL link uses (Provider.Ticks) — no second tick pipeline.
+// ProviderTicks adapts the quikdde Provider to the bridge's TickSource.
+//
+// Two sources are MERGED per instrument, freshest wins:
+//   - the params/quotes sheet (last/bid/ask/OI) — richest, but QUIK's DDE output
+//     of that big table has repeatedly died in production;
+//   - the per-code order-book sheets (best bid/ask) — small tables that stay
+//     alive, so bars keep building from the mid even when the params sheet dies.
 type ProviderTicks struct{ P *quikdde.Provider }
 
 func (pt ProviderTicks) Snapshot() []*quikv1.MarketDataTick {
-	ticks := pt.P.Ticks()
-	out := make([]*quikv1.MarketDataTick, 0, len(ticks))
-	for _, tk := range ticks {
-		out = append(out, &quikv1.MarketDataTick{
+	byCode := map[string]*quikv1.MarketDataTick{}
+	for _, tk := range pt.P.Ticks() {
+		byCode[tk.Code] = &quikv1.MarketDataTick{
 			Code:             tk.Code,
 			Last:             tk.Last,
 			Bid:              tk.Bid,
 			Ask:              tk.Ask,
 			OpenInterest:     tk.OpenInterest,
 			ReceivedAtUnixMs: tk.ReceivedUnixMs,
-		})
+		}
+	}
+	// Book-derived ticks: every non-reserved sheet that parses as a стакан.
+	for _, name := range pt.P.SheetNames() {
+		if quikdde.IsReservedSheet(name) {
+			continue
+		}
+		book, ok := pt.P.OrderBook(name)
+		if !ok {
+			continue
+		}
+		var bid, ask float64
+		if len(book.Bids) > 0 {
+			bid = book.Bids[0].Price
+		}
+		if len(book.Asks) > 0 {
+			ask = book.Asks[0].Price
+		}
+		if bid <= 0 && ask <= 0 {
+			continue
+		}
+		ex := byCode[name]
+		if ex != nil && ex.ReceivedAtUnixMs >= book.ReceivedUnixMs {
+			continue // params tick is fresher — keep it
+		}
+		// last deliberately 0: a stale last carried from the dead params sheet
+		// would win pick_price() forever and pin the bars to an old price. With
+		// last=0 the runner builds bars from the FRESH book mid.
+		byCode[name] = &quikv1.MarketDataTick{
+			Code: name, Bid: bid, Ask: ask,
+			ReceivedAtUnixMs: book.ReceivedUnixMs,
+		}
+	}
+	out := make([]*quikv1.MarketDataTick, 0, len(byCode))
+	for _, tk := range byCode {
+		out = append(out, tk)
 	}
 	return out
 }

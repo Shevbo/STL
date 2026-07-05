@@ -123,20 +123,38 @@
   }
 
   async function pollTick() {
+    const sym = symbol;
+    const q = agentId ? `?agent_id=${encodeURIComponent(agentId)}` : '';
+    let price = 0, ms = 0;
     try {
-      const sym = symbol;
-      const q = agentId ? `?agent_id=${encodeURIComponent(agentId)}` : '';
       const res = await fetchWithAuth(`/api/v1/quik/tick/${encodeURIComponent(sym)}${q}`,
         { signal: AbortSignal.timeout(FETCH_TO) } as any);
-      if (!res.ok) return;
-      const d = await res.json();
-      const price = Number(d.last || 0) || ((Number(d.bid || 0) && Number(d.ask || 0))
-        ? (Number(d.bid) + Number(d.ask)) / 2 : Number(d.bid || d.ask || 0));
-      const ms = Number(d.received_at_unix_ms ?? 0);
-      tickAge = ms ? Math.max(0, Math.round((Date.now() - ms) / 1000)) : null;
-      if (price > 0 && ms > 0)
-        liveTick = { t: Math.floor(ms / 1000) + MSK_OFFSET, p: price };
-    } catch { /* transient — next second retries */ }
+      if (res.ok) {
+        const d = await res.json();
+        price = Number(d.last || 0) || ((Number(d.bid || 0) && Number(d.ask || 0))
+          ? (Number(d.bid) + Number(d.ask)) / 2 : Number(d.bid || d.ask || 0));
+        ms = Number(d.received_at_unix_ms ?? 0);
+      }
+    } catch { /* fall through to the book */ }
+    // The params-sheet tick has a history of dying while the per-code order-book
+    // sheets stay alive. When the tick is stale (>15s), take the book mid instead —
+    // the chart and the стакан then can NEVER diverge for long.
+    if (!ms || Date.now() - ms > 15_000) {
+      try {
+        const res = await fetchWithAuth(`/api/v1/quik/orderbook/${encodeURIComponent(sym)}${q}`,
+          { signal: AbortSignal.timeout(FETCH_TO) } as any);
+        if (res.ok) {
+          const d = await res.json();
+          const bb = Number(d.bids?.[0]?.price ?? 0), ba = Number(d.asks?.[0]?.price ?? 0);
+          const bookMs = Number(d.received_at_unix_ms ?? 0);
+          const mid = bb > 0 && ba > 0 ? (bb + ba) / 2 : (bb || ba);
+          if (mid > 0 && bookMs > ms) { price = mid; ms = bookMs; }
+        }
+      } catch { /* next second retries */ }
+    }
+    tickAge = ms ? Math.max(0, Math.round((Date.now() - ms) / 1000)) : null;
+    if (price > 0 && ms > 0)
+      liveTick = { t: Math.floor(ms / 1000) + MSK_OFFSET, p: price };
   }
 
   async function loadDesc() {
