@@ -156,6 +156,12 @@ func getFreshPlanID(t *testing.T, ts *httptest.Server) string {
 
 func TestServer_AlignStalePlanReturns409WithFreshPlan(t *testing.T) {
 	d := mismatchDeps()
+	// AlignExec is wired (the nil gate now runs FIRST, so the 409 path must be
+	// reached past it) but must never actually run on a stale plan_id.
+	d.AlignExec = func(plan recon.Plan) []StepResult {
+		t.Errorf("AlignExec must not run on a stale plan_id")
+		return nil
+	}
 	ts := httptest.NewServer(newMux(d))
 	defer ts.Close()
 

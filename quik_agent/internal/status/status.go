@@ -93,9 +93,10 @@ func StepResultFrom(step recon.Step, ok bool, errMsg string) StepResult {
 	}
 }
 
-// Deps is everything BuildStatus/NewServer need. Every func field is called
-// only if non-nil (nil-safe defaults below) so a partially-filled Deps in a
-// test never panics.
+// Deps is everything BuildStatus/NewServer need. The FUNC fields are called
+// only if non-nil (nil-safe defaults below); the five interface fields
+// (Accounts/Robots/Runner/Manager/Provider) have no such guard and MUST be
+// set — BuildStatus reads them unconditionally.
 type Deps struct {
 	Accounts accountsSnapshotter
 	Robots   robotsStore
@@ -530,7 +531,10 @@ func buildRobotsJSON(d Deps) []robotJSON {
 			HasStatus:         hasStatus,
 		}
 
-		if pr, ok := paramsBySymbol[rj.Symbol]; ok && pr.PriceStep > 0 {
+		// Rubles are emitted only when BOTH params are genuinely known (> 0):
+		// the DDE-sheet fallback parse can yield a row with PriceStep set but
+		// StepCost 0, and a fabricated "pnl_rub": 0 would be a lie.
+		if pr, ok := paramsBySymbol[rj.Symbol]; ok && pr.PriceStep > 0 && pr.StepCost > 0 {
 			coef := pr.StepCost / pr.PriceStep
 			rub := rj.PnlPoints * coef
 			rj.PnlRub = &rub

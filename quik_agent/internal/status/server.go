@@ -122,10 +122,17 @@ type alignOKResponse struct {
 
 // handleAlign recomputes the recon report FRESH (never trusts a client-held
 // plan) so a confirm can only ever execute the plan the operator is actually
-// looking at right now. A stale/absent plan_id -> 409 with the fresh plan so
-// the page can update and let the operator re-confirm; only once the ids
-// match does it call Deps.AlignExec.
+// looking at right now. nil AlignExec -> 503 UNCONDITIONALLY, before any body
+// parse or plan comparison (without an executor nothing else about the
+// request matters). A stale/absent plan_id -> 409 with the fresh plan so the
+// page can update and let the operator re-confirm; only once the ids match
+// does it call Deps.AlignExec.
 func handleAlign(d Deps, w http.ResponseWriter, r *http.Request) {
+	if d.AlignExec == nil {
+		http.Error(w, "align not wired", http.StatusServiceUnavailable)
+		return
+	}
+
 	var req alignRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
@@ -140,11 +147,6 @@ func handleAlign(d Deps, w http.ResponseWriter, r *http.Request) {
 			Error: "plan_id stale or no active plan",
 			Recon: toReconJSON(rep, d.manualOffsets()),
 		})
-		return
-	}
-
-	if d.AlignExec == nil {
-		http.Error(w, "align not wired", http.StatusServiceUnavailable)
 		return
 	}
 
