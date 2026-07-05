@@ -181,6 +181,48 @@ func TestLastStatusesNewestWinsPerRobotAndOmittedRobotKeepsPrevious(t *testing.T
 	}
 }
 
+func TestSendFixStateRelaysToControlStreamAndFailsWhenDetached(t *testing.T) {
+	srv, cli, _, _ := startTestServer(t)
+
+	// No runner attached: an align step must see the failure, never a silent drop.
+	if err := srv.SendFixState(&quikv1.FixRobotState{RobotId: "r1"}); err == nil {
+		t.Fatal("SendFixState without a runner must return an error")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ctrl, err := cli.StreamControl(ctx, &quikv1.ControlHello{RunnerVersion: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Wait until the server registered the control channel.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		srv.mu.Lock()
+		attached := srv.ctrlAttached
+		srv.mu.Unlock()
+		if attached {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	fix := &quikv1.FixRobotState{RobotId: "r1", SetPosition: 2, SetAvgPrice: 89000,
+		ClearWorking: true, Note: "recon"}
+	if err := srv.SendFixState(fix); err != nil {
+		t.Fatalf("SendFixState with attached runner: %v", err)
+	}
+	rc, err := ctrl.Recv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := rc.GetFixState()
+	if got.GetRobotId() != "r1" || got.GetSetPosition() != 2 ||
+		got.GetSetAvgPrice() != 89000 || !got.GetClearWorking() || got.GetNote() != "recon" {
+		t.Fatalf("fix_state relay = %+v", rc)
+	}
+}
+
 func TestRunnerHealthyLifecycle(t *testing.T) {
 	srv, cli, _, _ := startTestServer(t)
 	if srv.RunnerHealthy() {

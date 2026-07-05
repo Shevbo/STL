@@ -197,6 +197,25 @@ class AgentRuntime:
     def realized_pnl(self) -> float:
         return self._realized
 
+    def apply_fix(self, *, position: int, avg: float, clear_working: bool,
+                  note: str, symbol: str = "") -> None:
+        """Recon align (fix_state): overwrite the believed book to the QUIK fact.
+
+        Realized P&L is never touched — a fix corrects belief, it is not a trade.
+        clear_working drops in-flight/resting order beliefs (QUIK has no such
+        orders). The note lands in the fill journal (the persistent audit trail)
+        as a "fix_state" entry carrying the forced position/avg.
+        """
+        self._signed = int(position)
+        self._avg = float(avg)
+        if clear_working:
+            self._orders = {cid: o for cid, o in self._orders.items()
+                            if o.status not in ("submitted", "active", "partial")}
+        status = f"fix_state: {note}" if note else "fix_state"
+        self._record("recon", symbol, "fix", int(position), float(avg), status)
+        self.log(f"fix_state applied: position={position} avg={avg} "
+                 f"clear_working={clear_working} note={note!r}", level="warning")
+
     def restore(self, *, position: int, avg: float, realized: float,
                 fills: list | None = None) -> None:
         """Re-seed position bookkeeping from persisted runner state (zero-touch)."""

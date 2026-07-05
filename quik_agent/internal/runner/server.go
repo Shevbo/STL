@@ -5,6 +5,7 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"net"
 	"strings"
 	"sync"
@@ -274,6 +275,27 @@ func (s *Server) PushControl(rc *quikv1.RunnerControl) {
 	case ch <- rc:
 	default:
 		s.cfg.Logf("runner control channel full; dropping command")
+	}
+}
+
+// SendFixState relays a recon align fix_state to the connected runner over the same
+// control stream the deploy/undeploy relays use. Unlike PushControl (fire-and-forget:
+// STL commands are replayed from persisted state on the next connect anyway) it returns
+// an error when no runner is attached or its channel is full — an align step must
+// surface the failure in its StepResult, never silently drop a state correction.
+func (s *Server) SendFixState(fix *quikv1.FixRobotState) error {
+	s.mu.Lock()
+	ch := s.ctrlCh
+	s.mu.Unlock()
+	if ch == nil {
+		return errors.New("runner not connected")
+	}
+	rc := &quikv1.RunnerControl{Payload: &quikv1.RunnerControl_FixState{FixState: fix}}
+	select {
+	case ch <- rc:
+		return nil
+	default:
+		return errors.New("runner control channel full")
 	}
 }
 

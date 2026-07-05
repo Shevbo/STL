@@ -2,6 +2,7 @@ package trade
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -200,9 +201,16 @@ func (m *Manager) SetBookSource(ctx context.Context, book BookSource) {
 // PlaceOrder handles a STL PlaceOrder. It enforces the master flag, the kill-switch
 // block, and every hard limit BEFORE touching the bridge. On any violation it emits an
 // OrderUpdate REJECTED and sends nothing to Lua.
-func (m *Manager) PlaceOrder(req *quikv1.PlaceOrder) {
+func (m *Manager) PlaceOrder(req *quikv1.PlaceOrder) { _ = m.PlaceOrderErr(req) }
+
+// PlaceOrderErr is PlaceOrder returning the rejection reason (nil once the order was
+// handed to the bridge). The recon Aligner (internal/status, Task 8) uses it so a
+// Guard/master-flag rejection becomes the align step's error instead of vanishing into
+// an emitted OrderUpdate. Behavior is IDENTICAL to PlaceOrder: every rejection still
+// emits the REJECTED OrderUpdate and fans to the runner; nothing is bypassed.
+func (m *Manager) PlaceOrderErr(req *quikv1.PlaceOrder) error {
 	if req == nil {
-		return
+		return errors.New("nil PlaceOrder")
 	}
 	// Free phantom PENDING orders QUIK never acknowledged BEFORE counting the working
 	// budget, so a link-drop leftover cannot falsely block this placement with
@@ -215,7 +223,7 @@ func (m *Manager) PlaceOrder(req *quikv1.PlaceOrder) {
 
 	if blocked {
 		m.rejectPlace(req.GetClientId(), req.GetCode(), req.GetSide(), req.GetPrice(), req.GetQuantity(), ReasonBlocked)
-		return
+		return errors.New(string(ReasonBlocked))
 	}
 
 	ok, reason := m.guard.CheckPlace(PlaceCheck{
@@ -226,13 +234,13 @@ func (m *Manager) PlaceOrder(req *quikv1.PlaceOrder) {
 	})
 	if !ok {
 		m.rejectPlace(req.GetClientId(), req.GetCode(), req.GetSide(), req.GetPrice(), req.GetQuantity(), reason)
-		return
+		return errors.New(string(reason))
 	}
 
 	// Reserve the daily-cap slot only now (atomic with the send decision).
 	if ok, reason := m.guard.CommitPlace(); !ok {
 		m.rejectPlace(req.GetClientId(), req.GetCode(), req.GetSide(), req.GetPrice(), req.GetQuantity(), reason)
-		return
+		return errors.New(string(reason))
 	}
 
 	transID := m.bridge.NextTransID()
@@ -273,7 +281,32 @@ func (m *Manager) PlaceOrder(req *quikv1.PlaceOrder) {
 		wo.rejectedMs = m.nowMs()
 		m.mu.Unlock()
 		m.emitOrderUpdate(wo, "bridge send failed: "+err.Error())
+		return fmt.Errorf("bridge send failed: %w", err)
 	}
+	return nil
+}
+
+// CancelOrphan issues a KILL_ORDER for an order_num the Manager does NOT track — a
+// recon ORPHAN: an active QUIK order that neither a robot nor the human order path
+// claims (so resolveForCancel can never find it). Class comes from ManagerConfig, sec
+// from the recon step's symbol. Like CancelOrder, it is allowed while the kill-switch
+// block is engaged: a cancel only ever reduces exposure.
+func (m *Manager) CancelOrphan(orderNum, sec string) error {
+	if orderNum == "" {
+		return errors.New("empty order_num")
+	}
+	transID := m.bridge.NextTransID()
+	if err := m.bridge.Cancel(cancelCmd{
+		TransID:  transID,
+		OrderNum: orderNum,
+		Class:    m.cfg.ClassCode,
+		Sec:      sec,
+	}); err != nil {
+		m.logf("trade: orphan cancel send failed (order=%s): %v", orderNum, err)
+		return err
+	}
+	m.logf("trade: orphan cancel sent (order=%s sec=%s trans=%d)", orderNum, sec, transID)
+	return nil
 }
 
 // CancelOrder handles a STL CancelOrder. It resolves order_num via the explicit field

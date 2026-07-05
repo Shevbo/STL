@@ -129,6 +129,24 @@ class RobotHost:
         elif kind == "kill":
             self.killed = True    # block all new orders; agent cancels working ones
             log.warning("host.kill_switch", reason=getattr(rc.kill, "reason", ""))
+        elif kind == "fix_state":
+            fx = rc.fix_state
+            r = self.robots.get(fx.robot_id)
+            if r is None:
+                log.warning("host.fix_state_unknown_robot", robot_id=fx.robot_id)
+                return
+            # Recon align: force the believed book to the QUIK fact. Journal +
+            # persist immediately so the fix survives a runner restart even if
+            # no bar ever closes again today.
+            r.runtime.apply_fix(position=int(fx.set_position),
+                                avg=float(fx.set_avg_price),
+                                clear_working=bool(fx.clear_working),
+                                note=fx.note, symbol=r.spec["symbol"])
+            log.warning("host.fix_state", robot_id=fx.robot_id,
+                        position=int(fx.set_position),
+                        avg=float(fx.set_avg_price),
+                        clear_working=bool(fx.clear_working), note=fx.note)
+            self.persist()
 
     # ---- scheduling ----
 
