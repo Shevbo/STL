@@ -329,15 +329,16 @@
       {/if}
     </div>
 
-    <div class="panel">
-      <div class="p-title">История заявок ({trades.length})</div>
+    <div class="panel trades-frame">
+      <div class="p-title">Сделки робота ({trades.length})
+        <span class="pt-note">каждая строка = заявка робота; «Подтверждение» — ID из QUIK или paper</span></div>
       <div class="hist-scroll">
-        {#if trades.length === 0}
-          <div class="empty">Заявок пока не было.</div>
-        {:else}
-          <table>
-            <thead><tr><th>Время (МСК)</th><th>Сторона</th><th>Кол-во</th><th>Цена</th><th>Статус</th><th>ID</th></tr></thead>
-            <tbody>
+        <table>
+          <thead><tr><th>Время (МСК)</th><th>Сторона</th><th>Кол-во</th><th>Цена</th><th>Статус</th><th>Подтверждение</th></tr></thead>
+          <tbody>
+            {#if trades.length === 0}
+              <tr class="empty-row"><td colspan="6">Сделок пока нет — робот ждёт сигнала.</td></tr>
+            {:else}
               {#each [...trades].reverse() as t}
                 <tr class:rej={t.status === 'rejected' || t.status === 'skipped'}>
                   <td class="mono">{fmtMskTime(t.time * 1000)}</td>
@@ -345,12 +346,20 @@
                   <td class="mono">{t.qty}</td>
                   <td class="mono">{Math.round(t.price).toLocaleString('ru-RU')}</td>
                   <td><span class="st st-{t.status}">{t.status}</span></td>
-                  <td class="mono id">{t.order_id}</td>
+                  <td class="mono id">
+                    {#if t.status === 'paper'}
+                      <span class="confirm paper" title="виртуальное исполнение — заявка НЕ уходила в QUIK">paper</span>
+                    {:else if t.order_id && !t.order_id.startsWith('rr:')}
+                      <span class="confirm quik" title="номер заявки, подтверждённый QUIK">QUIK №{t.order_id}</span>
+                    {:else}
+                      <span class="confirm none" title="подтверждение из QUIK не получено (client_id: {t.order_id})">нет подтв.</span>
+                    {/if}
+                  </td>
                 </tr>
               {/each}
-            </tbody>
-          </table>
-        {/if}
+            {/if}
+          </tbody>
+        </table>
       </div>
     </div>
 
@@ -387,6 +396,14 @@
   .ars-lat { flex: 0 0 120px; min-height: 0; border-top: 1px solid #1a1a2e; }
   .ars-bottom { flex: 0 0 30%; min-height: 180px; display: flex; border-top: 1px solid #22224a; overflow: hidden; }
   .panel { flex: 1; min-width: 0; overflow-y: auto; padding: 10px 12px; border-right: 1px solid #1a1a2e; }
+  /* Trades: an explicit framed table, visible even when empty */
+  .trades-frame { border: 1px solid #2a2a52; border-radius: 6px; margin: 4px; background: #0a0a15; }
+  .pt-note { font-size: 9px; color: #556; text-transform: none; letter-spacing: 0; margin-left: 8px; }
+  .empty-row td { color: #556; font-style: italic; padding: 14px 8px; text-align: center; }
+  .confirm { font-size: 10px; padding: 1px 6px; border-radius: 3px; }
+  .confirm.paper { background: #1a2a4a; color: #7ab8ff; }
+  .confirm.quik { background: #0d2a16; color: #35d07f; }
+  .confirm.none { background: #2a1a0d; color: #ffb35c; }
   .panel:last-child { border-right: none; }
   .p-title { font-size: 10px; color: #667; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 7px; }
   .p-title.sub { margin-top: 12px; }
