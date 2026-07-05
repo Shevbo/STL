@@ -1,0 +1,407 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shectory QUIK Agent — статус</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #0a0a12; color: #ccc; font: 12px/1.5 -apple-system, Segoe UI, Arial, sans-serif; }
+  .mono { font-family: "SF Mono", Consolas, Menlo, monospace; font-variant-numeric: tabular-nums; }
+  header { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid #22224a; flex-wrap: wrap; }
+  header .name { font-weight: 700; color: #eee; font-family: monospace; font-size: 13px; }
+  .badge { font-size: 10px; padding: 3px 8px; border-radius: 3px; background: #16162c; border: 1px solid #2d2d4a; color: #99a; display: inline-block; }
+  .badge.real { background: #2a0a0a; border-color: #f44336; color: #ff6b5e; font-weight: 700; }
+  .badge.paper { background: #16162c; border-color: #2d2d4a; color: #99a; }
+  .badge.ok { color: #00e676; border-color: #00e67655; }
+  .badge.warn { color: #ffb300; border-color: #ffb30055; }
+  .badge.bad { color: #ff5c5c; border-color: #ff5c5c55; }
+  .badge.dim { color: #667; }
+  section { padding: 10px 14px; border-bottom: 1px solid #16162c; }
+  .sec-title { font-size: 10px; color: #667; text-transform: uppercase; letter-spacing: .6px; margin-bottom: 8px; }
+  .tiles { display: flex; flex-wrap: wrap; gap: 8px; }
+  .tile { background: #12122a; border: 1px solid #22224a; border-radius: 6px; padding: 8px 12px; min-width: 130px; }
+  .tile .k { font-size: 9px; color: #667; text-transform: uppercase; }
+  .tile .v { font-size: 15px; color: #eee; margin-top: 2px; }
+  .tile .v.warn { color: #ffb300; }
+  .tile .v.bad { color: #ff5c5c; }
+  .tile .note { font-size: 9px; color: #ffb300; margin-top: 2px; }
+  table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  th { text-align: left; color: #556; font-size: 9px; text-transform: uppercase; padding: 4px 6px; border-bottom: 1px solid #22224a; }
+  td { padding: 4px 6px; border-top: 1px solid #14142a; vertical-align: top; }
+  tr.stale td { opacity: .5; }
+  tr.flag td { background: #1a0d0d; }
+  tr.robot-row { cursor: pointer; }
+  tr.robot-row:hover td { background: #12122a; }
+  .buy { color: #2ee6a6; } .sell { color: #ff5c8a; }
+  .params-row td { background: #0e0e1c; }
+  .kv-grid { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+  .kv { font-size: 10px; color: #889; } .kv b { color: #ccc; font-family: monospace; }
+  .banner { padding: 8px 12px; border-radius: 6px; font-weight: 700; font-size: 12px; margin-bottom: 10px; }
+  .banner.OK { background: #0a1a0d; color: #00e676; border: 1px solid #00e67666; }
+  .banner.MISMATCH { background: #2a0a0a; color: #ff6b5e; border: 1px solid #f4433666; }
+  .banner.STALE { background: #1a1000; color: #ffb74d; border: 1px solid #ff980066; }
+  .plan-card { background: #12122a; border: 1px solid #2d2d5a; border-radius: 6px; padding: 10px 12px; margin-top: 8px; }
+  .plan-step { padding: 4px 0; border-top: 1px dotted #22224a; font-size: 11px; }
+  .plan-step:first-child { border-top: none; }
+  button { background: #16162c; border: 1px solid #2d2d4a; color: #eee; padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 11px; }
+  button:hover { border-color: #4caf50; }
+  button.danger { border-color: #f44336; color: #ff8a80; }
+  .empty { color: #556; font-style: italic; padding: 6px 0; }
+  .mo-row { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+  .mo-row input[type=text] { width: 80px; } .mo-row input[type=number] { width: 90px; }
+  input, select { background: #0e0e1c; border: 1px solid #2d2d4a; color: #eee; padding: 4px 6px; border-radius: 3px; font-family: monospace; font-size: 11px; }
+  .stale-num { opacity: .45; }
+  footer { padding: 8px 14px; color: #445; font-size: 10px; }
+  #offline-overlay { display: none; position: fixed; inset: 0; background: rgba(10,10,18,.72); color: #ffb74d;
+    align-items: center; justify-content: center; font-size: 16px; font-weight: 700; z-index: 50; }
+  body.offline #offline-overlay { display: flex; }
+</style>
+</head>
+<body>
+
+<header id="hdr">
+  <span class="name">QUIK agent</span>
+  <span class="badge dim" id="h-version">—</span>
+  <span class="badge dim" id="h-build">—</span>
+  <span class="badge dim" id="h-uptime">—</span>
+  <span class="badge" id="h-master">—</span>
+  <span class="badge" id="h-link">—</span>
+</header>
+
+<section>
+  <div class="sec-title">Здоровье</div>
+  <div class="tiles" id="tiles-feed"></div>
+  <div class="tiles" style="margin-top:8px" id="tiles-misc"></div>
+</section>
+
+<section>
+  <div class="sec-title">Роботы</div>
+  <table>
+    <thead><tr><th></th><th>ID</th><th>Символ</th><th>Стратегия</th><th>Режим</th><th>Статус</th>
+      <th>Позиция</th><th>P&amp;L</th><th>Пульс</th><th>Ссылки</th></tr></thead>
+    <tbody id="robots-body"></tbody>
+  </table>
+</section>
+
+<section>
+  <div class="sec-title">Сверка (recon)</div>
+  <div id="recon-banner"></div>
+
+  <div class="sec-title" style="margin-top:10px">Позиции</div>
+  <table><thead><tr><th>Символ</th><th>Роботы</th><th>Ручной офсет</th><th>QUIK</th><th>OK</th></tr></thead>
+    <tbody id="recon-positions"></tbody></table>
+
+  <div class="sec-title" style="margin-top:10px">Заявки QUIK</div>
+  <table><thead><tr><th>№ заявки</th><th>Владелец</th><th>OK</th></tr></thead>
+    <tbody id="recon-orders"></tbody></table>
+
+  <div class="sec-title" style="margin-top:10px">Сделки роботов</div>
+  <table><thead><tr><th>№ сделки</th><th>№ заявки</th><th>Совпадение</th></tr></thead>
+    <tbody id="recon-trades"></tbody></table>
+
+  <div class="sec-title" style="margin-top:10px">Транзакции</div>
+  <table><thead><tr><th>№ транзакции</th><th>Статус</th><th>Текст</th></tr></thead>
+    <tbody id="recon-trans"></tbody></table>
+
+  <div id="align-card"></div>
+
+  <div class="sec-title" style="margin-top:10px">Ручной офсет позиции</div>
+  <div id="manual-offsets"></div>
+  <div class="mo-row">
+    <input type="text" id="mo-new-sym" placeholder="символ">
+    <input type="number" id="mo-new-val" placeholder="кол-во" step="1">
+    <button id="mo-add">Добавить</button>
+    <button id="mo-save">Сохранить офсеты</button>
+  </div>
+</section>
+
+<footer>Обновление каждые <span id="f-interval">—</span> мс · источник <span id="f-src" class="mono">—</span></footer>
+
+<div id="offline-overlay">агент недоступен</div>
+
+<script>
+const qs = new URLSearchParams(location.search);
+const SRC = qs.get('src') || '/api/status';
+const INTERVAL = +(qs.get('interval') || 1000);
+let lastOkMs = 0;
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function fmtMs(ms) {
+  if (ms == null) return '—';
+  if (ms < 1000) return ms + ' мс';
+  return (ms / 1000).toFixed(1) + ' с';
+}
+function fmtNum(n) { return (n ?? 0).toLocaleString('ru-RU'); }
+
+// manual-offset editor state: last map RENDERED from the server, plus local
+// edits the operator hasn't saved yet. Keyed by symbol -> value (as string
+// while editing so an empty/partial input doesn't get coerced to 0).
+let moDraft = {};
+let moLoadedOnce = false;
+
+let prevReconState = null;
+let audioCtx = null;
+function beep() {
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.frequency.value = 880;
+    gain.gain.value = 0.08;
+    osc.connect(gain); gain.connect(audioCtx.destination);
+    osc.start(); osc.stop(audioCtx.currentTime + 0.18);
+  } catch (e) { /* AudioContext may need a user gesture first; non-fatal */ }
+}
+
+function renderHeader(a) {
+  document.getElementById('h-version').textContent = a.version || '—';
+  document.getElementById('h-build').textContent = 'build ' + (a.build_rev ?? '—');
+  document.getElementById('h-uptime').textContent = 'аптайм ' + fmtMs((a.uptime_sec ?? 0) * 1000);
+  const master = document.getElementById('h-master');
+  master.textContent = a.master_flag ? 'ТОРГОВЛЯ ВКЛ (QUIK)' : 'торговля выкл';
+  master.className = 'badge' + (a.master_flag ? ' bad' : ' dim');
+  const link = document.getElementById('h-link');
+  link.textContent = 'STL: ' + (a.link_up ? 'связь есть' : 'нет связи') + ' (реконнектов: ' + (a.reconnects ?? 0) + ')';
+  link.className = 'badge' + (a.link_up ? ' ok' : ' warn');
+}
+
+function tile(label, value, cls, note) {
+  return '<div class="tile"><div class="k">' + esc(label) + '</div><div class="v' + (cls ? ' ' + cls : '') + '">'
+    + value + '</div>' + (note ? '<div class="note">' + esc(note) + '</div>' : '') + '</div>';
+}
+
+function renderHealth(h, linkUp) {
+  const feedEl = document.getElementById('tiles-feed');
+  if (!h.feed || !h.feed.length) {
+    feedEl.innerHTML = '<div class="empty">Нет тиков ни по одному инструменту.</div>';
+  } else {
+    feedEl.innerHTML = h.feed.map(f => {
+      const div = document.createElement('div');
+      div.innerHTML = tile(f.code, fmtMs(f.age_ms), f.age_ms > 5000 ? 'warn' : '');
+      div.firstElementChild.title = 'last=' + fmtNum(f.last) + ' bid=' + fmtNum(f.bid) + ' ask=' + fmtNum(f.ask);
+      return div.innerHTML;
+    }).join('');
+  }
+  const driftBad = Math.abs(h.clock_drift_ms ?? 0) > 1500;
+  const misc = [
+    tile('QUIK RTT', fmtMs(h.rtt_ms), h.rtt_ms > 2000 ? 'warn' : ''),
+    tile('Понг', fmtMs(h.pong_age_ms), h.pong_age_ms > 10000 ? 'warn' : ''),
+    tile('Дрейф часов', (h.clock_drift_ms ?? 0) + ' мс', driftBad ? 'warn' : ''),
+    tile('Биржевой лаг', fmtMs(h.exchange_lag_ms), driftBad ? 'warn' : '', driftBad ? 'ненадёжно (дрейф часов)' : ''),
+    tile('Позиции QUIK', fmtMs(h.pos_age_ms), h.pos_age_ms > 30000 ? 'warn' : '', 'возраст acc_pos'),
+    tile('Заявки QUIK', fmtMs(h.ord_age_ms), h.ord_age_ms > 30000 ? 'warn' : '', 'возраст acc_ord'),
+    tile('Раннер', h.runner_healthy ? 'жив' : 'не отвечает', h.runner_healthy ? '' : 'bad',
+      h.runner_report_age_ms < 0 ? 'ещё не подключался' : fmtMs(h.runner_report_age_ms) + ' назад'),
+    tile('Связь со STL', linkUp ? 'есть' : 'нет', linkUp ? '' : 'warn', 'не влияет на торговлю'),
+  ];
+  document.getElementById('tiles-misc').innerHTML = misc.join('');
+}
+
+function robotLinks(r) {
+  const links = [];
+  links.push('<a class="mono" href="/logs/runner" target="_blank" style="color:#7ab8ff">runner.log</a>');
+  if (r.strategy_id) links.push('<a class="mono" href="/strategy/' + encodeURIComponent(r.strategy_id) + '" target="_blank" style="color:#7ab8ff">стратегия</a>');
+  return links.join(' · ');
+}
+
+function renderRobots(robots) {
+  const body = document.getElementById('robots-body');
+  if (!robots || !robots.length) {
+    body.innerHTML = '<tr><td colspan="10" class="empty">Роботов на агенте не развёрнуто.</td></tr>';
+    return;
+  }
+  let html = '';
+  robots.forEach((r, i) => {
+    const modeCls = r.mode === 'real' ? 'real' : 'paper';
+    const modeLabel = r.mode === 'real' ? 'РЕАЛ' : 'PAPER';
+    const status = r.paused ? 'ПАУЗА' : (r.running ? 'РАБОТАЕТ' : (r.has_status ? 'СТОП' : 'нет данных'));
+    const hbAge = r.heartbeat_unix_ms ? (Date.now() - r.heartbeat_unix_ms) : null;
+    const hbCls = hbAge != null && hbAge < 45000 ? 'ok' : 'warn';
+    const pnl = r.pnl_rub != null
+      ? Math.round(r.pnl_rub).toLocaleString('ru-RU') + ' ₽'
+      : fmtNum(r.pnl_points) + ' п.';
+    html += '<tr class="robot-row" data-idx="' + i + '">'
+      + '<td>▸</td>'
+      + '<td class="mono">' + esc(r.id) + '</td>'
+      + '<td class="mono">' + esc(r.symbol) + '</td>'
+      + '<td>' + esc(r.strategy_id) + '</td>'
+      + '<td><span class="badge ' + modeCls + '">' + modeLabel + '</span></td>'
+      + '<td><span class="badge ' + (r.running ? 'ok' : 'dim') + '">' + status + '</span></td>'
+      + '<td class="mono ' + (r.position > 0 ? 'buy' : (r.position < 0 ? 'sell' : '')) + '">' + (r.position > 0 ? '+' : '') + fmtNum(r.position) + '</td>'
+      + '<td class="mono ' + (r.pnl_points > 0 ? 'buy' : (r.pnl_points < 0 ? 'sell' : '')) + '">' + pnl + '</td>'
+      + '<td><span class="badge ' + hbCls + '">' + (hbAge == null ? '—' : fmtMs(hbAge)) + '</span></td>'
+      + '<td>' + robotLinks(r) + '</td>'
+      + '</tr>';
+    html += '<tr class="params-row" id="params-' + i + '" style="display:none"><td></td><td colspan="9">' + paramsBlock(r) + '</td></tr>';
+  });
+  body.innerHTML = html;
+  body.querySelectorAll('tr.robot-row').forEach(tr => {
+    tr.addEventListener('click', () => {
+      const p = document.getElementById('params-' + tr.dataset.idx);
+      p.style.display = p.style.display === 'none' ? '' : 'none';
+    });
+  });
+}
+
+function fmtTs(ms) {
+  if (!ms) return '—';
+  return new Date(ms).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow',
+    day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function paramsBlock(r) {
+  let params = {};
+  try { params = r.params_json ? JSON.parse(r.params_json) : {}; } catch (e) { /* leave empty */ }
+  const kv = Object.entries(params).map(([k, v]) =>
+    '<div class="kv">' + esc(k) + ': <b>' + esc(v) + '</b></div>').join('');
+  const meta = [
+    ['окно торговли', r.schedule || '—'],
+    ['макс. позиция', fmtNum(r.max_position)],
+    ['средняя цена', fmtNum(r.avg_price)],
+    ['баров получено', fmtNum(r.bars_count)],
+    ['последний бар', fmtTs(r.last_bar_unix * 1000 || 0)],
+    ['развёрнут', fmtTs(r.deployed_at_ms)],
+    ['параметры изменены', fmtTs(r.params_updated_at_ms)],
+  ].map(([k, v]) => '<div class="kv">' + esc(k) + ': <b>' + esc(v) + '</b></div>').join('');
+  const fills = (r.recent_fills || []).slice(-10).reverse().map(f =>
+    '<div class="kv">' + (f.side === 'buy' ? '<span class="buy">▲</span>' : '<span class="sell">▼</span>') + ' '
+    + fmtNum(f.qty) + ' @ <b>' + fmtNum(f.price) + '</b> <span style="color:#667">' + esc(f.status) + '</span></div>').join('');
+  const working = (r.working_orders || []).map(w =>
+    '<div class="kv">' + (w.side === 'buy' ? '<span class="buy">▲</span>' : '<span class="sell">▼</span>') + ' '
+    + fmtNum(w.qty) + ' @ <b>' + fmtNum(w.price) + '</b> <span style="color:#667">' + esc(w.state) + '</span></div>').join('');
+  let signalPretty = '';
+  if (r.signal_json) {
+    try { signalPretty = JSON.stringify(JSON.parse(r.signal_json), null, 2); }
+    catch (e) { signalPretty = r.signal_json; }
+  }
+  return '<div class="sec-title">Параметры стратегии</div>'
+    + '<div class="kv-grid">' + (kv || '<span class="empty">нет параметров</span>') + '</div>'
+    + '<div class="sec-title" style="margin-top:6px">Метаданные</div>'
+    + '<div class="kv-grid">' + meta + '</div>'
+    + '<div class="sec-title" style="margin-top:6px">Заявки в работе</div>'
+    + '<div class="kv-grid">' + (working || '<span class="empty">нет</span>') + '</div>'
+    + '<div class="sec-title" style="margin-top:6px">Последние сделки</div>'
+    + '<div class="kv-grid">' + (fills || '<span class="empty">нет</span>') + '</div>'
+    + (signalPretty ? '<div class="sec-title" style="margin-top:6px">Сигнал стратегии (сырой JSON)</div>'
+      + '<pre class="mono" style="white-space:pre-wrap;background:#0e0e1c;padding:6px;border-radius:4px;max-height:200px;overflow:auto">'
+      + esc(signalPretty) + '</pre>' : '')
+    + (r.note ? '<div class="sec-title" style="margin-top:6px">Заметка</div><div>' + esc(r.note) + '</div>' : '');
+}
+
+function renderRecon(recon) {
+  const banner = document.getElementById('recon-banner');
+  const label = { OK: 'OK — расхождений нет', MISMATCH: 'РАСХОЖДЕНИЕ — требуется внимание', STALE: 'ДАННЫЕ УСТАРЕЛИ — сверка не выполнена' }[recon.state] || recon.state;
+  banner.innerHTML = '<div class="banner ' + esc(recon.state) + '">' + esc(label) + '</div>';
+
+  document.getElementById('recon-positions').innerHTML = (recon.positions || []).length
+    ? recon.positions.map(p => '<tr' + (p.ok ? '' : ' class="flag"') + '>'
+      + '<td class="mono">' + esc(p.symbol) + '</td><td class="mono">' + fmtNum(p.robots_sum) + '</td>'
+      + '<td class="mono">' + fmtNum(p.manual_offset) + '</td><td class="mono">' + fmtNum(p.quik) + '</td>'
+      + '<td>' + (p.ok ? '<span class="badge ok">OK</span>' : '<span class="badge bad">MISMATCH</span>') + '</td></tr>').join('')
+    : '<tr><td colspan="5" class="empty">Нет данных по позициям.</td></tr>';
+
+  document.getElementById('recon-orders').innerHTML = (recon.orders || []).length
+    ? recon.orders.map(o => '<tr' + (o.ok ? '' : ' class="flag"') + '>'
+      + '<td class="mono">' + esc(o.order_num) + '</td><td>' + esc(o.owner) + '</td>'
+      + '<td>' + (o.ok ? '<span class="badge ok">OK</span>' : '<span class="badge bad">' + esc(o.owner) + '</span>') + '</td></tr>').join('')
+    : '<tr><td colspan="3" class="empty">Активных заявок нет.</td></tr>';
+
+  document.getElementById('recon-trades').innerHTML = (recon.trades || []).length
+    ? recon.trades.map(t => '<tr' + (t.matched ? '' : ' class="flag"') + '>'
+      + '<td class="mono">' + esc(t.trade_id || '—') + '</td><td class="mono">' + esc(t.order_num) + '</td>'
+      + '<td>' + (t.matched ? '<span class="badge ok">совпало</span>' : '<span class="badge bad">не найдено в QUIK</span>') + '</td></tr>').join('')
+    : '<tr><td colspan="3" class="empty">Сделок для сверки нет.</td></tr>';
+
+  document.getElementById('recon-trans').innerHTML = (recon.trans || []).length
+    ? recon.trans.map(t => '<tr' + (t.ok ? '' : ' class="flag"') + '>'
+      + '<td class="mono">' + esc(t.trans_id) + '</td><td>' + esc(t.status) + '</td><td>' + esc(t.text) + '</td></tr>').join('')
+    : '<tr><td colspan="3" class="empty">Проблемных транзакций нет.</td></tr>';
+
+  const card = document.getElementById('align-card');
+  if (recon.plan && recon.plan.steps && recon.plan.steps.length) {
+    card.innerHTML = '<div class="plan-card">'
+      + '<div class="sec-title">План выравнивания ' + esc(recon.plan.id) + '</div>'
+      + recon.plan.steps.map(s => '<div class="plan-step">'
+        + '<b>' + esc(s.kind) + '</b> ' + esc(s.symbol) + (s.order_num ? ' · заявка ' + esc(s.order_num) : '')
+        + (s.robot_id ? ' · робот ' + esc(s.robot_id) : '')
+        + (s.qty ? ' · qty ' + fmtNum(s.qty) : '')
+        + (s.set_pos || s.set_avg ? ' · сброс позиции=' + fmtNum(s.set_pos) + ' avg=' + fmtNum(s.set_avg) : '')
+        + '<br><span style="color:#889">' + esc(s.detail) + '</span></div>').join('')
+      + '<div style="margin-top:8px"><button id="align-btn" data-plan="' + esc(recon.plan.id) + '">Выполнить план</button></div>'
+      + '</div>';
+    document.getElementById('align-btn').addEventListener('click', () => align(recon.plan.id));
+  } else {
+    card.innerHTML = '';
+  }
+
+  renderManualOffsets(recon.manual_offsets || {});
+}
+
+function renderManualOffsets(offsets) {
+  if (!moLoadedOnce) { moDraft = Object.assign({}, offsets); moLoadedOnce = true; }
+  const el = document.getElementById('manual-offsets');
+  const syms = Object.keys(moDraft);
+  el.innerHTML = syms.length ? syms.map(sym =>
+    '<div class="mo-row"><span class="mono" style="width:80px">' + esc(sym) + '</span>'
+    + '<input type="number" step="1" class="mono mo-val" data-sym="' + esc(sym) + '" value="' + esc(moDraft[sym]) + '">'
+    + '<button class="danger mo-del" data-sym="' + esc(sym) + '">убрать</button></div>').join('')
+    : '<div class="empty">Ручных офсетов нет.</div>';
+  el.querySelectorAll('.mo-val').forEach(inp => inp.addEventListener('change', () => {
+    moDraft[inp.dataset.sym] = parseInt(inp.value, 10) || 0;
+  }));
+  el.querySelectorAll('.mo-del').forEach(btn => btn.addEventListener('click', () => {
+    delete moDraft[btn.dataset.sym];
+    renderManualOffsets(offsets);
+  }));
+}
+
+document.getElementById('mo-add').addEventListener('click', () => {
+  const sym = document.getElementById('mo-new-sym').value.trim().toUpperCase();
+  const val = parseInt(document.getElementById('mo-new-val').value, 10) || 0;
+  if (!sym) return;
+  moDraft[sym] = val;
+  document.getElementById('mo-new-sym').value = '';
+  document.getElementById('mo-new-val').value = '';
+  renderManualOffsets(moDraft);
+});
+document.getElementById('mo-save').addEventListener('click', async () => {
+  try {
+    const r = await fetch('/api/manual-offset', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(moDraft) });
+    alert(r.ok ? 'Сохранено.' : 'Ошибка: ' + await r.text());
+  } catch (e) { alert('Ошибка сети: ' + e); }
+});
+
+function render(s) {
+  renderHeader(s.agent || {});
+  renderHealth(s.health || {}, (s.agent || {}).link_up);
+  renderRobots(s.robots || []);
+  renderRecon(s.recon || { state: 'STALE' });
+  if (prevReconState !== null && prevReconState !== 'MISMATCH' && s.recon && s.recon.state === 'MISMATCH') beep();
+  if (s.recon) prevReconState = s.recon.state;
+  document.getElementById('f-interval').textContent = INTERVAL;
+  document.getElementById('f-src').textContent = SRC;
+}
+
+async function poll() {
+  try {
+    const r = await fetch(SRC, {cache: 'no-store'});
+    render(await r.json()); lastOkMs = Date.now();
+    document.body.classList.remove('offline');
+  } catch (e) { if (Date.now() - lastOkMs > 5000) document.body.classList.add('offline'); }
+  setTimeout(poll, INTERVAL);
+}
+async function align(planId) {
+  if (!confirm('Выровнять по плану ' + planId + '?')) return;
+  const r = await fetch('/api/align', {method: 'POST', headers: {'content-type': 'application/json'},
+    body: JSON.stringify({plan_id: planId})});
+  alert(await r.text());
+}
+poll();
+</script>
+</body>
+</html>
