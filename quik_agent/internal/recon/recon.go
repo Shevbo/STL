@@ -349,8 +349,12 @@ func evalOrders(in Inputs) ([]OrderCheck, []Step) {
 
 // evalTrades checks every real robot's believed FillKey against AccView.Trades by
 // order_num, exact qty, and price within one PriceStep (or exact price if the symbol has
-// no configured step). Paper robots contribute no FillKeys.
+// no configured step). Paper robots contribute no FillKeys. Each QUIK trade row is
+// consumed by at most one FillKey match (a `used` set shared across all robots) so two
+// identical fill keys can never both be satisfied by the same single trade row — that
+// would silently hide a genuinely missing second fill.
 func evalTrades(in Inputs) []TradeCheck {
+	used := make([]bool, len(in.Acc.Trades))
 	var checks []TradeCheck
 	for _, r := range in.Robots {
 		if r.Paper {
@@ -359,8 +363,8 @@ func evalTrades(in Inputs) []TradeCheck {
 		step := in.PriceStep[r.Symbol]
 		for _, fk := range r.FillKeys {
 			matched, tradeID := false, ""
-			for _, tr := range in.Acc.Trades {
-				if tr.OrderNum != fk.OrderNum || tr.Qty != fk.Qty {
+			for i, tr := range in.Acc.Trades {
+				if used[i] || tr.OrderNum != fk.OrderNum || tr.Qty != fk.Qty {
 					continue
 				}
 				diff := tr.Price - fk.Price
@@ -369,6 +373,7 @@ func evalTrades(in Inputs) []TradeCheck {
 				}
 				if (step > 0 && diff <= step) || (step <= 0 && diff == 0) {
 					matched, tradeID = true, tr.Num
+					used[i] = true
 					break
 				}
 			}

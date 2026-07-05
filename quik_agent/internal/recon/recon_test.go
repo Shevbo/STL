@@ -442,6 +442,40 @@ func TestEvaluateTradeExactMatchWhenNoPriceStep(t *testing.T) {
 	}
 }
 
+// ---- a single QUIK trade cannot satisfy two distinct fill keys ----
+
+func TestEvaluateTradeMatchDoesNotDoubleCountSameTradeRow(t *testing.T) {
+	in := Inputs{
+		Robots: []RobotView{{
+			ID: "r1", Symbol: "RIU6", Position: 0,
+			// Two identical fill keys (e.g. two 1-lot partials at the same price).
+			FillKeys: []FillKey{
+				{OrderNum: "1", Qty: 1, Price: 100000},
+				{OrderNum: "1", Qty: 1, Price: 100000},
+			},
+		}},
+		Acc: AccView{
+			Positions: []Position{{Sec: "RIU6", Net: 0}},
+			// Only ONE matching trade row exists for that order/qty/price.
+			Trades:   []Trade{{Num: "t1", OrderNum: "1", Sec: "RIU6", Qty: 1, Price: 100000}},
+			PosAgeMs: 100, OrdAgeMs: 100,
+		},
+	}
+	rep := Evaluate(in)
+	if len(rep.Trades) != 2 {
+		t.Fatalf("trades = %+v, want 2 checks (one per fill key)", rep.Trades)
+	}
+	matchedCount := 0
+	for _, tc := range rep.Trades {
+		if tc.Matched {
+			matchedCount++
+		}
+	}
+	if matchedCount != 1 {
+		t.Fatalf("trades = %+v, want exactly ONE matched (the single trade row must not satisfy both fill keys)", rep.Trades)
+	}
+}
+
 // ---- human-owned order is OK, no step ----
 
 func TestEvaluateHumanOwnedOrderOK(t *testing.T) {
