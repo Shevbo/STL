@@ -101,6 +101,11 @@ type luaEvent struct {
 	TS         int64  `json:"ts"`          // trade/md timestamp (epoch, source-defined)
 	Text       string `json:"text"`        // trans_reply/order text
 
+	// account snapshot / clock-sync (QLua acc_pos/acc_ord/acc_trd/pong publisher)
+	Rows       [][]any `json:"rows"`        // acc_pos/acc_ord/acc_trd: raw decoded rows
+	T0         int64   `json:"t0"`          // pong: agent-stamped send time (echoed back)
+	ServerTime string  `json:"server_time"` // pong: QUIK server time "HH:MM:SS" (MSK)
+
 	// market data (QLua getParamEx / getQuoteLevel2 / OnAllTrade publisher)
 	Code   string      `json:"code"`   // md, book, tape, param
 	Last   float64     `json:"last"`   // md
@@ -126,6 +131,18 @@ type MDEvent struct {
 	IsBook         bool
 	IsTape         bool
 	IsParam        bool
+}
+
+// AccEvent is a QLua account-snapshot or clock-sync event (acc_pos/acc_ord/acc_trd/
+// pong) for the account sink. Rows carries the raw decoded row arrays; the accounts
+// adapter (internal/accounts) does the type-tolerant conversion, mirroring how MDEvent
+// keeps decoding out of the bridge itself.
+type AccEvent struct {
+	Kind       string  // "pos" | "ord" | "trd" | "pong"
+	Rows       [][]any // pos/ord/trd: raw decoded rows
+	T0         int64   // pong: agent-stamped send time (echoed back)
+	TS         int64   // pong: Lua-side receive time
+	ServerTime string  // pong: QUIK server time "HH:MM:SS" (MSK)
 }
 
 // BridgeHandler receives decoded Lua events. The order manager implements it. Calls
@@ -172,6 +189,7 @@ type Bridge struct {
 	addr    string
 	handler BridgeHandler
 	mdSink  func(MDEvent)
+	accSink func(AccEvent)
 	logf    func(string, ...any)
 
 	ln net.Listener
@@ -211,6 +229,15 @@ func NewBridge(port int, handler BridgeHandler, logf func(string, ...any)) *Brid
 func (b *Bridge) SetMDSink(f func(MDEvent)) {
 	b.mu.Lock()
 	b.mdSink = f
+	b.mu.Unlock()
+}
+
+// SetAccSink sets the account/clock-sync sink (acc_pos/acc_ord/acc_trd/pong events
+// from the QLua publisher). Optional; nil drops these events. Called on the bridge
+// reader goroutine.
+func (b *Bridge) SetAccSink(f func(AccEvent)) {
+	b.mu.Lock()
+	b.accSink = f
 	b.mu.Unlock()
 }
 
@@ -329,6 +356,7 @@ func (b *Bridge) dispatch(ev luaEvent) {
 	b.mu.Lock()
 	h := b.handler
 	md := b.mdSink
+	acc := b.accSink
 	b.mu.Unlock()
 	switch ev.Event {
 	case "md":
@@ -350,6 +378,26 @@ func (b *Bridge) dispatch(ev luaEvent) {
 		if md != nil {
 			md(MDEvent{Code: ev.Code, PriceStep: ev.PriceStep, StepCost: ev.StepCost,
 				Margin: ev.Margin, IsParam: true})
+		}
+		return
+	case "acc_pos":
+		if acc != nil {
+			acc(AccEvent{Kind: "pos", Rows: ev.Rows})
+		}
+		return
+	case "acc_ord":
+		if acc != nil {
+			acc(AccEvent{Kind: "ord", Rows: ev.Rows})
+		}
+		return
+	case "acc_trd":
+		if acc != nil {
+			acc(AccEvent{Kind: "trd", Rows: ev.Rows})
+		}
+		return
+	case "pong":
+		if acc != nil {
+			acc(AccEvent{Kind: "pong", T0: ev.T0, TS: ev.TS, ServerTime: ev.ServerTime})
 		}
 		return
 	}
