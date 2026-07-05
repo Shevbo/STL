@@ -61,6 +61,9 @@ local CONFIG = {
   MD_INTERVAL_MS   = 500,                    -- tick snapshot cadence
   MD_BOOK_INTERVAL_MS = 1000,                -- order-book (L2) snapshot cadence
   MD_BOOK_DEPTH    = 10,                     -- levels per side
+
+  -- Account tables (positions/orders/trades) publish cadence for the agent showcase (ms).
+  ACC_INTERVAL_MS  = 2000,
 }
 
 ----------------------------------------------------------------------
@@ -484,7 +487,7 @@ end
 -- main(). All calls are pcall-guarded — MD must never break order handling.
 ----------------------------------------------------------------------
 local md = { codes = {}, code_set = {}, last_tick_ms = 0, last_book_ms = 0,
-             last_param_ms = 0, tape = {}, last_tape_ms = 0 }
+             last_param_ms = 0, tape = {}, last_tape_ms = 0, last_acc_ms = 0 }
 for code in string.gmatch(CONFIG.MD_CODES or "", "([^,%s]+)") do
   md.codes[#md.codes + 1] = code
   md.code_set[code] = true
@@ -558,6 +561,73 @@ local function publish_params()
   end
 end
 
+-- Account tables (positions/orders/trades): change-gated publishers so a later Go task
+-- can reconcile QUIK facts against the STL-side view. ser_rows gives a cheap
+-- deterministic key so positions/orders are only re-emitted when a value actually
+-- changed; trades are inherently incremental (append-only), so we just track how many
+-- rows we have already sent.
+local function ser_rows(rows)
+  local parts = {}
+  for _, r in ipairs(rows) do parts[#parts + 1] = table.concat(r, ",") end
+  return table.concat(parts, ";")
+end
+
+local acc = { last_pos = "", last_ord = "", last_pos_ms = 0, last_ord_ms = 0, trd_seen = 0 }
+
+local function publish_acc_positions()
+  local n = getNumberOf("futures_client_holding") or 0
+  local rows = {}
+  for i = 0, n - 1 do
+    local r = getItem("futures_client_holding", i)
+    if r and r.sec_code and r.sec_code ~= "" then
+      rows[#rows + 1] = { r.sec_code, tonumber(r.totalnet) or 0, tonumber(r.avrposnprice) or 0 }
+    end
+  end
+  local key = ser_rows(rows)
+  if key ~= acc.last_pos then
+    acc.last_pos = key
+    emit({ event = "acc_pos", rows = rows })
+  end
+end
+
+local function publish_acc_orders()
+  local n = getNumberOf("orders") or 0
+  local rows = {}
+  for i = 0, n - 1 do
+    local r = getItem("orders", i)
+    if r and r.order_num then
+      local active = 0
+      -- bit library availability is uncertain in this terminal's QLua build; a plain
+      -- modulo check on bit0 avoids depending on it (see order_state_from above, which
+      -- uses the same math.floor/%-based pattern for the very same flags field).
+      if (tonumber(r.flags) or 0) % 2 == 1 then active = 1 end
+      rows[#rows + 1] = { tostring(r.order_num), r.sec_code or "", active,
+                          tonumber(r.price) or 0, tonumber(r.balance) or 0, tonumber(r.qty) or 0 }
+    end
+  end
+  local key = ser_rows(rows)
+  if key ~= acc.last_ord then
+    acc.last_ord = key
+    emit({ event = "acc_ord", rows = rows })
+  end
+end
+
+local function publish_acc_trades()  -- incremental: only rows we have not sent yet
+  local n = getNumberOf("trades") or 0
+  if n <= acc.trd_seen then return end
+  local rows = {}
+  for i = acc.trd_seen, n - 1 do
+    local r = getItem("trades", i)
+    if r and r.trade_num then
+      local ts = now_ms()  -- QUIK datetime table conversion is best-effort; agent stamps receipt anyway
+      rows[#rows + 1] = { tostring(r.trade_num), tostring(r.order_num or ""), r.sec_code or "",
+                          tonumber(r.price) or 0, tonumber(r.qty) or 0, ts }
+    end
+  end
+  acc.trd_seen = n
+  if #rows > 0 then emit({ event = "acc_trd", rows = rows }) end
+end
+
 -- Anonymized all-trades tape: OnAllTrade buffers, md_pump flushes batches.
 -- QLua serialises callbacks vs main(), so plain tables are safe here.
 function OnAllTrade(t)
@@ -599,6 +669,12 @@ local function md_pump()
   if t - md.last_param_ms >= 60000 then
     md.last_param_ms = t
     pcall(publish_params)
+  end
+  if t - (md.last_acc_ms or 0) >= (CONFIG.ACC_INTERVAL_MS or 2000) then
+    md.last_acc_ms = t
+    pcall(publish_acc_positions)
+    pcall(publish_acc_orders)
+    pcall(publish_acc_trades)
   end
 end
 
@@ -752,7 +828,10 @@ local function dispatch_command(line)
   elseif cmd.cmd == "move" then
     handle_move(cmd)
   elseif cmd.cmd == "ping" then
-    emit({ event = "pong", ts = os.time() })
+    local st = ""
+    local ok, v = pcall(getInfoParam, "SERVERTIME")
+    if ok and v then st = v end
+    emit({ event = "pong", t0 = cmd.t0 or 0, ts = now_ms(), server_time = st })
   else
     log("unknown cmd '" .. tostring(cmd.cmd) .. "' (dropped)")
   end

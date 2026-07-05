@@ -14,4 +14,7 @@ return {
   QUEUE_DIR      = "C:\\quik-bridge",  -- = agent_config.json trade_queue_dir
 
   -- MD_CODES    = "RIU6,GZU6,SiU6,SRU6",  -- инструменты для котировок/ленты
+
+  -- Account tables publish cadence for the agent showcase (ms). 0 keeps default 2000.
+  -- ACC_INTERVAL_MS = 2000,
 }
