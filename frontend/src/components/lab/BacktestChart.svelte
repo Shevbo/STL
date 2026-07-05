@@ -431,9 +431,12 @@
     if (!live || loading || tailBusy || !candleSeries || !lastBarTime) return;
     tailBusy = true;
     try {
+      // Window = TODAY only: the tail endpoint does an ISS top-up server-side, so a
+      // wide window on a fast cadence starved the backend event loop (the robots
+      // mirror timed out behind it). Ticks animate the forming candle at 1s anyway.
       const now = new Date();
       const isoD = (d: Date) => d.toISOString().slice(0, 10);
-      const from = isoD(new Date(now.getTime() - 86400_000));
+      const from = isoD(now);
       const to = isoD(new Date(now.getTime() + 86400_000));
       const fresh = await fetchBars(symbol, from, to);
       let appended = false;

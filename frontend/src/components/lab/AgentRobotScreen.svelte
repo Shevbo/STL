@@ -127,7 +127,7 @@
     try {
       const q = agentId ? `?agent_id=${encodeURIComponent(agentId)}` : '';
       const res = await fetchWithAuth(`/api/v1/quik/robots-mirror${q}`,
-        { signal: AbortSignal.timeout(FETCH_TO) } as any);
+        { signal: AbortSignal.timeout(6000) } as any);  // mirror can queue behind heavy bar fetches
       if (!res.ok) { error = `mirror: HTTP ${res.status}`; return; }
       report = await res.json();
       mirrorAge = report?.received_at_ms ? Math.round((Date.now() - Number(report.received_at_ms)) / 1000) : null;
@@ -198,7 +198,7 @@
   let timers: Array<ReturnType<typeof setInterval>> = [];
   onMount(() => {
     void load(); void loadDesc(); void pollTick();
-    timers = [setInterval(load, 2000), setInterval(pollTick, 1000)];
+    timers = [setInterval(load, 3000), setInterval(pollTick, 1000)];
   });
   onDestroy(() => { for (const t of timers) clearInterval(t); });
 </script>
@@ -243,7 +243,7 @@
       dateFrom={dateFrom}
       dateTo={dateTo}
       defaultInterval={1}
-      live={10}
+      live={20}
       liveTick={liveTick}
       taker={false}
       openOrders={openOrders}
