@@ -465,6 +465,21 @@
     return await res.json();
   }
 
+  // LIVE mode: the history window scales with the interval — 3 days of 1m candles
+  // is fine, but 30m/1h/4h need weeks-months or the chart "starts at 01.07".
+  // Backtest charts keep their exact requested period (dateFrom untouched).
+  function liveWindow(): { from: string; to: string } {
+    if (!live) return { from: dateFrom, to: dateTo };
+    const days = resampleMin >= 720 ? 730 : resampleMin >= 240 ? 365
+      : resampleMin >= 120 ? 180 : resampleMin >= 60 ? 120
+      : resampleMin >= 30 ? 60 : resampleMin >= 15 ? 30
+      : resampleMin >= 5 ? 14 : 4;
+    const isoD = (t: number) => new Date(t).toISOString().slice(0, 10);
+    const from = isoD(Date.now() - days * 86400_000);
+    const to = isoD(Date.now() + 86400_000);   // recomputed per load: long-lived tabs keep moving
+    return { from: from < dateFrom ? from : dateFrom, to: to > dateTo ? to : dateTo };
+  }
+
   // Continuous chart: for a rolled robot, fetch each contract's bars over its own
   // window (fromTs..toTs in chart-axis time) and concatenate — real prices, a visible
   // step at the roll, no overlap. Single-contract (backtest) falls back to one fetch.
@@ -480,7 +495,8 @@
       for (const b of all) if (b.time !== lastT) { out.push(b); lastT = b.time; }   // unique ascending times
       return out;
     }
-    return await fetchBars(symbol, dateFrom, dateTo);
+    const w = liveWindow();
+    return await fetchBars(symbol, w.from, w.to);
   }
 
   // Position rectangles (chart-axis time → pixels), recomputed on every pan/zoom so the
