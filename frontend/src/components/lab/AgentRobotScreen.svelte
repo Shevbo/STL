@@ -55,6 +55,7 @@
   let chartResult = $state<any>(null);
   let openOrders = $state<any[]>([]);
   let plannedOrders = $state<any[]>([]);
+  let armedOrders = $state<any[]>([]);   // fire-on-signal (market), NOT price levels
   let _fpChart = '';
   let _fpOrders = '';
   $effect(() => {
@@ -71,16 +72,22 @@
       side: w.side === 'SIDE_SELL' ? 'sell' : 'buy',
       price: Number(w.price ?? 0), qty: Number(w.qty ?? 0), order_id: w.order_id ?? '',
     }));
+    // Chart lines: ONLY real price levels (planned_orders, e.g. TP). "Armed" orders
+    // are NOT price triggers — FVG fires on a closed-bar pattern, not on a level
+    // touch — so drawing them as horizontal lines misled the operator ("price
+    // crossed the line 5 times, robot ignores"). They live in the side panel only.
     const planned: any[] = [];
     for (const p of signal?.planned_orders ?? [])
       planned.push({ side: p.side, price: p.price, qty: p.qty, reason: p.reason });
+    const armedList: any[] = [];
     for (const p of signal?.armed ?? [])
-      planned.push({ side: p.side, price: p.price, qty: p.qty, reason: p.reason });
-    const fp = JSON.stringify([open, planned]);
+      armedList.push({ side: p.side, price: p.price, qty: p.qty, reason: p.reason });
+    const fp = JSON.stringify([open, planned, armedList]);
     if (fp !== _fpOrders) {
       _fpOrders = fp;
       openOrders = open;
       plannedOrders = planned;
+      armedOrders = armedList;
     }
   });
 
@@ -159,6 +166,7 @@
       dateFrom={dateFrom}
       dateTo={dateTo}
       defaultInterval={1}
+      live={15}
       taker={false}
       openOrders={openOrders}
       plannedOrders={plannedOrders}
@@ -187,12 +195,19 @@
           </div>
         {/if}
         <div class="p-title sub">Планируемые заявки</div>
-        {#if plannedOrders.length}
+        {#if plannedOrders.length || armedOrders.length}
           {#each plannedOrders as p}
             <div class="plan-row" class:buy={p.side === 'buy'} class:sell={p.side === 'sell'}>
               <b>{p.side === 'buy' ? '▲ BUY' : '▼ SELL'} {p.qty}</b>
-              <span class="mono">@ ~{Math.round(p.price).toLocaleString('ru-RU')}</span>
+              <span class="mono">@ {Math.round(p.price).toLocaleString('ru-RU')}</span>
               <span class="why">{p.reason}</span>
+            </div>
+          {/each}
+          {#each armedOrders as p}
+            <div class="plan-row" class:buy={p.side === 'buy'} class:sell={p.side === 'sell'}>
+              <b>{p.side === 'buy' ? '▲ BUY' : '▼ SELL'} {p.qty}</b>
+              <span class="mono">по рынку</span>
+              <span class="why">{p.reason} — сработает по ЗАКРЫТИЮ бара с паттерном, это не ценовой уровень</span>
             </div>
           {/each}
         {:else}

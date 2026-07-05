@@ -18,7 +18,7 @@
   let {
     result, symbol, strategy = null, dateFrom, dateTo, pointValue = 1, defaultInterval = 60,
     openOrders = [], plannedOrders = [], taker = true, runParams = {}, paramSchema = [], onRerun = null,
-    segments = null, pointValues = null,
+    segments = null, pointValues = null, live = 0,
   }: {
     result: any; symbol: string; strategy?: any; dateFrom: string; dateTo: string;
     pointValue?: number; defaultInterval?: number;
@@ -36,6 +36,9 @@
     runParams?: Record<string, any>;
     paramSchema?: Array<{ key: string; label?: string }>;
     onRerun?: ((p: Record<string, any>) => void) | null;
+    // live > 0: refresh the candle TAIL every `live` seconds via series.update()
+    // (no setData, zoom preserved) so a LIVE robot's chart moves with the market.
+    live?: number;
   } = $props();
 
   // ── Editable parameters panel (collapsed by default; edit → re-run backtest) ──
@@ -246,6 +249,7 @@
 
     await loadMeta();
     await loadData();
+    if (live > 0) liveTimer = setInterval(refreshTail, Math.max(5, live) * 1000);
   });
 
   function onWheelPan(ev: WheelEvent) {
@@ -374,11 +378,47 @@
 
   onDestroy(() => {
     cancelAnimationFrame(rectRaf);
+    if (liveTimer) clearInterval(liveTimer);
     roRef?.disconnect();
     candleEl?.removeEventListener('wheel', onWheelPan);
     equityEl?.removeEventListener('wheel', onWheelPan);
     tvCandle?.remove(); tvEquity?.remove();
   });
+
+  // ── Live tail: append/refresh the newest candles WITHOUT setData ────────────
+  // series.update() mutates the last bar / appends new ones, so pan/zoom and the
+  // visible range survive. Dates are computed at refresh time (a tab left open
+  // across midnight keeps moving). Fetch window = today±1d, cheap on the server.
+  let lastBarTime = 0;                 // newest bar currently on the chart
+  let lastEquityValue = 100000;        // carried onto appended bars (axis alignment)
+  let liveTimer: ReturnType<typeof setInterval> | null = null;
+  let tailBusy = false;
+
+  async function refreshTail() {
+    if (!live || loading || tailBusy || !candleSeries || !lastBarTime) return;
+    tailBusy = true;
+    try {
+      const now = new Date();
+      const isoD = (d: Date) => d.toISOString().slice(0, 10);
+      const from = isoD(new Date(now.getTime() - 86400_000));
+      const to = isoD(new Date(now.getTime() + 86400_000));
+      const fresh = await fetchBars(symbol, from, to);
+      let appended = false;
+      for (const b of fresh) {
+        if (b.time < lastBarTime) continue;
+        candleSeries.update({ time: b.time, open: b.open, high: b.high, low: b.low, close: b.close });
+        volumeSeries.update({ time: b.time, value: b.volume, color: b.close >= b.open ? '#26a65b20' : '#c0392b20' });
+        if (b.time > lastBarTime) {
+          equitySeries.update({ time: b.time, value: lastEquityValue });
+          lastBarTime = b.time;
+          barCount += 1;
+          appended = true;
+        }
+      }
+      if (appended) periodLabel = `${periodLabel.split(' — ')[0]} — ${fmtDay(lastBarTime)}`;
+    } catch { /* transient network error — next tick retries */ }
+    tailBusy = false;
+  }
 
   async function fetchBars(sym: string, from: string, to: string): Promise<any[]> {
     const res = await fetchWithAuth(
@@ -469,6 +509,7 @@
       volumeSeries.setData(bars.map(b => ({ time: b.time, value: b.volume, color: b.close >= b.open ? '#26a65b20' : '#c0392b20' })));
       barCount = bars.length;
       periodLabel = `${fmtDay(bars[0].time)} — ${fmtDay(bars[bars.length - 1].time)}`;
+      lastBarTime = bars[bars.length - 1].time;
 
       const fills = toFills(result?.trades);
       // Roll-aware: P&L summed PER CONTRACT with each contract's own point value (a
@@ -519,12 +560,14 @@
         });
         equitySeries.applyOptions({ baseValue: { type: 'price', price: base } });
         equitySeries.setData(aligned);
+        lastEquityValue = aligned.length ? aligned[aligned.length - 1].value : base;
       } else if (bars.length) {
         // No trades yet (a fresh / just-launched LIVE robot): draw a FLAT baseline across
         // the candle times so the equity pane — which carries the shared VISIBLE time axis
         // — still renders. An empty series left the WHOLE chart with no time axis at all.
         equitySeries.applyOptions({ baseValue: { type: 'price', price: 100000 } });
         equitySeries.setData(bars.map(b => ({ time: b.time as number, value: 100000 })));
+        lastEquityValue = 100000;
       } else {
         equitySeries.setData([]);
       }
