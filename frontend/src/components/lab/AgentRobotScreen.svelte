@@ -105,6 +105,22 @@
   // Freshest tick, passed into the chart in CHART-AXIS time (bars are MSK-stamped
   // epochs; tick received_at is true UTC ms -> shift +3h). Drives the forming candle.
   let liveTick = $state<{ t: number; p: number } | null>(null);
+  // ₽ per price POINT (step_cost/price_step from the QLua params feed). The runner
+  // accumulates realized P&L in PRICE POINTS; the UI converts to honest rubles.
+  let pointCoef = $state<number | null>(null);
+  async function loadCoef() {
+    try {
+      const q = agentId ? `?agent_id=${encodeURIComponent(agentId)}` : '';
+      const res = await fetchWithAuth(`/api/v1/quik/params${q}`,
+        { signal: AbortSignal.timeout(4000) } as any);
+      if (!res.ok) return;
+      const d = await res.json();
+      const row = (d.rows ?? []).find((r: any) => r.code === symbol);
+      if (row?.coef > 0) pointCoef = Number(row.coef);
+    } catch { /* optional; badge falls back to points */ }
+  }
+  const pnlPoints = $derived(Number(robot?.realized_pnl ?? 0));
+  const pnlRub = $derived(pointCoef ? pnlPoints * pointCoef : null);
   let tickAge = $state<number | null>(null);
   let mirrorAge = $state<number | null>(null);
 
@@ -197,8 +213,9 @@
   // resolved, so setInterval was never installed).
   let timers: Array<ReturnType<typeof setInterval>> = [];
   onMount(() => {
-    void load(); void loadDesc(); void pollTick();
-    timers = [setInterval(load, 3000), setInterval(pollTick, 1000)];
+    void load(); void loadDesc(); void pollTick(); void loadCoef();
+    timers = [setInterval(load, 3000), setInterval(pollTick, 1000),
+              setInterval(loadCoef, 300_000)];
   });
   onDestroy(() => { for (const t of timers) clearInterval(t); });
 </script>
@@ -218,8 +235,13 @@
         пульс {heartbeatAge === null ? '—' : heartbeatAge + 'с'}</span>
       <span class="badge pos" class:long={position > 0} class:short={position < 0}>
         позиция {position > 0 ? '+' : ''}{position}</span>
-      <span class="badge pnl" class:up={Number(robot.realized_pnl ?? 0) > 0} class:dn={Number(robot.realized_pnl ?? 0) < 0}>
-        P&L {Math.round(Number(robot.realized_pnl ?? 0)).toLocaleString('ru-RU')} ₽</span>
+      <span class="badge pnl" class:up={pnlPoints > 0} class:dn={pnlPoints < 0}
+            title={pointCoef
+              ? `${pnlPoints.toLocaleString('ru-RU')} п. × ${pointCoef.toFixed(4)} ₽/п. (реализовано, без комиссий)`
+              : 'в пунктах цены (курс пункта ещё не получен)'}>
+        P&L {pnlRub !== null
+          ? Math.round(pnlRub).toLocaleString('ru-RU') + ' ₽'
+          : pnlPoints.toLocaleString('ru-RU') + ' п.'}</span>
       <span class="badge" class:ok={tickAge !== null && tickAge <= 10} class:warn={tickAge === null || tickAge > 10}
             title="возраст последнего тика QUIK (поток данных)">
         тик {tickAge === null ? '—' : tickAge + 'с'}</span>
