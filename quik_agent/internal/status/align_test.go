@@ -93,8 +93,8 @@ func TestAligner_ClosePosition_PositiveQtySellsQuantizedDown(t *testing.T) {
 	if p.GetCode() != "RIU6" {
 		t.Errorf("want code RIU6, got %q", p.GetCode())
 	}
-	if p.GetClientId() != "recon:abc123" {
-		t.Errorf(`want client_id "recon:abc123", got %q`, p.GetClientId())
+	if p.GetClientId() != "recon:abc123:0" {
+		t.Errorf(`want client_id "recon:abc123:0", got %q`, p.GetClientId())
 	}
 	if len(res) != 1 || !res[0].OK {
 		t.Fatalf("want one OK result, got %+v", res)
@@ -126,16 +126,49 @@ func TestAligner_ClosePosition_NegativeQtyBuysQuantizedUp(t *testing.T) {
 
 // A last price already on the grid stays put for both sides.
 func TestAligner_ClosePosition_OnGridPriceUnchanged(t *testing.T) {
+	for name, qty := range map[string]int64{"BUY": -1, "SELL": 1} {
+		a, mgr, _ := alignFixture()
+		a.Provider = fakeProvider{
+			ticks:  []quikdde.Tick{{Code: "RIU6", Last: 89170}},
+			params: []quikdde.ParamRow{{Code: "RIU6", PriceStep: 10}},
+		}
+		a.Execute(recon.Plan{ID: "p3", Steps: []recon.Step{
+			{Kind: "close_position", Symbol: "RIU6", Qty: qty},
+		}})
+		if len(mgr.placed) != 1 || mgr.placed[0].GetPrice() != 89170 {
+			t.Fatalf("%s: on-grid price must be unchanged, got %+v", name, mgr.placed)
+		}
+	}
+}
+
+// A multi-symbol mismatch yields one close_position per symbol in ONE plan;
+// each placement must carry a DISTINCT client_id ("recon:<plan_id>:<index>")
+// or the Manager's byClient index would collide.
+func TestAligner_TwoClosePositions_DistinctClientIDs(t *testing.T) {
 	a, mgr, _ := alignFixture()
 	a.Provider = fakeProvider{
-		ticks:  []quikdde.Tick{{Code: "RIU6", Last: 89170}},
-		params: []quikdde.ParamRow{{Code: "RIU6", PriceStep: 10}},
+		ticks: []quikdde.Tick{
+			{Code: "RIU6", Last: 89173},
+			{Code: "GZU6", Last: 14520},
+		},
+		params: []quikdde.ParamRow{
+			{Code: "RIU6", PriceStep: 10},
+			{Code: "GZU6", PriceStep: 1},
+		},
 	}
-	a.Execute(recon.Plan{ID: "p3", Steps: []recon.Step{
+	res := a.Execute(recon.Plan{ID: "p9", Steps: []recon.Step{
+		{Kind: "close_position", Symbol: "GZU6", Qty: 1},
 		{Kind: "close_position", Symbol: "RIU6", Qty: -1},
 	}})
-	if len(mgr.placed) != 1 || mgr.placed[0].GetPrice() != 89170 {
-		t.Fatalf("on-grid price must be unchanged, got %+v", mgr.placed)
+	if len(mgr.placed) != 2 {
+		t.Fatalf("want two placements, got %d", len(mgr.placed))
+	}
+	id0, id1 := mgr.placed[0].GetClientId(), mgr.placed[1].GetClientId()
+	if id0 != "recon:p9:0" || id1 != "recon:p9:1" {
+		t.Fatalf("want per-step client_ids recon:p9:0 / recon:p9:1, got %q / %q", id0, id1)
+	}
+	if len(res) != 2 || !res[0].OK || !res[1].OK {
+		t.Fatalf("want two OK results, got %+v", res)
 	}
 }
 

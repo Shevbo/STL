@@ -10,6 +10,7 @@ package status
 import (
 	"fmt"
 	"math"
+	"strconv"
 
 	"shectory/quik_agent/internal/recon"
 
@@ -48,12 +49,12 @@ type Aligner struct {
 func (a *Aligner) Execute(plan recon.Plan) []StepResult {
 	results := make([]StepResult, 0, len(plan.Steps))
 	failed := false
-	for _, step := range plan.Steps {
+	for i, step := range plan.Steps {
 		if failed {
 			results = append(results, StepResultFrom(step, false, "skipped: previous step failed"))
 			continue
 		}
-		if err := a.executeStep(plan.ID, step); err != nil {
+		if err := a.executeStep(plan.ID, i, step); err != nil {
 			failed = true
 			results = append(results, StepResultFrom(step, false, err.Error()))
 			continue
@@ -63,12 +64,12 @@ func (a *Aligner) Execute(plan recon.Plan) []StepResult {
 	return results
 }
 
-func (a *Aligner) executeStep(planID string, s recon.Step) error {
+func (a *Aligner) executeStep(planID string, stepIndex int, s recon.Step) error {
 	switch s.Kind {
 	case "cancel_order":
 		return a.Manager.CancelOrphan(s.OrderNum, s.Symbol)
 	case "close_position":
-		return a.closePosition(planID, s)
+		return a.closePosition(planID, stepIndex, s)
 	case "fix_state":
 		// A fix_state step exists because the robot believes in a working order
 		// QUIK does not have — clear that phantom belief and pin the robot's
@@ -91,8 +92,11 @@ func (a *Aligner) executeStep(planID string, s recon.Step) error {
 // is LONG in excess => SELL |Qty|; NEGATIVE = the account is SHORT of the
 // robots' claim => BUY back |Qty|. Price = the provider's current last for the
 // symbol, quantized to the instrument price step (a price that cannot exist on
-// the exchange is never sent); missing price or step fails the step.
-func (a *Aligner) closePosition(planID string, s recon.Step) error {
+// the exchange is never sent); missing price or step fails the step. The
+// client_id is unique PER STEP ("recon:<plan_id>:<step_index>"): a multi-symbol
+// mismatch yields one close_position per symbol in the same plan, and a shared
+// client_id would collide in the Manager's byClient index.
+func (a *Aligner) closePosition(planID string, stepIndex int, s recon.Step) error {
 	if s.Qty == 0 {
 		return fmt.Errorf("close_position %s: zero qty", s.Symbol)
 	}
@@ -123,7 +127,7 @@ func (a *Aligner) closePosition(planID string, s recon.Step) error {
 	}
 
 	return a.Manager.PlaceOrderErr(&quikv1.PlaceOrder{
-		ClientId: "recon:" + planID,
+		ClientId: "recon:" + planID + ":" + strconv.Itoa(stepIndex),
 		Code:     s.Symbol,
 		Side:     side,
 		Price:    quantizePrice(last, step, side == quikv1.Side_SIDE_BUY),

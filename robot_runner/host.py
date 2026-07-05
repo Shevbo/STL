@@ -141,7 +141,7 @@ class RobotHost:
             r.runtime.apply_fix(position=int(fx.set_position),
                                 avg=float(fx.set_avg_price),
                                 clear_working=bool(fx.clear_working),
-                                note=fx.note, symbol=r.spec["symbol"])
+                                note=fx.note, symbol=r.spec.get("symbol", ""))
             log.warning("host.fix_state", robot_id=fx.robot_id,
                         position=int(fx.set_position),
                         avg=float(fx.set_avg_price),
