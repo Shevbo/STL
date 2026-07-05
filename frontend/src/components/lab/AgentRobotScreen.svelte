@@ -10,6 +10,7 @@
   import { toFills } from '../../lib/lab-analytics';
   import BacktestChart from './BacktestChart.svelte';
   import LatencyPane from './LatencyPane.svelte';
+  import AgentBookPane from './AgentBookPane.svelte';
 
   let { robotId, agentId = null }: { robotId: string; agentId?: string | null } = $props();
 
@@ -159,6 +160,8 @@
   {/if}
 
   <div class="ars-chart">
+    <AgentBookPane {symbol} {agentId} depth={10} />
+    <div class="ars-chart-body">
     {#if chartResult}
     <BacktestChart
       result={chartResult}
@@ -172,6 +175,7 @@
       plannedOrders={plannedOrders}
     />
     {/if}
+    </div>
   </div>
 
   <div class="ars-lat"><LatencyPane minutes={360} /></div>
@@ -281,7 +285,8 @@
   .badge.pnl.up { color: #00e676; } .badge.pnl.dn { color: #f44336; }
   .badge.dim { color: #667; }
   .feed-warn { background: #1a1000; border-bottom: 1px solid #ff980044; color: #ffb74d; font-size: 11px; padding: 5px 14px; flex-shrink: 0; }
-  .ars-chart { flex: 1 1 52%; min-height: 0; }
+  .ars-chart { flex: 1 1 52%; min-height: 0; display: flex; }
+  .ars-chart-body { flex: 1; min-width: 0; min-height: 0; }
   .ars-lat { flex: 0 0 120px; min-height: 0; border-top: 1px solid #1a1a2e; }
   .ars-bottom { flex: 0 0 30%; min-height: 180px; display: flex; border-top: 1px solid #22224a; overflow: hidden; }
   .panel { flex: 1; min-width: 0; overflow-y: auto; padding: 10px 12px; border-right: 1px solid #1a1a2e; }
