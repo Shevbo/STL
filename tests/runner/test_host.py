@@ -57,12 +57,17 @@ async def test_deploy_creates_robot_and_persists(tmp_path):
     host.robots["r1"].runtime.set_state("trend", "up")
     host.robots["r1"].runtime.restore(position=1, avg=89000.0, realized=50.0)
     host.persist()
+    host.robots["r1"].runtime._apply_fill("buy", 1, 89000.0, symbol="RIU6")
+    host.persist()
     host2 = RobotHost(FakeBridge(), str(tmp_path))
     await host2.handle_control(_deploy_rc())
     r2 = host2.robots["r1"]
     assert r2.runtime.get_state("trend") == "up"
-    assert r2.runtime.signed_position() == 1
+    assert r2.runtime.signed_position() == 2   # restored 1 + the extra buy fill
     assert r2.runtime.realized_pnl() == 50.0
+    # the fill HISTORY survives the restart too (operator audit trail)
+    fills = r2.runtime.recent_fills()
+    assert fills and fills[-1]["price"] == 89000.0
 
 
 @pytest.mark.asyncio

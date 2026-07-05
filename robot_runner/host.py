@@ -64,7 +64,10 @@ class RobotHost:
             out[rid] = {"state": r.runtime.state,
                         "position": r.runtime.signed_position(),
                         "avg": r.runtime.avg_price(),
-                        "realized": r.runtime.realized_pnl()}
+                        "realized": r.runtime.realized_pnl(),
+                        # order/fill history survives runner restarts (the operator's
+                        # audit trail; P&L without its trades looked like a bug)
+                        "fills": r.runtime.fills_tail()}
         # keep saved state for robots not currently deployed (undeploy != wipe)
         for rid, saved in self._saved.items():
             out.setdefault(rid, saved)
@@ -99,7 +102,8 @@ class RobotHost:
                               paper=spec["paper"], state=saved.get("state"))
             rt.restore(position=saved.get("position", 0),
                        avg=saved.get("avg", 0.0),
-                       realized=saved.get("realized", 0.0))
+                       realized=saved.get("realized", 0.0),
+                       fills=saved.get("fills"))
             self.robots[spec["robot_id"]] = HostedRobot(spec, rt, bars)
             log.info("host.deployed", robot_id=spec["robot_id"],
                      strategy=spec["strategy_id"], paper=spec["paper"],

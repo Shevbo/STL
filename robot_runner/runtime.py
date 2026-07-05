@@ -197,11 +197,18 @@ class AgentRuntime:
     def realized_pnl(self) -> float:
         return self._realized
 
-    def restore(self, *, position: int, avg: float, realized: float) -> None:
+    def restore(self, *, position: int, avg: float, realized: float,
+                fills: list | None = None) -> None:
         """Re-seed position bookkeeping from persisted runner state (zero-touch)."""
         self._signed = int(position)
         self._avg = float(avg)
         self._realized = float(realized)
+        if fills:
+            self._fills = list(fills)[-200:]
+
+    def fills_tail(self) -> list[dict]:
+        """Persistable order/fill history (last 200)."""
+        return self._fills[-200:]
 
     @property
     def state(self) -> dict:
