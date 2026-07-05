@@ -1,0 +1,20 @@
+[Unit]
+Description=Shectory AI46 (team-46) standalone paper strategy
+After=network-online.target shectory-trader.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/apps/shectory-trader
+EnvironmentFile=/home/ubuntu/.shectory_trade.env
+# Keep the strategy off the API process (AI46_ENABLED=0 there); this unit IS AI46.
+ExecStart=/home/ubuntu/.local/bin/poetry run python -m trader.lab.ai46
+Restart=always
+RestartSec=10
+# The HMM/GARCH fits are CPU-hungry by design; keep them polite to the API.
+Nice=10
+CPUWeight=50
+
+[Install]
+WantedBy=multi-user.target
