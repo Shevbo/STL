@@ -55,6 +55,14 @@ def test_store_agent_status_malformed_json_is_dropped():
     assert store.agent_status("a1") is None
 
 
+def test_store_agent_status_deeply_nested_json_is_dropped():
+    """json.loads raises RecursionError on pathological nesting — must not
+    escape set_agent_status (one bad frame would kill the live gRPC session)."""
+    store = QuikAgentStore()
+    store.set_agent_status("a1", "[" * 5000 + "]" * 5000, generated_at_ms=1)
+    assert store.agent_status("a1") is None
+
+
 def test_store_agent_status_non_object_json_is_dropped():
     """A JSON array/scalar is valid JSON but not the expected shape — drop it."""
     store = QuikAgentStore()

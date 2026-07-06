@@ -149,16 +149,17 @@ class QuikAgentStore:
     def set_agent_status(self, agent_id: str, status_json: str, generated_at_ms: int) -> None:
         """Store the agent's local-showcase status snapshot (opaque JSON, mirrored
         verbatim). Malformed JSON is dropped (logged once) — never crash the
-        gRPC stream handler over a bad frame."""
+        gRPC stream handler over a bad frame. ``generated_at_ms`` is accepted but
+        unused: the snapshot JSON is self-describing and ``_received_at_ms`` is the
+        mirror's staleness source."""
         try:
             parsed = json.loads(status_json)
-        except (TypeError, ValueError):
+        except Exception:  # noqa: BLE001 — never break the session on a bad frame
             log.warning("quik.status_snapshot.malformed_json", agent=agent_id)
             return
         if not isinstance(parsed, dict):
             log.warning("quik.status_snapshot.not_an_object", agent=agent_id)
             return
-        parsed = dict(parsed)
         parsed["_received_at_ms"] = _now_ms()
         with self._lock:
             self._agents.setdefault(agent_id, AgentState(agent_id=agent_id)).agent_status = parsed
