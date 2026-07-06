@@ -69,6 +69,43 @@ func TestDispatchAccountEvents(t *testing.T) {
 	}
 }
 
+// A flat account emits acc_pos/acc_ord with an EMPTY rows array (the Lua encoder
+// serialises {} as []). That frame must decode cleanly and dispatch Kind=pos with
+// zero rows, so main.go calls SetPositions([]) and recon reads OK-empty (not STALE).
+// A JSON object {} here would fail json.Unmarshal into [][]any and drop the frame.
+func TestDispatchAccountEventsEmptyRows(t *testing.T) {
+	var got []AccEvent
+	b := NewBridge(0, nil, nil)
+	b.SetAccSink(func(e AccEvent) { got = append(got, e) })
+	var ev luaEvent
+	if err := json.Unmarshal([]byte(`{"event":"acc_pos","rows":[]}`), &ev); err != nil {
+		t.Fatalf("empty-rows acc_pos must unmarshal, got %v", err)
+	}
+	b.dispatch(ev)
+	if len(got) != 1 || got[0].Kind != "pos" || len(got[0].Rows) != 0 {
+		t.Fatalf("got %+v, want one pos event with zero rows", got)
+	}
+}
+
+// The wire contract the Lua encoder must honor: 13-digit epoch-ms integers
+// (pong t0 / last_trade_ts_ms) survive decode as full int64, not truncated. This
+// guards the %.0f Lua encoder fix against a regression back to %d (which zeros
+// large integers on QUIK's 32-bit Lua and collapsed rtt_ms to an epoch value).
+func TestDispatchPongLargeEpochSurvives(t *testing.T) {
+	var got []AccEvent
+	b := NewBridge(0, nil, nil)
+	b.SetAccSink(func(e AccEvent) { got = append(got, e) })
+	var ev luaEvent
+	line := `{"event":"pong","t0":1783340089079,"ts":1783340089079,"server_time":"12:00:01","last_trade_ts_ms":1783340089000}`
+	if err := json.Unmarshal([]byte(line), &ev); err != nil {
+		t.Fatal(err)
+	}
+	b.dispatch(ev)
+	if len(got) != 1 || got[0].T0 != 1783340089079 || got[0].LastTradeTsMs != 1783340089000 {
+		t.Fatalf("pong = %+v, want full int64 t0/last_trade_ts_ms", got)
+	}
+}
+
 // TestDispatchPongDecodesLastTradeTsMs: the QLua pong's last_trade_ts_ms field (freshest
 // OnAllTrade exchange timestamp) must decode through luaEvent into AccEvent verbatim —
 // this is what accounts.Store.SetPong uses to compute ExchangeLagMs (see accounts_test.go

@@ -204,7 +204,7 @@ function renderHealth(h, linkUp, stale) {
   }
   const driftBad = Math.abs(h.clock_drift_ms ?? 0) > 1500;
   const misc = [
-    tile('QUIK RTT', fmtMs(h.rtt_ms), h.rtt_ms > 2000 ? 'warn' : '', null, stale),
+    tile('QUIK RTT', fmtAge(h.rtt_ms), h.rtt_ms > 2000 ? 'warn' : '', null, stale),
     tile('Понг', fmtMs(h.pong_age_ms), h.pong_age_ms > 10000 ? 'warn' : '', null, stale),
     tile('Дрейф часов', (h.clock_drift_ms ?? 0) + ' мс', driftBad ? 'warn' : '', null, stale),
     tile('Биржевой лаг', fmtAge(h.exchange_lag_ms), driftBad ? 'warn' : '', driftBad ? 'ненадёжно (дрейф часов)' : '', stale),

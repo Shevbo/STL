@@ -142,7 +142,10 @@ function json.encode(v)
     if v == math.huge or v == -math.huge then return "0" end
     -- integers without trailing .0
     if math.floor(v) == v and math.abs(v) < 1e15 then
-      return string.format("%d", v)
+      -- %.0f serialises the full double integer range; %d casts to QUIK Lua's
+      -- 32-bit C long and truncates 13-digit epoch-ms values (pong t0,
+      -- last_trade_ts_ms, tape/acc trade timestamps) to garbage on the wire.
+      return string.format("%.0f", v)
     end
     return string.format("%.10g", v)
   elseif t == "boolean" then
@@ -157,7 +160,10 @@ function json.encode(v)
       n = n + 1
       if type(k) ~= "number" then is_array = false end
     end
-    if is_array and n > 0 then
+    -- An empty Lua table is ambiguous (array vs object). This protocol only ever
+    -- emits empty ARRAYS (rows/bids/asks/trades), never an empty object, so encode
+    -- {} as [] — the Go decoder unmarshals rows into [][]any and drops a JSON {}.
+    if is_array then
       local parts = {}
       for i = 1, #v do parts[i] = json.encode(v[i]) end
       return "[" .. table.concat(parts, ",") .. "]"
@@ -585,8 +591,14 @@ local function publish_acc_positions()
     end
   end
   local key = ser_rows(rows)
-  if key ~= acc.last_pos then
+  local t = now_ms()
+  -- Emit on change, on the first pass (last_pos_ms == 0, so a flat/empty account
+  -- still sends one frame and recon reads OK-empty instead of STALE), or as a
+  -- keepalive under the 30s recon-STALE threshold so a flat, unchanging account
+  -- stays GREEN instead of ageing back to STALE.
+  if key ~= acc.last_pos or acc.last_pos_ms == 0 or (t - acc.last_pos_ms) >= 15000 then
     acc.last_pos = key
+    acc.last_pos_ms = t
     emit({ event = "acc_pos", rows = rows })
   end
 end
@@ -607,8 +619,12 @@ local function publish_acc_orders()
     end
   end
   local key = ser_rows(rows)
-  if key ~= acc.last_ord then
+  local t = now_ms()
+  -- Same first-pass + keepalive gate as publish_acc_positions (see there): an
+  -- order-less account must still emit one acc_ord frame so recon is not STALE.
+  if key ~= acc.last_ord or acc.last_ord_ms == 0 or (t - acc.last_ord_ms) >= 15000 then
     acc.last_ord = key
+    acc.last_ord_ms = t
     emit({ event = "acc_ord", rows = rows })
   end
 end

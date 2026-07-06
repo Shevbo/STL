@@ -175,6 +175,72 @@ func TestStoreRTTAndDrift(t *testing.T) {
 	}
 }
 
+// A keepalive re-publish of an UNCHANGED table must refresh freshness (PosAgeMs low)
+// WITHOUT advancing the content stamp PosAtMs — otherwise the recon plan ID rotates and
+// every operator align confirm 409s on a static account. A genuine content change DOES
+// advance PosAtMs.
+func TestStorePublishSplitsRecvFromContentStamp(t *testing.T) {
+	now := int64(1_000_000)
+	s := New(func() int64 { return now })
+
+	rows := []Position{{Sec: "RIU6", Net: 2, Avg: 89100}}
+	s.SetPositions(rows)
+	first := s.Snapshot()
+	if first.PosAtMs != 1_000_000 || first.PosAgeMs != 0 {
+		t.Fatalf("first publish: PosAtMs=%d PosAgeMs=%d, want 1000000/0", first.PosAtMs, first.PosAgeMs)
+	}
+
+	// Keepalive: same content, 16s later. Freshness updates, content stamp does not.
+	now += 16_000
+	s.SetPositions([]Position{{Sec: "RIU6", Net: 2, Avg: 89100}})
+	ka := s.Snapshot()
+	if ka.PosAtMs != 1_000_000 {
+		t.Fatalf("keepalive rotated PosAtMs to %d (must stay 1000000 for stable plan ID)", ka.PosAtMs)
+	}
+	if ka.PosAgeMs != 0 {
+		t.Fatalf("keepalive PosAgeMs=%d, want 0 (freshly received)", ka.PosAgeMs)
+	}
+
+	// Real content change: PosAtMs advances (plan ID must invalidate).
+	now += 5_000
+	s.SetPositions([]Position{{Sec: "RIU6", Net: 1, Avg: 89100}})
+	chg := s.Snapshot()
+	if chg.PosAtMs != 1_021_000 {
+		t.Fatalf("content change: PosAtMs=%d, want 1021000", chg.PosAtMs)
+	}
+}
+
+// A fresh store has never seen a valid pong: RTT must read the "no data" sentinel
+// (-1), not 0, so the page renders "нет данных" rather than a fabricated 0 мс.
+func TestStoreRTTFreshIsNoData(t *testing.T) {
+	s := New(func() int64 { return 1_783_340_000_000 })
+	if snap := s.Snapshot(); snap.RTTMs != -1 {
+		t.Fatalf("fresh RTTMs = %d, want -1", snap.RTTMs)
+	}
+}
+
+// A pong that echoes no valid send-time (t0<=0) must NOT collapse RTT to the
+// current epoch (the live bug: rtt_ms tracked the wall clock). It reports -1.
+func TestStorePongNoT0YieldsNoData(t *testing.T) {
+	now := int64(1_783_340_089_100) // epoch-scale, matching production
+	s := New(func() int64 { return now })
+	s.SetPong(0, 0, "", 0)
+	if snap := s.Snapshot(); snap.RTTMs != -1 {
+		t.Fatalf("RTTMs = %d, want -1 (a zero t0 must not yield an epoch-sized RTT)", snap.RTTMs)
+	}
+}
+
+// RTT is a small delta even at epoch scale: locks the agent-clock semantics so a
+// future regression that feeds a zeroed t0 into nowMs-t0 (=> epoch) fails here.
+func TestStoreRTTEpochScale(t *testing.T) {
+	now := int64(1_783_340_089_100)
+	s := New(func() int64 { return now })
+	s.SetPong(now-25, 0, "", 0)
+	if snap := s.Snapshot(); snap.RTTMs != 25 {
+		t.Fatalf("RTTMs = %d, want 25", snap.RTTMs)
+	}
+}
+
 func TestStoreDriftMidnightWrap(t *testing.T) {
 	// now (UTC ms) chosen so that local MSK time-of-day = 00:00:30 (30s past MSK
 	// midnight): (now + 3h) mod 24h == 30_000ms.

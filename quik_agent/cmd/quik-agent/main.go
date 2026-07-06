@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -325,6 +326,11 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 	// status showcase (Deps.Accounts) reads it; recon compares it against the
 	// robots' believed books.
 	accStore := accounts.New(func() int64 { return time.Now().UnixMilli() })
+	// pingSentMs records the agent-clock send time of the most recent ping so the
+	// pong handler can compute RTT on the agent clock ALONE (never the Lua-echoed
+	// t0, which does not survive QUIK's 32-bit Lua integer encoding). One ping is
+	// outstanding at the 5s cadence vs a ~ms RTT, so last-send is unambiguous.
+	var pingSentMs atomic.Int64
 	bridge := trade.NewBridge(cfg.TradeBridgePort, nil, func(f string, a ...any) {
 		fmt.Printf("trade-bridge: "+f+"\n", a...)
 	})
@@ -369,7 +375,9 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 			}
 			accStore.AddTrades(rows)
 		case "pong":
-			accStore.SetPong(ev.T0, ev.TS, ev.ServerTime, ev.LastTradeTsMs)
+			// RTT is measured on the agent clock alone: feed the recorded send
+			// time (pingSentMs), NOT the Lua-echoed ev.T0 (see pingSentMs decl).
+			accStore.SetPong(pingSentMs.Load(), ev.TS, ev.ServerTime, ev.LastTradeTsMs)
 		}
 	})
 	// QLua market-data feed -> provider overlay: the PRIMARY data path for the
@@ -439,7 +447,9 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				_ = bridge.SendPing(time.Now().UnixMilli())
+				now := time.Now().UnixMilli()
+				pingSentMs.Store(now) // record on the agent clock for RTT (see decl)
+				_ = bridge.SendPing(now)
 			}
 		}
 	}()

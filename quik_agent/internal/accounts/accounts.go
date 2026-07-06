@@ -87,10 +87,12 @@ type Store struct {
 	now func() int64
 
 	positions []Position
-	posAtMs   int64
+	posAtMs   int64 // content-version stamp (recon plan ID): advances only on a content change
+	posRecvMs int64 // receipt stamp (freshness/STALE age): advances on every publish
 
-	orders []Order
-	ordAtMs int64
+	orders    []Order
+	ordAtMs   int64 // content-version stamp (recon plan ID)
+	ordRecvMs int64 // receipt stamp (freshness/STALE age)
 
 	trades     []Trade
 	seenTrades map[string]struct{} // every accepted Trade.Num (survives ring eviction)
@@ -110,23 +112,64 @@ func New(now func() int64) *Store {
 	return &Store{
 		now:        now,
 		seenTrades: make(map[string]struct{}),
+		rttMs:      -1, // "no data" until the first pong with a valid send-time
 	}
 }
 
 // SetPositions replaces the position table (QUIK sends the full table each poll).
+// The receipt stamp (posRecvMs) advances every call so the freshness age stays low
+// under the Lua keepalive; the content stamp (posAtMs, which the recon plan ID hashes)
+// advances ONLY when the rows actually change, so a keepalive re-emit of an unchanged
+// table cannot rotate the plan ID and 409 the operator's align confirm.
 func (s *Store) SetPositions(rows []Position) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	now := s.now()
+	if s.posRecvMs == 0 || !equalPositions(s.positions, rows) {
+		s.posAtMs = now
+	}
+	s.posRecvMs = now
 	s.positions = append([]Position(nil), rows...) // defensive copy: caller may reuse rows
-	s.posAtMs = s.now()
 }
 
 // SetOrders replaces the working-orders table (QUIK sends the full table each poll).
+// See SetPositions for the receipt-vs-content stamp split.
 func (s *Store) SetOrders(rows []Order) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	now := s.now()
+	if s.ordRecvMs == 0 || !equalOrders(s.orders, rows) {
+		s.ordAtMs = now
+	}
+	s.ordRecvMs = now
 	s.orders = append([]Order(nil), rows...) // defensive copy: caller may reuse rows
-	s.ordAtMs = s.now()
+}
+
+// equalPositions/equalOrders report whether two full-table snapshots carry identical
+// content (Position/Order are flat comparable structs). Used to decide whether a
+// republish is a real content change (bump the plan-ID stamp) or a keepalive.
+func equalPositions(a, b []Position) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func equalOrders(a, b []Order) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // seenTradesCap bounds the persistent dedupe set. When exceeded, the set is reset to
@@ -176,7 +219,11 @@ func (s *Store) SetPong(t0Ms, _luaTsMs int64, serverTime string, lastTradeTsMs i
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	nowMs := s.now()
-	s.rttMs = nowMs - t0Ms
+	if t0Ms > 0 {
+		s.rttMs = nowMs - t0Ms
+	} else {
+		s.rttMs = -1 // no valid send-time echoed; report "no data", not an epoch-sized RTT
+	}
 	s.pongAtMs = nowMs
 	if drift, ok := clockDriftMs(nowMs, serverTime); ok {
 		s.clockDriftMs = drift
@@ -217,12 +264,12 @@ func (s *Store) Snapshot() Snapshot {
 	nowMs := s.now()
 
 	posAge := int64(-1)
-	if s.posAtMs != 0 {
-		posAge = nowMs - s.posAtMs
+	if s.posRecvMs != 0 {
+		posAge = nowMs - s.posRecvMs
 	}
 	ordAge := int64(-1)
-	if s.ordAtMs != 0 {
-		ordAge = nowMs - s.ordAtMs
+	if s.ordRecvMs != 0 {
+		ordAge = nowMs - s.ordRecvMs
 	}
 	exchLag := int64(-1)
 	if s.haveTapeLag {
