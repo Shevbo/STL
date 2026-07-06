@@ -223,6 +223,85 @@ func TestSendFixStateRelaysToControlStreamAndFailsWhenDetached(t *testing.T) {
 	}
 }
 
+func TestSendSetParamsRelaysToControlStreamAndFailsWhenDetached(t *testing.T) {
+	srv, cli, _, _ := startTestServer(t)
+
+	// No runner attached: a GUI param edit must see the failure, never a silent drop.
+	if err := srv.SendSetParams("r1", `{"qty":2}`); err == nil {
+		t.Fatal("SendSetParams without a runner must return an error")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ctrl, err := cli.StreamControl(ctx, &quikv1.ControlHello{RunnerVersion: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Wait until the server registered the control channel.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		srv.mu.Lock()
+		attached := srv.ctrlAttached
+		srv.mu.Unlock()
+		if attached {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if err := srv.SendSetParams("r1", `{"qty":2}`); err != nil {
+		t.Fatalf("SendSetParams with attached runner: %v", err)
+	}
+	rc, err := ctrl.Recv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := rc.GetSetParams()
+	if got.GetRobotId() != "r1" || got.GetParamsJson() != `{"qty":2}` {
+		t.Fatalf("set_params relay = %+v", rc)
+	}
+}
+
+func TestSendDeployRelaysToControlStreamAndFailsWhenDetached(t *testing.T) {
+	srv, cli, _, _ := startTestServer(t)
+
+	// No runner attached: a GUI mode flip must see the failure, never a silent drop.
+	if err := srv.SendDeploy(&quikv1.RobotSpec{RobotId: "r1", StrategyId: "fvg"}); err == nil {
+		t.Fatal("SendDeploy without a runner must return an error")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ctrl, err := cli.StreamControl(ctx, &quikv1.ControlHello{RunnerVersion: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Wait until the server registered the control channel.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		srv.mu.Lock()
+		attached := srv.ctrlAttached
+		srv.mu.Unlock()
+		if attached {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	spec := &quikv1.RobotSpec{RobotId: "r1", StrategyId: "fvg", Symbol: "RIU6"}
+	if err := srv.SendDeploy(spec); err != nil {
+		t.Fatalf("SendDeploy with attached runner: %v", err)
+	}
+	rc, err := ctrl.Recv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := rc.GetDeploy().GetSpec()
+	if got.GetRobotId() != "r1" || got.GetStrategyId() != "fvg" || got.GetSymbol() != "RIU6" {
+		t.Fatalf("deploy relay = %+v", rc)
+	}
+}
+
 func TestRunnerHealthyLifecycle(t *testing.T) {
 	srv, cli, _, _ := startTestServer(t)
 	if srv.RunnerHealthy() {

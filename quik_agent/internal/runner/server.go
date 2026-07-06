@@ -299,6 +299,49 @@ func (s *Server) SendFixState(fix *quikv1.FixRobotState) error {
 	}
 }
 
+// SendSetParams relays a live param change to the connected runner over the same
+// control stream the deploy/undeploy relays use. Like SendFixState (and unlike
+// PushControl's fire-and-forget STL relay) it returns an error when no runner is
+// attached or its channel is full — a GUI param edit must surface the failure,
+// never silently drop it.
+func (s *Server) SendSetParams(robotID, paramsJSON string) error {
+	s.mu.Lock()
+	ch := s.ctrlCh
+	s.mu.Unlock()
+	if ch == nil {
+		return errors.New("runner not connected")
+	}
+	rc := &quikv1.RunnerControl{Payload: &quikv1.RunnerControl_SetParams{
+		SetParams: &quikv1.SetRobotParams{RobotId: robotID, ParamsJson: paramsJSON}}}
+	select {
+	case ch <- rc:
+		return nil
+	default:
+		return errors.New("runner control channel full")
+	}
+}
+
+// SendDeploy relays a mode re-deploy (e.g. paper -> live) to the connected runner
+// over the same control stream. Like SendFixState, it returns an error when no
+// runner is attached or its channel is full — a GUI mode flip must surface
+// "runner offline", never silently drop it.
+func (s *Server) SendDeploy(spec *quikv1.RobotSpec) error {
+	s.mu.Lock()
+	ch := s.ctrlCh
+	s.mu.Unlock()
+	if ch == nil {
+		return errors.New("runner not connected")
+	}
+	rc := &quikv1.RunnerControl{Payload: &quikv1.RunnerControl_Deploy{
+		Deploy: &quikv1.DeployRobot{Spec: spec}}}
+	select {
+	case ch <- rc:
+		return nil
+	default:
+		return errors.New("runner control channel full")
+	}
+}
+
 // FanOrderEvent forwards a manager order event to runner subscribers.
 func (s *Server) FanOrderEvent(u *quikv1.OrderUpdate) {
 	s.mu.Lock()
