@@ -728,6 +728,35 @@ func TestServer_ModeRouteBadJSONReturns400(t *testing.T) {
 	}
 }
 
+// TestServer_ModeRouteMissingPaperReturns400: an absent "paper" key must be
+// rejected outright, never silently treated as paper=false (which would arm a
+// robot for REAL money on a request that never actually said so). Deps.ModeSet
+// must not even be invoked.
+func TestServer_ModeRouteMissingPaperReturns400(t *testing.T) {
+	d := baseDeps()
+	d.ModeSet = func(id string, paper bool, confirmID string) error {
+		t.Errorf("ModeSet must not be called when 'paper' is absent from the request")
+		return nil
+	}
+	ts := httptest.NewServer(newMux(d))
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/api/robot/r1/mode", "application/json",
+		bytes.NewReader([]byte(`{"confirm_id":"r1"}`)))
+	if err != nil {
+		t.Fatalf("POST /api/robot/r1/mode: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+	buf := new(bytes.Buffer)
+	buf.ReadFrom(resp.Body)
+	if !strings.Contains(buf.String(), "paper") {
+		t.Errorf("body = %q, want it to mention the missing 'paper' key", buf.String())
+	}
+}
+
 func TestServer_ModeRouteNotWiredReturns503(t *testing.T) {
 	d := baseDeps() // ModeSet left nil
 	ts := httptest.NewServer(newMux(d))

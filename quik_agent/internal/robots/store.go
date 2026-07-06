@@ -4,15 +4,22 @@ package robots
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
 
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 
 	quikv1 "shectory/quik_agent/internal/pb"
 )
+
+// ErrNotFound is the sentinel UpdateParams/SetPaper return (wrapped with the
+// robot id) when id names no persisted spec. Callers map it with errors.Is.
+var ErrNotFound = errors.New("robot not found")
 
 type entry struct {
 	Spec              json.RawMessage `json:"spec"` // protojson-encoded RobotSpec
@@ -115,6 +122,60 @@ func (s *Store) Times(robotID string) (deployedMs, paramsMs int64) {
 	defer s.mu.Unlock()
 	t := s.times[robotID]
 	return t[0], t[1]
+}
+
+// UpdateParams applies a partial edit to the persisted spec for id: each
+// non-nil pointer overwrites its field (ParamsJson/Schedule/MaxPositionContracts),
+// nil means "leave unchanged". It swaps in a CLONE of the spec rather than
+// mutating the stored pointer in place, so a caller holding an earlier
+// Get/All result (e.g. a concurrent status-page read) never sees a
+// half-applied edit. Stamps ParamsUpdatedAtMs=now, persists, and returns the
+// new spec. Returns an error wrapping ErrNotFound when id is unknown.
+func (s *Store) UpdateParams(id string, paramsJSON, schedule *string, maxPos *int64) (*quikv1.RobotSpec, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, ok := s.specs[id]
+	if !ok {
+		return nil, fmt.Errorf("update params %s: %w", id, ErrNotFound)
+	}
+	spec := proto.Clone(existing).(*quikv1.RobotSpec)
+	if paramsJSON != nil {
+		spec.ParamsJson = *paramsJSON
+	}
+	if schedule != nil {
+		spec.Schedule = *schedule
+	}
+	if maxPos != nil {
+		spec.MaxPositionContracts = *maxPos
+	}
+	s.specs[id] = spec
+	t := s.times[id]
+	t[1] = s.nowMs()
+	s.times[id] = t
+	if err := s.flushLocked(); err != nil {
+		return nil, err
+	}
+	return spec, nil
+}
+
+// SetPaper flips the persisted spec's Paper flag for id (the paper/real
+// arming action's storage half). Like UpdateParams, it swaps in a clone
+// rather than mutating the stored pointer in place. Persists and returns the
+// new spec. Returns an error wrapping ErrNotFound when id is unknown.
+func (s *Store) SetPaper(id string, paper bool) (*quikv1.RobotSpec, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, ok := s.specs[id]
+	if !ok {
+		return nil, fmt.Errorf("set paper %s: %w", id, ErrNotFound)
+	}
+	spec := proto.Clone(existing).(*quikv1.RobotSpec)
+	spec.Paper = paper
+	s.specs[id] = spec
+	if err := s.flushLocked(); err != nil {
+		return nil, err
+	}
+	return spec, nil
 }
 
 func (s *Store) Delete(robotID string) error {

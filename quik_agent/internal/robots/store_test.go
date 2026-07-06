@@ -1,6 +1,7 @@
 package robots
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -102,6 +103,130 @@ func TestStoreDeployedAndParamsTimestamps(t *testing.T) {
 	deployed, params = s2.Times("r1")
 	if deployed != 1000 || params != 3000 {
 		t.Fatalf("reload lost timestamps: deployed=%d params=%d", deployed, params)
+	}
+}
+
+func TestUpdateParamsAppliesOnlyPresentFieldsAndPersists(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fakeNow := int64(5000)
+	s.nowMs = func() int64 { return fakeNow }
+
+	spec := &quikv1.RobotSpec{RobotId: "r1", StrategyId: "fvg", Symbol: "RIU6",
+		Schedule: "09:00-23:55", MaxPositionContracts: 1, ParamsJson: `{"qty":1}`}
+	if err := s.Put(spec); err != nil {
+		t.Fatal(err)
+	}
+
+	newParams := `{"qty":2}`
+	got, err := s.UpdateParams("r1", &newParams, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.GetParamsJson() != newParams {
+		t.Fatalf("params_json = %q, want %q", got.GetParamsJson(), newParams)
+	}
+	// nil pointers must leave schedule/max_position untouched
+	if got.GetSchedule() != "09:00-23:55" {
+		t.Fatalf("schedule changed unexpectedly: %q", got.GetSchedule())
+	}
+	if got.GetMaxPositionContracts() != 1 {
+		t.Fatalf("max_position changed unexpectedly: %d", got.GetMaxPositionContracts())
+	}
+	if _, paramsMs := s.Times("r1"); paramsMs != fakeNow {
+		t.Fatalf("params_updated_at_ms = %d, want %d", paramsMs, fakeNow)
+	}
+
+	// the ORIGINAL spec object (still held by the caller who built it above) must
+	// not be mutated in place — Store swaps in a clone, never edits a shared pointer
+	// another goroutine (e.g. a concurrent status-page read) may be holding.
+	if spec.GetParamsJson() != `{"qty":1}` {
+		t.Fatalf("original spec mutated in place: %q", spec.GetParamsJson())
+	}
+
+	// RELOAD from disk — the edit and its timestamp must survive.
+	s2, err := NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloaded := s2.Get("r1")
+	if reloaded.GetParamsJson() != newParams {
+		t.Fatalf("reload lost params_json: %q", reloaded.GetParamsJson())
+	}
+	if _, paramsMs := s2.Times("r1"); paramsMs != fakeNow {
+		t.Fatalf("reload lost params timestamp: %d", paramsMs)
+	}
+
+	// a second call with different present fields (schedule + max_position, params
+	// left nil) must change only those and leave params_json alone.
+	newSchedule := "10:00-18:45"
+	var newMax int64 = 3
+	got2, err := s.UpdateParams("r1", nil, &newSchedule, &newMax)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got2.GetParamsJson() != newParams {
+		t.Fatalf("params_json changed on a nil-params update: %q", got2.GetParamsJson())
+	}
+	if got2.GetSchedule() != newSchedule || got2.GetMaxPositionContracts() != newMax {
+		t.Fatalf("schedule/max_position = %q/%d, want %q/%d",
+			got2.GetSchedule(), got2.GetMaxPositionContracts(), newSchedule, newMax)
+	}
+}
+
+func TestUpdateParamsUnknownIDReturnsErrNotFound(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.UpdateParams("ghost", nil, nil, nil); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want wrapping ErrNotFound", err)
+	}
+}
+
+func TestSetPaperFlipsAndPersistsWithoutMutatingCallersPointer(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := &quikv1.RobotSpec{RobotId: "r1", Symbol: "RIU6", Paper: true}
+	if err := s.Put(spec); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.SetPaper("r1", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.GetPaper() {
+		t.Fatal("SetPaper(r1, false) left Paper=true on the returned spec")
+	}
+	if !spec.GetPaper() {
+		t.Fatal("original spec mutated in place: Paper flipped on the caller's own pointer")
+	}
+
+	s2, err := NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s2.Get("r1").GetPaper() {
+		t.Fatal("reload lost the paper=false flip")
+	}
+}
+
+func TestSetPaperUnknownIDReturnsErrNotFound(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SetPaper("ghost", true); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want wrapping ErrNotFound", err)
 	}
 }
 

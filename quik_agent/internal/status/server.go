@@ -157,19 +157,25 @@ func handleParamsSet(d Deps, w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// modeRequest is the paper/real toggle request body.
+// modeRequest is the paper/real toggle request body. Paper is a pointer so a
+// wire-absent key decodes to nil rather than silently defaulting to false —
+// see handleModeSet's explicit nil check (an absent key must NEVER be read as
+// "arm real").
 type modeRequest struct {
-	Paper     bool   `json:"paper"`
+	Paper     *bool  `json:"paper"`
 	ConfirmID string `json:"confirm_id"`
 }
 
 // handleModeSet flips a robot between paper and real — the real-money arming
 // action, so it exists ONLY on this agent-local server (never STL). nil
 // Deps.ModeSet -> 503 (mirrors handleAlign's nil-executor gate, checked before
-// any body parse). Bad JSON -> 400. A nil error from Deps.ModeSet -> 200.
-// ErrUnknownRobot -> 404. Any other error is a precondition/confirm failure
-// (e.g. "not flat" or a confirm_id mismatch) -> 409 with the error text as the
-// body, so the operator sees exactly why the flip was refused.
+// any body parse). Bad JSON -> 400. A request whose "paper" key is absent
+// (decodes to a nil pointer) -> 400 without ever calling Deps.ModeSet: a
+// missing key must not be silently treated as paper=false (arm real). A nil
+// error from Deps.ModeSet -> 200. ErrUnknownRobot -> 404. Any other error is a
+// precondition/confirm failure (e.g. "not flat" or a confirm_id mismatch) ->
+// 409 with the error text as the body, so the operator sees exactly why the
+// flip was refused.
 func handleModeSet(d Deps, w http.ResponseWriter, r *http.Request) {
 	if d.ModeSet == nil {
 		http.Error(w, "mode not wired", http.StatusServiceUnavailable)
@@ -182,8 +188,12 @@ func handleModeSet(d Deps, w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+	if req.Paper == nil {
+		http.Error(w, "missing 'paper'", http.StatusBadRequest)
+		return
+	}
 
-	if err := d.ModeSet(id, req.Paper, req.ConfirmID); err != nil {
+	if err := d.ModeSet(id, *req.Paper, req.ConfirmID); err != nil {
 		if errors.Is(err, ErrUnknownRobot) {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return

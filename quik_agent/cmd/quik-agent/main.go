@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"net/http"
@@ -67,7 +68,6 @@ func buildRev() uint32 {
 // service execution paths.
 type agentOptions struct {
 	cfg          config.Config
-	cfgPath      string
 	exeDir       string
 	token        string
 	noSelfUpdate bool
@@ -192,7 +192,6 @@ func resolveOptions(cfgPath string, noSelfUpdate bool) (agentOptions, error) {
 
 	return agentOptions{
 		cfg:          cfg,
-		cfgPath:      cfgPath,
 		exeDir:       exeDir,
 		token:        token,
 		noSelfUpdate: noSelfUpdate,
@@ -553,6 +552,53 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 			Version:    agentVersion,
 
 			AlignExec: aligner.Execute,
+
+			// ParamsSet persists a partial spec edit then pushes it live to the
+			// connected runner. robots.ErrNotFound maps to status.ErrUnknownRobot
+			// so the HTTP handler 404s instead of leaking the internal sentinel.
+			ParamsSet: func(id string, upd status.ParamsUpdate) error {
+				spec, err := robotStore.UpdateParams(id, upd.ParamsJSON, upd.Schedule, upd.MaxPosition)
+				if err != nil {
+					if errors.Is(err, robots.ErrNotFound) {
+						return status.ErrUnknownRobot
+					}
+					return err
+				}
+				return runnerSrv.SendSetParams(id, spec.GetParamsJson())
+			},
+
+			// ModeSet flips a robot between paper and real — the real-money
+			// arming action. Gated FLAT in both directions before the flip is
+			// ever persisted: zero position (per the runner's last reported
+			// status) AND no working/in-flight robot order (SnapshotWorking
+			// includes unacked, OrderNum=="" entries, so this single loop also
+			// covers "nothing in flight" with no separate pending-trans check).
+			ModeSet: func(id string, paper bool, confirmID string) error {
+				spec := robotStore.Get(id)
+				if spec == nil {
+					return status.ErrUnknownRobot
+				}
+				if confirmID != id {
+					return fmt.Errorf("подтверждение не совпадает: введите точный ID робота")
+				}
+				if st, ok := runnerSrv.LastStatuses()[id]; ok && st.GetPosition() != 0 {
+					return fmt.Errorf("робот не в нуле (позиция %d): закрой позицию перед сменой режима", st.GetPosition())
+				}
+				for _, ws := range mgr.SnapshotWorking() {
+					if rid, ok := trade.RobotIDFromClientID(ws.ClientID); ok && rid == id {
+						ref := ws.OrderNum
+						if ref == "" {
+							ref = "(в полёте)"
+						}
+						return fmt.Errorf("у робота есть активная заявка %s: сними её перед сменой режима", ref)
+					}
+				}
+				newSpec, err := robotStore.SetPaper(id, paper)
+				if err != nil {
+					return err
+				}
+				return runnerSrv.SendDeploy(newSpec) // re-deploy flips paper on a flat book
+			},
 
 			// No agent/runner log FILE exists anywhere today: interactive runs
 			// print to the console only, the Windows service redirects to the

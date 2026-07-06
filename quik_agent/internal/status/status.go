@@ -1,9 +1,13 @@
 // Package status builds the agent's local operator showcase: a single JSON
 // snapshot (agent/health/robots/recon) and an embedded HTML page that polls it.
-// It is READ-ONLY except for one operator action: confirming a recon align
-// plan (POST /api/align, executed by Deps.AlignExec — wired in a later task).
-// No strategy/network logic lives here; this package only reads other
-// packages' already-computed snapshots and renders them.
+// It is READ-ONLY except for three operator (mutating) actions: confirming a
+// recon align plan (POST /api/align, Deps.AlignExec), editing a deployed
+// robot's spec (POST /api/robot/{id}/params, Deps.ParamsSet), and flipping a
+// robot between paper and real (POST /api/robot/{id}/mode, Deps.ModeSet — the
+// real-money arming action, local-only, never mirrored to STL). No strategy/
+// network logic lives here; this package only reads other packages'
+// already-computed snapshots and relays these three actions to their wired
+// executors.
 package status
 
 import (
