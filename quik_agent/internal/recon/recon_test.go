@@ -6,32 +6,116 @@ import (
 	"testing"
 )
 
-// ---- brief's verbatim test ----
+// ---- brief's verbatim invariant-#1 test ----
 
-func TestEvaluateOrphanOrder(t *testing.T) {
+func TestEvaluateManualNeverAligned(t *testing.T) {
 	in := Inputs{
-		Robots: []RobotView{{ID: "r1", Symbol: "RIU6"}},
-		Acc: AccView{Orders: []Order{{Num: "555", Sec: "RIU6", Active: true}},
-			PosAgeMs: 1000, OrdAgeMs: 1000},
+		Robots: []RobotView{{ID: "r1", Tag: "r1", Symbol: "RIU6"}},
+		Acc: AccView{
+			Positions: []Position{{Sec: "RIU6", Net: 15}},
+			Orders: []Order{
+				{Num: "555", Sec: "RIU6", Active: true, Tag: ""},      // manual
+				{Num: "777", Sec: "RIU6", Active: true, Tag: "recon"}, // agent align
+			},
+			PosAgeMs: 100, OrdAgeMs: 100, PosAtMs: 1, OrdAtMs: 1,
+		},
 		NowMs: 1,
 	}
 	rep := Evaluate(in)
-	if rep.State != "MISMATCH" || rep.Plan == nil {
-		t.Fatalf("%+v", rep)
+	if rep.State != "OK" {
+		t.Fatalf("manual-only + agent align must be OK, got %s", rep.State)
 	}
-	if rep.Plan.Steps[0].Kind != "cancel_order" || rep.Plan.Steps[0].OrderNum != "555" {
-		t.Fatalf("%+v", rep.Plan.Steps)
+	if rep.Plan != nil && len(rep.Plan.Steps) != 0 {
+		t.Fatalf("no align step may target manual/recon: %+v", rep.Plan.Steps)
+	}
+	if len(rep.Manual.Orders) != 1 || rep.Manual.Orders[0].OrderNum != "555" {
+		t.Fatalf("manual order 555 must be in the Manual block: %+v", rep.Manual)
+	}
+	if rep.Manual.Orders[0].Sec != "RIU6" {
+		t.Fatalf("manual order must carry its symbol: %+v", rep.Manual.Orders[0])
+	}
+	if len(rep.Manual.AccountNet) != 1 || rep.Manual.AccountNet[0].Net != 15 {
+		t.Fatalf("account net 15 must be shown for context: %+v", rep.Manual.AccountNet)
+	}
+	// The "recon"-tagged order must be invisible to every robot-facing surface.
+	for _, oc := range rep.Orders {
+		if oc.OrderNum == "777" || oc.OrderNum == "555" {
+			t.Fatalf("recon/manual orders must not appear as OrderChecks: %+v", oc)
+		}
+	}
+	for _, m := range rep.Manual.Orders {
+		if m.OrderNum == "777" {
+			t.Fatalf("a recon-tagged order must NOT be classified manual: %+v", rep.Manual.Orders)
+		}
 	}
 }
 
-// ---- all-green OK ----
-
-func TestEvaluateAllGreenOK(t *testing.T) {
+// TestInvariant1_ManualNeverInAlignPlan: even when a REAL robot mismatch produces a plan,
+// no step may name a co-existing manual order or its symbol via that order.
+func TestInvariant1_ManualNeverInAlignPlan(t *testing.T) {
 	in := Inputs{
-		Robots: []RobotView{{ID: "r1", Symbol: "RIU6", Position: 2, OrderNums: []string{"1"}}},
+		Robots: []RobotView{{ID: "r1", Tag: "r1", Symbol: "RIU6"}},
+		Acc: AccView{
+			Orders: []Order{
+				{Num: "555", Sec: "RIU6", Active: true, Tag: ""},   // manual
+				{Num: "999", Sec: "RIU6", Active: true, Tag: "r1"}, // robot r1 does not know -> ROBOT_ORPHAN
+			},
+			PosAgeMs: 100, OrdAgeMs: 100,
+		},
+	}
+	rep := Evaluate(in)
+	if rep.State != "MISMATCH" || rep.Plan == nil {
+		t.Fatalf("expected MISMATCH with a plan: %+v", rep)
+	}
+	if len(rep.Plan.Steps) != 1 || rep.Plan.Steps[0].OrderNum != "999" {
+		t.Fatalf("plan must target ONLY the robot orphan 999, got %+v", rep.Plan.Steps)
+	}
+	for _, s := range rep.Plan.Steps {
+		if s.OrderNum == "555" {
+			t.Fatalf("INVARIANT #1 VIOLATED: a step targets the manual order 555: %+v", s)
+		}
+	}
+	// The manual order is still SHOWN, just never reconciled.
+	if len(rep.Manual.Orders) != 1 || rep.Manual.Orders[0].OrderNum != "555" {
+		t.Fatalf("manual order 555 must still appear in the Manual block: %+v", rep.Manual.Orders)
+	}
+}
+
+// TestInvariant5_ManualNeverFlipsState: a fully self-consistent robot alongside heavy
+// manual activity stays OK.
+func TestInvariant5_ManualNeverFlipsState(t *testing.T) {
+	in := Inputs{
+		Robots: []RobotView{{ID: "r1", Tag: "r1", Symbol: "RIU6", Position: 1, OrderNums: []string{"1"}}},
+		Acc: AccView{
+			Positions: []Position{{Sec: "RIU6", Net: 99}}, // account net wildly different from robot pos: irrelevant
+			Orders: []Order{
+				{Num: "1", Sec: "RIU6", Active: true, Tag: "r1"}, // robot's, known -> OK
+				{Num: "50", Sec: "RIU6", Active: true, Tag: ""},  // manual
+				{Num: "51", Sec: "SiU6", Active: true, Tag: ""},  // manual
+			},
+			PosAgeMs: 100, OrdAgeMs: 100,
+		},
+	}
+	rep := Evaluate(in)
+	if rep.State != "OK" {
+		t.Fatalf("INVARIANT #5 VIOLATED: manual activity flipped State to %s: %+v", rep.State, rep)
+	}
+	if rep.Plan != nil {
+		t.Fatalf("no plan when the only non-manual thing is a consistent robot: %+v", rep.Plan)
+	}
+	if len(rep.Manual.Orders) != 2 {
+		t.Fatalf("both manual orders must be listed: %+v", rep.Manual.Orders)
+	}
+}
+
+// ---- robot order the robot KNOWS -> OK ----
+
+func TestEvaluateRobotKnownOrderOK(t *testing.T) {
+	in := Inputs{
+		Robots: []RobotView{{ID: "r1", Tag: "r1", Symbol: "RIU6", Position: 2, OrderNums: []string{"1"}}},
 		Acc: AccView{
 			Positions: []Position{{Sec: "RIU6", Net: 2}},
-			Orders:    []Order{{Num: "1", Sec: "RIU6", Active: true}},
+			Orders:    []Order{{Num: "1", Sec: "RIU6", Active: true, Tag: "r1"}},
 			PosAgeMs:  100, OrdAgeMs: 100,
 		},
 	}
@@ -39,57 +123,99 @@ func TestEvaluateAllGreenOK(t *testing.T) {
 	if rep.State != "OK" || rep.Plan != nil {
 		t.Fatalf("%+v", rep)
 	}
-}
-
-// ---- STALE gating ----
-
-func TestEvaluateStaleTables(t *testing.T) {
-	cases := []struct {
-		name           string
-		posAge, ordAge int64
-	}{
-		{"pos age over threshold", 30_001, 100},
-		{"ord age over threshold", 100, 30_001},
-		{"both over threshold", 40_000, 40_000},
-		{"pos never published (-1 sentinel)", -1, 100},
-		{"ord never published (-1 sentinel)", 100, -1},
+	if len(rep.Orders) != 1 || rep.Orders[0].Owner != "r1" || !rep.Orders[0].OK {
+		t.Fatalf("orders = %+v, want one owner=r1 OK=true", rep.Orders)
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			in := Inputs{
-				// A clear mismatch (orphan order) so we can prove checks still render
-				// with real content even though the overall State is forced STALE.
-				Robots: []RobotView{{ID: "r1", Symbol: "RIU6"}},
-				Acc: AccView{
-					Orders:   []Order{{Num: "555", Sec: "RIU6", Active: true}},
-					PosAgeMs: tc.posAge, OrdAgeMs: tc.ordAge,
-				},
-			}
-			rep := Evaluate(in)
-			if rep.State != "STALE" {
-				t.Fatalf("state = %q, want STALE", rep.State)
-			}
-			if rep.Plan != nil {
-				t.Fatalf("plan must be nil when STALE, got %+v", rep.Plan)
-			}
-			if len(rep.Orders) != 1 || rep.Orders[0].OrderNum != "555" || rep.Orders[0].Owner != "ORPHAN" {
-				t.Fatalf("orders must still render with real data even when STALE, got %+v", rep.Orders)
-			}
-			if len(rep.Positions) != 1 {
-				t.Fatalf("positions must still render even when STALE, got %+v", rep.Positions)
-			}
-		})
+	if len(rep.Manual.Orders) != 0 {
+		t.Fatalf("a robot order must not appear in the Manual block: %+v", rep.Manual.Orders)
+	}
+	if len(rep.RobotChecks) != 1 || !rep.RobotChecks[0].OrdersOK || !rep.RobotChecks[0].TradesOK {
+		t.Fatalf("robot check = %+v, want OrdersOK/TradesOK true", rep.RobotChecks)
+	}
+	if rep.RobotChecks[0].Position != 2 {
+		t.Fatalf("robot check must show the robot's believed position, got %+v", rep.RobotChecks[0])
 	}
 }
 
-// ---- MISSING order -> fix_state ----
+// ---- robot-tagged order the robot does NOT know -> ROBOT_ORPHAN + cancel_order ----
+
+func TestEvaluateRobotOrphanCancels(t *testing.T) {
+	in := Inputs{
+		Robots: []RobotView{{ID: "r1", Tag: "r1", Symbol: "RIU6"}},
+		Acc: AccView{
+			Orders:   []Order{{Num: "555", Sec: "RIU6", Active: true, Tag: "r1"}},
+			PosAgeMs: 100, OrdAgeMs: 100,
+		},
+	}
+	rep := Evaluate(in)
+	if rep.State != "MISMATCH" || rep.Plan == nil {
+		t.Fatalf("%+v", rep)
+	}
+	if len(rep.Orders) != 1 || rep.Orders[0].Owner != "r1" || rep.Orders[0].OK {
+		t.Fatalf("orders = %+v, want owner=r1 OK=false (ROBOT_ORPHAN)", rep.Orders)
+	}
+	if len(rep.Plan.Steps) != 1 || rep.Plan.Steps[0].Kind != "cancel_order" || rep.Plan.Steps[0].OrderNum != "555" {
+		t.Fatalf("steps = %+v, want a single cancel_order for 555", rep.Plan.Steps)
+	}
+	if !strings.Contains(rep.Plan.Steps[0].Detail, "ROBOT_ORPHAN") {
+		t.Fatalf("detail should name the ROBOT_ORPHAN condition, got %q", rep.Plan.Steps[0].Detail)
+	}
+	if len(rep.RobotChecks) != 1 || rep.RobotChecks[0].OrdersOK {
+		t.Fatalf("robot check OrdersOK must be false, got %+v", rep.RobotChecks)
+	}
+}
+
+// ---- "recon"-tagged order -> agent align, skipped entirely ----
+
+func TestEvaluateReconTagSkipped(t *testing.T) {
+	in := Inputs{
+		Robots: []RobotView{{ID: "r1", Tag: "r1", Symbol: "RIU6"}},
+		Acc: AccView{
+			Orders:   []Order{{Num: "777", Sec: "RIU6", Active: true, Tag: "recon"}},
+			PosAgeMs: 100, OrdAgeMs: 100,
+		},
+	}
+	rep := Evaluate(in)
+	if rep.State != "OK" || rep.Plan != nil {
+		t.Fatalf("a recon-tagged order alone must be OK/no-plan, got %+v", rep)
+	}
+	if len(rep.Orders) != 0 {
+		t.Fatalf("a recon order must produce no OrderCheck, got %+v", rep.Orders)
+	}
+	if len(rep.Manual.Orders) != 0 {
+		t.Fatalf("a recon order must NOT be classified manual, got %+v", rep.Manual.Orders)
+	}
+}
+
+// ---- unknown tag (not a deployed robot) -> treated as MANUAL ----
+
+func TestEvaluateUnknownTagIsManual(t *testing.T) {
+	in := Inputs{
+		Robots: []RobotView{{ID: "r1", Tag: "r1", Symbol: "RIU6"}},
+		Acc: AccView{
+			Orders:   []Order{{Num: "888", Sec: "RIU6", Active: true, Tag: "human-42"}},
+			PosAgeMs: 100, OrdAgeMs: 100,
+		},
+	}
+	rep := Evaluate(in)
+	if rep.State != "OK" || rep.Plan != nil {
+		t.Fatalf("an unknown-tag order is not ours to touch -> OK, got %+v", rep)
+	}
+	if len(rep.Orders) != 0 {
+		t.Fatalf("unknown-tag order must produce no robot OrderCheck, got %+v", rep.Orders)
+	}
+	if len(rep.Manual.Orders) != 1 || rep.Manual.Orders[0].OrderNum != "888" {
+		t.Fatalf("unknown-tag order must land in the Manual block, got %+v", rep.Manual.Orders)
+	}
+}
+
+// ---- MISSING order -> fix_state (preserves SetPos/SetAvg/clear_working) ----
 
 func TestEvaluateMissingOrderFixState(t *testing.T) {
 	in := Inputs{
-		Robots: []RobotView{{ID: "r1", Symbol: "RIU6", Position: 3, AvgPrice: 100000.5, OrderNums: []string{"999"}}},
+		Robots: []RobotView{{ID: "r1", Tag: "r1", Symbol: "RIU6", Position: 3, AvgPrice: 100000.5, OrderNums: []string{"999"}}},
 		Acc: AccView{
-			Positions: []Position{{Sec: "RIU6", Net: 3}}, // positions already match; isolates the order issue
-			PosAgeMs:  100, OrdAgeMs: 100,
+			PosAgeMs: 100, OrdAgeMs: 100,
 		},
 	}
 	rep := Evaluate(in)
@@ -109,7 +235,7 @@ func TestEvaluateMissingOrderFixState(t *testing.T) {
 		t.Fatalf("expected an OrderCheck for 999, got %+v", rep.Orders)
 	}
 	if len(rep.Plan.Steps) != 1 {
-		t.Fatalf("expected exactly one step (no close_position since positions match), got %+v", rep.Plan.Steps)
+		t.Fatalf("expected exactly one fix_state step, got %+v", rep.Plan.Steps)
 	}
 	s := rep.Plan.Steps[0]
 	if s.Kind != "fix_state" || s.RobotID != "r1" || s.OrderNum != "999" || s.Symbol != "RIU6" {
@@ -121,244 +247,248 @@ func TestEvaluateMissingOrderFixState(t *testing.T) {
 	if !strings.Contains(s.Detail, "clear_working") {
 		t.Fatalf("fix_state Detail must explain clear_working semantics, got %q", s.Detail)
 	}
+	if len(rep.RobotChecks) != 1 || rep.RobotChecks[0].OrdersOK {
+		t.Fatalf("robot check OrdersOK must be false on a MISSING, got %+v", rep.RobotChecks)
+	}
 }
 
-// ---- position off by manual offset -> OK ----
+// ---- trades: forward match / no-match / reverse-unrecorded ----
 
-func TestEvaluatePositionOffsetByManualOK(t *testing.T) {
+func TestEvaluateTradeForwardMatchTradesOK(t *testing.T) {
 	in := Inputs{
-		Robots:       []RobotView{{ID: "r1", Symbol: "RIU6", Position: 2}},
-		ManualOffset: map[string]int64{"RIU6": 3},
+		Robots: []RobotView{{
+			ID: "r1", Tag: "r1", Symbol: "RIU6",
+			FillKeys: []FillKey{{OrderNum: "1", Qty: 1, Price: 100}},
+		}},
 		Acc: AccView{
-			Positions: []Position{{Sec: "RIU6", Net: 5}},
-			PosAgeMs:  100, OrdAgeMs: 100,
+			Trades:   []Trade{{Num: "t1", OrderNum: "1", Sec: "RIU6", Qty: 1, Price: 100, Tag: "r1"}},
+			PosAgeMs: 100, OrdAgeMs: 100,
 		},
 	}
 	rep := Evaluate(in)
 	if rep.State != "OK" || rep.Plan != nil {
-		t.Fatalf("%+v", rep)
+		t.Fatalf("a clean forward trade match must be OK, got %+v", rep)
 	}
-	if len(rep.Positions) != 1 || !rep.Positions[0].OK {
-		t.Fatalf("position check = %+v, want OK (manual offset accounts for the gap)", rep.Positions)
+	if len(rep.Trades) != 1 || !rep.Trades[0].Matched || rep.Trades[0].TradeID != "t1" {
+		t.Fatalf("trades = %+v, want matched against t1", rep.Trades)
+	}
+	if !rep.RobotChecks[0].TradesOK {
+		t.Fatalf("TradesOK must be true on a clean match, got %+v", rep.RobotChecks[0])
 	}
 }
 
-// ---- position off WITHOUT offset -> signed close_position Qty ----
+func TestEvaluateTradeForwardNoMatchFlipsState(t *testing.T) {
+	in := Inputs{
+		Robots: []RobotView{{
+			ID: "r1", Tag: "r1", Symbol: "RIU6",
+			FillKeys: []FillKey{{OrderNum: "1", Qty: 1, Price: 100}},
+		}},
+		Acc: AccView{
+			// no QUIK trade at all -> forward unmatched
+			PosAgeMs: 100, OrdAgeMs: 100,
+		},
+	}
+	rep := Evaluate(in)
+	if rep.State != "MISMATCH" {
+		t.Fatalf("an unmatched robot fill must flip State to MISMATCH, got %s", rep.State)
+	}
+	if rep.Plan == nil || len(rep.Plan.Steps) != 0 {
+		t.Fatalf("a trade mismatch must produce a plan with ZERO steps (informational), got %+v", rep.Plan)
+	}
+	if len(rep.Trades) != 1 || rep.Trades[0].Matched {
+		t.Fatalf("trades = %+v, want one unmatched", rep.Trades)
+	}
+	if rep.RobotChecks[0].TradesOK {
+		t.Fatalf("TradesOK must be false, got %+v", rep.RobotChecks[0])
+	}
+}
 
-func TestEvaluatePositionMismatchSignedQty(t *testing.T) {
+func TestEvaluateTradeWrongTagDoesNotMatch(t *testing.T) {
+	in := Inputs{
+		Robots: []RobotView{{
+			ID: "r1", Tag: "r1", Symbol: "RIU6",
+			FillKeys: []FillKey{{OrderNum: "1", Qty: 1, Price: 100}},
+		}},
+		Acc: AccView{
+			// right order/qty/price but UNTAGGED -> must NOT match the robot (tag model)
+			Trades:   []Trade{{Num: "t1", OrderNum: "1", Sec: "RIU6", Qty: 1, Price: 100, Tag: ""}},
+			PosAgeMs: 100, OrdAgeMs: 100,
+		},
+	}
+	rep := Evaluate(in)
+	if rep.State != "MISMATCH" {
+		t.Fatalf("an untagged trade must not satisfy a robot fill, expected MISMATCH, got %s", rep.State)
+	}
+	if len(rep.Trades) != 1 || rep.Trades[0].Matched {
+		t.Fatalf("trades = %+v, want unmatched (tag must equal the robot)", rep.Trades)
+	}
+}
+
+func TestEvaluateTradeReverseUnrecordedFlipsState(t *testing.T) {
+	in := Inputs{
+		Robots: []RobotView{{ID: "r1", Tag: "r1", Symbol: "RIU6"}}, // robot recorded NO fills
+		Acc: AccView{
+			// QUIK has a trade tagged for r1 that r1 never recorded.
+			Trades:   []Trade{{Num: "t9", OrderNum: "5", Sec: "RIU6", Qty: 1, Price: 100, Tag: "r1"}},
+			PosAgeMs: 100, OrdAgeMs: 100,
+		},
+	}
+	rep := Evaluate(in)
+	if rep.State != "MISMATCH" {
+		t.Fatalf("a tagged QUIK trade the robot never recorded must flip State, got %s", rep.State)
+	}
+	if rep.Plan == nil || len(rep.Plan.Steps) != 0 {
+		t.Fatalf("reverse trade mismatch generates no step, got %+v", rep.Plan)
+	}
+	if rep.RobotChecks[0].TradesOK {
+		t.Fatalf("TradesOK must be false on a reverse mismatch, got %+v", rep.RobotChecks[0])
+	}
+}
+
+// ---- trade fuzzy match within one price step, exact otherwise ----
+
+func TestEvaluateTradeMatchWithinPriceStep(t *testing.T) {
+	in := Inputs{
+		Robots: []RobotView{{
+			ID: "r1", Tag: "r1", Symbol: "RIU6",
+			FillKeys: []FillKey{{OrderNum: "1", Qty: 1, Price: 100000}},
+		}},
+		PriceStep: map[string]float64{"RIU6": 10},
+		Acc: AccView{
+			Trades:   []Trade{{Num: "t1", OrderNum: "1", Sec: "RIU6", Qty: 1, Price: 100005, Tag: "r1"}},
+			PosAgeMs: 100, OrdAgeMs: 100,
+		},
+	}
+	rep := Evaluate(in)
+	if len(rep.Trades) != 1 || !rep.Trades[0].Matched || rep.Trades[0].TradeID != "t1" {
+		t.Fatalf("trades = %+v, want matched within price step", rep.Trades)
+	}
+}
+
+func TestEvaluateTradeExactMatchWhenNoPriceStep(t *testing.T) {
+	in := Inputs{
+		Robots: []RobotView{{
+			ID: "r1", Tag: "r1", Symbol: "RIU6",
+			FillKeys: []FillKey{{OrderNum: "1", Qty: 1, Price: 100000}},
+		}},
+		Acc: AccView{
+			Trades:   []Trade{{Num: "t1", OrderNum: "1", Sec: "RIU6", Qty: 1, Price: 100005, Tag: "r1"}},
+			PosAgeMs: 100, OrdAgeMs: 100,
+		},
+	}
+	rep := Evaluate(in)
+	if len(rep.Trades) != 1 || rep.Trades[0].Matched {
+		t.Fatalf("trades = %+v, want unmatched (no price step -> exact match required)", rep.Trades)
+	}
+}
+
+// ---- a single QUIK trade cannot satisfy two distinct fill keys ----
+
+func TestEvaluateTradeMatchDoesNotDoubleCountSameTradeRow(t *testing.T) {
+	in := Inputs{
+		Robots: []RobotView{{
+			ID: "r1", Tag: "r1", Symbol: "RIU6",
+			FillKeys: []FillKey{
+				{OrderNum: "1", Qty: 1, Price: 100000},
+				{OrderNum: "1", Qty: 1, Price: 100000},
+			},
+		}},
+		Acc: AccView{
+			Trades:   []Trade{{Num: "t1", OrderNum: "1", Sec: "RIU6", Qty: 1, Price: 100000, Tag: "r1"}},
+			PosAgeMs: 100, OrdAgeMs: 100,
+		},
+	}
+	rep := Evaluate(in)
+	if len(rep.Trades) != 2 {
+		t.Fatalf("trades = %+v, want 2 checks (one per fill key)", rep.Trades)
+	}
+	matchedCount := 0
+	for _, tc := range rep.Trades {
+		if tc.Matched {
+			matchedCount++
+		}
+	}
+	if matchedCount != 1 {
+		t.Fatalf("trades = %+v, want exactly ONE matched (single row cannot satisfy both keys)", rep.Trades)
+	}
+	// The unsatisfied second fill flips TradesOK.
+	if rep.RobotChecks[0].TradesOK {
+		t.Fatalf("the un-matchable second fill must flip TradesOK, got %+v", rep.RobotChecks[0])
+	}
+}
+
+// ---- purely-manual account: State OK, Manual populated, zero steps ----
+
+func TestEvaluatePurelyManualAccount(t *testing.T) {
+	orders := make([]Order, 0, 6)
+	for _, num := range []string{"a", "b", "c", "d", "e", "f"} {
+		orders = append(orders, Order{Num: num, Sec: "RIU6", Active: true, Tag: ""})
+	}
+	in := Inputs{
+		Robots: []RobotView{{ID: "r1", Tag: "r1", Symbol: "RIU6"}}, // deployed but idle
+		Acc: AccView{
+			Positions: []Position{{Sec: "RIU6", Net: 15}},
+			Orders:    orders,
+			PosAgeMs:  100, OrdAgeMs: 100,
+		},
+	}
+	rep := Evaluate(in)
+	if rep.State != "OK" {
+		t.Fatalf("purely-manual account must be OK, got %s", rep.State)
+	}
+	if rep.Plan != nil {
+		t.Fatalf("no plan for a purely-manual account, got %+v", rep.Plan)
+	}
+	if len(rep.Manual.Orders) != 6 {
+		t.Fatalf("all six manual orders must be listed, got %+v", rep.Manual.Orders)
+	}
+	if len(rep.Manual.AccountNet) != 1 || rep.Manual.AccountNet[0].Net != 15 {
+		t.Fatalf("account net must be shown, got %+v", rep.Manual.AccountNet)
+	}
+	if len(rep.Orders) != 0 {
+		t.Fatalf("no robot OrderChecks in a purely-manual account, got %+v", rep.Orders)
+	}
+}
+
+// ---- STALE gating (checks still render; plan nil) ----
+
+func TestEvaluateStaleTables(t *testing.T) {
 	cases := []struct {
-		name         string
-		robotPos     int64
-		quikNet      int64
-		wantQty      int64
-		wantSubstr   string
+		name           string
+		posAge, ordAge int64
 	}{
-		{"excess long -> SELL", 2, 5, 3, "SELL 3"},
-		{"short -> BUY back", 5, 2, -3, "BUY 3"},
+		{"pos age over threshold", 30_001, 100},
+		{"ord age over threshold", 100, 30_001},
+		{"both over threshold", 40_000, 40_000},
+		{"pos never published (-1 sentinel)", -1, 100},
+		{"ord never published (-1 sentinel)", 100, -1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			in := Inputs{
-				Robots: []RobotView{{ID: "r1", Symbol: "RIU6", Position: tc.robotPos}},
+				// A clear robot mismatch (ROBOT_ORPHAN) so we can prove checks still render
+				// with real content even though the overall State is forced STALE.
+				Robots: []RobotView{{ID: "r1", Tag: "r1", Symbol: "RIU6"}},
 				Acc: AccView{
-					Positions: []Position{{Sec: "RIU6", Net: tc.quikNet}},
-					PosAgeMs:  100, OrdAgeMs: 100,
+					Orders:   []Order{{Num: "555", Sec: "RIU6", Active: true, Tag: "r1"}},
+					PosAgeMs: tc.posAge, OrdAgeMs: tc.ordAge,
 				},
 			}
 			rep := Evaluate(in)
-			if rep.State != "MISMATCH" || rep.Plan == nil {
-				t.Fatalf("%+v", rep)
+			if rep.State != "STALE" {
+				t.Fatalf("state = %q, want STALE", rep.State)
 			}
-			if len(rep.Plan.Steps) != 1 {
-				t.Fatalf("steps = %+v, want exactly one close_position", rep.Plan.Steps)
+			if rep.Plan != nil {
+				t.Fatalf("plan must be nil when STALE, got %+v", rep.Plan)
 			}
-			s := rep.Plan.Steps[0]
-			if s.Kind != "close_position" || s.Symbol != "RIU6" || s.Qty != tc.wantQty {
-				t.Fatalf("step = %+v, want close_position RIU6 qty=%d", s, tc.wantQty)
+			if len(rep.Orders) != 1 || rep.Orders[0].OrderNum != "555" || rep.Orders[0].Owner != "r1" || rep.Orders[0].OK {
+				t.Fatalf("orders must still render with real data even when STALE, got %+v", rep.Orders)
 			}
-			if !strings.Contains(s.Detail, tc.wantSubstr) {
-				t.Fatalf("detail = %q, want it to contain %q", s.Detail, tc.wantSubstr)
+			if len(rep.RobotChecks) != 1 {
+				t.Fatalf("robot checks must still render even when STALE, got %+v", rep.RobotChecks)
 			}
 		})
 	}
-}
-
-// ---- close_position suppressed when a MISSING/ORPHAN order explains the symbol ----
-
-func TestEvaluateClosePositionSuppressedByOrderFinding(t *testing.T) {
-	t.Run("suppressed by MISSING", func(t *testing.T) {
-		in := Inputs{
-			Robots: []RobotView{{ID: "r1", Symbol: "RIU6", Position: 2, OrderNums: []string{"999"}}},
-			Acc: AccView{
-				Positions: []Position{{Sec: "RIU6", Net: 10}}, // would mismatch on its own
-				PosAgeMs:  100, OrdAgeMs: 100,
-			},
-		}
-		rep := Evaluate(in)
-		if rep.State != "MISMATCH" || rep.Plan == nil {
-			t.Fatalf("%+v", rep)
-		}
-		if !positionMismatchRendered(rep, "RIU6") {
-			t.Fatalf("position check for RIU6 must still render as not-OK, got %+v", rep.Positions)
-		}
-		for _, s := range rep.Plan.Steps {
-			if s.Kind == "close_position" {
-				t.Fatalf("close_position must be suppressed when a MISSING order explains RIU6, got %+v", rep.Plan.Steps)
-			}
-		}
-	})
-
-	t.Run("suppressed by ORPHAN", func(t *testing.T) {
-		in := Inputs{
-			Robots: []RobotView{{ID: "r1", Symbol: "RIU6", Position: 2}},
-			Acc: AccView{
-				Positions: []Position{{Sec: "RIU6", Net: 10}},
-				Orders:    []Order{{Num: "42", Sec: "RIU6", Active: true}}, // orphan: nobody owns it
-				PosAgeMs:  100, OrdAgeMs: 100,
-			},
-		}
-		rep := Evaluate(in)
-		if rep.State != "MISMATCH" || rep.Plan == nil {
-			t.Fatalf("%+v", rep)
-		}
-		for _, s := range rep.Plan.Steps {
-			if s.Kind == "close_position" {
-				t.Fatalf("close_position must be suppressed when an ORPHAN order explains RIU6, got %+v", rep.Plan.Steps)
-			}
-		}
-	})
-}
-
-// TestEvaluateClosePositionSuppressedByPendingReconOrder: a symbol already carrying an
-// active working order from a PREVIOUS align (ReconPendingSymbols) must not get a second
-// close_position step piled on top — but this must not touch cancel_order/fix_state
-// logic for an unrelated symbol.
-func TestEvaluateClosePositionSuppressedByPendingReconOrder(t *testing.T) {
-	in := Inputs{
-		Robots: []RobotView{
-			{ID: "r1", Symbol: "RIU6", Position: 2}, // would mismatch -> close_position, but suppressed
-			{ID: "r2", Symbol: "GZU6", Position: 0}, // unrelated symbol, orphan order below
-		},
-		Acc: AccView{
-			Positions: []Position{{Sec: "RIU6", Net: 10}},
-			Orders:    []Order{{Num: "42", Sec: "GZU6", Active: true}}, // orphan, unrelated to RIU6
-			PosAgeMs:  100, OrdAgeMs: 100,
-		},
-		ReconPendingSymbols: map[string]bool{"RIU6": true},
-	}
-	rep := Evaluate(in)
-	if rep.State != "MISMATCH" || rep.Plan == nil {
-		t.Fatalf("%+v", rep)
-	}
-	if !positionMismatchRendered(rep, "RIU6") {
-		t.Fatalf("position check for RIU6 must still render as not-OK, got %+v", rep.Positions)
-	}
-	var haveCancel bool
-	for _, s := range rep.Plan.Steps {
-		if s.Kind == "close_position" {
-			t.Fatalf("close_position must be suppressed while a recon-owned order is already resting on RIU6, got %+v", rep.Plan.Steps)
-		}
-		if s.Kind == "cancel_order" && s.Symbol == "GZU6" {
-			haveCancel = true
-		}
-	}
-	if !haveCancel {
-		t.Fatalf("cancel_order for the unrelated GZU6 orphan must be unaffected, got %+v", rep.Plan.Steps)
-	}
-}
-
-// TestEvaluateClosePositionCrossSymbolNotSuppressed: a MISSING order finding on symbol A
-// must suppress close_position for A only — an unexplained position mismatch on symbol B
-// still gets its close_position step.
-func TestEvaluateClosePositionCrossSymbolNotSuppressed(t *testing.T) {
-	in := Inputs{
-		Robots: []RobotView{
-			// Symbol A (RIU6): MISSING order explains its position mismatch.
-			{ID: "r1", Symbol: "RIU6", Position: 2, OrderNums: []string{"999"}},
-			// Symbol B (GZU6): plain unexplained position mismatch.
-			{ID: "r2", Symbol: "GZU6", Position: 1},
-		},
-		Acc: AccView{
-			Positions: []Position{
-				{Sec: "RIU6", Net: 10}, // mismatch on A, explained by MISSING 999
-				{Sec: "GZU6", Net: 4},  // mismatch on B, nothing explains it
-			},
-			PosAgeMs: 100, OrdAgeMs: 100,
-		},
-	}
-	rep := Evaluate(in)
-	if rep.State != "MISMATCH" || rep.Plan == nil {
-		t.Fatalf("%+v", rep)
-	}
-	var closeSteps []Step
-	for _, s := range rep.Plan.Steps {
-		if s.Kind == "close_position" {
-			closeSteps = append(closeSteps, s)
-		}
-	}
-	if len(closeSteps) != 1 || closeSteps[0].Symbol != "GZU6" || closeSteps[0].Qty != 3 {
-		t.Fatalf("close steps = %+v, want exactly one for GZU6 qty=3 (RIU6 suppressed, GZU6 not)", closeSteps)
-	}
-	// The MISSING finding for RIU6 still yields its fix_state step.
-	var haveFixState bool
-	for _, s := range rep.Plan.Steps {
-		if s.Kind == "fix_state" && s.RobotID == "r1" && s.Symbol == "RIU6" {
-			haveFixState = true
-		}
-	}
-	if !haveFixState {
-		t.Fatalf("steps = %+v, want a fix_state for r1/RIU6", rep.Plan.Steps)
-	}
-}
-
-// TestEvaluateHeterogeneousPlanStepOrder: one Evaluate producing all three step kinds
-// must emit them sorted by (Kind, Symbol, OrderNum, RobotID).
-func TestEvaluateHeterogeneousPlanStepOrder(t *testing.T) {
-	in := Inputs{
-		Robots: []RobotView{
-			// MISSING order on SiU6 -> fix_state (positions for SiU6 kept matching so the
-			// suppression rule stays out of the way of the close_position assertion).
-			{ID: "r1", Symbol: "SiU6", Position: 1, OrderNums: []string{"777"}},
-			// GZU6 robot with an unexplained position mismatch -> close_position.
-			{ID: "r2", Symbol: "GZU6", Position: 1},
-		},
-		Acc: AccView{
-			Positions: []Position{
-				{Sec: "SiU6", Net: 1}, // matches
-				{Sec: "GZU6", Net: 4}, // unexplained mismatch -> close_position
-			},
-			// Orphan active order on RIU6 -> cancel_order.
-			Orders:   []Order{{Num: "555", Sec: "RIU6", Active: true}},
-			PosAgeMs: 100, OrdAgeMs: 100,
-		},
-	}
-	rep := Evaluate(in)
-	if rep.State != "MISMATCH" || rep.Plan == nil {
-		t.Fatalf("%+v", rep)
-	}
-	if len(rep.Plan.Steps) != 3 {
-		t.Fatalf("steps = %+v, want exactly 3 (one of each kind)", rep.Plan.Steps)
-	}
-	// Sorted by Kind first: cancel_order < close_position < fix_state.
-	s := rep.Plan.Steps
-	if s[0].Kind != "cancel_order" || s[0].OrderNum != "555" || s[0].Symbol != "RIU6" {
-		t.Fatalf("steps[0] = %+v, want cancel_order 555 RIU6", s[0])
-	}
-	if s[1].Kind != "close_position" || s[1].Symbol != "GZU6" || s[1].Qty != 3 {
-		t.Fatalf("steps[1] = %+v, want close_position GZU6 qty=3", s[1])
-	}
-	if s[2].Kind != "fix_state" || s[2].RobotID != "r1" || s[2].OrderNum != "777" || s[2].Symbol != "SiU6" {
-		t.Fatalf("steps[2] = %+v, want fix_state r1/777/SiU6", s[2])
-	}
-}
-
-func positionMismatchRendered(rep Report, symbol string) bool {
-	for _, p := range rep.Positions {
-		if p.Symbol == symbol {
-			return !p.OK
-		}
-	}
-	return false
 }
 
 // ---- paper robots contribute NOTHING ----
@@ -372,39 +502,91 @@ func TestEvaluatePaperRobotNeverContributes(t *testing.T) {
 		}},
 		Acc: AccView{
 			Positions: []Position{{Sec: "RIU6", Net: 0}},
-			Orders:    []Order{{Num: "777", Sec: "RIU6", Active: true}},
-			PosAgeMs:  100, OrdAgeMs: 100,
+			// An order tagged "r1" exists, but the paper robot must NOT own it (paper never
+			// places real orders / carries no tag) -> unknown tag -> MANUAL.
+			Orders:   []Order{{Num: "777", Sec: "RIU6", Active: true, Tag: "r1"}},
+			PosAgeMs: 100, OrdAgeMs: 100,
 		},
 	}
 	rep := Evaluate(in)
-
-	// Position: paper's 100 must not count -> robots sum 0, matches QUIK net 0.
-	if len(rep.Positions) != 1 || rep.Positions[0].RobotsSum != 0 || !rep.Positions[0].OK {
-		t.Fatalf("positions = %+v, want RobotsSum=0 OK=true (paper excluded)", rep.Positions)
+	if rep.State != "OK" || rep.Plan != nil {
+		t.Fatalf("paper robot contributes nothing -> OK, got %+v", rep)
 	}
-	// Order: paper's claimed order_num must NOT make it "owned" -> QUIK's active order is ORPHAN.
-	if len(rep.Orders) != 1 || rep.Orders[0].Owner != "ORPHAN" {
-		t.Fatalf("orders = %+v, want ORPHAN (paper robot does not own orders in QUIK matching)", rep.Orders)
+	if len(rep.Orders) != 0 {
+		t.Fatalf("paper robot must own no orders, got %+v", rep.Orders)
 	}
-	// Trades: paper contributes no FillKeys to check at all.
+	if len(rep.Manual.Orders) != 1 || rep.Manual.Orders[0].OrderNum != "777" {
+		t.Fatalf("the tag of a paper robot is unknown -> order is MANUAL, got %+v", rep.Manual.Orders)
+	}
 	if len(rep.Trades) != 0 {
-		t.Fatalf("trades = %+v, want none (paper robots contribute no fills)", rep.Trades)
+		t.Fatalf("paper contributes no fills, got %+v", rep.Trades)
 	}
-	if rep.State != "MISMATCH" || rep.Plan == nil {
-		t.Fatalf("%+v", rep)
-	}
-	if len(rep.Plan.Steps) != 1 || rep.Plan.Steps[0].Kind != "cancel_order" {
-		t.Fatalf("steps = %+v, want a single cancel_order for the orphan", rep.Plan.Steps)
+	if len(rep.RobotChecks) != 0 {
+		t.Fatalf("paper robots must not appear in RobotChecks, got %+v", rep.RobotChecks)
 	}
 }
 
-// ---- Plan.ID stability ----
+// ---- Trans: not-OK flips State to MISMATCH, generates no step ----
+
+func TestEvaluateTransMismatchNoStep(t *testing.T) {
+	in := Inputs{
+		Robots: []RobotView{{ID: "r1", Tag: "r1", Symbol: "RIU6"}},
+		Acc: AccView{
+			Positions: []Position{{Sec: "RIU6", Net: 0}},
+			PosAgeMs:  100, OrdAgeMs: 100,
+		},
+		Trans: []TransCheck{{TransID: 42, Status: "pending", Text: "stuck", OK: false}},
+	}
+	rep := Evaluate(in)
+	if rep.State != "MISMATCH" {
+		t.Fatalf("state = %q, want MISMATCH (a not-OK trans must surface)", rep.State)
+	}
+	if rep.Plan == nil || len(rep.Plan.Steps) != 0 {
+		t.Fatalf("trans issues must generate NO step, got %+v", rep.Plan)
+	}
+	if len(rep.Trans) != 1 || rep.Trans[0].TransID != 42 || rep.Trans[0].Text != "stuck" {
+		t.Fatalf("trans must pass through verbatim, got %+v", rep.Trans)
+	}
+}
+
+// ---- heterogeneous plan step order: cancel_order < fix_state ----
+
+func TestEvaluateHeterogeneousPlanStepOrder(t *testing.T) {
+	in := Inputs{
+		Robots: []RobotView{
+			// MISSING order on SiU6 -> fix_state.
+			{ID: "r1", Tag: "r1", Symbol: "SiU6", Position: 1, OrderNums: []string{"777"}},
+			// r2 owns nothing; a QUIK order tagged r2 it does not know -> ROBOT_ORPHAN cancel.
+			{ID: "r2", Tag: "r2", Symbol: "RIU6"},
+		},
+		Acc: AccView{
+			Orders:   []Order{{Num: "555", Sec: "RIU6", Active: true, Tag: "r2"}},
+			PosAgeMs: 100, OrdAgeMs: 100,
+		},
+	}
+	rep := Evaluate(in)
+	if rep.State != "MISMATCH" || rep.Plan == nil {
+		t.Fatalf("%+v", rep)
+	}
+	if len(rep.Plan.Steps) != 2 {
+		t.Fatalf("steps = %+v, want exactly 2", rep.Plan.Steps)
+	}
+	s := rep.Plan.Steps
+	if s[0].Kind != "cancel_order" || s[0].OrderNum != "555" || s[0].Symbol != "RIU6" {
+		t.Fatalf("steps[0] = %+v, want cancel_order 555 RIU6", s[0])
+	}
+	if s[1].Kind != "fix_state" || s[1].RobotID != "r1" || s[1].OrderNum != "777" || s[1].Symbol != "SiU6" {
+		t.Fatalf("steps[1] = %+v, want fix_state r1/777/SiU6", s[1])
+	}
+}
+
+// ---- Plan.ID stability + change sensitivity ----
 
 func TestEvaluatePlanIDStableAndChanges(t *testing.T) {
 	base := Inputs{
-		Robots: []RobotView{{ID: "r1", Symbol: "RIU6"}},
+		Robots: []RobotView{{ID: "r1", Tag: "r1", Symbol: "RIU6"}},
 		Acc: AccView{
-			Orders:   []Order{{Num: "555", Sec: "RIU6", Active: true}},
+			Orders:   []Order{{Num: "555", Sec: "RIU6", Active: true, Tag: "r1"}}, // ROBOT_ORPHAN
 			PosAgeMs: 100, OrdAgeMs: 100,
 			PosAtMs: 1_000_000, OrdAtMs: 1_000_000,
 		},
@@ -424,24 +606,21 @@ func TestEvaluatePlanIDStableAndChanges(t *testing.T) {
 	// A different step set -> different ID.
 	withExtra := base
 	withExtra.Acc.Orders = append([]Order{}, base.Acc.Orders...)
-	withExtra.Acc.Orders = append(withExtra.Acc.Orders, Order{Num: "556", Sec: "RIU6", Active: true})
+	withExtra.Acc.Orders = append(withExtra.Acc.Orders, Order{Num: "556", Sec: "RIU6", Active: true, Tag: "r1"})
 	rep3 := Evaluate(withExtra)
 	if rep3.Plan.ID == rep1.Plan.ID {
 		t.Fatalf("plan id must change when steps change")
 	}
 
-	// Same steps, different AGES ALONE -> id UNCHANGED. Ages are recomputed against
-	// the live clock on every accounts.Store.Snapshot() read; hashing them (the old
-	// bug) made a confirm computed even a second after the page polled always 409.
+	// Same steps, different AGES ALONE -> id UNCHANGED.
 	withDifferentAge := base
 	withDifferentAge.Acc.PosAgeMs = 200
 	rep4 := Evaluate(withDifferentAge)
 	if rep4.Plan.ID != rep1.Plan.ID {
-		t.Fatalf("plan id must NOT change when only PosAgeMs changes (age is not part of the hash)")
+		t.Fatalf("plan id must NOT change when only PosAgeMs changes")
 	}
 
-	// Same steps, different ABSOLUTE receipt stamp -> ID changes (a genuinely new
-	// table snapshot, not merely a later read of the same one).
+	// Same steps, different ABSOLUTE receipt stamp -> ID changes.
 	withNewStamp := base
 	withNewStamp.Acc.PosAtMs = 2_000_000
 	rep5 := Evaluate(withNewStamp)
@@ -450,16 +629,14 @@ func TestEvaluatePlanIDStableAndChanges(t *testing.T) {
 	}
 }
 
-// TestEvaluatePlanIDStableAcrossAgeDriftUsesAbsoluteStamps is the CRITICAL-fix
-// regression test: it simulates exactly what accounts.Store.Snapshot() does on two
-// polls of the SAME underlying tables — ages tick up against the live clock, the
-// absolute receipt stamps do not move — and asserts the plan id an operator saw on the
-// page still matches the id recomputed when they click "confirm" 1500ms later.
+// TestEvaluatePlanIDStableAcrossAgeDriftUsesAbsoluteStamps is the CRITICAL-fix regression:
+// two polls of the SAME underlying tables (ages tick up, absolute stamps do not) must yield
+// the identical plan id so a confirm computed 1500ms after the page polled still matches.
 func TestEvaluatePlanIDStableAcrossAgeDriftUsesAbsoluteStamps(t *testing.T) {
 	base := Inputs{
-		Robots: []RobotView{{ID: "r1", Symbol: "RIU6"}},
+		Robots: []RobotView{{ID: "r1", Tag: "r1", Symbol: "RIU6"}},
 		Acc: AccView{
-			Orders:   []Order{{Num: "555", Sec: "RIU6", Active: true}},
+			Orders:   []Order{{Num: "555", Sec: "RIU6", Active: true, Tag: "r1"}},
 			PosAgeMs: 100, OrdAgeMs: 100,
 			PosAtMs: 1_000_000, OrdAtMs: 1_000_000,
 		},
@@ -477,7 +654,6 @@ func TestEvaluatePlanIDStableAcrossAgeDriftUsesAbsoluteStamps(t *testing.T) {
 		t.Fatalf("plan id must survive 1500ms of pure age drift: %q vs %q", rep1.Plan.ID, rep2.Plan.ID)
 	}
 
-	// A genuinely new table (new PosAtMs) DOES change the id.
 	newTable := base
 	newTable.Acc.PosAtMs = 1_000_100
 	rep3 := Evaluate(newTable)
@@ -486,31 +662,34 @@ func TestEvaluatePlanIDStableAcrossAgeDriftUsesAbsoluteStamps(t *testing.T) {
 	}
 }
 
-// ---- deterministic ordering across shuffled input slices ----
+// ---- determinism across shuffled input slices ----
 
 func TestEvaluateDeterministicOrderingShuffledInputs(t *testing.T) {
 	build := func(reverse bool) Inputs {
 		robots := []RobotView{
-			{ID: "r1", Symbol: "RIU6", Position: 2, OrderNums: []string{"1"}, FillKeys: []FillKey{{OrderNum: "1", Qty: 1, Price: 100}}},
-			{ID: "r2", Symbol: "GZU6", Position: 1, OrderNums: []string{"2"}},
+			{ID: "r1", Tag: "r1", Symbol: "RIU6", Position: 2, OrderNums: []string{"1"}, FillKeys: []FillKey{{OrderNum: "1", Qty: 1, Price: 100}}},
+			{ID: "r2", Tag: "r2", Symbol: "GZU6", Position: 1, OrderNums: []string{"2"}},
 		}
-		positions := []Position{{Sec: "RIU6", Net: 2}, {Sec: "GZU6", Net: 5}} // GZU6 mismatches
-		orders := []Order{{Num: "1", Sec: "RIU6", Active: true}, {Num: "99", Sec: "GZU6", Active: true}} // 99 orphan
-		trades := []Trade{{Num: "t1", OrderNum: "1", Sec: "RIU6", Qty: 1, Price: 100, TsMs: 1}}
+		positions := []Position{{Sec: "RIU6", Net: 2}, {Sec: "GZU6", Net: 5}}
+		orders := []Order{
+			{Num: "1", Sec: "RIU6", Active: true, Tag: "r1"},  // r1 knows it -> OK
+			{Num: "99", Sec: "GZU6", Active: true, Tag: "r2"}, // r2 does NOT know it -> ROBOT_ORPHAN
+			{Num: "70", Sec: "RIU6", Active: true, Tag: ""},   // manual
+		}
+		trades := []Trade{{Num: "t1", OrderNum: "1", Sec: "RIU6", Qty: 1, Price: 100, Tag: "r1"}}
 		trans := []TransCheck{{TransID: 1, Status: "ok", OK: true}, {TransID: 2, Status: "rejected", OK: false}}
-		manual := map[string]int64{"RIU6": 0, "GZU6": 0}
 		priceStep := map[string]float64{"RIU6": 1, "GZU6": 1}
 
 		if reverse {
 			robots = []RobotView{robots[1], robots[0]}
 			positions = []Position{positions[1], positions[0]}
-			orders = []Order{orders[1], orders[0]}
+			orders = []Order{orders[2], orders[1], orders[0]}
 			trans = []TransCheck{trans[1], trans[0]}
 		}
 		return Inputs{
-			Robots: robots, HumanOrders: map[string]bool{},
-			Acc: AccView{Positions: positions, Orders: orders, Trades: trades, PosAgeMs: 100, OrdAgeMs: 100},
-			Trans: trans, ManualOffset: manual, PriceStep: priceStep,
+			Robots: robots,
+			Acc:    AccView{Positions: positions, Orders: orders, Trades: trades, PosAgeMs: 100, OrdAgeMs: 100},
+			Trans:  trans, PriceStep: priceStep,
 		}
 	}
 
@@ -522,162 +701,42 @@ func TestEvaluateDeterministicOrderingShuffledInputs(t *testing.T) {
 	if repA.Plan == nil || repB.Plan == nil || repA.Plan.ID != repB.Plan.ID {
 		t.Fatalf("plan ids differ across shuffled inputs: %+v vs %+v", repA.Plan, repB.Plan)
 	}
-}
-
-// ---- Trans: not-OK flips State to MISMATCH but generates no Step ----
-
-func TestEvaluateTransMismatchNoStep(t *testing.T) {
-	in := Inputs{
-		Robots: []RobotView{{ID: "r1", Symbol: "RIU6", Position: 0}},
-		Acc: AccView{
-			Positions: []Position{{Sec: "RIU6", Net: 0}},
-			PosAgeMs:  100, OrdAgeMs: 100,
-		},
-		Trans: []TransCheck{{TransID: 42, Status: "pending", Text: "stuck", OK: false}},
+	// Sanity on the fixture: r2 orphan cancel + r2 MISSING fix_state = 2 steps; the manual
+	// order 70 must NOT be among them (invariant #1).
+	if len(repA.Plan.Steps) != 2 {
+		t.Fatalf("steps = %+v, want 2 (r2 orphan cancel + r2 MISSING fix)", repA.Plan.Steps)
 	}
-	rep := Evaluate(in)
-	if rep.State != "MISMATCH" {
-		t.Fatalf("state = %q, want MISMATCH (a not-OK trans must surface)", rep.State)
-	}
-	if rep.Plan == nil {
-		t.Fatalf("expected a non-nil plan for MISMATCH state")
-	}
-	if len(rep.Plan.Steps) != 0 {
-		t.Fatalf("trans issues must generate NO step, got %+v", rep.Plan.Steps)
-	}
-	if len(rep.Trans) != 1 || rep.Trans[0].TransID != 42 || rep.Trans[0].Text != "stuck" {
-		t.Fatalf("trans must pass through verbatim, got %+v", rep.Trans)
-	}
-}
-
-// ---- Trades: unmatched is informational only, does not by itself flip State ----
-
-func TestEvaluateTradeMismatchInformationalOnly(t *testing.T) {
-	in := Inputs{
-		Robots: []RobotView{{
-			ID: "r1", Symbol: "RIU6", Position: 0,
-			FillKeys: []FillKey{{OrderNum: "1", Qty: 1, Price: 100}},
-		}},
-		Acc: AccView{
-			Positions: []Position{{Sec: "RIU6", Net: 0}},
-			PosAgeMs:  100, OrdAgeMs: 100,
-			// No matching Trade at all -> TradeCheck Matched=false.
-		},
-	}
-	rep := Evaluate(in)
-	if len(rep.Trades) != 1 || rep.Trades[0].Matched {
-		t.Fatalf("trades = %+v, want one unmatched entry", rep.Trades)
-	}
-	// Per the brief, trade mismatches are "informational only" (unlike Trans, which
-	// explicitly flips State) — everything else here is clean, so State stays OK.
-	if rep.State != "OK" || rep.Plan != nil {
-		t.Fatalf("state = %+v, want OK/no-plan: an unmatched trade alone must not force MISMATCH", rep)
-	}
-}
-
-// ---- trade fuzzy match within one price step ----
-
-func TestEvaluateTradeMatchWithinPriceStep(t *testing.T) {
-	in := Inputs{
-		Robots: []RobotView{{
-			ID: "r1", Symbol: "RIU6", Position: 0,
-			FillKeys: []FillKey{{OrderNum: "1", Qty: 1, Price: 100000}},
-		}},
-		PriceStep: map[string]float64{"RIU6": 10},
-		Acc: AccView{
-			Positions: []Position{{Sec: "RIU6", Net: 0}},
-			Trades:    []Trade{{Num: "t1", OrderNum: "1", Sec: "RIU6", Qty: 1, Price: 100005}}, // within 1 step
-			PosAgeMs:  100, OrdAgeMs: 100,
-		},
-	}
-	rep := Evaluate(in)
-	if len(rep.Trades) != 1 || !rep.Trades[0].Matched || rep.Trades[0].TradeID != "t1" {
-		t.Fatalf("trades = %+v, want matched within price step", rep.Trades)
-	}
-}
-
-func TestEvaluateTradeExactMatchWhenNoPriceStep(t *testing.T) {
-	in := Inputs{
-		Robots: []RobotView{{
-			ID: "r1", Symbol: "RIU6", Position: 0,
-			FillKeys: []FillKey{{OrderNum: "1", Qty: 1, Price: 100000}},
-		}},
-		// No PriceStep entry for RIU6 -> must fall back to exact match.
-		Acc: AccView{
-			Positions: []Position{{Sec: "RIU6", Net: 0}},
-			Trades:    []Trade{{Num: "t1", OrderNum: "1", Sec: "RIU6", Qty: 1, Price: 100005}},
-			PosAgeMs:  100, OrdAgeMs: 100,
-		},
-	}
-	rep := Evaluate(in)
-	if len(rep.Trades) != 1 || rep.Trades[0].Matched {
-		t.Fatalf("trades = %+v, want unmatched (no price step -> exact match required)", rep.Trades)
-	}
-}
-
-// ---- a single QUIK trade cannot satisfy two distinct fill keys ----
-
-func TestEvaluateTradeMatchDoesNotDoubleCountSameTradeRow(t *testing.T) {
-	in := Inputs{
-		Robots: []RobotView{{
-			ID: "r1", Symbol: "RIU6", Position: 0,
-			// Two identical fill keys (e.g. two 1-lot partials at the same price).
-			FillKeys: []FillKey{
-				{OrderNum: "1", Qty: 1, Price: 100000},
-				{OrderNum: "1", Qty: 1, Price: 100000},
-			},
-		}},
-		Acc: AccView{
-			Positions: []Position{{Sec: "RIU6", Net: 0}},
-			// Only ONE matching trade row exists for that order/qty/price.
-			Trades:   []Trade{{Num: "t1", OrderNum: "1", Sec: "RIU6", Qty: 1, Price: 100000}},
-			PosAgeMs: 100, OrdAgeMs: 100,
-		},
-	}
-	rep := Evaluate(in)
-	if len(rep.Trades) != 2 {
-		t.Fatalf("trades = %+v, want 2 checks (one per fill key)", rep.Trades)
-	}
-	matchedCount := 0
-	for _, tc := range rep.Trades {
-		if tc.Matched {
-			matchedCount++
+	for _, s := range repA.Plan.Steps {
+		if s.OrderNum == "70" {
+			t.Fatalf("manual order 70 must never be a step: %+v", repA.Plan.Steps)
 		}
 	}
-	if matchedCount != 1 {
-		t.Fatalf("trades = %+v, want exactly ONE matched (the single trade row must not satisfy both fill keys)", rep.Trades)
-	}
 }
 
-// ---- human-owned order is OK, no step ----
+// ---- RobotChecks: per-robot summary, sorted by ID ----
 
-func TestEvaluateHumanOwnedOrderOK(t *testing.T) {
+func TestEvaluateRobotChecksSortedAndPopulated(t *testing.T) {
 	in := Inputs{
-		Robots:      []RobotView{{ID: "r1", Symbol: "RIU6"}},
-		HumanOrders: map[string]bool{"1": true},
-		Acc: AccView{
-			Orders:   []Order{{Num: "1", Sec: "RIU6", Active: true}},
-			PosAgeMs: 100, OrdAgeMs: 100,
+		Robots: []RobotView{
+			{ID: "z", Tag: "z", Symbol: "GZU6", Position: -3},
+			{ID: "a", Tag: "a", Symbol: "RIU6", Position: 7},
+			{ID: "p", Tag: "p", Symbol: "SiU6", Position: 1, Paper: true}, // excluded
 		},
+		Acc: AccView{PosAgeMs: 100, OrdAgeMs: 100},
 	}
 	rep := Evaluate(in)
-	if len(rep.Orders) != 1 || rep.Orders[0].Owner != "human" || !rep.Orders[0].OK {
-		t.Fatalf("orders = %+v, want human-owned OK", rep.Orders)
+	if len(rep.RobotChecks) != 2 {
+		t.Fatalf("paper robot must be excluded from RobotChecks, got %+v", rep.RobotChecks)
 	}
-	if rep.State != "OK" || rep.Plan != nil {
-		t.Fatalf("%+v", rep)
+	if rep.RobotChecks[0].ID != "a" || rep.RobotChecks[1].ID != "z" {
+		t.Fatalf("RobotChecks must be sorted by ID, got %+v", rep.RobotChecks)
 	}
-}
-
-// ---- missing symbol in QUIK positions defaults to Net 0 ----
-
-func TestEvaluateMissingSymbolInQuikPositionsDefaultsZero(t *testing.T) {
-	in := Inputs{
-		Robots: []RobotView{{ID: "r1", Symbol: "RIU6", Position: 0}},
-		Acc:    AccView{PosAgeMs: 100, OrdAgeMs: 100}, // no Positions rows at all
+	if rep.RobotChecks[0].Position != 7 || rep.RobotChecks[1].Position != -3 {
+		t.Fatalf("RobotChecks must carry believed positions, got %+v", rep.RobotChecks)
 	}
-	rep := Evaluate(in)
-	if len(rep.Positions) != 1 || rep.Positions[0].Quik != 0 || !rep.Positions[0].OK {
-		t.Fatalf("positions = %+v, want Quik=0 OK=true", rep.Positions)
+	for _, rc := range rep.RobotChecks {
+		if !rc.OrdersOK || !rc.TradesOK {
+			t.Fatalf("idle robot must be self-consistent, got %+v", rc)
+		}
 	}
 }

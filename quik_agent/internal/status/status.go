@@ -175,9 +175,9 @@ func robotIDFromClientID(clientID string) (string, bool) {
 	return rest, true
 }
 
-// buildReconInputs adapts every Deps source into recon.Inputs, exactly as the
-// package doc for recon.Inputs specifies (Robots/HumanOrders/Acc/Trans/
-// ManualOffset/PriceStep/NowMs).
+// buildReconInputs adapts every Deps source into recon.Inputs. Attribution is by tag
+// (recon classifies each Acc order/trade by its brokerref Tag), so each RobotView carries
+// its ID as its Tag and the Acc order/trade tags are copied through verbatim.
 func buildReconInputs(d Deps) recon.Inputs {
 	acc := d.Accounts.Snapshot()
 
@@ -192,34 +192,27 @@ func buildReconInputs(d Deps) recon.Inputs {
 	}
 	for _, o := range acc.Orders {
 		accView.Orders = append(accView.Orders, recon.Order{
-			Num: o.Num, Sec: o.Sec, Active: o.Active, Price: o.Price, Balance: o.Balance, Qty: o.Qty,
+			Num: o.Num, Sec: o.Sec, Active: o.Active, Price: o.Price, Balance: o.Balance, Qty: o.Qty, Tag: o.Tag,
 		})
 	}
 	for _, t := range acc.Trades {
 		accView.Trades = append(accView.Trades, recon.Trade{
-			Num: t.Num, OrderNum: t.OrderNum, Sec: t.Sec, Price: t.Price, Qty: t.Qty, TsMs: t.TsMs,
+			Num: t.Num, OrderNum: t.OrderNum, Sec: t.Sec, Price: t.Price, Qty: t.Qty, TsMs: t.TsMs, Tag: t.Tag,
 		})
 	}
 
-	// Working orders, split into robot-owned (grouped by robot ID, "rr:" prefix)
-	// and human-owned (everything else), matching recon.Inputs' doc exactly. A
-	// "recon:"-prefixed client_id (a PREVIOUS align's close_position, see
-	// status.Aligner.closePosition) additionally marks its symbol as pending, so
-	// Evaluate does not generate a second close_position on top of one still resting.
+	// Robot-owned working orders, grouped by robot ID (client_id "rr:<robotID>:n"), feed
+	// each RobotView's OrderNums so recon can flag a MISSING (believed-working-but-absent)
+	// or a ROBOT_ORPHAN (tagged-but-unknown) order. A non-robot client_id is the
+	// human/manual path; under the tag model its QUIK order carries an empty/unknown
+	// brokerref and recon attributes it as MANUAL, so nothing extra is tracked here.
 	robotOrderNums := map[string][]string{}
-	humanOrders := map[string]bool{}
-	reconPendingSymbols := map[string]bool{}
 	for _, ws := range d.Manager.SnapshotWorking() {
-		if strings.HasPrefix(ws.ClientID, "recon:") {
-			reconPendingSymbols[ws.Code] = true
-		}
 		if ws.OrderNum == "" {
 			continue // not yet acknowledged by QUIK; nothing to reconcile against yet
 		}
 		if rid, ok := robotIDFromClientID(ws.ClientID); ok {
 			robotOrderNums[rid] = append(robotOrderNums[rid], ws.OrderNum)
-		} else {
-			humanOrders[ws.OrderNum] = true
 		}
 	}
 
@@ -242,6 +235,7 @@ func buildReconInputs(d Deps) recon.Inputs {
 		st := lastStatuses[id] // nil-safe: proto getters tolerate a nil receiver
 		rv := recon.RobotView{
 			ID:       id,
+			Tag:      id, // the robot's brokerref == its ID (stamped into the order COMMENT)
 			Symbol:   spec.GetSymbol(),
 			Paper:    spec.GetPaper(),
 			Position: st.GetPosition(),
@@ -262,14 +256,11 @@ func buildReconInputs(d Deps) recon.Inputs {
 	}
 
 	return recon.Inputs{
-		Robots:              robotViews,
-		HumanOrders:         humanOrders,
-		Acc:                 accView,
-		Trans:               trans,
-		ManualOffset:        d.manualOffsets(),
-		PriceStep:           priceStep,
-		ReconPendingSymbols: reconPendingSymbols,
-		NowMs:               d.nowMs(),
+		Robots:    robotViews,
+		Acc:       accView,
+		Trans:     trans,
+		PriceStep: priceStep,
+		NowMs:     d.nowMs(),
 	}
 }
 
@@ -405,18 +396,33 @@ type robotJSON struct {
 	HasStatus         bool               `json:"has_status"`
 }
 
-type posCheckJSON struct {
-	Symbol       string `json:"symbol"`
-	RobotsSum    int64  `json:"robots_sum"`
-	Quik         int64  `json:"quik"`
-	ManualOffset int64  `json:"manual_offset"`
-	OK           bool   `json:"ok"`
-}
-
 type orderCheckJSON struct {
 	OrderNum string `json:"order_num"`
 	Owner    string `json:"owner"`
 	OK       bool   `json:"ok"`
+}
+
+type manualOrderJSON struct {
+	OrderNum string `json:"order_num"`
+	Sec      string `json:"sec"`
+}
+
+type posLineJSON struct {
+	Sec string `json:"sec"`
+	Net int64  `json:"net"`
+}
+
+type manualViewJSON struct {
+	Orders     []manualOrderJSON `json:"orders"`
+	AccountNet []posLineJSON     `json:"account_net"`
+}
+
+type robotCheckJSON struct {
+	ID       string `json:"id"`
+	Symbol   string `json:"symbol"`
+	Position int64  `json:"position"`
+	OrdersOK bool   `json:"orders_ok"`
+	TradesOK bool   `json:"trades_ok"`
 }
 
 type tradeCheckJSON struct {
@@ -450,10 +456,11 @@ type planJSON struct {
 
 type reconJSON struct {
 	State         string           `json:"state"`
-	Positions     []posCheckJSON   `json:"positions"`
 	Orders        []orderCheckJSON `json:"orders"`
 	Trades        []tradeCheckJSON `json:"trades"`
 	Trans         []transCheckJSON `json:"trans"`
+	Manual        manualViewJSON   `json:"manual"`
+	RobotChecks   []robotCheckJSON `json:"robot_checks"`
 	Plan          *planJSON        `json:"plan"`
 	ManualOffsets map[string]int64 `json:"manual_offsets"`
 }
@@ -481,11 +488,6 @@ func toPlanJSON(p *recon.Plan) *planJSON {
 
 func toReconJSON(rep recon.Report, manualOffsets map[string]int64) reconJSON {
 	out := reconJSON{State: rep.State, ManualOffsets: manualOffsets}
-	for _, p := range rep.Positions {
-		out.Positions = append(out.Positions, posCheckJSON{
-			Symbol: p.Symbol, RobotsSum: p.RobotsSum, Quik: p.Quik, ManualOffset: p.ManualOffset, OK: p.OK,
-		})
-	}
 	for _, o := range rep.Orders {
 		out.Orders = append(out.Orders, orderCheckJSON{OrderNum: o.OrderNum, Owner: o.Owner, OK: o.OK})
 	}
@@ -495,6 +497,25 @@ func toReconJSON(rep recon.Report, manualOffsets map[string]int64) reconJSON {
 	for _, t := range rep.Trans {
 		out.Trans = append(out.Trans, transCheckJSON{TransID: t.TransID, Status: t.Status, Text: t.Text, OK: t.OK})
 	}
+
+	// Manual (untagged / unknown-tag) block: shown for context, never reconciled (the
+	// "Ручная торговля (не сверяется)" UI section). Empty slices, not null.
+	out.Manual = manualViewJSON{Orders: []manualOrderJSON{}, AccountNet: []posLineJSON{}}
+	for _, m := range rep.Manual.Orders {
+		out.Manual.Orders = append(out.Manual.Orders, manualOrderJSON{OrderNum: m.OrderNum, Sec: m.Sec})
+	}
+	for _, p := range rep.Manual.AccountNet {
+		out.Manual.AccountNet = append(out.Manual.AccountNet, posLineJSON{Sec: p.Sec, Net: p.Net})
+	}
+
+	// Per-robot self-consistency summary ("Мои роботы").
+	out.RobotChecks = []robotCheckJSON{}
+	for _, rc := range rep.RobotChecks {
+		out.RobotChecks = append(out.RobotChecks, robotCheckJSON{
+			ID: rc.ID, Symbol: rc.Symbol, Position: rc.Position, OrdersOK: rc.OrdersOK, TradesOK: rc.TradesOK,
+		})
+	}
+
 	out.Plan = toPlanJSON(rep.Plan)
 	if out.ManualOffsets == nil {
 		out.ManualOffsets = map[string]int64{}

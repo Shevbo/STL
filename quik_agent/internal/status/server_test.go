@@ -117,8 +117,8 @@ func TestServer_StrategyDoc(t *testing.T) {
 }
 
 // mismatchDeps returns a Deps whose recon.Evaluate produces a MISMATCH with a
-// non-empty Plan: one real robot claims Position=5 on RIU6 but QUIK's account
-// snapshot shows no position at all for that symbol.
+// non-empty Plan: a QUIK order tagged for robot r1 that the robot does not know about
+// (a ROBOT_ORPHAN) yields a single cancel_order step.
 func mismatchDeps() Deps {
 	d := baseDeps()
 	d.Robots = fakeRobots{
@@ -129,7 +129,10 @@ func mismatchDeps() Deps {
 	d.Runner = fakeRunner{statuses: map[string]*quikv1.RobotStatus{
 		"r1": {RobotId: "r1", Position: 5},
 	}}
-	d.Accounts = fakeAccounts{snap: accounts.Snapshot{PosAgeMs: 10, OrdAgeMs: 10}}
+	d.Accounts = fakeAccounts{snap: accounts.Snapshot{
+		PosAgeMs: 10, OrdAgeMs: 10,
+		Orders: []accounts.Order{{Num: "999", Sec: "RIU6", Active: true, Tag: "r1"}},
+	}}
 	return d
 }
 
@@ -244,6 +247,7 @@ func TestServer_AlignExecutesMatchingPlan(t *testing.T) {
 type clockAccounts struct {
 	posAtMs, ordAtMs int64
 	positions        []accounts.Position
+	orders           []accounts.Order
 	nowMs            func() int64
 }
 
@@ -251,6 +255,7 @@ func (c clockAccounts) Snapshot() accounts.Snapshot {
 	now := c.nowMs()
 	return accounts.Snapshot{
 		Positions: c.positions,
+		Orders:    c.orders,
 		PosAtMs:   c.posAtMs,
 		OrdAtMs:   c.ordAtMs,
 		PosAgeMs:  now - c.posAtMs,
@@ -266,7 +271,11 @@ func (c clockAccounts) Snapshot() accounts.Snapshot {
 func TestServer_AlignSucceedsAfterClockAdvanceWithSameTables(t *testing.T) {
 	clock := int64(1_000_000)
 	d := mismatchDeps()
-	d.Accounts = clockAccounts{posAtMs: 999_900, ordAtMs: 999_900, nowMs: func() int64 { return clock }}
+	d.Accounts = clockAccounts{
+		posAtMs: 999_900, ordAtMs: 999_900,
+		orders: []accounts.Order{{Num: "999", Sec: "RIU6", Active: true, Tag: "r1"}}, // ROBOT_ORPHAN -> mismatch
+		nowMs:  func() int64 { return clock },
+	}
 	var gotPlan recon.Plan
 	d.AlignExec = func(plan recon.Plan) []StepResult {
 		gotPlan = plan

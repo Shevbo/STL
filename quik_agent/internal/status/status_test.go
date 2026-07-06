@@ -346,12 +346,11 @@ func TestBuildStatus_ZeroStepPlanSerializesEmptySteps(t *testing.T) {
 	}
 }
 
-// TestBuildStatus_WorkingOrderOwnershipSplit: SnapshotWorking entries with an
-// "rr:<robotID>:n" ClientID must land in THAT robot's OrderNums (so an
-// absent-from-QUIK one surfaces as MISSING:<robotID>), while any other
-// ClientID goes to HumanOrders (so its active QUIK order resolves to owner
-// "human", never ORPHAN).
-func TestBuildStatus_WorkingOrderOwnershipSplit(t *testing.T) {
+// TestBuildStatus_WorkingOrderTagAttribution: under the tag model a robot's
+// believed-working order absent from QUIK surfaces as MISSING:<robotID>, while an
+// UNTAGGED QUIK order is the operator's manual trading — it goes to the manual block
+// (never reconciled), NOT to the robot OrderChecks.
+func TestBuildStatus_WorkingOrderTagAttribution(t *testing.T) {
 	d := baseDeps()
 	d.Robots = fakeRobots{
 		specs:  []*quikv1.RobotSpec{{RobotId: "r1", Symbol: "RIU6", Paper: false}},
@@ -362,12 +361,12 @@ func TestBuildStatus_WorkingOrderOwnershipSplit(t *testing.T) {
 		"r1": {RobotId: "r1", Position: 0},
 	}}
 	d.Manager = fakeManager{working: []trade.WorkingSnapshot{
-		{ClientID: "rr:r1:1", OrderNum: "111", Code: "RIU6"}, // robot-owned, NOT active in QUIK
-		{ClientID: "human-1", OrderNum: "222", Code: "RIU6"}, // human-owned, active in QUIK
+		{ClientID: "rr:r1:1", OrderNum: "111", Code: "RIU6"}, // robot-owned, NOT active in QUIK -> MISSING
+		{ClientID: "human-1", OrderNum: "222", Code: "RIU6"}, // human path; its QUIK order is untagged -> MANUAL
 	}}
 	d.Accounts = fakeAccounts{snap: accounts.Snapshot{
 		PosAgeMs: 10, OrdAgeMs: 10,
-		Orders: []accounts.Order{{Num: "222", Sec: "RIU6", Active: true, Qty: 1, Balance: 1}},
+		Orders: []accounts.Order{{Num: "222", Sec: "RIU6", Active: true, Qty: 1, Balance: 1, Tag: ""}},
 	}}
 
 	data, err := BuildStatus(d)
@@ -381,6 +380,11 @@ func TestBuildStatus_WorkingOrderOwnershipSplit(t *testing.T) {
 				Owner    string `json:"owner"`
 				OK       bool   `json:"ok"`
 			} `json:"orders"`
+			Manual struct {
+				Orders []struct {
+					OrderNum string `json:"order_num"`
+				} `json:"orders"`
+			} `json:"manual"`
 		} `json:"recon"`
 	}
 	json.Unmarshal(data, &out)
@@ -395,11 +399,20 @@ func TestBuildStatus_WorkingOrderOwnershipSplit(t *testing.T) {
 			OK    bool
 		}{o.Owner, o.OK}
 	}
-	if got := byNum["222"]; got.Owner != "human" || !got.OK {
-		t.Errorf(`order 222 = %+v, want owner "human" OK=true (not ORPHAN)`, got)
+	if _, present := byNum["222"]; present {
+		t.Errorf(`untagged order 222 must NOT be a robot OrderCheck (it is manual), got %+v`, byNum["222"])
 	}
 	if got := byNum["111"]; got.Owner != "MISSING:r1" || got.OK {
 		t.Errorf(`order 111 = %+v, want owner "MISSING:r1" OK=false`, got)
+	}
+	var manualHas222 bool
+	for _, m := range out.Recon.Manual.Orders {
+		if m.OrderNum == "222" {
+			manualHas222 = true
+		}
+	}
+	if !manualHas222 {
+		t.Errorf("untagged order 222 must appear in recon.manual.orders, got %+v", out.Recon.Manual.Orders)
 	}
 }
 
@@ -427,7 +440,8 @@ func TestBuildStatus_FillKeysGating(t *testing.T) {
 	}}
 	d.Accounts = fakeAccounts{snap: accounts.Snapshot{
 		PosAgeMs: 10, OrdAgeMs: 10,
-		Trades: []accounts.Trade{{Num: "t1", OrderNum: "10", Sec: "RIU6", Price: 100, Qty: 1}},
+		// Tagged for real1 so it matches under the tag model.
+		Trades: []accounts.Trade{{Num: "t1", OrderNum: "10", Sec: "RIU6", Price: 100, Qty: 1, Tag: "real1"}},
 	}}
 
 	data, err := BuildStatus(d)
@@ -474,8 +488,11 @@ func TestEvaluateRecon_MismatchWithRealRobotIsRealInvolved(t *testing.T) {
 	d.Runner = fakeRunner{statuses: map[string]*quikv1.RobotStatus{
 		"r1": {RobotId: "r1", Position: 3},
 	}}
+	// A QUIK order tagged for r1 that the robot does not know -> ROBOT_ORPHAN -> a
+	// cancel_order step naming r1's symbol, so realInvolved must be true.
 	d.Accounts = fakeAccounts{snap: accounts.Snapshot{
-		Positions: []accounts.Position{{Sec: "RIU6", Net: 0}},
+		PosAgeMs: 10, OrdAgeMs: 10,
+		Orders: []accounts.Order{{Num: "999", Sec: "RIU6", Active: true, Tag: "r1"}},
 	}}
 
 	state, real := EvaluateRecon(d)
@@ -483,7 +500,7 @@ func TestEvaluateRecon_MismatchWithRealRobotIsRealInvolved(t *testing.T) {
 		t.Fatalf("want MISMATCH, got %s", state)
 	}
 	if !real {
-		t.Errorf("a real (non-paper) robot's position mismatch must be realInvolved")
+		t.Errorf("a real (non-paper) robot's ROBOT_ORPHAN must be realInvolved")
 	}
 }
 
