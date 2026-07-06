@@ -9,12 +9,15 @@ import (
 
 // TestOwnerTag drives the client_id -> QUIK-order-COMMENT tag mapping used by
 // manager.go's place-cmd build: a robot's ID for "rr:<robotID>:<seq>", "recon" for
-// an align order ("recon:<planID>:<n>"), else the raw client_id verbatim.
+// an align order ("recon:<planID>:<n>"), and INTENTIONALLY "" for everything else — a
+// manual/non-robot order must stay untagged so recon treats it as MANUAL and never
+// cancels it (a raw client_id colliding with a robot ID would otherwise be misattributed
+// as a ROBOT_ORPHAN and aligned away).
 func TestOwnerTag(t *testing.T) {
 	cases := map[string]string{
 		"rr:agent-fvg-RIU6-v2:1": "agent-fvg-RIU6-v2",
 		"recon:ab8fffa61d4a:0":   "recon",
-		"human-7":                "human-7",
+		"human-7":                "",
 		"":                       "",
 	}
 	for in, want := range cases {

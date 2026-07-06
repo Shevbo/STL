@@ -82,7 +82,10 @@ func RobotIDFromClientID(clientID string) (string, bool) {
 
 // ownerTag maps a client_id to the tag written into the QUIK order COMMENT so recon can
 // attribute the order: a robot's ID for "rr:<robotID>:<seq>", "recon" for an align order
-// ("recon:<planID>:<n>"), else the raw client_id. Empty stays empty (manual/unknown).
+// ("recon:<planID>:<n>"). Everything else is INTENTIONALLY UNTAGGED (""): a manual or
+// otherwise non-robot/non-recon order must NEVER carry a robot ID as its tag, or recon
+// would misclassify it as a ROBOT_ORPHAN and an align could cancel it. An empty tag makes
+// recon treat the order as MANUAL, which is never reconciled or cancelled.
 func ownerTag(clientID string) string {
 	if rid, ok := RobotIDFromClientID(clientID); ok {
 		return rid
@@ -90,7 +93,7 @@ func ownerTag(clientID string) string {
 	if strings.HasPrefix(clientID, "recon:") {
 		return "recon"
 	}
-	return clientID
+	return ""
 }
 
 // cancelCmd is agent -> Lua: a KILL_ORDER transaction request.
