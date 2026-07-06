@@ -146,6 +146,54 @@ one the page shows the "HTTP 401 — войдите в STL в этом брау�
 instead of rendering. If the 401 banner appears while logged in, the session
 expired — re-login; the page recovers on its next poll.
 
+### Robot attribution — robots vs manual trading (tag model)
+
+The account you trade on can hold BOTH robot orders and your own MANUAL trades.
+Recon separates them by a robot-ID TAG the agent writes into every robot order's
+QUIK `COMMENT` (surfacing as the order/trade `brokerref`): a robot order carries
+its robot ID, an align order carries `"recon"`, and everything else — your manual
+terminal trading — carries no tag. The page splits accordingly:
+
+- **Мои роботы** — reconciled: each robot's working orders must be present + tagged
+  in QUIK, and its recent fills must match tagged QUIK trades; a mismatch here
+  (ROBOT_ORPHAN / MISSING / trade mismatch) is a real signal.
+- **Ручная торговля (не сверяется, справочно)** — every untagged QUIK order + the
+  account net position, shown for context. These NEVER turn recon red and NEVER
+  appear in an align plan. So your manual +N lots and your manual orders sit here
+  quietly; the align button can never touch them.
+
+`manual_offset` is retired — the tag replaces it. The COMMENT→brokerref round-trip
+is only exercised by a REAL order (paper never reaches QUIK); verify it in the
+first-real-order smoke (below).
+
+### Robot control from the GUI (params + paper/real mode)
+
+- **Edit params** — expand a robot row: strategy params, `schedule`, `max_position`,
+  Save. From the LOCAL page (`127.0.0.1:8071`) all three apply (via
+  `/api/robot/{id}/params` → runner + robots.json). From the STL mirror only the
+  strategy params (`params_json`) apply remotely (relayed via
+  `POST /api/v1/quik/robots/{id}/params` → `SetRobotParams`); `schedule`/`max_position`
+  edits there are disabled — change those from the local page.
+- **paper ⇄ real toggle — LOCAL CONSOLE ONLY.** The mode endpoint exists ONLY on the
+  agent (`POST /api/robot/{id}/mode`); STL has no such route, so arming real money
+  is impossible from the mirror by construction. On the local page the arming panel
+  requires ALL of: the robot FLAT (position 0, no working/in-flight order — the agent
+  re-checks this server-side and returns **409** with the reason if not), the
+  single-path checklist ticked (you confirm the STL/Finam variant of this symbol is
+  stopped — the agent can't see Finam), and the robot ID typed exactly. Only then does
+  "Армировать в REAL" enable. Both master flags are already ON, so `paper=false` starts
+  real orders immediately — this toggle IS the arming action. De-arming (real→paper)
+  needs the same FLAT state but no typing ceremony.
+
+### First-real-order smoke (part of go-live, HITL)
+
+When you arm the first real robot: place/allow one real order, then confirm on the
+page that (1) it appears under "Мои роботы" attributed to the robot (its ID is the
+order's tag), NOT under "Ручная торговля", and (2) a concurrent manual order you
+place in the terminal stays under "Ручная торговля". That proves the COMMENT→brokerref
+tag round-trips on this QUIK build (if the ID is truncated, the tag length exceeded the
+COMMENT field — tell me and we switch to a compact tag).
+
 ### Clock-drift caveat
 
 The page's "Дрейф часов" (clock drift) and "Биржевой лаг" (exchange lag)

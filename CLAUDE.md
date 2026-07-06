@@ -64,7 +64,16 @@ status+recon page (loopback `:8071`, `quik_agent/internal/status/page.html`) com
 robots' claimed positions against QUIK's account tables; STL mirrors that JSON opaquely
 at `GET /api/v1/quik/agent-local-status` for read-only remote viewing
 (`frontend/public/agent-status.html`, same page, `?src=&interval=` params) — align
-actions only work against the agent's own loopback, not the mirror.
+actions only work against the agent's own loopback, not the mirror. Recon attributes
+orders/trades to a robot by a TAG the agent stamps into the QUIK order COMMENT (=>
+`brokerref`): robot ID for `rr:` orders, `"recon"` for align orders, empty for MANUAL
+(operator's own terminal trading). Untagged = manual: shown separately, never
+reconciled, never in an align plan (so robot recon and manual trading never conflict;
+`manual_offset` is retired). Robots are edited from the page: params via
+`/api/robot/{id}/params` (local) or `POST /api/v1/quik/robots/{id}/params` (STL mirror,
+`params_json` only); the paper/real toggle via `/api/robot/{id}/mode` exists ONLY on the
+agent (never STL) and refuses a non-flat robot — arming real money is local-console-only,
+gated on FLAT + typed robot-ID confirm.
 
 **Order flow (human orders and robot orders share the tail):** UI → `POST
 /api/v1/quik/orders/*` (`trader/api/quik_orders.py`) → limit check (`trader/quik/
