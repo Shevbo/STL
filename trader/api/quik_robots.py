@@ -131,6 +131,38 @@ async def set_params_agent(robot_id: str, body: DeployAgentBody, request: Reques
     return {"ok": True, "agent_id": agent, "robot_id": robot_id}
 
 
+class ParamsRelayBody(BaseModel):
+    agent_id: str | None = None
+    params_json: str
+    schedule: str | None = None
+    max_position: int | None = None
+
+
+@router.post("/robots/{robot_id}/params")
+async def relay_robot_params(robot_id: str, body: ParamsRelayBody, request: Request):
+    """Relay a params edit from the STL mirror's param editor to the agent's
+    live session (portal-authed). Mirrors deploy-agent's enqueue pattern.
+
+    The proto's SetRobotParams carries params_json only, so that is the sole
+    field forwarded over the wire; schedule/max_position are accepted here for
+    body-shape parity with the agent's local /api/robot/{id}/params editor
+    (see docs/superpowers/specs/2026-07-06-robot-tagging-and-gui-control-design.md
+    B1) but are NOT applied through this route today -- editing those two
+    remotely would need either folding them into params_json or a future
+    spec re-deploy path. They currently take effect only via the agent's own
+    local console (set_params_agent/DeployRobot below already cover a full
+    spec re-deploy when strategy_id/symbol are also known).
+    """
+    _auth(request)
+    srv = _server(request)
+    agent = _resolve_agent(request, body.agent_id)
+    srv.enqueue_order(agent, pb.OrchestratorMessage(
+        set_robot_params=pb.SetRobotParams(
+            robot_id=robot_id,
+            params_json=body.params_json)))
+    return {"ok": True, "agent_id": agent, "robot_id": robot_id}
+
+
 @router.get("/agent/{agent_id}/robots")
 async def agent_robots(agent_id: str, request: Request):
     """Last RobotStatusReport mirror from the agent (position, fills, P&L,
