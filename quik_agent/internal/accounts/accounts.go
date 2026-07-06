@@ -28,6 +28,10 @@ type Order struct {
 	Price    float64
 	Balance  int64
 	Qty      int64
+	// Tag is the owner tag (brokerref, stamped from the order COMMENT — see
+	// trade.ownerTag) decoded from the row's optional trailing 7th element.
+	// Empty when absent (old Lua build) or unknown.
+	Tag string
 }
 
 // Trade mirrors one row of the QUIK trades table (a fill).
@@ -36,6 +40,9 @@ type Trade struct {
 	Price              float64
 	Qty                int64
 	TsMs               int64
+	// Tag is the owner tag (brokerref) decoded from the row's optional trailing
+	// 7th element. Empty when absent (old Lua build) or unknown.
+	Tag string
 }
 
 // tradesRing caps how many recent trades Snapshot() exposes. QUIK re-sends the full
@@ -364,7 +371,9 @@ func PositionFromRow(row []any) (Position, bool) {
 	return Position{Sec: sec, Net: net, Avg: avg}, true
 }
 
-// OrderFromRow converts one acc_ord row: [order_num, sec, active(0|1), price, balance, qty].
+// OrderFromRow converts one acc_ord row: [order_num, sec, active(0|1), price, balance,
+// qty], plus an OPTIONAL trailing 7th element (the owner tag/brokerref) — absent on an
+// old Lua build, in which case Tag stays "".
 func OrderFromRow(row []any) (Order, bool) {
 	if len(row) < 6 {
 		return Order{}, false
@@ -393,10 +402,18 @@ func OrderFromRow(row []any) (Order, bool) {
 	if !ok {
 		return Order{}, false
 	}
-	return Order{Num: num, Sec: sec, Active: active, Price: price, Balance: balance, Qty: qty}, true
+	out := Order{Num: num, Sec: sec, Active: active, Price: price, Balance: balance, Qty: qty}
+	if len(row) >= 7 {
+		if s, ok := row[6].(string); ok {
+			out.Tag = s
+		}
+	}
+	return out, true
 }
 
-// TradeFromRow converts one acc_trd row: [trade_num, order_num, sec, price, qty, ts_ms].
+// TradeFromRow converts one acc_trd row: [trade_num, order_num, sec, price, qty,
+// ts_ms], plus an OPTIONAL trailing 7th element (the owner tag/brokerref) — absent on
+// an old Lua build, in which case Tag stays "".
 func TradeFromRow(row []any) (Trade, bool) {
 	if len(row) < 6 {
 		return Trade{}, false
@@ -425,7 +442,13 @@ func TradeFromRow(row []any) (Trade, bool) {
 	if !ok {
 		return Trade{}, false
 	}
-	return Trade{Num: num, OrderNum: orderNum, Sec: sec, Price: price, Qty: qty, TsMs: tsMs}, true
+	out := Trade{Num: num, OrderNum: orderNum, Sec: sec, Price: price, Qty: qty, TsMs: tsMs}
+	if len(row) >= 7 {
+		if s, ok := row[6].(string); ok {
+			out.Tag = s
+		}
+	}
+	return out, true
 }
 
 func asString(v any) (string, bool) {

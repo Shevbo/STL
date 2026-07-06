@@ -272,6 +272,7 @@ func (m *Manager) PlaceOrderErr(req *quikv1.PlaceOrder) error {
 		Price:    formatPrice(req.GetPrice()),
 		Qty:      req.GetQuantity(),
 		Account:  m.cfg.Account,
+		Comment:  ownerTag(req.GetClientId()),
 	}
 	if err := m.bridge.Place(cmd); err != nil {
 		m.logf("trade: place send failed (trans=%d): %v", transID, err)

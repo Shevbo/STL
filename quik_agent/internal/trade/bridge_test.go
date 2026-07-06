@@ -7,6 +7,23 @@ import (
 	"testing"
 )
 
+// TestOwnerTag drives the client_id -> QUIK-order-COMMENT tag mapping used by
+// manager.go's place-cmd build: a robot's ID for "rr:<robotID>:<seq>", "recon" for
+// an align order ("recon:<planID>:<n>"), else the raw client_id verbatim.
+func TestOwnerTag(t *testing.T) {
+	cases := map[string]string{
+		"rr:agent-fvg-RIU6-v2:1": "agent-fvg-RIU6-v2",
+		"recon:ab8fffa61d4a:0":   "recon",
+		"human-7":                "human-7",
+		"":                       "",
+	}
+	for in, want := range cases {
+		if got := ownerTag(in); got != want {
+			t.Fatalf("ownerTag(%q)=%q want %q", in, got, want)
+		}
+	}
+}
+
 // TestSendPing_EncodesCmdAndT0 drives the REAL Bridge.send() plumbing (not the
 // bridgeAPI interface the manager sees) over a net.Pipe, mirroring how the Lua
 // script would read the line off the loopback TCP connection.

@@ -56,6 +56,25 @@ func TestTradeFromRow(t *testing.T) {
 	}
 }
 
+// TestOrderTradeFromRowTag: the trailing 7th row element (brokerref, stamped by the
+// Lua from the order COMMENT) decodes into Order.Tag/Trade.Tag. It is OPTIONAL — a row
+// from an old Lua build with only 6 elements still decodes fine, just with Tag == "".
+func TestOrderTradeFromRowTag(t *testing.T) {
+	o, ok := OrderFromRow([]any{"555", "RIU6", 1.0, 89000.0, 1.0, 1.0, "agent-fvg-RIU6-v2"})
+	if !ok || o.Tag != "agent-fvg-RIU6-v2" {
+		t.Fatalf("order tag: %+v ok=%v", o, ok)
+	}
+	// Old Lua (no 7th element) => empty tag, still decodes.
+	o2, ok2 := OrderFromRow([]any{"555", "RIU6", 1.0, 89000.0, 1.0, 1.0})
+	if !ok2 || o2.Tag != "" {
+		t.Fatalf("legacy order: %+v ok=%v", o2, ok2)
+	}
+	tr, ok3 := TradeFromRow([]any{"t1", "555", "RIU6", 89050.0, 1.0, 1.75e12, "recon"})
+	if !ok3 || tr.Tag != "recon" {
+		t.Fatalf("trade tag: %+v ok=%v", tr, ok3)
+	}
+}
+
 func TestStorePositionsOrdersSnapshot(t *testing.T) {
 	s := New(func() int64 { return 0 })
 	s.SetPositions([]Position{{Sec: "RIU6", Net: 2, Avg: 89100}})

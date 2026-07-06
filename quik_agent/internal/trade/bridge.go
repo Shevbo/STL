@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -60,6 +61,36 @@ type placeCmd struct {
 	Qty      int64  `json:"qty"`     // contracts
 	Type     string `json:"type"`    // "L" (limit)
 	Account  string `json:"account"` // trade account (from keymaster, never hardcoded)
+	Comment  string `json:"comment"` // owner tag stamped into the QUIK order COMMENT (see ownerTag)
+}
+
+// RobotIDFromClientID parses "rr:<robotID>:<seq>" -> (robotID, true); anything else is
+// ("", false). Exported because status (recon inputs) and main (mode flat-gate) both
+// need it. Uses the LAST ":" so a robotID may itself contain colons.
+func RobotIDFromClientID(clientID string) (string, bool) {
+	const p = "rr:"
+	if !strings.HasPrefix(clientID, p) {
+		return "", false
+	}
+	rest := clientID[len(p):]
+	i := strings.LastIndex(rest, ":")
+	if i <= 0 {
+		return "", false
+	}
+	return rest[:i], true
+}
+
+// ownerTag maps a client_id to the tag written into the QUIK order COMMENT so recon can
+// attribute the order: a robot's ID for "rr:<robotID>:<seq>", "recon" for an align order
+// ("recon:<planID>:<n>"), else the raw client_id. Empty stays empty (manual/unknown).
+func ownerTag(clientID string) string {
+	if rid, ok := RobotIDFromClientID(clientID); ok {
+		return rid
+	}
+	if strings.HasPrefix(clientID, "recon:") {
+		return "recon"
+	}
+	return clientID
 }
 
 // cancelCmd is agent -> Lua: a KILL_ORDER transaction request.
