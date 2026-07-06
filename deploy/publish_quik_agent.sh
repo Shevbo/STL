@@ -29,9 +29,10 @@ CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "-X main.agentBuildRev
 CGO_ENABLED=0 GOOS=windows GOARCH=386   go build -ldflags "-X main.agentBuildRevStr=$REV" -o dist/quik-agent.exe ./cmd/quik-agent
 
 # Flat zips: the exe sits at the archive root under its run name. When a bundled
-# robot-runner.exe has been staged into dist/ (built on Windows via
-# deploy/build_runner.sh and uploaded here), ship it in the SAME zip so the
-# agent's self-update delivers both binaries together (zero-touch satellite).
+# robot-runner.exe (+ its strategies_doc.json, Task 10) has been staged into dist/
+# (built on Windows via deploy/build_runner.sh and uploaded here), ship them in the
+# SAME zip so the agent's self-update delivers the runner and its docs together
+# (zero-touch satellite).
 cd dist
 python3 - <<'PYZ'
 import os, zipfile
@@ -40,9 +41,11 @@ def zwrite(zname, names):
     for n in names:
         z.write(n)
     z.close()
-extra = ['robot-runner.exe'] if os.path.exists('robot-runner.exe') else []
-if not extra:
+extra = [n for n in ('robot-runner.exe', 'strategies_doc.json') if os.path.exists(n)]
+if 'robot-runner.exe' not in extra:
     print('[publish] note: dist/robot-runner.exe not staged - shipping agent only')
+elif 'strategies_doc.json' not in extra:
+    print('[publish] note: dist/strategies_doc.json not staged - runner will ship without strategy docs')
 zwrite('amd64.zip', ['quik-agent_amd64.exe'] + extra)
 zwrite('386.zip', ['quik-agent.exe'] + extra)
 PYZ
