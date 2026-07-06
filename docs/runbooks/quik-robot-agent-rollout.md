@@ -130,6 +130,12 @@ Until the agent has sent at least one snapshot, the mirror endpoint returns
 `{"status": null, "_received_at_ms": null}` — expected on first deploy or
 after an agent restart, not a bug.
 
+The mirror endpoint is auth-gated like every `/api/v1/quik/*` route: viewing
+it requires a logged-in stl.shectory.ru session in the SAME browser; without
+one the page shows the "HTTP 401 — войдите в STL в этом браузере" banner
+instead of rendering. If the 401 banner appears while logged in, the session
+expired — re-login; the page recovers on its next poll.
+
 ### Clock-drift caveat
 
 The page's "Дрейф часов" (clock drift) and "Биржевой лаг" (exchange lag)

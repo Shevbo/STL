@@ -119,7 +119,7 @@
 
 <footer>Обновление каждые <span id="f-interval">—</span> мс · источник <span id="f-src" class="mono">—</span></footer>
 
-<div id="offline-overlay">агент недоступен</div>
+<div id="offline-overlay"><div style="text-align:center">агент недоступен<span id="offline-http" style="display:block;font-size:12px;font-weight:400;margin-top:6px"></span></div></div>
 
 <script>
 const qs = new URLSearchParams(location.search);
@@ -391,11 +391,24 @@ function render(s) {
 }
 
 async function poll() {
+  const httpEl = document.getElementById('offline-http');
   try {
     const r = await fetch(SRC, {cache: 'no-store'});
-    render(await r.json()); lastOkMs = Date.now();
-    document.body.classList.remove('offline');
-  } catch (e) { if (Date.now() - lastOkMs > 5000) document.body.classList.add('offline'); }
+    if (!r.ok) {
+      // Non-2xx: never render the body (an error page is not a snapshot).
+      // Same offline treatment as a network failure, plus the HTTP status —
+      // 401 on the STL mirror means "no logged-in stl session in this browser".
+      httpEl.textContent = r.status === 401 ? 'HTTP 401 — войдите в STL в этом браузере' : 'HTTP ' + r.status;
+      if (Date.now() - lastOkMs > 5000) document.body.classList.add('offline');
+    } else {
+      render(await r.json()); lastOkMs = Date.now();
+      httpEl.textContent = '';
+      document.body.classList.remove('offline');
+    }
+  } catch (e) {
+    httpEl.textContent = '';
+    if (Date.now() - lastOkMs > 5000) document.body.classList.add('offline');
+  }
   setTimeout(poll, INTERVAL);
 }
 async function align(planId) {
