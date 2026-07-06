@@ -278,6 +278,13 @@ class QuikAgentLinkServicer(pb_grpc.QuikAgentLinkServicer):
                         agent_id,
                         MessageToDict(msg.robot_status_report,
                                       preserving_proto_field_name=True))
+                elif field == "status_snapshot":
+                    # Agent's local-showcase status JSON (opaque; STL mirrors it
+                    # verbatim — never parses/acts on its shape). Malformed JSON
+                    # is dropped by the store, logged once, never raised here.
+                    ss = msg.status_snapshot
+                    self.store.set_agent_status(
+                        agent_id, ss.status_json, ss.generated_at_unix_ms)
 
                 self.store.touch(agent_id, msg.seq)
 

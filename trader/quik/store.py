@@ -9,10 +9,15 @@ No order state, no routing. Pure data + status.
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any
+
+import structlog
+
+log = structlog.get_logger()
 
 
 def _now_ms() -> int:
@@ -35,6 +40,8 @@ class AgentState:
     # last RobotStatusReport from the agent-hosted robot-runner (read-only mirror
     # for the LIVE screen; the agent's local state is the runtime source of truth)
     robot_report: dict[str, Any] | None = None
+    # last AgentStatusSnapshot (opaque local-showcase JSON, parsed) mirrored verbatim
+    agent_status: dict[str, Any] | None = None
     # security code -> Security dict
     securities: dict[str, dict[str, Any]] = field(default_factory=dict)
     # security code -> latest MarketDataTick dict
@@ -138,6 +145,28 @@ class QuikAgentStore:
         with self._lock:
             st = self._pick(agent_id)
             return st.robot_report if st else None
+
+    def set_agent_status(self, agent_id: str, status_json: str, generated_at_ms: int) -> None:
+        """Store the agent's local-showcase status snapshot (opaque JSON, mirrored
+        verbatim). Malformed JSON is dropped (logged once) — never crash the
+        gRPC stream handler over a bad frame."""
+        try:
+            parsed = json.loads(status_json)
+        except (TypeError, ValueError):
+            log.warning("quik.status_snapshot.malformed_json", agent=agent_id)
+            return
+        if not isinstance(parsed, dict):
+            log.warning("quik.status_snapshot.not_an_object", agent=agent_id)
+            return
+        parsed = dict(parsed)
+        parsed["_received_at_ms"] = _now_ms()
+        with self._lock:
+            self._agents.setdefault(agent_id, AgentState(agent_id=agent_id)).agent_status = parsed
+
+    def agent_status(self, agent_id: str | None = None) -> dict[str, Any] | None:
+        with self._lock:
+            st = self._pick(agent_id)
+            return st.agent_status if st else None
 
     def apply_securities(self, agent_id: str, items: list[dict[str, Any]], is_full: bool) -> None:
         with self._lock:

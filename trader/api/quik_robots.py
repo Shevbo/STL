@@ -149,3 +149,16 @@ async def robots_mirror(request: Request, agent_id: str | None = None):
     store = _store(request)
     report = store.robot_report(agent_id)
     return report or {"robots": [], "received_at_ms": None}
+
+
+@router.get("/agent-local-status")
+async def agent_local_status(request: Request, agent_id: str | None = None):
+    """Mirror of the agent's local-showcase status snapshot, served verbatim.
+
+    Opaque JSON — STL does not interpret its shape, just relays what the agent
+    last published (plus when STL received it). agent_id optional: picks the
+    single live agent (store._pick semantics), same as robots-mirror."""
+    _auth(request)
+    store = _store(request)
+    status = store.agent_status(agent_id)
+    return status or {"status": None, "_received_at_ms": None}
