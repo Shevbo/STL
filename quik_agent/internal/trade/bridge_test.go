@@ -15,14 +15,39 @@ import (
 // as a ROBOT_ORPHAN and aligned away).
 func TestOwnerTag(t *testing.T) {
 	cases := map[string]string{
-		"rr:agent-fvg-RIU6-v2:1": "agent-fvg-RIU6-v2",
-		"recon:ab8fffa61d4a:0":   "recon",
-		"human-7":                "",
-		"":                       "",
+		"rr:agent-fvg-RIU6-v2:1:a1b2c3": "agent-fvg-RIU6-v2", // REAL 4-segment runner format
+		"recon:ab8fffa61d4a:0":          "recon",
+		"human-7":                       "",
+		"":                              "",
 	}
 	for in, want := range cases {
 		if got := ownerTag(in); got != want {
 			t.Fatalf("ownerTag(%q)=%q want %q", in, got, want)
+		}
+	}
+}
+
+// TestRobotIDFromClientID pins the FIRST-colon parse against the runner's REAL client_id
+// (rr:<robotID>:<seq>:<uuid6hex>, robot_runner/runtime.py) so a regression to LastIndex —
+// which would return "<robotID>:<seq>" and silently break robot order attribution + the
+// MISSING-working-order safety check for every real robot — fails here.
+func TestRobotIDFromClientID(t *testing.T) {
+	cases := []struct {
+		in, wantID string
+		wantOK     bool
+	}{
+		{"rr:live-fvg-RIU6:7:a1b2c3", "live-fvg-RIU6", true}, // REAL 4-segment format
+		{"rr:agent-fvg-RIU6-v2:1", "agent-fvg-RIU6-v2", true},
+		{"rr:r1:1", "r1", true},
+		{"rr:x", "", false}, // no colon after the id
+		{"recon:abc:0", "", false},
+		{"human-7", "", false},
+		{"", "", false},
+	}
+	for _, c := range cases {
+		id, ok := RobotIDFromClientID(c.in)
+		if id != c.wantID || ok != c.wantOK {
+			t.Fatalf("RobotIDFromClientID(%q)=(%q,%v) want (%q,%v)", c.in, id, ok, c.wantID, c.wantOK)
 		}
 	}
 }

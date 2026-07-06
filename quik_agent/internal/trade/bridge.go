@@ -64,16 +64,17 @@ type placeCmd struct {
 	Comment  string `json:"comment"` // owner tag stamped into the QUIK order COMMENT (see ownerTag)
 }
 
-// RobotIDFromClientID parses "rr:<robotID>:<seq>" -> (robotID, true); anything else is
-// ("", false). Exported because status (recon inputs) and main (mode flat-gate) both
-// need it. Uses the LAST ":" so a robotID may itself contain colons.
+// RobotIDFromClientID parses "rr:<robotID>:<seq>:<uuid>" -> (robotID, true); anything
+// without the "rr:" prefix or without a colon after it is ("", false). The robot ID is
+// the segment between "rr:" and the FIRST following colon (robot IDs are colon-free
+// slugs; the runner emits rr:<id>:<seq>:<uuid6> and matches by the rr:<id>: prefix).
 func RobotIDFromClientID(clientID string) (string, bool) {
 	const p = "rr:"
 	if !strings.HasPrefix(clientID, p) {
 		return "", false
 	}
 	rest := clientID[len(p):]
-	i := strings.LastIndex(rest, ":")
+	i := strings.Index(rest, ":") // FIRST colon (not LastIndex)
 	if i <= 0 {
 		return "", false
 	}
