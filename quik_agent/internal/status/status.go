@@ -9,6 +9,7 @@ package status
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"sort"
 
 	"shectory/quik_agent/internal/accounts"
@@ -18,6 +19,12 @@ import (
 
 	quikv1 "shectory/quik_agent/internal/pb"
 )
+
+// ErrUnknownRobot is the sentinel Deps.ParamsSet/Deps.ModeSet implementations
+// (wired in a later task) return when id names no known robot. The HTTP
+// handlers in server.go map it to 404 via errors.Is; any other non-nil error
+// is a precondition/validation failure and maps to 400 (params) or 409 (mode).
+var ErrUnknownRobot = errors.New("unknown robot")
 
 // ---- narrow, verbatim-named consumer interfaces ----
 //
@@ -92,6 +99,14 @@ func StepResultFrom(step recon.Step, ok bool, errMsg string) StepResult {
 	}
 }
 
+// ParamsUpdate is a partial edit to a robot's spec: a nil pointer field means
+// "leave unchanged" (Deps.ParamsSet applies only the non-nil fields).
+type ParamsUpdate struct {
+	ParamsJSON  *string
+	Schedule    *string
+	MaxPosition *int64
+}
+
 // Deps is everything BuildStatus/NewServer need. The FUNC fields are called
 // only if non-nil (nil-safe defaults below); the five interface fields
 // (Accounts/Robots/Runner/Manager/Provider) have no such guard and MUST be
@@ -111,6 +126,18 @@ type Deps struct {
 	Version    string
 
 	AlignExec func(plan recon.Plan) []StepResult // Task 8
+
+	// ParamsSet applies a partial robot spec edit (POST /api/robot/{id}/params).
+	// Returns ErrUnknownRobot for an unknown id; any other error is a
+	// validation/range failure (Task 7).
+	ParamsSet func(id string, upd ParamsUpdate) error
+
+	// ModeSet flips a robot between paper and real (POST /api/robot/{id}/mode),
+	// the local-only real-money arming action. confirmID is the operator's
+	// typed confirmation (must match id per the caller's own policy). Returns
+	// ErrUnknownRobot for an unknown id; any other error is a
+	// precondition/confirm failure whose text is shown to the operator (Task 7).
+	ModeSet func(id string, paper bool, confirmID string) error
 
 	LogPaths map[string]string // "agent"/"runner" -> file path
 	DocsPath string            // strategies_doc.json (Task 10)

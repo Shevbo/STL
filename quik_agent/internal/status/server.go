@@ -3,6 +3,7 @@ package status
 import (
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -43,7 +44,10 @@ func tailFile(w io.Writer, path string) error {
 
 // NewServer builds the local showcase HTTP handler: GET /api/status (the JSON
 // snapshot), GET /logs/{name} (tail of an agent/runner log), GET /strategy/{id}
-// (strategy doc lookup), POST /api/align (confirm+execute a recon plan), and
+// (strategy doc lookup), POST /api/align (confirm+execute a recon plan),
+// POST /api/robot/{id}/params (partial spec edit), POST /api/robot/{id}/mode
+// (the paper/real toggle — deliberately absent from the STL-side app; it is
+// the real-money arming action and lives ONLY on this agent-local server), and
 // GET / (the embedded showcase page). Addr is left unset for the caller.
 func NewServer(d Deps) *http.Server {
 	return &http.Server{Handler: newMux(d)}
@@ -95,12 +99,99 @@ func newMux(d Deps) *http.ServeMux {
 		handleAlign(d, align, w, r)
 	})
 
+	mux.HandleFunc("POST /api/robot/{id}/params", func(w http.ResponseWriter, r *http.Request) {
+		handleParamsSet(d, w, r)
+	})
+
+	// Local-only: the real-money arming action. Deliberately absent from the
+	// STL-side HTTP app (invariant #2) — never add this route anywhere but here.
+	mux.HandleFunc("POST /api/robot/{id}/mode", func(w http.ResponseWriter, r *http.Request) {
+		handleModeSet(d, w, r)
+	})
+
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Write(pageHTML)
 	})
 
 	return mux
+}
+
+// paramsRequest mirrors ParamsUpdate as the wire shape: an absent JSON field
+// decodes to a nil pointer (leave unchanged), a present one to a non-nil
+// pointer to the decoded value — including an explicit JSON null, which also
+// decodes to nil and is therefore indistinguishable from "absent" (accepted:
+// neither the brief nor any caller needs to explicitly clear a field to zero).
+type paramsRequest struct {
+	ParamsJSON  *string `json:"params_json"`
+	Schedule    *string `json:"schedule"`
+	MaxPosition *int64  `json:"max_position"`
+}
+
+// handleParamsSet applies a partial robot spec edit. nil Deps.ParamsSet -> 503
+// (mirrors handleAlign's nil-executor gate). Bad JSON -> 400. A nil error from
+// Deps.ParamsSet -> 200. ErrUnknownRobot -> 404. Any other error is treated as
+// a validation/range failure -> 400 with the error text.
+func handleParamsSet(d Deps, w http.ResponseWriter, r *http.Request) {
+	if d.ParamsSet == nil {
+		http.Error(w, "params not wired", http.StatusServiceUnavailable)
+		return
+	}
+
+	id := r.PathValue("id")
+	var req paramsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	upd := ParamsUpdate{ParamsJSON: req.ParamsJSON, Schedule: req.Schedule, MaxPosition: req.MaxPosition}
+	if err := d.ParamsSet(id, upd); err != nil {
+		if errors.Is(err, ErrUnknownRobot) {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// modeRequest is the paper/real toggle request body.
+type modeRequest struct {
+	Paper     bool   `json:"paper"`
+	ConfirmID string `json:"confirm_id"`
+}
+
+// handleModeSet flips a robot between paper and real — the real-money arming
+// action, so it exists ONLY on this agent-local server (never STL). nil
+// Deps.ModeSet -> 503 (mirrors handleAlign's nil-executor gate, checked before
+// any body parse). Bad JSON -> 400. A nil error from Deps.ModeSet -> 200.
+// ErrUnknownRobot -> 404. Any other error is a precondition/confirm failure
+// (e.g. "not flat" or a confirm_id mismatch) -> 409 with the error text as the
+// body, so the operator sees exactly why the flip was refused.
+func handleModeSet(d Deps, w http.ResponseWriter, r *http.Request) {
+	if d.ModeSet == nil {
+		http.Error(w, "mode not wired", http.StatusServiceUnavailable)
+		return
+	}
+
+	id := r.PathValue("id")
+	var req modeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if err := d.ModeSet(id, req.Paper, req.ConfirmID); err != nil {
+		if errors.Is(err, ErrUnknownRobot) {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }
 
 type alignRequest struct {

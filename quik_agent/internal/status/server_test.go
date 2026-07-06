@@ -3,6 +3,7 @@ package status
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -457,6 +458,319 @@ func TestServer_ManualOffsetRouteRemoved(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusMethodNotAllowed {
 		t.Errorf("status = %d, want 405 (route retired with manual_offset)", resp.StatusCode)
+	}
+}
+
+// ---- POST /api/robot/{id}/params ----
+
+func TestServer_ParamsRouteCallsParamsSetWithPointerPresence(t *testing.T) {
+	var gotID string
+	var gotUpd ParamsUpdate
+	d := baseDeps()
+	d.ParamsSet = func(id string, upd ParamsUpdate) error {
+		gotID = id
+		gotUpd = upd
+		return nil
+	}
+	ts := httptest.NewServer(newMux(d))
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/api/robot/r1/params", "application/json",
+		bytes.NewReader([]byte(`{"max_position":2}`)))
+	if err != nil {
+		t.Fatalf("POST /api/robot/r1/params: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if gotID != "r1" {
+		t.Errorf("id = %q, want r1", gotID)
+	}
+	if gotUpd.MaxPosition == nil || *gotUpd.MaxPosition != 2 {
+		t.Fatalf("MaxPosition = %v, want pointer to 2", gotUpd.MaxPosition)
+	}
+	if gotUpd.ParamsJSON != nil {
+		t.Errorf("ParamsJSON = %v, want nil (absent field must not fabricate a value)", gotUpd.ParamsJSON)
+	}
+	if gotUpd.Schedule != nil {
+		t.Errorf("Schedule = %v, want nil (absent field must not fabricate a value)", gotUpd.Schedule)
+	}
+}
+
+func TestServer_ParamsRouteAllFieldsPresent(t *testing.T) {
+	var gotUpd ParamsUpdate
+	d := baseDeps()
+	d.ParamsSet = func(id string, upd ParamsUpdate) error {
+		gotUpd = upd
+		return nil
+	}
+	ts := httptest.NewServer(newMux(d))
+	defer ts.Close()
+
+	body := `{"params_json":"{\"k\":1}","schedule":"09:00-18:45","max_position":5}`
+	resp, err := http.Post(ts.URL+"/api/robot/r1/params", "application/json", bytes.NewReader([]byte(body)))
+	if err != nil {
+		t.Fatalf("POST /api/robot/r1/params: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if gotUpd.ParamsJSON == nil || *gotUpd.ParamsJSON != `{"k":1}` {
+		t.Errorf("ParamsJSON = %v, want pointer to {\"k\":1}", gotUpd.ParamsJSON)
+	}
+	if gotUpd.Schedule == nil || *gotUpd.Schedule != "09:00-18:45" {
+		t.Errorf("Schedule = %v, want pointer to 09:00-18:45", gotUpd.Schedule)
+	}
+	if gotUpd.MaxPosition == nil || *gotUpd.MaxPosition != 5 {
+		t.Errorf("MaxPosition = %v, want pointer to 5", gotUpd.MaxPosition)
+	}
+}
+
+func TestServer_ParamsRouteBadJSONReturns400(t *testing.T) {
+	d := baseDeps()
+	d.ParamsSet = func(id string, upd ParamsUpdate) error {
+		t.Errorf("ParamsSet must not be called on malformed JSON")
+		return nil
+	}
+	ts := httptest.NewServer(newMux(d))
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/api/robot/r1/params", "application/json",
+		bytes.NewReader([]byte(`{not json`)))
+	if err != nil {
+		t.Fatalf("POST /api/robot/r1/params: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestServer_ParamsRouteUnknownRobotReturns404(t *testing.T) {
+	d := baseDeps()
+	d.ParamsSet = func(id string, upd ParamsUpdate) error { return ErrUnknownRobot }
+	ts := httptest.NewServer(newMux(d))
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/api/robot/ghost/params", "application/json",
+		bytes.NewReader([]byte(`{"max_position":1}`)))
+	if err != nil {
+		t.Fatalf("POST /api/robot/ghost/params: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+// TestServer_ParamsRouteOtherErrorReturns400 asserts a non-ErrUnknownRobot
+// error (a validation/range failure, per the brief's "400 on bad JSON/range")
+// maps to 400 — unlike the mode route, where a non-nil error is a 409
+// precondition failure. Params errors are a client-input problem; mode errors
+// are a business-state problem.
+func TestServer_ParamsRouteOtherErrorReturns400(t *testing.T) {
+	d := baseDeps()
+	d.ParamsSet = func(id string, upd ParamsUpdate) error {
+		return errors.New("max_position must be >= 0")
+	}
+	ts := httptest.NewServer(newMux(d))
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/api/robot/r1/params", "application/json",
+		bytes.NewReader([]byte(`{"max_position":-1}`)))
+	if err != nil {
+		t.Fatalf("POST /api/robot/r1/params: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+	buf := new(bytes.Buffer)
+	buf.ReadFrom(resp.Body)
+	if !strings.Contains(buf.String(), "max_position must be >= 0") {
+		t.Errorf("body = %q, want it to contain the validation error", buf.String())
+	}
+}
+
+func TestServer_ParamsRouteNotWiredReturns503(t *testing.T) {
+	d := baseDeps() // ParamsSet left nil
+	ts := httptest.NewServer(newMux(d))
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/api/robot/r1/params", "application/json",
+		bytes.NewReader([]byte(`{"max_position":1}`)))
+	if err != nil {
+		t.Fatalf("POST /api/robot/r1/params: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", resp.StatusCode)
+	}
+}
+
+// ---- POST /api/robot/{id}/mode ----
+
+func TestServer_ModeRouteCallsModeSet(t *testing.T) {
+	var gotID, gotConfirm string
+	var gotPaper bool
+	d := baseDeps()
+	d.ModeSet = func(id string, paper bool, confirmID string) error {
+		gotID, gotPaper, gotConfirm = id, paper, confirmID
+		return nil
+	}
+	ts := httptest.NewServer(newMux(d))
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/api/robot/r1/mode", "application/json",
+		bytes.NewReader([]byte(`{"paper":false,"confirm_id":"r1"}`)))
+	if err != nil {
+		t.Fatalf("POST /api/robot/r1/mode: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if gotID != "r1" || gotPaper != false || gotConfirm != "r1" {
+		t.Errorf("ModeSet called with (%q, %v, %q), want (r1, false, r1)", gotID, gotPaper, gotConfirm)
+	}
+}
+
+// TestServer_ModeRoutePreconditionFailureReturns409WithReason: ModeSet's
+// precondition check (e.g. the flat gate) rejecting the flip must surface as
+// 409 with the exact reason text in the body — that text is the only way the
+// operator learns WHY the arming action was refused.
+func TestServer_ModeRoutePreconditionFailureReturns409WithReason(t *testing.T) {
+	d := baseDeps()
+	d.ModeSet = func(id string, paper bool, confirmID string) error {
+		return errors.New("робот не в нуле (позиция 5): закрой позицию перед сменой режима")
+	}
+	ts := httptest.NewServer(newMux(d))
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/api/robot/r1/mode", "application/json",
+		bytes.NewReader([]byte(`{"paper":true,"confirm_id":"r1"}`)))
+	if err != nil {
+		t.Fatalf("POST /api/robot/r1/mode: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", resp.StatusCode)
+	}
+	buf := new(bytes.Buffer)
+	buf.ReadFrom(resp.Body)
+	if !strings.Contains(buf.String(), "не в нуле") {
+		t.Errorf("body = %q, want it to contain the precondition reason", buf.String())
+	}
+}
+
+// TestServer_ModeRouteConfirmMismatchReturns409: confirm_id mismatch is the
+// ModeSet implementation's own concern (Task 7) — the route just forwards it
+// and maps whatever non-nil error comes back to 409, exactly like any other
+// precondition failure.
+func TestServer_ModeRouteConfirmMismatchReturns409(t *testing.T) {
+	d := baseDeps()
+	d.ModeSet = func(id string, paper bool, confirmID string) error {
+		if confirmID != id {
+			return errors.New("подтверждение не совпадает: введите точный ID робота")
+		}
+		return nil
+	}
+	ts := httptest.NewServer(newMux(d))
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/api/robot/r1/mode", "application/json",
+		bytes.NewReader([]byte(`{"paper":false,"confirm_id":"wrong"}`)))
+	if err != nil {
+		t.Fatalf("POST /api/robot/r1/mode: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Errorf("status = %d, want 409", resp.StatusCode)
+	}
+}
+
+func TestServer_ModeRouteUnknownRobotReturns404(t *testing.T) {
+	d := baseDeps()
+	d.ModeSet = func(id string, paper bool, confirmID string) error { return ErrUnknownRobot }
+	ts := httptest.NewServer(newMux(d))
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/api/robot/ghost/mode", "application/json",
+		bytes.NewReader([]byte(`{"paper":true,"confirm_id":"ghost"}`)))
+	if err != nil {
+		t.Fatalf("POST /api/robot/ghost/mode: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestServer_ModeRouteBadJSONReturns400(t *testing.T) {
+	d := baseDeps()
+	d.ModeSet = func(id string, paper bool, confirmID string) error {
+		t.Errorf("ModeSet must not be called on malformed JSON")
+		return nil
+	}
+	ts := httptest.NewServer(newMux(d))
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/api/robot/r1/mode", "application/json",
+		bytes.NewReader([]byte(`{not json`)))
+	if err != nil {
+		t.Fatalf("POST /api/robot/r1/mode: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestServer_ModeRouteNotWiredReturns503(t *testing.T) {
+	d := baseDeps() // ModeSet left nil
+	ts := httptest.NewServer(newMux(d))
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/api/robot/r1/mode", "application/json",
+		bytes.NewReader([]byte(`{"paper":true,"confirm_id":"r1"}`)))
+	if err != nil {
+		t.Fatalf("POST /api/robot/r1/mode: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", resp.StatusCode)
+	}
+}
+
+// TestServer_ModeRouteIsAgentLocalOnly documents and enforces invariant #2:
+// POST /api/robot/{id}/mode — the real-money paper/real arming action — must
+// be reachable on THIS agent-local status server. The STL-side HTTP app
+// (trader/api/quik_robots.py, a separate Python/FastAPI process — Task 8 of
+// this plan) deliberately registers NO such route, so STL itself can never
+// flip a robot's paper/real flag; this package has no visibility into that
+// separate process, so the STL half of the invariant is enforced by Task 8's
+// own test suite, not here. This test only asserts the local half: the route
+// exists and reaches Deps.ModeSet.
+func TestServer_ModeRouteIsAgentLocalOnly(t *testing.T) {
+	d := baseDeps()
+	called := false
+	d.ModeSet = func(id string, paper bool, confirmID string) error { called = true; return nil }
+	ts := httptest.NewServer(newMux(d))
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/api/robot/r1/mode", "application/json",
+		bytes.NewReader([]byte(`{"paper":true,"confirm_id":"r1"}`)))
+	if err != nil {
+		t.Fatalf("POST /api/robot/r1/mode: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("mode route not registered on the agent-local server: status = %d, want 200", resp.StatusCode)
+	}
+	if !called {
+		t.Errorf("ModeSet was not invoked by the registered route")
 	}
 }
 
