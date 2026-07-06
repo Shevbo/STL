@@ -43,8 +43,7 @@ func tailFile(w io.Writer, path string) error {
 
 // NewServer builds the local showcase HTTP handler: GET /api/status (the JSON
 // snapshot), GET /logs/{name} (tail of an agent/runner log), GET /strategy/{id}
-// (strategy doc lookup), POST /api/align (confirm+execute a recon plan),
-// POST /api/manual-offset (edit the operator's manual position offset), and
+// (strategy doc lookup), POST /api/align (confirm+execute a recon plan), and
 // GET / (the embedded showcase page). Addr is left unset for the caller.
 func NewServer(d Deps) *http.Server {
 	return &http.Server{Handler: newMux(d)}
@@ -94,10 +93,6 @@ func newMux(d Deps) *http.ServeMux {
 	align := &alignState{}
 	mux.HandleFunc("POST /api/align", func(w http.ResponseWriter, r *http.Request) {
 		handleAlign(d, align, w, r)
-	})
-
-	mux.HandleFunc("POST /api/manual-offset", func(w http.ResponseWriter, r *http.Request) {
-		handleManualOffset(d, w, r)
 	})
 
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
@@ -164,7 +159,7 @@ func handleAlign(d Deps, st *alignState, w http.ResponseWriter, r *http.Request)
 		w.WriteHeader(http.StatusConflict)
 		json.NewEncoder(w).Encode(alignMismatchResponse{
 			Error: "plan_id stale or no active plan",
-			Recon: toReconJSON(rep, d.manualOffsets()),
+			Recon: toReconJSON(rep),
 		})
 		return
 	}
@@ -174,7 +169,7 @@ func handleAlign(d Deps, st *alignState, w http.ResponseWriter, r *http.Request)
 		w.WriteHeader(http.StatusConflict)
 		json.NewEncoder(w).Encode(alignMismatchResponse{
 			Error: "план уже исполнен",
-			Recon: toReconJSON(rep, d.manualOffsets()),
+			Recon: toReconJSON(rep),
 		})
 		return
 	}
@@ -196,24 +191,4 @@ func handleAlign(d Deps, st *alignState, w http.ResponseWriter, r *http.Request)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(alignOKResponse{PlanID: rep.Plan.ID, Results: results})
-}
-
-// handleManualOffset replaces the operator's manual-offset map wholesale: the
-// request body IS the full new map (never a delta), matching ManualGet's
-// shape so the page's editor round-trips exactly what it displays.
-func handleManualOffset(d Deps, w http.ResponseWriter, r *http.Request) {
-	var m map[string]int64
-	if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
-		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-	if d.ManualSet == nil {
-		http.Error(w, "manual offset not wired", http.StatusServiceUnavailable)
-		return
-	}
-	if err := d.ManualSet(m); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.WriteHeader(http.StatusOK)
 }

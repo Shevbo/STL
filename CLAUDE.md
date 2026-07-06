@@ -63,8 +63,8 @@ cancel working; positions stay open by design. The agent also hosts its own loca
 status+recon page (loopback `:8071`, `quik_agent/internal/status/page.html`) comparing
 robots' claimed positions against QUIK's account tables; STL mirrors that JSON opaquely
 at `GET /api/v1/quik/agent-local-status` for read-only remote viewing
-(`frontend/public/agent-status.html`, same page, `?src=&interval=` params) — align/
-manual-offset actions only work against the agent's own loopback, not the mirror.
+(`frontend/public/agent-status.html`, same page, `?src=&interval=` params) — align
+actions only work against the agent's own loopback, not the mirror.
 
 **Order flow (human orders and robot orders share the tail):** UI → `POST
 /api/v1/quik/orders/*` (`trader/api/quik_orders.py`) → limit check (`trader/quik/

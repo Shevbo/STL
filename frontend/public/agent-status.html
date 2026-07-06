@@ -50,9 +50,6 @@
   button:hover { border-color: #4caf50; }
   button.danger { border-color: #f44336; color: #ff8a80; }
   .empty { color: #556; font-style: italic; padding: 6px 0; }
-  .mo-row { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
-  .mo-row input[type=text] { width: 80px; } .mo-row input[type=number] { width: 90px; }
-  input, select { background: #0e0e1c; border: 1px solid #2d2d4a; color: #eee; padding: 4px 6px; border-radius: 3px; font-family: monospace; font-size: 11px; }
   .stale-num { opacity: .45; }
   footer { padding: 8px 14px; color: #445; font-size: 10px; }
   #offline-overlay { display: none; position: fixed; inset: 0; background: rgba(10,10,18,.72); color: #ffb74d;
@@ -90,11 +87,11 @@
   <div class="sec-title">Сверка (recon)</div>
   <div id="recon-banner"></div>
 
-  <div class="sec-title" style="margin-top:10px">Позиции</div>
-  <table><thead><tr><th>Символ</th><th>Роботы</th><th>Ручной офсет</th><th>QUIK</th><th>OK</th></tr></thead>
-    <tbody id="recon-positions"></tbody></table>
+  <div class="sec-title" style="margin-top:14px">Мои роботы</div>
+  <table><thead><tr><th>ID</th><th>Символ</th><th>Позиция</th><th>Заявки</th><th>Сделки</th></tr></thead>
+    <tbody id="recon-robot-checks"></tbody></table>
 
-  <div class="sec-title" style="margin-top:10px">Заявки QUIK</div>
+  <div class="sec-title" style="margin-top:10px">Заявки QUIK (роботы)</div>
   <table><thead><tr><th>№ заявки</th><th>Владелец</th><th>OK</th></tr></thead>
     <tbody id="recon-orders"></tbody></table>
 
@@ -108,16 +105,13 @@
 
   <div id="align-card"></div>
 
-  <div id="manual-offset-block">
-    <div class="sec-title" style="margin-top:10px">Ручной офсет позиции</div>
-    <div id="manual-offsets"></div>
-    <div class="mo-row">
-      <input type="text" id="mo-new-sym" placeholder="символ">
-      <input type="number" id="mo-new-val" placeholder="кол-во" step="1">
-      <button id="mo-add">Добавить</button>
-      <button id="mo-save">Сохранить офсеты</button>
-    </div>
-  </div>
+  <div class="sec-title" style="margin-top:18px">Ручная торговля (не сверяется, справочно)</div>
+  <table><thead><tr><th>№ заявки</th><th>Символ</th></tr></thead>
+    <tbody id="manual-orders"></tbody></table>
+
+  <div class="sec-title" style="margin-top:10px">Позиции по счёту QUIK (сумма ручных + роботов)</div>
+  <table><thead><tr><th>Символ</th><th>Нетто</th></tr></thead>
+    <tbody id="manual-account-net"></tbody></table>
 </section>
 
 <footer>Обновление каждые <span id="f-interval">—</span> мс · источник <span id="f-src" class="mono">—</span></footer>
@@ -129,9 +123,9 @@ const qs = new URLSearchParams(location.search);
 const SRC = qs.get('src') || '/api/status';
 const INTERVAL = +(qs.get('interval') || 1000);
 // IS_LOCAL: true only for the agent's own /api/status. The STL mirror (any other
-// src=) does not implement /api/align or /api/manual-offset and serves a runner log
-// path that is meaningless off the VDS — those controls are hidden there, see
-// applyModeVisibility().
+// src=) does not implement /api/align and serves a runner log path that is
+// meaningless off the VDS — those render as plain text there instead (see
+// robotLinks and renderRecon's align-card branch).
 const IS_LOCAL = SRC === '/api/status';
 let lastOkMs = 0;
 
@@ -148,16 +142,6 @@ function fmtNum(n) { return (n ?? 0).toLocaleString('ru-RU'); }
 // -1 sentinel for "no data yet" (table never published / no trade ever seen) instead of
 // an epoch-sized number — render that as "нет данных", never as a bogus huge duration.
 function fmtAge(ms) { return (ms == null || ms < 0) ? 'нет данных' : fmtMs(ms); }
-function applyModeVisibility() {
-  if (IS_LOCAL) return;
-  document.querySelectorAll('#manual-offset-block').forEach(el => el.style.display = 'none');
-}
-
-// manual-offset editor state: last map RENDERED from the server, plus local
-// edits the operator hasn't saved yet. Keyed by symbol -> value (as string
-// while editing so an empty/partial input doesn't get coerced to 0).
-let moDraft = {};
-let moLoadedOnce = false;
 
 let prevReconState = null;
 let audioCtx = null;
@@ -324,12 +308,13 @@ function renderRecon(recon) {
   const label = { OK: 'OK — расхождений нет', MISMATCH: 'РАСХОЖДЕНИЕ — требуется внимание', STALE: 'ДАННЫЕ УСТАРЕЛИ — сверка не выполнена' }[recon.state] || recon.state;
   banner.innerHTML = '<div class="banner ' + esc(recon.state) + '">' + esc(label) + '</div>';
 
-  document.getElementById('recon-positions').innerHTML = (recon.positions || []).length
-    ? recon.positions.map(p => '<tr' + (p.ok ? '' : ' class="flag"') + '>'
-      + '<td class="mono">' + esc(p.symbol) + '</td><td class="mono">' + fmtNum(p.robots_sum) + '</td>'
-      + '<td class="mono">' + fmtNum(p.manual_offset) + '</td><td class="mono">' + fmtNum(p.quik) + '</td>'
-      + '<td>' + (p.ok ? '<span class="badge ok">OK</span>' : '<span class="badge bad">MISMATCH</span>') + '</td></tr>').join('')
-    : '<tr><td colspan="5" class="empty">Нет данных по позициям.</td></tr>';
+  document.getElementById('recon-robot-checks').innerHTML = (recon.robot_checks || []).length
+    ? recon.robot_checks.map(c => '<tr' + (c.orders_ok && c.trades_ok ? '' : ' class="flag"') + '>'
+      + '<td class="mono">' + esc(c.id) + '</td><td class="mono">' + esc(c.symbol) + '</td>'
+      + '<td class="mono ' + (c.position > 0 ? 'buy' : (c.position < 0 ? 'sell' : '')) + '">' + (c.position > 0 ? '+' : '') + fmtNum(c.position) + '</td>'
+      + '<td>' + (c.orders_ok ? '<span class="badge ok">OK</span>' : '<span class="badge bad">MISMATCH</span>') + '</td>'
+      + '<td>' + (c.trades_ok ? '<span class="badge ok">OK</span>' : '<span class="badge bad">MISMATCH</span>') + '</td></tr>').join('')
+    : '<tr><td colspan="5" class="empty">Роботов на агенте не развёрнуто.</td></tr>';
 
   document.getElementById('recon-orders').innerHTML = (recon.orders || []).length
     ? recon.orders.map(o => '<tr' + (o.ok ? '' : ' class="flag"') + '>'
@@ -370,43 +355,23 @@ function renderRecon(recon) {
     card.innerHTML = '';
   }
 
-  renderManualOffsets(recon.manual_offsets || {});
+  renderManual(recon.manual || {});
 }
 
-function renderManualOffsets(offsets) {
-  if (!moLoadedOnce) { moDraft = Object.assign({}, offsets); moLoadedOnce = true; }
-  const el = document.getElementById('manual-offsets');
-  const syms = Object.keys(moDraft);
-  el.innerHTML = syms.length ? syms.map(sym =>
-    '<div class="mo-row"><span class="mono" style="width:80px">' + esc(sym) + '</span>'
-    + '<input type="number" step="1" class="mono mo-val" data-sym="' + esc(sym) + '" value="' + esc(moDraft[sym]) + '">'
-    + '<button class="danger mo-del" data-sym="' + esc(sym) + '">убрать</button></div>').join('')
-    : '<div class="empty">Ручных офсетов нет.</div>';
-  el.querySelectorAll('.mo-val').forEach(inp => inp.addEventListener('change', () => {
-    moDraft[inp.dataset.sym] = parseInt(inp.value, 10) || 0;
-  }));
-  el.querySelectorAll('.mo-del').forEach(btn => btn.addEventListener('click', () => {
-    delete moDraft[btn.dataset.sym];
-    renderManualOffsets(offsets);
-  }));
-}
+// renderManual: the operator's own untagged trading, shown for context only — see
+// recon.go's ManualView doc (never reconciled, never in an align plan).
+function renderManual(manual) {
+  const orders = manual.orders || [];
+  document.getElementById('manual-orders').innerHTML = orders.length
+    ? orders.map(o => '<tr><td class="mono">' + esc(o.order_num) + '</td><td class="mono">' + esc(o.sec) + '</td></tr>').join('')
+    : '<tr><td colspan="2" class="empty">Ручных заявок нет.</td></tr>';
 
-document.getElementById('mo-add').addEventListener('click', () => {
-  const sym = document.getElementById('mo-new-sym').value.trim().toUpperCase();
-  const val = parseInt(document.getElementById('mo-new-val').value, 10) || 0;
-  if (!sym) return;
-  moDraft[sym] = val;
-  document.getElementById('mo-new-sym').value = '';
-  document.getElementById('mo-new-val').value = '';
-  renderManualOffsets(moDraft);
-});
-document.getElementById('mo-save').addEventListener('click', async () => {
-  try {
-    const r = await fetch('/api/manual-offset', { method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(moDraft) });
-    alert(r.ok ? 'Сохранено.' : 'Ошибка: ' + await r.text());
-  } catch (e) { alert('Ошибка сети: ' + e); }
-});
+  const net = manual.account_net || [];
+  document.getElementById('manual-account-net').innerHTML = net.length
+    ? net.map(p => '<tr><td class="mono">' + esc(p.sec) + '</td>'
+      + '<td class="mono ' + (p.net > 0 ? 'buy' : (p.net < 0 ? 'sell' : '')) + '">' + (p.net > 0 ? '+' : '') + fmtNum(p.net) + '</td></tr>').join('')
+    : '<tr><td colspan="2" class="empty">Нет открытых позиций по счёту.</td></tr>';
+}
 
 function render(s) {
   // The STL mirror injects "_received_at_ms" (its own receipt time) alongside the
@@ -461,7 +426,6 @@ async function align(planId, btn) {
     if (btn) btn.disabled = false;
   }
 }
-applyModeVisibility();
 poll();
 </script>
 </body>

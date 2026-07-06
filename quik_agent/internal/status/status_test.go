@@ -236,25 +236,6 @@ func TestBuildStatus_ReconOKWhenFresh(t *testing.T) {
 	}
 }
 
-func TestRobotIDFromClientID(t *testing.T) {
-	cases := []struct {
-		clientID string
-		wantID   string
-		wantOK   bool
-	}{
-		{"rr:live-fvg-RIU6:1", "live-fvg-RIU6", true},
-		{"rr:r1:2", "r1", true},
-		{"human-42", "", false},
-		{"rr:onlyid", "onlyid", true},
-	}
-	for _, c := range cases {
-		id, ok := robotIDFromClientID(c.clientID)
-		if id != c.wantID || ok != c.wantOK {
-			t.Errorf("robotIDFromClientID(%q) = (%q, %v), want (%q, %v)", c.clientID, id, ok, c.wantID, c.wantOK)
-		}
-	}
-}
-
 // TestBuildStatus_ZeroStepCostOmitsPnlRub: a params row can carry PriceStep>0
 // with StepCost==0 (DDE-sheet fallback parse path) — rubles must be OMITTED,
 // not fabricated as 0.
@@ -283,24 +264,63 @@ func TestBuildStatus_ZeroStepCostOmitsPnlRub(t *testing.T) {
 	}
 }
 
-// TestBuildStatus_ManualOffsetsInRecon: the recon block must carry the
-// CURRENT ManualGet() map so the page can render the offset editor.
-func TestBuildStatus_ManualOffsetsInRecon(t *testing.T) {
+// TestBuildStatus_ManualOffsetGoneRobotChecksAndManualPresent: manual_offset is
+// retired in favor of the tag model — the recon block must carry manual.orders/
+// manual.account_net and robot_checks, and manual_offsets must be entirely
+// ABSENT from the JSON (not just empty), so a stale client can't mistake its
+// disappearance for an empty map.
+func TestBuildStatus_ManualOffsetGoneRobotChecksAndManualPresent(t *testing.T) {
 	d := baseDeps()
-	d.ManualGet = func() map[string]int64 { return map[string]int64{"RIU6": 2, "GZU6": -1} }
+	d.Robots = fakeRobots{
+		specs:  []*quikv1.RobotSpec{{RobotId: "r1", Symbol: "RIU6", Paper: false}},
+		paused: map[string]bool{},
+		times:  map[string][2]int64{},
+	}
+	d.Accounts = fakeAccounts{snap: accounts.Snapshot{
+		PosAgeMs: 10, OrdAgeMs: 10,
+		Orders: []accounts.Order{{Num: "1", Sec: "RIU6", Active: true, Tag: ""}}, // untagged -> manual
+	}}
 
 	data, err := BuildStatus(d)
 	if err != nil {
 		t.Fatalf("BuildStatus: %v", err)
 	}
-	var out struct {
-		Recon struct {
-			ManualOffsets map[string]int64 `json:"manual_offsets"`
-		} `json:"recon"`
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(data, &top); err != nil {
+		t.Fatalf("unmarshal top: %v", err)
 	}
-	json.Unmarshal(data, &out)
-	if out.Recon.ManualOffsets["RIU6"] != 2 || out.Recon.ManualOffsets["GZU6"] != -1 {
-		t.Errorf("recon.manual_offsets = %v, want map[GZU6:-1 RIU6:2]", out.Recon.ManualOffsets)
+	var recon map[string]json.RawMessage
+	if err := json.Unmarshal(top["recon"], &recon); err != nil {
+		t.Fatalf("unmarshal recon: %v", err)
+	}
+	if _, present := recon["manual_offsets"]; present {
+		t.Errorf("recon.manual_offsets must be GONE, got %s", recon["manual_offsets"])
+	}
+	if _, present := recon["manual"]; !present {
+		t.Error("recon.manual must be present")
+	}
+	if _, present := recon["robot_checks"]; !present {
+		t.Error("recon.robot_checks must be present")
+	}
+
+	var out struct {
+		Manual struct {
+			Orders []struct {
+				OrderNum string `json:"order_num"`
+			} `json:"orders"`
+		} `json:"manual"`
+		RobotChecks []struct {
+			ID string `json:"id"`
+		} `json:"robot_checks"`
+	}
+	if err := json.Unmarshal(top["recon"], &out); err != nil {
+		t.Fatalf("unmarshal recon fields: %v", err)
+	}
+	if len(out.Manual.Orders) != 1 || out.Manual.Orders[0].OrderNum != "1" {
+		t.Errorf("recon.manual.orders = %+v, want the untagged order 1", out.Manual.Orders)
+	}
+	if len(out.RobotChecks) != 1 || out.RobotChecks[0].ID != "r1" {
+		t.Errorf("recon.robot_checks = %+v, want robot r1", out.RobotChecks)
 	}
 }
 

@@ -110,10 +110,6 @@ type Config struct {
 	// applyDefaults, which only fills in the 8071 default when the key is
 	// genuinely ABSENT from the config file, never when it reads back as 0.
 	StatusPort int `json:"status_port"`
-	// ReconManualOffset is the operator-declared manual position offset per
-	// symbol (recon.Inputs.ManualOffset), edited via POST /api/manual-offset and
-	// persisted here so it survives a restart. Default {} (nil/absent -> {}).
-	ReconManualOffset map[string]int64 `json:"recon_manual_offset"`
 	// StatusSnapshotMinSec floors how often the link mirrors the local status
 	// JSON to STL (AgentStatusSnapshot), even when it changes every tick.
 	// Default 5.
@@ -214,23 +210,14 @@ func (c *Config) applyDefaults(raw map[string]json.RawMessage) {
 	if _, present := raw["status_port"]; !present {
 		c.StatusPort = 8071
 	}
-	// nil (field absent) => default {}; an explicit {} in JSON stays {} (both
-	// round-trip identically here since a present-but-empty map and an absent
-	// one both decode as needing this default — unlike StatusPort there is no
-	// "explicit 0 must persist" requirement for this field).
-	if c.ReconManualOffset == nil {
-		c.ReconManualOffset = map[string]int64{}
-	}
 	if c.StatusSnapshotMinSec <= 0 {
 		c.StatusSnapshotMinSec = 5
 	}
 }
 
 // loadFile parses an EXISTING config file and applies defaults — the read half
-// of LoadOrInit, shared with ManualOffsets.Set (which must re-load fresh from
-// disk before persisting, and must never route through the wizard). Read
-// errors are returned as-is (os.IsNotExist distinguishable); parse errors are
-// wrapped.
+// of LoadOrInit (never routes through the wizard). Read errors are returned
+// as-is (os.IsNotExist distinguishable); parse errors are wrapped.
 func loadFile(path string) (Config, error) {
 	var cfg Config
 	b, err := os.ReadFile(path)

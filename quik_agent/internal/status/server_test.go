@@ -441,14 +441,12 @@ func TestServer_AlignPartialSuccessLatches(t *testing.T) {
 	}
 }
 
-func TestServer_ManualOffsetCallsManualSet(t *testing.T) {
-	d := baseDeps()
-	var got map[string]int64
-	d.ManualSet = func(m map[string]int64) error {
-		got = m
-		return nil
-	}
-	ts := httptest.NewServer(newMux(d))
+// TestServer_ManualOffsetRouteRemoved: no handler is registered for
+// POST /api/manual-offset anymore. Go's ServeMux still matches the path via
+// the catch-all "GET /" (a subtree pattern), so a mismatched method there
+// reports 405 rather than 404 — either way, handleManualOffset never runs.
+func TestServer_ManualOffsetRouteRemoved(t *testing.T) {
+	ts := httptest.NewServer(newMux(baseDeps()))
 	defer ts.Close()
 
 	resp, err := http.Post(ts.URL+"/api/manual-offset", "application/json",
@@ -457,28 +455,8 @@ func TestServer_ManualOffsetCallsManualSet(t *testing.T) {
 		t.Fatalf("POST /api/manual-offset: %v", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200", resp.StatusCode)
-	}
-	if got == nil || got["RIU6"] != 2 {
-		t.Errorf("ManualSet called with %v, want map[RIU6:2]", got)
-	}
-}
-
-func TestServer_ManualOffsetNotWiredReturns503(t *testing.T) {
-	d := baseDeps()
-	d.ManualSet = nil
-	ts := httptest.NewServer(newMux(d))
-	defer ts.Close()
-
-	resp, err := http.Post(ts.URL+"/api/manual-offset", "application/json",
-		bytes.NewReader([]byte(`{"RIU6":2}`)))
-	if err != nil {
-		t.Fatalf("POST /api/manual-offset: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusServiceUnavailable {
-		t.Errorf("status = %d, want 503", resp.StatusCode)
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want 405 (route retired with manual_offset)", resp.StatusCode)
 	}
 }
 

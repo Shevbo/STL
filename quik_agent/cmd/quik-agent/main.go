@@ -524,7 +524,6 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 	// is unavailable (robotStore/runnerSrv nil — the rsErr/store-error case
 	// above already explained why on the console).
 	if robotStore != nil && runnerSrv != nil {
-		manualOffsets := config.NewManualOffsets(opt.cfgPath, cfg)
 		aligner := &status.Aligner{
 			Manager:  mgr,
 			Runner:   runnerSrv,
@@ -553,8 +552,6 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 			BuildRev:   buildRev(),
 			Version:    agentVersion,
 
-			ManualGet: manualOffsets.Get,
-			ManualSet: manualOffsets.Set,
 			AlignExec: aligner.Execute,
 
 			// No agent/runner log FILE exists anywhere today: interactive runs

@@ -1,17 +1,15 @@
 // Package status builds the agent's local operator showcase: a single JSON
 // snapshot (agent/health/robots/recon) and an embedded HTML page that polls it.
-// It is READ-ONLY except for two operator actions: confirming a recon align
-// plan (POST /api/align, executed by Deps.AlignExec — wired in a later task)
-// and editing the manual position offset (POST /api/manual-offset). No
-// strategy/network logic lives here; this package only reads other packages'
-// already-computed snapshots and renders them.
+// It is READ-ONLY except for one operator action: confirming a recon align
+// plan (POST /api/align, executed by Deps.AlignExec — wired in a later task).
+// No strategy/network logic lives here; this package only reads other
+// packages' already-computed snapshots and renders them.
 package status
 
 import (
 	"crypto/sha256"
 	"encoding/json"
 	"sort"
-	"strings"
 
 	"shectory/quik_agent/internal/accounts"
 	"shectory/quik_agent/internal/quikdde"
@@ -112,8 +110,6 @@ type Deps struct {
 	BuildRev   uint32
 	Version    string
 
-	ManualGet func() map[string]int64            // from config
-	ManualSet func(map[string]int64) error       // persists to agent_config.json
 	AlignExec func(plan recon.Plan) []StepResult // Task 8
 
 	LogPaths map[string]string // "agent"/"runner" -> file path
@@ -142,37 +138,11 @@ func (d Deps) uptimeSec() int64 {
 	return d.UptimeSec()
 }
 
-func (d Deps) manualOffsets() map[string]int64 {
-	if d.ManualGet == nil {
-		return map[string]int64{}
-	}
-	m := d.ManualGet()
-	if m == nil {
-		return map[string]int64{}
-	}
-	return m
-}
-
 func (d Deps) nowMs() int64 {
 	if d.NowMs == nil {
 		return 0
 	}
 	return d.NowMs()
-}
-
-// robotIDFromClientID extracts the robot ID from a runner-owned client_id of
-// the form "rr:<robotID>:<n>" (see runner.Server's runnerPrefix). Returns
-// ok=false for a client_id that is not runner-owned (the human order path).
-func robotIDFromClientID(clientID string) (string, bool) {
-	const prefix = "rr:"
-	if !strings.HasPrefix(clientID, prefix) {
-		return "", false
-	}
-	rest := clientID[len(prefix):]
-	if i := strings.Index(rest, ":"); i >= 0 {
-		return rest[:i], true
-	}
-	return rest, true
 }
 
 // buildReconInputs adapts every Deps source into recon.Inputs. Attribution is by tag
@@ -211,7 +181,7 @@ func buildReconInputs(d Deps) recon.Inputs {
 		if ws.OrderNum == "" {
 			continue // not yet acknowledged by QUIK; nothing to reconcile against yet
 		}
-		if rid, ok := robotIDFromClientID(ws.ClientID); ok {
+		if rid, ok := trade.RobotIDFromClientID(ws.ClientID); ok {
 			robotOrderNums[rid] = append(robotOrderNums[rid], ws.OrderNum)
 		}
 	}
@@ -455,14 +425,13 @@ type planJSON struct {
 }
 
 type reconJSON struct {
-	State         string           `json:"state"`
-	Orders        []orderCheckJSON `json:"orders"`
-	Trades        []tradeCheckJSON `json:"trades"`
-	Trans         []transCheckJSON `json:"trans"`
-	Manual        manualViewJSON   `json:"manual"`
-	RobotChecks   []robotCheckJSON `json:"robot_checks"`
-	Plan          *planJSON        `json:"plan"`
-	ManualOffsets map[string]int64 `json:"manual_offsets"`
+	State       string           `json:"state"`
+	Orders      []orderCheckJSON `json:"orders"`
+	Trades      []tradeCheckJSON `json:"trades"`
+	Trans       []transCheckJSON `json:"trans"`
+	Manual      manualViewJSON   `json:"manual"`
+	RobotChecks []robotCheckJSON `json:"robot_checks"`
+	Plan        *planJSON        `json:"plan"`
 }
 
 type statusJSON struct {
@@ -486,8 +455,8 @@ func toPlanJSON(p *recon.Plan) *planJSON {
 	return &planJSON{ID: p.ID, Steps: steps}
 }
 
-func toReconJSON(rep recon.Report, manualOffsets map[string]int64) reconJSON {
-	out := reconJSON{State: rep.State, ManualOffsets: manualOffsets}
+func toReconJSON(rep recon.Report) reconJSON {
+	out := reconJSON{State: rep.State}
 	for _, o := range rep.Orders {
 		out.Orders = append(out.Orders, orderCheckJSON{OrderNum: o.OrderNum, Owner: o.Owner, OK: o.OK})
 	}
@@ -517,9 +486,6 @@ func toReconJSON(rep recon.Report, manualOffsets map[string]int64) reconJSON {
 	}
 
 	out.Plan = toPlanJSON(rep.Plan)
-	if out.ManualOffsets == nil {
-		out.ManualOffsets = map[string]int64{}
-	}
 	return out
 }
 
@@ -639,7 +605,7 @@ func BuildStatus(d Deps) ([]byte, error) {
 		Agent:  buildAgentJSON(d),
 		Health: buildHealthJSON(d, acc),
 		Robots: buildRobotsJSON(d),
-		Recon:  toReconJSON(rep, d.manualOffsets()),
+		Recon:  toReconJSON(rep),
 	}
 	return json.Marshal(out)
 }

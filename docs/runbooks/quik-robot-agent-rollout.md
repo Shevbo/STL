@@ -89,10 +89,6 @@ account tables. STL mirrors the same JSON opaquely (does not interpret it) at
    - `status_port` — loopback port for the local page. Default `8071`. An
      explicit `0` is a deliberate persistent "disabled" (unlike other numeric
      fields, 0 is never re-defaulted back to 8071).
-   - `recon_manual_offset` — per-symbol operator-declared position offset
-     (map symbol -> qty), edited from the page itself (`POST
-     /api/manual-offset`, whole-map replace) and persisted here across
-     restarts. Default `{}`.
    - `status_snapshot_min_sec` — floors how often the agent mirrors its local
      status JSON up to STL, even if it changes every tick. Default `5`.
 5. Open `http://127.0.0.1:8071` on the VDS (agent loopback only — not exposed
@@ -137,10 +133,9 @@ This is the SAME page (`frontend/public/agent-status.html`, a literal copy of
 the agent's embedded HTML) pointed at STL's mirror endpoint instead of the
 agent's own `/api/status`, polling every 10s instead of the local page's 1s
 default — remote viewing only generates load on STL, not the VDS. The align
-button and manual-offset editor on this URL POST to `/api/align` and
-`/api/manual-offset` RELATIVE TO STL's own origin, which does not implement
-those routes — treat the mirror as READ-ONLY monitoring; do any align/manual-
-offset action from the local `http://127.0.0.1:8071` page on the VDS itself.
+button on this URL POSTs `/api/align` RELATIVE TO STL's own origin, which does
+not implement that route — treat the mirror as READ-ONLY monitoring; confirm
+any align from the local `http://127.0.0.1:8071` page on the VDS itself.
 Until the agent has sent at least one snapshot, the mirror endpoint returns
 `{"status": null, "_received_at_ms": null}` — expected on first deploy or
 after an agent restart, not a bug.
