@@ -203,6 +203,9 @@ function renderHealth(h, linkUp) {
 
 function robotLinks(r) {
   const links = [];
+  // NOTE: /logs/runner 404s today — no runner log FILE exists yet (stdout is
+  // piped into the agent console); link becomes live once Deps.LogPaths gains
+  // a real file (follow-up ticket).
   links.push('<a class="mono" href="/logs/runner" target="_blank" style="color:#7ab8ff">runner.log</a>');
   if (r.strategy_id) links.push('<a class="mono" href="/strategy/' + encodeURIComponent(r.strategy_id) + '" target="_blank" style="color:#7ab8ff">стратегия</a>');
   return links.join(' · ');

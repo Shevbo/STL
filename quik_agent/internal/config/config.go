@@ -226,24 +226,44 @@ func (c *Config) applyDefaults(raw map[string]json.RawMessage) {
 	}
 }
 
-// LoadOrInit loads the config, or runs the first-run wizard if it does not exist.
-func LoadOrInit(path string, defaultDataRoot string) (Config, error) {
+// loadFile parses an EXISTING config file and applies defaults — the read half
+// of LoadOrInit, shared with ManualOffsets.Set (which must re-load fresh from
+// disk before persisting, and must never route through the wizard). Read
+// errors are returned as-is (os.IsNotExist distinguishable); parse errors are
+// wrapped.
+func loadFile(path string) (Config, error) {
 	var cfg Config
-	if b, err := os.ReadFile(path); err == nil {
-		if err := json.Unmarshal(b, &cfg); err != nil {
-			return cfg, fmt.Errorf("parse config %s: %w", path, err)
-		}
-		// Consulted only so applyDefaults can tell "status_port absent" (backfill
-		// 8071) apart from "status_port present as 0" (explicit, persistent
-		// disable). Best-effort: b already unmarshaled successfully above, so
-		// this cannot fail in a way that matters; a nil raw just means every key
-		// reads as absent, which is the safe (defaulting) direction.
-		var raw map[string]json.RawMessage
-		_ = json.Unmarshal(b, &raw)
-		cfg.applyDefaults(raw)
-		return cfg, nil
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return cfg, err
 	}
-	return runWizard(path, defaultDataRoot)
+	if err := json.Unmarshal(b, &cfg); err != nil {
+		return cfg, fmt.Errorf("parse config %s: %w", path, err)
+	}
+	// Consulted only so applyDefaults can tell "status_port absent" (backfill
+	// 8071) apart from "status_port present as 0" (explicit, persistent
+	// disable). Best-effort: b already unmarshaled successfully above, so
+	// this cannot fail in a way that matters; a nil raw just means every key
+	// reads as absent, which is the safe (defaulting) direction.
+	var raw map[string]json.RawMessage
+	_ = json.Unmarshal(b, &raw)
+	cfg.applyDefaults(raw)
+	return cfg, nil
+}
+
+// LoadOrInit loads the config, or runs the first-run wizard if it does not
+// exist. A file that EXISTS but cannot be read is an error, never a wizard
+// run (the wizard would overwrite a config a human needs to fix instead).
+func LoadOrInit(path string, defaultDataRoot string) (Config, error) {
+	cfg, err := loadFile(path)
+	switch {
+	case err == nil:
+		return cfg, nil
+	case os.IsNotExist(err):
+		return runWizard(path, defaultDataRoot)
+	default:
+		return cfg, err
+	}
 }
 
 func runWizard(path, defaultDataRoot string) (Config, error) {
@@ -269,7 +289,11 @@ func runWizard(path, defaultDataRoot string) (Config, error) {
 	return cfg, nil
 }
 
-// Save writes the config as indented JSON.
+// Save writes the config as indented JSON, atomically: full write to a
+// sibling .tmp file, then rename over the target (same pattern as the robots
+// store's flushLocked). This file carries token_env / whitelist / master
+// flag — a torn write here bricks agent startup, so a crash mid-Save must
+// leave the previous config intact.
 func Save(path string, cfg Config) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
@@ -278,7 +302,11 @@ func Save(path string, cfg Config) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, b, 0o644)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 func ask(r *bufio.Reader, prompt, def string) string {

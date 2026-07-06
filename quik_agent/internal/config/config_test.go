@@ -128,6 +128,78 @@ func TestManualOffsets_SetPersistsAndRoundTrips(t *testing.T) {
 	}
 }
 
+func TestManualOffsets_SetSurvivesOutOfBandHandEdit(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent_config.json")
+	// Startup state: agent loaded this config...
+	if err := Save(path, Config{STLGRPCURL: "x:1", InstrumentWhitelist: []string{"RIU6"}}); err != nil {
+		t.Fatalf("seed Save: %v", err)
+	}
+	cfg, err := LoadOrInit(path, dir)
+	if err != nil {
+		t.Fatalf("LoadOrInit: %v", err)
+	}
+	m := NewManualOffsets(path, cfg)
+	// ...then an operator hand-edits ANOTHER field out-of-band...
+	if err := os.WriteFile(path,
+		[]byte(`{"stl_grpc_url":"x:1","instrument_whitelist":["RIU6","GZU6"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// ...and a manual-offset POST lands. The hand-edit must SURVIVE.
+	if err := m.Set(map[string]int64{"RIU6": 7}); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	onDisk, err := loadFile(path)
+	if err != nil {
+		t.Fatalf("reload persisted config: %v", err)
+	}
+	if len(onDisk.InstrumentWhitelist) != 2 || onDisk.InstrumentWhitelist[1] != "GZU6" {
+		t.Errorf("out-of-band whitelist edit clobbered by Set: %v", onDisk.InstrumentWhitelist)
+	}
+	if onDisk.ReconManualOffset["RIU6"] != 7 {
+		t.Errorf("persisted recon_manual_offset = %v, want RIU6:7", onDisk.ReconManualOffset)
+	}
+}
+
+func TestManualOffsets_SetOnCorruptFileErrorsAndWritesNothing(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent_config.json")
+	corrupt := `{"stl_grpc_url": TRUNCATED`
+	if err := os.WriteFile(path, []byte(corrupt), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := NewManualOffsets(path, Config{STLGRPCURL: "x:1"})
+	if err := m.Set(map[string]int64{"RIU6": 1}); err == nil {
+		t.Fatal("Set over a corrupt config must error, not overwrite it")
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(b) != corrupt {
+		t.Errorf("corrupt file was rewritten: %q", b)
+	}
+}
+
+func TestSave_AtomicRoundTripAndNoTmpLeftover(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent_config.json")
+	want := Config{STLGRPCURL: "x:1", StatusPort: 9100}
+	if err := Save(path, want); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	got, err := loadFile(path)
+	if err != nil {
+		t.Fatalf("loadFile after Save: %v", err)
+	}
+	if got.STLGRPCURL != "x:1" || got.StatusPort != 9100 {
+		t.Errorf("round-trip = %+v", got)
+	}
+	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
+		t.Errorf(".tmp sibling left behind after a successful Save (stat err=%v)", err)
+	}
+}
+
 func TestManualOffsets_ConcurrentSetDoesNotCorruptFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "agent_config.json")

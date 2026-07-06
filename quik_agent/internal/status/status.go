@@ -277,6 +277,12 @@ func computeReport(d Deps) recon.Report {
 // without duplicating recon evaluation or reaching into recon.Report's
 // internals from outside this package. "OK"/"STALE" always report
 // realInvolved=false (there is nothing to be involved in).
+//
+// Deliberate narrowing (review-adjudicated): realInvolved is scoped to THIS
+// mismatch's plan — a non-paper robot (or a symbol it trades) must appear in
+// the plan's steps — NOT the looser "any real robot deployed anywhere", so a
+// paper-only discrepancy never escalates to CRITICAL just because an
+// unrelated real robot happens to be hosted on the same agent.
 func EvaluateRecon(d Deps) (state string, realInvolved bool) {
 	rep := computeReport(d)
 	if rep.State != "MISMATCH" || rep.Plan == nil {
