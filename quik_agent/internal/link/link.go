@@ -25,6 +25,7 @@ import (
 	quikv1 "shectory/quik_agent/internal/pb"
 	"shectory/quik_agent/internal/quikdde"
 	"shectory/quik_agent/internal/robots"
+	"shectory/quik_agent/internal/status"
 )
 
 // Options configures the link.
@@ -89,6 +90,13 @@ type Options struct {
 	// runner bridge. Both nil = robot hosting disabled (wired via SetRobots).
 	Robots *robots.Store
 	Runner RunnerControlSink
+
+	// ---- Status snapshot mirror (Task 9, additive) ----
+
+	// StatusSnapshotMinSec floors how often EmitStatusSnapshot is allowed to
+	// fire from the periodic loop even when the JSON changed every tick. <=0
+	// falls back to 5s in New.
+	StatusSnapshotMinSec int
 }
 
 // TradeManager is the subset of the order manager the link drives. internal/trade
@@ -146,6 +154,21 @@ type Link struct {
 	// sendMu serializes stream.Send across the sendLoop and the trade Emitter
 	// goroutines (a gRPC client stream allows only one concurrent Send).
 	sendMu sync.Mutex
+
+	// ---- Status snapshot mirror (Task 9) ----
+	// statusDeps/hasStatusDeps/lastStatusHash/lastStatusSentMs/hasSentStatus are
+	// touched only from the sendLoop goroutine (one per session, same discipline
+	// as rawSent/tickSentMs above) EXCEPT hasStatusDeps/statusDeps, which are
+	// also written once by SetStatusDeps before Run starts — see its doc comment.
+	statusDepsMu  sync.RWMutex
+	statusDeps    status.Deps
+	hasStatusDeps bool
+	// lastStatusSentMs can legitimately be 0 (a first send observed at nowMs==0,
+	// as in tests, or a clock near the epoch), so "never sent yet" is tracked by
+	// hasSentStatus rather than by comparing the timestamp to its zero value.
+	hasSentStatus    bool
+	lastStatusHash   [32]byte
+	lastStatusSentMs int64
 }
 
 // New builds a Link. The token is taken from opt.Token (the caller reads it from
@@ -166,6 +189,9 @@ func New(opt Options) *Link {
 	if opt.HaveTicked == nil {
 		prov := opt.Provider
 		opt.HaveTicked = func() bool { return prov.FreshnessMs() > 0 || prov.LastMutationMs() > 0 }
+	}
+	if opt.StatusSnapshotMinSec <= 0 {
+		opt.StatusSnapshotMinSec = 5
 	}
 	return &Link{
 		opt:       opt,

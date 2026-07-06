@@ -268,6 +268,37 @@ func computeReport(d Deps) recon.Report {
 	return recon.Evaluate(buildReconInputs(d))
 }
 
+// EvaluateRecon runs the exact same computation BuildStatus uses and
+// additionally reports whether the current MISMATCH (if any) involves at
+// least one non-paper ("real") robot — either directly (a fix_state step
+// names the robot) or via a symbol that robot trades (a cancel_order/
+// close_position step names only a symbol). Wired into main.go's recon alert
+// loop (Task 9, feeding ReconAlerter.Step) so alert severity can be decided
+// without duplicating recon evaluation or reaching into recon.Report's
+// internals from outside this package. "OK"/"STALE" always report
+// realInvolved=false (there is nothing to be involved in).
+func EvaluateRecon(d Deps) (state string, realInvolved bool) {
+	rep := computeReport(d)
+	if rep.State != "MISMATCH" || rep.Plan == nil {
+		return rep.State, false
+	}
+	realRobots := map[string]bool{}
+	realSymbols := map[string]bool{}
+	for _, spec := range d.Robots.All() {
+		if spec.GetPaper() {
+			continue
+		}
+		realRobots[spec.GetRobotId()] = true
+		realSymbols[spec.GetSymbol()] = true
+	}
+	for _, s := range rep.Plan.Steps {
+		if realRobots[s.RobotID] || realSymbols[s.Symbol] {
+			return rep.State, true
+		}
+	}
+	return rep.State, false
+}
+
 // sideString renders a quikv1.Side as the page's lowercase convention.
 func sideString(s quikv1.Side) string {
 	switch s {

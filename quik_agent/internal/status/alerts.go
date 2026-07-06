@@ -1,7 +1,7 @@
 package status
 
-// reconAlerter debounces recon-state transitions into alert specs. It is pure
-// state-machine logic: the caller (the recon evaluation loop, wired in Task 9)
+// ReconAlerter debounces recon-state transitions into alert specs. It is pure
+// state-machine logic: the caller (main.go's recon evaluation loop, Task 9)
 // feeds it every observation with its own clock and forwards the returned
 // specs to the link's EmitAlert — nothing here touches the network.
 
@@ -25,8 +25,10 @@ type AlertSpec struct {
 // an incident.
 const reconAlertDebounceMs = 10_000
 
-// reconAlerter tracks one recon stream's alert state. Zero value is ready.
-type reconAlerter struct {
+// ReconAlerter tracks one recon stream's alert state. Zero value is ready.
+// Exported (Task 8 originally kept it package-private) so main.go's recon
+// alert loop (Task 9) can hold one across ticks: var a status.ReconAlerter.
+type ReconAlerter struct {
 	armed     bool  // a MISMATCH run is in progress (explicit flag: nowMs may legitimately be 0)
 	armedAtMs int64 // first ms a MISMATCH was observed in the current run
 	emitted   bool  // a RECON_MISMATCH went out and no RECON_RECOVERED yet
@@ -41,7 +43,7 @@ type reconAlerter struct {
 //   - OK inside the debounce (a flap) silently disarms;
 //   - STALE disarms the debounce (data too old to judge) but is never a
 //     recovery — only a real OK clears an emitted alert.
-func (a *reconAlerter) Step(state string, realInvolved bool, nowMs int64) []AlertSpec {
+func (a *ReconAlerter) Step(state string, realInvolved bool, nowMs int64) []AlertSpec {
 	switch state {
 	case "MISMATCH":
 		if !a.armed {

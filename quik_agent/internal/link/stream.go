@@ -54,6 +54,12 @@ func (l *Link) sendLoop(ctx context.Context, stream quikv1.QuikAgentLink_Session
 			if err := l.sendDiagnosticsSnapshot(stream, snap); err != nil {
 				return err
 			}
+			// Mirror the local status showcase to STL, change-gated (Task 9): a
+			// snapshot-build hiccup must never break the heartbeat itself, so only
+			// a genuine SEND error (stream problem) tears down the session.
+			if err := l.maybeSendStatusSnapshot(time.Now().UnixMilli()); err != nil {
+				return err
+			}
 		case <-poll.C:
 			if err := l.flushMarketData(stream); err != nil {
 				return err

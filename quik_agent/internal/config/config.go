@@ -100,6 +100,24 @@ type Config struct {
 	// RobotsDataSubdir is the subdirectory (under exeDir) holding robots.json +
 	// runner_state.json. Default "robots".
 	RobotsDataSubdir string `json:"robots_data_subdir"`
+
+	// ---- Status / recon showcase (Task 9, additive) ----
+
+	// StatusPort is the loopback HTTP port the local operator showcase (internal/
+	// status) listens on. Default 8071. Unlike every other numeric field in this
+	// struct, an explicit 0 is a deliberate, PERSISTENT "disabled" state (an
+	// operator may not want the local status server running at all) — see
+	// applyDefaults, which only fills in the 8071 default when the key is
+	// genuinely ABSENT from the config file, never when it reads back as 0.
+	StatusPort int `json:"status_port"`
+	// ReconManualOffset is the operator-declared manual position offset per
+	// symbol (recon.Inputs.ManualOffset), edited via POST /api/manual-offset and
+	// persisted here so it survives a restart. Default {} (nil/absent -> {}).
+	ReconManualOffset map[string]int64 `json:"recon_manual_offset"`
+	// StatusSnapshotMinSec floors how often the link mirrors the local status
+	// JSON to STL (AgentStatusSnapshot), even when it changes every tick.
+	// Default 5.
+	StatusSnapshotMinSec int `json:"status_snapshot_min_sec"`
 }
 
 // RunnerExePath resolves the runner exe: explicit config path wins; else the
@@ -127,7 +145,15 @@ func ConfigPath(exeDir string) string {
 	return filepath.Join(exeDir, "agent_config.json")
 }
 
-func (c *Config) applyDefaults() {
+// applyDefaults fills in every additive field's default. raw is the config
+// file's top-level JSON object (nil when there is no file yet, e.g. the
+// wizard's fresh Config{}): it is consulted ONLY for StatusPort, which needs
+// to distinguish "key absent" (backfill the 8071 default) from "key present
+// as 0" (an explicit, persistent disable — must not be re-defaulted on every
+// subsequent load). Every other field below uses the existing zero-value
+// convention (a <=0 int or a nil map/slice means "absent"), same as the rest
+// of this function.
+func (c *Config) applyDefaults(raw map[string]json.RawMessage) {
 	if c.TokenEnv == "" {
 		c.TokenEnv = DefaultTokenEnv
 	}
@@ -183,6 +209,21 @@ func (c *Config) applyDefaults() {
 	if c.RobotsDataSubdir == "" {
 		c.RobotsDataSubdir = "robots"
 	}
+
+	// ---- Status / recon showcase defaults (Task 9, additive) ----
+	if _, present := raw["status_port"]; !present {
+		c.StatusPort = 8071
+	}
+	// nil (field absent) => default {}; an explicit {} in JSON stays {} (both
+	// round-trip identically here since a present-but-empty map and an absent
+	// one both decode as needing this default — unlike StatusPort there is no
+	// "explicit 0 must persist" requirement for this field).
+	if c.ReconManualOffset == nil {
+		c.ReconManualOffset = map[string]int64{}
+	}
+	if c.StatusSnapshotMinSec <= 0 {
+		c.StatusSnapshotMinSec = 5
+	}
 }
 
 // LoadOrInit loads the config, or runs the first-run wizard if it does not exist.
@@ -192,7 +233,14 @@ func LoadOrInit(path string, defaultDataRoot string) (Config, error) {
 		if err := json.Unmarshal(b, &cfg); err != nil {
 			return cfg, fmt.Errorf("parse config %s: %w", path, err)
 		}
-		cfg.applyDefaults()
+		// Consulted only so applyDefaults can tell "status_port absent" (backfill
+		// 8071) apart from "status_port present as 0" (explicit, persistent
+		// disable). Best-effort: b already unmarshaled successfully above, so
+		// this cannot fail in a way that matters; a nil raw just means every key
+		// reads as absent, which is the safe (defaulting) direction.
+		var raw map[string]json.RawMessage
+		_ = json.Unmarshal(b, &raw)
+		cfg.applyDefaults(raw)
 		return cfg, nil
 	}
 	return runWizard(path, defaultDataRoot)
@@ -209,7 +257,7 @@ func runWizard(path, defaultDataRoot string) (Config, error) {
 	cfg.QuikDataRoot = ask(reader, "QUIK data root", defaultDataRoot)
 	cfg.PollIntervalSec = askInt(reader, "Market-data flush interval (sec)", 5)
 	cfg.HeartbeatIntervalSec = askInt(reader, "Heartbeat interval (sec)", 15)
-	cfg.applyDefaults()
+	cfg.applyDefaults(nil) // fresh config: every key is genuinely absent
 
 	if err := Save(path, cfg); err != nil {
 		return cfg, err

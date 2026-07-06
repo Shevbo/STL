@@ -71,6 +71,14 @@ type cancelCmd struct {
 	Sec      string `json:"sec"`
 }
 
+// pingCmd is agent -> Lua: a clock-sync probe. Lua echoes it back verbatim as
+// a "pong" event (see luaEvent.T0/TS/ServerTime) so accounts.Store.SetPong can
+// compute round-trip time and clock drift against the QUIK server clock.
+type pingCmd struct {
+	Cmd string `json:"cmd"` // "ping"
+	T0  int64  `json:"t0"`  // agent-stamped send time (UnixMilli), echoed back
+}
+
 // moveCmd is agent -> Lua: a MOVE_ORDERS transaction request (native atomic move).
 // It re-prices (and optionally re-sizes) a resting order in ONE QUIK transaction — no
 // cancel+place window. Qty 0 = keep the current quantity. The resulting OnOrder/
@@ -488,4 +496,14 @@ func (b *Bridge) Cancel(c cancelCmd) error {
 func (b *Bridge) Move(m moveCmd) error {
 	m.Cmd = "move"
 	return b.send(m)
+}
+
+// SendPing sends a clock-sync probe to Lua. t0 is the agent-stamped send time
+// (time.Now().UnixMilli()); the Lua script echoes it back verbatim in the
+// "pong" event so accounts.Store.SetPong can compute RTT and clock drift.
+// Errors mirror Place/Cancel/Move (e.g. no Lua client attached) — the ping
+// loop (main.go, every 5s) treats a failure as unremarkable and does not log
+// it every tick.
+func (b *Bridge) SendPing(t0 int64) error {
+	return b.send(pingCmd{Cmd: "ping", T0: t0})
 }

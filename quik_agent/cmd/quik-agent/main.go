@@ -18,6 +18,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -26,6 +27,7 @@ import (
 	"syscall"
 	"time"
 
+	"shectory/quik_agent/internal/accounts"
 	"shectory/quik_agent/internal/config"
 	"shectory/quik_agent/internal/health"
 	"shectory/quik_agent/internal/link"
@@ -36,6 +38,7 @@ import (
 	"shectory/quik_agent/internal/runner"
 	"shectory/quik_agent/internal/selfupdate"
 	"shectory/quik_agent/internal/service"
+	"shectory/quik_agent/internal/status"
 	"shectory/quik_agent/internal/trade"
 	"shectory/quik_agent/internal/watchdog"
 )
@@ -201,6 +204,7 @@ func resolveOptions(cfgPath string, noSelfUpdate bool) (agentOptions, error) {
 func runAgent(opt agentOptions, stop <-chan struct{}) error {
 	cfg := opt.cfg
 	host, _ := os.Hostname()
+	startedAt := time.Now() // Deps.UptimeSec (Task 9's status showcase)
 
 	fmt.Println("Shectory QUIK agent starting...")
 	fmt.Println("  stl:    ", cfg.STLGRPCURL, "(insecure:", cfg.STLInsecure, ")")
@@ -277,6 +281,7 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 		HeartbeatInterval: time.Duration(cfg.HeartbeatSec) * time.Second,
 		PollInterval:      time.Duration(cfg.PollIntervalSec) * time.Second,
 		Provider:          quikdde.Default,
+		StatusSnapshotMinSec: cfg.StatusSnapshotMinSec,
 		QuikAlive:         func() bool { return quikdde.Alive() },
 		Thresholds: health.Thresholds{
 			StaleTickMs: int64(cfg.StaleTickMs),
@@ -314,6 +319,12 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 		InstrumentWhitelist:  cfg.InstrumentWhitelist,
 		DailyOrderCap:        cfg.DailyOrderCap,
 	})
+	// accStore holds the QUIK account snapshot (positions/orders/trades) and
+	// agent<->QUIK clock health (RTT/drift/tape lag), fed by the QLua acc_pos/
+	// acc_ord/acc_trd/pong publisher via bridge.SetAccSink below. The local
+	// status showcase (Deps.Accounts) reads it; recon compares it against the
+	// robots' believed books.
+	accStore := accounts.New(func() int64 { return time.Now().UnixMilli() })
 	bridge := trade.NewBridge(cfg.TradeBridgePort, nil, func(f string, a ...any) {
 		fmt.Printf("trade-bridge: "+f+"\n", a...)
 	})
@@ -327,6 +338,40 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 		fmt.Printf("trade: "+f+"\n", a...)
 	})
 	bridge.SetHandler(mgr)                       // Lua events -> manager
+	// acc_pos/acc_ord/acc_trd/pong -> accStore: the account-snapshot half of
+	// the QLua publisher (separate from the md/book/tape/param feed above).
+	// Converters are type-tolerant (accounts.*FromRow); a malformed row is
+	// skipped without corrupting the rest of the batch.
+	bridge.SetAccSink(func(ev trade.AccEvent) {
+		switch ev.Kind {
+		case "pos":
+			rows := make([]accounts.Position, 0, len(ev.Rows))
+			for _, r := range ev.Rows {
+				if p, ok := accounts.PositionFromRow(r); ok {
+					rows = append(rows, p)
+				}
+			}
+			accStore.SetPositions(rows)
+		case "ord":
+			rows := make([]accounts.Order, 0, len(ev.Rows))
+			for _, r := range ev.Rows {
+				if o, ok := accounts.OrderFromRow(r); ok {
+					rows = append(rows, o)
+				}
+			}
+			accStore.SetOrders(rows)
+		case "trd":
+			rows := make([]accounts.Trade, 0, len(ev.Rows))
+			for _, r := range ev.Rows {
+				if tr, ok := accounts.TradeFromRow(r); ok {
+					rows = append(rows, tr)
+				}
+			}
+			accStore.AddTrades(rows)
+		case "pong":
+			accStore.SetPong(ev.T0, ev.TS, ev.ServerTime)
+		}
+	})
 	// QLua market-data feed -> provider overlay: the PRIMARY data path for the
 	// trading stack (DDE stays as fallback/passthrough — it needs manual QUIK
 	// clicks and has repeatedly died in production).
@@ -338,16 +383,21 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 		if ev.IsTape {
 			trades := make([]*quikv1.TapeTrade, 0, len(ev.Trades))
 			var lastPx float64
+			var lastTsMs int64
 			for _, r := range ev.Trades {
 				if len(r) >= 4 && r[0] > 0 {
 					trades = append(trades, &quikv1.TapeTrade{Price: r[0], Qty: int64(r[1]),
 						Side: int32(r[2]), TsUnixMs: int64(r[3])})
 					lastPx = r[0]
+					lastTsMs = int64(r[3])
 				}
 			}
 			if len(trades) > 0 {
 				runnerSrvTape(trades, ev.Code)
 				quikdde.Default.SetLuaLast(ev.Code, lastPx) // /tick + UI follow the tape
+				// exchange lag = agent receive time minus the freshest trade's
+				// exchange timestamp (Deps.Health.exchange_lag_ms).
+				accStore.SetTapeLag(lastTsMs, time.Now().UnixMilli())
 			}
 			return
 		}
@@ -376,6 +426,23 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 	fmt.Printf("  trade:   bridge :%d  enabled=%v  whitelist=%v  (human-initiated only)\n",
 		cfg.TradeBridgePort, cfg.QuikTradingEnabled, cfg.InstrumentWhitelist)
 
+	// Clock-sync probe: every 5s, ping Lua so accStore can track RTT/drift
+	// (accStore.SetPong, fed back through the acc sink above once Lua echoes
+	// the pong). Best-effort: no Lua client attached is the common idle case
+	// and not worth logging every tick.
+	go func() {
+		t := time.NewTicker(5 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				_ = bridge.SendPing(time.Now().UnixMilli())
+			}
+		}
+	}()
+
 	// ---- Robot hosting: local store + runner bridge + supervised runner ----
 	// Zero-touch: the agent is the SINGLE entrypoint. It persists deployed
 	// RobotSpecs (auto-resume after reboot), serves the loopback bridge, and
@@ -384,8 +451,11 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 	if rsErr != nil {
 		fmt.Println("robots: store error:", rsErr)
 	}
+	// Hoisted so the Task 9 status/recon block below (which needs Runner too)
+	// can see it after this if-block closes; nil when robot hosting is off.
+	var runnerSrv *runner.Server
 	if robotStore != nil {
-		runnerSrv := runner.NewServer(runner.ServerCfg{
+		runnerSrv = runner.NewServer(runner.ServerCfg{
 			Store: robotStore,
 			Ticks: runner.ProviderTicks{P: quikdde.Default},
 			Orders: mgr, Status: lk,
@@ -431,9 +501,101 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 				}
 				return "DOWN"
 			}
-			fmt.Printf("ready: quik=%s dde=%s runner=%s robots=%d trading_enabled=%v\n",
+			fmt.Printf("ready: quik=%s dde=%s runner=%s robots=%d trading_enabled=%v status=:%d\n",
 				ok(quikdde.Alive()), ok(quikdde.Default.LastMutationMs() > 0),
-				ok(runnerSrv.RunnerHealthy()), len(robotStore.All()), cfg.QuikTradingEnabled)
+				ok(runnerSrv.RunnerHealthy()), len(robotStore.All()), cfg.QuikTradingEnabled, cfg.StatusPort)
+		}()
+	}
+
+	// ---- Local operator showcase: status.Deps + HTTP server + recon alert loop.
+	// Depends on Robots+Runner (recon has nothing to reconcile without a hosted
+	// robot registry), so this whole block is skipped when robot hosting itself
+	// is unavailable (robotStore/runnerSrv nil — the rsErr/store-error case
+	// above already explained why on the console).
+	if robotStore != nil && runnerSrv != nil {
+		manualOffsets := config.NewManualOffsets(opt.cfgPath, cfg)
+		aligner := &status.Aligner{
+			Manager:  mgr,
+			Runner:   runnerSrv,
+			Provider: quikdde.Default,
+			NowMs:    func() int64 { return time.Now().UnixMilli() },
+		}
+
+		// strategies_doc.json lives next to wherever the runner exe actually is
+		// (or would be); Task 10 populates its content.
+		runnerDir := opt.exeDir
+		if p := cfg.RunnerExePath(opt.exeDir); p != "" {
+			runnerDir = filepath.Dir(p)
+		}
+
+		deps := status.Deps{
+			Accounts: accStore,
+			Robots:   robotStore,
+			Runner:   runnerSrv,
+			Manager:  mgr,
+			Provider: quikdde.Default,
+
+			LinkUp:     lk.IsUp,
+			Reconnects: wd.Reconnects,
+			UptimeSec:  func() int64 { return int64(time.Since(startedAt).Seconds()) },
+			MasterFlag: cfg.QuikTradingEnabled,
+			BuildRev:   buildRev(),
+			Version:    agentVersion,
+
+			ManualGet: manualOffsets.Get,
+			ManualSet: manualOffsets.Set,
+			AlignExec: aligner.Execute,
+
+			// No agent/runner log FILE exists anywhere today: interactive runs
+			// print to the console only, the Windows service redirects to the
+			// Event Log (internal/service/service_windows.go), and the runner's
+			// stdout/stderr are piped straight into the agent's own console
+			// (runner.ExecStart's logf), never written to disk. Left empty
+			// rather than inventing a path; /logs/{name} 404s until a real log
+			// file exists to point at.
+			LogPaths: map[string]string{},
+			DocsPath: filepath.Join(runnerDir, "strategies_doc.json"),
+			NowMs:    func() int64 { return time.Now().UnixMilli() },
+		}
+		lk.SetStatusDeps(deps)
+
+		if cfg.StatusPort != 0 {
+			srv := status.NewServer(deps)
+			srv.Addr = fmt.Sprintf("127.0.0.1:%d", cfg.StatusPort)
+			go func() {
+				<-ctx.Done()
+				shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				_ = srv.Shutdown(shutdownCtx)
+			}()
+			go func() {
+				fmt.Println("status: serving on", srv.Addr)
+				if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+					fmt.Println("status:", err)
+				}
+			}()
+		} else {
+			fmt.Println("status: disabled (status_port=0)")
+		}
+
+		// Recon alert loop: every 5s, re-evaluate the same recon computation
+		// BuildStatus uses and feed the debounced alerter; any resulting spec
+		// goes out over the live link (STL surfaces it same as any other Alert).
+		go func() {
+			var alerter status.ReconAlerter
+			t := time.NewTicker(5 * time.Second)
+			defer t.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+					state, realInvolved := status.EvaluateRecon(deps)
+					for _, spec := range alerter.Step(state, realInvolved, time.Now().UnixMilli()) {
+						_ = lk.EmitAlert(spec.Severity, spec.Code, spec.Message)
+					}
+				}
+			}
 		}()
 	}
 

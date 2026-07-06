@@ -454,3 +454,72 @@ func TestBuildStatus_FillKeysGating(t *testing.T) {
 		t.Errorf("trade check = %+v, want order 10 matched against t1", tc)
 	}
 }
+
+// ---- EvaluateRecon (Task 9's main.go alert-loop helper) ----
+
+func TestEvaluateRecon_OKStateNeverRealInvolved(t *testing.T) {
+	state, real := EvaluateRecon(baseDeps())
+	if state != "OK" || real {
+		t.Fatalf("empty everything must be OK/false, got %s/%v", state, real)
+	}
+}
+
+func TestEvaluateRecon_MismatchWithRealRobotIsRealInvolved(t *testing.T) {
+	d := baseDeps()
+	d.Robots = fakeRobots{
+		specs:  []*quikv1.RobotSpec{{RobotId: "r1", Symbol: "RIU6", Paper: false}},
+		paused: map[string]bool{},
+		times:  map[string][2]int64{},
+	}
+	d.Runner = fakeRunner{statuses: map[string]*quikv1.RobotStatus{
+		"r1": {RobotId: "r1", Position: 3},
+	}}
+	d.Accounts = fakeAccounts{snap: accounts.Snapshot{
+		Positions: []accounts.Position{{Sec: "RIU6", Net: 0}},
+	}}
+
+	state, real := EvaluateRecon(d)
+	if state != "MISMATCH" {
+		t.Fatalf("want MISMATCH, got %s", state)
+	}
+	if !real {
+		t.Errorf("a real (non-paper) robot's position mismatch must be realInvolved")
+	}
+}
+
+func TestEvaluateRecon_MismatchPaperOnlyIsNotRealInvolved(t *testing.T) {
+	d := baseDeps()
+	// A pure Trans mismatch: no robot, no position/order finding involved at all.
+	d.Manager = fakeManager{trans: []trade.PendingTransView{
+		{TransID: 1, Status: "REJECTED", OK: false},
+	}}
+
+	state, real := EvaluateRecon(d)
+	if state != "MISMATCH" {
+		t.Fatalf("want MISMATCH, got %s", state)
+	}
+	if real {
+		t.Errorf("a trans-only mismatch naming no real robot/symbol must not be realInvolved")
+	}
+}
+
+func TestEvaluateRecon_StaleNeverRealInvolved(t *testing.T) {
+	d := baseDeps()
+	d.Accounts = fakeAccounts{snap: accounts.Snapshot{PosAgeMs: 999_999}}
+	d.Robots = fakeRobots{
+		specs:  []*quikv1.RobotSpec{{RobotId: "r1", Symbol: "RIU6", Paper: false}},
+		paused: map[string]bool{},
+		times:  map[string][2]int64{},
+	}
+	d.Runner = fakeRunner{statuses: map[string]*quikv1.RobotStatus{
+		"r1": {RobotId: "r1", Position: 3},
+	}}
+
+	state, real := EvaluateRecon(d)
+	if state != "STALE" {
+		t.Fatalf("want STALE, got %s", state)
+	}
+	if real {
+		t.Errorf("STALE must report realInvolved=false regardless of robot mode")
+	}
+}

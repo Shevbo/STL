@@ -1,7 +1,10 @@
 package link
 
 import (
+	"crypto/sha256"
+
 	quikv1 "shectory/quik_agent/internal/pb"
+	"shectory/quik_agent/internal/status"
 )
 
 // Phase 2: the link implements trade.Emitter so the order manager can push
@@ -31,6 +34,13 @@ func (l *Link) currentStream() quikv1.QuikAgentLink_SessionClient {
 	l.streamMu.Lock()
 	defer l.streamMu.Unlock()
 	return l.curStream
+}
+
+// IsUp reports whether a session is currently open (Deps.LinkUp, Task 9's
+// status showcase — the agent's own view of link health, independent of
+// STL's Ack liveness).
+func (l *Link) IsUp() bool {
+	return l.currentStream() != nil
 }
 
 // EmitOrderUpdate sends an OrderUpdate frame (trade.Emitter).
@@ -75,4 +85,68 @@ func (l *Link) EmitAlert(sev quikv1.AlertSeverity, code, message string) error {
 		return nil
 	}
 	return l.sendAlert(stream, sev, code, message)
+}
+
+// EmitStatusSnapshot sends the local status showcase JSON as an
+// AgentStatusSnapshot frame — mirrors EmitAlert exactly: drops quietly when no
+// session is open (STL keeps whatever it last received; the agent's own
+// /api/status is unaffected either way).
+func (l *Link) EmitStatusSnapshot(statusJSON []byte, genMs int64) error {
+	stream := l.currentStream()
+	if stream == nil {
+		return nil
+	}
+	return l.sendMsg(stream, &quikv1.AgentMessage{
+		Payload: &quikv1.AgentMessage_StatusSnapshot{StatusSnapshot: &quikv1.AgentStatusSnapshot{
+			StatusJson:        string(statusJSON),
+			GeneratedAtUnixMs: genMs,
+		}},
+	})
+}
+
+// SetStatusDeps wires the status.Deps used to build the periodic
+// AgentStatusSnapshot mirror (main.go, AFTER robot hosting is constructed —
+// same "build the pieces, wire them in" timing as SetTrade/SetRobots). Safe to
+// call before or after Run starts (guarded independently of the sendLoop-only
+// hash/timestamp state).
+func (l *Link) SetStatusDeps(d status.Deps) {
+	l.statusDepsMu.Lock()
+	l.statusDeps = d
+	l.hasStatusDeps = true
+	l.statusDepsMu.Unlock()
+}
+
+// maybeSendStatusSnapshot builds the local showcase JSON (status.BuildStatus)
+// and emits it to STL only when BOTH: the content materially changed (sha256
+// differs from the last successful send) AND at least StatusSnapshotMinSec
+// elapsed since that send. Called once per heartbeat tick from sendLoop; a
+// build error is swallowed (never breaks the heartbeat cadence over a
+// snapshot problem — the agent's own /api/status would show the same error
+// surface if this failed structurally).
+func (l *Link) maybeSendStatusSnapshot(nowMs int64) error {
+	l.statusDepsMu.RLock()
+	deps, ok := l.statusDeps, l.hasStatusDeps
+	l.statusDepsMu.RUnlock()
+	if !ok {
+		return nil
+	}
+	data, err := status.BuildStatus(deps)
+	if err != nil {
+		return nil
+	}
+	sum := sha256.Sum256(data)
+	if sum == l.lastStatusHash {
+		return nil // unchanged since the last send
+	}
+	minMs := int64(l.opt.StatusSnapshotMinSec) * 1000
+	if l.hasSentStatus && nowMs-l.lastStatusSentMs < minMs {
+		return nil // changed, but the floor cadence has not elapsed yet
+	}
+	if err := l.EmitStatusSnapshot(data, nowMs); err != nil {
+		return err
+	}
+	l.lastStatusHash = sum
+	l.lastStatusSentMs = nowMs
+	l.hasSentStatus = true
+	return nil
 }

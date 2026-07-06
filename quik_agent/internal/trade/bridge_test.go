@@ -1,9 +1,52 @@
 package trade
 
 import (
+	"bufio"
 	"encoding/json"
+	"net"
 	"testing"
 )
+
+// TestSendPing_EncodesCmdAndT0 drives the REAL Bridge.send() plumbing (not the
+// bridgeAPI interface the manager sees) over a net.Pipe, mirroring how the Lua
+// script would read the line off the loopback TCP connection.
+func TestSendPing_EncodesCmdAndT0(t *testing.T) {
+	b := NewBridge(0, nil, nil)
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+	b.conn = client
+
+	lineCh := make(chan string, 1)
+	go func() {
+		sc := bufio.NewScanner(server)
+		if sc.Scan() {
+			lineCh <- sc.Text()
+		}
+	}()
+
+	if err := b.SendPing(123456); err != nil {
+		t.Fatalf("SendPing: %v", err)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal([]byte(<-lineCh), &got); err != nil {
+		t.Fatalf("bad json line: %v", err)
+	}
+	if got["cmd"] != "ping" {
+		t.Errorf("cmd = %v, want %q", got["cmd"], "ping")
+	}
+	if got["t0"] != float64(123456) {
+		t.Errorf("t0 = %v, want 123456", got["t0"])
+	}
+}
+
+func TestSendPing_NoLuaClientReturnsError(t *testing.T) {
+	b := NewBridge(0, nil, nil)
+	if err := b.SendPing(1); err == nil {
+		t.Fatal("SendPing without a connected Lua client must return an error")
+	}
+}
 
 func TestDispatchAccountEvents(t *testing.T) {
 	var got []AccEvent
