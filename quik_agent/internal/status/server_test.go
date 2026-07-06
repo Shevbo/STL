@@ -339,6 +339,99 @@ func TestServer_AlignRefusesReExecutionOfSamePlan(t *testing.T) {
 	}
 }
 
+// TestServer_AlignAllFailedDoesNotLatch: an execution where EVERY step failed (the
+// routine first-smoke case: disarmed agent rejects the close order) must NOT latch the
+// plan id — the operator arms the master flag and retries the SAME plan (unchanged
+// tables = unchanged id), and that retry must execute, not 409 "план уже исполнен".
+func TestServer_AlignAllFailedDoesNotLatch(t *testing.T) {
+	d := mismatchDeps()
+	execCount := 0
+	d.AlignExec = func(plan recon.Plan) []StepResult {
+		execCount++
+		if execCount == 1 {
+			// First run: all-failed (e.g. "trading disabled by master flag").
+			return []StepResult{{Kind: "close_position", Symbol: "RIU6", OK: false,
+				Error: "trading disabled by master flag"}}
+		}
+		return []StepResult{{Kind: "close_position", Symbol: "RIU6", OK: true}}
+	}
+	ts := httptest.NewServer(newMux(d))
+	defer ts.Close()
+
+	fresh := getFreshPlanID(t, ts)
+	body, _ := json.Marshal(alignRequest{PlanID: fresh})
+
+	resp1, err := http.Post(ts.URL+"/api/align", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("first POST /api/align: %v", err)
+	}
+	resp1.Body.Close()
+	if resp1.StatusCode != http.StatusOK {
+		t.Fatalf("first POST status = %d, want 200 (failed steps still report 200 with per-step errors)", resp1.StatusCode)
+	}
+
+	// Immediate retry with the SAME plan id (operator armed the flag): must execute.
+	resp2, err := http.Post(ts.URL+"/api/align", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("second POST /api/align: %v", err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		buf := new(bytes.Buffer)
+		buf.ReadFrom(resp2.Body)
+		t.Fatalf("retry after all-failed run: status = %d, want 200 (must not latch): %s", resp2.StatusCode, buf.String())
+	}
+	if execCount != 2 {
+		t.Errorf("AlignExec called %d times, want 2 (all-failed run must not latch the plan)", execCount)
+	}
+}
+
+// TestServer_AlignPartialSuccessLatches: an execution where SOME step succeeded (and
+// the rest failed/skipped) DID change reality — re-running the same plan must be
+// refused; the remaining steps need a fresh plan computed from the new picture.
+func TestServer_AlignPartialSuccessLatches(t *testing.T) {
+	d := mismatchDeps()
+	execCount := 0
+	d.AlignExec = func(plan recon.Plan) []StepResult {
+		execCount++
+		return []StepResult{
+			{Kind: "cancel_order", Symbol: "RIU6", OrderNum: "1", OK: true},
+			{Kind: "close_position", Symbol: "RIU6", OK: false, Error: "no current last price"},
+		}
+	}
+	ts := httptest.NewServer(newMux(d))
+	defer ts.Close()
+
+	fresh := getFreshPlanID(t, ts)
+	body, _ := json.Marshal(alignRequest{PlanID: fresh})
+
+	resp1, err := http.Post(ts.URL+"/api/align", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("first POST /api/align: %v", err)
+	}
+	resp1.Body.Close()
+	if resp1.StatusCode != http.StatusOK {
+		t.Fatalf("first POST status = %d, want 200", resp1.StatusCode)
+	}
+
+	resp2, err := http.Post(ts.URL+"/api/align", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("second POST /api/align: %v", err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusConflict {
+		t.Fatalf("retry after partial success: status = %d, want 409 (must latch)", resp2.StatusCode)
+	}
+	buf := new(bytes.Buffer)
+	buf.ReadFrom(resp2.Body)
+	if !strings.Contains(buf.String(), "уже исполнен") {
+		t.Errorf("retry body = %q, want it to mention the plan is already executed", buf.String())
+	}
+	if execCount != 1 {
+		t.Errorf("AlignExec called %d times, want exactly 1 (partial success must latch)", execCount)
+	}
+}
+
 func TestServer_ManualOffsetCallsManualSet(t *testing.T) {
 	d := baseDeps()
 	var got map[string]int64
