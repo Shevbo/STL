@@ -177,6 +177,70 @@ func TestUpdateParamsAppliesOnlyPresentFieldsAndPersists(t *testing.T) {
 	}
 }
 
+// TestUpdateParamsInvalidJSONRejectedNotPersisted: a garbage params_json must
+// be refused (a plain error, not wrapping ErrNotFound — server.go's
+// handleParamsSet maps that to 400) and never reach disk or the in-memory
+// spec.
+func TestUpdateParamsInvalidJSONRejectedNotPersisted(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := &quikv1.RobotSpec{RobotId: "r1", StrategyId: "fvg", Symbol: "RIU6",
+		ParamsJson: `{"qty":1}`}
+	if err := s.Put(spec); err != nil {
+		t.Fatal(err)
+	}
+
+	garbage := `{"qty":`
+	if _, err := s.UpdateParams("r1", &garbage, nil, nil); err == nil {
+		t.Fatal("want an error for invalid params_json, got nil")
+	} else if errors.Is(err, ErrNotFound) {
+		t.Fatalf("invalid JSON must not be reported as ErrNotFound, got %v", err)
+	}
+	if got := s.Get("r1").GetParamsJson(); got != `{"qty":1}` {
+		t.Fatalf("garbage params_json must not be persisted, got %q", got)
+	}
+
+	// reload confirms nothing hit disk either
+	s2, err := NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s2.Get("r1").GetParamsJson(); got != `{"qty":1}` {
+		t.Fatalf("reload shows garbage params_json was persisted: %q", got)
+	}
+}
+
+// TestUpdateParamsMaxPositionBelowOneRejectedNotPersisted: max_position must
+// floor at 1 — 0 or negative is refused rather than silently disabling the
+// robot's position cap.
+func TestUpdateParamsMaxPositionBelowOneRejectedNotPersisted(t *testing.T) {
+	for name, bad := range map[string]int64{"zero": 0, "negative": -5} {
+		dir := t.TempDir()
+		s, err := NewStore(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		spec := &quikv1.RobotSpec{RobotId: "r1", StrategyId: "fvg", Symbol: "RIU6",
+			MaxPositionContracts: 2}
+		if err := s.Put(spec); err != nil {
+			t.Fatal(err)
+		}
+
+		badMax := bad
+		if _, err := s.UpdateParams("r1", nil, nil, &badMax); err == nil {
+			t.Fatalf("%s: want an error for max_position=%d, got nil", name, bad)
+		} else if errors.Is(err, ErrNotFound) {
+			t.Fatalf("%s: must not be reported as ErrNotFound, got %v", name, err)
+		}
+		if got := s.Get("r1").GetMaxPositionContracts(); got != 2 {
+			t.Fatalf("%s: max_position=%d must not be persisted, got %d", name, bad, got)
+		}
+	}
+}
+
 func TestUpdateParamsUnknownIDReturnsErrNotFound(t *testing.T) {
 	dir := t.TempDir()
 	s, err := NewStore(dir)

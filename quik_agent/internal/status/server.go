@@ -277,10 +277,11 @@ func handleAlign(d Deps, st *alignState, w http.ResponseWriter, r *http.Request)
 
 	results := d.AlignExec(*rep.Plan)
 	// Latch ONLY when at least one step actually executed (OK=true). An all-failed
-	// run is the routine first-smoke case — a disarmed agent rejects the
-	// close_position, every step reports an error, nothing happened — and must stay
-	// retryable: the operator arms the master flag and confirms the SAME plan again
-	// (the tables haven't changed, so the plan id hasn't either). Latching it would
+	// run is the routine first-smoke case — every step errors out (e.g. a
+	// disarmed agent rejecting a cancel_order, or a runner-down fix_state) and
+	// nothing happened — and must stay retryable: the operator fixes the
+	// precondition and confirms the SAME plan again (the tables haven't
+	// changed, so the plan id hasn't either). Latching it would
 	// wedge the align behind 409 "план уже исполнен" until the tables happened to
 	// move. A partial success DOES latch: something real executed, and re-running the
 	// remaining steps needs a FRESH plan computed from the post-execution picture.

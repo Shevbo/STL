@@ -573,6 +573,11 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 			// status) AND no working/in-flight robot order (SnapshotWorking
 			// includes unacked, OrderNum=="" entries, so this single loop also
 			// covers "nothing in flight" with no separate pending-trans check).
+			// A robot with NO entry yet in LastStatuses (runner reconnected but
+			// hasn't sent its first ReportStatus) REFUSES rather than skipping
+			// the position check: an absent status is not evidence of a flat
+			// book, and flipping mode in that window could orphan a real open
+			// position the agent simply hasn't heard about yet.
 			ModeSet: func(id string, paper bool, confirmID string) error {
 				spec := robotStore.Get(id)
 				if spec == nil {
@@ -581,7 +586,11 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 				if confirmID != id {
 					return fmt.Errorf("подтверждение не совпадает: введите точный ID робота")
 				}
-				if st, ok := runnerSrv.LastStatuses()[id]; ok && st.GetPosition() != 0 {
+				st, ok := runnerSrv.LastStatuses()[id]
+				if !ok {
+					return fmt.Errorf("статус робота ещё не получен от раннера — не могу подтвердить нулевую позицию, повтори позже")
+				}
+				if st.GetPosition() != 0 {
 					return fmt.Errorf("робот не в нуле (позиция %d): закрой позицию перед сменой режима", st.GetPosition())
 				}
 				for _, ws := range mgr.SnapshotWorking() {

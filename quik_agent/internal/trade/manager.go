@@ -204,10 +204,11 @@ func (m *Manager) SetBookSource(ctx context.Context, book BookSource) {
 func (m *Manager) PlaceOrder(req *quikv1.PlaceOrder) { _ = m.PlaceOrderErr(req) }
 
 // PlaceOrderErr is PlaceOrder returning the rejection reason (nil once the order was
-// handed to the bridge). The recon Aligner (internal/status, Task 8) uses it so a
-// Guard/master-flag rejection becomes the align step's error instead of vanishing into
-// an emitted OrderUpdate. Behavior is IDENTICAL to PlaceOrder: every rejection still
+// handed to the bridge). Behavior is IDENTICAL to PlaceOrder: every rejection still
 // emits the REJECTED OrderUpdate and fans to the runner; nothing is bypassed.
+// NOTE: the recon Aligner (internal/status) does NOT call this — its narrow
+// alignOrderManager interface deliberately exposes no place-order method at all, so
+// the align path can never place a real order (close_position is a hard refusal).
 func (m *Manager) PlaceOrderErr(req *quikv1.PlaceOrder) error {
 	if req == nil {
 		return errors.New("nil PlaceOrder")
@@ -299,12 +300,13 @@ func (m *Manager) PlaceOrderErr(req *quikv1.PlaceOrder) error {
 // orders while blocking new placements): the platform convention across this whole
 // package is that order-cancelling actions only ever REDUCE exposure, so they stay
 // available regardless of the master flag, while anything that could INCREASE or
-// create exposure (PlaceOrderErr, and therefore the align Aligner's close_position
-// step, which places a real order) stays gated on it. Do not add a TradingEnabled
-// check here without re-deriving this from first principles — it would make an
-// orphan order impossible to clear from the local showcase while disarmed, which is
-// the opposite of the intent (see docs/runbooks/quik-robot-agent-rollout.md, Align
-// procedure section).
+// create exposure (PlaceOrderErr) stays gated on it. The align Aligner's
+// close_position step used to place such an order; it is now a hard refusal with no
+// wired place-order capability at all (recon no longer generates that step — see
+// internal/status/align.go). Do not add a TradingEnabled check here without
+// re-deriving this from first principles — it would make an orphan order impossible
+// to clear from the local showcase while disarmed, which is the opposite of the
+// intent (see docs/runbooks/quik-robot-agent-rollout.md, Align procedure section).
 func (m *Manager) CancelOrphan(orderNum, sec string) error {
 	if orderNum == "" {
 		return errors.New("empty order_num")

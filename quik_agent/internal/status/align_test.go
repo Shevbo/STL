@@ -68,83 +68,48 @@ func TestAligner_CancelOrder(t *testing.T) {
 	}
 }
 
-// SIGN CONVENTION: Step.Qty POSITIVE = account LONG in excess => SELL |Qty|.
-// Price = provider last quantized to the step, FILL-FAVORING for the side:
-// SELL rounds down (89173/10 -> 89170).
-func TestAligner_ClosePosition_PositiveQtySellsQuantizedDown(t *testing.T) {
-	a, mgr, _ := alignFixture()
-	plan := recon.Plan{ID: "abc123", Steps: []recon.Step{
-		{Kind: "close_position", Symbol: "RIU6", Qty: 2, Detail: "SELL 2 to align"},
-	}}
-	res := a.Execute(plan)
-	if len(mgr.placed) != 1 {
-		t.Fatalf("want one placement, got %d", len(mgr.placed))
-	}
-	p := mgr.placed[0]
-	if p.GetSide() != quikv1.Side_SIDE_SELL {
-		t.Errorf("Qty>0 must SELL, got side %v", p.GetSide())
-	}
-	if p.GetQuantity() != 2 {
-		t.Errorf("want qty 2, got %d", p.GetQuantity())
-	}
-	if p.GetPrice() != 89170 {
-		t.Errorf("want price quantized 89173->89170, got %v", p.GetPrice())
-	}
-	if p.GetCode() != "RIU6" {
-		t.Errorf("want code RIU6, got %q", p.GetCode())
-	}
-	if p.GetClientId() != "recon:abc123:0" {
-		t.Errorf(`want client_id "recon:abc123:0", got %q`, p.GetClientId())
-	}
-	if len(res) != 1 || !res[0].OK {
-		t.Fatalf("want one OK result, got %+v", res)
-	}
-}
-
-// NEGATIVE Qty = account is SHORT of the robots' claim => BUY back |Qty|.
-// BUY quantizes UP (fill-favoring): 89173/10 -> 89180.
-func TestAligner_ClosePosition_NegativeQtyBuysQuantizedUp(t *testing.T) {
-	a, mgr, _ := alignFixture()
-	plan := recon.Plan{ID: "p2", Steps: []recon.Step{
-		{Kind: "close_position", Symbol: "RIU6", Qty: -1, Detail: "BUY 1 to align"},
-	}}
-	a.Execute(plan)
-	if len(mgr.placed) != 1 {
-		t.Fatalf("want one placement, got %d", len(mgr.placed))
-	}
-	p := mgr.placed[0]
-	if p.GetSide() != quikv1.Side_SIDE_BUY {
-		t.Errorf("Qty<0 must BUY, got side %v", p.GetSide())
-	}
-	if p.GetQuantity() != 1 {
-		t.Errorf("want qty 1 (abs), got %d", p.GetQuantity())
-	}
-	if p.GetPrice() != 89180 {
-		t.Errorf("want BUY price quantized 89173->89180, got %v", p.GetPrice())
-	}
-}
-
-// A last price already on the grid stays put for both sides.
-func TestAligner_ClosePosition_OnGridPriceUnchanged(t *testing.T) {
-	for name, qty := range map[string]int64{"BUY": -1, "SELL": 1} {
-		a, mgr, _ := alignFixture()
-		a.Provider = fakeProvider{
-			ticks:  []quikdde.Tick{{Code: "RIU6", Last: 89170}},
-			params: []quikdde.ParamRow{{Code: "RIU6", PriceStep: 10}},
-		}
-		a.Execute(recon.Plan{ID: "p3", Steps: []recon.Step{
-			{Kind: "close_position", Symbol: "RIU6", Qty: qty},
+// close_position is a HARD REFUSAL: recon no longer generates this step kind
+// (an "excess account position" is contextual — it can include the operator's
+// own manual trading, not just robot activity — so it is reported for context
+// only). The Aligner must place NO order for it under any Qty/sign/zero, and
+// must refuse even with a live tick+price-step available (unlike the old
+// placing behavior, the refusal does not depend on provider data at all).
+func TestAligner_ClosePosition_AlwaysRefusesNoOrderPlaced(t *testing.T) {
+	for name, qty := range map[string]int64{"positive": 2, "negative": -1, "zero": 0} {
+		a, mgr, _ := alignFixture() // fixture provider DOES have a valid RIU6 tick+step
+		res := a.Execute(recon.Plan{ID: "cp-" + name, Steps: []recon.Step{
+			{Kind: "close_position", Symbol: "RIU6", Qty: qty, Detail: "stale/legacy step"},
 		}})
-		if len(mgr.placed) != 1 || mgr.placed[0].GetPrice() != 89170 {
-			t.Fatalf("%s: on-grid price must be unchanged, got %+v", name, mgr.placed)
+		if len(mgr.placed) != 0 {
+			t.Errorf("%s: close_position must place NO order, got %+v", name, mgr.placed)
+		}
+		if len(res) != 1 || res[0].OK || res[0].Error == "" {
+			t.Errorf("%s: close_position must be refused with a non-empty error, got %+v", name, res)
 		}
 	}
 }
 
-// A multi-symbol mismatch yields one close_position per symbol in ONE plan;
-// each placement must carry a DISTINCT client_id ("recon:<plan_id>:<index>")
-// or the Manager's byClient index would collide.
-func TestAligner_TwoClosePositions_DistinctClientIDs(t *testing.T) {
+// The refusal holds even with NO provider tick/price-step data at all — the
+// old placing implementation needed both to compute a quantized price; the
+// refusal needs neither, confirming it never reaches that logic.
+func TestAligner_ClosePosition_RefusesWithNoProviderData(t *testing.T) {
+	a, mgr, _ := alignFixture()
+	a.Provider = fakeProvider{} // no ticks, no params
+	res := a.Execute(recon.Plan{ID: "cp-noprov", Steps: []recon.Step{
+		{Kind: "close_position", Symbol: "RIU6", Qty: 1},
+	}})
+	if len(mgr.placed) != 0 {
+		t.Fatalf("must not place without provider data either, placed %+v", mgr.placed)
+	}
+	if len(res) != 1 || res[0].OK {
+		t.Fatalf("want a refused result, got %+v", res)
+	}
+}
+
+// A multi-symbol plan with two close_position steps: the FIRST is refused,
+// which stops the sequence (Execute's documented behavior) — the second is
+// reported skipped, never executed. Nothing is ever placed either way.
+func TestAligner_TwoClosePositions_BothNeverPlaceOrders(t *testing.T) {
 	a, mgr, _ := alignFixture()
 	a.Provider = fakeProvider{
 		ticks: []quikdde.Tick{
@@ -160,34 +125,14 @@ func TestAligner_TwoClosePositions_DistinctClientIDs(t *testing.T) {
 		{Kind: "close_position", Symbol: "GZU6", Qty: 1},
 		{Kind: "close_position", Symbol: "RIU6", Qty: -1},
 	}})
-	if len(mgr.placed) != 2 {
-		t.Fatalf("want two placements, got %d", len(mgr.placed))
+	if len(mgr.placed) != 0 {
+		t.Fatalf("want zero placements, got %d: %+v", len(mgr.placed), mgr.placed)
 	}
-	id0, id1 := mgr.placed[0].GetClientId(), mgr.placed[1].GetClientId()
-	if id0 != "recon:p9:0" || id1 != "recon:p9:1" {
-		t.Fatalf("want per-step client_ids recon:p9:0 / recon:p9:1, got %q / %q", id0, id1)
+	if len(res) != 2 || res[0].OK || res[0].Error == "" {
+		t.Fatalf("want the first step refused with an error, got %+v", res)
 	}
-	if len(res) != 2 || !res[0].OK || !res[1].OK {
-		t.Fatalf("want two OK results, got %+v", res)
-	}
-}
-
-func TestAligner_ClosePosition_NoPriceOrStepFails(t *testing.T) {
-	for name, prov := range map[string]fakeProvider{
-		"no tick": {params: []quikdde.ParamRow{{Code: "RIU6", PriceStep: 10}}},
-		"no step": {ticks: []quikdde.Tick{{Code: "RIU6", Last: 89173}}},
-	} {
-		a, mgr, _ := alignFixture()
-		a.Provider = prov
-		res := a.Execute(recon.Plan{ID: "p4", Steps: []recon.Step{
-			{Kind: "close_position", Symbol: "RIU6", Qty: 1},
-		}})
-		if len(mgr.placed) != 0 {
-			t.Errorf("%s: must not place without a valid price, placed %+v", name, mgr.placed)
-		}
-		if len(res) != 1 || res[0].OK || res[0].Error == "" {
-			t.Errorf("%s: want one failed result with error, got %+v", name, res)
-		}
+	if res[1].OK || res[1].Error == "" {
+		t.Fatalf("want the second step reported skipped after the first failure, got %+v", res[1])
 	}
 }
 
@@ -243,15 +188,18 @@ func TestAligner_ErrorStopsSequence(t *testing.T) {
 	}
 }
 
-// A Manager rejection (Guard limits / master flag off) becomes the StepResult
-// error — the Aligner never pre-checks or bypasses the Manager's gates.
+// A Manager rejection becomes the StepResult error — the Aligner never
+// pre-checks or bypasses the Manager's gates. (close_position can no longer
+// exercise this path at all — it refuses unconditionally without ever
+// reaching the Manager — so this now covers cancel_order, the one step kind
+// that still calls into trade.Manager.)
 func TestAligner_ManagerRejectionBecomesStepError(t *testing.T) {
 	a, mgr, _ := alignFixture()
-	mgr.placeErr = errors.New("trading disabled by master flag")
+	mgr.cancelErr = errors.New("cancel rejected: bridge down")
 	res := a.Execute(recon.Plan{ID: "p7", Steps: []recon.Step{
-		{Kind: "close_position", Symbol: "RIU6", Qty: 1},
+		{Kind: "cancel_order", Symbol: "RIU6", OrderNum: "1"},
 	}})
-	if len(res) != 1 || res[0].OK || res[0].Error != "trading disabled by master flag" {
+	if len(res) != 1 || res[0].OK || res[0].Error != "cancel rejected: bridge down" {
 		t.Fatalf("rejection must surface as the step error, got %+v", res)
 	}
 }

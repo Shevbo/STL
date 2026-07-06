@@ -274,8 +274,9 @@ func computeReport(d Deps) recon.Report {
 // EvaluateRecon runs the exact same computation BuildStatus uses and
 // additionally reports whether the current MISMATCH (if any) involves at
 // least one non-paper ("real") robot — either directly (a fix_state step
-// names the robot), via a symbol that robot trades (a cancel_order/
-// close_position step names only a symbol), OR via the robot's own
+// names the robot), via a symbol that robot trades (a cancel_order step
+// names only a symbol; recon no longer generates close_position steps at
+// all — see recon.Step's doc comment), OR via the robot's own
 // self-consistency summary (RobotCheck.OrdersOK/TradesOK) flagging it, even
 // when that finding produced NO plan step. Wired into main.go's recon alert
 // loop (Task 9, feeding ReconAlerter.Step) so alert severity can be decided

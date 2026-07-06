@@ -489,6 +489,65 @@ func TestBuildStatus_FillKeysGating(t *testing.T) {
 	}
 }
 
+// TestBuildStatus_HasStatusFalseWithNoRunnerReport: a robot the runner has
+// never reported on (freshly reconnected runner, first ReportStatus not yet
+// received) must render has_status=false — this is the JSON half of the
+// money-safety fix in main.go's ModeSet, which refuses a paper/real flip
+// while has_status/LastStatuses is absent instead of treating a missing
+// status as an implicit zero position. The mode panel in page.html gates its
+// "flat" precondition on has_status too, for the same reason.
+func TestBuildStatus_HasStatusFalseWithNoRunnerReport(t *testing.T) {
+	d := baseDeps()
+	d.Robots = fakeRobots{
+		specs:  []*quikv1.RobotSpec{{RobotId: "r1", Symbol: "RIU6", Paper: false}},
+		paused: map[string]bool{},
+		times:  map[string][2]int64{},
+	}
+	// d.Runner (baseDeps' fakeRunner) has an empty statuses map: r1 has no entry.
+	data, err := BuildStatus(d)
+	if err != nil {
+		t.Fatalf("BuildStatus: %v", err)
+	}
+	var out struct {
+		Robots []map[string]any `json:"robots"`
+	}
+	json.Unmarshal(data, &out)
+	if len(out.Robots) != 1 {
+		t.Fatalf("want 1 robot, got %d", len(out.Robots))
+	}
+	if v, ok := out.Robots[0]["has_status"]; !ok || v != false {
+		t.Errorf("want has_status=false when the robot has no LastStatuses entry, got %v (present=%v)", v, ok)
+	}
+}
+
+// TestBuildStatus_HasStatusTrueWhenRunnerReported: once the runner has sent
+// at least one ReportStatus for the robot, has_status must be true — even
+// when the reported position itself is zero (has_status and position==0 are
+// independent facts: ModeSet/the page must be able to tell "reported flat"
+// apart from "never reported").
+func TestBuildStatus_HasStatusTrueWhenRunnerReported(t *testing.T) {
+	d := baseDeps()
+	d.Robots = fakeRobots{
+		specs:  []*quikv1.RobotSpec{{RobotId: "r1", Symbol: "RIU6", Paper: false}},
+		paused: map[string]bool{},
+		times:  map[string][2]int64{},
+	}
+	d.Runner = fakeRunner{statuses: map[string]*quikv1.RobotStatus{
+		"r1": {RobotId: "r1", Position: 0},
+	}}
+	data, err := BuildStatus(d)
+	if err != nil {
+		t.Fatalf("BuildStatus: %v", err)
+	}
+	var out struct {
+		Robots []map[string]any `json:"robots"`
+	}
+	json.Unmarshal(data, &out)
+	if v, ok := out.Robots[0]["has_status"]; !ok || v != true {
+		t.Errorf("want has_status=true once the runner has reported, got %v (present=%v)", v, ok)
+	}
+}
+
 // ---- EvaluateRecon (Task 9's main.go alert-loop helper) ----
 
 func TestEvaluateRecon_OKStateNeverRealInvolved(t *testing.T) {

@@ -110,18 +110,19 @@ and the operator re-confirms — this is the guard against acting on a stale
 screenshot/plan. Steps execute sequentially and stop at the first failure
 (remaining steps are reported `skipped`, not attempted) — a half-applied plan
 must be re-evaluated from a fresh recon picture, never pushed through blind.
-Step kinds: `cancel_order` (cancel a QUIK order the agent doesn't track),
-`close_position` (place ONE limit order for the unexplained excess — goes
-through the SAME `trade.Manager.PlaceOrderErr` path as any other order, so
-the master flag and Guard limits gate it exactly like a human order; a
-disarmed agent simply rejects the align order and that becomes the step's
-error), and `fix_state` (clear a robot's phantom "working order" belief and
-pin its position/avg to the plan's values). No AlignExec wired -> **503**
-before any body parse (an agent without an executor can't act on anything).
-Снятие заявок (`cancel_order`, `CancelOrphan`) работает и при выключенном
-master-флаге — как и KillSwitch, оно только снижает экспозицию; ордера на
-закрытие позиции (`close_position`) — нет, они идут через тот же путь, что и
-любой другой ордер, и требуют взведённого флага. A repeated confirm of a plan
+Step kinds: `cancel_order` (cancel a QUIK order the agent doesn't track) and
+`fix_state` (clear a robot's phantom "working order" belief and pin its
+position/avg to the plan's values). `close_position` is a HARD REFUSAL —
+recon no longer generates it (an "excess account position" is contextual: it
+can include the operator's own manual trading, not just robot activity, so
+it is now reported for context only) and the Aligner has no wired capability
+to place an order for it at all, so a stray/legacy `close_position` in a plan
+always fails with an error and never reaches QUIK. No AlignExec wired ->
+**503** before any body parse (an agent without an executor can't act on
+anything). Снятие заявок (`cancel_order`, `CancelOrphan`) работает и при
+выключенном master-флаге — как и KillSwitch, оно только снижает экспозицию;
+`close_position` не размещает ордера вообще — сверка позиции теперь только
+информационная. A repeated confirm of a plan
 that already ran is refused (409, "план уже исполнен") — the page also
 disables the button while a request is in flight, so a double-click cannot
 fire the same align twice.

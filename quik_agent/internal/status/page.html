@@ -372,9 +372,14 @@ function modeBlock(r) {
     + '<div class="kv">Текущий режим: <span class="badge ' + modeCls + '">' + modeLabel + '</span></div>';
   if (!IS_LOCAL) return html;
 
-  const flat = (r.position === 0);
+  // flat requires BOTH a known status (r.has_status) AND zero position: a
+  // robot the runner hasn't reported on yet has an UNKNOWN position, not a
+  // zero one — showing it as flat here would be a false green light for the
+  // exact same gap main.go's ModeSet refuses on the server side.
+  const flat = (r.has_status && r.position === 0);
   const noWorking = !((r.working_orders || []).length);
-  const flatBadge = '<span class="badge ' + (flat ? 'ok' : 'bad') + '">' + (flat ? 'OK' : 'не 0 (' + fmtNum(r.position) + ')') + '</span>';
+  const flatBadge = '<span class="badge ' + (flat ? 'ok' : 'bad') + '">'
+    + (flat ? 'OK' : (r.has_status ? 'не 0 (' + fmtNum(r.position) + ')' : 'позиция неизвестна')) + '</span>';
   const workBadge = '<span class="badge ' + (noWorking ? 'ok' : 'bad') + '">' + (noWorking ? 'OK' : 'есть заявки') + '</span>';
 
   if (r.mode !== 'real') {

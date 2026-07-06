@@ -130,13 +130,21 @@ func (s *Store) Times(robotID string) (deployedMs, paramsMs int64) {
 // mutating the stored pointer in place, so a caller holding an earlier
 // Get/All result (e.g. a concurrent status-page read) never sees a
 // half-applied edit. Stamps ParamsUpdatedAtMs=now, persists, and returns the
-// new spec. Returns an error wrapping ErrNotFound when id is unknown.
+// new spec. Returns an error wrapping ErrNotFound when id is unknown, and a
+// plain validation error (never persisted) when paramsJSON is not valid JSON
+// or maxPos is < 1 — the HTTP handler maps any non-ErrNotFound error to 400.
 func (s *Store) UpdateParams(id string, paramsJSON, schedule *string, maxPos *int64) (*quikv1.RobotSpec, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	existing, ok := s.specs[id]
 	if !ok {
 		return nil, fmt.Errorf("update params %s: %w", id, ErrNotFound)
+	}
+	if paramsJSON != nil && !json.Valid([]byte(*paramsJSON)) {
+		return nil, fmt.Errorf("update params %s: params_json is not valid JSON", id)
+	}
+	if maxPos != nil && *maxPos < 1 {
+		return nil, fmt.Errorf("update params %s: max_position must be >= 1", id)
 	}
 	spec := proto.Clone(existing).(*quikv1.RobotSpec)
 	if paramsJSON != nil {
