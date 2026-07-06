@@ -158,6 +158,15 @@ node ./node_modules/vitest/vitest.mjs run           # tests
 
 ## Critical gotchas
 
+- **QUIK QLua is 32-bit: `string.format("%d", v)` TRUNCATES epoch-ms (has bitten prod).**
+  The terminal's Lua casts `%d` through a 32-bit C long, so any integer >= 2^31 (13-digit
+  epoch-ms: pong t0, `last_trade_ts_ms`, trade timestamps) is silently corrupted/zeroed on
+  the wire. Encode large ints as `string.format("%.0f", v)` (`shectory_trade.lua` json.encode).
+  Also: the hand-rolled encoder emits an empty Lua table as `{}`, but the Go bridge decodes
+  `rows` into `[][]any` and DROPS a JSON `{}` — empty arrays must serialize as `[]`
+  (`if is_array then`, not `and n > 0`). Both bugs made a flat account's recon read STALE.
+  And measure agent<->QUIK RTT on the AGENT clock alone (record the ping send time locally),
+  never the Lua-echoed t0.
 - **Protobuf 5.29 (has bitten prod twice):** the prod protobuf runtime is 5.29.6.
   Regenerate the PYTHON stubs (`trader/quik/pb/...`) ONLY with `grpcio-tools<1.71` — its
   header reads "Protobuf Python Version: 5.29.0". grpcio-tools ≥1.81 emits gencode 6.x,
