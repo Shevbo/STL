@@ -274,21 +274,39 @@ func computeReport(d Deps) recon.Report {
 // EvaluateRecon runs the exact same computation BuildStatus uses and
 // additionally reports whether the current MISMATCH (if any) involves at
 // least one non-paper ("real") robot — either directly (a fix_state step
-// names the robot) or via a symbol that robot trades (a cancel_order/
-// close_position step names only a symbol). Wired into main.go's recon alert
+// names the robot), via a symbol that robot trades (a cancel_order/
+// close_position step names only a symbol), OR via the robot's own
+// self-consistency summary (RobotCheck.OrdersOK/TradesOK) flagging it, even
+// when that finding produced NO plan step. Wired into main.go's recon alert
 // loop (Task 9, feeding ReconAlerter.Step) so alert severity can be decided
 // without duplicating recon evaluation or reaching into recon.Report's
 // internals from outside this package. "OK"/"STALE" always report
 // realInvolved=false (there is nothing to be involved in).
 //
-// Deliberate narrowing (review-adjudicated): realInvolved is scoped to THIS
-// mismatch's plan — a non-paper robot (or a symbol it trades) must appear in
-// the plan's steps — NOT the looser "any real robot deployed anywhere", so a
-// paper-only discrepancy never escalates to CRITICAL just because an
-// unrelated real robot happens to be hosted on the same agent.
+// The RobotChecks pass exists because a pure trade-only mismatch (evalTrades'
+// tradesBad, e.g. a robot fill with no matching tagged QUIK trade) flips
+// State to MISMATCH but contributes ZERO steps to the Plan (only evalOrders
+// feeds Plan.Steps) — the step-based scan alone would silently miss it and
+// under-report a real robot's discrepancy as a mere WARN. recon.Evaluate
+// builds RobotChecks ONLY for non-paper robots, so no extra paper-filtering
+// is needed here.
+//
+// Deliberate narrowing (review-adjudicated) retained for the step-based half:
+// a non-paper robot (or a symbol it trades) must appear in the plan's steps —
+// NOT the looser "any real robot deployed anywhere" — so a paper-only
+// discrepancy never escalates to CRITICAL just because an unrelated real
+// robot happens to be hosted on the same agent.
 func EvaluateRecon(d Deps) (state string, realInvolved bool) {
 	rep := computeReport(d)
-	if rep.State != "MISMATCH" || rep.Plan == nil {
+	if rep.State != "MISMATCH" {
+		return rep.State, false
+	}
+	for _, rc := range rep.RobotChecks {
+		if !rc.OrdersOK || !rc.TradesOK {
+			return rep.State, true
+		}
+	}
+	if rep.Plan == nil {
 		return rep.State, false
 	}
 	realRobots := map[string]bool{}

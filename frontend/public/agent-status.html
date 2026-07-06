@@ -39,6 +39,14 @@
   .params-row td { background: #0e0e1c; }
   .kv-grid { display: flex; flex-wrap: wrap; gap: 4px 14px; }
   .kv { font-size: 10px; color: #889; } .kv b { color: #ccc; font-family: monospace; }
+  .edit-field { display: inline-flex; align-items: center; gap: 6px; font-size: 10px; color: #889; }
+  .edit-field input { background: #0a0a12; border: 1px solid #2d2d4a; color: #eee; border-radius: 3px; padding: 2px 6px; font-size: 11px; width: 100px; }
+  .edit-field input:disabled { opacity: .4; }
+  .remote-note { font-size: 10px; color: #ffb300; margin-top: 4px; }
+  .arm-panel { margin-top: 6px; border: 1px solid #2d2d4a; border-radius: 6px; padding: 8px 10px; background: #0e0e1c; }
+  .arm-panel.to-real { border-color: #f4433666; background: #1a0a0a; }
+  .arm-panel label { cursor: pointer; }
+  .save-msg, .arm-msg, .disarm-msg { font-size: 10px; margin-left: 8px; }
   .banner { padding: 8px 12px; border-radius: 6px; font-weight: 700; font-size: 12px; margin-bottom: 10px; }
   .banner.OK { background: #0a1a0d; color: #00e676; border: 1px solid #00e67666; }
   .banner.MISMATCH { background: #2a0a0a; color: #ff6b5e; border: 1px solid #f4433666; }
@@ -218,12 +226,34 @@ function robotLinks(r) {
   return links.join(' · ');
 }
 
+// expandedRobots: robot IDs whose row is currently expanded (details/editor/
+// arm panel open). Persists across renderRobots calls (module scope) so the
+// freeze below survives a poll tick.
+let expandedRobots = new Set();
+
 function renderRobots(robots, stale) {
   const body = document.getElementById('robots-body');
   if (!robots || !robots.length) {
+    expandedRobots.clear();
     body.innerHTML = '<tr><td colspan="10" class="empty">Роботов на агенте не развёрнуто.</td></tr>';
     return;
   }
+  // Drop ids for robots no longer present (undeployed) so a stale expansion
+  // can never wedge the freeze below forever.
+  const liveIds = new Set(robots.map(r => r.id));
+  for (const id of [...expandedRobots]) if (!liveIds.has(id)) expandedRobots.delete(id);
+
+  // While any row is expanded (param editor / mode arm panel open), freeze the
+  // WHOLE table: a full poll-driven rebuild (body.innerHTML = html below) would
+  // wipe any in-progress typed edit — including, worst case, a half-typed arm
+  // confirm-id. Health/recon render independently and keep updating. The
+  // server re-validates every precondition at submit time regardless (see
+  // ModeSet in main.go / handleModeSet in server.go), so a precondition badge
+  // going stale during the freeze can never itself arm an unsafe state — it
+  // only means a rejected submit shows a 409 reason instead of a pre-emptive
+  // gray-out.
+  if (expandedRobots.size > 0) return;
+
   const staleCls = stale ? ' stale-num' : '';
   let html = '';
   robots.forEach((r, i) => {
@@ -235,7 +265,7 @@ function renderRobots(robots, stale) {
     const pnl = r.pnl_rub != null
       ? Math.round(r.pnl_rub).toLocaleString('ru-RU') + ' ₽'
       : fmtNum(r.pnl_points) + ' п.';
-    html += '<tr class="robot-row" data-idx="' + i + '">'
+    html += '<tr class="robot-row" data-idx="' + i + '" data-id="' + esc(r.id) + '">'
       + '<td>▸</td>'
       + '<td class="mono">' + esc(r.id) + '</td>'
       + '<td class="mono">' + esc(r.symbol) + '</td>'
@@ -247,15 +277,20 @@ function renderRobots(robots, stale) {
       + '<td><span class="badge ' + hbCls + '">' + (hbAge == null ? '—' : fmtMs(hbAge)) + '</span></td>'
       + '<td>' + robotLinks(r) + '</td>'
       + '</tr>';
-    html += '<tr class="params-row" id="params-' + i + '" style="display:none"><td></td><td colspan="9">' + paramsBlock(r) + '</td></tr>';
+    html += '<tr class="params-row" id="params-' + i + '" data-id="' + esc(r.id) + '" style="display:none"><td></td><td colspan="9">' + paramsBlock(r) + '</td></tr>';
   });
   body.innerHTML = html;
   body.querySelectorAll('tr.robot-row').forEach(tr => {
     tr.addEventListener('click', () => {
+      const id = tr.dataset.id;
       const p = document.getElementById('params-' + tr.dataset.idx);
-      p.style.display = p.style.display === 'none' ? '' : 'none';
+      const opening = p.style.display === 'none';
+      p.style.display = opening ? '' : 'none';
+      if (opening) expandedRobots.add(id); else expandedRobots.delete(id);
     });
   });
+  wireParamsEditors(body);
+  wireModeControls(body);
 }
 
 function fmtTs(ms) {
@@ -293,6 +328,8 @@ function paramsBlock(r) {
     + '<div class="kv-grid">' + (kv || '<span class="empty">нет параметров</span>') + '</div>'
     + '<div class="sec-title" style="margin-top:6px">Метаданные</div>'
     + '<div class="kv-grid">' + meta + '</div>'
+    + editorBlock(r, params)
+    + modeBlock(r)
     + '<div class="sec-title" style="margin-top:6px">Заявки в работе</div>'
     + '<div class="kv-grid">' + (working || '<span class="empty">нет</span>') + '</div>'
     + '<div class="sec-title" style="margin-top:6px">Последние сделки</div>'
@@ -301,6 +338,192 @@ function paramsBlock(r) {
       + '<pre class="mono" style="white-space:pre-wrap;background:#0e0e1c;padding:6px;border-radius:4px;max-height:200px;overflow:auto">'
       + esc(signalPretty) + '</pre>' : '')
     + (r.note ? '<div class="sec-title" style="margin-top:6px">Заметка</div><div>' + esc(r.note) + '</div>' : '');
+}
+
+// editorBlock: the per-robot param editor (params_json fields + schedule +
+// max_position + Save). Save POSTs the LOCAL /api/robot/{id}/params when
+// IS_LOCAL, else the STL relay (/api/v1/quik/robots/{id}/params), which
+// forwards ONLY params_json — schedule/max_position never apply remotely
+// (trader/api/quik_robots.py relay_robot_params), so those two inputs are
+// disabled with an explanatory note when !IS_LOCAL rather than silently
+// accepting edits that would never take effect.
+function editorBlock(r, params) {
+  const fields = Object.entries(params).map(([k, v]) =>
+    '<div class="edit-field"><span>' + esc(k) + '</span><input class="mono" data-param-key="' + esc(k) + '" value="' + esc(v) + '"></div>').join('');
+  const dis = IS_LOCAL ? '' : ' disabled';
+  return '<div class="sec-title" style="margin-top:10px">Изменить параметры</div>'
+    + '<div class="kv-grid">' + (fields || '<span class="empty">нет параметров</span>') + '</div>'
+    + '<div class="kv-grid" style="margin-top:4px">'
+    + '<div class="edit-field"><span>окно торговли</span><input class="mono" data-field="schedule" value="' + esc(r.schedule || '') + '"' + dis + '></div>'
+    + '<div class="edit-field"><span>макс. позиция</span><input class="mono" type="number" data-field="max_position" value="' + esc(r.max_position ?? 0) + '"' + dis + '></div>'
+    + '</div>'
+    + (IS_LOCAL ? '' : '<div class="remote-note">На зеркале STL применяются только параметры стратегии — окно торговли и макс. позиция меняются только локально на агенте.</div>')
+    + '<div style="margin-top:6px"><button class="save-params-btn">Сохранить параметры</button><span class="save-msg"></span></div>';
+}
+
+// modeBlock: mode is ALWAYS shown as a badge; the arm/de-arm toggle renders
+// ONLY when IS_LOCAL — the STL mirror has no /api/robot/{id}/mode route at
+// all (topology = enforcement, see status.go server.go doc comment), so
+// showing a toggle there would be a dead control at best and a false sense of
+// remote control at worst.
+function modeBlock(r) {
+  const modeCls = r.mode === 'real' ? 'real' : 'paper';
+  const modeLabel = r.mode === 'real' ? 'РЕАЛ' : 'PAPER';
+  let html = '<div class="sec-title" style="margin-top:10px">Режим торговли</div>'
+    + '<div class="kv">Текущий режим: <span class="badge ' + modeCls + '">' + modeLabel + '</span></div>';
+  if (!IS_LOCAL) return html;
+
+  const flat = (r.position === 0);
+  const noWorking = !((r.working_orders || []).length);
+  const flatBadge = '<span class="badge ' + (flat ? 'ok' : 'bad') + '">' + (flat ? 'OK' : 'не 0 (' + fmtNum(r.position) + ')') + '</span>';
+  const workBadge = '<span class="badge ' + (noWorking ? 'ok' : 'bad') + '">' + (noWorking ? 'OK' : 'есть заявки') + '</span>';
+
+  if (r.mode !== 'real') {
+    // paper -> real: full arming ceremony.
+    html += '<div class="arm-panel to-real" data-id="' + esc(r.id) + '" data-flat="' + (flat ? '1' : '0') + '" data-nowork="' + (noWorking ? '1' : '0') + '">'
+      + '<div class="kv">Позиция = 0: ' + flatBadge + '</div>'
+      + '<div class="kv" style="margin-top:2px">Нет активных заявок: ' + workBadge + '</div>'
+      + '<div class="kv" style="margin-top:6px"><label><input type="checkbox" class="arm-ack"> Остановлен ли STL/Finam-вариант этого символа на реале?</label></div>'
+      + '<div class="kv" style="margin-top:4px">Введите ID робота (<b>' + esc(r.id) + '</b>) для подтверждения: '
+      + '<input class="mono arm-confirm-id" placeholder="' + esc(r.id) + '"></div>'
+      + '<div style="margin-top:8px"><button class="danger arm-btn" disabled>Армировать в REAL</button><span class="arm-msg"></span></div>'
+      + '</div>';
+  } else {
+    // real -> paper: same flat preconditions, no typed-id ceremony (a plain
+    // confirm() dialog is enough — see task-9 brief). confirm_id is still sent
+    // to the endpoint, just supplied by the page itself (it already knows the
+    // id) rather than typed by the operator.
+    html += '<div class="arm-panel" data-id="' + esc(r.id) + '" data-flat="' + (flat ? '1' : '0') + '" data-nowork="' + (noWorking ? '1' : '0') + '">'
+      + '<div class="kv">Позиция = 0: ' + flatBadge + '</div>'
+      + '<div class="kv" style="margin-top:2px">Нет активных заявок: ' + workBadge + '</div>'
+      + '<div style="margin-top:8px"><button class="disarm-btn"' + (flat && noWorking ? '' : ' disabled') + '>Перевести в PAPER</button><span class="disarm-msg"></span></div>'
+      + '</div>';
+  }
+  return html;
+}
+
+function setMsg(el, text, ok) {
+  if (!el) return;
+  el.textContent = text;
+  el.style.color = ok ? '#00e676' : '#ff5c5c';
+}
+
+// saveParams: reads the editor inputs scoped to THIS row (via closest — no
+// global ids needed, so a row's freeze while expanded never fights another
+// row's editor) and POSTs the local or STL param endpoint per IS_LOCAL. Each
+// params_json field value is JSON-parsed with a raw-string fallback so a
+// numeric/boolean param round-trips as its original type instead of becoming
+// a string; a value that isn't valid JSON (an ordinary string param) is kept
+// verbatim. On success the row collapses so the next poll shows the
+// authoritative re-read; on failure the row stays open and shows the
+// server's error text.
+async function saveParams(btn) {
+  const row = btn.closest('tr.params-row');
+  const robotId = row.dataset.id;
+  const paramsObj = {};
+  row.querySelectorAll('input[data-param-key]').forEach(inp => {
+    const key = inp.dataset.paramKey;
+    let val = inp.value;
+    try { val = JSON.parse(val); } catch (e) { /* keep raw string */ }
+    paramsObj[key] = val;
+  });
+  const scheduleInp = row.querySelector('input[data-field="schedule"]');
+  const maxPosInp = row.querySelector('input[data-field="max_position"]');
+  const body = { params_json: JSON.stringify(paramsObj) };
+  if (IS_LOCAL) {
+    if (scheduleInp) body.schedule = scheduleInp.value;
+    if (maxPosInp) body.max_position = Number(maxPosInp.value) || 0;
+  }
+  const msgEl = row.querySelector('.save-msg');
+  const url = IS_LOCAL ? '/api/robot/' + encodeURIComponent(robotId) + '/params'
+                        : '/api/v1/quik/robots/' + encodeURIComponent(robotId) + '/params';
+  btn.disabled = true;
+  try {
+    const resp = await fetch(url, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(body)});
+    const text = await resp.text();
+    if (!resp.ok) {
+      setMsg(msgEl, text || ('HTTP ' + resp.status), false);
+      btn.disabled = false;
+      return;
+    }
+    setMsg(msgEl, 'сохранено', true);
+    expandedRobots.delete(robotId);
+    await fetchAndRender();
+  } catch (e) {
+    setMsg(msgEl, 'ошибка сети', false);
+    btn.disabled = false;
+  }
+}
+
+// wireParamsEditors: attaches the Save handler for every editor in `body`.
+// The robot id comes from the enclosing tr.params-row's own data-id (set in
+// renderRobots, present on BOTH the local page and the STL mirror) — never
+// from modeBlock's arm-panel, which does not exist at all when !IS_LOCAL.
+function wireParamsEditors(body) {
+  body.querySelectorAll('.save-params-btn').forEach(btn => {
+    btn.addEventListener('click', () => saveParams(btn));
+  });
+}
+
+// setMode: POSTs the LOCAL-ONLY /api/robot/{id}/mode. paper=false arms REAL
+// (confirmId is whatever the operator typed — must equal id server-side);
+// paper=true de-arms to PAPER (confirmId is supplied by the page itself, see
+// modeBlock's de-arm branch — no typed ceremony for the safe direction, but
+// the server's confirm_id invariant still holds since we pass the exact id).
+async function setMode(id, paper, confirmId, btn, msgEl) {
+  btn.disabled = true;
+  try {
+    const resp = await fetch('/api/robot/' + encodeURIComponent(id) + '/mode', {
+      method: 'POST', headers: {'content-type': 'application/json'},
+      body: JSON.stringify({ paper: paper, confirm_id: confirmId }),
+    });
+    const text = await resp.text();
+    if (!resp.ok) {
+      setMsg(msgEl, text || ('HTTP ' + resp.status), false);
+      btn.disabled = false;
+      return;
+    }
+    setMsg(msgEl, 'ОК', true);
+    expandedRobots.delete(id);
+    await fetchAndRender();
+  } catch (e) {
+    setMsg(msgEl, 'ошибка сети', false);
+    btn.disabled = false;
+  }
+}
+
+// wireModeControls: local-only (IS_LOCAL gates the panel's very existence in
+// modeBlock, so these selectors simply find nothing on the STL mirror).
+// Arm-to-real: the button enables only when BOTH auto-checks are green AND
+// the checklist is ticked AND the typed id exactly equals the robot id —
+// recomputed on every relevant input event, never just once at render time.
+function wireModeControls(body) {
+  body.querySelectorAll('.arm-panel.to-real').forEach(panel => {
+    const id = panel.dataset.id;
+    const flatOk = panel.dataset.flat === '1';
+    const noWorkOk = panel.dataset.nowork === '1';
+    const ack = panel.querySelector('.arm-ack');
+    const idInput = panel.querySelector('.arm-confirm-id');
+    const btn = panel.querySelector('.arm-btn');
+    const msgEl = panel.querySelector('.arm-msg');
+    function refresh() {
+      btn.disabled = !(flatOk && noWorkOk && ack.checked && idInput.value === id);
+    }
+    ack.addEventListener('change', refresh);
+    idInput.addEventListener('input', refresh);
+    refresh();
+    btn.addEventListener('click', () => setMode(id, false, idInput.value, btn, msgEl));
+  });
+  body.querySelectorAll('.arm-panel:not(.to-real)').forEach(panel => {
+    const btn = panel.querySelector('.disarm-btn');
+    if (!btn) return; // paper robot's arm-panel (to-real) already handled above
+    const id = panel.dataset.id;
+    const msgEl = panel.querySelector('.disarm-msg');
+    btn.addEventListener('click', () => {
+      if (!confirm('Перевести робота ' + id + ' из РЕАЛ в PAPER?')) return;
+      setMode(id, true, id, btn, msgEl);
+    });
+  });
 }
 
 function renderRecon(recon) {

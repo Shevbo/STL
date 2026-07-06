@@ -540,6 +540,38 @@ func TestEvaluateRecon_MismatchPaperOnlyIsNotRealInvolved(t *testing.T) {
 	}
 }
 
+// TestEvaluateRecon_TradeOnlyMismatchIsRealInvolved: a real robot's fill with
+// no matching tagged QUIK trade flips State to MISMATCH via evalTrades'
+// tradesBad, but generates ZERO plan steps (only evalOrders feeds
+// Plan.Steps) — the RobotChecks-based pass must still catch it as
+// realInvolved, or a real robot's trade divergence would under-alert as WARN
+// instead of CRITICAL.
+func TestEvaluateRecon_TradeOnlyMismatchIsRealInvolved(t *testing.T) {
+	d := baseDeps()
+	d.Robots = fakeRobots{
+		specs:  []*quikv1.RobotSpec{{RobotId: "r1", Symbol: "RIU6", Paper: false}},
+		paused: map[string]bool{},
+		times:  map[string][2]int64{},
+	}
+	d.Runner = fakeRunner{statuses: map[string]*quikv1.RobotStatus{
+		"r1": {RobotId: "r1", RecentFills: []*quikv1.RobotFill{
+			{OrderId: "10", Qty: 1, Price: 100, Status: "filled"},
+		}},
+	}}
+	// No QUIK trade at all (Acc.Orders/Trades both empty) -> no order finding,
+	// so ordSteps is empty and rep.Plan.Steps is []; the fill above matches no
+	// tagged trade -> tradesBad["r1"]=true -> RobotCheck{ID:"r1", TradesOK:false}.
+	d.Accounts = fakeAccounts{snap: accounts.Snapshot{PosAgeMs: 10, OrdAgeMs: 10}}
+
+	state, real := EvaluateRecon(d)
+	if state != "MISMATCH" {
+		t.Fatalf("want MISMATCH, got %s", state)
+	}
+	if !real {
+		t.Errorf("a real robot's trade-only mismatch (zero plan steps) must still be realInvolved")
+	}
+}
+
 func TestEvaluateRecon_StaleNeverRealInvolved(t *testing.T) {
 	d := baseDeps()
 	d.Accounts = fakeAccounts{snap: accounts.Snapshot{PosAgeMs: 999_999}}
