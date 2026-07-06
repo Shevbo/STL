@@ -615,7 +615,8 @@ local function publish_acc_orders()
       -- uses the same math.floor/%-based pattern for the very same flags field).
       if (tonumber(r.flags) or 0) % 2 == 1 then active = 1 end
       rows[#rows + 1] = { tostring(r.order_num), r.sec_code or "", active,
-                          tonumber(r.price) or 0, tonumber(r.balance) or 0, tonumber(r.qty) or 0 }
+                          tonumber(r.price) or 0, tonumber(r.balance) or 0, tonumber(r.qty) or 0,
+                          tostring(r.brokerref or "") }
     end
   end
   local key = ser_rows(rows)
@@ -641,7 +642,8 @@ local function publish_acc_trades()  -- incremental: only rows we have not sent 
     if r and r.trade_num then
       local ts = now_ms()  -- QUIK datetime table conversion is best-effort; agent stamps receipt anyway
       rows[#rows + 1] = { tostring(r.trade_num), tostring(r.order_num or ""), r.sec_code or "",
-                          tonumber(r.price) or 0, tonumber(r.qty) or 0, ts }
+                          tonumber(r.price) or 0, tonumber(r.qty) or 0, ts,
+                          tostring(r.brokerref or "") }
     end
   end
   acc.trd_seen = n
@@ -757,6 +759,11 @@ local function handle_place(cmd)
     ACCOUNT     = tostring(account),
   }
   if client_code ~= "" then trans.CLIENT_CODE = tostring(client_code) end
+  -- Robot attribution: the agent sends the owner tag (robot ID / "recon"); QUIK stores
+  -- a NEW_ORDER COMMENT in the order's brokerref, inherited by its trades, so recon can
+  -- tell a robot order from manual trading. Empty for manual/unknown (never happens from
+  -- the agent path). Length is bounded by the QUIK build — verified in the go-live smoke.
+  if cmd.comment and cmd.comment ~= "" then trans.COMMENT = tostring(cmd.comment) end
 
   log(string.format("place trans_id=%d %s %s %s @%s x%s acct=%s",
     trans_id, trans.OPERATION, trans.CLASSCODE, trans.SECCODE,
