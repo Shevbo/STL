@@ -59,7 +59,12 @@ restart). Runner state (strategy dict, position, avg, realized P&L in PRICE POIN
 200 fills) persists in `runner_state.json`. Status mirrors back as `RobotStatusReport`
 (incl. `signal_json` strategy introspection from `robot_runner/explain.py`) → STL
 `QuikAgentStore` → `GET /api/v1/quik/robots-mirror` → showcase. KillSwitch = block new +
-cancel working; positions stay open by design.
+cancel working; positions stay open by design. The agent also hosts its own local
+status+recon page (loopback `:8071`, `quik_agent/internal/status/page.html`) comparing
+robots' claimed positions against QUIK's account tables; STL mirrors that JSON opaquely
+at `GET /api/v1/quik/agent-local-status` for read-only remote viewing
+(`frontend/public/agent-status.html`, same page, `?src=&interval=` params) — align/
+manual-offset actions only work against the agent's own loopback, not the mirror.
 
 **Order flow (human orders and robot orders share the tail):** UI → `POST
 /api/v1/quik/orders/*` (`trader/api/quik_orders.py`) → limit check (`trader/quik/

@@ -56,6 +56,88 @@ Reboot the QUIK VDS. Expected with NO manual steps: QUIK autostarts, the agent
 restored), the status mirror goes fresh in STL. The ONLY manual act that ever
 remains: the master trading flag.
 
+## Local showcase (agent-hosted status + recon page)
+
+The agent embeds its own operator page (`quik_agent/internal/status/page.html`,
+served at `GET /` on the agent's loopback status server) showing feed/runner
+health, deployed robots (position/P&L/heartbeat/params/signal), and a recon
+(sverka) block that compares robots-claimed positions against QUIK's own
+account tables. STL mirrors the same JSON opaquely (does not interpret it) at
+`GET /api/v1/quik/agent-local-status` for remote viewing — see below.
+
+### VDS operator steps (one-time per release, manual — no SSH to the VDS)
+
+1. Update `quik_agent/lua/shectory_trade.lua` on the VDS (copy the new script
+   version next to QUIK) — it now also publishes account tables (positions/
+   orders/trades) for recon, change-gated same as ticks/books.
+2. Update the sidecar `shectory_trade_config.lua` next to the script if new
+   keys were added (it survives script updates by design; diff against
+   `quik_agent/lua/shectory_trade_config.example.lua`).
+3. Restart the Lua script in QUIK (reload from the QUIK Lua menu, or restart
+   QUIK). Confirm the "Таблица всех сделок" (all-trades) window is still open
+   — the tape feed depends on it.
+4. Confirm the agent picks up new `agent_config.json` keys (additive, agent
+   backfills sane defaults on first read if absent):
+   - `status_port` — loopback port for the local page. Default `8071`. An
+     explicit `0` is a deliberate persistent "disabled" (unlike other numeric
+     fields, 0 is never re-defaulted back to 8071).
+   - `recon_manual_offset` — per-symbol operator-declared position offset
+     (map symbol -> qty), edited from the page itself (`POST
+     /api/manual-offset`, whole-map replace) and persisted here across
+     restarts. Default `{}`.
+   - `status_snapshot_min_sec` — floors how often the agent mirrors its local
+     status JSON up to STL, even if it changes every tick. Default `5`.
+5. Open `http://127.0.0.1:8071` on the VDS (agent loopback only — not exposed
+   externally) and confirm the page renders: header shows version/build/
+   uptime/master-flag/link-to-STL; the "Здоровье" tiles are fresh; deployed
+   robots show a heartbeat under ~45s; the "Сверка (recon)" banner reads OK
+   (green) once the account-table feed above is live — it reads STALE
+   (amber) until Lua step 1 is applied, which is expected and not an error.
+
+### Align procedure — what the button does
+
+When recon finds a mismatch, the page shows a plan (`recon.plan.steps`) and an
+"Выполнить план (Execute plan)" button. Clicking it POSTs `{"plan_id"}` to
+`/api/align` on the AGENT (never STL — this executes locally against QUIK).
+The handler recomputes recon FRESH server-side and refuses to run a plan the
+operator isn't currently looking at: if the fresh plan's id doesn't match the
+one submitted, it returns **409** with the fresh recon so the page can update
+and the operator re-confirms — this is the guard against acting on a stale
+screenshot/plan. Steps execute sequentially and stop at the first failure
+(remaining steps are reported `skipped`, not attempted) — a half-applied plan
+must be re-evaluated from a fresh recon picture, never pushed through blind.
+Step kinds: `cancel_order` (cancel a QUIK order the agent doesn't track),
+`close_position` (place ONE limit order for the unexplained excess — goes
+through the SAME `trade.Manager.PlaceOrderErr` path as any other order, so
+the master flag and Guard limits gate it exactly like a human order; a
+disarmed agent simply rejects the align order and that becomes the step's
+error), and `fix_state` (clear a robot's phantom "working order" belief and
+pin its position/avg to the plan's values). No AlignExec wired -> **503**
+before any body parse (an agent without an executor can't act on anything).
+
+### STL mirror (remote viewing, read-only)
+
+Open `https://stl.shectory.ru/agent-status.html?src=/api/v1/quik/agent-local-status&interval=10000`.
+This is the SAME page (`frontend/public/agent-status.html`, a literal copy of
+the agent's embedded HTML) pointed at STL's mirror endpoint instead of the
+agent's own `/api/status`, polling every 10s instead of the local page's 1s
+default — remote viewing only generates load on STL, not the VDS. The align
+button and manual-offset editor on this URL POST to `/api/align` and
+`/api/manual-offset` RELATIVE TO STL's own origin, which does not implement
+those routes — treat the mirror as READ-ONLY monitoring; do any align/manual-
+offset action from the local `http://127.0.0.1:8071` page on the VDS itself.
+Until the agent has sent at least one snapshot, the mirror endpoint returns
+`{"status": null, "_received_at_ms": null}` — expected on first deploy or
+after an agent restart, not a bug.
+
+### Clock-drift caveat
+
+The page's "Дрейф часов" (clock drift) and "Биржевой лаг" (exchange lag)
+tiles are only meaningful if the VDS clock is accurate. The VDS clock has
+drifted minutes before. If drift looks implausible (large, or exchange lag
+looks negative/huge), resync FIRST before treating it as a feed problem:
+`w32tm /resync` on the VDS (operator-manual, no SSH access from here).
+
 ## Verify loops
 
 - Python: `python -m pytest tests/runner/ tests/quik/ -q`
