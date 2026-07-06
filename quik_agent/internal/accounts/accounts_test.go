@@ -168,7 +168,7 @@ func TestStoreAddTradesCapsAt500(t *testing.T) {
 func TestStoreRTTAndDrift(t *testing.T) {
 	now := int64(1000_000)
 	s := New(func() int64 { return now })
-	s.SetPong(now-150, 0, "03:00:00") // t0 150ms ago
+	s.SetPong(now-150, 0, "03:00:00", 0) // t0 150ms ago
 	snap := s.Snapshot()
 	if snap.RTTMs != 150 {
 		t.Fatalf("rtt %d", snap.RTTMs)
@@ -182,7 +182,7 @@ func TestStoreDriftMidnightWrap(t *testing.T) {
 	s := New(func() int64 { return now })
 	// Server reports 23:59:00 MSK (60s before midnight). Physically the true drift
 	// is +90s (local is 90s ahead), not the naive ~24h same-day subtraction.
-	s.SetPong(now, 0, "23:59:00")
+	s.SetPong(now, 0, "23:59:00", 0)
 	snap := s.Snapshot()
 	if snap.ClockDriftMs != 90_000 {
 		t.Fatalf("ClockDriftMs = %d, want 90000 (midnight-wrap candidate)", snap.ClockDriftMs)
@@ -193,7 +193,7 @@ func TestStoreDriftSameDay(t *testing.T) {
 	// now (UTC ms) chosen so local MSK time-of-day = 12:00:05.
 	now := int64(12*3600_000 + 5_000 - 3*3600_000)
 	s := New(func() int64 { return now })
-	s.SetPong(now, 0, "12:00:00")
+	s.SetPong(now, 0, "12:00:00", 0)
 	snap := s.Snapshot()
 	if snap.ClockDriftMs != 5_000 {
 		t.Fatalf("ClockDriftMs = %d, want 5000", snap.ClockDriftMs)
@@ -203,7 +203,7 @@ func TestStoreDriftSameDay(t *testing.T) {
 func TestStorePongAge(t *testing.T) {
 	now := int64(1000)
 	s := New(func() int64 { return now })
-	s.SetPong(now-10, 0, "00:00:00")
+	s.SetPong(now-10, 0, "00:00:00", 0)
 	now += 300
 	snap := s.Snapshot()
 	if snap.PongAgeMs != 300 {
@@ -230,5 +230,60 @@ func TestStoreTapeLag(t *testing.T) {
 	snap = s.Snapshot()
 	if snap.ExchangeLagMs != 200 {
 		t.Fatalf("ExchangeLagMs = %d, want 200", snap.ExchangeLagMs)
+	}
+}
+
+// TestStoreExchangeLagFromPong: production feeds ExchangeLagMs from SetPong's
+// last_trade_ts_ms (the QLua pong's own exchange-timestamped field), not from the tape
+// feed (whose rows carry the agent's receipt stamp, not the exchange's trade time).
+func TestStoreExchangeLagFromPong(t *testing.T) {
+	now := int64(1_000_000)
+	s := New(func() int64 { return now })
+
+	snap := s.Snapshot()
+	if snap.ExchangeLagMs != -1 {
+		t.Fatalf("ExchangeLagMs before any pong = %d, want -1 (no data)", snap.ExchangeLagMs)
+	}
+
+	// Lua has seen no trade yet (last_trade_ts_ms=0): must not fabricate a lag.
+	s.SetPong(now, 0, "00:00:00", 0)
+	snap = s.Snapshot()
+	if snap.ExchangeLagMs != -1 {
+		t.Fatalf("ExchangeLagMs with last_trade_ts_ms=0 = %d, want -1 (still no data)", snap.ExchangeLagMs)
+	}
+
+	// A pong carrying a real last_trade_ts_ms computes the lag as this pong's
+	// receipt time minus that trade's exchange timestamp.
+	now = 1_000_500
+	s.SetPong(now, 0, "00:00:00", now-300)
+	snap = s.Snapshot()
+	if snap.ExchangeLagMs != 300 {
+		t.Fatalf("ExchangeLagMs = %d, want 300", snap.ExchangeLagMs)
+	}
+}
+
+// TestStoreAgesNegativeBeforeFirstPublish: PosAgeMs/OrdAgeMs must be -1 (not an
+// epoch-sized number) before SetPositions/SetOrders has ever been called, and switch to
+// a real age once data arrives.
+func TestStoreAgesNegativeBeforeFirstPublish(t *testing.T) {
+	now := int64(1_700_000_000_000)
+	s := New(func() int64 { return now })
+
+	snap := s.Snapshot()
+	if snap.PosAgeMs != -1 || snap.OrdAgeMs != -1 {
+		t.Fatalf("ages before any publish = pos=%d ord=%d, want -1/-1", snap.PosAgeMs, snap.OrdAgeMs)
+	}
+	if snap.PosAtMs != 0 || snap.OrdAtMs != 0 {
+		t.Fatalf("stamps before any publish = pos=%d ord=%d, want 0/0", snap.PosAtMs, snap.OrdAtMs)
+	}
+
+	s.SetPositions([]Position{{Sec: "RIU6", Net: 1}})
+	now += 250
+	snap = s.Snapshot()
+	if snap.PosAgeMs != 250 {
+		t.Fatalf("PosAgeMs after publish = %d, want 250", snap.PosAgeMs)
+	}
+	if snap.OrdAgeMs != -1 {
+		t.Fatalf("OrdAgeMs must still be -1 (orders never published), got %d", snap.OrdAgeMs)
 	}
 }

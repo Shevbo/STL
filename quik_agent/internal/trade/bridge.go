@@ -110,9 +110,10 @@ type luaEvent struct {
 	Text       string `json:"text"`        // trans_reply/order text
 
 	// account snapshot / clock-sync (QLua acc_pos/acc_ord/acc_trd/pong publisher)
-	Rows       [][]any `json:"rows"`        // acc_pos/acc_ord/acc_trd: raw decoded rows
-	T0         int64   `json:"t0"`          // pong: agent-stamped send time (echoed back)
-	ServerTime string  `json:"server_time"` // pong: QUIK server time "HH:MM:SS" (MSK)
+	Rows          [][]any `json:"rows"`             // acc_pos/acc_ord/acc_trd: raw decoded rows
+	T0            int64   `json:"t0"`               // pong: agent-stamped send time (echoed back)
+	ServerTime    string  `json:"server_time"`      // pong: QUIK server time "HH:MM:SS" (MSK)
+	LastTradeTsMs int64   `json:"last_trade_ts_ms"` // pong: freshest OnAllTrade's exchange ts (epoch ms), 0 if none seen
 
 	// market data (QLua getParamEx / getQuoteLevel2 / OnAllTrade publisher)
 	Code   string      `json:"code"`   // md, book, tape, param
@@ -146,11 +147,12 @@ type MDEvent struct {
 // adapter (internal/accounts) does the type-tolerant conversion, mirroring how MDEvent
 // keeps decoding out of the bridge itself.
 type AccEvent struct {
-	Kind       string  // "pos" | "ord" | "trd" | "pong"
-	Rows       [][]any // pos/ord/trd: raw decoded rows
-	T0         int64   // pong: agent-stamped send time (echoed back)
-	TS         int64   // pong: Lua-side receive time
-	ServerTime string  // pong: QUIK server time "HH:MM:SS" (MSK)
+	Kind          string  // "pos" | "ord" | "trd" | "pong"
+	Rows          [][]any // pos/ord/trd: raw decoded rows
+	T0            int64   // pong: agent-stamped send time (echoed back)
+	TS            int64   // pong: Lua-side receive time
+	ServerTime    string  // pong: QUIK server time "HH:MM:SS" (MSK)
+	LastTradeTsMs int64   // pong: freshest OnAllTrade's exchange ts (epoch ms), 0 if none seen
 }
 
 // BridgeHandler receives decoded Lua events. The order manager implements it. Calls
@@ -405,7 +407,7 @@ func (b *Bridge) dispatch(ev luaEvent) {
 		return
 	case "pong":
 		if acc != nil {
-			acc(AccEvent{Kind: "pong", T0: ev.T0, TS: ev.TS, ServerTime: ev.ServerTime})
+			acc(AccEvent{Kind: "pong", T0: ev.T0, TS: ev.TS, ServerTime: ev.ServerTime, LastTradeTsMs: ev.LastTradeTsMs})
 		}
 		return
 	}

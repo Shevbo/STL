@@ -144,3 +144,35 @@ func TestMaybeSendStatusSnapshot_ChangeGate(t *testing.T) {
 			fs.sent[1].GetStatusSnapshot().GetGeneratedAtUnixMs())
 	}
 }
+
+// TestMaybeSendStatusSnapshot_AgeOnlyChangeDoesNotResend: uptime_sec (and every
+// *_age_ms / exchange-lag field) ticks up every heartbeat regardless of real content —
+// GateHash (status.GateHash) must zero those before hashing, or the change-gate would
+// never actually gate anything (a resend on every single tick).
+func TestMaybeSendStatusSnapshot_AgeOnlyChangeDoesNotResend(t *testing.T) {
+	l := New(Options{StatusSnapshotMinSec: 5})
+	fs := &fakeSessionClient{}
+	l.setStream(fs)
+	src := &fakeStatusSrc{price: 100}
+	uptime := int64(0)
+	deps := statusDeps(src)
+	deps.UptimeSec = func() int64 { return uptime }
+	l.SetStatusDeps(deps)
+
+	if err := l.maybeSendStatusSnapshot(0); err != nil {
+		t.Fatalf("first send: %v", err)
+	}
+	if len(fs.sent) != 1 {
+		t.Fatalf("want 1 sent frame after first observation, got %d", len(fs.sent))
+	}
+
+	// Only uptime_sec advances; nothing else in the payload changes. Even well past
+	// the min-interval floor, this must NOT trigger a resend.
+	uptime = 42
+	if err := l.maybeSendStatusSnapshot(60_000); err != nil {
+		t.Fatalf("age-only resend check: %v", err)
+	}
+	if len(fs.sent) != 1 {
+		t.Fatalf("uptime-only change must not resend (GateHash must zero volatile fields), got %d sends", len(fs.sent))
+	}
+}

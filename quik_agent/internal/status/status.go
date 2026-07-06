@@ -8,6 +8,7 @@
 package status
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"sort"
 	"strings"
@@ -183,6 +184,8 @@ func buildReconInputs(d Deps) recon.Inputs {
 	accView := recon.AccView{
 		PosAgeMs: acc.PosAgeMs,
 		OrdAgeMs: acc.OrdAgeMs,
+		PosAtMs:  acc.PosAtMs,
+		OrdAtMs:  acc.OrdAtMs,
 	}
 	for _, p := range acc.Positions {
 		accView.Positions = append(accView.Positions, recon.Position{Sec: p.Sec, Net: p.Net, Avg: p.Avg})
@@ -199,10 +202,17 @@ func buildReconInputs(d Deps) recon.Inputs {
 	}
 
 	// Working orders, split into robot-owned (grouped by robot ID, "rr:" prefix)
-	// and human-owned (everything else), matching recon.Inputs' doc exactly.
+	// and human-owned (everything else), matching recon.Inputs' doc exactly. A
+	// "recon:"-prefixed client_id (a PREVIOUS align's close_position, see
+	// status.Aligner.closePosition) additionally marks its symbol as pending, so
+	// Evaluate does not generate a second close_position on top of one still resting.
 	robotOrderNums := map[string][]string{}
 	humanOrders := map[string]bool{}
+	reconPendingSymbols := map[string]bool{}
 	for _, ws := range d.Manager.SnapshotWorking() {
+		if strings.HasPrefix(ws.ClientID, "recon:") {
+			reconPendingSymbols[ws.Code] = true
+		}
 		if ws.OrderNum == "" {
 			continue // not yet acknowledged by QUIK; nothing to reconcile against yet
 		}
@@ -252,13 +262,14 @@ func buildReconInputs(d Deps) recon.Inputs {
 	}
 
 	return recon.Inputs{
-		Robots:       robotViews,
-		HumanOrders:  humanOrders,
-		Acc:          accView,
-		Trans:        trans,
-		ManualOffset: d.manualOffsets(),
-		PriceStep:    priceStep,
-		NowMs:        d.nowMs(),
+		Robots:              robotViews,
+		HumanOrders:         humanOrders,
+		Acc:                 accView,
+		Trans:               trans,
+		ManualOffset:        d.manualOffsets(),
+		PriceStep:           priceStep,
+		ReconPendingSymbols: reconPendingSymbols,
+		NowMs:               d.nowMs(),
 	}
 }
 
@@ -610,4 +621,37 @@ func BuildStatus(d Deps) ([]byte, error) {
 		Recon:  toReconJSON(rep, d.manualOffsets()),
 	}
 	return json.Marshal(out)
+}
+
+// GateHash returns a change-detection digest of a /api/status JSON payload (as produced
+// by BuildStatus) with fields that legitimately drift every tick REGARDLESS of any real
+// change — uptime, every per-instrument tick age, the pos/ord/runner-report table ages,
+// the pong RTT, and the exchange lag (now recomputed against the wall clock on every 5s
+// ping even with no new trade — see accounts.Store.SetPong) — zeroed out first.
+//
+// Without this, link.Link.maybeSendStatusSnapshot's change-gate would never actually
+// gate anything: the JSON differs every single heartbeat purely from these counters
+// ticking upward, so STL would get pushed on every tick no matter how quiet the
+// account/robots actually are. The bytes the caller actually SENDS to STL are the
+// original, untouched `data` — this function only decides WHETHER to send.
+func GateHash(data []byte) ([32]byte, error) {
+	var v statusJSON
+	if err := json.Unmarshal(data, &v); err != nil {
+		return [32]byte{}, err
+	}
+	v.Agent.UptimeSec = 0
+	v.Health.RTTMs = 0
+	v.Health.PongAgeMs = 0
+	v.Health.ExchangeLagMs = 0
+	v.Health.PosAgeMs = 0
+	v.Health.OrdAgeMs = 0
+	v.Health.RunnerReportAgeMs = 0
+	for i := range v.Health.Feed {
+		v.Health.Feed[i].AgeMs = 0
+	}
+	gateData, err := json.Marshal(v)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	return sha256.Sum256(gateData), nil
 }

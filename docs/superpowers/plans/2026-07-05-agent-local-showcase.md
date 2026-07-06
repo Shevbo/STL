@@ -14,7 +14,7 @@
 - Go builds/tests run ON THE HOSTER in `~/quik_build` (`export PATH=$HOME/go-sdk/go/bin:$HOME/go/bin:$HOME/protoc/bin:$PATH`); scp changed files up first.
 - All new Lua publications and the STL snapshot frame are CHANGE-GATED (send only when payload changed).
 - Status HTTP server binds `127.0.0.1` ONLY. The only mutating endpoints are `/api/align` and `/api/manual-offset`.
-- Align order steps go through `trade.Manager` (Guard limits + master flag apply). A disarmed agent executes state-only steps.
+- Align order steps go through `trade.Manager` (Guard limits + master flag apply). A disarmed agent executes state-only steps. Exception (adjudicated): `cancel_order` goes through `CancelOrphan`, which — like `KillSwitch` — is intentionally allowed with the master flag OFF, since a cancel only ever reduces exposure; only `close_position` (a real placement) is gated on the master flag.
 - Synthetic/derived prices must be quantized to the instrument price step.
 - No secret values in code, config, or logs (env var NAMES only).
 - P&L rubles = points x `step_cost / price_step`; if coef unavailable, show points only, never a fabricated ruble number.

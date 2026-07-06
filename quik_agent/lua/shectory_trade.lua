@@ -487,7 +487,8 @@ end
 -- main(). All calls are pcall-guarded — MD must never break order handling.
 ----------------------------------------------------------------------
 local md = { codes = {}, code_set = {}, last_tick_ms = 0, last_book_ms = 0,
-             last_param_ms = 0, tape = {}, last_tape_ms = 0, last_acc_ms = 0 }
+             last_param_ms = 0, tape = {}, last_tape_ms = 0, last_acc_ms = 0,
+             last_trade_ts_ms = 0 }
 for code in string.gmatch(CONFIG.MD_CODES or "", "([^,%s]+)") do
   md.codes[#md.codes + 1] = code
   md.code_set[code] = true
@@ -642,6 +643,18 @@ function OnAllTrade(t)
   local fl = tonumber(t.flags) or 0
   if math.floor(fl / 1) % 2 == 1 then side = 1 end       -- 0x1 = sell aggressor
   if math.floor(fl / 2) % 2 == 1 then side = 2 end       -- 0x2 = buy aggressor
+  -- Tape row ts stays the agent's OWN receipt stamp (now_ms()) — runner bars depend on
+  -- it, do not touch. Separately track the freshest trade's TRUE exchange timestamp for
+  -- the pong's last_trade_ts_ms field (agent exchange_lag_ms / "Биржевой лаг" tile).
+  -- ASSUMPTION: the VDS OS clock/timezone is set to MSK, matching exchange time, so
+  -- os.time() over QUIK's datetime table yields a correct epoch-ms trade timestamp — if
+  -- the VDS clock/tz is ever changed this must be revisited.
+  if type(t.datetime) == "table" then
+    local dt = t.datetime
+    local okts, ts = pcall(os.time, { year = dt.year, month = dt.month, day = dt.day,
+      hour = dt.hour or 0, min = dt.min or 0, sec = dt.sec or 0 })
+    if okts and ts then md.last_trade_ts_ms = ts * 1000 end
+  end
   buf[#buf + 1] = { tonumber(t.price) or 0, tonumber(t.qty) or 0, side, now_ms() }
 end
 
@@ -834,7 +847,8 @@ local function dispatch_command(line)
     local st = ""
     local ok, v = pcall(getInfoParam, "SERVERTIME")
     if ok and v then st = v end
-    emit({ event = "pong", t0 = cmd.t0 or 0, ts = now_ms(), server_time = st })
+    emit({ event = "pong", t0 = cmd.t0 or 0, ts = now_ms(), server_time = st,
+           last_trade_ts_ms = md.last_trade_ts_ms or 0 })
   else
     log("unknown cmd '" .. tostring(cmd.cmd) .. "' (dropped)")
   end

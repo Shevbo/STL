@@ -107,13 +107,15 @@
 
   <div id="align-card"></div>
 
-  <div class="sec-title" style="margin-top:10px">Ручной офсет позиции</div>
-  <div id="manual-offsets"></div>
-  <div class="mo-row">
-    <input type="text" id="mo-new-sym" placeholder="символ">
-    <input type="number" id="mo-new-val" placeholder="кол-во" step="1">
-    <button id="mo-add">Добавить</button>
-    <button id="mo-save">Сохранить офсеты</button>
+  <div id="manual-offset-block">
+    <div class="sec-title" style="margin-top:10px">Ручной офсет позиции</div>
+    <div id="manual-offsets"></div>
+    <div class="mo-row">
+      <input type="text" id="mo-new-sym" placeholder="символ">
+      <input type="number" id="mo-new-val" placeholder="кол-во" step="1">
+      <button id="mo-add">Добавить</button>
+      <button id="mo-save">Сохранить офсеты</button>
+    </div>
   </div>
 </section>
 
@@ -125,6 +127,11 @@
 const qs = new URLSearchParams(location.search);
 const SRC = qs.get('src') || '/api/status';
 const INTERVAL = +(qs.get('interval') || 1000);
+// IS_LOCAL: true only for the agent's own /api/status. The STL mirror (any other
+// src=) does not implement /api/align or /api/manual-offset and serves a runner log
+// path that is meaningless off the VDS — those controls are hidden there, see
+// applyModeVisibility().
+const IS_LOCAL = SRC === '/api/status';
 let lastOkMs = 0;
 
 function esc(s) {
@@ -136,6 +143,14 @@ function fmtMs(ms) {
   return (ms / 1000).toFixed(1) + ' с';
 }
 function fmtNum(n) { return (n ?? 0).toLocaleString('ru-RU'); }
+// fmtAge: several *_age_ms fields (and exchange_lag_ms, which behaves like one) use a
+// -1 sentinel for "no data yet" (table never published / no trade ever seen) instead of
+// an epoch-sized number — render that as "нет данных", never as a bogus huge duration.
+function fmtAge(ms) { return (ms == null || ms < 0) ? 'нет данных' : fmtMs(ms); }
+function applyModeVisibility() {
+  if (IS_LOCAL) return;
+  document.querySelectorAll('#manual-offset-block').forEach(el => el.style.display = 'none');
+}
 
 // manual-offset editor state: last map RENDERED from the server, plus local
 // edits the operator hasn't saved yet. Keyed by symbol -> value (as string
@@ -169,54 +184,62 @@ function renderHeader(a) {
   link.className = 'badge' + (a.link_up ? ' ok' : ' warn');
 }
 
-function tile(label, value, cls, note) {
-  return '<div class="tile"><div class="k">' + esc(label) + '</div><div class="v' + (cls ? ' ' + cls : '') + '">'
+function tile(label, value, cls, note, stale) {
+  return '<div class="tile"><div class="k">' + esc(label) + '</div><div class="v' + (cls ? ' ' + cls : '') + (stale ? ' stale-num' : '') + '">'
     + value + '</div>' + (note ? '<div class="note">' + esc(note) + '</div>' : '') + '</div>';
 }
 
-function renderHealth(h, linkUp) {
+function renderHealth(h, linkUp, stale) {
   const feedEl = document.getElementById('tiles-feed');
   if (!h.feed || !h.feed.length) {
     feedEl.innerHTML = '<div class="empty">Нет тиков ни по одному инструменту.</div>';
   } else {
     feedEl.innerHTML = h.feed.map(f => {
       const div = document.createElement('div');
-      div.innerHTML = tile(f.code, fmtMs(f.age_ms), f.age_ms > 5000 ? 'warn' : '');
+      div.innerHTML = tile(f.code, fmtMs(f.age_ms), f.age_ms > 5000 ? 'warn' : '', null, stale);
       div.firstElementChild.title = 'last=' + fmtNum(f.last) + ' bid=' + fmtNum(f.bid) + ' ask=' + fmtNum(f.ask);
       return div.innerHTML;
     }).join('');
   }
   const driftBad = Math.abs(h.clock_drift_ms ?? 0) > 1500;
   const misc = [
-    tile('QUIK RTT', fmtMs(h.rtt_ms), h.rtt_ms > 2000 ? 'warn' : ''),
-    tile('Понг', fmtMs(h.pong_age_ms), h.pong_age_ms > 10000 ? 'warn' : ''),
-    tile('Дрейф часов', (h.clock_drift_ms ?? 0) + ' мс', driftBad ? 'warn' : ''),
-    tile('Биржевой лаг', fmtMs(h.exchange_lag_ms), driftBad ? 'warn' : '', driftBad ? 'ненадёжно (дрейф часов)' : ''),
-    tile('Позиции QUIK', fmtMs(h.pos_age_ms), h.pos_age_ms > 30000 ? 'warn' : '', 'возраст acc_pos'),
-    tile('Заявки QUIK', fmtMs(h.ord_age_ms), h.ord_age_ms > 30000 ? 'warn' : '', 'возраст acc_ord'),
+    tile('QUIK RTT', fmtMs(h.rtt_ms), h.rtt_ms > 2000 ? 'warn' : '', null, stale),
+    tile('Понг', fmtMs(h.pong_age_ms), h.pong_age_ms > 10000 ? 'warn' : '', null, stale),
+    tile('Дрейф часов', (h.clock_drift_ms ?? 0) + ' мс', driftBad ? 'warn' : '', null, stale),
+    tile('Биржевой лаг', fmtAge(h.exchange_lag_ms), driftBad ? 'warn' : '', driftBad ? 'ненадёжно (дрейф часов)' : '', stale),
+    tile('Позиции QUIK', fmtAge(h.pos_age_ms), h.pos_age_ms > 30000 ? 'warn' : '', 'возраст acc_pos', stale),
+    tile('Заявки QUIK', fmtAge(h.ord_age_ms), h.ord_age_ms > 30000 ? 'warn' : '', 'возраст acc_ord', stale),
     tile('Раннер', h.runner_healthy ? 'жив' : 'не отвечает', h.runner_healthy ? '' : 'bad',
-      h.runner_report_age_ms < 0 ? 'ещё не подключался' : fmtMs(h.runner_report_age_ms) + ' назад'),
-    tile('Связь со STL', linkUp ? 'есть' : 'нет', linkUp ? '' : 'warn', 'не влияет на торговлю'),
+      h.runner_report_age_ms < 0 ? 'ещё не подключался' : fmtMs(h.runner_report_age_ms) + ' назад', stale),
+    tile('Связь со STL', linkUp ? 'есть' : 'нет', linkUp ? '' : 'warn', 'не влияет на торговлю', stale),
   ];
   document.getElementById('tiles-misc').innerHTML = misc.join('');
 }
 
 function robotLinks(r) {
   const links = [];
-  // NOTE: /logs/runner 404s today — no runner log FILE exists yet (stdout is
-  // piped into the agent console); link becomes live once Deps.LogPaths gains
-  // a real file (follow-up ticket).
-  links.push('<a class="mono" href="/logs/runner" target="_blank" style="color:#7ab8ff">runner.log</a>');
-  if (r.strategy_id) links.push('<a class="mono" href="/strategy/' + encodeURIComponent(r.strategy_id) + '" target="_blank" style="color:#7ab8ff">стратегия</a>');
+  // On the STL mirror these paths resolve against STL's own origin (not the agent),
+  // which does not implement them — render plain text there instead of a dead link.
+  if (IS_LOCAL) {
+    // NOTE: /logs/runner 404s today — no runner log FILE exists yet (stdout is
+    // piped into the agent console); link becomes live once Deps.LogPaths gains
+    // a real file (follow-up ticket).
+    links.push('<a class="mono" href="/logs/runner" target="_blank" style="color:#7ab8ff">runner.log</a>');
+    if (r.strategy_id) links.push('<a class="mono" href="/strategy/' + encodeURIComponent(r.strategy_id) + '" target="_blank" style="color:#7ab8ff">стратегия</a>');
+  } else {
+    links.push('<span class="mono" style="color:#667">runner.log</span>');
+    if (r.strategy_id) links.push('<span class="mono" style="color:#667">' + esc(r.strategy_id) + '</span>');
+  }
   return links.join(' · ');
 }
 
-function renderRobots(robots) {
+function renderRobots(robots, stale) {
   const body = document.getElementById('robots-body');
   if (!robots || !robots.length) {
     body.innerHTML = '<tr><td colspan="10" class="empty">Роботов на агенте не развёрнуто.</td></tr>';
     return;
   }
+  const staleCls = stale ? ' stale-num' : '';
   let html = '';
   robots.forEach((r, i) => {
     const modeCls = r.mode === 'real' ? 'real' : 'paper';
@@ -234,8 +257,8 @@ function renderRobots(robots) {
       + '<td>' + esc(r.strategy_id) + '</td>'
       + '<td><span class="badge ' + modeCls + '">' + modeLabel + '</span></td>'
       + '<td><span class="badge ' + (r.running ? 'ok' : 'dim') + '">' + status + '</span></td>'
-      + '<td class="mono ' + (r.position > 0 ? 'buy' : (r.position < 0 ? 'sell' : '')) + '">' + (r.position > 0 ? '+' : '') + fmtNum(r.position) + '</td>'
-      + '<td class="mono ' + (r.pnl_points > 0 ? 'buy' : (r.pnl_points < 0 ? 'sell' : '')) + '">' + pnl + '</td>'
+      + '<td class="mono' + staleCls + ' ' + (r.position > 0 ? 'buy' : (r.position < 0 ? 'sell' : '')) + '">' + (r.position > 0 ? '+' : '') + fmtNum(r.position) + '</td>'
+      + '<td class="mono' + staleCls + ' ' + (r.pnl_points > 0 ? 'buy' : (r.pnl_points < 0 ? 'sell' : '')) + '">' + pnl + '</td>'
       + '<td><span class="badge ' + hbCls + '">' + (hbAge == null ? '—' : fmtMs(hbAge)) + '</span></td>'
       + '<td>' + robotLinks(r) + '</td>'
       + '</tr>';
@@ -334,9 +357,14 @@ function renderRecon(recon) {
         + (s.qty ? ' · qty ' + fmtNum(s.qty) : '')
         + (s.set_pos || s.set_avg ? ' · сброс позиции=' + fmtNum(s.set_pos) + ' avg=' + fmtNum(s.set_avg) : '')
         + '<br><span style="color:#889">' + esc(s.detail) + '</span></div>').join('')
-      + '<div style="margin-top:8px"><button id="align-btn" data-plan="' + esc(recon.plan.id) + '">Выполнить план</button></div>'
+      + (IS_LOCAL
+          ? '<div style="margin-top:8px"><button id="align-btn" data-plan="' + esc(recon.plan.id) + '">Выполнить план</button></div>'
+          : '<div style="margin-top:8px;color:#667;font-size:11px">Выполнение плана доступно только с локальной страницы агента.</div>')
       + '</div>';
-    document.getElementById('align-btn').addEventListener('click', () => align(recon.plan.id));
+    if (IS_LOCAL) {
+      const btn = document.getElementById('align-btn');
+      btn.addEventListener('click', () => align(recon.plan.id, btn));
+    }
   } else {
     card.innerHTML = '';
   }
@@ -380,9 +408,14 @@ document.getElementById('mo-save').addEventListener('click', async () => {
 });
 
 function render(s) {
+  // The STL mirror injects "_received_at_ms" (its own receipt time) alongside the
+  // agent's own top-level keys — see trader/quik/store.py set_agent_status. Data
+  // received more than 5s ago (routine on the 10s-interval mirror) is dimmed via the
+  // existing .stale-num class instead of looking as fresh as the live 1s local page.
+  const stale = s._received_at_ms != null && (Date.now() - s._received_at_ms > 5000);
   renderHeader(s.agent || {});
-  renderHealth(s.health || {}, (s.agent || {}).link_up);
-  renderRobots(s.robots || []);
+  renderHealth(s.health || {}, (s.agent || {}).link_up, stale);
+  renderRobots(s.robots || [], stale);
   renderRecon(s.recon || { state: 'STALE' });
   if (prevReconState !== null && prevReconState !== 'MISMATCH' && s.recon && s.recon.state === 'MISMATCH') beep();
   if (s.recon) prevReconState = s.recon.state;
@@ -390,7 +423,7 @@ function render(s) {
   document.getElementById('f-src').textContent = SRC;
 }
 
-async function poll() {
+async function fetchAndRender() {
   const httpEl = document.getElementById('offline-http');
   try {
     const r = await fetch(SRC, {cache: 'no-store'});
@@ -409,14 +442,25 @@ async function poll() {
     httpEl.textContent = '';
     if (Date.now() - lastOkMs > 5000) document.body.classList.add('offline');
   }
+}
+async function poll() {
+  await fetchAndRender();
   setTimeout(poll, INTERVAL);
 }
-async function align(planId) {
+async function align(planId, btn) {
   if (!confirm('Выровнять по плану ' + planId + '?')) return;
-  const r = await fetch('/api/align', {method: 'POST', headers: {'content-type': 'application/json'},
-    body: JSON.stringify({plan_id: planId})});
-  alert(await r.text());
+  if (btn) btn.disabled = true;
+  try {
+    const r = await fetch('/api/align', {method: 'POST', headers: {'content-type': 'application/json'},
+      body: JSON.stringify({plan_id: planId})});
+    const text = await r.text();
+    alert(text);
+    if (r.ok) await fetchAndRender(); // force an immediate re-poll so the page reflects the executed plan right away
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
+applyModeVisibility();
 poll();
 </script>
 </body>

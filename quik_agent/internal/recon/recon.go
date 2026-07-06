@@ -57,12 +57,17 @@ type Trade struct {
 	TsMs               int64
 }
 
-// AccView is accounts.Snapshot adapted for the comparator.
+// AccView is accounts.Snapshot adapted for the comparator. PosAgeMs/OrdAgeMs gate
+// staleness (negative means "never published", same as a too-old age — see Evaluate);
+// PosAtMs/OrdAtMs are the ABSOLUTE receipt stamps of the underlying tables and are what
+// Plan.ID hashes (see plan.go) — unlike the ages, they do not drift between reads of an
+// unchanged table.
 type AccView struct {
 	Positions          []Position
 	Orders             []Order
 	Trades             []Trade
 	PosAgeMs, OrdAgeMs int64
+	PosAtMs, OrdAtMs   int64
 }
 
 // TransCheck surfaces one hung-past-reconcile or rejected transaction, pre-flagged by
@@ -86,7 +91,13 @@ type Inputs struct {
 	Trans        []TransCheck       // pre-flagged hung/rejected trans from the Manager's pending state
 	ManualOffset map[string]int64   // symbol -> operator-declared manual position
 	PriceStep    map[string]float64 // symbol -> exchange price step; missing => exact-match trade fuzzing
-	NowMs        int64
+	// ReconPendingSymbols marks a symbol that already has an active working order
+	// placed by a PREVIOUS align (client_id prefix "recon:") still resting — its
+	// close_position is generated at most once per outstanding order; a fresh
+	// mismatch is re-evaluated once that order clears (fills/cancels), not raced by
+	// a second close on the same excess.
+	ReconPendingSymbols map[string]bool
+	NowMs               int64
 }
 
 // PosCheck is one symbol's position reconciliation: real robots' Position summed, plus
@@ -155,8 +166,11 @@ func Evaluate(in Inputs) Report {
 
 	// STALE gates everything else: the checks above still render from whatever data is
 	// at hand, but no Plan is ever computed from stale data, and State is never
-	// falsely reported OK.
-	if in.Acc.PosAgeMs > staleThresholdMs || in.Acc.OrdAgeMs > staleThresholdMs {
+	// falsely reported OK. A negative age means the table has NEVER been published at
+	// all (accounts.Store's -1 sentinel for "no data yet") — at least as stale as data
+	// that is merely too old, never treated as fresh.
+	if in.Acc.PosAgeMs < 0 || in.Acc.OrdAgeMs < 0 ||
+		in.Acc.PosAgeMs > staleThresholdMs || in.Acc.OrdAgeMs > staleThresholdMs {
 		rep.State = "STALE"
 		return rep
 	}
@@ -170,14 +184,16 @@ func Evaluate(in Inputs) Report {
 
 	// close_position is suppressed for any symbol a MISSING/ORPHAN order finding
 	// already explains — an operator should resolve the order first, not fight the
-	// robot's own working order with a position trade.
+	// robot's own working order with a position trade. It is also suppressed for a
+	// symbol whose PREVIOUS align close is still resting (ReconPendingSymbols) — the
+	// mismatch is already being worked, a second close would double the correction.
 	explainedSymbol := map[string]bool{}
 	for _, s := range ordSteps {
 		explainedSymbol[s.Symbol] = true
 	}
 	steps := append([]Step(nil), ordSteps...)
 	for _, p := range posChecks {
-		if p.OK || explainedSymbol[p.Symbol] {
+		if p.OK || explainedSymbol[p.Symbol] || in.ReconPendingSymbols[p.Symbol] {
 			continue
 		}
 		steps = append(steps, closePositionStep(p))
@@ -186,7 +202,7 @@ func Evaluate(in Inputs) Report {
 
 	rep.Plan = &Plan{
 		Steps: steps,
-		ID:    planID(steps, in.Acc.PosAgeMs, in.Acc.OrdAgeMs),
+		ID:    planID(steps, in.Acc.PosAtMs, in.Acc.OrdAtMs),
 	}
 	return rep
 }

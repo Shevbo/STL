@@ -236,6 +236,109 @@ func TestServer_AlignExecutesMatchingPlan(t *testing.T) {
 	}
 }
 
+// clockAccounts models accounts.Store's REAL behavior (ages computed against a live
+// clock at Snapshot() time, absolute receipt stamps fixed until new data arrives) — the
+// static fakeAccounts used elsewhere in this file returns a frozen age and can't
+// exercise the finding-1 regression (plan id computed at page-poll time must still
+// match the id recomputed at button-click time, even after the clock moved on).
+type clockAccounts struct {
+	posAtMs, ordAtMs int64
+	positions        []accounts.Position
+	nowMs            func() int64
+}
+
+func (c clockAccounts) Snapshot() accounts.Snapshot {
+	now := c.nowMs()
+	return accounts.Snapshot{
+		Positions: c.positions,
+		PosAtMs:   c.posAtMs,
+		OrdAtMs:   c.ordAtMs,
+		PosAgeMs:  now - c.posAtMs,
+		OrdAgeMs:  now - c.ordAtMs,
+	}
+}
+
+// TestServer_AlignSucceedsAfterClockAdvanceWithSameTables is the CRITICAL-fix
+// regression test at the HTTP layer: it fetches the plan id via GET /api/status, then
+// advances the injected clock (simulating time passing before the operator clicks
+// "confirm") WITHOUT any new table data, and confirms the align with the EARLIER plan
+// id still succeeds. Before the fix, hashing PosAgeMs/OrdAgeMs made this always 409.
+func TestServer_AlignSucceedsAfterClockAdvanceWithSameTables(t *testing.T) {
+	clock := int64(1_000_000)
+	d := mismatchDeps()
+	d.Accounts = clockAccounts{posAtMs: 999_900, ordAtMs: 999_900, nowMs: func() int64 { return clock }}
+	var gotPlan recon.Plan
+	d.AlignExec = func(plan recon.Plan) []StepResult {
+		gotPlan = plan
+		return []StepResult{{Kind: "close_position", Symbol: "RIU6", OK: true}}
+	}
+	ts := httptest.NewServer(newMux(d))
+	defer ts.Close()
+
+	fresh := getFreshPlanID(t, ts)
+
+	// Advance the clock (ages recompute) with NO new table data.
+	clock += 1500
+
+	body, _ := json.Marshal(alignRequest{PlanID: fresh})
+	resp, err := http.Post(ts.URL+"/api/align", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST /api/align: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		buf := new(bytes.Buffer)
+		buf.ReadFrom(resp.Body)
+		t.Fatalf("status = %d, want 200 (plan id must survive age drift alone): %s", resp.StatusCode, buf.String())
+	}
+	if gotPlan.ID != fresh {
+		t.Errorf("AlignExec called with plan.ID=%q, want %q", gotPlan.ID, fresh)
+	}
+}
+
+// TestServer_AlignRefusesReExecutionOfSamePlan: a second POST /api/align naming the
+// SAME plan_id that was just executed must be refused (409, "already executed") rather
+// than firing the align actions a second time.
+func TestServer_AlignRefusesReExecutionOfSamePlan(t *testing.T) {
+	d := mismatchDeps()
+	execCount := 0
+	d.AlignExec = func(plan recon.Plan) []StepResult {
+		execCount++
+		return []StepResult{{Kind: "close_position", Symbol: "RIU6", OK: true}}
+	}
+	ts := httptest.NewServer(newMux(d))
+	defer ts.Close()
+
+	fresh := getFreshPlanID(t, ts)
+	body, _ := json.Marshal(alignRequest{PlanID: fresh})
+
+	resp1, err := http.Post(ts.URL+"/api/align", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("first POST /api/align: %v", err)
+	}
+	resp1.Body.Close()
+	if resp1.StatusCode != http.StatusOK {
+		t.Fatalf("first POST status = %d, want 200", resp1.StatusCode)
+	}
+
+	resp2, err := http.Post(ts.URL+"/api/align", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("second POST /api/align: %v", err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusConflict {
+		t.Fatalf("second POST (same plan) status = %d, want 409", resp2.StatusCode)
+	}
+	buf := new(bytes.Buffer)
+	buf.ReadFrom(resp2.Body)
+	if !strings.Contains(buf.String(), "уже исполнен") {
+		t.Errorf("second POST body = %q, want it to mention the plan is already executed", buf.String())
+	}
+	if execCount != 1 {
+		t.Errorf("AlignExec called %d times, want exactly 1 (double-fire must be refused)", execCount)
+	}
+}
+
 func TestServer_ManualOffsetCallsManualSet(t *testing.T) {
 	d := baseDeps()
 	var got map[string]int64

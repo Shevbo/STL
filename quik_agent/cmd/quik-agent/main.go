@@ -369,7 +369,7 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 			}
 			accStore.AddTrades(rows)
 		case "pong":
-			accStore.SetPong(ev.T0, ev.TS, ev.ServerTime)
+			accStore.SetPong(ev.T0, ev.TS, ev.ServerTime, ev.LastTradeTsMs)
 		}
 	})
 	// QLua market-data feed -> provider overlay: the PRIMARY data path for the
@@ -383,21 +383,22 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 		if ev.IsTape {
 			trades := make([]*quikv1.TapeTrade, 0, len(ev.Trades))
 			var lastPx float64
-			var lastTsMs int64
 			for _, r := range ev.Trades {
 				if len(r) >= 4 && r[0] > 0 {
 					trades = append(trades, &quikv1.TapeTrade{Price: r[0], Qty: int64(r[1]),
 						Side: int32(r[2]), TsUnixMs: int64(r[3])})
 					lastPx = r[0]
-					lastTsMs = int64(r[3])
 				}
 			}
 			if len(trades) > 0 {
 				runnerSrvTape(trades, ev.Code)
 				quikdde.Default.SetLuaLast(ev.Code, lastPx) // /tick + UI follow the tape
-				// exchange lag = agent receive time minus the freshest trade's
-				// exchange timestamp (Deps.Health.exchange_lag_ms).
-				accStore.SetTapeLag(lastTsMs, time.Now().UnixMilli())
+				// NOTE: exchange lag is NOT measured here. Tape rows carry the
+				// agent's OWN receipt stamp (see shectory_trade.lua OnAllTrade),
+				// not the exchange's trade time, so timing off them would only
+				// measure file-queue latency. accStore.ExchangeLagMs is instead
+				// fed from the pong handler's last_trade_ts_ms (below), which IS
+				// the exchange's own trade datetime.
 			}
 			return
 		}

@@ -291,6 +291,19 @@ func (m *Manager) PlaceOrderErr(req *quikv1.PlaceOrder) error {
 // claims (so resolveForCancel can never find it). Class comes from ManagerConfig, sec
 // from the recon step's symbol. Like CancelOrder, it is allowed while the kill-switch
 // block is engaged: a cancel only ever reduces exposure.
+//
+// DELIBERATE (review-adjudicated): unlike PlaceOrderErr, this does NOT check
+// m.guard.Limits().TradingEnabled — a cancel is allowed even with the master trading
+// flag OFF. This mirrors KillSwitch semantics exactly (KillSwitch also cancels working
+// orders while blocking new placements): the platform convention across this whole
+// package is that order-cancelling actions only ever REDUCE exposure, so they stay
+// available regardless of the master flag, while anything that could INCREASE or
+// create exposure (PlaceOrderErr, and therefore the align Aligner's close_position
+// step, which places a real order) stays gated on it. Do not add a TradingEnabled
+// check here without re-deriving this from first principles — it would make an
+// orphan order impossible to clear from the local showcase while disarmed, which is
+// the opposite of the intent (see docs/runbooks/quik-robot-agent-rollout.md, Align
+// procedure section).
 func (m *Manager) CancelOrphan(orderNum, sec string) error {
 	if orderNum == "" {
 		return errors.New("empty order_num")

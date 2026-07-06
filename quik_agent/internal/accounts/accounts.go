@@ -56,13 +56,28 @@ type Snapshot struct {
 	Orders    []Order
 	Trades    []Trade
 
-	PosAgeMs int64 // ms since the last SetPositions call
-	OrdAgeMs int64 // ms since the last SetOrders call
+	// PosAgeMs/OrdAgeMs are -1 when the corresponding table has NEVER been
+	// published (SetPositions/SetOrders not yet called) — never an
+	// epoch-sized number from subtracting against a zero-value timestamp.
+	// Otherwise ms since the last Set call, computed against s.now() every
+	// read.
+	PosAgeMs int64
+	OrdAgeMs int64
+	// PosAtMs/OrdAtMs are the ABSOLUTE receipt timestamps (UnixMilli) of the
+	// last SetPositions/SetOrders call, 0 if never called. Unlike the ages
+	// above, these do NOT change between reads unless the underlying table
+	// actually changed — recon.Plan.ID hashes these, not the ages, so a
+	// confirm computed minutes after a poll still matches (see recon/plan.go).
+	PosAtMs int64
+	OrdAtMs int64
 
-	RTTMs         int64 // agent->Lua->agent round trip of the last pong
-	ClockDriftMs  int64 // local MSK time-of-day minus QUIK server time-of-day
-	PongAgeMs     int64 // ms since the last SetPong call
-	ExchangeLagMs int64 // freshest tape sample: agent recv time minus exchange ts
+	RTTMs        int64 // agent->Lua->agent round trip of the last pong
+	ClockDriftMs int64 // local MSK time-of-day minus QUIK server time-of-day
+	PongAgeMs    int64 // ms since the last SetPong call
+	// ExchangeLagMs is -1 when no trade has ever been observed (Lua's
+	// last_trade_ts_ms is 0), else the freshest pong-derived sample: pong
+	// receipt time minus that trade's exchange timestamp.
+	ExchangeLagMs int64
 }
 
 // Store is the mutex-guarded account/clock-health snapshot. now is injected so tests
@@ -153,7 +168,11 @@ func (s *Store) AddTrades(rows []Trade) {
 
 // SetPong records a QUIK clock-sync round trip. t0Ms is the agent-stamped send time
 // echoed back by Lua; serverTime is QUIK's own clock as "HH:MM:SS" (MSK, no DST).
-func (s *Store) SetPong(t0Ms, _luaTsMs int64, serverTime string) {
+// lastTradeTsMs is the exchange timestamp (epoch ms) of the freshest all-trade Lua has
+// seen, 0 if none yet — when > 0 it feeds the exchange-lag measurement (pong receipt
+// time minus that trade's exchange time); 0 leaves ExchangeLagMs at its current value
+// (still -1/"no data" on a fresh store — see Snapshot).
+func (s *Store) SetPong(t0Ms, _luaTsMs int64, serverTime string, lastTradeTsMs int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	nowMs := s.now()
@@ -162,14 +181,26 @@ func (s *Store) SetPong(t0Ms, _luaTsMs int64, serverTime string) {
 	if drift, ok := clockDriftMs(nowMs, serverTime); ok {
 		s.clockDriftMs = drift
 	}
+	if lastTradeTsMs > 0 {
+		s.setTapeLagLocked(lastTradeTsMs, nowMs)
+	}
 }
 
-// SetTapeLag feeds one (exchange timestamp, agent receive time) sample from the tape
-// MD sink (wired in a later task). Only the freshest pair (by recvMs) is kept, so an
-// out-of-order/stale sample cannot clobber a more recent measurement.
+// SetTapeLag feeds one (exchange timestamp, agent receive time) sample. Only the
+// freshest pair (by recvMs) is kept, so an out-of-order/stale sample cannot clobber a
+// more recent measurement. Exported for direct unit testing; production callers go
+// through SetPong (see setTapeLagLocked), which is fed from the QLua pong's
+// last_trade_ts_ms rather than the tape feed (tape rows carry the agent's OWN receipt
+// stamp, not the exchange's trade time — see shectory_trade.lua OnAllTrade).
 func (s *Store) SetTapeLag(exchTsMs, recvMs int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.setTapeLagLocked(exchTsMs, recvMs)
+}
+
+// setTapeLagLocked is SetTapeLag's body, callable while s.mu is already held (from
+// SetPong).
+func (s *Store) setTapeLagLocked(exchTsMs, recvMs int64) {
 	if s.haveTapeLag && recvMs < s.lastTapeRecvMs {
 		return
 	}
@@ -184,18 +215,34 @@ func (s *Store) Snapshot() Snapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	nowMs := s.now()
+
+	posAge := int64(-1)
+	if s.posAtMs != 0 {
+		posAge = nowMs - s.posAtMs
+	}
+	ordAge := int64(-1)
+	if s.ordAtMs != 0 {
+		ordAge = nowMs - s.ordAtMs
+	}
+	exchLag := int64(-1)
+	if s.haveTapeLag {
+		exchLag = s.exchangeLagMs
+	}
+
 	return Snapshot{
 		Positions: append([]Position(nil), s.positions...),
 		Orders:    append([]Order(nil), s.orders...),
 		Trades:    append([]Trade(nil), s.trades...),
 
-		PosAgeMs: nowMs - s.posAtMs,
-		OrdAgeMs: nowMs - s.ordAtMs,
+		PosAgeMs: posAge,
+		OrdAgeMs: ordAge,
+		PosAtMs:  s.posAtMs,
+		OrdAtMs:  s.ordAtMs,
 
 		RTTMs:         s.rttMs,
 		ClockDriftMs:  s.clockDriftMs,
 		PongAgeMs:     nowMs - s.pongAtMs,
-		ExchangeLagMs: s.exchangeLagMs,
+		ExchangeLagMs: exchLag,
 	}
 }
 

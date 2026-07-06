@@ -1,8 +1,6 @@
 package link
 
 import (
-	"crypto/sha256"
-
 	quikv1 "shectory/quik_agent/internal/pb"
 	"shectory/quik_agent/internal/status"
 )
@@ -134,7 +132,15 @@ func (l *Link) maybeSendStatusSnapshot(nowMs int64) error {
 	if err != nil {
 		return nil
 	}
-	sum := sha256.Sum256(data)
+	// GateHash zeroes fields that drift every tick regardless of real content
+	// (uptime, tick/table/pong ages, exchange lag) before hashing — a raw hash of
+	// `data` would differ every single heartbeat purely from those counters ticking,
+	// defeating the change-gate entirely. The bytes actually SENT below are `data`
+	// unmodified.
+	sum, err := status.GateHash(data)
+	if err != nil {
+		return nil // malformed build output: never break the heartbeat cadence over it
+	}
 	if sum == l.lastStatusHash {
 		return nil // unchanged since the last send
 	}

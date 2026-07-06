@@ -56,6 +56,14 @@ Reboot the QUIK VDS. Expected with NO manual steps: QUIK autostarts, the agent
 restored), the status mirror goes fresh in STL. The ONLY manual act that ever
 remains: the master trading flag.
 
+Note on recon after a restart: order OWNERSHIP (which robot/human placed a
+working order) lives only in the agent's in-memory `trade.Manager` state, not
+on disk. If the agent restarts while robot orders are still resting in QUIK,
+those orders come back as `ORPHAN` in the recon block until they fill or
+cancel — this is EXPECTED, not a bug, and the align plan will simply offer to
+cancel them (or the robot's own logic re-places as needed on its next
+signal).
+
 ## Local showcase (agent-hosted status + recon page)
 
 The agent embeds its own operator page (`quik_agent/internal/status/page.html`,
@@ -114,6 +122,13 @@ disarmed agent simply rejects the align order and that becomes the step's
 error), and `fix_state` (clear a robot's phantom "working order" belief and
 pin its position/avg to the plan's values). No AlignExec wired -> **503**
 before any body parse (an agent without an executor can't act on anything).
+Снятие заявок (`cancel_order`, `CancelOrphan`) работает и при выключенном
+master-флаге — как и KillSwitch, оно только снижает экспозицию; ордера на
+закрытие позиции (`close_position`) — нет, они идут через тот же путь, что и
+любой другой ордер, и требуют взведённого флага. A repeated confirm of a plan
+that already ran is refused (409, "план уже исполнен") — the page also
+disables the button while a request is in flight, so a double-click cannot
+fire the same align twice.
 
 ### STL mirror (remote viewing, read-only)
 

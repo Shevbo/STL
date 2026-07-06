@@ -69,6 +69,26 @@ func TestDispatchAccountEvents(t *testing.T) {
 	}
 }
 
+// TestDispatchPongDecodesLastTradeTsMs: the QLua pong's last_trade_ts_ms field (freshest
+// OnAllTrade exchange timestamp) must decode through luaEvent into AccEvent verbatim —
+// this is what accounts.Store.SetPong uses to compute ExchangeLagMs (see accounts_test.go
+// TestStoreExchangeLagFromPong).
+func TestDispatchPongDecodesLastTradeTsMs(t *testing.T) {
+	var got []AccEvent
+	b := NewBridge(0, nil, nil)
+	b.SetAccSink(func(e AccEvent) { got = append(got, e) })
+
+	var ev luaEvent
+	line := `{"event":"pong","t0":100,"ts":200,"server_time":"12:00:01","last_trade_ts_ms":1751700000000}`
+	if err := json.Unmarshal([]byte(line), &ev); err != nil {
+		t.Fatal(err)
+	}
+	b.dispatch(ev)
+	if len(got) != 1 || got[0].LastTradeTsMs != 1751700000000 {
+		t.Fatalf("pong event = %+v, want LastTradeTsMs=1751700000000", got)
+	}
+}
+
 func TestDispatchAccountEventsNilSink(t *testing.T) {
 	// Without SetAccSink, acc_*/pong events must be dropped silently (no panic).
 	b := NewBridge(0, nil, nil)
@@ -94,6 +114,9 @@ func TestDispatchAccountEventsFieldMapping(t *testing.T) {
 	}
 	if got[0].Kind != "pong" || got[0].T0 != 100 || got[0].TS != 200 || got[0].ServerTime != "12:00:01" {
 		t.Fatalf("pong event = %+v", got[0])
+	}
+	if got[0].LastTradeTsMs != 0 {
+		t.Fatalf("LastTradeTsMs = %d, want 0 (field absent in this line)", got[0].LastTradeTsMs)
 	}
 
 	got = nil

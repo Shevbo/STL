@@ -8,9 +8,14 @@ import (
 )
 
 // Plan is the deterministic, operator-confirmable align plan computed when a Report is
-// MISMATCH. ID is stable across calls with identical Steps + snapshot ages, so a
-// confirm request naming an ID can be safely rejected by the wiring layer (Task 7/8) if
-// the underlying picture changed underneath it.
+// MISMATCH. ID is stable across calls with identical Steps + the ABSOLUTE snapshot
+// receipt stamps (PosAtMs/OrdAtMs), so a confirm request naming an ID can be safely
+// rejected by the wiring layer (Task 7/8) if the underlying picture changed underneath
+// it. Deliberately NOT hashed against PosAgeMs/OrdAgeMs: those are recomputed against
+// the live clock on every read (accounts.Store.Snapshot), so hashing them made the id
+// shown at page-poll time never match the id recomputed at button-click time even a
+// second later — every confirm 409'd. The stamps only change when the table itself
+// actually changes.
 type Plan struct {
 	ID    string
 	Steps []Step
@@ -52,16 +57,17 @@ func sortSteps(steps []Step) {
 	})
 }
 
-// planID hashes the canonical JSON of the (already-sorted) steps plus the snapshot ages
-// that gated the evaluation, and returns the first 12 hex chars of the sha256 digest. No
-// time.Now/rand: identical Steps + ages always yield the same ID, and any change to
-// either changes it.
-func planID(steps []Step, posAgeMs, ordAgeMs int64) string {
+// planID hashes the canonical JSON of the (already-sorted) steps plus the ABSOLUTE
+// snapshot receipt stamps that gated the evaluation, and returns the first 12 hex chars
+// of the sha256 digest. No time.Now/rand: identical Steps + stamps always yield the
+// same ID, and any change to either changes it — but re-reading the SAME underlying
+// tables a moment later (ages ticking up, stamps unchanged) yields the identical ID.
+func planID(steps []Step, posAtMs, ordAtMs int64) string {
 	payload := struct {
-		Steps    []Step
-		PosAgeMs int64
-		OrdAgeMs int64
-	}{Steps: steps, PosAgeMs: posAgeMs, OrdAgeMs: ordAgeMs}
+		Steps   []Step
+		PosAtMs int64
+		OrdAtMs int64
+	}{Steps: steps, PosAtMs: posAtMs, OrdAtMs: ordAtMs}
 	data, err := json.Marshal(payload)
 	if err != nil {
 		// payload contains only strings/ints/floats/slices of structs thereof — it

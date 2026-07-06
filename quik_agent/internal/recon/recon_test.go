@@ -45,12 +45,14 @@ func TestEvaluateAllGreenOK(t *testing.T) {
 
 func TestEvaluateStaleTables(t *testing.T) {
 	cases := []struct {
-		name               string
-		posAge, ordAge     int64
+		name           string
+		posAge, ordAge int64
 	}{
 		{"pos age over threshold", 30_001, 100},
 		{"ord age over threshold", 100, 30_001},
 		{"both over threshold", 40_000, 40_000},
+		{"pos never published (-1 sentinel)", -1, 100},
+		{"ord never published (-1 sentinel)", 100, -1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -227,6 +229,44 @@ func TestEvaluateClosePositionSuppressedByOrderFinding(t *testing.T) {
 	})
 }
 
+// TestEvaluateClosePositionSuppressedByPendingReconOrder: a symbol already carrying an
+// active working order from a PREVIOUS align (ReconPendingSymbols) must not get a second
+// close_position step piled on top — but this must not touch cancel_order/fix_state
+// logic for an unrelated symbol.
+func TestEvaluateClosePositionSuppressedByPendingReconOrder(t *testing.T) {
+	in := Inputs{
+		Robots: []RobotView{
+			{ID: "r1", Symbol: "RIU6", Position: 2}, // would mismatch -> close_position, but suppressed
+			{ID: "r2", Symbol: "GZU6", Position: 0}, // unrelated symbol, orphan order below
+		},
+		Acc: AccView{
+			Positions: []Position{{Sec: "RIU6", Net: 10}},
+			Orders:    []Order{{Num: "42", Sec: "GZU6", Active: true}}, // orphan, unrelated to RIU6
+			PosAgeMs:  100, OrdAgeMs: 100,
+		},
+		ReconPendingSymbols: map[string]bool{"RIU6": true},
+	}
+	rep := Evaluate(in)
+	if rep.State != "MISMATCH" || rep.Plan == nil {
+		t.Fatalf("%+v", rep)
+	}
+	if !positionMismatchRendered(rep, "RIU6") {
+		t.Fatalf("position check for RIU6 must still render as not-OK, got %+v", rep.Positions)
+	}
+	var haveCancel bool
+	for _, s := range rep.Plan.Steps {
+		if s.Kind == "close_position" {
+			t.Fatalf("close_position must be suppressed while a recon-owned order is already resting on RIU6, got %+v", rep.Plan.Steps)
+		}
+		if s.Kind == "cancel_order" && s.Symbol == "GZU6" {
+			haveCancel = true
+		}
+	}
+	if !haveCancel {
+		t.Fatalf("cancel_order for the unrelated GZU6 orphan must be unaffected, got %+v", rep.Plan.Steps)
+	}
+}
+
 // TestEvaluateClosePositionCrossSymbolNotSuppressed: a MISSING order finding on symbol A
 // must suppress close_position for A only — an unexplained position mismatch on symbol B
 // still gets its close_position step.
@@ -366,6 +406,7 @@ func TestEvaluatePlanIDStableAndChanges(t *testing.T) {
 		Acc: AccView{
 			Orders:   []Order{{Num: "555", Sec: "RIU6", Active: true}},
 			PosAgeMs: 100, OrdAgeMs: 100,
+			PosAtMs: 1_000_000, OrdAtMs: 1_000_000,
 		},
 	}
 	rep1 := Evaluate(base)
@@ -389,12 +430,59 @@ func TestEvaluatePlanIDStableAndChanges(t *testing.T) {
 		t.Fatalf("plan id must change when steps change")
 	}
 
-	// Same steps, different ages -> different ID (ages are part of the hash).
+	// Same steps, different AGES ALONE -> id UNCHANGED. Ages are recomputed against
+	// the live clock on every accounts.Store.Snapshot() read; hashing them (the old
+	// bug) made a confirm computed even a second after the page polled always 409.
 	withDifferentAge := base
 	withDifferentAge.Acc.PosAgeMs = 200
 	rep4 := Evaluate(withDifferentAge)
-	if rep4.Plan.ID == rep1.Plan.ID {
-		t.Fatalf("plan id must change when PosAgeMs changes")
+	if rep4.Plan.ID != rep1.Plan.ID {
+		t.Fatalf("plan id must NOT change when only PosAgeMs changes (age is not part of the hash)")
+	}
+
+	// Same steps, different ABSOLUTE receipt stamp -> ID changes (a genuinely new
+	// table snapshot, not merely a later read of the same one).
+	withNewStamp := base
+	withNewStamp.Acc.PosAtMs = 2_000_000
+	rep5 := Evaluate(withNewStamp)
+	if rep5.Plan.ID == rep1.Plan.ID {
+		t.Fatalf("plan id must change when PosAtMs changes")
+	}
+}
+
+// TestEvaluatePlanIDStableAcrossAgeDriftUsesAbsoluteStamps is the CRITICAL-fix
+// regression test: it simulates exactly what accounts.Store.Snapshot() does on two
+// polls of the SAME underlying tables — ages tick up against the live clock, the
+// absolute receipt stamps do not move — and asserts the plan id an operator saw on the
+// page still matches the id recomputed when they click "confirm" 1500ms later.
+func TestEvaluatePlanIDStableAcrossAgeDriftUsesAbsoluteStamps(t *testing.T) {
+	base := Inputs{
+		Robots: []RobotView{{ID: "r1", Symbol: "RIU6"}},
+		Acc: AccView{
+			Orders:   []Order{{Num: "555", Sec: "RIU6", Active: true}},
+			PosAgeMs: 100, OrdAgeMs: 100,
+			PosAtMs: 1_000_000, OrdAtMs: 1_000_000,
+		},
+	}
+	rep1 := Evaluate(base)
+
+	drifted := base
+	drifted.Acc.PosAgeMs += 1500
+	drifted.Acc.OrdAgeMs += 1500
+	rep2 := Evaluate(drifted)
+	if rep1.Plan == nil || rep2.Plan == nil {
+		t.Fatalf("expected a plan on both calls")
+	}
+	if rep1.Plan.ID != rep2.Plan.ID {
+		t.Fatalf("plan id must survive 1500ms of pure age drift: %q vs %q", rep1.Plan.ID, rep2.Plan.ID)
+	}
+
+	// A genuinely new table (new PosAtMs) DOES change the id.
+	newTable := base
+	newTable.Acc.PosAtMs = 1_000_100
+	rep3 := Evaluate(newTable)
+	if rep3.Plan.ID == rep1.Plan.ID {
+		t.Fatalf("plan id must change when PosAtMs changes (new table snapshot)")
 	}
 }
 

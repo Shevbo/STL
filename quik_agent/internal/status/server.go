@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sync"
 )
 
 //go:embed page.html
@@ -90,8 +91,9 @@ func newMux(d Deps) *http.ServeMux {
 		w.Write(doc)
 	})
 
+	align := &alignState{}
 	mux.HandleFunc("POST /api/align", func(w http.ResponseWriter, r *http.Request) {
-		handleAlign(d, w, r)
+		handleAlign(d, align, w, r)
 	})
 
 	mux.HandleFunc("POST /api/manual-offset", func(w http.ResponseWriter, r *http.Request) {
@@ -120,14 +122,28 @@ type alignOKResponse struct {
 	Results []StepResult `json:"results"`
 }
 
+// alignState is per-SERVER (not per-request, not per-Deps-value) execution state: it
+// survives across requests to the SAME running status server for as long as the
+// process does. Its mutex serializes the whole handleAlign body — including the
+// AlignExec call itself — so two POSTs racing (a double click, or a client retry after
+// a slow response the operator never saw complete) cannot both execute; the second
+// blocks until the first finishes, by which point lastExecuted already names its plan
+// and it is refused instead of firing the order/cancel/fix_state actions twice.
+type alignState struct {
+	mu           sync.Mutex
+	lastExecuted string
+}
+
 // handleAlign recomputes the recon report FRESH (never trusts a client-held
 // plan) so a confirm can only ever execute the plan the operator is actually
 // looking at right now. nil AlignExec -> 503 UNCONDITIONALLY, before any body
 // parse or plan comparison (without an executor nothing else about the
 // request matters). A stale/absent plan_id -> 409 with the fresh plan so the
-// page can update and let the operator re-confirm; only once the ids match
-// does it call Deps.AlignExec.
-func handleAlign(d Deps, w http.ResponseWriter, r *http.Request) {
+// page can update and let the operator re-confirm. A plan_id that matches the
+// fresh plan but was ALREADY executed -> 409 with a "already executed" note
+// (double-fire suppression) rather than silently re-running it. Only once the
+// ids match AND the plan has not yet been executed does it call Deps.AlignExec.
+func handleAlign(d Deps, st *alignState, w http.ResponseWriter, r *http.Request) {
 	if d.AlignExec == nil {
 		http.Error(w, "align not wired", http.StatusServiceUnavailable)
 		return
@@ -138,6 +154,9 @@ func handleAlign(d Deps, w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+
+	st.mu.Lock()
+	defer st.mu.Unlock()
 
 	rep := computeReport(d)
 	if rep.Plan == nil || rep.Plan.ID != req.PlanID {
@@ -150,7 +169,18 @@ func handleAlign(d Deps, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if req.PlanID == st.lastExecuted {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		json.NewEncoder(w).Encode(alignMismatchResponse{
+			Error: "план уже исполнен",
+			Recon: toReconJSON(rep, d.manualOffsets()),
+		})
+		return
+	}
+
 	results := d.AlignExec(*rep.Plan)
+	st.lastExecuted = rep.Plan.ID
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(alignOKResponse{PlanID: rep.Plan.ID, Results: results})
 }
