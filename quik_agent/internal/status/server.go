@@ -109,6 +109,12 @@ func newMux(d Deps) *http.ServeMux {
 		handleModeSet(d, w, r)
 	})
 
+	// Local-only: zero a PAPER robot's fictional position so its flat gate opens
+	// for arming. Refuses a real robot server-side (see Deps.ResetPaper).
+	mux.HandleFunc("POST /api/robot/{id}/reset-paper", func(w http.ResponseWriter, r *http.Request) {
+		handleResetPaper(d, w, r)
+	})
+
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Write(pageHTML)
@@ -194,6 +200,25 @@ func handleModeSet(d Deps, w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := d.ModeSet(id, *req.Paper, req.ConfirmID); err != nil {
+		if errors.Is(err, ErrUnknownRobot) {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// handleResetPaper zeroes a PAPER robot's fictional position (Deps.ResetPaper).
+// nil ResetPaper -> 503; ErrUnknownRobot -> 404; a real-robot refusal (or any
+// other error) -> 409 with the reason.
+func handleResetPaper(d Deps, w http.ResponseWriter, r *http.Request) {
+	if d.ResetPaper == nil {
+		http.Error(w, "reset-paper not wired", http.StatusServiceUnavailable)
+		return
+	}
+	if err := d.ResetPaper(r.PathValue("id")); err != nil {
 		if errors.Is(err, ErrUnknownRobot) {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return

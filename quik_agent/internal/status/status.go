@@ -143,6 +143,13 @@ type Deps struct {
 	// precondition/confirm failure whose text is shown to the operator (Task 7).
 	ModeSet func(id string, paper bool, confirmID string) error
 
+	// ResetPaper zeroes a PAPER robot's fictional position/avg and clears its
+	// working-order belief (POST /api/robot/{id}/reset-paper), so its flat gate
+	// passes and the operator can then arm it real via ModeSet. Refuses a real
+	// robot (a real position must never be zeroed by a button). ErrUnknownRobot
+	// for an unknown id; any other error's text is shown to the operator.
+	ResetPaper func(id string) error
+
 	LogPaths map[string]string // "agent"/"runner" -> file path
 	DocsPath string            // strategies_doc.json (Task 10)
 	NowMs    func() int64

@@ -609,6 +609,26 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 				return runnerSrv.SendDeploy(newSpec) // re-deploy flips paper on a flat book
 			},
 
+			// ResetPaper zeroes a PAPER robot's fictional position/avg + clears its
+			// working belief so its flat gate opens for arming. Refuses a REAL robot
+			// (a real position must never be zeroed by a button).
+			ResetPaper: func(id string) error {
+				spec := robotStore.Get(id)
+				if spec == nil {
+					return status.ErrUnknownRobot
+				}
+				if !spec.GetPaper() {
+					return fmt.Errorf("робот не в paper: обнуление только для бумажной торговли")
+				}
+				return runnerSrv.SendFixState(&quikv1.FixRobotState{
+					RobotId:      id,
+					SetPosition:  0,
+					SetAvgPrice:  0,
+					ClearWorking: true,
+					Note:         "обнуление бумажной позиции (оператор)",
+				})
+			},
+
 			// No agent/runner log FILE exists anywhere today: interactive runs
 			// print to the console only, the Windows service redirects to the
 			// Event Log (internal/service/service_windows.go), and the runner's

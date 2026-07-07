@@ -387,6 +387,7 @@ function modeBlock(r) {
     html += '<div class="arm-panel to-real" data-id="' + esc(r.id) + '" data-flat="' + (flat ? '1' : '0') + '" data-nowork="' + (noWorking ? '1' : '0') + '">'
       + '<div class="kv">Позиция = 0: ' + flatBadge + '</div>'
       + '<div class="kv" style="margin-top:2px">Нет активных заявок: ' + workBadge + '</div>'
+      + (flat ? '' : '<div style="margin-top:6px"><button class="reset-paper-btn">Обнулить бумажную позицию</button><span class="reset-paper-msg"></span></div>')
       + '<div class="kv" style="margin-top:6px"><label><input type="checkbox" class="arm-ack"> Остановлен ли STL/Finam-вариант этого символа на реале?</label></div>'
       + '<div class="kv" style="margin-top:4px">Введите ID робота (<b>' + esc(r.id) + '</b>) для подтверждения: '
       + '<input class="mono arm-confirm-id" placeholder="' + esc(r.id) + '"></div>'
@@ -496,6 +497,21 @@ async function setMode(id, paper, confirmId, btn, msgEl) {
   }
 }
 
+// resetPaper zeroes a PAPER robot's fictional position so its flat gate opens
+// for arming (server refuses a real robot). Re-polls so the flat badge updates.
+async function resetPaper(id, btn, msgEl) {
+  if (!confirm('Обнулить бумажную позицию робота ' + id + ' (позиция=0, снять заявки)?')) return;
+  btn.disabled = true;
+  try {
+    const resp = await fetch('/api/robot/' + encodeURIComponent(id) + '/reset-paper', { method: 'POST' });
+    const text = await resp.text();
+    if (!resp.ok) { setMsg(msgEl, text || ('HTTP ' + resp.status), false); btn.disabled = false; return; }
+    setMsg(msgEl, 'обнулено', true);
+    expandedRobots.delete(id);
+    await fetchAndRender();
+  } catch (e) { setMsg(msgEl, 'ошибка сети', false); btn.disabled = false; }
+}
+
 // wireModeControls: local-only (IS_LOCAL gates the panel's very existence in
 // modeBlock, so these selectors simply find nothing on the STL mirror).
 // Arm-to-real: the button enables only when BOTH auto-checks are green AND
@@ -517,6 +533,10 @@ function wireModeControls(body) {
     idInput.addEventListener('input', refresh);
     refresh();
     btn.addEventListener('click', () => setMode(id, false, idInput.value, btn, msgEl));
+    const resetBtn = panel.querySelector('.reset-paper-btn');
+    if (resetBtn) {
+      resetBtn.addEventListener('click', () => resetPaper(id, resetBtn, panel.querySelector('.reset-paper-msg')));
+    }
   });
   body.querySelectorAll('.arm-panel:not(.to-real)').forEach(panel => {
     const btn = panel.querySelector('.disarm-btn');
