@@ -423,9 +423,14 @@
       {/if}
       {#if manualBlock && ((manualBlock.orders?.length ?? 0) > 0 || (manualBlock.account_net?.length ?? 0) > 0)}
         <div class="recon-line manual">
-          <span class="mlabel">ручная торговля на счёте (не робот):</span>
-          {#each manualBlock.account_net ?? [] as n}<span class="mchip">{n.sec} нетто {n.net}</span>{/each}
-          {#if (manualBlock.orders?.length ?? 0) > 0}<span class="mchip">{manualBlock.orders.length} заявок</span>{/if}
+          {#if (manualBlock.orders?.length ?? 0) > 0}
+            <span class="mlabel">ручные заявки (не робот):</span>
+            <span class="mchip">{manualBlock.orders.length} шт</span>
+          {/if}
+          {#if (manualBlock.account_net?.length ?? 0) > 0}
+            <span class="mlabel" title="сырое нетто по счёту QUIK — роботы + ручная торговля вместе; справочно, не сверяется">нетто счёта (роботы + ручное):</span>
+            {#each manualBlock.account_net ?? [] as n}<span class="mchip">{n.sec} {n.net > 0 ? '+' : ''}{n.net}</span>{/each}
+          {/if}
         </div>
       {/if}
     </div>
