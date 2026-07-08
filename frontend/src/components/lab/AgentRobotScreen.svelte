@@ -329,7 +329,11 @@
   </div>
 
   {#if robot && !robot.bars_count}
-    <div class="feed-warn">Нет закрытых баров — поток тиков из QUIK не идёт (проверь DDE-вывод таблицы текущих торгов).</div>
+    {#if tickAge !== null && tickAge <= 10}
+      <div class="feed-warn calm">Копим первый закрытый бар после рестарта (~1 мин) — тики из QUIK идут, стратегия ждёт свечу.</div>
+    {:else}
+      <div class="feed-warn">Нет закрытых баров и поток тиков из QUIK не идёт — проверь QLua-скрипт shectory_trade (файловая очередь) и открытые окна QUIK.</div>
+    {/if}
   {/if}
 
   <div class="ars-chart">
@@ -564,6 +568,7 @@
   .badge.pnl.up { color: #00e676; } .badge.pnl.dn { color: #f44336; }
   .badge.dim { color: #667; }
   .feed-warn { background: #1a1000; border-bottom: 1px solid #ff980044; color: #ffb74d; font-size: 11px; padding: 5px 14px; flex-shrink: 0; }
+  .feed-warn.calm { background: #0e1a12; border-bottom-color: #4caf5044; color: #81c784; }
   .ars-chart { flex: 1 1 52%; min-height: 0; display: flex; }
   .ars-chart-body { flex: 1; min-width: 0; min-height: 0; }
   .ars-lat { flex: 0 0 120px; min-height: 0; border-top: 1px solid #1a1a2e; }

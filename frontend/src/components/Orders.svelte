@@ -105,7 +105,9 @@
     const al = cfg?.agent_limits ?? null;
     return [
       { label: 'Агент', ok: !!greenAgent, hint: greenAgent ? 'link green' : 'нет green-агента' },
-      { label: 'DDE', ok: diag.dde === 1, hint: 'канал данных QUIK' },
+      // proto field is historically named `dde`; the feed itself is the QLua
+      // publisher (DDE retired) — label honestly.
+      { label: 'Фид QUIK', ok: diag.dde === 1, hint: 'поток данных (QLua-скрипт)' },
       { label: 'QUIK', ok: diag.quik === 1, hint: 'терминал QUIK' },
       { label: 'Whitelist', ok: whitelistSynced, hint: 'STL = агент' },
       { label: 'Флаг STL', ok: !!cfg?.trading_enabled, hint: 'quik_trading_enabled' },
@@ -200,11 +202,11 @@
     }
     // Still pending after the watch window: QUIK never acked. A healthy order replies in
     // ~1s; a stuck pending means the agent sent it but QUIK gave no OnTransReply/OnOrder
-    // (terminal/DDE/broker-link issue). Surface it LOUDLY — the order may NOT have
+    // (terminal/Lua-bridge/broker-link issue). Surface it LOUDLY — the order may NOT have
     // reached the exchange, so the operator must verify in the QUIK terminal.
     const last = orders.find((x) => x.client_id === clientId);
     if (last && last.state === 'pending') {
-      msg = '⚠ ЗАВИСЛА в pending — QUIK не ответил. Проверь терминал QUIK (DDE/связь с брокером): заявка могла НЕ дойти до биржи.';
+      msg = '⚠ ЗАВИСЛА в pending — QUIK не ответил. Проверь терминал QUIK (QLua-скрипт shectory_trade / связь с брокером): заявка могла НЕ дойти до биржи.';
     }
   }
 

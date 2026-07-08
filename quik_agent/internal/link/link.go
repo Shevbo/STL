@@ -223,7 +223,9 @@ func (l *Link) healthInputs(linkConnected bool) health.Inputs {
 		quikAlive = l.opt.QuikAlive()
 	}
 	return health.Inputs{
-		DDEServerAlive:       quikdde.Alive(),
+		// Legacy DDE off (default): the feed channel is judged by freshness
+		// alone; a hard false here would raise DDE_DOWN on every start.
+		DDEServerAlive:       quikdde.Alive() || !quikdde.LegacyEnabled(),
 		HaveTicked:           l.opt.HaveTicked(),
 		LastTickAgeMs:        l.opt.Provider.FreshnessMs(),
 		QuikAlive:            quikAlive,

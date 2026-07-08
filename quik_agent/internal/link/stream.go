@@ -213,7 +213,9 @@ func (l *Link) sendHeartbeat(stream quikv1.QuikAgentLink_SessionClient) error {
 		Payload: &quikv1.AgentMessage_Heartbeat{
 			Heartbeat: &quikv1.Heartbeat{
 				SentAtUnixMs: time.Now().UnixMilli(),
-				DdeAlive:     quikdde.Alive(),
+				// wire name is historical; semantics = market-data feed alive
+				// (legacy DDE off -> freshness-driven, same as health inputs)
+				DdeAlive:     quikdde.Alive() || !quikdde.LegacyEnabled(),
 				QuikAlive:    quikAlive,
 				LastTickAgeMs: l.opt.Provider.FreshnessMs(),
 			},

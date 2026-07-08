@@ -1,5 +1,5 @@
 <!-- AgentBookPane: compact QUIK order book (10 asks / 10 bids) for the agent-robot
-     showcase, polled from the agent's DDE export via STL. Colors match the chart's
+     showcase, polled from the agent's QLua feed (getQuoteLevel2) via STL. Colors match the chart's
      trade markers (teal = buy side, rose = sell side). -->
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';

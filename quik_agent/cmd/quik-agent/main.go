@@ -1,17 +1,19 @@
 // Command quik-agent is the single-binary local QUIK agent for Windows.
 //
-// It reads QUIK market data over DDE (read-only), dials OUT to STL, and runs one
-// long-lived bidi gRPC stream. Phase 1 is READ-ONLY: it never places, moves, or
-// cancels orders. First run writes agent_config.json via an interactive wizard.
+// Market data comes from the QLua file-queue publisher (shectory_trade.lua:
+// ticks/books/tape/params/accounts); orders go through the same Lua bridge.
+// The agent dials OUT to STL over one long-lived bidi gRPC stream and HOSTS
+// live robots via the bundled robot-runner (loopback bridge). DDE is RETIRED:
+// its reader exists only as a dormant legacy fallback (SHECTORY_ENABLE_DDE=1).
+// First run writes agent_config.json via an interactive wizard.
 //
 // The Bearer token is NEVER stored in the config or in this binary; the config
 // records the NAME of an env var, and the value is read from the environment here.
 //
-// Resilience (sub-agent D): the agent can install/run as a Windows service that
-// auto-starts on boot and restarts on failure; a watchdog supervises DDE liveness
-// and restarts a hung DDE channel (read-only recovery); a health state machine
-// emits Diagnostics + Alert frames; and a local Telegram fallback signals a link
-// outage when the gRPC stream itself is down.
+// Resilience: the agent can install/run as a Windows service that auto-starts
+// on boot and restarts on failure; a watchdog supervises FEED liveness; a
+// health state machine emits Diagnostics + Alert frames; and a local Telegram
+// fallback signals a link outage when the gRPC stream itself is down.
 package main
 
 import (
@@ -228,12 +230,16 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 		}
 	}
 
-	// Bring up DDE through a restartable supervisor (Windows real, stub elsewhere).
+	// Market data: the QLua file-queue publisher is the PRIMARY (and default
+	// only) source. The DDE supervisor stays as a dormant legacy fallback —
+	// its StartDDE is a no-op unless SHECTORY_ENABLE_DDE=1 resurrects it.
 	ddeSup, err := quikdde.NewSupervisor(cfg.QuikDataRoot)
 	if err != nil {
 		fmt.Println("quik DDE:", err)
+	} else if os.Getenv("SHECTORY_ENABLE_DDE") == "1" {
+		fmt.Println("quik DDE: LEGACY reader resurrected (SHECTORY_ENABLE_DDE=1)")
 	} else {
-		fmt.Println("quik DDE: read-only reader started (disable: SHECTORY_DISABLE_DDE=1)")
+		fmt.Println("md: QLua file-queue feed (DDE retired; legacy fallback: SHECTORY_ENABLE_DDE=1)")
 	}
 	defer ddeSup.Stop()
 
@@ -511,8 +517,10 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 				}
 				return "DOWN"
 			}
-			fmt.Printf("ready: quik=%s dde=%s runner=%s robots=%d trading_enabled=%v status=:%d\n",
-				ok(quikdde.Alive()), ok(quikdde.Default.LastMutationMs() > 0),
+			// feed = the QLua file-queue market data (DDE retired; its legacy
+			// server state is not worth an operator-facing field anymore).
+			fmt.Printf("ready: feed=%s runner=%s robots=%d trading_enabled=%v status=:%d\n",
+				ok(quikdde.Default.LastMutationMs() > 0),
 				ok(runnerSrv.RunnerHealthy()), len(robotStore.All()), cfg.QuikTradingEnabled, cfg.StatusPort)
 		}()
 	}

@@ -675,10 +675,12 @@ func Alive() bool {
 	return ddeReady
 }
 
-// StartDDE brings up the DDEML server: service SHECTORY_QUIK, topic data. QUIK is
-// configured to export tables there ([data]<list>). Disable: SHECTORY_DISABLE_DDE=1.
+// StartDDE brings up the DDEML server: service SHECTORY_QUIK, topic data.
+// DDE is RETIRED as a data source — the QLua file-queue publisher is primary
+// (ticks/books/tape/params/accounts). The server starts ONLY when explicitly
+// resurrected with SHECTORY_ENABLE_DDE=1 (legacy fallback for a broken Lua).
 func StartDDE(dataRoot string) (stop func(), err error) {
-	if strings.TrimSpace(os.Getenv("SHECTORY_DISABLE_DDE")) == "1" {
+	if strings.TrimSpace(os.Getenv("SHECTORY_ENABLE_DDE")) != "1" {
 		return func() {}, nil
 	}
 
