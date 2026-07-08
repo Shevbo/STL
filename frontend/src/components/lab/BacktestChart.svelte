@@ -552,8 +552,17 @@
     rectRaf = requestAnimationFrame(tick);
   }
 
+  // Preserve the operator's zoom/pan across LIVE reloads: on the live stand a
+  // new robot fill recreates `result` -> loadData -> a full view reset every
+  // time made the chart unusable. Keep the visible range when reloading the
+  // SAME symbol at the SAME interval; refit only on first load / a different
+  // instrument / an interval switch (resampling changes logical indexing).
+  let _viewKey = '';
   async function loadData() {
     loading = true; error = ''; syncReady = false;
+    const viewKey = `${symbol}:${resampleMin}`;
+    const keepRange = (viewKey === _viewKey)
+      ? tvCandle?.timeScale().getVisibleLogicalRange() : null;
     try {
       const bars: any[] = await loadBars();
       if (!bars.length) { error = `Нет данных для ${symbol}. Загрузите через "Load from ISS".`; loading = false; return; }
@@ -657,8 +666,15 @@
         label: e.label,
       }));
 
-      // Fit all data into the view (equity mirrors via one-way logical sync).
-      tvCandle.timeScale().fitContent();
+      // First load of this symbol/interval: fit all data into the view.
+      // Same-view LIVE reload: restore the operator's zoom/pan instead.
+      if (keepRange) {
+        try { tvCandle.timeScale().setVisibleLogicalRange(keepRange); }
+        catch { tvCandle.timeScale().fitContent(); }
+      } else {
+        tvCandle.timeScale().fitContent();
+      }
+      _viewKey = viewKey;
       syncReady = true;
       const lr = tvCandle.timeScale().getVisibleLogicalRange();
       if (lr) updateThumb(lr); else scrollThumb = { left: 0, width: 100 };

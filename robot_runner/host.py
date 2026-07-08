@@ -176,7 +176,11 @@ class RobotHost:
             try:
                 await r.runtime.cancel_order(w["order_id"])
             except Exception as exc:  # noqa: BLE001 — a failed cancel must not skip the bar
-                log.warning("host.precancel_failed", robot_id=r.spec["robot_id"],
+                # The agent can't cancel an order it doesn't know (placed before
+                # an agent restart / day-expired at QUIK). Terminate it LOCALLY
+                # or the book turns phantom (8 non-existent orders shown live).
+                r.runtime.expire_order(w["order_id"])
+                log.warning("host.precancel_expired_local", robot_id=r.spec["robot_id"],
                             client_id=w["order_id"], error=str(exc))
         try:
             await r.on_bar(r.runtime, r.spec["params"])
@@ -196,7 +200,9 @@ class RobotHost:
                 symbol=f["symbol"] or r.spec["symbol"],
                 side=pb.SIDE_BUY if f["side"] == "buy" else pb.SIDE_SELL,
                 qty=f["qty"], price=f["price"], status=f["status"],
-                ts_unix_ms=f["ts_ms"]) for f in r.runtime.recent_fills()]
+                # FULL persisted tail (200), not the last 20: the operator's
+                # showcase must not forget yesterday's trades.
+                ts_unix_ms=f["ts_ms"]) for f in r.runtime.fills_tail()]
             working = [pb.RobotWorkingOrder(
                 client_id=w["client_id"], order_id=w["order_id"],
                 side=pb.SIDE_BUY if w["side"] == "buy" else pb.SIDE_SELL,

@@ -125,6 +125,33 @@ async def test_real_robot_cancels_resting_orders_before_next_bar(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_failed_precancel_expires_phantom_locally(tmp_path):
+    # An order the agent cannot cancel (unknown after an agent restart / QUIK
+    # day-expiry) must be terminated LOCALLY, or the runner's book shows
+    # phantom orders forever (seen live: 8 non-existent BUYs).
+    bridge = FakeBridge()
+    host = RobotHost(bridge, str(tmp_path))
+    await host.handle_control(_deploy_rc(paper=False))
+    r = host.robots["r1"]
+    t0 = 1_751_500_000_000
+    for i in range(10):
+        r.bars.on_tick(t0 + i * 60_000, 89_000 + i * 30)
+    await host.tick_robot(r)
+    o = await r.runtime.place_order("RIU6", "buy", 1, 89_000.0)
+    assert len(r.runtime.working_orders()) == 1
+
+    async def boom(client_id, order_id):
+        raise RuntimeError("unknown order")
+    bridge.cancel_order = boom
+
+    r.bars.on_tick(t0 + 10 * 60_000, 89_400)
+    r.bars.on_tick(t0 + 11 * 60_000, 89_500)
+    assert await host.tick_robot(r) is True
+    assert r.runtime.working_orders() == []      # phantom gone from the book
+    assert r.runtime._orders[o.order_id].status == "expired"
+
+
+@pytest.mark.asyncio
 async def test_paper_tick_never_cancels(tmp_path):
     # Paper fills are instant -> no resting orders -> no cancel churn.
     bridge = FakeBridge()

@@ -52,7 +52,7 @@
     <span class="b-age" class:ok={ageS !== null && ageS <= 15}>{ageS === null ? '—' : ageS + 'с'}</span>
   </div>
   {#if err}
-    <div class="b-err">{err === 'нет стакана' ? 'Стакан не экспортируется (добавь таблицу RIU6 в DDE-вывод QUIK)' : err}</div>
+    <div class="b-err">{err === 'нет стакана' ? `Нет данных стакана: открой окно «Стакан ${symbol}» в QUIK и держи его открытым — getQuoteLevel2 отдаёт уровни только при открытом стакане (как лента при открытой «Таблице всех сделок»)` : err}</div>
   {:else}
     <div class="b-rows">
       {#each [...asks].slice(0, depth).reverse() as l}

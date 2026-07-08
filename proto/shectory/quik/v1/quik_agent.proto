@@ -275,7 +275,7 @@ message RobotStatus {
   double realized_pnl = 6;          // PRICE POINTS x contracts, session (NOT rubles; UI converts via step_cost/price_step)
   int64 last_bar_unix = 7;          // newest bar the strategy saw
   int64 heartbeat_unix_ms = 8;      // runner's per-robot liveness
-  repeated RobotFill recent_fills = 9;   // last <=20
+  repeated RobotFill recent_fills = 9;   // full persisted tail (<=200)
   string note = 10;                 // last log / error line
   // Strategy introspection for the showcase UI: JSON with the CURRENT signal
   // internals — what the robot waits for, computed features (gaps/body/thresholds),

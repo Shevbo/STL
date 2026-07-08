@@ -117,6 +117,18 @@ class AgentRuntime:
     async def cancel_order(self, order_id: str) -> None:
         await self._bridge.cancel_order(order_id, "")
 
+    def expire_order(self, client_id: str) -> None:
+        """Locally terminate an order the agent cannot cancel (unknown to it —
+        e.g. left from before an agent restart, or day-expired at QUIK). Keeping
+        it 'submitted' forever made the runner's book PHANTOM (seen live: 8
+        non-existent BUYs displayed for a day). If it somehow fills later,
+        on_order_event still applies the fill by client_id prefix."""
+        o = self._orders.get(client_id)
+        if o is not None and o.status in ("submitted", "active", "partial"):
+            self._orders[client_id] = Order(order_id=client_id, symbol=o.symbol,
+                                            side=o.side, qty=o.qty,
+                                            price=o.price, status="expired")
+
     async def get_orders(self) -> list[Order]:
         return [o for o in self._orders.values()
                 if o.status in ("submitted", "active", "partial")]
