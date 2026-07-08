@@ -76,6 +76,19 @@ func (p *Provider) luaBook(code string, sheetMs int64) (Book, bool) {
 	return b, true
 }
 
+// LuaBookCodes lists the codes with a QLua L2 snapshot. The link's book
+// forwarder must enumerate THESE: with DDE retired there are no book sheets,
+// so a sheet-name walk alone finds nothing and STL never gets a стакан.
+func (p *Provider) LuaBookCodes() []string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	codes := make([]string, 0, len(p.luaBooks))
+	for code := range p.luaBooks {
+		codes = append(codes, code)
+	}
+	return codes
+}
+
 // luaFreshestMs returns the newest lua-feed timestamp (0 when no lua data).
 func (p *Provider) luaFreshestMs() int64 {
 	p.mu.RLock()

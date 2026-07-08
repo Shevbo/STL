@@ -135,6 +135,10 @@ type Link struct {
 	secSentMs    int64
 	paramsSentMs int64
 	tickSentMs   map[string]int64
+	// bookSentFp gates lua-fed order books by CONTENT (the Lua publisher stamps
+	// a fresh ts every second even when levels are unchanged, so a timestamp
+	// gate would pass everything). Same goroutine discipline as tickSentMs.
+	bookSentFp map[string]string
 
 	// rawSent tracks the last-sent lastMutationMs per sheet name so unchanged
 	// RawTables are not re-sent. Accessed only from the sendLoop goroutine (one
@@ -331,6 +335,7 @@ func (l *Link) runOnce(ctx context.Context) error {
 	l.rawSent = map[string]int64{}
 	l.secSentMs, l.paramsSentMs = 0, 0
 	l.tickSentMs = map[string]int64{}
+	l.bookSentFp = map[string]string{}
 
 	// Publish the live stream for the trade Emitter; clear it when the session ends.
 	l.setStream(stream)

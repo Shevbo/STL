@@ -22,6 +22,24 @@ func TestLuaTickOverlayAddsAndWins(t *testing.T) {
 	}
 }
 
+func TestLuaBookCodesEnumeratesOverlay(t *testing.T) {
+	p := NewProvider()
+	if got := p.LuaBookCodes(); len(got) != 0 {
+		t.Fatalf("empty provider must list no book codes, got %v", got)
+	}
+	p.SetLuaBook("RIU6", []BookLevel{{Price: 88990, Quantity: 3}}, nil)
+	p.SetLuaBook("SiU6", nil, []BookLevel{{Price: 76761, Quantity: 5}})
+	got := map[string]bool{}
+	for _, c := range p.LuaBookCodes() {
+		got[c] = true
+	}
+	// With DDE retired the link walks THESE codes; missing one means STL never
+	// receives that instrument's стакан (the exact live gap this fixes).
+	if !got["RIU6"] || !got["SiU6"] || len(got) != 2 {
+		t.Fatalf("LuaBookCodes = %v", got)
+	}
+}
+
 func TestLuaBookOverlayWinsOverStaleSheet(t *testing.T) {
 	p := NewProvider()
 	p.SetLuaBook("RIU6",

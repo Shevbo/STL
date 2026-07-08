@@ -1,6 +1,9 @@
 package link
 
 import (
+	"fmt"
+	"strings"
+
 	quikv1 "shectory/quik_agent/internal/pb"
 	"shectory/quik_agent/internal/commission"
 	"shectory/quik_agent/internal/quikdde"
@@ -128,7 +131,45 @@ func (l *Link) flushMarketData(stream quikv1.QuikAgentLink_SessionClient) error 
 			sent[name] = true
 		}
 	}
+	// QLua-fed books (the PRIMARY source with DDE retired): the sheet walk above
+	// finds nothing when no DDE стакан is exported, so enumerate the lua overlay
+	// explicitly — otherwise STL never receives a book at all. Change-gated by
+	// CONTENT: the Lua re-publishes an unchanged book every second with a fresh
+	// stamp, and re-sending identical levels is pure STL ingest burn.
+	for _, code := range l.opt.Provider.LuaBookCodes() {
+		if sent[code] {
+			continue
+		}
+		book, ok := l.opt.Provider.OrderBook(code)
+		if !ok || len(book.Bids)+len(book.Asks) == 0 {
+			continue
+		}
+		fp := bookFingerprint(book)
+		if l.bookSentFp != nil && l.bookSentFp[code] == fp {
+			continue
+		}
+		if err := l.sendOrderBook(stream, book); err != nil {
+			return err
+		}
+		if l.bookSentFp != nil {
+			l.bookSentFp[code] = fp
+		}
+		sent[code] = true
+	}
 	return nil
+}
+
+// bookFingerprint folds a book's levels into a compact content key for the
+// change gate (price/qty of every level, both sides).
+func bookFingerprint(b quikdde.Book) string {
+	var sb strings.Builder
+	for _, lv := range b.Bids {
+		fmt.Fprintf(&sb, "b%.10g:%d;", lv.Price, lv.Quantity)
+	}
+	for _, lv := range b.Asks {
+		fmt.Fprintf(&sb, "a%.10g:%d;", lv.Price, lv.Quantity)
+	}
+	return sb.String()
 }
 
 // flushRawTables pushes EVERY QUIK DDE sheet to STL as a generic RawTable, so any
