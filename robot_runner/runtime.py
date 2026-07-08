@@ -25,6 +25,7 @@ log = structlog.get_logger()
 
 _FILLED_STATE = 4    # quik_agent.proto OrderState.ORDER_STATE_FILLED
 _PARTIAL_STATE = 3
+_QUOTE_FRESH_MS = 10_000   # marketable pricing only off a quote younger than this
 _STATE_TO_STATUS = {2: "active", 3: "partial", 4: "filled",
                     5: "cancelled", 6: "rejected"}
 
@@ -32,7 +33,7 @@ _STATE_TO_STATUS = {2: "active", 3: "partial", 4: "filled",
 class AgentRuntime:
     def __init__(self, robot_id: str, bridge, bars, *, max_position: int = 1,
                  paper: bool = False, state: dict | None = None,
-                 fills_log=None) -> None:
+                 fills_log=None, quote_fn=None) -> None:
         self._robot_id = robot_id
         self._bridge = bridge
         self._bars = bars
@@ -40,6 +41,10 @@ class AgentRuntime:
         self._paper = paper
         self._state: dict[str, Any] = dict(state or {})
         self._fills_log = fills_log          # optional callable(dict) for persistence
+        # quote_fn() -> (bid, ask, ts_ms) | None: freshest QUIK quote for THIS
+        # robot's symbol (fed by the host's tick consumer). Real orders price
+        # marketable off it; paper never uses it (same-bar close fills).
+        self._quote_fn = quote_fn
         self._signed = 0
         self._avg = 0.0
         self._realized = 0.0
@@ -76,16 +81,36 @@ class AgentRuntime:
                              status="paper")
             return Order(order_id=client_id, symbol=symbol, side=side, qty=qty,
                          price=price, status="paper", fill_price=price)
+        # REAL orders go MARKETABLE: BUY at the ask, SELL at the bid (freshest
+        # QUIK quote), so the fill matches the backtest's fill-at-close model.
+        # A limit at bars[-1].close RESTS whenever the market moved during the
+        # bar -> the position never flips -> the strategy re-emits every bar
+        # (stacking, seen live). bid/ask are exchange prices (on-step) and are
+        # inside the agent's price collar by construction. Stale/absent quote
+        # falls back to the strategy price (old behaviour).
+        send_price = price
+        if self._quote_fn is not None:
+            try:
+                q = self._quote_fn()
+            except Exception:  # noqa: BLE001 — quote is best-effort
+                q = None
+            if q:
+                bid, ask, ts_ms = q
+                px = float((ask if side == "buy" else bid) or 0)
+                if px > 0 and (time.time() * 1000 - float(ts_ms or 0)) <= _QUOTE_FRESH_MS:
+                    if px != price:
+                        self.log(f"marketable {side}: {price} -> {px}")
+                    send_price = px
         try:
             await self._bridge.place_order(client_id=client_id, code=symbol,
-                                           side=side, price=price, qty=qty)
+                                           side=side, price=send_price, qty=qty)
         except Exception as exc:
             self.log(f"order rejected pre-QUIK: {exc}", level="error")
-            self._record(client_id, symbol, side, qty, price, "rejected")
+            self._record(client_id, symbol, side, qty, send_price, "rejected")
             return Order(order_id=client_id, symbol=symbol, side=side, qty=qty,
-                         price=price, status="rejected")
+                         price=send_price, status="rejected")
         order = Order(order_id=client_id, symbol=symbol, side=side, qty=qty,
-                      price=price, status="submitted")
+                      price=send_price, status="submitted")
         self._orders[client_id] = order
         return order
 

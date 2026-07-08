@@ -47,6 +47,9 @@ class RobotHost:
         self._state_path = os.path.join(data_dir, "runner_state.json")
         self.robots: dict[str, HostedRobot] = {}
         self.killed = False
+        # freshest QUIK quote per symbol: code -> (bid, ask, ts_ms). Runtimes
+        # price REAL orders marketable off it (see AgentRuntime.place_order).
+        self.quotes: dict[str, tuple[float, float, int]] = {}
         self._saved = self._load()
 
     # ---- persistence ----
@@ -97,9 +100,11 @@ class RobotHost:
             # keep accumulated bars across a re-deploy (params change, STL reconnect)
             bars = (self.robots[spec["robot_id"]].bars
                     if spec["robot_id"] in self.robots else BarBuilder())
+            sym = spec["symbol"]
             rt = AgentRuntime(spec["robot_id"], self._bridge, bars,
                               max_position=spec["max_position"],
-                              paper=spec["paper"], state=saved.get("state"))
+                              paper=spec["paper"], state=saved.get("state"),
+                              quote_fn=lambda s=sym: self.quotes.get(s))
             rt.restore(position=saved.get("position", 0),
                        avg=saved.get("avg", 0.0),
                        realized=saved.get("realized", 0.0),
@@ -160,6 +165,19 @@ class RobotHost:
         last = r.bars.last_bar_time
         if last == 0 or last == r.last_bar_run:
             return False
+        # Backtest parity + real-money safety: in backtest/paper every bar's order
+        # fills the SAME bar, so nothing carries over. A REAL limit order can REST
+        # unfilled; the strategy re-derives its intent from the FILLED position each
+        # bar and would re-emit (stack) the same orders every bar -> unbounded
+        # duplicate exposure (seen live: 8 resting BUYs at max_position=1). Cancel
+        # this robot's working orders before re-running the strategy so each bar
+        # starts order-flat, exactly like the backtest. No-op in paper.
+        for w in r.runtime.working_orders():
+            try:
+                await r.runtime.cancel_order(w["order_id"])
+            except Exception as exc:  # noqa: BLE001 — a failed cancel must not skip the bar
+                log.warning("host.precancel_failed", robot_id=r.spec["robot_id"],
+                            client_id=w["order_id"], error=str(exc))
         try:
             await r.on_bar(r.runtime, r.spec["params"])
             r.last_error = ""
@@ -226,6 +244,10 @@ class RobotHost:
 
         async def consume_ticks():
             async for t in self._bridge.ticks([]):
+                # freshest bid/ask for marketable order pricing (0s tolerated;
+                # the runtime validates >0 and freshness before using them)
+                self.quotes[t.code] = (float(t.bid or 0), float(t.ask or 0),
+                                       int(t.received_at_unix_ms or 0))
                 price = pick_price(t.last, t.bid, t.ask)
                 if price <= 0:
                     continue

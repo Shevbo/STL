@@ -8,10 +8,14 @@ from robot_runner.host import RobotHost
 class FakeBridge:
     def __init__(self):
         self.placed = []
+        self.cancelled = []
         self.reports = []
 
     async def place_order(self, **kw):
         self.placed.append(kw)
+
+    async def cancel_order(self, client_id, order_id):
+        self.cancelled.append(client_id)
 
     async def report_status(self, r):
         self.reports.append(r)
@@ -89,6 +93,74 @@ async def test_tick_runs_strategy_once_per_closed_bar(tmp_path):
     r.bars.on_tick(t0 + 10 * 60_000, 89_400)
     r.bars.on_tick(t0 + 11 * 60_000, 89_500)
     assert await host.tick_robot(r) is True
+
+
+@pytest.mark.asyncio
+async def test_real_robot_cancels_resting_orders_before_next_bar(tmp_path):
+    # A REAL limit order rests unfilled between bars. Without clearing it the
+    # strategy re-emits its intent each bar and stacks duplicate real orders
+    # (seen live: 8 resting BUYs at max_position=1). The host must cancel this
+    # robot's working orders before re-running on_bar.
+    bridge = FakeBridge()
+    host = RobotHost(bridge, str(tmp_path))
+    await host.handle_control(_deploy_rc(paper=False))
+    r = host.robots["r1"]
+    t0 = 1_751_500_000_000
+    for i in range(10):
+        r.bars.on_tick(t0 + i * 60_000, 89_000 + i * 30)
+    assert await host.tick_robot(r) is True
+
+    # simulate a real order that was placed and is still RESTING (submitted)
+    o = await r.runtime.place_order("RIU6", "buy", 1, 89_000.0)
+    assert o.status == "submitted"
+    assert len(r.runtime.working_orders()) == 1
+    resting_cid = o.order_id
+    bridge.cancelled.clear()
+
+    # a NEW closed bar -> the resting order is cancelled before on_bar runs
+    r.bars.on_tick(t0 + 10 * 60_000, 89_400)
+    r.bars.on_tick(t0 + 11 * 60_000, 89_500)
+    assert await host.tick_robot(r) is True
+    assert resting_cid in bridge.cancelled
+
+
+@pytest.mark.asyncio
+async def test_paper_tick_never_cancels(tmp_path):
+    # Paper fills are instant -> no resting orders -> no cancel churn.
+    bridge = FakeBridge()
+    host = RobotHost(bridge, str(tmp_path))
+    await host.handle_control(_deploy_rc(paper=True))
+    r = host.robots["r1"]
+    t0 = 1_751_500_000_000
+    for i in range(12):
+        r.bars.on_tick(t0 + i * 60_000, 89_000 + i * 30)
+    await host.tick_robot(r)
+    assert bridge.cancelled == []
+
+
+@pytest.mark.asyncio
+async def test_real_order_prices_marketable_from_host_quote(tmp_path):
+    # Host feeds quotes; a REAL BUY goes out at the ASK (marketable), not at
+    # the strategy's bar-close price, so it fills like the backtest assumes.
+    bridge = FakeBridge()
+    host = RobotHost(bridge, str(tmp_path))
+    await host.handle_control(_deploy_rc(paper=False))
+    r = host.robots["r1"]
+    import time as _t
+    now_ms = int(_t.time() * 1000)
+    host.quotes["RIU6"] = (88_990.0, 89_010.0, now_ms)   # bid, ask, fresh
+    o = await r.runtime.place_order("RIU6", "buy", 1, 88_900.0)
+    assert bridge.placed[-1]["price"] == 89_010.0         # ask, not close
+    assert o.price == 89_010.0
+    s = await r.runtime.place_order("RIU6", "sell", 1, 89_100.0)
+    assert bridge.placed[-1]["price"] == 88_990.0         # bid
+    assert s.price == 88_990.0
+
+    # STALE quote -> falls back to the strategy price
+    host.quotes["RIU6"] = (88_990.0, 89_010.0, now_ms - 60_000)
+    f = await r.runtime.place_order("RIU6", "sell", 1, 89_100.0)
+    assert bridge.placed[-1]["price"] == 89_100.0
+    assert f.price == 89_100.0
 
 
 @pytest.mark.asyncio
