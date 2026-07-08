@@ -251,9 +251,17 @@ func buildReconInputs(d Deps) recon.Inputs {
 		}
 		rv.OrderNums = append(rv.OrderNums, robotOrderNums[id]...)
 		if !rv.Paper {
+			// Match ONLY the current session: the runner reports its FULL fill
+			// tail (days back), but QUIK's acc_trd table holds today's trades —
+			// older fills can never match and flipped recon into a permanent
+			// phantom MISMATCH (seen live after the 200-tail change).
+			floor := mskMidnightMs(d.nowMs())
 			for _, f := range st.GetRecentFills() {
 				if f.GetStatus() != "filled" {
 					continue // no QUIK trade exists for a rejected/skipped/paper fill
+				}
+				if f.GetTsUnixMs() < floor {
+					continue // pre-session fill: absent from today's QUIK table by design
 				}
 				rv.FillKeys = append(rv.FillKeys, recon.FillKey{
 					OrderNum: f.GetOrderId(), Qty: f.GetQty(), Price: f.GetPrice(),
@@ -270,6 +278,17 @@ func buildReconInputs(d Deps) recon.Inputs {
 		PriceStep: priceStep,
 		NowMs:     d.nowMs(),
 	}
+}
+
+// mskMidnightMs returns 00:00 MSK (UTC+3, no DST) of the day containing nowMs,
+// as epoch-ms. Recon's trade matcher scopes robot fills to the current session:
+// QUIK's acc_trd table only carries today's trades, so older fills are
+// unmatchable by design, not a divergence.
+func mskMidnightMs(nowMs int64) int64 {
+	const day = int64(24 * 60 * 60 * 1000)
+	const mskOffset = int64(3 * 60 * 60 * 1000)
+	shifted := nowMs + mskOffset
+	return (shifted/day)*day - mskOffset
 }
 
 // computeReport is the single place that turns Deps into a recon.Report, used

@@ -7,7 +7,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { fetchWithAuth } from '../../lib/fetch-auth';
-  import { toFills } from '../../lib/lab-analytics';
+  import { toFills, rolledPnl } from '../../lib/lab-analytics';
   import BacktestChart from './BacktestChart.svelte';
   import LatencyPane from './LatencyPane.svelte';
   import AgentBookPane from './AgentBookPane.svelte';
@@ -142,6 +142,14 @@
   $effect(() => { void loadCoef(symbol); });
   const pnlPoints = $derived(Number(robot?.realized_pnl ?? 0));
   const pnlRub = $derived(pointCoef ? pnlPoints * pointCoef : null);
+  // REAL robots: the header badge shows REAL money (filled-only fills replayed
+  // with taker commission — the same math as the chart's «Результат», so the
+  // two never diverge again). The strategy's paper-inclusive cumulative moves
+  // to the tooltip.
+  const realNetRub = $derived.by(() => {
+    if (robot?.paper || !pointCoef || !chartFills.length) return null;
+    try { return rolledPnl(chartFills, pointCoef, true).net; } catch { return null; }
+  });
   let tickAge = $state<number | null>(null);
   let mirrorAge = $state<number | null>(null);
 
@@ -312,13 +320,19 @@
         пульс {heartbeatAge === null ? '—' : heartbeatAge + 'с'}</span>
       <span class="badge pos" class:long={position > 0} class:short={position < 0}>
         позиция {position > 0 ? '+' : ''}{position}</span>
-      <span class="badge pnl" class:up={pnlPoints > 0} class:dn={pnlPoints < 0}
-            title={pointCoef
-              ? `${pnlPoints.toLocaleString('ru-RU')} п. × ${pointCoef.toFixed(4)} ₽/п. — кумулятив стратегии С БУМАЖНОГО периода, без комиссий. Реальные деньги смотри в блоке «Результат» на графике (считается только по filled-сделкам QUIK).`
-              : 'в пунктах цены (курс пункта ещё не получен)'}>
-        P&L∑ {pnlRub !== null
-          ? Math.round(pnlRub).toLocaleString('ru-RU') + ' ₽'
-          : pnlPoints.toLocaleString('ru-RU') + ' п.'}</span>
+      {#if realNetRub !== null}
+        <span class="badge pnl" class:up={realNetRub > 0} class:dn={realNetRub < 0}
+              title={`РЕАЛЬНЫЕ деньги: только filled-сделки QUIK + комиссия тейкера (= «Результат» на графике). Кумулятив стратегии с бумажного периода, без комиссий: ${pnlRub !== null ? Math.round(pnlRub).toLocaleString('ru-RU') + ' ₽' : pnlPoints.toLocaleString('ru-RU') + ' п.'}`}>
+          P&L реал {Math.round(realNetRub).toLocaleString('ru-RU')} ₽</span>
+      {:else}
+        <span class="badge pnl" class:up={pnlPoints > 0} class:dn={pnlPoints < 0}
+              title={pointCoef
+                ? `${pnlPoints.toLocaleString('ru-RU')} п. × ${pointCoef.toFixed(4)} ₽/п. — кумулятив стратегии С БУМАЖНОГО периода, без комиссий.`
+                : 'в пунктах цены (курс пункта ещё не получен)'}>
+          P&L∑ {pnlRub !== null
+            ? Math.round(pnlRub).toLocaleString('ru-RU') + ' ₽'
+            : pnlPoints.toLocaleString('ru-RU') + ' п.'}</span>
+      {/if}
       <span class="badge" class:ok={tickAge !== null && tickAge <= 10} class:warn={tickAge === null || tickAge > 10}
             title="возраст последнего тика QUIK (поток данных)">
         тик {tickAge === null ? '—' : tickAge + 'с'}</span>
