@@ -40,13 +40,19 @@ Agent build tree on the hoster: `~/quik_build` (synced by scp, Go toolchain user
   StreamOrderEvents/PlaceRunnerOrder/ReportStatus.
 Regenerate stubs after any edit (see the protobuf gotcha below).
 
-**Market data (DDE is RETIRED):** `quik_agent/lua/shectory_trade.lua` publishes over the
-file queue: ticks (getParamEx, 500ms), order books (getQuoteLevel2, 1s), the anonymized
-all-trades tape (OnAllTrade, 300ms batches — the QUIK "Таблица всех сделок" window must
-stay open), instrument params (price step/step cost/margin, 60s). The Go bridge routes
-md/book/tape/param events into a `quikdde.Provider` overlay (freshest-wins merge with any
-DDE sheets); the runner builds EXACT OHLCV bars from the tape (`robot_runner/bars.py`,
-snapshot ticks muted while the tape flows). Operator config lives in a sidecar
+**Market data (DDE is RETIRED, default-off in code):** `quik_agent/lua/shectory_trade.lua`
+publishes over the file queue: ticks (getParamEx, 500ms), order books (getQuoteLevel2, 1s
+— QUIK returns L2 only while a depth window for that instrument is OPEN in the terminal),
+the anonymized all-trades tape (OnAllTrade, 300ms batches — the QUIK "Таблица всех сделок"
+window must stay open), instrument params (price step/step cost/margin, 60s). The Go
+bridge routes md/book/tape/param events into a `quikdde.Provider` overlay (the package
+name is historical — Provider is the market-data hub); the runner builds EXACT OHLCV bars
+from the tape (`robot_runner/bars.py`, snapshot ticks muted while the tape flows). The
+legacy DDE reader starts ONLY with `SHECTORY_ENABLE_DDE=1`; health/heartbeat judge the
+FEED freshness, not the DDE server (a hard `Alive()` check with DDE off would raise a
+false CRITICAL DDE_DOWN on every start). Books are forwarded to STL by walking
+`Provider.LuaBookCodes()` content-fingerprint-gated — the old DDE-sheet walk finds nothing
+post-DDE and silently kills the стакан (bit prod). Operator config lives in a sidecar
 `shectory_trade_config.lua` next to the script (survives script updates; example in
 `quik_agent/lua/`). Synthetic prices are quantized to the instrument price step — never
 draw or feed a price that cannot exist on the exchange.
@@ -69,29 +75,68 @@ orders/trades to a robot by a TAG the agent stamps into the QUIK order COMMENT (
 `brokerref`): robot ID for `rr:` orders, `"recon"` for align orders, empty for MANUAL
 (operator's own terminal trading). Untagged = manual: shown separately, never
 reconciled, never in an align plan (so robot recon and manual trading never conflict;
-`manual_offset` is retired). Robots are edited from the page: params via
-`/api/robot/{id}/params` (local) or `POST /api/v1/quik/robots/{id}/params` (STL mirror,
-`params_json` only); the paper/real toggle via `/api/robot/{id}/mode` exists ONLY on the
-agent (never STL) and refuses a non-flat robot — arming real money is local-console-only,
-gated on FLAT + typed robot-ID confirm.
+`manual_offset` is retired). The recon trade-matcher scopes robot fills to the CURRENT
+session (MSK-midnight floor): QUIK's acc_trd only holds today, so older fills are
+unmatchable by design, not a divergence (`Manual.AccountNet` = the raw WHOLE-account net,
+robots included — label it that way). Robots are edited from the GUI: params via
+`/api/robot/{id}/params` (local) or `POST /api/v1/quik/robots/{id}/params` (STL);
+params_json alone = light SetRobotParams (next bar); a different max_position/schedule =
+full spec re-deploy built from the MIRROR echo (paper strictly from the mirror — that
+route can never arm/disarm; 409 when the robot is absent from the mirror, never a silent
+ignore). The paper/real toggle via `/api/robot/{id}/mode` exists ONLY on the agent (never
+STL) and refuses a non-flat robot — arming real money is local-console-only, gated on
+FLAT (position 0 + no working/in-flight order + status known) + typed robot-ID confirm.
+Recon never generates a `close_position` step (a position is contextual — it can include
+the operator's manual trading); align does `cancel_order` (orphan) + `fix_state` only,
+and the Aligner is structurally unable to place an account-net order. On the stand, the
+chart's «Результат» = REAL money (status=='filled' fills only, taker commission) while
+the runner's `realized_pnl` is the strategy cumulative INCLUDING the paper era (never
+reset at arming) — two different numbers by design.
 
 **Order flow (human orders and robot orders share the tail):** UI → `POST
 /api/v1/quik/orders/*` (`trader/api/quik_orders.py`) → limit check (`trader/quik/
 limits.py`) → gRPC enqueue (`trader/quik/server.py`) → agent `trade.Manager` re-checks
 limits → file-queue `C:\quik-bridge\cmd.jsonl` (prod QUIK has no LuaSocket) →
 `shectory_trade.lua` `sendTransaction` → QUIK. Robot orders enter at the Manager via the
-runner bridge with `client_id` prefix `rr:` (order events are fanned back only to `rr:`
-subscribers). Replies flow back as OrderUpdate/TransReply; STL order state in
-`trader/quik/orders.py`, market state in `trader/quik/store.py`.
+runner bridge with `client_id` of the exact form `rr:<robotID>:<seq>:<uuid6hex>`
+(`robot_runner/runtime.py`) — FOUR segments; order events are fanned back only to `rr:`
+subscribers. Parse the robot ID with the FIRST colon after `rr:` (robot IDs are colon-free
+slugs), never LastIndex — a wrong parse silently breaks robot order attribution for every
+REAL robot and paper robots hide it. Replies flow back as OrderUpdate/TransReply; STL order
+state in `trader/quik/orders.py`, market state in `trader/quik/store.py`.
+
+**Runner execution parity (paid for in real money):** in backtest/paper every bar's order
+fills the SAME bar, so the strategy (which re-derives its intent each bar from the FILLED
+position) never re-emits. A live LIMIT at `bars[-1].close` can REST → the position never
+flips → the same reversal re-emits every bar (8 stacked real orders at max_position=1,
+seen live). Hence in `robot_runner`: (a) REAL orders go MARKETABLE — BUY at ask / SELL at
+bid from the host-fed freshest quote (10s freshness, fallback to strategy price); paper
+path untouched; (b) `host.tick_robot` cancels this robot's working orders before every
+new-bar `on_bar`; (c) a cancel the agent cannot honor (unknown client_id after an agent
+restart / QUIK day-expiry) is terminated LOCALLY, or the runner book turns phantom;
+(d) `RobotStatusReport.recent_fills` carries the FULL persisted 200-tail, and
+`realized_pnl` is PRICE POINTS × contracts, NOT rubles (UI converts via
+step_cost/price_step). Thin evening books partial-fill a multi-lot marketable order; the
+pre-bar cancel drops the tail remainder — position tops up via averaging, by design.
 
 **Dual trading safety.** A QUIK order requires the master flag ON in BOTH STL
 (`quik_trading_enabled` env) AND the agent's own `agent_config.json`. STL never pushes the
 master flag; it pushes only the whitelist + numeric caps via `SetLimits` on connect (so the
 two whitelists cannot silently diverge), and the agent echoes its effective limits back via
 `LimitsState`. A rejected order text "Торговля QUIK отключена" therefore means the AGENT's
-local flag is off. Phantom orders QUIK never acknowledges are reconciled to terminal on
-BOTH sides (STL `OrderStore.reconcile_pending`, agent `Manager.reconcileStalePending`, ~20s)
-so they cannot occupy the working-contracts budget forever.
+local flag is off. Numeric caps: effective = min(agent_config backstop, STL push), and the
+agent only TIGHTENS a push live — it re-reads WIDER caps ONLY at start. To raise caps:
+STL env (`QUIK_MAX_CONTRACTS_PER_ORDER`/`QUIK_MAX_WORKING_CONTRACTS`) + restart STL FIRST,
+THEN restart the agent (wrong order leaves the old tight caps in force; bit live). Chain
+sizing sanity: a robot reversal = close N + open N = 2N contracts in flight at once, so
+working cap ≥ 2×per-order. Phantom orders QUIK never acknowledges are reconciled to
+terminal on BOTH sides (STL `OrderStore.reconcile_pending`, agent
+`Manager.reconcileStalePending`, ~20s) so they cannot occupy the working-contracts budget
+forever. The agent does NOT persist its own working-order table across restarts: orders
+placed before an agent restart can be neither listed nor cancelled by it (kill-switch
+included) — QUIK day-expiry clears them at session end. An agent restart also ORPHANS the
+runner process (it survives, keeping its in-memory book); for a manual restart taskkill
+BOTH `robot-runner.exe` and the agent exe first.
 
 **Broker abstraction** (`trader/broker/`): robots trade through one `BrokerInterface`
 (`base.py`); the concrete adapter is chosen from `settings.exchange_interface` by
@@ -102,8 +147,24 @@ honestly.
 **Lab** (`trader/lab/`): paper robots persisted in Postgres table `robots` (the traded
 symbol lives in `params_json`, NOT a column); `scheduler.py` runs them, `runtime.py` is the
 per-robot execution context; `strategies/library.py` is the signal registry consumed 1:1
-by backtest, STL robots AND the agent-side runner. The backtester + optimizer sweep jobs
-live here too (self-healing orphan reaper in `api/app.py`).
+by backtest, STL robots AND the agent-side runner. All library strategies run on M1 bars
+(hardwired `tf=1` in `make_on_bar`); param ranges in each strategy's schema drive both the
+Optimizer UI and campaign grids. The backtester + optimizer sweep jobs live here too
+(self-healing orphan reaper in `api/app.py`).
+
+**Param sweeps (heavy compute runs on the i9, never the VDS):** queue with
+`scripts/queue_campaign.py` from a dev box (`--strategies fvg --symbols RI --date-from …
+--include-avg-params --pin qty=1`; `--pin` frees a grid axis — qty only scales P&L). Jobs
+land in `backtest_runs` (engine=remote); the pull agent on the i9 box "Win10-HyperV"
+(repo copy at `C:\Users\admin\Documents\@FIN\Shectory Trade & Lab`, NO git — sync
+`trader/` by hand or via the agent self-update manifest) claims via
+`/api/v1/agent/claim`. GOTCHAS: `agent_control.pause_remote='1'` makes claim return 204
+forever (agent idles "waiting for jobs"); `shectory-optimizer.service` on the hoster
+enqueues its own rounds and competes for the i9 — stop it for a focused sweep; results
+from `camp-`/`opt-` prefixed run_ids mirror into `optimization_leaderboard`
+(Botstore), bare-cuid runs land ONLY in `backtest_results`; explicit `paramSets` (list of
+dicts, e.g. a random no-repeat sample) bypasses the grid product and the local combo cap
+on engine=remote. The VDS fallback sweeper only takes jobs ≤150 combos.
 
 **Process isolation rule (paid for twice):** no strategy/model computation ever runs
 inside the STL API process. AI46 (`trader/lab/ai46/`) runs standalone: `python -m
@@ -145,6 +206,13 @@ bash deploy/build_runner.sh                         # -> dist/runner/robot-runne
 # directly, or use PowerShell.
 cd frontend && node ./node_modules/vite/bin/vite.js build
 node ./node_modules/vitest/vitest.mjs run           # tests
+
+# Portal-authed API from a shell (mirror/status/orders endpoints) — mint a session
+# Bearer ON THE HOSTER with the app's own signer (never print the secret):
+ssh hoster 'cd ~/apps/shectory-trader && set -a; . ~/.shectory_trade.env; set +a; \
+  PY=$(/home/ubuntu/.local/bin/poetry env info --path)/bin/python; \
+  TK=$($PY -c "import os;from trader.auth.portal import make_session_token as m;print(m(\"<email>\",os.environ[\"SHECTORY_AUTH_BRIDGE_SECRET\"]))"); \
+  curl -s -H "Authorization: Bearer $TK" localhost:8000/api/v1/quik/robots-mirror'
 ```
 
 ## Deploy
@@ -161,6 +229,13 @@ node ./node_modules/vitest/vitest.mjs run           # tests
   `robot-runner.exe` into the SAME zip when staged in `~/quik_build/quik_agent/dist/`
   (build it on Windows first, scp it up); the agent self-updates on start/03:00/command
   and its apply-.bat installs companion exes too. `build_rev` must be a NUMERIC epoch.
+  Omit `[agent_id]` to publish WITHOUT triggering — the agent applies it at 03:00 (no
+  extra live-robot restart). **VERIFY `sha256sum` of the staged runner exe against the
+  local build BEFORE publishing, and the zip entry after** (python3 zipfile; no unzip on
+  the hoster): a Bash-tool timeout once killed an scp mid-transfer, the staged exe kept
+  the right SIZE with wrong bytes, three publishes shipped it, and the runner crash-looped
+  on the VDS with `[PYI-x:ERROR] Failed to extract ... decompression -3` (PyInstaller
+  archive corrupt; runner stderr is not remoted — diagnosis needed the operator's console).
 - **AI46:** `deploy/shectory-ai46.service`; runs `python -m trader.lab.ai46`.
 - ssh aliases: `hoster` (prod), `smain` (federation/keymaster). No SSH to the QUIK VDS —
   anything there (QUIK settings, Lua script file, agent_config.json) is operator-only.
@@ -199,6 +274,15 @@ node ./node_modules/vitest/vitest.mjs run           # tests
   FIRST when data freshness looks wrong.
 - **Agent flush discipline:** the link sends only CHANGED securities/params/ticks
   (poll_interval_sec=1 in prod); keep new frame types change-gated or STL CPU pays x5.
+  Gate by CONTENT when the publisher re-stamps unchanged data every cycle (the Lua book
+  ts advances every second — a timestamp gate passes everything).
+- **Lua on the VDS runs from MEMORY.** Copying a newer `shectory_trade.lua` over the file
+  changes nothing until the operator stops/starts the script in QUIK (Сервисы →
+  Lua-скрипты). File mtime identical to repo ≠ the running code is current.
+- **Never restart the STL service mid-diagnosis of the mirror**: `robots-mirror` /
+  `agent-local-status` are in-memory mirrors — a restart empties them until the agent
+  redials and re-reports (~15-60s); an empty mirror right after a restart is not an
+  outage, and robots[0] indexing will throw.
 
 ## Approach
 - Read existing files before writing. Don't re-read unless changed.
