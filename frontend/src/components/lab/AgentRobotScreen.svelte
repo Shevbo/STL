@@ -55,8 +55,14 @@
     order_id: f.order_id ?? '',
     status: f.status ?? '',
   })));
+  // REAL robot: the chart + "Результат" must count ONLY QUIK-confirmed fills
+  // (status 'filled'). The runner's 200-tail also carries the PAPER-era history
+  // (kept in the trades TABLE, labelled) — replaying paper+real through one book
+  // fabricated "макс. позиция 2 конт" and a mixed-era net. Paper robots keep
+  // counting their paper fills.
   const chartFills = $derived(
-    toFills(trades.filter((t: any) => EXECUTED.has(t.status)))
+    toFills(trades.filter((t: any) =>
+      robot?.paper ? EXECUTED.has(t.status) : t.status === 'filled'))
       .map((f: any) => ({ ...f, time: f.time + MSK_OFFSET })));
 
   // STABLE-IDENTITY chart props. BacktestChart fully reloads on every new `result`
@@ -259,9 +265,9 @@
         позиция {position > 0 ? '+' : ''}{position}</span>
       <span class="badge pnl" class:up={pnlPoints > 0} class:dn={pnlPoints < 0}
             title={pointCoef
-              ? `${pnlPoints.toLocaleString('ru-RU')} п. × ${pointCoef.toFixed(4)} ₽/п. (реализовано, без комиссий)`
+              ? `${pnlPoints.toLocaleString('ru-RU')} п. × ${pointCoef.toFixed(4)} ₽/п. — кумулятив стратегии С БУМАЖНОГО периода, без комиссий. Реальные деньги смотри в блоке «Результат» на графике (считается только по filled-сделкам QUIK).`
               : 'в пунктах цены (курс пункта ещё не получен)'}>
-        P&L {pnlRub !== null
+        P&L∑ {pnlRub !== null
           ? Math.round(pnlRub).toLocaleString('ru-RU') + ' ₽'
           : pnlPoints.toLocaleString('ru-RU') + ' п.'}</span>
       <span class="badge" class:ok={tickAge !== null && tickAge <= 10} class:warn={tickAge === null || tickAge > 10}
@@ -289,7 +295,7 @@
       defaultInterval={1}
       live={20}
       liveTick={liveTick}
-      taker={false}
+      taker={!robot?.paper}
       openOrders={openOrders}
       plannedOrders={plannedOrders}
     />
