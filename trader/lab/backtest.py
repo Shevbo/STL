@@ -127,6 +127,12 @@ def compute_metrics(trades: list[dict], initial_equity: float,
     def _annualize(r):
         if r is None or bars_days < 7:
             return None
+        # r <= -100% (futures loss beyond initial equity): a negative base to a
+        # fractional power is COMPLEX in Python and poisons the whole sweep
+        # batch at json.dumps ("Object of type complex is not JSON serializable",
+        # killed a 55-min 100k run). Annualizing a wipeout is meaningless — None.
+        if r <= -1.0:
+            return None
         return (1.0 + r) ** (365.0 / bars_days) - 1.0
 
     ann_return_go = _annualize(total_return)
