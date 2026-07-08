@@ -20,6 +20,10 @@
   .badge.dim { color: #667; }
   section { padding: 10px 14px; border-bottom: 1px solid #16162c; }
   .sec-title { font-size: 10px; color: #667; text-transform: uppercase; letter-spacing: .6px; margin-bottom: 8px; }
+  /* long lists collapse into fixed frames instead of eating the screen */
+  .scrollbox { max-height: 30vh; overflow-y: auto; }
+  .pop { float: right; cursor: pointer; color: #667; font-size: 12px; padding: 0 4px; }
+  .pop:hover { color: #cdd; }
   .tiles { display: flex; flex-wrap: wrap; gap: 8px; }
   .tile { background: #12122a; border: 1px solid #22224a; border-radius: 6px; padding: 8px 12px; min-width: 130px; }
   .tile .k { font-size: 9px; color: #667; text-transform: uppercase; }
@@ -98,23 +102,27 @@
   <table><thead><tr><th>ID</th><th>Символ</th><th>Позиция</th><th>Заявки</th><th>Сделки</th></tr></thead>
     <tbody id="recon-robot-checks"></tbody></table>
 
-  <div class="sec-title" style="margin-top:10px">Заявки QUIK (роботы)</div>
-  <table><thead><tr><th>№ заявки</th><th>Владелец</th><th>OK</th></tr></thead>
-    <tbody id="recon-orders"></tbody></table>
+  <div class="sec-title" style="margin-top:10px">Заявки QUIK (роботы)
+    <span class="pop" onclick="popout(this)" title="открыть в отдельном окне">⧉</span></div>
+  <div class="scrollbox"><table><thead><tr><th>№ заявки</th><th>Владелец</th><th>OK</th></tr></thead>
+    <tbody id="recon-orders"></tbody></table></div>
 
-  <div class="sec-title" style="margin-top:10px">Сделки роботов</div>
-  <table><thead><tr><th>№ сделки</th><th>№ заявки</th><th>Совпадение</th></tr></thead>
-    <tbody id="recon-trades"></tbody></table>
+  <div class="sec-title" style="margin-top:10px">Сделки роботов
+    <span class="pop" onclick="popout(this)" title="открыть в отдельном окне">⧉</span></div>
+  <div class="scrollbox"><table><thead><tr><th>№ сделки</th><th>№ заявки</th><th>Совпадение</th></tr></thead>
+    <tbody id="recon-trades"></tbody></table></div>
 
-  <div class="sec-title" style="margin-top:10px">Транзакции</div>
-  <table><thead><tr><th>№ транзакции</th><th>Статус</th><th>Текст</th></tr></thead>
-    <tbody id="recon-trans"></tbody></table>
+  <div class="sec-title" style="margin-top:10px">Транзакции
+    <span class="pop" onclick="popout(this)" title="открыть в отдельном окне">⧉</span></div>
+  <div class="scrollbox"><table><thead><tr><th>№ транзакции</th><th>Статус</th><th>Текст</th></tr></thead>
+    <tbody id="recon-trans"></tbody></table></div>
 
   <div id="align-card"></div>
 
-  <div class="sec-title" style="margin-top:18px">Ручная торговля (не сверяется, справочно)</div>
-  <table><thead><tr><th>№ заявки</th><th>Символ</th></tr></thead>
-    <tbody id="manual-orders"></tbody></table>
+  <div class="sec-title" style="margin-top:18px">Ручная торговля (не сверяется, справочно)
+    <span class="pop" onclick="popout(this)" title="открыть в отдельном окне">⧉</span></div>
+  <div class="scrollbox"><table><thead><tr><th>№ заявки</th><th>Символ</th></tr></thead>
+    <tbody id="manual-orders"></tbody></table></div>
 
   <div class="sec-title" style="margin-top:10px">Позиции по счёту QUIK (сумма ручных + роботов)</div>
   <table><thead><tr><th>Символ</th><th>Нетто</th></tr></thead>
@@ -135,6 +143,17 @@ const INTERVAL = +(qs.get('interval') || 1000);
 // robotLinks and renderRecon's align-card branch).
 const IS_LOCAL = SRC === '/api/status';
 let lastOkMs = 0;
+
+// ponytail: static snapshot of the table; live-refreshing popout when asked
+function popout(btn) {
+  const title = btn.parentNode.textContent.replace('⧉', '').trim();
+  const tbl = btn.parentNode.nextElementSibling.querySelector('table');
+  const w = window.open('', '_blank', 'width=780,height=900');
+  w.document.write('<title>' + title + '</title>' + document.querySelector('style').outerHTML
+    + '<body style="padding:16px"><h3>' + title + ' — снимок '
+    + new Date().toLocaleTimeString('ru-RU') + '</h3>' + tbl.outerHTML);
+  w.document.close();
+}
 
 function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
