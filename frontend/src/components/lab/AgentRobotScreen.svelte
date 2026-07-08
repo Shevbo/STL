@@ -11,6 +11,7 @@
   import BacktestChart from './BacktestChart.svelte';
   import LatencyPane from './LatencyPane.svelte';
   import AgentBookPane from './AgentBookPane.svelte';
+  import { fetchAgentLocalStatus, type AgentLocalStatus } from '../../lib/agent-robots';
 
   let { robotId, agentId = null }: { robotId: string; agentId?: string | null } = $props();
 
@@ -18,8 +19,16 @@
   const EXECUTED = new Set(['paper', 'filled', 'submitted', 'executed']);
 
   let report = $state<any>(null);
+  let localStatus = $state<AgentLocalStatus | null>(null);
   let strategyDesc = $state<string>('');
   let error = $state('');
+
+  // QUIK-link health + recon (agent vs QUIK account tables) for this robot.
+  const health = $derived(localStatus?.health ?? null);
+  const reconState = $derived(localStatus?.recon?.state ?? null);
+  const reconCheck = $derived.by(() =>
+    (localStatus?.recon?.robot_checks ?? []).find((c: any) => c.id === robotId) ?? null);
+  const manualBlock = $derived(localStatus?.recon?.manual ?? null);
 
   const robot = $derived((report?.robots ?? []).find((r: any) => r.robot_id === robotId) ?? null);
   const signal = $derived.by(() => {
@@ -108,17 +117,23 @@
   // ₽ per price POINT (step_cost/price_step from the QLua params feed). The runner
   // accumulates realized P&L in PRICE POINTS; the UI converts to honest rubles.
   let pointCoef = $state<number | null>(null);
-  async function loadCoef() {
+  async function loadCoef(sym: string = symbol) {
     try {
       const q = agentId ? `?agent_id=${encodeURIComponent(agentId)}` : '';
       const res = await fetchWithAuth(`/api/v1/quik/params${q}`,
         { signal: AbortSignal.timeout(4000) } as any);
       if (!res.ok) return;
       const d = await res.json();
-      const row = (d.rows ?? []).find((r: any) => r.code === symbol);
-      if (row?.coef > 0) pointCoef = Number(row.coef);
+      const row = (d.rows ?? []).find((r: any) => r.code === sym);
+      // Guard the async gap: only apply if the robot's symbol hasn't changed,
+      // else a stale response could stamp the WRONG instrument's ₽/point.
+      if (row?.coef > 0 && sym === symbol) pointCoef = Number(row.coef);
     } catch { /* optional; badge falls back to points */ }
   }
+  // Re-resolve the coef when the robot's symbol becomes known/changes (on mount
+  // the robot is still null, so a fixed onMount call could cache the default
+  // symbol's coef for 5 min — or the wrong instrument's).
+  $effect(() => { void loadCoef(symbol); });
   const pnlPoints = $derived(Number(robot?.realized_pnl ?? 0));
   const pnlRub = $derived(pointCoef ? pnlPoints * pointCoef : null);
   let tickAge = $state<number | null>(null);
@@ -197,25 +212,32 @@
       liveTick = { t: Math.floor(ms / 1000) + MSK_OFFSET, p: price };
   }
 
-  async function loadDesc() {
+  async function loadStatus() {
+    // agent local status (QUIK-link health + recon). Never throws (returns null).
+    localStatus = await fetchAgentLocalStatus(agentId);
+  }
+
+  async function loadDesc(sid: string) {
     try {
       const res = await fetchWithAuth('/api/v1/strategies');
       if (!res.ok) return;
       const list = await res.json();
-      const sid = robot?.strategy_id || 'fvg';
       const hit = (list ?? []).find((s: any) => s.id === sid);
       if (hit?.description) strategyDesc = hit.description;
     } catch { /* description is optional */ }
   }
+  // Reactive: the mirror resolves strategy_id AFTER mount, so a one-shot onMount
+  // call raced it and could pin the default ('fvg') description forever.
+  $effect(() => { const sid = robot?.strategy_id; if (sid) void loadDesc(sid); });
 
   // Non-blocking startup: a hung first request must not delay the timers (that
   // is exactly how the screen froze — onMount awaited a request that never
   // resolved, so setInterval was never installed).
   let timers: Array<ReturnType<typeof setInterval>> = [];
   onMount(() => {
-    void load(); void loadDesc(); void pollTick(); void loadCoef();
+    void load(); void pollTick(); void loadStatus();
     timers = [setInterval(load, 3000), setInterval(pollTick, 1000),
-              setInterval(loadCoef, 300_000)];
+              setInterval(loadStatus, 4000), setInterval(loadCoef, 300_000)];
   });
   onDestroy(() => { for (const t of timers) clearInterval(t); });
 </script>
@@ -276,6 +298,65 @@
   </div>
 
   <div class="ars-lat"><LatencyPane minutes={360} /></div>
+
+  <!-- QUIK-link diagnostics + recon vs QUIK account tables (agent local status) -->
+  <div class="ars-diag-row">
+    <div class="diag-box">
+      <div class="p-title">Связь с биржей (QUIK-агент)</div>
+      <div class="diag-grid">
+        <div class="dg" class:ok={localStatus?.agent?.link_up} class:bad={localStatus != null && !localStatus.agent?.link_up}>
+          <span class="dgk">линк агент↔STL</span>
+          <span class="dgv">{localStatus ? (localStatus.agent?.link_up ? 'на связи' : 'ОБРЫВ') : '—'}</span>
+        </div>
+        <div class="dg"><span class="dgk">RTT агент↔QUIK</span><span class="dgv">{health?.rtt_ms != null ? health.rtt_ms + ' мс' : '—'}</span></div>
+        <div class="dg" class:warn={(health?.exchange_lag_ms ?? 0) > 3000}>
+          <span class="dgk">лаг биржи</span><span class="dgv">{health?.exchange_lag_ms != null ? health.exchange_lag_ms + ' мс' : '—'}</span>
+        </div>
+        <div class="dg" class:warn={Math.abs(health?.clock_drift_ms ?? 0) > 5000}>
+          <span class="dgk">дрейф часов VDS</span><span class="dgv">{health?.clock_drift_ms != null ? health.clock_drift_ms + ' мс' : '—'}</span>
+        </div>
+        <div class="dg" class:ok={health?.runner_healthy} class:bad={localStatus != null && !health?.runner_healthy}>
+          <span class="dgk">runner</span><span class="dgv">{localStatus ? (health?.runner_healthy ? 'здоров' : 'НЕЗДОРОВ') : '—'}</span>
+        </div>
+        <div class="dg"><span class="dgk">отчёт runner</span><span class="dgv">{health?.runner_report_age_ms != null ? Math.round(health.runner_report_age_ms / 1000) + ' с' : '—'}</span></div>
+        <div class="dg"><span class="dgk">возраст зеркала</span><span class="dgv">{mirrorAge != null ? mirrorAge + ' с' : '—'}</span></div>
+        <div class="dg"><span class="dgk">статус получен</span><span class="dgv">{localStatus?.receivedAgeSec != null ? localStatus.receivedAgeSec + ' с' : '—'}</span></div>
+      </div>
+      {#if health?.feed?.length}
+        <div class="feed-row">
+          {#each health.feed as f}
+            <span class="feed-chip" class:stale={f.age_ms > 15000} class:cur={f.code === symbol}>{f.code} · {Math.round(f.age_ms)}мс</span>
+          {/each}
+        </div>
+      {/if}
+    </div>
+
+    <div class="diag-box recon-box" class:mismatch={reconState != null && reconState !== 'OK'} class:reconok={reconState === 'OK'}>
+      <div class="p-title">Сверка с таблицами QUIK
+        <span class="recon-state" class:ok={reconState === 'OK'} class:bad={reconState != null && reconState !== 'OK'}>{reconState ?? '—'}</span>
+      </div>
+      {#if reconCheck}
+        <div class="recon-line">
+          <span>позиция робота по данным агента: <b>{reconCheck.position}</b></span>
+        </div>
+        <div class="recon-line">
+          <span class="rok" class:bad={!reconCheck.orders_ok}>заявки {reconCheck.orders_ok ? '✓ сходятся' : '✗ расходятся'}</span>
+          <span class="rok" class:bad={!reconCheck.trades_ok}>сделки {reconCheck.trades_ok ? '✓ сходятся' : '✗ расходятся'}</span>
+        </div>
+      {:else if localStatus}
+        <div class="recon-line dim">нет строки сверки для этого робота (агент ещё не публикует acc-таблицы, либо у робота нет позиции/заявок)</div>
+      {:else}
+        <div class="recon-line dim">загрузка статуса агента…</div>
+      {/if}
+      {#if manualBlock && ((manualBlock.orders?.length ?? 0) > 0 || (manualBlock.account_net?.length ?? 0) > 0)}
+        <div class="recon-line manual">
+          <span class="mlabel">ручная торговля на счёте (не робот):</span>
+          {#each manualBlock.account_net ?? [] as n}<span class="mchip">{n.sec} нетто {n.net}</span>{/each}
+          {#if (manualBlock.orders?.length ?? 0) > 0}<span class="mchip">{manualBlock.orders.length} заявок</span>{/if}
+        </div>
+      {/if}
+    </div>
+  </div>
 
   <div class="ars-bottom">
     <div class="panel">
@@ -394,6 +475,38 @@
   .ars-chart { flex: 1 1 52%; min-height: 0; display: flex; }
   .ars-chart-body { flex: 1; min-width: 0; min-height: 0; }
   .ars-lat { flex: 0 0 120px; min-height: 0; border-top: 1px solid #1a1a2e; }
+
+  /* QUIK-link diagnostics + recon */
+  /* shrinkable + self-scrolling so a short viewport clips THIS row, never the
+     bottom signal/orders/fills panels (root .ars is overflow:hidden) */
+  .ars-diag-row { flex: 0 1 auto; min-height: 0; max-height: 26%; display: flex; gap: 1px; border-top: 1px solid #22224a; background: #14142a; }
+  .diag-box { flex: 1; min-width: 0; padding: 8px 12px; background: #0a0a15; overflow-y: auto; }
+  .diag-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 5px 14px; }
+  .dg { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; border-bottom: 1px dotted #17172e; padding-bottom: 2px; }
+  .dgk { font-size: 10px; color: #667; }
+  .dgv { font-size: 11px; color: #cfd; font-family: monospace; }
+  .dg.ok .dgv { color: #4caf50; }
+  .dg.bad .dgv { color: #ff5252; font-weight: 700; }
+  .dg.warn .dgv { color: #ffb300; }
+  .feed-row { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+  .feed-chip { font-size: 10px; font-family: monospace; color: #8a8; background: #0e1a0e; border: 1px solid #1e3a1e; border-radius: 3px; padding: 1px 6px; }
+  .feed-chip.cur { border-color: #4caf5088; color: #7fe; }
+  .feed-chip.stale { color: #ff9800; background: #1a1200; border-color: #ff980044; }
+
+  .recon-box.reconok { box-shadow: inset 3px 0 0 #4caf50; }
+  .recon-box.mismatch { box-shadow: inset 3px 0 0 #ff5252; }
+  .recon-state { font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 3px; margin-left: 8px; letter-spacing: 0.5px; }
+  .recon-state.ok { color: #4caf50; background: #11271a; }
+  .recon-state.bad { color: #ff5252; background: #2a1414; }
+  .recon-line { font-size: 11px; color: #bcd; display: flex; flex-wrap: wrap; gap: 12px; margin-top: 5px; }
+  .recon-line b { color: #fff; font-family: monospace; }
+  .recon-line.dim { color: #667; }
+  .rok { color: #4caf50; }
+  .rok.bad { color: #ff5252; font-weight: 700; }
+  .recon-line.manual { margin-top: 8px; padding-top: 6px; border-top: 1px dotted #22224a; }
+  .mlabel { color: #889; }
+  .mchip { font-size: 10px; font-family: monospace; color: #b388ff; background: #14102a; border: 1px solid #2a1f4a; border-radius: 3px; padding: 1px 6px; }
+
   .ars-bottom { flex: 0 0 30%; min-height: 180px; display: flex; border-top: 1px solid #22224a; overflow: hidden; }
   .panel { flex: 1; min-width: 0; overflow-y: auto; padding: 10px 12px; border-right: 1px solid #1a1a2e; }
   /* Trades: an explicit framed table, visible even when empty */

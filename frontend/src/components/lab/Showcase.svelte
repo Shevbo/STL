@@ -6,6 +6,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { fetchWithAuth } from '../../lib/fetch-auth';
   import { toFills, rolledPnl } from '../../lib/lab-analytics';
+  import { fetchAgentRobots, openAgentRobot, type AgentRobotRow } from '../../lib/agent-robots';
   import RobotWindow from './RobotWindow.svelte';
 
   // Robot whose chart + trades window is open (double-click a row to open).
@@ -15,6 +16,7 @@
   const REFRESH_MS = 60_000;
 
   let robots = $state<any[]>([]);
+  let agentRobots = $state<AgentRobotRow[]>([]);
   let loading = $state(true);
   let lastUpdate = $state<Date | null>(null);
 
@@ -98,7 +100,12 @@
       robots = await res.json();
       lastUpdate = new Date();
     }
+    // Paper table renders NOW; agent robots fill their own section in a moment.
+    // (Gating `loading` on the agent fetch blanked the primary table for up to
+    // 6s every refresh whenever the agent was slow/down.)
     loading = false;
+    // Agent-hosted robots (QUIK agent, not the STL robots table). Never throws.
+    agentRobots = await fetchAgentRobots();
   }
 
   async function openRetire(robot: any) {
@@ -195,8 +202,58 @@
     <span class="tot-item">ГО <b>{Math.round(totals.margin).toLocaleString('ru-RU')} ₽</b></span>
   </div>
 
+  <!-- Agent-hosted robots (QUIK agent; real & paper). Double-click -> full stand. -->
+  {#if agentRobots.length}
+    <div class="sc-section agent-section">
+      <div class="sc-section-title">
+        Роботы на бирже QUIK · агент
+        <span class="sc-hint">· живут на агенте рядом с QUIK, P&amp;L из runner (пункты × стоимость пункта) · двойной клик — полный стенд</span>
+      </div>
+      <div class="sc-table-wrap">
+        <table class="sc-table">
+          <thead>
+            <tr>
+              <th>Робот</th>
+              <th>Инструмент</th>
+              <th>Режим</th>
+              <th class="num">P&amp;L ₽</th>
+              <th class="num">Позиция</th>
+              <th class="num">Заявок</th>
+              <th class="num">Heartbeat</th>
+              <th class="num">Статус</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each agentRobots as r (r.id)}
+              <tr class="sc-row" class:stopped={!r.deployed}
+                  title="Двойной клик — полный стенд робота"
+                  ondblclick={() => openAgentRobot(r.id)}>
+                <td class="sc-name"><span class="dot" class:live={r.deployed}></span>{r.name}</td>
+                <td class="sc-sym">{r.symbol}</td>
+                <td><span class="mode-pill" class:real={r.mode === 'real'}>{r.mode === 'real' ? 'РЕАЛ' : 'бумага'}</span></td>
+                <td class="num sc-pnl" class:pos={(r.netRub ?? 0) > 0} class:neg={(r.netRub ?? 0) < 0}>
+                  {r.netRub != null ? fmtMoney(r.netRub) : `${r.pnlPoints} п`}
+                </td>
+                <td class="num" class:pos={r.position > 0} class:neg={r.position < 0}>
+                  {r.position !== 0 ? (r.position > 0 ? '+' : '') + r.position + ' к' : '—'}
+                </td>
+                <td class="num" class:warn={r.working > 6}>{r.working}</td>
+                <td class="num" class:warn={r.heartbeatAgeSec != null && r.heartbeatAgeSec > 120}>
+                  {r.heartbeatAgeSec != null ? `${r.heartbeatAgeSec} с` : '—'}
+                </td>
+                <td class="num">
+                  {#if r.deployed}<span class="badge-live">LIVE</span>{:else}<span class="badge-off">стоп</span>{/if}
+                </td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  {/if}
+
   <!-- Robot summary table -->
-  <div class="sc-section">
+  <div class="sc-section sc-primary">
     <div class="sc-section-title">
       Роботы ({summaries.filter(s => s.robot.deployed).length} активных)
       <span class="sc-hint">· ГО — макс. задействованное гарантийное обеспечение (ГО/контракт × пик контрактов) · P&amp;L % = доход / ГО</span>
@@ -333,8 +390,13 @@
   .sc-refresh:hover { color: #fff; }
 
   .sc-section { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
-  .sc-section:first-of-type { flex: 1 1 0; border-bottom: 1px solid #2d2d4a; }
+  .sc-primary { flex: 1 1 0; border-bottom: 1px solid #2d2d4a; }
+  .agent-section { flex: 0 0 auto; max-height: 34%; border-bottom: 1px solid #2d2d4a; }
   .sc-feed-section { flex: 0 0 260px; }
+
+  .mode-pill { font-size: 9px; font-weight: 700; letter-spacing: 0.4px; color: #889; background: #14142a; border: 1px solid #2a2a44; border-radius: 3px; padding: 1px 6px; }
+  .mode-pill.real { color: #ff5252; border-color: #ff525255; background: #1a0a0a; }
+  .sc-table td.num.warn { color: #ffb300; font-weight: 600; }
   .sc-section-title { font-size: 10px; color: #4a4a6a; text-transform: uppercase; letter-spacing: 0.4px; padding: 6px 14px 4px; flex-shrink: 0; }
   .sc-loading, .sc-empty { padding: 14px; color: #556; font-size: 12px; }
 

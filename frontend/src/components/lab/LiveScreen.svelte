@@ -6,15 +6,20 @@
   import { onMount, onDestroy } from 'svelte';
   import { fetchWithAuth } from '../../lib/fetch-auth';
   import { fetchLatency, pingColor, pingLabel, fmtMs, type LatencyResponse } from '../../lib/latency';
+  import { fetchAgentRobots, openAgentRobot, type AgentRobotRow } from '../../lib/agent-robots';
 
   let { onOpen }: { onOpen: (id: string) => void } = $props();
 
   let robots = $state<any[]>([]);
+  let agentRobots = $state<AgentRobotRow[]>([]);
   let lat = $state<LatencyResponse | null>(null);
   let loading = $state(true);
 
   // Real-money live robots only.
   const liveRobots = $derived(robots.filter(r => r.deployed && r.paper === false));
+  // Real-money robots hosted ON the QUIK agent (separate world; open their full stand).
+  const agentLive = $derived(agentRobots.filter(r => !r.paper));
+  const fmtRub = (v: number) => (v >= 0 ? '+' : '') + Math.round(v).toLocaleString('ru-RU') + ' ₽';
 
   const lastRtt = $derived(lat?.summary?.last_rtt_ms ?? null);
   // Last ~60 ok RTT samples (5 min) for the header sparkline.
@@ -36,6 +41,12 @@
     } catch { robots = []; }
   }
 
+  async function loadAgentRobots() {
+    // fetchAgentRobots never throws (returns [] on any failure) so an agent
+    // outage degrades to "no agent robots", never blanks the Finam list.
+    agentRobots = await fetchAgentRobots();
+  }
+
   async function loadLatency() {
     const r = await fetchLatency(360);
     if (r) lat = r;
@@ -45,11 +56,14 @@
   onMount(async () => {
     await Promise.all([loadRobots(), loadLatency()]);
     loading = false;
-    // Ping refreshes on the 5s probe cadence; robot list every 6 ticks (30s).
+    // Agent robots fill in independently — a slow/down agent must not hold the
+    // Finam cards on "Загрузка…" (their section is gated on its own .length).
+    void loadAgentRobots();
+    // Ping refreshes on the 5s probe cadence; robot lists every 6 ticks (30s).
     let n = 0;
     timer = setInterval(async () => {
       await loadLatency();
-      if (++n % 6 === 0) await loadRobots();
+      if (++n % 6 === 0) await Promise.all([loadRobots(), loadAgentRobots()]);
     }, 5000);
   });
   onDestroy(() => { if (timer) clearInterval(timer); });
@@ -81,30 +95,78 @@
 
   {#if loading}
     <div class="empty">Загрузка…</div>
-  {:else if liveRobots.length === 0}
+  {:else if liveRobots.length === 0 && agentLive.length === 0}
     <div class="empty">Нет LIVE-роботов на реальные деньги.</div>
   {:else}
-    <div class="cards">
-      {#each liveRobots as r (r.id)}
-        <div class="card" role="button" tabindex="0"
-             title="Двойной клик — окно робота"
-             ondblclick={() => onOpen(r.id)}
-             onkeydown={(e) => e.key === 'Enter' && onOpen(r.id)}>
-          <div class="card-top">
-            <span class="dot"></span>
-            <span class="card-name">{r.name}</span>
-            <span class="card-sym">{r.symbol}</span>
+    {#if agentLive.length}
+      <div class="group-band">Роботы на бирже QUIK · агент · реальные деньги</div>
+      <div class="cards">
+        {#each agentLive as r (r.id)}
+          <div class="card agent-card" role="button" tabindex="0"
+               title="Двойной клик — полный стенд робота"
+               ondblclick={() => openAgentRobot(r.id)}
+               onkeydown={(e) => e.key === 'Enter' && openAgentRobot(r.id)}>
+            <div class="card-top">
+              <span class="dot" class:off={!r.deployed}
+                    class:stale={r.deployed && r.heartbeatAgeSec != null && r.heartbeatAgeSec > 120}></span>
+              <span class="card-name">{r.name}</span>
+              <span class="card-sym">{r.symbol}</span>
+              {#if !r.deployed}<span class="stop-badge">СТОП</span>{/if}
+              <span class="mode-badge" class:real={r.mode === 'real'}>{r.mode === 'real' ? 'РЕАЛ' : 'бумага'}</span>
+            </div>
+            <div class="agent-metrics">
+              <div class="am">
+                <span class="amk">P&amp;L</span>
+                <span class="amv" class:pos={(r.netRub ?? 0) > 0} class:neg={(r.netRub ?? 0) < 0}>
+                  {r.netRub != null ? fmtRub(r.netRub) : `${r.pnlPoints} п`}
+                </span>
+              </div>
+              <div class="am">
+                <span class="amk">Позиция</span>
+                <span class="amv" class:pos={r.position > 0} class:neg={r.position < 0}>
+                  {r.position > 0 ? '+' : ''}{r.position} к
+                </span>
+              </div>
+              <div class="am">
+                <span class="amk">Заявок</span>
+                <span class="amv" class:warn={r.working > 6}>{r.working}</span>
+              </div>
+              <div class="am">
+                <span class="amk">Heartbeat</span>
+                <span class="amv" class:warn={r.heartbeatAgeSec != null && r.heartbeatAgeSec > 120}>
+                  {r.heartbeatAgeSec != null ? `${r.heartbeatAgeSec} с` : '—'}
+                </span>
+              </div>
+            </div>
           </div>
-          <div class="card-ping">
-            <span class="cp-val" style="color:{pingColor(lastRtt)}">{fmtMs(lastRtt)}</span>
-            <span class="cp-cap">пинг Finam</span>
+        {/each}
+      </div>
+    {/if}
+
+    {#if liveRobots.length}
+      <div class="group-band">Биржа Finam</div>
+      <div class="cards">
+        {#each liveRobots as r (r.id)}
+          <div class="card" role="button" tabindex="0"
+               title="Двойной клик — окно робота"
+               ondblclick={() => onOpen(r.id)}
+               onkeydown={(e) => e.key === 'Enter' && onOpen(r.id)}>
+            <div class="card-top">
+              <span class="dot"></span>
+              <span class="card-name">{r.name}</span>
+              <span class="card-sym">{r.symbol}</span>
+            </div>
+            <div class="card-ping">
+              <span class="cp-val" style="color:{pingColor(lastRtt)}">{fmtMs(lastRtt)}</span>
+              <span class="cp-cap">пинг Finam</span>
+            </div>
+            <svg class="card-spark" viewBox="0 0 220 34" preserveAspectRatio="none">
+              <path d={sparkPath(spark)} fill="none" stroke={pingColor(lastRtt)} stroke-width="1.5" />
+            </svg>
           </div>
-          <svg class="card-spark" viewBox="0 0 220 34" preserveAspectRatio="none">
-            <path d={sparkPath(spark)} fill="none" stroke={pingColor(lastRtt)} stroke-width="1.5" />
-          </svg>
-        </div>
-      {/each}
-    </div>
+        {/each}
+      </div>
+    {/if}
   {/if}
 </div>
 
@@ -138,4 +200,20 @@
   .card-spark { width: 100%; height: 34px; margin-top: 6px; }
 
   .empty { color: #555; font-size: 13px; padding: 24px; text-align: center; }
+
+  /* group headers + agent-hosted robot cards */
+  .group-band { font-size: 10px; color: #4a4a6a; text-transform: uppercase; letter-spacing: 0.5px; margin: 4px 2px -4px; }
+  .agent-card:hover { border-color: #ffb30066; background: #1a1608; }
+  .dot.stale { background: #ff9800; box-shadow: 0 0 5px #ff980088; }
+  .dot.off { background: #555; box-shadow: none; }
+  .stop-badge { font-size: 9px; font-weight: 700; letter-spacing: 0.5px; color: #ffb300; background: #1a1200; border: 1px solid #ff980044; border-radius: 3px; padding: 1px 6px; }
+  .mode-badge { margin-left: auto; font-size: 9px; font-weight: 700; letter-spacing: 0.5px; color: #889; background: #14142a; border: 1px solid #2a2a44; border-radius: 3px; padding: 1px 6px; }
+  .mode-badge.real { color: #ff5252; border-color: #ff525255; background: #1a0a0a; }
+  .agent-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; margin-top: 10px; }
+  .am { display: flex; flex-direction: column; gap: 1px; }
+  .amk { font-size: 9px; color: #556; text-transform: uppercase; letter-spacing: 0.3px; }
+  .amv { font-size: 15px; font-weight: 600; font-family: monospace; color: #cfd; }
+  .amv.pos { color: #00e676; }
+  .amv.neg { color: #ff5252; }
+  .amv.warn { color: #ffb300; }
 </style>
