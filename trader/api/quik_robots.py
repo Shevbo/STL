@@ -143,24 +143,55 @@ async def relay_robot_params(robot_id: str, body: ParamsRelayBody, request: Requ
     """Relay a params edit from the STL mirror's param editor to the agent's
     live session (portal-authed). Mirrors deploy-agent's enqueue pattern.
 
-    The proto's SetRobotParams carries params_json only, so that is the sole
-    field forwarded over the wire; schedule/max_position are accepted here for
-    body-shape parity with the agent's local /api/robot/{id}/params editor
-    (see docs/superpowers/specs/2026-07-06-robot-tagging-and-gui-control-design.md
-    B1) but are NOT applied through this route today -- editing those two
-    remotely would need either folding them into params_json or a future
-    spec re-deploy path. They currently take effect only via the agent's own
-    local console (set_params_agent/DeployRobot below already cover a full
-    spec re-deploy when strategy_id/symbol are also known).
+    params_json alone -> a light SetRobotParams (applies next bar). When
+    max_position or schedule is ALSO given (and differs from the mirror), the
+    edit needs the SPEC, so this relays a full DeployRobot re-deploy built
+    from the robot's own mirror echo (strategy/symbol/PAPER come from the
+    mirror VERBATIM -- paper is never client-settable here: arming stays on
+    the agent's local console). Re-deploy is zero-loss: the runner keeps
+    bars/position/P&L for a known robot_id.
     """
     _auth(request)
     srv = _server(request)
+    store = _store(request)
     agent = _resolve_agent(request, body.agent_id)
+
+    # Current spec echo from the mirror (source of truth for what runs now).
+    report = store.robot_report(body.agent_id) or {}
+    cur = next((r for r in report.get("robots", [])
+                if r.get("robot_id") == robot_id), None)
+    cur_maxpos = int(cur.get("max_position", 0) or 0) if cur else None
+    cur_sched = (cur or {}).get("schedule") or ""
+    want_maxpos = body.max_position if (body.max_position or 0) > 0 else None
+    want_sched = body.schedule or None
+    spec_change = ((want_maxpos is not None and want_maxpos != cur_maxpos)
+                   or (want_sched is not None and want_sched != cur_sched))
+
+    if spec_change:
+        if cur is None:
+            raise HTTPException(status_code=409, detail=(
+                "Робот не найден в зеркале агента — spec-поля (max_position/"
+                "расписание) менять нельзя вслепую. Обнови страницу / проверь линк."))
+        spec = pb.RobotSpec(
+            robot_id=robot_id,
+            strategy_id=cur.get("strategy_id") or "",
+            params_json=body.params_json,
+            symbol=cur.get("symbol") or "",
+            schedule=want_sched or cur_sched,
+            max_position_contracts=max(1, int(want_maxpos or cur_maxpos or 1)),
+            # paper strictly from the mirror: this route must never arm/disarm.
+            paper=bool(cur.get("paper", False)),
+        )
+        srv.enqueue_order(agent, pb.OrchestratorMessage(
+            deploy_robot=pb.DeployRobot(spec=spec)))
+        return {"ok": True, "agent_id": agent, "robot_id": robot_id,
+                "redeployed": True, "max_position": int(spec.max_position_contracts)}
+
     srv.enqueue_order(agent, pb.OrchestratorMessage(
         set_robot_params=pb.SetRobotParams(
             robot_id=robot_id,
             params_json=body.params_json)))
-    return {"ok": True, "agent_id": agent, "robot_id": robot_id}
+    return {"ok": True, "agent_id": agent, "robot_id": robot_id, "redeployed": False}
 
 
 @router.get("/agent/{agent_id}/robots")

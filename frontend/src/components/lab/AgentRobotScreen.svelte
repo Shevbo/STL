@@ -223,6 +223,55 @@
     localStatus = await fetchAgentLocalStatus(agentId);
   }
 
+  // ---- params editor (GUI, no hand-JSON): params apply next bar; changing
+  // max_position/schedule relays a full spec re-deploy (zero-loss). ----
+  let editMode = $state(false);
+  let draft = $state<Record<string, any>>({});
+  let draftMaxPos = $state<number>(1);
+  let draftSchedule = $state('');
+  let saving = $state(false);
+  let saveMsg = $state('');
+
+  function startEdit() {
+    draft = { ...params };
+    draftMaxPos = Number(robot?.max_position ?? 1) || 1;
+    draftSchedule = robot?.schedule ?? '09:00-23:55';
+    saveMsg = '';
+    editMode = true;
+  }
+
+  async function saveParams() {
+    const isReal = !robot?.paper;
+    const summary = `qty=${draft.qty} avg_max=${draft.avg_max} max_position=${draftMaxPos}`;
+    if (isReal && !window.confirm(
+      `Робот торгует РЕАЛЬНЫМИ деньгами.\nПрименить: ${summary}?`)) return;
+    saving = true; saveMsg = '';
+    try {
+      // numbers stay numbers (inputs type=number give numbers; guard NaN)
+      const clean: Record<string, any> = {};
+      for (const [k, v] of Object.entries(draft))
+        clean[k] = k === 'symbol' ? v : (Number.isFinite(Number(v)) ? Number(v) : v);
+      const res = await fetchWithAuth(`/api/v1/quik/robots/${encodeURIComponent(robotId)}/params`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          agent_id: agentId,
+          params_json: JSON.stringify(clean),
+          max_position: Math.max(1, Math.round(Number(draftMaxPos) || 1)),
+          schedule: draftSchedule.trim() || null,
+        }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { saveMsg = `Ошибка: ${d?.detail ?? res.status}`; return; }
+      saveMsg = d.redeployed
+        ? 'Применено с редеплоем спеки (позиция/P&L сохранены).'
+        : 'Применено (с нового бара).';
+      editMode = false;   // mirror refresh (3s) will show the new values
+    } catch (e) {
+      saveMsg = `Ошибка: ${String(e).slice(0, 80)}`;
+    } finally { saving = false; }
+  }
+
   async function loadDesc(sid: string) {
     try {
       const res = await fetchWithAuth('/api/v1/strategies');
@@ -453,13 +502,50 @@
     <div class="panel">
       <div class="p-title">Логика стратегии</div>
       <div class="desc">{strategyDesc || 'Fair Value Gap (ICT) — вход по 3-барному ценовому разрыву с подтверждением телом свечи.'}</div>
-      <div class="p-title sub">Параметры</div>
-      <div class="kv-grid">
-        {#each Object.entries(params) as [k, v]}
-          <div class="kv"><span>{k}</span><b class="mono">{v}</b></div>
-        {/each}
-        <div class="kv"><span>max позиция</span><b class="mono">{robot?.max_position ?? '—'}</b></div>
+      <div class="p-title sub">Параметры
+        {#if !editMode}
+          <button class="pe-btn" onclick={startEdit}>Изменить</button>
+        {/if}
       </div>
+      {#if !editMode}
+        <div class="kv-grid">
+          {#each Object.entries(params) as [k, v]}
+            <div class="kv"><span>{k}</span><b class="mono">{v}</b></div>
+          {/each}
+          <div class="kv"><span>max позиция</span><b class="mono">{robot?.max_position ?? '—'}</b></div>
+          <div class="kv"><span>окно</span><b class="mono">{robot?.schedule ?? '—'}</b></div>
+        </div>
+        {#if saveMsg}<div class="pe-msg">{saveMsg}</div>{/if}
+      {:else}
+        <div class="pe-grid">
+          {#each Object.keys(draft) as k}
+            <label class="pe-row">
+              <span>{k}</span>
+              {#if k === 'symbol'}
+                <input class="pe-in mono" value={draft[k]} disabled
+                       title="инструмент меняется только редеплоем с новой спекой" />
+              {:else}
+                <input class="pe-in mono" type="number" bind:value={draft[k]} />
+              {/if}
+            </label>
+          {/each}
+          <label class="pe-row spec">
+            <span>max позиция (спека)</span>
+            <input class="pe-in mono" type="number" min="1" bind:value={draftMaxPos}
+                   title="потолок контрактов; изменение = редеплой спеки (позиция/P&L сохраняются)" />
+          </label>
+          <label class="pe-row spec">
+            <span>окно (спека)</span>
+            <input class="pe-in mono" bind:value={draftSchedule} placeholder="09:00-23:55" />
+          </label>
+        </div>
+        <div class="pe-actions">
+          <button class="pe-btn" onclick={() => { editMode = false; saveMsg = ''; }}>Отмена</button>
+          <button class="pe-btn save" disabled={saving} onclick={saveParams}>
+            {saving ? 'Сохраняю…' : 'Сохранить'}</button>
+        </div>
+        {#if saveMsg}<div class="pe-msg">{saveMsg}</div>{/if}
+      {/if}
     </div>
   </div>
 </div>
@@ -514,6 +600,21 @@
   .mchip { font-size: 10px; font-family: monospace; color: #b388ff; background: #14102a; border: 1px solid #2a1f4a; border-radius: 3px; padding: 1px 6px; }
 
   .ars-bottom { flex: 0 0 30%; min-height: 180px; display: flex; border-top: 1px solid #22224a; overflow: hidden; }
+
+  /* params editor */
+  .pe-btn { margin-left: 8px; font-size: 10px; padding: 2px 10px; background: #16162c; border: 1px solid #2d2d4a; color: #aab; border-radius: 3px; cursor: pointer; }
+  .pe-btn:hover { color: #fff; border-color: #4d4d7a; }
+  .pe-btn.save { background: #0e2a18; border-color: #2e7d32; color: #66bb6a; font-weight: 600; }
+  .pe-btn.save:hover:not(:disabled) { background: #12351f; }
+  .pe-btn:disabled { opacity: 0.5; cursor: default; }
+  .pe-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; }
+  .pe-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 11px; color: #99a; }
+  .pe-row.spec span { color: #ffb300; }
+  .pe-in { width: 90px; background: #080810; border: 1px solid #2d2d4a; color: #dde; font-size: 11px; padding: 3px 6px; border-radius: 3px; text-align: right; }
+  .pe-in:focus { outline: none; border-color: #4caf50; }
+  .pe-in:disabled { opacity: 0.5; }
+  .pe-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+  .pe-msg { margin-top: 8px; font-size: 11px; color: #8bc34a; }
   .panel { flex: 1; min-width: 0; overflow-y: auto; padding: 10px 12px; border-right: 1px solid #1a1a2e; }
   /* Trades: an explicit framed table, visible even when empty */
   .trades-frame { border: 1px solid #2a2a52; border-radius: 6px; margin: 4px; background: #0a0a15; }

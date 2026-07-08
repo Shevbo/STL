@@ -47,17 +47,18 @@ def _client(monkeypatch, *, bridge_secret: str = "", dev_bypass: bool = True,
 
 
 def test_params_relay_enqueues_set_robot_params(monkeypatch):
+    # params-only edit -> light SetRobotParams (no spec change requested).
     srv = _FakeServer()
     client = _client(monkeypatch, server=srv)
 
     r = client.post(
         "/api/v1/quik/robots/live-fvg-RIU6/params",
-        json={"agent_id": "A1", "params_json": json.dumps({"qty": 2}),
-              "schedule": "09:00-23:55", "max_position": 2},
+        json={"agent_id": "A1", "params_json": json.dumps({"qty": 2})},
     )
     assert r.status_code == 200
     body = r.json()
-    assert body == {"ok": True, "agent_id": "A1", "robot_id": "live-fvg-RIU6"}
+    assert body == {"ok": True, "agent_id": "A1", "robot_id": "live-fvg-RIU6",
+                    "redeployed": False}
 
     assert len(srv.enqueued) == 1
     agent_id, msg = srv.enqueued[0]
@@ -65,6 +66,76 @@ def test_params_relay_enqueues_set_robot_params(monkeypatch):
     assert msg.WhichOneof("payload") == "set_robot_params"
     assert msg.set_robot_params.robot_id == "live-fvg-RIU6"
     assert json.loads(msg.set_robot_params.params_json) == {"qty": 2}
+
+
+def test_params_relay_spec_change_needs_mirror(monkeypatch):
+    # Requesting a DIFFERENT max_position with no mirror echo must refuse
+    # loudly (409), never silently ignore (the old behaviour bit the operator:
+    # qty=3 applied, max_position stayed 1, robot could not open at all).
+    srv = _FakeServer()
+    client = _client(monkeypatch, server=srv)
+
+    r = client.post(
+        "/api/v1/quik/robots/live-fvg-RIU6/params",
+        json={"agent_id": "A1", "params_json": "{}", "max_position": 3},
+    )
+    assert r.status_code == 409
+    assert srv.enqueued == []
+
+
+def test_params_relay_max_position_redeploys_from_mirror(monkeypatch):
+    # max_position change with a live mirror echo -> full DeployRobot rebuilt
+    # from the mirror (strategy/symbol/PAPER strictly from the mirror: this
+    # route must never be able to arm/disarm).
+    srv = _FakeServer()
+    store = QuikAgentStore()
+    store.ensure_agent("A1")
+    store.set_robot_report("A1", {"robots": [{
+        "robot_id": "r1", "strategy_id": "fvg", "symbol": "RIU6",
+        "schedule": "09:00-23:55", "max_position": "1", "paper": True,
+    }]})
+    client = _client(monkeypatch, server=srv, store=store)
+
+    r = client.post(
+        "/api/v1/quik/robots/r1/params",
+        json={"agent_id": "A1", "params_json": json.dumps({"qty": 3}),
+              "max_position": 3},
+    )
+    assert r.status_code == 200
+    assert r.json()["redeployed"] is True
+
+    assert len(srv.enqueued) == 1
+    _, msg = srv.enqueued[0]
+    assert msg.WhichOneof("payload") == "deploy_robot"
+    spec = msg.deploy_robot.spec
+    assert spec.robot_id == "r1"
+    assert spec.strategy_id == "fvg"
+    assert spec.symbol == "RIU6"
+    assert spec.max_position_contracts == 3
+    assert spec.paper is True          # from the mirror, NOT the client
+    assert json.loads(spec.params_json) == {"qty": 3}
+
+
+def test_params_relay_same_spec_values_stay_light(monkeypatch):
+    # Body-shape parity: sending schedule/max_position EQUAL to the mirror's
+    # current values is not a spec change -> light SetRobotParams.
+    srv = _FakeServer()
+    store = QuikAgentStore()
+    store.ensure_agent("A1")
+    store.set_robot_report("A1", {"robots": [{
+        "robot_id": "r1", "strategy_id": "fvg", "symbol": "RIU6",
+        "schedule": "09:00-23:55", "max_position": "3", "paper": False,
+    }]})
+    client = _client(monkeypatch, server=srv, store=store)
+
+    r = client.post(
+        "/api/v1/quik/robots/r1/params",
+        json={"agent_id": "A1", "params_json": "{}",
+              "schedule": "09:00-23:55", "max_position": 3},
+    )
+    assert r.status_code == 200
+    assert r.json()["redeployed"] is False
+    assert srv.enqueued[0][1].WhichOneof("payload") == "set_robot_params"
 
 
 def test_params_relay_resolves_single_live_agent_when_omitted(monkeypatch):
