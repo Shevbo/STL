@@ -39,6 +39,13 @@
   });
   const symbol = $derived(robot?.symbol || 'RIU6');
   const position = $derived(Number(robot?.position ?? 0));
+  const avgPrice = $derived(Number(robot?.avg_price ?? 0));
+  // Floating (unrealized) P&L on the OPEN position, marked to the freshest price:
+  // signed contracts × (price − avg) × ₽/point. This is what closing NOW would add
+  // to the realized «Результат» — the open +N was invisible before.
+  const floatRub = $derived(
+    position !== 0 && avgPrice > 0 && pointCoef && liveTick?.p
+      ? position * (liveTick.p - avgPrice) * pointCoef : null);
   const heartbeatAge = $derived.by(() => {
     const hb = Number(robot?.heartbeat_unix_ms ?? 0);
     return hb ? Math.round((Date.now() - hb) / 1000) : null;
@@ -317,6 +324,11 @@
         пульс {heartbeatAge === null ? '—' : heartbeatAge + 'с'}</span>
       <span class="badge pos" class:long={position > 0} class:short={position < 0}>
         позиция {position > 0 ? '+' : ''}{position}</span>
+      {#if floatRub !== null}
+        <span class="badge pnl" class:up={floatRub > 0} class:dn={floatRub < 0}
+              title={`плавающий P&L открытой позиции по текущей цене: ${position > 0 ? '+' : ''}${position} × (${Math.round(liveTick.p).toLocaleString('ru-RU')} − ${Math.round(avgPrice).toLocaleString('ru-RU')}) × ${pointCoef.toFixed(4)} ₽/п. Реализуется при закрытии.`}>
+          плав {floatRub > 0 ? '+' : ''}{Math.round(floatRub).toLocaleString('ru-RU')} ₽</span>
+      {/if}
       {#if realNetRub !== null}
         <span class="badge pnl" class:up={realNetRub > 0} class:dn={realNetRub < 0}
               title={`РЕАЛЬНЫЕ деньги: только filled-сделки QUIK + комиссия тейкера (= «Результат» на графике). Кумулятив стратегии с бумажного периода, без комиссий: ${pnlRub !== null ? Math.round(pnlRub).toLocaleString('ru-RU') + ' ₽' : pnlPoints.toLocaleString('ru-RU') + ' п.'}`}>
