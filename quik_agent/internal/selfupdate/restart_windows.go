@@ -32,6 +32,17 @@ func spawnRestart(exeDir, restartName, stage, stageExe string) error {
 			filepath.Join(stageQ, "robot-runner.exe"),
 			filepath.Join(stageQ, "robot-runner.exe"),
 			filepath.Join(exeDir, "robot-runner.exe")),
+		// QLua feed/trade script rides the same channel -> <exeDir>\lua\; the operator
+		// only Stop/Starts it in QUIK (Lua runs from memory) instead of hand-copying.
+		// Never touches the sidecar shectory_trade_config.lua (operator's ACCOUNT etc).
+		fmt.Sprintf(`if exist "%s" if not exist "%s" mkdir "%s"`,
+			filepath.Join(stageQ, "shectory_trade.lua"),
+			filepath.Join(exeDir, "lua"),
+			filepath.Join(exeDir, "lua")),
+		fmt.Sprintf(`if exist "%s" copy /y "%s" "%s"`,
+			filepath.Join(stageQ, "shectory_trade.lua"),
+			filepath.Join(stageQ, "shectory_trade.lua"),
+			filepath.Join(exeDir, "lua", "shectory_trade.lua")),
 		fmt.Sprintf(`if exist "%s" rd /s /q "%s"`, stageQ, stageQ),
 		fmt.Sprintf(`start "" /D "%s" "%s"`, exeDir, destExe),
 		`del "%~f0"`,

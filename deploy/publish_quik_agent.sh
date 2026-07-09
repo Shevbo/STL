@@ -33,6 +33,10 @@ CGO_ENABLED=0 GOOS=windows GOARCH=386   go build -ldflags "-X main.agentBuildRev
 # (built on Windows via deploy/build_runner.sh and uploaded here), ship them in the
 # SAME zip so the agent's self-update delivers the runner and its docs together
 # (zero-touch satellite).
+# Ship the current QLua feed/trade script too, so a self-update delivers it next
+# to the agent (<exeDir>\lua\); the operator then only Stop/Starts it in QUIK
+# instead of hand-copying the file (stale in-memory Lua has bitten us — brokerref).
+cp -f lua/shectory_trade.lua dist/ 2>/dev/null || echo '[publish] note: lua/shectory_trade.lua missing - shipping without it'
 cd dist
 python3 - <<'PYZ'
 import os, zipfile
@@ -41,7 +45,7 @@ def zwrite(zname, names):
     for n in names:
         z.write(n)
     z.close()
-extra = [n for n in ('robot-runner.exe', 'strategies_doc.json') if os.path.exists(n)]
+extra = [n for n in ('robot-runner.exe', 'strategies_doc.json', 'shectory_trade.lua') if os.path.exists(n)]
 if 'robot-runner.exe' not in extra:
     print('[publish] note: dist/robot-runner.exe not staged - shipping agent only')
 elif 'strategies_doc.json' not in extra:
