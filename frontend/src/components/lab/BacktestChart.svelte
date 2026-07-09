@@ -843,11 +843,12 @@
             <span>{stats.roundTrips} сделок · комиссия {commission ? fmtRub(commission.total) : '—'}</span>
           </div>
           {#if floatRub != null}
-            <!-- live robot: realized above is static (closed trades); this line moves
-                 with price so «Результат» isn't seen as frozen while a position is open -->
+            <!-- live robot: «Результат» above = realized (closed trades, static). This
+                 line = flatten-at-market now (realized + variation margin − exit comm),
+                 moves with price. floatRub prop already nets the exit commission. -->
             <div class="st-head2 st-live">
-              <span>плавающий <b class:pos={floatRub > 0} class:neg={floatRub < 0}>{fmtMoney(floatRub)} ₽</b>
-                · итог <b class:pos={netResult + floatRub > 0} class:neg={netResult + floatRub < 0}>{fmtMoney(netResult + floatRub)} ₽</b></span>
+              <span>P&L+Маржа <b class:pos={netResult + floatRub > 0} class:neg={netResult + floatRub < 0}>{fmtMoney(netResult + floatRub)} ₽</b>
+                <span class="st-sub">(закрыть всё сейчас)</span></span>
             </div>
           {/if}
         </button>

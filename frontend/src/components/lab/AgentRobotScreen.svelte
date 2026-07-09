@@ -7,7 +7,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { fetchWithAuth } from '../../lib/fetch-auth';
-  import { toFills } from '../../lib/lab-analytics';
+  import { toFills, commissionFor } from '../../lib/lab-analytics';
   import BacktestChart from './BacktestChart.svelte';
   import LatencyPane from './LatencyPane.svelte';
   import AgentBookPane from './AgentBookPane.svelte';
@@ -40,12 +40,21 @@
   const symbol = $derived(robot?.symbol || 'RIU6');
   const position = $derived(Number(robot?.position ?? 0));
   const avgPrice = $derived(Number(robot?.avg_price ?? 0));
-  // Floating (unrealized) P&L on the OPEN position, marked to the freshest price:
-  // signed contracts × (price − avg) × ₽/point. This is what closing NOW would add
-  // to the realized «Результат» — the open +N was invisible before.
+  // Floating (variation margin) on the OPEN position, marked to the freshest price:
+  // signed contracts × (price − avg) × ₽/point.
   const floatRub = $derived(
     position !== 0 && avgPrice > 0 && pointCoef && liveTick?.p
       ? position * (liveTick.p - avgPrice) * pointCoef : null);
+  // Commission to hit the market and close the whole position now (taker).
+  const closeComm = $derived(
+    position !== 0 && pointCoef && liveTick?.p
+      ? commissionFor(symbol, liveTick.p, Math.abs(position), pointCoef, true) : 0);
+  // «P&L + Маржа»: realized + (floating − exit commission) = what you keep if you
+  // flatten at market right now. null until the chart hands us the realized number.
+  const pnlMargin = $derived(
+    realNetRub !== null ? realNetRub + (floatRub ?? 0) - closeComm : null);
+  // net floating (after the exit commission) — passed to the chart panel.
+  const floatNetRub = $derived(floatRub !== null ? floatRub - closeComm : null);
   const heartbeatAge = $derived.by(() => {
     const hb = Number(robot?.heartbeat_unix_ms ?? 0);
     return hb ? Math.round((Date.now() - hb) / 1000) : null;
@@ -324,19 +333,17 @@
         пульс {heartbeatAge === null ? '—' : heartbeatAge + 'с'}</span>
       <span class="badge pos" class:long={position > 0} class:short={position < 0}>
         позиция {position > 0 ? '+' : ''}{position}</span>
-      {#if floatRub !== null}
-        <span class="badge pnl" class:up={floatRub > 0} class:dn={floatRub < 0}
-              title={`плавающий P&L открытой позиции по текущей цене: ${position > 0 ? '+' : ''}${position} × (${Math.round(liveTick.p).toLocaleString('ru-RU')} − ${Math.round(avgPrice).toLocaleString('ru-RU')}) × ${pointCoef.toFixed(4)} ₽/п. Реализуется при закрытии.`}>
-          плав {floatRub > 0 ? '+' : ''}{Math.round(floatRub).toLocaleString('ru-RU')} ₽</span>
-      {/if}
+      <!-- Two metrics per operator spec: (1) realized P&L (closed trades − commission,
+           WITHOUT the open position, static); (2) P&L + Маржа = flatten-at-market now
+           value (realized + variation margin − exit commission), moves with price. -->
       {#if realNetRub !== null}
-        {@const totalRub = realNetRub + (floatRub ?? 0)}
-        <span class="badge pnl" class:up={totalRub > 0} class:dn={totalRub < 0}
-              title={`ЖИВОЙ ИТОГ по текущей цене = реализованный ${Math.round(realNetRub).toLocaleString('ru-RU')} ₽ (закрытые сделки QUIK, тейкер-комиссия) + плавающий ${floatRub !== null ? (floatRub > 0 ? '+' : '') + Math.round(floatRub).toLocaleString('ru-RU') : '0'} ₽ (открытая позиция). Кумулятив стратегии с бумагой: ${pnlRub !== null ? Math.round(pnlRub).toLocaleString('ru-RU') + ' ₽' : pnlPoints.toLocaleString('ru-RU') + ' п.'}`}>
-          P&L {totalRub > 0 ? '+' : ''}{Math.round(totalRub).toLocaleString('ru-RU')} ₽</span>
+        <span class="badge pnl" class:up={realNetRub > 0} class:dn={realNetRub < 0}
+              title="Чистый реализованный результат: закрытые сделки QUIK за вычетом тейкер-комиссии, БЕЗ учёта текущей позиции. Меняется только при закрытии сделки.">
+          P&L {realNetRub > 0 ? '+' : ''}{Math.round(realNetRub).toLocaleString('ru-RU')} ₽</span>
+        <span class="badge pnl" class:up={(pnlMargin ?? 0) > 0} class:dn={(pnlMargin ?? 0) < 0}
+              title={`Если ударить по рынку и закрыть ВСЮ позицию прямо сейчас: реализованный ${Math.round(realNetRub).toLocaleString('ru-RU')} + вариац. маржа ${floatRub !== null ? (floatRub > 0 ? '+' : '') + Math.round(floatRub).toLocaleString('ru-RU') : '0'} − комиссия закрытия ${Math.round(closeComm).toLocaleString('ru-RU')} ₽.`}>
+          P&L+Маржа {(pnlMargin ?? 0) > 0 ? '+' : ''}{Math.round(pnlMargin ?? realNetRub).toLocaleString('ru-RU')} ₽</span>
       {:else}
-        <!-- realized not computed yet (chart mounting): show a placeholder, never
-             the paper-inclusive cumulative — that mismatch was the -4500 flash. -->
         <span class="badge pnl dim">P&L …</span>
       {/if}
       <span class="badge" class:ok={tickAge !== null && tickAge <= 10} class:warn={tickAge === null || tickAge > 10}
@@ -372,7 +379,7 @@
       openOrders={openOrders}
       plannedOrders={plannedOrders}
       onNet={(n) => { if (!robot?.paper) realNetRub = n; }}
-      floatRub={robot?.paper ? null : floatRub}
+      floatRub={robot?.paper ? null : floatNetRub}
     />
     {/if}
     </div>
