@@ -134,6 +134,30 @@ class RobotHost:
         elif kind == "kill":
             self.killed = True    # block all new orders; agent cancels working ones
             log.warning("host.kill_switch", reason=getattr(rc.kill, "reason", ""))
+        elif kind == "flatten":
+            # Operator: cancel working orders, MARKET-close the whole open position
+            # (marketable via the real order path, tagged rr: so the fill zeroes the
+            # runner's own book), then PAUSE until an explicit Start. Unlike kill,
+            # this actually exits the position.
+            r = self.robots.get(rc.flatten.robot_id)
+            if r is None:
+                log.warning("host.flatten_unknown_robot", robot_id=rc.flatten.robot_id)
+                return
+            for w in r.runtime.working_orders():
+                try:
+                    await r.runtime.cancel_order(w["order_id"])
+                except Exception:  # noqa: BLE001
+                    r.runtime.expire_order(w["order_id"])
+            signed = r.runtime.signed_position()
+            if signed != 0:
+                bars = r.bars.bars(1)
+                px = bars[-1].close if bars else 0.0
+                await r.runtime.place_order(r.spec["symbol"],
+                                            "sell" if signed > 0 else "buy",
+                                            abs(signed), px)
+            r.paused = True
+            log.warning("host.flatten", robot_id=rc.flatten.robot_id, closed=signed)
+            self.persist()
         elif kind == "fix_state":
             fx = rc.fix_state
             r = self.robots.get(fx.robot_id)

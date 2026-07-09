@@ -125,6 +125,35 @@ async def test_real_robot_cancels_resting_orders_before_next_bar(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_flatten_market_closes_and_pauses(tmp_path):
+    # Operator flatten: cancel working orders, market-close the whole position
+    # (opposite side, abs(signed)), and pause until an explicit start.
+    bridge = FakeBridge()
+    host = RobotHost(bridge, str(tmp_path))
+    await host.handle_control(_deploy_rc(paper=False))
+    r = host.robots["r1"]
+    t0 = 1_751_500_000_000
+    for i in range(3):
+        r.bars.on_tick(t0 + i * 60_000, 89_000 + i * 30)
+    r.runtime.restore(position=5, avg=89_000.0, realized=0.0)   # believe +5 long
+
+    class _Flatten:
+        class F:
+            robot_id = "r1"
+        flatten = F()
+        def WhichOneof(self, _):  # noqa: N802 (proto API shape)
+            return "flatten"
+
+    bridge.placed.clear()
+    await host.handle_control(_Flatten())
+    assert r.paused is True
+    # exactly one market close order, opposite the long, for the full size
+    assert len(bridge.placed) == 1
+    assert bridge.placed[0]["side"] == "sell"
+    assert bridge.placed[0]["qty"] == 5
+
+
+@pytest.mark.asyncio
 async def test_failed_precancel_expires_phantom_locally(tmp_path):
     # An order the agent cannot cancel (unknown after an agent restart / QUIK
     # day-expiry) must be terminated LOCALLY, or the runner's book shows

@@ -166,6 +166,7 @@ message OrchestratorMessage {
     SetRobotParams set_robot_params = 12;
     PauseRobot pause_robot = 13;
     StartRobot start_robot = 14;
+    FlattenRobot flatten_robot = 15;   // operator: market-close the whole position + pause
   }
 }
 
@@ -244,6 +245,9 @@ message UndeployRobot { string robot_id = 1; }
 message SetRobotParams { string robot_id = 1; string params_json = 2; }
 message PauseRobot { string robot_id = 1; }
 message StartRobot { string robot_id = 1; }
+// Operator-initiated flatten: cancel working orders, market-close the whole open
+// position (marketable, tagged as the robot), then pause until an explicit Start.
+message FlattenRobot { string robot_id = 1; }
 
 message RobotFill {
   string order_id = 1;

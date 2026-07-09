@@ -49,6 +49,7 @@ message RunnerControl {
     StartRobot start = 5;
     KillSwitch kill = 6;
     FixRobotState fix_state = 7;  // recon align: force runner state to QUIK fact
+    FlattenRobot flatten = 8;     // operator: market-close whole position + pause
   }
 }
 

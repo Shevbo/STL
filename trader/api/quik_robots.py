@@ -118,6 +118,20 @@ async def start_agent(robot_id: str, body: AgentIdBody, request: Request):
     return {"ok": True, "agent_id": agent, "robot_id": robot_id}
 
 
+@router.post("/robots/{robot_id}/flatten-agent")
+async def flatten_agent(robot_id: str, body: AgentIdBody, request: Request):
+    """Operator: market-close the robot's whole open position and pause it. The
+    runner cancels its working orders, sends ONE marketable close order (rr:-tagged,
+    so the fill zeroes its own book), and stays paused until start-agent. Real money
+    — the UI gates it behind a typed confirm."""
+    _auth(request)
+    srv = _server(request)
+    agent = _resolve_agent(request, body.agent_id)
+    srv.enqueue_order(agent, pb.OrchestratorMessage(
+        flatten_robot=pb.FlattenRobot(robot_id=robot_id)))
+    return {"ok": True, "agent_id": agent, "robot_id": robot_id, "flattened": True}
+
+
 @router.post("/robots/{robot_id}/set-params-agent")
 async def set_params_agent(robot_id: str, body: DeployAgentBody, request: Request):
     """Push new strategy params to an already-deployed agent robot."""

@@ -48,6 +48,10 @@ func (l *Link) handleRobotMsg(msg *quikv1.OrchestratorMessage) {
 	case *quikv1.OrchestratorMessage_StartRobot:
 		_ = l.opt.Robots.SetPaused(p.StartRobot.GetRobotId(), false)
 		rc = &quikv1.RunnerControl{Payload: &quikv1.RunnerControl_Start{Start: p.StartRobot}}
+	case *quikv1.OrchestratorMessage_FlattenRobot:
+		// operator market-close + pause; persist paused so it survives a restart
+		_ = l.opt.Robots.SetPaused(p.FlattenRobot.GetRobotId(), true)
+		rc = &quikv1.RunnerControl{Payload: &quikv1.RunnerControl_Flatten{Flatten: p.FlattenRobot}}
 	default:
 		return
 	}

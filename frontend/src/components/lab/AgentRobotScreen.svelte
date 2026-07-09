@@ -244,6 +244,36 @@
     localStatus = await fetchAgentLocalStatus(agentId);
   }
 
+  // Operator flatten: market-close the whole position + pause. Real money -> confirm.
+  let flattening = $state(false);
+  let flattenMsg = $state('');
+  async function flattenNow() {
+    if (!window.confirm(
+      `ЗАКРЫТЬ ВСЮ позицию робота по рынку и ОСТАНОВИТЬ его?\n` +
+      `Позиция: ${position > 0 ? '+' : ''}${position} конт. Это РЕАЛЬНЫЕ деньги.\n` +
+      `Робот встанет на паузу до нажатия «Пуск».`)) return;
+    flattening = true; flattenMsg = '';
+    try {
+      const res = await fetchWithAuth(
+        `/api/v1/quik/robots/${encodeURIComponent(robotId)}/flatten-agent`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ agent_id: agentId }) });
+      flattenMsg = res.ok ? 'Закрытие по рынку отправлено. Робот на паузе.'
+                          : `Ошибка: ${res.status}`;
+    } catch (e) { flattenMsg = `Ошибка: ${String(e).slice(0, 80)}`; }
+    finally { flattening = false; }
+  }
+  async function startRobot() {
+    flattenMsg = '';
+    try {
+      const res = await fetchWithAuth(
+        `/api/v1/quik/robots/${encodeURIComponent(robotId)}/start-agent`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ agent_id: agentId }) });
+      flattenMsg = res.ok ? 'Пуск отправлен.' : `Ошибка: ${res.status}`;
+    } catch (e) { flattenMsg = `Ошибка: ${String(e).slice(0, 80)}`; }
+  }
+
   // ---- params editor (GUI, no hand-JSON): params apply next bar; changing
   // max_position/schedule relays a full spec re-deploy (zero-loss). ----
   let editMode = $state(false);
@@ -349,6 +379,16 @@
       <span class="badge" class:ok={tickAge !== null && tickAge <= 10} class:warn={tickAge === null || tickAge > 10}
             title="возраст последнего тика QUIK (поток данных)">
         тик {tickAge === null ? '—' : tickAge + 'с'}</span>
+      {#if !robot.paper}
+        {#if robot.paused}
+          <button class="rc-btn go" onclick={startRobot} title="возобновить работу робота">▶ Пуск</button>
+        {:else}
+          <button class="rc-btn danger" disabled={flattening} onclick={flattenNow}
+                  title="закрыть всю позицию по рынку и остановить робота">
+            {flattening ? '…' : '⏻ Закрыть всё + стоп'}</button>
+        {/if}
+        {#if flattenMsg}<span class="rc-msg">{flattenMsg}</span>{/if}
+      {/if}
     {:else if report}
       <span class="badge warn">робот {robotId} не найден на агенте</span>
     {/if}
@@ -641,6 +681,13 @@
   .ars-bottom { flex: 0 0 30%; min-height: 180px; display: flex; border-top: 1px solid #22224a; overflow: hidden; }
 
   /* params editor */
+  .rc-btn { margin-left: 6px; font-size: 10px; font-weight: 600; padding: 3px 10px; border-radius: 3px; cursor: pointer; }
+  .rc-btn.danger { background: #2a0a0a; border: 1px solid #f44336; color: #ff8a80; }
+  .rc-btn.danger:hover:not(:disabled) { background: #3a0e0e; }
+  .rc-btn.danger:disabled { opacity: .5; cursor: default; }
+  .rc-btn.go { background: #0e2a18; border: 1px solid #2e7d32; color: #66bb6a; }
+  .rc-btn.go:hover { background: #123520; }
+  .rc-msg { font-size: 10px; color: #8bc34a; margin-left: 6px; }
   .pe-btn { margin-left: 8px; font-size: 10px; padding: 2px 10px; background: #16162c; border: 1px solid #2d2d4a; color: #aab; border-radius: 3px; cursor: pointer; }
   .pe-btn:hover { color: #fff; border-color: #4d4d7a; }
   .pe-btn.save { background: #0e2a18; border-color: #2e7d32; color: #66bb6a; font-weight: 600; }
