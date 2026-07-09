@@ -330,17 +330,14 @@
           плав {floatRub > 0 ? '+' : ''}{Math.round(floatRub).toLocaleString('ru-RU')} ₽</span>
       {/if}
       {#if realNetRub !== null}
-        <span class="badge pnl" class:up={realNetRub > 0} class:dn={realNetRub < 0}
-              title={`РЕАЛЬНЫЕ деньги: только filled-сделки QUIK + комиссия тейкера (= «Результат» на графике). Кумулятив стратегии с бумажного периода, без комиссий: ${pnlRub !== null ? Math.round(pnlRub).toLocaleString('ru-RU') + ' ₽' : pnlPoints.toLocaleString('ru-RU') + ' п.'}`}>
-          P&L реал {Math.round(realNetRub).toLocaleString('ru-RU')} ₽</span>
+        {@const totalRub = realNetRub + (floatRub ?? 0)}
+        <span class="badge pnl" class:up={totalRub > 0} class:dn={totalRub < 0}
+              title={`ЖИВОЙ ИТОГ по текущей цене = реализованный ${Math.round(realNetRub).toLocaleString('ru-RU')} ₽ (закрытые сделки QUIK, тейкер-комиссия) + плавающий ${floatRub !== null ? (floatRub > 0 ? '+' : '') + Math.round(floatRub).toLocaleString('ru-RU') : '0'} ₽ (открытая позиция). Кумулятив стратегии с бумагой: ${pnlRub !== null ? Math.round(pnlRub).toLocaleString('ru-RU') + ' ₽' : pnlPoints.toLocaleString('ru-RU') + ' п.'}`}>
+          P&L {totalRub > 0 ? '+' : ''}{Math.round(totalRub).toLocaleString('ru-RU')} ₽</span>
       {:else}
-        <span class="badge pnl" class:up={pnlPoints > 0} class:dn={pnlPoints < 0}
-              title={pointCoef
-                ? `${pnlPoints.toLocaleString('ru-RU')} п. × ${pointCoef.toFixed(4)} ₽/п. — кумулятив стратегии С БУМАЖНОГО периода, без комиссий.`
-                : 'в пунктах цены (курс пункта ещё не получен)'}>
-          P&L∑ {pnlRub !== null
-            ? Math.round(pnlRub).toLocaleString('ru-RU') + ' ₽'
-            : pnlPoints.toLocaleString('ru-RU') + ' п.'}</span>
+        <!-- realized not computed yet (chart mounting): show a placeholder, never
+             the paper-inclusive cumulative — that mismatch was the -4500 flash. -->
+        <span class="badge pnl dim">P&L …</span>
       {/if}
       <span class="badge" class:ok={tickAge !== null && tickAge <= 10} class:warn={tickAge === null || tickAge > 10}
             title="возраст последнего тика QUIK (поток данных)">
