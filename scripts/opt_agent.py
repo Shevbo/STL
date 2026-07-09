@@ -500,11 +500,12 @@ def main():
     ap.add_argument("--api", default=os.environ.get("STL_API", "https://stl.shectory.ru"))
     ap.add_argument("--token", default=os.environ.get("OPT_AGENT_TOKEN", ""))
     ap.add_argument("--workers", type=int,
-                    # ponytail: default capped at 10 — cores-2 on the 20-core i9
-                    # pegged every core at 100% (operator: "ПК может хлопнуться").
-                    # More via explicit --workers N or OPT_AGENT_WORKERS.
-                    default=int(os.environ.get("OPT_AGENT_WORKERS", "0"))
-                    or min(10, max(1, (os.cpu_count() or 4) - 2)))
+                    # ponytail: HARD-cap the default at 10. cores-2 pegged the
+                    # 20-core i9 at 100% (operator alarmed twice); a stale
+                    # OPT_AGENT_WORKERS=16 from the old install also gets capped.
+                    # Only an explicit CLI --workers N exceeds 10.
+                    default=min(10, int(os.environ.get("OPT_AGENT_WORKERS", "0"))
+                                or max(1, (os.cpu_count() or 4) - 2)))
     ap.add_argument("--poll", type=float, default=float(os.environ.get("OPT_AGENT_POLL", "5")))
     ap.add_argument("--proxy", default=os.environ.get("OPT_AGENT_PROXY", ""),
                     help="HTTP(S) proxy URL for outbound, e.g. http://proxy.corp:8080 "
