@@ -11,10 +11,15 @@
 package status
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"sort"
+	"strings"
+
+	"golang.org/x/text/encoding/charmap"
 
 	"shectory/quik_agent/internal/accounts"
 	"shectory/quik_agent/internal/quikdde"
@@ -149,6 +154,12 @@ type Deps struct {
 	// robot (a real position must never be zeroed by a button). ErrUnknownRobot
 	// for an unknown id; any other error's text is shown to the operator.
 	ResetPaper func(id string) error
+
+	// SetPosition force-writes a robot's believed position/avg (POST
+	// /api/robot/{id}/set-position) — operator manual correction after a
+	// desync. Local-only, like ModeSet. ErrUnknownRobot for an unknown id; any
+	// other error is a precondition/confirm failure shown to the operator.
+	SetPosition func(id string, pos int64, avg float64, confirmID string) error
 
 	LogPaths map[string]string // "agent"/"runner" -> file path
 	DocsPath string            // strategies_doc.json (Task 10)
@@ -510,11 +521,161 @@ type reconJSON struct {
 	Plan        *planJSON        `json:"plan"`
 }
 
+// ---- QUIK terminal tables (full observability: заявки/сделки/транзакции/
+// системные сообщения/новости). Orders/trades come from the QLua acc_ord/
+// acc_trd publisher; trans is the OnTransReply ring; messages/news are tails
+// of the terminal's own info.log/news.log (QLua has NO API for those windows —
+// ARQA confirmed; the log files are the only programmatic source).
+
+type quikOrderJSON struct {
+	Num     string  `json:"num"`
+	TsMs    int64   `json:"ts_ms"`
+	Sec     string  `json:"sec"`
+	Side    string  `json:"side"` // "buy"/"sell"/"" (old Lua build)
+	Price   float64 `json:"price"`
+	Qty     int64   `json:"qty"`
+	Balance int64   `json:"balance"`
+	Active  bool    `json:"active"`
+	Tag     string  `json:"tag"`
+}
+
+type quikTradeJSON struct {
+	Num      string  `json:"num"`
+	TsMs     int64   `json:"ts_ms"` // exchange time when known (cc3+), else Lua receipt
+	OrderNum string  `json:"order_num"`
+	Sec      string  `json:"sec"`
+	Side     string  `json:"side"`
+	Price    float64 `json:"price"`
+	Qty      int64   `json:"qty"`
+	Tag      string  `json:"tag"`
+}
+
+type quikTransJSON struct {
+	TsMs     int64  `json:"ts_ms"`
+	TransID  int64  `json:"trans_id"`
+	Status   int32  `json:"status"`
+	OrderNum string `json:"order_num"`
+	Text     string `json:"text"`
+}
+
+type quikJSON struct {
+	Orders   []quikOrderJSON `json:"orders"`   // full table, newest first
+	Trades   []quikTradeJSON `json:"trades"`   // newest first
+	Trans    []quikTransJSON `json:"trans"`    // newest first
+	Messages []string        `json:"messages"` // info.log tail, newest first
+	News     []string        `json:"news"`     // news.log tail, newest first
+	Dir      string          `json:"dir"`      // QUIK working folder ("" until a cc3 pong)
+}
+
+// Caps keep the mirrored status_json payload bounded (flush discipline: this
+// JSON is pushed to STL on every content change).
+const (
+	quikOrdersCap = 100
+	quikTradesCap = 100
+	quikTransCap  = 50
+	quikLinesCap  = 50
+)
+
+func sideRu(s string) string {
+	switch s {
+	case "B":
+		return "buy"
+	case "S":
+		return "sell"
+	}
+	return ""
+}
+
+func buildQuikJSON(acc accounts.Snapshot) quikJSON {
+	q := quikJSON{Dir: acc.QuikFolder,
+		Orders: []quikOrderJSON{}, Trades: []quikTradeJSON{}, Trans: []quikTransJSON{}}
+	// Lua publishes tables in QUIK's own (chronological) order: take the tail, newest first.
+	ords := acc.Orders
+	if len(ords) > quikOrdersCap {
+		ords = ords[len(ords)-quikOrdersCap:]
+	}
+	for i := len(ords) - 1; i >= 0; i-- {
+		o := ords[i]
+		q.Orders = append(q.Orders, quikOrderJSON{
+			Num: o.Num, TsMs: o.TsMs, Sec: o.Sec, Side: sideRu(o.Side),
+			Price: o.Price, Qty: o.Qty, Balance: o.Balance, Active: o.Active, Tag: o.Tag,
+		})
+	}
+	trds := acc.Trades
+	if len(trds) > quikTradesCap {
+		trds = trds[len(trds)-quikTradesCap:]
+	}
+	for i := len(trds) - 1; i >= 0; i-- {
+		t := trds[i]
+		ts := t.ExchTsMs
+		if ts == 0 {
+			ts = t.TsMs
+		}
+		q.Trades = append(q.Trades, quikTradeJSON{
+			Num: t.Num, TsMs: ts, OrderNum: t.OrderNum, Sec: t.Sec, Side: sideRu(t.Side),
+			Price: t.Price, Qty: t.Qty, Tag: t.Tag,
+		})
+	}
+	trans := acc.TransReplies
+	if len(trans) > quikTransCap {
+		trans = trans[len(trans)-quikTransCap:]
+	}
+	for i := len(trans) - 1; i >= 0; i-- {
+		tr := trans[i]
+		q.Trans = append(q.Trans, quikTransJSON{
+			TsMs: tr.TsMs, TransID: tr.TransID, Status: tr.Status, OrderNum: tr.OrderNum, Text: tr.Text,
+		})
+	}
+	if acc.QuikFolder != "" {
+		q.Messages = tailLogLines(filepath.Join(acc.QuikFolder, "info.log"), quikLinesCap)
+		q.News = tailLogLines(filepath.Join(acc.QuikFolder, "news.log"), quikLinesCap)
+	}
+	if q.Messages == nil {
+		q.Messages = []string{}
+	}
+	if q.News == nil {
+		q.News = []string{}
+	}
+	return q
+}
+
+// tailLogLines reads the last logTailBytes of a QUIK log file, decodes it from
+// Windows-1251 (QUIK is an ANSI app), and returns up to maxLines complete
+// lines, NEWEST FIRST. Missing/unreadable file -> nil (the page shows "нет").
+// ponytail: full re-read of a 64KiB tail on every status build (~1/s); switch
+// to an offset-tracking tailer only if VDS disk profiling ever says so.
+func tailLogLines(path string, maxLines int) []string {
+	var buf bytes.Buffer
+	if err := tailFile(&buf, path); err != nil {
+		return nil
+	}
+	decoded, err := charmap.Windows1251.NewDecoder().Bytes(buf.Bytes())
+	if err != nil {
+		decoded = buf.Bytes()
+	}
+	lines := strings.Split(string(decoded), "\n")
+	out := make([]string, 0, maxLines)
+	for i := len(lines) - 1; i >= 0 && len(out) < maxLines; i-- {
+		ln := strings.TrimRight(lines[i], "\r")
+		if strings.TrimSpace(ln) == "" {
+			continue
+		}
+		// The first line of the window is usually cut mid-line by the byte seek;
+		// harmless in a human-facing tail. Cap pathological line length.
+		if len(ln) > 400 {
+			ln = ln[:400]
+		}
+		out = append(out, ln)
+	}
+	return out
+}
+
 type statusJSON struct {
 	Agent  agentJSON   `json:"agent"`
 	Health healthJSON  `json:"health"`
 	Robots []robotJSON `json:"robots"`
 	Recon  reconJSON   `json:"recon"`
+	Quik   quikJSON    `json:"quik"`
 }
 
 func toPlanJSON(p *recon.Plan) *planJSON {
@@ -682,6 +843,7 @@ func BuildStatus(d Deps) ([]byte, error) {
 		Health: buildHealthJSON(d, acc),
 		Robots: buildRobotsJSON(d),
 		Recon:  toReconJSON(rep),
+		Quik:   buildQuikJSON(acc),
 	}
 	return json.Marshal(out)
 }

@@ -2,6 +2,8 @@ package status
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"shectory/quik_agent/internal/accounts"
@@ -649,5 +651,73 @@ func TestEvaluateRecon_StaleNeverRealInvolved(t *testing.T) {
 	}
 	if real {
 		t.Errorf("STALE must report realInvolved=false regardless of robot mode")
+	}
+}
+
+// ---- QUIK terminal tables section ----
+
+func TestBuildStatus_QuikSection(t *testing.T) {
+	d := baseDeps()
+	d.Accounts = fakeAccounts{snap: accounts.Snapshot{
+		Orders: []accounts.Order{{Num: "1", Sec: "RIU6", Active: true, Price: 89000,
+			Balance: 1, Qty: 1, Tag: "r1", Side: "S", TsMs: 5}},
+		Trades: []accounts.Trade{{Num: "t1", OrderNum: "1", Sec: "RIU6", Price: 89050,
+			Qty: 1, TsMs: 7, Tag: "r1", Side: "B", ExchTsMs: 9}},
+		TransReplies: []accounts.TransReply{{TsMs: 3, TransID: 42, Status: 3, OrderNum: "1", Text: "ok"}},
+	}}
+	data, err := BuildStatus(d)
+	if err != nil {
+		t.Fatalf("BuildStatus: %v", err)
+	}
+	var out struct {
+		Quik struct {
+			Orders   []map[string]any `json:"orders"`
+			Trades   []map[string]any `json:"trades"`
+			Trans    []map[string]any `json:"trans"`
+			Messages []string         `json:"messages"`
+			News     []string         `json:"news"`
+		} `json:"quik"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	q := out.Quik
+	if len(q.Orders) != 1 || q.Orders[0]["side"] != "sell" || q.Orders[0]["tag"] != "r1" {
+		t.Errorf("orders = %+v", q.Orders)
+	}
+	// exchange ts (9) must win over the Lua receipt stamp (7)
+	if len(q.Trades) != 1 || q.Trades[0]["ts_ms"] != float64(9) || q.Trades[0]["side"] != "buy" {
+		t.Errorf("trades = %+v", q.Trades)
+	}
+	if len(q.Trans) != 1 || q.Trans[0]["trans_id"] != float64(42) {
+		t.Errorf("trans = %+v", q.Trans)
+	}
+	// no QuikFolder -> messages/news are EMPTY ARRAYS, never null
+	if q.Messages == nil || q.News == nil {
+		t.Errorf("messages/news must be [] without a folder: %v / %v", q.Messages, q.News)
+	}
+}
+
+// TestTailLogLines_CP1251NewestFirst: QUIK logs are Windows-1251; the tail
+// must decode them, drop blank lines, and return newest-first with the cap.
+func TestTailLogLines_CP1251NewestFirst(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "info.log")
+	content := []byte("line1\r\n")
+	content = append(content, []byte{0xCF, 0xF0, 0xE8, 0xE2, 0xE5, 0xF2}...) // "Привет" cp1251
+	content = append(content, []byte("\r\n\r\nline3\r\n")...)
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	lines := tailLogLines(path, 10)
+	want := []string{"line3", "Привет", "line1"}
+	if len(lines) != 3 || lines[0] != want[0] || lines[1] != want[1] || lines[2] != want[2] {
+		t.Fatalf("lines = %q, want %q", lines, want)
+	}
+	if capped := tailLogLines(path, 2); len(capped) != 2 || capped[0] != "line3" {
+		t.Fatalf("capped = %q", capped)
+	}
+	if missing := tailLogLines(filepath.Join(dir, "absent.log"), 10); missing != nil {
+		t.Fatalf("missing file must return nil, got %q", missing)
 	}
 }

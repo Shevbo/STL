@@ -129,6 +129,34 @@
     <tbody id="manual-account-net"></tbody></table>
 </section>
 
+<section>
+  <div class="sec-title">Таблицы QUIK (терминал)</div>
+  <div class="kv" id="quik-dir" style="margin-bottom:6px"></div>
+
+  <div class="sec-title">Заявки
+    <span class="pop" onclick="popout(this)" title="открыть в отдельном окне">⧉</span></div>
+  <div class="scrollbox"><table><thead><tr><th>Время</th><th>№ заявки</th><th>Символ</th><th>Напр.</th>
+    <th>Цена</th><th>Кол-во</th><th>Остаток</th><th>Статус</th><th>Тег</th></tr></thead>
+    <tbody id="quik-orders"></tbody></table></div>
+
+  <div class="sec-title" style="margin-top:10px">Сделки
+    <span class="pop" onclick="popout(this)" title="открыть в отдельном окне">⧉</span></div>
+  <div class="scrollbox"><table><thead><tr><th>Время</th><th>№ сделки</th><th>№ заявки</th><th>Символ</th>
+    <th>Напр.</th><th>Цена</th><th>Кол-во</th><th>Тег</th></tr></thead>
+    <tbody id="quik-trades"></tbody></table></div>
+
+  <div class="sec-title" style="margin-top:10px">Транзакции (ответы QUIK)
+    <span class="pop" onclick="popout(this)" title="открыть в отдельном окне">⧉</span></div>
+  <div class="scrollbox"><table><thead><tr><th>Время</th><th>№ транз.</th><th>Статус</th><th>№ заявки</th><th>Текст</th></tr></thead>
+    <tbody id="quik-trans"></tbody></table></div>
+
+  <div class="sec-title" style="margin-top:10px">Системные сообщения (info.log, новые сверху)</div>
+  <div class="scrollbox mono" id="quik-messages" style="font-size:10px;white-space:pre-wrap"></div>
+
+  <div class="sec-title" style="margin-top:10px">Новости (news.log, новые сверху)</div>
+  <div class="scrollbox mono" id="quik-news" style="font-size:10px;white-space:pre-wrap"></div>
+</section>
+
 <footer>Обновление каждые <span id="f-interval">—</span> мс · источник <span id="f-src" class="mono">—</span></footer>
 
 <div id="offline-overlay"><div style="text-align:center">агент недоступен<span id="offline-http" style="display:block;font-size:12px;font-weight:400;margin-top:6px"></span></div></div>
@@ -309,6 +337,7 @@ function renderRobots(robots, stale) {
   });
   wireParamsEditors(body);
   wireModeControls(body);
+  wireSetPos(body);
 }
 
 function fmtTs(ms) {
@@ -348,6 +377,7 @@ function paramsBlock(r) {
     + '<div class="kv-grid">' + meta + '</div>'
     + editorBlock(r, params)
     + modeBlock(r)
+    + setPosBlock(r)
     + '<div class="sec-title" style="margin-top:6px">Заявки в работе</div>'
     + '<div class="kv-grid">' + (working || '<span class="empty">нет</span>') + '</div>'
     + '<div class="sec-title" style="margin-top:6px">Последние сделки</div>'
@@ -424,6 +454,54 @@ function modeBlock(r) {
       + '</div>';
   }
   return html;
+}
+
+// setPosBlock: operator manual position correction (desync repair). LOCAL ONLY
+// — rides the same fix_state control recon align uses, but with operator-typed
+// values. Server enforces: typed confirm == id AND robot is PAUSED.
+function setPosBlock(r) {
+  if (!IS_LOCAL) return '';
+  return '<div class="sec-title" style="margin-top:10px">Ручная коррекция позиции</div>'
+    + '<div class="arm-panel" data-id="' + esc(r.id) + '">'
+    + '<div class="kv">Перезаписывает веру руннера (позиция + средняя, вера в заявки очищается). Только на ПАУЗЕ. Текущая вера: <b>'
+    + (r.position > 0 ? '+' : '') + fmtNum(r.position) + ' @ ' + fmtNum(r.avg_price) + '</b></div>'
+    + '<div class="kv-grid" style="margin-top:6px">'
+    + '<div class="edit-field"><span>позиция</span><input class="mono setpos-pos" type="number" value="' + esc(r.position ?? 0) + '"></div>'
+    + '<div class="edit-field"><span>средняя цена</span><input class="mono setpos-avg" type="number" value="' + esc(r.avg_price ?? 0) + '"></div>'
+    + '<div class="edit-field"><span>ID для подтверждения</span><input class="mono setpos-confirm" placeholder="' + esc(r.id) + '"></div>'
+    + '</div>'
+    + '<div style="margin-top:8px"><button class="danger setpos-btn" disabled>Записать позицию в руннер</button><span class="setpos-msg"></span></div>'
+    + '</div>';
+}
+
+// wireSetPos: confirm-id must match the robot id before the button enables;
+// the server re-validates everything (confirm + paused) at submit anyway.
+function wireSetPos(body) {
+  body.querySelectorAll('.setpos-btn').forEach(btn => {
+    const panel = btn.closest('.arm-panel');
+    const id = panel.dataset.id;
+    const confirmInp = panel.querySelector('.setpos-confirm');
+    const msgEl = panel.querySelector('.setpos-msg');
+    confirmInp.addEventListener('input', () => { btn.disabled = confirmInp.value !== id; });
+    btn.addEventListener('click', async () => {
+      const pos = Number(panel.querySelector('.setpos-pos').value);
+      const avg = Number(panel.querySelector('.setpos-avg').value);
+      if (!Number.isInteger(pos)) { setMsg(msgEl, 'позиция должна быть целым числом', false); return; }
+      if (!confirm('Записать роботу ' + id + ' позицию ' + pos + ' @ ' + avg + '?')) return;
+      btn.disabled = true;
+      try {
+        const resp = await fetch('/api/robot/' + encodeURIComponent(id) + '/set-position', {
+          method: 'POST', headers: {'content-type': 'application/json'},
+          body: JSON.stringify({ position: pos, avg_price: avg, confirm_id: confirmInp.value }),
+        });
+        const text = await resp.text();
+        if (!resp.ok) { setMsg(msgEl, text || ('HTTP ' + resp.status), false); btn.disabled = false; return; }
+        setMsg(msgEl, 'записано', true);
+        expandedRobots.delete(id);
+        await fetchAndRender();
+      } catch (e) { setMsg(msgEl, 'ошибка сети', false); btn.disabled = false; }
+    });
+  });
 }
 
 function setMsg(el, text, ok) {
@@ -639,6 +717,56 @@ function renderManual(manual) {
     : '<tr><td colspan="2" class="empty">Нет открытых позиций по счёту.</td></tr>';
 }
 
+// renderQuik: the terminal's own tables (заявки/сделки/транзакции + info.log/
+// news.log tails). Read-only mirror of QUIK fact — recon above stays the
+// robot-attribution view; this is the raw account-wide truth.
+function renderQuik(q) {
+  document.getElementById('quik-dir').innerHTML = q.dir
+    ? 'папка QUIK: <b class="mono">' + esc(q.dir) + '</b>'
+    : 'папка QUIK неизвестна (нужна Lua cc3+) — сообщения и новости недоступны';
+
+  const sideArrow = s => s === 'buy' ? '<span class="buy">▲</span>' : (s === 'sell' ? '<span class="sell">▼</span>' : '—');
+
+  document.getElementById('quik-orders').innerHTML = (q.orders || []).length
+    ? q.orders.map(o => '<tr>'
+      + '<td class="mono">' + fmtTs(o.ts_ms) + '</td>'
+      + '<td class="mono">' + esc(o.num) + '</td>'
+      + '<td class="mono">' + esc(o.sec) + '</td>'
+      + '<td>' + sideArrow(o.side) + '</td>'
+      + '<td class="mono">' + fmtNum(o.price) + '</td>'
+      + '<td class="mono">' + fmtNum(o.qty) + '</td>'
+      + '<td class="mono">' + fmtNum(o.balance) + '</td>'
+      + '<td>' + (o.active ? '<span class="badge ok">активна</span>' : '<span class="badge dim">завершена</span>') + '</td>'
+      + '<td class="mono">' + esc(o.tag || '—') + '</td></tr>').join('')
+    : '<tr><td colspan="9" class="empty">Заявок за сессию нет.</td></tr>';
+
+  document.getElementById('quik-trades').innerHTML = (q.trades || []).length
+    ? q.trades.map(t => '<tr>'
+      + '<td class="mono">' + fmtTs(t.ts_ms) + '</td>'
+      + '<td class="mono">' + esc(t.num) + '</td>'
+      + '<td class="mono">' + esc(t.order_num) + '</td>'
+      + '<td class="mono">' + esc(t.sec) + '</td>'
+      + '<td>' + sideArrow(t.side) + '</td>'
+      + '<td class="mono">' + fmtNum(t.price) + '</td>'
+      + '<td class="mono">' + fmtNum(t.qty) + '</td>'
+      + '<td class="mono">' + esc(t.tag || '—') + '</td></tr>').join('')
+    : '<tr><td colspan="8" class="empty">Сделок за сессию нет.</td></tr>';
+
+  document.getElementById('quik-trans').innerHTML = (q.trans || []).length
+    ? q.trans.map(t => '<tr' + (t.status !== 0 && t.status !== 3 ? ' class="flag"' : '') + '>'
+      + '<td class="mono">' + fmtTs(t.ts_ms) + '</td>'
+      + '<td class="mono">' + esc(t.trans_id) + '</td>'
+      + '<td class="mono">' + esc(t.status) + '</td>'
+      + '<td class="mono">' + esc(t.order_num || '—') + '</td>'
+      + '<td>' + esc(t.text) + '</td></tr>').join('')
+    : '<tr><td colspan="5" class="empty">Ответов на транзакции нет (с момента старта агента).</td></tr>';
+
+  document.getElementById('quik-messages').textContent =
+    (q.messages || []).length ? q.messages.join('\n') : 'нет данных';
+  document.getElementById('quik-news').textContent =
+    (q.news || []).length ? q.news.join('\n') : 'нет данных';
+}
+
 function render(s) {
   // The STL mirror injects "_received_at_ms" (its own receipt time) alongside the
   // agent's own top-level keys — see trader/quik/store.py set_agent_status. Data
@@ -649,6 +777,7 @@ function render(s) {
   renderHealth(s.health || {}, (s.agent || {}).link_up, stale);
   renderRobots(s.robots || [], stale);
   renderRecon(s.recon || { state: 'STALE' });
+  renderQuik(s.quik || {});
   if (prevReconState !== null && prevReconState !== 'MISMATCH' && s.recon && s.recon.state === 'MISMATCH') beep();
   if (s.recon) prevReconState = s.recon.state;
   document.getElementById('f-interval').textContent = INTERVAL;

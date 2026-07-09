@@ -115,6 +115,13 @@ func newMux(d Deps) *http.ServeMux {
 		handleResetPaper(d, w, r)
 	})
 
+	// Local-only: force-write a robot's believed position/avg (operator manual
+	// correction after a desync). Preconditions (typed confirm, robot paused)
+	// are enforced by Deps.SetPosition's wiring in main.go.
+	mux.HandleFunc("POST /api/robot/{id}/set-position", func(w http.ResponseWriter, r *http.Request) {
+		handleSetPosition(d, w, r)
+	})
+
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Write(pageHTML)
@@ -219,6 +226,55 @@ func handleResetPaper(d Deps, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := d.ResetPaper(r.PathValue("id")); err != nil {
+		if errors.Is(err, ErrUnknownRobot) {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// setPositionRequest: Position is a pointer so an absent key is a 400, never a
+// silent "set to 0" (same absent-key discipline as modeRequest.Paper).
+// AvgPrice may be omitted ONLY when position is 0 (a flat book has no avg).
+type setPositionRequest struct {
+	Position  *int64   `json:"position"`
+	AvgPrice  *float64 `json:"avg_price"`
+	ConfirmID string   `json:"confirm_id"`
+}
+
+// handleSetPosition force-writes a robot's believed position/avg. nil
+// Deps.SetPosition -> 503. Bad JSON / missing position / missing avg for a
+// non-zero position -> 400. ErrUnknownRobot -> 404. Any other error is a
+// precondition/confirm failure -> 409 with the reason.
+func handleSetPosition(d Deps, w http.ResponseWriter, r *http.Request) {
+	if d.SetPosition == nil {
+		http.Error(w, "set-position not wired", http.StatusServiceUnavailable)
+		return
+	}
+
+	id := r.PathValue("id")
+	var req setPositionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Position == nil {
+		http.Error(w, "missing 'position'", http.StatusBadRequest)
+		return
+	}
+	var avg float64
+	if req.AvgPrice != nil {
+		avg = *req.AvgPrice
+	}
+	if *req.Position != 0 && avg <= 0 {
+		http.Error(w, "непустая позиция требует avg_price > 0", http.StatusBadRequest)
+		return
+	}
+
+	if err := d.SetPosition(id, *req.Position, avg, req.ConfirmID); err != nil {
 		if errors.Is(err, ErrUnknownRobot) {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return

@@ -38,7 +38,7 @@
 -- Bump on every change you deliver to the VDS. Logged FIRST on OnInit so the
 -- operator can confirm which version QUIK actually loaded (the running script is
 -- in MEMORY; a file on disk with the same name may be a different build).
-local SCRIPT_VERSION = "2026.07.09-cc2"
+local SCRIPT_VERSION = "2026.07.09-cc3"
 
 local CONFIG = {
   HOST          = "127.0.0.1",
@@ -586,6 +586,22 @@ end
 
 local acc = { last_pos = "", last_ord = "", last_pos_ms = 0, last_ord_ms = 0, trd_seen = 0 }
 
+-- QUIK datetime table -> epoch ms (0 when absent/unparsable). Same VDS-clock=MSK
+-- assumption as OnAllTrade's last_trade_ts_ms (see the comment there).
+local function dt_to_ms(dt)
+  if type(dt) ~= "table" then return 0 end
+  local ok, t = pcall(os.time, { year = dt.year, month = dt.month, day = dt.day,
+    hour = dt.hour or 0, min = dt.min or 0, sec = dt.sec or 0 })
+  if ok and t then return t * 1000 end
+  return 0
+end
+
+-- flags bit2 (4) = SELL, same bit for both the orders and trades tables.
+local function side_from_flags(flags)
+  if (math.floor((tonumber(flags) or 0) / 4) % 2) == 1 then return "S" end
+  return "B"
+end
+
 local function publish_acc_positions()
   local n = getNumberOf("futures_client_holding") or 0
   local rows = {}
@@ -621,7 +637,8 @@ local function publish_acc_orders()
       if (tonumber(r.flags) or 0) % 2 == 1 then active = 1 end
       rows[#rows + 1] = { tostring(r.order_num), r.sec_code or "", active,
                           tonumber(r.price) or 0, tonumber(r.balance) or 0, tonumber(r.qty) or 0,
-                          tostring(r.brokerref or "") }
+                          tostring(r.brokerref or ""),
+                          side_from_flags(r.flags), dt_to_ms(r.datetime) }
     end
   end
   local key = ser_rows(rows)
@@ -648,7 +665,8 @@ local function publish_acc_trades()  -- incremental: only rows we have not sent 
       local ts = now_ms()  -- QUIK datetime table conversion is best-effort; agent stamps receipt anyway
       rows[#rows + 1] = { tostring(r.trade_num), tostring(r.order_num or ""), r.sec_code or "",
                           tonumber(r.price) or 0, tonumber(r.qty) or 0, ts,
-                          tostring(r.brokerref or "") }
+                          tostring(r.brokerref or ""),
+                          side_from_flags(r.flags), dt_to_ms(r.datetime) }
     end
   end
   acc.trd_seen = n
@@ -888,8 +906,13 @@ local function dispatch_command(line)
     local st = ""
     local ok, v = pcall(getInfoParam, "SERVERTIME")
     if ok and v then st = v end
+    -- wf = QUIK working folder, so the agent can tail info.log/news.log there
+    -- (system messages / news have NO QLua API — ARQA confirmed on forum.quik.ru).
+    local wf = ""
+    local okw, w = pcall(getWorkingFolder)
+    if okw and w then wf = tostring(w) end
     emit({ event = "pong", t0 = cmd.t0 or 0, ts = now_ms(), server_time = st,
-           last_trade_ts_ms = md.last_trade_ts_ms or 0 })
+           last_trade_ts_ms = md.last_trade_ts_ms or 0, wf = wf })
   else
     log("unknown cmd '" .. tostring(cmd.cmd) .. "' (dropped)")
   end

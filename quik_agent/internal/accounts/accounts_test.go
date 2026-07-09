@@ -75,6 +75,54 @@ func TestOrderTradeFromRowTag(t *testing.T) {
 	}
 }
 
+// TestOrderTradeFromRowSideTs: cc3+ trailing elements 8-9 (side "B"/"S", ts_ms)
+// decode into Side/TsMs (orders) and Side/ExchTsMs (trades). A cc2 row (7
+// elements) still decodes with the new fields zero-valued.
+func TestOrderTradeFromRowSideTs(t *testing.T) {
+	o, ok := OrderFromRow([]any{"555", "RIU6", 1.0, 89000.0, 1.0, 1.0, "tag", "S", 1751700000000.0})
+	if !ok || o.Side != "S" || o.TsMs != 1751700000000 {
+		t.Fatalf("order side/ts: %+v ok=%v", o, ok)
+	}
+	tr, ok2 := TradeFromRow([]any{"t1", "555", "RIU6", 89050.0, 1.0, 1.75e12, "recon", "B", 1751700000123.0})
+	if !ok2 || tr.Side != "B" || tr.ExchTsMs != 1751700000123 {
+		t.Fatalf("trade side/ts: %+v ok=%v", tr, ok2)
+	}
+	o2, ok3 := OrderFromRow([]any{"555", "RIU6", 1.0, 89000.0, 1.0, 1.0, "tag"})
+	if !ok3 || o2.Side != "" || o2.TsMs != 0 {
+		t.Fatalf("cc2 order row: %+v ok=%v", o2, ok3)
+	}
+}
+
+func TestStoreTransRepliesRing(t *testing.T) {
+	now := int64(1000)
+	s := New(func() int64 { return now })
+	for i := 0; i < transRing+5; i++ {
+		s.AddTransReply(int64(i), 0, "", fmt.Sprintf("m%d", i))
+	}
+	snap := s.Snapshot()
+	if len(snap.TransReplies) != transRing {
+		t.Fatalf("ring len = %d, want %d", len(snap.TransReplies), transRing)
+	}
+	if snap.TransReplies[0].TransID != 5 || snap.TransReplies[transRing-1].TransID != int64(transRing+4) {
+		t.Fatalf("ring window = [%d..%d]", snap.TransReplies[0].TransID, snap.TransReplies[transRing-1].TransID)
+	}
+	if snap.TransReplies[0].TsMs != 1000 {
+		t.Fatalf("TsMs = %d, want store clock 1000", snap.TransReplies[0].TsMs)
+	}
+}
+
+func TestStoreQuikFolder(t *testing.T) {
+	s := New(func() int64 { return 0 })
+	if s.Snapshot().QuikFolder != "" {
+		t.Fatal("fresh store must have empty folder")
+	}
+	s.SetQuikFolder(`C:\QUIK`)
+	s.SetQuikFolder("") // an old-Lua empty pong must NOT erase a known folder
+	if got := s.Snapshot().QuikFolder; got != `C:\QUIK` {
+		t.Fatalf("folder = %q", got)
+	}
+}
+
 func TestStorePositionsOrdersSnapshot(t *testing.T) {
 	s := New(func() int64 { return 0 })
 	s.SetPositions([]Position{{Sec: "RIU6", Net: 2, Avg: 89100}})

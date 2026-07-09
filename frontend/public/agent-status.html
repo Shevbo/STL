@@ -21,6 +21,10 @@
   .badge.dim { color: #667; }
   section { padding: 10px 14px; border-bottom: 1px solid #16162c; }
   .sec-title { font-size: 10px; color: #667; text-transform: uppercase; letter-spacing: .6px; margin-bottom: 8px; }
+  /* long lists collapse into fixed frames instead of eating the screen */
+  .scrollbox { max-height: 30vh; overflow-y: auto; }
+  .pop { float: right; cursor: pointer; color: #667; font-size: 12px; padding: 0 4px; }
+  .pop:hover { color: #cdd; }
   .tiles { display: flex; flex-wrap: wrap; gap: 8px; }
   .tile { background: #12122a; border: 1px solid #22224a; border-radius: 6px; padding: 8px 12px; min-width: 130px; }
   .tile .k { font-size: 9px; color: #667; text-transform: uppercase; }
@@ -86,7 +90,7 @@
   <div class="sec-title">Роботы</div>
   <table>
     <thead><tr><th></th><th>ID</th><th>Символ</th><th>Стратегия</th><th>Режим</th><th>Статус</th>
-      <th>Позиция</th><th>P&amp;L</th><th>Пульс</th><th>Ссылки</th></tr></thead>
+      <th>Позиция</th><th title="кумулятив стратегии (включая бумажный период), без комиссий. Реальные деньги — «Результат» на карточке робота STL: только filled-сделки QUIK + комиссия тейкера">P&amp;L&#8721;</th><th>Пульс</th><th>Ссылки</th></tr></thead>
     <tbody id="robots-body"></tbody>
   </table>
 </section>
@@ -99,27 +103,59 @@
   <table><thead><tr><th>ID</th><th>Символ</th><th>Позиция</th><th>Заявки</th><th>Сделки</th></tr></thead>
     <tbody id="recon-robot-checks"></tbody></table>
 
-  <div class="sec-title" style="margin-top:10px">Заявки QUIK (роботы)</div>
-  <table><thead><tr><th>№ заявки</th><th>Владелец</th><th>OK</th></tr></thead>
-    <tbody id="recon-orders"></tbody></table>
+  <div class="sec-title" style="margin-top:10px">Заявки QUIK (роботы)
+    <span class="pop" onclick="popout(this)" title="открыть в отдельном окне">⧉</span></div>
+  <div class="scrollbox"><table><thead><tr><th>№ заявки</th><th>Владелец</th><th>OK</th></tr></thead>
+    <tbody id="recon-orders"></tbody></table></div>
 
-  <div class="sec-title" style="margin-top:10px">Сделки роботов</div>
-  <table><thead><tr><th>№ сделки</th><th>№ заявки</th><th>Совпадение</th></tr></thead>
-    <tbody id="recon-trades"></tbody></table>
+  <div class="sec-title" style="margin-top:10px">Сделки роботов
+    <span class="pop" onclick="popout(this)" title="открыть в отдельном окне">⧉</span></div>
+  <div class="scrollbox"><table><thead><tr><th>№ сделки</th><th>№ заявки</th><th>Совпадение</th></tr></thead>
+    <tbody id="recon-trades"></tbody></table></div>
 
-  <div class="sec-title" style="margin-top:10px">Транзакции</div>
-  <table><thead><tr><th>№ транзакции</th><th>Статус</th><th>Текст</th></tr></thead>
-    <tbody id="recon-trans"></tbody></table>
+  <div class="sec-title" style="margin-top:10px">Транзакции
+    <span class="pop" onclick="popout(this)" title="открыть в отдельном окне">⧉</span></div>
+  <div class="scrollbox"><table><thead><tr><th>№ транзакции</th><th>Статус</th><th>Текст</th></tr></thead>
+    <tbody id="recon-trans"></tbody></table></div>
 
   <div id="align-card"></div>
 
-  <div class="sec-title" style="margin-top:18px">Ручная торговля (не сверяется, справочно)</div>
-  <table><thead><tr><th>№ заявки</th><th>Символ</th></tr></thead>
-    <tbody id="manual-orders"></tbody></table>
+  <div class="sec-title" style="margin-top:18px">Ручная торговля (не сверяется, справочно)
+    <span class="pop" onclick="popout(this)" title="открыть в отдельном окне">⧉</span></div>
+  <div class="scrollbox"><table><thead><tr><th>№ заявки</th><th>Символ</th></tr></thead>
+    <tbody id="manual-orders"></tbody></table></div>
 
   <div class="sec-title" style="margin-top:10px">Позиции по счёту QUIK (сумма ручных + роботов)</div>
   <table><thead><tr><th>Символ</th><th>Нетто</th></tr></thead>
     <tbody id="manual-account-net"></tbody></table>
+</section>
+
+<section>
+  <div class="sec-title">Таблицы QUIK (терминал)</div>
+  <div class="kv" id="quik-dir" style="margin-bottom:6px"></div>
+
+  <div class="sec-title">Заявки
+    <span class="pop" onclick="popout(this)" title="открыть в отдельном окне">⧉</span></div>
+  <div class="scrollbox"><table><thead><tr><th>Время</th><th>№ заявки</th><th>Символ</th><th>Напр.</th>
+    <th>Цена</th><th>Кол-во</th><th>Остаток</th><th>Статус</th><th>Тег</th></tr></thead>
+    <tbody id="quik-orders"></tbody></table></div>
+
+  <div class="sec-title" style="margin-top:10px">Сделки
+    <span class="pop" onclick="popout(this)" title="открыть в отдельном окне">⧉</span></div>
+  <div class="scrollbox"><table><thead><tr><th>Время</th><th>№ сделки</th><th>№ заявки</th><th>Символ</th>
+    <th>Напр.</th><th>Цена</th><th>Кол-во</th><th>Тег</th></tr></thead>
+    <tbody id="quik-trades"></tbody></table></div>
+
+  <div class="sec-title" style="margin-top:10px">Транзакции (ответы QUIK)
+    <span class="pop" onclick="popout(this)" title="открыть в отдельном окне">⧉</span></div>
+  <div class="scrollbox"><table><thead><tr><th>Время</th><th>№ транз.</th><th>Статус</th><th>№ заявки</th><th>Текст</th></tr></thead>
+    <tbody id="quik-trans"></tbody></table></div>
+
+  <div class="sec-title" style="margin-top:10px">Системные сообщения (info.log, новые сверху)</div>
+  <div class="scrollbox mono" id="quik-messages" style="font-size:10px;white-space:pre-wrap"></div>
+
+  <div class="sec-title" style="margin-top:10px">Новости (news.log, новые сверху)</div>
+  <div class="scrollbox mono" id="quik-news" style="font-size:10px;white-space:pre-wrap"></div>
 </section>
 
 <footer>Обновление каждые <span id="f-interval">—</span> мс · источник <span id="f-src" class="mono">—</span></footer>
@@ -136,6 +172,17 @@ const INTERVAL = +(qs.get('interval') || 1000);
 // robotLinks and renderRecon's align-card branch).
 const IS_LOCAL = SRC === '/api/status';
 let lastOkMs = 0;
+
+// ponytail: static snapshot of the table; live-refreshing popout when asked
+function popout(btn) {
+  const title = btn.parentNode.textContent.replace('⧉', '').trim();
+  const tbl = btn.parentNode.nextElementSibling.querySelector('table');
+  const w = window.open('', '_blank', 'width=780,height=900');
+  w.document.write('<title>' + title + '</title>' + document.querySelector('style').outerHTML
+    + '<body style="padding:16px"><h3>' + title + ' — снимок '
+    + new Date().toLocaleTimeString('ru-RU') + '</h3>' + tbl.outerHTML);
+  w.document.close();
+}
 
 function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -291,6 +338,7 @@ function renderRobots(robots, stale) {
   });
   wireParamsEditors(body);
   wireModeControls(body);
+  wireSetPos(body);
 }
 
 function fmtTs(ms) {
@@ -330,6 +378,7 @@ function paramsBlock(r) {
     + '<div class="kv-grid">' + meta + '</div>'
     + editorBlock(r, params)
     + modeBlock(r)
+    + setPosBlock(r)
     + '<div class="sec-title" style="margin-top:6px">Заявки в работе</div>'
     + '<div class="kv-grid">' + (working || '<span class="empty">нет</span>') + '</div>'
     + '<div class="sec-title" style="margin-top:6px">Последние сделки</div>'
@@ -406,6 +455,54 @@ function modeBlock(r) {
       + '</div>';
   }
   return html;
+}
+
+// setPosBlock: operator manual position correction (desync repair). LOCAL ONLY
+// — rides the same fix_state control recon align uses, but with operator-typed
+// values. Server enforces: typed confirm == id AND robot is PAUSED.
+function setPosBlock(r) {
+  if (!IS_LOCAL) return '';
+  return '<div class="sec-title" style="margin-top:10px">Ручная коррекция позиции</div>'
+    + '<div class="arm-panel" data-id="' + esc(r.id) + '">'
+    + '<div class="kv">Перезаписывает веру руннера (позиция + средняя, вера в заявки очищается). Только на ПАУЗЕ. Текущая вера: <b>'
+    + (r.position > 0 ? '+' : '') + fmtNum(r.position) + ' @ ' + fmtNum(r.avg_price) + '</b></div>'
+    + '<div class="kv-grid" style="margin-top:6px">'
+    + '<div class="edit-field"><span>позиция</span><input class="mono setpos-pos" type="number" value="' + esc(r.position ?? 0) + '"></div>'
+    + '<div class="edit-field"><span>средняя цена</span><input class="mono setpos-avg" type="number" value="' + esc(r.avg_price ?? 0) + '"></div>'
+    + '<div class="edit-field"><span>ID для подтверждения</span><input class="mono setpos-confirm" placeholder="' + esc(r.id) + '"></div>'
+    + '</div>'
+    + '<div style="margin-top:8px"><button class="danger setpos-btn" disabled>Записать позицию в руннер</button><span class="setpos-msg"></span></div>'
+    + '</div>';
+}
+
+// wireSetPos: confirm-id must match the robot id before the button enables;
+// the server re-validates everything (confirm + paused) at submit anyway.
+function wireSetPos(body) {
+  body.querySelectorAll('.setpos-btn').forEach(btn => {
+    const panel = btn.closest('.arm-panel');
+    const id = panel.dataset.id;
+    const confirmInp = panel.querySelector('.setpos-confirm');
+    const msgEl = panel.querySelector('.setpos-msg');
+    confirmInp.addEventListener('input', () => { btn.disabled = confirmInp.value !== id; });
+    btn.addEventListener('click', async () => {
+      const pos = Number(panel.querySelector('.setpos-pos').value);
+      const avg = Number(panel.querySelector('.setpos-avg').value);
+      if (!Number.isInteger(pos)) { setMsg(msgEl, 'позиция должна быть целым числом', false); return; }
+      if (!confirm('Записать роботу ' + id + ' позицию ' + pos + ' @ ' + avg + '?')) return;
+      btn.disabled = true;
+      try {
+        const resp = await fetch('/api/robot/' + encodeURIComponent(id) + '/set-position', {
+          method: 'POST', headers: {'content-type': 'application/json'},
+          body: JSON.stringify({ position: pos, avg_price: avg, confirm_id: confirmInp.value }),
+        });
+        const text = await resp.text();
+        if (!resp.ok) { setMsg(msgEl, text || ('HTTP ' + resp.status), false); btn.disabled = false; return; }
+        setMsg(msgEl, 'записано', true);
+        expandedRobots.delete(id);
+        await fetchAndRender();
+      } catch (e) { setMsg(msgEl, 'ошибка сети', false); btn.disabled = false; }
+    });
+  });
 }
 
 function setMsg(el, text, ok) {
@@ -621,6 +718,56 @@ function renderManual(manual) {
     : '<tr><td colspan="2" class="empty">Нет открытых позиций по счёту.</td></tr>';
 }
 
+// renderQuik: the terminal's own tables (заявки/сделки/транзакции + info.log/
+// news.log tails). Read-only mirror of QUIK fact — recon above stays the
+// robot-attribution view; this is the raw account-wide truth.
+function renderQuik(q) {
+  document.getElementById('quik-dir').innerHTML = q.dir
+    ? 'папка QUIK: <b class="mono">' + esc(q.dir) + '</b>'
+    : 'папка QUIK неизвестна (нужна Lua cc3+) — сообщения и новости недоступны';
+
+  const sideArrow = s => s === 'buy' ? '<span class="buy">▲</span>' : (s === 'sell' ? '<span class="sell">▼</span>' : '—');
+
+  document.getElementById('quik-orders').innerHTML = (q.orders || []).length
+    ? q.orders.map(o => '<tr>'
+      + '<td class="mono">' + fmtTs(o.ts_ms) + '</td>'
+      + '<td class="mono">' + esc(o.num) + '</td>'
+      + '<td class="mono">' + esc(o.sec) + '</td>'
+      + '<td>' + sideArrow(o.side) + '</td>'
+      + '<td class="mono">' + fmtNum(o.price) + '</td>'
+      + '<td class="mono">' + fmtNum(o.qty) + '</td>'
+      + '<td class="mono">' + fmtNum(o.balance) + '</td>'
+      + '<td>' + (o.active ? '<span class="badge ok">активна</span>' : '<span class="badge dim">завершена</span>') + '</td>'
+      + '<td class="mono">' + esc(o.tag || '—') + '</td></tr>').join('')
+    : '<tr><td colspan="9" class="empty">Заявок за сессию нет.</td></tr>';
+
+  document.getElementById('quik-trades').innerHTML = (q.trades || []).length
+    ? q.trades.map(t => '<tr>'
+      + '<td class="mono">' + fmtTs(t.ts_ms) + '</td>'
+      + '<td class="mono">' + esc(t.num) + '</td>'
+      + '<td class="mono">' + esc(t.order_num) + '</td>'
+      + '<td class="mono">' + esc(t.sec) + '</td>'
+      + '<td>' + sideArrow(t.side) + '</td>'
+      + '<td class="mono">' + fmtNum(t.price) + '</td>'
+      + '<td class="mono">' + fmtNum(t.qty) + '</td>'
+      + '<td class="mono">' + esc(t.tag || '—') + '</td></tr>').join('')
+    : '<tr><td colspan="8" class="empty">Сделок за сессию нет.</td></tr>';
+
+  document.getElementById('quik-trans').innerHTML = (q.trans || []).length
+    ? q.trans.map(t => '<tr' + (t.status !== 0 && t.status !== 3 ? ' class="flag"' : '') + '>'
+      + '<td class="mono">' + fmtTs(t.ts_ms) + '</td>'
+      + '<td class="mono">' + esc(t.trans_id) + '</td>'
+      + '<td class="mono">' + esc(t.status) + '</td>'
+      + '<td class="mono">' + esc(t.order_num || '—') + '</td>'
+      + '<td>' + esc(t.text) + '</td></tr>').join('')
+    : '<tr><td colspan="5" class="empty">Ответов на транзакции нет (с момента старта агента).</td></tr>';
+
+  document.getElementById('quik-messages').textContent =
+    (q.messages || []).length ? q.messages.join('\n') : 'нет данных';
+  document.getElementById('quik-news').textContent =
+    (q.news || []).length ? q.news.join('\n') : 'нет данных';
+}
+
 function render(s) {
   // The STL mirror injects "_received_at_ms" (its own receipt time) alongside the
   // agent's own top-level keys — see trader/quik/store.py set_agent_status. Data
@@ -631,6 +778,7 @@ function render(s) {
   renderHealth(s.health || {}, (s.agent || {}).link_up, stale);
   renderRobots(s.robots || [], stale);
   renderRecon(s.recon || { state: 'STALE' });
+  renderQuik(s.quik || {});
   if (prevReconState !== null && prevReconState !== 'MISMATCH' && s.recon && s.recon.state === 'MISMATCH') beep();
   if (s.recon) prevReconState = s.recon.state;
   document.getElementById('f-interval').textContent = INTERVAL;

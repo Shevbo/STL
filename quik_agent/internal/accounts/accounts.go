@@ -32,6 +32,10 @@ type Order struct {
 	// trade.ownerTag) decoded from the row's optional trailing 7th element.
 	// Empty when absent (old Lua build) or unknown.
 	Tag string
+	// Side ("B"/"S") and TsMs (order registration epoch ms) come from optional
+	// trailing row elements 8-9 (Lua cc3+); zero-valued on an old Lua build.
+	Side string
+	TsMs int64
 }
 
 // Trade mirrors one row of the QUIK trades table (a fill).
@@ -43,6 +47,22 @@ type Trade struct {
 	// Tag is the owner tag (brokerref) decoded from the row's optional trailing
 	// 7th element. Empty when absent (old Lua build) or unknown.
 	Tag string
+	// Side ("B"/"S") and ExchTsMs (exchange trade time, epoch ms) come from
+	// optional trailing row elements 8-9 (Lua cc3+); zero-valued on an old build.
+	// TsMs above stays the Lua RECEIPT stamp (recon depends on it).
+	Side     string
+	ExchTsMs int64
+}
+
+// TransReply mirrors one OnTransReply (the QUIK транзакции table has no QLua
+// getItem access; this ring of replies is the programmatic equivalent for
+// transactions sent from this terminal).
+type TransReply struct {
+	TsMs     int64
+	TransID  int64
+	Status   int32
+	OrderNum string
+	Text     string
 }
 
 // tradesRing caps how many recent trades Snapshot() exposes. QUIK re-sends the full
@@ -62,6 +82,11 @@ type Snapshot struct {
 	Positions []Position
 	Orders    []Order
 	Trades    []Trade
+	// TransReplies is the OnTransReply ring, arrival order (oldest first).
+	TransReplies []TransReply
+	// QuikFolder is the QUIK working folder reported by the Lua pong ("" until
+	// a cc3+ pong arrives); the status page tails info.log/news.log there.
+	QuikFolder string
 
 	// PosAgeMs/OrdAgeMs are -1 when the corresponding table has NEVER been
 	// published (SetPositions/SetOrders not yet called) — never an
@@ -103,6 +128,9 @@ type Store struct {
 
 	trades     []Trade
 	seenTrades map[string]struct{} // every accepted Trade.Num (survives ring eviction)
+
+	transReplies []TransReply
+	quikFolder   string
 
 	rttMs        int64
 	clockDriftMs int64
@@ -216,6 +244,32 @@ func (s *Store) AddTrades(rows []Trade) {
 	}
 }
 
+// transRing caps the OnTransReply ring (same rationale as tradesRing).
+const transRing = 200
+
+// AddTransReply appends one OnTransReply to the ring, stamped with the store clock.
+func (s *Store) AddTransReply(transID int64, status int32, orderNum, text string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.transReplies = append(s.transReplies, TransReply{
+		TsMs: s.now(), TransID: transID, Status: status, OrderNum: orderNum, Text: text,
+	})
+	if len(s.transReplies) > transRing {
+		drop := len(s.transReplies) - transRing
+		s.transReplies = append([]TransReply(nil), s.transReplies[drop:]...)
+	}
+}
+
+// SetQuikFolder records the QUIK working folder from a Lua pong (ignored when empty).
+func (s *Store) SetQuikFolder(dir string) {
+	if dir == "" {
+		return
+	}
+	s.mu.Lock()
+	s.quikFolder = dir
+	s.mu.Unlock()
+}
+
 // SetPong records a QUIK clock-sync round trip. t0Ms is the agent-stamped send time
 // echoed back by Lua; serverTime is QUIK's own clock as "HH:MM:SS" (MSK, no DST).
 // lastTradeTsMs is the exchange timestamp (epoch ms) of the freshest all-trade Lua has
@@ -284,9 +338,11 @@ func (s *Store) Snapshot() Snapshot {
 	}
 
 	return Snapshot{
-		Positions: append([]Position(nil), s.positions...),
-		Orders:    append([]Order(nil), s.orders...),
-		Trades:    append([]Trade(nil), s.trades...),
+		Positions:    append([]Position(nil), s.positions...),
+		Orders:       append([]Order(nil), s.orders...),
+		Trades:       append([]Trade(nil), s.trades...),
+		TransReplies: append([]TransReply(nil), s.transReplies...),
+		QuikFolder:   s.quikFolder,
 
 		PosAgeMs: posAge,
 		OrdAgeMs: ordAge,
@@ -408,6 +464,14 @@ func OrderFromRow(row []any) (Order, bool) {
 			out.Tag = s
 		}
 	}
+	if len(row) >= 9 { // Lua cc3+: side, registration ts_ms
+		if s, ok := row[7].(string); ok {
+			out.Side = s
+		}
+		if ts, ok := asInt(row[8]); ok {
+			out.TsMs = ts
+		}
+	}
 	return out, true
 }
 
@@ -446,6 +510,14 @@ func TradeFromRow(row []any) (Trade, bool) {
 	if len(row) >= 7 {
 		if s, ok := row[6].(string); ok {
 			out.Tag = s
+		}
+	}
+	if len(row) >= 9 { // Lua cc3+: side, exchange trade ts_ms
+		if s, ok := row[7].(string); ok {
+			out.Side = s
+		}
+		if ts, ok := asInt(row[8]); ok {
+			out.ExchTsMs = ts
 		}
 	}
 	return out, true

@@ -383,6 +383,9 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 			// RTT is measured on the agent clock alone: feed the recorded send
 			// time (pingSentMs), NOT the Lua-echoed ev.T0 (see pingSentMs decl).
 			accStore.SetPong(pingSentMs.Load(), ev.TS, ev.ServerTime, ev.LastTradeTsMs)
+			accStore.SetQuikFolder(ev.WF) // "" (old Lua) is ignored
+		case "trans":
+			accStore.AddTransReply(ev.TransID, ev.ResultCode, ev.OrderNum, ev.Text)
 		}
 	})
 	// QLua market-data feed -> provider overlay: the PRIMARY data path for the
@@ -634,6 +637,31 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 					SetAvgPrice:  0,
 					ClearWorking: true,
 					Note:         "обнуление бумажной позиции (оператор)",
+				})
+			},
+
+			// SetPosition force-writes a robot's believed position/avg (operator
+			// manual correction after a desync, e.g. a fill that landed while the
+			// Lua bridge was dead). Rides the SAME fix_state control the recon
+			// aligner uses; runner persists immediately. Gated: exact typed
+			// confirm + robot must be PAUSED (never rewrite a trading book live).
+			SetPosition: func(id string, pos int64, avg float64, confirmID string) error {
+				spec := robotStore.Get(id)
+				if spec == nil {
+					return status.ErrUnknownRobot
+				}
+				if confirmID != id {
+					return fmt.Errorf("подтверждение не совпадает: введите точный ID робота")
+				}
+				if !robotStore.Paused(id) {
+					return fmt.Errorf("робот должен быть на ПАУЗЕ: останови его перед ручной установкой позиции")
+				}
+				return runnerSrv.SendFixState(&quikv1.FixRobotState{
+					RobotId:      id,
+					SetPosition:  pos,
+					SetAvgPrice:  avg,
+					ClearWorking: true,
+					Note:         fmt.Sprintf("оператор: ручная установка позиции=%d avg=%.2f", pos, avg),
 				})
 			},
 

@@ -820,3 +820,135 @@ func TestServer_RootServesEmbeddedPage(t *testing.T) {
 		t.Errorf("root response does not look like the embedded HTML page")
 	}
 }
+
+// ---- set-position route (operator manual position correction) ----
+
+func TestServer_SetPositionRouteCallsDep(t *testing.T) {
+	var gotID, gotConfirm string
+	var gotPos int64
+	var gotAvg float64
+	d := baseDeps()
+	d.SetPosition = func(id string, pos int64, avg float64, confirmID string) error {
+		gotID, gotPos, gotAvg, gotConfirm = id, pos, avg, confirmID
+		return nil
+	}
+	ts := httptest.NewServer(newMux(d))
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/api/robot/r1/set-position", "application/json",
+		bytes.NewReader([]byte(`{"position":-1,"avg_price":90070,"confirm_id":"r1"}`)))
+	if err != nil {
+		t.Fatalf("POST set-position: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if gotID != "r1" || gotPos != -1 || gotAvg != 90070 || gotConfirm != "r1" {
+		t.Errorf("SetPosition called with (%q, %d, %v, %q)", gotID, gotPos, gotAvg, gotConfirm)
+	}
+}
+
+// TestServer_SetPositionMissingFieldsReturn400: an absent "position" key must
+// 400 (never a silent 0), and a non-zero position with no/zero avg_price must
+// 400 — in both cases WITHOUT calling the dep.
+func TestServer_SetPositionMissingFieldsReturn400(t *testing.T) {
+	called := false
+	d := baseDeps()
+	d.SetPosition = func(id string, pos int64, avg float64, confirmID string) error {
+		called = true
+		return nil
+	}
+	ts := httptest.NewServer(newMux(d))
+	defer ts.Close()
+
+	for _, body := range []string{
+		`{"avg_price":90070,"confirm_id":"r1"}`, // no position
+		`{"position":-1,"confirm_id":"r1"}`,     // non-zero position, no avg
+		`{"position":-1,"avg_price":0,"confirm_id":"r1"}`,
+		`not json`,
+	} {
+		resp, err := http.Post(ts.URL+"/api/robot/r1/set-position", "application/json",
+			bytes.NewReader([]byte(body)))
+		if err != nil {
+			t.Fatalf("POST set-position: %v", err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("body %q: status = %d, want 400", body, resp.StatusCode)
+		}
+	}
+	if called {
+		t.Error("SetPosition must not be called on a 400 request")
+	}
+}
+
+// TestServer_SetPositionZeroNeedsNoAvg: position 0 (flatten the belief) is
+// valid without avg_price — a flat book has no meaningful average.
+func TestServer_SetPositionZeroNeedsNoAvg(t *testing.T) {
+	d := baseDeps()
+	d.SetPosition = func(id string, pos int64, avg float64, confirmID string) error { return nil }
+	ts := httptest.NewServer(newMux(d))
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/api/robot/r1/set-position", "application/json",
+		bytes.NewReader([]byte(`{"position":0,"confirm_id":"r1"}`)))
+	if err != nil {
+		t.Fatalf("POST set-position: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestServer_SetPositionErrorMapping(t *testing.T) {
+	d := baseDeps()
+	d.SetPosition = func(id string, pos int64, avg float64, confirmID string) error {
+		if id == "ghost" {
+			return ErrUnknownRobot
+		}
+		return errors.New("робот должен быть на ПАУЗЕ")
+	}
+	ts := httptest.NewServer(newMux(d))
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/api/robot/ghost/set-position", "application/json",
+		bytes.NewReader([]byte(`{"position":0,"confirm_id":"ghost"}`)))
+	if err != nil {
+		t.Fatalf("POST set-position (ghost): %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("unknown robot: status = %d, want 404", resp.StatusCode)
+	}
+
+	resp2, err := http.Post(ts.URL+"/api/robot/r1/set-position", "application/json",
+		bytes.NewReader([]byte(`{"position":0,"confirm_id":"r1"}`)))
+	if err != nil {
+		t.Fatalf("POST set-position (r1): %v", err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusConflict {
+		t.Errorf("precondition: status = %d, want 409", resp2.StatusCode)
+	}
+	buf := new(bytes.Buffer)
+	buf.ReadFrom(resp2.Body)
+	if !strings.Contains(buf.String(), "ПАУЗЕ") {
+		t.Errorf("body = %q, want the reason text", buf.String())
+	}
+}
+
+func TestServer_SetPositionNotWiredReturns503(t *testing.T) {
+	ts := httptest.NewServer(newMux(baseDeps()))
+	defer ts.Close()
+	resp, err := http.Post(ts.URL+"/api/robot/r1/set-position", "application/json",
+		bytes.NewReader([]byte(`{"position":0,"confirm_id":"r1"}`)))
+	if err != nil {
+		t.Fatalf("POST set-position: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", resp.StatusCode)
+	}
+}

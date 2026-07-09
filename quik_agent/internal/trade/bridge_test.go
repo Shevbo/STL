@@ -211,3 +211,32 @@ func TestDispatchAccountEventsFieldMapping(t *testing.T) {
 		t.Fatalf("ord event = %+v", got)
 	}
 }
+
+// trans_reply must TEE into the account sink (Kind "trans", for the status
+// page's транзакции ring) even with no handler attached; pong must carry the
+// QUIK working folder (wf) for the info.log/news.log tail.
+func TestDispatchTransReplyTeeAndPongWF(t *testing.T) {
+	var got []AccEvent
+	b := NewBridge(0, nil, nil)
+	b.SetAccSink(func(e AccEvent) { got = append(got, e) })
+	for _, line := range []string{
+		`{"event":"trans_reply","trans_id":7,"result_code":3,"order_num":"123","text":"ok"}`,
+		`{"event":"pong","t0":100,"ts":200,"server_time":"12:00:01","wf":"C:\\QUIK"}`,
+	} {
+		var ev luaEvent
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			t.Fatal(err)
+		}
+		b.dispatch(ev)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d events, want 2: %+v", len(got), got)
+	}
+	if got[0].Kind != "trans" || got[0].TransID != 7 || got[0].ResultCode != 3 ||
+		got[0].OrderNum != "123" || got[0].Text != "ok" {
+		t.Fatalf("trans tee = %+v", got[0])
+	}
+	if got[1].Kind != "pong" || got[1].WF != `C:\QUIK` {
+		t.Fatalf("pong wf = %+v", got[1])
+	}
+}
