@@ -759,11 +759,13 @@ local function handle_place(cmd)
     ACCOUNT     = tostring(account),
   }
   if client_code ~= "" then trans.CLIENT_CODE = tostring(client_code) end
-  -- Robot attribution: the agent sends the owner tag (robot ID / "recon"); QUIK stores
-  -- a NEW_ORDER COMMENT in the order's brokerref, inherited by its trades, so recon can
-  -- tell a robot order from manual trading. Empty for manual/unknown (never happens from
-  -- the agent path). Length is bounded by the QUIK build — verified in the go-live smoke.
-  if cmd.comment and cmd.comment ~= "" then trans.COMMENT = tostring(cmd.comment) end
+  -- Robot attribution: the agent sends the owner tag (robot ID / "recon") in the
+  -- transaction's BROKERREF field (QUIK's NEW_ORDER "комментарий/поручение") — NOT
+  -- COMMENT, which is not a NEW_ORDER field and QUIK silently drops, leaving every
+  -- robot trade untagged so recon never matched (live). The order's brokerref is
+  -- inherited by its trades and read back on acc_ord/acc_trd (r.brokerref) so recon
+  -- can tell a robot order from manual trading. Empty for manual/unknown.
+  if cmd.comment and cmd.comment ~= "" then trans.BROKERREF = tostring(cmd.comment) end
 
   log(string.format("place trans_id=%d %s %s %s @%s x%s acct=%s",
     trans_id, trans.OPERATION, trans.CLASSCODE, trans.SECCODE,
