@@ -18,7 +18,7 @@
   let {
     result, symbol, strategy = null, dateFrom, dateTo, pointValue = 1, defaultInterval = 60,
     openOrders = [], plannedOrders = [], taker = true, runParams = {}, paramSchema = [], onRerun = null,
-    segments = null, pointValues = null, live = 0, liveTick = null, onNet = null,
+    segments = null, pointValues = null, live = 0, liveTick = null, onNet = null, floatRub = null,
   }: {
     result: any; symbol: string; strategy?: any; dateFrom: string; dateTo: string;
     pointValue?: number; defaultInterval?: number;
@@ -46,6 +46,9 @@
     // Fires the authoritative net result (₽, net of commission) so a parent can
     // show the SAME number in a header badge instead of recomputing it.
     onNet?: ((net: number) => void) | null;
+    // Live robot floating (unrealized) P&L on the open position (₽). null = n/a
+    // (backtest). Shown in the Результат panel so it isn't seen as frozen.
+    floatRub?: number | null;
   } = $props();
 
   // ── Editable parameters panel (collapsed by default; edit → re-run backtest) ──
@@ -839,6 +842,14 @@
           <div class="st-head2">
             <span>{stats.roundTrips} сделок · комиссия {commission ? fmtRub(commission.total) : '—'}</span>
           </div>
+          {#if floatRub != null}
+            <!-- live robot: realized above is static (closed trades); this line moves
+                 with price so «Результат» isn't seen as frozen while a position is open -->
+            <div class="st-head2 st-live">
+              <span>плавающий <b class:pos={floatRub > 0} class:neg={floatRub < 0}>{fmtMoney(floatRub)} ₽</b>
+                · итог <b class:pos={netResult + floatRub > 0} class:neg={netResult + floatRub < 0}>{fmtMoney(netResult + floatRub)} ₽</b></span>
+            </div>
+          {/if}
         </button>
 
         {#if statsExpanded}
@@ -1033,6 +1044,7 @@
   .st-head b { font-size: 13px; }
   .st-chev { color: #6aa8ff; font-size: 11px; }
   .st-head2 { font-size: 9px; color: #667; margin-top: 1px; }
+  .st-live { color: #8aa; } .st-live b { font-size: 10px; }
   .st-body { display: flex; flex-direction: column; gap: 2px; margin-top: 5px; border-top: 1px solid #2d2d4a; padding-top: 5px; }
   .st-row { display: flex; align-items: baseline; gap: 6px; font-size: 10px; color: #888; }
   .st-row span:first-child { flex: 1; }

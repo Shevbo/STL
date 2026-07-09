@@ -372,6 +372,7 @@
       openOrders={openOrders}
       plannedOrders={plannedOrders}
       onNet={(n) => { if (!robot?.paper) realNetRub = n; }}
+      floatRub={robot?.paper ? null : floatRub}
     />
     {/if}
     </div>
