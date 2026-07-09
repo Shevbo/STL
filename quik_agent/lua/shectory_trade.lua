@@ -35,6 +35,11 @@
 -- for the trading account this terminal logs into. They are used as a FALLBACK only when
 -- the agent does not supply ACCOUNT/CLIENT_CODE in the command. Prefer letting the agent
 -- (sourced from keymaster + STL) provide them; these defaults keep manual 1a tests simple.
+-- Bump on every change you deliver to the VDS. Logged FIRST on OnInit so the
+-- operator can confirm which version QUIK actually loaded (the running script is
+-- in MEMORY; a file on disk with the same name may be a different build).
+local SCRIPT_VERSION = "2026.07.09-diag1"
+
 local CONFIG = {
   HOST          = "127.0.0.1",
   PORT          = 50063,          -- must match agent trade_bridge_port
@@ -767,9 +772,11 @@ local function handle_place(cmd)
   -- can tell a robot order from manual trading. Empty for manual/unknown.
   if cmd.comment and cmd.comment ~= "" then trans.BROKERREF = tostring(cmd.comment) end
 
-  log(string.format("place trans_id=%d %s %s %s @%s x%s acct=%s",
+  -- DIAG: log the tag we send so we can confirm end-to-end whether the agent
+  -- supplies it AND whether QUIK keeps it (compare against orders.brokerref).
+  log(string.format("place trans_id=%d %s %s %s @%s x%s acct=%s BROKERREF=[%s]",
     trans_id, trans.OPERATION, trans.CLASSCODE, trans.SECCODE,
-    trans.PRICE, trans.QUANTITY, trans.ACCOUNT))
+    trans.PRICE, trans.QUANTITY, trans.ACCOUNT, tostring(trans.BROKERREF or "")))
 
   -- sendTransaction returns "" on success (queued), or an error string on immediate reject.
   local res = sendTransaction(trans)
@@ -989,7 +996,7 @@ end
 -- OnInit: QUIK calls this with the script path when the script starts (if defined).
 ----------------------------------------------------------------------
 function OnInit(path)
-  log("OnInit; LuaSocket=" .. (socket_lib and "yes" or "NO") ..
+  log("OnInit v" .. SCRIPT_VERSION .. "; LuaSocket=" .. (socket_lib and "yes" or "NO") ..
       " transport=" .. (CONFIG.USE_FILE_QUEUE and "file-queue" or "tcp"))
 end
 
