@@ -200,12 +200,17 @@ class RobotHost:
             try:
                 await r.runtime.cancel_order(w["order_id"])
             except Exception as exc:  # noqa: BLE001 — a failed cancel must not skip the bar
-                # The agent can't cancel an order it doesn't know (placed before
-                # an agent restart / day-expired at QUIK). Terminate it LOCALLY
-                # or the book turns phantom (8 non-existent orders shown live).
-                r.runtime.expire_order(w["order_id"])
-                log.warning("host.precancel_expired_local", robot_id=r.spec["robot_id"],
+                log.warning("host.precancel_failed", robot_id=r.spec["robot_id"],
                             client_id=w["order_id"], error=str(exc))
+            finally:
+                # Expire the order LOCALLY every bar regardless of the cancel outcome.
+                # A bar-close strategy must start order-flat; and QUIK may REJECT the
+                # cancel ("Вы не можете снять данную заявку" — the order already
+                # filled/expired), which otherwise leaves it "active" forever and
+                # re-sends the cancel every bar — a cancel-reject storm every minute
+                # (seen live 2026-07-09 18:17-19:30 after a Lua crash). A late fill
+                # still applies via on_order_event by client_id, so this is safe.
+                r.runtime.expire_order(w["order_id"])
         try:
             await r.on_bar(r.runtime, r.spec["params"])
             r.last_error = ""
