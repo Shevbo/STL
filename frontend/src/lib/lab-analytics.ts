@@ -350,8 +350,9 @@ export function priceMarkers(
   const buy = { points: [] as any[], markers: [] as any[] };
   const sell = { points: [] as any[], markers: [] as any[] };
   const index: any[] = [];
-  // Dim an entry color for AVERAGING fills (faded vs a bright fresh entry). Hex → +alpha.
-  const dim = (c: string) => (c.length === 7 ? c + '70' : c);
+  // Tint an AVERAGING fill vs a bright fresh entry. Was '70' (44% alpha) — too faint;
+  // 'b0' (69%) is ~50% more visible by COLOUR while still reading as "not fresh".
+  const dim = (c: string) => (c.length === 7 ? c + 'b0' : c);
   for (const e of events) {
     // Synthetic roll force-close fills have no real trade / no table row — no arrow.
     if (e.synthetic) continue;

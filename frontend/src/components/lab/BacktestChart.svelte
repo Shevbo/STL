@@ -94,6 +94,13 @@
   let showTrades = $state(false);       // trades-table overlay
   let tradeRows = $state<any[]>([]);    // per-trade rows for the table
   let crossLabel = $state('');
+  // "LIVE ПОТОКА" marker: x-pixel of the newest bar (where the live stream feeds the
+  // chart). null = off-screen/hidden. Repositioned on pan/zoom and each live tail.
+  let liveLineX = $state<number | null>(null);
+  function positionLiveLine() {
+    const x = lastBarTime ? tvCandle?.timeScale().timeToCoordinate(lastBarTime as any) : null;
+    liveLineX = (x != null && x >= 0) ? x : null;
+  }
   let resampleMin = $state(defaultInterval);
   let margin = $state<number | null>(null);
   let tip = $state<{ x: number; y: number; head?: string; headKind?: 'tp' | 'sl' | 'neutral'; lines: string[] } | null>(null);
@@ -161,8 +168,11 @@
       // fixLeftEdge/fixRightEdge clamp panning+zoom to the data so there are never
       // empty gaps on the left/right when you zoom out — data always fills the view.
       timeScale: {
+        // rightOffset (set from bar count in loadData) reserves ~7% width on the
+        // right so the newest arrows aren't jammed under the price-axis order labels.
+        // fixRightEdge OFF so that reserved gap actually shows.
         borderColor: '#2d2d4a', timeVisible: true, rightOffset: 0,
-        fixLeftEdge: true, fixRightEdge: true,
+        fixLeftEdge: true, fixRightEdge: false,
       },
       crosshair: { mode: 1 },
       rightPriceScale: { borderColor: '#2d2d4a', minimumWidth: 84 },
@@ -239,6 +249,7 @@
       try { tvEquity.timeScale().setVisibleLogicalRange(lr); } catch { /* transient */ }
       if (syncReady && !draggingBar) updateThumb(lr);
       updateRects();   // boxes track the candles on pan/zoom
+      positionLiveLine();
     });
 
     // Shift+wheel = horizontal pan (QUIK). Plain wheel is left to handleScale (zoom).
@@ -326,11 +337,15 @@
       const mx = ts.timeToCoordinate(m.time);
       if (mx == null) continue;
       const dx = Math.abs(mx - px);
-      if (dx > 9) continue;
+      if (dx > 11) continue;
       const my = candleSeries.priceToCoordinate(m.price);
       if (my == null) continue;
+      // ponytail: an 'inBar' arrow renders offset from its price coordinate, so the
+      // hover point never sat on the visual arrow (operator had to hunt below it).
+      // Widen the vertical catch to the arrow's rendered height instead of chasing
+      // lightweight-charts' exact marker geometry (not exposed).
       const dy = Math.abs(my - py);
-      if (dy > 14) continue;
+      if (dy > 24) continue;
       const score = dx + dy;
       if (score < bestScore) { bestScore = score; best = m; bestMy = my; }
     }
@@ -455,7 +470,7 @@
         }
         tailBar = { ...b };            // server bar = authoritative tick-merge base
       }
-      if (appended) periodLabel = `${periodLabel.split(' — ')[0]} — ${fmtDay(lastBarTime)}`;
+      if (appended) { periodLabel = `${periodLabel.split(' — ')[0]} — ${fmtDay(lastBarTime)}`; positionLiveLine(); }
     } catch { /* transient network error — next tick retries */ }
     tailBusy = false;
   }
@@ -681,7 +696,11 @@
       _viewKey = viewKey;
       syncReady = true;
       const lr = tvCandle.timeScale().getVisibleLogicalRange();
+      // ~7% of the visible width reserved on the right (in bars) so the newest
+      // arrows clear the price-axis order labels.
+      if (lr) tvCandle.timeScale().applyOptions({ rightOffset: Math.max(2, Math.round((lr.to - lr.from) * 0.07)) });
       if (lr) updateThumb(lr); else scrollThumb = { left: 0, width: 100 };
+      positionLiveLine();
       drawOrderLines();
       scheduleRects();   // defer over frames so boxes lock onto candles on first render
     } catch (e) {
@@ -749,6 +768,12 @@
 
   <div class="bt-candle-area">
     <div class="candle" bind:this={candleEl}></div>
+
+    <!-- "LIVE ПОТОКА": thin blue line at the newest bar — where the live stream
+         feeds price into the robot's calc. Sits in the ~7% right gap. -->
+    {#if liveLineX != null}
+      <div class="live-flow" style="left:{liveLineX}px"><span>LIVE ПОТОКА</span></div>
+    {/if}
 
     <!-- Position rectangles: diagonal = entry vertex → exit vertex (exact fill prices,
          AVG never moves them); green long / red short; dashed border = still-open. The
@@ -946,6 +971,10 @@
   /* Position rectangles overlay — above candles, below tooltips; never intercepts
      pointer events (pan/zoom/hover pass through to the chart). */
   .pos-rects { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 3; }
+  .live-flow { position: absolute; top: 0; bottom: 0; width: 1px; background: #38bdf855;
+    box-shadow: 0 0 6px #38bdf844; pointer-events: none; z-index: 2; }
+  .live-flow span { position: absolute; top: 4px; left: 4px; font-size: 8px; letter-spacing: .5px;
+    color: #7dd3fc; white-space: nowrap; writing-mode: vertical-rl; text-orientation: mixed; }
   .pos-rect {
     position: absolute; border: 1px solid; border-radius: 1px; box-sizing: border-box;
     display: flex; align-items: center; justify-content: center;
