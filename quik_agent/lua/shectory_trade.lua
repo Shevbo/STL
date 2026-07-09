@@ -38,7 +38,7 @@
 -- Bump on every change you deliver to the VDS. Logged FIRST on OnInit so the
 -- operator can confirm which version QUIK actually loaded (the running script is
 -- in MEMORY; a file on disk with the same name may be a different build).
-local SCRIPT_VERSION = "2026.07.09-cc1"
+local SCRIPT_VERSION = "2026.07.09-cc2"
 
 local CONFIG = {
   HOST          = "127.0.0.1",
@@ -1037,11 +1037,18 @@ function main()
     if transport.is_open() then
       local lines = transport.recv_lines()
       for _, line in ipairs(lines) do
-        dispatch_command(line)
+        -- CRASH-HARDEN: a single bad command / sendTransaction error must NOT kill
+        -- the script. An unguarded error here took the whole feed+order bridge down
+        -- mid-session (2026-07-09, during a rapid reversal place/cancel cycle) — the
+        -- robot went blind and a resting order filled unseen -> position desync.
+        local ok, err = pcall(dispatch_command, line)
+        if not ok then log("dispatch error (script survives): " .. tostring(err)) end
       end
     end
 
-    md_pump()   -- market-data snapshots on their own cadence (no-op when disabled)
+    -- md_pump is internally pcall-guarded per publisher, but wrap the whole pump too
+    -- so an unexpected error in the timer path can never stop the main loop either.
+    pcall(md_pump)   -- market-data snapshots on their own cadence (no-op when disabled)
 
     -- idle sleep; QUIK provides sleep(ms). Guard in case it is absent.
     if sleep then
