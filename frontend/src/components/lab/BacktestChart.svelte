@@ -227,7 +227,7 @@
       width: equityEl.clientWidth || 600, height: equityEl.clientHeight || 150,
     });
     equitySeries = tvEquity.addBaselineSeries({
-      baseValue: { type: 'price', price: 100000 },
+      baseValue: { type: 'price', price: 0 },
       topLineColor: '#4caf50', topFillColor1: '#4caf5040', topFillColor2: '#4caf5008',
       bottomLineColor: '#f44336', bottomFillColor1: '#f4433608', bottomFillColor2: '#f4433640',
       lineWidth: 1, priceFormat: { type: 'price', precision: 0, minMove: 1 },
@@ -413,7 +413,7 @@
   // across midnight keeps moving). Fetch window = today±1d, cheap on the server.
   let lastBarTime = 0;                 // newest bar currently on the chart
   let tailBar: any = null;             // full OHLCV of the newest bar (tick merge base)
-  let lastEquityValue = 100000;        // carried onto appended bars (axis alignment)
+  let lastEquityValue = 0;             // last cumulative P&L, carried onto appended bars
   let liveTimer: ReturnType<typeof setInterval> | null = null;
   let tailBusy = false;
 
@@ -623,41 +623,32 @@
       longSeries.setData([]);
       shortSeries.setData([]);
 
-      const eq: any[] = Array.isArray(result?.equity_curve)
-        ? result.equity_curve
-        : (typeof result?.equity_curve === 'string' ? JSON.parse(result.equity_curve) : []);
-      if (eq.length) {
-        // Align equity to the CANDLE bucket times: lightweight-charts spaces bars by
-        // index (not by time), so two charts only line up if they share the exact
-        // same time/index set. Carry the last equity value forward onto each candle
-        // time → one equity point per candle → axis + curve match the price chart
-        // pixel-for-pixel across the whole period (no more scale "чехарда").
-        const sorted = [...eq].sort((a, b) => a.time - b.time);
-        const base = sorted[0].equity;
-        let j = 0, lastEq = base;
-        const aligned = bars.map(b => {
-          while (j < sorted.length && sorted[j].time <= b.time) { lastEq = sorted[j].equity; j++; }
-          return { time: b.time, value: lastEq };
+      // P&L curve (₽, from ZERO): running sum of closed-trade results carried onto
+      // each candle time so the pane shares the price chart's axis. Baseline 0 —
+      // green above / red below, no 100000-equity fiction. Works for backtest AND
+      // live (events exist for both); result.equity_curve is no longer used, and the
+      // agent robot no longer draws a flat 100000 zombie line.
+      const closes = events.filter((e: any) => e.close).sort((a: any, b: any) => a.time - b.time);
+      let maxDD = 0;
+      if (bars.length) {
+        let k = 0, cum = 0, peak = 0;
+        const curve = bars.map(b => {
+          while (k < closes.length && closes[k].time <= b.time) { cum += closes[k].close.pnl; k++; }
+          if (cum > peak) peak = cum;
+          if (peak - cum > maxDD) maxDD = peak - cum;
+          return { time: b.time as number, value: cum };
         });
-        equitySeries.applyOptions({ baseValue: { type: 'price', price: base } });
-        equitySeries.setData(aligned);
-        lastEquityValue = aligned.length ? aligned[aligned.length - 1].value : base;
-      } else if (bars.length) {
-        // No trades yet (a fresh / just-launched LIVE robot): draw a FLAT baseline across
-        // the candle times so the equity pane — which carries the shared VISIBLE time axis
-        // — still renders. An empty series left the WHOLE chart with no time axis at all.
-        equitySeries.applyOptions({ baseValue: { type: 'price', price: 100000 } });
-        equitySeries.setData(bars.map(b => ({ time: b.time as number, value: 100000 })));
-        lastEquityValue = 100000;
+        equitySeries.applyOptions({ baseValue: { type: 'price', price: 0 } });
+        equitySeries.setData(curve);
+        lastEquityValue = curve.length ? curve[curve.length - 1].value : 0;
       } else {
         equitySeries.setData([]);
+        lastEquityValue = 0;
       }
 
       // All round-trip / money stats from the roll-aware result — single source of
       // truth, identical to the robot summary and the showcase (no more disagreement).
       const closesPnl = events.filter(e => e.close).map(e => e.close!.pnl);
-      let maxDD = 0, peakEq = -Infinity;
-      for (const p of (eq as any[])) { if (p.equity > peakEq) peakEq = p.equity; maxDD = Math.max(maxDD, peakEq - p.equity); }
       stats = {
         fills: fills.length,
         roundTrips: rolled.closes,
@@ -926,7 +917,7 @@
     {#if error}<div class="overlay error">{error}</div>{/if}
   </div>
 
-  <div class="bt-equity-label">График доходности робота</div>
+  <div class="bt-equity-label">P&L робота, ₽ (нарастающим по закрытым сделкам)</div>
   <div class="equity" bind:this={equityEl}></div>
 
   <!-- Custom horizontal scrollbar: drag the thumb to scroll across the data span. -->
