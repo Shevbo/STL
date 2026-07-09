@@ -7,7 +7,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { fetchWithAuth } from '../../lib/fetch-auth';
-  import { toFills, rolledPnl } from '../../lib/lab-analytics';
+  import { toFills } from '../../lib/lab-analytics';
   import BacktestChart from './BacktestChart.svelte';
   import LatencyPane from './LatencyPane.svelte';
   import AgentBookPane from './AgentBookPane.svelte';
@@ -142,14 +142,11 @@
   $effect(() => { void loadCoef(symbol); });
   const pnlPoints = $derived(Number(robot?.realized_pnl ?? 0));
   const pnlRub = $derived(pointCoef ? pnlPoints * pointCoef : null);
-  // REAL robots: the header badge shows REAL money (filled-only fills replayed
-  // with taker commission — the same math as the chart's «Результат», so the
-  // two never diverge again). The strategy's paper-inclusive cumulative moves
-  // to the tooltip.
-  const realNetRub = $derived.by(() => {
-    if (robot?.paper || !pointCoef || !chartFills.length) return null;
-    try { return rolledPnl(chartFills, pointCoef, true).net; } catch { return null; }
-  });
+  // REAL robots: the header badge shows the EXACT number the chart's «Результат»
+  // computes (per-contract point values + bucket-correct fees), bubbled up via
+  // onNet — one source of truth, so the two can never diverge. A parallel
+  // rolledPnl() here drifted (single coef, no bucketing): -2737 vs -1801.
+  let realNetRub = $state<number | null>(null);
   let tickAge = $state<number | null>(null);
   let mirrorAge = $state<number | null>(null);
 
@@ -365,6 +362,7 @@
       taker={!robot?.paper}
       openOrders={openOrders}
       plannedOrders={plannedOrders}
+      onNet={(n) => { if (!robot?.paper) realNetRub = n; }}
     />
     {/if}
     </div>

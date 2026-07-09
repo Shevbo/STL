@@ -18,7 +18,7 @@
   let {
     result, symbol, strategy = null, dateFrom, dateTo, pointValue = 1, defaultInterval = 60,
     openOrders = [], plannedOrders = [], taker = true, runParams = {}, paramSchema = [], onRerun = null,
-    segments = null, pointValues = null, live = 0, liveTick = null,
+    segments = null, pointValues = null, live = 0, liveTick = null, onNet = null,
   }: {
     result: any; symbol: string; strategy?: any; dateFrom: string; dateTo: string;
     pointValue?: number; defaultInterval?: number;
@@ -43,6 +43,9 @@
     // Merged into the FORMING candle via series.update() — the candle breathes with
     // every tick instead of waiting for the next closed bar.
     liveTick?: { t: number; p: number } | null;
+    // Fires the authoritative net result (₽, net of commission) so a parent can
+    // show the SAME number in a header badge instead of recomputing it.
+    onNet?: ((net: number) => void) | null;
   } = $props();
 
   // ── Editable parameters panel (collapsed by default; edit → re-run backtest) ──
@@ -654,6 +657,7 @@
         recovery: maxDD > 0 ? rolled.net / maxDD : null,
       };
       netResult = rolled.net;   // net of commission, roll-aware
+      onNet?.(netResult);       // authoritative number for a parent header badge
       // Broker vs exchange commission split (transparency).
       commission = commissionBreakdown(fills, pointValue, symbol, taker);
       // Per-trade rows for the trades table (one row per fill, with role + close PnL).
