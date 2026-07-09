@@ -38,7 +38,7 @@
 -- Bump on every change you deliver to the VDS. Logged FIRST on OnInit so the
 -- operator can confirm which version QUIK actually loaded (the running script is
 -- in MEMORY; a file on disk with the same name may be a different build).
-local SCRIPT_VERSION = "2026.07.09-diag1"
+local SCRIPT_VERSION = "2026.07.09-cc1"
 
 local CONFIG = {
   HOST          = "127.0.0.1",
@@ -763,20 +763,29 @@ local function handle_place(cmd)
     TYPE        = (cmd.type == "M") and "M" or "L",   -- L = limit (default); M = market
     ACCOUNT     = tostring(account),
   }
-  if client_code ~= "" then trans.CLIENT_CODE = tostring(client_code) end
-  -- Robot attribution: the agent sends the owner tag (robot ID / "recon") in the
-  -- transaction's BROKERREF field (QUIK's NEW_ORDER "комментарий/поручение") — NOT
-  -- COMMENT, which is not a NEW_ORDER field and QUIK silently drops, leaving every
-  -- robot trade untagged so recon never matched (live). The order's brokerref is
-  -- inherited by its trades and read back on acc_ord/acc_trd (r.brokerref) so recon
-  -- can tell a robot order from manual trading. Empty for manual/unknown.
-  if cmd.comment and cmd.comment ~= "" then trans.BROKERREF = tostring(cmd.comment) end
+  -- Robot attribution: QUIK populates the order's brokerref from the CLIENT_CODE
+  -- transaction field — NOT COMMENT (batch-cancel only) and NOT BROKERREF (no such
+  -- NEW_ORDER field); both were silently dropped, leaving every robot trade untagged
+  -- so recon never matched (live). Source: forum.quik.ru ARQA + qllib. CLIENT_CODE is
+  -- a 20-char COMPOSITE field: on FORTS the client code is free, so the tag goes in
+  -- directly; if a real client code is configured, append the tag after '//' and cap
+  -- at 20 (else truncation silently breaks attribution). brokerref is inherited by
+  -- trades and read back on acc_ord/acc_trd (r.brokerref).
+  local cc = client_code
+  if cmd.comment and cmd.comment ~= "" then
+    if cc ~= "" then
+      cc = string.sub(cc .. "//" .. tostring(cmd.comment), 1, 20)
+    else
+      cc = string.sub(tostring(cmd.comment), 1, 20)
+    end
+  end
+  if cc ~= "" then trans.CLIENT_CODE = tostring(cc) end
 
-  -- DIAG: log the tag we send so we can confirm end-to-end whether the agent
-  -- supplies it AND whether QUIK keeps it (compare against orders.brokerref).
-  log(string.format("place trans_id=%d %s %s %s @%s x%s acct=%s BROKERREF=[%s]",
+  -- DIAG: log the tag we send in CLIENT_CODE so we can confirm end-to-end whether
+  -- the agent supplies it AND whether QUIK keeps it (compare against orders.brokerref).
+  log(string.format("place trans_id=%d %s %s %s @%s x%s acct=%s CLIENT_CODE=[%s]",
     trans_id, trans.OPERATION, trans.CLASSCODE, trans.SECCODE,
-    trans.PRICE, trans.QUANTITY, trans.ACCOUNT, tostring(trans.BROKERREF or "")))
+    trans.PRICE, trans.QUANTITY, trans.ACCOUNT, tostring(trans.CLIENT_CODE or "")))
 
   -- sendTransaction returns "" on success (queued), or an error string on immediate reject.
   local res = sendTransaction(trans)
