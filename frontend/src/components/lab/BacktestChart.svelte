@@ -976,7 +976,7 @@
   .pos-rects { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 3; }
   .live-flow { position: absolute; top: 0; bottom: 0; width: 1px; background: #38bdf855;
     box-shadow: 0 0 6px #38bdf844; pointer-events: none; z-index: 2; }
-  .live-flow span { position: absolute; top: 4px; left: 4px; font-size: 8px; letter-spacing: .5px;
+  .live-flow span { position: absolute; top: 4px; left: 4px; font-size: 10px; letter-spacing: .5px;
     color: #7dd3fc; white-space: nowrap; writing-mode: vertical-rl; text-orientation: mixed; }
   .pos-rect {
     position: absolute; border: 1px solid; border-radius: 1px; box-sizing: border-box;
@@ -989,7 +989,7 @@
   .pos-rect.short { background: #ff525212; border-color: #ff525255; }
   .pos-rect.open  { border-style: dashed; }
   .pr-pnl {
-    font-size: 9px; font-family: monospace; font-weight: 700; white-space: nowrap;
+    font-size: 10px; font-family: monospace; font-weight: 700; white-space: nowrap;
     padding: 0 3px; border-radius: 2px; background: #0a0a15cc; color: #ccc;
   }
   .pr-pnl.pos { color: #00e676; } .pr-pnl.neg { color: #ff5252; }
@@ -1011,7 +1011,7 @@
   .bc-params-h:hover { background: #1a2b48; }
   .bc-params-body { display: flex; flex-direction: column; gap: 3px; padding: 6px; max-height: 60vh; overflow-y: auto; }
   .bc-prow { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
-  .bc-pk { font-size: 9px; color: #9ab; line-height: 1.1; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bc-pk { font-size: 10px; color: #9ab; line-height: 1.1; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .bc-pv { width: 52px; flex-shrink: 0; background: #0a1120; border: 1px solid #24406a; color: #cfe;
     font-size: 10px; border-radius: 3px; padding: 1px 4px; text-align: right; }
   .bc-pv:focus { outline: none; border-color: #4a7ad0; }
@@ -1044,18 +1044,18 @@
   .st-head span:first-child { flex: 1; }
   .st-head b { font-size: 13px; }
   .st-chev { color: #6aa8ff; font-size: 11px; }
-  .st-head2 { font-size: 9px; color: #667; margin-top: 1px; }
+  .st-head2 { font-size: 10px; color: #667; margin-top: 1px; }
   .st-live { color: #8aa; } .st-live b { font-size: 10px; }
   .st-body { display: flex; flex-direction: column; gap: 2px; margin-top: 5px; border-top: 1px solid #2d2d4a; padding-top: 5px; }
   .st-row { display: flex; align-items: baseline; gap: 6px; font-size: 10px; color: #888; }
   .st-row span:first-child { flex: 1; }
   .st-row b { color: #ccc; font-size: 11px; }
   .st-comm-h b { font-size: 12px; }
-  .st-sub { color: #555; font-size: 9px; }
+  .st-sub { color: #555; font-size: 10px; }
   .st-sep { height: 1px; background: #2d2d4a; margin: 3px 0; }
   .st-trades-btn { margin-top: 6px; padding: 4px 8px; background: #12203a; border: 1px solid #24406a; color: #9cf; border-radius: 3px; font-size: 10px; cursor: pointer; }
   .st-trades-btn:hover { border-color: #6aa8ff66; color: #cfe; }
-  .st-foot { font-size: 8px; color: #555; margin-top: 4px; font-style: italic; }
+  .st-foot { font-size: 10px; color: #555; margin-top: 4px; font-style: italic; }
   .pos { color: #4caf50; } .neg { color: #f44336; }
 
   /* full trades table overlay */
@@ -1088,7 +1088,7 @@
   .bt-thumb:hover { background: #4caf5088; }
   .bt-thumb:active { cursor: grabbing; background: #4caf50aa; }
 
-  .bt-hint { padding: 2px 10px; font-size: 9px; color: #555; background: #0f0f1e; border-top: 1px solid #1a1a2e; flex-shrink: 0; }
+  .bt-hint { padding: 2px 10px; font-size: 10px; color: #555; background: #0f0f1e; border-top: 1px solid #1a1a2e; flex-shrink: 0; }
 
   .overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: #0a0a15cc; z-index: 10; font-size: 12px; color: #666; }
   .overlay.error { color: #f4433699; }

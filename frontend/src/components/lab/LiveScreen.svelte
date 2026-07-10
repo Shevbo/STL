@@ -182,7 +182,7 @@
   .spark { width: 100%; height: 34px; }
   .link-right { display: flex; gap: 14px; }
   .stat { display: flex; flex-direction: column; align-items: flex-end; }
-  .stat .k { font-size: 9px; color: #555; text-transform: uppercase; }
+  .stat .k { font-size: 10px; color: #555; text-transform: uppercase; }
   .stat .v { font-size: 12px; color: #bbb; font-family: monospace; }
 
   .method-note { font-size: 10px; color: #667; line-height: 1.5; }
@@ -206,12 +206,12 @@
   .agent-card:hover { border-color: #ffb30066; background: #1a1608; }
   .dot.stale { background: #ff9800; box-shadow: 0 0 5px #ff980088; }
   .dot.off { background: #555; box-shadow: none; }
-  .stop-badge { font-size: 9px; font-weight: 700; letter-spacing: 0.5px; color: #ffb300; background: #1a1200; border: 1px solid #ff980044; border-radius: 3px; padding: 1px 6px; }
-  .mode-badge { margin-left: auto; font-size: 9px; font-weight: 700; letter-spacing: 0.5px; color: #889; background: #14142a; border: 1px solid #2a2a44; border-radius: 3px; padding: 1px 6px; }
+  .stop-badge { font-size: 10px; font-weight: 700; letter-spacing: 0.5px; color: #ffb300; background: #1a1200; border: 1px solid #ff980044; border-radius: 3px; padding: 1px 6px; }
+  .mode-badge { margin-left: auto; font-size: 10px; font-weight: 700; letter-spacing: 0.5px; color: #889; background: #14142a; border: 1px solid #2a2a44; border-radius: 3px; padding: 1px 6px; }
   .mode-badge.real { color: #ff5252; border-color: #ff525255; background: #1a0a0a; }
   .agent-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; margin-top: 10px; }
   .am { display: flex; flex-direction: column; gap: 1px; }
-  .amk { font-size: 9px; color: #556; text-transform: uppercase; letter-spacing: 0.3px; }
+  .amk { font-size: 10px; color: #556; text-transform: uppercase; letter-spacing: 0.3px; }
   .amv { font-size: 15px; font-weight: 600; font-family: monospace; color: #cfd; }
   .amv.pos { color: #00e676; }
   .amv.neg { color: #ff5252; }

@@ -222,7 +222,7 @@
   .status-dot { width: 6px; height: 6px; border-radius: 50%; background: #333; flex-shrink: 0; }
   .status-dot.live { background: #4caf50; box-shadow: 0 0 4px #4caf5088; }
   .name { flex: 1; font-size: 12px; color: #ccc; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .status-badge { font-size: 9px; color: #555; white-space: nowrap; }
+  .status-badge { font-size: 10px; color: #555; white-space: nowrap; }
   .status-badge.deployed { color: #4caf50; }
   .loading { padding: 12px; color: #555; font-size: 12px; }
 

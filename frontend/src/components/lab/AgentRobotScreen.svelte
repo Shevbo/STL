@@ -705,7 +705,7 @@
   .panel { flex: 1; min-width: 0; overflow-y: auto; padding: 10px 12px; border-right: 1px solid #1a1a2e; }
   /* Trades: an explicit framed table, visible even when empty */
   .trades-frame { border: 1px solid #2a2a52; border-radius: 6px; margin: 4px; background: #0a0a15; }
-  .pt-note { font-size: 9px; color: #556; text-transform: none; letter-spacing: 0; margin-left: 8px; }
+  .pt-note { font-size: 10px; color: #556; text-transform: none; letter-spacing: 0; margin-left: 8px; }
   .empty-row td { color: #556; font-style: italic; padding: 14px 8px; text-align: center; }
   .confirm { font-size: 10px; padding: 1px 6px; border-radius: 3px; }
   .confirm.paper { background: #1a2a4a; color: #7ab8ff; }
@@ -727,12 +727,12 @@
   .plan-row .why { color: #778; font-size: 10px; }
   .hist-scroll { overflow-y: auto; max-height: 100%; }
   table { width: 100%; border-collapse: collapse; font-size: 11px; }
-  th { text-align: left; color: #556; font-size: 9px; text-transform: uppercase; padding: 3px 6px; position: sticky; top: 0; background: #0a0a12; }
+  th { text-align: left; color: #556; font-size: 10px; text-transform: uppercase; padding: 3px 6px; position: sticky; top: 0; background: #0a0a12; }
   td { padding: 3px 6px; border-top: 1px solid #14142a; }
   td.buy { color: #2ee6a6; } td.sell { color: #ff5c8a; }
   tr.rej { opacity: 0.55; }
-  td.id { color: #667; font-size: 9px; max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .st { font-size: 9px; padding: 1px 5px; border-radius: 3px; background: #16162c; }
+  td.id { color: #667; font-size: 10px; max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .st { font-size: 10px; padding: 1px 5px; border-radius: 3px; background: #16162c; }
   .st-filled, .st-paper { color: #00e676; } .st-rejected { color: #f44336; } .st-skipped { color: #ffb300; }
   .empty { color: #556; font-size: 11px; padding: 6px 0; }
   .desc { font-size: 11px; line-height: 1.55; color: #aab; white-space: pre-wrap; max-height: 180px; overflow-y: auto; }

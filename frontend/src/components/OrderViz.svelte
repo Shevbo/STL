@@ -407,7 +407,7 @@
   .ov-asks { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; overflow: hidden; }
   .ov-bids { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
   .ov-mid {
-    text-align: center; color: #889; font-size: 9px; padding: 1px 0;
+    text-align: center; color: #889; font-size: 10px; padding: 1px 0;
     border-top: 1px solid #1e1e3a; border-bottom: 1px solid #1e1e3a; background: #111120;
     flex-shrink: 0;
   }
@@ -422,11 +422,11 @@
   .ov-p { flex: 1; text-align: right; z-index: 1; font-weight: 500; }
   .ask-p { color: #f44336; }
   .bid-p { color: #4caf50; }
-  .ov-mark { z-index: 1; font-size: 9px; }
+  .ov-mark { z-index: 1; font-size: 10px; }
   .ov-mark.buy { color: #4caf50; }
   .ov-mark.sell { color: #f44336; }
   .ov-badge {
-    z-index: 1; font-size: 9px; font-weight: 700; border-radius: 3px;
+    z-index: 1; font-size: 10px; font-weight: 700; border-radius: 3px;
     padding: 0 4px; color: #0d0d1c;
   }
   .ov-badge.buy { background: #4caf50; }

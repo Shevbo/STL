@@ -4,6 +4,7 @@
      Middle action: "установить на платформу" (create a robot from the template +
      best params). Installed robots have "удалить с платформы". -->
 <script lang="ts">
+  import { downloadCSV } from '$lib/csv';
   import { fetchWithAuth } from '../../lib/fetch-auth';
   import BacktestChart from './BacktestChart.svelte';
 
@@ -369,6 +370,7 @@
   $effect(() => {
     load();
     loadActivity();
+    loadCampaignsList();
     activityTimer = setInterval(loadActivity, 5000);
     // Deep-link: /?campaign=camp-YYYYMMDD-... opens the campaign detail panel directly.
     const wanted = new URLSearchParams(window.location.search).get('campaign');
@@ -377,6 +379,14 @@
   });
 
   // ── Campaign detail modal: params, ranges, sampling method, return×RF heatmap ──
+  // Перечень проведённых переборов (все кампании, схлопнутые строки)
+  let campaignsList = $state<any[]>([]);
+  async function loadCampaignsList() {
+    try {
+      const r = await fetchWithAuth('/api/v1/lab/campaigns');
+      if (r.ok) campaignsList = await r.json();
+    } catch { /* list is auxiliary */ }
+  }
   let campaign = $state<any | null>(null);
   let campaignLoading = $state(false);
   let heatCanvas = $state<HTMLCanvasElement | null>(null);
@@ -441,6 +451,26 @@
   </div>
 
   <!-- Agent / background-optimizer live status (so you can watch the headless agent) -->
+  {#if campaignsList.length}
+    <div class="camp-list">
+      <div class="cl-head">
+        <span class="cl-title">Проведённые переборы ({campaignsList.length})</span>
+        <button class="cl-csv" onclick={() => downloadCSV(campaignsList, 'campaigns')}>Выгрузить в CSV</button>
+      </div>
+      <div class="cl-rows">
+        {#each campaignsList as c}
+          <button class="cl-row" onclick={() => openCampaign(c.campaign)}
+                  title="Открыть кампанию: карта плотности, лучшие наборы, график по клику">
+            <span class="mono cl-id">{c.campaign}</span>
+            <span class="cl-meta">{(c.strategies ?? []).join(', ')} · {(c.symbols ?? []).join(', ')}</span>
+            <span class="cl-meta">{c.combos?.toLocaleString('ru-RU')} комб. · кандидатов {c.candidates?.toLocaleString('ru-RU')}</span>
+            <span class="cl-meta">{c.date_from ?? '—'} — {c.date_to ?? '—'}</span>
+          </button>
+        {/each}
+      </div>
+    </div>
+  {/if}
+
   {#if activity}
     <div class="ag-panel">
       <div class="ag-row">
@@ -623,6 +653,7 @@
            (density map + best rows -> chart) — the self-serve path to sweep results -->
       {#if detailCampaigns.length}
         <div class="dp-camps">
+          <button class="cl-csv" onclick={() => downloadCSV(detail.rows, detail.id + '-variants')}>Выгрузить в CSV</button>
           <span class="cmp-k">кампании перебора:</span>
           {#each detailCampaigns as c}
             <button class="ag-camp" onclick={() => openCampaign(c)}
@@ -858,7 +889,8 @@
 
             {#if campaign.best?.length}
               <div class="cmp-best">
-                <div class="cmp-h-title">Лучшие по финрезу <span class="cmp-sub2">клик по строке — прогон с графиком (цена + сделки + доходность)</span></div>
+                <div class="cmp-h-title">Лучшие по финрезу <span class="cmp-sub2">клик по строке — прогон с графиком (цена + сделки + доходность)</span>
+                  <button class="cl-csv" onclick={() => downloadCSV(campaign.best, campaign.campaign + '-best')}>Выгрузить в CSV</button></div>
                 <table class="cmp-bt">
                   <thead><tr><th>робот</th><th>инстр.</th><th>финрез</th><th>доходн.</th><th>RF</th><th>параметры</th></tr></thead>
                   <tbody>
@@ -901,10 +933,10 @@
   .ag-title { font-size: 12px; color: #cde; }
   .ag-sub { font-size: 10px; color: #678; }
   .ag-right { margin-left: auto; }
-  .ag-badge { font-size: 9px; color: #ffb86b; border: 1px solid #ffb86b55; border-radius: 3px; padding: 1px 6px; }
+  .ag-badge { font-size: 10px; color: #ffb86b; border: 1px solid #ffb86b55; border-radius: 3px; padding: 1px 6px; }
   .ag-prog { position: relative; flex: 1; min-width: 200px; height: 16px; display: flex; align-items: center; background: #0a1120; border: 1px solid #1a2a44; border-radius: 3px; overflow: hidden; }
   .ag-prog-bar { position: absolute; inset: 0 auto 0 0; background: #1f5e3a; }
-  .ag-prog-lbl { position: relative; font-size: 9px; color: #cfe; line-height: 1; padding-left: 8px; white-space: nowrap; }
+  .ag-prog-lbl { position: relative; font-size: 10px; color: #cfe; line-height: 1; padding-left: 8px; white-space: nowrap; }
   .ag-recent { display: flex; flex-wrap: wrap; gap: 4px 8px; font-size: 10px; color: #89a; }
   .ag-job { font-family: monospace; white-space: nowrap; }
   .ag-jst { font-weight: 700; }
@@ -928,9 +960,9 @@
   .cc-metrics { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; font-size: 11px; color: #999; }
   .cc-inst { color: #6aa8ff; font-family: monospace; }
   .cc-dd, .cc-rf { color: #777; font-size: 10px; }
-  .cc-params { margin-top: 4px; font-family: monospace; font-size: 9px; color: #666; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cc-params { margin-top: 4px; font-family: monospace; font-size: 10px; color: #666; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .cc-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 6px; }
-  .cc-run { font-size: 9px; color: #555; }
+  .cc-run { font-size: 10px; color: #555; }
   .cc-install { padding: 3px 9px; background: #4caf5018; border: 1px solid #4caf5066; color: #4caf50; border-radius: 3px; font-size: 10px; cursor: pointer; white-space: nowrap; }
   .cc-install:hover { background: #4caf5030; }
   .cc-install:disabled { opacity: 0.5; cursor: default; }
@@ -941,8 +973,8 @@
   .cc-sweep { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
   .cc-prog { position: relative; flex: 1; height: 16px; display: flex; align-items: center; background: #15152a; border-radius: 3px; overflow: hidden; }
   .cc-prog-bar { position: absolute; inset: 0 auto 0 0; background: #1f5e3a; }
-  .cc-prog-lbl { position: relative; font-size: 9px; color: #cfe; line-height: 1; padding-left: 6px; }
-  .cc-mt { font-size: 9px; color: #89a; white-space: nowrap; }
+  .cc-prog-lbl { position: relative; font-size: 10px; color: #cfe; line-height: 1; padding-left: 6px; }
+  .cc-mt { font-size: 10px; color: #89a; white-space: nowrap; }
   .cc-top3 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 5px; margin-top: 5px; font-size: 10px; }
   .cc-medal { font-size: 10px; }
   .cc-t3sym { color: #6aa8ff; font-family: monospace; }
@@ -973,12 +1005,12 @@
   .ic-dot { width: 6px; height: 6px; border-radius: 50%; background: #333; flex-shrink: 0; }
   .ic-dot.live { background: #4caf50; box-shadow: 0 0 4px #4caf5088; }
   .ic-name { flex: 1; font-size: 12px; color: #ccc; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .ic-badge { font-size: 9px; color: #666; }
+  .ic-badge { font-size: 10px; color: #666; }
   .ic-badge.on { color: #4caf50; }
   .ic-meta { display: flex; gap: 10px; margin-top: 4px; font-size: 10px; color: #888; }
   .ic-inst { color: #6aa8ff; font-family: monospace; }
-  .ic-params { margin-top: 4px; font-family: monospace; font-size: 9px; color: #666; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .ic-src { margin-top: 2px; font-family: monospace; font-size: 8px; color: #445; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ic-params { margin-top: 4px; font-family: monospace; font-size: 10px; color: #666; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ic-src { margin-top: 2px; font-family: monospace; font-size: 10px; color: #445; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .ic-foot { display: flex; justify-content: flex-end; gap: 6px; margin-top: 6px; }
   .ic-undeploy { padding: 3px 9px; background: #1a1a2e; border: 1px solid #4caf5066; color: #4caf50; border-radius: 3px; font-size: 10px; cursor: pointer; }
   .ic-undeploy:hover { background: #1a2a1a; }
@@ -1012,7 +1044,7 @@
   .dp-spec-table td { padding: 5px 10px; color: #aaa; border-bottom: 1px solid #101a2e; vertical-align: top; }
   .dp-spec-table tr:last-child td { border-bottom: none; }
   .ps-name { color: #cde; white-space: nowrap; }
-  .ps-key { font-family: monospace; font-size: 9px; color: #567; margin-left: 6px; }
+  .ps-key { font-family: monospace; font-size: 10px; color: #567; margin-left: 6px; }
   .ps-desc { color: #9ab; max-width: 520px; line-height: 1.4; }
 
   .dp-inst { flex-shrink: 0; border: 1px solid #1e1e3a; border-radius: 5px; overflow: hidden; }
@@ -1075,11 +1107,24 @@
 
   /* catalog card: highlight the robot currently being swept */
   .cat-card.sweeping { border-color: #ffb86b88; box-shadow: 0 0 0 1px #ffb86b44, 0 0 10px #ffb86b22; }
-  .cc-sweeping { font-size: 9px; color: #ffb86b; border: 1px solid #ffb86b55; border-radius: 3px;
+  .cc-sweeping { font-size: 10px; color: #ffb86b; border: 1px solid #ffb86b55; border-radius: 3px;
                  padding: 0 5px; white-space: nowrap; animation: cc-pulse 1.6s ease-in-out infinite; }
   @keyframes cc-pulse { 0%,100% { opacity: 0.55; } 50% { opacity: 1; } }
 
   .dp-camps { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 4px 0 8px; }
+  .camp-list { border: 1px solid #1a2a44; border-radius: 6px; background: #0a1120; padding: 8px 10px; margin-bottom: 8px; }
+  .cl-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .cl-title { font-size: 11px; color: #9ab; text-transform: uppercase; letter-spacing: .5px; }
+  .cl-csv { margin-left: auto; background: #16162c; border: 1px solid #2d2d4a; color: #cde;
+    padding: 3px 10px; border-radius: 4px; cursor: pointer; font-size: 11px; }
+  .cl-csv:hover { border-color: #4caf50; }
+  .cl-rows { display: flex; flex-direction: column; gap: 2px; max-height: 180px; overflow-y: auto; }
+  .cl-row { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; text-align: left;
+    background: transparent; border: none; border-top: 1px solid #111a2c; padding: 5px 4px;
+    cursor: pointer; font-size: 11px; color: #9ab; width: 100%; }
+  .cl-row:hover { background: #0f1830; }
+  .cl-id { color: #7ab8ff; font-size: 11px; }
+  .cl-meta { color: #789; font-size: 10px; }
   .cmp-click { cursor: pointer; }
   .cmp-click:hover td { background: rgba(122, 184, 255, .08); }
   /* campaign modal */
@@ -1110,5 +1155,5 @@
   .cmp-bt th:first-child, .cmp-bt th:nth-child(2) { text-align: left; }
   .cmp-bt td { text-align: right; padding: 4px 8px; color: #abc; border-bottom: 1px solid #14142a; font-variant-numeric: tabular-nums; }
   .cmp-l { text-align: left !important; color: #cde; }
-  .cmp-params-cell { text-align: left !important; color: #667; font-size: 9px; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cmp-params-cell { text-align: left !important; color: #667; font-size: 10px; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>

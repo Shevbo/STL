@@ -457,7 +457,7 @@
   .kv-i {
     display: inline-flex; align-items: center; justify-content: center;
     width: 13px; height: 13px; margin-left: 4px; border-radius: 50%;
-    font-size: 9px; color: #6aa8ff; border: 1px solid #6aa8ff66; cursor: help; user-select: none;
+    font-size: 10px; color: #6aa8ff; border: 1px solid #6aa8ff66; cursor: help; user-select: none;
   }
   .kv-i:hover { background: #6aa8ff22; }
   .kv-popover {
@@ -473,7 +473,7 @@
   .r-row span:first-child { flex: 1; }
   .r-row b { color: #ccc; font-size: 12px; font-family: monospace; }
   .r-row .sub { color: #666; font-size: 10px; flex: none; }
-  .basis { margin-top: 8px; font-size: 9px; color: #555; font-style: italic; }
+  .basis { margin-top: 8px; font-size: 10px; color: #555; font-style: italic; }
   .pos { color: #4caf50 !important; } .neg { color: #f44336 !important; }
 
   .history-scroll { flex: 1; overflow-y: auto; min-height: 0; }
@@ -489,7 +489,7 @@
   .mono { font-family: monospace; }
   td.buy { color: #4caf50; } td.sell { color: #f44336; }
   thead th.num, tbody td.num { text-align: right; }
-  .tt-badge { font-size: 9px; padding: 1px 6px; border-radius: 2px; background: #1a1a2e; color: #888; font-weight: 600; }
+  .tt-badge { font-size: 10px; padding: 1px 6px; border-radius: 2px; background: #1a1a2e; color: #888; font-weight: 600; }
   .tt-tp { background: #11271a; color: #4caf50; }
   .tt-sl { background: #2a1414; color: #ff6b6b; }
   .tt-avg { background: #2a2410; color: #ffb300; }
@@ -497,7 +497,7 @@
   .tt-rev { background: #1a1430; color: #b388ff; }
   .tt-open { background: #14222a; color: #6aa8ff; }
   .tt-none { background: transparent; color: #555; }
-  .st-badge { font-size: 9px; padding: 1px 6px; border-radius: 2px; background: #1a1a2e; color: #888; }
+  .st-badge { font-size: 10px; padding: 1px 6px; border-radius: 2px; background: #1a1a2e; color: #888; }
   .st-paper { background: #1a2a1a; color: #4caf50; }
   .st-rejected, .st-skipped { background: #2a1414; color: #ff6b6b; }
   .st-submitted, .st-filled, .st-executed { background: #14222a; color: #6aa8ff; }

@@ -558,7 +558,7 @@
   .pf-chip.ok .pf-dot { color: #4caf50; }
   .pf-chip.bad { color: #ff6b6b; }
   .pf-chip.bad .pf-dot { color: #ff6b6b; }
-  .pf-dot { font-size: 9px; }
+  .pf-dot { font-size: 10px; }
   .sync-dot { font-size: 10px; }
   .sync-dot.ok { color: #4caf50; }
   .sync-dot.warn { color: #ff6b6b; }

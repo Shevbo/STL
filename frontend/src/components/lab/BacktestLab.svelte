@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { downloadCSV } from '$lib/csv';
   import { fetchWithAuth } from '../../lib/fetch-auth';
   import BacktestChart from './BacktestChart.svelte';
   import { toFills, commissionBreakdown } from '../../lib/lab-analytics';
@@ -14,6 +15,9 @@
   let paramValues = $state<Record<string, any>>({});
   let sweepRanges = $state<Record<string, { from: number; to: number; step: number }>>({});
   let dateFrom = $state('2026-03-02');
+  // named sweep -> becomes a Botstore campaign (camp-<date>-<slug>); empty = bare run
+  let campaignName = $state('');
+  let lastCampaign = $state('');
   let dateTo = $state('2026-05-24');
   let engine = $state<'auto' | 'local' | 'remote'>('local');
   let strategyInfo = $state<any | null>(null);  // popover: show desc for a strategy
@@ -272,6 +276,7 @@
       engine,
       robotId: selectedStrategy?.robotId || (installed[0]?.id ?? ''),
     };
+    if (campaignName.trim()) body.campaign = campaignName.trim();
     if (scriptCode) {
       body.scriptCode = scriptCode;
       body.baseParams = { symbol: sym };
@@ -286,6 +291,7 @@
       });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
+      if (data.campaign) lastCampaign = data.campaign;
       const actualEng = data.engine === 'remote' ? 'i9 (очередь)' : data.engine === 'local' ? 'VDS' : data.engine;
       runPhase = `${ROUNDS[ri].label}: ${paramSets.length} вариантов · ${actualEng}…`;
       await pollRun(data.run_id, ri, paramSets);
@@ -417,7 +423,7 @@
   const LS_BTL = 'btl_state';
   function saveBtlState() {
     try {
-      const st = { selectedStrategyId, paramValues, sweepRanges, dateFrom, dateTo, engine, roundResults, activeRound };
+      const st = { selectedStrategyId, paramValues, sweepRanges, dateFrom, dateTo, engine, roundResults, activeRound, campaignName };
       localStorage.setItem(LS_BTL, JSON.stringify(st));
     } catch {}
   }
@@ -429,6 +435,7 @@
       if (st.selectedStrategyId) selectedStrategyId = st.selectedStrategyId;
       if (st.paramValues) paramValues = st.paramValues;
       if (st.sweepRanges) sweepRanges = st.sweepRanges;
+      if (st.campaignName) campaignName = st.campaignName;
       if (st.dateFrom) dateFrom = st.dateFrom;
       if (st.dateTo) dateTo = st.dateTo;
       if (st.engine) engine = st.engine;
@@ -577,6 +584,16 @@
       </div>
 
       <div class="btl-section">
+        <div class="btl-sec-title">Имя перебора</div>
+        <input class="btl-inp" style="width:220px" placeholder="латиницей/цифрами, напр. winC"
+               bind:value={campaignName}
+               title="С именем перебор станет кампанией: результаты попадут в Botstore (чип на карточке стратегии) и по ссылке /?campaign=..." />
+        {#if lastCampaign}
+          <div class="btl-camp-link">кампания: <a href={'/?campaign=' + encodeURIComponent(lastCampaign)} target="_blank">{lastCampaign}</a></div>
+        {/if}
+      </div>
+
+      <div class="btl-section">
         <div class="btl-sec-title">Движок</div>
         <div class="btl-engines">
           {#each [['auto','Авто (i9 если жив)'],['local','VDS (сервер)'],['remote','Мощный хост (i9)']] as [v, label]}
@@ -634,6 +651,9 @@
         <div class="btl-sec-title">
           🏆 Хит-парад
           <span class="btl-sec-sub">сортировка: прибыль × recovery factor ↓</span>
+          <button class="btl-csv" onclick={() => downloadCSV(
+            leaderboard().map((r: any) => ({ ...(r.params ?? {}), ...Object.fromEntries(Object.entries(r.result ?? {}).filter(([k]) => k !== 'trades' && k !== 'equity_curve')) })),
+            'backtest-' + (campaignName || 'sweep'))}>Выгрузить в CSV</button>
         </div>
         <div class="btl-leader-wrap">
           <table class="btl-table">
@@ -822,6 +842,9 @@
 
   /* Leaderboard table */
   .btl-leader-wrap { overflow-x: auto; max-height: 360px; overflow-y: auto; }
+  .btl-csv { margin-left: auto; background: #16162c; border: 1px solid #2d2d4a; color: #cde;
+    padding: 3px 10px; border-radius: 4px; cursor: pointer; font-size: 11px; }
+  .btl-csv:hover { border-color: #4caf50; }
   .btl-table { width: 100%; border-collapse: collapse; font-size: 12px; }
   .btl-table th {
     position: sticky; top: 0; background: #0c0c1a; color: #667;

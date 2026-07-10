@@ -394,7 +394,7 @@
   .agent-section { flex: 0 0 auto; max-height: 34%; border-bottom: 1px solid #2d2d4a; }
   .sc-feed-section { flex: 0 0 260px; }
 
-  .mode-pill { font-size: 9px; font-weight: 700; letter-spacing: 0.4px; color: #889; background: #14142a; border: 1px solid #2a2a44; border-radius: 3px; padding: 1px 6px; }
+  .mode-pill { font-size: 10px; font-weight: 700; letter-spacing: 0.4px; color: #889; background: #14142a; border: 1px solid #2a2a44; border-radius: 3px; padding: 1px 6px; }
   .mode-pill.real { color: #ff5252; border-color: #ff525255; background: #1a0a0a; }
   .sc-table td.num.warn { color: #ffb300; font-weight: 600; }
   .sc-section-title { font-size: 10px; color: #4a4a6a; text-transform: uppercase; letter-spacing: 0.4px; padding: 6px 14px 4px; flex-shrink: 0; }
@@ -438,10 +438,10 @@
   .tot-item { font-size: 11px; color: #889; }
   .tot-item b { font-size: 13px; color: #ccc; font-family: monospace; margin-left: 4px; }
   .tot-pct { font-size: 11px; }
-  .sc-hint { font-size: 9px; color: #445; text-transform: none; letter-spacing: 0; font-weight: 400; }
+  .sc-hint { font-size: 10px; color: #445; text-transform: none; letter-spacing: 0; font-weight: 400; }
 
   /* Trade-type badges */
-  .tt-badge { font-size: 9px; padding: 1px 6px; border-radius: 2px; background: #1a1a2e; color: #888; font-weight: 600; }
+  .tt-badge { font-size: 10px; padding: 1px 6px; border-radius: 2px; background: #1a1a2e; color: #888; font-weight: 600; }
   .tt-tp { background: #11271a; color: #4caf50; }
   .tt-sl { background: #2a1414; color: #ff6b6b; }
   .tt-avg { background: #2a2410; color: #ffb300; }
@@ -452,9 +452,9 @@
   .sc-side.buy { color: #4caf50; }
   .sc-side.sell { color: #f44336; }
 
-  .badge-live { font-size: 9px; color: #4caf50; font-weight: 600; }
-  .badge-rework { font-size: 9px; color: #ff9800; }
-  .badge-off { font-size: 9px; color: #555; }
+  .badge-live { font-size: 10px; color: #4caf50; font-weight: 600; }
+  .badge-rework { font-size: 10px; color: #ff9800; }
+  .badge-off { font-size: 10px; color: #555; }
 
   .btn-stop {
     padding: 3px 10px; font-size: 10px; background: #1a0a0a;

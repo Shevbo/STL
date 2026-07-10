@@ -1917,6 +1917,42 @@ def create_app() -> FastAPI:
             })
         return out
 
+    @fastapi_app.get("/api/v1/lab/campaigns")
+    async def lab_campaigns(request: Request):
+        """Перечень проведённых переборов: one row per campaign (named UI sweeps and
+        background optimizer rounds alike), newest first — the Botstore list renders
+        collapsed rows, click opens the campaign panel."""
+        _auth(request)
+        pool = request.app.state.db_pool
+        if pool is None:
+            return []
+        rows = await pool.fetch(
+            """
+            SELECT campaign_run, count(*) AS combos,
+                   count(*) FILTER (WHERE candidate) AS candidates,
+                   array_agg(DISTINCT strategy) AS strategies,
+                   array_agg(DISTINCT symbol) AS symbols,
+                   min(date_from) AS date_from, max(date_to) AS date_to,
+                   max(created_at) AS last_at
+            FROM optimization_leaderboard
+            WHERE campaign_run IS NOT NULL
+            GROUP BY campaign_run
+            ORDER BY max(created_at) DESC
+            LIMIT 100
+            """)
+        out = []
+        for r in rows:
+            out.append({
+                "campaign": r["campaign_run"], "combos": r["combos"],
+                "candidates": r["candidates"],
+                "strategies": list(r["strategies"] or []),
+                "symbols": list(r["symbols"] or []),
+                "date_from": r["date_from"].isoformat() if r["date_from"] else None,
+                "date_to": r["date_to"].isoformat() if r["date_to"] else None,
+                "last_at": r["last_at"].isoformat() if r["last_at"] else None,
+            })
+        return out
+
     # ── LAB: STL Links ───────────────────────────────────────────────
     @fastapi_app.get("/api/v1/stl-links")
     async def list_stl_links(request: Request):
@@ -2404,6 +2440,20 @@ def create_app() -> FastAPI:
         from datetime import datetime as _dt
         pool = request.app.state.db_pool
         run_id = cuid()
+        # Named sweep from the UI: "campaign" (human name, латиница/цифры) turns this
+        # run into a first-class campaign — a camp-<date>-<slug>-... run_id makes the
+        # agent-result ingest mirror rows into optimization_leaderboard, so the sweep
+        # appears in Botstore (strategy-card chips, /?campaign= deep link) exactly
+        # like a background one. Bare runs stay bare-cuid (no leaderboard noise).
+        camp_name = str(body.get("campaign") or "").strip().lower()
+        if camp_name and body.get("scriptCode"):
+            import re as _re2
+            slug = _re2.sub(r"[^a-z0-9]+", "", camp_name)[:24] or "sweep"
+            m = _re2.search(r"make_on_bar\('([a-z0-9_]+)'\)", body.get("scriptCode") or "")
+            strat = m.group(1) if m else "strat"
+            now = _dt.now()
+            sym_tok = _re2.sub(r"[^A-Za-z0-9]+", "", str(body.get("symbol") or "X")) or "X"
+            run_id = f"camp-{now:%Y%m%d}-{slug}-r{now:%H%M%S}-{strat}-{sym_tok}"
 
         def _parse_dt(s: str) -> _dt:
             return _dt.fromisoformat(s.replace("Z", "+00:00"))
@@ -2450,7 +2500,7 @@ def create_app() -> FastAPI:
             _asyncio.create_task(
                 _run_backtest_task(run_id, body, pool, request.app.state)
             )
-        return {"run_id": run_id, "engine": engine}
+        return {"run_id": run_id, "engine": engine, "campaign": _sweep_campaign(run_id)}
 
     @fastapi_app.get("/api/v1/backtest/{run_id}/status")
     async def backtest_status(run_id: str, request: Request):
@@ -2777,7 +2827,8 @@ def create_app() -> FastAPI:
         import json as _json
         # If this run is part of a campaign (job_body has script_code), also mirror
         # results into optimization_leaderboard so Botstore shows the hit-parade.
-        meta = await pool.fetchrow("SELECT symbol, job_body FROM backtest_runs WHERE id=$1", run_id)
+        meta = await pool.fetchrow(
+            "SELECT symbol, job_body, date_from, date_to FROM backtest_runs WHERE id=$1", run_id)
         strat_id = None
         campaign = None
         if meta and meta["job_body"]:
@@ -2834,7 +2885,7 @@ def create_app() -> FastAPI:
                 e["result"].get("net_profit"), e["result"].get("recovery_factor"),
             )
             for e in ok
-        ] if not is_campaign else []
+        ]
         # Mirror to the leaderboard ONLY for real sweeps (camp-/opt-, non-null
         # campaign_run). A UI/chart run has strat_id but campaign=None → NULL
         # campaign_run would abort the txn.
@@ -2846,12 +2897,14 @@ def create_app() -> FastAPI:
                 e["result"].get("total_trades"), _score(e["result"]), _cand(e["result"]),
                 e["result"].get("net_profit"), e["result"].get("recovery_factor"),
                 e["result"].get("ann_return_go"), e["result"].get("ann_return_full"),
+                meta["date_from"].date() if meta and meta["date_from"] else None,
+                meta["date_to"].date() if meta and meta["date_to"] else None,
             )
             for e in ok
         ] if is_campaign else []
         async with pool.acquire() as conn:
             async with conn.transaction():
-                if not is_campaign:
+                if True:  # compact results stored for ALL runs (trades/equity kept only for the best row)
                     await conn.execute("DELETE FROM backtest_results WHERE run_id=$1", run_id)
                     if result_rows:
                         await conn.executemany(
@@ -2867,8 +2920,9 @@ def create_app() -> FastAPI:
                             """INSERT INTO optimization_leaderboard
                                  (campaign_run, strategy, symbol, params, total_return, sharpe,
                                   max_drawdown, win_rate, total_trades, score, candidate,
-                                  net_profit, recovery_factor, ann_return_go, ann_return_full)
-                               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)""",
+                                  net_profit, recovery_factor, ann_return_go, ann_return_full,
+                                  date_from, date_to)
+                               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)""",
                             lb_rows,
                         )
                     except Exception as exc:

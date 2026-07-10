@@ -26,13 +26,13 @@
   .pop:hover { color: #cdd; }
   .tiles { display: flex; flex-wrap: wrap; gap: 8px; }
   .tile { background: #12122a; border: 1px solid #22224a; border-radius: 6px; padding: 8px 12px; min-width: 130px; }
-  .tile .k { font-size: 9px; color: #667; text-transform: uppercase; }
+  .tile .k { font-size: 10px; color: #667; text-transform: uppercase; }
   .tile .v { font-size: 15px; color: #eee; margin-top: 2px; }
   .tile .v.warn { color: #ffb300; }
   .tile .v.bad { color: #ff5c5c; }
-  .tile .note { font-size: 9px; color: #ffb300; margin-top: 2px; }
+  .tile .note { font-size: 10px; color: #ffb300; margin-top: 2px; }
   table { width: 100%; border-collapse: collapse; font-size: 11px; }
-  th { text-align: left; color: #556; font-size: 9px; text-transform: uppercase; padding: 4px 6px; border-bottom: 1px solid #22224a; }
+  th { text-align: left; color: #556; font-size: 10px; text-transform: uppercase; padding: 4px 6px; border-bottom: 1px solid #22224a; }
   td { padding: 4px 6px; border-top: 1px solid #14142a; vertical-align: top; }
   tr.stale td { opacity: .5; }
   tr.flag td { background: #1a0d0d; }
@@ -154,19 +154,22 @@
   <div class="kv" id="quik-dir" style="margin-bottom:6px"></div>
 
   <div class="sec-title">Заявки
-    <span class="pop" onclick="popout(this)" title="открыть в отдельном окне">⧉</span></div>
+    <span class="pop" onclick="popout(this)" title="открыть в отдельном окне">⧉</span>
+    <span class="pop" onclick="csvQuik('orders')" title="выгрузить в CSV (все поля)">CSV</span></div>
   <div class="scrollbox"><table><thead><tr><th>Время</th><th>№ заявки</th><th>Символ</th><th>Напр.</th>
     <th>Цена</th><th>Кол-во</th><th>Остаток</th><th>Статус</th><th>Тег</th></tr></thead>
     <tbody id="quik-orders"></tbody></table></div>
 
   <div class="sec-title" style="margin-top:10px">Сделки
-    <span class="pop" onclick="popout(this)" title="открыть в отдельном окне">⧉</span></div>
+    <span class="pop" onclick="popout(this)" title="открыть в отдельном окне">⧉</span>
+    <span class="pop" onclick="csvQuik('trades')" title="выгрузить в CSV (все поля)">CSV</span></div>
   <div class="scrollbox"><table><thead><tr><th>Время</th><th>№ сделки</th><th>№ заявки</th><th>Символ</th>
     <th>Напр.</th><th>Цена</th><th>Кол-во</th><th>Тег</th></tr></thead>
     <tbody id="quik-trades"></tbody></table></div>
 
   <div class="sec-title" style="margin-top:10px">Транзакции (ответы QUIK)
-    <span class="pop" onclick="popout(this)" title="открыть в отдельном окне">⧉</span></div>
+    <span class="pop" onclick="popout(this)" title="открыть в отдельном окне">⧉</span>
+    <span class="pop" onclick="csvQuik('trans')" title="выгрузить в CSV (все поля)">CSV</span></div>
   <div class="scrollbox"><table><thead><tr><th>Время</th><th>№ транз.</th><th>Статус</th><th>№ заявки</th><th>Текст</th></tr></thead>
     <tbody id="quik-trans"></tbody></table></div>
 
@@ -810,7 +813,27 @@ function renderQuik(q) {
 
 }
 
+// операторский стандарт: CSV-выгрузка любого списка, все поля, Excel-RU (';' + BOM)
+let lastStatus = null;
+function csvQuik(kind) {
+  const rows = ((lastStatus || {}).quik || {})[kind] || [];
+  if (!rows.length) { alert('нет данных'); return; }
+  const keys = [...new Set(rows.flatMap(r => Object.keys(r)))];
+  const esc = v => {
+    if (v == null) return '';
+    let x = typeof v === 'number' ? String(v).replace('.', ',') : String(v);
+    if (/[";\n\r]/.test(x)) x = '"' + x.replace(/"/g, '""') + '"';
+    return x;
+  };
+  const csv = '\uFEFF' + [keys.join(';'), ...rows.map(r => keys.map(k => esc(r[k])).join(';'))].join('\r\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  a.download = 'quik-' + kind + '.csv';
+  a.click(); URL.revokeObjectURL(a.href);
+}
+
 function render(s) {
+  lastStatus = s;
   // The STL mirror injects "_received_at_ms" (its own receipt time) alongside the
   // agent's own top-level keys — see trader/quik/store.py set_agent_status. Data
   // received more than 5s ago (routine on the 10s-interval mirror) is dimmed via the
