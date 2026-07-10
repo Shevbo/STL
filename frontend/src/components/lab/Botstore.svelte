@@ -168,6 +168,7 @@
         schema: tmpl?.params_schema ?? [],
         sweep: data.sweep ?? robot.sweep ?? null,
         top3: data.top3 ?? robot.top3 ?? [],
+        campaigns: data.campaigns ?? null,
       };
       sortBy = { col: 'net_profit', dir: -1 };   // default: by financial result
       expanded = new Set();
@@ -177,9 +178,10 @@
     detailLoading = false;
   }
   function closeDetail() { detail = null; }
-  // distinct campaigns of the open strategy card, newest first (id embeds the date)
-  const detailCampaigns = $derived(
-    [...new Set((detail?.rows ?? []).map((r: any) => r.campaign_run).filter(Boolean))].sort().reverse());
+  // campaigns of the open strategy card, newest first: from the endpoint's explicit
+  // list (rows are capped per-symbol and may not contain every campaign).
+  const detailCampaigns = $derived(detail?.campaigns
+    ?? [...new Set((detail?.rows ?? []).map((r: any) => r.campaign_run).filter(Boolean))].sort().reverse());
 
   // Instrument tables: groups ordered top→bottom by best financial result (net_profit),
   // rows within each ordered by the active sort column (default net_profit desc).

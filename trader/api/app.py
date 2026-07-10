@@ -1710,21 +1710,31 @@ def create_app() -> FastAPI:
         pool = request.app.state.db_pool
         if pool is None:
             return {"strategy": strategy, "rows": [], "period": None}
+        # Cap PER SYMBOL, not globally: full-sweep backfills put 100k+ rows per
+        # strategy here (unbounded SELECT shipped a multi-MB payload), and a global
+        # top-N by score buries whole campaigns under one hot symbol. The UI shows
+        # per-instrument tables (collapsed to 5 rows) — top-50 each covers them all.
         rows = await pool.fetch(
             """
             SELECT campaign_run, symbol, params, total_return, sharpe, max_drawdown,
                    win_rate, total_trades, net_profit, recovery_factor, score,
                    candidate, created_at, ann_return_go, ann_return_full
-            FROM optimization_leaderboard
-            WHERE strategy=$1
-            ORDER BY score DESC NULLS LAST
-            LIMIT 5000
+            FROM (
+                SELECT *, ROW_NUMBER() OVER (
+                    PARTITION BY symbol ORDER BY score DESC NULLS LAST) AS rn
+                FROM optimization_leaderboard
+                WHERE strategy=$1
+            ) t WHERE rn <= 50
+            ORDER BY symbol, score DESC NULLS LAST
             """,
             strategy,
         )
-        # LIMIT 5000: full-sweep backfills put 100k+ rows per strategy here; unbounded
-        # SELECT shipped a multi-MB payload and hung the catalog card. Top-5000 by
-        # score covers every view this card renders (groups, top3, campaign chips).
+        # Campaign chips need the FULL campaign list, not just those surviving the
+        # per-symbol cap.
+        camp_rows = await pool.fetch(
+            "SELECT DISTINCT campaign_run FROM optimization_leaderboard "
+            "WHERE strategy=$1 AND campaign_run IS NOT NULL", strategy)
+        all_campaigns = sorted((r["campaign_run"] for r in camp_rows), reverse=True)
         out = []
         campaigns = set()
         for r in rows:
@@ -1755,7 +1765,8 @@ def create_app() -> FastAPI:
             if cur is None or (d.get("net_profit") or -1e18) > (cur.get("net_profit") or -1e18):
                 best_per_sym[sym] = d
         top3 = _top3_by_netprofit(list(best_per_sym.values()))
-        return {"strategy": strategy, "rows": out, "period": period, "sweep": sweep, "top3": top3}
+        return {"strategy": strategy, "rows": out, "period": period, "sweep": sweep,
+                "top3": top3, "campaigns": all_campaigns}
 
     @fastapi_app.get("/api/v1/agent/activity")
     async def agent_activity(request: Request):
