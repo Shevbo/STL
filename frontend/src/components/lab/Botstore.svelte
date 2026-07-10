@@ -503,6 +503,21 @@
                   title="Приостановить перебор на VDS">⏹</button>
         </span>
       </div>
+      {#if activity.last_runs?.length}
+        <div class="ag-runs">
+          <span class="ag-sub">последние прогоны:</span>
+          {#each activity.last_runs.slice(0, 6) as lr}
+            <span class="ag-run" title={lr.error ?? lr.id}>
+              <span class="mono">{lr.id.slice(0, 10)}</span>
+              · {lr.agent}
+              · <span class="ag-st" class:ok={lr.status === 'done'} class:bad={lr.status === 'failed'}>{lr.status}</span>
+              {#if lr.elapsed_sec != null}· {lr.elapsed_sec}с{/if}
+              {#if lr.error}<span class="ag-err"> — {lr.error.slice(0, 90)}</span>{/if}
+            </span>
+          {/each}
+        </div>
+      {/if}
+
       {#if activity.campaign}
         <div class="ag-row">
           <button class="ag-camp" onclick={() => openCampaign(activity.campaign)}
@@ -938,6 +953,10 @@
   .ag-prog-bar { position: absolute; inset: 0 auto 0 0; background: #1f5e3a; }
   .ag-prog-lbl { position: relative; font-size: 10px; color: #cfe; line-height: 1; padding-left: 8px; white-space: nowrap; }
   .ag-recent { display: flex; flex-wrap: wrap; gap: 4px 8px; font-size: 10px; color: #89a; }
+  .ag-runs { display: flex; flex-direction: column; gap: 2px; font-size: 10px; color: #89a; margin-top: 4px; }
+  .ag-run { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ag-st.ok { color: #4caf50; } .ag-st.bad { color: #ff5c5c; font-weight: 700; }
+  .ag-err { color: #ff8a80; }
   .ag-job { font-family: monospace; white-space: nowrap; }
   .ag-jst { font-weight: 700; }
 

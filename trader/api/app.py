@@ -523,13 +523,15 @@ async def _run_backtest_task(run_id: str, body: dict, pool, app_state) -> None:
                 result.get("win_rate"), result.get("total_return"),
                 result.get("total_trades"),
                 result.get("net_profit"), result.get("recovery_factor"), point_value,
+                result.get("peak_contracts"),
             ))
         if rows:
             await pool.executemany(
                 """INSERT INTO backtest_results
                    (id, run_id, params, trades, equity_curve, sharpe, max_drawdown, win_rate,
-                    total_return, total_trades, net_profit, recovery_factor, point_value)
-                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)""",
+                    total_return, total_trades, net_profit, recovery_factor, point_value,
+                    peak_contracts)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)""",
                 rows,
             )
 
@@ -1837,6 +1839,29 @@ def create_app() -> FastAPI:
                              ("VDS" if r["agent_id"] == "vds-fallback" else "?"),
                     "finished_at": r["finished_at"].isoformat(),
                 })
+
+        # ANY recent runs (named sweeps + bare UI runs alike) — full agent visibility
+        # for the operator: status, engine/host, ERROR TEXT, and wall time. Today a
+        # sweep died with a worker-pool crash and the UI only said "таймаут" — the
+        # failure reason must be one glance away.
+        lr = await pool.fetch(
+            "SELECT id, status, engine, agent_id, created_at, finished_at, claimed_at, "
+            "left(coalesce(error_msg,''), 200) AS err "
+            "FROM backtest_runs ORDER BY created_at DESC LIMIT 10")
+        import datetime as _dt2
+        _now2 = _dt2.datetime.now(_dt2.timezone.utc)
+        out["last_runs"] = [{
+            "id": r["id"][:28],
+            "status": r["status"],
+            "engine": r["engine"],
+            "agent": ("i9" if (r["agent_id"] and r["agent_id"] != "vds-fallback")
+                      else ("VDS" if (r["agent_id"] == "vds-fallback" or r["engine"] == "local") else "—")),
+            "error": r["err"] or None,
+            "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+            "elapsed_sec": int(((r["finished_at"] or _now2)
+                                - (r["claimed_at"] or r["created_at"])).total_seconds())
+                           if r["created_at"] else None,
+        } for r in lr]
         return out
 
     @fastapi_app.get("/api/v1/agent/campaign")
@@ -2544,7 +2569,7 @@ def create_app() -> FastAPI:
         else:
             rows = await pool.fetch(
                 "SELECT id, run_id, params, sharpe, max_drawdown, win_rate, total_return, "
-                "total_trades, net_profit, recovery_factor, point_value "
+                "total_trades, net_profit, recovery_factor, point_value, peak_contracts "
                 "FROM backtest_results WHERE run_id=$1 ORDER BY total_return DESC NULLS LAST",
                 run_id,
             )
@@ -2883,6 +2908,7 @@ def create_app() -> FastAPI:
                 e["result"].get("win_rate"), e["result"].get("total_return"),
                 e["result"].get("total_trades"),
                 e["result"].get("net_profit"), e["result"].get("recovery_factor"),
+                e["result"].get("peak_contracts"),
             )
             for e in ok
         ]
@@ -2910,8 +2936,8 @@ def create_app() -> FastAPI:
                         await conn.executemany(
                             """INSERT INTO backtest_results
                                (id, run_id, params, trades, equity_curve, sharpe, max_drawdown, win_rate,
-                                total_return, total_trades, net_profit, recovery_factor)
-                               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)""",
+                                total_return, total_trades, net_profit, recovery_factor, peak_contracts)
+                               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)""",
                             result_rows,
                         )
                 if lb_rows:

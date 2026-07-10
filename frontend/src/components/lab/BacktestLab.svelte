@@ -303,7 +303,7 @@
 
   async function pollRun(runId: string, ri: number, paramSets: any[]) {
     let attempts = 0;
-    const MAX_ATTEMPTS = 600; // 15 min timeout
+    const MAX_ATTEMPTS = 1800; // 45 min: an i9 sweep keeps running server-side; do not abandon it early
     polling = setInterval(async () => {
       attempts++;
       if (attempts > MAX_ATTEMPTS) {
@@ -687,6 +687,7 @@
                 <th>RF</th>
                 <th>Просадка</th>
                 <th>Сделок</th>
+                <th title="пиковая одновременная позиция (контрактов) за бэктест — сверяй с лимитами агента и ГО">Макс. поз.</th>
                 <th>Прибыль×RF</th>
               </tr>
             </thead>
@@ -707,6 +708,7 @@
                   <td class="btl-num">{fmtD(r.recovery_factor)}</td>
                   <td class="btl-num" class:neg={(r.max_drawdown ?? 0) > 0.1}>{fmtPct(r.max_drawdown)}</td>
                   <td class="btl-num">{fmtN(r.total_trades)}</td>
+                  <td class="btl-num" class:neg={(r.peak_contracts ?? 0) > 20}>{r.peak_contracts ?? '—'}</td>
                   <td class="btl-num btl-score" class:pos={profitRF(r) > 0}>{fmtMoney(profitRF(r))}</td>
                 </tr>
               {/each}
