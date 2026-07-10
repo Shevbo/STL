@@ -43,9 +43,29 @@
   .params-row td { background: #0e0e1c; }
   .kv-grid { display: flex; flex-wrap: wrap; gap: 4px 14px; }
   .kv { font-size: 10px; color: #889; } .kv b { color: #ccc; font-family: monospace; }
-  .edit-field { display: inline-flex; align-items: center; gap: 6px; font-size: 10px; color: #889; }
-  .edit-field input { background: #0a0a12; border: 1px solid #2d2d4a; color: #eee; border-radius: 3px; padding: 2px 6px; font-size: 11px; width: 100px; }
+  .edit-field { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: #889; }
+  .edit-field input { background: #0a0a12; border: 1px solid #2d2d4a; color: #eee; border-radius: 4px; padding: 5px 8px; font-size: 13px; width: 120px; }
   .edit-field input:disabled { opacity: .4; }
+  /* expanded robot card: live state (left) + controls (right) */
+  .card { display: grid; grid-template-columns: 1.1fr 1fr; gap: 16px; font-size: 13px; padding: 4px 0 8px; }
+  @media (max-width: 1100px) { .card { grid-template-columns: 1fr; } }
+  .pos-ticket { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; padding: 12px 16px;
+    background: #12122a; border: 1px solid #2d2d4a; border-radius: 8px; }
+  .pos-ticket .pp { font-size: 26px; font-weight: 700; }
+  .pos-ticket .avg { font-size: 15px; color: #99a; }
+  .pos-ticket .pnl { margin-left: auto; font-size: 18px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px 8px; margin-top: 10px; }
+  .chip { background: #12122a; border: 1px solid #22224a; border-radius: 5px; padding: 5px 10px; font-size: 11px; color: #889; }
+  .chip b { color: #dde; font-family: "SF Mono", Consolas, monospace; font-size: 12px; font-weight: 600; }
+  .panel { border: 1px solid #2d2d4a; border-left: 3px solid #2d2d4a; border-radius: 6px;
+    padding: 12px 14px; background: #10101f; margin-bottom: 12px; }
+  .panel.danger { border-left-color: #f44336; }
+  .flist { margin-top: 6px; }
+  .flist .kv { font-size: 12px; padding: 2px 0; }
+  .card details summary { cursor: pointer; color: #889; font-size: 11px; text-transform: uppercase; letter-spacing: .6px; }
+  /* control panels provide the frame; the legacy arm-panel inside loses its own box */
+  .panel .arm-panel { border: none; background: transparent; padding: 0; margin-top: 6px; }
+  .panel .sec-title { margin-bottom: 6px; }
   .remote-note { font-size: 10px; color: #ffb300; margin-top: 4px; }
   .arm-panel { margin-top: 6px; border: 1px solid #2d2d4a; border-radius: 6px; padding: 8px 10px; background: #0e0e1c; }
   .arm-panel.to-real { border-color: #f4433666; background: #1a0a0a; }
@@ -58,7 +78,7 @@
   .plan-card { background: #12122a; border: 1px solid #2d2d5a; border-radius: 6px; padding: 10px 12px; margin-top: 8px; }
   .plan-step { padding: 4px 0; border-top: 1px dotted #22224a; font-size: 11px; }
   .plan-step:first-child { border-top: none; }
-  button { background: #16162c; border: 1px solid #2d2d4a; color: #eee; padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 11px; }
+  button { background: #16162c; border: 1px solid #2d2d4a; color: #eee; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 12px; }
   button:hover { border-color: #4caf50; }
   button.danger { border-color: #f44336; color: #ff8a80; }
   .empty { color: #556; font-style: italic; padding: 6px 0; }
@@ -151,11 +171,8 @@
   <div class="scrollbox"><table><thead><tr><th>Время</th><th>№ транз.</th><th>Статус</th><th>№ заявки</th><th>Текст</th></tr></thead>
     <tbody id="quik-trans"></tbody></table></div>
 
-  <div class="sec-title" style="margin-top:10px">Системные сообщения (info.log, новые сверху)</div>
-  <div class="scrollbox mono" id="quik-messages" style="font-size:10px;white-space:pre-wrap"></div>
-
-  <div class="sec-title" style="margin-top:10px">Новости (news.log, новые сверху)</div>
-  <div class="scrollbox mono" id="quik-news" style="font-size:10px;white-space:pre-wrap"></div>
+  <!-- Системные сообщения и новости НЕ рендерятся (решение оператора): они доступны
+       инструментам диагностики/стратегиям через /api/status -> quik.messages / quik.news. -->
 </section>
 
 <footer>Обновление каждые <span id="f-interval">—</span> мс · источник <span id="f-src" class="mono">—</span></footer>
@@ -278,6 +295,30 @@ function robotLinks(r) {
 // freeze below survives a poll tick.
 let expandedRobots = new Set();
 
+// summaryCellsHTML: the 10 summary cells of one robot row — shared by the full
+// rebuild and the in-place live refresh so the two can never drift apart.
+function summaryCellsHTML(r, stale) {
+  const staleCls = stale ? ' stale-num' : '';
+  const modeCls = r.mode === 'real' ? 'real' : 'paper';
+  const modeLabel = r.mode === 'real' ? 'РЕАЛ' : 'PAPER';
+  const status = r.paused ? 'ПАУЗА' : (r.running ? 'РАБОТАЕТ' : (r.has_status ? 'СТОП' : 'нет данных'));
+  const hbAge = r.heartbeat_unix_ms ? (Date.now() - r.heartbeat_unix_ms) : null;
+  const hbCls = hbAge != null && hbAge < 45000 ? 'ok' : 'warn';
+  const pnl = r.pnl_rub != null
+    ? Math.round(r.pnl_rub).toLocaleString('ru-RU') + ' ₽'
+    : fmtNum(r.pnl_points) + ' п.';
+  return '<td>▸</td>'
+    + '<td class="mono">' + esc(r.id) + '</td>'
+    + '<td class="mono">' + esc(r.symbol) + '</td>'
+    + '<td>' + esc(r.strategy_id) + '</td>'
+    + '<td><span class="badge ' + modeCls + '">' + modeLabel + '</span></td>'
+    + '<td><span class="badge ' + (r.running ? 'ok' : 'dim') + '">' + status + '</span></td>'
+    + '<td class="mono' + staleCls + ' ' + (r.position > 0 ? 'buy' : (r.position < 0 ? 'sell' : '')) + '">' + (r.position > 0 ? '+' : '') + fmtNum(r.position) + '</td>'
+    + '<td class="mono' + staleCls + ' ' + (r.pnl_points > 0 ? 'buy' : (r.pnl_points < 0 ? 'sell' : '')) + '">' + pnl + '</td>'
+    + '<td><span class="badge ' + hbCls + '">' + (hbAge == null ? '—' : fmtMs(hbAge)) + '</span></td>'
+    + '<td>' + robotLinks(r) + '</td>';
+}
+
 function renderRobots(robots, stale) {
   const body = document.getElementById('robots-body');
   if (!robots || !robots.length) {
@@ -285,46 +326,36 @@ function renderRobots(robots, stale) {
     body.innerHTML = '<tr><td colspan="10" class="empty">Роботов на агенте не развёрнуто.</td></tr>';
     return;
   }
-  // Drop ids for robots no longer present (undeployed) so a stale expansion
-  // can never wedge the freeze below forever.
+  // Drop ids for robots no longer present (undeployed).
   const liveIds = new Set(robots.map(r => r.id));
   for (const id of [...expandedRobots]) if (!liveIds.has(id)) expandedRobots.delete(id);
 
-  // While any row is expanded (param editor / mode arm panel open), freeze the
-  // WHOLE table: a full poll-driven rebuild (body.innerHTML = html below) would
-  // wipe any in-progress typed edit — including, worst case, a half-typed arm
-  // confirm-id. Health/recon render independently and keep updating. The
-  // server re-validates every precondition at submit time regardless (see
-  // ModeSet in main.go / handleModeSet in server.go), so a precondition badge
-  // going stale during the freeze can never itself arm an unsafe state — it
-  // only means a rejected submit shows a 409 reason instead of a pre-emptive
-  // gray-out.
-  if (expandedRobots.size > 0) return;
+  // While any card is open, DON'T rebuild the table (that would wipe typed
+  // input) — instead refresh IN PLACE everything that is pure data: the
+  // summary row cells and each open card's live half (#card-live-*). The
+  // controls half is left untouched, so forms stay as typed AND the numbers
+  // never go stale (the old whole-table freeze needed an F5 after set-position).
+  if (expandedRobots.size > 0) {
+    robots.forEach(r => {
+      const tr = body.querySelector('tr.robot-row[data-id="' + CSS.escape(r.id) + '"]');
+      if (tr) tr.innerHTML = summaryCellsHTML(r, stale);
+      const live = document.getElementById('card-live-' + r.id);
+      if (live) {
+        const det = live.querySelector('details');
+        const wasOpen = det ? det.open : false;
+        live.innerHTML = cardLiveHTML(r);
+        const det2 = live.querySelector('details');
+        if (det2) det2.open = wasOpen;
+      }
+    });
+    return;
+  }
 
-  const staleCls = stale ? ' stale-num' : '';
   let html = '';
   robots.forEach((r, i) => {
-    const modeCls = r.mode === 'real' ? 'real' : 'paper';
-    const modeLabel = r.mode === 'real' ? 'РЕАЛ' : 'PAPER';
-    const status = r.paused ? 'ПАУЗА' : (r.running ? 'РАБОТАЕТ' : (r.has_status ? 'СТОП' : 'нет данных'));
-    const hbAge = r.heartbeat_unix_ms ? (Date.now() - r.heartbeat_unix_ms) : null;
-    const hbCls = hbAge != null && hbAge < 45000 ? 'ok' : 'warn';
-    const pnl = r.pnl_rub != null
-      ? Math.round(r.pnl_rub).toLocaleString('ru-RU') + ' ₽'
-      : fmtNum(r.pnl_points) + ' п.';
     html += '<tr class="robot-row" data-idx="' + i + '" data-id="' + esc(r.id) + '">'
-      + '<td>▸</td>'
-      + '<td class="mono">' + esc(r.id) + '</td>'
-      + '<td class="mono">' + esc(r.symbol) + '</td>'
-      + '<td>' + esc(r.strategy_id) + '</td>'
-      + '<td><span class="badge ' + modeCls + '">' + modeLabel + '</span></td>'
-      + '<td><span class="badge ' + (r.running ? 'ok' : 'dim') + '">' + status + '</span></td>'
-      + '<td class="mono' + staleCls + ' ' + (r.position > 0 ? 'buy' : (r.position < 0 ? 'sell' : '')) + '">' + (r.position > 0 ? '+' : '') + fmtNum(r.position) + '</td>'
-      + '<td class="mono' + staleCls + ' ' + (r.pnl_points > 0 ? 'buy' : (r.pnl_points < 0 ? 'sell' : '')) + '">' + pnl + '</td>'
-      + '<td><span class="badge ' + hbCls + '">' + (hbAge == null ? '—' : fmtMs(hbAge)) + '</span></td>'
-      + '<td>' + robotLinks(r) + '</td>'
-      + '</tr>';
-    html += '<tr class="params-row" id="params-' + i + '" data-id="' + esc(r.id) + '" style="display:none"><td></td><td colspan="9">' + paramsBlock(r) + '</td></tr>';
+      + summaryCellsHTML(r, stale) + '</tr>';
+    html += '<tr class="params-row" id="params-' + i + '" data-id="' + esc(r.id) + '" style="display:none"><td></td><td colspan="9">' + cardHTML(r) + '</td></tr>';
   });
   body.innerHTML = html;
   body.querySelectorAll('tr.robot-row').forEach(tr => {
@@ -347,46 +378,62 @@ function fmtTs(ms) {
     day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
-function paramsBlock(r) {
+// cardHTML: the expanded robot card. Two halves: #card-live-<id> is pure data
+// and is refreshed IN PLACE on every poll (see renderRobots); .card-controls
+// holds the forms and is built exactly once per expansion, so typed input
+// survives polls without freezing the data next to it.
+function cardHTML(r) {
   let params = {};
   try { params = r.params_json ? JSON.parse(r.params_json) : {}; } catch (e) { /* leave empty */ }
-  const kv = Object.entries(params).map(([k, v]) =>
-    '<div class="kv">' + esc(k) + ': <b>' + esc(v) + '</b></div>').join('');
-  const meta = [
+  return '<div class="card">'
+    + '<div class="card-live" id="card-live-' + esc(r.id) + '">' + cardLiveHTML(r) + '</div>'
+    + '<div class="card-controls">'
+    + '<div class="panel">' + editorBlock(r, params) + '</div>'
+    + '<div class="panel' + (r.mode === 'real' ? ' danger' : '') + '">' + modeBlock(r) + '</div>'
+    + (IS_LOCAL ? '<div class="panel danger">' + setPosBlock(r) + '</div>' : '')
+    + '</div></div>';
+}
+
+// cardLiveHTML: the data half — position ticket (the card's focal point),
+// metadata chips, working orders, recent fills, raw strategy signal.
+function cardLiveHTML(r) {
+  const posCls = r.position > 0 ? 'buy' : (r.position < 0 ? 'sell' : '');
+  const pnl = r.pnl_rub != null
+    ? Math.round(r.pnl_rub).toLocaleString('ru-RU') + ' ₽'
+    : fmtNum(r.pnl_points) + ' п.';
+  const pnlCls = r.pnl_points > 0 ? 'buy' : (r.pnl_points < 0 ? 'sell' : '');
+  const chips = [
     ['окно торговли', r.schedule || '—'],
     ['макс. позиция', fmtNum(r.max_position)],
-    ['средняя цена', fmtNum(r.avg_price)],
-    ['баров получено', fmtNum(r.bars_count)],
+    ['баров', fmtNum(r.bars_count)],
     ['последний бар', fmtTs(r.last_bar_unix * 1000 || 0)],
     ['развёрнут', fmtTs(r.deployed_at_ms)],
     ['параметры изменены', fmtTs(r.params_updated_at_ms)],
-  ].map(([k, v]) => '<div class="kv">' + esc(k) + ': <b>' + esc(v) + '</b></div>').join('');
-  const fills = (r.recent_fills || []).slice(-10).reverse().map(f =>
-    '<div class="kv">' + (f.side === 'buy' ? '<span class="buy">▲</span>' : '<span class="sell">▼</span>') + ' '
-    + fmtNum(f.qty) + ' @ <b>' + fmtNum(f.price) + '</b> <span style="color:#667">' + esc(f.status) + '</span></div>').join('');
-  const working = (r.working_orders || []).map(w =>
-    '<div class="kv">' + (w.side === 'buy' ? '<span class="buy">▲</span>' : '<span class="sell">▼</span>') + ' '
-    + fmtNum(w.qty) + ' @ <b>' + fmtNum(w.price) + '</b> <span style="color:#667">' + esc(w.state) + '</span></div>').join('');
+  ].map(([k, v]) => '<span class="chip">' + esc(k) + ' <b>' + esc(v) + '</b></span>').join('');
+  const line = x => '<div class="kv">' + (x.side === 'buy' ? '<span class="buy">▲</span>' : '<span class="sell">▼</span>') + ' '
+    + fmtNum(x.qty) + ' @ <b>' + fmtNum(x.price) + '</b> <span style="color:#667">' + esc(x.state || x.status) + '</span>'
+    + (x.ts_unix_ms ? ' <span style="color:#556">' + fmtTs(x.ts_unix_ms) + '</span>' : '') + '</div>';
+  const working = (r.working_orders || []).map(line).join('');
+  const fills = (r.recent_fills || []).slice(-10).reverse().map(line).join('');
   let signalPretty = '';
   if (r.signal_json) {
     try { signalPretty = JSON.stringify(JSON.parse(r.signal_json), null, 2); }
     catch (e) { signalPretty = r.signal_json; }
   }
-  return '<div class="sec-title">Параметры стратегии</div>'
-    + '<div class="kv-grid">' + (kv || '<span class="empty">нет параметров</span>') + '</div>'
-    + '<div class="sec-title" style="margin-top:6px">Метаданные</div>'
-    + '<div class="kv-grid">' + meta + '</div>'
-    + editorBlock(r, params)
-    + modeBlock(r)
-    + setPosBlock(r)
-    + '<div class="sec-title" style="margin-top:6px">Заявки в работе</div>'
-    + '<div class="kv-grid">' + (working || '<span class="empty">нет</span>') + '</div>'
-    + '<div class="sec-title" style="margin-top:6px">Последние сделки</div>'
-    + '<div class="kv-grid">' + (fills || '<span class="empty">нет</span>') + '</div>'
-    + (signalPretty ? '<div class="sec-title" style="margin-top:6px">Сигнал стратегии (сырой JSON)</div>'
-      + '<pre class="mono" style="white-space:pre-wrap;background:#0e0e1c;padding:6px;border-radius:4px;max-height:200px;overflow:auto">'
-      + esc(signalPretty) + '</pre>' : '')
-    + (r.note ? '<div class="sec-title" style="margin-top:6px">Заметка</div><div>' + esc(r.note) + '</div>' : '');
+  return '<div class="pos-ticket">'
+    + '<span class="pp mono ' + posCls + '">' + (r.position > 0 ? '+' : '') + fmtNum(r.position) + '</span>'
+    + '<span class="avg mono">@ ' + fmtNum(r.avg_price) + '</span>'
+    + '<span class="pnl mono ' + pnlCls + '" title="кумулятив стратегии, вкл. бумажный период"><span style="font-size:10px;color:#667;margin-right:6px">P&amp;L&#8721;</span>' + pnl + '</span>'
+    + '</div>'
+    + '<div class="chips">' + chips + '</div>'
+    + '<div class="sec-title" style="margin-top:12px">Заявки в работе</div>'
+    + '<div class="flist">' + (working || '<span class="empty">нет</span>') + '</div>'
+    + '<div class="sec-title" style="margin-top:10px">Последние сделки</div>'
+    + '<div class="flist">' + (fills || '<span class="empty">нет</span>') + '</div>'
+    + (signalPretty ? '<details style="margin-top:10px"><summary>Сигнал стратегии (сырой JSON)</summary>'
+      + '<pre class="mono" style="white-space:pre-wrap;background:#0e0e1c;padding:8px;border-radius:4px;max-height:220px;overflow:auto;font-size:11px">'
+      + esc(signalPretty) + '</pre></details>' : '')
+    + (r.note ? '<div class="sec-title" style="margin-top:10px">Заметка</div><div>' + esc(r.note) + '</div>' : '');
 }
 
 // editorBlock: the per-robot param editor (params_json fields + schedule +
@@ -462,16 +509,15 @@ function modeBlock(r) {
 // values. Server enforces: typed confirm == id AND robot is PAUSED.
 function setPosBlock(r) {
   if (!IS_LOCAL) return '';
-  return '<div class="sec-title" style="margin-top:10px">Ручная коррекция позиции</div>'
-    + '<div class="arm-panel" data-id="' + esc(r.id) + '">'
-    + '<div class="kv">Перезаписывает веру руннера (позиция + средняя, вера в заявки очищается). Только на ПАУЗЕ. Текущая вера: <b>'
-    + (r.position > 0 ? '+' : '') + fmtNum(r.position) + ' @ ' + fmtNum(r.avg_price) + '</b></div>'
-    + '<div class="kv-grid" style="margin-top:6px">'
+  return '<div class="setpos" data-id="' + esc(r.id) + '">'
+    + '<div class="sec-title">Ручная коррекция позиции</div>'
+    + '<div class="kv">Перезаписывает веру руннера (позиция + средняя, вера в заявки очищается). Только на ПАУЗЕ.</div>'
+    + '<div class="kv-grid" style="margin-top:8px">'
     + '<div class="edit-field"><span>позиция</span><input class="mono setpos-pos" type="number" value="' + esc(r.position ?? 0) + '"></div>'
     + '<div class="edit-field"><span>средняя цена</span><input class="mono setpos-avg" type="number" value="' + esc(r.avg_price ?? 0) + '"></div>'
     + '<div class="edit-field"><span>ID для подтверждения</span><input class="mono setpos-confirm" placeholder="' + esc(r.id) + '"></div>'
     + '</div>'
-    + '<div style="margin-top:8px"><button class="danger setpos-btn" disabled>Записать позицию в руннер</button><span class="setpos-msg"></span></div>'
+    + '<div style="margin-top:10px"><button class="danger setpos-btn" disabled>Записать позицию в руннер</button><span class="setpos-msg"></span></div>'
     + '</div>';
 }
 
@@ -479,7 +525,7 @@ function setPosBlock(r) {
 // the server re-validates everything (confirm + paused) at submit anyway.
 function wireSetPos(body) {
   body.querySelectorAll('.setpos-btn').forEach(btn => {
-    const panel = btn.closest('.arm-panel');
+    const panel = btn.closest('.setpos');
     const id = panel.dataset.id;
     const confirmInp = panel.querySelector('.setpos-confirm');
     const msgEl = panel.querySelector('.setpos-msg');
@@ -497,9 +543,10 @@ function wireSetPos(body) {
         });
         const text = await resp.text();
         if (!resp.ok) { setMsg(msgEl, text || ('HTTP ' + resp.status), false); btn.disabled = false; return; }
-        setMsg(msgEl, 'записано', true);
-        expandedRobots.delete(id);
-        await fetchAndRender();
+        // Card stays open: the live half (#card-live-*) picks up the runner's
+        // corrected belief on the next polls — no collapse, no F5.
+        setMsg(msgEl, 'записано — вера руннера обновится в течение пары секунд', true);
+        btn.disabled = false;
       } catch (e) { setMsg(msgEl, 'ошибка сети', false); btn.disabled = false; }
     });
   });
@@ -549,9 +596,9 @@ async function saveParams(btn) {
       btn.disabled = false;
       return;
     }
+    // Card stays open; the live chips reflect the applied spec on the next polls.
     setMsg(msgEl, 'сохранено', true);
-    expandedRobots.delete(robotId);
-    await fetchAndRender();
+    btn.disabled = false;
   } catch (e) {
     setMsg(msgEl, 'ошибка сети', false);
     btn.disabled = false;
@@ -724,7 +771,7 @@ function renderManual(manual) {
 function renderQuik(q) {
   document.getElementById('quik-dir').innerHTML = q.dir
     ? 'папка QUIK: <b class="mono">' + esc(q.dir) + '</b>'
-    : 'папка QUIK неизвестна (нужна Lua cc3+) — сообщения и новости недоступны';
+    : 'папка QUIK неизвестна (нужна Lua cc3+)';
 
   const sideArrow = s => s === 'buy' ? '<span class="buy">▲</span>' : (s === 'sell' ? '<span class="sell">▼</span>' : '—');
 
@@ -762,10 +809,6 @@ function renderQuik(q) {
       + '<td>' + esc(t.text) + '</td></tr>').join('')
     : '<tr><td colspan="5" class="empty">Ответов на транзакции нет (с момента старта агента).</td></tr>';
 
-  document.getElementById('quik-messages').textContent =
-    (q.messages || []).length ? q.messages.join('\n') : 'нет данных';
-  document.getElementById('quik-news').textContent =
-    (q.news || []).length ? q.news.join('\n') : 'нет данных';
 }
 
 function render(s) {

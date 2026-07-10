@@ -660,8 +660,20 @@ func tailLogLines(path string, maxLines int) []string {
 		if strings.TrimSpace(ln) == "" {
 			continue
 		}
+		// QUIK logs interleave binary records with cp1251 text; control bytes
+		// survive the decode as control runes — strip them so the JSON stays
+		// clean for the diagnostics/strategy consumers (not rendered in the UI).
+		ln = strings.Map(func(r rune) rune {
+			if r < 0x20 {
+				return -1
+			}
+			return r
+		}, ln)
+		if strings.TrimSpace(ln) == "" {
+			continue
+		}
 		// The first line of the window is usually cut mid-line by the byte seek;
-		// harmless in a human-facing tail. Cap pathological line length.
+		// harmless in a diagnostics tail. Cap pathological line length.
 		if len(ln) > 400 {
 			ln = ln[:400]
 		}
