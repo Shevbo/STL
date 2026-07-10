@@ -276,7 +276,8 @@
         vds_load: sd.vds_load, agent_alive: sd.agent_alive, vds_down: false,
       };
       if (sd.status === 'done') {
-        const rr = await fetchWithAuth(`/api/v1/backtest/${run_id}/results`);
+        // full=1: bare /results strips trades/equity (sweep fast-path) — the chart needs the fills
+        const rr = await fetchWithAuth(`/api/v1/backtest/${run_id}/results?full=1`);
         const rows = rr.ok ? await rr.json() : [];
         const result = rows[0] ?? null;
         if (!result) throw new Error('Прогон завершён, но результат пуст');
