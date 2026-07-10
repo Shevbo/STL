@@ -32,13 +32,24 @@ func spawnRestart(exeDir, restartName, stage, stageExe string) error {
 			filepath.Join(stageQ, "robot-runner.exe"),
 			filepath.Join(stageQ, "robot-runner.exe"),
 			filepath.Join(exeDir, "robot-runner.exe")),
-		// QLua feed/trade script rides the same channel -> <exeDir>\lua\; the operator
-		// only Stop/Starts it in QUIK (Lua runs from memory) instead of hand-copying.
-		// Never touches the sidecar shectory_trade_config.lua (operator's ACCOUNT etc).
+		// QLua feed/trade script rides the same channel -> <exeDir>\lua\, under a
+		// VERSION-STAMPED name (shectory_trade_v<ver>.lua) so the operator's QUIK
+		// load dialog shows which build he picks (operator requirement); older
+		// versioned copies are swept first (the v* mask never matches the sidecar
+		// shectory_trade_config.lua — operator's ACCOUNT etc — nor the plain name).
+		// A plain-named copy is kept too so a pre-existing QUIK autostart entry
+		// pointing at it still loads the CURRENT build after a terminal restart.
 		fmt.Sprintf(`if exist "%s" if not exist "%s" mkdir "%s"`,
 			filepath.Join(stageQ, "shectory_trade.lua"),
 			filepath.Join(exeDir, "lua"),
 			filepath.Join(exeDir, "lua")),
+		fmt.Sprintf(`if exist "%s" del /q "%s" 2>nul`,
+			filepath.Join(stageQ, "shectory_trade.lua"),
+			filepath.Join(exeDir, "lua", "shectory_trade_v*.lua")),
+		fmt.Sprintf(`if exist "%s" copy /y "%s" "%s"`,
+			filepath.Join(stageQ, "shectory_trade.lua"),
+			filepath.Join(stageQ, "shectory_trade.lua"),
+			filepath.Join(exeDir, "lua", luaInstallName(stageQ))),
 		fmt.Sprintf(`if exist "%s" copy /y "%s" "%s"`,
 			filepath.Join(stageQ, "shectory_trade.lua"),
 			filepath.Join(stageQ, "shectory_trade.lua"),
