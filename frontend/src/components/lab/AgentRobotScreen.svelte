@@ -415,6 +415,7 @@
       defaultInterval={1}
       live={20}
       liveTick={liveTick}
+      pointValue={pointCoef ?? 1}
       taker={!robot?.paper}
       openOrders={openOrders}
       plannedOrders={plannedOrders}
