@@ -177,6 +177,9 @@
     detailLoading = false;
   }
   function closeDetail() { detail = null; }
+  // distinct campaigns of the open strategy card, newest first (id embeds the date)
+  const detailCampaigns = $derived(
+    [...new Set((detail?.rows ?? []).map((r: any) => r.campaign_run).filter(Boolean))].sort().reverse());
 
   // Instrument tables: groups ordered top→bottom by best financial result (net_profit),
   // rows within each ordered by the active sort column (default net_profit desc).
@@ -613,6 +616,20 @@
           {#if detail.period}· период {fmtDate(detail.period.date_from)} — {fmtDate(detail.period.date_to)}{/if}
         </span>
       </div>
+
+      <!-- campaigns this strategy was swept in: click opens the campaign panel
+           (density map + best rows -> chart) — the self-serve path to sweep results -->
+      {#if detailCampaigns.length}
+        <div class="dp-camps">
+          <span class="cmp-k">кампании перебора:</span>
+          {#each detailCampaigns as c}
+            <button class="ag-camp" onclick={() => openCampaign(c)}
+                    title="Открыть кампанию: карта плотности, лучшие наборы, график по клику">
+              {c}
+            </button>
+          {/each}
+        </div>
+      {/if}
 
       <!-- adaptive sweep status: % complete · machine time · last run · top-3 -->
       {#if detail.sweep || detail.top3?.length}
@@ -1060,6 +1077,7 @@
                  padding: 0 5px; white-space: nowrap; animation: cc-pulse 1.6s ease-in-out infinite; }
   @keyframes cc-pulse { 0%,100% { opacity: 0.55; } 50% { opacity: 1; } }
 
+  .dp-camps { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 4px 0 8px; }
   .cmp-click { cursor: pointer; }
   .cmp-click:hover td { background: rgba(122, 184, 255, .08); }
   /* campaign modal */

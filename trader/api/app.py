@@ -1717,10 +1717,14 @@ def create_app() -> FastAPI:
                    candidate, created_at, ann_return_go, ann_return_full
             FROM optimization_leaderboard
             WHERE strategy=$1
-            ORDER BY symbol, score DESC NULLS LAST
+            ORDER BY score DESC NULLS LAST
+            LIMIT 5000
             """,
             strategy,
         )
+        # LIMIT 5000: full-sweep backfills put 100k+ rows per strategy here; unbounded
+        # SELECT shipped a multi-MB payload and hung the catalog card. Top-5000 by
+        # score covers every view this card renders (groups, top3, campaign chips).
         out = []
         campaigns = set()
         for r in rows:
