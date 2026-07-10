@@ -397,8 +397,12 @@ func robotKnowsOrder(r RobotView, num string) bool {
 }
 
 // evalTrades bidirectionally matches every real robot's believed FillKey against QUIK
-// trades tagged for that robot (tag == robot.Tag, order_num equal, qty equal, price within
-// one PriceStep or exact if the symbol has no step). It returns the per-fill forward
+// trades tagged for that robot (tag == robot.Tag, order_num equal, qty equal). PRICE IS
+// DELIBERATELY NOT COMPARED: a marketable order routinely fills better than its limit
+// price (price improvement — seen live 10.07, buy @87330 filled @87310, 2 price steps),
+// and the tag+order_num+qty triple already pins the trade to exactly one believed fill;
+// an exact/1-step price gate produced false MISMATCH on every improved fill. FillKey
+// keeps its Price field as diagnostic context only. It returns the per-fill forward
 // TradeChecks and the set of robot IDs whose fills do NOT line up — a robot fill with no
 // matching tagged QUIK trade (forward) OR a tagged QUIK trade no fill claimed (reverse).
 // Each QUIK trade row is consumed by at most one FillKey (a `used` set shared across all
@@ -410,7 +414,6 @@ func evalTrades(in Inputs, robotByTag map[string]RobotView, realRobots []RobotVi
 	used := make([]bool, len(in.Acc.Trades))
 
 	for _, r := range realRobots {
-		step := in.PriceStep[r.Symbol]
 		for _, fk := range r.FillKeys {
 			matched, tradeID := false, ""
 			// A robot with no tag (a wiring quirk — real robots always carry one) can
@@ -420,15 +423,9 @@ func evalTrades(in Inputs, robotByTag map[string]RobotView, realRobots []RobotVi
 					if used[i] || tr.Tag != r.Tag || tr.OrderNum != fk.OrderNum || tr.Qty != fk.Qty {
 						continue
 					}
-					diff := tr.Price - fk.Price
-					if diff < 0 {
-						diff = -diff
-					}
-					if (step > 0 && diff <= step) || (step <= 0 && diff == 0) {
-						matched, tradeID = true, tr.Num
-						used[i] = true
-						break
-					}
+					matched, tradeID = true, tr.Num
+					used[i] = true
+					break
 				}
 			}
 			checks = append(checks, TradeCheck{TradeID: tradeID, OrderNum: fk.OrderNum, Matched: matched})

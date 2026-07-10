@@ -63,6 +63,16 @@ type workingOrder struct {
 	// this stamp — otherwise one old rejection would pin the recon State to MISMATCH
 	// until process restart.
 	rejectedMs int64
+	// tradeQty/tradeAvg accumulate the REAL execution price from OnTrade (VWAP over
+	// this order's fills). A marketable order routinely fills BETTER than its limit
+	// price (price improvement, seen live 10.07: buy placed @87330 filled @87310);
+	// wo.price is the ORDER price and would book the robot's position at the wrong
+	// level. When tradeQty > 0, emitOrderUpdate carries tradeAvg instead. QUIK
+	// usually delivers OnTrade before the final OnOrder, so the corrected price
+	// reaches the runner with the fill-carrying update; if OnOrder wins the race the
+	// order price is still used (best available then).
+	tradeQty int64
+	tradeAvg float64
 }
 
 func (w *workingOrder) restingQty() int64 {
@@ -935,17 +945,21 @@ func (m *Manager) OnOrder(ev OrderEvent) {
 // authoritative filled count comes from OnOrder; OnTrade is used to feed avg price to
 // the maker loop and as a fast partial signal.
 func (m *Manager) OnTrade(ev TradeEvent) {
+	px, pxOK := parsePrice(ev.Price)
 	m.mu.Lock()
 	wo := m.byOrder[ev.OrderNum]
 	var ex *execution
 	if wo != nil {
 		ex = m.exec[wo.clientID]
+		if pxOK && ev.Qty > 0 { // real execution price VWAP (see workingOrder.tradeAvg)
+			tot := wo.tradeQty + ev.Qty
+			wo.tradeAvg = (wo.tradeAvg*float64(wo.tradeQty) + px*float64(ev.Qty)) / float64(tot)
+			wo.tradeQty = tot
+		}
 	}
 	m.mu.Unlock()
-	if ex != nil {
-		if px, ok := parsePrice(ev.Price); ok {
-			ex.onTrade(ev.Qty, px)
-		}
+	if ex != nil && pxOK {
+		ex.onTrade(ev.Qty, px)
 	}
 }
 
@@ -1074,13 +1088,17 @@ func (m *Manager) rejectPlace(clientID, code string, side quikv1.Side, price flo
 
 func (m *Manager) emitOrderUpdate(wo *workingOrder, text string) {
 	m.mu.Lock()
+	price := wo.price
+	if wo.tradeQty > 0 {
+		price = wo.tradeAvg // real execution VWAP beats the order price (see workingOrder)
+	}
 	upd := &quikv1.OrderUpdate{
 		ClientId: wo.clientID,
 		OrderId:  wo.orderNum,
 		Code:     wo.code,
 		Side:     wo.side,
 		State:    wo.state,
-		Price:    wo.price,
+		Price:    price,
 		Quantity: wo.qty,
 		Filled:   wo.filled,
 		Text:     text,

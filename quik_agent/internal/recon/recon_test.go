@@ -345,27 +345,31 @@ func TestEvaluateTradeReverseUnrecordedFlipsState(t *testing.T) {
 	}
 }
 
-// ---- trade fuzzy match within one price step, exact otherwise ----
+// ---- trade match ignores price (improvement must not unmatch) ----
 
-func TestEvaluateTradeMatchWithinPriceStep(t *testing.T) {
+// A marketable order fills BETTER than its limit price routinely (price
+// improvement; live 10.07: buy placed @87330 filled @87310). The matcher keys
+// on tag+order_num+qty ONLY — any price divergence still matches.
+func TestEvaluateTradeMatchIgnoresPrice(t *testing.T) {
 	in := Inputs{
 		Robots: []RobotView{{
 			ID: "r1", Tag: "r1", Symbol: "RIU6",
-			FillKeys: []FillKey{{OrderNum: "1", Qty: 1, Price: 100000}},
+			FillKeys: []FillKey{{OrderNum: "1", Qty: 1, Price: 87330}},
 		}},
 		PriceStep: map[string]float64{"RIU6": 10},
 		Acc: AccView{
-			Trades:   []Trade{{Num: "t1", OrderNum: "1", Sec: "RIU6", Qty: 1, Price: 100005, Tag: "r1"}},
+			Trades:   []Trade{{Num: "t1", OrderNum: "1", Sec: "RIU6", Qty: 1, Price: 87310, Tag: "r1"}},
 			PosAgeMs: 100, OrdAgeMs: 100,
 		},
 	}
 	rep := Evaluate(in)
 	if len(rep.Trades) != 1 || !rep.Trades[0].Matched || rep.Trades[0].TradeID != "t1" {
-		t.Fatalf("trades = %+v, want matched within price step", rep.Trades)
+		t.Fatalf("trades = %+v, want matched despite 2-step price improvement", rep.Trades)
 	}
 }
 
-func TestEvaluateTradeExactMatchWhenNoPriceStep(t *testing.T) {
+// Same without any PriceStep supplied — must still match (no exact-price fallback).
+func TestEvaluateTradeMatchIgnoresPriceWithoutStep(t *testing.T) {
 	in := Inputs{
 		Robots: []RobotView{{
 			ID: "r1", Tag: "r1", Symbol: "RIU6",
@@ -377,8 +381,8 @@ func TestEvaluateTradeExactMatchWhenNoPriceStep(t *testing.T) {
 		},
 	}
 	rep := Evaluate(in)
-	if len(rep.Trades) != 1 || rep.Trades[0].Matched {
-		t.Fatalf("trades = %+v, want unmatched (no price step -> exact match required)", rep.Trades)
+	if len(rep.Trades) != 1 || !rep.Trades[0].Matched {
+		t.Fatalf("trades = %+v, want matched (price is not part of identity)", rep.Trades)
 	}
 }
 

@@ -95,3 +95,52 @@ func TestCancelOrphan_EmptyOrderNumFails(t *testing.T) {
 		t.Fatal("empty order_num must fail, not send a broken KILL_ORDER")
 	}
 }
+
+// A marketable order that fills BETTER than its limit price (price improvement)
+// must surface the REAL execution price in the OrderUpdate the runner books —
+// not the order price. Live 10.07: buy placed @87330 filled @87310; the runner
+// booked 87330 and recon flagged a false MISMATCH.
+func TestOnTradePriceImprovementFlowsToOrderUpdate(t *testing.T) {
+	br := &recBridge{}
+	em := &fakeEmit{}
+	m := NewManager(ManagerConfig{ClassCode: "SPBFUT", Account: "A1"}, br,
+		NewGuard(baseLimits()), em, nil)
+	if err := m.PlaceOrderErr(&quikv1.PlaceOrder{
+		ClientId: "rr:r1:1:abcdef", Code: "RIU6",
+		Side: quikv1.Side_SIDE_BUY, Price: 87330, Quantity: 1}); err != nil {
+		t.Fatal(err)
+	}
+	transID := br.trans
+	m.OnTransReply(TransReplyEvent{TransID: transID, ResultCode: 3, OrderNum: "555"})
+	m.OnTrade(TradeEvent{OrderNum: "555", Qty: 1, Price: "87310"}) // improved
+	m.OnOrder(OrderEvent{OrderNum: "555", TransID: transID, State: "filled",
+		Balance: 0, Qty: 1, Price: "87330"})
+
+	last := em.orders[len(em.orders)-1]
+	if last.GetState() != quikv1.OrderState_ORDER_STATE_FILLED {
+		t.Fatalf("last update state = %v, want FILLED", last.GetState())
+	}
+	if last.GetPrice() != 87310 {
+		t.Fatalf("filled update price = %v, want trade price 87310 (not order price 87330)", last.GetPrice())
+	}
+}
+
+// OnOrder arriving BEFORE any OnTrade (race) still emits the order price —
+// the best information available at that moment.
+func TestOnOrderWithoutTradeKeepsOrderPrice(t *testing.T) {
+	br := &recBridge{}
+	em := &fakeEmit{}
+	m := NewManager(ManagerConfig{ClassCode: "SPBFUT", Account: "A1"}, br,
+		NewGuard(baseLimits()), em, nil)
+	if err := m.PlaceOrderErr(&quikv1.PlaceOrder{
+		ClientId: "rr:r1:2:abcdef", Code: "RIU6",
+		Side: quikv1.Side_SIDE_BUY, Price: 87330, Quantity: 1}); err != nil {
+		t.Fatal(err)
+	}
+	m.OnOrder(OrderEvent{OrderNum: "556", TransID: br.trans, State: "filled",
+		Balance: 0, Qty: 1, Price: "87330"})
+	last := em.orders[len(em.orders)-1]
+	if last.GetPrice() != 87330 {
+		t.Fatalf("price = %v, want order price 87330", last.GetPrice())
+	}
+}
