@@ -6,7 +6,9 @@
   import { instrumentStore } from '$lib/stores/instrument.svelte';
 
   type Tab = 'live' | 'market' | 'backtest' | 'botstore';
-  let activeTab = $state<Tab>('live');
+  // Deep-link: ?campaign=... lands on Botstore (which opens the campaign panel).
+  let activeTab = $state<Tab>(
+    new URLSearchParams(window.location.search).has('campaign') ? 'botstore' : 'live');
   // Market Browser default: top current FORTS contract from the live instrument list
   // (survives expiration). Falls back only if the list hasn't loaded yet.
   let marketSymbol = $derived(instrumentStore.list[0]?.symbol ?? 'IMOEXF@RTSX');

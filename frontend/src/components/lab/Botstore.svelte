@@ -362,6 +362,9 @@
     load();
     loadActivity();
     activityTimer = setInterval(loadActivity, 5000);
+    // Deep-link: /?campaign=camp-YYYYMMDD-... opens the campaign detail panel directly.
+    const wanted = new URLSearchParams(window.location.search).get('campaign');
+    if (wanted) openCampaign(wanted);
     return () => clearInterval(activityTimer);
   });
 
