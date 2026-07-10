@@ -38,7 +38,7 @@
 -- Bump on every change you deliver to the VDS. Logged FIRST on OnInit so the
 -- operator can confirm which version QUIK actually loaded (the running script is
 -- in MEMORY; a file on disk with the same name may be a different build).
-local SCRIPT_VERSION = "2026.07.09-cc3"
+local SCRIPT_VERSION = "2026.07.10-cc4"
 
 local CONFIG = {
   HOST          = "127.0.0.1",
@@ -103,6 +103,10 @@ local last_connect_attempt = 0
 -- but we keep both maps so a `cancel` referencing an order_num and an `order` event line up.
 local transId_to_orderNum = {}   -- [trans_id] = order_num
 local orderNum_to_transId = {}   -- [order_num] = trans_id
+
+-- Forward declaration: real body assigned after the acc publisher state below
+-- (transport connect hooks below reference it; Lua locals are lexically scoped).
+local acc_resync = function() end
 
 ----------------------------------------------------------------------
 -- Logging helper
@@ -327,6 +331,7 @@ function tcp_transport.connect()
   sock = s
   connected = true
   rxbuf = ""
+  pcall(acc_resync)            -- a (re)connected agent starts with empty tables
   log("connected to agent " .. CONFIG.HOST .. ":" .. CONFIG.PORT)
   return true
 end
@@ -431,9 +436,14 @@ function fq.recv_lines()
   local f = io.open(fq.cmd_path, "r")
   if not f then return lines end
   -- Truncation detection: if cmd.jsonl is now smaller than our offset, the agent
-  -- truncated/rotated it on a fresh session -> re-read from the start, never seek past EOF.
+  -- truncated/rotated it on a fresh session -> re-read from the start, never seek
+  -- past EOF. A truncated queue = the agent RESTARTED: its account tables are
+  -- empty, so also re-publish everything (trades resend dedupes agent-side).
   local size = f:seek("end")
-  if size < fq.cmd_offset then fq.cmd_offset = 0 end
+  if size < fq.cmd_offset then
+    fq.cmd_offset = 0
+    pcall(acc_resync)
+  end
   f:seek("set", fq.cmd_offset)
   for line in f:lines() do
     line = string.gsub(line, "\r$", "")
@@ -600,6 +610,18 @@ end
 local function side_from_flags(flags)
   if (math.floor((tonumber(flags) or 0) / 4) % 2) == 1 then return "S" end
   return "B"
+end
+
+-- acc_resync: forget what we already sent so the FULL account picture is
+-- re-published. Called when the agent (re)appears: a restarted agent has an
+-- EMPTY trades ring, and without a resend today's robot trades would be gone
+-- from it until session end — recon would false-MISMATCH every filled fill.
+-- The agent dedupes trades by trade_num, so a resend is always safe.
+-- (Assigns the forward-declared local near the top of the file.)
+acc_resync = function()
+  acc.trd_seen = 0
+  acc.last_pos, acc.last_pos_ms = "", 0
+  acc.last_ord, acc.last_ord_ms = "", 0
 end
 
 local function publish_acc_positions()
