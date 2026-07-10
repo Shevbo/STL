@@ -1839,7 +1839,7 @@ def create_app() -> FastAPI:
             return out
         rows = await pool.fetch(
             "SELECT total_return, recovery_factor, net_profit, sharpe, max_drawdown, "
-            "strategy, symbol, params, created_at FROM optimization_leaderboard "
+            "strategy, symbol, params, created_at, date_from, date_to FROM optimization_leaderboard "
             "WHERE campaign_run=$1 LIMIT 80000", id)
         out["combos"] = len(rows)
         if not rows:
@@ -1896,6 +1896,9 @@ def create_app() -> FastAPI:
                 "strategy": r["strategy"], "symbol": r["symbol"],
                 "total_return": r["total_return"], "recovery_factor": r["recovery_factor"],
                 "net_profit": r["net_profit"], "params": p,
+                # sweep window: lets the UI re-run this row 1:1 and open its chart
+                "date_from": r["date_from"].isoformat() if r["date_from"] else None,
+                "date_to": r["date_to"].isoformat() if r["date_to"] else None,
             })
         return out
 

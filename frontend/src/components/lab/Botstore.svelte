@@ -287,18 +287,20 @@
     throw new Error('Бэктест не вернул результат за 6 мин (таймаут ожидания)');
   }
 
-  async function openChart(symbol: string, params: any) {
-    if (!detail) return;
+  // opts {strategyId, dateFrom, dateTo}: campaign rows open a chart WITHOUT a catalog
+  // detail card — strategy + the sweep's own date window come from the row itself.
+  async function openChart(symbol: string, params: any, opts: any = null) {
+    if (!detail && !opts) return;
     chartErr = ''; chartLoading = true; chart = null;
     chartJob = { symbol, params };
     chartStatus = { runner: '…', status: 'queued', elapsed: 0, vds_load: null, agent_alive: null, vds_down: false };
     const t0 = Date.now();
     try {
-      const tmpl = tmplOf(detail.id);
+      const tmpl = tmplOf(opts?.strategyId ?? detail?.id);
       if (!tmpl) throw new Error('Нет шаблона стратегии для прогона');
       // Reproduce the EXACT leaderboard window so the chart MATCHES the table number.
-      const dateFrom = detail.period?.date_from ?? toISO(daysAgo(95));
-      const dateTo = detail.period?.date_to ?? toISO(yesterday());
+      const dateFrom = opts?.dateFrom ? opts.dateFrom + 'T00:00:00' : (detail?.period?.date_from ?? toISO(daysAgo(95)));
+      const dateTo = opts?.dateTo ? opts.dateTo + 'T23:59:59' : (detail?.period?.date_to ?? toISO(yesterday()));
       const sc = tmpl.script_code;
       let result: any;
       try {
@@ -321,7 +323,7 @@
         const mr = await fetchWithAuth(`/api/v1/instruments/${encodeURIComponent(symbol)}/meta`);
         if (mr.ok) { const m = await mr.json(); pv = m?.point_value || 1; }
       } catch { /* default 1 */ }
-      chart = { symbol, params, result, pointValue: pv, dateFrom, dateTo };
+      chart = { symbol, params, result, pointValue: pv, dateFrom, dateTo, opts };
     } catch (e) {
       chartErr = String(e);
     }
@@ -772,7 +774,7 @@
               taker={true}
               runParams={chart.params}
               paramSchema={detail?.schema ?? []}
-              onRerun={(p) => openChart(chart.symbol, p)}
+              onRerun={(p) => openChart(chart.symbol, p, chart.opts)}
             />
           {/if}
         </div>
@@ -836,12 +838,14 @@
 
             {#if campaign.best?.length}
               <div class="cmp-best">
-                <div class="cmp-h-title">Лучшие по финрезу</div>
+                <div class="cmp-h-title">Лучшие по финрезу <span class="cmp-sub2">клик по строке — прогон с графиком (цена + сделки + доходность)</span></div>
                 <table class="cmp-bt">
                   <thead><tr><th>робот</th><th>инстр.</th><th>финрез</th><th>доходн.</th><th>RF</th><th>параметры</th></tr></thead>
                   <tbody>
                     {#each campaign.best as b}
-                      <tr>
+                      <tr class="cmp-click"
+                          title="Открыть график этого набора: цена со сделками + кривая доходности"
+                          onclick={() => { const o = { strategyId: b.strategy, dateFrom: b.date_from, dateTo: b.date_to }; closeCampaign(); openChart(b.symbol, b.params, o); }}>
                         <td class="cmp-l">{robotName(b.strategy)}</td>
                         <td class="mono">{b.symbol}</td>
                         <td class:pos={b.net_profit > 0} class:neg={b.net_profit < 0}>{fmtMoney(b.net_profit)}</td>
@@ -1055,6 +1059,8 @@
                  padding: 0 5px; white-space: nowrap; animation: cc-pulse 1.6s ease-in-out infinite; }
   @keyframes cc-pulse { 0%,100% { opacity: 0.55; } 50% { opacity: 1; } }
 
+  .cmp-click { cursor: pointer; }
+  .cmp-click:hover td { background: rgba(122, 184, 255, .08); }
   /* campaign modal */
   .cmp-box { width: min(960px, 96vw); max-height: 90vh; background: #0a0a15; border: 1px solid #2d2d4a;
              border-radius: 6px; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 10px 40px rgba(0,0,0,0.6); }
