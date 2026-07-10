@@ -366,8 +366,25 @@
   // Click a hit-parade row → show its chart. Sweep results keep trades only for the
   // best combo (to dodge nginx 413), so for any row without trades we run ONE fast
   // single backtest on the VDS to get full trades + equity + fresh net_profit/RF.
+  // rub per price point for the leader chart: from the result row when the engine
+  // stored it, else the instrument meta. Without it the chart replays fills with
+  // pointValue=1 and «Результат» shows POINTS labelled as rubles (never matches
+  // the engine's net in the table) — same bug family as the robot-card badge.
+  let leaderPV = $state(1);
+  async function resolveLeaderPV(row: any) {
+    const pv = Number(row?.result?.point_value ?? 0);
+    if (pv > 0) { leaderPV = pv; return; }
+    try {
+      const sym = paramValues.symbol ?? row?.params?.symbol ?? '';
+      const mr = await fetchWithAuth('/api/v1/instruments/' + encodeURIComponent(sym) + '/meta');
+      if (mr.ok) { const m = await mr.json(); leaderPV = m?.point_value || 1; return; }
+    } catch { /* keep 1 */ }
+    leaderPV = 1;
+  }
+
   async function selectLeader(row: any) {
     leaderId = JSON.stringify(row.params);
+    await resolveLeaderPV(row);
     const hasTrades = Array.isArray(row.result?.trades) && row.result.trades.length > 0;
     if (hasTrades) { leaderResult = row; return; }
     // Run a single backtest for these exact params.
@@ -712,6 +729,7 @@
               symbol={paramValues.symbol ?? (leaderResult.result.params?.symbol) ?? 'RIM6'}
               dateFrom={dateFrom}
               dateTo={dateTo}
+              pointValue={leaderPV}
             />
           {/key}
         </div>
