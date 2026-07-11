@@ -309,6 +309,26 @@
       const dateFrom = opts?.dateFrom ? opts.dateFrom + 'T00:00:00' : (detail?.period?.date_from ?? toISO(daysAgo(95)));
       const dateTo = opts?.dateTo ? opts.dateTo + 'T23:59:59' : (detail?.period?.date_to ?? toISO(yesterday()));
       const sc = tmpl.script_code;
+      // Prefer a pre-computed stored result (top-3 backfill) — opens from the DB with no
+      // i9/VDS re-run. Falls through to a live run when nothing is stored for this combo.
+      if (opts?.campaign) {
+        try {
+          const q = `campaign_run=${encodeURIComponent(opts.campaign)}&params=${encodeURIComponent(JSON.stringify(params))}`;
+          const cr = await fetchWithAuth(`/api/v1/lab/campaign-result?${q}`);
+          if (cr.ok) {
+            const stored = await cr.json();
+            if (stored && Array.isArray(stored.trades) && stored.trades.length) {
+              let pv0 = stored.point_value;
+              if (!pv0) {
+                try { const mr = await fetchWithAuth(`/api/v1/instruments/${encodeURIComponent(symbol)}/meta`); if (mr.ok) pv0 = (await mr.json())?.point_value || 1; } catch { pv0 = 1; }
+              }
+              chart = { symbol, params, result: stored, pointValue: pv0 || 1, dateFrom, dateTo, opts };
+              chartLoading = false; chartStatus = null;
+              return;
+            }
+          }
+        } catch { /* fall through to a live re-run */ }
+      }
       let result: any;
       try {
         // Prefer the i9 agent (keeps load off the VDS); backend picks remote if alive.
@@ -912,7 +932,7 @@
                     {#each campaign.best as b}
                       <tr class="cmp-click"
                           title="Открыть график этого набора: цена со сделками + кривая доходности"
-                          onclick={() => { const o = { strategyId: b.strategy, dateFrom: b.date_from, dateTo: b.date_to }; closeCampaign(); openChart(b.symbol, b.params, o); }}>
+                          onclick={() => { const o = { strategyId: b.strategy, dateFrom: b.date_from, dateTo: b.date_to, campaign: campaign.campaign }; closeCampaign(); openChart(b.symbol, b.params, o); }}>
                         <td class="cmp-l">{robotName(b.strategy)}</td>
                         <td class="mono">{b.symbol}</td>
                         <td class:pos={b.net_profit > 0} class:neg={b.net_profit < 0}>{fmtMoney(b.net_profit)}</td>
