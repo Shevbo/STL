@@ -290,9 +290,15 @@
       // Elements may be gone if the window closed mid-resize — guard against null.
       if (candleEl) tvCandle?.applyOptions({ width: candleEl.clientWidth, height: candleEl.clientHeight });
       if (equityEl) tvEquity?.applyOptions({ width: equityEl.clientWidth, height: equityEl.clientHeight });
-      updateRects();
+      scheduleRects();   // recompute the position-box overlay over a few frames (coords settle after resize)
     });
+    // Observe the PANES, not just the root: dragging the divider changes the
+    // candle/equity split without changing the root's size, so a root-only observer
+    // never fired and the chart canvas kept its stale height (the «некорректно при
+    // сдвиге границы» glitch).
     ro.observe(containerEl);
+    if (candleEl) ro.observe(candleEl);
+    if (equityEl) ro.observe(equityEl);
     roRef = ro;
 
     await loadMeta();

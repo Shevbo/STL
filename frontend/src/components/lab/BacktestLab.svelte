@@ -13,6 +13,20 @@
   let helpOpen = $state<Record<string, boolean>>({});
   const helpCtx = { price: 0, atr: 0 };
 
+  // «История прогонов»: every saved sweep campaign, viewable right here in the Lab
+  // (operator couldn't find where the run history lived). Lazy-loaded on first open.
+  let labCampaigns = $state<any[]>([]);
+  let showLabHistory = $state(false);
+  async function toggleLabHistory() {
+    showLabHistory = !showLabHistory;
+    if (showLabHistory) {
+      try {
+        const r = await fetchWithAuth('/api/v1/lab/campaigns');
+        if (r.ok) labCampaigns = await r.json();
+      } catch { /* history is auxiliary */ }
+    }
+  }
+
   // ── Strategy catalog (botstore + installed robots merged) ──────────────
   let catalog = $state<any[]>([]);
   let installed = $state<any[]>([]);
@@ -670,6 +684,30 @@
 
   <!-- ── RIGHT: Results ───────────────────────────────────────────────── -->
   <div class="btl-results">
+    <!-- История прогонов: все сохранённые кампании перебора (без повторного прогона) -->
+    <div class="btl-history">
+      <button class="btl-hist-btn" onclick={toggleLabHistory}
+              title="все сохранённые прогоны перебора — открой любой хит-парад без повторного расчёта">
+        📊 История прогонов{#if labCampaigns.length} ({labCampaigns.length}){/if}
+        <span class="btl-hist-chev">{showLabHistory ? '▴' : '▾'}</span>
+      </button>
+      {#if showLabHistory}
+        <div class="btl-hist-list">
+          {#if labCampaigns.length === 0}
+            <div class="btl-hist-empty">Сохранённых прогонов пока нет. Задай «Имя перебора» и запусти R0 — кампания сохранится сюда.</div>
+          {:else}
+            {#each labCampaigns as c}
+              <a class="btl-hist-row mono" href={'/?campaign=' + encodeURIComponent(c.campaign)} target="_blank" rel="noopener"
+                 title="открыть витрину прогона: карта плотности + лучшие наборы + график по клику">
+                <span class="btl-hist-id">{c.campaign}</span>
+                <span class="btl-hist-meta">{(c.strategies ?? []).join(', ')} · {(c.symbols ?? []).join(', ')} · {c.combos?.toLocaleString('ru-RU')} комб. · {c.date_from ?? '—'}—{c.date_to ?? '—'}</span>
+              </a>
+            {/each}
+          {/if}
+        </div>
+      {/if}
+    </div>
+
     {#if running || runPhase}
       <div class="btl-progress">
         <div class="btl-prog-bar">
@@ -883,6 +921,18 @@
 
   /* ── Results panel ──────────────────────────────────────────────────── */
   .btl-results { flex: 1; overflow-y: auto; min-width: 0; padding: 14px; display: flex; flex-direction: column; gap: 14px; }
+  .btl-history { border: 1px solid #24406a; border-radius: 8px; background: #0c1424; padding: 8px 12px; }
+  .btl-hist-btn { background: transparent; border: none; color: #7ab8ff; cursor: pointer;
+    font-size: 13px; font-weight: 600; padding: 2px 0; display: flex; align-items: center; gap: 6px; }
+  .btl-hist-chev { color: #567; }
+  .btl-hist-list { margin-top: 8px; display: flex; flex-direction: column; gap: 2px; max-height: 260px; overflow-y: auto; }
+  .btl-hist-empty { font-size: 12px; color: #789; padding: 4px; }
+  .btl-hist-row { display: flex; flex-direction: column; gap: 1px; padding: 6px 8px; border-radius: 4px;
+    text-decoration: none; border-top: 1px solid #14203a; }
+  .btl-hist-row:first-child { border-top: none; }
+  .btl-hist-row:hover { background: #0f1c34; }
+  .btl-hist-id { font-size: 12px; color: #8acaff; }
+  .btl-hist-meta { font-size: 11px; color: #789; }
   .btl-progress { margin-bottom: 6px; }
   .btl-prog-bar { height: 4px; background: #1a1a32; border-radius: 2px; overflow: hidden; margin-bottom: 6px; }
   .btl-prog-fill { height: 100%; background: #4caf50; transition: width 0.5s; border-radius: 2px; }
@@ -918,7 +968,7 @@
   .th-hl { color: #00e676; }
 
   /* Chart */
-  .btl-chart-wrap { height: 400px; }
+  .btl-chart-wrap { height: 68vh; min-height: 440px; }
 
   /* Empty */
   .btl-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 14px; color: #556; }
