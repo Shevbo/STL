@@ -206,7 +206,11 @@ async def run_single_backtest(
     bars_days = (bars[-1].time - bars[0].time) / 86400.0 if len(bars) > 1 else 0.0
     metrics = compute_metrics(trades, initial_equity, point_value, symbol=symbol,
                               initial_margin=initial_margin, bars_days=bars_days)
-    return {"trades": trades, "equity_curve": equity_curve, **metrics}
+    # Return the EXACT point_value the engine used, so the chart's P&L (and its
+    # commission, which scales with notional=price×point_value) is computed on the
+    # same basis as net_profit — the two must never disagree ("единая логика").
+    return {"trades": trades, "equity_curve": equity_curve,
+            "point_value": point_value, **metrics}
 
 
 def _subprocess_run(script_code: str, bars_data: list[dict], symbol: str,

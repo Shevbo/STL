@@ -4,6 +4,7 @@
   // by the robot card; BacktestLab reuses ParamHelp inline in its range rows.
   // The parent owns Save/Cancel; this component renders fields + help + CSV.
   import ParamHelp from './ParamHelp.svelte';
+  import MustDescription from './MustDescription.svelte';
   import { helpFor, type LiveCtx } from '$lib/strategy-help';
   import { downloadCSV } from '$lib/csv';
 
@@ -19,6 +20,7 @@
 </script>
 
 <div class="pe2">
+  <MustDescription {strategyId} />
   <div class="pe2-head">
     <span class="pe2-hint">Нажми «?» у параметра — раскроется пояснение со схемой и примером в пунктах.</span>
     <button class="pe2-csv" onclick={() => downloadCSV([values], 'params-' + strategyId)}>Выгрузить в CSV</button>
@@ -29,7 +31,7 @@
     <div class="pe2-row">
       <button class="pe2-q" class:on={open[f.key]} disabled={!help}
               title={help ? 'пояснение' : 'пояснения нет'} onclick={() => toggle(f.key)}>?</button>
-      <span class="pe2-label">{help?.title ?? f.label}</span>
+      <span class="pe2-label"><code class="pe2-key">{f.key}</code>{#if help?.title} · {help.title}{/if}</span>
       {#if f.type === 'text' || disabledKeys.includes(f.key)}
         <input class="pe2-in mono" value={values[f.key] ?? ''} disabled />
       {:else}
@@ -61,6 +63,8 @@
   .pe2-q.on { background: #2d4a7a; color: #fff; }
   .pe2-q:disabled { opacity: .3; cursor: default; }
   .pe2-label { flex: 1; font-size: 13px; color: #cdd; }
+  .pe2-key { font-family: Consolas, "SF Mono", monospace; font-size: 12px; color: #ffca7a;
+    background: #2a1e0a; border: 1px solid #b8860b55; border-radius: 3px; padding: 1px 5px; }
   .pe2-in { width: 96px; background: #0a0a12; border: 1px solid #2d2d4a; color: #eee;
     border-radius: 4px; padding: 5px 8px; font-size: 13px; text-align: right; }
   .pe2-in:disabled { opacity: .5; }

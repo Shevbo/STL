@@ -631,15 +631,30 @@
       // green above / red below, no 100000-equity fiction. Works for backtest AND
       // live (events exist for both); result.equity_curve is no longer used, and the
       // agent robot no longer draws a flat 100000 zombie line.
+      // SINGLE PROFITABILITY LOGIC: when the backend result carries net_profit
+      // (any backtest), THAT is the authoritative number shown as «Результат» —
+      // identical to the hit-parade «Чистая прибыль». The engine (compute_metrics)
+      // is the one source of truth the sweep optimises on. The frontend replay is
+      // used only to DRAW the curve/markers; its raw sum can drift from the engine
+      // (rounding, roll accounting), so the curve is anchored to end exactly at the
+      // engine net. A LIVE robot has no engine result → engineNet is null and the
+      // real-money replay (rolled.net) stands as before.
+      const engineNet = (result && result.net_profit != null) ? Number(result.net_profit) : null;
       const closes = events.filter((e: any) => e.close).sort((a: any, b: any) => a.time - b.time);
       let maxDD = 0;
       if (bars.length) {
         let k = 0, cum = 0, peak = 0;
-        const curve = bars.map(b => {
+        const raw = bars.map(b => {
           while (k < closes.length && closes[k].time <= b.time) { cum += closes[k].close.pnl; k++; }
-          if (cum > peak) peak = cum;
-          if (peak - cum > maxDD) maxDD = peak - cum;
           return { time: b.time as number, value: cum };
+        });
+        const rawEnd = raw.length ? raw[raw.length - 1].value : 0;
+        const scale = (engineNet != null && rawEnd !== 0) ? engineNet / rawEnd : 1;
+        const curve = raw.map(p => {
+          const v = p.value * scale;
+          if (v > peak) peak = v;
+          if (peak - v > maxDD) maxDD = peak - v;
+          return { time: p.time, value: v };
         });
         equitySeries.applyOptions({ baseValue: { type: 'price', price: 0 } });
         equitySeries.setData(curve);
@@ -652,21 +667,25 @@
       // All round-trip / money stats from the roll-aware result — single source of
       // truth, identical to the robot summary and the showcase (no more disagreement).
       const closesPnl = events.filter(e => e.close).map(e => e.close!.pnl);
+      // «Результат» + «сделок» = the engine's numbers when present (backtest),
+      // so the chart and the hit-parade can never disagree; else the live replay.
+      const authNet = engineNet != null ? engineNet : rolled.net;
+      const authTrades = (result && result.total_trades != null) ? Number(result.total_trades) : rolled.closes;
       stats = {
         fills: fills.length,
-        roundTrips: rolled.closes,
+        roundTrips: authTrades,
         longRT: events.filter(e => e.close && e.side === 'sell').length,   // sold to close a long
         shortRT: events.filter(e => e.close && e.side === 'buy').length,   // bought to close a short
         maxAbsPos: rolled.peakContracts,
         avgPerTrade: closesPnl.length ? closesPnl.reduce((a, b) => a + b, 0) / closesPnl.length : 0,
         maxProfit: closesPnl.length ? Math.max(...closesPnl) : 0,
         maxLoss: closesPnl.length ? Math.min(...closesPnl) : 0,
-        netProfit: rolled.net,
+        netProfit: authNet,
         maxDDmoney: maxDD,
-        recovery: maxDD > 0 ? rolled.net / maxDD : null,
+        recovery: maxDD > 0 ? authNet / maxDD : null,
       };
-      netResult = rolled.net;   // net of commission, roll-aware
-      onNet?.(netResult);       // authoritative number for a parent header badge
+      netResult = authNet;      // authoritative: engine net (backtest) or real-money replay (live)
+      onNet?.(netResult);       // parent header badge shows the SAME number
       // Broker vs exchange commission split (transparency).
       commission = commissionBreakdown(fills, pointValue, symbol, taker);
       // Per-trade rows for the trades table (one row per fill, with role + close PnL).

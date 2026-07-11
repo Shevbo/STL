@@ -3,6 +3,7 @@
   import { fetchWithAuth } from '../../lib/fetch-auth';
   import BacktestChart from './BacktestChart.svelte';
   import ParamHelp from './ParamHelp.svelte';
+  import MustDescription from './MustDescription.svelte';
   import { helpFor } from '$lib/strategy-help';
   import { toFills, commissionBreakdown } from '../../lib/lab-analytics';
 
@@ -339,7 +340,10 @@
             running = false;
             return;
           }
-          const rr = await fetchWithAuth(`/api/v1/backtest/${runId}/results`);
+          // full=1 so the BEST row carries its trades/equity (the ingest keeps them
+          // only for the top combo); without it every row is metrics-only and the
+          // leader chart shows «0 сделок» + a needless VDS re-run that can diverge.
+          const rr = await fetchWithAuth(`/api/v1/backtest/${runId}/results?full=1`);
           if (rr.ok) {
             const rd = await rr.json();
             const items = (Array.isArray(rd) ? rd : (rd.results ?? rd.combos ?? [])).map((c: any) => ({
@@ -406,7 +410,11 @@
       dateFrom: new Date(dateFrom).toISOString(),
       dateTo: new Date(dateTo).toISOString(),
       paramSets: [{ ...row.params, symbol: sym }],
-      engine: 'local',   // single combo → fast on VDS, full trades, no 413
+      // 'auto' → the same host that ran the sweep (i9), which HAS the bars. The VDS
+      // ohlcv_bars store keeps the continuous contract as «RI» ending mid-June, so a
+      // 'local' re-run of «RIU6» over a July window found 0 bars → 0 trades (the empty
+      // leader chart). i9 resolves the real bars and matches the hit-parade numbers.
+      engine: 'auto',
       robotId: selectedStrategy?.robotId || (installed[0]?.id ?? ''),
     };
     if (scriptCode) { body.scriptCode = scriptCode; body.baseParams = { symbol: sym }; }
@@ -551,6 +559,7 @@
             <a class="btl-src-link" href={selectedStrategy.source_url} target="_blank" rel="noopener">источник ↗</a>
           {/if}
         </div>
+        <MustDescription strategyId={selectedStrategyId} />
         {#each (selectedStrategy.params_schema ?? []) as p}
           {@const isSymbol = p.key === 'symbol'}
           {@const help = helpFor(selectedStrategyId, p.key)}
@@ -560,7 +569,7 @@
                 <button class="btl-pf-q" class:on={helpOpen[p.key]}
                         title="пояснение со схемой" onclick={() => helpOpen[p.key] = !helpOpen[p.key]}>?</button>
               {/if}
-              <span class="btl-pf-label">{help?.title ?? p.label}</span>
+              <span class="btl-pf-label"><code class="btl-pf-key">{p.key}</code>{#if help?.title} · {help.title}{/if}</span>
               {#if !help && (p.desc || p.hint)}
                 <span class="btl-pf-i" title={p.desc || p.hint}>ⓘ</span>
               {/if}
@@ -816,6 +825,8 @@
   .btl-pf { margin-bottom: 12px; }
   .btl-pf-head { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
   .btl-pf-label { font-size: 12px; color: #bbb; font-weight: 500; }
+  .btl-pf-key { font-family: Consolas, "SF Mono", monospace; font-size: 11px; color: #ffca7a;
+    background: #2a1e0a; border: 1px solid #b8860b55; border-radius: 3px; padding: 1px 5px; }
   .btl-pf-i { font-size: 12px; color: #5a8aba; cursor: help; }
   .btl-pf-i:hover { color: #8acaff; }
   .btl-pf-q { width: 20px; height: 20px; flex-shrink: 0; border-radius: 50%;

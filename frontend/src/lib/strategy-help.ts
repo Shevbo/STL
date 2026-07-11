@@ -107,6 +107,29 @@ export function helpFor(strategyId: string, key: string): ParamHelp | null {
   return STRATEGY_HELP[strategyId]?.[key] ?? SPEC_HELP[key] ?? SHARED[key] ?? null;
 }
 
+// MUST DESCRIPTION: the strategy-level block shown ABOVE the params — the four
+// things an operator needs before touching any knob: the analysis timeframe, the
+// entry signal, the take-profit rule, and the stop-loss rule.
+export interface StrategyOverview {
+  timeframe: string;  // период анализа сигналов
+  entry: string;      // описание сигнала открытия
+  tp: string;         // описание тейк-профита
+  sl: string;         // описание стоп-лосса
+}
+
+export const STRATEGY_OVERVIEW: Record<string, StrategyOverview> = {
+  fvg: {
+    timeframe: 'М1 — минутные бары (жёстко, tf=1). Робот строит бары из ленты сделок QUIK и исполняет стратегию ОДИН раз по закрытию каждой минутки.',
+    entry: 'Fair Value Gap (ICT), трёхбарный разрыв: (1) low текущего бара выше high позапрошлого — бычий (зеркально — медвежий), И (2) тело текущей 1-мин свечи ≥ min_frac (фильтр силы импульса). Оба условия — вход в сторону разрыва.',
+    tp: 'Тейк-профит на средняя ± tp_atr×ATR. При tp_atr=0 тейка НЕТ — выход только по обратному сигналу.',
+    sl: 'СТОП-ЛОССА НЕТ. Убыточная позиция закрывается разворотным сигналом FVG (или тейком, если включён). Вместо стопа — усреднение: при ходе против позиции на avg_step_atr×ATR робот ДОКУПАЕТ (до avg_max), снижая среднюю. Жёсткий потолок max позиция лишь блокирует новые доборы, но не закрывает. Риск — глубокая просадка внутри эпизода вместо стоп-выноса.',
+  },
+};
+
+export function overviewFor(strategyId: string): StrategyOverview | null {
+  return STRATEGY_OVERVIEW[strategyId] ?? null;
+}
+
 // Client-side ATR (Wilder), mirroring trader/lab/indicators.py atr(). Fed by the
 // M1 bars the chart already loads, so the editor shows live points even without
 // a live robot (backtest context). Returns 0 when there aren't enough bars.
