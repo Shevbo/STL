@@ -11,6 +11,7 @@
   import BacktestChart from './BacktestChart.svelte';
   import LatencyPane from './LatencyPane.svelte';
   import AgentBookPane from './AgentBookPane.svelte';
+  import ParamEditor from './ParamEditor.svelte';
   import { fetchAgentLocalStatus, type AgentLocalStatus } from '../../lib/agent-robots';
 
   let { robotId, agentId = null }: { robotId: string; agentId?: string | null } = $props();
@@ -337,6 +338,7 @@
     } finally { saving = false; }
   }
 
+  let paramSchema = $state<any[]>([]);
   async function loadDesc(sid: string) {
     try {
       const res = await fetchWithAuth('/api/v1/strategies');
@@ -344,8 +346,21 @@
       const list = await res.json();
       const hit = (list ?? []).find((s: any) => s.id === sid);
       if (hit?.description) strategyDesc = hit.description;
+      if (Array.isArray(hit?.params_schema)) paramSchema = hit.params_schema;
     } catch { /* description is optional */ }
   }
+  // Live context for the param editor's «×ATR = N пунктов» conversions: price +
+  // current ATR come from the runner's signal_json (explain.py, always present).
+  const paramCtx = $derived({
+    price: Number(signal?.last_close ?? liveTick?.p ?? avgPrice ?? 0) || 0,
+    atr: Number(signal?.atr ?? 0) || 0,
+  });
+  // Editor schema: the strategy's own params_schema when loaded, else synthesize
+  // rows from the deployed params so the editor still renders before the fetch.
+  const editorSchema = $derived(
+    paramSchema.length
+      ? paramSchema.filter((f: any) => f.key in draft || f.key === 'symbol')
+      : Object.keys(draft).map((k) => ({ key: k, label: k, type: k === 'symbol' ? 'text' : 'number' })));
   // Reactive: the mirror resolves strategy_id AFTER mount, so a one-shot onMount
   // call raced it and could pin the default ('fvg') description forever.
   $effect(() => { const sid = robot?.strategy_id; if (sid) void loadDesc(sid); });
@@ -613,25 +628,16 @@
         </div>
         {#if saveMsg}<div class="pe-msg">{saveMsg}</div>{/if}
       {:else}
-        <div class="pe-grid">
-          {#each Object.keys(draft) as k}
-            <label class="pe-row">
-              <span>{k}</span>
-              {#if k === 'symbol'}
-                <input class="pe-in mono" value={draft[k]} disabled
-                       title="инструмент меняется только редеплоем с новой спекой" />
-              {:else}
-                <input class="pe-in mono" type="number" bind:value={draft[k]} />
-              {/if}
-            </label>
-          {/each}
+        <ParamEditor strategyId={robot?.strategy_id ?? 'fvg'}
+                     schema={editorSchema} bind:values={draft} ctx={paramCtx}
+                     disabledKeys={['symbol']} />
+        <div class="pe-grid" style="margin-top:10px">
           <label class="pe-row spec">
-            <span>max позиция (спека)</span>
-            <input class="pe-in mono" type="number" min="1" bind:value={draftMaxPos}
-                   title="потолок контрактов; изменение = редеплой спеки (позиция/P&L сохраняются)" />
+            <span title="жёсткий потолок контрактов: заявка сверх него не отправляется вовсе (страховка перед лимитами агента). Изменение = редеплой спеки, позиция/P&L сохраняются.">max позиция (спека)</span>
+            <input class="pe-in mono" type="number" min="1" bind:value={draftMaxPos} />
           </label>
           <label class="pe-row spec">
-            <span>окно (спека)</span>
+            <span title="часы МСК, когда робот активен и принимает сигналы. Формат 09:00-23:55.">окно (спека)</span>
             <input class="pe-in mono" bind:value={draftSchedule} placeholder="09:00-23:55" />
           </label>
         </div>

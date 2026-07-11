@@ -2,7 +2,15 @@
   import { downloadCSV } from '$lib/csv';
   import { fetchWithAuth } from '../../lib/fetch-auth';
   import BacktestChart from './BacktestChart.svelte';
+  import ParamHelp from './ParamHelp.svelte';
+  import { helpFor } from '$lib/strategy-help';
   import { toFills, commissionBreakdown } from '../../lib/lab-analytics';
+
+  // «?» help panels per param in the sweep form. Lab has no live robot, so the
+  // points-conversion context is zero (formula + illustrative schematic shown);
+  // live «×ATR = N пунктов» is on the robot card where a real ATR exists.
+  let helpOpen = $state<Record<string, boolean>>({});
+  const helpCtx = { price: 0, atr: 0 };
 
   // ── Strategy catalog (botstore + installed robots merged) ──────────────
   let catalog = $state<any[]>([]);
@@ -545,14 +553,21 @@
         </div>
         {#each (selectedStrategy.params_schema ?? []) as p}
           {@const isSymbol = p.key === 'symbol'}
+          {@const help = helpFor(selectedStrategyId, p.key)}
           <div class="btl-pf">
             <div class="btl-pf-head">
-              <span class="btl-pf-label">{p.label}</span>
-              {#if p.desc || p.hint}
+              {#if help}
+                <button class="btl-pf-q" class:on={helpOpen[p.key]}
+                        title="пояснение со схемой" onclick={() => helpOpen[p.key] = !helpOpen[p.key]}>?</button>
+              {/if}
+              <span class="btl-pf-label">{help?.title ?? p.label}</span>
+              {#if !help && (p.desc || p.hint)}
                 <span class="btl-pf-i" title={p.desc || p.hint}>ⓘ</span>
               {/if}
             </div>
-            {#if p.desc || p.hint}
+            {#if help && helpOpen[p.key]}
+              <ParamHelp {help} value={Number(paramValues[p.key] ?? p.default) || 0} ctx={helpCtx} />
+            {:else if !help && (p.desc || p.hint)}
               <div class="btl-pf-desc">{p.desc || p.hint}</div>
             {/if}
             {#if isSymbol}
@@ -799,10 +814,15 @@
 
   /* Param fields */
   .btl-pf { margin-bottom: 12px; }
-  .btl-pf-head { display: flex; align-items: center; gap: 5px; margin-bottom: 3px; }
+  .btl-pf-head { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
   .btl-pf-label { font-size: 12px; color: #bbb; font-weight: 500; }
   .btl-pf-i { font-size: 12px; color: #5a8aba; cursor: help; }
   .btl-pf-i:hover { color: #8acaff; }
+  .btl-pf-q { width: 20px; height: 20px; flex-shrink: 0; border-radius: 50%;
+    background: #16204a; border: 1px solid #2d4a7a; color: #7ab8ff; cursor: pointer;
+    font-size: 12px; font-weight: 700; line-height: 1; padding: 0; }
+  .btl-pf-q:hover { background: #1d2a5a; }
+  .btl-pf-q.on { background: #2d4a7a; color: #fff; }
   .btl-pf-desc { font-size: 11px; color: #7a9abb; line-height: 1.55; margin-bottom: 4px; white-space: pre-line; }
 
   /* Inputs */

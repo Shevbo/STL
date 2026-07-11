@@ -150,6 +150,17 @@ def explain(strategy_id: str, bars, params: dict, position: int,
     d["position"] = position
     price = bars[-1].close if bars else 0.0
     d["last_close"] = price
+    # Current ATR (points) over avg_atr_n M1 bars, ALWAYS present (even when flat)
+    # so the parameter editor can show live "×ATR = N пунктов" conversions.
+    atr_n = int(params.get("avg_atr_n", 14) or 14)
+    if len(bars) >= atr_n + 1:
+        try:
+            d["atr"] = round(I.atr([b.high for b in bars], [b.low for b in bars],
+                                   [b.close for b in bars], atr_n), 2)
+        except Exception:
+            d["atr"] = 0.0
+    else:
+        d["atr"] = 0.0
     # What fires on the NEXT confirming signal: if a signal is live now, the
     # actual orders; otherwise the hypothetical entry orders for either side.
     want = d.get("want")
