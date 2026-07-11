@@ -273,6 +273,20 @@
       flattenMsg = res.ok ? 'Пуск отправлен.' : `Ошибка: ${res.status}`;
     } catch (e) { flattenMsg = `Ошибка: ${String(e).slice(0, 80)}`; }
   }
+  // Пауза БЕЗ закрытия: блокирует новые входы, открытая позиция остаётся как есть
+  // (в отличие от «Закрыть всё + стоп»). Тот же pause-agent, что и operator-pause.
+  let pausing = $state(false);
+  async function pauseRobot() {
+    flattenMsg = ''; pausing = true;
+    try {
+      const res = await fetchWithAuth(
+        `/api/v1/quik/robots/${encodeURIComponent(robotId)}/pause-agent`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ agent_id: agentId }) });
+      flattenMsg = res.ok ? 'Пауза отправлена. Позиция остаётся открытой.' : `Ошибка: ${res.status}`;
+    } catch (e) { flattenMsg = `Ошибка: ${String(e).slice(0, 80)}`; }
+    finally { pausing = false; }
+  }
 
   // ---- params editor (GUI, no hand-JSON): params apply next bar; changing
   // max_position/schedule relays a full spec re-deploy (zero-loss). ----
@@ -383,6 +397,9 @@
         {#if robot.paused}
           <button class="rc-btn go" onclick={startRobot} title="возобновить работу робота">▶ Пуск</button>
         {:else}
+          <button class="rc-btn" disabled={pausing} onclick={pauseRobot}
+                  title="остановить новые входы; открытая позиция ОСТАЁТСЯ">
+            {pausing ? '…' : '⏸ Пауза'}</button>
           <button class="rc-btn danger" disabled={flattening} onclick={flattenNow}
                   title="закрыть всю позицию по рынку и остановить робота">
             {flattening ? '…' : '⏻ Закрыть всё + стоп'}</button>
@@ -682,7 +699,10 @@
   .ars-bottom { flex: 0 0 30%; min-height: 180px; display: flex; border-top: 1px solid #22224a; overflow: hidden; }
 
   /* params editor */
-  .rc-btn { margin-left: 6px; font-size: 10px; font-weight: 600; padding: 3px 10px; border-radius: 3px; cursor: pointer; }
+  .rc-btn { margin-left: 6px; font-size: 10px; font-weight: 600; padding: 3px 10px; border-radius: 3px; cursor: pointer;
+    background: #2a1e0a; border: 1px solid #b8860b; color: #ffca7a; }
+  .rc-btn:hover:not(:disabled) { background: #352712; }
+  .rc-btn:disabled { opacity: .5; cursor: default; }
   .rc-btn.danger { background: #2a0a0a; border: 1px solid #f44336; color: #ff8a80; }
   .rc-btn.danger:hover:not(:disabled) { background: #3a0e0e; }
   .rc-btn.danger:disabled { opacity: .5; cursor: default; }
