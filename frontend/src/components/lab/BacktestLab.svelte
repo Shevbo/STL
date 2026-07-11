@@ -712,7 +712,6 @@
                 <th>Просадка</th>
                 <th>Сделок</th>
                 <th title="пиковая одновременная позиция (контрактов) за бэктест — сверяй с лимитами агента и ГО">Макс. поз.</th>
-                <th>Прибыль×RF</th>
               </tr>
             </thead>
             <tbody>
@@ -733,7 +732,6 @@
                   <td class="btl-num" class:neg={(r.max_drawdown ?? 0) > 0.1}>{fmtPct(r.max_drawdown)}</td>
                   <td class="btl-num">{fmtN(r.total_trades)}</td>
                   <td class="btl-num" class:neg={(r.peak_contracts ?? 0) > 20}>{r.peak_contracts ?? '—'}</td>
-                  <td class="btl-num btl-score" class:pos={profitRF(r) > 0}>{fmtMoney(profitRF(r))}</td>
                 </tr>
               {/each}
             </tbody>

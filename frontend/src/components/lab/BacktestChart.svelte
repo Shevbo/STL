@@ -10,6 +10,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { fetchWithAuth } from '../../lib/fetch-auth';
+  import { downloadCSV } from '$lib/csv';
   import {
     toFills, rolledPnl, priceMarkers,
     positionRects, exitStats, commissionBreakdown, commissionFor,
@@ -96,6 +97,30 @@
   let statsExpanded = $state(false);    // report collapsed to 2 lines by default
   let showTrades = $state(false);       // trades-table overlay
   let tradeRows = $state<any[]>([]);    // per-trade rows for the table
+
+  // Resizable P&L pane (operator: «слепой и очень узкий»). Drag the divider to
+  // grow the equity field; persisted so it survives reloads. The ResizeObserver
+  // already re-sizes the chart to the div's clientHeight.
+  let equityPx = $state<number>(Number(localStorage.getItem('bt_equity_px')) || 240);
+  let eqResizing = false;
+  function startEqResize(ev: PointerEvent) {
+    eqResizing = true;
+    (ev.target as HTMLElement).setPointerCapture?.(ev.pointerId);
+    ev.preventDefault();
+  }
+  function moveEqResize(ev: PointerEvent) {
+    if (!eqResizing) return;
+    // dragging UP grows the pane: delta = how far the pointer is above the divider.
+    const root = (ev.currentTarget as HTMLElement).closest('.bt-root') as HTMLElement | null;
+    if (!root) return;
+    const rb = root.getBoundingClientRect();
+    equityPx = Math.max(90, Math.min(rb.height - 180, rb.bottom - ev.clientY - 34));
+  }
+  function endEqResize(ev: PointerEvent) {
+    if (!eqResizing) return;
+    eqResizing = false;
+    try { localStorage.setItem('bt_equity_px', String(Math.round(equityPx))); } catch {}
+  }
   let crossLabel = $state('');
   // "LIVE ПОТОКА" marker: x-pixel of the newest bar (where the live stream feeds the
   // chart). null = off-screen/hidden. Repositioned on pan/zoom and each live tail.
@@ -231,9 +256,11 @@
     });
     equitySeries = tvEquity.addBaselineSeries({
       baseValue: { type: 'price', price: 0 },
-      topLineColor: '#4caf50', topFillColor1: '#4caf5040', topFillColor2: '#4caf5008',
-      bottomLineColor: '#f44336', bottomFillColor1: '#f4433608', bottomFillColor2: '#f4433640',
-      lineWidth: 1, priceFormat: { type: 'price', precision: 0, minMove: 1 },
+      // Solid green field above 0 (operator: TSLab-style «залитое зелёное поле»),
+      // red field below. Strong fill + a 2px line so the curve is not «слепой».
+      topLineColor: '#00e676', topFillColor1: '#00e67688', topFillColor2: '#00e67618',
+      bottomLineColor: '#ff5252', bottomFillColor1: '#ff525218', bottomFillColor2: '#ff525288',
+      lineWidth: 2, priceFormat: { type: 'price', precision: 0, minMove: 1 },
     });
 
     // Crosshair: time label + trade tooltip if hovering near a triangle.
@@ -917,6 +944,11 @@
       <div class="trades-pane">
         <div class="tp-head">
           <span class="tp-title">Сделки бэктеста · {symbol} · {tradeRows.length} филлов</span>
+          <button class="tp-csv" onclick={() => downloadCSV(
+            tradeRows.map(r => ({ '№': r.n, время_UTC: fmtTs(r.time), тип: KIND_RU[r.kind] ?? r.kind,
+              сторона: r.side === 'buy' ? 'покупка' : 'продажа', кол_во: r.qty, цена: r.price,
+              комиссия: r.comm, позиция_после: r.posAfter, результат_руб: r.pnl })),
+            'trades-' + symbol)}>Выгрузить в CSV</button>
           <button class="tp-close" onclick={() => showTrades = false}>✕</button>
         </div>
         <div class="tp-wrap">
@@ -948,8 +980,11 @@
     {#if error}<div class="overlay error">{error}</div>{/if}
   </div>
 
+  <!-- drag this divider up/down to resize the P&L field -->
+  <div class="bt-resizer" title="потяни, чтобы изменить высоту графика доходности"
+       onpointerdown={startEqResize} onpointermove={moveEqResize} onpointerup={endEqResize}></div>
   <div class="bt-equity-label">P&L робота, ₽ (нарастающим по закрытым сделкам)</div>
-  <div class="equity" bind:this={equityEl}></div>
+  <div class="equity" bind:this={equityEl} style="height:{equityPx}px"></div>
 
   <!-- Custom horizontal scrollbar: drag the thumb to scroll across the data span. -->
   <div class="bt-scrollbar" bind:this={scrollTrackEl}>
@@ -1094,7 +1129,13 @@
     padding: 3px 10px; font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.5px;
     background: #0f0f1e; border-top: 1px solid #1a1a2e; border-bottom: 1px solid #1a1a2e; flex-shrink: 0;
   }
-  .equity { flex: 0 0 22%; min-height: 0; }
+  .equity { flex: 0 0 auto; min-height: 0; }
+  .bt-resizer { flex: 0 0 8px; cursor: ns-resize; background: #12203a;
+    border-top: 1px solid #24406a; border-bottom: 1px solid #24406a; touch-action: none; }
+  .bt-resizer:hover { background: #1c3054; }
+  .tp-csv { background: #16162c; border: 1px solid #2d2d4a; color: #cde; margin-left: auto;
+    margin-right: 8px; padding: 3px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+  .tp-csv:hover { border-color: #4caf50; }
 
   .bt-scrollbar {
     position: relative; height: 14px; margin: 4px 10px; flex-shrink: 0;

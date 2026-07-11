@@ -363,6 +363,17 @@ export function priceMarkers(
     const color = e.close ? (e.close.exit === 'TP' ? colors.tp : colors.sl)
       : (e.kind === 'average' ? dim(base) : base);
     const size = e.close ? 1 : (isAdd ? 1 : 2);   // fresh entry larger; adds smaller
+    // TEXT tag so every fill is unambiguous on the chart (operator: «где OPEN, TP,
+    // AVR, ENF, SL?»). A REVERSE fill both CLOSES the old position and OPENS the new
+    // one on the same bar — label it «TP→OPEN» / «SL→OPEN» so the flip is visible
+    // instead of the entry hiding behind the exit. TP/SL here = profit/loss close
+    // (this strategy has no protective stop; a losing close reads as «SL»).
+    let text: string;
+    if (e.kind === 'reverse' && e.close) text = `${e.close.exit}→OPEN`;
+    else if (e.close) text = e.close.exit;            // TP / SL (full or partial close)
+    else if (e.kind === 'average') text = 'AVR';       // усреднение (добор против движения)
+    else if (e.kind === 'enforce') text = 'ENF';       // усиление (добор в сторону прибыли)
+    else text = 'OPEN';                                // свежий вход
     // Use the bucketed time DIRECTLY (no +1s uniqueness nudge). Markers are attached to
     // the candle series (setMarkers), which snaps them to the containing bar and allows
     // several markers on one bar — so we never inject off-grid time points into the shared
@@ -370,11 +381,11 @@ export function priceMarkers(
     const tt = e.time;
     if (e.side === 'buy') {
       buy.points.push({ time: tt, value: e.price });
-      buy.markers.push({ time: tt, position: 'inBar', color, shape: 'arrowUp', size });
+      buy.markers.push({ time: tt, position: 'belowBar', color, shape: 'arrowUp', size, text });
       index.push({ time: tt, price: e.price, side: 'buy', label: e.label, rawTime: e.rawTime, id: e.id, close: e.close });
     } else {
       sell.points.push({ time: tt, value: e.price });
-      sell.markers.push({ time: tt, position: 'inBar', color, shape: 'arrowDown', size });
+      sell.markers.push({ time: tt, position: 'aboveBar', color, shape: 'arrowDown', size, text });
       index.push({ time: tt, price: e.price, side: 'sell', label: e.label, rawTime: e.rawTime, id: e.id, close: e.close });
     }
   }
