@@ -561,6 +561,25 @@ def _is_sweep_run(run_id: str) -> bool:
     return bool(run_id) and (run_id.startswith("camp-") or run_id.startswith("opt-"))
 
 
+def _strat_id_from_code(code: str) -> str | None:
+    """Strategy id from a run's script_code, handling BOTH forms: library
+    `make_on_bar('id')` / `make_on_bar("id")` and standalone strategies
+    `from trader.lab.strategies.<module> import ...`. Without this the standalone
+    strategies (donchian_breakout, ema_crossover, supertrend, …) never matched the
+    make_on_bar regex, so their sweeps were not mirrored to the leaderboard and never
+    appeared in the per-robot run history."""
+    import re as _re
+    if not code:
+        return None
+    m = _re.search(r"make_on_bar\(\s*['\"]([a-z0-9_]+)['\"]", code)
+    if m:
+        return m.group(1)
+    m = _re.search(r"trader\.lab\.strategies\.([a-z0-9_]+)\s+import", code)
+    if m:
+        return m.group(1)
+    return None
+
+
 def _sweep_campaign(run_id: str) -> str | None:
     """Campaign id = first 3 dash-parts of a sweep run_id (e.g. opt-20260605-1200)."""
     if not _is_sweep_run(run_id):
@@ -687,7 +706,6 @@ async def _run_remote_job_on_vds(row, app_state) -> None:
     leaderboard (same shape as the agent). Serialized + capped + idle-priority."""
     import itertools
     import json as _json
-    import re as _re
     from trader.lab.backtest import run_backtest_grid
 
     pool = app_state.db_pool
@@ -747,8 +765,7 @@ async def _run_remote_job_on_vds(row, app_state) -> None:
                 initial_margin=initial_margin, metrics_only=True,   # sweeps: never hold equity → no OOM
             )
 
-            m = _re.search(r"make_on_bar\('([a-z0-9_]+)'\)", script_code or "")
-            strat_id = m.group(1) if m else None
+            strat_id = _strat_id_from_code(script_code or "")
             campaign = _sweep_campaign(run_id)
             if strat_id:
                 lb_rows = [
@@ -2474,8 +2491,7 @@ def create_app() -> FastAPI:
         if camp_name and body.get("scriptCode"):
             import re as _re2
             slug = _re2.sub(r"[^a-z0-9]+", "", camp_name)[:24] or "sweep"
-            m = _re2.search(r"make_on_bar\('([a-z0-9_]+)'\)", body.get("scriptCode") or "")
-            strat = m.group(1) if m else "strat"
+            strat = _strat_id_from_code(body.get("scriptCode") or "") or "strat"
             now = _dt.now()
             sym_tok = _re2.sub(r"[^A-Za-z0-9]+", "", str(body.get("symbol") or "X")) or "X"
             run_id = f"camp-{now:%Y%m%d}-{slug}-r{now:%H%M%S}-{strat}-{sym_tok}"
@@ -2861,10 +2877,8 @@ def create_app() -> FastAPI:
             if isinstance(jb, str):
                 jb = _json.loads(jb)
             sc = jb.get("script_code", "") or ""
-            # script_code = "...make_on_bar('rsi_trend')" → extract the strategy id
-            import re as _re
-            m = _re.search(r"make_on_bar\('([a-z0-9_]+)'\)", sc)
-            strat_id = m.group(1) if m else None
+            # both library make_on_bar('id') and standalone module imports (see helper)
+            strat_id = _strat_id_from_code(sc)
             # sweep run_id = "<camp|opt>-YYYYMMDD-HHMM-..." → campaign = first 3 parts.
             campaign = _sweep_campaign(run_id)
 
