@@ -35,9 +35,9 @@
   // maxLocal = cap on the small VDS (one subprocess, serial — keep modest so a run
   // finishes in minutes). maxRemote = cap on the i9 agent (16 workers — handles 10x).
   const ROUNDS = [
-    { id: 'r0', label: 'R0 Random Explore', desc: 'Случайный поиск по сетке', maxLocal: 80, maxRemote: 800 },
-    { id: 'r1', label: 'R1 RF×Return Refine', desc: 'Уточнение лучших', maxLocal: 60, maxRemote: 400 },
-    { id: 'r2', label: 'R2 RF×Return Refine', desc: 'Финальный отбор', maxLocal: 40, maxRemote: 250 },
+    { id: 'r0', label: 'R0 Random Explore', desc: 'Случайный поиск по сетке', maxLocal: 80, maxRemote: 5000 },
+    { id: 'r1', label: 'R1 RF×Return Refine', desc: 'Уточнение лучших', maxLocal: 60, maxRemote: 5000 },
+    { id: 'r2', label: 'R2 RF×Return Refine', desc: 'Финальный отбор', maxLocal: 40, maxRemote: 2500 },
   ];
   let activeRound = $state(0);
   let roundResults = $state<any[][]>([[], [], []]);

@@ -349,6 +349,23 @@
       if (Array.isArray(hit?.params_schema)) paramSchema = hit.params_schema;
     } catch { /* description is optional */ }
   }
+  // «История прогонов»: all saved parameter sweeps of THIS robot's strategy, so the
+  // operator reviews every hit-parade without re-running (each row opens the standard
+  // campaign showcase via ?campaign=). Loaded lazily on first open.
+  let allCampaigns = $state<any[]>([]);
+  let showHistory = $state(false);
+  const strategyCampaigns = $derived(
+    allCampaigns.filter((c: any) => (c.strategies ?? []).includes(robot?.strategy_id)));
+  async function toggleHistory() {
+    showHistory = !showHistory;
+    if (showHistory && allCampaigns.length === 0) {
+      try {
+        const r = await fetchWithAuth('/api/v1/lab/campaigns');
+        if (r.ok) allCampaigns = await r.json();
+      } catch { /* history is auxiliary */ }
+    }
+  }
+
   // Live context for the param editor's «×ATR = N пунктов» conversions: price +
   // current ATR come from the runner's signal_json (explain.py, always present).
   const paramCtx = $derived({
@@ -611,7 +628,26 @@
     </div>
 
     <div class="panel">
-      <div class="p-title">Логика стратегии</div>
+      <div class="p-title">Логика стратегии
+        <button class="pe-btn hist" onclick={toggleHistory}
+                title="все сохранённые прогоны перебора параметров этой стратегии">
+          История прогонов{#if strategyCampaigns.length} ({strategyCampaigns.length}){/if}</button>
+      </div>
+      {#if showHistory}
+        <div class="hist-box">
+          {#if strategyCampaigns.length === 0}
+            <div class="hist-empty">Прогонов параметров для этой стратегии ещё нет.</div>
+          {:else}
+            {#each strategyCampaigns as c}
+              <a class="hist-row mono" href={'/?campaign=' + encodeURIComponent(c.campaign)} target="_blank" rel="noopener"
+                 title="открыть витрину прогона: карта плотности, лучшие наборы, график по клику">
+                <span class="hist-id">{c.campaign}</span>
+                <span class="hist-meta">{(c.symbols ?? []).join(', ')} · {c.combos?.toLocaleString('ru-RU')} комб. · {c.date_from ?? '—'}—{c.date_to ?? '—'}</span>
+              </a>
+            {/each}
+          {/if}
+        </div>
+      {/if}
       <div class="desc">{strategyDesc || 'Fair Value Gap (ICT) — вход по 3-барному ценовому разрыву с подтверждением телом свечи.'}</div>
       <div class="p-title sub">Параметры
         {#if !editMode}
@@ -720,6 +756,17 @@
   .pe-btn.save { background: #0e2a18; border-color: #2e7d32; color: #66bb6a; font-weight: 600; }
   .pe-btn.save:hover:not(:disabled) { background: #12351f; }
   .pe-btn:disabled { opacity: 0.5; cursor: default; }
+  .pe-btn.hist { border-color: #2d4a7a; color: #7ab8ff; }
+  .pe-btn.hist:hover { border-color: #4a6aaa; color: #aad4ff; }
+  .hist-box { margin: 8px 0; border: 1px solid #1a2a44; border-radius: 6px; background: #0a1120;
+    padding: 6px 8px; max-height: 200px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+  .hist-empty { font-size: 11px; color: #667; font-style: italic; padding: 4px; }
+  .hist-row { display: flex; flex-direction: column; gap: 1px; padding: 5px 6px; border-radius: 4px;
+    text-decoration: none; border-top: 1px solid #111a2c; }
+  .hist-row:first-child { border-top: none; }
+  .hist-row:hover { background: #0f1830; }
+  .hist-id { font-size: 11px; color: #7ab8ff; }
+  .hist-meta { font-size: 10px; color: #789; }
   .pe-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; }
   .pe-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 11px; color: #99a; }
   .pe-row.spec span { color: #ffb300; }
