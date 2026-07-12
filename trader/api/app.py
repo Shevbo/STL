@@ -2609,22 +2609,21 @@ def create_app() -> FastAPI:
         return [dict(r) for r in rows]
 
     @fastapi_app.get("/api/v1/lab/campaign-result")
-    async def lab_campaign_result(campaign_run: str, params: str, request: Request):
-        """Return a STORED full result (with trades) for one campaign hit-parade entry so
-        the showcase opens it from the DB with no i9/VDS re-run. Matched by the run_id
-        campaign prefix (a sweep/backfill run_id is `<campaign_run>-r...`) + exact params.
-        null when nothing is stored yet → the frontend re-runs once and caches it."""
+    async def lab_campaign_result(campaign_run: str, rank: int, request: Request):
+        """Return a STORED full result (with trades) for one campaign hit-parade row so the
+        showcase opens it from the DB with no i9/VDS re-run. Matched by RANK: the backfill
+        stores the top-N <=10-contract configs as `<campaign_run>-bf<rank>` in net_profit
+        desc order, exactly the order the `best` list is rendered in, so best[rank] maps to
+        -bf<rank>. null when nothing is stored yet → the frontend re-runs once."""
         _auth(request)
         pool = request.app.state.db_pool
-        if pool is None:
+        if pool is None or rank < 0:
             return None
         row = await pool.fetchrow(
             "SELECT run_id, params, trades, sharpe, max_drawdown, win_rate, total_return, "
             "total_trades, net_profit, recovery_factor, point_value, peak_contracts "
-            "FROM backtest_results "
-            "WHERE run_id LIKE $1 AND params = $2::jsonb AND trades IS NOT NULL "
-            "ORDER BY total_trades DESC NULLS LAST LIMIT 1",
-            campaign_run + "-%", params,
+            "FROM backtest_results WHERE run_id=$1 AND trades IS NOT NULL LIMIT 1",
+            f"{campaign_run}-bf{rank}",
         )
         return dict(row) if row else None
 

@@ -309,11 +309,12 @@
       const dateFrom = opts?.dateFrom ? opts.dateFrom + 'T00:00:00' : (detail?.period?.date_from ?? toISO(daysAgo(95)));
       const dateTo = opts?.dateTo ? opts.dateTo + 'T23:59:59' : (detail?.period?.date_to ?? toISO(yesterday()));
       const sc = tmpl.script_code;
-      // Prefer a pre-computed stored result (top-3 backfill) — opens from the DB with no
-      // i9/VDS re-run. Falls through to a live run when nothing is stored for this combo.
-      if (opts?.campaign) {
+      // Prefer a pre-computed stored result (top-N backfill) — opens from the DB with no
+      // i9/VDS re-run. Matched by rank (row position in the net-desc best list). Falls
+      // through to a live run when nothing is stored for this row.
+      if (opts?.campaign && opts?.rank != null) {
         try {
-          const q = `campaign_run=${encodeURIComponent(opts.campaign)}&params=${encodeURIComponent(JSON.stringify(params))}`;
+          const q = `campaign_run=${encodeURIComponent(opts.campaign)}&rank=${opts.rank}`;
           const cr = await fetchWithAuth(`/api/v1/lab/campaign-result?${q}`);
           if (cr.ok) {
             const stored = await cr.json();
@@ -929,10 +930,10 @@
                 <table class="cmp-bt">
                   <thead><tr><th>робот</th><th>инстр.</th><th>финрез</th><th>доходн.</th><th>RF</th><th>параметры</th></tr></thead>
                   <tbody>
-                    {#each campaign.best as b}
+                    {#each campaign.best as b, i}
                       <tr class="cmp-click"
                           title="Открыть график этого набора: цена со сделками + кривая доходности"
-                          onclick={() => { const o = { strategyId: b.strategy, dateFrom: b.date_from, dateTo: b.date_to, campaign: campaign.campaign }; closeCampaign(); openChart(b.symbol, b.params, o); }}>
+                          onclick={() => { const o = { strategyId: b.strategy, dateFrom: b.date_from, dateTo: b.date_to, campaign: campaign.campaign, rank: i }; closeCampaign(); openChart(b.symbol, b.params, o); }}>
                         <td class="cmp-l">{robotName(b.strategy)}</td>
                         <td class="mono">{b.symbol}</td>
                         <td class:pos={b.net_profit > 0} class:neg={b.net_profit < 0}>{fmtMoney(b.net_profit)}</td>
