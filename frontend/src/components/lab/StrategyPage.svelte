@@ -140,48 +140,48 @@
   /* ── ONE type scale — each size maps to ONE role, applied everywhere ──────────
      display 46 · title(H3) 17 · lead 16 · body 15 · meta 13 · eyebrow 12 · kicker 11 · mono 12.5 */
   .hero-eyebrow { font-size: 12px; letter-spacing: 2px; text-transform: uppercase; color: var(--muted); font-weight: 600; }
-  .hero-name { margin: 12px 0 0; font-size: clamp(32px, 5.4vw, 46px); line-height: 1.04; font-weight: 800;
-    letter-spacing: -0.022em; color: var(--ink); text-wrap: balance; }
+  .hero-name { margin: 14px 0 0; font-size: clamp(38px, 6.2vw, 56px); line-height: 1.0; font-weight: 800;
+    letter-spacing: -0.025em; color: var(--ink); text-wrap: balance; }
   .hero-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin-top: 16px; }
   .hero-chip { font-family: ui-monospace, "SF Mono", monospace; font-size: 12.5px; color: var(--accent);
     background: rgba(43,95,176,.08); border: 1px solid rgba(43,95,176,.24); border-radius: 6px; padding: 4px 9px; letter-spacing: .3px; }
   .hero-tf { font-size: 13px; color: var(--ink2); }
   .hero-src { font-size: 13px; color: var(--accent); text-decoration: none; }
   .hero-src:hover { text-decoration: underline; }
-  .hero-thesis { margin: 22px 0 0; font-size: 16px; line-height: 1.66; color: var(--ink2); max-width: 68ch; font-weight: 400; }
+  .hero-thesis { margin: 24px 0 0; font-size: 18px; line-height: 1.6; color: var(--ink2); max-width: 62ch; font-weight: 400; }
 
-  .rule { height: 1px; margin: 36px 0; background: linear-gradient(90deg, var(--accent), transparent 62%); opacity: .45; }
-  .sec-title { font-size: 12px; letter-spacing: 1.6px; text-transform: uppercase; color: var(--muted); font-weight: 700; margin: 0 0 22px; }
+  .rule { height: 1px; margin: 44px 0; background: linear-gradient(90deg, var(--accent), transparent 62%); opacity: .45; }
+  .sec-title { font-size: 12px; letter-spacing: 1.8px; text-transform: uppercase; color: var(--muted); font-weight: 700; margin: 0 0 26px; }
 
   .behavior { background: var(--tint); border: 1px solid var(--tint-line); border-left: 3px solid var(--accent);
-    border-radius: 4px 12px 12px 4px; padding: 20px 24px; margin-bottom: 44px; }
-  .behavior-kicker { font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: var(--accent); font-weight: 700; margin-bottom: 9px; }
-  .behavior-text { margin: 0; font-size: 16px; line-height: 1.7; color: var(--ink); max-width: 68ch; }
-  .behavior-foot { margin-top: 12px; font-size: 13px; color: var(--muted); }
+    border-radius: 4px 12px 12px 4px; padding: 24px 28px; margin-bottom: 56px; }
+  .behavior-kicker { font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: var(--accent); font-weight: 700; margin-bottom: 11px; }
+  .behavior-text { margin: 0; font-size: 17px; line-height: 1.72; color: var(--ink); max-width: 64ch; }
+  .behavior-foot { margin-top: 14px; font-size: 13px; color: var(--muted); }
 
-  .lifecycle { margin-bottom: 52px; }
+  .lifecycle { margin-bottom: 64px; }
   .stages { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
-  .stage { position: relative; display: grid; grid-template-columns: 84px 1fr; gap: 6px 14px; align-items: start;
-    padding: 24px 8px; border-top: 1px solid var(--rule); }
-  .stage:first-child { border-top: none; padding-top: 6px; }
-  .stage-num { font-family: ui-monospace, "SF Mono", monospace; font-size: 52px; font-weight: 800;
-    line-height: .9; color: var(--ghost); letter-spacing: -.03em; -webkit-text-stroke: 1px rgba(43,95,176,.24); }
+  .stage { position: relative; display: grid; grid-template-columns: 92px 1fr; gap: 6px 18px; align-items: start;
+    padding: 30px 8px; border-top: 1px solid var(--rule); }
+  .stage:first-child { border-top: none; padding-top: 8px; }
+  .stage-num { font-family: ui-monospace, "SF Mono", monospace; font-size: 60px; font-weight: 800;
+    line-height: .82; color: var(--ghost); letter-spacing: -.03em; -webkit-text-stroke: 1px rgba(43,95,176,.24); }
   .stage-kicker { font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: var(--accent); font-weight: 700; }
-  .stage-label { margin: 4px 0 8px; font-size: 17px; font-weight: 700; color: var(--ink); letter-spacing: -.01em; }
-  .stage-text { margin: 0; font-size: 15px; line-height: 1.65; color: var(--ink2); max-width: 66ch; }
+  .stage-label { margin: 5px 0 10px; font-size: 21px; font-weight: 700; color: var(--ink); letter-spacing: -.015em; }
+  .stage-text { margin: 0; font-size: 16px; line-height: 1.7; color: var(--ink2); max-width: 62ch; }
   .stage.risk .stage-num { color: rgba(165,102,27,.12); -webkit-text-stroke-color: rgba(165,102,27,.34); }
   .stage.risk .stage-kicker { color: var(--amber); }
 
   .params { margin-top: 8px; }
   .param-list { display: flex; flex-direction: column; }
-  .param { border-top: 1px solid var(--rule); padding: 22px 0; }
-  .param:first-child { border-top: none; padding-top: 0; }
-  .param-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 12px; margin-bottom: 12px; }
+  .param { border-top: 1px solid var(--rule); padding: 30px 0; }
+  .param:first-child { border-top: none; padding-top: 4px; }
+  .param-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 9px 13px; margin-bottom: 14px; }
   .param-key { font-family: ui-monospace, "SF Mono", monospace; font-size: 12.5px; color: var(--accent);
-    background: rgba(43,95,176,.08); border-radius: 5px; padding: 2px 7px; }
-  .param-title { font-size: 17px; font-weight: 700; color: var(--ink); }
+    background: rgba(43,95,176,.08); border-radius: 5px; padding: 3px 8px; }
+  .param-title { font-size: 21px; font-weight: 700; color: var(--ink); letter-spacing: -.015em; }
   .param-def { font-size: 12.5px; color: var(--muted); font-family: ui-monospace, monospace; margin-left: auto; }
-  .param-desc { margin: 0; font-size: 15px; line-height: 1.65; color: var(--ink2); max-width: 66ch; }
+  .param-desc { margin: 0; font-size: 16px; line-height: 1.7; color: var(--ink2); max-width: 62ch; }
 
   .sp-msg { color: var(--muted); padding: 40px 0; font-size: 15px; }
   .sp-err { color: #b5443a; padding: 40px 0; font-size: 15px; }
@@ -194,7 +194,7 @@
   .params :global(.ph) { background: var(--paper); border-left: 3px solid var(--accent);
     border-radius: 0 9px 9px 0; padding: 15px 18px; margin: 2px 0 6px; }
   .params :global(.ph-title) { display: none; }
-  .params :global(.ph-what) { font-size: 15px; line-height: 1.65; color: var(--ink2); }
+  .params :global(.ph-what) { font-size: 16px; line-height: 1.7; color: var(--ink2); }
   .params :global(.ph-how) { font-size: 13px; line-height: 1.55; color: var(--muted); }
   .params :global(.ph-live) { font-size: 13px; color: var(--accent); }
   .params :global(.ph-note) { font-size: 13px; line-height: 1.55; color: var(--amber); background: var(--amber-bg); }
