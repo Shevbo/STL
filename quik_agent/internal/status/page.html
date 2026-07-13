@@ -280,15 +280,15 @@ function robotLinks(r) {
   // On the STL mirror these paths resolve against STL's own origin (not the agent),
   // which does not implement them — render plain text there instead of a dead link.
   if (IS_LOCAL) {
-    // /logs/runner tails <runnerDir>\runner.log (teed from the runner's stdout/stderr
-    // by FileTee in the agent); /strategy/{id} returns the doc from strategies_doc.json
-    // shipped next to the runner exe. Both are agent-local only (plain text on the mirror).
-    links.push('<a class="mono" href="/logs/runner" target="_blank" style="color:#7ab8ff">runner.log</a>');
-    if (r.strategy_id) links.push('<a class="mono" href="/strategy/' + encodeURIComponent(r.strategy_id) + '" target="_blank" style="color:#7ab8ff">стратегия</a>');
+    // «Детальный лог робота» tails THIS robot's own event log (orders/fills/signals/
+    // errors/lifecycle) from the agent — agent-local, so it's plain text on the mirror.
+    links.push('<a class="mono" href="/logs/robot/' + encodeURIComponent(r.id) + '" target="_blank" style="color:#7ab8ff">Детальный лог робота</a>');
   } else {
-    links.push('<span class="mono" style="color:#667">runner.log</span>');
-    if (r.strategy_id) links.push('<span class="mono" style="color:#667">' + esc(r.strategy_id) + '</span>');
+    links.push('<span class="mono" style="color:#667">Детальный лог робота</span>');
   }
+  // «стратегия» opens the STL frontend's illustrated strategy page at an ABSOLUTE
+  // URL, so the link works both on the loopback stand and via the STL mirror.
+  if (r.strategy_id) links.push('<a class="mono" href="https://stl.shectory.ru/?strategy=' + encodeURIComponent(r.strategy_id) + '" target="_blank" style="color:#7ab8ff">стратегия</a>');
   return links.join(' · ');
 }
 

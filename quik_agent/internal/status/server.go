@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -75,6 +77,26 @@ func newMux(d Deps) *http.ServeMux {
 		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		if err := tailFile(w, path); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	})
+
+	// Per-robot detailed log ("Детальный лог робота"): tails <RobotLogDir>/<id>.log,
+	// which the runner appends significant events to (orders/fills/signals/errors/
+	// lifecycle). id is a colon-free robot slug; reject any path separators so it
+	// cannot escape the log dir. A missing file = the robot has not acted yet.
+	mux.HandleFunc("GET /logs/robot/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if d.RobotLogDir == "" || id == "" || strings.ContainsAny(id, `/\`) {
+			http.Error(w, "unknown robot log: "+id, http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		err := tailFile(w, filepath.Join(d.RobotLogDir, id+".log"))
+		if err != nil && os.IsNotExist(err) {
+			w.Write([]byte("пока нет событий для " + id +
+				" (робот ещё не совершал действий)\n"))
+		} else if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 	})

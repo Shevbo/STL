@@ -684,7 +684,10 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 			// Windows service => Event Log), so only "runner" is wired here.
 			LogPaths: map[string]string{"runner": filepath.Join(runnerDir, "runner.log")},
 			DocsPath: filepath.Join(runnerDir, "strategies_doc.json"),
-			NowMs:    func() int64 { return time.Now().UnixMilli() },
+			// Per-robot detailed logs: the runner writes <data_dir>/logs/<id>.log
+			// (AgentRuntime.event); the stand's «Детальный лог робота» tails them.
+			RobotLogDir: filepath.Join(cfg.RobotsDataDir(opt.exeDir), "logs"),
+			NowMs:       func() int64 { return time.Now().UnixMilli() },
 		}
 		lk.SetStatusDeps(deps)
 

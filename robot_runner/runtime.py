@@ -11,7 +11,9 @@ Limits: max_position is enforced BEFORE sending (first line; the Go Guard is
 the second). An order that would exceed it returns status='skipped'.
 """
 
+import os
 import time
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 from uuid import uuid4
@@ -29,11 +31,37 @@ _QUOTE_FRESH_MS = 10_000   # marketable pricing only off a quote younger than th
 _STATE_TO_STATUS = {2: "active", 3: "partial", 4: "filled",
                     5: "cancelled", 6: "rejected"}
 
+# Per-robot detailed log ("Детальный лог робота" on the stand): significant events
+# only (orders/fills/signals/errors/lifecycle), appended across runner restarts.
+_MSK = timezone(timedelta(hours=3))          # FORTS wall clock; RU has no DST
+_LOG_MAX_BYTES = 1_048_576                   # trim when the file passes 1 MiB…
+_LOG_KEEP_BYTES = 262_144                    # …down to the last 256 KiB
+
+
+def _ts_msk() -> str:
+    return datetime.now(_MSK).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _trim_log(path: str, keep: int) -> None:
+    """Keep only the last `keep` bytes of path, dropping the partial first line.
+    ponytail: size cap in lieu of a rotation lib — the stand tails 64 KiB anyway."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(max(0, os.path.getsize(path) - keep))
+            tail = f.read()
+        nl = tail.find(b"\n")
+        if nl != -1:
+            tail = tail[nl + 1:]
+        with open(path, "wb") as f:
+            f.write(tail)
+    except OSError:
+        pass
+
 
 class AgentRuntime:
     def __init__(self, robot_id: str, bridge, bars, *, max_position: int = 1,
                  paper: bool = False, state: dict | None = None,
-                 fills_log=None, quote_fn=None) -> None:
+                 fills_log=None, quote_fn=None, event_log_dir: str | None = None) -> None:
         self._robot_id = robot_id
         self._bridge = bridge
         self._bars = bars
@@ -51,6 +79,15 @@ class AgentRuntime:
         self._fills: list[dict] = []
         self._seq = 0
         self._orders: dict[str, Order] = {}  # client_id -> last known state
+        # Per-robot detailed log file (<data_dir>/logs/<robot_id>.log); None disables.
+        self._event_log_path: str | None = None
+        if event_log_dir:
+            try:
+                d = os.path.join(event_log_dir, "logs")
+                os.makedirs(d, exist_ok=True)
+                self._event_log_path = os.path.join(d, f"{robot_id}.log")
+            except OSError:
+                self._event_log_path = None
 
     # ---- STLRuntime protocol ----
 
@@ -70,8 +107,9 @@ class AgentRuntime:
         # Reducing is always allowed; growing beyond max_position is refused.
         grows = abs(self._signed + delta) > abs(self._signed)
         if grows and abs(self._signed + delta) > self._max_position:
-            self.log(f"SKIP {side} {qty} {symbol}: would exceed max_position="
-                     f"{self._max_position} (now {self._signed})", level="warning")
+            self.event("SKIP", f"{side} {qty} {symbol}: превышен потолок "
+                       f"max_position={self._max_position} (позиция {self._signed})",
+                       level="warning")
             return Order(order_id="skipped-maxpos", symbol=symbol, side=side,
                          qty=qty, price=price, status="skipped")
         self._seq += 1
@@ -98,23 +136,25 @@ class AgentRuntime:
                 bid, ask, ts_ms = q
                 px = float((ask if side == "buy" else bid) or 0)
                 if px > 0 and (time.time() * 1000 - float(ts_ms or 0)) <= _QUOTE_FRESH_MS:
-                    if px != price:
-                        self.log(f"marketable {side}: {price} -> {px}")
                     send_price = px
         try:
             await self._bridge.place_order(client_id=client_id, code=symbol,
                                            side=side, price=send_price, qty=qty)
         except Exception as exc:
-            self.log(f"order rejected pre-QUIK: {exc}", level="error")
+            self.event("REJECT", f"{side} {qty} {symbol} @ {send_price:.0f}: {exc}",
+                       level="error")
             self._record(client_id, symbol, side, qty, send_price, "rejected")
             return Order(order_id=client_id, symbol=symbol, side=side, qty=qty,
                          price=send_price, status="rejected")
+        mk = " (маркетируемая)" if send_price != price else ""
+        self.event("ORDER", f"{side} {qty} {symbol} @ {send_price:.0f}{mk}")
         order = Order(order_id=client_id, symbol=symbol, side=side, qty=qty,
                       price=send_price, status="submitted")
         self._orders[client_id] = order
         return order
 
     async def cancel_order(self, order_id: str) -> None:
+        self.event("CANCEL", order_id, console=False)
         await self._bridge.cancel_order(order_id, "")
 
     def expire_order(self, client_id: str) -> None:
@@ -151,6 +191,24 @@ class AgentRuntime:
 
     def log(self, msg: str, level: str = "info") -> None:
         log.msg(msg, robot_id=self._robot_id, level=level)
+
+    def event(self, kind: str, msg: str, *, level: str = "info", console: bool = True) -> None:
+        """Record a SIGNIFICANT event to the per-robot detailed log (the stand's
+        «Детальный лог робота»), and by default mirror it to the console. Kinds:
+        ORDER/CANCEL/FILL/SKIP/REJECT/FIX/SIGNAL/ERROR/LIFECYCLE. Best-effort:
+        a disk error must never break trading."""
+        if console:
+            self.log(f"[{kind}] {msg}", level=level)
+        path = self._event_log_path
+        if not path:
+            return
+        try:
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(f"{_ts_msk()} [{kind}] {msg}\n")
+            if os.path.getsize(path) > _LOG_MAX_BYTES:
+                _trim_log(path, _LOG_KEEP_BYTES)
+        except Exception:  # noqa: BLE001 — logging must never break trading
+            pass
 
     # ---- fills / position bookkeeping ----
 
@@ -201,6 +259,9 @@ class AgentRuntime:
             self._signed, self._avg = new_signed, price
         self._record(client_id or "fill", symbol, side, qty, price, status,
                      order_id=order_id)
+        tag = "" if status == "filled" else f" ({status})"
+        self.event("FILL", f"{side} {qty} @ {price:.0f}{tag} → позиция {self._signed} @ "
+                   f"{self._avg:.0f}, реализовано {self._realized:.0f} п.")
 
     def _record(self, client_id, symbol, side, qty, price, status, order_id="") -> None:
         f = {"client_id": client_id, "order_id": order_id or client_id,
@@ -250,8 +311,8 @@ class AgentRuntime:
                             if o.status not in ("submitted", "active", "partial")}
         status = f"fix_state: {note}" if note else "fix_state"
         self._record("recon", symbol, "fix", int(position), float(avg), status)
-        self.log(f"fix_state applied: position={position} avg={avg} "
-                 f"clear_working={clear_working} note={note!r}", level="warning")
+        self.event("FIX", f"позиция←{position} avg←{avg:.0f} "
+                   f"clear_working={clear_working} note={note!r}", level="warning")
 
     def restore(self, *, position: int, avg: float, realized: float,
                 fills: list | None = None) -> None:

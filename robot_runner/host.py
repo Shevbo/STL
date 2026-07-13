@@ -38,6 +38,7 @@ class HostedRobot:
         self.on_bar = make_on_bar(spec["strategy_id"])
         self.window = _parse_window(spec.get("schedule"))
         self.last_error = ""
+        self.last_want = "unset"     # sentinel: first computed signal always logs
 
 
 class RobotHost:
@@ -111,7 +112,8 @@ class RobotHost:
             rt = AgentRuntime(spec["robot_id"], self._bridge, bars,
                               max_position=spec["max_position"],
                               paper=spec["paper"], state=saved.get("state"),
-                              quote_fn=lambda s=sym: self.quotes.get(s))
+                              quote_fn=lambda s=sym: self.quotes.get(s),
+                              event_log_dir=self._data_dir)
             rt.restore(position=saved.get("position", 0),
                        avg=saved.get("avg", 0.0),
                        realized=saved.get("realized", 0.0),
@@ -120,8 +122,14 @@ class RobotHost:
             log.info("host.deployed", robot_id=spec["robot_id"],
                      strategy=spec["strategy_id"], paper=spec["paper"],
                      max_position=spec["max_position"])
+            rt.event("LIFECYCLE", f"деплой: стратегия={spec['strategy_id']} "
+                     f"режим={'paper' if spec['paper'] else 'РЕАЛ'} "
+                     f"max_pos={spec['max_position']} окно={spec['schedule']}")
             self.persist()
         elif kind == "undeploy":
+            r = self.robots.get(rc.undeploy.robot_id)
+            if r is not None:
+                r.runtime.event("LIFECYCLE", "снят с деплоя (undeploy)")
             self.robots.pop(rc.undeploy.robot_id, None)
             self.persist()
         elif kind == "set_params":
@@ -131,19 +139,26 @@ class RobotHost:
                 if r.spec.get("symbol"):     # see deploy: params must carry symbol
                     params["symbol"] = r.spec["symbol"]
                 r.spec["params"] = params
+                r.runtime.event("LIFECYCLE", "параметры обновлены: "
+                                + json.dumps(params, ensure_ascii=False))
                 log.info("host.params_updated", robot_id=rc.set_params.robot_id)
         elif kind == "pause":
             r = self.robots.get(rc.pause.robot_id)
             if r is not None:
                 r.paused = True
+                r.runtime.event("LIFECYCLE", "ПАУЗА (оператор)")
         elif kind == "start":
             r = self.robots.get(rc.start.robot_id)
             if r is not None:
                 r.paused = False
+                r.runtime.event("LIFECYCLE", "СТАРТ (снята пауза)")
             self.killed = False   # an explicit start clears a kill
         elif kind == "kill":
             self.killed = True    # block all new orders; agent cancels working ones
-            log.warning("host.kill_switch", reason=getattr(rc.kill, "reason", ""))
+            reason = getattr(rc.kill, "reason", "")
+            for r in self.robots.values():
+                r.runtime.event("LIFECYCLE", f"KILL-SWITCH: {reason}", level="warning")
+            log.warning("host.kill_switch", reason=reason)
         elif kind == "flatten":
             # Operator: cancel working orders, MARKET-close the whole open position
             # (marketable via the real order path, tagged rr: so the fill zeroes the
@@ -166,6 +181,8 @@ class RobotHost:
                                             "sell" if signed > 0 else "buy",
                                             abs(signed), px)
             r.paused = True
+            r.runtime.event("LIFECYCLE", f"FLATTEN: закрыта позиция {signed}, ПАУЗА",
+                            level="warning")
             log.warning("host.flatten", robot_id=rc.flatten.robot_id, closed=signed)
             self.persist()
         elif kind == "fix_state":
@@ -224,12 +241,29 @@ class RobotHost:
         try:
             await r.on_bar(r.runtime, r.spec["params"])
             r.last_error = ""
+            self._log_signal_change(r)
         except Exception as exc:  # noqa: BLE001 — one robot's error never kills the host
             r.last_error = str(exc)
             log.error("host.on_bar_failed", robot_id=r.spec["robot_id"], error=str(exc))
+            r.runtime.event("ERROR", str(exc), console=False, level="error")
         r.last_bar_run = last
         self.persist()
         return True
+
+    def _log_signal_change(self, r: HostedRobot) -> None:
+        """Emit a SIGNAL event to the robot's detailed log only when the strategy's
+        desired position (want) CHANGES — entry/exit/reversal — not every bar."""
+        try:
+            sig = explain(r.spec["strategy_id"], r.bars.bars(), r.spec["params"],
+                          r.runtime.signed_position(), avg=r.runtime.avg_price())
+        except Exception:  # noqa: BLE001 — introspection must never break the bar
+            return
+        want = sig.get("want")
+        if want == r.last_want:
+            return
+        r.last_want = want
+        reason = sig.get("waiting_for") or ""
+        r.runtime.event("SIGNAL", f"want={want} · {reason}", console=False)
 
     def status_report(self) -> pb.RobotStatusReport:
         robots = []

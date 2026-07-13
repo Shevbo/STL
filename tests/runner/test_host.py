@@ -137,6 +137,36 @@ async def test_set_params_reinjects_spec_symbol(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_per_robot_event_log_records_significant_events(tmp_path):
+    # «Детальный лог робота»: the runner appends significant events to
+    # <data>/logs/<robot_id>.log — deploy (LIFECYCLE), fills (FILL), and a
+    # max_position refusal (SKIP). The agent serves this file at /logs/robot/<id>.
+    host = RobotHost(FakeBridge(), str(tmp_path))
+    await host.handle_control(_deploy_rc(paper=True))
+    logf = tmp_path / "logs" / "r1.log"
+    assert logf.exists()
+    assert "[LIFECYCLE]" in logf.read_text(encoding="utf-8")   # deploy logged
+
+    r = host.robots["r1"]
+    await r.runtime.place_order("RIU6", "buy", 1, 89_000.0)     # paper -> instant FILL
+    text = logf.read_text(encoding="utf-8")
+    assert "[FILL]" in text and "позиция 1" in text
+    # growing past max_position (=1) is refused and logged, not silently dropped
+    await r.runtime.place_order("RIU6", "buy", 5, 89_000.0)
+    assert "[SKIP]" in logf.read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_event_log_disabled_without_dir_never_raises(tmp_path):
+    # No event_log_dir (STL-side paper robots, tests) -> event() is console-only,
+    # never touches disk, never raises.
+    from robot_runner.runtime import AgentRuntime
+    rt = AgentRuntime("r9", FakeBridge(), None, paper=True)   # no event_log_dir
+    rt.event("ORDER", "smoke")                                 # must be a no-op on disk
+    assert rt._event_log_path is None
+
+
+@pytest.mark.asyncio
 async def test_tick_runs_strategy_once_per_closed_bar(tmp_path):
     host = RobotHost(FakeBridge(), str(tmp_path))
     await host.handle_control(_deploy_rc())

@@ -19,6 +19,7 @@
   import ChartsGrid from './components/ChartsGrid.svelte';
   import LoginDialog from './components/LoginDialog.svelte';
   import AgentRobotScreen from './components/lab/AgentRobotScreen.svelte';
+  import StrategyPage from './components/lab/StrategyPage.svelte';
   import { WsClient } from '$lib/ws';
   import { robotsStore } from '$lib/stores/robots.svelte';
   import { quotesStore } from '$lib/stores/quotes.svelte';
@@ -34,6 +35,10 @@
   const _qs = new URLSearchParams(window.location.search);
   const agentRobotId = _qs.get('agent_robot');
   const agentIdParam = _qs.get('agent');
+  // Deep-link: /?strategy=<id> renders the standalone "how the robot works" page
+  // (the same MustDescription + schematics as the param-run page). The agent-local
+  // stand links here as https://stl.shectory.ru/?strategy=<strategy_id>.
+  const strategyId = _qs.get('strategy');
   // Session check is in flight on first load. While checking we show a neutral splash
   // (NOT the login form) so a normal F5 with a valid cookie does not flash the login
   // screen. The login form only appears after the check completes with a real 401.
@@ -257,6 +262,8 @@
   </div>
 {:else if !authed}
   <LoginDialog {onLogin} />
+{:else if strategyId}
+  <StrategyPage {strategyId} />
 {:else if agentRobotId}
   <AgentRobotScreen robotId={agentRobotId} agentId={agentIdParam} />
 {:else}

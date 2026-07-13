@@ -161,9 +161,10 @@ type Deps struct {
 	// other error is a precondition/confirm failure shown to the operator.
 	SetPosition func(id string, pos int64, avg float64, confirmID string) error
 
-	LogPaths map[string]string // "agent"/"runner" -> file path
-	DocsPath string            // strategies_doc.json (Task 10)
-	NowMs    func() int64
+	LogPaths    map[string]string // "agent"/"runner" -> file path
+	DocsPath    string            // strategies_doc.json (Task 10)
+	RobotLogDir string            // dir of per-robot <robot_id>.log detailed logs
+	NowMs       func() int64
 }
 
 func (d Deps) linkUp() bool {
