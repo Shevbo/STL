@@ -47,7 +47,8 @@
   });
 </script>
 
-<div class="sp">
+<div class="sp-page">
+ <div class="sp">
   {#if loading}
     <div class="sp-msg">Загрузка…</div>
   {:else if error}
@@ -115,19 +116,22 @@
       </div>
     </section>
   {/if}
+ </div>
 </div>
 
 <style>
+  .sp-page {
+    --bg: #0b0e16; --surface: #141926; --surface2: #191f2e;
+    --ink: #f3f6fc; --ink2: #cdd5e3; --muted: #7d8899; --rule: #212a3b;
+    --accent: #6aaaff; --entry: #46e08c; --amber: #f4b268; --ghost: rgba(106,170,255,0.08);
+    background: var(--bg); min-height: 100vh; color: var(--ink);
+  }
   .sp {
-    --bg: #0a0d15; --surface: #12151f; --surface2: #161b28;
-    --ink: #eef2fa; --ink2: #aab4c8; --muted: #6b7688; --rule: #1e2536;
-    --accent: #5aa0ff; --entry: #3ddc84; --amber: #f0a860; --amber-rail: #6e4a24;
-    --ghost: rgba(90,160,255,0.07);
     max-width: 900px; margin: 0 auto; padding: 46px 24px 90px;
     font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    color: var(--ink); animation: rise .5s ease both;
+    animation: rise .5s ease both;
   }
-  :global(body:has(.sp)) { background: #0a0d15; }
+  :global(body:has(.sp-page)) { background: #0b0e16; }
 
   .hero-eyebrow { font-size: 12px; letter-spacing: 2.2px; text-transform: uppercase; color: var(--muted); font-weight: 600; }
   .hero-name { margin: 10px 0 0; font-size: clamp(30px, 5.4vw, 48px); line-height: 1.03; font-weight: 800;
@@ -182,19 +186,12 @@
   @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
   @media (prefers-reduced-motion: reduce) { .sp { animation: none; } }
 
-  /* Light theme — via the app toggle (data-theme) and the OS preference. */
-  :root[data-theme='light'] .sp, .sp:where([data-theme='light'] *) {
-    --bg: #f6f8fc; --surface: #ffffff; --surface2: #eef2fa;
-    --ink: #131824; --ink2: #46516a; --muted: #8b95a9; --rule: #dde3ef;
-    --accent: #2563c4; --entry: #17a05a; --amber: #b5711f; --ghost: rgba(37,99,196,.08);
+  /* Light theme ONLY when the app explicitly sets it. The OS media query is deliberately
+     NOT used — it desynced from the app's dark shell and put dark text on a dark bg. */
+  :root[data-theme='light'] .sp-page {
+    --bg: #f7f9fd; --surface: #ffffff; --surface2: #eef2fa;
+    --ink: #121826; --ink2: #3f4a62; --muted: #768398; --rule: #dde3ef;
+    --accent: #2563c4; --entry: #17a05a; --amber: #b5711f; --ghost: rgba(37,99,196,.09);
   }
-  :root[data-theme='light'] :global(body:has(.sp)) { background: #f6f8fc; }
-  @media (prefers-color-scheme: light) {
-    :root:not([data-theme='dark']) .sp {
-      --bg: #f6f8fc; --surface: #ffffff; --surface2: #eef2fa;
-      --ink: #131824; --ink2: #46516a; --muted: #8b95a9; --rule: #dde3ef;
-      --accent: #2563c4; --entry: #17a05a; --amber: #b5711f; --ghost: rgba(37,99,196,.08);
-    }
-    :root:not([data-theme='dark']) :global(body:has(.sp)) { background: #f6f8fc; }
-  }
+  :root[data-theme='light'] :global(body:has(.sp-page)) { background: #f7f9fd; }
 </style>
