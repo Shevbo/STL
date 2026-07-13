@@ -501,12 +501,17 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 			}
 		}()
 		if exe := cfg.RunnerExePath(opt.exeDir); exe != "" {
+			// Tee the runner's stdout/stderr (+ supervisor lifecycle lines) to
+			// <runnerDir>\runner.log so the local status page serves it at
+			// /logs/runner (the runner.log link on the stand). Console unchanged.
+			logRunner := runner.FileTee(filepath.Join(filepath.Dir(exe), "runner.log"),
+				func(f string, a ...any) { fmt.Printf(f+"\n", a...) })
 			sup := runner.NewSupervisor(runner.SupervisorCfg{
 				Start: runner.ExecStart(exe, []string{
 					"--bridge", fmt.Sprintf("127.0.0.1:%d", cfg.RunnerBridgePort),
 					"--data", cfg.RobotsDataDir(opt.exeDir),
-				}, func(f string, a ...any) { fmt.Printf(f+"\n", a...) }),
-				Logf: func(f string, a ...any) { fmt.Printf("runner-sup: "+f+"\n", a...) },
+				}, logRunner),
+				Logf: func(f string, a ...any) { logRunner("runner-sup: "+f, a...) },
 			})
 			go sup.Run(ctx)
 			fmt.Printf("  robots:  runner=%s  bridge=127.0.0.1:%d  persisted=%d\n",
@@ -673,14 +678,11 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 				})
 			},
 
-			// No agent/runner log FILE exists anywhere today: interactive runs
-			// print to the console only, the Windows service redirects to the
-			// Event Log (internal/service/service_windows.go), and the runner's
-			// stdout/stderr are piped straight into the agent's own console
-			// (runner.ExecStart's logf), never written to disk. Left empty
-			// rather than inventing a path; /logs/{name} 404s until a real log
-			// file exists to point at.
-			LogPaths: map[string]string{},
+			// The runner's stdout/stderr (+ supervisor lifecycle) are teed to
+			// <runnerDir>\runner.log by FileTee above; expose it at /logs/runner.
+			// The agent's OWN console still isn't filed (interactive => console,
+			// Windows service => Event Log), so only "runner" is wired here.
+			LogPaths: map[string]string{"runner": filepath.Join(runnerDir, "runner.log")},
 			DocsPath: filepath.Join(runnerDir, "strategies_doc.json"),
 			NowMs:    func() int64 { return time.Now().UnixMilli() },
 		}
