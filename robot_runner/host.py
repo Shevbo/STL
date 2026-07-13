@@ -336,9 +336,16 @@ class RobotHost:
 
         async def consume_events():
             async for u in self._bridge.order_events("rr:"):
-                for r in self.robots.values():
-                    r.runtime.on_order_event(u)
-                self.persist()
+                # A fill must ALWAYS land in the book. Any exception here used to
+                # propagate through gather() and kill the whole runner BEFORE
+                # persist — the fill was lost forever and the strategy re-emitted
+                # its intent every restart (real-money order pile-up, 2026-07-13).
+                try:
+                    for r in self.robots.values():
+                        r.runtime.on_order_event(u)
+                    self.persist()
+                except Exception as exc:  # noqa: BLE001
+                    log.error("host.order_event_failed", error=str(exc))
 
         async def schedule():
             while True:

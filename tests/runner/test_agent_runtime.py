@@ -96,3 +96,23 @@ def test_restore_reseeds_position():
     assert rt.signed_position() == -1
     assert rt.avg_price() == 88000.0
     assert rt.realized_pnl() == 150.0
+
+
+@pytest.mark.asyncio
+async def test_fill_applies_even_when_console_logger_raises(monkeypatch):
+    """2026-07-13 regression: the FILL console line contains '→'; on the RU VDS
+    the runner's piped stdout is cp1251 STRICT, so the print raised
+    UnicodeEncodeError inside on_order_event -> the whole runner died BEFORE
+    persisting the fill (book frozen at 10:15, strategy re-emitted all day).
+    Logging must never break the book."""
+    import robot_runner.runtime as rtmod
+    rt = _rt()
+    order = await rt.place_order("RIU6", "buy", 1, 89000.0)
+
+    def boom(*a, **kw):
+        raise UnicodeEncodeError("charmap", "→", 0, 1, "no arrow in cp1251")
+    monkeypatch.setattr(rtmod.log, "msg", boom)
+
+    rt.on_order_event(U(order.order_id, state=4, price=89000.0, qty=1))  # must not raise
+    assert rt.signed_position() == 1
+    assert rt.recent_fills()[-1]["status"] == "filled"

@@ -198,7 +198,10 @@ class AgentRuntime:
         ORDER/CANCEL/FILL/SKIP/REJECT/FIX/SIGNAL/ERROR/LIFECYCLE. Best-effort:
         a disk error must never break trading."""
         if console:
-            self.log(f"[{kind}] {msg}", level=level)
+            try:
+                self.log(f"[{kind}] {msg}", level=level)
+            except Exception:  # noqa: BLE001 — a console encoding error must never
+                pass           # break trading (cp1251 pipe killed fills 2026-07-13)
         path = self._event_log_path
         if not path:
             return
