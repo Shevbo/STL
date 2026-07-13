@@ -2012,6 +2012,7 @@ def create_app() -> FastAPI:
         pool = request.app.state.db_pool
         if pool is None:
             return []
+        import json as _json2
         rows = await pool.fetch(
             """
             SELECT campaign_run, count(*) AS combos,
@@ -2026,16 +2027,53 @@ def create_app() -> FastAPI:
             ORDER BY max(created_at) DESC
             LIMIT 100
             """)
+        # Leader per campaign = best net_profit among <=10-contract configs (matches the
+        # campaign showcase's universe), with the fields the run-history table shows.
+        leaders = await pool.fetch(
+            """
+            SELECT DISTINCT ON (campaign_run) campaign_run, strategy, symbol, params,
+                   net_profit, recovery_factor, total_trades, initial_margin,
+                   date_from, date_to
+            FROM optimization_leaderboard
+            WHERE campaign_run IS NOT NULL AND net_profit IS NOT NULL
+              AND COALESCE(NULLIF(params->>'qty','')::int, 1) <= 10
+              AND COALESCE(NULLIF(params->>'avg_max','')::int, 1) <= 10
+            ORDER BY campaign_run, net_profit DESC NULLS LAST
+            """)
+        lead = {r["campaign_run"]: r for r in leaders}
         out = []
         for r in rows:
+            cr = r["campaign_run"]
+            L = lead.get(cr)
+            p = (L["params"] if L else None) or {}
+            if isinstance(p, str):
+                try:
+                    p = _json2.loads(p)
+                except Exception:
+                    p = {}
+            def _pi(k, d=1):
+                try:
+                    return int(p.get(k, d) or d)
+                except Exception:
+                    return d
+            max_pos = max(_pi("qty", 1), _pi("avg_max", 1)) if L else None
+            margin = float(L["initial_margin"]) if (L and L["initial_margin"]) else None
+            max_go = round(margin * max_pos) if (margin and max_pos) else None
+            strat = L["strategy"] if L else (list(r["strategies"] or [None])[0])
+            strat_base = strat[:-5] if (strat and strat.endswith("__inv")) else strat
             out.append({
-                "campaign": r["campaign_run"], "combos": r["combos"],
-                "candidates": r["candidates"],
-                "strategies": list(r["strategies"] or []),
-                "symbols": list(r["symbols"] or []),
+                "campaign": cr, "combos": r["combos"], "candidates": r["candidates"],
+                "strategies": list(r["strategies"] or []), "symbols": list(r["symbols"] or []),
                 "date_from": r["date_from"].isoformat() if r["date_from"] else None,
                 "date_to": r["date_to"].isoformat() if r["date_to"] else None,
                 "last_at": r["last_at"].isoformat() if r["last_at"] else None,
+                "strategy": strat, "strategy_base": strat_base,
+                "leader_symbol": (L["symbol"] if L else None),
+                "leader_net": (float(L["net_profit"]) if L and L["net_profit"] is not None else None),
+                "leader_rf": (float(L["recovery_factor"]) if L and L["recovery_factor"] is not None else None),
+                "leader_trades": (L["total_trades"] if L else None),
+                "leader_params": p if L else None,
+                "max_pos": max_pos, "max_go": max_go,
             })
         return out
 

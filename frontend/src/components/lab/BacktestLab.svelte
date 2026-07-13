@@ -19,12 +19,88 @@
   let showLabHistory = $state(false);
   async function toggleLabHistory() {
     showLabHistory = !showLabHistory;
-    if (showLabHistory) {
+    if (showLabHistory && labCampaigns.length === 0) {
       try {
         const r = await fetchWithAuth('/api/v1/lab/campaigns');
         if (r.ok) labCampaigns = await r.json();
       } catch { /* history is auxiliary */ }
     }
+  }
+
+  // Run-history table: sortable + filterable. All client-side (<=100 campaigns).
+  const HIST_COLS = [
+    { key: 'campaign', label: 'ID прогона', sort: true },
+    { key: 'last_at', label: 'Дата', sort: true },
+    { key: 'strategy', label: 'Стратегия / робот', sort: true },
+    { key: 'symbol', label: 'Контракт', sort: true },
+    { key: 'period', label: 'Период бэктеста', sort: false },
+    { key: 'max_pos', label: 'Макс. поз.', sort: true },
+    { key: 'max_go', label: 'Макс. ГО', sort: true },
+    { key: 'leader_net', label: 'P&L лидера', sort: true },
+    { key: 'leader_rf', label: 'RF лидера', sort: true },
+    { key: 'leader_trades', label: 'Сделок', sort: true },
+    { key: 'doc', label: 'Описание', sort: false },
+    { key: 'params', label: 'Параметры лидера', sort: false },
+  ];
+  let histSort = $state<{ key: string; dir: number }>({ key: 'last_at', dir: -1 });
+  let histFilter = $state('');
+  let histWinOnly = $state(false);
+  let histExpanded = $state<string | null>(null);
+
+  function histSortBy(key: string) {
+    if (histSort.key === key) histSort = { key, dir: -histSort.dir };
+    else histSort = { key, dir: (key === 'campaign' || key === 'strategy' || key === 'symbol') ? 1 : -1 };
+  }
+  const histVal = (c: any, k: string) => {
+    switch (k) {
+      case 'campaign': return c.campaign || '';
+      case 'last_at': return c.last_at || '';
+      case 'strategy': return c.strategy || '';
+      case 'symbol': return c.leader_symbol || (c.symbols || [])[0] || '';
+      case 'max_pos': return c.max_pos ?? -1;
+      case 'max_go': return c.max_go ?? -1;
+      case 'leader_net': return c.leader_net ?? -Infinity;
+      case 'leader_rf': return c.leader_rf ?? -Infinity;
+      case 'leader_trades': return c.leader_trades ?? -1;
+      default: return '';
+    }
+  };
+  const histRows = $derived.by(() => {
+    const q = histFilter.trim().toLowerCase();
+    let rows = labCampaigns.filter((c: any) => {
+      if (histWinOnly && !((c.leader_net ?? 0) > 0)) return false;
+      if (!q) return true;
+      return (c.campaign || '').toLowerCase().includes(q)
+        || (c.strategy || '').toLowerCase().includes(q)
+        || ((c.symbols || []).join(' ') + ' ' + (c.leader_symbol || '')).toLowerCase().includes(q);
+    });
+    const { key, dir } = histSort;
+    return rows.sort((a: any, b: any) => {
+      const x = histVal(a, key), y = histVal(b, key);
+      if (typeof x === 'number' && typeof y === 'number') return (x - y) * dir;
+      return String(x).localeCompare(String(y), 'ru') * dir;
+    });
+  });
+  const histMaxAbsNet = $derived(Math.max(1, ...labCampaigns.map((c: any) => Math.abs(c.leader_net ?? 0))));
+
+  const fmtRub = (v: any) => v == null ? '—' : Math.round(v).toLocaleString('ru-RU') + ' ₽';
+  const fmtRf = (v: any) => v == null ? '—' : Number(v).toFixed(2);
+  const fmtDay = (iso: any) => iso ? new Date(iso).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' }) : '—';
+  const robName = (s: any) => !s ? '—' : (String(s).endsWith('__inv') ? String(s).slice(0, -5) + ' (контр)' : s);
+  const paramsShort = (p: any) => {
+    if (!p) return '';
+    const e = Object.entries(p).filter(([k]) => k !== 'symbol');
+    return e.slice(0, 4).map(([k, v]) => `${k}:${v}`).join('  ') + (e.length > 4 ? '  …' : '');
+  };
+  function histCsv() {
+    const cols = ['campaign', 'last_at', 'strategy', 'leader_symbol', 'date_from', 'date_to', 'max_pos', 'max_go', 'leader_net', 'leader_rf', 'leader_trades'];
+    const head = ['ID прогона', 'Дата', 'Стратегия', 'Контракт', 'Период с', 'Период по', 'Макс.поз', 'Макс.ГО', 'P&L лидера', 'RF лидера', 'Сделок', 'Параметры'];
+    const esc = (v: any) => { const s = v == null ? '' : String(v); return /[";\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+    const lines = [head.join(';')];
+    for (const c of histRows) lines.push([...cols.map((k) => esc(c[k])), esc(JSON.stringify(c.leader_params || {}))].join(';'));
+    const blob = new Blob(['﻿' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = 'run-history.csv'; a.click(); URL.revokeObjectURL(a.href);
   }
 
   // ── Strategy catalog (botstore + installed robots merged) ──────────────
@@ -692,19 +768,57 @@
         <span class="btl-hist-chev">{showLabHistory ? '▴' : '▾'}</span>
       </button>
       {#if showLabHistory}
-        <div class="btl-hist-list">
-          {#if labCampaigns.length === 0}
-            <div class="btl-hist-empty">Сохранённых прогонов пока нет. Задай «Имя перебора» и запусти R0 — кампания сохранится сюда.</div>
-          {:else}
-            {#each labCampaigns as c}
-              <a class="btl-hist-row mono" href={'/?campaign=' + encodeURIComponent(c.campaign)} target="_blank" rel="noopener"
-                 title="открыть витрину прогона: карта плотности + лучшие наборы + график по клику">
-                <span class="btl-hist-id">{c.campaign}</span>
-                <span class="btl-hist-meta">{(c.strategies ?? []).join(', ')} · {(c.symbols ?? []).join(', ')} · {c.combos?.toLocaleString('ru-RU')} комб. · {c.date_from ?? '—'}—{c.date_to ?? '—'}</span>
-              </a>
-            {/each}
-          {/if}
-        </div>
+        {#if labCampaigns.length === 0}
+          <div class="btl-hist-empty">Сохранённых прогонов пока нет. Задай «Имя перебора» и запусти R0 — кампания сохранится сюда.</div>
+        {:else}
+          <div class="btl-hist-tools">
+            <input class="btl-hist-search" placeholder="фильтр: ID, стратегия, контракт…" bind:value={histFilter} />
+            <label class="btl-hist-chk"><input type="checkbox" bind:checked={histWinOnly} /> только прибыльные</label>
+            <span class="btl-hist-count">{histRows.length} из {labCampaigns.length}</span>
+            <button class="btl-hist-csv" onclick={histCsv}>Выгрузить в CSV</button>
+          </div>
+          <div class="btl-hist-scroll">
+            <table class="btl-ht">
+              <thead>
+                <tr>
+                  {#each HIST_COLS as col}
+                    <th class:ht-sortable={col.sort} class:ht-active={histSort.key === col.key}
+                        onclick={() => col.sort && histSortBy(col.key)}
+                        title={col.sort ? 'сортировать' : ''}>
+                      {col.label}{#if col.sort}<span class="ht-ar">{histSort.key === col.key ? (histSort.dir > 0 ? '▲' : '▼') : '↕'}</span>{/if}
+                    </th>
+                  {/each}
+                </tr>
+              </thead>
+              <tbody>
+                {#each histRows as c (c.campaign)}
+                  <tr class="ht-row">
+                    <td class="mono ht-id"><a href={'/?campaign=' + encodeURIComponent(c.campaign)} target="_blank" rel="noopener" title="открыть витрину прогона">{c.campaign}</a></td>
+                    <td class="ht-day">{fmtDay(c.last_at)}</td>
+                    <td class="ht-strat">{robName(c.strategy)}</td>
+                    <td class="mono">{c.leader_symbol ?? (c.symbols ?? []).join(',')}</td>
+                    <td class="mono ht-period">{fmtDay(c.date_from)}—{fmtDay(c.date_to)}</td>
+                    <td class="mono ht-num">{c.max_pos ?? '—'}</td>
+                    <td class="mono ht-num">{c.max_go != null ? Math.round(c.max_go).toLocaleString('ru-RU') : '—'}</td>
+                    <td class="mono ht-pnl" class:pos={(c.leader_net ?? 0) > 0} class:neg={(c.leader_net ?? 0) < 0}>
+                      <span class="ht-bar" style="width:{Math.round(90 * Math.abs(c.leader_net ?? 0) / histMaxAbsNet)}%"></span>
+                      <span class="ht-pnlv">{fmtRub(c.leader_net)}</span>
+                    </td>
+                    <td class="mono ht-num">{fmtRf(c.leader_rf)}</td>
+                    <td class="mono ht-num">{c.leader_trades ?? '—'}</td>
+                    <td class="ht-doc-cell">{#if c.strategy_base}<a class="ht-doc" href={'/?strategy=' + encodeURIComponent(c.strategy_base)} target="_blank" rel="noopener" title="описание стратегии">описание ↗</a>{:else}—{/if}</td>
+                    <td class="ht-params">
+                      <button class="ht-pexp mono" onclick={() => histExpanded = histExpanded === c.campaign ? null : c.campaign}>
+                        <span class="ht-pchev">{histExpanded === c.campaign ? '▴' : '▾'}</span>{paramsShort(c.leader_params)}
+                      </button>
+                      {#if histExpanded === c.campaign}<div class="ht-pfull mono">{JSON.stringify(c.leader_params)}</div>{/if}
+                    </td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        {/if}
       {/if}
     </div>
 
@@ -925,14 +1039,45 @@
   .btl-hist-btn { background: transparent; border: none; color: #7ab8ff; cursor: pointer;
     font-size: 13px; font-weight: 600; padding: 2px 0; display: flex; align-items: center; gap: 6px; }
   .btl-hist-chev { color: #567; }
-  .btl-hist-list { margin-top: 8px; display: flex; flex-direction: column; gap: 2px; max-height: 260px; overflow-y: auto; }
-  .btl-hist-empty { font-size: 12px; color: #789; padding: 4px; }
-  .btl-hist-row { display: flex; flex-direction: column; gap: 1px; padding: 6px 8px; border-radius: 4px;
-    text-decoration: none; border-top: 1px solid #14203a; }
-  .btl-hist-row:first-child { border-top: none; }
-  .btl-hist-row:hover { background: #0f1c34; }
-  .btl-hist-id { font-size: 12px; color: #8acaff; }
-  .btl-hist-meta { font-size: 11px; color: #789; }
+  .btl-hist-empty { font-size: 12px; color: #789; padding: 6px 2px; }
+  .btl-hist-tools { display: flex; align-items: center; gap: 10px; margin: 10px 0 6px; flex-wrap: wrap; }
+  .btl-hist-search { background: #0a0f1c; border: 1px solid #24406a; border-radius: 5px; color: #cde; font-size: 12px; padding: 5px 9px; min-width: 220px; flex: 1; }
+  .btl-hist-search:focus { outline: none; border-color: #3a7; }
+  .btl-hist-chk { display: flex; align-items: center; gap: 5px; font-size: 12px; color: #9ab; cursor: pointer; user-select: none; }
+  .btl-hist-count { font-size: 11px; color: #678; margin-left: auto; font-variant-numeric: tabular-nums; }
+  .btl-hist-csv { background: #13233a; border: 1px solid #2a4a6a; color: #9cf; border-radius: 5px; font-size: 11px; padding: 5px 10px; cursor: pointer; }
+  .btl-hist-csv:hover { background: #1a3050; }
+  .btl-hist-scroll { overflow: auto; max-height: 440px; border: 1px solid #16233c; border-radius: 6px; }
+  .btl-ht { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .btl-ht thead th { position: sticky; top: 0; z-index: 1; background: #0e1830; color: #9ab; font-weight: 600; text-align: right; padding: 7px 10px; white-space: nowrap; border-bottom: 1px solid #24406a; user-select: none; }
+  .btl-ht thead th:nth-child(-n+5), .btl-ht thead th:nth-child(11), .btl-ht thead th:nth-child(12) { text-align: left; }
+  .btl-ht th.ht-sortable { cursor: pointer; }
+  .btl-ht th.ht-sortable:hover { color: #cde; }
+  .btl-ht th.ht-active { color: #7fd7b0; }
+  .ht-ar { color: #567; margin-left: 3px; font-size: 10px; }
+  .btl-ht th.ht-active .ht-ar { color: #7fd7b0; }
+  .btl-ht td { text-align: right; padding: 6px 10px; color: #cde; border-bottom: 1px solid #12203a; white-space: nowrap; font-variant-numeric: tabular-nums; vertical-align: top; }
+  .btl-ht td:nth-child(-n+5), .btl-ht td:nth-child(11), .btl-ht td:nth-child(12) { text-align: left; }
+  .ht-row:hover td { background: #0f1c34; }
+  .ht-id a { color: #8acaff; text-decoration: none; font-size: 11px; }
+  .ht-id a:hover { text-decoration: underline; }
+  .ht-strat { color: #dfe; }
+  .ht-period { color: #9ab; font-size: 11px; }
+  .ht-num { color: #bcd; }
+  .ht-pnl { position: relative; min-width: 128px; }
+  .ht-bar { position: absolute; right: 8px; top: 4px; bottom: 4px; border-radius: 2px; opacity: .20; }
+  .ht-pnl.pos .ht-bar { background: #00e676; }
+  .ht-pnl.neg .ht-bar { background: #ff5c72; }
+  .ht-pnlv { position: relative; font-weight: 600; }
+  .ht-pnl.pos .ht-pnlv { color: #37e28f; }
+  .ht-pnl.neg .ht-pnlv { color: #ff6b80; }
+  .ht-doc { color: #7fd7b0; text-decoration: none; font-size: 11px; }
+  .ht-doc:hover { text-decoration: underline; }
+  .ht-params { max-width: 360px; }
+  .ht-pexp { background: transparent; border: none; color: #99a; font-size: 11px; cursor: pointer; padding: 0; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 350px; display: block; }
+  .ht-pexp:hover { color: #cde; }
+  .ht-pchev { color: #567; margin-right: 3px; }
+  .ht-pfull { margin-top: 4px; color: #bcd; font-size: 11px; white-space: normal; word-break: break-word; max-width: 360px; line-height: 1.5; background: #0a1120; padding: 5px 7px; border-radius: 4px; }
   .btl-progress { margin-bottom: 6px; }
   .btl-prog-bar { height: 4px; background: #1a1a32; border-radius: 2px; overflow: hidden; margin-bottom: 6px; }
   .btl-prog-fill { height: 100%; background: #4caf50; transition: width 0.5s; border-radius: 2px; }
