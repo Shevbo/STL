@@ -371,8 +371,20 @@
   let launchBusy = $state(false);
   let launchMsg = $state('');
   let launchOk = $state(false);
+  let launchParams = $state<Record<string, any>>({});
   const launchSid = $derived(chart?.opts?.strategyId ?? '');
-  const launchBehavior = $derived(behaviorFor(launchSid, chart?.params, chart?.symbol));
+  const launchSchema = $derived(
+    (strategies.find((s) => s.id === launchSid || s.id === launchSid.replace(/__inv$/, ''))?.params_schema ?? [])
+  );
+  // Editable fields: prefer the schema (labels/min/max), else the raw param keys.
+  const launchFields = $derived(
+    launchSchema.length
+      ? launchSchema.filter((p: any) => p.key !== 'symbol')
+      : Object.keys(launchParams).filter((k) => k !== 'symbol')
+          .map((k) => ({ key: k, label: k, type: typeof launchParams[k] === 'number' ? 'number' : 'text', min: undefined, max: undefined, hint: '' }))
+  );
+  // Behavior reflects the EDITED params so the operator sees what GO will actually do.
+  const launchBehavior = $derived(behaviorFor(launchSid, { ...launchParams, symbol: chart?.symbol }, chart?.symbol));
   // The QUIK agent's runner only knows base library strategies — counter (__inv) and the
   // standalone us_open module can't run there, so Live-on-agent is gated to library bases.
   const canLiveAgent = $derived(!!launchSid && !launchSid.endsWith('__inv') && launchSid !== 'us_open_fvg');
@@ -392,6 +404,7 @@
   function openLaunch() {
     if (!chart) return;
     launchName = `${nameFor(launchSid)} · ${chart.symbol}`.slice(0, 64);
+    launchParams = { ...(chart.params ?? {}) };   // editable copy — change before GO
     launchMode = 'paper'; launchMsg = ''; launchOk = false; launchOpen = true;
   }
   async function doLaunch() {
@@ -400,7 +413,9 @@
     if (!sc) { launchMsg = 'Не удалось собрать код стратегии для запуска.'; return; }
     if (!stlLinks.length) { launchMsg = 'Нет STL Link (коннектора счёта) — создай его на вкладке подключения.'; return; }
     if (launchMode === 'live' && !canLiveAgent) { launchMsg = 'На агенте (Live) доступны только базовые библиотечные стратегии. Контр- и us_open запускай в Paper.'; return; }
-    const params = { ...(chart.params ?? {}), symbol: chart.symbol };
+    // Coerce numeric fields (inputs give strings) and pin the backtested symbol.
+    const params: Record<string, any> = { ...launchParams, symbol: chart.symbol };
+    for (const p of launchSchema) if (p.type === 'number' && params[p.key] !== undefined && params[p.key] !== '') params[p.key] = Number(params[p.key]);
     const maxPos = Math.max(1, Number(params.avg_max ?? params.qty ?? 1) || 1);
     launchBusy = true; launchMsg = ''; launchOk = false;
     try {
@@ -975,9 +990,22 @@
             </div>
           </div>
           {#if !canLiveAgent}<div class="lp-note">Live-на-агенте доступен только для базовых библиотечных стратегий. Контр- и us_open — запускай в Paper.</div>{/if}
-          <div class="lp-params"><span class="lp-k">Параметры</span>
-            <code class="lp-code">{JSON.stringify(chart?.params ?? {})}</code>
-            <div class="lp-hint">изменить — в ⚙ Параметры на графике → «Пересчитать», затем запусти снова</div></div>
+          <div class="lp-params"><span class="lp-k">Параметры <span class="lp-k-note">— меняй перед запуском</span></span>
+            <div class="lp-pgrid">
+              <div class="lp-prow"><label class="lp-plabel">инструмент</label><span class="lp-pfix">{chart?.symbol}</span></div>
+              {#each launchFields as p}
+                <div class="lp-prow">
+                  <label class="lp-plabel" title={p.hint ?? ''}>{p.label ?? p.key}</label>
+                  {#if p.type === 'number'}
+                    <input class="lp-pinput" type="number" min={p.min} max={p.max} bind:value={launchParams[p.key]} />
+                  {:else}
+                    <input class="lp-pinput" type="text" bind:value={launchParams[p.key]} />
+                  {/if}
+                </div>
+              {/each}
+            </div>
+            <div class="lp-hint">поведенческая модель выше обновляется под твои значения</div>
+          </div>
           {#if launchMode === 'live'}
             <div class="lp-warn">⚠ Live: робот встанет на агента в <b>PAPER</b>. Реальные деньги включаются ТОЛЬКО на консоли агента (робот FLAT + ввод его ID). Из GUI реал не армится — правило безопасности.</div>
           {/if}
@@ -1268,9 +1296,16 @@
   .lp-mode.sel { border-color: #3a7f57; background: #12261a; color: #e6ffee; }
   .lp-mode.off { opacity: .5; cursor: not-allowed; }
   .lp-note { font-size: 12px; color: #c9a24a; background: #221c0c; border-radius: 6px; padding: 8px 11px; }
-  .lp-params { display: flex; flex-direction: column; gap: 5px; }
-  .lp-code { font-family: monospace; font-size: 11.5px; color: #9db4d6; background: #0a0f1c; border-radius: 6px;
-    padding: 8px 10px; word-break: break-all; line-height: 1.5; }
+  .lp-params { display: flex; flex-direction: column; gap: 7px; }
+  .lp-k-note { text-transform: none; letter-spacing: 0; color: #66728c; font-weight: 400; }
+  .lp-pgrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px 12px;
+    background: #0a0f1c; border: 1px solid #1a2338; border-radius: 8px; padding: 10px 12px; }
+  .lp-prow { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+  .lp-plabel { font-size: 12px; color: #9aa6bd; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lp-pinput { width: 76px; flex-shrink: 0; background: #12182a; border: 1px solid #2a3552; border-radius: 5px;
+    color: #e6edf7; font-size: 12.5px; font-family: ui-monospace, monospace; padding: 4px 7px; text-align: right; }
+  .lp-pinput:focus { outline: none; border-color: #3a7; }
+  .lp-pfix { font-family: ui-monospace, monospace; font-size: 12.5px; color: #7fd7b0; }
   .lp-hint { font-size: 11px; color: #66728c; }
   .lp-warn { font-size: 12.5px; line-height: 1.55; color: #ffcf9e; background: #2a1608; border: 1px solid #7a4a1e; border-radius: 8px; padding: 11px 14px; }
   .lp-msg { font-size: 13px; line-height: 1.55; color: #ff9a8a; background: #1f0f0f; border-radius: 8px; padding: 11px 14px; }
