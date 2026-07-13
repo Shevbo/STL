@@ -473,6 +473,7 @@
       netOverride={robot?.paper ? null : pnlRub}
       floatRub={robot?.paper ? null : floatNetRub}
       livePosition={robot ? position : null}
+      journalSuspect={reconCheck ? reconCheck.trades_ok === false : false}
     />
     {/if}
     </div>

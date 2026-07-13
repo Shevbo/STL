@@ -20,7 +20,7 @@
     result, symbol, strategy = null, dateFrom, dateTo, pointValue = 1, defaultInterval = 60,
     openOrders = [], plannedOrders = [], taker = true, runParams = {}, paramSchema = [], onRerun = null,
     segments = null, pointValues = null, live = 0, liveTick = null, onNet = null, floatRub = null,
-    netOverride = null, livePosition = null,
+    netOverride = null, livePosition = null, journalSuspect = false,
   }: {
     result: any; symbol: string; strategy?: any; dateFrom: string; dateTo: string;
     pointValue?: number; defaultInterval?: number;
@@ -65,6 +65,12 @@
     // the replayed end position disagrees, the trailing open rect is suppressed —
     // closed (bounded) rects stay. null = backtest / trust the replay.
     livePosition?: number | null;
+    // Recon verdict from the agent: the robot's trades diverge from the QUIK
+    // account tables. Book and journal can be CONSISTENTLY wrong together
+    // (fills lost before recording — book froze on the same hole), so the
+    // livePosition check alone stays silent; recon compares against QUIK truth
+    // and catches exactly that case. true → suppress the open rect too.
+    journalSuspect?: boolean;
   } = $props();
 
   // ── Editable parameters panel (collapsed by default; edit → re-run backtest) ──
@@ -677,7 +683,7 @@
       // ponytail: suppression only; resyncing the replay at journal fix_state
       // entries would heal mid-tail holes if this ever needs to draw again.
       const endPos = events.length ? (events[events.length - 1] as any).posAfter : 0;
-      if (livePosition != null && endPos !== livePosition)
+      if (journalSuspect || (livePosition != null && endPos !== livePosition))
         posRects = posRects.filter((r: any) => !r.open);
       longSeries.setData([]);
       shortSeries.setData([]);
