@@ -20,6 +20,7 @@
     result, symbol, strategy = null, dateFrom, dateTo, pointValue = 1, defaultInterval = 60,
     openOrders = [], plannedOrders = [], taker = true, runParams = {}, paramSchema = [], onRerun = null,
     segments = null, pointValues = null, live = 0, liveTick = null, onNet = null, floatRub = null,
+    netOverride = null,
   }: {
     result: any; symbol: string; strategy?: any; dateFrom: string; dateTo: string;
     pointValue?: number; defaultInterval?: number;
@@ -50,6 +51,12 @@
     // Live robot floating (unrealized) P&L on the open position (₽). null = n/a
     // (backtest). Shown in the Результат panel so it isn't seen as frozen.
     floatRub?: number | null;
+    // AUTHORITATIVE realized net (₽) supplied by the parent for a LIVE robot: the
+    // runner's own realized_pnl × ₽/point. Overrides the tail-replay net, which is
+    // WRONG for a robot whose history exceeds the 200-fill mirror tail (the tail
+    // starts mid-position, so replaying it from flat mis-attributes the P&L). null
+    // = backtest / use the replay.
+    netOverride?: number | null;
   } = $props();
 
   // ── Editable parameters panel (collapsed by default; edit → re-run backtest) ──
@@ -703,6 +710,9 @@
       // «Результат» + «сделок» = the engine's numbers when present (backtest),
       // so the chart and the hit-parade can never disagree; else the live replay.
       const authNet = engineNet != null ? engineNet : rolled.net;
+      // Live robot: parent supplies the runner's own realized_pnl × ₽/point via
+      // netOverride — authoritative over the tail replay (see the prop doc above).
+      const shownNet = (netOverride != null && Number.isFinite(netOverride)) ? netOverride : authNet;
       const authTrades = (result && result.total_trades != null) ? Number(result.total_trades) : rolled.closes;
       stats = {
         fills: fills.length,
@@ -713,11 +723,11 @@
         avgPerTrade: closesPnl.length ? closesPnl.reduce((a, b) => a + b, 0) / closesPnl.length : 0,
         maxProfit: closesPnl.length ? Math.max(...closesPnl) : 0,
         maxLoss: closesPnl.length ? Math.min(...closesPnl) : 0,
-        netProfit: authNet,
+        netProfit: shownNet,
         maxDDmoney: maxDD,
-        recovery: maxDD > 0 ? authNet / maxDD : null,
+        recovery: maxDD > 0 ? shownNet / maxDD : null,
       };
-      netResult = authNet;      // authoritative: engine net (backtest) or real-money replay (live)
+      netResult = shownNet;     // parent-supplied authoritative net (live) else engine/replay
       onNet?.(netResult);       // parent header badge shows the SAME number
       // Broker vs exchange commission split (transparency).
       commission = commissionBreakdown(fills, pointValue, symbol, taker);

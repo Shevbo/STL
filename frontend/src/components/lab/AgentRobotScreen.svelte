@@ -51,9 +51,10 @@
     position !== 0 && pointCoef && liveTick?.p
       ? commissionFor(symbol, liveTick.p, Math.abs(position), pointCoef, true) : 0);
   // «P&L + Маржа»: realized + (floating − exit commission) = what you keep if you
-  // flatten at market right now. null until the chart hands us the realized number.
+  // flatten at market right now. Uses the runner's AUTHORITATIVE realized (pnlRub),
+  // not the chart's tail-replay (which is wrong for a long-history live robot).
   const pnlMargin = $derived(
-    realNetRub !== null ? realNetRub + (floatRub ?? 0) - closeComm : null);
+    pnlRub !== null ? pnlRub + (floatRub ?? 0) - closeComm : null);
   // net floating (after the exit commission) — passed to the chart panel.
   const floatNetRub = $derived(floatRub !== null ? floatRub - closeComm : null);
   const heartbeatAge = $derived.by(() => {
@@ -159,11 +160,12 @@
   $effect(() => { void loadCoef(symbol); });
   const pnlPoints = $derived(Number(robot?.realized_pnl ?? 0));
   const pnlRub = $derived(pointCoef ? pnlPoints * pointCoef : null);
-  // REAL robots: the header badge shows the EXACT number the chart's «Результат»
-  // computes (per-contract point values + bucket-correct fees), bubbled up via
-  // onNet — one source of truth, so the two can never diverge. A parallel
-  // rolledPnl() here drifted (single coef, no bucketing): -2737 vs -1801.
-  let realNetRub = $state<number | null>(null);
+  // pnlRub is the robot's AUTHORITATIVE realized — the agent's OWN number
+  // (realized_pnl × ₽/point), matching its 127.0.0.1:8071 page. Both the header
+  // badge and the chart's «Результат» (via netOverride) use it, so they can never
+  // diverge. The chart's tail-replay net was WRONG for a long-history live robot
+  // (>200 fills: the mirror tail starts mid-position, so replay-from-flat mis-
+  // attributes P&L — showed -36 574 ₽ vs the agent's own -11 444 ₽).
   let tickAge = $state<number | null>(null);
   let mirrorAge = $state<number | null>(null);
 
@@ -412,13 +414,13 @@
       <!-- Two metrics per operator spec: (1) realized P&L (closed trades − commission,
            WITHOUT the open position, static); (2) P&L + Маржа = flatten-at-market now
            value (realized + variation margin − exit commission), moves with price. -->
-      {#if realNetRub !== null}
-        <span class="badge pnl" class:up={realNetRub > 0} class:dn={realNetRub < 0}
-              title="Чистый реализованный результат: закрытые сделки QUIK за вычетом тейкер-комиссии, БЕЗ учёта текущей позиции. Меняется только при закрытии сделки.">
-          P&L {realNetRub > 0 ? '+' : ''}{Math.round(realNetRub).toLocaleString('ru-RU')} ₽</span>
+      {#if pnlRub !== null}
+        <span class="badge pnl" class:up={pnlRub > 0} class:dn={pnlRub < 0}
+              title="Реализованный P&L робота: закрытые сделки × ₽/пункт — авторитетное число самого агента (совпадает с его страницей 127.0.0.1:8071). Считается по филлам робота, БЕЗ учёта текущей позиции и БЕЗ биржевой комиссии; включает бумажный период до перевода на реал.">
+          P&L {pnlRub > 0 ? '+' : ''}{Math.round(pnlRub).toLocaleString('ru-RU')} ₽</span>
         <span class="badge pnl" class:up={(pnlMargin ?? 0) > 0} class:dn={(pnlMargin ?? 0) < 0}
-              title={`Если ударить по рынку и закрыть ВСЮ позицию прямо сейчас: реализованный ${Math.round(realNetRub).toLocaleString('ru-RU')} + вариац. маржа ${floatRub !== null ? (floatRub > 0 ? '+' : '') + Math.round(floatRub).toLocaleString('ru-RU') : '0'} − комиссия закрытия ${Math.round(closeComm).toLocaleString('ru-RU')} ₽.`}>
-          P&L+Маржа {(pnlMargin ?? 0) > 0 ? '+' : ''}{Math.round(pnlMargin ?? realNetRub).toLocaleString('ru-RU')} ₽</span>
+              title={`Если ударить по рынку и закрыть ВСЮ позицию прямо сейчас: реализованный ${Math.round(pnlRub).toLocaleString('ru-RU')} + вариац. маржа ${floatRub !== null ? (floatRub > 0 ? '+' : '') + Math.round(floatRub).toLocaleString('ru-RU') : '0'} − комиссия закрытия ${Math.round(closeComm).toLocaleString('ru-RU')} ₽.`}>
+          P&L+Маржа {(pnlMargin ?? 0) > 0 ? '+' : ''}{Math.round(pnlMargin ?? pnlRub).toLocaleString('ru-RU')} ₽</span>
       {:else}
         <span class="badge pnl dim">P&L …</span>
       {/if}
@@ -468,7 +470,7 @@
       taker={!robot?.paper}
       openOrders={openOrders}
       plannedOrders={plannedOrders}
-      onNet={(n) => { if (!robot?.paper) realNetRub = n; }}
+      netOverride={robot?.paper ? null : pnlRub}
       floatRub={robot?.paper ? null : floatNetRub}
     />
     {/if}
