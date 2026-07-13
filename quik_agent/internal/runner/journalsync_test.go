@@ -129,3 +129,16 @@ func TestMissingFillsTailCutGuard(t *testing.T) {
 		t.Fatalf("tail-cut robot healed: %+v", got)
 	}
 }
+
+// The journal stamp must be the EXCHANGE trade time when the Lua build supplies
+// it: a restart re-stamps receipt times to NOW, which would journal a restored
+// fill hours off its true chart spot.
+func TestMissingFillsPrefersExchangeTime(t *testing.T) {
+	st := map[string]*quikv1.RobotStatus{"r1": status(false, nowMs-5000, nil, nil)}
+	tr := trade("r1", "700", "S", 1, 88000, nowMs-600_000) // receipt: 10 min ago
+	tr.ExchTsMs = nowMs - 7200_000                          // exchange: 2h ago
+	ups := MissingFills(st, []accounts.Trade{tr}, nowMs)
+	if len(ups) != 1 || ups[0].GetTsUnixMs() != nowMs-7200_000 {
+		t.Fatalf("want exchange ts, got %+v", ups)
+	}
+}

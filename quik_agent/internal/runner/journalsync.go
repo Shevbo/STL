@@ -78,7 +78,9 @@ func MissingFills(statuses map[string]*quikv1.RobotStatus, trades []accounts.Tra
 		robot, sec, side string
 		qty              int64
 		vwapNum          float64 // Σ price×qty
-		lastTsMs         int64
+		lastTsMs         int64   // journal stamp: EXCHANGE time when known (cc3+ Lua),
+		// else the Lua receipt stamp. A restart re-stamps receipts to NOW, which
+		// would journal a restored fill hours off its true spot on the chart.
 	}
 	aggs := map[string]*orderAgg{} // key: robot + "\x00" + orderNum
 	var keys []string              // insertion order -> deterministic output
@@ -104,8 +106,12 @@ func MissingFills(statuses map[string]*quikv1.RobotStatus, trades []accounts.Tra
 		}
 		a.qty += tr.Qty
 		a.vwapNum += tr.Price * float64(tr.Qty)
-		if tr.TsMs > a.lastTsMs {
-			a.lastTsMs = tr.TsMs
+		ts := tr.ExchTsMs
+		if ts <= 0 {
+			ts = tr.TsMs
+		}
+		if ts > a.lastTsMs {
+			a.lastTsMs = ts
 		}
 	}
 
