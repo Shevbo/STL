@@ -81,6 +81,14 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
     pos = await stl.get_position(symbol)
     cur_qty = pos.quantity if pos.side == "long" else (-pos.quantity if pos.side == "short" else 0)
 
+    # Safety: a position that survived into a new day (its `entered` flag was cleared by the
+    # reset) must be CLOSED, never added to by a fresh entry below — otherwise it accumulates
+    # day over day into a runaway position + P&L. This is the belt for a missed EOD flatten.
+    if cur_qty != 0 and not stl.get_state("entered"):
+        await stl.place_order(symbol, "sell" if cur_qty > 0 else "buy", abs(cur_qty), cur.close)
+        stl.set_state("done", 1)
+        return
+
     # 1) Manage an open position: fixed take-profit OR a trailing stop, plus stop-loss and
     #    an end-of-day flatten. tp_trail=1 drops the fixed TP and rides a stop that trails
     #    trail_dist×H behind the best price once profit reaches trail_act×H (slippage
