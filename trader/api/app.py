@@ -1451,6 +1451,7 @@ def create_app() -> FastAPI:
         """Return available built-in strategy templates with param schemas."""
         _require_any_auth(request)
         from trader.lab.strategies.donchian_breakout import STRATEGY_META as donchian_meta
+        from trader.lab.strategies.us_open_fvg import STRATEGY_META as us_open_fvg_meta
         core = [
             {
                 "id": "donchian_breakout",
@@ -1570,6 +1571,31 @@ def create_app() -> FastAPI:
                 ],
                 "script_code": "from trader.lab.strategies.supertrend import on_bar, on_start, on_stop",
                 "default_params": {"symbol": "RIM6", "atr_period": 10, "multiplier": 30, "qty": 1},
+            },
+            {
+                "id": "us_open_fvg",
+                "name": us_open_fvg_meta["name"],
+                "description": (
+                    "US-Open Range + FVG — одна сделка в день от открытия биржи США (16:30 МСК / 9:30 Нью-Йорк).\n"
+                    "Стиль ICT «Silver Bullet».\n\n"
+                    "КАК РАБОТАЕТ:\n"
+                    "1. Первая свеча длиной range_min минут после 16:30 МСК задаёт диапазон дня [хай RH, лоу RL]\n"
+                    "   (на M1 это блок 16:30..16:44 при range_min=15).\n"
+                    "2. После закрытия диапазона на 1-мин графике ждём ОДНОВРЕМЕННО пробой И Fair Value Gap\n"
+                    "   (3-барный разрыв) в ту же сторону:\n"
+                    "   • ЛОНГ: close > RH и бычий FVG (low[-1] > high[-3], тело >= min_frac).\n"
+                    "   • ШОРТ: close < RL и медвежий FVG (high[-1] < low[-3]).\n"
+                    "3. ВХОД ОДИН РАЗ. Стоп сразу за опорной свечой (лонг: RL-буфер, шорт: RH+буфер).\n"
+                    "   Тейк = R:R × риск (по умолчанию 2:1).\n"
+                    "4. Выход: TP, SL или принудительный флэт в 23:45 МСК. Повторно в рынок до\n"
+                    "   следующего дня НЕ входит — один сетап за сессию.\n\n"
+                    "ДЛЯ ЧЕГО: ловит импульс от открытия США. FVG отсекает ложные пробои;\n"
+                    "жёсткий R:R и один вход в день держат риск под контролем."
+                ),
+                "source": us_open_fvg_meta["source"],
+                "params_schema": us_open_fvg_meta["params_schema"],
+                "script_code": "from trader.lab.strategies.us_open_fvg import on_bar, on_start, on_stop",
+                "default_params": {p["key"]: p["default"] for p in us_open_fvg_meta["params_schema"]},
             },
         ]
         # append the whole strategy LIBRARY (12+ classic robots)
