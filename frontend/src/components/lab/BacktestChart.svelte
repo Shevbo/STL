@@ -20,7 +20,7 @@
     result, symbol, strategy = null, dateFrom, dateTo, pointValue = 1, defaultInterval = 60,
     openOrders = [], plannedOrders = [], taker = true, runParams = {}, paramSchema = [], onRerun = null,
     segments = null, pointValues = null, live = 0, liveTick = null, onNet = null, floatRub = null,
-    netOverride = null,
+    netOverride = null, livePosition = null,
   }: {
     result: any; symbol: string; strategy?: any; dateFrom: string; dateTo: string;
     pointValue?: number; defaultInterval?: number;
@@ -57,6 +57,14 @@
     // starts mid-position, so replaying it from flat mis-attributes the P&L). null
     // = backtest / use the replay.
     netOverride?: number | null;
+    // AUTHORITATIVE current position (signed contracts) for a LIVE robot. Same
+    // disease as netOverride: when the fill journal is incomplete (200-tail cut,
+    // lost fills, fix_state corrections filtered out) the flat-start replay ends
+    // on a WRONG position and paints a never-closing "open position" rectangle
+    // across days of later trades (incl. their TP/SL exits). When this is set and
+    // the replayed end position disagrees, the trailing open rect is suppressed —
+    // closed (bounded) rects stay. null = backtest / trust the replay.
+    livePosition?: number | null;
   } = $props();
 
   // ── Editable parameters panel (collapsed by default; edit → re-run backtest) ──
@@ -663,6 +671,14 @@
       // series stay empty (kept only to preserve series z-order).
       const lastBar = bars[bars.length - 1];
       posRects = positionRects(events, lastBar.time, lastBar.close);
+      // Incomplete-journal guard: replay end position vs the runner's authoritative
+      // one. On mismatch the episode boundaries after the hole are provably wrong —
+      // drop the sprawling open rect rather than draw a lie over later trades.
+      // ponytail: suppression only; resyncing the replay at journal fix_state
+      // entries would heal mid-tail holes if this ever needs to draw again.
+      const endPos = events.length ? (events[events.length - 1] as any).posAfter : 0;
+      if (livePosition != null && endPos !== livePosition)
+        posRects = posRects.filter((r: any) => !r.open);
       longSeries.setData([]);
       shortSeries.setData([]);
 

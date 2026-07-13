@@ -472,6 +472,7 @@
       plannedOrders={plannedOrders}
       netOverride={robot?.paper ? null : pnlRub}
       floatRub={robot?.paper ? null : floatNetRub}
+      livePosition={robot ? position : null}
     />
     {/if}
     </div>
