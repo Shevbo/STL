@@ -649,7 +649,7 @@
             <a class="btl-src-link" href={selectedStrategy.source_url} target="_blank" rel="noopener">источник ↗</a>
           {/if}
         </div>
-        <MustDescription strategyId={selectedStrategyId} />
+        <MustDescription strategyId={selectedStrategyId} params={paramValues} symbol={paramValues.symbol} />
         {#each (selectedStrategy.params_schema ?? []) as p}
           {@const isSymbol = p.key === 'symbol'}
           {@const help = helpFor(selectedStrategyId, p.key)}

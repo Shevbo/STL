@@ -210,7 +210,68 @@ export const STRATEGY_OVERVIEW: Record<string, StrategyOverview> = {
 };
 
 export function overviewFor(strategyId: string): StrategyOverview | null {
-  return STRATEGY_OVERVIEW[strategyId] ?? null;
+  return STRATEGY_OVERVIEW[strategyId.replace(/__inv$/, '')] ?? null;
+}
+
+// Human-readable NAME per strategy (for headings / chart title). Falls back to the id.
+export const STRATEGY_NAME: Record<string, string> = {
+  fvg: 'Fair Value Gap (ICT)', macd_cross: 'MACD Crossover', bollinger_mr: 'Bollinger Mean-Reversion',
+  bollinger_bo: 'Bollinger Breakout', bollinger_bo_m1: 'Bollinger Breakout M1', shectory_2ema: 'Двойная EMA',
+  stochastic: 'Stochastic', cci: 'CCI', williams_r: 'Williams %R', momentum: 'Momentum', roc: 'Rate of Change',
+  triple_sma: 'Тройная SMA', keltner_bo: 'Keltner Breakout', rsi_trend: 'RSI-откат в тренде',
+  ema_atr: 'EMA + ATR-фильтр', order_block: 'Order Block (ICT)', pivot_reversal: 'Pivot Reversal',
+  donchian_breakout: 'Donchian Breakout', ema_crossover: 'EMA Crossover', rsi_mean_reversion: 'RSI Mean-Reversion',
+  supertrend: 'SuperTrend', us_open_fvg: 'US-Open Range + FVG/Ретест',
+};
+export function nameFor(strategyId: string): string {
+  const base = strategyId.replace(/__inv$/, '');
+  const nm = STRATEGY_NAME[base] ?? base;
+  return strategyId.endsWith('__inv') ? `${nm} (контр)` : nm;
+}
+export function docBase(strategyId: string): string {
+  return strategyId.replace(/__inv$/, '');   // /?strategy=<base> — the description page
+}
+
+const cap = (s: string) => s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+const lc = (s: string) => s ? s.charAt(0).toLowerCase() + s.slice(1) : s;
+
+// A one-paragraph plain-language behavioral model built from the CURRENT params: what
+// the robot will actually DO with these knobs, not just the static rule. Returns null
+// without params. Complements overviewFor (the static four-pillar rule).
+export function behaviorFor(strategyId: string, params: Record<string, any> | null | undefined, symbol?: string): string | null {
+  if (!params) return null;
+  const sym = symbol || params.symbol || 'инструменте';
+  const num = (k: string, d = 0) => { const v = Number(params[k]); return Number.isFinite(v) ? v : d; };
+
+  if (strategyId === 'us_open_fvg' || strategyId === 'us_open_fvg__inv') {
+    const rng = num('range_min', 5), sig = num('signal_min', 60), mode = num('entry_mode', 1);
+    const modeTxt = mode === 0 ? 'пробой границы диапазона, подтверждённый Fair Value Gap'
+      : mode === 1 ? 'ретест пробитой границы с сильной свечой-отвержением (фильтр ложных пробоев)'
+      : 'пробой+FVG ЛИБО ретест — что сработает первым';
+    const sides = num('allow_long', 1) && num('allow_short', 1) ? 'в лонг или шорт'
+      : num('allow_long', 1) ? 'только в лонг' : 'только в шорт';
+    const trail = num('tp_trail', 0);
+    const tpTxt = trail
+      ? `прибыль ведётся трейлинг-стопом (${num('trail_dist', 50)}% высоты диапазона за пиком, включается после +${num('trail_act', 100)}%)`
+      : `тейк-профит ${(num('rr_x10', 20) / 10).toFixed(1)} к 1 от риска`;
+    const stop = num('stop_pct', 0);
+    const stopTxt = stop === 0 ? 'ровно на краю опорной свечи'
+      : stop > 0 ? `на ${stop}% высоты диапазона ЗА краем (шире, меньше выбивов)`
+      : `на ${-stop}% высоты диапазона ВНУТРЬ диапазона (туже, лучше R:R)`;
+    return `Отмечает хай и лоу первой ${rng}-минутной свечи после открытия биржи США (16:30 МСК). В течение ${sig} минут ждёт ${modeTxt} и заходит ${sides} на ${num('qty', 1)} контракт(ов) ${sym} — ОДИН раз за день, без повторных входов. ${cap(tpTxt)}. Стоп — ${stopTxt}. Если ни тейк, ни стоп не сработали, позиция закрывается по рынку в конце сессии.`;
+  }
+
+  const ov = overviewFor(strategyId);
+  const inv = strategyId.endsWith('__inv');
+  const qty = num('qty', 1), avgMax = num('avg_max', 1), avgStep = num('avg_step_atr', 0), tp = num('tp_atr', 0), atrN = num('avg_atr_n', 14);
+  const entry = ov ? lc(ov.entry) : 'по сигналу стратегии';
+  const entryTxt = inv ? `сигнал ПРОТИВОПОЛОЖЕН базовому (контр-стратегия): там, где база купила бы — робот продаёт, и наоборот. База: ${entry}` : entry;
+  const avgTxt = (avgMax > 1 && avgStep > 0)
+    ? `при ходе ПРОТИВ позиции докупает до ${avgMax} контрактов шагом ${(avgStep / 10).toFixed(1)}×ATR — усреднение вместо стопа (ATR считается по ${atrN} минутным барам)`
+    : `без усреднения — держит ровно ${qty} контракт(ов)`;
+  const tpTxt = tp > 0 ? `фиксирует прибыль на ${(tp / 10).toFixed(1)}×ATR от средней цены входа` : 'фиксирует прибыль ТОЛЬКО по появлению обратного сигнала (жёсткого тейка нет)';
+  const slTxt = `жёсткого стоп-лосса нет — убыток гасится сменой сигнала${avgMax > 1 ? ' и усреднением против движения' : ''}`;
+  return `Считает сигнал по закрытию каждой минутной свечи. Условие входа: ${entryTxt}. Заходит на ${qty} контракт(ов) ${sym} и ${avgTxt}. Дальше ${tpTxt}; ${slTxt}.`;
 }
 
 // Client-side ATR (Wilder), mirroring trader/lab/indicators.py atr(). Fed by the

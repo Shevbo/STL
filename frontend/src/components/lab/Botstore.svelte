@@ -7,6 +7,8 @@
   import { downloadCSV } from '$lib/csv';
   import { fetchWithAuth } from '../../lib/fetch-auth';
   import BacktestChart from './BacktestChart.svelte';
+  import MustDescription from './MustDescription.svelte';
+  import { nameFor, docBase, behaviorFor } from '$lib/strategy-help';
 
   let loading = $state(true);
   let error = $state('');
@@ -361,6 +363,75 @@
     chartStatus = null;
   }
   function closeChart() { chart = null; chartErr = ''; chartJob = null; chartStatus = null; }
+
+  // ── Launch a backtested config into trading (Paper / Live) ───────────────
+  let launchOpen = $state(false);
+  let launchMode = $state<'paper' | 'live'>('paper');
+  let launchName = $state('');
+  let launchBusy = $state(false);
+  let launchMsg = $state('');
+  let launchOk = $state(false);
+  const launchSid = $derived(chart?.opts?.strategyId ?? '');
+  const launchBehavior = $derived(behaviorFor(launchSid, chart?.params, chart?.symbol));
+  // The QUIK agent's runner only knows base library strategies — counter (__inv) and the
+  // standalone us_open module can't run there, so Live-on-agent is gated to library bases.
+  const canLiveAgent = $derived(!!launchSid && !launchSid.endsWith('__inv') && launchSid !== 'us_open_fvg');
+
+  function scriptCodeFor(sid: string): string | null {
+    if (!sid) return null;
+    if (sid.endsWith('__inv')) {
+      const base = sid.slice(0, -5);
+      return "from trader.lab.strategies.library import REGISTRY, make_on_bar\n"
+        + `_b = REGISTRY['${base}']\n`
+        + "def _inv(bars, p):\n    w = _b['signal'](bars, p)\n    return (-w) if w in (1, -1) else w\n"
+        + `REGISTRY['${base}__inv'] = dict(_b, id='${base}__inv', signal=_inv)\n`
+        + `on_bar = make_on_bar('${base}__inv')`;
+    }
+    return strategies.find((s) => s.id === sid)?.script_code ?? null;
+  }
+  function openLaunch() {
+    if (!chart) return;
+    launchName = `${nameFor(launchSid)} · ${chart.symbol}`.slice(0, 64);
+    launchMode = 'paper'; launchMsg = ''; launchOk = false; launchOpen = true;
+  }
+  async function doLaunch() {
+    if (!chart) return;
+    const sc = scriptCodeFor(launchSid);
+    if (!sc) { launchMsg = 'Не удалось собрать код стратегии для запуска.'; return; }
+    if (!stlLinks.length) { launchMsg = 'Нет STL Link (коннектора счёта) — создай его на вкладке подключения.'; return; }
+    if (launchMode === 'live' && !canLiveAgent) { launchMsg = 'На агенте (Live) доступны только базовые библиотечные стратегии. Контр- и us_open запускай в Paper.'; return; }
+    const params = { ...(chart.params ?? {}), symbol: chart.symbol };
+    const maxPos = Math.max(1, Number(params.avg_max ?? params.qty ?? 1) || 1);
+    launchBusy = true; launchMsg = ''; launchOk = false;
+    try {
+      const res = await fetchWithAuth('/api/v1/robots', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userEmail: 'admin', stlLinkId: stlLinks[0]?.id ?? '',
+          name: launchName || `${nameFor(launchSid)} · ${chart.symbol}`,
+          scriptCode: sc, paramsJson: params, schedule: '09:00-23:55' }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const { id } = await res.json();
+      if (launchMode === 'paper') {
+        const d = await fetchWithAuth(`/api/v1/robots/${id}/deploy`, { method: 'POST' });
+        if (!d.ok) throw new Error(await d.text());
+        launchMsg = `Запущен в PAPER: «${launchName}». Смотри его в Live Robots / витрине.`;
+        await load();
+      } else {
+        const d = await fetchWithAuth(`/api/v1/quik/robots/${id}/deploy-agent`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ strategy_id: launchSid, params, symbol: chart.symbol,
+            schedule: '09:00-23:55', max_position: maxPos, paper: true }),
+        });
+        if (!d.ok) throw new Error(await d.text());
+        launchMsg = `Развёрнут на агенте в PAPER: «${launchName}». РЕАЛЬНЫЕ ДЕНЬГИ включаются ТОЛЬКО на консоли агента (робот FLAT + ввод его ID) — из GUI реал не армится, это правило безопасности.`;
+      }
+      launchOk = true;
+    } catch (e) {
+      launchMsg = 'Ошибка запуска: ' + String(e);
+    }
+    launchBusy = false;
+  }
 
   // ── Agent activity panel (background optimizer status) ───────────────────────
   let activity = $state<any | null>(null);
@@ -827,10 +898,16 @@
       <div class="cm-box">
         <div class="cm-head">
           <span class="cm-title">
-            Бэктест · {chart?.symbol ?? chartJob?.symbol ?? ''}
-            {#if chart || chartJob}<span class="cm-params">{JSON.stringify(chart?.params ?? chartJob?.params)}</span>{/if}
+            {#if chart?.opts?.strategyId}
+              <b class="cm-strat">{nameFor(chart.opts.strategyId)}</b>
+              <a class="cm-doc" href={'/?strategy=' + encodeURIComponent(docBase(chart.opts.strategyId))} target="_blank" rel="noopener" title="полное описание стратегии">описание ↗</a>
+            {:else}Бэктест{/if}
+            <span class="cm-sym">· {chart?.symbol ?? chartJob?.symbol ?? ''}</span>
           </span>
-          <button class="cm-close" onclick={closeChart}>✕</button>
+          <div class="cm-actions">
+            {#if chart}<button class="cm-launch" onclick={openLaunch} title="создать робота из этого набора параметров и запустить в торговлю">▶ Запустить в торговлю</button>{/if}
+            <button class="cm-close" onclick={closeChart}>✕</button>
+          </div>
         </div>
         <div class="cm-body">
           {#if chartLoading}
@@ -866,6 +943,49 @@
               onRerun={(p) => openChart(chart.symbol, p, chart.opts)}
             />
           {/if}
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  <!-- LAUNCH INTO TRADING: create a robot from the chart's config and start it -->
+  {#if launchOpen}
+    <div class="lp-modal" role="dialog" tabindex="-1">
+      <div class="lp-box">
+        <div class="lp-head">
+          <span class="lp-h-title">Запустить в торговлю</span>
+          <button class="cm-close" onclick={() => launchOpen = false}>✕</button>
+        </div>
+        <div class="lp-body">
+          <div class="lp-strat">{nameFor(launchSid)}<span class="lp-sym">· {chart?.symbol}</span></div>
+          {#if launchBehavior}
+            <div class="lp-behavior">
+              <div class="lp-b-label">Что будет делать робот</div>
+              <p class="lp-b-text">{launchBehavior}</p>
+            </div>
+          {/if}
+          <label class="lp-field"><span class="lp-k">Имя робота</span>
+            <input class="lp-input" bind:value={launchName} maxlength="64" /></label>
+          <div class="lp-field"><span class="lp-k">Режим</span>
+            <div class="lp-modes">
+              <label class="lp-mode" class:sel={launchMode === 'paper'}>
+                <input type="radio" bind:group={launchMode} value="paper" /> Paper — симуляция на платформе</label>
+              <label class="lp-mode" class:sel={launchMode === 'live'} class:off={!canLiveAgent}>
+                <input type="radio" bind:group={launchMode} value="live" disabled={!canLiveAgent} /> Live — на торговом агенте</label>
+            </div>
+          </div>
+          {#if !canLiveAgent}<div class="lp-note">Live-на-агенте доступен только для базовых библиотечных стратегий. Контр- и us_open — запускай в Paper.</div>{/if}
+          <div class="lp-params"><span class="lp-k">Параметры</span>
+            <code class="lp-code">{JSON.stringify(chart?.params ?? {})}</code>
+            <div class="lp-hint">изменить — в ⚙ Параметры на графике → «Пересчитать», затем запусти снова</div></div>
+          {#if launchMode === 'live'}
+            <div class="lp-warn">⚠ Live: робот встанет на агента в <b>PAPER</b>. Реальные деньги включаются ТОЛЬКО на консоли агента (робот FLAT + ввод его ID). Из GUI реал не армится — правило безопасности.</div>
+          {/if}
+          {#if launchMsg}<div class="lp-msg" class:ok={launchOk}>{launchMsg}</div>{/if}
+        </div>
+        <div class="lp-foot">
+          <button class="lp-cancel" onclick={() => launchOpen = false}>{launchOk ? 'Закрыть' : 'Отмена'}</button>
+          {#if !launchOk}<button class="lp-go" disabled={launchBusy} onclick={doLaunch}>{launchBusy ? 'Запускаю…' : 'GO ▶'}</button>{/if}
         </div>
       </div>
     </div>
@@ -1118,6 +1238,48 @@
   .cm-params-big { font-size: 13px; color: #7fd7b0; text-overflow: clip; white-space: normal; }
   .cm-close { width: 26px; height: 26px; background: #1a1a2e; border: 1px solid #2d2d4a; color: #aaa; border-radius: 3px; font-size: 13px; cursor: pointer; flex-shrink: 0; }
   .cm-close:hover { color: #f44336; border-color: #f4433655; }
+  .cm-strat { font-size: 14px; color: #eaf2ff; font-weight: 700; }
+  .cm-sym { font-family: monospace; font-size: 13px; color: #7fd7b0; }
+  .cm-doc { font-size: 11px; color: #6aa8ff; text-decoration: none; }
+  .cm-doc:hover { text-decoration: underline; }
+  .cm-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+  .cm-launch { padding: 6px 14px; background: linear-gradient(180deg,#1c6b3a,#14522c); border: 1px solid #2c8a4e;
+    color: #d6ffe4; border-radius: 5px; font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+  .cm-launch:hover { background: linear-gradient(180deg,#237e46,#186334); }
+
+  /* Launch-into-trading panel */
+  .lp-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.66); display: flex; align-items: center; justify-content: center; z-index: 60; padding: 24px; }
+  .lp-box { width: min(560px, 96vw); max-height: 90vh; overflow-y: auto; background: #0e1220; border: 1px solid #2a3552; border-radius: 12px; box-shadow: 0 16px 48px rgba(0,0,0,0.6); }
+  .lp-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid #1c2540; }
+  .lp-h-title { font-size: 15px; font-weight: 700; color: #eaf2ff; }
+  .lp-body { padding: 16px 18px; display: flex; flex-direction: column; gap: 14px; }
+  .lp-strat { font-size: 17px; font-weight: 700; color: #eaf2ff; }
+  .lp-sym { font-family: monospace; font-size: 14px; color: #7fd7b0; margin-left: 6px; }
+  .lp-behavior { background: #172136; border-left: 3px solid #2f5c9e; border-radius: 0 8px 8px 0; padding: 11px 14px; }
+  .lp-b-label { font-size: 11px; letter-spacing: .6px; text-transform: uppercase; color: #6aa8ff; font-weight: 600; margin-bottom: 5px; }
+  .lp-b-text { margin: 0; font-size: 13.5px; line-height: 1.6; color: #e9edf6; }
+  .lp-field { display: flex; flex-direction: column; gap: 6px; }
+  .lp-k { font-size: 11px; letter-spacing: .5px; text-transform: uppercase; color: #7c88a3; font-weight: 600; }
+  .lp-input { background: #0a0f1c; border: 1px solid #2a3552; border-radius: 6px; color: #dfe6f2; font-size: 13px; padding: 8px 10px; }
+  .lp-input:focus { outline: none; border-color: #3a7; }
+  .lp-modes { display: flex; flex-direction: column; gap: 6px; }
+  .lp-mode { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #c5cddd; padding: 9px 12px;
+    border: 1px solid #24304c; border-radius: 7px; cursor: pointer; }
+  .lp-mode.sel { border-color: #3a7f57; background: #12261a; color: #e6ffee; }
+  .lp-mode.off { opacity: .5; cursor: not-allowed; }
+  .lp-note { font-size: 12px; color: #c9a24a; background: #221c0c; border-radius: 6px; padding: 8px 11px; }
+  .lp-params { display: flex; flex-direction: column; gap: 5px; }
+  .lp-code { font-family: monospace; font-size: 11.5px; color: #9db4d6; background: #0a0f1c; border-radius: 6px;
+    padding: 8px 10px; word-break: break-all; line-height: 1.5; }
+  .lp-hint { font-size: 11px; color: #66728c; }
+  .lp-warn { font-size: 12.5px; line-height: 1.55; color: #ffcf9e; background: #2a1608; border: 1px solid #7a4a1e; border-radius: 8px; padding: 11px 14px; }
+  .lp-msg { font-size: 13px; line-height: 1.55; color: #ff9a8a; background: #1f0f0f; border-radius: 8px; padding: 11px 14px; }
+  .lp-msg.ok { color: #9effc0; background: #0c2015; }
+  .lp-foot { display: flex; justify-content: flex-end; gap: 10px; padding: 14px 18px; border-top: 1px solid #1c2540; }
+  .lp-cancel { padding: 9px 16px; background: #171c2c; border: 1px solid #2a3552; color: #aeb8cc; border-radius: 6px; font-size: 13px; cursor: pointer; }
+  .lp-go { padding: 9px 22px; background: linear-gradient(180deg,#1f7a42,#155a30); border: 1px solid #2c8a4e; color: #eafff1; border-radius: 6px; font-size: 14px; font-weight: 700; cursor: pointer; }
+  .lp-go:hover { background: linear-gradient(180deg,#238a4b,#186334); }
+  .lp-go:disabled { opacity: .6; cursor: default; }
   .cm-body { flex: 1; min-height: 0; position: relative; }
   .cm-status { display: flex; flex-direction: column; gap: 8px; padding: 28px; max-width: 720px; margin: 0 auto; }
   .cm-spin { font-size: 14px; color: #4caf50; font-weight: 600; }
