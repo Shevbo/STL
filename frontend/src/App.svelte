@@ -226,7 +226,10 @@
       await new Promise((r) => setTimeout(r, 800));
     }
     checking = false;
-    if (authed) {
+    // The /?strategy=<id> page is a static explanation — it needs auth (to read
+    // /api/v1/strategies) but NOT the trading shell's live services, whose
+    // orderbook polling would otherwise 404-spam the console on this route.
+    if (authed && !strategyId) {
       startWs();
       loadInstruments();
       loadFeeConfig();
