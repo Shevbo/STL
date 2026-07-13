@@ -303,15 +303,13 @@
     chartStatus = { runner: '…', status: 'queued', elapsed: 0, vds_load: null, agent_alive: null, vds_down: false };
     const t0 = Date.now();
     try {
-      const tmpl = tmplOf(opts?.strategyId ?? detail?.id);
-      if (!tmpl) throw new Error('Нет шаблона стратегии для прогона');
       // Reproduce the EXACT leaderboard window so the chart MATCHES the table number.
       const dateFrom = opts?.dateFrom ? opts.dateFrom + 'T00:00:00' : (detail?.period?.date_from ?? toISO(daysAgo(95)));
       const dateTo = opts?.dateTo ? opts.dateTo + 'T23:59:59' : (detail?.period?.date_to ?? toISO(yesterday()));
-      const sc = tmpl.script_code;
-      // Prefer a pre-computed stored result (top-N backfill) — opens from the DB with no
-      // i9/VDS re-run. Matched by rank (row position in the net-desc best list). Falls
-      // through to a live run when nothing is stored for this row.
+      // Prefer a pre-computed stored result (top-N backfill) — opens from the DB with NO
+      // template and NO re-run. Matched by rank (row position in the net-desc best list).
+      // Counter campaigns (strategy "<id>__inv") have no template at all, so this is their
+      // ONLY path — it MUST run before the template lookup below.
       if (opts?.campaign && opts?.rank != null) {
         try {
           const q = `campaign_run=${encodeURIComponent(opts.campaign)}&rank=${opts.rank}`;
@@ -330,6 +328,10 @@
           }
         } catch { /* fall through to a live re-run */ }
       }
+      // A live re-run needs the strategy template. Counter variants have none -> clear msg.
+      const tmpl = tmplOf(opts?.strategyId ?? detail?.id);
+      if (!tmpl) throw new Error('Сохранённый результат ещё не готов (идёт бэкфилл топ-3), а пересчёт контр-стратегии из витрины недоступен. Обнови через минуту.');
+      const sc = tmpl.script_code;
       let result: any;
       try {
         // Prefer the i9 agent (keeps load off the VDS); backend picks remote if alive.
@@ -874,9 +876,9 @@
     <div class="chart-modal" role="dialog" tabindex="-1">
       <div class="cmp-box">
         <div class="cm-head">
-          <span class="cm-title">
-            Кампания перебора
-            {#if campaign}<span class="cm-params">{campaign.campaign}</span>{/if}
+          <span class="cm-title cm-title-big">
+            Витрина кампании перебора параметров
+            {#if campaign}<span class="cm-params cm-params-big">для {campaign.campaign}</span>{/if}
           </span>
           <button class="cm-close" onclick={closeCampaign}>✕</button>
         </div>
@@ -928,7 +930,7 @@
                 <div class="cmp-h-title">Лучшие по финрезу <span class="cmp-sub2">клик по строке — прогон с графиком (цена + сделки + доходность)</span>
                   <button class="cl-csv" onclick={() => downloadCSV(campaign.best, campaign.campaign + '-best')}>Выгрузить в CSV</button></div>
                 <table class="cmp-bt">
-                  <thead><tr><th>робот</th><th>инстр.</th><th>финрез</th><th>доходн.</th><th>RF</th><th>параметры</th></tr></thead>
+                  <thead><tr><th>робот</th><th>инстр.</th><th>финрез</th><th>доходн.</th><th>RF</th><th>сделок</th><th>параметры</th></tr></thead>
                   <tbody>
                     {#each campaign.best as b, i}
                       <tr class="cmp-click"
@@ -939,6 +941,7 @@
                         <td class:pos={b.net_profit > 0} class:neg={b.net_profit < 0}>{fmtMoney(b.net_profit)}</td>
                         <td class:pos={b.total_return > 0} class:neg={b.total_return < 0}>{fmtPct(b.total_return)}</td>
                         <td>{fmtNum(b.recovery_factor)}</td>
+                        <td class="mono">{b.total_trades ?? '—'}</td>
                         <td class="cmp-params-cell mono">{JSON.stringify(b.params)}</td>
                       </tr>
                     {/each}
@@ -1111,6 +1114,8 @@
   .cm-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 12px; border-bottom: 1px solid #1e1e3a; flex-shrink: 0; }
   .cm-title { font-size: 12px; color: #ccc; font-weight: 600; display: flex; align-items: baseline; gap: 8px; min-width: 0; }
   .cm-params { font-family: monospace; font-size: 10px; color: #666; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cm-title-big { font-size: 16px; color: #eaf2ff; font-weight: 700; letter-spacing: .2px; flex-wrap: wrap; }
+  .cm-params-big { font-size: 13px; color: #7fd7b0; text-overflow: clip; white-space: normal; }
   .cm-close { width: 26px; height: 26px; background: #1a1a2e; border: 1px solid #2d2d4a; color: #aaa; border-radius: 3px; font-size: 13px; cursor: pointer; flex-shrink: 0; }
   .cm-close:hover { color: #f44336; border-color: #f4433655; }
   .cm-body { flex: 1; min-height: 0; position: relative; }
@@ -1190,10 +1195,10 @@
               background: linear-gradient(90deg, #0c0c18, rgb(54,220,110)); border: 1px solid #1e1e3a; }
   .cmp-hint2 { margin-left: auto; color: #ffb86b; }
   .cmp-best { display: flex; flex-direction: column; gap: 6px; }
-  .cmp-bt { width: 100%; border-collapse: collapse; font-size: 11px; }
-  .cmp-bt th { text-align: right; padding: 4px 8px; color: #788; font-weight: 500; border-bottom: 1px solid #1e1e3a; }
+  .cmp-bt { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .cmp-bt th { text-align: right; padding: 6px 10px; color: #9ab; font-weight: 600; border-bottom: 1px solid #1e1e3a; }
   .cmp-bt th:first-child, .cmp-bt th:nth-child(2) { text-align: left; }
-  .cmp-bt td { text-align: right; padding: 4px 8px; color: #abc; border-bottom: 1px solid #14142a; font-variant-numeric: tabular-nums; }
+  .cmp-bt td { text-align: right; padding: 6px 10px; color: #cde; border-bottom: 1px solid #14142a; font-variant-numeric: tabular-nums; }
   .cmp-l { text-align: left !important; color: #cde; }
-  .cmp-params-cell { text-align: left !important; color: #667; font-size: 10px; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cmp-params-cell { text-align: left !important; color: #bcd; font-size: 12px; max-width: 520px; white-space: normal; word-break: break-word; line-height: 1.5; }
 </style>

@@ -1923,7 +1923,7 @@ def create_app() -> FastAPI:
             return out
         rows = await pool.fetch(
             "SELECT total_return, recovery_factor, net_profit, sharpe, max_drawdown, "
-            "strategy, symbol, params, created_at, date_from, date_to FROM optimization_leaderboard "
+            "total_trades, strategy, symbol, params, created_at, date_from, date_to FROM optimization_leaderboard "
             "WHERE campaign_run=$1 LIMIT 80000", id)
         # Consider ONLY configs whose position never exceeds 10 contracts (entry size
         # qty<=10 AND averaging cap avg_max<=10). Applied campaign-wide so the heatmap,
@@ -1996,7 +1996,7 @@ def create_app() -> FastAPI:
             out["best"].append({
                 "strategy": r["strategy"], "symbol": r["symbol"],
                 "total_return": r["total_return"], "recovery_factor": r["recovery_factor"],
-                "net_profit": r["net_profit"], "params": p,
+                "net_profit": r["net_profit"], "total_trades": r["total_trades"], "params": p,
                 # sweep window: lets the UI re-run this row 1:1 and open its chart
                 "date_from": r["date_from"].isoformat() if r["date_from"] else None,
                 "date_to": r["date_to"].isoformat() if r["date_to"] else None,
