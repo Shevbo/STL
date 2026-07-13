@@ -1,0 +1,180 @@
+package runner
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"shectory/quik_agent/internal/accounts"
+	quikv1 "shectory/quik_agent/internal/pb"
+)
+
+// Journal auto-heal: QUIK is the source of truth for REAL fills. A robot-tagged
+// trade in today's QUIK trades table that the robot's believed book does not
+// account for is a LOST fill (runner died between fill and persist — seen live
+// 2026-07-13, book frozen at 10:15 while 12 real fills piled up; event-path
+// outage; wiped state). Recon only FLAGS the divergence; this loop repairs it:
+// the missing quantity is synthesized as a normal OrderUpdate and fanned through
+// the regular runner event path, so the runner applies it via on_order_event,
+// persists it, and the next status report converges recon back to OK.
+//
+// Idempotency is structural: the synthetic client_id is a pure function of
+// (robot, order_num, total QUIK qty for that order) and the runner dedups fill
+// application per client_id. Re-detecting the same shortfall re-sends the same
+// client_id -> zero fresh qty applied. A later extra trade on the same order
+// raises the QUIK total -> new client_id -> only the increment applies.
+
+const (
+	syncInterval       = 60 * time.Second
+	syncMinTradeAgeMs  = 90_000 // let the normal event path deliver first
+	syncMaxHeartbeatMs = 90_000 // heal only robots whose book view is FRESH
+	syncMaxPerCycle    = 30     // runaway guard: heal gradually, never storm
+	syncTailCap        = 200    // runner's persisted fills tail size (runtime.py)
+)
+
+// MissingFills computes synthetic OrderUpdates for robot-tagged QUIK trades the
+// robots' believed books do not cover. Pure: no clock, no I/O — nowMs injected.
+func MissingFills(statuses map[string]*quikv1.RobotStatus, trades []accounts.Trade, nowMs int64) []*quikv1.OrderUpdate {
+	floor := mskMidnightMs(nowMs)
+
+	// journalQty[robot][orderNum] = qty the robot's book already accounts for:
+	// recorded real fills + still-working orders (their fills are in flight on
+	// the normal path and must never be pre-empted).
+	type robotView struct {
+		journalQty map[string]int64
+		working    map[string]bool
+	}
+	views := map[string]*robotView{}
+	for id, st := range statuses {
+		if st.GetPaper() {
+			continue // paper robots place no QUIK orders; nothing to heal
+		}
+		if hb := st.GetHeartbeatUnixMs(); hb == 0 || nowMs-hb > syncMaxHeartbeatMs {
+			continue // stale book view: healing against it could double-apply
+		}
+		fills := st.GetRecentFills()
+		// Tail-cut guard: a 200-capped tail whose OLDEST entry is already inside
+		// today may have dropped today's fills -> journalQty would undercount and
+		// the heal would double-apply. Skip such a robot (recon still flags it).
+		if len(fills) >= syncTailCap && len(fills) > 0 && fills[0].GetTsUnixMs() >= floor {
+			continue
+		}
+		v := &robotView{journalQty: map[string]int64{}, working: map[string]bool{}}
+		for _, f := range fills {
+			if f.GetStatus() == "filled" && f.GetOrderId() != "" {
+				v.journalQty[f.GetOrderId()] += f.GetQty()
+			}
+		}
+		for _, w := range st.GetWorkingOrders() {
+			if w.GetOrderId() != "" {
+				v.working[w.GetOrderId()] = true
+			}
+		}
+		views[id] = v
+	}
+
+	// Aggregate today's settled tagged QUIK trades per (robot, order).
+	type orderAgg struct {
+		robot, sec, side string
+		qty              int64
+		vwapNum          float64 // Σ price×qty
+		lastTsMs         int64
+	}
+	aggs := map[string]*orderAgg{} // key: robot + "\x00" + orderNum
+	var keys []string              // insertion order -> deterministic output
+	for _, tr := range trades {
+		if tr.Tag == "" || tr.Tag == "recon" || tr.OrderNum == "" || tr.Qty <= 0 {
+			continue
+		}
+		if _, ok := views[tr.Tag]; !ok {
+			continue // not a (healable) robot
+		}
+		if tr.TsMs < floor || nowMs-tr.TsMs < syncMinTradeAgeMs {
+			continue
+		}
+		if tr.Side != "B" && tr.Side != "S" {
+			continue // old Lua build without a side column: cannot synthesize safely
+		}
+		k := tr.Tag + "\x00" + tr.OrderNum
+		a := aggs[k]
+		if a == nil {
+			a = &orderAgg{robot: tr.Tag, sec: tr.Sec, side: tr.Side}
+			aggs[k] = a
+			keys = append(keys, k)
+		}
+		a.qty += tr.Qty
+		a.vwapNum += tr.Price * float64(tr.Qty)
+		if tr.TsMs > a.lastTsMs {
+			a.lastTsMs = tr.TsMs
+		}
+	}
+
+	var out []*quikv1.OrderUpdate
+	for _, k := range keys {
+		a := aggs[k]
+		v := views[a.robot]
+		orderNum := k[len(a.robot)+1:]
+		if v.working[orderNum] {
+			continue // normal event path still owns this order
+		}
+		missing := a.qty - v.journalQty[orderNum]
+		if missing <= 0 {
+			continue
+		}
+		side := quikv1.Side_SIDE_BUY
+		if a.side == "S" {
+			side = quikv1.Side_SIDE_SELL
+		}
+		out = append(out, &quikv1.OrderUpdate{
+			// qty-suffixed: same shortfall -> same id (runner dedups); a later
+			// extra trade raises the QUIK total -> new id -> only the increment.
+			ClientId: fmt.Sprintf("rr:%s:qsync:%s:%d", a.robot, orderNum, a.qty),
+			OrderId:  orderNum,
+			Code:     a.sec,
+			Side:     side,
+			State:    quikv1.OrderState_ORDER_STATE_FILLED,
+			Price:    a.vwapNum / float64(a.qty),
+			Quantity: missing,
+			Filled:   missing,
+			Text:     "journal-sync: restored from the QUIK trades table",
+			TsUnixMs: a.lastTsMs,
+		})
+		if len(out) >= syncMaxPerCycle {
+			break
+		}
+	}
+	return out
+}
+
+// JournalSyncLoop runs MissingFills on a ticker and fans the repairs through the
+// runner bridge until ctx is done.
+func JournalSyncLoop(ctx context.Context, srv *Server, acc *accounts.Store, logf func(string, ...any)) {
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
+	t := time.NewTicker(syncInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			ups := MissingFills(srv.LastStatuses(), acc.Snapshot().Trades, time.Now().UnixMilli())
+			for _, u := range ups {
+				logf("restoring lost fill: %s %s qty=%d @ %.0f (order %s)",
+					u.GetClientId(), u.GetSide(), u.GetFilled(), u.GetPrice(), u.GetOrderId())
+				srv.FanOrderEvent(u)
+			}
+		}
+	}
+}
+
+// mskMidnightMs returns 00:00 MSK (UTC+3, no DST since 2014) of the day
+// containing nowMs, as epoch-ms. acc_trd holds today's session only; fills and
+// trades are compared within it (mirrors internal/status.mskMidnightMs).
+func mskMidnightMs(nowMs int64) int64 {
+	const day = int64(24 * 60 * 60 * 1000)
+	const mskOffset = int64(3 * 60 * 60 * 1000)
+	shifted := nowMs + mskOffset
+	return (shifted/day)*day - mskOffset
+}

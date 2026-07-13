@@ -519,6 +519,11 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 		} else {
 			fmt.Println("  robots:  robot-runner.exe not found — robot hosting disabled")
 		}
+		// Journal auto-heal: robot-tagged QUIK trades missing from the runner's
+		// believed book (fill lost between QUIK and persist — 2026-07-13) are
+		// synthesized back through the normal event path. QUIK fact > agent belief.
+		go runner.JournalSyncLoop(ctx, runnerSrv, accStore,
+			func(f string, a ...any) { fmt.Printf("journal-sync: "+f+"\n", a...) })
 		// Startup self-check traffic light: one aggregate readiness line after the
 		// stack settles, so an operator (or log reader) sees what's up in ONE place.
 		go func() {

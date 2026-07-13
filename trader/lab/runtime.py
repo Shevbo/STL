@@ -153,6 +153,12 @@ class BacktestRuntime:
             total = abs(signed) + qty
             avg = (avg * abs(signed) + fill_price * qty) / total
             pos = {"side": "long" if new_signed > 0 else "short", "qty": abs(new_signed), "avg": avg}
+        elif signed != 0 and (new_signed > 0) == (signed > 0):
+            # Partial reduce: fewer contracts at the SAME entry average. The old
+            # else-branch reset avg to the closing fill's price, re-basing the
+            # remaining contracts and mis-realizing every later close. Mirrors
+            # the identical fix in robot_runner/runtime.py (live/backtest parity).
+            pos = {"side": "long" if new_signed > 0 else "short", "qty": abs(new_signed), "avg": avg}
         else:
             # Opened fresh, or flipped through zero → entry at fill price.
             pos = {"side": "long" if new_signed > 0 else "short", "qty": abs(new_signed), "avg": fill_price}

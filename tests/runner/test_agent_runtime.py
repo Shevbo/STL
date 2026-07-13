@@ -116,3 +116,20 @@ async def test_fill_applies_even_when_console_logger_raises(monkeypatch):
     rt.on_order_event(U(order.order_id, state=4, price=89000.0, qty=1))  # must not raise
     assert rt.signed_position() == 1
     assert rt.recent_fills()[-1]["status"] == "filled"
+
+
+@pytest.mark.asyncio
+async def test_partial_reduce_keeps_avg():
+    """Partial close must NOT re-base the remaining contracts: the old code set
+    avg to the closing fill's price, mis-realizing every later close (found
+    2026-07-13 reconstructing the lost-fill sequence)."""
+    rt = AgentRuntime("r1", FakeBridge(), BarBuilder(), max_position=10, paper=True)
+    await rt.place_order("RIU6", "sell", 3, 88000.0)   # short 3 @ 88000
+    assert (rt.signed_position(), rt.avg_price()) == (-3, 88000.0)
+    await rt.place_order("RIU6", "buy", 1, 87000.0)    # close 1 -> short 2
+    assert rt.signed_position() == -2
+    assert rt.avg_price() == 88000.0                   # avg unchanged
+    assert rt.realized_pnl() == 1000.0
+    await rt.place_order("RIU6", "buy", 1, 87500.0)    # close 1 more
+    assert rt.avg_price() == 88000.0
+    assert rt.realized_pnl() == 1500.0                 # 1000 + 500, both vs 88000

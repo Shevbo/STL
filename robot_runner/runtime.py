@@ -235,7 +235,12 @@ class AgentRuntime:
             if fresh:
                 self._apply_fill(side, fresh, price, client_id=cid,
                                  order_id=getattr(u, "order_id", ""),
-                                 symbol=getattr(u, "code", ""))
+                                 symbol=getattr(u, "code", ""),
+                                 # journal at the EVENT's time, not receipt time:
+                                 # the agent's journal-sync restores lost fills
+                                 # hours later and they must land on their true
+                                 # spot on the chart/session timeline.
+                                 ts_ms=int(getattr(u, "ts_unix_ms", 0)) or None)
         if order is not None:
             status = _STATE_TO_STATUS.get(state, order.status)
             self._orders[cid] = Order(order_id=cid, symbol=order.symbol,
@@ -244,7 +249,7 @@ class AgentRuntime:
 
     def _apply_fill(self, side: str, qty: int, price: float, *,
                     client_id: str = "", order_id: str = "", symbol: str = "",
-                    status: str = "filled") -> None:
+                    status: str = "filled", ts_ms: int | None = None) -> None:
         # Same signed-space algorithm as BacktestRuntime.place_order.
         delta = qty if side == "buy" else -qty
         signed, avg = self._signed, self._avg
@@ -258,18 +263,26 @@ class AgentRuntime:
             total = abs(signed) + qty
             self._avg = (avg * abs(signed) + price * qty) / total
             self._signed = new_signed
+        elif signed != 0 and (new_signed > 0) == (signed > 0):
+            # Partial reduce: fewer contracts at the SAME entry average. The old
+            # else-branch reset avg to the closing fill's price, silently
+            # re-basing the remaining contracts and mis-realizing every later
+            # close (found 2026-07-13 reconstructing lost fills: -1583 pts of
+            # truth became -5111 through the reset avg).
+            self._signed = new_signed
         else:
             self._signed, self._avg = new_signed, price
         self._record(client_id or "fill", symbol, side, qty, price, status,
-                     order_id=order_id)
+                     order_id=order_id, ts_ms=ts_ms)
         tag = "" if status == "filled" else f" ({status})"
         self.event("FILL", f"{side} {qty} @ {price:.0f}{tag} → позиция {self._signed} @ "
                    f"{self._avg:.0f}, реализовано {self._realized:.0f} п.")
 
-    def _record(self, client_id, symbol, side, qty, price, status, order_id="") -> None:
+    def _record(self, client_id, symbol, side, qty, price, status, order_id="",
+                ts_ms: int | None = None) -> None:
         f = {"client_id": client_id, "order_id": order_id or client_id,
              "symbol": symbol, "side": side, "qty": qty, "price": price,
-             "status": status, "ts_ms": int(time.time() * 1000)}
+             "status": status, "ts_ms": int(ts_ms or time.time() * 1000)}
         self._fills.append(f)
         if len(self._fills) > 200:
             self._fills = self._fills[-200:]
