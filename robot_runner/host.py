@@ -96,6 +96,13 @@ class RobotHost:
                 "max_position": int(spec_pb.max_position_contracts or 1),
                 "paper": bool(spec_pb.paper),
             }
+            # make_on_bar reads params["symbol"]; spec.symbol is the authoritative
+            # symbol (it drives tape/tick/order routing everywhere below). Some
+            # deploy/edit routes omit symbol from params_json -> KeyError 'symbol'
+            # on every bar (agent-fvg-RIU6-v3 was wedged on exactly this). Keep the
+            # params symbol in lockstep with the spec so any route deploys clean.
+            if spec["symbol"]:
+                spec["params"]["symbol"] = spec["symbol"]
             saved = self._saved.get(spec["robot_id"], {})
             # keep accumulated bars across a re-deploy (params change, STL reconnect)
             bars = (self.robots[spec["robot_id"]].bars
@@ -120,7 +127,10 @@ class RobotHost:
         elif kind == "set_params":
             r = self.robots.get(rc.set_params.robot_id)
             if r is not None:
-                r.spec["params"] = json.loads(rc.set_params.params_json or "{}")
+                params = json.loads(rc.set_params.params_json or "{}")
+                if r.spec.get("symbol"):     # see deploy: params must carry symbol
+                    params["symbol"] = r.spec["symbol"]
+                r.spec["params"] = params
                 log.info("host.params_updated", robot_id=rc.set_params.robot_id)
         elif kind == "pause":
             r = self.robots.get(rc.pause.robot_id)

@@ -274,7 +274,15 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 		cancel()
 	}()
 
-	go wd.Run(ctx)
+	// DDE is RETIRED (the QLua file-queue is the feed). This watchdog only
+	// supervises the legacy DDE reader, and its sole action (RestartDDE) is a
+	// no-op unless SHECTORY_ENABLE_DDE=1. Running it with DDE off fired
+	// "DDE hung (dde server not alive) — read-only restart attempt" every cycle
+	// and inflated the reconnect counter — a zombie. Feed staleness is already
+	// classified by the health package. Start it only when DDE is enabled.
+	if quikdde.LegacyEnabled() {
+		go wd.Run(ctx)
+	}
 
 	lk := link.New(link.Options{
 		Target:            cfg.STLGRPCURL,

@@ -3,6 +3,19 @@ import json
 import pytest
 
 from robot_runner.host import RobotHost
+from trader.lab.strategies.library import make_on_bar
+
+
+@pytest.mark.asyncio
+async def test_make_on_bar_raises_without_symbol_in_params():
+    # Independent root-cause proof (strategy layer, no host): make_on_bar reads
+    # params["symbol"] first thing, so symbol-less params raise KeyError('symbol')
+    # -> str(exc) == "'symbol'", exactly the host.on_bar_failed error seen on
+    # agent-fvg-RIU6-v3. This is WHY the host must backfill symbol from spec.
+    on_bar = make_on_bar("fvg")
+    with pytest.raises(KeyError) as ei:
+        await on_bar(object(), {"qty": 1})   # object() is untouched: fails before any call
+    assert str(ei.value) == "'symbol'"
 
 
 class FakeBridge:
@@ -21,16 +34,18 @@ class FakeBridge:
         self.reports.append(r)
 
 
-def _deploy_rc(robot_id="r1", strategy="fvg", paper=True):
+def _deploy_rc(robot_id="r1", strategy="fvg", paper=True, params=None):
     """Duck-typed RunnerControl stand-in for handle_control."""
     class Spec:
         pass
     spec = Spec()
     spec.robot_id = robot_id
     spec.strategy_id = strategy
-    spec.params_json = json.dumps({"symbol": "RIU6", "qty": 1, "min_frac": 12,
-                                   "tp_atr": 60, "avg_max": 1, "avg_atr_n": 5,
-                                   "avg_step_atr": 24})
+    if params is None:
+        params = {"symbol": "RIU6", "qty": 1, "min_frac": 12,
+                  "tp_atr": 60, "avg_max": 1, "avg_atr_n": 5,
+                  "avg_step_atr": 24}
+    spec.params_json = json.dumps(params)
     spec.symbol = "RIU6"
     spec.schedule = "00:00-23:59"
     spec.max_position_contracts = 1
@@ -72,6 +87,53 @@ async def test_deploy_creates_robot_and_persists(tmp_path):
     # the fill HISTORY survives the restart too (operator audit trail)
     fills = r2.runtime.recent_fills()
     assert fills and fills[-1]["price"] == 89000.0
+
+
+@pytest.mark.asyncio
+async def test_deploy_injects_spec_symbol_when_params_json_omits_it(tmp_path):
+    # Regression (agent-fvg-RIU6-v3): a deploy/edit route sent params_json WITHOUT
+    # "symbol". make_on_bar reads params["symbol"] -> KeyError 'symbol' on EVERY
+    # bar (host.on_bar_failed error="'symbol'"), so the robot never traded. The
+    # host must backfill params.symbol from the authoritative spec.symbol.
+    host = RobotHost(FakeBridge(), str(tmp_path))
+    await host.handle_control(_deploy_rc(params={"qty": 1, "min_frac": 12,
+                                                 "tp_atr": 60, "avg_max": 1,
+                                                 "avg_atr_n": 5, "avg_step_atr": 24}))
+    r = host.robots["r1"]
+    assert r.spec["params"]["symbol"] == "RIU6"   # backfilled from spec.symbol
+    # and the strategy now runs clean instead of raising KeyError('symbol')
+    t0 = 1_751_500_000_000
+    for i in range(12):
+        r.bars.on_tick(t0 + i * 60_000, 89_000 + i * 30)
+    assert await host.tick_robot(r) is True
+    assert r.last_error == ""
+
+
+@pytest.mark.asyncio
+async def test_set_params_reinjects_spec_symbol(tmp_path):
+    # A light SetRobotParams (params_json only) that omits symbol must not strip
+    # it back out — otherwise the next bar throws KeyError('symbol') again.
+    host = RobotHost(FakeBridge(), str(tmp_path))
+    await host.handle_control(_deploy_rc())
+    r = host.robots["r1"]
+
+    class _SetParams:
+        class SP:
+            robot_id = "r1"
+            params_json = json.dumps({"qty": 2, "min_frac": 15})  # no symbol
+        set_params = SP()
+
+        def WhichOneof(self, _):  # noqa: N802 (proto API shape)
+            return "set_params"
+
+    await host.handle_control(_SetParams())
+    assert r.spec["params"]["symbol"] == "RIU6"   # re-injected, not lost
+    assert r.spec["params"]["qty"] == 2           # the edit still applied
+    t0 = 1_751_500_000_000
+    for i in range(12):
+        r.bars.on_tick(t0 + i * 60_000, 89_000 + i * 30)
+    assert await host.tick_robot(r) is True
+    assert r.last_error == ""
 
 
 @pytest.mark.asyncio
