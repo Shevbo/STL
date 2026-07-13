@@ -3028,7 +3028,10 @@ def create_app() -> FastAPI:
                 return None
             try:
                 f = float(v)
-                return None if (_math.isnan(f) or _math.isinf(f)) else v
+                # NULL out Inf/NaN and absurd magnitudes (a runaway backtest can emit a
+                # ~1e120 net_profit; legit metrics are well under 1e12) so garbage can't
+                # top the leaderboard or become a campaign's "leader".
+                return None if (_math.isnan(f) or _math.isinf(f) or abs(f) > 1e12) else v
             except (TypeError, ValueError):
                 return None
         def _fint(e, k):
@@ -3057,7 +3060,7 @@ def create_app() -> FastAPI:
                 return None
             try:
                 f = float(v)
-                return None if (_math.isnan(f) or _math.isinf(f)) else v
+                return None if (_math.isnan(f) or _math.isinf(f) or abs(f) > 1e12) else v
             except (TypeError, ValueError):
                 return None
         lb_rows = [
