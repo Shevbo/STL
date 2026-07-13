@@ -59,6 +59,10 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
     allow_long = int(params.get("allow_long", 1))
     allow_short = int(params.get("allow_short", 1))
     flatten_eod = int(params.get("flatten_eod", 1))
+    tp_trail = int(params.get("tp_trail", 0))               # 0=fixed TP, 1=trailing
+    trail_act = float(params.get("trail_act", 100)) / 100.0  # activate after this profit (×H)
+    trail_dist = float(params.get("trail_dist", 50)) / 100.0  # trail distance behind peak (×H)
+    trail_slip = float(params.get("trail_slip", 0)) / 100.0   # slippage on the trail exit (×H)
 
     need = max(5, range_min + signal_min + 10)
     bars = await stl.get_bars(symbol, tf=1, n=need)
@@ -77,27 +81,49 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
     pos = await stl.get_position(symbol)
     cur_qty = pos.quantity if pos.side == "long" else (-pos.quantity if pos.side == "short" else 0)
 
-    # 1) Manage an open position: take-profit / stop-loss / end-of-day flatten.
+    # 1) Manage an open position: fixed take-profit OR a trailing stop, plus stop-loss and
+    #    an end-of-day flatten. tp_trail=1 drops the fixed TP and rides a stop that trails
+    #    trail_dist×H behind the best price once profit reaches trail_act×H (slippage
+    #    trail_slip×H budgeted on the exit fill).
     if cur_qty != 0 and stl.get_state("entered"):
         sl = stl.get_state("sl")
         tp = stl.get_state("tp")
         dirn = stl.get_state("dir")
+        entry = stl.get_state("entry")
+        height = (stl.get_state("rh") or 0) - (stl.get_state("rl") or 0)
+        exit_px = None
         if dirn > 0:
-            if cur.low <= sl:
-                await stl.place_order(symbol, "sell", abs(cur_qty), sl)
-                stl.set_state("done", 1)
-                return
-            if cur.high >= tp:
-                await stl.place_order(symbol, "sell", abs(cur_qty), tp)
+            if tp_trail and height > 0:
+                peak = max(stl.get_state("peak", entry), cur.high)
+                stl.set_state("peak", peak)
+                trail = peak - trail_dist * height if (peak - entry) >= trail_act * height else None
+                eff_stop = max(sl, trail) if trail is not None else sl
+                if cur.low <= eff_stop:
+                    exit_px = eff_stop - trail_slip * height
+            else:
+                if cur.low <= sl:
+                    exit_px = sl
+                elif cur.high >= tp:
+                    exit_px = tp
+            if exit_px is not None:
+                await stl.place_order(symbol, "sell", abs(cur_qty), exit_px)
                 stl.set_state("done", 1)
                 return
         else:
-            if cur.high >= sl:
-                await stl.place_order(symbol, "buy", abs(cur_qty), sl)
-                stl.set_state("done", 1)
-                return
-            if cur.low <= tp:
-                await stl.place_order(symbol, "buy", abs(cur_qty), tp)
+            if tp_trail and height > 0:
+                trough = min(stl.get_state("peak", entry), cur.low)
+                stl.set_state("peak", trough)
+                trail = trough + trail_dist * height if (entry - trough) >= trail_act * height else None
+                eff_stop = min(sl, trail) if trail is not None else sl
+                if cur.high >= eff_stop:
+                    exit_px = eff_stop + trail_slip * height
+            else:
+                if cur.high >= sl:
+                    exit_px = sl
+                elif cur.low <= tp:
+                    exit_px = tp
+            if exit_px is not None:
+                await stl.place_order(symbol, "buy", abs(cur_qty), exit_px)
                 stl.set_state("done", 1)
                 return
         if flatten_eod and hm >= _EOD_HM:
@@ -152,6 +178,8 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
         stl.set_state("dir", dirn)
         stl.set_state("sl", sl)
         stl.set_state("tp", tp)
+        stl.set_state("entry", price)
+        stl.set_state("peak", price)
         stl.log(f"{'LONG' if dirn > 0 else 'SHORT'} {price:.0f} SL={sl:.0f} TP={tp:.0f} "
                 f"(range {rl:.0f}-{rh:.0f})")
         return True
@@ -220,6 +248,14 @@ STRATEGY_META = {
          "hint": "Разрешить входы в лонг"},
         {"key": "allow_short", "label": "Шорты (0/1)", "type": "number", "default": 1, "min": 0, "max": 1,
          "hint": "Разрешить входы в шорт"},
+        {"key": "tp_trail", "label": "Трейлинг TP (0/1)", "type": "number", "default": 0, "min": 0, "max": 1,
+         "hint": "0 = фикс TP (R:R). 1 = трейлинг-стоп вместо фикс TP (профит едет за ценой)"},
+        {"key": "trail_act", "label": "Активация трейла % H", "type": "number", "default": 100, "min": 0, "max": 500,
+         "hint": "Трейл включается после профита ≥ этот % высоты диапазона (100 = 1 диапазон)"},
+        {"key": "trail_dist", "label": "Дистанция трейла % H", "type": "number", "default": 50, "min": 5, "max": 300,
+         "hint": "Стоп тянется на этот % высоты диапазона за пиком цены"},
+        {"key": "trail_slip", "label": "Проскальзывание % H", "type": "number", "default": 0, "min": 0, "max": 50,
+         "hint": "Защита от проскальзывания: exit-филл трейла хуже на этот % высоты диапазона"},
         {"key": "flatten_eod", "label": "Флэт в конце дня (0/1)", "type": "number", "default": 1, "min": 0, "max": 1,
          "hint": "1 = закрыть по рынку в 23:45 МСК, если TP/SL не сработали"},
         {"key": "qty", "label": "Контрактов", "type": "number", "default": 1, "min": 1, "max": 10, "hint": "Лотность"},
