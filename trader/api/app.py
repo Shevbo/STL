@@ -2041,6 +2041,9 @@ def create_app() -> FastAPI:
             ORDER BY campaign_run, net_profit DESC NULLS LAST
             """)
         lead = {r["campaign_run"]: r for r in leaders}
+        # ГО (initial margin) per contract lives in instrument_meta, not the leaderboard.
+        metas = await pool.fetch("SELECT symbol, initial_margin FROM instrument_meta WHERE initial_margin IS NOT NULL")
+        margin_of = {m["symbol"]: float(m["initial_margin"]) for m in metas}
         out = []
         for r in rows:
             cr = r["campaign_run"]
@@ -2057,7 +2060,7 @@ def create_app() -> FastAPI:
                 except Exception:
                     return d
             max_pos = max(_pi("qty", 1), _pi("avg_max", 1)) if L else None
-            margin = float(L["initial_margin"]) if (L and L["initial_margin"]) else None
+            margin = margin_of.get(L["symbol"]) if L else None
             max_go = round(margin * max_pos) if (margin and max_pos) else None
             strat = L["strategy"] if L else (list(r["strategies"] or [None])[0])
             strat_base = strat[:-5] if (strat and strat.endswith("__inv")) else strat
