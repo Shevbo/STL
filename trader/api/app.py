@@ -3018,29 +3018,56 @@ def create_app() -> FastAPI:
         # Build all rows first, then one executemany per table instead of a round-trip
         # per combo (hundreds of awaited INSERTs on the small VDS Postgres).
         ok = [e for e in results if e.get("ok")]
+        # Sanitize agent-computed metrics before INSERT: a buggy combo (e.g. a runaway
+        # peak_contracts far past int32, or an Inf/NaN recovery_factor from a zero-drawdown
+        # run) must never 500 the whole batch — clamp it to NULL instead.
+        import math as _math
+        def _fnum(e, k):
+            v = e["result"].get(k)
+            if v is None:
+                return None
+            try:
+                f = float(v)
+                return None if (_math.isnan(f) or _math.isinf(f)) else v
+            except (TypeError, ValueError):
+                return None
+        def _fint(e, k):
+            try:
+                iv = int(e["result"].get(k))
+                return iv if -2_000_000_000 <= iv <= 2_000_000_000 else None
+            except (TypeError, ValueError):
+                return None
         result_rows = [
             (
                 cuid(), run_id, e["params"],
                 e["result"].get("trades", []), e["result"].get("equity_curve", []),
-                e["result"].get("sharpe"), e["result"].get("max_drawdown"),
-                e["result"].get("win_rate"), e["result"].get("total_return"),
-                e["result"].get("total_trades"),
-                e["result"].get("net_profit"), e["result"].get("recovery_factor"),
-                e["result"].get("peak_contracts"),
+                _fnum(e, "sharpe"), _fnum(e, "max_drawdown"),
+                _fnum(e, "win_rate"), _fnum(e, "total_return"),
+                _fint(e, "total_trades"),
+                _fnum(e, "net_profit"), _fnum(e, "recovery_factor"),
+                _fint(e, "peak_contracts"),
             )
             for e in ok
         ]
         # Mirror to the leaderboard ONLY for real sweeps (camp-/opt-, non-null
         # campaign_run). A UI/chart run has strat_id but campaign=None → NULL
         # campaign_run would abort the txn.
+        def _sv(v):
+            if v is None:
+                return None
+            try:
+                f = float(v)
+                return None if (_math.isnan(f) or _math.isinf(f)) else v
+            except (TypeError, ValueError):
+                return None
         lb_rows = [
             (
                 campaign, strat_id, meta["symbol"], e["params"],
-                e["result"].get("total_return"), e["result"].get("sharpe"),
-                e["result"].get("max_drawdown"), e["result"].get("win_rate"),
-                e["result"].get("total_trades"), _score(e["result"]), _cand(e["result"]),
-                e["result"].get("net_profit"), e["result"].get("recovery_factor"),
-                e["result"].get("ann_return_go"), e["result"].get("ann_return_full"),
+                _fnum(e, "total_return"), _fnum(e, "sharpe"),
+                _fnum(e, "max_drawdown"), _fnum(e, "win_rate"),
+                _fint(e, "total_trades"), _sv(_score(e["result"])), _cand(e["result"]),
+                _fnum(e, "net_profit"), _fnum(e, "recovery_factor"),
+                _fnum(e, "ann_return_go"), _fnum(e, "ann_return_full"),
                 meta["date_from"].date() if meta and meta["date_from"] else None,
                 meta["date_to"].date() if meta and meta["date_to"] else None,
             )
