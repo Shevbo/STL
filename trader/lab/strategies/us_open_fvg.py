@@ -1,7 +1,8 @@
 """
 US-Open Opening Range + FVG / Retest (ICT "Silver Bullet" + Влад Дудукчанов "Свеча 9:30").
 
-One trade per day, anchored to the US equity open (16:30 MSK / 09:30 New York):
+One trade per day, anchored to the US equity open (09:30 New York — 16:30 MSK under
+US daylight saving ~Mar-Nov, 17:30 MSK in winter; open_hour/open_min params):
   1. The FIRST `range_min`-minute candle after the open sets the day's range [RH, RL] (its
      high and low). On FORTS M1 bars with range_min=5 that is the 16:30..16:34 block.
   2. After the range closes, on the 1-minute chart form the entry by ONE of two modes:
@@ -231,13 +232,19 @@ async def on_stop(stl: STLRuntime, params: dict) -> None:
 STRATEGY_META = {
     "name": "US-Open Range + FVG/Retest",
     "description": (
-        "ICT opening-range with FVG or retest confirmation. One trade per day off the US open."
+        "ICT opening-range with FVG or retest confirmation. One trade per day off the US open. "
+        "Открытие США = 09:30 Нью-Йорк ВСЕГДА; в МСК это 16:30 при американском летнем времени "
+        "(~март–ноябрь) и 17:30 зимой — при переводе часов в США переключите open_hour."
     ),
     "source": "ICT Silver Bullet + Влад Дудукчанов «Свеча 9:30»",
     "params_schema": [
         {"key": "symbol", "label": "Инструмент", "type": "text", "default": "RIU6", "hint": "FORTS тикер"},
+        {"key": "open_hour", "label": "Час открытия США (МСК)", "type": "number", "default": 16, "min": 9, "max": 23,
+         "hint": "09:30 Нью-Йорк = 16 МСК при летнем времени США (~март–ноябрь), 17 зимой. Переключать при переводе часов в США"},
+        {"key": "open_min", "label": "Минута открытия", "type": "number", "default": 30, "min": 0, "max": 59,
+         "hint": "Минута открытия США (обычно 30)"},
         {"key": "range_min", "label": "Мин. опорной свечи", "type": "number", "default": 5, "min": 3, "max": 30,
-         "hint": "Длина опорной свечи после 16:30 МСК (видео: 5). Хай/лоу = диапазон дня"},
+         "hint": "Длина опорной свечи после открытия США (видео: 5). Хай/лоу = диапазон дня"},
         {"key": "signal_min", "label": "Окно входа (мин)", "type": "number", "default": 60, "min": 15, "max": 180,
          "hint": "Сколько минут после закрытия диапазона разрешён вход"},
         {"key": "entry_mode", "label": "Режим входа 0/1/2", "type": "number", "default": 1, "min": 0, "max": 2,
