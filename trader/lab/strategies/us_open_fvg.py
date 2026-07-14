@@ -33,9 +33,16 @@ from trader.lab.runtime import STLRuntime
 _EOD_HM = 23 * 60 + 45          # flatten any open position at 23:45 MSK (before session close)
 
 
-def _hm_day(t: int):
-    """(minutes-since-midnight MSK, YYYYMMDD) for a bar epoch."""
-    d = datetime.fromtimestamp(t, tz=timezone.utc)   # bars are MSK stamped as UTC
+def _hm_day(t: int, offset_min: int = 0):
+    """(minutes-since-midnight MSK, YYYYMMDD) for a bar epoch.
+
+    Backtest/ISS bars are MSK-wall stamped as UTC -> offset 0 (default, historic
+    behaviour). The AGENT RUNNER builds TRUE-UTC bars from the QUIK tape, so a
+    deploy there must pass bar_offset_min=180 to recover MSK wall time — with 0
+    the strategy would anchor the "16:30" range at 19:30 MSK and the EOD flatten
+    at 02:45. Infrastructure param, deliberately NOT in params_schema (never a
+    sweep axis)."""
+    d = datetime.fromtimestamp(t + offset_min * 60, tz=timezone.utc)
     return d.hour * 60 + d.minute, d.year * 10000 + d.month * 100 + d.day
 
 
@@ -70,7 +77,8 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
     if len(bars) < 3:
         return
     cur = bars[-1]
-    hm, day = _hm_day(cur.time)
+    bar_off = int(params.get("bar_offset_min", 0))   # 180 on the agent runner (true-UTC bars)
+    hm, day = _hm_day(cur.time, bar_off)
 
     if stl.get_state("day") != day:                        # new trading day -> reset
         stl.set_state("day", day)
@@ -151,7 +159,7 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
             return
         win = []
         for b in bars:
-            bhm, bday = _hm_day(b.time)
+            bhm, bday = _hm_day(b.time, bar_off)
             if bday == day and open_hm <= bhm < open_hm + range_min:
                 win.append(b)
         if not win:

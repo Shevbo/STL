@@ -36,3 +36,13 @@ async def test_rsi_buys_on_oversold():
     orders = await rt.get_orders()
     buys = [o for o in orders if o.side == "buy"]
     assert len(buys) >= 1
+
+
+def test_us_open_hm_day_offset():
+    """bar_offset_min recovers MSK wall time from TRUE-UTC bars (agent runner);
+    default 0 keeps the historic MSK-as-UTC backtest behaviour."""
+    from datetime import datetime, timezone
+    from trader.lab.strategies.us_open_fvg import _hm_day
+    t = int(datetime(2026, 7, 14, 13, 30, tzinfo=timezone.utc).timestamp())
+    assert _hm_day(t) == (13 * 60 + 30, 20260714)          # backtest bars: as-is
+    assert _hm_day(t, 180) == (16 * 60 + 30, 20260714)     # runner bars: +3h -> 16:30 MSK

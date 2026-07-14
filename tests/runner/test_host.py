@@ -386,3 +386,37 @@ async def test_status_report_shape(tmp_path):
     assert st.running is True
     assert len(st.recent_fills) == 1
     assert st.recent_fills[0].price == 89000.0
+
+
+@pytest.mark.asyncio
+async def test_standalone_strategy_us_open_anchors_msk_on_utc_bars(tmp_path):
+    """us_open_fvg is a STANDALONE module (not in the library REGISTRY): the host
+    must resolve it via import, and — the real-money part — the runner's bars
+    are TRUE UTC while the strategy thinks in MSK wall time, so the deploy passes
+    bar_offset_min=180. With the offset the 16:30 MSK opening range is anchored
+    at 13:30 UTC; without it the strategy would wait for 19:30 MSK (seen before
+    it ever shipped: this test is the guard)."""
+    from datetime import datetime, timezone
+
+    host = RobotHost(FakeBridge(), str(tmp_path))
+    await host.handle_control(_deploy_rc(
+        robot_id="usopen", strategy="us_open_fvg",
+        params={"symbol": "RIU6", "qty": 1, "bar_offset_min": 180,
+                "range_min": 5, "entry_mode": 1}))
+    r = host.robots["usopen"]
+
+    def utc(h, m):
+        return int(datetime(2026, 7, 14, h, m, tzinfo=timezone.utc).timestamp())
+
+    # trades minute-by-minute across the US open (13:30 UTC == 16:30 MSK)
+    for i, (h, m) in enumerate([(13, 28), (13, 29), (13, 30), (13, 31), (13, 32),
+                                (13, 33), (13, 34), (13, 35), (13, 36)]):
+        r.bars.on_trade(utc(h, m) * 1000, 87000.0 + i * 10, 1)
+        await host.tick_robot(r)
+
+    assert r.last_error == ""                      # module resolved and ran clean
+    rh = r.runtime.get_state("rh")
+    rl = r.runtime.get_state("rl")
+    assert rh is not None and rl is not None       # opening range BUILT at 16:30 MSK
+    # range = bars of 13:30..13:34 UTC (prices 87020..87060)
+    assert rl >= 87000.0 and rh <= 87070.0

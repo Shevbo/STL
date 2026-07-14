@@ -8,6 +8,7 @@ realized P&L) lives in <data_dir>/runner_state.json, written atomically.
 """
 
 import asyncio
+import importlib
 import json
 import os
 import time
@@ -28,6 +29,19 @@ log = structlog.get_logger()
 STATUS_INTERVAL_S = 15.0
 
 
+def resolve_on_bar(strategy_id: str):
+    """Strategy resolution, 1:1 with STL's two families: the parametric REGISTRY
+    (library.make_on_bar) first, else a standalone module
+    trader.lab.strategies.<id> exporting its own on_bar (donchian_breakout,
+    us_open_fvg, ...). Standalone modules are bundled into the exe by
+    build.spec's collect_submodules('trader.lab.strategies')."""
+    try:
+        return make_on_bar(strategy_id)
+    except KeyError:
+        mod = importlib.import_module(f"trader.lab.strategies.{strategy_id}")
+        return mod.on_bar
+
+
 class HostedRobot:
     def __init__(self, spec: dict, runtime: AgentRuntime, bars: BarBuilder) -> None:
         self.spec = spec
@@ -35,7 +49,7 @@ class HostedRobot:
         self.bars = bars
         self.paused = False
         self.last_bar_run = 0        # newest closed-bar time already executed
-        self.on_bar = make_on_bar(spec["strategy_id"])
+        self.on_bar = resolve_on_bar(spec["strategy_id"])
         self.window = _parse_window(spec.get("schedule"))
         self.last_error = ""
         self.last_want = "unset"     # sentinel: first computed signal always logs
