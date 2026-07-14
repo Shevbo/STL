@@ -104,10 +104,19 @@ class RobotHost:
             # params symbol in lockstep with the spec so any route deploys clean.
             if spec["symbol"]:
                 spec["params"]["symbol"] = spec["symbol"]
+            prev = self.robots.get(spec["robot_id"])
+            # ARMING: a LIVE paper->real flip re-deploys this spec. Reset the P&L +
+            # fills statistics so the REAL account starts from ZERO — the paper era
+            # is not real money (operator request; supersedes the old "never reset at
+            # arming"). Detected only on the in-memory paper->real transition, so a
+            # plain runner restart / params re-deploy never resets, and a long-running
+            # REAL robot's history is safe. The robot is FLAT at arming (the agent's
+            # ModeSet gate refuses a non-flat flip); bars are KEPT so it does not
+            # re-warm (silent for an hour).
+            arming = prev is not None and prev.spec.get("paper") and not spec["paper"]
             saved = self._saved.get(spec["robot_id"], {})
-            # keep accumulated bars across a re-deploy (params change, STL reconnect)
-            bars = (self.robots[spec["robot_id"]].bars
-                    if spec["robot_id"] in self.robots else BarBuilder())
+            # keep accumulated bars across a re-deploy (params change, STL reconnect, arming)
+            bars = prev.bars if prev is not None else BarBuilder()
             sym = spec["symbol"]
             rt = AgentRuntime(spec["robot_id"], self._bridge, bars,
                               max_position=spec["max_position"],
@@ -116,8 +125,8 @@ class RobotHost:
                               event_log_dir=self._data_dir)
             rt.restore(position=saved.get("position", 0),
                        avg=saved.get("avg", 0.0),
-                       realized=saved.get("realized", 0.0),
-                       fills=saved.get("fills"))
+                       realized=0.0 if arming else saved.get("realized", 0.0),
+                       fills=[] if arming else saved.get("fills"))
             self.robots[spec["robot_id"]] = HostedRobot(spec, rt, bars)
             log.info("host.deployed", robot_id=spec["robot_id"],
                      strategy=spec["strategy_id"], paper=spec["paper"],
@@ -125,6 +134,9 @@ class RobotHost:
             rt.event("LIFECYCLE", f"деплой: стратегия={spec['strategy_id']} "
                      f"режим={'paper' if spec['paper'] else 'РЕАЛ'} "
                      f"max_pos={spec['max_position']} окно={spec['schedule']}")
+            if arming:
+                rt.event("LIFECYCLE", "АРМИНГ paper->РЕАЛ: статистика обнулена "
+                         "(realized P&L и история сделок с нуля)", level="warning")
             self.persist()
         elif kind == "undeploy":
             r = self.robots.get(rc.undeploy.robot_id)

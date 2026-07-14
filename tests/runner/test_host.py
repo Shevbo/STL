@@ -167,6 +167,36 @@ async def test_event_log_disabled_without_dir_never_raises(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_arming_paper_to_real_resets_stats_keeps_bars(tmp_path):
+    # Operator arming: flipping a PAPER robot to REAL re-deploys the same spec.
+    # The paper-era P&L/fills must reset to zero (real money starts clean), but the
+    # warmed bar history must survive (no silent re-warm).
+    host = RobotHost(FakeBridge(), str(tmp_path))
+    await host.handle_control(_deploy_rc(paper=True))
+    r = host.robots["r1"]
+    r.runtime.restore(position=0, avg=0.0, realized=1234.5,
+                      fills=[{"side": "buy", "qty": 1, "price": 100.0, "status": "paper",
+                              "order_id": "o", "client_id": "c", "symbol": "RIU6", "ts_ms": 1}])
+    t0 = 1_751_500_000_000
+    for i in range(12):
+        r.bars.on_tick(t0 + i * 60_000, 89_000 + i * 30)
+    bars_before = len(r.bars.bars())
+    host.persist()
+
+    await host.handle_control(_deploy_rc(paper=False))   # flip paper -> REAL
+    r2 = host.robots["r1"]
+    assert r2.runtime.realized_pnl() == 0.0          # P&L reset
+    assert r2.runtime.fills_tail() == []             # trade history reset
+    assert len(r2.bars.bars()) == bars_before        # bars KEPT (no re-warm)
+
+    # a plain REAL->REAL re-deploy (e.g. params change) must NOT wipe real history
+    r2.runtime.restore(position=0, avg=0.0, realized=555.0, fills=[])
+    host.persist()
+    await host.handle_control(_deploy_rc(paper=False))
+    assert host.robots["r1"].runtime.realized_pnl() == 555.0
+
+
+@pytest.mark.asyncio
 async def test_tick_runs_strategy_once_per_closed_bar(tmp_path):
     host = RobotHost(FakeBridge(), str(tmp_path))
     await host.handle_control(_deploy_rc())
