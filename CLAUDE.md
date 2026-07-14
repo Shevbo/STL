@@ -88,10 +88,14 @@ STL) and refuses a non-flat robot — arming real money is local-console-only, g
 FLAT (position 0 + no working/in-flight order + status known) + typed robot-ID confirm.
 Recon never generates a `close_position` step (a position is contextual — it can include
 the operator's manual trading); align does `cancel_order` (orphan) + `fix_state` only,
-and the Aligner is structurally unable to place an account-net order. On the stand, the
-chart's «Результат» = REAL money (status=='filled' fills only, taker commission) while
-the runner's `realized_pnl` is the strategy cumulative INCLUDING the paper era (never
-reset at arming) — two different numbers by design.
+and the Aligner is structurally unable to place an account-net order. On the stand the P&L
+badge (and the chart «Результат» via `netOverride`) show the runner's authoritative
+`realized_pnl × ₽/point`. On a paper->real ARMING flip the runner RESETS
+`realized_pnl` + the fills tail to zero (the paper era is not real money), so a REAL
+robot's P&L reflects real trading only; bars/position are kept (the robot is flat at
+arming, and its warmup must survive). Reset fires ONLY on the live paper->real
+transition — never on a plain restart or params re-deploy — so a long-running real
+robot's history is safe.
 
 **Order flow (human orders and robot orders share the tail):** UI → `POST
 /api/v1/quik/orders/*` (`trader/api/quik_orders.py`) → limit check (`trader/quik/
@@ -146,11 +150,18 @@ honestly.
 
 **Lab** (`trader/lab/`): paper robots persisted in Postgres table `robots` (the traded
 symbol lives in `params_json`, NOT a column); `scheduler.py` runs them, `runtime.py` is the
-per-robot execution context; `strategies/library.py` is the signal registry consumed 1:1
-by backtest, STL robots AND the agent-side runner. All library strategies run on M1 bars
-(hardwired `tf=1` in `make_on_bar`); param ranges in each strategy's schema drive both the
-Optimizer UI and campaign grids. The backtester + optimizer sweep jobs live here too
-(self-healing orphan reaper in `api/app.py`).
+per-robot execution context. TWO strategy families share the same `STLRuntime` protocol
+(both consumed 1:1 by backtest, STL robots AND the agent-side runner): (a) the parametric
+REGISTRY in `strategies/library.py` — scriptCode `from ...library import make_on_bar; on_bar
+= make_on_bar('<id>')`, all hardwired to M1 (`tf=1` in `make_on_bar`); (b) standalone modules
+`strategies/<name>.py` (donchian_breakout, ema_crossover, rsi_mean_reversion, supertrend,
+us_open_fvg) that export their own `on_bar`/`on_start`/`on_stop` + a `STRATEGY_META`
+(name/source/params_schema) and are registered EXPLICITLY in `list_strategies` (`api/app.py`),
+scriptCode `from ...strategies.<name> import on_bar, on_start, on_stop`. Either way a result
+row is tagged back to its strategy id on ingest by `_strat_id_from_code` (`api/app.py`) parsing
+the scriptCode — a strategy the regex can't match lands untagged. Param ranges in each schema
+drive both the Optimizer UI and campaign grids. The backtester + optimizer sweep jobs live
+here too (self-healing orphan reaper in `api/app.py`).
 
 **Param sweeps (heavy compute runs on the i9, never the VDS):** queue with
 `scripts/queue_campaign.py` from a dev box (`--strategies fvg --symbols RI --date-from …
@@ -224,6 +235,11 @@ ssh hoster 'cd ~/apps/shectory-trader && set -a; . ~/.shectory_trade.env; set +a
   `~/apps/shectory-trader/frontend/dist/`. Frontend-only = NO service restart (nginx
   serves dist). Backend change = `sudo systemctl restart shectory-trader` (drops the agent
   gRPC link briefly — agent redials; never restart while the operator live-tests trading).
+  Assets are hashed + served `Cache-Control: immutable` 1y, so only the FIRST visit pays
+  download cost; scp never cleans old hashes so `frontend/dist/assets/` accumulates dozens of
+  stale bundles (harmless). If a cold first-load is slow, check nginx `gzip_types` is
+  UNcommented in `/etc/nginx/nginx.conf` — with it off nginx gzips only `text/html`, shipping
+  the JS/CSS raw (~727KB vs ~218KB gzipped over the thin VDS uplink; this bit prod once).
 - **QUIK agent + runner:** scp changed Go files + protos into hoster `~/quik_build`, then
   `bash ~/quik_build/publish_quik_agent.sh [agent_id]` — builds the agent exe, packs
   `robot-runner.exe` into the SAME zip when staged in `~/quik_build/quik_agent/dist/`
