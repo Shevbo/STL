@@ -702,6 +702,12 @@
       // engine net. A LIVE robot has no engine result → engineNet is null and the
       // real-money replay (rolled.net) stands as before.
       const engineNet = (result && result.net_profit != null) ? Number(result.net_profit) : null;
+      // Anchor the DRAWN curve to end at the AUTHORITATIVE net: a backtest's engine
+      // net_profit, or (LIVE robot) the parent-supplied netOverride = runner realized_pnl.
+      // Without it the raw fill-replay drifts (partial 200-fill tail, from-flat, fix_state
+      // resets) — v2 drew -42373 while realized was -15790. Now curve endpoint == badge.
+      const anchorNet = engineNet != null ? engineNet
+        : (netOverride != null && Number.isFinite(netOverride) ? netOverride : null);
       const closes = events.filter((e: any) => e.close).sort((a: any, b: any) => a.time - b.time);
       let maxDD = 0;
       if (bars.length) {
@@ -711,7 +717,7 @@
           return { time: b.time as number, value: cum };
         });
         const rawEnd = raw.length ? raw[raw.length - 1].value : 0;
-        const scale = (engineNet != null && rawEnd !== 0) ? engineNet / rawEnd : 1;
+        const scale = (anchorNet != null && rawEnd !== 0) ? anchorNet / rawEnd : 1;
         const curve = raw.map(p => {
           const v = p.value * scale;
           if (v > peak) peak = v;

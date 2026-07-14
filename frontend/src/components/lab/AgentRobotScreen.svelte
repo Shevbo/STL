@@ -467,7 +467,7 @@
       live={20}
       liveTick={liveTick}
       pointValue={pointCoef ?? 1}
-      taker={!robot?.paper}
+      taker={true}
       openOrders={openOrders}
       plannedOrders={plannedOrders}
       netOverride={robot?.paper ? null : pnlRub}
