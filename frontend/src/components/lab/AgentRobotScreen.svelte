@@ -94,8 +94,13 @@
   let _fpOrders = '';
   $effect(() => {
     const fills = chartFills;
+    // Include the authoritative net (pnlRub) so the chart RE-ANCHORS its equity
+    // curve when the ₽/point coef finally loads (flaky VDS fetch): otherwise the
+    // curve draws once with netOverride=null (raw tail-replay) and never re-scales
+    // until the next fill — the curve showed -34452 while the badge was -42431.
     const fp = JSON.stringify([symbol, fills.length,
-      fills.at(-1)?.time ?? 0, fills.at(-1)?.price ?? 0, params]);
+      fills.at(-1)?.time ?? 0, fills.at(-1)?.price ?? 0, params,
+      pnlRub == null ? 0 : Math.round(pnlRub)]);
     if (fp !== _fpChart) {
       _fpChart = fp;
       chartResult = { trades: fills, equity_curve: [], params };
