@@ -9,3 +9,8 @@ func ReadMem() (MemStatus, bool) { return MemStatus{}, false }
 
 // RestartQuik is Windows-only.
 func RestartQuik(string) error { return errors.New("quik restart: windows only") }
+
+// EnsureAutostart is Windows-only.
+func EnsureAutostart(string, string, string) error {
+	return errors.New("autostart: windows only")
+}

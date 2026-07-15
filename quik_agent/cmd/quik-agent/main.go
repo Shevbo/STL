@@ -592,6 +592,41 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 		})
 		go guard.Run(ctx)
 
+		// Reboot immunity, zero operator action: once the QUIK folder is known
+		// (first Lua pong), the agent writes start_all.bat and registers the
+		// ShectoryTradeStack logon task itself, refreshed on every start (/F).
+		// Files reach the VDS through the agent — the operator never downloads.
+		if !cfg.AutostartDisabled {
+			go func() {
+				t := time.NewTicker(30 * time.Second)
+				defer t.Stop()
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case <-t.C:
+					}
+					folder := accStore.Snapshot().QuikFolder
+					if folder == "" {
+						continue // pre-cc3 Lua or QUIK still booting: retry
+					}
+					exe, err := os.Executable()
+					if err != nil {
+						fmt.Println("autostart: cannot resolve own exe:", err)
+						return
+					}
+					if err := vdsguard.EnsureAutostart(
+						filepath.Dir(exe), filepath.Base(exe), folder); err != nil {
+						fmt.Println("autostart:", err)
+					} else {
+						fmt.Printf("autostart: logon task registered (QUIK=%s, agent=%s)\n",
+							folder, exe)
+					}
+					return // once per agent start is enough (idempotent /F)
+				}
+			}()
+		}
+
 		deps := status.Deps{
 			Accounts: accStore,
 			Robots:   robotStore,

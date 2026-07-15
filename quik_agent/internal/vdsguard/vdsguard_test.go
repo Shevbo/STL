@@ -144,3 +144,21 @@ func TestRestartFailureAlerts(t *testing.T) {
 		t.Fatalf("want restart+failure alerts, got %q", got)
 	}
 }
+
+func TestAutostartBat(t *testing.T) {
+	got := AutostartBat(`C:\QuikFinam`, `C:\distr\dist`, "quik-agent_amd64.exe")
+	for _, want := range []string{
+		`start "" "C:\QuikFinam\info.exe"`,
+		"timeout /t 25 /nobreak >nul",
+		`cd /d "C:\distr\dist"`,
+		`start "" "C:\distr\dist\quik-agent_amd64.exe"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("bat missing %q:\n%s", want, got)
+		}
+	}
+	// unknown QUIK folder: agent-only launcher, no blind info.exe start
+	if got := AutostartBat("", `C:\d`, "a.exe"); strings.Contains(got, "info.exe") {
+		t.Fatalf("bat must not start an unknown QUIK: %s", got)
+	}
+}

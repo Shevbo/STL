@@ -18,6 +18,7 @@ package vdsguard
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -236,4 +237,21 @@ func mskDay(nowMs int64) int64 {
 	const day = int64(24 * 60 * 60 * 1000)
 	const msk = int64(3 * 60 * 60 * 1000)
 	return (nowMs + msk) / day
+}
+
+// AutostartBat renders <exeDir>\start_all.bat: QUIK first (terminal + saved
+// layout + Lua autoload), a settle pause, then the agent. Pure — the Windows
+// side writes it to disk and registers the logon task (EnsureAutostart).
+func AutostartBat(quikDir, exeDir, exeName string) string {
+	lines := []string{"@echo off",
+		"rem Shectory autostart (written by the agent itself on every start)"}
+	if quikDir != "" {
+		lines = append(lines,
+			fmt.Sprintf(`start "" "%s\info.exe"`, quikDir),
+			"timeout /t 25 /nobreak >nul")
+	}
+	lines = append(lines,
+		fmt.Sprintf(`cd /d "%s"`, exeDir),
+		fmt.Sprintf(`start "" "%s\%s"`, exeDir, exeName))
+	return strings.Join(lines, "\r\n") + "\r\n"
 }

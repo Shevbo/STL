@@ -127,6 +127,10 @@ type Config struct {
 	QuikGuardHungSec int `json:"quik_guard_hung_sec"`
 	// QuikGuardCooldownSec: minimum gap between forced restarts. Default 900.
 	QuikGuardCooldownSec int `json:"quik_guard_cooldown_sec"`
+	// AutostartDisabled stops the agent from self-registering the Windows
+	// logon task (ShectoryTradeStack: QUIK -> agent) it maintains on every
+	// start. Default false (self-register).
+	AutostartDisabled bool `json:"autostart_disabled"`
 }
 
 // RunnerExePath resolves the runner exe: explicit config path wins; else the

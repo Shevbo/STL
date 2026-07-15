@@ -4,8 +4,10 @@ package vdsguard
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 	"unsafe"
 
@@ -48,6 +50,25 @@ func ReadMem() (MemStatus, bool) {
 		AvailMB:   m.AvailPhys / mb,
 		CommitPct: commitPct,
 	}, true
+}
+
+// EnsureAutostart makes the VDS reboot-proof with ZERO operator action: writes
+// <exeDir>\start_all.bat (see AutostartBat) and registers/refreshes a logon
+// scheduled task pointing at it. Called by the agent itself once the QUIK
+// folder is known (from the Lua pong), idempotent via schtasks /F. No
+// /RL HIGHEST: neither QUIK nor the agent needs elevation, and a plain
+// current-user logon task registers without admin rights.
+func EnsureAutostart(exeDir, exeName, quikFolder string) error {
+	bat := filepath.Join(exeDir, "start_all.bat")
+	if err := os.WriteFile(bat, []byte(AutostartBat(quikFolder, exeDir, exeName)), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", bat, err)
+	}
+	out, err := exec.Command("schtasks", "/Create", "/F",
+		"/TN", "ShectoryTradeStack", "/SC", "ONLOGON", "/TR", `"`+bat+`"`).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("schtasks: %v (%s)", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // RestartQuik force-kills the QUIK terminal (info.exe) and relaunches it from
