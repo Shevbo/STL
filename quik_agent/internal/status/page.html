@@ -286,6 +286,10 @@ function robotLinks(r) {
   } else {
     links.push('<span class="mono" style="color:#667">Детальный лог робота</span>');
   }
+  // «витрина» opens the robot's STL showcase (live chart + Результат/P&L curve)
+  // at an ABSOLUTE URL — works on the loopback stand and via the STL mirror.
+  // Real robots first and foremost, but paper robots benefit equally, so no gate.
+  links.push('<a class="mono" href="https://stl.shectory.ru/?agent_robot=' + encodeURIComponent(r.id) + '" target="_blank" style="color:#7ab8ff">витрина</a>');
   // «стратегия» opens the STL frontend's illustrated strategy page at an ABSOLUTE
   // URL, so the link works both on the loopback stand and via the STL mirror.
   if (r.strategy_id) links.push('<a class="mono" href="https://stl.shectory.ru/?strategy=' + encodeURIComponent(r.strategy_id) + '" target="_blank" style="color:#7ab8ff">стратегия</a>');
