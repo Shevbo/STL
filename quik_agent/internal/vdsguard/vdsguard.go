@@ -247,7 +247,11 @@ func AutostartBat(quikDir, exeDir, exeName string) string {
 		"rem Shectory autostart (written by the agent itself on every start)"}
 	if quikDir != "" {
 		lines = append(lines,
-			fmt.Sprintf(`start "" "%s\info.exe"`, quikDir),
+			// /D sets the working dir: launched from the scheduler the CWD is
+			// system32, and QUIK resolves its crypto provider (OpenSSL_Pr.dll,
+			// key-based auth) RELATIVE to CWD — "Крипто-провайдер не найден"
+			// on every autostart without it (seen on the first real reboot).
+			fmt.Sprintf(`start "" /D "%s" "%s\info.exe"`, quikDir, quikDir),
 			"timeout /t 25 /nobreak >nul")
 	}
 	lines = append(lines,

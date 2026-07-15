@@ -148,7 +148,9 @@ func TestRestartFailureAlerts(t *testing.T) {
 func TestAutostartBat(t *testing.T) {
 	got := AutostartBat(`C:\QuikFinam`, `C:\distr\dist`, "quik-agent_amd64.exe")
 	for _, want := range []string{
-		`start "" "C:\QuikFinam\info.exe"`,
+		// /D working dir is mandatory: from the scheduler CWD is system32 and
+		// QUIK's crypto provider (key auth) resolves relative to CWD.
+		`start "" /D "C:\QuikFinam" "C:\QuikFinam\info.exe"`,
 		"timeout /t 25 /nobreak >nul",
 		`cd /d "C:\distr\dist"`,
 		`start "" "C:\distr\dist\quik-agent_amd64.exe"`,
