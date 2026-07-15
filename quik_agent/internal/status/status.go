@@ -448,6 +448,11 @@ type robotJSON struct {
 	AvgPrice          float64            `json:"avg_price"`
 	PnlPoints         float64            `json:"pnl_points"`
 	PnlRub            *float64           `json:"pnl_rub,omitempty"`
+	// FloatRub: variation margin of the OPEN position marked to the freshest
+	// feed price — position × (last − avg) × ₽/point. Present only when the
+	// position is open AND price/params are genuinely known (realized P&L
+	// alone reads frozen while the market moves against an open position).
+	FloatRub *float64 `json:"float_rub,omitempty"`
 	LastBarUnix       int64              `json:"last_bar_unix"`
 	HeartbeatUnixMs   int64              `json:"heartbeat_unix_ms"`
 	BarsCount         int32              `json:"bars_count"`
@@ -788,6 +793,12 @@ func buildRobotsJSON(d Deps) []robotJSON {
 	for _, pr := range d.Provider.Params() {
 		paramsBySymbol[pr.Code] = pr
 	}
+	lastBySymbol := map[string]float64{}
+	for _, t := range d.Provider.Ticks() {
+		if t.Last > 0 {
+			lastBySymbol[t.Code] = t.Last
+		}
+	}
 
 	specs := d.Robots.All()
 	sort.Slice(specs, func(i, j int) bool { return specs[i].GetRobotId() < specs[j].GetRobotId() })
@@ -833,6 +844,12 @@ func buildRobotsJSON(d Deps) []robotJSON {
 			coef := pr.StepCost / pr.PriceStep
 			rub := rj.PnlPoints * coef
 			rj.PnlRub = &rub
+			// Variation margin of the open position at the freshest feed price:
+			// realized alone reads FROZEN while the market moves an open position.
+			if last := lastBySymbol[rj.Symbol]; last > 0 && rj.Position != 0 && rj.AvgPrice > 0 {
+				fl := float64(rj.Position) * (last - rj.AvgPrice) * coef
+				rj.FloatRub = &fl
+			}
 		}
 
 		for _, f := range st.GetRecentFills() {

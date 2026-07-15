@@ -109,7 +109,7 @@
   <div class="sec-title">Роботы</div>
   <table>
     <thead><tr><th></th><th>ID</th><th>Символ</th><th>Стратегия</th><th>Режим</th><th>Статус</th>
-      <th>Позиция</th><th title="кумулятив стратегии (включая бумажный период), без комиссий. Реальные деньги — «Результат» на карточке робота STL: только filled-сделки QUIK + комиссия тейкера">P&amp;L&#8721;</th><th>Пульс</th><th>Ссылки</th></tr></thead>
+      <th>Позиция</th><th title="кумулятив стратегии (включая бумажный период), без комиссий. Реальные деньги — «Результат» на карточке робота STL: только filled-сделки QUIK + комиссия тейкера">P&amp;L&#8721;</th><th title="вариационная маржа открытой позиции по свежей цене фида: позиция × (цена − средняя) × ₽/пункт">Вар. маржа</th><th>Пульс</th><th>Ссылки</th></tr></thead>
     <tbody id="robots-body"></tbody>
   </table>
 </section>
@@ -297,7 +297,7 @@ function robotLinks(r) {
 // freeze below survives a poll tick.
 let expandedRobots = new Set();
 
-// summaryCellsHTML: the 10 summary cells of one robot row — shared by the full
+// summaryCellsHTML: the 11 summary cells of one robot row — shared by the full
 // rebuild and the in-place live refresh so the two can never drift apart.
 function summaryCellsHTML(r, stale) {
   const staleCls = stale ? ' stale-num' : '';
@@ -309,6 +309,12 @@ function summaryCellsHTML(r, stale) {
   const pnl = r.pnl_rub != null
     ? Math.round(r.pnl_rub).toLocaleString('ru-RU') + ' ₽'
     : fmtNum(r.pnl_points) + ' п.';
+  // Variation margin of the OPEN position at the freshest feed price — the
+  // realized P&L column alone reads frozen while the market moves.
+  const fl = r.float_rub;
+  const flTxt = fl != null ? Math.round(fl).toLocaleString('ru-RU') + ' ₽'
+    : (r.position ? '…' : '—');
+  const flCls = fl > 0 ? 'buy' : (fl < 0 ? 'sell' : '');
   return '<td>▸</td>'
     + '<td class="mono">' + esc(r.id) + '</td>'
     + '<td class="mono">' + esc(r.symbol) + '</td>'
@@ -317,6 +323,7 @@ function summaryCellsHTML(r, stale) {
     + '<td><span class="badge ' + (r.running ? 'ok' : 'dim') + '">' + status + '</span></td>'
     + '<td class="mono' + staleCls + ' ' + (r.position > 0 ? 'buy' : (r.position < 0 ? 'sell' : '')) + '">' + (r.position > 0 ? '+' : '') + fmtNum(r.position) + '</td>'
     + '<td class="mono' + staleCls + ' ' + (r.pnl_points > 0 ? 'buy' : (r.pnl_points < 0 ? 'sell' : '')) + '">' + pnl + '</td>'
+    + '<td class="mono' + staleCls + ' ' + flCls + '">' + flTxt + '</td>'
     + '<td><span class="badge ' + hbCls + '">' + (hbAge == null ? '—' : fmtMs(hbAge)) + '</span></td>'
     + '<td>' + robotLinks(r) + '</td>';
 }
@@ -325,7 +332,7 @@ function renderRobots(robots, stale) {
   const body = document.getElementById('robots-body');
   if (!robots || !robots.length) {
     expandedRobots.clear();
-    body.innerHTML = '<tr><td colspan="10" class="empty">Роботов на агенте не развёрнуто.</td></tr>';
+    body.innerHTML = '<tr><td colspan="11" class="empty">Роботов на агенте не развёрнуто.</td></tr>';
     return;
   }
   // Drop ids for robots no longer present (undeployed).
@@ -357,7 +364,7 @@ function renderRobots(robots, stale) {
   robots.forEach((r, i) => {
     html += '<tr class="robot-row" data-idx="' + i + '" data-id="' + esc(r.id) + '">'
       + summaryCellsHTML(r, stale) + '</tr>';
-    html += '<tr class="params-row" id="params-' + i + '" data-id="' + esc(r.id) + '" style="display:none"><td></td><td colspan="9">' + cardHTML(r) + '</td></tr>';
+    html += '<tr class="params-row" id="params-' + i + '" data-id="' + esc(r.id) + '" style="display:none"><td></td><td colspan="10">' + cardHTML(r) + '</td></tr>';
   });
   body.innerHTML = html;
   body.querySelectorAll('tr.robot-row').forEach(tr => {
@@ -422,10 +429,16 @@ function cardLiveHTML(r) {
     try { signalPretty = JSON.stringify(JSON.parse(r.signal_json), null, 2); }
     catch (e) { signalPretty = r.signal_json; }
   }
+  const fl = r.float_rub;
+  const flCls = fl > 0 ? 'buy' : (fl < 0 ? 'sell' : '');
+  const flHTML = fl != null
+    ? '<span class="pnl mono ' + flCls + '" title="вариационная маржа открытой позиции по свежей цене фида"><span style="font-size:10px;color:#667;margin-right:6px">ВАР.М</span>' + Math.round(fl).toLocaleString('ru-RU') + ' ₽</span>'
+    : '';
   return '<div class="pos-ticket">'
     + '<span class="pp mono ' + posCls + '">' + (r.position > 0 ? '+' : '') + fmtNum(r.position) + '</span>'
     + '<span class="avg mono">@ ' + fmtNum(r.avg_price) + '</span>'
     + '<span class="pnl mono ' + pnlCls + '" title="кумулятив стратегии, вкл. бумажный период"><span style="font-size:10px;color:#667;margin-right:6px">P&amp;L&#8721;</span>' + pnl + '</span>'
+    + flHTML
     + '</div>'
     + '<div class="chips">' + chips + '</div>'
     + '<div class="sec-title" style="margin-top:12px">Заявки в работе</div>'
