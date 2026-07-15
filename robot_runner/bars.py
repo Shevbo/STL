@@ -35,6 +35,8 @@ class BarBuilder:
 
     def _merge(self, ts_ms: int, price: float, volume: int) -> None:
         minute = int(ts_ms // 60_000) * 60  # unix seconds
+        if self._bars and minute <= self._bars[-1].time:
+            return  # at/behind the newest CLOSED bar (incl. a restored tail) — ignore
         cur = self._cur
         if cur is None or minute > cur.time:
             if cur is not None:
@@ -68,6 +70,34 @@ class BarBuilder:
     def bars(self, n: int = 0) -> list[Bar]:
         out = list(self._bars)
         return out[-n:] if n else out
+
+    # ---- persistence (restart immunity) ----
+    # Bars used to live only in memory: every runner/agent restart blinded a
+    # long-lookback robot for `lookback` minutes (order_block: ~2h; us_open:
+    # a whole day's setup if restarted near the open). Closed bars round-trip
+    # through runner_state.json as compact rows.
+
+    def to_rows(self, n: int = 600) -> list[list]:
+        """Last n CLOSED bars as [t, o, h, l, c, v] rows (the forming minute is
+        not persisted — it rebuilds from the live tape in under a minute)."""
+        return [[b.time, b.open, b.high, b.low, b.close, b.volume]
+                for b in self.bars(n)]
+
+    def seed(self, rows: list) -> None:
+        """Restore persisted rows into an EMPTY builder (fresh deploy after a
+        restart). Malformed rows are skipped — a corrupt state file must never
+        block trading; the builder just warms up live instead."""
+        if self._bars or self._cur is not None:
+            return  # live data already flowing: never overwrite reality
+        for r in rows or []:
+            try:
+                t, o, h, lo, c, v = int(r[0]), float(r[1]), float(r[2]), \
+                    float(r[3]), float(r[4]), int(r[5])
+            except (TypeError, ValueError, IndexError):
+                continue
+            if self._bars and t <= self._bars[-1].time:
+                continue  # keep strictly ascending
+            self._bars.append(Bar(time=t, open=o, high=h, low=lo, close=c, volume=v))
 
     @property
     def last_bar_time(self) -> int:

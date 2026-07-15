@@ -85,7 +85,12 @@ class RobotHost:
                         "realized": r.runtime.realized_pnl(),
                         # order/fill history survives runner restarts (the operator's
                         # audit trail; P&L without its trades looked like a bug)
-                        "fills": r.runtime.fills_tail()}
+                        "fills": r.runtime.fills_tail(),
+                        # closed-bars tail: restart immunity for long-lookback
+                        # strategies (order_block re-warmed ~2h after every
+                        # agent/runner restart; us_open could miss its one daily
+                        # setup entirely)
+                        "bars": r.bars.to_rows()}
         # keep saved state for robots not currently deployed (undeploy != wipe)
         for rid, saved in self._saved.items():
             out.setdefault(rid, saved)
@@ -131,6 +136,10 @@ class RobotHost:
             saved = self._saved.get(spec["robot_id"], {})
             # keep accumulated bars across a re-deploy (params change, STL reconnect, arming)
             bars = prev.bars if prev is not None else BarBuilder()
+            if prev is None:
+                # fresh process: re-warm from the persisted tail so a restart never
+                # blinds a long-lookback robot (seed() is a no-op once live data flows)
+                bars.seed(saved.get("bars") or [])
             sym = spec["symbol"]
             rt = AgentRuntime(spec["robot_id"], self._bridge, bars,
                               max_position=spec["max_position"],
@@ -141,7 +150,12 @@ class RobotHost:
                        avg=saved.get("avg", 0.0),
                        realized=0.0 if arming else saved.get("realized", 0.0),
                        fills=[] if arming else saved.get("fills"))
-            self.robots[spec["robot_id"]] = HostedRobot(spec, rt, bars)
+            hr = HostedRobot(spec, rt, bars)
+            # A restored/kept tail's newest bar was already executed by the previous
+            # incarnation (or predates the re-deploy): act only on genuinely NEW bars,
+            # never re-run a historical one against live orders.
+            hr.last_bar_run = bars.last_bar_time
+            self.robots[spec["robot_id"]] = hr
             log.info("host.deployed", robot_id=spec["robot_id"],
                      strategy=spec["strategy_id"], paper=spec["paper"],
                      max_position=spec["max_position"])

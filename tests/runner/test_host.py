@@ -420,3 +420,36 @@ async def test_standalone_strategy_us_open_anchors_msk_on_utc_bars(tmp_path):
     assert rh is not None and rl is not None       # opening range BUILT at 16:30 MSK
     # range = bars of 13:30..13:34 UTC (prices 87020..87060)
     assert rl >= 87000.0 and rh <= 87070.0
+
+
+@pytest.mark.asyncio
+async def test_bars_survive_runner_restart(tmp_path):
+    """Restart immunity: closed bars persist in runner_state.json and re-warm a
+    fresh host, so a long-lookback robot (order_block needs 116 M1 bars = ~2h)
+    is combat-ready immediately instead of blind after every agent restart."""
+    host = RobotHost(FakeBridge(), str(tmp_path))
+    await host.handle_control(_deploy_rc())
+    r = host.robots["r1"]
+    base = 1_784_000_000_000 - (1_784_000_000_000 % 60_000)
+    for i in range(10):                       # 9 closed bars + 1 forming
+        r.bars.on_trade(base + i * 60_000, 87000.0 + i, 1)
+    await host.tick_robot(r)                  # runs + persists (with bars)
+    closed = len(r.bars.bars())
+    assert closed == 9
+
+    host2 = RobotHost(FakeBridge(), str(tmp_path))   # "restart"
+    await host2.handle_control(_deploy_rc())
+    r2 = host2.robots["r1"]
+    assert len(r2.bars.bars()) == closed              # re-warmed, not blind
+    assert r2.bars.bars()[-1].close == 87008.0
+    # the restored newest bar was already executed pre-restart: no re-run
+    assert r2.last_bar_run == r2.bars.last_bar_time
+    assert await host2.tick_robot(r2) is False
+    # live tape continues cleanly after the seed (no duplicate/backward minutes)
+    r2.bars.on_trade(base + 10 * 60_000, 87020.0, 1)  # closes bar 9
+    r2.bars.on_trade(base + 11 * 60_000, 87030.0, 1)
+    assert len(r2.bars.bars()) == closed + 1
+    assert await host2.tick_robot(r2) is True         # NEW bar -> strategy runs
+    # a stale replayed trade older than the restored tail is ignored
+    r2.bars.on_trade(base, 1.0, 1)
+    assert r2.bars.bars()[0].close != 1.0

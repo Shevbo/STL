@@ -24,6 +24,13 @@ func spawnRestart(exeDir, restartName, stage, stageExe string) error {
 		"setlocal",
 		"rem Shectory QUIK agent self-update: wait for exit, copy, restart",
 		"ping -n 5 127.0.0.1 >nul",
+		// The agent exits via os.Exit (no ctx cancel), which ORPHANS the runner
+		// child: it kept trading against a dead pipe until its first console
+		// write killed it, and its open exe handle could fail the companion
+		// copy below (old runner shipped as the "new" one). Kill it here so the
+		// new agent starts a clean pair; the runner re-warms from
+		// runner_state.json (book + bars persisted).
+		"taskkill /IM robot-runner.exe /F >nul 2>&1",
 		fmt.Sprintf(`copy /y "%s" "%s"`, stageExe, destExe),
 		"if errorlevel 1 goto :fail",
 		// Companion binaries shipped in the same release zip (zero-touch satellite:
