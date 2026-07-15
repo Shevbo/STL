@@ -20,7 +20,7 @@ from trader.lab.ai46.order_flow import OrderFlow
 from trader.lab.ai46.params import BotParams
 
 # Detector signal types that launch / feed a contrarian session.
-_ENTRY_SIGNALS = {DET.OFI_ANOMALY, DET.PRICE_SHOCK, DET.VOL_SPIKE, DET.NEWS, DET.TREND_FLIP}
+_ENTRY_SIGNALS = {DET.OFI_ANOMALY, DET.PRICE_SHOCK, DET.VOL_SPIKE, DET.TREND_FLIP}
 
 
 class Ai46Runner:

@@ -8,5 +8,4 @@ export const instrumentStore = {
   get params(): Record<string, unknown> { return _params; },
   setList(instruments: InstrumentMeta[]): void { _list = instruments; },
   setParams(params: Record<string, unknown>): void { _params = params; },
-  reset(): void { _list = []; _params = {}; },
 };

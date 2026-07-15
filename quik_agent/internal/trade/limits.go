@@ -1,7 +1,6 @@
 package trade
 
 import (
-	"fmt"
 	"math"
 	"strings"
 	"sync"
@@ -251,14 +250,6 @@ func (g *Guard) CommitPlace() (bool, RejectReason) {
 	return true, ""
 }
 
-// PlacedToday returns the current day's placement count (for diagnostics/tests).
-func (g *Guard) PlacedToday() int {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	g.rollDay()
-	return g.placedToday
-}
-
 // CheckCollar reports whether price is within the collar around reference for the
 // given side. For a BUY, prices ABOVE reference*(1+frac) are adverse; for a SELL,
 // prices BELOW reference*(1-frac) are adverse. frac<=0 disables the check (allow).
@@ -278,23 +269,4 @@ func CheckCollar(buy bool, reference, price, frac float64) (bool, RejectReason) 
 		}
 	}
 	return true, ""
-}
-
-// WorstPrice returns the collar bound price for a side given a reference price and
-// fraction: the highest tolerable buy price, or the lowest tolerable sell price.
-func WorstPrice(buy bool, reference, frac float64) float64 {
-	if frac <= 0 || reference <= 0 {
-		return reference
-	}
-	if buy {
-		return reference * (1 + frac)
-	}
-	return reference * (1 - frac)
-}
-
-// String renders limits for log/diagnostics without leaking anything sensitive
-// (there is nothing sensitive here; account/secrets are not part of limits).
-func (l Limits) String() string {
-	return fmt.Sprintf("trading_enabled=%v max_per_order=%d max_working=%d collar=%.4f whitelist=%v daily_cap=%d",
-		l.TradingEnabled, l.MaxContractsPerOrder, l.MaxWorkingContracts, l.PriceCollarFrac, l.InstrumentWhitelist, l.DailyOrderCap)
 }

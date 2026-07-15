@@ -40,5 +40,4 @@ export const candlesStore = {
     _bars[symbol] = arr;
     _version += 1;
   },
-  reset(): void { _bars = {}; _version += 1; },
 };

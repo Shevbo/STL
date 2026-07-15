@@ -38,13 +38,6 @@ func NewProvider() *Provider {
 	return &Provider{sheets: map[string]*sheetGrid{}}
 }
 
-func max2(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
 func (p *Provider) ensureGridSize(g *sheetGrid, minR, minC int) {
 	if minR < 1 {
 		minR = 1
@@ -63,8 +56,8 @@ func (p *Provider) ensureGridSize(g *sheetGrid, minR, minC int) {
 	if g.rows >= minR && g.cols >= minC {
 		return
 	}
-	newR := max2(g.rows, minR)
-	newC := max2(g.cols, minC)
+	newR := max(g.rows, minR)
+	newC := max(g.cols, minC)
 	nc := make([][]string, newR)
 	for r := 0; r < newR; r++ {
 		row := make([]string, newC)

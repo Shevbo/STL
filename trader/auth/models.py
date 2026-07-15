@@ -8,10 +8,6 @@ class TokenResponse(BaseModel):
     expires_at: datetime
     account_id: str = ""
 
-    @property
-    def access_token(self) -> str:
-        return self.token
-
     def is_expired(self, buffer_secs: int = 60) -> bool:
         now = datetime.now(timezone.utc)
         return (self.expires_at - now).total_seconds() < buffer_secs

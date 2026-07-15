@@ -2,9 +2,8 @@ import os
 
 from fastapi import HTTPException, Request, WebSocket
 
+from trader.auth.portal import SESSION_COOKIE as _SESSION_COOKIE
 from trader.auth.portal import verify_session_token
-
-_SESSION_COOKIE = "shectory_session"
 
 
 def _dev_bypass() -> bool:

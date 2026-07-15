@@ -7,7 +7,6 @@ Usage:
 """
 import asyncio
 import os
-import sys
 
 # grpcio's `grpc` package is a regular (non-namespace) package, so we must
 # explicitly extend its __path__ to include our generated stubs directory.

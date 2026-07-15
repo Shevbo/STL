@@ -346,7 +346,6 @@ LOCAL Telegram fallback instead (see the `SHECTORY_AGENT_TG_*` env vars above).
 | `stale_tick_ms` | `30000` | DDE -> DEGRADED once the freshest tick is older than this |
 | `dde_down_ms` | `60000` | DDE -> DOWN and watchdog restart trigger |
 | `heartbeat_sec` | = `heartbeat_interval_sec` | heartbeat / diagnostics / watchdog cadence |
-| `diag_interval_sec` | = `heartbeat_sec` | Diagnostics emit cadence |
 
 Absent fields fall back to the defaults, so configs written before this layer load
 unchanged.

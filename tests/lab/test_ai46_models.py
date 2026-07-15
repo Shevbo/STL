@@ -29,8 +29,6 @@ def test_cusum_negative_drift_triggers_lower():
     c = M.CUSUMDetector(sigma_pnl=2.0)  # k=1, h=10; -3 dev adds (3-1)=2 to neg → >10 after 6
     fired = [c.update(-3.0, 0.0) for _ in range(6)]
     assert fired[-1] is True
-    c.reset()
-    assert c.pos == 0.0 and c.neg == 0.0
 
 
 # ── GARCH(1,1) ────────────────────────────────────────────────────────────────
@@ -80,31 +78,3 @@ def test_hmm_detects_panic_regime_at_end():
 
 def test_hmm_short_series_none():
     assert M.hmm_regime([0.0] * 5) is None
-
-
-# ── Conformal interval ────────────────────────────────────────────────────────
-
-def test_conformal_brackets_price_and_covers():
-    rng = random.Random(11)
-    closes = [100.0]
-    for _ in range(500):
-        closes.append(closes[-1] * math.exp(rng.gauss(0, 0.001)))
-    res = M.conformal_interval(closes, horizon=1, ci=0.9)
-    assert res is not None
-    assert res.lower < closes[-1] < res.upper
-    assert res.ci_pct > 0
-    # empirical coverage of the half-width over the calibration scores ≈ ci
-    q = (res.upper - res.lower) / 2
-    scores = [abs(closes[t + 1] - closes[t]) for t in range(len(closes) - 1)]
-    cov = sum(1 for s in scores if s <= q) / len(scores)
-    assert cov >= 0.85
-
-
-def test_conformal_wider_with_horizon():
-    rng = random.Random(13)
-    closes = [100.0]
-    for _ in range(500):
-        closes.append(closes[-1] * math.exp(rng.gauss(0, 0.001)))
-    w1 = M.conformal_interval(closes, horizon=1).ci_pct
-    w10 = M.conformal_interval(closes, horizon=10).ci_pct
-    assert w10 > w1

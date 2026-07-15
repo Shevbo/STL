@@ -42,8 +42,4 @@ export const orderbookStore = {
     delete _quikClaim[symbol];
     _version += 1;
   },
-  reset(): void {
-    _books = {};
-    _version += 1;
-  },
 };

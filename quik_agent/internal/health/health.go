@@ -249,6 +249,3 @@ func (m *Monitor) Step(s Snapshot) []AlertSpec {
 	m.prev = s
 	return out
 }
-
-// Prev returns the last snapshot the Monitor saw (UP baseline before priming).
-func (m *Monitor) Prev() Snapshot { return m.prev }

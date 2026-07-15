@@ -63,11 +63,11 @@ class BridgeClient:
             "control")
 
     async def place_order(self, *, client_id: str, code: str, side: str,
-                          price: float, qty: int, collar: float = 0.002) -> None:
+                          price: float, qty: int) -> None:
         pb_side = pb.SIDE_BUY if side == "buy" else pb.SIDE_SELL
         ack = await self._stub.PlaceRunnerOrder(pb.PlaceOrder(
             client_id=client_id, code=code, side=pb_side,
-            price=price, quantity=qty, collar=collar))
+            price=price, quantity=qty, collar=0.002))
         if not ack.ok:
             raise RuntimeError(f"bridge rejected order: {ack.error}")
 
@@ -80,7 +80,3 @@ class BridgeClient:
             await self._stub.ReportStatus(report)
         except (grpc.aio.AioRpcError, ConnectionError) as exc:
             log.warning("bridge.report_failed", error=str(exc))  # never crash on status
-
-    async def aclose(self) -> None:
-        if self._channel is not None:
-            await self._channel.close()

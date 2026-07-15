@@ -41,7 +41,7 @@ async def test_place_order_sends_and_position_updates_on_fill():
 
     rt.on_order_event(U(order.order_id, state=4, price=89000.0, qty=1))
     assert rt.signed_position() == 1
-    assert rt.recent_fills()[-1]["status"] == "filled"
+    assert rt.fills_tail()[-1]["status"] == "filled"
     # duplicate event must NOT double-apply
     rt.on_order_event(U(order.order_id, state=4, price=89000.0, qty=1))
     assert rt.signed_position() == 1
@@ -115,7 +115,7 @@ async def test_fill_applies_even_when_console_logger_raises(monkeypatch):
 
     rt.on_order_event(U(order.order_id, state=4, price=89000.0, qty=1))  # must not raise
     assert rt.signed_position() == 1
-    assert rt.recent_fills()[-1]["status"] == "filled"
+    assert rt.fills_tail()[-1]["status"] == "filled"
 
 
 @pytest.mark.asyncio

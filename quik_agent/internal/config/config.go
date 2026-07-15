@@ -48,9 +48,6 @@ type Config struct {
 	// wins. Kept distinct so the watchdog cadence can be tuned without touching
 	// the existing heartbeat field.
 	HeartbeatSec int `json:"heartbeat_sec"`
-	// DiagIntervalSec: cadence at which Diagnostics frames are emitted. Defaults
-	// to the heartbeat cadence when unset.
-	DiagIntervalSec int `json:"diag_interval_sec"`
 
 	// ---- Phase 2: order / execution (sub-agent A, additive) ----
 	// All optional; absent fields fall back to the defaults below so older
@@ -184,9 +181,6 @@ func (c *Config) applyDefaults(raw map[string]json.RawMessage) {
 	}
 	if c.HeartbeatSec <= 0 {
 		c.HeartbeatSec = c.HeartbeatIntervalSec
-	}
-	if c.DiagIntervalSec <= 0 {
-		c.DiagIntervalSec = c.HeartbeatSec
 	}
 	if c.QuikGuardHungSec <= 0 {
 		c.QuikGuardHungSec = 300

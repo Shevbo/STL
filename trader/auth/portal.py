@@ -10,8 +10,9 @@ log = structlog.get_logger()
 
 
 _VERIFY_PATH = "/api/internal/verify-portal-credentials"
-_SESSION_COOKIE = "shectory_session"
-_SESSION_TTL = 60 * 60 * 24 * 30
+# Single source of truth for the session cookie (guard.py and app.py import these).
+SESSION_COOKIE = "shectory_session"
+SESSION_TTL = 60 * 60 * 24 * 30
 
 
 @dataclass
@@ -73,7 +74,7 @@ def _sign(value: str, secret: str) -> str:
 
 
 def make_session_token(email: str, secret: str) -> str:
-    expires = int(time.time()) + _SESSION_TTL
+    expires = int(time.time()) + SESSION_TTL
     payload = f"{email}:{expires}"
     sig = _sign(payload, secret)
     return f"{payload}:{sig}"

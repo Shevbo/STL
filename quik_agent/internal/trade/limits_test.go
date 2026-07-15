@@ -178,7 +178,7 @@ func TestDailyCapAndRollover(t *testing.T) {
 	if ok, _ := g.CommitPlace(); !ok {
 		t.Fatalf("commit after day rollover should succeed")
 	}
-	if got := g.PlacedToday(); got != 1 {
+	if got := g.placedToday; got != 1 {
 		t.Fatalf("placedToday after rollover = %d, want 1", got)
 	}
 }
@@ -206,17 +206,5 @@ func TestCheckCollar(t *testing.T) {
 				t.Fatalf("ok = %v, want %v", ok, tc.wantOK)
 			}
 		})
-	}
-}
-
-func TestWorstPrice(t *testing.T) {
-	if got := WorstPrice(true, 100000, 0.002); got != 100200 {
-		t.Fatalf("buy worst = %v, want 100200", got)
-	}
-	if got := WorstPrice(false, 100000, 0.002); got != 99800 {
-		t.Fatalf("sell worst = %v, want 99800", got)
-	}
-	if got := WorstPrice(true, 100000, 0); got != 100000 {
-		t.Fatalf("frac 0 worst = %v, want reference", got)
 	}
 }

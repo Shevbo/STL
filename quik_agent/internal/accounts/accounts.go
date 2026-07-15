@@ -9,6 +9,7 @@ package accounts
 
 import (
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -160,7 +161,7 @@ func (s *Store) SetPositions(rows []Position) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
-	if s.posRecvMs == 0 || !equalPositions(s.positions, rows) {
+	if s.posRecvMs == 0 || !slices.Equal(s.positions, rows) {
 		s.posAtMs = now
 	}
 	s.posRecvMs = now
@@ -173,38 +174,11 @@ func (s *Store) SetOrders(rows []Order) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
-	if s.ordRecvMs == 0 || !equalOrders(s.orders, rows) {
+	if s.ordRecvMs == 0 || !slices.Equal(s.orders, rows) {
 		s.ordAtMs = now
 	}
 	s.ordRecvMs = now
 	s.orders = append([]Order(nil), rows...) // defensive copy: caller may reuse rows
-}
-
-// equalPositions/equalOrders report whether two full-table snapshots carry identical
-// content (Position/Order are flat comparable structs). Used to decide whether a
-// republish is a real content change (bump the plan-ID stamp) or a keepalive.
-func equalPositions(a, b []Position) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func equalOrders(a, b []Order) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 // seenTradesCap bounds the persistent dedupe set. When exceeded, the set is reset to

@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from trader.auth.guard import require_auth
 from trader.quik.pb.shectory.quik.v1 import quik_agent_pb2 as pb
+from trader.quik.store import resolve_agent
 
 router = APIRouter(prefix="/api/v1/quik", tags=["quik-robots"])
 
@@ -41,16 +42,7 @@ def _store(request: Request):
 
 
 def _resolve_agent(request: Request, agent_id: str | None) -> str:
-    store = _store(request)
-    if agent_id:
-        return agent_id
-    green = [r["agent_id"] for r in store.status() if r.get("link") == "green"]
-    if len(green) == 1:
-        return green[0]
-    ids = store.agent_ids()
-    if len(ids) == 1:
-        return ids[0]
-    raise HTTPException(status_code=400, detail="Укажите agent_id (агентов не ровно один).")
+    return resolve_agent(_store(request), agent_id)
 
 
 class DeployAgentBody(BaseModel):

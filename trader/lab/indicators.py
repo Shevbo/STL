@@ -132,13 +132,6 @@ def williams_r(highs: list[float], lows: list[float], closes: list[float], perio
     return -100.0 * (hh - closes[-1]) / (hh - ll)
 
 
-def donchian(highs: list[float], lows: list[float], period: int) -> tuple[float, float]:
-    """Returns (lower, upper) Donchian channel over `period` bars."""
-    if len(highs) < period:
-        raise ValueError("need more bars for donchian")
-    return min(lows[-period:]), max(highs[-period:])
-
-
 def keltner(highs: list[float], lows: list[float], closes: list[float],
             ema_period: int = 20, atr_period: int = 10, mult: float = 2.0) -> tuple[float, float, float]:
     """Returns (lower, mid, upper) Keltner channel."""

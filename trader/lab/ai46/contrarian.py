@@ -230,8 +230,3 @@ class ContrarianSession:
         else:
             self.exec.close_hard(self.ticker, "contrarian")
         leg.open = False
-
-    def cleanup(self) -> None:
-        """Hard-close any open legs (shutdown/abort safety)."""
-        self._close_leg(self._primary, soft=False)
-        self._close_leg(self._reversal, soft=False)

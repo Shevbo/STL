@@ -5,7 +5,7 @@ varies them to find a commission-aware, less-overtrading configuration.
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 
 from trader.lab.ai46 import contrarian as C
 from trader.lab.ai46 import detector as DET
@@ -30,6 +30,3 @@ class BotParams:
     # ── risk ────────────────────────────────────────────────────────────────
     max_positions: int = 5
     max_exposure: float = 0.30
-
-    def as_dict(self) -> dict:
-        return asdict(self)

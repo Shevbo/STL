@@ -1,0 +1,1432 @@
+{
+  "C:\\Dev\\Shectory Trade & Lab\\.claude\\settings.json": {
+    "mtime": 1779959567.2772484,
+    "ast_hash": "6a129058ad40480da207000449abaf02",
+    "semantic_hash": "6a129058ad40480da207000449abaf02"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\.remember\\tmp\\last-ndc.ts": {
+    "mtime": 1781462880.984938,
+    "ast_hash": "bb7ef90e30761c03ecc6ab8ba5dcea8c",
+    "semantic_hash": "bb7ef90e30761c03ecc6ab8ba5dcea8c"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\.remember\\tmp\\last-save.json": {
+    "mtime": 1781517487.367454,
+    "ast_hash": "3bce89c76188e2a3b34de30858420a6e",
+    "semantic_hash": "3bce89c76188e2a3b34de30858420a6e"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\.vscode\\setting.json": {
+    "mtime": 1781032204.7516813,
+    "ast_hash": "198dd5b88a62c21a54f34366350cfbb1",
+    "semantic_hash": "198dd5b88a62c21a54f34366350cfbb1"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\agent\\install.ps1": {
+    "mtime": 1780568051.4381227,
+    "ast_hash": "a6e4a19a0f3bd312ec79813bc703f889",
+    "semantic_hash": "a6e4a19a0f3bd312ec79813bc703f889"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\agent\\install_autostart.ps1": {
+    "mtime": 1780683553.837844,
+    "ast_hash": "5bf8703c6eae25d5ec1a46b9ed31bc78",
+    "semantic_hash": "5bf8703c6eae25d5ec1a46b9ed31bc78"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\deploy\\deploy.sh": {
+    "mtime": 1779649696.1295996,
+    "ast_hash": "6b863f897ce907eb06137c6e1ccaf46d",
+    "semantic_hash": "6b863f897ce907eb06137c6e1ccaf46d"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\docs\\Source_update.ps1": {
+    "mtime": 1776345469.7280357,
+    "ast_hash": "aedac972f151eca1e9e404c0f6b2f554",
+    "semantic_hash": "aedac972f151eca1e9e404c0f6b2f554"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\mock\\ws_server.py": {
+    "mtime": 1779648655.5622663,
+    "ast_hash": "63851bfd4ba74a0809976eccf06570fa",
+    "semantic_hash": "63851bfd4ba74a0809976eccf06570fa"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\package.json": {
+    "mtime": 1779648664.176016,
+    "ast_hash": "2f7acf53db9d764ef2a7bdb008de0759",
+    "semantic_hash": "2f7acf53db9d764ef2a7bdb008de0759"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\src\\App.svelte": {
+    "mtime": 1780990174.1258843,
+    "ast_hash": "29fed3d59f094c55c160d6f4df060be5",
+    "semantic_hash": "29fed3d59f094c55c160d6f4df060be5"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\src\\components\\ActiveOrdersPanel.svelte": {
+    "mtime": 1779648664.2000165,
+    "ast_hash": "2ff507ca9680d44ec11a951382337017",
+    "semantic_hash": "2ff507ca9680d44ec11a951382337017"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\src\\components\\BottomBar.svelte": {
+    "mtime": 1779648655.5642679,
+    "ast_hash": "f51680fc0a831341efe804b962b212a3",
+    "semantic_hash": "f51680fc0a831341efe804b962b212a3"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\src\\components\\ChartFrame.svelte": {
+    "mtime": 1779700274.9056716,
+    "ast_hash": "90b4117796fc6a09fb30f93751bd18e7",
+    "semantic_hash": "90b4117796fc6a09fb30f93751bd18e7"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\src\\components\\CodeEditor.svelte": {
+    "mtime": 1779650473.1620004,
+    "ast_hash": "2eb67e015482ec73fa7212881f8e0191",
+    "semantic_hash": "2eb67e015482ec73fa7212881f8e0191"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\src\\components\\InstrumentPanel.svelte": {
+    "mtime": 1779648664.2020178,
+    "ast_hash": "9e4f751e44bce79fc27170c1e608a6d9",
+    "semantic_hash": "9e4f751e44bce79fc27170c1e608a6d9"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\src\\components\\LabBar.svelte": {
+    "mtime": 1779648655.5662675,
+    "ast_hash": "37781cdd1fdcc9416d070a002567dc11",
+    "semantic_hash": "37781cdd1fdcc9416d070a002567dc11"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\src\\components\\LabPanel.svelte": {
+    "mtime": 1780480139.7762053,
+    "ast_hash": "1f99abd8bf1708fc6d677746972c3d19",
+    "semantic_hash": "1f99abd8bf1708fc6d677746972c3d19"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\src\\components\\LoginDialog.svelte": {
+    "mtime": 1779650426.4250753,
+    "ast_hash": "d4c8bf2860858131caa14f045d08df54",
+    "semantic_hash": "d4c8bf2860858131caa14f045d08df54"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\src\\components\\OrderBook.svelte": {
+    "mtime": 1779648664.2040167,
+    "ast_hash": "843fec5f8907be52cbf4a83a5b38afc8",
+    "semantic_hash": "843fec5f8907be52cbf4a83a5b38afc8"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\src\\components\\OrderConfirmDialog.svelte": {
+    "mtime": 1779648664.2040167,
+    "ast_hash": "333511f3bd1af3c2dd555ae1f908f65f",
+    "semantic_hash": "333511f3bd1af3c2dd555ae1f908f65f"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\src\\components\\OrderPanel.svelte": {
+    "mtime": 1779648664.2050352,
+    "ast_hash": "667705f581e29d1a183bbce7c3b48996",
+    "semantic_hash": "667705f581e29d1a183bbce7c3b48996"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\src\\components\\PositionsTable.svelte": {
+    "mtime": 1779648664.206029,
+    "ast_hash": "d0d7f20b557faeafbd006bfeb1adf8db",
+    "semantic_hash": "d0d7f20b557faeafbd006bfeb1adf8db"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\src\\components\\RobotsPanel.svelte": {
+    "mtime": 1779648664.206029,
+    "ast_hash": "d203c29b34319caf532db552cb7aed2a",
+    "semantic_hash": "d203c29b34319caf532db552cb7aed2a"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\src\\components\\TopBar.svelte": {
+    "mtime": 1779980013.666643,
+    "ast_hash": "19f2b4c08957ce9027e99e49b6af9006",
+    "semantic_hash": "19f2b4c08957ce9027e99e49b6af9006"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\src\\components\\lab\\BacktestChart.svelte": {
+    "mtime": 1780770468.2649295,
+    "ast_hash": "bfb9bc30b83e9ce149a6f29f8c3d3950",
+    "semantic_hash": "bfb9bc30b83e9ce149a6f29f8c3d3950"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\src\\components\\lab\\BacktestLab.svelte": {
+    "mtime": 1781423794.6640525,
+    "ast_hash": "4adec7613256ca7cf11f891edab4d1f2",
+    "semantic_hash": "4adec7613256ca7cf11f891edab4d1f2"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\src\\components\\lab\\Botstore.svelte": {
+    "mtime": 1781423831.704173,
+    "ast_hash": "37c34a988d434fae17f5d53f908c6d7f",
+    "semantic_hash": "37c34a988d434fae17f5d53f908c6d7f"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\src\\components\\lab\\LiveRobots.svelte": {
+    "mtime": 1781456718.372628,
+    "ast_hash": "b01df3f1e149fb807c3b6ba5e902437c",
+    "semantic_hash": "b01df3f1e149fb807c3b6ba5e902437c"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\src\\components\\lab\\Optimizer.svelte": {
+    "mtime": 1781423618.2770786,
+    "ast_hash": "97ae0b2ec1b03a92908e7956feea0698",
+    "semantic_hash": "97ae0b2ec1b03a92908e7956feea0698"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\src\\components\\lab\\RobotEditor.svelte": {
+    "mtime": 1780996331.3696895,
+    "ast_hash": "b478375ad211a0075e421ddc92b17adf",
+    "semantic_hash": "b478375ad211a0075e421ddc92b17adf"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\src\\components\\lab\\RobotWindow.svelte": {
+    "mtime": 1780589289.8618844,
+    "ast_hash": "644101d454e16aa148c5c60038b3148d",
+    "semantic_hash": "644101d454e16aa148c5c60038b3148d"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\src\\components\\lab\\Showcase.svelte": {
+    "mtime": 1781456500.8663044,
+    "ast_hash": "e364cf6f84d409d5c4ce749e321d33e1",
+    "semantic_hash": "e364cf6f84d409d5c4ce749e321d33e1"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\src\\lib\\api.ts": {
+    "mtime": 1779650435.9728527,
+    "ast_hash": "3d90ec1533b1cda7e960c8935b68d8cb",
+    "semantic_hash": "3d90ec1533b1cda7e960c8935b68d8cb"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\src\\lib\\fetch-auth.ts": {
+    "mtime": 1779650430.5672767,
+    "ast_hash": "1df25a3aeb50730a3ca8ef7a5d3ec0f4",
+    "semantic_hash": "1df25a3aeb50730a3ca8ef7a5d3ec0f4"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\src\\lib\\lab-analytics.ts": {
+    "mtime": 1780645394.853882,
+    "ast_hash": "a5bd6a41a27da8084edd531cd939fd14",
+    "semantic_hash": "a5bd6a41a27da8084edd531cd939fd14"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\src\\lib\\offline-player.test.ts": {
+    "mtime": 1779648655.567267,
+    "ast_hash": "b5b707d9e0593b26c5e844732352a9d6",
+    "semantic_hash": "b5b707d9e0593b26c5e844732352a9d6"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\src\\lib\\offline-player.ts": {
+    "mtime": 1779648655.568267,
+    "ast_hash": "dc6fcde885ccf0a99cd2c5825d9982be",
+    "semantic_hash": "dc6fcde885ccf0a99cd2c5825d9982be"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\src\\lib\\stores\\account.svelte.ts": {
+    "mtime": 1779648655.568267,
+    "ast_hash": "6f619a61a740f8b4b1cdbe4f6d0d9eff",
+    "semantic_hash": "6f619a61a740f8b4b1cdbe4f6d0d9eff"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\src\\lib\\stores\\candles.svelte.ts": {
+    "mtime": 1779648664.2070162,
+    "ast_hash": "89bd50e7cf793252584f1f6d8a228950",
+    "semantic_hash": "89bd50e7cf793252584f1f6d8a228950"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\src\\lib\\stores\\instrument.svelte.ts": {
+    "mtime": 1779648664.2080154,
+    "ast_hash": "da04fd8ceae1fa759353fd178254d064",
+    "semantic_hash": "da04fd8ceae1fa759353fd178254d064"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\src\\lib\\stores\\orderbook.svelte.ts": {
+    "mtime": 1779648664.2080154,
+    "ast_hash": "24dcdb8afe3c19e00f277ba0da5b4aa4",
+    "semantic_hash": "24dcdb8afe3c19e00f277ba0da5b4aa4"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\src\\lib\\stores\\orders.svelte.ts": {
+    "mtime": 1779648664.2090154,
+    "ast_hash": "9f51efabe1d49840cd1091c28f8213a6",
+    "semantic_hash": "9f51efabe1d49840cd1091c28f8213a6"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\src\\lib\\stores\\positions.svelte.ts": {
+    "mtime": 1779648664.2090154,
+    "ast_hash": "0461d15f781bf35a057f4fd14d01d381",
+    "semantic_hash": "0461d15f781bf35a057f4fd14d01d381"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\src\\lib\\stores\\quotes.svelte.ts": {
+    "mtime": 1779648655.568267,
+    "ast_hash": "d3a5e892fcbce1a328d4d392f6f8df22",
+    "semantic_hash": "d3a5e892fcbce1a328d4d392f6f8df22"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\src\\lib\\stores\\robots.svelte.ts": {
+    "mtime": 1779648655.5692673,
+    "ast_hash": "28ec9d45fb547ebd0591afa948238be9",
+    "semantic_hash": "28ec9d45fb547ebd0591afa948238be9"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\src\\lib\\stores\\services.svelte.ts": {
+    "mtime": 1779648655.5692673,
+    "ast_hash": "7109478e406df4325362ff18ecac133a",
+    "semantic_hash": "7109478e406df4325362ff18ecac133a"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\src\\lib\\stores\\trades.svelte.ts": {
+    "mtime": 1779648664.2100158,
+    "ast_hash": "6a48c4c223bb3ed9fef84293b32dd838",
+    "semantic_hash": "6a48c4c223bb3ed9fef84293b32dd838"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\src\\lib\\types.test.ts": {
+    "mtime": 1779648655.5702674,
+    "ast_hash": "2bec899826826227bd4fccafe70a6148",
+    "semantic_hash": "2bec899826826227bd4fccafe70a6148"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\src\\lib\\types.ts": {
+    "mtime": 1779648664.2100158,
+    "ast_hash": "664dc9bb951b4e9af2a72e2fcff67ffc",
+    "semantic_hash": "664dc9bb951b4e9af2a72e2fcff67ffc"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\src\\lib\\ws.test.ts": {
+    "mtime": 1779648655.571268,
+    "ast_hash": "8ae426541fe150ca7f615d6e3600efaa",
+    "semantic_hash": "8ae426541fe150ca7f615d6e3600efaa"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\src\\lib\\ws.ts": {
+    "mtime": 1779650567.965763,
+    "ast_hash": "18ac6e362012b6131f7336b2510c4dee",
+    "semantic_hash": "18ac6e362012b6131f7336b2510c4dee"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\src\\main.ts": {
+    "mtime": 1779648655.571268,
+    "ast_hash": "5411aeb8fe0f901798354692de77bac5",
+    "semantic_hash": "5411aeb8fe0f901798354692de77bac5"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\src\\test-setup.ts": {
+    "mtime": 1779648655.572287,
+    "ast_hash": "40cc85d23feb5db8c0f69083aed249a2",
+    "semantic_hash": "40cc85d23feb5db8c0f69083aed249a2"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\svelte.config.js": {
+    "mtime": 1779648655.572287,
+    "ast_hash": "ddf231b6cbe094818cb95622113e1e37",
+    "semantic_hash": "ddf231b6cbe094818cb95622113e1e37"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\tsconfig.json": {
+    "mtime": 1779648655.5732665,
+    "ast_hash": "445299bdd9f9dd4f0b991cc5de508b41",
+    "semantic_hash": "445299bdd9f9dd4f0b991cc5de508b41"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\vite.config.ts": {
+    "mtime": 1779648655.5732665,
+    "ast_hash": "83ddc80df7161b9512d7863d4ad5f734",
+    "semantic_hash": "83ddc80df7161b9512d7863d4ad5f734"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\package.json": {
+    "mtime": 1779978866.0108252,
+    "ast_hash": "6ccdd231f3b2de98019933b59f3088af",
+    "semantic_hash": "6ccdd231f3b2de98019933b59f3088af"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\playwright.config.ts": {
+    "mtime": 1779648664.4380176,
+    "ast_hash": "00a3662e06a71459f08e49c2fc99b187",
+    "semantic_hash": "00a3662e06a71459f08e49c2fc99b187"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\prisma\\package.json": {
+    "mtime": 1779978861.6257315,
+    "ast_hash": "39cd0687f314a2714e9ebae18d6a62bf",
+    "semantic_hash": "39cd0687f314a2714e9ebae18d6a62bf"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\prisma\\prisma.config.ts": {
+    "mtime": 1779984212.7190373,
+    "ast_hash": "34a7ae7397cb7264ec51fba9a4ce3bc8",
+    "semantic_hash": "34a7ae7397cb7264ec51fba9a4ce3bc8"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\scripts\\deploy_winners.py": {
+    "mtime": 1781357136.8728085,
+    "ast_hash": "ec47fd5f9ad44ee08abb9dda8d5f7283",
+    "semantic_hash": "ec47fd5f9ad44ee08abb9dda8d5f7283"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\scripts\\diag_2ema.py": {
+    "mtime": 1780826578.9461887,
+    "ast_hash": "1a8b35cf25f557178b78d8fab773cb9c",
+    "semantic_hash": "1a8b35cf25f557178b78d8fab773cb9c"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\scripts\\diag_666.py": {
+    "mtime": 1780237012.904855,
+    "ast_hash": "db3b0041a3cfbcddf06f14516fcac2e3",
+    "semantic_hash": "db3b0041a3cfbcddf06f14516fcac2e3"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\scripts\\enqueue_campaign.py": {
+    "mtime": 1780589394.4594128,
+    "ast_hash": "69edda26ae6dea34ecd9997a37f7baae",
+    "semantic_hash": "69edda26ae6dea34ecd9997a37f7baae"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\scripts\\find_instrument.py": {
+    "mtime": 1779308252.0,
+    "ast_hash": "98e76e1bd33305fdfb321986eac23cbe",
+    "semantic_hash": "98e76e1bd33305fdfb321986eac23cbe"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\scripts\\fix_grpc_imports.py": {
+    "mtime": 1779648664.4400165,
+    "ast_hash": "fffa1f71d25ef5a37b78f48c09a74ba0",
+    "semantic_hash": "fffa1f71d25ef5a37b78f48c09a74ba0"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\scripts\\opt_agent.py": {
+    "mtime": 1781356456.640177,
+    "ast_hash": "a0122f59561c0eb2b3ffae5f150e0b19",
+    "semantic_hash": "a0122f59561c0eb2b3ffae5f150e0b19"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\scripts\\optimize_adaptive.py": {
+    "mtime": 1780763982.5902624,
+    "ast_hash": "d038378e89438121110ee521b4b24b53",
+    "semantic_hash": "d038378e89438121110ee521b4b24b53"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\scripts\\optimize_campaign.py": {
+    "mtime": 1780211500.922591,
+    "ast_hash": "f23ba6d915d002307cd36b13b1315452",
+    "semantic_hash": "f23ba6d915d002307cd36b13b1315452"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\scripts\\optimize_loop.sh": {
+    "mtime": 1780651942.6780672,
+    "ast_hash": "907abfaf273059b455789a2d7d2c4ec2",
+    "semantic_hash": "907abfaf273059b455789a2d7d2c4ec2"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\scripts\\queue_campaign.py": {
+    "mtime": 1781503415.7278457,
+    "ast_hash": "ca53155549ea4124ed54e00bf5a84c4c",
+    "semantic_hash": "ca53155549ea4124ed54e00bf5a84c4c"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\scripts\\regen_proto.sh": {
+    "mtime": 1779648664.4410155,
+    "ast_hash": "9c05c794a6574f7f3097ed849f9e8af1",
+    "semantic_hash": "9c05c794a6574f7f3097ed849f9e8af1"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\scripts\\spike_last_quote.py": {
+    "mtime": 1779648664.4410155,
+    "ast_hash": "e88f61c4ad33ac7e658e8f1a3414bd9a",
+    "semantic_hash": "e88f61c4ad33ac7e658e8f1a3414bd9a"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\test-results\\.last-run.json": {
+    "mtime": 1779648664.442018,
+    "ast_hash": "d393f47fa14a8bb37fdb1a818afe92e9",
+    "semantic_hash": "d393f47fa14a8bb37fdb1a818afe92e9"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\tests\\__init__.py": {
+    "mtime": 1779308252.0,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\tests\\api\\__init__.py": {
+    "mtime": 1779648664.442018,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\tests\\api\\test_app.py": {
+    "mtime": 1779648664.4430342,
+    "ast_hash": "76e62905e459a89391bd4acf5f1a638f",
+    "semantic_hash": "76e62905e459a89391bd4acf5f1a638f"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\tests\\api\\test_ws_hub.py": {
+    "mtime": 1779648664.4430342,
+    "ast_hash": "f5873dde5a25b52747c98a79a5692b38",
+    "semantic_hash": "f5873dde5a25b52747c98a79a5692b38"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\tests\\api\\test_ws_hub_sprint1.py": {
+    "mtime": 1780570665.5517738,
+    "ast_hash": "ded62d89c40a5616006b6c992cc325ec",
+    "semantic_hash": "ded62d89c40a5616006b6c992cc325ec"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\tests\\auth\\__init__.py": {
+    "mtime": 1779308252.0,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\tests\\auth\\test_auth_client.py": {
+    "mtime": 1779648664.4450188,
+    "ast_hash": "bd8d8ed9fd059821dd442a45ca52f775",
+    "semantic_hash": "bd8d8ed9fd059821dd442a45ca52f775"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\tests\\auth\\test_auth_integration.py": {
+    "mtime": 1779648664.4450188,
+    "ast_hash": "a5c0242bea6efd9008e1825c3402a2de",
+    "semantic_hash": "a5c0242bea6efd9008e1825c3402a2de"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\tests\\auth\\test_guard.py": {
+    "mtime": 1779648664.4460177,
+    "ast_hash": "68ba022a7ff1ca60e1b331417640d08f",
+    "semantic_hash": "68ba022a7ff1ca60e1b331417640d08f"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\tests\\auth\\test_models.py": {
+    "mtime": 1779308252.0,
+    "ast_hash": "4f809e195d7236f6499300ee230b5296",
+    "semantic_hash": "4f809e195d7236f6499300ee230b5296"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\tests\\conftest.py": {
+    "mtime": 1779648664.4460177,
+    "ast_hash": "b935d7407e0141485acaa35e4398ab31",
+    "semantic_hash": "b935d7407e0141485acaa35e4398ab31"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\tests\\lab\\__init__.py": {
+    "mtime": 1779979090.206391,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\tests\\lab\\test_backtest_engine.py": {
+    "mtime": 1780589334.7332165,
+    "ast_hash": "e1da5126bc8c10a2ffeee0df15fdd584",
+    "semantic_hash": "e1da5126bc8c10a2ffeee0df15fdd584"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\tests\\lab\\test_commission.py": {
+    "mtime": 1780589349.173076,
+    "ast_hash": "a550f55fd6e7aa5635680e5be1ebdd01",
+    "semantic_hash": "a550f55fd6e7aa5635680e5be1ebdd01"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\tests\\lab\\test_db.py": {
+    "mtime": 1779979086.9208272,
+    "ast_hash": "1605ad3a92f306dd10c8c14acc0aa420",
+    "semantic_hash": "1605ad3a92f306dd10c8c14acc0aa420"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\tests\\lab\\test_indicators.py": {
+    "mtime": 1779979329.6650033,
+    "ast_hash": "f79bde157c94648dc3afece9b3bee97d",
+    "semantic_hash": "f79bde157c94648dc3afece9b3bee97d"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\tests\\lab\\test_models.py": {
+    "mtime": 1779979301.187786,
+    "ast_hash": "01608db176869a05ded5417057bb23d8",
+    "semantic_hash": "01608db176869a05ded5417057bb23d8"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\tests\\lab\\test_runtime_backtest.py": {
+    "mtime": 1780569496.4502132,
+    "ast_hash": "360df9668ac03725c0f0eacab35e81dc",
+    "semantic_hash": "360df9668ac03725c0f0eacab35e81dc"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\tests\\lab\\test_scheduler.py": {
+    "mtime": 1779979685.0026958,
+    "ast_hash": "01d9afeb827a8c928623c65400351810",
+    "semantic_hash": "01d9afeb827a8c928623c65400351810"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\tests\\lab\\test_strategies.py": {
+    "mtime": 1779979413.4860275,
+    "ast_hash": "552f821faaae3d3cccbf4d087ce0da1d",
+    "semantic_hash": "552f821faaae3d3cccbf4d087ce0da1d"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\tests\\md\\__init__.py": {
+    "mtime": 1779308252.0,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\tests\\md\\test_feed.py": {
+    "mtime": 1779648664.447018,
+    "ast_hash": "e3030e089c8d1557bdbb3c88f8e32ead",
+    "semantic_hash": "e3030e089c8d1557bdbb3c88f8e32ead"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\tests\\md\\test_grpc_client.py": {
+    "mtime": 1779648664.448028,
+    "ast_hash": "0355368030a68253e6f81d1b72b22ac3",
+    "semantic_hash": "0355368030a68253e6f81d1b72b22ac3"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\tests\\md\\test_integration.py": {
+    "mtime": 1779648664.448028,
+    "ast_hash": "b93c6a488f834e894d4649f086a150a1",
+    "semantic_hash": "b93c6a488f834e894d4649f086a150a1"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\tests\\md\\test_models.py": {
+    "mtime": 1779648664.4490159,
+    "ast_hash": "16fb39f108211e532261263a61eda7ce",
+    "semantic_hash": "16fb39f108211e532261263a61eda7ce"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\tests\\pos\\__init__.py": {
+    "mtime": 1779648664.4490159,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\tests\\pos\\test_pos_client.py": {
+    "mtime": 1779648664.4490159,
+    "ast_hash": "52bfeef02a5aa50eb3b2f0eb629c0907",
+    "semantic_hash": "52bfeef02a5aa50eb3b2f0eb629c0907"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\tests\\registry\\__init__.py": {
+    "mtime": 1779308252.0,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\tests\\registry\\test_client.py": {
+    "mtime": 1779308252.0,
+    "ast_hash": "e359fda72bc508e77c5c5b2906579f46",
+    "semantic_hash": "e359fda72bc508e77c5c5b2906579f46"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\tests\\registry\\test_integration.py": {
+    "mtime": 1779308252.0,
+    "ast_hash": "30e9f98dacec79870a07dc7496740673",
+    "semantic_hash": "30e9f98dacec79870a07dc7496740673"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\tests\\registry\\test_models.py": {
+    "mtime": 1779308252.0,
+    "ast_hash": "aa656bd6ef8cbd9e8c0e2467fabd9497",
+    "semantic_hash": "aa656bd6ef8cbd9e8c0e2467fabd9497"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\tests\\test_avg_margin.py": {
+    "mtime": 1781006706.1000102,
+    "ast_hash": "06cb2b25e85c1559dfc49043ef8ffe56",
+    "semantic_hash": "06cb2b25e85c1559dfc49043ef8ffe56"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\tests\\test_config.py": {
+    "mtime": 1779308252.0,
+    "ast_hash": "667eef6e740d43d19b212a3fbd4ded9d",
+    "semantic_hash": "667eef6e740d43d19b212a3fbd4ded9d"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\tests\\tx\\__init__.py": {
+    "mtime": 1779648664.4500296,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\tests\\tx\\test_tx_client.py": {
+    "mtime": 1780570488.3658164,
+    "ast_hash": "d7937224991d40212d15f2b65e91b749",
+    "semantic_hash": "d7937224991d40212d15f2b65e91b749"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\tests\\ui\\sprint-02-mechanics.test.ts": {
+    "mtime": 1779648664.451017,
+    "ast_hash": "4bd6ec2765959f4505e9956dd1e0a1c1",
+    "semantic_hash": "4bd6ec2765959f4505e9956dd1e0a1c1"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\__init__.py": {
+    "mtime": 1779648664.451017,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\api\\__init__.py": {
+    "mtime": 1779648664.452016,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\api\\app.py": {
+    "mtime": 1781469099.6128733,
+    "ast_hash": "6e3350479ec333316c56df53abb9f157",
+    "semantic_hash": "6e3350479ec333316c56df53abb9f157"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\api\\ws_hub.py": {
+    "mtime": 1779648664.4530175,
+    "ast_hash": "2c20ee878e1b470658d284359ed66427",
+    "semantic_hash": "2c20ee878e1b470658d284359ed66427"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\auth\\__init__.py": {
+    "mtime": 1779308252.0,
+    "ast_hash": "ea232354109026c35aece0bc4886e410",
+    "semantic_hash": "ea232354109026c35aece0bc4886e410"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\auth\\client.py": {
+    "mtime": 1779648664.4530175,
+    "ast_hash": "297dd773de1494d9a340c8074ba99de0",
+    "semantic_hash": "297dd773de1494d9a340c8074ba99de0"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\auth\\guard.py": {
+    "mtime": 1779650573.783149,
+    "ast_hash": "a8dc9d7e10000f9ec8b92cc3d2e65f2f",
+    "semantic_hash": "a8dc9d7e10000f9ec8b92cc3d2e65f2f"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\auth\\models.py": {
+    "mtime": 1779648664.4540176,
+    "ast_hash": "61acae5fd44303b626e880951296d071",
+    "semantic_hash": "61acae5fd44303b626e880951296d071"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\auth\\portal.py": {
+    "mtime": 1779648664.4550254,
+    "ast_hash": "e6ab0832822ea290da8c98e20b659495",
+    "semantic_hash": "e6ab0832822ea290da8c98e20b659495"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\config.py": {
+    "mtime": 1780498035.8522527,
+    "ast_hash": "f97171a67f180825315ef3ee4a31ab82",
+    "semantic_hash": "f97171a67f180825315ef3ee4a31ab82"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\db.py": {
+    "mtime": 1780126679.261011,
+    "ast_hash": "f47a8c5526902e08f89c24b4ea52823a",
+    "semantic_hash": "f47a8c5526902e08f89c24b4ea52823a"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\lab\\__init__.py": {
+    "mtime": 1779979287.482923,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\lab\\backtest.py": {
+    "mtime": 1781423506.5795555,
+    "ast_hash": "983864e732e08682e4cbad2eca164511",
+    "semantic_hash": "983864e732e08682e4cbad2eca164511"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\lab\\commission.py": {
+    "mtime": 1780588812.8473682,
+    "ast_hash": "e3955fade81567268547630eeb2cc68f",
+    "semantic_hash": "e3955fade81567268547630eeb2cc68f"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\lab\\indicators.py": {
+    "mtime": 1781356456.6411893,
+    "ast_hash": "7ab4dd73de2e13416893172e437514c3",
+    "semantic_hash": "7ab4dd73de2e13416893172e437514c3"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\lab\\iss_loader.py": {
+    "mtime": 1780569766.7573118,
+    "ast_hash": "ec8eb76e00b3c47f6703d185cb230b74",
+    "semantic_hash": "ec8eb76e00b3c47f6703d185cb230b74"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\lab\\market_store.py": {
+    "mtime": 1780569683.3694062,
+    "ast_hash": "1279f30fe7082e9cb51d47047522b08b",
+    "semantic_hash": "1279f30fe7082e9cb51d47047522b08b"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\lab\\models.py": {
+    "mtime": 1779979295.1817746,
+    "ast_hash": "87b6e4b7498388b86dd79773a97a87b0",
+    "semantic_hash": "87b6e4b7498388b86dd79773a97a87b0"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\lab\\runtime.py": {
+    "mtime": 1780990869.9165826,
+    "ast_hash": "ef0aec559f740900ec8b5d2b0fb1f5e9",
+    "semantic_hash": "ef0aec559f740900ec8b5d2b0fb1f5e9"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\lab\\scheduler.py": {
+    "mtime": 1781271321.3984542,
+    "ast_hash": "a6de491458f095a3248a9ab684311dc3",
+    "semantic_hash": "a6de491458f095a3248a9ab684311dc3"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\lab\\strategies\\__init__.py": {
+    "mtime": 1779979397.0507343,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\lab\\strategies\\donchian_breakout.py": {
+    "mtime": 1780569648.795124,
+    "ast_hash": "c7fd96e728814f2049432e1bb972e125",
+    "semantic_hash": "c7fd96e728814f2049432e1bb972e125"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\lab\\strategies\\ema_crossover.py": {
+    "mtime": 1779979402.7336028,
+    "ast_hash": "b534499d99739c1de3305510aa8b4d3f",
+    "semantic_hash": "b534499d99739c1de3305510aa8b4d3f"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\lab\\strategies\\library.py": {
+    "mtime": 1781356456.6411893,
+    "ast_hash": "cc9ca420cc52518093fc32b0b3577195",
+    "semantic_hash": "cc9ca420cc52518093fc32b0b3577195"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\lab\\strategies\\rsi_mean_reversion.py": {
+    "mtime": 1779979407.2161431,
+    "ast_hash": "03535303c912597fb094679d699aebc7",
+    "semantic_hash": "03535303c912597fb094679d699aebc7"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\lab\\strategies\\supertrend.py": {
+    "mtime": 1780569617.234246,
+    "ast_hash": "5a1c22b1d73b981fe60e81e53a498522",
+    "semantic_hash": "5a1c22b1d73b981fe60e81e53a498522"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\md\\__init__.py": {
+    "mtime": 1779308252.0,
+    "ast_hash": "71b9c1e4884a4c0d4ee66ba7a893df98",
+    "semantic_hash": "71b9c1e4884a4c0d4ee66ba7a893df98"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\md\\feed.py": {
+    "mtime": 1779648664.4560156,
+    "ast_hash": "54c25ce8a67573c3e0cf2602a215c4bd",
+    "semantic_hash": "54c25ce8a67573c3e0cf2602a215c4bd"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\md\\grpc_client.py": {
+    "mtime": 1781422502.7301493,
+    "ast_hash": "5da857e35da7576cc6b28a52b437e7cf",
+    "semantic_hash": "5da857e35da7576cc6b28a52b437e7cf"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\md\\models.py": {
+    "mtime": 1779648664.4570158,
+    "ast_hash": "66774e208e13bd3769db36dac23af7ba",
+    "semantic_hash": "66774e208e13bd3769db36dac23af7ba"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\md\\source.py": {
+    "mtime": 1779648664.4570158,
+    "ast_hash": "eaf2960b70ba8e3c195f6c9c9a8254de",
+    "semantic_hash": "eaf2960b70ba8e3c195f6c9c9a8254de"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\pos\\__init__.py": {
+    "mtime": 1779648664.4570158,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\pos\\client.py": {
+    "mtime": 1779648664.4580164,
+    "ast_hash": "3f5cb247d7ec799217e675cbcbd5a6bb",
+    "semantic_hash": "3f5cb247d7ec799217e675cbcbd5a6bb"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\pos\\models.py": {
+    "mtime": 1779648664.4580164,
+    "ast_hash": "df81412e3765fa1e27a94676d744fad9",
+    "semantic_hash": "df81412e3765fa1e27a94676d744fad9"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\gen\\__init__.py": {
+    "mtime": 1779648664.4590335,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\gen\\google\\api\\__init__.py": {
+    "mtime": 1779648664.460017,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\gen\\google\\api\\annotations_pb2.py": {
+    "mtime": 1779648664.460017,
+    "ast_hash": "f28517ca5ae828e86f7e570eec9992fb",
+    "semantic_hash": "f28517ca5ae828e86f7e570eec9992fb"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\gen\\google\\api\\annotations_pb2_grpc.py": {
+    "mtime": 1779648664.4610195,
+    "ast_hash": "edf0a928770d91f7d0d08c3fd21527d7",
+    "semantic_hash": "edf0a928770d91f7d0d08c3fd21527d7"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\gen\\google\\api\\http_pb2.py": {
+    "mtime": 1779648664.4610195,
+    "ast_hash": "aaec39f6b1ee8ed40e5f7536920b706a",
+    "semantic_hash": "aaec39f6b1ee8ed40e5f7536920b706a"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\gen\\google\\api\\http_pb2_grpc.py": {
+    "mtime": 1779648664.4620166,
+    "ast_hash": "6c293eb9625b599bbd9cef03c86e9993",
+    "semantic_hash": "6c293eb9625b599bbd9cef03c86e9993"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\gen\\google\\type\\__init__.py": {
+    "mtime": 1779648664.463017,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\gen\\google\\type\\decimal_pb2.py": {
+    "mtime": 1779648664.463017,
+    "ast_hash": "60c562504e63b242881e2327dc2de8e3",
+    "semantic_hash": "60c562504e63b242881e2327dc2de8e3"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\gen\\google\\type\\decimal_pb2_grpc.py": {
+    "mtime": 1779648664.463017,
+    "ast_hash": "7762135723cbb6ae518cbbbd74f8d912",
+    "semantic_hash": "7762135723cbb6ae518cbbbd74f8d912"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\gen\\google\\type\\interval_pb2.py": {
+    "mtime": 1779648664.464016,
+    "ast_hash": "b196b047abdc92d140f49f679faebbb3",
+    "semantic_hash": "b196b047abdc92d140f49f679faebbb3"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\gen\\google\\type\\interval_pb2_grpc.py": {
+    "mtime": 1779648664.464016,
+    "ast_hash": "0c4210b9f2d313f733076a161dfa0f0a",
+    "semantic_hash": "0c4210b9f2d313f733076a161dfa0f0a"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\gen\\grpc\\gateway\\__init__.py": {
+    "mtime": 1779648664.4650164,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\gen\\grpc\\gateway\\protoc_gen_openapiv2\\__init__.py": {
+    "mtime": 1779648664.4650164,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\gen\\grpc\\gateway\\protoc_gen_openapiv2\\options\\__init__.py": {
+    "mtime": 1779648664.4650164,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\gen\\grpc\\gateway\\protoc_gen_openapiv2\\options\\annotations_pb2.py": {
+    "mtime": 1779648664.4660232,
+    "ast_hash": "f5caa378ef16bfd4a0532a0e207b8b04",
+    "semantic_hash": "f5caa378ef16bfd4a0532a0e207b8b04"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\gen\\grpc\\gateway\\protoc_gen_openapiv2\\options\\annotations_pb2_grpc.py": {
+    "mtime": 1779648664.4660232,
+    "ast_hash": "4a9a11ba24a5f1c4b9fb9c0b223325a7",
+    "semantic_hash": "4a9a11ba24a5f1c4b9fb9c0b223325a7"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\gen\\grpc\\gateway\\protoc_gen_openapiv2\\options\\openapiv2_pb2.py": {
+    "mtime": 1779648664.4670153,
+    "ast_hash": "aa43c16c7ef97baaa284cac61f73376c",
+    "semantic_hash": "aa43c16c7ef97baaa284cac61f73376c"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\gen\\grpc\\gateway\\protoc_gen_openapiv2\\options\\openapiv2_pb2_grpc.py": {
+    "mtime": 1779648664.4670153,
+    "ast_hash": "3cf6420bc95969b7977d35d790a87ccb",
+    "semantic_hash": "3cf6420bc95969b7977d35d790a87ccb"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\gen\\grpc\\tradeapi\\__init__.py": {
+    "mtime": 1779648664.468015,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\gen\\grpc\\tradeapi\\v1\\__init__.py": {
+    "mtime": 1779648664.468015,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\gen\\grpc\\tradeapi\\v1\\marketdata\\__init__.py": {
+    "mtime": 1779648664.468015,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\gen\\grpc\\tradeapi\\v1\\marketdata\\marketdata_service_pb2.py": {
+    "mtime": 1779648664.4690154,
+    "ast_hash": "7f8d011079ee9445bf0b2563f30c6850",
+    "semantic_hash": "7f8d011079ee9445bf0b2563f30c6850"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\gen\\grpc\\tradeapi\\v1\\marketdata\\marketdata_service_pb2_grpc.py": {
+    "mtime": 1779648664.4700172,
+    "ast_hash": "5c214a3688063a15367fc20d08182a69",
+    "semantic_hash": "5c214a3688063a15367fc20d08182a69"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\gen\\grpc\\tradeapi\\v1\\side_pb2.py": {
+    "mtime": 1779648664.4700172,
+    "ast_hash": "948cda90486c1c1473576ad70a31f9fc",
+    "semantic_hash": "948cda90486c1c1473576ad70a31f9fc"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\gen\\grpc\\tradeapi\\v1\\side_pb2_grpc.py": {
+    "mtime": 1779648664.4700172,
+    "ast_hash": "6a3fd3fd15068637808170b78af3db0b",
+    "semantic_hash": "6a3fd3fd15068637808170b78af3db0b"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\api\\annotations.pb.go": {
+    "mtime": 1779648664.4710164,
+    "ast_hash": "34c6b7dab78ad5d17a1f69ff05a5e879",
+    "semantic_hash": "34c6b7dab78ad5d17a1f69ff05a5e879"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\api\\auth.pb.go": {
+    "mtime": 1779648664.4730253,
+    "ast_hash": "b5f410e7496d765820d0ec3f78a6517e",
+    "semantic_hash": "b5f410e7496d765820d0ec3f78a6517e"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\api\\backend.pb.go": {
+    "mtime": 1779648664.474015,
+    "ast_hash": "fcab7de187af2710f53a18cb05b8a39b",
+    "semantic_hash": "fcab7de187af2710f53a18cb05b8a39b"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\api\\billing.pb.go": {
+    "mtime": 1779648664.4750183,
+    "ast_hash": "1d4a54df0767225d151811b8cb2fd8b4",
+    "semantic_hash": "1d4a54df0767225d151811b8cb2fd8b4"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\api\\client.pb.go": {
+    "mtime": 1779648664.4760168,
+    "ast_hash": "e2aa671cadcadd56491bcdba2a36d22b",
+    "semantic_hash": "e2aa671cadcadd56491bcdba2a36d22b"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\api\\config_change.pb.go": {
+    "mtime": 1779648664.4770164,
+    "ast_hash": "4cb1243e0ea1ff28339e5faa9f8385c5",
+    "semantic_hash": "4cb1243e0ea1ff28339e5faa9f8385c5"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\api\\consumer.pb.go": {
+    "mtime": 1779648664.4780233,
+    "ast_hash": "c810b6dc3c37bcc22d57e57b3a3e8c89",
+    "semantic_hash": "c810b6dc3c37bcc22d57e57b3a3e8c89"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\api\\context.pb.go": {
+    "mtime": 1779648664.4800177,
+    "ast_hash": "6d56e562686b758469ed65afaea5f7fe",
+    "semantic_hash": "6d56e562686b758469ed65afaea5f7fe"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\api\\control.pb.go": {
+    "mtime": 1779648664.481033,
+    "ast_hash": "c86b58ae20602b5614865b21655a01be",
+    "semantic_hash": "c86b58ae20602b5614865b21655a01be"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\api\\distribution.pb.go": {
+    "mtime": 1779648664.4820325,
+    "ast_hash": "5dd2bd4fc5befe4092b5d3638a4aad31",
+    "semantic_hash": "5dd2bd4fc5befe4092b5d3638a4aad31"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\api\\documentation.pb.go": {
+    "mtime": 1779648664.4830163,
+    "ast_hash": "0620c40054473f5f1698f3778394641f",
+    "semantic_hash": "0620c40054473f5f1698f3778394641f"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\api\\endpoint.pb.go": {
+    "mtime": 1779648664.4840243,
+    "ast_hash": "6cef773f4d76426fe905b91ab6a388b3",
+    "semantic_hash": "6cef773f4d76426fe905b91ab6a388b3"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\api\\error_reason.pb.go": {
+    "mtime": 1779648664.485015,
+    "ast_hash": "343422c18de40b11b0db8ef08ebd017f",
+    "semantic_hash": "343422c18de40b11b0db8ef08ebd017f"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\api\\field_behavior.pb.go": {
+    "mtime": 1779648664.4860227,
+    "ast_hash": "5d134e7129b6ad3681b61a7af98c8bd9",
+    "semantic_hash": "5d134e7129b6ad3681b61a7af98c8bd9"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\api\\field_info.pb.go": {
+    "mtime": 1779648664.487026,
+    "ast_hash": "2b26916b80e144675700e839d6db0cf1",
+    "semantic_hash": "2b26916b80e144675700e839d6db0cf1"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\api\\http.pb.go": {
+    "mtime": 1779648664.4880154,
+    "ast_hash": "fad873df6b2905e822ec3699b9ac6313",
+    "semantic_hash": "fad873df6b2905e822ec3699b9ac6313"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\api\\httpbody.pb.go": {
+    "mtime": 1779648664.489015,
+    "ast_hash": "49a6e7f3fe5b0f15af40b740d7956904",
+    "semantic_hash": "49a6e7f3fe5b0f15af40b740d7956904"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\api\\label.pb.go": {
+    "mtime": 1779648664.4900153,
+    "ast_hash": "93df403701935205e2a4f37ede7b7132",
+    "semantic_hash": "93df403701935205e2a4f37ede7b7132"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\api\\launch_stage.pb.go": {
+    "mtime": 1779648664.4920182,
+    "ast_hash": "ba5da154348b67f4bb37d1ce7f10cc8b",
+    "semantic_hash": "ba5da154348b67f4bb37d1ce7f10cc8b"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\api\\log.pb.go": {
+    "mtime": 1779648664.4930165,
+    "ast_hash": "039027ff277cfbffa9f1974ae7ae65e6",
+    "semantic_hash": "039027ff277cfbffa9f1974ae7ae65e6"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\api\\logging.pb.go": {
+    "mtime": 1779648664.4930165,
+    "ast_hash": "770793255546b5d6a5278738fcc0b652",
+    "semantic_hash": "770793255546b5d6a5278738fcc0b652"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\api\\metric.pb.go": {
+    "mtime": 1779648664.4950154,
+    "ast_hash": "8f514988d53e65dd725d31dc9dde3f73",
+    "semantic_hash": "8f514988d53e65dd725d31dc9dde3f73"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\api\\monitored_resource.pb.go": {
+    "mtime": 1779648664.4960155,
+    "ast_hash": "ab61a6db59f90cebc93f6e5de505a131",
+    "semantic_hash": "ab61a6db59f90cebc93f6e5de505a131"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\api\\monitoring.pb.go": {
+    "mtime": 1779648664.4970345,
+    "ast_hash": "e49185e8518009f8f00a0698cddcb5df",
+    "semantic_hash": "e49185e8518009f8f00a0698cddcb5df"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\api\\policy.pb.go": {
+    "mtime": 1779648664.4980328,
+    "ast_hash": "609143354ddb9621af854f6a1123c99a",
+    "semantic_hash": "609143354ddb9621af854f6a1123c99a"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\api\\quota.pb.go": {
+    "mtime": 1779648664.499015,
+    "ast_hash": "5204231bad62af11fd2498f997840bcb",
+    "semantic_hash": "5204231bad62af11fd2498f997840bcb"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\api\\resource.pb.go": {
+    "mtime": 1779648664.5000167,
+    "ast_hash": "bbc672c4b29319c1e87e8fefb450f18a",
+    "semantic_hash": "bbc672c4b29319c1e87e8fefb450f18a"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\api\\routing.pb.go": {
+    "mtime": 1779648664.5020182,
+    "ast_hash": "8bca1d4c27d2c5c1490f6d1624c48aad",
+    "semantic_hash": "8bca1d4c27d2c5c1490f6d1624c48aad"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\api\\service.pb.go": {
+    "mtime": 1779648664.5030339,
+    "ast_hash": "00f4e4b3c2e8366cbe4d305f5f8b2010",
+    "semantic_hash": "00f4e4b3c2e8366cbe4d305f5f8b2010"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\api\\source_info.pb.go": {
+    "mtime": 1779648664.5040195,
+    "ast_hash": "d40f341f536e0d9ccfa6281cc778867e",
+    "semantic_hash": "d40f341f536e0d9ccfa6281cc778867e"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\api\\system_parameter.pb.go": {
+    "mtime": 1779648664.505017,
+    "ast_hash": "ba367d2d1a3282834aa12b59740c0c78",
+    "semantic_hash": "ba367d2d1a3282834aa12b59740c0c78"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\api\\usage.pb.go": {
+    "mtime": 1779648664.5070338,
+    "ast_hash": "850b4ad9c8d45c42e1884e2e522bf491",
+    "semantic_hash": "850b4ad9c8d45c42e1884e2e522bf491"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\api\\visibility.pb.go": {
+    "mtime": 1779648664.5080154,
+    "ast_hash": "894b4d59b8cad7ca0255f7d66ffced05",
+    "semantic_hash": "894b4d59b8cad7ca0255f7d66ffced05"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\type\\calendar_period.pb.go": {
+    "mtime": 1779648664.5090163,
+    "ast_hash": "bfd6dbdc795eb597e23650379a3031bc",
+    "semantic_hash": "bfd6dbdc795eb597e23650379a3031bc"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\type\\color.pb.go": {
+    "mtime": 1779648664.5100157,
+    "ast_hash": "5b32c6135ba6d54dffe528a7af3b4a7e",
+    "semantic_hash": "5b32c6135ba6d54dffe528a7af3b4a7e"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\type\\date.pb.go": {
+    "mtime": 1779648664.512015,
+    "ast_hash": "ed408c510ebf333dca717625d462c061",
+    "semantic_hash": "ed408c510ebf333dca717625d462c061"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\type\\datetime.pb.go": {
+    "mtime": 1779648664.5130148,
+    "ast_hash": "8b57e714bbb0ee1c8a5f2c175b89cf21",
+    "semantic_hash": "8b57e714bbb0ee1c8a5f2c175b89cf21"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\type\\dayofweek.pb.go": {
+    "mtime": 1779648664.5140302,
+    "ast_hash": "fc1d2ba1c801194a7ec3a0523ce004ab",
+    "semantic_hash": "fc1d2ba1c801194a7ec3a0523ce004ab"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\type\\decimal.pb.go": {
+    "mtime": 1779648664.5150177,
+    "ast_hash": "fbad271347c9240e802972de329f4e58",
+    "semantic_hash": "fbad271347c9240e802972de329f4e58"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\type\\expr.pb.go": {
+    "mtime": 1779648664.5160182,
+    "ast_hash": "3f8714d57e9ffa094e3315765120215e",
+    "semantic_hash": "3f8714d57e9ffa094e3315765120215e"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\type\\fraction.pb.go": {
+    "mtime": 1779648664.5170152,
+    "ast_hash": "83c6c6745d59aa1c7116f4b9ce98a4c0",
+    "semantic_hash": "83c6c6745d59aa1c7116f4b9ce98a4c0"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\type\\interval.pb.go": {
+    "mtime": 1779648664.518031,
+    "ast_hash": "648747b114809a881e4938aa96362688",
+    "semantic_hash": "648747b114809a881e4938aa96362688"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\type\\latlng.pb.go": {
+    "mtime": 1779648664.5190215,
+    "ast_hash": "85002da17fa30482317f6f6accf32be6",
+    "semantic_hash": "85002da17fa30482317f6f6accf32be6"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\type\\localized_text.pb.go": {
+    "mtime": 1779648664.5200155,
+    "ast_hash": "095894571fd3d817d541145d4c3cb7f0",
+    "semantic_hash": "095894571fd3d817d541145d4c3cb7f0"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\type\\money.pb.go": {
+    "mtime": 1779648664.521659,
+    "ast_hash": "d10a64dd049be4e0183707410b74b17b",
+    "semantic_hash": "d10a64dd049be4e0183707410b74b17b"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\type\\month.pb.go": {
+    "mtime": 1779648664.5221963,
+    "ast_hash": "551f0d7b5ebc81675f2ff3074b43400d",
+    "semantic_hash": "551f0d7b5ebc81675f2ff3074b43400d"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\type\\phone_number.pb.go": {
+    "mtime": 1779648664.52318,
+    "ast_hash": "b5535d541355a9e5df0416effda0dd5e",
+    "semantic_hash": "b5535d541355a9e5df0416effda0dd5e"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\type\\postal_address.pb.go": {
+    "mtime": 1779648664.525191,
+    "ast_hash": "c4dc932edae76d3f0625634161a5825d",
+    "semantic_hash": "c4dc932edae76d3f0625634161a5825d"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\type\\quaternion.pb.go": {
+    "mtime": 1779648664.5261805,
+    "ast_hash": "1f3dba281a28f7ea4c8ce9a673ffaa5a",
+    "semantic_hash": "1f3dba281a28f7ea4c8ce9a673ffaa5a"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\google\\type\\timeofday.pb.go": {
+    "mtime": 1779648664.52718,
+    "ast_hash": "d7760cac21dc85ada0498740821f2358",
+    "semantic_hash": "d7760cac21dc85ada0498740821f2358"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\grpc\\gateway\\protoc_gen_openapiv2\\options\\annotations.pb.go": {
+    "mtime": 1779648664.5291824,
+    "ast_hash": "e88981bf9918b1d059d9b684e878d43e",
+    "semantic_hash": "e88981bf9918b1d059d9b684e878d43e"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\grpc\\gateway\\protoc_gen_openapiv2\\options\\openapiv2.pb.go": {
+    "mtime": 1779648664.5311816,
+    "ast_hash": "e680ba47977cb5cd10ae4580db80e7b2",
+    "semantic_hash": "e680ba47977cb5cd10ae4580db80e7b2"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\grpc\\tradeapi\\v1\\accounts\\accounts_service.pb.go": {
+    "mtime": 1779648664.5331821,
+    "ast_hash": "ff28dda66538e60cdb65cf385dc6234f",
+    "semantic_hash": "ff28dda66538e60cdb65cf385dc6234f"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\grpc\\tradeapi\\v1\\accounts\\accounts_service_grpc.pb.go": {
+    "mtime": 1779648664.5341907,
+    "ast_hash": "600c04c70fa0e4ee9707bc5347b4b26b",
+    "semantic_hash": "600c04c70fa0e4ee9707bc5347b4b26b"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\grpc\\tradeapi\\v1\\assets\\assets_service.pb.go": {
+    "mtime": 1779648664.5361826,
+    "ast_hash": "f37fd4909746f50f0ebcbf2ece5773f8",
+    "semantic_hash": "f37fd4909746f50f0ebcbf2ece5773f8"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\grpc\\tradeapi\\v1\\assets\\assets_service_grpc.pb.go": {
+    "mtime": 1779648664.5372021,
+    "ast_hash": "354c83705c5132056130a0bdf8fe71a7",
+    "semantic_hash": "354c83705c5132056130a0bdf8fe71a7"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\grpc\\tradeapi\\v1\\auth\\auth_service.pb.go": {
+    "mtime": 1779648664.5391805,
+    "ast_hash": "1e6f299d8e3d57039be2c3d970d34893",
+    "semantic_hash": "1e6f299d8e3d57039be2c3d970d34893"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\grpc\\tradeapi\\v1\\auth\\auth_service_grpc.pb.go": {
+    "mtime": 1779648664.5401907,
+    "ast_hash": "8bfb042e7ec08aa52f9ef3aab3f1d0c7",
+    "semantic_hash": "8bfb042e7ec08aa52f9ef3aab3f1d0c7"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\grpc\\tradeapi\\v1\\marketdata\\marketdata_service.pb.go": {
+    "mtime": 1779648664.5411835,
+    "ast_hash": "9cd7226976f373e3875db83aabb94aae",
+    "semantic_hash": "9cd7226976f373e3875db83aabb94aae"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\grpc\\tradeapi\\v1\\marketdata\\marketdata_service_grpc.pb.go": {
+    "mtime": 1779648664.5421813,
+    "ast_hash": "5100eedb808c77c2850c7a216a296e00",
+    "semantic_hash": "5100eedb808c77c2850c7a216a296e00"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\grpc\\tradeapi\\v1\\metrics\\usage_metrics_service.pb.go": {
+    "mtime": 1779648664.5441818,
+    "ast_hash": "d6a337904735cce41aa7bda922284483",
+    "semantic_hash": "d6a337904735cce41aa7bda922284483"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\grpc\\tradeapi\\v1\\metrics\\usage_metrics_service_grpc.pb.go": {
+    "mtime": 1779648664.5451813,
+    "ast_hash": "fb4e0b29a4110d74e9331a6f8bd08f45",
+    "semantic_hash": "fb4e0b29a4110d74e9331a6f8bd08f45"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\grpc\\tradeapi\\v1\\orders\\orders_service.pb.go": {
+    "mtime": 1779648664.546191,
+    "ast_hash": "4ac506af8f3edff1658151e675945c28",
+    "semantic_hash": "4ac506af8f3edff1658151e675945c28"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\grpc\\tradeapi\\v1\\orders\\orders_service_grpc.pb.go": {
+    "mtime": 1779648664.5471892,
+    "ast_hash": "ad59412041246b0380350183babf62de",
+    "semantic_hash": "ad59412041246b0380350183babf62de"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\grpc\\tradeapi\\v1\\reports\\reports_service.pb.go": {
+    "mtime": 1779648664.5491807,
+    "ast_hash": "8eddf6245e575b70375c19aefc383cc6",
+    "semantic_hash": "8eddf6245e575b70375c19aefc383cc6"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\grpc\\tradeapi\\v1\\reports\\reports_service_grpc.pb.go": {
+    "mtime": 1779648664.5501995,
+    "ast_hash": "d83a79a4d967131fa72140e8b0072003",
+    "semantic_hash": "d83a79a4d967131fa72140e8b0072003"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\grpc\\tradeapi\\v1\\side.pb.go": {
+    "mtime": 1779648664.5511813,
+    "ast_hash": "9f9a2cd5e56eb9d8120d36c8370995b1",
+    "semantic_hash": "9f9a2cd5e56eb9d8120d36c8370995b1"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\proto\\grpc\\tradeapi\\v1\\trade.pb.go": {
+    "mtime": 1779648664.5511813,
+    "ast_hash": "2fa5b42bf7a22f2d23f1a2f659a5b230",
+    "semantic_hash": "2fa5b42bf7a22f2d23f1a2f659a5b230"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\registry\\__init__.py": {
+    "mtime": 1779308252.0,
+    "ast_hash": "3d2846d709c2762972b57369e146aa4e",
+    "semantic_hash": "3d2846d709c2762972b57369e146aa4e"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\registry\\client.py": {
+    "mtime": 1779308252.0,
+    "ast_hash": "7380db5f0c7c1b5117a814ba68f95ba9",
+    "semantic_hash": "7380db5f0c7c1b5117a814ba68f95ba9"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\registry\\models.py": {
+    "mtime": 1779308252.0,
+    "ast_hash": "095ee23521f6de683cdf0427d768c706",
+    "semantic_hash": "095ee23521f6de683cdf0427d768c706"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\tx\\__init__.py": {
+    "mtime": 1779648664.5521963,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\tx\\client.py": {
+    "mtime": 1780429652.7829874,
+    "ast_hash": "9875da4c0e1e00b30b25372e8e512233",
+    "semantic_hash": "9875da4c0e1e00b30b25372e8e512233"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\trader\\tx\\models.py": {
+    "mtime": 1779648664.5531962,
+    "ast_hash": "3f6e207d983ecf026e54daaab926c3c0",
+    "semantic_hash": "3f6e207d983ecf026e54daaab926c3c0"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\.github\\workflows\\ci.yml": {
+    "mtime": 1780570680.2446506,
+    "ast_hash": "c9316b9c7962a7018f395182fe6501bf",
+    "semantic_hash": "c9316b9c7962a7018f395182fe6501bf"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\.remember\\archive.md": {
+    "mtime": 1781517509.1387975,
+    "ast_hash": "39fbf7f6ef3d4d93837aa118d7963096",
+    "semantic_hash": "39fbf7f6ef3d4d93837aa118d7963096"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\.remember\\now.md": {
+    "mtime": 1781466473.5228608,
+    "ast_hash": "5166d796d7e3315b9184bdaa449927e5",
+    "semantic_hash": "5166d796d7e3315b9184bdaa449927e5"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\.remember\\recent.md": {
+    "mtime": 1781517509.1247814,
+    "ast_hash": "0660d90e8357b47c9dfa1747fe2b62bc",
+    "semantic_hash": "0660d90e8357b47c9dfa1747fe2b62bc"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\.remember\\today-2026-06-08.done.md": {
+    "mtime": 1780911304.3331585,
+    "ast_hash": "4d9a91b027138b494230da2647ff667b",
+    "semantic_hash": "4d9a91b027138b494230da2647ff667b"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\.remember\\today-2026-06-09.done.md": {
+    "mtime": 1781032170.4460783,
+    "ast_hash": "4775b2e10180dc384136f111dc1b66a6",
+    "semantic_hash": "4775b2e10180dc384136f111dc1b66a6"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\.remember\\today-2026-06-11.done.md": {
+    "mtime": 1781191684.9898007,
+    "ast_hash": "d79a5ec2a8cf9a5e488a2e6728aea81b",
+    "semantic_hash": "d79a5ec2a8cf9a5e488a2e6728aea81b"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\.remember\\today-2026-06-12.done.md": {
+    "mtime": 1781293762.881338,
+    "ast_hash": "00788516f3c4748356b7828d50f8d6ec",
+    "semantic_hash": "00788516f3c4748356b7828d50f8d6ec"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\.remember\\today-2026-06-13.done.md": {
+    "mtime": 1781367850.8758862,
+    "ast_hash": "415ab9888480876d73f86fcffff34cfb",
+    "semantic_hash": "415ab9888480876d73f86fcffff34cfb"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\.remember\\today-2026-06-14.done.md": {
+    "mtime": 1781462956.6542234,
+    "ast_hash": "7ec6a61e390ad595d3f70dfdbd9ecba9",
+    "semantic_hash": "7ec6a61e390ad595d3f70dfdbd9ecba9"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\CLAUDE.md": {
+    "mtime": 1779648664.164017,
+    "ast_hash": "ffbe3b454733c02aff0239614295872c",
+    "semantic_hash": "ffbe3b454733c02aff0239614295872c"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\README.md": {
+    "mtime": 1779648664.165017,
+    "ast_hash": "1b1fef0e4c97382409aae945dc6f979e",
+    "semantic_hash": "1b1fef0e4c97382409aae945dc6f979e"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\SPRINT_02_DEPLOYMENT_STATUS.md": {
+    "mtime": 1779648664.165017,
+    "ast_hash": "0172a5f4c428bff0ee7dea03821c4152",
+    "semantic_hash": "0172a5f4c428bff0ee7dea03821c4152"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\SPRINT_02_VERIFICATION_REPORT.md": {
+    "mtime": 1779648664.1660173,
+    "ast_hash": "37ce8102f3dbad62d8b131a16709d520",
+    "semantic_hash": "37ce8102f3dbad62d8b131a16709d520"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\agent\\README.md": {
+    "mtime": 1780556620.111478,
+    "ast_hash": "98a51a9f8b9cc2be09da25db37230cf3",
+    "semantic_hash": "98a51a9f8b9cc2be09da25db37230cf3"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\agent\\requirements.txt": {
+    "mtime": 1780556553.7934227,
+    "ast_hash": "9706d00950c901a3a5da99c48fe349b6",
+    "semantic_hash": "9706d00950c901a3a5da99c48fe349b6"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\agent\\update_manifest.txt": {
+    "mtime": 1781271513.690384,
+    "ast_hash": "3fbe37df8f759961d61993020c44d146",
+    "semantic_hash": "3fbe37df8f759961d61993020c44d146"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\deploy\\README.md": {
+    "mtime": 1779648664.167016,
+    "ast_hash": "7a32cd91dfa3ee8cc5825274eb527e86",
+    "semantic_hash": "7a32cd91dfa3ee8cc5825274eb527e86"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\docs\\config\\MVP-instrument.md": {
+    "mtime": 1779308252.0,
+    "ast_hash": "380770bc100f91c37c9eda364d59ed44",
+    "semantic_hash": "380770bc100f91c37c9eda364d59ed44"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\docs\\lab-integration-test.md": {
+    "mtime": 1779980159.053307,
+    "ast_hash": "de99474c4e061c839c4aa0a199094a9a",
+    "semantic_hash": "de99474c4e061c839c4aa0a199094a9a"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\docs\\superpowers\\plans\\2026-05-14-stage-1-2-scaffolding-auth.md": {
+    "mtime": 1779308252.0,
+    "ast_hash": "eb97a05de15bd5f814cf95e4eef4240f",
+    "semantic_hash": "eb97a05de15bd5f814cf95e4eef4240f"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\docs\\superpowers\\plans\\2026-05-15-m1-market-data.md": {
+    "mtime": 1779308252.0,
+    "ast_hash": "60e8d96b88426a4ca096f0d6d9cf1140",
+    "semantic_hash": "60e8d96b88426a4ca096f0d6d9cf1140"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\docs\\superpowers\\plans\\2026-05-15-m4-instrument-registry.md": {
+    "mtime": 1779308252.0,
+    "ast_hash": "35b945317d6ce0e99f0fc1fca01822e5",
+    "semantic_hash": "35b945317d6ce0e99f0fc1fca01822e5"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\docs\\superpowers\\plans\\2026-05-16-frontend-operational-lab.md": {
+    "mtime": 1779648655.5602653,
+    "ast_hash": "d21bcb8c950f3b2b3fe3a4829f0a9a59",
+    "semantic_hash": "d21bcb8c950f3b2b3fe3a4829f0a9a59"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\docs\\superpowers\\plans\\2026-05-16-m1-grpc-marketdata.md": {
+    "mtime": 1779648664.1710174,
+    "ast_hash": "89cf39676218ec9ae186baf10b1b1afa",
+    "semantic_hash": "89cf39676218ec9ae186baf10b1b1afa"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\docs\\superpowers\\plans\\2026-05-18-unified-auth.md": {
+    "mtime": 1779648664.1720161,
+    "ast_hash": "5be6a1a2e9430f3a7d6f1f9424113e5c",
+    "semantic_hash": "5be6a1a2e9430f3a7d6f1f9424113e5c"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\docs\\superpowers\\plans\\2026-05-28-lab-mvp-v1.md": {
+    "mtime": 1779977300.547509,
+    "ast_hash": "05d799ae9ec99c5b73a564440530f4b2",
+    "semantic_hash": "05d799ae9ec99c5b73a564440530f4b2"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\docs\\superpowers\\specs\\2026-05-15-m1-market-data-design.md": {
+    "mtime": 1779308252.0,
+    "ast_hash": "fabd2e05cac656c872884fc3768e1e06",
+    "semantic_hash": "fabd2e05cac656c872884fc3768e1e06"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\docs\\superpowers\\specs\\2026-05-15-m4-instrument-registry-design.md": {
+    "mtime": 1779308252.0,
+    "ast_hash": "9c321d813960fc95faca8b262c6c5333",
+    "semantic_hash": "9c321d813960fc95faca8b262c6c5333"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\docs\\superpowers\\specs\\2026-05-16-frontend-design.md": {
+    "mtime": 1779648655.5602653,
+    "ast_hash": "9fd0e59e04016c2eace196a475c32602",
+    "semantic_hash": "9fd0e59e04016c2eace196a475c32602"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\docs\\superpowers\\specs\\2026-05-16-m1-grpc-marketdata-design.md": {
+    "mtime": 1779648664.1720161,
+    "ast_hash": "4766e3142898eee968df4c66ea98d800",
+    "semantic_hash": "4766e3142898eee968df4c66ea98d800"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\docs\\superpowers\\specs\\2026-05-17-mvp-design.md": {
+    "mtime": 1779648664.1730163,
+    "ast_hash": "af15989e3eab7a976fd57066d06eaae3",
+    "semantic_hash": "af15989e3eab7a976fd57066d06eaae3"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\docs\\superpowers\\specs\\2026-05-18-unified-auth-design.md": {
+    "mtime": 1779648664.1740181,
+    "ast_hash": "2c872446449139da1e6c744ad68bcc7c",
+    "semantic_hash": "2c872446449139da1e6c744ad68bcc7c"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\docs\\superpowers\\specs\\2026-05-28-lab-mvp-v1-design.md": {
+    "mtime": 1779975160.2568514,
+    "ast_hash": "3149a90dcca50db782e44b152f86f066",
+    "semantic_hash": "3149a90dcca50db782e44b152f86f066"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\index.html": {
+    "mtime": 1779648655.561267,
+    "ast_hash": "00364b4bb7b1de03b85d85bdbe6b1d20",
+    "semantic_hash": "00364b4bb7b1de03b85d85bdbe6b1d20"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\mock\\requirements.txt": {
+    "mtime": 1779648655.561267,
+    "ast_hash": "0e3bba5c8968a1b32e517e150ebc7e7c",
+    "semantic_hash": "0e3bba5c8968a1b32e517e150ebc7e7c"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\memory\\MEMORY.md": {
+    "mtime": 1779648655.574267,
+    "ast_hash": "a63b09be717fe3bd227a76d837fe64b2",
+    "semantic_hash": "a63b09be717fe3bd227a76d837fe64b2"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\memory\\project_status.md": {
+    "mtime": 1779648655.574267,
+    "ast_hash": "0a52d08cd381575fc0bdf5936548d51b",
+    "semantic_hash": "0a52d08cd381575fc0bdf5936548d51b"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\memory\\user_preferences.md": {
+    "mtime": 1779648655.574267,
+    "ast_hash": "5cd7ca8c2be2cc3ce5cd4f63d823de4d",
+    "semantic_hash": "5cd7ca8c2be2cc3ce5cd4f63d823de4d"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\prisma\\SETUP_NOTES.md": {
+    "mtime": 1779978872.5554366,
+    "ast_hash": "613d4cb640ae7cfc1740027db89c8023",
+    "semantic_hash": "613d4cb640ae7cfc1740027db89c8023"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\frontend\\public\\brand\\shectory-logo.gif": {
+    "mtime": 1779648664.198041,
+    "ast_hash": "ecfa6cbee1a63ab9de64011e6e869333",
+    "semantic_hash": "ecfa6cbee1a63ab9de64011e6e869333"
+  },
+  "C:\\Dev\\Shectory Trade & Lab\\opt-result.jpeg": {
+    "mtime": 1780156127.3899486,
+    "ast_hash": "3adda15216ce65c637740a10a8d953fa",
+    "semantic_hash": "3adda15216ce65c637740a10a8d953fa"
+  }
+}

@@ -35,9 +35,6 @@ type Deps struct {
 	// server and start a new one, returning an error if the restart failed. It must
 	// NOT place any order.
 	RestartDDE func(ctx context.Context) error
-	// OnReconnectAttempt is called (best-effort) each time a restart is attempted,
-	// after the reconnect counter is bumped. Optional.
-	OnReconnectAttempt func(count uint32, reason string)
 	// Logf logs a line. Optional; defaults to a no-op.
 	Logf func(format string, args ...any)
 }
@@ -140,9 +137,6 @@ func (w *Watchdog) Run(ctx context.Context) {
 
 		n := w.reconnects.Add(1)
 		w.deps.Logf("watchdog: DDE hung (%s) — read-only restart attempt #%d", reason, n)
-		if w.deps.OnReconnectAttempt != nil {
-			w.deps.OnReconnectAttempt(n, reason)
-		}
 
 		if w.deps.RestartDDE != nil {
 			if err := w.deps.RestartDDE(ctx); err != nil {

@@ -1,8 +1,7 @@
 """Order-flow collector for team-46 — live trades + order book → OFI family.
 
 This is the "точнее" path: real order flow, not a proxy from 1-min bars.
-`OrderFlow` consumes parsed trades and order-book snapshots and exposes the
-OFI family (features.ofi/mlofi/queue_imbalance/microprice/spread_bps) per symbol.
+`OrderFlow` consumes parsed trades and exposes OFI (features.ofi) per symbol.
 `TradesStream` is the thin Finam gRPC transport (SubscribeLatestTrades) that
 feeds it; the collector itself is pure and unit-testable without gRPC.
 
@@ -30,7 +29,6 @@ class OrderFlow:
 
     def __init__(self, max_age_secs: float = 1800.0) -> None:
         self._tb = F.TradeBuffer(max_age_secs=max_age_secs)
-        self._books: dict[str, F.OrderBook] = {}
         self._last_price: dict[str, float] = {}
         self._last_side: dict[str, str] = {}
 
@@ -56,46 +54,10 @@ class OrderFlow:
         # Age on the data clock (newest trade time), not wall-clock — the feed lags.
         self._tb.add(symbol, F.Trade(time=time, side=side, volume=size), now=time)
 
-    def on_book(self, symbol: str, bids: list[tuple[float, float]],
-                asks: list[tuple[float, float]]) -> None:
-        """Replace the order book. bids/asks are (price, size), best first."""
-        self._books[symbol] = F.OrderBook(
-            bids=[F.BookLevel(p, s) for p, s in bids],
-            asks=[F.BookLevel(p, s) for p, s in asks],
-        )
-
     # ── features ───────────────────────────────────────────────────────────-
 
     def ofi(self, symbol: str, window_secs: float = _OFI_WINDOW_SECS) -> float:
         return F.ofi(self._tb, symbol, window_secs)
-
-    def mlofi(self, symbol: str) -> float:
-        return F.mlofi(self._books.get(symbol))
-
-    def queue_imbalance(self, symbol: str) -> float:
-        return F.queue_imbalance(self._books.get(symbol))
-
-    def microprice(self, symbol: str) -> float:
-        return F.microprice(self._books.get(symbol))
-
-    def spread_bps(self, symbol: str) -> float:
-        return F.spread_bps(self._books.get(symbol))
-
-    def book(self, symbol: str) -> F.OrderBook | None:
-        return self._books.get(symbol)
-
-    def stats(self, symbol: str, now: float) -> F.BufferStat:
-        return self._tb.stats(symbol, now)
-
-    def snapshot(self, symbol: str, window_secs: float = _OFI_WINDOW_SECS) -> dict:
-        """All order-flow features for the LLM/ML proposal."""
-        return {
-            "ofi": self.ofi(symbol, window_secs),
-            "mlofi": self.mlofi(symbol),
-            "queue_imbalance": self.queue_imbalance(symbol),
-            "microprice": self.microprice(symbol),
-            "spread_bps": self.spread_bps(symbol),
-        }
 
 
 # ════════════════════════════════════════════════════════════════════════════

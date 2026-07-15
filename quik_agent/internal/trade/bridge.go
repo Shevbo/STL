@@ -161,7 +161,6 @@ type luaEvent struct {
 	Trades [][]float64 `json:"trades"` // tape: [[price, qty, side, ts_ms] ...]
 	PriceStep float64  `json:"price_step"` // param
 	StepCost  float64  `json:"step_cost"`  // param
-	Margin    float64  `json:"margin"`     // param (initial margin, BUYDEPO)
 }
 
 // MDEvent is a QLua market-data event (tick / book / tape / param) for the MD sink.
@@ -172,7 +171,6 @@ type MDEvent struct {
 	Trades         [][]float64 // tape: [[price, qty, side, ts_ms] ...]
 	PriceStep      float64     // param
 	StepCost       float64     // param
-	Margin         float64     // param
 	IsBook         bool
 	IsTape         bool
 	IsParam        bool
@@ -307,17 +305,6 @@ func (b *Bridge) SetHandler(h BridgeHandler) {
 // and order events.
 func (b *Bridge) NextTransID() int64 { return b.transSeq.Add(1) }
 
-// Connected reports whether a Lua client is currently attached. In file-queue mode
-// the transport is the filesystem, so it is always "connected".
-func (b *Bridge) Connected() bool {
-	if b.queueDir != "" {
-		return true
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.conn != nil
-}
-
 // Run binds the listener and accepts Lua connections until ctx is cancelled. It only
 // ever serves loopback. A new connection replaces any previous one. Run blocks; start
 // it in a goroutine.
@@ -431,7 +418,7 @@ func (b *Bridge) dispatch(ev luaEvent) {
 	case "param":
 		if md != nil {
 			md(MDEvent{Code: ev.Code, PriceStep: ev.PriceStep, StepCost: ev.StepCost,
-				Margin: ev.Margin, IsParam: true})
+				IsParam: true})
 		}
 		return
 	case "acc_pos":

@@ -85,7 +85,7 @@ async def test_deploy_creates_robot_and_persists(tmp_path):
     assert r2.runtime.signed_position() == 2   # restored 1 + the extra buy fill
     assert r2.runtime.realized_pnl() == 50.0
     # the fill HISTORY survives the restart too (operator audit trail)
-    fills = r2.runtime.recent_fills()
+    fills = r2.runtime.fills_tail()[-20:]
     assert fills and fills[-1]["price"] == 89000.0
 
 

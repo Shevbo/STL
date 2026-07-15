@@ -1,0 +1,450 @@
+[
+  {
+    "combo": {
+      "cooldown": 300.0,
+      "min_agreement": 0.75,
+      "ofi_thr": 0.7,
+      "shock_z": 3.0,
+      "vol_thr": 5.0
+    },
+    "net": -3.200000000000006e-05,
+    "gross": 0.0012330000000000002,
+    "fees": 0.001264,
+    "trades": 704,
+    "n": 5
+  },
+  {
+    "combo": {
+      "cooldown": 900.0,
+      "min_agreement": 0.75,
+      "ofi_thr": 0.7,
+      "shock_z": 3.0,
+      "vol_thr": 5.0
+    },
+    "net": -3.200000000000006e-05,
+    "gross": 0.0012330000000000002,
+    "fees": 0.001264,
+    "trades": 704,
+    "n": 5
+  },
+  {
+    "combo": {
+      "cooldown": 300.0,
+      "min_agreement": 0.75,
+      "ofi_thr": 0.85,
+      "shock_z": 3.0,
+      "vol_thr": 5.0
+    },
+    "net": -0.000288,
+    "gross": 0.000424,
+    "fees": 0.0007139999999999999,
+    "trades": 408,
+    "n": 5
+  },
+  {
+    "combo": {
+      "cooldown": 900.0,
+      "min_agreement": 0.75,
+      "ofi_thr": 0.85,
+      "shock_z": 3.0,
+      "vol_thr": 5.0
+    },
+    "net": -0.000288,
+    "gross": 0.000424,
+    "fees": 0.0007139999999999999,
+    "trades": 408,
+    "n": 5
+  },
+  {
+    "combo": {
+      "cooldown": 300.0,
+      "min_agreement": 0.75,
+      "ofi_thr": 0.7,
+      "shock_z": 2.0,
+      "vol_thr": 5.0
+    },
+    "net": -0.0007740000000000001,
+    "gross": 0.000553,
+    "fees": 0.001324,
+    "trades": 741,
+    "n": 5
+  },
+  {
+    "combo": {
+      "cooldown": 900.0,
+      "min_agreement": 0.75,
+      "ofi_thr": 0.7,
+      "shock_z": 2.0,
+      "vol_thr": 5.0
+    },
+    "net": -0.0007740000000000001,
+    "gross": 0.000553,
+    "fees": 0.001324,
+    "trades": 741,
+    "n": 5
+  },
+  {
+    "combo": {
+      "cooldown": 300.0,
+      "min_agreement": 0.75,
+      "ofi_thr": 0.85,
+      "shock_z": 2.0,
+      "vol_thr": 5.0
+    },
+    "net": -0.000862,
+    "gross": -6.700000000000002e-05,
+    "fees": 0.0007949999999999999,
+    "trades": 458,
+    "n": 5
+  },
+  {
+    "combo": {
+      "cooldown": 900.0,
+      "min_agreement": 0.75,
+      "ofi_thr": 0.85,
+      "shock_z": 2.0,
+      "vol_thr": 5.0
+    },
+    "net": -0.000862,
+    "gross": -6.700000000000002e-05,
+    "fees": 0.0007949999999999999,
+    "trades": 458,
+    "n": 5
+  },
+  {
+    "combo": {
+      "cooldown": 300.0,
+      "min_agreement": 0.75,
+      "ofi_thr": 0.85,
+      "shock_z": 3.0,
+      "vol_thr": 3.0
+    },
+    "net": -0.0009059999999999999,
+    "gross": -5.200000000000007e-05,
+    "fees": 0.000853,
+    "trades": 534,
+    "n": 5
+  },
+  {
+    "combo": {
+      "cooldown": 900.0,
+      "min_agreement": 0.75,
+      "ofi_thr": 0.85,
+      "shock_z": 3.0,
+      "vol_thr": 3.0
+    },
+    "net": -0.0009059999999999999,
+    "gross": -5.200000000000007e-05,
+    "fees": 0.000853,
+    "trades": 534,
+    "n": 5
+  },
+  {
+    "combo": {
+      "cooldown": 300.0,
+      "min_agreement": 0.75,
+      "ofi_thr": 0.7,
+      "shock_z": 3.0,
+      "vol_thr": 3.0
+    },
+    "net": -0.001073,
+    "gross": 0.0002800000000000001,
+    "fees": 0.0013530000000000003,
+    "trades": 798,
+    "n": 5
+  },
+  {
+    "combo": {
+      "cooldown": 900.0,
+      "min_agreement": 0.75,
+      "ofi_thr": 0.7,
+      "shock_z": 3.0,
+      "vol_thr": 3.0
+    },
+    "net": -0.001073,
+    "gross": 0.0002800000000000001,
+    "fees": 0.0013530000000000003,
+    "trades": 798,
+    "n": 5
+  },
+  {
+    "combo": {
+      "cooldown": 300.0,
+      "min_agreement": 0.75,
+      "ofi_thr": 0.85,
+      "shock_z": 2.0,
+      "vol_thr": 3.0
+    },
+    "net": -0.0012929999999999999,
+    "gross": -0.00038100000000000005,
+    "fees": 0.000913,
+    "trades": 568,
+    "n": 5
+  },
+  {
+    "combo": {
+      "cooldown": 900.0,
+      "min_agreement": 0.75,
+      "ofi_thr": 0.85,
+      "shock_z": 2.0,
+      "vol_thr": 3.0
+    },
+    "net": -0.0012929999999999999,
+    "gross": -0.00038100000000000005,
+    "fees": 0.000913,
+    "trades": 568,
+    "n": 5
+  },
+  {
+    "combo": {
+      "cooldown": 300.0,
+      "min_agreement": 0.5,
+      "ofi_thr": 0.7,
+      "shock_z": 3.0,
+      "vol_thr": 5.0
+    },
+    "net": -0.0014429999999999998,
+    "gross": 0.001385,
+    "fees": 0.0028280000000000002,
+    "trades": 2272,
+    "n": 5
+  },
+  {
+    "combo": {
+      "cooldown": 900.0,
+      "min_agreement": 0.5,
+      "ofi_thr": 0.7,
+      "shock_z": 3.0,
+      "vol_thr": 5.0
+    },
+    "net": -0.0014429999999999998,
+    "gross": 0.001385,
+    "fees": 0.0028280000000000002,
+    "trades": 2272,
+    "n": 5
+  },
+  {
+    "combo": {
+      "cooldown": 300.0,
+      "min_agreement": 0.75,
+      "ofi_thr": 0.7,
+      "shock_z": 2.0,
+      "vol_thr": 3.0
+    },
+    "net": -0.001493,
+    "gross": -9.299999999999998e-05,
+    "fees": 0.0014,
+    "trades": 823,
+    "n": 5
+  },
+  {
+    "combo": {
+      "cooldown": 900.0,
+      "min_agreement": 0.75,
+      "ofi_thr": 0.7,
+      "shock_z": 2.0,
+      "vol_thr": 3.0
+    },
+    "net": -0.001493,
+    "gross": -9.299999999999998e-05,
+    "fees": 0.0014,
+    "trades": 823,
+    "n": 5
+  },
+  {
+    "combo": {
+      "cooldown": 300.0,
+      "min_agreement": 0.5,
+      "ofi_thr": 0.85,
+      "shock_z": 3.0,
+      "vol_thr": 5.0
+    },
+    "net": -0.0017310000000000001,
+    "gross": 0.00013899999999999996,
+    "fees": 0.00187,
+    "trades": 1476,
+    "n": 5
+  },
+  {
+    "combo": {
+      "cooldown": 900.0,
+      "min_agreement": 0.5,
+      "ofi_thr": 0.85,
+      "shock_z": 3.0,
+      "vol_thr": 5.0
+    },
+    "net": -0.0017310000000000001,
+    "gross": 0.00013899999999999996,
+    "fees": 0.00187,
+    "trades": 1476,
+    "n": 5
+  },
+  {
+    "combo": {
+      "cooldown": 300.0,
+      "min_agreement": 0.5,
+      "ofi_thr": 0.85,
+      "shock_z": 3.0,
+      "vol_thr": 3.0
+    },
+    "net": -0.0019519999999999997,
+    "gross": 0.000579,
+    "fees": 0.002532,
+    "trades": 2168,
+    "n": 5
+  },
+  {
+    "combo": {
+      "cooldown": 900.0,
+      "min_agreement": 0.5,
+      "ofi_thr": 0.85,
+      "shock_z": 3.0,
+      "vol_thr": 3.0
+    },
+    "net": -0.0019519999999999997,
+    "gross": 0.000579,
+    "fees": 0.002532,
+    "trades": 2168,
+    "n": 5
+  },
+  {
+    "combo": {
+      "cooldown": 300.0,
+      "min_agreement": 0.5,
+      "ofi_thr": 0.7,
+      "shock_z": 3.0,
+      "vol_thr": 3.0
+    },
+    "net": -0.002376,
+    "gross": 0.0009980000000000002,
+    "fees": 0.003375,
+    "trades": 2849,
+    "n": 5
+  },
+  {
+    "combo": {
+      "cooldown": 900.0,
+      "min_agreement": 0.5,
+      "ofi_thr": 0.7,
+      "shock_z": 3.0,
+      "vol_thr": 3.0
+    },
+    "net": -0.002376,
+    "gross": 0.0009980000000000002,
+    "fees": 0.003375,
+    "trades": 2849,
+    "n": 5
+  },
+  {
+    "combo": {
+      "cooldown": 300.0,
+      "min_agreement": 0.5,
+      "ofi_thr": 0.85,
+      "shock_z": 2.0,
+      "vol_thr": 3.0
+    },
+    "net": -0.0028460000000000004,
+    "gross": -0.00013700000000000002,
+    "fees": 0.002708,
+    "trades": 2313,
+    "n": 5
+  },
+  {
+    "combo": {
+      "cooldown": 900.0,
+      "min_agreement": 0.5,
+      "ofi_thr": 0.85,
+      "shock_z": 2.0,
+      "vol_thr": 3.0
+    },
+    "net": -0.0028460000000000004,
+    "gross": -0.00013700000000000002,
+    "fees": 0.002708,
+    "trades": 2313,
+    "n": 5
+  },
+  {
+    "combo": {
+      "cooldown": 300.0,
+      "min_agreement": 0.5,
+      "ofi_thr": 0.7,
+      "shock_z": 2.0,
+      "vol_thr": 3.0
+    },
+    "net": -0.0029799999999999996,
+    "gross": 0.000515,
+    "fees": 0.003496,
+    "trades": 2957,
+    "n": 5
+  },
+  {
+    "combo": {
+      "cooldown": 900.0,
+      "min_agreement": 0.5,
+      "ofi_thr": 0.7,
+      "shock_z": 2.0,
+      "vol_thr": 3.0
+    },
+    "net": -0.0029799999999999996,
+    "gross": 0.000515,
+    "fees": 0.003496,
+    "trades": 2957,
+    "n": 5
+  },
+  {
+    "combo": {
+      "cooldown": 300.0,
+      "min_agreement": 0.5,
+      "ofi_thr": 0.7,
+      "shock_z": 2.0,
+      "vol_thr": 5.0
+    },
+    "net": -0.0032250000000000004,
+    "gross": -0.0002250000000000001,
+    "fees": 0.002999,
+    "trades": 2411,
+    "n": 5
+  },
+  {
+    "combo": {
+      "cooldown": 900.0,
+      "min_agreement": 0.5,
+      "ofi_thr": 0.7,
+      "shock_z": 2.0,
+      "vol_thr": 5.0
+    },
+    "net": -0.0032250000000000004,
+    "gross": -0.0002250000000000001,
+    "fees": 0.002999,
+    "trades": 2411,
+    "n": 5
+  },
+  {
+    "combo": {
+      "cooldown": 300.0,
+      "min_agreement": 0.5,
+      "ofi_thr": 0.85,
+      "shock_z": 2.0,
+      "vol_thr": 5.0
+    },
+    "net": -0.003458,
+    "gross": -0.00134,
+    "fees": 0.0021190000000000002,
+    "trades": 1662,
+    "n": 5
+  },
+  {
+    "combo": {
+      "cooldown": 900.0,
+      "min_agreement": 0.5,
+      "ofi_thr": 0.85,
+      "shock_z": 2.0,
+      "vol_thr": 5.0
+    },
+    "net": -0.003458,
+    "gross": -0.00134,
+    "fees": 0.0021190000000000002,
+    "trades": 1662,
+    "n": 5
+  }
+]

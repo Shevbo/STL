@@ -9,7 +9,7 @@ No real network: a fake sender is injected (or httpx is monkeypatched). Covers:
 """
 
 from trader.quik import alerts as alerts_mod
-from trader.quik.alerts import AlertForwarder, SEVERITY_CRITICAL, SEVERITY_WARN
+from trader.quik.alerts import AlertForwarder, SEVERITY_WARN
 
 
 class _FakeSender:
@@ -85,37 +85,6 @@ async def test_recovery_always_passes():
     await fwd.forward(rec, agent_host="h1")
     await fwd.forward(rec, agent_host="h1")  # recovery bypasses cooldown
     assert len(sender.sent) == 2
-
-
-async def test_critical_hits_sms_stub(monkeypatch):
-    calls = []
-    monkeypatch.setattr(alerts_mod, "sms_stub",
-                        lambda alert, host: calls.append((alert["code"], host)))
-    sender = _FakeSender()
-    fwd = AlertForwarder("tok", "chat", cooldown_sec=60, send=sender)
-    await fwd.forward(_alert(severity=SEVERITY_CRITICAL, code="LINK_DOWN"), agent_host="h1")
-
-    assert calls == [("LINK_DOWN", "h1")]
-    assert len(sender.sent) == 1  # also forwarded to Telegram
-
-
-async def test_non_critical_skips_sms_stub(monkeypatch):
-    calls = []
-    monkeypatch.setattr(alerts_mod, "sms_stub", lambda alert, host: calls.append(host))
-    fwd = AlertForwarder("tok", "chat", cooldown_sec=60, send=_FakeSender())
-    await fwd.forward(_alert(severity=SEVERITY_WARN), agent_host="h1")
-    assert calls == []  # WARN does not SMS
-
-
-async def test_critical_sms_stub_runs_even_when_unconfigured(monkeypatch):
-    """CRITICAL must mark for SMS even if Telegram is unset (SMS is the fallback)."""
-    calls = []
-    monkeypatch.setattr(alerts_mod, "sms_stub", lambda alert, host: calls.append(host))
-    sender = _FakeSender()
-    fwd = AlertForwarder("", "", cooldown_sec=60, send=sender)  # unconfigured TG
-    await fwd.forward(_alert(severity=SEVERITY_CRITICAL, code="LINK_DOWN"), agent_host="h1")
-    assert calls == ["h1"]
-    assert sender.sent == []  # TG unconfigured -> no telegram send
 
 
 async def test_send_failure_never_raises(monkeypatch):

@@ -15,8 +15,8 @@ type luaTick struct {
 }
 
 type luaParam struct {
-	priceStep, stepCost, margin float64
-	recvMs                      int64
+	priceStep, stepCost float64
+	recvMs              int64
 }
 
 // SetLuaTick stores the freshest QLua tick for a code (recv-stamped here).
@@ -124,14 +124,14 @@ func (p *Provider) SetLuaLast(code string, price float64) {
 
 // SetLuaParam stores instrument reference params from the QLua publisher —
 // with these, the DDE params sheet is no longer needed at all.
-func (p *Provider) SetLuaParam(code string, priceStep, stepCost, margin float64) {
+func (p *Provider) SetLuaParam(code string, priceStep, stepCost float64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.luaParams == nil {
 		p.luaParams = map[string]luaParam{}
 	}
 	p.luaParams[code] = luaParam{priceStep: priceStep, stepCost: stepCost,
-		margin: margin, recvMs: time.Now().UnixMilli()}
+		recvMs: time.Now().UnixMilli()}
 }
 
 // luaParamsMerged overlays lua params onto the sheet-derived rows (fresher wins,

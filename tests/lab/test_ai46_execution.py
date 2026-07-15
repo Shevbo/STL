@@ -48,10 +48,8 @@ def test_approve_exposure_and_position_caps():
     assert not rm.approve_for_event("C", "contrarian", "buy", 0.1, "e")   # exposure > 0.30
 
 
-def test_cusum_halt_blocks_approval():
+def test_halt_blocks_approval():
     ex = PaperExecutor()
-    rm = RiskManager(ex, sigma_pnl=1.0)   # k=0.5, h=5
-    for _ in range(20):
-        rm.record_pnl(-3.0, 0.0)          # sustained loss drift → halt
-    assert rm.halted
+    rm = RiskManager(ex, sigma_pnl=1.0)
+    rm.halted = True
     assert not rm.approve_for_event("A", "contrarian", "buy", 0.01, "e")

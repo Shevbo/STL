@@ -117,7 +117,3 @@ def _build(settings, **inject):
 5. Select it with `exchange_interface = "mybroker"`. If you implement all 9 CORE
    caps, `get_broker(settings)` passes the gate; otherwise it raises and names
    what is missing.
-
-See `demo_robot.py` for a robot that uses ONLY the contract + registry and works
-across finam/quik by config.
-```

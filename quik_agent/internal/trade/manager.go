@@ -32,7 +32,6 @@ type bridgeAPI interface {
 	Place(p placeCmd) error
 	Cancel(c cancelCmd) error
 	Move(m moveCmd) error
-	Connected() bool
 }
 
 // workingOrder is one order the agent has sent to QUIK and not yet seen fully done.
@@ -487,23 +486,6 @@ func (m *Manager) KillSwitch(req *quikv1.KillSwitch) {
 		m.sendCancel(wo)
 	}
 	m.logf("trade: KILL-SWITCH engaged (reason=%q): cancelled %d working, blocked new placements", reason, len(toCancel))
-}
-
-// ClearBlock lifts the kill-switch block so placements are accepted again. There is no
-// proto message for this in Slice 1; the operator clears it out-of-band (or a future
-// command wires here). Exposed so the wiring/tests can re-enable trading.
-func (m *Manager) ClearBlock() {
-	m.mu.Lock()
-	m.blocked = false
-	m.mu.Unlock()
-	m.logf("trade: kill-switch block cleared; placements accepted")
-}
-
-// Blocked reports whether the kill-switch block is engaged.
-func (m *Manager) Blocked() bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.blocked
 }
 
 // ---- read-only views for the recon/status page (internal/recon wiring) ----

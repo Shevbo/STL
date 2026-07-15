@@ -22,7 +22,6 @@ import asyncio
 import json
 import os
 import sys
-from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -62,7 +61,8 @@ async def main():
 
         link = await c.fetchrow("SELECT id, user_email FROM stl_links ORDER BY created_at LIMIT 1")
         if not link:
-            print("no stl_links row — create a connector first"); return
+            print("no stl_links row — create a connector first")
+            return
         stl_link_id, user_email = link["id"], link["user_email"]
 
         # ── global top-N mode ────────────────────────────────────────────────
@@ -86,7 +86,8 @@ async def main():
             for r in candidates:
                 sid = r["strategy"]
                 if sid not in REGISTRY:
-                    print(f"  skip {sid}: not in REGISTRY"); continue
+                    print(f"  skip {sid}: not in REGISTRY")
+                    continue
                 params = dict(r["params"]) if isinstance(r["params"], dict) else json.loads(r["params"])
                 params["symbol"] = r["symbol"]
                 name = f"{REGISTRY[sid]['name']} (paper {r['symbol']})"
@@ -115,7 +116,8 @@ async def main():
         deployed = 0
         for sid in want:
             if sid not in REGISTRY:
-                print(f"  skip {sid}: not in REGISTRY"); continue
+                print(f"  skip {sid}: not in REGISTRY")
+                continue
 
             camp = args.campaign or await c.fetchval(
                 "SELECT campaign_run FROM optimization_leaderboard "
@@ -123,7 +125,8 @@ async def main():
                 sid,
             )
             if not camp:
-                print(f"  {sid}: no campaign — skip"); continue
+                print(f"  {sid}: no campaign — skip")
+                continue
 
             rows = await c.fetch(
                 """SELECT symbol, params, net_profit, recovery_factor, total_return,
@@ -135,7 +138,8 @@ async def main():
                 camp, sid, args.min_trades,
             )
             if not rows:
-                print(f"  {sid}: no profitable result (≥{args.min_trades} trades) — skip"); continue
+                print(f"  {sid}: no profitable result (≥{args.min_trades} trades) — skip")
+                continue
 
             # best per symbol, or single best overall
             buckets: dict = {}

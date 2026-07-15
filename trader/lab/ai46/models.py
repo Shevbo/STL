@@ -4,9 +4,8 @@
 - garch11_forecast: GARCH(1,1) volatility, MLE-fit via a hand-rolled Nelder-Mead.
 - hmm_regime: 4-state Gaussian HMM (Baum-Welch) → regime label + probability,
   matching the ML-service contract states trend_up/trend_down/flat/panic.
-- conformal_interval: split-conformal price interval (lower/upper/ci_pct).
 
-HMM/GARCH/conformal are reconstructions from the gRPC contract + standard methods
+HMM/GARCH are reconstructions from the gRPC contract + standard methods
 (the original Python ML service is not in the repo); CUSUM is a 1:1 port.
 """
 from __future__ import annotations
@@ -39,17 +38,6 @@ class CUSUMDetector:
         self.pos = max(0.0, self.pos + dev - self.k)
         self.neg = max(0.0, self.neg - dev - self.k)
         return self.pos > self.h or self.neg > self.h
-
-    def reset(self) -> None:
-        self.pos = 0.0
-        self.neg = 0.0
-
-    def recalibrate(self, sigma_pnl: float) -> None:
-        if sigma_pnl <= 0:
-            return
-        self.sigma = sigma_pnl
-        self.k = 0.5 * sigma_pnl
-        self.h = 5.0 * sigma_pnl
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -277,36 +265,3 @@ def hmm_regime(returns: list[float], n_states: int = 4, n_iter: int = 40) -> HMM
 
     cur = max(range(K), key=lambda k: gamma[n - 1][k])
     return HMMResult(state=labels[cur], probability=gamma[n - 1][cur])
-
-
-# ════════════════════════════════════════════════════════════════════════════
-#  Conformal interval
-# ════════════════════════════════════════════════════════════════════════════
-
-@dataclass
-class ConformalResult:
-    lower: float
-    upper: float
-    ci_pct: float   # interval width as a fraction of price
-
-
-def conformal_interval(closes: list[float], horizon: int = 1, ci: float = 0.9) -> ConformalResult | None:
-    """Split-conformal price interval `horizon` bars ahead at coverage `ci`.
-
-    Nonconformity score = |price_{t+h} − price_t| over the calibration history;
-    the (1−α) empirical quantile (with the conformal +1 correction) is the
-    symmetric half-width applied to the last price."""
-    n = len(closes)
-    if n < horizon + 10 or not (0 < ci < 1):
-        return None
-    scores = [abs(closes[t + horizon] - closes[t]) for t in range(n - horizon)]
-    scores.sort()
-    m = len(scores)
-    rank = math.ceil((m + 1) * ci)
-    idx = min(rank, m) - 1
-    q = scores[idx]
-    price = closes[-1]
-    lower = price - q
-    upper = price + q
-    ci_pct = (upper - lower) / price if price else 0.0
-    return ConformalResult(lower=lower, upper=upper, ci_pct=ci_pct)

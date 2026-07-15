@@ -29,7 +29,6 @@ func (b *recBridge) Cancel(c cancelCmd) error {
 	return b.cancelErr
 }
 func (b *recBridge) Move(moveCmd) error { return nil }
-func (b *recBridge) Connected() bool    { return true }
 
 func TestPlaceOrderErr_AcceptedReturnsNil(t *testing.T) {
 	br := &recBridge{}

@@ -58,25 +58,6 @@ def _format_alert(alert: dict, agent_host: str) -> str:
     )
 
 
-def sms_stub(alert: dict, agent_host: str) -> None:
-    """Phase 1 SMS-dubbing placeholder for CRITICAL alerts.
-
-    Does NOT call any real gateway. Phase 2 wires the Garden-manager SMS gateway
-    here, reading its endpoint/credentials by ENV NAME only.
-
-    TODO(Phase 2): send via the Garden-manager SMS gateway. Read gateway URL +
-    auth from env NAMES (e.g. GARDEN_MANAGER_SMS_URL / GARDEN_MANAGER_SMS_TOKEN)
-    through Settings; never hardcode a value. Reference: reference_commission_model
-    note and the Garden-manager gateway service.
-    """
-    log.warning(
-        "quik.alert.sms_stub",
-        msg="would SMS via garden-manager gateway",
-        code=alert.get("code", ""),
-        agent=agent_host or "unknown",
-    )
-
-
 class AlertForwarder:
     """Async Telegram forwarder with per-(agent, code, severity) cooldown.
 
@@ -118,10 +99,6 @@ class AlertForwarder:
         try:
             severity = int(alert.get("severity", 0))
             code = alert.get("code", "")
-
-            # CRITICAL: mark for SMS-dubbing (Phase 1 stub only).
-            if severity == SEVERITY_CRITICAL:
-                sms_stub(alert, agent_host)
 
             if not self.configured():
                 log.warning(

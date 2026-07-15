@@ -17,7 +17,9 @@ from pydantic import BaseModel
 from trader.api.ws_hub import WsHub
 from trader.auth.client import AsyncAuthClient
 from trader.auth.guard import require_auth, ws_auth_ok
-from trader.auth.portal import make_session_token, verify_portal_credentials
+from trader.auth.portal import (SESSION_COOKIE as _SESSION_COOKIE,
+                                SESSION_TTL as _COOKIE_MAX_AGE,
+                                make_session_token, verify_portal_credentials)
 from trader.config import Settings
 from trader.md.feed import MarketDataFeed
 from trader.md.grpc_client import BarsStream, OrderBookStream, QuoteStream
@@ -27,9 +29,6 @@ from trader.tx.client import TxClient
 from trader.tx.models import OrderRequest, OrderResponse
 
 log = structlog.get_logger()
-
-_SESSION_COOKIE = "shectory_session"
-_COOKIE_MAX_AGE = 60 * 60 * 24 * 30
 
 
 def _auth(request: Request) -> str:
@@ -2988,12 +2987,6 @@ def create_app() -> FastAPI:
             # sweep run_id = "<camp|opt>-YYYYMMDD-HHMM-..." → campaign = first 3 parts.
             campaign = _sweep_campaign(run_id)
 
-        def _score(r):
-            return (r.get("sharpe") or 0) + 3 * (r.get("total_return") or 0) - 2 * (r.get("max_drawdown") or 0)
-        def _cand(r):
-            return ((r.get("total_return") or 0) > 0 and (r.get("sharpe") or -9) >= 0.5
-                    and (r.get("max_drawdown") or 9) <= 0.15 and 30 <= (r.get("total_trades") or 0) <= 3000)
-
         # Campaign runs (strat_id set) write ONLY the compact leaderboard row — the
         # bulky per-combo trades/equity arrays would hammer the small VDS Postgres
         # (this is what overloaded the box). A sweep run (camp-/opt-) stores metrics
@@ -3070,7 +3063,7 @@ def create_app() -> FastAPI:
                 campaign, strat_id, meta["symbol"], e["params"],
                 _fnum(e, "total_return"), _fnum(e, "sharpe"),
                 _fnum(e, "max_drawdown"), _fnum(e, "win_rate"),
-                _fint(e, "total_trades"), _sv(_score(e["result"])), _cand(e["result"]),
+                _fint(e, "total_trades"), _sv(_campaign_score(e["result"])), _campaign_candidate(e["result"]),
                 _fnum(e, "net_profit"), _fnum(e, "recovery_factor"),
                 _fnum(e, "ann_return_go"), _fnum(e, "ann_return_full"),
                 meta["date_from"].date() if meta and meta["date_from"] else None,

@@ -305,9 +305,6 @@ class AgentRuntime:
     def avg_price(self) -> float:
         return self._avg
 
-    def recent_fills(self) -> list[dict]:
-        return self._fills[-20:]
-
     def realized_pnl(self) -> float:
         return self._realized
 

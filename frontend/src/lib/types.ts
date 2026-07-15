@@ -35,14 +35,6 @@ export interface OhlcBar {
   volume: number;
 }
 
-export interface TradeMarker {
-  time: number;
-  position: 'aboveBar' | 'belowBar';
-  color: string;
-  shape: 'arrowDown' | 'arrowUp';
-  text: string;
-}
-
 export interface InstrumentMeta {
   symbol: string;
   ticker: string;

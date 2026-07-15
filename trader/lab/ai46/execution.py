@@ -124,12 +124,3 @@ class RiskManager:
         if self.exec.open_exposure() + size_pct > self.max_exposure:
             return False
         return True
-
-    def ref_price(self, ticker, strategy) -> float:
-        return self.exec.price_of(ticker)
-
-    def record_pnl(self, realized: float, expected: float = 0.0) -> bool:
-        """Feed a realized P&L deviation to CUSUM; sets halted on drift. Returns halted."""
-        if self.cusum.update(realized, expected):
-            self.halted = True
-        return self.halted

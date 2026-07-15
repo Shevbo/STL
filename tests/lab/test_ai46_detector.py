@@ -47,10 +47,3 @@ def test_trend_flip_requires_decisive_reversal_confirmed():
     d.check_ticker("MX", TF(dir_1h="long", dir_10m="long"), now=0)
     sigs = d.check_ticker("MX", TF(dir_1h="short", dir_10m="short"), now=400)
     assert any(s.type == D.TREND_FLIP for s in sigs)
-
-
-def test_news_signal_severity_gate():
-    d = Detector()
-    assert d.classify_news_signal("RIU6", TF(), severity=5, now=0) is None
-    s = d.classify_news_signal("RIU6", TF(), severity=7, now=0)
-    assert s is not None and s.type == D.NEWS and s.category == D.UNCERTAIN

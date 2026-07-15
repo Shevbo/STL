@@ -341,3 +341,33 @@ class QuikAgentStore:
         if len(green) == 1:
             return green[0]
         return None
+
+
+def resolve_agent(store: "QuikAgentStore | None", agent_id: str | None) -> str:
+    """Pick the target agent for a write route: the explicit one, else the single
+    LIVE (green) agent.
+
+    The in-memory store accumulates stale entries (a pre-Register subject id, dead
+    probes, old sessions). Prefer the single agent whose link is fresh (green) so the
+    UI need not pass agent_id when exactly one agent is actually connected.
+    Raises HTTPException — shared by the quik_orders and quik_robots routers."""
+    from fastapi import HTTPException
+
+    if agent_id:
+        return agent_id
+    if store is None:
+        raise HTTPException(status_code=409, detail="Нет подключённого QUIK агента.")
+    green = [r["agent_id"] for r in store.status() if r.get("link") == "green"]
+    if len(green) == 1:
+        return green[0]
+    ids = store.agent_ids()
+    if len(ids) == 1:
+        return ids[0]
+    if not ids:
+        raise HTTPException(status_code=409, detail="Нет подключённого QUIK агента.")
+    detail = (
+        "Несколько живых агентов — укажите agent_id."
+        if len(green) > 1
+        else "Подключено несколько агентов — укажите agent_id."
+    )
+    raise HTTPException(status_code=400, detail=detail)

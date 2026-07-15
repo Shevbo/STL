@@ -402,7 +402,7 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 	// clicks and has repeatedly died in production).
 	bridge.SetMDSink(func(ev trade.MDEvent) {
 		if ev.IsParam {
-			quikdde.Default.SetLuaParam(ev.Code, ev.PriceStep, ev.StepCost, ev.Margin)
+			quikdde.Default.SetLuaParam(ev.Code, ev.PriceStep, ev.StepCost)
 			return
 		}
 		if ev.IsTape {

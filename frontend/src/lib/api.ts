@@ -1,4 +1,4 @@
-import type { OrderRequest, OrderResponse, Position } from './types';
+import type { OrderRequest, OrderResponse } from './types';
 import { fetchWithAuth } from './fetch-auth';
 import { applyFeeConfig } from './lab-analytics';
 
@@ -21,10 +21,4 @@ export async function placeOrder(req: OrderRequest): Promise<OrderResponse> {
   });
   if (!resp.ok) throw new Error(await resp.text());
   return resp.json() as Promise<OrderResponse>;
-}
-
-export async function fetchPortfolio(): Promise<Position[]> {
-  const resp = await fetchWithAuth('/api/v1/portfolio');
-  if (!resp.ok) throw new Error(await resp.text());
-  return resp.json() as Promise<Position[]>;
 }

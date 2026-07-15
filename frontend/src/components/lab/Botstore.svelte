@@ -83,8 +83,6 @@
   async function install(robot: any) {
     const b = best(robot);
     const tmpl = strategies.find(s => s.id === robot.id);
-    // Diagnostic: log what the UI matched so we can trace install mismatches.
-    console.log('[botstore] install', { catId: robot.id, catName: robot.name, tmplId: tmpl?.id, tmplName: tmpl?.name, scriptCode: tmpl?.script_code?.slice(0, 60) });
     if (!tmpl) { notice = `Нет шаблона стратегии для "${robot.name}" (id=${robot.id}). Обновлений в списке стратегий: ${strategies.length}.`; return; }
     if (!stlLinks.length) { notice = 'Нет STL Link (коннектора счёта). Создайте его сначала.'; return; }
     busy = true; notice = '';

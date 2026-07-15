@@ -183,12 +183,6 @@ class QuikAgentLinkServicer(pb_grpc.QuikAgentLinkServicer):
         cmd_q = self.command_queues.setdefault(agent_id, asyncio.Queue())
         log.info("quik.session.connected", agent=agent_id, peer=context.peer())
 
-        async def _drain_commands() -> AsyncIterator["pb.OrchestratorMessage"]:
-            while True:
-                message = await cmd_q.get()
-                yield message
-
-        cmd_task: asyncio.Task | None = None
         try:
             async for msg in request_iterator:
                 # Identify a more specific agent id once Register arrives.
@@ -249,7 +243,7 @@ class QuikAgentLinkServicer(pb_grpc.QuikAgentLinkServicer):
                         "message": a.message, "raised_at_unix_ms": a.raised_at_unix_ms,
                     }
                     self.store.set_alert(agent_id, alert_dict)
-                    # Fire-and-forget forward to Telegram (+ CRITICAL SMS stub).
+                    # Fire-and-forget forward to Telegram.
                     # forward() never raises, so a Telegram failure can't break the
                     # gRPC stream; we also detach it as a task to avoid blocking.
                     if self.alert_forwarder is not None:
@@ -288,10 +282,6 @@ class QuikAgentLinkServicer(pb_grpc.QuikAgentLinkServicer):
 
                 self.store.touch(agent_id, msg.seq)
 
-                # Start the command pump lazily after first frame (we now know agent_id).
-                if cmd_task is None:
-                    cmd_task = asyncio.ensure_future(self._pump(cmd_q))
-
                 # Ack every received frame.
                 yield pb.OrchestratorMessage(ack=pb.Ack(ack_seq=msg.seq))
 
@@ -304,18 +294,7 @@ class QuikAgentLinkServicer(pb_grpc.QuikAgentLinkServicer):
         except grpc.aio.AioRpcError as exc:
             log.warning("quik.session.rpc_error", agent=agent_id, code=str(exc.code()))
         finally:
-            if cmd_task is not None:
-                cmd_task.cancel()
             log.info("quik.session.disconnected", agent=agent_id)
-
-    async def _pump(self, cmd_q: asyncio.Queue) -> None:
-        # Placeholder keeper so an idle queue does not block; the Session loop
-        # itself flushes commands after each Ack. Kept for symmetry / future use.
-        try:
-            while True:
-                await asyncio.sleep(3600)
-        except asyncio.CancelledError:
-            return
 
 
 class QuikAgentServer:

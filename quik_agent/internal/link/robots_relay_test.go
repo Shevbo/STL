@@ -45,13 +45,22 @@ func TestHandleRobotCommandsPersistAndRelay(t *testing.T) {
 		t.Fatal("set_params must update the persisted spec")
 	}
 
+	l.handleRobotMsg(&quikv1.OrchestratorMessage{Payload: &quikv1.OrchestratorMessage_FlattenRobot{
+		FlattenRobot: &quikv1.FlattenRobot{RobotId: "r1"}}})
+	if !st.Paused("r1") {
+		t.Fatal("flatten must persist paused")
+	}
+	if fr.got[len(fr.got)-1].GetFlatten() == nil {
+		t.Fatal("flatten must relay to runner")
+	}
+
 	l.handleRobotMsg(&quikv1.OrchestratorMessage{Payload: &quikv1.OrchestratorMessage_UndeployRobot{
 		UndeployRobot: &quikv1.UndeployRobot{RobotId: "r1"}}})
 	if st.Get("r1") != nil {
 		t.Fatal("undeploy must delete the spec")
 	}
-	if len(fr.got) != 5 {
-		t.Fatalf("all 5 commands must relay, got %d", len(fr.got))
+	if len(fr.got) != 6 {
+		t.Fatalf("all 6 commands must relay, got %d", len(fr.got))
 	}
 }
 

@@ -1,0 +1,1101 @@
+{
+  "cfg": {
+    "step": 600,
+    "window_days": 2,
+    "model_window": 240,
+    "model_iter": 18,
+    "refresh": 7200.0,
+    "days": 0,
+    "blend": false,
+    "point_values": {
+      "Si": 1.0,
+      "CR": 1000.0,
+      "MX": 1.0,
+      "GD": 73.3591,
+      "BR": 733.591,
+      "CNYRUBF": 1000.0,
+      "IMOEXF": 10.0,
+      "USDRUBF": 1000.0,
+      "SV": 733.591,
+      "NG": 7335.91,
+      "RI": 1.467182,
+      "SF": 73.359,
+      "MM": 10.0,
+      "NA": 0.73359,
+      "Eu": 1.0,
+      "RB": 1.0,
+      "ED": 73359.09999999999,
+      "GLDRUBF": 1.0,
+      "SR": 1.0,
+      "CC": 10.0
+    },
+    "taker": false
+  },
+  "summary": {
+    "zero": {
+      "gross": -0.0012,
+      "fees": 0.00503,
+      "net": -0.00623,
+      "trades": 7525,
+      "win_rate": 0.2848,
+      "longs": 0,
+      "shorts": 7526
+    },
+    "proxy": {
+      "gross": -0.00284,
+      "fees": 0.01362,
+      "net": -0.01646,
+      "trades": 20336,
+      "win_rate": 0.2749,
+      "longs": 6899,
+      "shorts": 13440
+    }
+  },
+  "results": {
+    "zero": {
+      "BR": {
+        "ofi_mode": "zero",
+        "ticks": 5433,
+        "symbols": 1,
+        "gross_pnl": 0.000125,
+        "fees": 1e-05,
+        "net_pnl": 0.000115,
+        "total_pnl": 0.000125,
+        "trades_closed": 46,
+        "win_rate": 0.2826,
+        "max_drawdown": 1.6e-05,
+        "n_fills": 92,
+        "per_symbol": {
+          "BR": {
+            "opens": 46,
+            "closes": 46,
+            "pnl": 0.000125,
+            "fees": 1e-05,
+            "net": 0.000115,
+            "wins": 13,
+            "shorts": 46,
+            "longs": 0
+          }
+        },
+        "wall_secs": 35.3
+      },
+      "Eu": {
+        "ofi_mode": "zero",
+        "ticks": 21548,
+        "symbols": 1,
+        "gross_pnl": -0.000399,
+        "fees": 4.9e-05,
+        "net_pnl": -0.000448,
+        "total_pnl": -0.000399,
+        "trades_closed": 331,
+        "win_rate": 0.2538,
+        "max_drawdown": 0.000573,
+        "n_fills": 662,
+        "per_symbol": {
+          "Eu": {
+            "opens": 331,
+            "closes": 331,
+            "pnl": -0.000399,
+            "fees": 4.9e-05,
+            "net": -0.000448,
+            "wins": 84,
+            "shorts": 331,
+            "longs": 0
+          }
+        },
+        "wall_secs": 160.8
+      },
+      "ED": {
+        "ofi_mode": "zero",
+        "ticks": 21560,
+        "symbols": 1,
+        "gross_pnl": 0.000102,
+        "fees": 7.4e-05,
+        "net_pnl": 2.8e-05,
+        "total_pnl": 0.000102,
+        "trades_closed": 495,
+        "win_rate": 0.2525,
+        "max_drawdown": 9.7e-05,
+        "n_fills": 990,
+        "per_symbol": {
+          "ED": {
+            "opens": 495,
+            "closes": 495,
+            "pnl": 0.000102,
+            "fees": 7.4e-05,
+            "net": 2.8e-05,
+            "wins": 125,
+            "shorts": 495,
+            "longs": 0
+          }
+        },
+        "wall_secs": 162.4
+      },
+      "CR": {
+        "ofi_mode": "zero",
+        "ticks": 21510,
+        "symbols": 1,
+        "gross_pnl": -7.5e-05,
+        "fees": 0.000611,
+        "net_pnl": -0.000685,
+        "total_pnl": -7.5e-05,
+        "trades_closed": 474,
+        "win_rate": 0.2068,
+        "max_drawdown": 0.000936,
+        "n_fills": 948,
+        "per_symbol": {
+          "CR": {
+            "opens": 474,
+            "closes": 474,
+            "pnl": -7.5e-05,
+            "fees": 0.000611,
+            "net": -0.000685,
+            "wins": 98,
+            "shorts": 474,
+            "longs": 0
+          }
+        },
+        "wall_secs": 165.0
+      },
+      "CNYRUBF": {
+        "ofi_mode": "zero",
+        "ticks": 24789,
+        "symbols": 1,
+        "gross_pnl": 0.00011,
+        "fees": 0.000485,
+        "net_pnl": -0.000375,
+        "total_pnl": 0.00011,
+        "trades_closed": 419,
+        "win_rate": 0.3341,
+        "max_drawdown": 0.000459,
+        "n_fills": 838,
+        "per_symbol": {
+          "CNYRUBF": {
+            "opens": 419,
+            "closes": 419,
+            "pnl": 0.00011,
+            "fees": 0.000485,
+            "net": -0.000375,
+            "wins": 140,
+            "shorts": 419,
+            "longs": 0
+          }
+        },
+        "wall_secs": 193.9
+      },
+      "CC": {
+        "ofi_mode": "zero",
+        "ticks": 22036,
+        "symbols": 1,
+        "gross_pnl": 0.001623,
+        "fees": 0.001448,
+        "net_pnl": 0.000175,
+        "total_pnl": 0.001623,
+        "trades_closed": 341,
+        "win_rate": 0.3343,
+        "max_drawdown": 0.000748,
+        "n_fills": 682,
+        "per_symbol": {
+          "CC": {
+            "opens": 341,
+            "closes": 341,
+            "pnl": 0.001623,
+            "fees": 0.001448,
+            "net": 0.000175,
+            "wins": 114,
+            "shorts": 341,
+            "longs": 0
+          }
+        },
+        "wall_secs": 195.4
+      },
+      "GD": {
+        "ofi_mode": "zero",
+        "ticks": 23450,
+        "symbols": 1,
+        "gross_pnl": 0.000334,
+        "fees": 1.2e-05,
+        "net_pnl": 0.000322,
+        "total_pnl": 0.000334,
+        "trades_closed": 318,
+        "win_rate": 0.3145,
+        "max_drawdown": 0.00035,
+        "n_fills": 637,
+        "per_symbol": {
+          "GD": {
+            "opens": 319,
+            "closes": 318,
+            "pnl": 0.000334,
+            "fees": 1.2e-05,
+            "net": 0.000322,
+            "wins": 100,
+            "shorts": 319,
+            "longs": 0
+          }
+        },
+        "wall_secs": 211.9
+      },
+      "MM": {
+        "ofi_mode": "zero",
+        "ticks": 23109,
+        "symbols": 1,
+        "gross_pnl": -0.000277,
+        "fees": 0.000203,
+        "net_pnl": -0.00048,
+        "total_pnl": -0.000277,
+        "trades_closed": 417,
+        "win_rate": 0.3285,
+        "max_drawdown": 0.000583,
+        "n_fills": 834,
+        "per_symbol": {
+          "MM": {
+            "opens": 417,
+            "closes": 417,
+            "pnl": -0.000277,
+            "fees": 0.000203,
+            "net": -0.00048,
+            "wins": 137,
+            "shorts": 417,
+            "longs": 0
+          }
+        },
+        "wall_secs": 212.5
+      },
+      "MX": {
+        "ofi_mode": "zero",
+        "ticks": 23109,
+        "symbols": 1,
+        "gross_pnl": 6.7e-05,
+        "fees": 1.8e-05,
+        "net_pnl": 4.9e-05,
+        "total_pnl": 6.7e-05,
+        "trades_closed": 373,
+        "win_rate": 0.3592,
+        "max_drawdown": 0.00023,
+        "n_fills": 746,
+        "per_symbol": {
+          "MX": {
+            "opens": 373,
+            "closes": 373,
+            "pnl": 6.7e-05,
+            "fees": 1.8e-05,
+            "net": 4.9e-05,
+            "wins": 134,
+            "shorts": 373,
+            "longs": 0
+          }
+        },
+        "wall_secs": 208.8
+      },
+      "GLDRUBF": {
+        "ofi_mode": "zero",
+        "ticks": 26481,
+        "symbols": 1,
+        "gross_pnl": 0.000713,
+        "fees": 0.000507,
+        "net_pnl": 0.000205,
+        "total_pnl": 0.000713,
+        "trades_closed": 460,
+        "win_rate": 0.2587,
+        "max_drawdown": 0.000515,
+        "n_fills": 920,
+        "per_symbol": {
+          "GLDRUBF": {
+            "opens": 460,
+            "closes": 460,
+            "pnl": 0.000713,
+            "fees": 0.000507,
+            "net": 0.000205,
+            "wins": 119,
+            "shorts": 460,
+            "longs": 0
+          }
+        },
+        "wall_secs": 242.5
+      },
+      "IMOEXF": {
+        "ofi_mode": "zero",
+        "ticks": 26481,
+        "symbols": 1,
+        "gross_pnl": -0.000313,
+        "fees": 0.000226,
+        "net_pnl": -0.00054,
+        "total_pnl": -0.000313,
+        "trades_closed": 485,
+        "win_rate": 0.2825,
+        "max_drawdown": 0.000654,
+        "n_fills": 970,
+        "per_symbol": {
+          "IMOEXF": {
+            "opens": 485,
+            "closes": 485,
+            "pnl": -0.000313,
+            "fees": 0.000226,
+            "net": -0.00054,
+            "wins": 137,
+            "shorts": 485,
+            "longs": 0
+          }
+        },
+        "wall_secs": 243.3
+      },
+      "NA": {
+        "ofi_mode": "zero",
+        "ticks": 23536,
+        "symbols": 1,
+        "gross_pnl": -0.000444,
+        "fees": 0.000188,
+        "net_pnl": -0.000632,
+        "total_pnl": -0.000444,
+        "trades_closed": 266,
+        "win_rate": 0.3759,
+        "max_drawdown": 0.000869,
+        "n_fills": 532,
+        "per_symbol": {
+          "NA": {
+            "opens": 266,
+            "closes": 266,
+            "pnl": -0.000444,
+            "fees": 0.000188,
+            "net": -0.000632,
+            "wins": 100,
+            "shorts": 266,
+            "longs": 0
+          }
+        },
+        "wall_secs": 214.3
+      },
+      "NG": {
+        "ofi_mode": "zero",
+        "ticks": 24798,
+        "symbols": 1,
+        "gross_pnl": -0.002866,
+        "fees": 0.000247,
+        "net_pnl": -0.003113,
+        "total_pnl": -0.002866,
+        "trades_closed": 424,
+        "win_rate": 0.2028,
+        "max_drawdown": 0.003399,
+        "n_fills": 848,
+        "per_symbol": {
+          "NG": {
+            "opens": 424,
+            "closes": 424,
+            "pnl": -0.002866,
+            "fees": 0.000247,
+            "net": -0.003113,
+            "wins": 86,
+            "shorts": 424,
+            "longs": 0
+          }
+        },
+        "wall_secs": 214.2
+      },
+      "RB": {
+        "ofi_mode": "zero",
+        "ticks": 20019,
+        "symbols": 1,
+        "gross_pnl": 0.000174,
+        "fees": 0.000495,
+        "net_pnl": -0.000321,
+        "total_pnl": 0.000174,
+        "trades_closed": 445,
+        "win_rate": 0.2607,
+        "max_drawdown": 0.000526,
+        "n_fills": 890,
+        "per_symbol": {
+          "RB": {
+            "opens": 445,
+            "closes": 445,
+            "pnl": 0.000174,
+            "fees": 0.000495,
+            "net": -0.000321,
+            "wins": 116,
+            "shorts": 445,
+            "longs": 0
+          }
+        },
+        "wall_secs": 176.6
+      },
+      "RI": {
+        "ofi_mode": "zero",
+        "ticks": 23107,
+        "symbols": 1,
+        "gross_pnl": 0.000648,
+        "fees": 2.6e-05,
+        "net_pnl": 0.000622,
+        "total_pnl": 0.000648,
+        "trades_closed": 348,
+        "win_rate": 0.3592,
+        "max_drawdown": 0.000106,
+        "n_fills": 696,
+        "per_symbol": {
+          "RI": {
+            "opens": 348,
+            "closes": 348,
+            "pnl": 0.000648,
+            "fees": 2.6e-05,
+            "net": 0.000622,
+            "wins": 125,
+            "shorts": 348,
+            "longs": 0
+          }
+        },
+        "wall_secs": 209.8
+      },
+      "SF": {
+        "ofi_mode": "zero",
+        "ticks": 23536,
+        "symbols": 1,
+        "gross_pnl": -0.000118,
+        "fees": 9e-05,
+        "net_pnl": -0.000208,
+        "total_pnl": -0.000118,
+        "trades_closed": 363,
+        "win_rate": 0.3251,
+        "max_drawdown": 0.000439,
+        "n_fills": 726,
+        "per_symbol": {
+          "SF": {
+            "opens": 363,
+            "closes": 363,
+            "pnl": -0.000118,
+            "fees": 9e-05,
+            "net": -0.000208,
+            "wins": 118,
+            "shorts": 363,
+            "longs": 0
+          }
+        },
+        "wall_secs": 211.5
+      },
+      "SR": {
+        "ofi_mode": "zero",
+        "ticks": 23282,
+        "symbols": 1,
+        "gross_pnl": -0.000263,
+        "fees": 0.000143,
+        "net_pnl": -0.000406,
+        "total_pnl": -0.000263,
+        "trades_closed": 358,
+        "win_rate": 0.3464,
+        "max_drawdown": 0.000651,
+        "n_fills": 716,
+        "per_symbol": {
+          "SR": {
+            "opens": 358,
+            "closes": 358,
+            "pnl": -0.000263,
+            "fees": 0.000143,
+            "net": -0.000406,
+            "wins": 124,
+            "shorts": 358,
+            "longs": 0
+          }
+        },
+        "wall_secs": 210.3
+      },
+      "SV": {
+        "ofi_mode": "zero",
+        "ticks": 23451,
+        "symbols": 1,
+        "gross_pnl": -0.000242,
+        "fees": 7.4e-05,
+        "net_pnl": -0.000316,
+        "total_pnl": -0.000242,
+        "trades_closed": 345,
+        "win_rate": 0.2406,
+        "max_drawdown": 0.000959,
+        "n_fills": 690,
+        "per_symbol": {
+          "SV": {
+            "opens": 345,
+            "closes": 345,
+            "pnl": -0.000242,
+            "fees": 7.4e-05,
+            "net": -0.000316,
+            "wins": 83,
+            "shorts": 345,
+            "longs": 0
+          }
+        },
+        "wall_secs": 214.5
+      },
+      "Si": {
+        "ofi_mode": "zero",
+        "ticks": 21598,
+        "symbols": 1,
+        "gross_pnl": -2e-06,
+        "fees": 6.9e-05,
+        "net_pnl": -7.1e-05,
+        "total_pnl": -2e-06,
+        "trades_closed": 465,
+        "win_rate": 0.1613,
+        "max_drawdown": 0.000159,
+        "n_fills": 930,
+        "per_symbol": {
+          "Si": {
+            "opens": 465,
+            "closes": 465,
+            "pnl": -2e-06,
+            "fees": 6.9e-05,
+            "net": -7.1e-05,
+            "wins": 75,
+            "shorts": 465,
+            "longs": 0
+          }
+        },
+        "wall_secs": 168.7
+      },
+      "USDRUBF": {
+        "ofi_mode": "zero",
+        "ticks": 24789,
+        "symbols": 1,
+        "gross_pnl": -9.5e-05,
+        "fees": 5.3e-05,
+        "net_pnl": -0.000148,
+        "total_pnl": -9.5e-05,
+        "trades_closed": 352,
+        "win_rate": 0.3267,
+        "max_drawdown": 0.000431,
+        "n_fills": 704,
+        "per_symbol": {
+          "USDRUBF": {
+            "opens": 352,
+            "closes": 352,
+            "pnl": -9.5e-05,
+            "fees": 5.3e-05,
+            "net": -0.000148,
+            "wins": 115,
+            "shorts": 352,
+            "longs": 0
+          }
+        },
+        "wall_secs": 194.6
+      }
+    },
+    "proxy": {
+      "BR": {
+        "ofi_mode": "proxy",
+        "ticks": 5433,
+        "symbols": 1,
+        "gross_pnl": 0.000141,
+        "fees": 3.7e-05,
+        "net_pnl": 0.000104,
+        "total_pnl": 0.000141,
+        "trades_closed": 161,
+        "win_rate": 0.2547,
+        "max_drawdown": 0.000184,
+        "n_fills": 322,
+        "per_symbol": {
+          "BR": {
+            "opens": 161,
+            "closes": 161,
+            "pnl": 0.000141,
+            "fees": 3.7e-05,
+            "net": 0.000104,
+            "wins": 41,
+            "shorts": 81,
+            "longs": 80
+          }
+        },
+        "wall_secs": 35.1
+      },
+      "CR": {
+        "ofi_mode": "proxy",
+        "ticks": 21510,
+        "symbols": 1,
+        "gross_pnl": -0.00016,
+        "fees": 0.001129,
+        "net_pnl": -0.001289,
+        "total_pnl": -0.00016,
+        "trades_closed": 944,
+        "win_rate": 0.232,
+        "max_drawdown": 0.001515,
+        "n_fills": 1888,
+        "per_symbol": {
+          "CR": {
+            "opens": 944,
+            "closes": 944,
+            "pnl": -0.00016,
+            "fees": 0.001129,
+            "net": -0.001289,
+            "wins": 219,
+            "shorts": 632,
+            "longs": 312
+          }
+        },
+        "wall_secs": 167.8
+      },
+      "ED": {
+        "ofi_mode": "proxy",
+        "ticks": 21560,
+        "symbols": 1,
+        "gross_pnl": -0.000357,
+        "fees": 0.000157,
+        "net_pnl": -0.000515,
+        "total_pnl": -0.000357,
+        "trades_closed": 1091,
+        "win_rate": 0.2667,
+        "max_drawdown": 0.000531,
+        "n_fills": 2182,
+        "per_symbol": {
+          "ED": {
+            "opens": 1091,
+            "closes": 1091,
+            "pnl": -0.000357,
+            "fees": 0.000157,
+            "net": -0.000515,
+            "wins": 291,
+            "shorts": 791,
+            "longs": 300
+          }
+        },
+        "wall_secs": 163.3
+      },
+      "CC": {
+        "ofi_mode": "proxy",
+        "ticks": 22036,
+        "symbols": 1,
+        "gross_pnl": 0.001541,
+        "fees": 0.004306,
+        "net_pnl": -0.002765,
+        "total_pnl": 0.001541,
+        "trades_closed": 996,
+        "win_rate": 0.2781,
+        "max_drawdown": 0.003499,
+        "n_fills": 1992,
+        "per_symbol": {
+          "CC": {
+            "opens": 996,
+            "closes": 996,
+            "pnl": 0.001541,
+            "fees": 0.004306,
+            "net": -0.002765,
+            "wins": 277,
+            "shorts": 623,
+            "longs": 373
+          }
+        },
+        "wall_secs": 195.2
+      },
+      "CNYRUBF": {
+        "ofi_mode": "proxy",
+        "ticks": 24789,
+        "symbols": 1,
+        "gross_pnl": 5.7e-05,
+        "fees": 0.001211,
+        "net_pnl": -0.001154,
+        "total_pnl": 5.7e-05,
+        "trades_closed": 1096,
+        "win_rate": 0.2573,
+        "max_drawdown": 0.001246,
+        "n_fills": 2192,
+        "per_symbol": {
+          "CNYRUBF": {
+            "opens": 1096,
+            "closes": 1096,
+            "pnl": 5.7e-05,
+            "fees": 0.001211,
+            "net": -0.001154,
+            "wins": 282,
+            "shorts": 766,
+            "longs": 330
+          }
+        },
+        "wall_secs": 194.3
+      },
+      "Eu": {
+        "ofi_mode": "proxy",
+        "ticks": 21548,
+        "symbols": 1,
+        "gross_pnl": -0.000312,
+        "fees": 0.000146,
+        "net_pnl": -0.000458,
+        "total_pnl": -0.000312,
+        "trades_closed": 981,
+        "win_rate": 0.2314,
+        "max_drawdown": 0.000579,
+        "n_fills": 1962,
+        "per_symbol": {
+          "Eu": {
+            "opens": 981,
+            "closes": 981,
+            "pnl": -0.000312,
+            "fees": 0.000146,
+            "net": -0.000458,
+            "wins": 227,
+            "shorts": 730,
+            "longs": 251
+          }
+        },
+        "wall_secs": 165.8
+      },
+      "GD": {
+        "ofi_mode": "proxy",
+        "ticks": 23450,
+        "symbols": 1,
+        "gross_pnl": 0.000246,
+        "fees": 3.5e-05,
+        "net_pnl": 0.000211,
+        "total_pnl": 0.000246,
+        "trades_closed": 903,
+        "win_rate": 0.2669,
+        "max_drawdown": 0.000469,
+        "n_fills": 1807,
+        "per_symbol": {
+          "GD": {
+            "opens": 904,
+            "closes": 903,
+            "pnl": 0.000246,
+            "fees": 3.5e-05,
+            "net": 0.000211,
+            "wins": 241,
+            "shorts": 562,
+            "longs": 342
+          }
+        },
+        "wall_secs": 213.9
+      },
+      "MX": {
+        "ofi_mode": "proxy",
+        "ticks": 23109,
+        "symbols": 1,
+        "gross_pnl": -0.000217,
+        "fees": 4.6e-05,
+        "net_pnl": -0.000263,
+        "total_pnl": -0.000217,
+        "trades_closed": 973,
+        "win_rate": 0.3145,
+        "max_drawdown": 0.000574,
+        "n_fills": 1946,
+        "per_symbol": {
+          "MX": {
+            "opens": 973,
+            "closes": 973,
+            "pnl": -0.000217,
+            "fees": 4.6e-05,
+            "net": -0.000263,
+            "wins": 306,
+            "shorts": 633,
+            "longs": 340
+          }
+        },
+        "wall_secs": 208.3
+      },
+      "MM": {
+        "ofi_mode": "proxy",
+        "ticks": 23109,
+        "symbols": 1,
+        "gross_pnl": 0.000485,
+        "fees": 0.000543,
+        "net_pnl": -5.8e-05,
+        "total_pnl": 0.000485,
+        "trades_closed": 1137,
+        "win_rate": 0.321,
+        "max_drawdown": 0.000664,
+        "n_fills": 2274,
+        "per_symbol": {
+          "MM": {
+            "opens": 1137,
+            "closes": 1137,
+            "pnl": 0.000485,
+            "fees": 0.000543,
+            "net": -5.8e-05,
+            "wins": 365,
+            "shorts": 707,
+            "longs": 430
+          }
+        },
+        "wall_secs": 208.8
+      },
+      "NA": {
+        "ofi_mode": "proxy",
+        "ticks": 23536,
+        "symbols": 1,
+        "gross_pnl": 0.000535,
+        "fees": 0.000744,
+        "net_pnl": -0.000209,
+        "total_pnl": 0.000535,
+        "trades_closed": 1115,
+        "win_rate": 0.3157,
+        "max_drawdown": 0.000878,
+        "n_fills": 2231,
+        "per_symbol": {
+          "NA": {
+            "opens": 1116,
+            "closes": 1115,
+            "pnl": 0.000535,
+            "fees": 0.000744,
+            "net": -0.000209,
+            "wins": 352,
+            "shorts": 599,
+            "longs": 517
+          }
+        },
+        "wall_secs": 216.2
+      },
+      "IMOEXF": {
+        "ofi_mode": "proxy",
+        "ticks": 26481,
+        "symbols": 1,
+        "gross_pnl": -0.000358,
+        "fees": 0.000677,
+        "net_pnl": -0.001035,
+        "total_pnl": -0.000358,
+        "trades_closed": 1455,
+        "win_rate": 0.2832,
+        "max_drawdown": 0.001133,
+        "n_fills": 2910,
+        "per_symbol": {
+          "IMOEXF": {
+            "opens": 1455,
+            "closes": 1455,
+            "pnl": -0.000358,
+            "fees": 0.000677,
+            "net": -0.001035,
+            "wins": 412,
+            "shorts": 819,
+            "longs": 636
+          }
+        },
+        "wall_secs": 244.7
+      },
+      "GLDRUBF": {
+        "ofi_mode": "proxy",
+        "ticks": 26481,
+        "symbols": 1,
+        "gross_pnl": 0.000771,
+        "fees": 0.001468,
+        "net_pnl": -0.000698,
+        "total_pnl": 0.000771,
+        "trades_closed": 1298,
+        "win_rate": 0.2912,
+        "max_drawdown": 0.001041,
+        "n_fills": 2596,
+        "per_symbol": {
+          "GLDRUBF": {
+            "opens": 1298,
+            "closes": 1298,
+            "pnl": 0.000771,
+            "fees": 0.001468,
+            "net": -0.000698,
+            "wins": 378,
+            "shorts": 796,
+            "longs": 502
+          }
+        },
+        "wall_secs": 246.3
+      },
+      "NG": {
+        "ofi_mode": "proxy",
+        "ticks": 24798,
+        "symbols": 1,
+        "gross_pnl": -0.006656,
+        "fees": 0.000551,
+        "net_pnl": -0.007207,
+        "total_pnl": -0.006656,
+        "trades_closed": 957,
+        "win_rate": 0.2257,
+        "max_drawdown": 0.007658,
+        "n_fills": 1914,
+        "per_symbol": {
+          "NG": {
+            "opens": 957,
+            "closes": 957,
+            "pnl": -0.006656,
+            "fees": 0.000551,
+            "net": -0.007207,
+            "wins": 216,
+            "shorts": 738,
+            "longs": 219
+          }
+        },
+        "wall_secs": 224.2
+      },
+      "RB": {
+        "ofi_mode": "proxy",
+        "ticks": 20019,
+        "symbols": 1,
+        "gross_pnl": 0.000172,
+        "fees": 0.001243,
+        "net_pnl": -0.001071,
+        "total_pnl": 0.000172,
+        "trades_closed": 1096,
+        "win_rate": 0.2637,
+        "max_drawdown": 0.001138,
+        "n_fills": 2192,
+        "per_symbol": {
+          "RB": {
+            "opens": 1096,
+            "closes": 1096,
+            "pnl": 0.000172,
+            "fees": 0.001243,
+            "net": -0.001071,
+            "wins": 289,
+            "shorts": 767,
+            "longs": 329
+          }
+        },
+        "wall_secs": 182.9
+      },
+      "RI": {
+        "ofi_mode": "proxy",
+        "ticks": 23107,
+        "symbols": 1,
+        "gross_pnl": 0.00098,
+        "fees": 7.9e-05,
+        "net_pnl": 0.000902,
+        "total_pnl": 0.00098,
+        "trades_closed": 1003,
+        "win_rate": 0.2981,
+        "max_drawdown": 0.000197,
+        "n_fills": 2006,
+        "per_symbol": {
+          "RI": {
+            "opens": 1003,
+            "closes": 1003,
+            "pnl": 0.00098,
+            "fees": 7.9e-05,
+            "net": 0.000902,
+            "wins": 299,
+            "shorts": 686,
+            "longs": 317
+          }
+        },
+        "wall_secs": 217.8
+      },
+      "SF": {
+        "ofi_mode": "proxy",
+        "ticks": 23536,
+        "symbols": 1,
+        "gross_pnl": 0.00031,
+        "fees": 0.000321,
+        "net_pnl": -1.1e-05,
+        "total_pnl": 0.00031,
+        "trades_closed": 1286,
+        "win_rate": 0.3227,
+        "max_drawdown": 0.00072,
+        "n_fills": 2572,
+        "per_symbol": {
+          "SF": {
+            "opens": 1286,
+            "closes": 1286,
+            "pnl": 0.00031,
+            "fees": 0.000321,
+            "net": -1.1e-05,
+            "wins": 415,
+            "shorts": 786,
+            "longs": 500
+          }
+        },
+        "wall_secs": 230.4
+      },
+      "SR": {
+        "ofi_mode": "proxy",
+        "ticks": 23282,
+        "symbols": 1,
+        "gross_pnl": -0.000299,
+        "fees": 0.000439,
+        "net_pnl": -0.000738,
+        "total_pnl": -0.000299,
+        "trades_closed": 1104,
+        "win_rate": 0.3161,
+        "max_drawdown": 0.0011,
+        "n_fills": 2209,
+        "per_symbol": {
+          "SR": {
+            "opens": 1105,
+            "closes": 1104,
+            "pnl": -0.000299,
+            "fees": 0.000439,
+            "net": -0.000738,
+            "wins": 349,
+            "shorts": 683,
+            "longs": 422
+          }
+        },
+        "wall_secs": 226.2
+      },
+      "SV": {
+        "ofi_mode": "proxy",
+        "ticks": 23451,
+        "symbols": 1,
+        "gross_pnl": 0.000909,
+        "fees": 0.000172,
+        "net_pnl": 0.000737,
+        "total_pnl": 0.000909,
+        "trades_closed": 751,
+        "win_rate": 0.281,
+        "max_drawdown": 0.00093,
+        "n_fills": 1502,
+        "per_symbol": {
+          "SV": {
+            "opens": 751,
+            "closes": 751,
+            "pnl": 0.000909,
+            "fees": 0.000172,
+            "net": 0.000737,
+            "wins": 211,
+            "shorts": 479,
+            "longs": 272
+          }
+        },
+        "wall_secs": 229.6
+      },
+      "Si": {
+        "ofi_mode": "proxy",
+        "ticks": 21598,
+        "symbols": 1,
+        "gross_pnl": 5.4e-05,
+        "fees": 0.000117,
+        "net_pnl": -6.3e-05,
+        "total_pnl": 5.4e-05,
+        "trades_closed": 745,
+        "win_rate": 0.2282,
+        "max_drawdown": 0.000209,
+        "n_fills": 1490,
+        "per_symbol": {
+          "Si": {
+            "opens": 745,
+            "closes": 745,
+            "pnl": 5.4e-05,
+            "fees": 0.000117,
+            "net": -6.3e-05,
+            "wins": 170,
+            "shorts": 636,
+            "longs": 109
+          }
+        },
+        "wall_secs": 165.6
+      },
+      "USDRUBF": {
+        "ofi_mode": "proxy",
+        "ticks": 24789,
+        "symbols": 1,
+        "gross_pnl": -0.00068,
+        "fees": 0.000195,
+        "net_pnl": -0.000875,
+        "total_pnl": -0.00068,
+        "trades_closed": 1244,
+        "win_rate": 0.2018,
+        "max_drawdown": 0.000949,
+        "n_fills": 2488,
+        "per_symbol": {
+          "USDRUBF": {
+            "opens": 1244,
+            "closes": 1244,
+            "pnl": -0.00068,
+            "fees": 0.000195,
+            "net": -0.000875,
+            "wins": 251,
+            "shorts": 926,
+            "longs": 318
+          }
+        },
+        "wall_secs": 178.0
+      }
+    }
+  },
+  "wall_secs": 1381.0
+}

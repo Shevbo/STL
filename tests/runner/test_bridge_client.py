@@ -37,6 +37,5 @@ async def test_place_order_maps_and_raises():
             await cli.place_order(client_id="rr:r1:2", code="REJECTME", side="sell",
                                   price=1, qty=1)
         assert svc.placed[1].side == pb.SIDE_SELL
-        await cli.aclose()
     finally:
         await server.stop(None)

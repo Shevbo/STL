@@ -274,20 +274,3 @@ export function behaviorFor(strategyId: string, params: Record<string, any> | nu
   return `Считает сигнал по закрытию каждой минутной свечи. Условие входа: ${entryTxt}. Заходит на ${qty} контракт(ов) ${sym} и ${avgTxt}. Дальше ${tpTxt}; ${slTxt}.`;
 }
 
-// Client-side ATR (Wilder), mirroring trader/lab/indicators.py atr(). Fed by the
-// M1 bars the chart already loads, so the editor shows live points even without
-// a live robot (backtest context). Returns 0 when there aren't enough bars.
-export function atrFromBars(
-  bars: { high: number; low: number; close: number }[], period: number,
-): number {
-  const n = bars.length;
-  if (n < period + 1) return 0;
-  const trs: number[] = [];
-  for (let i = 1; i < n; i++) {
-    const h = bars[i].high, l = bars[i].low, pc = bars[i - 1].close;
-    trs.push(Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)));
-  }
-  let avg = trs.slice(0, period).reduce((a, b) => a + b, 0) / period;
-  for (let i = period; i < trs.length; i++) avg = (avg * (period - 1) + trs[i]) / period;
-  return avg;
-}

@@ -32,7 +32,7 @@ async def test_cached_token_is_reused(auth_client, mock_token):
         token = await auth_client.get_token()
 
     mock_fetch.assert_not_called()
-    assert token == mock_token.access_token
+    assert token == mock_token.token
 
 
 async def test_expired_token_triggers_refresh(auth_client, expired_token):

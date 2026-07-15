@@ -25,9 +25,9 @@ class AsyncAuthClient:
             and self._cached_token
             and not self._cached_token.is_expired(self._refresh_before_secs)
         ):
-            return self._cached_token.access_token
+            return self._cached_token.token
         self._cached_token = await self._fetch_token()
-        return self._cached_token.access_token
+        return self._cached_token.token
 
     @property
     def account_id(self) -> str:

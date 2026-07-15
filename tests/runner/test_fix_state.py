@@ -49,7 +49,7 @@ async def test_fix_state_note_lands_in_journal(tmp_path):
 
     await host.handle_control(_fix_rc(note="recon"))
 
-    journal = host.robots["r1"].runtime.recent_fills()
+    journal = host.robots["r1"].runtime.fills_tail()[-20:]
     fix_entries = [f for f in journal if f["status"].startswith("fix_state")]
     assert fix_entries, f"no fix_state journal entry in {journal}"
     assert "recon" in fix_entries[-1]["status"]
@@ -75,7 +75,7 @@ async def test_fix_state_persists_to_runner_state(tmp_path):
     r2 = host2.robots["r1"]
     assert r2.runtime.signed_position() == 2
     assert r2.runtime.avg_price() == 89000.0
-    assert any(f["status"].startswith("fix_state") for f in r2.runtime.recent_fills())
+    assert any(f["status"].startswith("fix_state") for f in r2.runtime.fills_tail()[-20:])
 
 
 @pytest.mark.asyncio

@@ -13,7 +13,6 @@ _EMIT_COOLDOWN = 300.0  # 5 min per (ticker, type), matches emitCooldown
 _PRICE_EWMA_ALPHA = 0.1
 
 # EventType (detector.go)
-NEWS = "news"
 PRICE_SHOCK = "price_shock"
 VOL_SPIKE = "volume_spike"
 OFI_ANOMALY = "ofi_anomaly"
@@ -149,17 +148,6 @@ class Detector:
         self._last_dir[ticker] = new_dir
 
         return out
-
-    def classify_news_signal(self, ticker: str, f: TickerFeatures, severity: int, now: float) -> Signal | None:
-        """News path: emit only when severity >= 6 (after classification)."""
-        if severity < 6:
-            return None
-        if not self._allow(ticker, NEWS, now):
-            return None
-        s = self._snapshot(ticker, f, now)
-        s.type = NEWS
-        s.category = UNCERTAIN
-        return s
 
     def _allow(self, ticker: str, etype: str, now: float) -> bool:
         key = f"{ticker}:{etype}"

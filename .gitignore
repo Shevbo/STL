@@ -19,11 +19,10 @@ frontend/.svelte-kit/
 frontend/mock/venv/
 frontend/.vite/
 
-# Prisma local deps (server installs these itself)
-prisma/node_modules/
-
 # Deploy logs
 *.log
+deploy.log
+test-results/
 
 # Poetry
 poetry.lock
@@ -44,3 +43,5 @@ poetry.lock
 
 # harness scratch (agent working notes)
 .harness/notes/
+*.tar.gz
+*.jpeg

@@ -213,53 +213,6 @@ async def run_single_backtest(
             "point_value": point_value, **metrics}
 
 
-def _subprocess_run(script_code: str, bars_data: list[dict], symbol: str,
-                    params: dict, result_queue: multiprocessing.Queue) -> None:
-    import asyncio
-    import types
-
-    _demote_to_background()
-    validate_script(script_code)
-    bars = [Bar(**b) for b in bars_data]
-    mod = types.ModuleType("robot_script")
-    exec(compile(script_code, "<robot>", "exec"), mod.__dict__)
-
-    async def _run():
-        return await run_single_backtest(mod, bars, symbol, params)
-
-    try:
-        result = asyncio.run(_run())
-        result_queue.put({"ok": True, "result": result})
-    except Exception as exc:
-        result_queue.put({"ok": False, "error": str(exc)})
-
-
-async def run_backtest_isolated(
-    script_code: str,
-    bars: list[Bar],
-    symbol: str,
-    params: dict,
-) -> dict[str, Any]:
-    bars_data = [
-        {"time": b.time, "open": b.open, "high": b.high,
-         "low": b.low, "close": b.close, "volume": b.volume}
-        for b in bars
-    ]
-    q: multiprocessing.Queue = multiprocessing.Queue()
-    proc = multiprocessing.Process(
-        target=_subprocess_run,
-        args=(script_code, bars_data, symbol, params, q),
-        daemon=True,
-    )
-    proc.start()
-    loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, q.get, True, 120)
-    proc.join(timeout=5)
-    if not result.get("ok"):
-        raise RuntimeError(result.get("error", "Unknown backtest error"))
-    return result["result"]
-
-
 def _subprocess_run_many(script_code: str, bars_data: list[dict], symbol: str,
                          param_sets: list[dict], result_queue: multiprocessing.Queue,
                          point_value: float = 1.0, initial_margin: float = 0.0,

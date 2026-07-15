@@ -34,20 +34,3 @@ def test_ofi_window_excludes_old_trades():
     of.on_trade("BRU6", 10_000.0, price=51, size=10, side_enum=_SIDE_BUY)  # newest
     # window 300s from newest (10000) → only the buy counts → +1
     assert of.ofi("BRU6", window_secs=300) == 1.0
-
-
-def test_book_features():
-    of = OrderFlow()
-    of.on_book("GZU6", bids=[(99.0, 30.0), (98.0, 10.0)], asks=[(101.0, 10.0), (102.0, 5.0)])
-    assert abs(of.queue_imbalance("GZU6") - (20 / 40)) < 1e-9          # (30-10)/(30+10)
-    assert abs(of.mlofi("GZU6") - ((40 - 15) / 55)) < 1e-9             # all levels
-    assert abs(of.spread_bps("GZU6") - ((101 - 99) / 100 * 10000)) < 1e-9
-    # microprice = (bid*askVol + ask*bidVol)/(bidVol+askVol)
-    assert abs(of.microprice("GZU6") - ((99 * 10 + 101 * 30) / 40)) < 1e-9
-
-
-def test_snapshot_keys_and_empty_defaults():
-    of = OrderFlow()
-    snap = of.snapshot("UNKNOWN")
-    assert set(snap) == {"ofi", "mlofi", "queue_imbalance", "microprice", "spread_bps"}
-    assert snap["ofi"] == 0.0 and snap["spread_bps"] == 999.0  # no data → safe defaults

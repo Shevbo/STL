@@ -8,7 +8,4 @@ let _all = $state<Record<ServiceId, ServiceStatus>>({
 export const servicesStore = {
   get all(): Record<ServiceId, ServiceStatus> { return _all; },
   set(id: ServiceId, status: ServiceStatus): void { _all[id] = status; },
-  reset(): void {
-    _all = { auth: 'warn', md: 'warn', tx: 'warn', oms: 'warn', pos: 'warn', audit: 'warn' };
-  },
 };
