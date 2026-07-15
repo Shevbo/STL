@@ -122,6 +122,16 @@ restart / QUIK day-expiry) is terminated LOCALLY, or the runner book turns phant
 `realized_pnl` is PRICE POINTS × contracts, NOT rubles (UI converts via
 step_cost/price_step). Thin evening books partial-fill a multi-lot marketable order; the
 pre-bar cancel drops the tail remainder — position tops up via averaging, by design.
+(e) The runner's stdout is a PIPE to the agent, which on the RU-Windows VDS defaulted to
+cp1251 STRICT: a '→' in a FILL log line raised UnicodeEncodeError inside the fill path
+and KILLED the runner before persist on EVERY real fill (book froze, strategy re-emitted
+all day, 2026-07-13). main.py reconfigures stdio to UTF-8 and event()/consume_events are
+try/except-guarded — logging must NEVER sit unprotected in the trade path, and non-ASCII
+in hot-path console lines is a loaded gun. (f) Signed-space PARTIAL REDUCE keeps the avg
+(fewer contracts, same entry average) — the old else-branch reset avg to the closing
+fill's price and mis-realized every later close; fixed IDENTICALLY in
+`robot_runner/runtime.py` and `trader/lab/runtime.py` (live/backtest parity — keep them
+in lockstep).
 
 **Dual trading safety.** A QUIK order requires the master flag ON in BOTH STL
 (`quik_trading_enabled` env) AND the agent's own `agent_config.json`. STL never pushes the
@@ -138,9 +148,32 @@ terminal on BOTH sides (STL `OrderStore.reconcile_pending`, agent
 `Manager.reconcileStalePending`, ~20s) so they cannot occupy the working-contracts budget
 forever. The agent does NOT persist its own working-order table across restarts: orders
 placed before an agent restart can be neither listed nor cancelled by it (kill-switch
-included) — QUIK day-expiry clears them at session end. An agent restart also ORPHANS the
-runner process (it survives, keeping its in-memory book); for a manual restart taskkill
-BOTH `robot-runner.exe` and the agent exe first.
+included) — QUIK day-expiry clears them at session end. The self-update .bat taskkills
+`robot-runner.exe` before copying (an orphaned runner once kept trading against a dead
+pipe AND its open exe handle could ship the OLD runner as the "new" one); for a manual
+restart still taskkill BOTH exes first.
+
+**Restart/failure immunity (built after real incidents, keep it intact):** closed bars
+(600-tail/robot) persist in `runner_state.json` and re-seed a fresh host, so a
+long-lookback robot is combat-ready right after any restart; `last_bar_run` seeds to the
+restored newest bar so a historical bar is never re-executed against live orders.
+Journal auto-heal (`internal/runner/journalsync.go`, 60s): a robot-tagged QUIK trade
+missing from the runner's believed book is synthesized back through the normal event path
+— idempotent via client_id `rr:<robot>:qsync:<order>:<quikTotal>` + the runner's per-cid
+dedup; guards: fresh heartbeat only, 90s trade age (normal path first), working orders
+untouched, paper/manual/`recon` tags skipped, 200-tail-cut skip. QUIK fact > agent
+belief. vdsguard (`internal/vdsguard/`): pong-silence watchdog — SLOW alerts, HUNG
+(>quik_guard_hung_sec, default 300) = CRITICAL alert + forced `info.exe` restart from the
+pong-reported QUIK folder (cooldown 900s; never restarts a QUIK that has not ponged this
+session or whose folder is unknown), plus RAM health (VDS_LOW_MEMORY <400MB avail or
+>=92% load). STRICT operator workflow: before ANY manual Lua/terminal servicing set
+`quik_guard_disabled: true` (or stop the agent) — else the guard restarts QUIK
+mid-servicing. The agent also self-registers the Windows logon task ShectoryTradeStack
+(writes `start_all.bat`: QUIK with `/D` working dir — without it QUIK resolves its crypto
+provider against system32 — then 25s, then agent; gate `autostart_disabled`). Delivery
+rule: files reach the VDS THROUGH the agent (release zip / self-registration), the
+operator never downloads by hand. Still manual after a reboot: Windows auto-logon and the
+QUIK key password (Finam build, key-based auth).
 
 **Broker abstraction** (`trader/broker/`): robots trade through one `BrokerInterface`
 (`base.py`); the concrete adapter is chosen from `settings.exchange_interface` by
@@ -162,6 +195,17 @@ row is tagged back to its strategy id on ingest by `_strat_id_from_code` (`api/a
 the scriptCode — a strategy the regex can't match lands untagged. Param ranges in each schema
 drive both the Optimizer UI and campaign grids. The backtester + optimizer sweep jobs live
 here too (self-healing orphan reaper in `api/app.py`).
+
+**Strategy time semantics (nearly cost real money):** backtest/ISS bars are MSK-wall
+stamped as UTC; the AGENT RUNNER builds TRUE-UTC bars from the QUIK tape. A wall-clock
+strategy (us_open_fvg's `_hm_day`) must take `bar_offset_min` in params: 0 for
+backtest/STL (default, historic behaviour), 180 on an agent deploy — without it the
+"16:30 MSK" anchor lands at 19:30 and the 23:45 EOD flatten at 02:45. Deliberately NOT in
+params_schema (infrastructure, never a sweep axis). The runner resolves BOTH strategy
+families via `host.resolve_on_bar` (registry first, else module import; standalone
+modules are bundled by build.spec's collect_submodules). US-open reminder: 09:30 New York
+= 16:30 MSK only under US DST (~Mar–Nov); switch live robots' `open_hour` to 17 in early
+November and back in March.
 
 **Param sweeps (heavy compute runs on the i9, never the VDS):** queue with
 `scripts/queue_campaign.py` from a dev box (`--strategies fvg --symbols RI --date-from …
@@ -283,6 +327,8 @@ ssh hoster 'cd ~/apps/shectory-trader && set -a; . ~/.shectory_trade.env; set +a
 - **Chart epoch bases differ.** `/api/v1/market/bars` (ISS) epochs are MSK-wall-clock
   stamped as UTC — render AS UTC, never add +3h again; fills are true-UTC and get +3h
   shifted onto that grid client-side. Finam `/chart/bars` REST is true UTC and has NO M30.
+  The AGENT RUNNER's tape-built bars are TRUE UTC — see "Strategy time semantics" (Lab)
+  before running any wall-clock-anchored strategy on the agent.
 - **Runner P&L is in PRICE POINTS**, not rubles. Convert with the instrument point value
   (`coef = step_cost / price_step`, served by `/api/v1/quik/params` from the QLua feed).
 - **VDS environment:** PyInstaller exes need the Universal CRT (vc_redist.x64) installed
