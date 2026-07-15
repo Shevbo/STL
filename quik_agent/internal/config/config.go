@@ -114,6 +114,19 @@ type Config struct {
 	// JSON to STL (AgentStatusSnapshot), even when it changes every tick.
 	// Default 5.
 	StatusSnapshotMinSec int `json:"status_snapshot_min_sec"`
+
+	// ---- VDS guard (QUIK-hang watchdog + OS memory health, additive) ----
+
+	// QuikGuardDisabled turns the guard fully off (no forced restarts, no
+	// QUIK_SLOW/HUNG alerts). Set true while servicing the Lua script/terminal
+	// by hand so the guard does not fight the operator. Default false (on).
+	QuikGuardDisabled bool `json:"quik_guard_disabled"`
+	// QuikGuardHungSec: pong silence after which the terminal is force-restarted
+	// (taskkill info.exe + relaunch). Default 300. Keep well above any manual
+	// Lua stop/start window or disable the guard first.
+	QuikGuardHungSec int `json:"quik_guard_hung_sec"`
+	// QuikGuardCooldownSec: minimum gap between forced restarts. Default 900.
+	QuikGuardCooldownSec int `json:"quik_guard_cooldown_sec"`
 }
 
 // RunnerExePath resolves the runner exe: explicit config path wins; else the
@@ -170,6 +183,12 @@ func (c *Config) applyDefaults(raw map[string]json.RawMessage) {
 	}
 	if c.DiagIntervalSec <= 0 {
 		c.DiagIntervalSec = c.HeartbeatSec
+	}
+	if c.QuikGuardHungSec <= 0 {
+		c.QuikGuardHungSec = 300
+	}
+	if c.QuikGuardCooldownSec <= 0 {
+		c.QuikGuardCooldownSec = 900
 	}
 
 	// ---- Phase 2 defaults (additive). QuikTradingEnabled intentionally has NO

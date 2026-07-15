@@ -44,6 +44,7 @@ import (
 	"shectory/quik_agent/internal/service"
 	"shectory/quik_agent/internal/status"
 	"shectory/quik_agent/internal/trade"
+	"shectory/quik_agent/internal/vdsguard"
 	"shectory/quik_agent/internal/watchdog"
 )
 
@@ -566,6 +567,31 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 			runnerDir = filepath.Dir(p)
 		}
 
+		// VDS guard: QUIK-hang watchdog (pong-silence -> forced terminal restart)
+		// + OS memory health. Pong age is epoch-sized until the FIRST pong
+		// (pongAtMs 0), so map "never ponged" to -1 via the rtt sentinel — the
+		// guard must never kill a QUIK it has no evidence was ever alive.
+		guard := vdsguard.New(vdsguard.Config{
+			Disabled:   cfg.QuikGuardDisabled,
+			HungMs:     int64(cfg.QuikGuardHungSec) * 1000,
+			CooldownMs: int64(cfg.QuikGuardCooldownSec) * 1000,
+		}, vdsguard.Deps{
+			Pong: func() (int64, int64, string) {
+				s := accStore.Snapshot()
+				if s.RTTMs < 0 {
+					return -1, -1, s.QuikFolder
+				}
+				return s.PongAgeMs, s.RTTMs, s.QuikFolder
+			},
+			Alert: func(sev quikv1.AlertSeverity, code, msg string) {
+				_ = lk.EmitAlert(sev, code, msg)
+			},
+			RestartQuik: vdsguard.RestartQuik,
+			Mem:         vdsguard.ReadMem,
+			Logf:        func(f string, a ...any) { fmt.Printf("vds-guard: "+f+"\n", a...) },
+		})
+		go guard.Run(ctx)
+
 		deps := status.Deps{
 			Accounts: accStore,
 			Robots:   robotStore,
@@ -693,6 +719,7 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 			// (AgentRuntime.event); the stand's «Детальный лог робота» tails them.
 			RobotLogDir: filepath.Join(cfg.RobotsDataDir(opt.exeDir), "logs"),
 			NowMs:       func() int64 { return time.Now().UnixMilli() },
+			VDSGuard:    guard.Status,
 		}
 		lk.SetStatusDeps(deps)
 

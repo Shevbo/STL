@@ -25,6 +25,7 @@ import (
 	"shectory/quik_agent/internal/quikdde"
 	"shectory/quik_agent/internal/recon"
 	"shectory/quik_agent/internal/trade"
+	"shectory/quik_agent/internal/vdsguard"
 
 	quikv1 "shectory/quik_agent/internal/pb"
 )
@@ -165,6 +166,8 @@ type Deps struct {
 	DocsPath    string            // strategies_doc.json (Task 10)
 	RobotLogDir string            // dir of per-robot <robot_id>.log detailed logs
 	NowMs       func() int64
+	// VDSGuard returns the QUIK-hang watchdog + OS memory view; nil = not wired.
+	VDSGuard func() vdsguard.StatusView
 }
 
 func (d Deps) linkUp() bool {
@@ -406,6 +409,9 @@ type healthJSON struct {
 	OrdAgeMs          int64      `json:"ord_age_ms"`
 	RunnerHealthy     bool       `json:"runner_healthy"`
 	RunnerReportAgeMs int64      `json:"runner_report_age_ms"`
+	// VDS guard: QUIK-hang watchdog state + OS memory health (nil when the
+	// guard is not wired). Opaque-mirrored to STL like the rest of this page.
+	VDS *vdsguard.StatusView `json:"vds,omitempty"`
 }
 
 type fillJSON struct {
@@ -760,6 +766,10 @@ func buildHealthJSON(d Deps, acc accounts.Snapshot) healthJSON {
 		OrdAgeMs:          acc.OrdAgeMs,
 		RunnerHealthy:     d.Runner.RunnerHealthy(),
 		RunnerReportAgeMs: d.Runner.LastReportAgeMs(),
+	}
+	if d.VDSGuard != nil {
+		v := d.VDSGuard()
+		h.VDS = &v
 	}
 	now := d.nowMs()
 	ticks := d.Provider.Ticks()
