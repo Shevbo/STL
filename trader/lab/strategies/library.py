@@ -49,8 +49,23 @@ def make_on_bar(rid: str):
         bet_step = int(params.get("bet_step", 0) or 0)
         bet_max = int(params.get("bet_max", 10) or 10)
         bet_extra = int(stl.get_state("bet_extra", 0) or 0) if bet_step > 0 else 0
-        unit = base_unit + bet_extra                             # current entry size
-        avg_max = max(unit, int(params.get("avg_max", 1) or 1))   # max contracts to hold
+        # SuperAverage (super_y>0 AND super_z>0): after a LOSING exit, the NEXT entry's
+        # qty AND avg_max both grow by super_y contracts; up to super_z escalations;
+        # reset to base after a WINNING exit. Independent of the betting system (they
+        # compose additively). Off by default -> identical behaviour to before.
+        super_y = int(params.get("super_y", 0) or 0)
+        super_z = int(params.get("super_z", 0) or 0)
+        super_on = super_y > 0 and super_z > 0
+        super_lvl = int(stl.get_state("super_level", 0) or 0) if super_on else 0
+        super_add = super_lvl * super_y
+        # Cooldown (cooldown_min>0): after an exit that booked >= cooldown_pct price
+        # move (a real winner), block NEW entries for cooldown_min minutes; and in this
+        # mode a signal flip becomes EXIT-ONLY (close to flat, re-evaluate after the
+        # pause) instead of reversing straight into the opposite side.
+        cooldown_min = int(params.get("cooldown_min", 0) or 0)
+        cooldown_frac = float(params.get("cooldown_pct", 1.0) or 1.0) / 100.0
+        unit = base_unit + bet_extra + super_add                 # current entry size
+        avg_max = max(unit, int(params.get("avg_max", 1) or 1) + super_add)  # max held
         k_step = float(params.get("avg_step_atr", 0) or 0) / 10.0  # add per k_step×ATR adverse
         tp = float(params.get("tp_atr", 0) or 0) / 10.0           # take-profit in ×ATR (0=off)
         atr_n = int(params.get("avg_atr_n", 14) or 14)
@@ -61,24 +76,43 @@ def make_on_bar(rid: str):
             return
         want = signal(bars, params)        # +1 / -1 / 0 / None
         price = bars[-1].close
+        bar_time = bars[-1].time
+        in_cooldown = cooldown_min > 0 and bar_time < int(stl.get_state("cooldown_until", 0) or 0)
         pos = await stl.get_position(symbol)
         cur = pos.quantity if pos.side == "long" else (-pos.quantity if pos.side == "short" else 0)
         avg = float(pos.avg_price)
         cur_dir = 1 if cur > 0 else (-1 if cur < 0 else 0)
 
-        # 1) Signal flip / flat → close the whole position (and open the new side).
+        def on_exit(exit_price: float, entry_avg: float, direction: int) -> None:
+            """Book a close: update SuperAverage escalation + the cooldown timer.
+            ret>0 is a winner (resets escalation), ret<0 a loser (escalates)."""
+            ret = (exit_price - entry_avg) / entry_avg * direction if entry_avg else 0.0
+            if super_on:
+                stl.set_state("super_level", 0 if ret > 0 else min(super_lvl + 1, super_z))
+            if cooldown_min > 0 and ret >= cooldown_frac:
+                stl.set_state("cooldown_until", bar_time + cooldown_min * 60)
+
+        def fresh_entry_size() -> int:
+            """Entry size using the CURRENT (post-exit) escalation + betting state."""
+            lvl = int(stl.get_state("super_level", 0) or 0) if super_on else 0
+            be = int(stl.get_state("bet_extra", 0) or 0) if bet_step > 0 else 0
+            return base_unit + be + lvl * super_y
+
+        # 1) Signal flip / flat → close the whole position. In cooldown mode this is
+        #    EXIT-ONLY; otherwise it reverses straight into the new side.
         if cur != 0 and want is not None and (want == 0 or (want > 0) != (cur > 0)):
             if bet_step > 0:                      # closed-trade result drives the betting system
                 bet_extra = min(bet_extra + bet_step, bet_max) if (price - avg) * cur_dir < 0 else 0
                 stl.set_state("bet_extra", bet_extra)
+            on_exit(price, avg, cur_dir)
             await stl.place_order(symbol, "sell" if cur > 0 else "buy", abs(cur), price)
-            if want != 0:
-                await stl.place_order(symbol, "buy" if want > 0 else "sell", base_unit + bet_extra, price)
+            if want != 0 and cooldown_min == 0:   # reversal->exit-only when cooldown mode on
+                await stl.place_order(symbol, "buy" if want > 0 else "sell", fresh_entry_size(), price)
             return
-        # 2) Flat → open a fresh base position on a signal.
+        # 2) Flat → open a fresh base position on a signal (unless cooling down).
         if cur == 0:
-            if want is not None and want != 0:
-                await stl.place_order(symbol, "buy" if want > 0 else "sell", unit, price)
+            if not in_cooldown and want is not None and want != 0:
+                await stl.place_order(symbol, "buy" if want > 0 else "sell", fresh_entry_size(), price)
             return
         # 3) Holding (signal agrees or is None) → manage take-profit + averaging by ATR.
         if not ((tp > 0) or (k_step > 0 and abs(cur) < avg_max)):
@@ -90,11 +124,13 @@ def make_on_bar(rid: str):
             if cur_dir > 0 and price >= avg + tp * atrv:
                 if bet_step > 0:
                     stl.set_state("bet_extra", 0)
+                on_exit(price, avg, cur_dir)
                 await stl.place_order(symbol, "sell", abs(cur), price)
                 return
             if cur_dir < 0 and price <= avg - tp * atrv:
                 if bet_step > 0:
                     stl.set_state("bet_extra", 0)
+                on_exit(price, avg, cur_dir)
                 await stl.place_order(symbol, "buy", abs(cur), price)
                 return
         if k_step > 0 and abs(cur) < avg_max:   # average in: add a unit on adverse move
