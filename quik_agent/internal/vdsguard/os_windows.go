@@ -76,9 +76,14 @@ func EnsureAutostart(exeDir, exeName, quikFolder string) error {
 // have configured QUIK auto-login + the Lua-script autostart entry, or the
 // terminal comes back to a login prompt.
 func RestartQuik(folder string) error {
+	exe := filepath.Join(folder, "info.exe")
+	// Verify the exe EXISTS before killing — never taskkill a running QUIK we
+	// then cannot relaunch (that leaves the operator with a dead terminal).
+	if _, err := os.Stat(exe); err != nil {
+		return fmt.Errorf("quik exe not found at %s (not killing): %w", exe, err)
+	}
 	_ = exec.Command("taskkill", "/IM", "info.exe", "/F").Run() // may not be running
 	time.Sleep(5 * time.Second)
-	exe := filepath.Join(folder, "info.exe")
 	// START syntax: first quoted arg is the window title (see selfupdate).
 	cmd := exec.Command("cmd", "/C", "start", "QUIK", "/D", folder, exe)
 	if err := cmd.Start(); err != nil {

@@ -572,9 +572,10 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 		// (pongAtMs 0), so map "never ponged" to -1 via the rtt sentinel — the
 		// guard must never kill a QUIK it has no evidence was ever alive.
 		guard := vdsguard.New(vdsguard.Config{
-			Disabled:   cfg.QuikGuardDisabled,
-			HungMs:     int64(cfg.QuikGuardHungSec) * 1000,
-			CooldownMs: int64(cfg.QuikGuardCooldownSec) * 1000,
+			Disabled:     cfg.QuikGuardDisabled,
+			ForceRestart: cfg.QuikGuardForceRestart,
+			HungMs:       int64(cfg.QuikGuardHungSec) * 1000,
+			CooldownMs:   int64(cfg.QuikGuardCooldownSec) * 1000,
 		}, vdsguard.Deps{
 			Pong: func() (int64, int64, string) {
 				s := accStore.Snapshot()

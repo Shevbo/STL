@@ -66,8 +66,36 @@ func TestSlowQuikAlertsThrottled(t *testing.T) {
 	}
 }
 
-func TestHungQuikRestartsWithCooldown(t *testing.T) {
+func TestHungDefaultAlertsOnlyNeverRestarts(t *testing.T) {
+	// Default (ForceRestart off): a hung QUIK is ALERTED, never auto-killed.
 	h := newHarness(Config{})
+	h.pongAge = 400_000 // > HungMs 300s
+	h.g.tick()
+	if len(h.restarts) != 0 {
+		t.Fatalf("default guard auto-killed QUIK: %+v", h.restarts)
+	}
+	if got := strings.Join(h.alerts, ","); got != "QUIK_HUNG" {
+		t.Fatalf("want QUIK_HUNG alert only, got %q", got)
+	}
+}
+
+func TestHungUnderLowMemNeverRestarts(t *testing.T) {
+	// Even opted in: never kill under memory pressure (the 2026-07-16 loop).
+	h := newHarness(Config{ForceRestart: true})
+	h.pongAge = 400_000
+	h.memOK = true
+	h.mem = MemStatus{LoadPct: 96, TotalMB: 4096, AvailMB: 131, CommitPct: 42}
+	h.g.tick()
+	if len(h.restarts) != 0 {
+		t.Fatalf("killed QUIK under low memory: %+v", h.restarts)
+	}
+	if got := strings.Join(h.alerts, ","); !strings.Contains(got, "QUIK_HUNG_LOWMEM") {
+		t.Fatalf("want QUIK_HUNG_LOWMEM, got %q", got)
+	}
+}
+
+func TestHungQuikRestartsWithCooldown(t *testing.T) {
+	h := newHarness(Config{ForceRestart: true})
 	h.pongAge = 400_000 // > HungMs 300s
 	h.g.tick()
 	if len(h.restarts) != 1 || h.restarts[0] != `C:\QUIK` {
@@ -89,7 +117,7 @@ func TestHungQuikRestartsWithCooldown(t *testing.T) {
 }
 
 func TestHungWithoutFolderNeverKillsBlind(t *testing.T) {
-	h := newHarness(Config{})
+	h := newHarness(Config{ForceRestart: true})
 	h.pongAge, h.folder = 400_000, ""
 	h.g.tick()
 	if len(h.restarts) != 0 {
@@ -137,7 +165,7 @@ func TestLowMemoryAlertThrottled(t *testing.T) {
 }
 
 func TestRestartFailureAlerts(t *testing.T) {
-	h := newHarness(Config{})
+	h := newHarness(Config{ForceRestart: true})
 	h.pongAge, h.fail = 400_000, true
 	h.g.tick()
 	if got := strings.Join(h.alerts, ","); got != "QUIK_HUNG_RESTART,QUIK_RESTART_FAILED" {
@@ -154,6 +182,10 @@ func TestAutostartBat(t *testing.T) {
 		"timeout /t 25 /nobreak >nul",
 		`cd /d "C:\distr\dist"`,
 		`start "" "C:\distr\dist\quik-agent_amd64.exe"`,
+		// idempotent: skip a launch when that process is already running (the
+		// task fires on every logon incl. RDP)
+		`tasklist /FI "IMAGENAME eq info.exe"`,
+		`tasklist /FI "IMAGENAME eq quik-agent_amd64.exe"`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("bat missing %q:\n%s", want, got)

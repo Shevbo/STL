@@ -27,6 +27,7 @@ import (
 
 type Config struct {
 	Disabled    bool  // no restarts, no alerts (operator servicing the terminal)
+	ForceRestart bool // opt IN to auto taskkill+relaunch on HUNG; default off (detect+alert only)
 	SlowMs      int64 // pong/rtt soft alarm; default 15s (operator: ">10s = думает")
 	HungMs      int64 // forced restart threshold; default 300s
 	CooldownMs  int64 // min gap between forced restarts; default 900s
@@ -167,7 +168,7 @@ func (g *Guard) tick() {
 		}
 	case pongAge > g.cfg.HungMs:
 		v.QuikState = "HUNG"
-		g.maybeRestart(now, pongAge, folder)
+		g.maybeRestart(now, pongAge, folder, v.LowMemory)
 	case pongAge > g.cfg.SlowMs || rtt > 10_000:
 		v.QuikState = "SLOW"
 		if g.throttle(&g.lastSlowAlert, now, slowAlertEveryMs) {
@@ -182,7 +183,27 @@ func (g *Guard) tick() {
 	g.mu.Unlock()
 }
 
-func (g *Guard) maybeRestart(now, pongAge int64, folder string) {
+func (g *Guard) maybeRestart(now, pongAge int64, folder string, lowMem bool) {
+	// Detect-and-alert is the DEFAULT: never auto-kill a real-money terminal.
+	// Auto-killing a merely-slow QUIK (its pong stalls under memory pressure)
+	// looped 6x on 2026-07-16, and a key-auth Finam terminal cannot self-recover
+	// after a kill anyway. Force-restart is opt-in (quik_guard_force_restart).
+	if !g.cfg.ForceRestart {
+		if g.throttle(&g.lastSlowAlert, now, slowAlertEveryMs) {
+			g.alert(quikv1.AlertSeverity_ALERT_SEVERITY_CRITICAL, "QUIK_HUNG",
+				fmt.Sprintf("QUIK завис (pong %d с) — нужен РУЧНОЙ перезапуск (автокилл выключен)", pongAge/1000))
+		}
+		return
+	}
+	// Even when opted in: never kill under memory pressure — the kill+relaunch
+	// churn makes exhaustion worse and QUIK relaunches slowly. Alert instead.
+	if lowMem {
+		if g.throttle(&g.lastSlowAlert, now, slowAlertEveryMs) {
+			g.alert(quikv1.AlertSeverity_ALERT_SEVERITY_CRITICAL, "QUIK_HUNG_LOWMEM",
+				fmt.Sprintf("QUIK завис (pong %d с) при нехватке RAM — НЕ рестартую, освободи память", pongAge/1000))
+		}
+		return
+	}
 	g.mu.Lock()
 	day := mskDay(now)
 	if g.restartsDay != day {
@@ -244,18 +265,22 @@ func mskDay(nowMs int64) int64 {
 // side writes it to disk and registers the logon task (EnsureAutostart).
 func AutostartBat(quikDir, exeDir, exeName string) string {
 	lines := []string{"@echo off",
-		"rem Shectory autostart (written by the agent itself on every start)"}
+		"rem Shectory autostart (written by the agent itself on every start).",
+		"rem IDEMPOTENT: the ShectoryTradeStack task fires on EVERY logon (incl. RDP),",
+		"rem so each launch is skipped when that process is already running — otherwise",
+		"rem every RDP login re-launched QUIK+agent (dup agents, error dialogs)."}
 	if quikDir != "" {
 		lines = append(lines,
 			// /D sets the working dir: launched from the scheduler the CWD is
 			// system32, and QUIK resolves its crypto provider (OpenSSL_Pr.dll,
 			// key-based auth) RELATIVE to CWD — "Крипто-провайдер не найден"
-			// on every autostart without it (seen on the first real reboot).
-			fmt.Sprintf(`start "" /D "%s" "%s\info.exe"`, quikDir, quikDir),
+			// without it. if exist guards a wrong/renamed exe (no error dialog).
+			`tasklist /FI "IMAGENAME eq info.exe" | find /I "info.exe" >nul`,
+			fmt.Sprintf(`if errorlevel 1 if exist "%s\info.exe" start "" /D "%s" "%s\info.exe"`, quikDir, quikDir, quikDir),
 			"timeout /t 25 /nobreak >nul")
 	}
 	lines = append(lines,
-		fmt.Sprintf(`cd /d "%s"`, exeDir),
-		fmt.Sprintf(`start "" "%s\%s"`, exeDir, exeName))
+		fmt.Sprintf(`tasklist /FI "IMAGENAME eq %s" | find /I "%s" >nul`, exeName, exeName),
+		fmt.Sprintf(`if errorlevel 1 ( cd /d "%s" & start "" "%s\%s" )`, exeDir, exeDir, exeName))
 	return strings.Join(lines, "\r\n") + "\r\n"
 }

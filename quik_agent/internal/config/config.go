@@ -124,6 +124,13 @@ type Config struct {
 	QuikGuardHungSec int `json:"quik_guard_hung_sec"`
 	// QuikGuardCooldownSec: minimum gap between forced restarts. Default 900.
 	QuikGuardCooldownSec int `json:"quik_guard_cooldown_sec"`
+	// QuikGuardForceRestart opts INTO the automatic taskkill+relaunch of a hung
+	// QUIK. Default FALSE: the guard only DETECTS and ALERTS. Auto-killing a
+	// merely-slow QUIK (memory pressure stalls its pong) turned a RAM problem
+	// into a 6x kill loop on 2026-07-16, and a key-auth (Finam) terminal cannot
+	// auto-recover after a kill anyway (it lands on the key-password prompt).
+	// Enable ONLY if the terminal has unattended auto-login.
+	QuikGuardForceRestart bool `json:"quik_guard_force_restart"`
 	// AutostartDisabled stops the agent from self-registering the Windows
 	// logon task (ShectoryTradeStack: QUIK -> agent) it maintains on every
 	// start. Default false (self-register).
