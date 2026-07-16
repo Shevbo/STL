@@ -43,14 +43,16 @@ def script_code(sid: str) -> str:
     return f"from trader.lab.strategies.library import make_on_bar\non_bar = make_on_bar('{sid}')"
 
 
-async def top_configs(conn) -> list[dict]:
+async def top_configs(conn, min_trades: int = 200, max_trades: int = 0) -> list[dict]:
+    """Top-N per strategy x symbol by RF among profitable, inside a trade-count band.
+    max_trades=0 means no upper bound (the original >200 tier)."""
     rows = await conn.fetch(
         """SELECT strategy, symbol, params, net_profit, recovery_factor, total_trades
            FROM optimization_leaderboard
-           WHERE total_trades > 200 AND net_profit > 0
+           WHERE total_trades > $1 AND ($2 = 0 OR total_trades <= $2) AND net_profit > 0
              AND recovery_factor IS NOT NULL
              AND date_from >= '2026-03-25' AND date_to <= '2026-07-31'
-           ORDER BY strategy, symbol, recovery_factor DESC""")
+           ORDER BY strategy, symbol, recovery_factor DESC""", min_trades, max_trades)
     picked: dict[tuple[str, str], list[dict]] = {}
     seen: dict[tuple[str, str], set[str]] = {}
     for r in rows:
@@ -72,14 +74,17 @@ async def top_configs(conn) -> list[dict]:
     return [c for lst in picked.values() for c in lst]
 
 
-def jobs_for(cfg: dict) -> list[dict]:
+def jobs_for(cfg: dict, tag: str = "") -> list[dict]:
+    """tag distinguishes selection TIERS in the run_id (camp-<date>-<slug>-r..-strat-sym),
+    so a second tier (e.g. the 1000-3000-trade band) never collides with, or is
+    confused for, the first one in the leaderboard."""
     base = {**cfg["params"], "symbol": cfg["symbol"]}
     sc = script_code(cfg["strategy"])
     common = dict(scriptCode=sc, baseParams=base, symbol=cfg["symbol"],
                   dateFrom=DATE_FROM, dateTo=DATE_TO, engine="remote")
     return [
-        {**common, "campaign": f"cooldown{cfg['rank']}", "paramSets": COOLDOWN_SETS},
-        {**common, "campaign": f"superavg{cfg['rank']}", "paramSets": SUPER_SETS},
+        {**common, "campaign": f"cooldown{tag}{cfg['rank']}", "paramSets": COOLDOWN_SETS},
+        {**common, "campaign": f"superavg{tag}{cfg['rank']}", "paramSets": SUPER_SETS},
     ]
 
 
@@ -88,16 +93,19 @@ async def main() -> None:
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--submit", action="store_true")
     ap.add_argument("--limit", type=int, default=0, help="queue only the first N base configs (canary)")
+    ap.add_argument("--min-trades", type=int, default=200)
+    ap.add_argument("--max-trades", type=int, default=0, help="0 = no upper bound")
+    ap.add_argument("--tag", default="", help="campaign tier tag, e.g. 'mid' for the 1000-3000 band")
     args = ap.parse_args()
 
     conn = await asyncpg.connect(os.environ["LAB_DB_URL"].replace("postgresql+asyncpg", "postgresql"))
-    cfgs = await top_configs(conn)
+    cfgs = await top_configs(conn, args.min_trades, args.max_trades)
     await conn.close()
 
     cfgs.sort(key=lambda c: (-c["rf"], c["strategy"], c["symbol"]))   # canary picks strongest first
     if args.limit > 0:
         cfgs = cfgs[:args.limit]
-    jobs = [j for c in cfgs for j in jobs_for(c)]
+    jobs = [j for c in cfgs for j in jobs_for(c, args.tag)]
     combos = sum(len(j["paramSets"]) for j in jobs)
     print(f"base configs: {len(cfgs)}  |  campaigns(jobs): {len(jobs)}  |  total backtests: {combos:,}")
     by_strat: dict[str, int] = {}
