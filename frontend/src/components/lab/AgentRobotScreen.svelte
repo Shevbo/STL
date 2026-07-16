@@ -7,7 +7,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { fetchWithAuth } from '../../lib/fetch-auth';
-  import { toFills, commissionFor } from '../../lib/lab-analytics';
+  import { toFills, commissionFor, tradeEvents } from '../../lib/lab-analytics';
   import BacktestChart from './BacktestChart.svelte';
   import LatencyPane from './LatencyPane.svelte';
   import AgentBookPane from './AgentBookPane.svelte';
@@ -82,6 +82,41 @@
     toFills(trades.filter((t: any) =>
       robot?.paper ? EXECUTED.has(t.status) : t.status === 'filled'))
       .map((f: any) => ({ ...f, time: f.time + MSK_OFFSET })));
+
+  // Per-fill lifecycle role (OPEN / AVG / ENF / TP / SL) + realized P&L on closes,
+  // for the "Сделки робота" table. REUSES tradeEvents — the SAME classifier that
+  // draws the chart markers — so table and chart never disagree. Joined to the raw
+  // fills by INDEX over the executed subset (filled/paper), which tradeEvents keeps
+  // in chronological order. Rejected/skipped fills change no position -> no action.
+  function mapAction(e: any): { action: string; cls: string; pnl: number | null } {
+    switch (e.kind) {
+      case 'open':    return { action: 'OPEN', cls: 'a-open', pnl: null };
+      case 'average': return { action: 'AVG',  cls: 'a-avg',  pnl: null };
+      case 'enforce': return { action: 'ENF',  cls: 'a-enf',  pnl: null };
+      case 'partial': return { action: (e.close?.exit ?? '') + ' ч.', cls: e.close?.exit === 'TP' ? 'a-tp' : 'a-sl', pnl: e.close?.pnl ?? null };
+      case 'full':    return { action: e.close?.exit ?? '',           cls: e.close?.exit === 'TP' ? 'a-tp' : 'a-sl', pnl: e.close?.pnl ?? null };
+      case 'reverse': return { action: (e.close?.exit ?? '') + '→OPEN', cls: e.close?.exit === 'TP' ? 'a-tp' : 'a-sl', pnl: e.close?.pnl ?? null };
+      default:        return { action: '', cls: '', pnl: null };
+    }
+  }
+  const tradeActions = $derived.by(() => {
+    const isPaper = !!robot?.paper;
+    const idx: number[] = [];
+    const fills: any[] = [];
+    trades.forEach((t: any, i: number) => {
+      if (isPaper ? EXECUTED.has(t.status) : t.status === 'filled') {
+        idx.push(i);
+        fills.push({ time: t.time, side: t.side, qty: t.qty, price: t.price, order_id: t.order_id });
+      }
+    });
+    // coef only scales the P&L magnitude; the OPEN/TP/SL classification is coef-free.
+    const evs = tradeEvents(fills, 60, pointCoef ?? 1, symbol, !isPaper);
+    const m = new Map<number, { action: string; cls: string; pnl: number | null }>();
+    evs.forEach((e: any, k: number) => m.set(idx[k], mapAction(e)));
+    return m;
+  });
+  // trades newest-last; attach each row's action so the template can reverse freely.
+  const tradeRows = $derived(trades.map((t: any, i: number) => ({ ...t, meta: tradeActions.get(i) ?? null })));
 
   // STABLE-IDENTITY chart props. BacktestChart fully reloads on every new `result`
   // object; the 5s mirror poll must NOT recreate props unless the CONTENT changed
@@ -607,17 +642,19 @@
         <span class="pt-note">каждая строка = заявка робота; «Подтверждение» — ID из QUIK или paper</span></div>
       <div class="hist-scroll">
         <table>
-          <thead><tr><th>Время (МСК)</th><th>Сторона</th><th>Кол-во</th><th>Цена</th><th>Статус</th><th>Подтверждение</th></tr></thead>
+          <thead><tr><th>Время (МСК)</th><th>Сторона</th><th title="роль сделки в жизненном цикле позиции: OPEN — открытие, AVG — усреднение против движения, ENF — усиление по движению, TP/SL — закрытие в плюс/минус, →OPEN — разворот">Действие</th><th>Кол-во</th><th>Цена</th><th title="реализованный результат сделки net комиссии, только на закрывающих (TP/SL/разворот)">P&amp;L</th><th>Статус</th><th>Подтверждение</th></tr></thead>
           <tbody>
             {#if trades.length === 0}
-              <tr class="empty-row"><td colspan="6">Сделок пока нет — робот ждёт сигнала.</td></tr>
+              <tr class="empty-row"><td colspan="8">Сделок пока нет — робот ждёт сигнала.</td></tr>
             {:else}
-              {#each [...trades].reverse() as t}
+              {#each [...tradeRows].reverse() as t}
                 <tr class:rej={t.status === 'rejected' || t.status === 'skipped'}>
                   <td class="mono">{fmtMskTime(t.time * 1000)}</td>
                   <td class:buy={t.side === 'buy'} class:sell={t.side === 'sell'}>{t.side === 'buy' ? '▲ buy' : '▼ sell'}</td>
+                  <td>{#if t.meta?.action}<span class="act {t.meta.cls}">{t.meta.action}</span>{/if}</td>
                   <td class="mono">{t.qty}</td>
                   <td class="mono">{Math.round(t.price).toLocaleString('ru-RU')}</td>
+                  <td class="mono">{#if t.meta?.pnl != null && pointCoef != null}<span class={t.meta.pnl >= 0 ? 'buy' : 'sell'}>{t.meta.pnl >= 0 ? '+' : ''}{Math.round(t.meta.pnl).toLocaleString('ru-RU')} ₽</span>{/if}</td>
                   <td><span class="st st-{t.status}">{t.status}</span></td>
                   <td class="mono id">
                     {#if t.status === 'paper'}
@@ -789,6 +826,13 @@
   .trades-frame { border: 1px solid #2a2a52; border-radius: 6px; margin: 4px; background: #0a0a15; }
   .pt-note { font-size: 10px; color: #556; text-transform: none; letter-spacing: 0; margin-left: 8px; }
   .empty-row td { color: #556; font-style: italic; padding: 14px 8px; text-align: center; }
+  .act { font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 3px; letter-spacing: .3px;
+    font-family: "SF Mono", Consolas, monospace; white-space: nowrap; }
+  .act.a-open { background: #10233f; color: #7ab8ff; }   /* OPEN — вход */
+  .act.a-avg  { background: #2a2410; color: #e0c060; }   /* AVG — усреднение против движения */
+  .act.a-enf  { background: #241a3a; color: #b98cff; }   /* ENF — усиление по движению */
+  .act.a-tp   { background: #0d2a16; color: #35d07f; }   /* закрытие в плюс */
+  .act.a-sl   { background: #2a0d0d; color: #ff6b5e; }   /* закрытие в минус */
   .confirm { font-size: 10px; padding: 1px 6px; border-radius: 3px; }
   .confirm.paper { background: #1a2a4a; color: #7ab8ff; }
   .confirm.quik { background: #0d2a16; color: #35d07f; }
