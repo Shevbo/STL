@@ -212,6 +212,31 @@
     if (!silent) loading = false;
   }
 
+  // Clone this robot's strategy+params into a NEW paper Lab robot (same account link).
+  // Reuses the robot's own script_code/params — no strategy catalog needed here.
+  let cloneBusy = $state(false);
+  let cloneMsg = $state('');
+  async function cloneToPaper() {
+    const r = live?.robot;
+    if (!r?.script_code) { cloneMsg = 'Нет script_code у робота — клонировать нечем.'; return; }
+    if (!window.confirm(`Скопировать параметры робота «${r.name}» и запустить НОВЫЙ робот в PAPER?\nРеальные деньги не задействуются.`)) return;
+    cloneBusy = true; cloneMsg = '';
+    try {
+      const res = await fetchWithAuth('/api/v1/robots', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userEmail: r.user_email ?? 'admin', stlLinkId: r.stl_link_id ?? '',
+          name: `${r.name} (paper-копия)`.slice(0, 64), scriptCode: r.script_code,
+          paramsJson: r.params_json ?? {}, schedule: r.schedule ?? '09:00-23:55' }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const { id } = await res.json();
+      const d = await fetchWithAuth(`/api/v1/robots/${id}/deploy`, { method: 'POST' });
+      if (!d.ok) throw new Error(await d.text());
+      cloneMsg = `Запущен в PAPER: «${r.name} (paper-копия)». Смотри его в списке роботов.`;
+    } catch (e) { cloneMsg = `Ошибка клонирования: ${String(e).slice(0, 90)}`; }
+    finally { cloneBusy = false; }
+  }
+
   function onKey(e: KeyboardEvent) { if (e.key === 'Escape') onClose(); }
   // Live refresh: while the robot is deployed, silently re-pull its state so the screen
   // "moves" (new candles / fills / position / equity) without a manual reload.
@@ -238,6 +263,10 @@
         <span class="badge sym">{live.symbol}</span>
         <span class="badge dim">{live.robot?.deployed ? 'LIVE' : 'остановлен'}</span>
         <span class="badge dim">окно {live.robot?.schedule}</span>
+        <button class="rw-launch" disabled={cloneBusy} onclick={cloneToPaper}
+                title="скопировать параметры этого робота и запустить НОВЫЙ робот в PAPER">
+          {cloneBusy ? '…' : '▶ Запустить в торговлю (paper)'}</button>
+        {#if cloneMsg}<span class="rw-launch-msg">{cloneMsg}</span>{/if}
       {/if}
       <button class="close" onclick={onClose} title="Закрыть (Esc)">✕</button>
     </div>
@@ -407,6 +436,12 @@
   .badge.real { background: #3a1010; color: #ff6b6b; border-color: #ff6b6b66; }
   .badge.sym { background: #1a1a2e; color: #6aa8ff; border-color: #6aa8ff44; }
   .badge.dim { background: #14141f; color: #777; border-color: #2d2d4a; }
+  .rw-launch { margin-left: 8px; padding: 3px 10px; background: linear-gradient(180deg,#1c6b3a,#14522c);
+    border: 1px solid #2c8a4e; color: #d6ffe4; border-radius: 4px; font-size: 11px; font-weight: 700;
+    cursor: pointer; white-space: nowrap; }
+  .rw-launch:hover { background: linear-gradient(180deg,#237e46,#186334); }
+  .rw-launch:disabled { opacity: .6; cursor: default; }
+  .rw-launch-msg { font-size: 11px; color: #9fd8b0; }
   .close {
     margin-left: auto; background: none; border: none; color: #888;
     font-size: 16px; cursor: pointer; padding: 0 4px;
