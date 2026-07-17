@@ -147,7 +147,11 @@ type Deps struct {
 	// typed confirmation (must match id per the caller's own policy). Returns
 	// ErrUnknownRobot for an unknown id; any other error is a
 	// precondition/confirm failure whose text is shown to the operator (Task 7).
-	ModeSet func(id string, paper bool, confirmID string) error
+	// force (paper=true only) skips the FLAT precondition to DISARM a robot that
+	// still holds a real position — the operator accepts that the real position
+	// stays open on the exchange and closes it by hand. Arming (paper=false)
+	// NEVER honours force: the hard flat gate always applies to real money.
+	ModeSet func(id string, paper bool, confirmID string, force bool) error
 
 	// ResetPaper zeroes a PAPER robot's fictional position/avg and clears its
 	// working-order belief (POST /api/robot/{id}/reset-paper), so its flat gate

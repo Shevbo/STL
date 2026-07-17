@@ -514,11 +514,23 @@ function modeBlock(r) {
     // confirm() dialog is enough — see task-9 brief). confirm_id is still sent
     // to the endpoint, just supplied by the page itself (it already knows the
     // id) rather than typed by the operator.
+    const canClean = flat && noWorking;
     html += '<div class="arm-panel" data-id="' + esc(r.id) + '" data-flat="' + (flat ? '1' : '0') + '" data-nowork="' + (noWorking ? '1' : '0') + '">'
       + '<div class="kv">Позиция = 0: ' + flatBadge + '</div>'
-      + '<div class="kv" style="margin-top:2px">Нет активных заявок: ' + workBadge + '</div>'
-      + '<div style="margin-top:8px"><button class="disarm-btn"' + (flat && noWorking ? '' : ' disabled') + '>Перевести в PAPER</button><span class="disarm-msg"></span></div>'
-      + '</div>';
+      + '<div class="kv" style="margin-top:2px">Нет активных заявок: ' + workBadge + '</div>';
+    if (canClean) {
+      html += '<div style="margin-top:8px"><button class="disarm-btn">Перевести в PAPER</button><span class="disarm-msg"></span></div>';
+    } else {
+      // Not flat: the normal disarm is blocked because a real->paper flip would
+      // leave the real position unmanaged. Show WHY + a FORCE button that does it
+      // anyway (the operator closes the real position by hand).
+      html += '<div class="kv" style="margin-top:6px;color:#ffb300">Обычный перевод заблокирован: '
+          + (flat ? '' : 'позиция ' + fmtNum(r.position) + '; ') + (noWorking ? '' : 'есть активная заявка; ')
+          + 'реальная позиция осталась бы без управления.</div>'
+        + '<div style="margin-top:8px"><button class="danger disarm-force-btn">Перевести в PAPER всё-равно</button><span class="disarm-msg"></span></div>'
+        + '<div class="kv" style="margin-top:4px;color:#889">Форс: раннер станет бумажным, но реальная позиция на бирже НЕ закроется — закрой её вручную.</div>';
+    }
+    html += '</div>';
   }
   return html;
 }
@@ -639,12 +651,12 @@ function wireParamsEditors(body) {
 // paper=true de-arms to PAPER (confirmId is supplied by the page itself, see
 // modeBlock's de-arm branch — no typed ceremony for the safe direction, but
 // the server's confirm_id invariant still holds since we pass the exact id).
-async function setMode(id, paper, confirmId, btn, msgEl) {
+async function setMode(id, paper, confirmId, btn, msgEl, force) {
   btn.disabled = true;
   try {
     const resp = await fetch('/api/robot/' + encodeURIComponent(id) + '/mode', {
       method: 'POST', headers: {'content-type': 'application/json'},
-      body: JSON.stringify({ paper: paper, confirm_id: confirmId }),
+      body: JSON.stringify({ paper: paper, confirm_id: confirmId, force: !!force }),
     });
     const text = await resp.text();
     if (!resp.ok) {
@@ -703,14 +715,22 @@ function wireModeControls(body) {
     }
   });
   body.querySelectorAll('.arm-panel:not(.to-real)').forEach(panel => {
-    const btn = panel.querySelector('.disarm-btn');
-    if (!btn) return; // paper robot's arm-panel (to-real) already handled above
     const id = panel.dataset.id;
     const msgEl = panel.querySelector('.disarm-msg');
-    btn.addEventListener('click', () => {
-      if (!confirm('Перевести робота ' + id + ' из РЕАЛ в PAPER?')) return;
-      setMode(id, true, id, btn, msgEl);
-    });
+    const clean = panel.querySelector('.disarm-btn');
+    if (clean) {
+      clean.addEventListener('click', () => {
+        if (!confirm('Перевести робота ' + id + ' из РЕАЛ в PAPER?')) return;
+        setMode(id, true, id, clean, msgEl, false);
+      });
+    }
+    const forceBtn = panel.querySelector('.disarm-force-btn');
+    if (forceBtn) {
+      forceBtn.addEventListener('click', () => {
+        if (!confirm('ФОРС: перевести ' + id + ' в PAPER, ОСТАВИВ реальную позицию открытой на бирже? Её придётся закрыть вручную.')) return;
+        setMode(id, true, id, forceBtn, msgEl, true);
+      });
+    }
   });
 }
 

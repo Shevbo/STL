@@ -669,7 +669,7 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 			// the position check: an absent status is not evidence of a flat
 			// book, and flipping mode in that window could orphan a real open
 			// position the agent simply hasn't heard about yet.
-			ModeSet: func(id string, paper bool, confirmID string) error {
+			ModeSet: func(id string, paper bool, confirmID string, force bool) error {
 				spec := robotStore.Get(id)
 				if spec == nil {
 					return status.ErrUnknownRobot
@@ -677,27 +677,37 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 				if confirmID != id {
 					return fmt.Errorf("подтверждение не совпадает: введите точный ID робота")
 				}
-				st, ok := runnerSrv.LastStatuses()[id]
-				if !ok {
-					return fmt.Errorf("статус робота ещё не получен от раннера — не могу подтвердить нулевую позицию, повтори позже")
-				}
-				if st.GetPosition() != 0 {
-					return fmt.Errorf("робот не в нуле (позиция %d): закрой позицию перед сменой режима", st.GetPosition())
-				}
-				for _, ws := range mgr.SnapshotWorking() {
-					if rid, ok := trade.RobotIDFromClientID(ws.ClientID); ok && rid == id {
-						ref := ws.OrderNum
-						if ref == "" {
-							ref = "(в полёте)"
+				st := runnerSrv.LastStatuses()[id] // nil-safe: proto getters tolerate nil
+				// forceDisarm: real->paper with the flat gate deliberately bypassed by
+				// the operator. NEVER honoured for arming (paper=false) — arming real
+				// money always requires a flat book.
+				forceDisarm := force && paper
+				if !forceDisarm {
+					if _, ok := runnerSrv.LastStatuses()[id]; !ok {
+						return fmt.Errorf("статус робота ещё не получен от раннера — не могу подтвердить нулевую позицию, повтори позже")
+					}
+					if st.GetPosition() != 0 {
+						return fmt.Errorf("робот не в нуле (позиция %d): закрой позицию перед сменой режима", st.GetPosition())
+					}
+					for _, ws := range mgr.SnapshotWorking() {
+						if rid, ok := trade.RobotIDFromClientID(ws.ClientID); ok && rid == id {
+							ref := ws.OrderNum
+							if ref == "" {
+								ref = "(в полёте)"
+							}
+							return fmt.Errorf("у робота есть активная заявка %s: сними её перед сменой режима", ref)
 						}
-						return fmt.Errorf("у робота есть активная заявка %s: сними её перед сменой режима", ref)
 					}
 				}
 				newSpec, err := robotStore.SetPaper(id, paper)
 				if err != nil {
 					return err
 				}
-				return runnerSrv.SendDeploy(newSpec) // re-deploy flips paper on a flat book
+				if forceDisarm && st.GetPosition() != 0 {
+					fmt.Printf("MODE: forced real->paper for %s with open position %d — the REAL position stays on the exchange, operator must close it manually\n",
+						id, st.GetPosition())
+				}
+				return runnerSrv.SendDeploy(newSpec) // re-deploy flips paper
 			},
 
 			// ResetPaper zeroes a PAPER robot's fictional position/avg + clears its

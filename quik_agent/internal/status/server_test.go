@@ -614,10 +614,10 @@ func TestServer_ParamsRouteNotWiredReturns503(t *testing.T) {
 
 func TestServer_ModeRouteCallsModeSet(t *testing.T) {
 	var gotID, gotConfirm string
-	var gotPaper bool
+	var gotPaper, gotForce bool
 	d := baseDeps()
-	d.ModeSet = func(id string, paper bool, confirmID string) error {
-		gotID, gotPaper, gotConfirm = id, paper, confirmID
+	d.ModeSet = func(id string, paper bool, confirmID string, force bool) error {
+		gotID, gotPaper, gotConfirm, gotForce = id, paper, confirmID, force
 		return nil
 	}
 	ts := httptest.NewServer(newMux(d))
@@ -632,8 +632,18 @@ func TestServer_ModeRouteCallsModeSet(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
-	if gotID != "r1" || gotPaper != false || gotConfirm != "r1" {
-		t.Errorf("ModeSet called with (%q, %v, %q), want (r1, false, r1)", gotID, gotPaper, gotConfirm)
+	if gotID != "r1" || gotPaper != false || gotConfirm != "r1" || gotForce != false {
+		t.Errorf("ModeSet called with (%q, %v, %q, force=%v), want (r1, false, r1, false)", gotID, gotPaper, gotConfirm, gotForce)
+	}
+
+	// force=true is forwarded verbatim (the disarm-override the operator uses to
+	// send a non-flat real robot to paper).
+	gotForce = false
+	resp2, _ := http.Post(ts.URL+"/api/robot/r1/mode", "application/json",
+		bytes.NewReader([]byte(`{"paper":true,"confirm_id":"r1","force":true}`)))
+	resp2.Body.Close()
+	if !gotForce {
+		t.Errorf("force=true was not forwarded to ModeSet")
 	}
 }
 
@@ -643,7 +653,7 @@ func TestServer_ModeRouteCallsModeSet(t *testing.T) {
 // operator learns WHY the arming action was refused.
 func TestServer_ModeRoutePreconditionFailureReturns409WithReason(t *testing.T) {
 	d := baseDeps()
-	d.ModeSet = func(id string, paper bool, confirmID string) error {
+	d.ModeSet = func(id string, paper bool, confirmID string, force bool) error {
 		return errors.New("робот не в нуле (позиция 5): закрой позицию перед сменой режима")
 	}
 	ts := httptest.NewServer(newMux(d))
@@ -671,7 +681,7 @@ func TestServer_ModeRoutePreconditionFailureReturns409WithReason(t *testing.T) {
 // precondition failure.
 func TestServer_ModeRouteConfirmMismatchReturns409(t *testing.T) {
 	d := baseDeps()
-	d.ModeSet = func(id string, paper bool, confirmID string) error {
+	d.ModeSet = func(id string, paper bool, confirmID string, force bool) error {
 		if confirmID != id {
 			return errors.New("подтверждение не совпадает: введите точный ID робота")
 		}
@@ -693,7 +703,7 @@ func TestServer_ModeRouteConfirmMismatchReturns409(t *testing.T) {
 
 func TestServer_ModeRouteUnknownRobotReturns404(t *testing.T) {
 	d := baseDeps()
-	d.ModeSet = func(id string, paper bool, confirmID string) error { return ErrUnknownRobot }
+	d.ModeSet = func(id string, paper bool, confirmID string, force bool) error { return ErrUnknownRobot }
 	ts := httptest.NewServer(newMux(d))
 	defer ts.Close()
 
@@ -710,7 +720,7 @@ func TestServer_ModeRouteUnknownRobotReturns404(t *testing.T) {
 
 func TestServer_ModeRouteBadJSONReturns400(t *testing.T) {
 	d := baseDeps()
-	d.ModeSet = func(id string, paper bool, confirmID string) error {
+	d.ModeSet = func(id string, paper bool, confirmID string, force bool) error {
 		t.Errorf("ModeSet must not be called on malformed JSON")
 		return nil
 	}
@@ -734,7 +744,7 @@ func TestServer_ModeRouteBadJSONReturns400(t *testing.T) {
 // must not even be invoked.
 func TestServer_ModeRouteMissingPaperReturns400(t *testing.T) {
 	d := baseDeps()
-	d.ModeSet = func(id string, paper bool, confirmID string) error {
+	d.ModeSet = func(id string, paper bool, confirmID string, force bool) error {
 		t.Errorf("ModeSet must not be called when 'paper' is absent from the request")
 		return nil
 	}
@@ -785,7 +795,7 @@ func TestServer_ModeRouteNotWiredReturns503(t *testing.T) {
 func TestServer_ModeRouteIsAgentLocalOnly(t *testing.T) {
 	d := baseDeps()
 	called := false
-	d.ModeSet = func(id string, paper bool, confirmID string) error { called = true; return nil }
+	d.ModeSet = func(id string, paper bool, confirmID string, force bool) error { called = true; return nil }
 	ts := httptest.NewServer(newMux(d))
 	defer ts.Close()
 

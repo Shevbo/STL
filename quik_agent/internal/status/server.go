@@ -199,6 +199,9 @@ func handleParamsSet(d Deps, w http.ResponseWriter, r *http.Request) {
 type modeRequest struct {
 	Paper     *bool  `json:"paper"`
 	ConfirmID string `json:"confirm_id"`
+	// Force (disarm only) bypasses the flat precondition — see Deps.ModeSet.
+	// Absent key -> false -> the normal gated flip.
+	Force bool `json:"force"`
 }
 
 // handleModeSet flips a robot between paper and real — the real-money arming
@@ -228,7 +231,7 @@ func handleModeSet(d Deps, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := d.ModeSet(id, *req.Paper, req.ConfirmID); err != nil {
+	if err := d.ModeSet(id, *req.Paper, req.ConfirmID, req.Force); err != nil {
 		if errors.Is(err, ErrUnknownRobot) {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
