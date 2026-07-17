@@ -453,3 +453,19 @@ async def test_bars_survive_runner_restart(tmp_path):
     # a stale replayed trade older than the restored tail is ignored
     r2.bars.on_trade(base, 1.0, 1)
     assert r2.bars.bars()[0].close != 1.0
+
+
+@pytest.mark.asyncio
+async def test_redeploy_preserves_paused_state(tmp_path):
+    """A re-deploy (params edit / mode flip / reconnect) must NOT silently unpause:
+    a paused REAL robot would quietly resume real trading on a params edit, and a
+    paper mode-flip once left the store paused but the runner running (2026-07-17)."""
+    host = RobotHost(FakeBridge(), str(tmp_path))
+    await host.handle_control(_deploy_rc())
+    host.robots["r1"].paused = True             # operator paused it
+    await host.handle_control(_deploy_rc())     # re-deploy (e.g. a mode/params change)
+    assert host.robots["r1"].paused is True     # still paused, not silently resumed
+    # a fresh (prev is None) deploy defaults to not-paused (agent replays Pause after)
+    host2 = RobotHost(FakeBridge(), str(tmp_path))
+    await host2.handle_control(_deploy_rc())
+    assert host2.robots["r1"].paused is False

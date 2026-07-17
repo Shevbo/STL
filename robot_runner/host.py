@@ -151,6 +151,16 @@ class RobotHost:
                        realized=0.0 if arming else saved.get("realized", 0.0),
                        fills=[] if arming else saved.get("fills"))
             hr = HostedRobot(spec, rt, bars)
+            # A re-deploy (params edit, paper<->real mode flip, STL reconnect) must
+            # PRESERVE the paused state: a fresh HostedRobot defaults to paused=False,
+            # so without this a paused robot silently resumed on any re-deploy —
+            # a REAL robot would quietly start trading real money again on a params
+            # edit, and (seen 2026-07-17) a paper flip left the store paused=True but
+            # the runner running, so the operator could not clear the pause. prev is
+            # None only on a fresh process, where the agent replays the persisted
+            # Pause right after this Deploy anyway.
+            if prev is not None:
+                hr.paused = prev.paused
             # A restored/kept tail's newest bar was already executed by the previous
             # incarnation (or predates the re-deploy): act only on genuinely NEW bars,
             # never re-run a historical one against live orders.
