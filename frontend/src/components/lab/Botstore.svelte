@@ -370,7 +370,8 @@
   let launchMsg = $state('');
   let launchOk = $state(false);
   let launchParams = $state<Record<string, any>>({});
-  const launchSid = $derived(chart?.opts?.strategyId ?? '');
+  let launchSid = $state('');
+  let launchSymbol = $state('');
   const launchSchema = $derived(
     (strategies.find((s) => s.id === launchSid || s.id === launchSid.replace(/__inv$/, ''))?.params_schema ?? [])
   );
@@ -382,7 +383,7 @@
           .map((k) => ({ key: k, label: k, type: typeof launchParams[k] === 'number' ? 'number' : 'text', min: undefined, max: undefined, hint: '' }))
   );
   // Behavior reflects the EDITED params so the operator sees what GO will actually do.
-  const launchBehavior = $derived(behaviorFor(launchSid, { ...launchParams, symbol: chart?.symbol }, chart?.symbol));
+  const launchBehavior = $derived(behaviorFor(launchSid, { ...launchParams, symbol: launchSymbol }, launchSymbol));
   // The QUIK agent's runner only knows base library strategies — counter (__inv) and the
   // standalone us_open module can't run there, so Live-on-agent is gated to library bases.
   const canLiveAgent = $derived(!!launchSid && !launchSid.endsWith('__inv') && launchSid !== 'us_open_fvg');
@@ -401,18 +402,23 @@
   }
   function openLaunch() {
     if (!chart) return;
-    launchName = `${nameFor(launchSid)} · ${chart.symbol}`.slice(0, 64);
-    launchParams = { ...(chart.params ?? {}) };   // editable copy — change before GO
+    openLaunchFor(chart.opts?.strategyId ?? detail?.id ?? '', chart.symbol, chart.params);
+  }
+  // Open the launch panel from any card/row (showcase or sweep run), pre-filled + Paper.
+  function openLaunchFor(sid: string, symbol: string, params: any) {
+    launchSid = sid; launchSymbol = symbol;
+    launchName = `${nameFor(sid)} · ${symbol}`.slice(0, 64);
+    launchParams = { ...(params ?? {}) };   // editable copy — change before GO
     launchMode = 'paper'; launchMsg = ''; launchOk = false; launchOpen = true;
   }
   async function doLaunch() {
-    if (!chart) return;
+    if (!launchSid || !launchSymbol) return;
     const sc = scriptCodeFor(launchSid);
     if (!sc) { launchMsg = 'Не удалось собрать код стратегии для запуска.'; return; }
     if (!stlLinks.length) { launchMsg = 'Нет STL Link (коннектора счёта) — создай его на вкладке подключения.'; return; }
     if (launchMode === 'live' && !canLiveAgent) { launchMsg = 'На агенте (Live) доступны только базовые библиотечные стратегии. Контр- и us_open запускай в Paper.'; return; }
     // Coerce numeric fields (inputs give strings) and pin the backtested symbol.
-    const params: Record<string, any> = { ...launchParams, symbol: chart.symbol };
+    const params: Record<string, any> = { ...launchParams, symbol: launchSymbol };
     for (const p of launchSchema) if (p.type === 'number' && params[p.key] !== undefined && params[p.key] !== '') params[p.key] = Number(params[p.key]);
     const maxPos = Math.max(1, Number(params.avg_max ?? params.qty ?? 1) || 1);
     launchBusy = true; launchMsg = ''; launchOk = false;
@@ -420,7 +426,7 @@
       const res = await fetchWithAuth('/api/v1/robots', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userEmail: 'admin', stlLinkId: stlLinks[0]?.id ?? '',
-          name: launchName || `${nameFor(launchSid)} · ${chart.symbol}`,
+          name: launchName || `${nameFor(launchSid)} · ${launchSymbol}`,
           scriptCode: sc, paramsJson: params, schedule: '09:00-23:55' }),
       });
       if (!res.ok) throw new Error(await res.text());
@@ -433,7 +439,7 @@
       } else {
         const d = await fetchWithAuth(`/api/v1/quik/robots/${id}/deploy-agent`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ strategy_id: launchSid, params, symbol: chart.symbol,
+          body: JSON.stringify({ strategy_id: launchSid, params, symbol: launchSymbol,
             schedule: '09:00-23:55', max_position: maxPos, paper: true }),
         });
         if (!d.ok) throw new Error(await d.text());
@@ -870,6 +876,7 @@
                       <th class="num" onclick={() => setSort('recovery_factor')}>RF{sortBy.col === 'recovery_factor' ? (sortBy.dir === 1 ? ' ▲' : ' ▼') : ''}</th>
                       <th class="num" onclick={() => setSort('total_trades')}>Сделок{sortBy.col === 'total_trades' ? (sortBy.dir === 1 ? ' ▲' : ' ▼') : ''}</th>
                       <th class="num" onclick={() => setSort('win_rate')}>Win%{sortBy.col === 'win_rate' ? (sortBy.dir === 1 ? ' ▲' : ' ▼') : ''}</th>
+                      <th></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -888,6 +895,10 @@
                         <td class="num">{fmtNum(r.recovery_factor)}</td>
                         <td class="num">{r.total_trades ?? '—'}</td>
                         <td class="num">{fmtPct(r.win_rate)}</td>
+                        <td class="dp-go">
+                          <button class="dp-go-btn" title="скопировать параметры и запустить робота в Paper"
+                            onclick={(e) => { e.stopPropagation(); openLaunchFor(r.strategy ?? detail.id, sym, r.params); }}>▶ в торговлю</button>
+                        </td>
                       </tr>
                     {/each}
                   </tbody>
@@ -970,7 +981,7 @@
           <button class="cm-close" onclick={() => launchOpen = false}>✕</button>
         </div>
         <div class="lp-body">
-          <div class="lp-strat">{nameFor(launchSid)}<span class="lp-sym">· {chart?.symbol}</span></div>
+          <div class="lp-strat">{nameFor(launchSid)}<span class="lp-sym">· {launchSymbol}</span></div>
           {#if launchBehavior}
             <div class="lp-behavior">
               <div class="lp-b-label">Что будет делать робот</div>
@@ -1249,6 +1260,10 @@
   .dp-row:hover td { background: #12122a; }
   .dp-row.cand td { background: #0c160c; }
   .dp-row.cand:hover td { background: #112811; }
+  .dp-go { padding: 2px 6px; }
+  .dp-go-btn { padding: 3px 8px; background: linear-gradient(180deg,#1c6b3a,#14522c); border: 1px solid #2c8a4e;
+    color: #d6ffe4; border-radius: 4px; font-size: 11px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+  .dp-go-btn:hover { background: linear-gradient(180deg,#237e46,#186334); }
   .ann { font-weight: 700; font-size: 12px; }
   .ann.pos { color: #00e676; text-shadow: 0 0 6px #00e67644; }
   .ann.neg { color: #ff5252; text-shadow: 0 0 6px #ff525244; }
