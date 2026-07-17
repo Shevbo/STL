@@ -331,6 +331,29 @@
     } catch (e) { flattenMsg = `Ошибка: ${String(e).slice(0, 80)}`; }
     finally { pausing = false; }
   }
+  // Clone this robot's exact strategy+params+symbol into a fresh PAPER robot on the
+  // agent. deploy-agent needs no scriptCode/STL record — the runner resolves the
+  // strategy by id. New robot_id must be colon-free (attribution parses on ':').
+  let cloneBusy = $state(false);
+  let cloneMsg = $state('');
+  async function cloneToPaper() {
+    const sid = robot?.strategy_id;
+    if (!sid) { cloneMsg = 'Нет strategy_id — робот ещё не отобразился из зеркала.'; return; }
+    if (!window.confirm(`Скопировать параметры робота «${robotId}» и запустить НОВЫЙ робот в PAPER?\nСтратегия: ${sid} · ${symbol}. Реальные деньги не задействуются.`)) return;
+    const newId = `${sid}-${symbol}-c${Date.now().toString(36)}`.replace(/[^A-Za-z0-9_-]/g, '');
+    cloneBusy = true; cloneMsg = '';
+    try {
+      const res = await fetchWithAuth(`/api/v1/quik/robots/${encodeURIComponent(newId)}/deploy-agent`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agent_id: agentId, strategy_id: sid, params: { ...params, symbol },
+          symbol, schedule: robot?.schedule ?? '09:00-23:55',
+          max_position: Math.max(1, Number(robot?.max_position ?? 1) || 1), paper: true }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      cloneMsg = `Развёрнут в PAPER: «${newId}».`;
+    } catch (e) { cloneMsg = `Ошибка клонирования: ${String(e).slice(0, 80)}`; }
+    finally { cloneBusy = false; }
+  }
 
   // ---- params editor (GUI, no hand-JSON): params apply next bar; changing
   // max_position/schedule relays a full spec re-deploy (zero-loss). ----
@@ -482,6 +505,10 @@
         {/if}
         {#if flattenMsg}<span class="rc-msg">{flattenMsg}</span>{/if}
       {/if}
+      <button class="rc-btn go" disabled={cloneBusy} onclick={cloneToPaper}
+              title="скопировать параметры этого робота и запустить НОВЫЙ робот в PAPER на агенте">
+        {cloneBusy ? '…' : '▶ Запустить в торговлю (paper)'}</button>
+      {#if cloneMsg}<span class="rc-msg">{cloneMsg}</span>{/if}
     {:else if report}
       <span class="badge warn">робот {robotId} не найден на агенте</span>
     {/if}
