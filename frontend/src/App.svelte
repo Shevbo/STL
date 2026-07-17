@@ -43,8 +43,10 @@
   // (NOT the login form) so a normal F5 with a valid cookie does not flash the login
   // screen. The login form only appears after the check completes with a real 401.
   let checking = $state(true);
-  // Deep-link: ?campaign=camp-... opens the lab panel (LabPanel/Botstore pick it up).
-  let showLab = $state(new URLSearchParams(window.location.search).has('campaign'));
+  // Deep-link: ?campaign=camp-... or ?lab=<tab> opens the lab panel (LabPanel picks
+  // the tab). NavMenu on the full-page screens links here to get back into the shell.
+  const labTab = _qs.get('lab');
+  let showLab = $state(_qs.has('campaign') || _qs.has('lab'));
   let showQuikTables = $state(false);
   let showQuikOrders = $state(false);
   let showCharts = $state(false);
@@ -362,7 +364,7 @@
       <div class="dh-dot"></div>
     </div>
     <div class="lab-panel-wrap" style="height:{labH}px">
-      <LabPanel />
+      <LabPanel initialTab={labTab} />
     </div>
   {/if}
   {#if showQuikTables}

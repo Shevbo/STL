@@ -12,6 +12,7 @@
   import LatencyPane from './LatencyPane.svelte';
   import AgentBookPane from './AgentBookPane.svelte';
   import ParamEditor from './ParamEditor.svelte';
+  import NavMenu from '../NavMenu.svelte';
   import { fetchAgentLocalStatus, type AgentLocalStatus } from '../../lib/agent-robots';
 
   let { robotId, agentId = null }: { robotId: string; agentId?: string | null } = $props();
@@ -438,6 +439,7 @@
 
 <div class="ars">
   <div class="ars-head">
+    <NavMenu />
     <span class="ars-icon">🤖</span>
     <span class="ars-name">{robotId}</span>
     {#if robot}
