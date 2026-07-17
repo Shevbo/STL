@@ -212,28 +212,32 @@
     if (!silent) loading = false;
   }
 
-  // Clone this robot's strategy+params into a NEW paper Lab robot (same account link).
-  // Reuses the robot's own script_code/params — no strategy catalog needed here.
+  // Deploy this robot's strategy+params ONTO THE AGENT as PAPER (top "QUIK/АГЕНТ"
+  // table) — real-ready: it can later be armed to real from the VDS console. This is
+  // NOT the STL-only sim (bottom table); the agent runner executes it against QUIK.
+  // strategy_id comes from the matched template (live.strategy.id); deploy-agent needs
+  // no script_code. New robot_id must be colon-free (order attribution parses on ':').
   let cloneBusy = $state(false);
   let cloneMsg = $state('');
   async function cloneToPaper() {
-    const r = live?.robot;
-    if (!r?.script_code) { cloneMsg = 'Нет script_code у робота — клонировать нечем.'; return; }
-    if (!window.confirm(`Скопировать параметры робота «${r.name}» и запустить НОВЫЙ робот в PAPER?\nРеальные деньги не задействуются.`)) return;
+    const sid = live?.strategy?.id;
+    if (!sid) { cloneMsg = 'Не удалось определить strategy_id — на агент разворачиваются только библиотечные/standalone стратегии.'; return; }
+    const p = live?.robot?.params_json ?? {};
+    const maxPos = Math.max(1, Number(p.avg_max ?? p.qty ?? live?.robot?.max_position ?? 1) || 1);
+    if (!window.confirm(`Развернуть «${live.robot?.name}» НА АГЕНТ в PAPER (верхняя таблица)?\n` +
+      `Стратегия: ${sid} · ${live.symbol}. Робот появится в «РОБОТЫ НА БИРЖЕ QUIK».\n` +
+      `Реал включается ТОЛЬКО с консоли VDS (FLAT + ввод ID) — из GUI не армится.`)) return;
+    const newId = `${sid}-${live.symbol}-p${Date.now().toString(36)}`.replace(/[^A-Za-z0-9_-]/g, '');
     cloneBusy = true; cloneMsg = '';
     try {
-      const res = await fetchWithAuth('/api/v1/robots', {
+      const d = await fetchWithAuth(`/api/v1/quik/robots/${encodeURIComponent(newId)}/deploy-agent`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userEmail: r.user_email ?? 'admin', stlLinkId: r.stl_link_id ?? '',
-          name: `${r.name} (paper-копия)`.slice(0, 64), scriptCode: r.script_code,
-          paramsJson: r.params_json ?? {}, schedule: r.schedule ?? '09:00-23:55' }),
+        body: JSON.stringify({ strategy_id: sid, params: { ...p, symbol: live.symbol }, symbol: live.symbol,
+          schedule: live.robot?.schedule ?? '09:00-23:55', max_position: maxPos, paper: true }),
       });
-      if (!res.ok) throw new Error(await res.text());
-      const { id } = await res.json();
-      const d = await fetchWithAuth(`/api/v1/robots/${id}/deploy`, { method: 'POST' });
       if (!d.ok) throw new Error(await d.text());
-      cloneMsg = `Запущен в PAPER: «${r.name} (paper-копия)». Смотри его в списке роботов.`;
-    } catch (e) { cloneMsg = `Ошибка клонирования: ${String(e).slice(0, 90)}`; }
+      cloneMsg = `Развёрнут на агенте в PAPER: «${newId}» (верхняя таблица). Реал — с консоли VDS.`;
+    } catch (e) { cloneMsg = `Ошибка деплоя на агент: ${String(e).slice(0, 90)}`; }
     finally { cloneBusy = false; }
   }
 
@@ -264,8 +268,8 @@
         <span class="badge dim">{live.robot?.deployed ? 'LIVE' : 'остановлен'}</span>
         <span class="badge dim">окно {live.robot?.schedule}</span>
         <button class="rw-launch" disabled={cloneBusy} onclick={cloneToPaper}
-                title="скопировать параметры этого робота и запустить НОВЫЙ робот в PAPER">
-          {cloneBusy ? '…' : '▶ Запустить в торговлю (paper)'}</button>
+                title="развернуть НА АГЕНТ в PAPER (верхняя таблица) — real-ready, армится с консоли VDS">
+          {cloneBusy ? '…' : '▶ На агент в торговлю (paper)'}</button>
         {#if cloneMsg}<span class="rw-launch-msg">{cloneMsg}</span>{/if}
       {/if}
       <button class="close" onclick={onClose} title="Закрыть (Esc)">✕</button>
