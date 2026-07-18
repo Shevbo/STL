@@ -35,7 +35,7 @@ async def _last_trade_date(conn, robot_id: str, symbol: str):
         "SELECT max(timestamp) AS t FROM live_trades WHERE robot_id=$1 AND symbol=$2",
         robot_id, symbol)
     t = row["t"] if row else None
-    return t.astimezone(_MSK).date() if t else None
+    return t.replace(tzinfo=timezone.utc).astimezone(_MSK).date() if t else None
 
 
 async def backfill_one(conn, robot: dict, *, dry_run: bool) -> tuple[str, int]:
@@ -103,12 +103,15 @@ async def main() -> None:
                 rows = await conn.fetch("SELECT * FROM robots WHERE id=$1", args.robot)
             else:
                 rows = await conn.fetch("SELECT * FROM robots")
+            if args.robot and not rows:
+                print(f"robot not found: {args.robot}")
+                return
             for r in rows:
                 try:
                     status, n = await backfill_one(conn, dict(r), dry_run=args.dry_run)
                 except Exception as exc:  # never let one robot abort the batch
                     status, n = (f"ERROR: {exc}", 0)
-                print(f"{r['id']:<28} {r['name'][:32]:<34} {status}  fills={n}")
+                print(f"{r['id']:<28} {(r['name'] or '')[:32]:<34} {status}  fills={n}")
     finally:
         await close_pool()
 
