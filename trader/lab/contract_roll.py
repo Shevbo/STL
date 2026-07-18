@@ -7,7 +7,7 @@ to today's live front contract (RIM6 -> RIU6) so the scheduler can roll it.
 from __future__ import annotations
 
 import time as _time
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from uuid import uuid4
 
@@ -86,7 +86,7 @@ def fills_to_rows(robot_id: str, symbol: str, fills: list[dict]) -> list[tuple]:
     fills: list of {side, price, qty, time} from backtest.run_single_backtest."""
     rows: list[tuple] = []
     for f in fills:
-        ts = datetime.utcfromtimestamp(int(f["time"]) - 3 * 3600)
+        ts = datetime.fromtimestamp(int(f["time"]) - 3 * 3600, timezone.utc).replace(tzinfo=None)
         rows.append((
             uuid4().hex, robot_id, symbol, f["side"], int(f["qty"]),
             Decimal(str(f["price"])), "sim-" + uuid4().hex[:10], "paper", ts,

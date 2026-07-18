@@ -39,7 +39,7 @@ async def test_front_contract_none_when_no_future(monkeypatch):
 
 
 def test_fills_to_rows_maps_and_marks_sim():
-    from datetime import datetime
+    from datetime import datetime, timezone
     fills = [
         {"side": "buy",  "price": 88000.0, "qty": 1, "time": 1_760_000_000},
         {"side": "sell", "price": 88100.0, "qty": 1, "time": 1_760_000_060},
@@ -53,6 +53,6 @@ def test_fills_to_rows_maps_and_marks_sim():
     assert r0[6].startswith("sim-")
     assert r0[7] == "paper"
     # ISS bar time (MSK-wall-as-UTC) shifted -3h to true UTC, naive
-    assert r0[8] == datetime.utcfromtimestamp(1_760_000_000 - 3 * 3600)
+    assert r0[8] == datetime.fromtimestamp(1_760_000_000 - 3 * 3600, timezone.utc).replace(tzinfo=None)
     assert r0[8].tzinfo is None
     assert rows[0][6] != rows[1][6]          # unique sim ids
