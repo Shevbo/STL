@@ -5,11 +5,23 @@ live_trades (status='paper', order_id='sim-...') so the showcase stats are
 continuous. Also rolls the robot's params.symbol forward + resets state so the live
 scheduler continues on the new contract.
 
-Run on the hoster (heavy-compute isolation rule — NOT in the API process):
-    poetry run python scripts/backfill_roll_sim.py            # apply
-    poetry run python scripts/backfill_roll_sim.py --dry-run  # report only
-    poetry run python scripts/backfill_roll_sim.py --robot <id>
+STOP THE SCHEDULER FIRST. The live scheduler auto-rolls each paper robot to the
+front contract on its next tick (trader/lab/scheduler.py _maybe_roll). If it runs
+concurrently with this backfill it (a) rolls a robot's params.symbol forward while
+this script reads the old symbol — the two then write the SAME new-contract window
+twice (paper position double-counted), and (b) once it has rolled a robot,
+front_contract(new)==new here so the gap is never simulated (skip-current). So the
+gap-sim is only both correct AND effective in a maintenance window:
 
+    ssh hoster 'sudo systemctl stop shectory-trader'        # scheduler off
+    cd ~/apps/shectory-trader && git pull --ff-only         # new code (this script)
+    poetry run python scripts/backfill_roll_sim.py --dry-run # report only
+    poetry run python scripts/backfill_roll_sim.py           # apply (sim + roll forward)
+    ssh hoster 'sudo systemctl start shectory-trader'        # scheduler on; robots already
+                                                             # front → skip-current, trade fwd
+    poetry run python scripts/backfill_roll_sim.py --robot <id>  # one robot only
+
+Run on the hoster (heavy-compute isolation rule — NOT in the API process).
 Reversible:  DELETE FROM live_trades WHERE order_id LIKE 'sim-%';
 """
 from __future__ import annotations
