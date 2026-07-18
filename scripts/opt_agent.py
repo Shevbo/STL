@@ -113,6 +113,18 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import httpx  # noqa: E402
 
+# psutil gives real CPU%/RAM for the heartbeat. It is NOT a hard dependency, so the
+# agent degrades gracefully when it is absent (reports cores/workers/activity only,
+# and the monitor tells the operator to `pip install psutil`).
+try:
+    import psutil  # noqa: E402
+except Exception:  # noqa: BLE001
+    psutil = None
+
+# Bumped whenever the agent's wire behaviour changes; reported in the heartbeat so the
+# monitor shows whether the i9 is running the latest opt_agent.
+AGENT_VERSION = "2026-07-18-cpu-hb"
+
 # ── self-update ────────────────────────────────────────────────────────────────
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Per-file updates come from raw.githubusercontent (reachable from the i9; the codeload
@@ -245,6 +257,14 @@ class Agent:
         self.agent_id = f"{socket.gethostname()}:{os.getpid()}"
         self.h = {"X-Agent-Token": token, "Content-Type": "application/json"}
         self.applied_token = _read_token()   # last self-update token applied
+        # What the CPU is doing right now, surfaced by the heartbeat. Mutated by the
+        # claim loop (job/task/idle); read by the concurrent heartbeat task.
+        self._activity: dict = {"state": "starting"}
+        if psutil is not None:
+            try:
+                psutil.cpu_percent(interval=None)  # prime: first call is meaningless
+            except Exception:  # noqa: BLE001
+                pass
 
     def _client(self) -> httpx.AsyncClient:
         kw: dict = {"timeout": 30}
@@ -310,6 +330,36 @@ class Agent:
         r.raise_for_status()
         return r.json()
 
+    def _metrics(self) -> dict:
+        """Snapshot of what the i9 CPU is doing, for the heartbeat. All best-effort —
+        psutil may be absent; never raise from here."""
+        m = {"agent_id": self.agent_id, "version": AGENT_VERSION, "workers": self.workers,
+             "cpu_count": os.cpu_count() or 0, "psutil": psutil is not None,
+             "activity": self._activity}
+        if psutil is not None:
+            try:
+                m["cpu_pct"] = round(psutil.cpu_percent(interval=None), 1)      # since last call (~hb period)
+                m["per_core"] = [round(x, 0) for x in psutil.cpu_percent(interval=None, percpu=True)]
+                vm = psutil.virtual_memory()
+                m["ram_pct"] = round(vm.percent, 1)
+                m["ram_used_mb"] = round(vm.used / 1e6)
+                m["ram_total_mb"] = round(vm.total / 1e6)
+            except Exception:  # noqa: BLE001
+                pass
+        return m
+
+    async def _heartbeat_loop(self, client: httpx.AsyncClient, period: float = 4.0):
+        """Independent task: report CPU/RAM/activity every `period`s even WHILE a job is
+        crunching (the claim loop is blocked awaiting the pool then, so it can't). Runs
+        on the SAME httpx client — concurrent POSTs are fine. Never raises."""
+        while True:
+            try:
+                await client.post(f"{self.api}/api/v1/agent/heartbeat",
+                                  json=self._metrics(), headers=self.h, timeout=10)
+            except Exception:  # noqa: BLE001 — a missed heartbeat just ages out in the monitor
+                pass
+            await asyncio.sleep(period)
+
     # ── generic tasks ───────────────────────────────────────────────────────
     async def claim_task(self, client: httpx.AsyncClient):
         r = await client.post(f"{self.api}/api/v1/agent/task/claim",
@@ -331,6 +381,8 @@ class Agent:
         if not isinstance(args, list):
             args = [args]
         _log(f"[task {tid}] {module}.{func} × {len(args)} units on {self.workers} workers")
+        self._activity = {"state": "task", "task_id": tid, "func": f"{module}.{func}",
+                          "units": len(args), "since": time.time()}
         loop = asyncio.get_event_loop()
         t0 = time.time()
         futs = [loop.run_in_executor(pool, _run_task_unit, module, func, a) for a in args]
@@ -376,6 +428,8 @@ class Agent:
                 param_sets = self._expand(job["base_params"], job["params_grid"])
             _log(f"[{run_id}] {symbol} {len(bars)} bars × {len(param_sets)} combos "
                  f"on {self.workers} workers")
+            self._activity = {"state": "job", "run_id": run_id, "symbol": symbol,
+                              "combos": len(param_sets), "since": time.time()}
 
             chunks = _chunked(param_sets, self.workers)
             im = job.get("initial_margin", 0) or 0
@@ -414,44 +468,54 @@ class Agent:
         _set_priority(idle=False)        # main process: below-normal (yields to the user)
         with ProcessPoolExecutor(max_workers=self.workers, initializer=_worker_init) as pool:
             async with self._client() as client:
+                # Independent heartbeat so CPU%/activity keep flowing WHILE a job blocks
+                # the claim loop below. Cancelled when this life ends.
+                hb = asyncio.create_task(self._heartbeat_loop(client))
+                try:
+                    return await self._claim_loop(client, pool)
+                finally:
+                    hb.cancel()
+
+    async def _claim_loop(self, client: httpx.AsyncClient, pool: ProcessPoolExecutor):
+        idle_note = True
+        while True:
+            # self-update check (each cycle, lightweight GET)
+            tok = await self.control(client)
+            if tok and tok != self.applied_token:
+                if await self._self_update(tok):
+                    return "RESTART"   # exits pool/client cleanly, run() re-execs
+            # Generic offloaded tasks take priority over grid campaign jobs.
+            try:
+                task = await self.claim_task(client)
+            except Exception as exc:  # noqa: BLE001
+                task = None
+                _log(f"task claim error: {exc}")
+            if task is not None:
                 idle_note = True
-                while True:
-                    # self-update check (each cycle, lightweight GET)
-                    tok = await self.control(client)
-                    if tok and tok != self.applied_token:
-                        if await self._self_update(tok):
-                            return "RESTART"   # exits pool/client cleanly, run() re-execs
-                    # Generic offloaded tasks take priority over grid campaign jobs.
-                    try:
-                        task = await self.claim_task(client)
-                    except Exception as exc:  # noqa: BLE001
-                        task = None
-                        _log(f"task claim error: {exc}")
-                    if task is not None:
-                        idle_note = True
-                        try:
-                            await self.process_task(client, task, pool)
-                        except Exception as exc:  # noqa: BLE001 — never let one task kill the loop
-                            _log(f"task error (continuing): {exc}")
-                        continue
-                    try:
-                        job = await self.claim(client)
-                    except Exception as exc:  # noqa: BLE001 — DNS/network/5xx: keep polling
-                        _log(f"claim error: {exc}")
-                        await asyncio.sleep(self.poll)
-                        continue
-                    if job is None:
-                        if idle_note:
-                            _log("idle… waiting for jobs")
-                            idle_note = False
-                        await asyncio.sleep(self.poll)
-                        continue
-                    idle_note = True
-                    try:
-                        await self.process(client, job, pool)
-                    except Exception as exc:  # noqa: BLE001 — never let one job kill the loop
-                        _log(f"process error (continuing): {exc}")
-                        await asyncio.sleep(self.poll)
+                try:
+                    await self.process_task(client, task, pool)
+                except Exception as exc:  # noqa: BLE001 — never let one task kill the loop
+                    _log(f"task error (continuing): {exc}")
+                continue
+            try:
+                job = await self.claim(client)
+            except Exception as exc:  # noqa: BLE001 — DNS/network/5xx: keep polling
+                _log(f"claim error: {exc}")
+                await asyncio.sleep(self.poll)
+                continue
+            if job is None:
+                self._activity = {"state": "idle"}
+                if idle_note:
+                    _log("idle… waiting for jobs")
+                    idle_note = False
+                await asyncio.sleep(self.poll)
+                continue
+            idle_note = True
+            try:
+                await self.process(client, job, pool)
+            except Exception as exc:  # noqa: BLE001 — never let one job kill the loop
+                _log(f"process error (continuing): {exc}")
+                await asyncio.sleep(self.poll)
 
     async def run(self):
         """Supervisor: the agent must NEVER exit on its own. Any fatal error in a

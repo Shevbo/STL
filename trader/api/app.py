@@ -1,5 +1,6 @@
 import asyncio
 import hmac
+import json
 import os
 import time
 from contextlib import asynccontextmanager
@@ -27,6 +28,7 @@ from trader.pos.client import PositionsClient
 from trader.pos.models import Position
 from trader.tx.client import TxClient
 from trader.tx.models import OrderRequest, OrderResponse
+from trader.util import i9_hb_view
 
 log = structlog.get_logger()
 
@@ -1847,6 +1849,10 @@ def create_app() -> FastAPI:
             "AND claimed_at > now() - interval '3 minutes'")
         out["vds_fallback"] = fb is not None
 
+        # i9 host telemetry (what the CPU is actually doing) from the agent heartbeat.
+        hb_raw = await pool.fetchval("SELECT value FROM agent_control WHERE key='i9_heartbeat'")
+        out["i9"] = i9_hb_view(hb_raw, time.time())
+
         rows = await pool.fetch(
             "SELECT id, status, agent_id, finished_at FROM backtest_runs "
             "WHERE id LIKE 'opt-%' OR id LIKE 'camp-%' ORDER BY created_at DESC LIMIT 500")
@@ -2935,6 +2941,23 @@ def create_app() -> FastAPI:
             "INSERT INTO agent_control(key,value) VALUES('i9_ping',$1) "
             "ON CONFLICT (key) DO UPDATE SET value=$1", val)
         return {"ok": True, "pingable": bool(body.get("pingable"))}
+
+    @fastapi_app.post("/api/v1/agent/heartbeat")
+    async def agent_heartbeat(body: dict, request: Request):
+        """The i9 agent reports what its CPU is doing (cpu%/per-core/RAM/workers/
+        current activity) every few seconds — even WHILE crunching a job, from an
+        independent task. Stored (latest only) in agent_control(key='i9_heartbeat')
+        with a server receive-time so the monitor can age it out."""
+        _agent_auth(request)
+        pool = request.app.state.db_pool
+        if pool is None:
+            raise HTTPException(status_code=503, detail="DB unavailable")
+        payload = dict(body or {})
+        payload["_recv_ts"] = time.time()
+        await pool.execute(
+            "INSERT INTO agent_control(key,value) VALUES('i9_heartbeat',$1) "
+            "ON CONFLICT (key) DO UPDATE SET value=$1", json.dumps(payload))
+        return {"ok": True}
 
     @fastapi_app.get("/api/v1/agent/bars/{key}")
     async def agent_bars(key: str, request: Request):

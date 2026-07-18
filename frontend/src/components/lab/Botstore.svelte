@@ -600,8 +600,45 @@
                   disabled={pauseBusy} onclick={() => togglePause('remote', true)}
                   title="Приостановить перебор на i9">⏹</button>
         </span>
-        <span class="ag-sub ag-right">VDS loadavg {activity.vds_load ?? '—'} · {activity.throughput_per_min} задач/мин</span>
+        <span class="ag-sub ag-right" title="loadavg ХОСТЕРА (не i9) · пропускная способность">хостер load {activity.vds_load ?? '—'} · {activity.throughput_per_min} задач/мин</span>
       </div>
+
+      <!-- What the i9 CPU is actually doing (from the agent heartbeat) -->
+      {#if activity.i9}
+        <div class="ag-i9" class:stale={activity.i9.stale}>
+          <div class="i9-head">
+            <span class="i9-label">CPU i9</span>
+            {#if activity.i9.cpu_pct != null}
+              <span class="i9-cpu-num mono" class:hot={activity.i9.cpu_pct >= 85}>{activity.i9.cpu_pct}%</span>
+            {:else}
+              <span class="i9-warn">нет psutil — на i9: <span class="mono">pip install psutil</span></span>
+            {/if}
+            <span class="i9-sub mono" title="воркеры / всего ядер">{activity.i9.workers ?? '?'}w · {activity.i9.cpu_count ?? '?'} ядер</span>
+            {#if activity.i9.ram_pct != null}<span class="i9-sub" title="{activity.i9.ram_used_mb}/{activity.i9.ram_total_mb} МБ">RAM {activity.i9.ram_pct}%</span>{/if}
+            {#if activity.i9.version}<span class="i9-sub dim">v{activity.i9.version}</span>{/if}
+            <span class="i9-act ag-right" title="что CPU делает прямо сейчас">
+              {#if activity.i9.activity?.state === 'job'}● считает <b class="mono">{activity.i9.activity.symbol}</b> · {activity.i9.activity.combos} комб.
+              {:else if activity.i9.activity?.state === 'task'}● задача <span class="mono">{activity.i9.activity.func}</span>
+              {:else if activity.i9.activity?.state === 'idle'}○ простаивает
+              {:else}{activity.i9.activity?.state ?? '—'}{/if}
+            </span>
+            {#if activity.i9.stale}<span class="i9-stale-b">нет пинга {activity.i9.age_sec ?? '∞'}с</span>{/if}
+          </div>
+          {#if activity.i9.cpu_pct != null}
+            <div class="i9-cpubar"><div class="i9-cpubar-fill" class:hot={activity.i9.cpu_pct >= 85} style="width:{Math.min(100, activity.i9.cpu_pct)}%"></div></div>
+          {/if}
+          {#if activity.i9.per_core?.length}
+            <div class="i9-cores">
+              {#each activity.i9.per_core as c}
+                <div class="i9-core" title="{c}%"><div class="i9-core-fill" style="height:{Math.max(3, Math.min(100, c))}%"></div></div>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      {:else}
+        <div class="ag-row"><span class="ag-sub dim">CPU i9: телеметрии нет — обнови opt_agent на i9 (+ <span class="mono">pip install psutil</span>)</span></div>
+      {/if}
+
       <div class="ag-row">
         <span class="ag-sub">VDS-воркеры:</span>
         <span class="ag-sub" class:pos={!activity.paused_local} class:neg={activity.paused_local}>
@@ -1133,6 +1170,24 @@
   .ag-prog { position: relative; flex: 1; min-width: 200px; height: 16px; display: flex; align-items: center; background: #0a1120; border: 1px solid #1a2a44; border-radius: 3px; overflow: hidden; }
   .ag-prog-bar { position: absolute; inset: 0 auto 0 0; background: #1f5e3a; }
   .ag-prog-lbl { position: relative; font-size: 10px; color: #cfe; line-height: 1; padding-left: 8px; white-space: nowrap; }
+  /* i9 CPU telemetry */
+  .ag-i9 { display: flex; flex-direction: column; gap: 5px; padding: 6px 8px; background: #0a1424; border: 1px solid #1c3a5e; border-radius: 4px; }
+  .ag-i9.stale { opacity: 0.55; }
+  .i9-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 11px; color: #9ab; }
+  .i9-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px; color: #6a8cc0; font-weight: 700; }
+  .i9-cpu-num { font-size: 15px; font-weight: 700; color: #6fd08a; }
+  .i9-cpu-num.hot { color: #ff8a5c; }
+  .i9-sub { font-size: 10px; color: #789; }
+  .i9-sub.dim { color: #556; }
+  .i9-warn { font-size: 10px; color: #ffb86b; }
+  .i9-act { font-size: 11px; color: #cde; }
+  .i9-stale-b { font-size: 10px; color: #ff8a80; border: 1px solid #ff8a8055; border-radius: 3px; padding: 1px 6px; }
+  .i9-cpubar { height: 6px; background: #0f1a2e; border-radius: 3px; overflow: hidden; }
+  .i9-cpubar-fill { height: 100%; background: linear-gradient(90deg, #2f8f49, #6fd08a); transition: width 0.5s; }
+  .i9-cpubar-fill.hot { background: linear-gradient(90deg, #b5502a, #ff8a5c); }
+  .i9-cores { display: flex; align-items: flex-end; gap: 2px; height: 22px; }
+  .i9-core { width: 7px; height: 100%; background: #0f1a2e; border-radius: 2px; display: flex; align-items: flex-end; overflow: hidden; }
+  .i9-core-fill { width: 100%; background: #4d9be6; border-radius: 2px; transition: height 0.5s; }
   .ag-recent { display: flex; flex-wrap: wrap; gap: 4px 8px; font-size: 10px; color: #89a; }
   .ag-runs { display: flex; flex-direction: column; gap: 2px; font-size: 10px; color: #89a; margin-top: 4px; }
   .ag-run { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
