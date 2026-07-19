@@ -20,6 +20,7 @@
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;max-width:1000px}
   .card{background:var(--panel);border:1px solid var(--bd);border-radius:8px;padding:12px 14px}
   .card.wide{grid-column:1/3} .card.stale{opacity:.55}
+  .grid.stale{opacity:.45} .grid.stale::after{content:''}
   .lbl{font-size:10px;text-transform:uppercase;letter-spacing:.6px;color:var(--lbl);margin-bottom:6px}
   .big{font-size:34px;font-weight:700;line-height:1} .big.hot{color:var(--red)} .big.ok{color:var(--grn)}
   .bar{height:8px;background:#0b1220;border-radius:4px;overflow:hidden;margin-top:8px}
@@ -60,10 +61,11 @@
     </div>
     <div class="card wide"><div class="lbl">Сейчас</div><div class="act" id="act">—</div></div>
     <div class="card wide"><div class="lbl">Кампания <span id="camp" class="sub"></span></div>
-      <div class="prog"><i id="progBar" style="width:0"></i><span id="progLbl">—</span></div>
+      <div class="prog"><i id="progBar" style="width:0"></i></div>
+      <div id="progLbl" class="sub" style="margin-top:6px">—</div>
     </div>
     <div class="card wide"><div class="lbl">Последние прогоны</div>
-      <table><thead><tr><th>Стратегия · инстр.</th><th>агент</th><th>статус</th><th class="num">сек</th></tr></thead>
+      <table><thead><tr><th>Стратегия · инстр.</th><th>агент</th><th>статус</th><th class="num">когда</th></tr></thead>
       <tbody id="recent"><tr><td colspan="4" style="color:var(--dim)">—</td></tr></tbody></table>
     </div>
   </div>
@@ -77,7 +79,7 @@ function render(d){
   var i=d.i9;
   set('hdr', dot+'i9 '+(on?'онлайн':'офлайн')+' · обновлено '+clock()
       +(i? ' · v'+esc(i.version||'?')+' · '+esc(i.agent_id||'')+(i.stale? ' · <span style="color:var(--red)">нет пинга '+esc(i.age_sec)+'с</span>':' · пинг '+esc(i.age_sec)+'с') : ' · телеметрии нет'));
-  document.getElementById('cpuCard').className='card'+((i&&i.stale)?' stale':'');
+  document.querySelector('.grid').classList.toggle('stale', !!(i && i.stale));
   if(!i){ set('act','<span class="dot idle"></span>i9 ещё не прислал телеметрию — обнови opt_agent на i9');
     document.getElementById('cpuBig').textContent='—'; document.getElementById('ramBig').textContent='—';
     document.getElementById('cores').innerHTML=''; }
@@ -108,9 +110,10 @@ function render(d){
   document.getElementById('progBar').style.width=(d.pct||0)+'%';
   set('progLbl', (d.pct||0)+'% · done '+(c.done||0)+'/'+tot+' · queued '+(c.queued||0)+' · running '+(c.running||0)
       +' · '+(d.throughput_per_min||0)+' задач/мин');
-  var rows=(d.recent||[]).map(function(r){return '<tr><td class="mono">'+esc(r.strategy)+'·'+esc(r.symbol)
+  var rows=(d.recent||[]).map(function(r){var t=r.finished_at?new Date(r.finished_at).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}):'';
+    return '<tr><td class="mono">'+esc(r.strategy)+'·'+esc(r.symbol)
     +'</td><td>'+esc(r.agent)+'</td><td class="st '+(r.status==='done'?'ok':(r.status==='failed'?'bad':''))+'">'+esc(r.status)
-    +'</td><td class="num"></td></tr>';}).join('');
+    +'</td><td class="num">'+esc(t)+'</td></tr>';}).join('');
   document.getElementById('recent').innerHTML=rows||'<tr><td colspan="4" style="color:var(--dim)">пока нет</td></tr>';
 }
 async function load(){
