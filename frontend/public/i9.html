@@ -15,6 +15,11 @@
   button{background:#14203a;border:1px solid #2c8a4e;color:#d6ffe4;border-radius:5px;
     font-size:13px;font-weight:600;padding:6px 14px;cursor:pointer}
   button:hover{background:#1a2a48} label{font-size:12px;color:var(--dim);cursor:pointer}
+  .ctlrow{margin-top:-6px;margin-bottom:14px}
+  .ctlrow input,.ctlrow select{background:#0b1220;border:1px solid var(--bd);color:var(--ink);
+    border-radius:4px;font-size:12px;padding:4px 6px;margin-left:4px} .ctlrow input{width:56px}
+  #ctlMsg{color:var(--cyan)}
+  td.pos{color:var(--grn)} td.neg{color:var(--red)}
   .dotc{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;vertical-align:middle}
   .dotc.on{background:var(--grn);box-shadow:0 0 6px #43c463aa} .dotc.off{background:var(--red)}
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;max-width:1000px}
@@ -47,6 +52,15 @@
     <span class="sub" id="hdr">—</span>
     <span id="err"></span>
   </div>
+  <div class="top ctlrow">
+    <span class="lbl" style="margin:0">управление i9:</span>
+    <label>воркеры <input type="number" id="wIn" min="1" max="64"></label>
+    <label>приоритет
+      <select id="pIn"><option value="idle">idle (только свободные ядра)</option><option value="below">below-normal</option><option value="normal">normal (жёстко)</option></select>
+    </label>
+    <button id="apply">Применить</button>
+    <span class="sub" id="ctlMsg"></span>
+  </div>
   <div class="grid">
     <div class="card" id="cpuCard"><div class="lbl">Загрузка CPU i9</div>
       <div id="cpuBig" class="big">—</div><div class="bar"><i id="cpuBar" style="width:0"></i></div>
@@ -63,6 +77,10 @@
     <div class="card wide"><div class="lbl">Кампания <span id="camp" class="sub"></span></div>
       <div class="prog"><i id="progBar" style="width:0"></i></div>
       <div id="progLbl" class="sub" style="margin-top:6px">—</div>
+    </div>
+    <div class="card wide"><div class="lbl">Лидеры последнего прогона <span class="sub">— формирующийся хитпарад (P&amp;L текущих параметров); полный график — в Botstore</span></div>
+      <table><thead><tr><th>Стратегия · инстр.</th><th class="num">P&amp;L ₽</th><th class="num">RF</th><th class="num">Сделок</th><th>Параметры</th></tr></thead>
+      <tbody id="leaders"><tr><td colspan="5" style="color:var(--dim)">—</td></tr></tbody></table>
     </div>
     <div class="card wide"><div class="lbl">Последние прогоны</div>
       <table><thead><tr><th>Стратегия · инстр.</th><th>агент</th><th>статус</th><th class="num">когда</th></tr></thead>
@@ -115,6 +133,19 @@ function render(d){
     +'</td><td>'+esc(r.agent)+'</td><td class="st '+(r.status==='done'?'ok':(r.status==='failed'?'bad':''))+'">'+esc(r.status)
     +'</td><td class="num">'+esc(t)+'</td></tr>';}).join('');
   document.getElementById('recent').innerHTML=rows||'<tr><td colspan="4" style="color:var(--dim)">пока нет</td></tr>';
+  // forming hit-parade (top combos of the last finished job)
+  var leaders=(i&&i.leaders)||[];
+  var lrows=leaders.map(function(L){
+    var pj=Object.keys(L.params||{}).filter(function(k){return k!=='symbol';}).map(function(k){return k+'='+L.params[k];}).join(' ');
+    var net=L.net||0;
+    return '<tr><td class="mono">'+esc(L.strategy)+'·'+esc(L.symbol)+'</td><td class="num '+(net>=0?'pos':'neg')+'">'
+      +net.toLocaleString()+'</td><td class="num">'+esc(L.rf==null?'—':(+L.rf).toFixed(2))+'</td><td class="num">'+esc(L.trades==null?'—':L.trades)
+      +'</td><td class="mono sub" title="'+esc(pj)+'">'+esc(pj)+'</td></tr>';}).join('');
+  document.getElementById('leaders').innerHTML=lrows||'<tr><td colspan="5" style="color:var(--dim)">пока нет (ждём завершения первого прогона)</td></tr>';
+  // sync control inputs to current agent state (don't clobber what the operator is editing)
+  if(i){ var wIn=document.getElementById('wIn'), pIn=document.getElementById('pIn');
+    if(document.activeElement!==wIn){ wIn.placeholder=(i.workers==null?'':i.workers); if(!wIn.value) wIn.value=i.workers||''; }
+    if(document.activeElement!==pIn && i.priority){ pIn.value=i.priority; } }
 }
 async function load(){
   try{ var r=await fetch('/api/v1/agent/activity',{cache:'no-store',credentials:'same-origin'});
@@ -125,5 +156,15 @@ async function load(){
 document.getElementById('refresh').onclick=load;
 var timer=null;
 document.getElementById('auto').onchange=function(){ if(this.checked){ timer=setInterval(load,5000);} else if(timer){ clearInterval(timer); timer=null; } };
+document.getElementById('apply').onclick=async function(){
+  var w=document.getElementById('wIn').value, p=document.getElementById('pIn').value, body={};
+  if(w!=='') body.workers=parseInt(w,10); if(p) body.priority=p;
+  var msg=document.getElementById('ctlMsg'); msg.textContent='применяю…';
+  try{ var r=await fetch('/api/v1/agent/control-set',{method:'POST',headers:{'content-type':'application/json'},
+      credentials:'same-origin',body:JSON.stringify(body)});
+    if(!r.ok){ msg.textContent='ошибка HTTP '+r.status; return; }
+    msg.textContent='OK — агент применит на следующем опросе (~поллинг)'; setTimeout(load,1500);
+  }catch(e){ msg.textContent='ошибка: '+e; }
+};
 load();
 </script></body></html>

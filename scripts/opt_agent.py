@@ -64,26 +64,30 @@ def _user_env(name: str) -> str:
 # Keep the sweep on SPARE CPU so it never lags the user's foreground work. The main
 # process runs below-normal; each compute worker runs at IDLE priority (Windows: only
 # when cores are otherwise free; POSIX: nice 19). User keeps all cores, zero felt lag.
-_PRIO_BELOW_NORMAL = 0x00004000
-_PRIO_IDLE = 0x00000040
+# Windows priority classes / POSIX nice per level. "idle" = only spare cores (default,
+# zero felt lag); "below" = below-normal; "normal" = compete evenly with other work.
+_PRIO_WIN = {"idle": 0x00000040, "below": 0x00004000, "normal": 0x00000020}
+_PRIO_NICE = {"idle": 19, "below": 10, "normal": 0}
+_PRIO_LEVELS = ("idle", "below", "normal")
 
 
-def _set_priority(idle: bool = False) -> None:
+def _set_priority(prio: str = "below") -> None:
     try:
         if sys.platform == "win32":
             import ctypes
-            cls = _PRIO_IDLE if idle else _PRIO_BELOW_NORMAL
+            cls = _PRIO_WIN.get(prio, _PRIO_WIN["below"])
             ctypes.windll.kernel32.SetPriorityClass(
                 ctypes.windll.kernel32.GetCurrentProcess(), cls)
         else:
-            os.nice(19 if idle else 10)
+            os.nice(_PRIO_NICE.get(prio, 10))
     except Exception:
         pass
 
 
 def _worker_init() -> None:
-    # pool workers are pure CPU crunch → IDLE priority (use only spare cores)
-    _set_priority(idle=True)
+    # Pool workers are pure CPU crunch. Priority is chosen by the operator (env set
+    # before the pool is built); default idle = use only spare cores.
+    _set_priority(os.environ.get("OPT_AGENT_WORKER_PRIO", "idle"))
 
 
 def _tee_log(path: str) -> None:
@@ -127,7 +131,7 @@ except Exception:  # noqa: BLE001
 
 # Bumped whenever the agent's wire behaviour changes; reported in the heartbeat so the
 # monitor shows whether the i9 is running the latest opt_agent.
-AGENT_VERSION = "2026-07-19-statuspage"
+AGENT_VERSION = "2026-07-19-control-leaders"
 
 # ── self-update ────────────────────────────────────────────────────────────────
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -348,12 +352,16 @@ def _run_task_unit(module: str, func: str, arg):
 # ── agent ─────────────────────────────────────────────────────────────────────
 class Agent:
     def __init__(self, api: str, token: str, workers: int, poll: float, proxy: str = "",
-                 status_port: int = 8099):
+                 status_port: int = 8099, priority: str = "idle"):
         self.api = api.rstrip("/")
         self.token = token
         self.workers = workers
         self.poll = poll
         self.status_port = status_port
+        self._priority = priority if priority in _PRIO_LEVELS else "idle"
+        # Remembers the worker count/priority we last applied so a repeated control
+        # value doesn't rebuild the pool every poll.
+        self._applied_ctl = (workers, self._priority)
         # Corporate networks often block direct outbound :443 ("All connection
         # attempts failed"). Route httpx through the proxy if given (or via the
         # standard HTTPS_PROXY env var, which httpx reads by default).
@@ -369,6 +377,9 @@ class Agent:
         # psutil.cpu_percent() from two callers, which would split the sampling window).
         self._last_metrics: dict = {}
         self._recent: collections.deque = collections.deque(maxlen=12)
+        # Top combos of the last finished job (the forming hit-parade), with full params
+        # so the monitor can re-run any of them into a chart. Refilled per job.
+        self._leaders: list = []
         self._started = time.time()
         if psutil is not None:
             try:
@@ -382,15 +393,39 @@ class Agent:
             kw["proxy"] = self.proxy
         return httpx.AsyncClient(**kw)
 
-    async def control(self, client: httpx.AsyncClient):
-        """Poll the self-update flag. Returns the server's update_token (or None)."""
+    async def control(self, client: httpx.AsyncClient) -> dict:
+        """Poll the control channel: self-update token + operator-set worker count /
+        priority. Returns the raw dict ({} on any error)."""
         try:
             r = await client.get(f"{self.api}/api/v1/agent/control", headers=self.h, timeout=15)
             if r.status_code != 200:
-                return None
-            return (r.json() or {}).get("update_token")
+                return {}
+            return r.json() or {}
         except Exception:
-            return None
+            return {}
+
+    def _apply_control(self, ctl: dict) -> bool:
+        """Apply operator-set worker count / priority from the control channel. Returns
+        True when the pool must be rebuilt (count or priority actually changed)."""
+        cpu = os.cpu_count() or 64
+        new_w, new_p = self.workers, self._priority
+        w = ctl.get("workers")
+        if w is not None:
+            try:
+                w = int(w)
+                if 1 <= w <= cpu:
+                    new_w = w
+            except (TypeError, ValueError):
+                pass
+        p = ctl.get("priority")
+        if isinstance(p, str) and p in _PRIO_LEVELS:
+            new_p = p
+        if (new_w, new_p) == self._applied_ctl:
+            return False
+        self.workers, self._priority = new_w, new_p
+        self._applied_ctl = (new_w, new_p)
+        _log(f"control: workers={new_w} priority={new_p} → rebuild pool")
+        return True
 
     async def _self_update(self, token: str) -> bool:
         """Pull fresh code per-file from raw.githubusercontent (reachable from the i9;
@@ -444,8 +479,9 @@ class Agent:
         """Snapshot of what the i9 CPU is doing, for the heartbeat. All best-effort —
         psutil may be absent; never raise from here."""
         m = {"agent_id": self.agent_id, "version": AGENT_VERSION, "workers": self.workers,
-             "cpu_count": os.cpu_count() or 0, "psutil": psutil is not None,
-             "activity": self._activity}
+             "priority": self._priority, "cpu_count": os.cpu_count() or 0,
+             "psutil": psutil is not None, "activity": self._activity,
+             "leaders": self._leaders}
         if psutil is not None:
             try:
                 m["cpu_pct"] = round(psutil.cpu_percent(interval=None), 1)      # since last call (~hb period)
@@ -605,6 +641,17 @@ class Agent:
                                      "secs": round(dt, 1), "ok": ok,
                                      "cps": round(len(results) / dt, 1) if dt else 0,
                                      "at": time.time()})
+            # Forming hit-parade: top-3 combos of THIS job by net profit, with full
+            # params so the monitor can re-run any into a chart (grabbed BEFORE the
+            # trades/equity strip below — but we keep only metrics + params here).
+            strat = run_id.split("-")[-2] if run_id.count("-") >= 2 else ""
+            oks = [e for e in results if e.get("ok") and isinstance(e.get("result"), dict)]
+            top = sorted(oks, key=lambda e: (e["result"].get("net_profit") or -1e18), reverse=True)[:3]
+            self._leaders = [{"strategy": strat, "symbol": symbol, "run_id": run_id,
+                              "net": round(e["result"].get("net_profit") or 0),
+                              "rf": e["result"].get("recovery_factor"),
+                              "trades": e["result"].get("total_trades"),
+                              "params": e["params"]} for e in top]
             # Multi-combo sweeps only need metrics for the leaderboard — strip the
             # bulky trades + equity_curve arrays so we don't flood the small VDS
             # Postgres AND don't hit nginx body-size limits (413 Entity Too Large).
@@ -627,7 +674,8 @@ class Agent:
         Returns only on a fatal error (pool/client death); the outer run() restarts."""
         _log(f"agent {self.agent_id} → {self.api}  workers={self.workers}  poll={self.poll}s"
              + (f"  proxy={self.proxy}" if self.proxy else ""))
-        _set_priority(idle=False)        # main process: below-normal (yields to the user)
+        _set_priority("below")           # main process: below-normal (yields to the user)
+        os.environ["OPT_AGENT_WORKER_PRIO"] = self._priority   # spawned workers read this
         with ProcessPoolExecutor(max_workers=self.workers, initializer=_worker_init) as pool:
             async with self._client() as client:
                 # Independent heartbeat so CPU%/activity keep flowing WHILE a job blocks
@@ -641,11 +689,14 @@ class Agent:
     async def _claim_loop(self, client: httpx.AsyncClient, pool: ProcessPoolExecutor):
         idle_note = True
         while True:
-            # self-update check (each cycle, lightweight GET)
-            tok = await self.control(client)
+            # control channel: self-update token + operator worker/priority control
+            ctl = await self.control(client)
+            tok = ctl.get("update_token")
             if tok and tok != self.applied_token:
                 if await self._self_update(tok):
                     return "RESTART"   # exits pool/client cleanly, run() re-execs
+            if self._apply_control(ctl):
+                return "REBUILD"       # tear the pool down + rebuild with new workers/priority
             # Generic offloaded tasks take priority over grid campaign jobs.
             try:
                 task = await self.claim_task(client)
@@ -690,6 +741,9 @@ class Agent:
                 res = await self._loop_once()
                 if res == "RESTART":
                     self._reexec()   # never returns
+                elif res == "REBUILD":
+                    _log("rebuilding pool (worker/priority change)…")
+                    continue         # new _loop_once builds a fresh pool with new settings
             except KeyboardInterrupt:
                 print("stopped (KeyboardInterrupt)", flush=True)
                 return
@@ -745,6 +799,9 @@ def main():
     ap.add_argument("--status-port", type=int,
                     default=int(os.environ.get("OPT_AGENT_STATUS_PORT", "8099")),
                     help="local resource page on 127.0.0.1:<port> (0 disables)")
+    ap.add_argument("--priority", choices=("idle", "below", "normal"),
+                    default=os.environ.get("OPT_AGENT_PRIORITY", "idle"),
+                    help="worker CPU priority (idle=spare cores only; overridden live by the control channel)")
     args = ap.parse_args()
     if args.log:
         _tee_log(args.log)
@@ -764,7 +821,7 @@ def main():
         _patch_httpx_insecure()
         print("WARNING: TLS verification DISABLED (--insecure)", flush=True)
     asyncio.run(Agent(args.api, args.token, args.workers, args.poll, args.proxy,
-                      status_port=args.status_port).run())
+                      status_port=args.status_port, priority=args.priority).run())
 
 
 if __name__ == "__main__":

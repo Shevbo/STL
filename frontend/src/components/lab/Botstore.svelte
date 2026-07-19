@@ -634,6 +634,19 @@
               {/each}
             </div>
           {/if}
+          {#if activity.i9.leaders?.length}
+            <div class="i9-leaders">
+              <span class="i9-sub">формирующийся хитпарад · клик → график + сделки + P&amp;L:</span>
+              {#each activity.i9.leaders as L}
+                <button class="i9-leader" onclick={() => openChart(L.symbol, L.params, { strategyId: L.strategy })}
+                        title="Пересчитать эту комбо и открыть график со сделками и P&L">
+                  <b class="mono">{nameFor(L.strategy)}·{L.symbol}</b>
+                  <span class="mono" class:pos={L.net >= 0} class:neg={L.net < 0}>{L.net >= 0 ? '+' : ''}{(L.net ?? 0).toLocaleString('ru-RU')} ₽</span>
+                  <span class="i9-sub">RF {L.rf == null ? '—' : (+L.rf).toFixed(2)} · {L.trades ?? '—'} сд.</span>
+                </button>
+              {/each}
+            </div>
+          {/if}
         </div>
       {:else}
         <div class="ag-row"><span class="ag-sub dim">CPU i9: телеметрии нет — обнови opt_agent на i9 (+ <span class="mono">pip install psutil</span>)</span></div>
@@ -1185,6 +1198,11 @@
   .i9-cpubar { height: 6px; background: #0f1a2e; border-radius: 3px; overflow: hidden; }
   .i9-cpubar-fill { height: 100%; background: linear-gradient(90deg, #2f8f49, #6fd08a); transition: width 0.5s; }
   .i9-cpubar-fill.hot { background: linear-gradient(90deg, #b5502a, #ff8a5c); }
+  .i9-leaders { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; margin-top: 2px; }
+  .i9-leader { display: inline-flex; align-items: center; gap: 6px; font-size: 10.5px; padding: 2px 8px;
+    background: #0c1626; border: 1px solid #24406a; border-radius: 4px; color: #9ab; cursor: pointer; }
+  .i9-leader:hover { border-color: #4dd0e1; background: #10203a; }
+  .i9-leader .pos { color: #43c463; } .i9-leader .neg { color: #ff5c5c; }
   .i9-cores { display: flex; align-items: flex-end; gap: 2px; height: 22px; }
   .i9-core { width: 7px; height: 100%; background: #0f1a2e; border-radius: 2px; display: flex; align-items: flex-end; overflow: hidden; }
   .i9-core-fill { width: 100%; background: #4d9be6; border-radius: 2px; transition: height 0.5s; }

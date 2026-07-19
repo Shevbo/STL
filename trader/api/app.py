@@ -2819,13 +2819,55 @@ def create_app() -> FastAPI:
                  ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value" """
         _agent_auth(request)
         pool = request.app.state.db_pool
-        token = None
+        out: dict = {"update_token": None, "workers": None, "priority": None}
         if pool is not None:
             try:
-                token = await pool.fetchval("SELECT value FROM agent_control WHERE key='update_token'")
+                rows = await pool.fetch(
+                    "SELECT key, value FROM agent_control WHERE key IN "
+                    "('update_token','i9_workers','i9_priority')")
+                kv = {r["key"]: r["value"] for r in rows}
+                out["update_token"] = kv.get("update_token")
+                if kv.get("i9_workers"):
+                    try:
+                        out["workers"] = int(kv["i9_workers"])
+                    except (TypeError, ValueError):
+                        pass
+                if kv.get("i9_priority") in ("idle", "below", "normal"):
+                    out["priority"] = kv["i9_priority"]
             except Exception:
-                token = None
-        return {"update_token": token}
+                pass
+        return out
+
+    @fastapi_app.post("/api/v1/agent/control-set")
+    async def agent_control_set(body: dict, request: Request):
+        """Operator sets the i9 agent's worker count / CPU priority (applied on the
+        agent's next poll — it rebuilds its process pool). Session-authed (from the UI)."""
+        _auth(request)
+        pool = request.app.state.db_pool
+        if pool is None:
+            raise HTTPException(status_code=503, detail="DB unavailable")
+        out = {}
+        w = body.get("workers")
+        if w is not None:
+            try:
+                w = int(w)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=422, detail="workers must be an integer")
+            if not (1 <= w <= 128):
+                raise HTTPException(status_code=422, detail="workers out of range (1..128)")
+            await pool.execute(
+                "INSERT INTO agent_control(key,value) VALUES('i9_workers',$1) "
+                "ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", str(w))
+            out["workers"] = w
+        p = body.get("priority")
+        if p is not None:
+            if p not in ("idle", "below", "normal"):
+                raise HTTPException(status_code=422, detail="priority must be idle|below|normal")
+            await pool.execute(
+                "INSERT INTO agent_control(key,value) VALUES('i9_priority',$1) "
+                "ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", p)
+            out["priority"] = p
+        return {"ok": True, **out}
 
     # ── Generic agent task queue (run any repo module.func on the i9) ────────
     @fastapi_app.post("/api/v1/agent/task/enqueue")

@@ -6,9 +6,11 @@ from trader.util import i9_hb_view
 def _raw(**over):
     d = {
         "_recv_ts": 1000.0, "cpu_pct": 87.5, "per_core": [90, 85, 80, 95],
-        "cpu_count": 20, "workers": 18, "ram_pct": 61.0, "ram_used_mb": 40000,
-        "ram_total_mb": 65000, "version": "2026-07-18-cpu-hb", "psutil": True,
-        "agent_id": "Win10-HyperV:1234",
+        "cpu_count": 20, "workers": 18, "priority": "idle", "ram_pct": 61.0,
+        "ram_used_mb": 40000, "ram_total_mb": 65000, "version": "2026-07-18-cpu-hb",
+        "psutil": True, "agent_id": "Win10-HyperV:1234",
+        "leaders": [{"strategy": "cci", "symbol": "RIU6", "net": 12345, "rf": 3.1,
+                     "trades": 40, "params": {"qty": 1, "tp_atr": 60}}],
         "activity": {"state": "job", "run_id": "camp-x", "symbol": "RIU6", "combos": 300},
     }
     d.update(over)
@@ -32,8 +34,16 @@ def test_fresh_passthrough():
     assert v["workers"] == 18 and v["cpu_count"] == 20
     assert v["has_psutil"] is True
     assert v["activity"]["symbol"] == "RIU6"
+    assert v["priority"] == "idle"
+    assert len(v["leaders"]) == 1 and v["leaders"][0]["net"] == 12345
+    assert v["leaders"][0]["params"] == {"qty": 1, "tp_atr": 60}
     assert v["age_sec"] == 4
     assert v["stale"] is False
+
+
+def test_leaders_default_empty_when_absent():
+    v = i9_hb_view(_raw(leaders=None), now_ts=1000.0)
+    assert v["leaders"] == []
 
 
 def test_stale_when_old():

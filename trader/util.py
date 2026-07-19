@@ -21,6 +21,8 @@ def i9_hb_view(raw: "str | None", now_ts: float, stale_after: float = 15.0) -> "
         "per_core": d.get("per_core") or [],
         "cpu_count": d.get("cpu_count"),
         "workers": d.get("workers"),
+        "priority": d.get("priority"),
+        "leaders": d.get("leaders") or [],
         "ram_pct": d.get("ram_pct"),
         "ram_used_mb": d.get("ram_used_mb"),
         "ram_total_mb": d.get("ram_total_mb"),
