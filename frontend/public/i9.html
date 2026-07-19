@@ -1,0 +1,126 @@
+<!doctype html><html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>i9 · ресурсы (STL)</title>
+<!-- STL-side mirror of the i9 agent's local resource page. Reads the SAME data STL
+     already receives via the agent heartbeat (/api/v1/agent/activity -> .i9). Manual
+     refresh by design; auth via the same-origin session cookie (like agent-status.html). -->
+<style>
+  :root{--bg:#0a0e17;--panel:#0f1524;--bd:#1e2a44;--ink:#d7e0f0;--dim:#7386a8;--lbl:#5a6c90;
+        --grn:#43c463;--amb:#f5a623;--red:#ff5c5c;--cyan:#4dd0e1;--mono:ui-monospace,Consolas,monospace}
+  *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--ink);
+    font:14px/1.5 system-ui,Segoe UI,sans-serif;padding:18px}
+  h1{font-size:16px;margin:0 0 2px} .sub{color:var(--dim);font-size:12px}
+  .sub b{color:var(--cyan)} .mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+  .top{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+  button{background:#14203a;border:1px solid #2c8a4e;color:#d6ffe4;border-radius:5px;
+    font-size:13px;font-weight:600;padding:6px 14px;cursor:pointer}
+  button:hover{background:#1a2a48} label{font-size:12px;color:var(--dim);cursor:pointer}
+  .dotc{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;vertical-align:middle}
+  .dotc.on{background:var(--grn);box-shadow:0 0 6px #43c463aa} .dotc.off{background:var(--red)}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;max-width:1000px}
+  .card{background:var(--panel);border:1px solid var(--bd);border-radius:8px;padding:12px 14px}
+  .card.wide{grid-column:1/3} .card.stale{opacity:.55}
+  .lbl{font-size:10px;text-transform:uppercase;letter-spacing:.6px;color:var(--lbl);margin-bottom:6px}
+  .big{font-size:34px;font-weight:700;line-height:1} .big.hot{color:var(--red)} .big.ok{color:var(--grn)}
+  .bar{height:8px;background:#0b1220;border-radius:4px;overflow:hidden;margin-top:8px}
+  .bar > i{display:block;height:100%;background:linear-gradient(90deg,#2f8f49,var(--grn))}
+  .bar > i.hot{background:linear-gradient(90deg,#b5502a,var(--red))}
+  .cores{display:flex;align-items:flex-end;gap:3px;height:64px;margin-top:6px}
+  .core{flex:1;min-width:6px;height:100%;background:#0b1220;border-radius:2px;display:flex;align-items:flex-end;overflow:hidden}
+  .core > i{width:100%;background:var(--cyan);border-radius:2px} .core > i.hot{background:var(--red)}
+  .act{font-size:15px} .act b{color:var(--cyan)}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle}
+  .dot.run{background:var(--grn);box-shadow:0 0 6px #43c463aa} .dot.idle{background:#556}
+  .prog{height:16px;background:#0a1120;border:1px solid #1a2a44;border-radius:3px;position:relative;overflow:hidden;margin-top:6px}
+  .prog > i{position:absolute;inset:0 auto 0 0;background:#1f5e3a} .prog > span{position:relative;font-size:10px;color:#cfe;padding-left:8px;line-height:16px;white-space:nowrap}
+  table{width:100%;border-collapse:collapse;font-size:12px} th,td{text-align:left;padding:4px 6px}
+  th{color:var(--lbl);font-weight:500;font-size:10px;text-transform:uppercase;border-bottom:1px solid var(--bd)}
+  td{border-bottom:1px solid #131c30} td.num{text-align:right;font-family:var(--mono)}
+  .st.ok{color:var(--grn)} .st.bad{color:var(--red);font-weight:700}
+  .warn{color:var(--amb);font-size:12px} #err{color:var(--red);font-size:12px}
+</style></head><body>
+  <h1>🖥 i9 · ресурсы (зеркало на STL)</h1>
+  <div class="top">
+    <button id="refresh">↻ Обновить</button>
+    <label><input type="checkbox" id="auto"> авто (5с)</label>
+    <span class="sub" id="hdr">—</span>
+    <span id="err"></span>
+  </div>
+  <div class="grid">
+    <div class="card" id="cpuCard"><div class="lbl">Загрузка CPU i9</div>
+      <div id="cpuBig" class="big">—</div><div class="bar"><i id="cpuBar" style="width:0"></i></div>
+      <div id="cpuWarn" class="warn" style="margin-top:8px"></div>
+    </div>
+    <div class="card"><div class="lbl">RAM</div>
+      <div id="ramBig" class="big">—</div><div class="bar"><i id="ramBar" style="width:0"></i></div>
+      <div id="ramSub" class="sub" style="margin-top:8px"></div>
+    </div>
+    <div class="card wide"><div class="lbl">Ядра (<span id="coreN">—</span>) · воркеры <span id="wk" class="mono">—</span></div>
+      <div class="cores" id="cores"></div>
+    </div>
+    <div class="card wide"><div class="lbl">Сейчас</div><div class="act" id="act">—</div></div>
+    <div class="card wide"><div class="lbl">Кампания <span id="camp" class="sub"></span></div>
+      <div class="prog"><i id="progBar" style="width:0"></i><span id="progLbl">—</span></div>
+    </div>
+    <div class="card wide"><div class="lbl">Последние прогоны</div>
+      <table><thead><tr><th>Стратегия · инстр.</th><th>агент</th><th>статус</th><th class="num">сек</th></tr></thead>
+      <tbody id="recent"><tr><td colspan="4" style="color:var(--dim)">—</td></tr></tbody></table>
+    </div>
+  </div>
+<script>
+function esc(v){return (''+v).replace(/[<>&]/g,function(c){return {'<':'&lt;','>':'&gt;','&':'&amp;'}[c];});}
+function clock(){var d=new Date();return d.toLocaleTimeString('ru-RU');}
+function set(id,html){document.getElementById(id).innerHTML=html;}
+function render(d){
+  document.getElementById('err').textContent='';
+  var on=!!d.online, dot='<span class="dotc '+(on?'on':'off')+'"></span>';
+  var i=d.i9;
+  set('hdr', dot+'i9 '+(on?'онлайн':'офлайн')+' · обновлено '+clock()
+      +(i? ' · v'+esc(i.version||'?')+' · '+esc(i.agent_id||'')+(i.stale? ' · <span style="color:var(--red)">нет пинга '+esc(i.age_sec)+'с</span>':' · пинг '+esc(i.age_sec)+'с') : ' · телеметрии нет'));
+  document.getElementById('cpuCard').className='card'+((i&&i.stale)?' stale':'');
+  if(!i){ set('act','<span class="dot idle"></span>i9 ещё не прислал телеметрию — обнови opt_agent на i9');
+    document.getElementById('cpuBig').textContent='—'; document.getElementById('ramBig').textContent='—';
+    document.getElementById('cores').innerHTML=''; }
+  else {
+    var cpu=i.cpu_pct, big=document.getElementById('cpuBig'), bar=document.getElementById('cpuBar');
+    if(cpu==null){ big.textContent='—'; big.className='big'; bar.style.width='0';
+      document.getElementById('cpuWarn').textContent='psutil не установлен на i9 (pip install psutil)'; }
+    else { var hot=cpu>=85; big.textContent=cpu.toFixed(0)+'%'; big.className='big '+(hot?'hot':'ok');
+      bar.style.width=Math.min(100,cpu)+'%'; bar.className=hot?'hot':''; document.getElementById('cpuWarn').textContent=''; }
+    var rb=document.getElementById('ramBig');
+    if(i.ram_pct==null){ rb.textContent='—'; document.getElementById('ramBar').style.width='0'; document.getElementById('ramSub').textContent=''; }
+    else { rb.textContent=i.ram_pct.toFixed(0)+'%'; document.getElementById('ramBar').style.width=Math.min(100,i.ram_pct)+'%';
+      document.getElementById('ramSub').textContent=(i.ram_used_mb||0).toLocaleString()+' / '+(i.ram_total_mb||0).toLocaleString()+' МБ'; }
+    document.getElementById('coreN').textContent=i.cpu_count||'?';
+    document.getElementById('wk').textContent=(i.workers==null?'?':i.workers);
+    var wrap=document.getElementById('cores'), pc=i.per_core||[];
+    if(pc.length!==wrap.children.length){ wrap.innerHTML=''; for(var k=0;k<pc.length;k++){var c=document.createElement('div');c.className='core';c.innerHTML='<i></i>';wrap.appendChild(c);} }
+    for(var k=0;k<pc.length;k++){ var f=wrap.children[k].firstChild; f.style.height=Math.max(3,Math.min(100,pc[k]))+'%'; f.className=pc[k]>=90?'hot':''; wrap.children[k].title=Math.round(pc[k])+'%'; }
+    var a=i.activity||{};
+    if(a.state==='job') set('act','<span class="dot run"></span>считает <b>'+esc(a.symbol)+'</b> · '+esc(a.combos)+' комбо <span class="sub">('+esc(a.run_id||'')+')</span>');
+    else if(a.state==='task') set('act','<span class="dot run"></span>задача <b>'+esc(a.func||'')+'</b>');
+    else if(a.state==='idle') set('act','<span class="dot idle"></span>простаивает');
+    else set('act','<span class="dot idle"></span>'+esc(a.state||'—'));
+  }
+  // campaign progress (from STL side)
+  document.getElementById('camp').textContent=d.campaign||'';
+  var c=d.counts||{}, tot=(c.done||0)+(c.failed||0)+(c.queued||0)+(c.running||0);
+  document.getElementById('progBar').style.width=(d.pct||0)+'%';
+  set('progLbl', (d.pct||0)+'% · done '+(c.done||0)+'/'+tot+' · queued '+(c.queued||0)+' · running '+(c.running||0)
+      +' · '+(d.throughput_per_min||0)+' задач/мин');
+  var rows=(d.recent||[]).map(function(r){return '<tr><td class="mono">'+esc(r.strategy)+'·'+esc(r.symbol)
+    +'</td><td>'+esc(r.agent)+'</td><td class="st '+(r.status==='done'?'ok':(r.status==='failed'?'bad':''))+'">'+esc(r.status)
+    +'</td><td class="num"></td></tr>';}).join('');
+  document.getElementById('recent').innerHTML=rows||'<tr><td colspan="4" style="color:var(--dim)">пока нет</td></tr>';
+}
+async function load(){
+  try{ var r=await fetch('/api/v1/agent/activity',{cache:'no-store',credentials:'same-origin'});
+    if(!r.ok){ document.getElementById('err').textContent='HTTP '+r.status+(r.status===401?' — войди в STL сначала':''); return; }
+    render(await r.json());
+  }catch(e){ document.getElementById('err').textContent='ошибка сети: '+e; }
+}
+document.getElementById('refresh').onclick=load;
+var timer=null;
+document.getElementById('auto').onchange=function(){ if(this.checked){ timer=setInterval(load,5000);} else if(timer){ clearInterval(timer); timer=null; } };
+load();
+</script></body></html>

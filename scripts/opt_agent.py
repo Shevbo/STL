@@ -22,13 +22,17 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import collections
 import itertools
+import json
 import os
 import socket
 import sys
+import threading
 import time
 from concurrent.futures import ProcessPoolExecutor
 from datetime import date, datetime
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # Force UTF-8 console so status lines (→ × …) print on Windows cp1251 terminals.
 try:
@@ -123,7 +127,7 @@ except Exception:  # noqa: BLE001
 
 # Bumped whenever the agent's wire behaviour changes; reported in the heartbeat so the
 # monitor shows whether the i9 is running the latest opt_agent.
-AGENT_VERSION = "2026-07-18-cpu-hb"
+AGENT_VERSION = "2026-07-19-statuspage"
 
 # ── self-update ────────────────────────────────────────────────────────────────
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -131,6 +135,104 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # tarball host is intermittently blocked there).
 RAW_BASE = os.environ.get("OPT_AGENT_RAW_BASE", "https://raw.githubusercontent.com/Shevbo/STL/main")
 TOKEN_FILE = os.path.join(REPO_ROOT, ".agent_update_token")
+
+# Local resource page served on 127.0.0.1 — self-contained (no external assets), polls
+# /metrics every 1.5s. Mirrors what the STL heartbeat sends, viewable right on the i9.
+_STATUS_HTML = r"""<!doctype html><html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>i9 · ресурсы агента STL</title>
+<style>
+  :root{--bg:#0a0e17;--panel:#0f1524;--bd:#1e2a44;--ink:#d7e0f0;--dim:#7386a8;--lbl:#5a6c90;
+        --grn:#43c463;--amb:#f5a623;--red:#ff5c5c;--cyan:#4dd0e1;--mono:ui-monospace,Consolas,monospace}
+  *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--ink);
+    font:14px/1.5 system-ui,Segoe UI,sans-serif;padding:18px}
+  h1{font-size:16px;margin:0 0 2px} .sub{color:var(--dim);font-size:12px;margin-bottom:14px}
+  .sub b{color:var(--cyan)} .mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;max-width:1000px}
+  .card{background:var(--panel);border:1px solid var(--bd);border-radius:8px;padding:12px 14px}
+  .card.wide{grid-column:1/3}
+  .lbl{font-size:10px;text-transform:uppercase;letter-spacing:.6px;color:var(--lbl);margin-bottom:6px}
+  .big{font-size:34px;font-weight:700;line-height:1} .big.hot{color:var(--red)} .big.ok{color:var(--grn)}
+  .bar{height:8px;background:#0b1220;border-radius:4px;overflow:hidden;margin-top:8px}
+  .bar > i{display:block;height:100%;background:linear-gradient(90deg,#2f8f49,var(--grn))}
+  .bar > i.hot{background:linear-gradient(90deg,#b5502a,var(--red))}
+  .cores{display:flex;align-items:flex-end;gap:3px;height:64px;margin-top:6px}
+  .core{flex:1;min-width:6px;height:100%;background:#0b1220;border-radius:2px;display:flex;align-items:flex-end;overflow:hidden}
+  .core > i{width:100%;background:var(--cyan);border-radius:2px}
+  .core > i.hot{background:var(--red)}
+  .kv{display:flex;justify-content:space-between;font-size:13px;padding:3px 0;border-bottom:1px solid #131c30}
+  .kv:last-child{border-bottom:none} .kv span{color:var(--dim)}
+  .act{font-size:15px} .act b{color:var(--cyan)}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle}
+  .dot.run{background:var(--grn);box-shadow:0 0 6px #43c463aa} .dot.idle{background:#556}
+  table{width:100%;border-collapse:collapse;font-size:12px} th,td{text-align:left;padding:4px 6px}
+  th{color:var(--lbl);font-weight:500;font-size:10px;text-transform:uppercase;border-bottom:1px solid var(--bd)}
+  td{border-bottom:1px solid #131c30} td.num{text-align:right;font-family:var(--mono)}
+  .warn{color:var(--amb);font-size:12px} #conn{color:var(--red);font-size:12px}
+</style></head><body>
+  <h1>🖥 i9 · ресурсы агента STL</h1>
+  <div class="sub" id="hdr">подключение…</div>
+  <div id="conn"></div>
+  <div class="grid">
+    <div class="card"><div class="lbl">Загрузка CPU</div>
+      <div id="cpuBig" class="big">—</div><div class="bar"><i id="cpuBar" style="width:0"></i></div>
+      <div id="cpuWarn" class="warn" style="margin-top:8px"></div>
+    </div>
+    <div class="card"><div class="lbl">RAM</div>
+      <div id="ramBig" class="big">—</div><div class="bar"><i id="ramBar" style="width:0"></i></div>
+      <div id="ramSub" class="sub" style="margin:8px 0 0"></div>
+    </div>
+    <div class="card wide"><div class="lbl">Ядра (<span id="coreN">—</span>) · воркеры <span id="wk" class="mono">—</span></div>
+      <div class="cores" id="cores"></div>
+    </div>
+    <div class="card wide"><div class="lbl">Сейчас</div>
+      <div class="act" id="act">—</div>
+    </div>
+    <div class="card wide"><div class="lbl">Последние прогоны</div>
+      <table><thead><tr><th>Инстр.</th><th class="num">Комбо</th><th class="num">Сек</th><th class="num">Комбо/с</th><th class="num">OK</th></tr></thead>
+      <tbody id="recent"><tr><td colspan="5" style="color:var(--dim)">—</td></tr></tbody></table>
+    </div>
+  </div>
+<script>
+function fmtDur(s){s=Math.round(s||0);var h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;return (h?h+'ч ':'')+(h||m?m+'м ':'')+x+'с';}
+function esc(v){return (''+v).replace(/[<>&]/g,function(c){return {'<':'&lt;','>':'&gt;','&':'&amp;'}[c];});}
+function render(d){
+  document.getElementById('conn').textContent='';
+  var a=d.activity||{};
+  document.getElementById('hdr').innerHTML='агент <b>'+esc(d.agent_id||'?')+'</b> · v'+esc(d.version||'?')
+    +' · аптайм '+fmtDur(d.uptime_sec)+' · '+esc(d.api||'')+' · poll '+esc(d.poll)+'с';
+  // CPU
+  var cpu=d.cpu_pct, big=document.getElementById('cpuBig'), bar=document.getElementById('cpuBar');
+  if(cpu==null){ big.textContent='—'; big.className='big'; bar.style.width='0';
+    document.getElementById('cpuWarn').textContent='psutil не установлен — на i9: pip install psutil';
+  } else { var hot=cpu>=85; big.textContent=cpu.toFixed(0)+'%'; big.className='big '+(hot?'hot':'ok');
+    bar.style.width=Math.min(100,cpu)+'%'; bar.className=hot?'hot':''; document.getElementById('cpuWarn').textContent=''; }
+  // RAM
+  var rb=document.getElementById('ramBig'), rbar=document.getElementById('ramBar');
+  if(d.ram_pct==null){ rb.textContent='—'; rbar.style.width='0'; document.getElementById('ramSub').textContent=''; }
+  else { rb.textContent=d.ram_pct.toFixed(0)+'%'; rbar.style.width=Math.min(100,d.ram_pct)+'%';
+    document.getElementById('ramSub').textContent=(d.ram_used_mb||0).toLocaleString()+' / '+(d.ram_total_mb||0).toLocaleString()+' МБ'; }
+  // cores
+  document.getElementById('coreN').textContent=d.cpu_count||'?';
+  document.getElementById('wk').textContent=(d.workers==null?'?':d.workers);
+  var wrap=document.getElementById('cores'), pc=d.per_core||[];
+  if(pc.length!==wrap.children.length){ wrap.innerHTML=''; for(var i=0;i<pc.length;i++){var c=document.createElement('div');c.className='core';c.innerHTML='<i></i>';wrap.appendChild(c);} }
+  for(var i=0;i<pc.length;i++){ var f=wrap.children[i].firstChild; f.style.height=Math.max(3,Math.min(100,pc[i]))+'%'; f.className=pc[i]>=90?'hot':''; wrap.children[i].title=Math.round(pc[i])+'%'; }
+  // activity
+  var actEl=document.getElementById('act');
+  if(a.state==='job') actEl.innerHTML='<span class="dot run"></span>считает <b>'+esc(a.symbol)+'</b> · '+esc(a.combos)+' комбо <span class="sub">('+esc(a.run_id||'')+')</span>';
+  else if(a.state==='task') actEl.innerHTML='<span class="dot run"></span>задача <b>'+esc(a.func||'')+'</b> · '+esc(a.units)+' ед.';
+  else if(a.state==='idle') actEl.innerHTML='<span class="dot idle"></span>простаивает — ждёт джобы';
+  else actEl.innerHTML='<span class="dot idle"></span>'+esc(a.state||'—');
+  // recent
+  var rows=(d.recent||[]).map(function(r){return '<tr><td class="mono">'+esc(r.symbol)+'</td><td class="num">'+esc(r.combos)
+    +'</td><td class="num">'+esc(r.secs)+'</td><td class="num">'+esc(r.cps)+'</td><td class="num">'+esc(r.ok)+'</td></tr>';}).join('');
+  document.getElementById('recent').innerHTML=rows||'<tr><td colspan="5" style="color:var(--dim)">пока нет</td></tr>';
+}
+async function tick(){ try{ var r=await fetch('/metrics',{cache:'no-store'}); render(await r.json()); }
+  catch(e){ document.getElementById('conn').textContent='нет связи с агентом (перезапущен?)'; } }
+setInterval(tick,1500); tick();
+</script></body></html>"""
 
 
 class _Restart(Exception):
@@ -245,11 +347,13 @@ def _run_task_unit(module: str, func: str, arg):
 
 # ── agent ─────────────────────────────────────────────────────────────────────
 class Agent:
-    def __init__(self, api: str, token: str, workers: int, poll: float, proxy: str = ""):
+    def __init__(self, api: str, token: str, workers: int, poll: float, proxy: str = "",
+                 status_port: int = 8099):
         self.api = api.rstrip("/")
         self.token = token
         self.workers = workers
         self.poll = poll
+        self.status_port = status_port
         # Corporate networks often block direct outbound :443 ("All connection
         # attempts failed"). Route httpx through the proxy if given (or via the
         # standard HTTPS_PROXY env var, which httpx reads by default).
@@ -260,6 +364,12 @@ class Agent:
         # What the CPU is doing right now, surfaced by the heartbeat. Mutated by the
         # claim loop (job/task/idle); read by the concurrent heartbeat task.
         self._activity: dict = {"state": "starting"}
+        # Latest metrics snapshot + recent jobs for the LOCAL status page (127.0.0.1).
+        # The heartbeat task refills _last_metrics; the http thread only reads it (no
+        # psutil.cpu_percent() from two callers, which would split the sampling window).
+        self._last_metrics: dict = {}
+        self._recent: collections.deque = collections.deque(maxlen=12)
+        self._started = time.time()
         if psutil is not None:
             try:
                 psutil.cpu_percent(interval=None)  # prime: first call is meaningless
@@ -346,6 +456,7 @@ class Agent:
                 m["ram_total_mb"] = round(vm.total / 1e6)
             except Exception:  # noqa: BLE001
                 pass
+        self._last_metrics = m          # freshest snapshot for the local status page
         return m
 
     async def _heartbeat_loop(self, client: httpx.AsyncClient, period: float = 4.0):
@@ -359,6 +470,53 @@ class Agent:
             except Exception:  # noqa: BLE001 — a missed heartbeat just ages out in the monitor
                 pass
             await asyncio.sleep(period)
+
+    # ── local status page (127.0.0.1) ────────────────────────────────────────────
+    def _status_payload(self) -> dict:
+        """Everything the local page shows: the freshest metric snapshot (refilled by
+        the heartbeat task) + recent jobs + uptime. Read-only, thread-safe (reads a
+        dict reference the heartbeat swaps wholesale)."""
+        m = dict(self._last_metrics or {"activity": self._activity})
+        m["recent"] = list(self._recent)
+        m["uptime_sec"] = round(time.time() - self._started)
+        m["api"] = self.api
+        m["poll"] = self.poll
+        return m
+
+    def _start_status_server(self) -> None:
+        """Serve a live resource page on 127.0.0.1:<status_port> (like the QUIK agent's
+        :8071). Loopback only, no auth. Best-effort — a bind failure never stops the
+        agent."""
+        agent = self
+
+        class _H(BaseHTTPRequestHandler):
+            def log_message(self, *a):  # silence per-request logging
+                pass
+
+            def _send(self, body: bytes, ctype: str):
+                self.send_response(200)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                try:
+                    self.wfile.write(body)
+                except Exception:
+                    pass
+
+            def do_GET(self):
+                if self.path.startswith("/metrics"):
+                    self._send(json.dumps(agent._status_payload()).encode(), "application/json")
+                else:
+                    self._send(_STATUS_HTML.encode("utf-8"), "text/html; charset=utf-8")
+
+        try:
+            srv = ThreadingHTTPServer(("127.0.0.1", self.status_port), _H)
+        except Exception as exc:  # noqa: BLE001 — port taken / restricted
+            _log(f"status page disabled (bind :{self.status_port} failed: {exc})")
+            return
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        _log(f"status page → http://127.0.0.1:{self.status_port}/")
 
     # ── generic tasks ───────────────────────────────────────────────────────
     async def claim_task(self, client: httpx.AsyncClient):
@@ -443,6 +601,10 @@ class Agent:
             ok = sum(1 for r in results if r.get("ok"))
             _log(f"[{run_id}] done {ok}/{len(results)} in {dt:.1f}s "
                  f"({len(results)/dt:.0f} combos/s)")
+            self._recent.appendleft({"symbol": symbol, "combos": len(param_sets),
+                                     "secs": round(dt, 1), "ok": ok,
+                                     "cps": round(len(results) / dt, 1) if dt else 0,
+                                     "at": time.time()})
             # Multi-combo sweeps only need metrics for the leaderboard — strip the
             # bulky trades + equity_curve arrays so we don't flood the small VDS
             # Postgres AND don't hit nginx body-size limits (413 Entity Too Large).
@@ -521,6 +683,7 @@ class Agent:
         """Supervisor: the agent must NEVER exit on its own. Any fatal error in a
         loop life (pool crash, client teardown) is caught and the loop restarts
         after a short backoff. Stop only via Ctrl+C / process kill."""
+        self._start_status_server()      # local resource page, survives loop restarts
         backoff = 5
         while True:
             try:
@@ -579,6 +742,9 @@ def main():
                     help="skip TLS verification (behind a TLS-intercepting proxy)")
     ap.add_argument("--log", default=os.environ.get("OPT_AGENT_LOG",
                     os.path.join(os.environ.get("TEMP", "."), "shectory_opt_agent.log")))
+    ap.add_argument("--status-port", type=int,
+                    default=int(os.environ.get("OPT_AGENT_STATUS_PORT", "8099")),
+                    help="local resource page on 127.0.0.1:<port> (0 disables)")
     args = ap.parse_args()
     if args.log:
         _tee_log(args.log)
@@ -597,7 +763,8 @@ def main():
         os.environ["OPT_AGENT_INSECURE"] = "1"   # so spawned workers inherit it
         _patch_httpx_insecure()
         print("WARNING: TLS verification DISABLED (--insecure)", flush=True)
-    asyncio.run(Agent(args.api, args.token, args.workers, args.poll, args.proxy).run())
+    asyncio.run(Agent(args.api, args.token, args.workers, args.poll, args.proxy,
+                      status_port=args.status_port).run())
 
 
 if __name__ == "__main__":
