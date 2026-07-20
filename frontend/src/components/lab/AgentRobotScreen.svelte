@@ -110,11 +110,26 @@
         fills.push({ time: t.time, side: t.side, qty: t.qty, price: t.price, order_id: t.order_id });
       }
     });
-    // coef only scales the P&L magnitude; the OPEN/TP/SL classification is coef-free.
-    const evs = tradeEvents(fills, 60, pointCoef ?? 1, symbol, !isPaper);
-    const m = new Map<number, { action: string; cls: string; pnl: number | null }>();
-    evs.forEach((e: any, k: number) => m.set(idx[k], mapAction(e)));
+    // Agent robots trade MARKETABLE (cross the spread) in BOTH paper and real, so the
+    // per-trade P&L is netted with the TAKER model — matching the runner's realized and
+    // the backtest (paper used to net maker here, disagreeing with the runner).
+    const evs = tradeEvents(fills, 60, pointCoef ?? 1, symbol, true);
+    const m = new Map<number, { action: string; cls: string; pnl: number | null; comm: number | null }>();
+    evs.forEach((e: any, k: number) => {
+      // Commission (₽) of THIS fill — every fill pays it; shown per row + summed below.
+      const comm = pointCoef != null ? commissionFor(symbol, e.price, e.qty, pointCoef, true) : null;
+      m.set(idx[k], { ...mapAction(e), comm });
+    });
     return m;
+  });
+  // Detailed-log totals (₽): commission paid across all fills + net realized on closes.
+  const tradeTotals = $derived.by(() => {
+    let comm = 0, net = 0;
+    for (const [, meta] of tradeActions) {
+      if (meta?.comm != null) comm += meta.comm;
+      if (meta?.pnl != null) net += meta.pnl;
+    }
+    return { comm, net };
   });
   // trades newest-last; attach each row's action so the template can reverse freely.
   const tradeRows = $derived(trades.map((t: any, i: number) => ({ ...t, meta: tradeActions.get(i) ?? null })));
@@ -686,10 +701,10 @@
         <span class="pt-note">каждая строка = заявка робота; «Подтверждение» — ID из QUIK или paper</span></div>
       <div class="hist-scroll">
         <table>
-          <thead><tr><th>Время (МСК)</th><th>Сторона</th><th title="роль сделки в жизненном цикле позиции: OPEN — открытие, AVG — усреднение против движения, ENF — усиление по движению, TP/SL — закрытие в плюс/минус, →OPEN — разворот">Действие</th><th>Кол-во</th><th>Цена</th><th title="реализованный результат сделки net комиссии, только на закрывающих (TP/SL/разворот)">P&amp;L</th><th>Статус</th><th>Подтверждение</th></tr></thead>
+          <thead><tr><th>Время (МСК)</th><th>Сторона</th><th title="роль сделки в жизненном цикле позиции: OPEN — открытие, AVG — усреднение против движения, ENF — усиление по движению, TP/SL — закрытие в плюс/минус, →OPEN — разворот">Действие</th><th>Кол-во</th><th>Цена</th><th title="реализованный результат сделки net комиссии, только на закрывающих (TP/SL/разворот)">P&amp;L ₽</th><th title="биржевая комиссия (taker) этого филла — платится на КАЖДОЙ сделке">Комиссия ₽</th><th>Статус</th><th>Подтверждение</th></tr></thead>
           <tbody>
             {#if trades.length === 0}
-              <tr class="empty-row"><td colspan="8">Сделок пока нет — робот ждёт сигнала.</td></tr>
+              <tr class="empty-row"><td colspan="9">Сделок пока нет — робот ждёт сигнала.</td></tr>
             {:else}
               {#each [...tradeRows].reverse() as t}
                 <tr class:rej={t.status === 'rejected' || t.status === 'skipped'}>
@@ -699,6 +714,7 @@
                   <td class="mono">{t.qty}</td>
                   <td class="mono">{Math.round(t.price).toLocaleString('ru-RU')}</td>
                   <td class="mono">{#if t.meta?.pnl != null && pointCoef != null}<span class={t.meta.pnl >= 0 ? 'buy' : 'sell'}>{t.meta.pnl >= 0 ? '+' : ''}{Math.round(t.meta.pnl).toLocaleString('ru-RU')} ₽</span>{/if}</td>
+                  <td class="mono">{#if t.meta?.comm != null && t.meta.comm > 0}<span class="comm-cell" title="комиссия этого филла">−{t.meta.comm.toLocaleString('ru-RU', { maximumFractionDigits: 2 })} ₽</span>{/if}</td>
                   <td><span class="st st-{t.status}">{t.status}</span></td>
                   <td class="mono id">
                     {#if t.status === 'paper'}
@@ -713,6 +729,17 @@
               {/each}
             {/if}
           </tbody>
+          {#if trades.length && pointCoef != null}
+            <tfoot>
+              <tr class="hist-tot">
+                <td colspan="5" class="tot-lbl" title="по показанным в таблице сделкам (хвост до 200); полный реализованный P&L — в бейдже вверху">Итого (показанные, ₽):</td>
+                <td class="mono" class:buy={tradeTotals.net >= 0} class:sell={tradeTotals.net < 0}
+                    title="сумма реализованного по закрытиям, net комиссии">{tradeTotals.net >= 0 ? '+' : ''}{Math.round(tradeTotals.net).toLocaleString('ru-RU')} ₽</td>
+                <td class="mono comm-cell" title="суммарная биржевая комиссия по всем филлам">−{Math.round(tradeTotals.comm).toLocaleString('ru-RU')} ₽</td>
+                <td colspan="2"></td>
+              </tr>
+            </tfoot>
+          {/if}
         </table>
       </div>
     </div>
@@ -906,6 +933,9 @@
   td.id { color: #667; font-size: 10px; max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .st { font-size: 10px; padding: 1px 5px; border-radius: 3px; background: #16162c; }
   .st-filled, .st-paper { color: #00e676; } .st-rejected { color: #f44336; } .st-skipped { color: #ffb300; }
+  .comm-cell { color: #e0956b; }
+  .hist-tot td { border-top: 1px solid #2d2d4a; padding-top: 5px; font-weight: 600; }
+  .tot-lbl { text-align: right; color: #9ab; }
   .empty { color: #556; font-size: 11px; padding: 6px 0; }
   .desc { font-size: 11px; line-height: 1.55; color: #aab; white-space: pre-wrap; max-height: 180px; overflow-y: auto; }
 </style>
