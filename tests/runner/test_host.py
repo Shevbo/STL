@@ -338,11 +338,13 @@ async def test_real_order_prices_marketable_from_host_quote(tmp_path):
     assert bridge.placed[-1]["price"] == 88_990.0         # bid
     assert s.price == 88_990.0
 
-    # STALE quote -> falls back to the strategy price
+    # STALE quote -> CROSS the (stale) bid so an EXIT still crosses the live market and
+    # never rests at the bar-close (the stuck-exit bug 2026-07-20).
+    from robot_runner.runtime import _STALE_CROSS_FRAC
     host.quotes["RIU6"] = (88_990.0, 89_010.0, now_ms - 60_000)
     f = await r.runtime.place_order("RIU6", "sell", 1, 89_100.0)
-    assert bridge.placed[-1]["price"] == 89_100.0
-    assert f.price == 89_100.0
+    assert bridge.placed[-1]["price"] == pytest.approx(88_990.0 * (1 - _STALE_CROSS_FRAC))
+    assert f.price < 88_990.0        # crosses below the stale bid → marketable
 
 
 @pytest.mark.asyncio
