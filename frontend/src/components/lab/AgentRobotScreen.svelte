@@ -378,6 +378,53 @@
     } catch (e) { flattenMsg = `Ошибка: ${String(e).slice(0, 80)}`; }
     finally { posBusy = false; }
   }
+  // Record a MANUAL trade the robot never emitted (e.g. a position the operator closed
+  // by hand in their own QUIK terminal). REALIZES P&L + lands in the fill history — the
+  // agent rides the real fill path. NO exchange order. Server + agent gate on PAUSED +
+  // confirm. Time is entered as HH:MM MSK (today) -> epoch ms (MSK = UTC+3).
+  let fillBusy = $state(false);
+  async function recordFill() {
+    const sideRaw = window.prompt(
+      `Записать РУЧНУЮ сделку (реализует P&L + в историю; реальный ордер НЕ выставляется).\n` +
+      `id: ${robotId}\nСторона: "sell" (продажа/закрытие лонга) или "buy" (покупка):`,
+      position > 0 ? 'sell' : 'buy');
+    if (sideRaw === null) return;
+    const side = sideRaw.trim().toLowerCase();
+    if (side !== 'buy' && side !== 'sell') { flattenMsg = 'Сторона — buy или sell.'; return; }
+    const qRaw = window.prompt('Кол-во контрактов:', String(Math.abs(position) || 1));
+    if (qRaw === null) return;
+    const qty = Number(qRaw);
+    if (!Number.isInteger(qty) || qty <= 0) { flattenMsg = 'Кол-во — целое > 0.'; return; }
+    const pRaw = window.prompt('Цена сделки:', String(robot?.last_close ?? ''));
+    if (pRaw === null) return;
+    const price = Number(pRaw);
+    if (!(price > 0)) { flattenMsg = 'Цена должна быть > 0.'; return; }
+    const tRaw = window.prompt('Время сделки ЧЧ:ММ по МСК (сегодня). Пусто = сейчас:', '');
+    if (tRaw === null) return;
+    let ts_unix_ms = 0;
+    const m = tRaw.trim().match(/^(\d{1,2}):(\d{2})$/);
+    if (m) {
+      const d = new Date();
+      ts_unix_ms = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(),
+                            Number(m[1]) - 3, Number(m[2]), 0);  // MSK = UTC+3
+    }
+    const conf = window.prompt(`Подтверди: впиши точный ID робота\n${robotId}`, '');
+    if (conf !== robotId) { flattenMsg = 'ID не совпал — отменено.'; return; }
+    if (!window.confirm(
+      `Записать ${side.toUpperCase()} ${qty} @ ${price}${m ? ' в ' + tRaw.trim() + ' МСК' : ''}?\n` +
+      `Реализует P&L робота. Реальный ордер НЕ выставляется.`)) return;
+    fillBusy = true; flattenMsg = '';
+    try {
+      const res = await fetchWithAuth(
+        `/api/v1/quik/robots/${encodeURIComponent(robotId)}/record-fill-agent`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ agent_id: agentId, side, qty, price,
+            ts_unix_ms: ts_unix_ms || undefined, confirm_id: robotId }) });
+      flattenMsg = res.ok ? `Сделка записана: ${side} ${qty} @ ${price}. Статистика обновится через пару секунд.`
+                          : `Ошибка: ${res.status}`;
+    } catch (e) { flattenMsg = `Ошибка: ${String(e).slice(0, 80)}`; }
+    finally { fillBusy = false; }
+  }
   // Clone this robot's exact strategy+params+symbol into a fresh PAPER robot on the
   // agent. deploy-agent needs no scriptCode/STL record — the runner resolves the
   // strategy by id. New robot_id must be colon-free (attribution parses on ':').
@@ -558,8 +605,11 @@
         {#if robot.paused}
           <button class="rc-btn go" onclick={startRobot} title="возобновить работу робота">▶ Пуск</button>
           <button class="rc-btn" disabled={posBusy} onclick={zeroBelief}
-                  title="исправить веру робота о позиции (например обнулить после ручного закрытия) — только вера, не реальный ордер">
+                  title="исправить веру робота о позиции (фантом) — только вера, без реализации P&L и без реального ордера">
             {posBusy ? '…' : '✎ Позиция'}</button>
+          <button class="rc-btn" disabled={fillBusy} onclick={recordFill}
+                  title="записать РУЧНУЮ сделку (закрытие руками в терминале): реализует P&L и попадёт в историю, реальный ордер НЕ выставляется">
+            {fillBusy ? '…' : '＋ Сделка'}</button>
         {:else}
           <button class="rc-btn" disabled={pausing} onclick={pauseRobot}
                   title="остановить новые входы; открытая позиция ОСТАЁТСЯ">

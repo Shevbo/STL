@@ -168,6 +168,7 @@ message OrchestratorMessage {
     StartRobot start_robot = 14;
     FlattenRobot flatten_robot = 15;   // operator: market-close the whole position + pause
     SetRobotPosition set_robot_position = 16;  // operator: force the believed position (belief-only)
+    RecordRobotFill record_robot_fill = 17;    // operator: inject a fill (realizes P&L + history)
   }
 }
 
@@ -269,6 +270,22 @@ message SetRobotPosition {
   int64 position = 2;
   double avg_price = 3;
   string confirm_id = 4;
+}
+
+// Operator manual-trade recording: inject a fill the robot itself never emitted
+// (e.g. a position the operator closed by hand in their own QUIK terminal — an
+// UNTAGGED trade the journal auto-heal deliberately skips). Unlike SetRobotPosition
+// (belief-only), this REALIZES P&L and appends to the fill history, because it rides
+// the real fill path (agent fabricates an OrderUpdate -> runner on_order_event ->
+// _apply_fill). No real exchange order is placed. Gated agent-side on PAUSED +
+// confirm_id==robot_id. side is "buy" | "sell"; symbol comes from the robot spec.
+message RecordRobotFill {
+  string robot_id = 1;
+  string side = 2;          // "buy" | "sell"
+  int64 qty = 3;
+  double price = 4;
+  int64 ts_unix_ms = 5;     // when the manual trade happened (journal/chart stamp)
+  string confirm_id = 6;
 }
 
 // A robot's resting/in-flight order (agent-hosted execution).

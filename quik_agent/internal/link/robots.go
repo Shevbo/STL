@@ -1,6 +1,8 @@
 package link
 
 import (
+	"fmt"
+
 	quikv1 "shectory/quik_agent/internal/pb"
 	"shectory/quik_agent/internal/robots"
 )
@@ -13,7 +15,12 @@ import (
 
 // RunnerControlSink is the runner-bridge subset the link relays commands into.
 // runner.Server satisfies it. Interface keeps link free of the runner package.
-type RunnerControlSink interface{ PushControl(*quikv1.RunnerControl) }
+// FanOrderEvent injects a fabricated fill through the runner's normal event path
+// (same mechanism the journal auto-heal uses) — for operator manual-trade recording.
+type RunnerControlSink interface {
+	PushControl(*quikv1.RunnerControl)
+	FanOrderEvent(*quikv1.OrderUpdate)
+}
 
 // SetRobots wires the persisted store + runner bridge AFTER construction (same
 // pattern as SetTrade — main builds link, bridge, then connects them).
@@ -68,6 +75,38 @@ func (l *Link) handleRobotMsg(msg *quikv1.OrchestratorMessage) {
 			ClearWorking: true,
 			Note:         "STL: ручная установка позиции (оператор)",
 		}}}
+	case *quikv1.OrchestratorMessage_RecordRobotFill:
+		// Inject an operator manual-trade fill through the runner's real fill path
+		// (fabricated OrderUpdate -> on_order_event -> _apply_fill), so P&L is realized
+		// and it lands in the fill history — for a position the operator closed by hand
+		// (an untagged QUIK trade the auto-heal skips). Gate: confirm_id echoes the id
+		// AND the robot is PAUSED. symbol comes from the spec; the client_id is stable
+		// per (ts,qty) so a re-send is idempotent (runner dedups fills per client_id).
+		rf := p.RecordRobotFill
+		spec := l.opt.Robots.Get(rf.GetRobotId())
+		if spec == nil || rf.GetConfirmId() != rf.GetRobotId() || rf.GetQty() <= 0 ||
+			!l.opt.Robots.Paused(rf.GetRobotId()) {
+			return
+		}
+		side := quikv1.Side_SIDE_BUY
+		if rf.GetSide() == "sell" {
+			side = quikv1.Side_SIDE_SELL
+		}
+		if l.opt.Runner != nil {
+			l.opt.Runner.FanOrderEvent(&quikv1.OrderUpdate{
+				ClientId: fmt.Sprintf("rr:%s:manual:%d:%d", rf.GetRobotId(), rf.GetTsUnixMs(), rf.GetQty()),
+				OrderId:  fmt.Sprintf("manual-%d", rf.GetTsUnixMs()),
+				Code:     spec.GetSymbol(),
+				Side:     side,
+				State:    quikv1.OrderState_ORDER_STATE_FILLED,
+				Price:    rf.GetPrice(),
+				Quantity: rf.GetQty(),
+				Filled:   rf.GetQty(),
+				Text:     "manual close recorded by operator (STL)",
+				TsUnixMs: rf.GetTsUnixMs(),
+			})
+		}
+		return // FanOrderEvent already delivered; nothing to PushControl
 	default:
 		return
 	}

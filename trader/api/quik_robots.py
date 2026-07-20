@@ -11,6 +11,7 @@ master flag (dual-flag, never pushed from here).
 from __future__ import annotations
 
 import json
+import time
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
@@ -80,6 +81,15 @@ class SetPositionBody(BaseModel):
     agent_id: str | None = None
     position: int
     avg_price: float = 0.0
+    confirm_id: str = ""
+
+
+class RecordFillBody(BaseModel):
+    agent_id: str | None = None
+    side: str                       # "buy" | "sell"
+    qty: int
+    price: float
+    ts_unix_ms: int | None = None   # when the manual trade happened; default now
     confirm_id: str = ""
 
 
@@ -308,6 +318,44 @@ async def set_position_agent(robot_id: str, body: SetPositionBody, request: Requ
             avg_price=float(body.avg_price or 0.0),
             confirm_id=robot_id)))
     return {"ok": True, "agent_id": agent, "robot_id": robot_id, "position": int(body.position)}
+
+
+@router.post("/robots/{robot_id}/record-fill-agent")
+async def record_fill_agent(robot_id: str, body: RecordFillBody, request: Request):
+    """Operator manual-trade recording: inject a fill the robot itself never emitted
+    (e.g. a position the operator closed BY HAND in their own QUIK terminal — an untagged
+    trade the journal auto-heal deliberately skips). Unlike set-position (belief-only) this
+    REALIZES P&L and appends to the fill history: the agent fabricates an OrderUpdate that
+    rides the runner's real fill path. NO exchange order is placed. Gated: confirm_id ==
+    robot_id AND the robot PAUSED per the mirror."""
+    _auth(request)
+    srv = _server(request)
+    store = _store(request)
+    agent = _resolve_agent(request, body.agent_id)
+    side = (body.side or "").lower()
+    if side not in ("buy", "sell"):
+        raise HTTPException(status_code=400, detail="side должен быть 'buy' или 'sell'.")
+    if body.qty <= 0 or body.price <= 0:
+        raise HTTPException(status_code=400, detail="qty и price должны быть > 0.")
+    if body.confirm_id != robot_id:
+        raise HTTPException(status_code=400, detail="Подтверждение не совпадает: введите точный ID робота.")
+    report = store.robot_report(body.agent_id) or {}
+    cur = next((r for r in report.get("robots", []) if r.get("robot_id") == robot_id), None)
+    if cur is None:
+        raise HTTPException(status_code=409, detail=(
+            "Робот не найден в зеркале агента — обнови страницу / проверь линк."))
+    if not cur.get("paused"):
+        raise HTTPException(status_code=409, detail=(
+            "Робот должен быть на ПАУЗЕ перед записью сделки."))
+    ts = int(body.ts_unix_ms or 0)
+    if ts <= 0:
+        ts = int(time.time() * 1000)
+    srv.enqueue_order(agent, pb.OrchestratorMessage(
+        record_robot_fill=pb.RecordRobotFill(
+            robot_id=robot_id, side=side, qty=int(body.qty),
+            price=float(body.price), ts_unix_ms=ts, confirm_id=robot_id)))
+    return {"ok": True, "agent_id": agent, "robot_id": robot_id,
+            "side": side, "qty": int(body.qty), "price": float(body.price), "ts_unix_ms": ts}
 
 
 @router.get("/agent-local-status")
