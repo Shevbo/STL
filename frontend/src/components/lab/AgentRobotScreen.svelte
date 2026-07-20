@@ -355,6 +355,19 @@
     finally { cloneBusy = false; }
   }
 
+  // Display name overlay (agent robots have no name of their own — robot_id is the key).
+  const displayName = $derived(robot?.display_name || robotId);
+  async function renameRobot() {
+    const cur = (robot?.display_name as string) || '';
+    const next = window.prompt(`Имя робота (id: ${robotId})\nПусто = вернуть к id:`, cur);
+    if (next === null) return;
+    await fetchWithAuth(`/api/v1/quik/robots/${encodeURIComponent(robotId)}/rename`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: next.trim() }),
+    });
+    await load();   // reflect immediately
+  }
+
   // ---- params editor (GUI, no hand-JSON): params apply next bar; changing
   // max_position/schedule relays a full spec re-deploy (zero-loss). ----
   let editMode = $state(false);
@@ -464,7 +477,8 @@
   <div class="ars-head">
     <NavMenu />
     <span class="ars-icon">🤖</span>
-    <span class="ars-name">{robotId}</span>
+    <span class="ars-name">{displayName}</span>
+    <button class="ars-rename" title="Переименовать" onclick={renameRobot}>✏</button>
     {#if robot}
       <span class="badge" class:real={!robot.paper}>{robot.paper ? 'PAPER' : 'РЕАЛ'}</span>
       <span class="badge sym">{symbol}</span>
@@ -769,6 +783,8 @@
   .ars-head { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid #22224a; flex-wrap: wrap; flex-shrink: 0; }
   .ars-icon { font-size: 16px; }
   .ars-name { font-size: 14px; font-weight: 600; color: #eee; font-family: monospace; }
+  .ars-rename { background: none; border: none; color: #667; cursor: pointer; font-size: 12px; padding: 0 2px; }
+  .ars-rename:hover { color: #6aa8ff; }
   .badge { font-size: 10px; padding: 2px 8px; border-radius: 3px; background: #16162c; border: 1px solid #2d2d4a; color: #99a; }
   .badge.real { background: #2a0a0a; border-color: #f44336; color: #ff6b5e; font-weight: 700; }
   .badge.sym { color: #4caf50; font-family: monospace; }
