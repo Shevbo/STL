@@ -63,7 +63,7 @@ export async function fetchAgentRobots(agentId?: string | null): Promise<AgentRo
       const hb = Number(r.heartbeat_unix_ms ?? 0);
       return {
         id: String(r.robot_id ?? ''),
-        name: String(r.robot_id ?? ''),
+        name: String(r.display_name || r.robot_id || ''),   // operator override, else the raw id
         symbol: String(r.symbol ?? ''),
         agent: true,
         mode: paper ? 'paper' : 'real',

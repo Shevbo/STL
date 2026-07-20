@@ -108,6 +108,19 @@
     agentRobots = await fetchAgentRobots();
   }
 
+  // Agent robots have no name of their own (robot_id is the key); STL keeps a display
+  // name overlay. Rename = set that overlay; empty clears it back to the raw id.
+  async function renameAgentRobot(r: AgentRobotRow) {
+    const cur = r.name === r.id ? '' : r.name;
+    const next = window.prompt(`Имя робота (id: ${r.id})\nПусто = вернуть к id:`, cur);
+    if (next === null) return;                 // cancelled
+    await fetchWithAuth(`/api/v1/quik/robots/${encodeURIComponent(r.id)}/rename`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: next.trim() }),
+    });
+    agentRobots = await fetchAgentRobots();     // reflect immediately
+  }
+
   async function openRetire(robot: any) {
     retireTarget = robot;
     retireComment = '';
@@ -228,7 +241,10 @@
               <tr class="sc-row" class:stopped={!r.deployed}
                   title="Двойной клик — полный стенд робота"
                   ondblclick={() => openAgentRobot(r.id)}>
-                <td class="sc-name"><span class="dot" class:live={r.deployed}></span>{r.name}</td>
+                <td class="sc-name"><span class="dot" class:live={r.deployed}></span>{r.name}<button
+                    class="sc-rename" title="Переименовать"
+                    onclick={(e) => { e.stopPropagation(); renameAgentRobot(r); }}
+                    ondblclick={(e) => e.stopPropagation()}>✏</button></td>
                 <td class="sc-sym">{r.symbol}</td>
                 <td><span class="mode-pill" class:real={r.mode === 'real'}>{r.mode === 'real' ? 'РЕАЛ' : 'бумага'}</span></td>
                 <td class="num sc-pnl" class:pos={(r.netRub ?? 0) > 0} class:neg={(r.netRub ?? 0) < 0}>
@@ -417,7 +433,10 @@
   .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #333; margin-right: 5px; vertical-align: middle; }
   .dot.live { background: #4caf50; box-shadow: 0 0 4px #4caf5088; }
 
-  .sc-name { color: #ccc; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sc-name { color: #ccc; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sc-rename { background: none; border: none; color: #556; cursor: pointer; font-size: 11px; padding: 0 2px; margin-left: 5px; opacity: 0; transition: opacity .12s; }
+  .sc-row:hover .sc-rename { opacity: 1; }
+  .sc-rename:hover { color: #6aa8ff; }
   .sc-sym { color: #4caf50; font-family: monospace; font-weight: 600; }
   .sc-time { font-family: monospace; color: #667; font-size: 10px; }
   .sc-rname { color: #aaa; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

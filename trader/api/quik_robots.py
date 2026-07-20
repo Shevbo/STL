@@ -45,6 +45,37 @@ def _resolve_agent(request: Request, agent_id: str | None) -> str:
     return resolve_agent(_store(request), agent_id)
 
 
+_NAME_PREFIX = "robotname:"
+
+
+async def _name_overrides(request: Request) -> dict:
+    """robot_id → operator display name, from agent_control('robotname:<id>'). Agent
+    robots have no name field (robot_id is the key), so STL keeps a display-name
+    overlay so a cuid-id robot can be shown with a friendly name."""
+    pool = getattr(request.app.state, "db_pool", None)
+    if pool is None:
+        return {}
+    try:
+        rows = await pool.fetch(
+            "SELECT key, value FROM agent_control WHERE key LIKE $1", _NAME_PREFIX + "%")
+        return {r["key"][len(_NAME_PREFIX):]: r["value"] for r in rows}
+    except Exception:
+        return {}
+
+
+def _overlay_names(report: dict | None, names: dict) -> dict | None:
+    if report and names:
+        for rob in report.get("robots", []):
+            nm = names.get(rob.get("robot_id"))
+            if nm:
+                rob["display_name"] = nm
+    return report
+
+
+class RenameBody(BaseModel):
+    name: str = ""
+
+
 class DeployAgentBody(BaseModel):
     agent_id: str | None = None
     strategy_id: str                  # library id, e.g. "fvg"
@@ -206,7 +237,7 @@ async def agent_robots(agent_id: str, request: Request):
     heartbeat per robot + runner health)."""
     _auth(request)
     store = _store(request)
-    report = store.robot_report(agent_id)
+    report = _overlay_names(store.robot_report(agent_id), await _name_overrides(request))
     return report or {"robots": [], "received_at_ms": None}
 
 
@@ -216,8 +247,28 @@ async def robots_mirror(request: Request, agent_id: str | None = None):
     (store._pick semantics) — lets a per-robot showcase URL omit the agent."""
     _auth(request)
     store = _store(request)
-    report = store.robot_report(agent_id)
+    report = _overlay_names(store.robot_report(agent_id), await _name_overrides(request))
     return report or {"robots": [], "received_at_ms": None}
+
+
+@router.post("/robots/{robot_id}/rename")
+async def rename_robot(robot_id: str, body: RenameBody, request: Request):
+    """Set (or clear, when name is empty) the operator display name for an agent robot.
+    Stored in STL (agent_control) as a robot_id→name overlay; the robot_id — the agent's
+    real key for orders/state — is never changed."""
+    _auth(request)
+    pool = getattr(request.app.state, "db_pool", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="DB unavailable")
+    name = (body.name or "").strip()[:64]
+    key = _NAME_PREFIX + robot_id
+    if not name:
+        await pool.execute("DELETE FROM agent_control WHERE key=$1", key)
+        return {"ok": True, "robot_id": robot_id, "name": None}
+    await pool.execute(
+        "INSERT INTO agent_control(key,value) VALUES($1,$2) "
+        "ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", key, name)
+    return {"ok": True, "robot_id": robot_id, "name": name}
 
 
 @router.get("/agent-local-status")
