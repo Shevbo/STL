@@ -82,7 +82,8 @@ class RobotHost:
             out[rid] = {"state": r.runtime.state,
                         "position": r.runtime.signed_position(),
                         "avg": r.runtime.avg_price(),
-                        "realized": r.runtime.realized_pnl(),
+                        "realized": r.runtime.realized_gross(),   # GROSS points…
+                        "commission": r.runtime.commission_points(),  # …+ fees kept apart
                         # order/fill history survives runner restarts (the operator's
                         # audit trail; P&L without its trades looked like a bug)
                         "fills": r.runtime.fills_tail(),
@@ -146,9 +147,24 @@ class RobotHost:
                               paper=spec["paper"], state=saved.get("state"),
                               quote_fn=lambda s=sym: self.quotes.get(s),
                               event_log_dir=self._data_dir)
+            # Commission: on the FIRST restore after the fee upgrade the persisted
+            # state has no "commission" key — retro-charge the saved fills tail once
+            # so the shown P&L doesn't jump from gross to net (best-effort; ≤200 fills,
+            # exact for robots newer than that). Later restores read the persisted value.
+            saved_comm = saved.get("commission")
+            if saved_comm is None and not arming:
+                try:
+                    from trader.lab.commission import taker_points
+                    saved_comm = sum(
+                        taker_points(f.get("symbol") or "", f.get("price") or 0, f.get("qty") or 0)
+                        for f in (saved.get("fills") or [])
+                        if f.get("side") in ("buy", "sell") and f.get("status") in ("filled", "paper"))
+                except Exception:
+                    saved_comm = 0.0
             rt.restore(position=saved.get("position", 0),
                        avg=saved.get("avg", 0.0),
                        realized=0.0 if arming else saved.get("realized", 0.0),
+                       commission=0.0 if arming else (saved_comm or 0.0),
                        fills=[] if arming else saved.get("fills"))
             hr = HostedRobot(spec, rt, bars)
             # A re-deploy (params edit, paper<->real mode flip, STL reconnect) must

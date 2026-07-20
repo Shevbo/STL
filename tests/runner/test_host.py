@@ -83,7 +83,7 @@ async def test_deploy_creates_robot_and_persists(tmp_path):
     r2 = host2.robots["r1"]
     assert r2.runtime.get_state("trend") == "up"
     assert r2.runtime.signed_position() == 2   # restored 1 + the extra buy fill
-    assert r2.runtime.realized_pnl() == 50.0
+    assert r2.runtime.realized_gross() == 50.0
     # the fill HISTORY survives the restart too (operator audit trail)
     fills = r2.runtime.fills_tail()[-20:]
     assert fills and fills[-1]["price"] == 89000.0
@@ -185,7 +185,7 @@ async def test_arming_paper_to_real_resets_stats_keeps_bars(tmp_path):
 
     await host.handle_control(_deploy_rc(paper=False))   # flip paper -> REAL
     r2 = host.robots["r1"]
-    assert r2.runtime.realized_pnl() == 0.0          # P&L reset
+    assert r2.runtime.realized_gross() == 0.0          # P&L reset
     assert r2.runtime.fills_tail() == []             # trade history reset
     assert len(r2.bars.bars()) == bars_before        # bars KEPT (no re-warm)
 

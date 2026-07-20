@@ -481,7 +481,8 @@
            value (realized + variation margin − exit commission), moves with price. -->
       {#if pnlRub !== null}
         <span class="badge pnl" class:up={pnlRub > 0} class:dn={pnlRub < 0}
-              title="Реализованный P&L робота: закрытые сделки × ₽/пункт — авторитетное число самого агента (совпадает с его страницей 127.0.0.1:8071). Считается по филлам робота, БЕЗ учёта текущей позиции и БЕЗ биржевой комиссии; включает бумажный период до перевода на реал.">
+              title="Реализованный P&L робота: закрытые сделки × ₽/пункт — авторитетное число самого агента (совпадает с его страницей 127.0.0.1:8071). Считается по филлам робота, БЕЗ учёта текущей позиции, но УЖЕ ЗА ВЫЧЕТОМ биржевой комиссии (taker, как в бэктесте); включает бумажный период до перевода на реал.">
+
           P&L {pnlRub > 0 ? '+' : ''}{Math.round(pnlRub).toLocaleString('ru-RU')} ₽</span>
         <span class="badge pnl" class:up={(pnlMargin ?? 0) > 0} class:dn={(pnlMargin ?? 0) < 0}
               title={`Если ударить по рынку и закрыть ВСЮ позицию прямо сейчас: реализованный ${Math.round(pnlRub).toLocaleString('ru-RU')} + вариац. маржа ${floatRub !== null ? (floatRub > 0 ? '+' : '') + Math.round(floatRub).toLocaleString('ru-RU') : '0'} − комиссия закрытия ${Math.round(closeComm).toLocaleString('ru-RU')} ₽.`}>

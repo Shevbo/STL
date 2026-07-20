@@ -73,12 +73,34 @@ async def test_realized_pnl_signed_space():
     rt = _rt(max_position=2)
     rt._apply_fill("buy", 1, 100.0)
     rt._apply_fill("sell", 1, 110.0)
-    assert rt.realized_pnl() == pytest.approx(10.0)
+    assert rt.realized_gross() == pytest.approx(10.0)
     assert rt.signed_position() == 0
     # short side
     rt._apply_fill("sell", 2, 110.0)
     rt._apply_fill("buy", 2, 100.0)
-    assert rt.realized_pnl() == pytest.approx(10.0 + 20.0)
+    assert rt.realized_gross() == pytest.approx(10.0 + 20.0)
+
+
+@pytest.mark.asyncio
+async def test_realized_pnl_net_of_commission():
+    # Taker commission is charged on EVERY fill; realized_pnl() (what STL shows) is NET.
+    from trader.lab.commission import taker_points
+    rt = _rt(max_position=1)
+    rt._apply_fill("buy", 1, 77000.0, symbol="RIU6")    # open
+    rt._apply_fill("sell", 1, 77100.0, symbol="RIU6")   # close → gross +100 pts
+    exp_comm = taker_points("RIU6", 77000.0, 1) + taker_points("RIU6", 77100.0, 1)
+    assert rt.realized_gross() == pytest.approx(100.0)
+    assert rt.commission_points() == pytest.approx(exp_comm)
+    assert rt.realized_pnl() == pytest.approx(100.0 - exp_comm)
+    assert exp_comm > 9.0            # ~10 pts on two RI fills — materially non-zero
+
+
+def test_restore_reseeds_commission():
+    rt = _rt()
+    rt.restore(position=0, avg=0.0, realized=150.0, commission=12.0)
+    assert rt.realized_gross() == 150.0
+    assert rt.commission_points() == 12.0
+    assert rt.realized_pnl() == pytest.approx(138.0)   # NET = gross − commission
 
 
 @pytest.mark.asyncio
@@ -95,7 +117,7 @@ def test_restore_reseeds_position():
     rt.restore(position=-1, avg=88000.0, realized=150.0)
     assert rt.signed_position() == -1
     assert rt.avg_price() == 88000.0
-    assert rt.realized_pnl() == 150.0
+    assert rt.realized_gross() == 150.0
 
 
 @pytest.mark.asyncio
@@ -129,7 +151,7 @@ async def test_partial_reduce_keeps_avg():
     await rt.place_order("RIU6", "buy", 1, 87000.0)    # close 1 -> short 2
     assert rt.signed_position() == -2
     assert rt.avg_price() == 88000.0                   # avg unchanged
-    assert rt.realized_pnl() == 1000.0
+    assert rt.realized_gross() == 1000.0
     await rt.place_order("RIU6", "buy", 1, 87500.0)    # close 1 more
     assert rt.avg_price() == 88000.0
-    assert rt.realized_pnl() == 1500.0                 # 1000 + 500, both vs 88000
+    assert rt.realized_gross() == 1500.0                 # 1000 + 500, both vs 88000

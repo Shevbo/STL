@@ -85,3 +85,18 @@ def commission_for(symbol: str, price: float, qty: int, point_value: float,
     rate = MOEX_TAKER_RATE.get(fee_group(symbol), MOEX_TAKER_RATE[_DEFAULT_GROUP])
     exchange = rate * notional * q
     return broker + exchange
+
+
+def taker_points(symbol: str, price: float, qty: int, point_value: float | None = None) -> float:
+    """Taker commission expressed in PRICE POINTS — for a consumer that tracks P&L in
+    points and doesn't know ₽/point (the agent runner). MOEX fee = rate × notional_rub
+    and notional_rub = price_points × point_value × qty, so in POINTS it is
+    rate × price × qty — the point_value CANCELS, giving an exact exchange fee without
+    it. The fixed broker fee (₽/contract) only enters when point_value is known; it is
+    ~0.6% of the total, so omitting it (point_value=None) is a sub-percent understatement."""
+    q = abs(int(qty)) or 1
+    rate = MOEX_TAKER_RATE.get(fee_group(symbol), MOEX_TAKER_RATE[_DEFAULT_GROUP])
+    pts = rate * abs(price) * q
+    if point_value and point_value > 0:
+        pts += (BROKER_FEE_PER_CONTRACT * q) / point_value
+    return pts

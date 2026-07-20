@@ -75,7 +75,8 @@ class AgentRuntime:
         self._quote_fn = quote_fn
         self._signed = 0
         self._avg = 0.0
-        self._realized = 0.0
+        self._realized = 0.0          # GROSS price points (entry↔exit diff), no fees
+        self._commission = 0.0        # cumulative TAKER commission in points (see _apply_fill)
         self._fills: list[dict] = []
         self._seq = 0
         self._orders: dict[str, Order] = {}  # client_id -> last known state
@@ -272,11 +273,25 @@ class AgentRuntime:
             self._signed = new_signed
         else:
             self._signed, self._avg = new_signed, price
+        # Commission charged on EVERY fill (open + close), same TAKER model as the
+        # backtest — the agent's real orders go MARKETABLE (cross the spread), so paper
+        # must model taker too or its P&L flatters the strategy. Tracked in POINTS so it
+        # subtracts directly from realized (also points); exact exchange fee, no ₽/point
+        # needed (see commission.taker_points). NEVER let a fee calc break the trade path.
+        fee_pts = 0.0
+        try:
+            from trader.lab.commission import taker_points
+            fee_pts = taker_points(symbol or "", price, qty)
+            self._commission += fee_pts
+        except Exception:
+            pass
         self._record(client_id or "fill", symbol, side, qty, price, status,
                      order_id=order_id, ts_ms=ts_ms)
         tag = "" if status == "filled" else f" ({status})"
         self.event("FILL", f"{side} {qty} @ {price:.0f}{tag} → позиция {self._signed} @ "
-                   f"{self._avg:.0f}, реализовано {self._realized:.0f} п.")
+                   f"{self._avg:.0f}, реализовано {self._realized:.0f} п., "
+                   f"комиссия {fee_pts:.1f} п. (Sum {self._commission:.0f}), "
+                   f"чистыми {self._realized - self._commission:.0f} п.")
 
     def _record(self, client_id, symbol, side, qty, price, status, order_id="",
                 ts_ms: int | None = None) -> None:
@@ -306,7 +321,16 @@ class AgentRuntime:
         return self._avg
 
     def realized_pnl(self) -> float:
+        """Realized P&L reported to STL — NET of taker commission (points)."""
+        return self._realized - self._commission
+
+    def realized_gross(self) -> float:
+        """Gross realized (points, pre-commission) — for persistence, so a restart
+        restores gross + commission separately and never double-charges fees."""
         return self._realized
+
+    def commission_points(self) -> float:
+        return self._commission
 
     def apply_fix(self, *, position: int, avg: float, clear_working: bool,
                   note: str, symbol: str = "") -> None:
@@ -328,11 +352,13 @@ class AgentRuntime:
                    f"clear_working={clear_working} note={note!r}", level="warning")
 
     def restore(self, *, position: int, avg: float, realized: float,
-                fills: list | None = None) -> None:
-        """Re-seed position bookkeeping from persisted runner state (zero-touch)."""
+                commission: float = 0.0, fills: list | None = None) -> None:
+        """Re-seed position bookkeeping from persisted runner state (zero-touch).
+        `realized` is the GROSS points; `commission` the cumulative fee points."""
         self._signed = int(position)
         self._avg = float(avg)
         self._realized = float(realized)
+        self._commission = float(commission)
         if fills:
             self._fills = list(fills)[-200:]
 
