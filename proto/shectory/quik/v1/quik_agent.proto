@@ -167,6 +167,7 @@ message OrchestratorMessage {
     PauseRobot pause_robot = 13;
     StartRobot start_robot = 14;
     FlattenRobot flatten_robot = 15;   // operator: market-close the whole position + pause
+    SetRobotPosition set_robot_position = 16;  // operator: force the believed position (belief-only)
   }
 }
 
@@ -257,6 +258,17 @@ message RobotFill {
   double price = 5;
   string status = 6;                // filled | rejected | skipped | paper
   int64 ts_unix_ms = 7;
+}
+
+// Operator belief-correction: force the runner's believed position/avg to match
+// reality after a desync (e.g. a manual close the robot didn't emit). BELIEF-ONLY
+// — the agent relays it as a runner fix_state (never a real order). Gated agent-side
+// on the robot being PAUSED (never rewrite a live trading book) + confirm_id==robot_id.
+message SetRobotPosition {
+  string robot_id = 1;
+  int64 position = 2;
+  double avg_price = 3;
+  string confirm_id = 4;
 }
 
 // A robot's resting/in-flight order (agent-hosted execution).

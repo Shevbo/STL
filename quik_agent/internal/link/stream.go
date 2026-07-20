@@ -149,7 +149,8 @@ func (l *Link) recvLoop(stream quikv1.QuikAgentLink_SessionClient, cancel contex
 			*quikv1.OrchestratorMessage_SetRobotParams,
 			*quikv1.OrchestratorMessage_PauseRobot,
 			*quikv1.OrchestratorMessage_StartRobot,
-			*quikv1.OrchestratorMessage_FlattenRobot:
+			*quikv1.OrchestratorMessage_FlattenRobot,
+			*quikv1.OrchestratorMessage_SetRobotPosition:
 			l.handleRobotMsg(msg)
 		}
 	}

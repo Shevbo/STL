@@ -346,6 +346,38 @@
     } catch (e) { flattenMsg = `Ошибка: ${String(e).slice(0, 80)}`; }
     finally { pausing = false; }
   }
+  // Operator belief-correction from the STL stand: force the runner's believed position
+  // to reality (e.g. 0 after a manual close the robot never emitted). BELIEF-ONLY — the
+  // agent relays it as a runner fix_state, NEVER a real order. Server + agent both gate
+  // on the robot being PAUSED + confirm_id == robotId, so the button only shows on pause.
+  let posBusy = $state(false);
+  async function zeroBelief() {
+    const raw = window.prompt(
+      `Записать роботу ВЕРУ о позиции (только вера, не реальный ордер).\n` +
+      `id: ${robotId}\nТекущая вера: ${position}. Новая позиция (обычно 0):`, '0');
+    if (raw === null) return;
+    const pos = Number(raw);
+    if (!Number.isInteger(pos)) { flattenMsg = 'Позиция должна быть целым числом.'; return; }
+    let avg = 0;
+    if (pos !== 0) {
+      const a = window.prompt(`Средняя цена для позиции ${pos}:`, String(robot?.avg_price ?? 0));
+      if (a === null) return;
+      avg = Number(a);
+      if (!(avg > 0)) { flattenMsg = 'Для ненулевой позиции нужна средняя цена > 0.'; return; }
+    }
+    const conf = window.prompt(`Подтверди: впиши точный ID робота\n${robotId}`, '');
+    if (conf !== robotId) { flattenMsg = 'ID не совпал — отменено.'; return; }
+    posBusy = true; flattenMsg = '';
+    try {
+      const res = await fetchWithAuth(
+        `/api/v1/quik/robots/${encodeURIComponent(robotId)}/set-position-agent`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ agent_id: agentId, position: pos, avg_price: avg, confirm_id: robotId }) });
+      flattenMsg = res.ok ? `Вера обновлена: позиция ← ${pos}. Проверь через пару секунд.`
+                          : `Ошибка: ${res.status}`;
+    } catch (e) { flattenMsg = `Ошибка: ${String(e).slice(0, 80)}`; }
+    finally { posBusy = false; }
+  }
   // Clone this robot's exact strategy+params+symbol into a fresh PAPER robot on the
   // agent. deploy-agent needs no scriptCode/STL record — the runner resolves the
   // strategy by id. New robot_id must be colon-free (attribution parses on ':').
@@ -525,6 +557,9 @@
       {#if !robot.paper}
         {#if robot.paused}
           <button class="rc-btn go" onclick={startRobot} title="возобновить работу робота">▶ Пуск</button>
+          <button class="rc-btn" disabled={posBusy} onclick={zeroBelief}
+                  title="исправить веру робота о позиции (например обнулить после ручного закрытия) — только вера, не реальный ордер">
+            {posBusy ? '…' : '✎ Позиция'}</button>
         {:else}
           <button class="rc-btn" disabled={pausing} onclick={pauseRobot}
                   title="остановить новые входы; открытая позиция ОСТАЁТСЯ">

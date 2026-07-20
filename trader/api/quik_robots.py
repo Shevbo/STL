@@ -76,6 +76,13 @@ class RenameBody(BaseModel):
     name: str = ""
 
 
+class SetPositionBody(BaseModel):
+    agent_id: str | None = None
+    position: int
+    avg_price: float = 0.0
+    confirm_id: str = ""
+
+
 class DeployAgentBody(BaseModel):
     agent_id: str | None = None
     strategy_id: str                  # library id, e.g. "fvg"
@@ -269,6 +276,38 @@ async def rename_robot(robot_id: str, body: RenameBody, request: Request):
         "INSERT INTO agent_control(key,value) VALUES($1,$2) "
         "ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", key, name)
     return {"ok": True, "robot_id": robot_id, "name": name}
+
+
+@router.post("/robots/{robot_id}/set-position-agent")
+async def set_position_agent(robot_id: str, body: SetPositionBody, request: Request):
+    """Operator belief-correction from STL: force the runner's believed position/avg for
+    an agent robot (e.g. after a manual close the robot never emitted). BELIEF-ONLY — the
+    agent relays it as a runner fix_state, never a real order. Gated: confirm_id must echo
+    the robot id AND the robot must be PAUSED per the mirror (never rewrite a live trading
+    book; the agent re-checks paused + confirm as well)."""
+    _auth(request)
+    srv = _server(request)
+    store = _store(request)
+    agent = _resolve_agent(request, body.agent_id)
+    if body.confirm_id != robot_id:
+        raise HTTPException(status_code=400, detail="Подтверждение не совпадает: введите точный ID робота.")
+    report = store.robot_report(body.agent_id) or {}
+    cur = next((r for r in report.get("robots", []) if r.get("robot_id") == robot_id), None)
+    if cur is None:
+        raise HTTPException(status_code=409, detail=(
+            "Робот не найден в зеркале агента — обнови страницу / проверь линк."))
+    if not cur.get("paused"):
+        raise HTTPException(status_code=409, detail=(
+            "Робот должен быть на ПАУЗЕ: поставь паузу перед установкой позиции."))
+    if body.position != 0 and (body.avg_price or 0) <= 0:
+        raise HTTPException(status_code=400, detail="Для ненулевой позиции нужна средняя цена > 0.")
+    srv.enqueue_order(agent, pb.OrchestratorMessage(
+        set_robot_position=pb.SetRobotPosition(
+            robot_id=robot_id,
+            position=int(body.position),
+            avg_price=float(body.avg_price or 0.0),
+            confirm_id=robot_id)))
+    return {"ok": True, "agent_id": agent, "robot_id": robot_id, "position": int(body.position)}
 
 
 @router.get("/agent-local-status")

@@ -52,6 +52,22 @@ func (l *Link) handleRobotMsg(msg *quikv1.OrchestratorMessage) {
 		// operator market-close + pause; persist paused so it survives a restart
 		_ = l.opt.Robots.SetPaused(p.FlattenRobot.GetRobotId(), true)
 		rc = &quikv1.RunnerControl{Payload: &quikv1.RunnerControl_Flatten{Flatten: p.FlattenRobot}}
+	case *quikv1.OrchestratorMessage_SetRobotPosition:
+		// Belief-only correction relayed as a runner fix_state (never a real order).
+		// Gate agent-side too (STL gates as well): confirm_id must echo the id AND
+		// the robot must be PAUSED — never rewrite a live trading book. Fails silent
+		// (fire-and-forget like the other relays); the operator reads back the mirror.
+		sp := p.SetRobotPosition
+		if sp.GetConfirmId() != sp.GetRobotId() || !l.opt.Robots.Paused(sp.GetRobotId()) {
+			return
+		}
+		rc = &quikv1.RunnerControl{Payload: &quikv1.RunnerControl_FixState{FixState: &quikv1.FixRobotState{
+			RobotId:      sp.GetRobotId(),
+			SetPosition:  sp.GetPosition(),
+			SetAvgPrice:  sp.GetAvgPrice(),
+			ClearWorking: true,
+			Note:         "STL: ручная установка позиции (оператор)",
+		}}}
 	default:
 		return
 	}
