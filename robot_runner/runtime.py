@@ -27,7 +27,13 @@ log = structlog.get_logger()
 
 _FILLED_STATE = 4    # quik_agent.proto OrderState.ORDER_STATE_FILLED
 _PARTIAL_STATE = 3
-_QUOTE_FRESH_MS = 10_000   # marketable pricing only off a quote younger than this
+_QUOTE_FRESH_MS = 10_000   # a quote younger than this prices at the exchange touch
+# When the quote is STALE/absent we cross the best reference by this fraction so a REAL
+# order still crosses the live market instead of resting (an EXIT must fill). RIU6 ~80k
+# → 0.3% ≈ 240 pts ≈ 24 steps: well past the ~1-step spread, inside the exchange/agent
+# price collar. The stuck-exit bug (2026-07-20) fell back to bars[-1].close = a resting
+# limit above the market that never filled while the robot sat long +11.
+_STALE_CROSS_FRAC = 0.003
 _STATE_TO_STATUS = {2: "active", 3: "partial", 4: "filled",
                     5: "cancelled", 6: "rejected"}
 
@@ -128,6 +134,7 @@ class AgentRuntime:
         # inside the agent's price collar by construction. Stale/absent quote
         # falls back to the strategy price (old behaviour).
         send_price = price
+        ref, fresh = 0.0, False
         if self._quote_fn is not None:
             try:
                 q = self._quote_fn()
@@ -135,9 +142,17 @@ class AgentRuntime:
                 q = None
             if q:
                 bid, ask, ts_ms = q
-                px = float((ask if side == "buy" else bid) or 0)
-                if px > 0 and (time.time() * 1000 - float(ts_ms or 0)) <= _QUOTE_FRESH_MS:
-                    send_price = px
+                ref = float((ask if side == "buy" else bid) or 0)
+                fresh = ref > 0 and (time.time() * 1000 - float(ts_ms or 0)) <= _QUOTE_FRESH_MS
+        if fresh:
+            send_price = ref                       # fresh exchange touch → marketable
+        else:
+            # No fresh quote: CROSS the best reference so the order still crosses the
+            # live market (an EXIT must not rest). Prefer the (possibly-stale) exchange
+            # touch over the strategy bar-close, which drifts furthest on a fast tape.
+            base = ref if ref > 0 else price
+            collar = base * _STALE_CROSS_FRAC
+            send_price = base - collar if side == "sell" else base + collar
         try:
             await self._bridge.place_order(client_id=client_id, code=symbol,
                                            side=side, price=send_price, qty=qty)

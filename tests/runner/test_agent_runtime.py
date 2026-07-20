@@ -1,7 +1,9 @@
+import time
+
 import pytest
 
 from robot_runner.bars import BarBuilder
-from robot_runner.runtime import AgentRuntime
+from robot_runner.runtime import AgentRuntime, _STALE_CROSS_FRAC
 
 
 class FakeBridge:
@@ -101,6 +103,34 @@ def test_restore_reseeds_commission():
     assert rt.realized_gross() == 150.0
     assert rt.commission_points() == 12.0
     assert rt.realized_pnl() == pytest.approx(138.0)   # NET = gross − commission
+
+
+@pytest.mark.asyncio
+async def test_real_order_marketable_never_rests():
+    # REAL order pricing: a fresh quote prices at the exchange touch (marketable); a
+    # STALE/absent quote CROSSES the best reference so an exit never rests above/below
+    # the market (the stuck-exit bug 2026-07-20). Strategy price is only a last-resort ref.
+    now = time.time() * 1000
+    box = {"q": (80000.0, 80010.0, now)}   # (bid, ask, ts_ms), fresh
+    rt = AgentRuntime("r1", FakeBridge(), BarBuilder(), max_position=5, paper=False,
+                      quote_fn=lambda: box["q"])
+
+    await rt.place_order("RIU6", "sell", 1, 79000.0)   # strategy price ignored when fresh
+    assert rt._bridge.placed[-1]["price"] == 80000.0   # SELL at the bid (touch)
+    await rt.place_order("RIU6", "buy", 1, 81000.0)
+    assert rt._bridge.placed[-1]["price"] == 80010.0   # BUY at the ask (touch)
+
+    # STALE quote: a SELL must cross BELOW the (stale) bid, never rest at the bar close.
+    box["q"] = (80000.0, 80010.0, now - 30_000)        # 30s old
+    await rt.place_order("RIU6", "sell", 1, 85000.0)   # bar-close 85000 (above mkt) NOT used
+    assert rt._bridge.placed[-1]["price"] == pytest.approx(80000.0 * (1 - _STALE_CROSS_FRAC))
+    assert rt._bridge.placed[-1]["price"] < 80000.0    # crosses down → marketable
+
+    # No quote at all: cross the strategy price (last resort) so it still crosses.
+    rt2 = AgentRuntime("r2", FakeBridge(), BarBuilder(), max_position=5, paper=False,
+                       quote_fn=lambda: None)
+    await rt2.place_order("RIU6", "buy", 1, 80000.0)
+    assert rt2._bridge.placed[-1]["price"] == pytest.approx(80000.0 * (1 + _STALE_CROSS_FRAC))
 
 
 @pytest.mark.asyncio
