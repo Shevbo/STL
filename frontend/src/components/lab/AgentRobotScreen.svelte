@@ -12,6 +12,7 @@
   import LatencyPane from './LatencyPane.svelte';
   import AgentBookPane from './AgentBookPane.svelte';
   import ParamEditor from './ParamEditor.svelte';
+  import RobotIdentity from './RobotIdentity.svelte';
   import NavMenu from '../NavMenu.svelte';
   import { fetchAgentLocalStatus, type AgentLocalStatus } from '../../lib/agent-robots';
 
@@ -571,7 +572,7 @@
   <div class="ars-head">
     <NavMenu />
     <span class="ars-icon">🤖</span>
-    <span class="ars-name">{displayName}</span>
+    <RobotIdentity name={displayName} id={robotId} size="title" />
     <button class="ars-rename" title="Переименовать" onclick={renameRobot}>✏</button>
     {#if robot}
       <span class="badge" class:real={!robot.paper}>{robot.paper ? 'PAPER' : 'РЕАЛ'}</span>

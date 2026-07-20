@@ -6,6 +6,7 @@
 <script lang="ts">
   import { downloadCSV } from '$lib/csv';
   import { fetchWithAuth } from '../../lib/fetch-auth';
+  import RobotIdentity from './RobotIdentity.svelte';
   import BacktestChart from './BacktestChart.svelte';
   import MustDescription from './MustDescription.svelte';
   import { nameFor, docBase, behaviorFor } from '$lib/strategy-help';
@@ -732,7 +733,7 @@
                  onclick={() => { selectedCat = robot.id; openDetail(robot); }}
                  onkeydown={(e) => e.key === 'Enter' && (selectedCat = robot.id, openDetail(robot))}>
               <div class="cc-top">
-                <span class="cc-name">{robot.name}</span>
+                <RobotIdentity name={robot.name} id={robot.id} size="row" />
                 {#if activity?.current?.strategy === robot.id}
                   <span class="cc-sweeping" title="По этому роботу сейчас идёт перебор">● перебор {activity.current.symbol}</span>
                 {/if}
@@ -791,7 +792,7 @@
             <div class="inst-card">
               <div class="ic-top">
                 <span class="ic-dot" class:live={r.deployed}></span>
-                <span class="ic-name">{r.name}</span>
+                <RobotIdentity name={r.name} id={r.id} size="row" />
                 <span class="ic-badge" class:on={r.deployed}>{r.deployed ? 'LIVE' : 'остановлен'}</span>
               </div>
               <div class="ic-meta">
@@ -820,7 +821,7 @@
     <div class="detail-pane">
       <div class="dp-head">
         <button class="dp-back" onclick={closeDetail}>← Назад к каталогу</button>
-        <span class="dp-title">{detail.name}</span>
+        <RobotIdentity name={detail.name} id={detail.id} size="title" />
         <span class="dp-sub">
           инструментов: {instrumentTables.length} · вариантов: {detail.rows.length}
           {#if detail.period}· период {fmtDate(detail.period.date_from)} — {fmtDate(detail.period.date_to)}{/if}

@@ -5,6 +5,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { fetchWithAuth } from '../../lib/fetch-auth';
+  import RobotIdentity from './RobotIdentity.svelte';
   import { fetchLatency, pingColor, pingLabel, fmtMs, type LatencyResponse } from '../../lib/latency';
   import { fetchAgentRobots, openAgentRobot, type AgentRobotRow } from '../../lib/agent-robots';
 
@@ -109,7 +110,7 @@
             <div class="card-top">
               <span class="dot" class:off={!r.deployed}
                     class:stale={r.deployed && r.heartbeatAgeSec != null && r.heartbeatAgeSec > 120}></span>
-              <span class="card-name">{r.name}</span>
+              <RobotIdentity name={r.name} id={r.id} size="row" />
               <span class="card-sym">{r.symbol}</span>
               {#if !r.deployed}<span class="stop-badge">СТОП</span>{/if}
               <span class="mode-badge" class:real={r.mode === 'real'}>{r.mode === 'real' ? 'РЕАЛ' : 'бумага'}</span>
@@ -153,7 +154,7 @@
                onkeydown={(e) => e.key === 'Enter' && onOpen(r.id)}>
             <div class="card-top">
               <span class="dot"></span>
-              <span class="card-name">{r.name}</span>
+              <RobotIdentity name={r.name} id={r.id} size="row" />
               <span class="card-sym">{r.symbol}</span>
             </div>
             <div class="card-ping">

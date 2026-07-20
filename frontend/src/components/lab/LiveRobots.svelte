@@ -4,6 +4,7 @@
 <script lang="ts">
   import { fetchWithAuth } from '../../lib/fetch-auth';
   import { toFills, rolledPnl } from '../../lib/lab-analytics';
+  import RobotIdentity from './RobotIdentity.svelte';
   import RobotEditor from './RobotEditor.svelte';
   import RobotWindow from './RobotWindow.svelte';
   import Showcase from './Showcase.svelte';
@@ -256,7 +257,7 @@
               <span class="led" class:live={r.deployed}></span>
               <span class="rrow-main">
                 <span class="rrow-top">
-                  <span class="rname" title={r.name}>{r.name}</span>
+                  <RobotIdentity name={r.name} id={r.id} size="chip" />
                   {#if m?.symbol}<span class="tag">{m.symbol}</span>{/if}
                 </span>
                 <span class="rrow-bar">
@@ -289,7 +290,7 @@
             <div class="dh-id">
               <span class="dh-led" class:live={selected.deployed}></span>
               <div class="dh-titles">
-                <h2 class="dh-name">{selected.name}</h2>
+                <h2 class="dh-name"><RobotIdentity name={selected.name} id={selected.id} size="title" /></h2>
                 <div class="dh-sub">
                   {#if selTemplate}<span class="dh-strat">{selTemplate.name}</span>{/if}
                   {#if selSymbol}<span class="tag lg">{selSymbol}</span>{/if}

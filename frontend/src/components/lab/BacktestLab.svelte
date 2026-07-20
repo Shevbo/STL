@@ -1,6 +1,7 @@
 <script lang="ts">
   import { downloadCSV } from '$lib/csv';
   import { fetchWithAuth } from '../../lib/fetch-auth';
+  import RobotIdentity from './RobotIdentity.svelte';
   import BacktestChart from './BacktestChart.svelte';
   import ParamHelp from './ParamHelp.svelte';
   import MustDescription from './MustDescription.svelte';
@@ -593,7 +594,7 @@
           <button class="btl-cat-card" class:active
                   onclick={() => selectStrategy(s)}>
             <div class="btl-cat-name">
-              <span>{s.name}</span>
+              <RobotIdentity name={s.name} id={s.robotId || s.id} size="row" />
               <span class="btl-cat-actions">
                 {#if s.sweep?.pct > 0}
                   <span class="btl-cat-sweep">перебор {s.sweep.pct}%</span>
@@ -623,7 +624,7 @@
       {#if strategyInfo}
         <div class="btl-info-box">
           <div class="btl-info-head">
-            <span class="btl-info-title">{strategyInfo.name}</span>
+            <RobotIdentity name={strategyInfo.name} id={strategyInfo.robotId || strategyInfo.id} size="row" />
             <button class="btl-info-close" onclick={() => strategyInfo = null}>✕</button>
           </div>
           <div class="btl-info-body">{strategyInfo.description}</div>
@@ -795,7 +796,7 @@
                   <tr class="ht-row">
                     <td class="mono ht-id"><a href={'/?campaign=' + encodeURIComponent(c.campaign)} target="_blank" rel="noopener" title="открыть витрину прогона">{c.campaign}</a></td>
                     <td class="ht-day">{fmtDay(c.last_at)}</td>
-                    <td class="ht-strat">{robName(c.strategy)}</td>
+                    <td class="ht-strat"><RobotIdentity name={robName(c.strategy)} id={c.strategy} size="row" /></td>
                     <td class="mono">{c.leader_symbol ?? (c.symbols ?? []).join(',')}</td>
                     <td class="mono ht-period">{fmtDay(c.date_from)}—{fmtDay(c.date_to)}</td>
                     <td class="mono ht-num">{c.max_pos ?? '—'}</td>

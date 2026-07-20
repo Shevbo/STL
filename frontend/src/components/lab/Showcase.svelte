@@ -5,6 +5,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { fetchWithAuth } from '../../lib/fetch-auth';
+  import RobotIdentity from './RobotIdentity.svelte';
   import { toFills, rolledPnl } from '../../lib/lab-analytics';
   import { fetchAgentRobots, openAgentRobot, type AgentRobotRow } from '../../lib/agent-robots';
   import RobotWindow from './RobotWindow.svelte';
@@ -174,7 +175,7 @@
   <div class="modal-overlay" onclick={() => retireTarget = null} role="dialog" aria-modal="true">
     <div class="modal" onclick={(e) => e.stopPropagation()}>
       <div class="modal-title">Остановить робота</div>
-      <div class="modal-robot">{retireTarget.name}</div>
+      <div class="modal-robot"><RobotIdentity name={retireTarget.name} id={retireTarget.id} size="row" /></div>
       <div class="modal-label">Комментарий (на доработку стратегии):</div>
       <textarea
         class="modal-textarea"
@@ -241,7 +242,7 @@
               <tr class="sc-row" class:stopped={!r.deployed}
                   title="Двойной клик — полный стенд робота"
                   ondblclick={() => openAgentRobot(r.id)}>
-                <td class="sc-name"><span class="dot" class:live={r.deployed}></span>{r.name}<button
+                <td class="sc-name"><span class="dot" class:live={r.deployed}></span><RobotIdentity name={r.name} id={r.id} size="row" /><button
                     class="sc-rename" title="Переименовать"
                     onclick={(e) => { e.stopPropagation(); renameAgentRobot(r); }}
                     ondblclick={(e) => e.stopPropagation()}>✏</button></td>
@@ -301,7 +302,7 @@
                   ondblclick={() => windowRobotId = r.id}>
                 <td class="sc-name">
                   <span class="dot" class:live={r.deployed}></span>
-                  {r.name}
+                  <RobotIdentity name={r.name} id={r.id} size="row" />
                   {#if r.retire_comment}
                     <span class="retire-note" title={r.retire_comment}>📝</span>
                   {/if}

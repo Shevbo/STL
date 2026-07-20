@@ -10,6 +10,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { fetchWithAuth } from '../../lib/fetch-auth';
+  import RobotIdentity from './RobotIdentity.svelte';
   import { toFills, rolledPnl } from '../../lib/lab-analytics';
   import BacktestChart from './BacktestChart.svelte';
   import LatencyPane from './LatencyPane.svelte';
@@ -261,7 +262,7 @@
 
     <div class="win-header">
       <span class="win-icon">🤖</span>
-      <span class="win-name">{live?.robot?.name ?? 'Робот'}</span>
+      <RobotIdentity name={live?.robot?.name ?? robotId} id={robotId} size="title" />
       {#if live}
         <span class="badge" class:real={!live.paper}>{live.paper ? 'PAPER' : 'РЕАЛ'}</span>
         <span class="badge sym">{live.symbol}</span>
