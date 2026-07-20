@@ -755,6 +755,22 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 				})
 			},
 
+			// Pause/resume from the local page: persist the flag (so a reconnect
+			// replays it) AND push a live control to the connected runner. Blocks/
+			// allows new entries; the open position is untouched.
+			Pause: func(id string, paused bool) error {
+				if robotStore.Get(id) == nil {
+					return status.ErrUnknownRobot
+				}
+				if err := robotStore.SetPaused(id, paused); err != nil {
+					return err
+				}
+				if paused {
+					return runnerSrv.SendPause(id)
+				}
+				return runnerSrv.SendStart(id)
+			},
+
 			// The runner's stdout/stderr (+ supervisor lifecycle) are teed to
 			// <runnerDir>\runner.log by FileTee above; expose it at /logs/runner.
 			// The agent's OWN console still isn't filed (interactive => console,

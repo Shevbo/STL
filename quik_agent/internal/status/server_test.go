@@ -78,6 +78,43 @@ func TestServer_LogsUnknownName(t *testing.T) {
 	}
 }
 
+func TestServer_Pause(t *testing.T) {
+	var gotID string
+	var gotPaused bool
+	d := baseDeps()
+	d.Pause = func(id string, paused bool) error { gotID = id; gotPaused = paused; return nil }
+	ts := httptest.NewServer(newMux(d))
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/api/robot/r1/pause", "application/json", strings.NewReader(`{"paused":true}`))
+	if err != nil {
+		t.Fatalf("POST pause: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if gotID != "r1" || !gotPaused {
+		t.Errorf("Pause got (%q,%v), want (r1,true)", gotID, gotPaused)
+	}
+
+	// missing 'paused' -> 400 (never a silent default)
+	resp2, _ := http.Post(ts.URL+"/api/robot/r1/pause", "application/json", strings.NewReader(`{}`))
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusBadRequest {
+		t.Errorf("missing paused: status = %d, want 400", resp2.StatusCode)
+	}
+
+	// nil Pause dep -> 503
+	ts2 := httptest.NewServer(newMux(baseDeps()))
+	defer ts2.Close()
+	resp3, _ := http.Post(ts2.URL+"/api/robot/r1/pause", "application/json", strings.NewReader(`{"paused":true}`))
+	resp3.Body.Close()
+	if resp3.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("nil Pause: status = %d, want 503", resp3.StatusCode)
+	}
+}
+
 func TestServer_StrategyDoc(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "strategies_doc.json")

@@ -144,6 +144,12 @@ func newMux(d Deps) *http.ServeMux {
 		handleSetPosition(d, w, r)
 	})
 
+	// Pause / resume a robot from the local page (blocks/allows new entries; the open
+	// position is untouched) — needed on-page because SetPosition requires a paused book.
+	mux.HandleFunc("POST /api/robot/{id}/pause", func(w http.ResponseWriter, r *http.Request) {
+		handlePause(d, w, r)
+	})
+
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Write(pageHTML)
@@ -251,6 +257,39 @@ func handleResetPaper(d Deps, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := d.ResetPaper(r.PathValue("id")); err != nil {
+		if errors.Is(err, ErrUnknownRobot) {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// pauseRequest: Paused is a pointer so an absent key is a 400, never a silent default.
+type pauseRequest struct {
+	Paused *bool `json:"paused"`
+}
+
+// handlePause pauses (true) / resumes (false) a robot (Deps.Pause). nil Pause ->
+// 503; bad JSON / missing 'paused' -> 400; ErrUnknownRobot -> 404; any other error
+// (e.g. runner offline) -> 409 with the reason.
+func handlePause(d Deps, w http.ResponseWriter, r *http.Request) {
+	if d.Pause == nil {
+		http.Error(w, "pause not wired", http.StatusServiceUnavailable)
+		return
+	}
+	var req pauseRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Paused == nil {
+		http.Error(w, "missing 'paused'", http.StatusBadRequest)
+		return
+	}
+	if err := d.Pause(r.PathValue("id"), *req.Paused); err != nil {
 		if errors.Is(err, ErrUnknownRobot) {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return

@@ -166,6 +166,12 @@ type Deps struct {
 	// other error is a precondition/confirm failure shown to the operator.
 	SetPosition func(id string, pos int64, avg float64, confirmID string) error
 
+	// Pause pauses (paused=true) or resumes (paused=false) a robot from the local
+	// page (POST /api/robot/{id}/pause) — blocks/allows new entries; the open
+	// position is untouched. Needed on-page because SetPosition requires a paused
+	// book. ErrUnknownRobot for an unknown id.
+	Pause func(id string, paused bool) error
+
 	LogPaths    map[string]string // "agent"/"runner" -> file path
 	DocsPath    string            // strategies_doc.json (Task 10)
 	RobotLogDir string            // dir of per-robot <robot_id>.log detailed logs

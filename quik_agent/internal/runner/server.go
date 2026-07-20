@@ -342,6 +342,44 @@ func (s *Server) SendDeploy(spec *quikv1.RobotSpec) error {
 	}
 }
 
+// SendPause / SendStart relay a live pause / resume to the connected runner over the
+// same control stream, so the agent's LOCAL page can pause a robot (e.g. before a
+// manual SetPosition, which requires a paused book). Same error semantics as
+// SendFixState — surface "runner offline" instead of silently dropping.
+func (s *Server) SendPause(robotID string) error {
+	s.mu.Lock()
+	ch := s.ctrlCh
+	s.mu.Unlock()
+	if ch == nil {
+		return errors.New("runner not connected")
+	}
+	rc := &quikv1.RunnerControl{Payload: &quikv1.RunnerControl_Pause{
+		Pause: &quikv1.PauseRobot{RobotId: robotID}}}
+	select {
+	case ch <- rc:
+		return nil
+	default:
+		return errors.New("runner control channel full")
+	}
+}
+
+func (s *Server) SendStart(robotID string) error {
+	s.mu.Lock()
+	ch := s.ctrlCh
+	s.mu.Unlock()
+	if ch == nil {
+		return errors.New("runner not connected")
+	}
+	rc := &quikv1.RunnerControl{Payload: &quikv1.RunnerControl_Start{
+		Start: &quikv1.StartRobot{RobotId: robotID}}}
+	select {
+	case ch <- rc:
+		return nil
+	default:
+		return errors.New("runner control channel full")
+	}
+}
+
 // FanOrderEvent forwards a manager order event to runner subscribers.
 func (s *Server) FanOrderEvent(u *quikv1.OrderUpdate) {
 	s.mu.Lock()

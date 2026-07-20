@@ -161,8 +161,13 @@ class RobotHost:
                         if f.get("side") in ("buy", "sell") and f.get("status") in ("filled", "paper"))
                 except Exception:
                     saved_comm = 0.0
-            rt.restore(position=saved.get("position", 0),
-                       avg=saved.get("avg", 0.0),
+            # ARMING starts the REAL era FLAT: a paper position is fictional (no real
+            # order backs it), so it must NOT carry into real. Resetting position+avg
+            # here is the backstop for the flat-gate racing on a stale status — without
+            # it a paper +N "teleports" into real as a phantom the runner would try to
+            # close with a REAL order (found live 2026-07-20). Paper P&L/fills already reset.
+            rt.restore(position=0 if arming else saved.get("position", 0),
+                       avg=0.0 if arming else saved.get("avg", 0.0),
                        realized=0.0 if arming else saved.get("realized", 0.0),
                        commission=0.0 if arming else (saved_comm or 0.0),
                        fills=[] if arming else saved.get("fills"))

@@ -498,6 +498,14 @@ function modeBlock(r) {
     + (flat ? 'OK' : (r.has_status ? 'не 0 (' + fmtNum(r.position) + ')' : 'позиция неизвестна')) + '</span>';
   const workBadge = '<span class="badge ' + (noWorking ? 'ok' : 'bad') + '">' + (noWorking ? 'OK' : 'есть заявки') + '</span>';
 
+  // Pause / resume: blocks or allows new entries; the open position is untouched.
+  // Needed on-page because SetPosition (manual correction) requires a paused book.
+  html += '<div class="kv" style="margin-top:6px">Работа: '
+    + '<button class="pause-btn" data-id="' + esc(r.id) + '" data-paused="' + (r.paused ? '1' : '0') + '">'
+    + (r.paused ? '▶ Снять паузу' : '⏸ Пауза') + '</button>'
+    + '<span class="pause-msg" style="margin-left:6px"></span>'
+    + '<span style="margin-left:6px;color:#889">блокирует новые входы; позицию не трогает</span></div>';
+
   if (r.mode !== 'real') {
     // paper -> real: full arming ceremony.
     html += '<div class="arm-panel to-real" data-id="' + esc(r.id) + '" data-flat="' + (flat ? '1' : '0') + '" data-nowork="' + (noWorking ? '1' : '0') + '">'
@@ -688,12 +696,33 @@ async function resetPaper(id, btn, msgEl) {
   } catch (e) { setMsg(msgEl, 'ошибка сети', false); btn.disabled = false; }
 }
 
+// setPause pauses (true) / resumes (false) a robot — blocks/allows new entries, the
+// open position is untouched. Keeps the row expanded so the operator can continue to
+// a manual SetPosition (which requires a paused book).
+async function setPause(id, paused, btn, msgEl) {
+  btn.disabled = true;
+  try {
+    const resp = await fetch('/api/robot/' + encodeURIComponent(id) + '/pause', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ paused: paused }),
+    });
+    const text = await resp.text();
+    if (!resp.ok) { setMsg(msgEl, text || ('HTTP ' + resp.status), false); btn.disabled = false; return; }
+    setMsg(msgEl, paused ? 'на паузе' : 'снято с паузы', true);
+    await fetchAndRender();
+  } catch (e) { setMsg(msgEl, 'ошибка сети', false); btn.disabled = false; }
+}
+
 // wireModeControls: local-only (IS_LOCAL gates the panel's very existence in
 // modeBlock, so these selectors simply find nothing on the STL mirror).
 // Arm-to-real: the button enables only when BOTH auto-checks are green AND
 // the checklist is ticked AND the typed id exactly equals the robot id —
 // recomputed on every relevant input event, never just once at render time.
 function wireModeControls(body) {
+  body.querySelectorAll('.pause-btn').forEach(btn => {
+    btn.addEventListener('click', () =>
+      setPause(btn.dataset.id, btn.dataset.paused !== '1', btn, btn.parentElement.querySelector('.pause-msg')));
+  });
   body.querySelectorAll('.arm-panel.to-real').forEach(panel => {
     const id = panel.dataset.id;
     const flatOk = panel.dataset.flat === '1';

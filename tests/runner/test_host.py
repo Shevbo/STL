@@ -174,7 +174,8 @@ async def test_arming_paper_to_real_resets_stats_keeps_bars(tmp_path):
     host = RobotHost(FakeBridge(), str(tmp_path))
     await host.handle_control(_deploy_rc(paper=True))
     r = host.robots["r1"]
-    r.runtime.restore(position=0, avg=0.0, realized=1234.5,
+    # NON-flat paper position: it must NOT carry into real (phantom guard, 2026-07-20).
+    r.runtime.restore(position=1, avg=88000.0, realized=1234.5,
                       fills=[{"side": "buy", "qty": 1, "price": 100.0, "status": "paper",
                               "order_id": "o", "client_id": "c", "symbol": "RIU6", "ts_ms": 1}])
     t0 = 1_751_500_000_000
@@ -187,13 +188,16 @@ async def test_arming_paper_to_real_resets_stats_keeps_bars(tmp_path):
     r2 = host.robots["r1"]
     assert r2.runtime.realized_gross() == 0.0          # P&L reset
     assert r2.runtime.fills_tail() == []             # trade history reset
+    assert r2.runtime.signed_position() == 0         # paper position does NOT carry into real
     assert len(r2.bars.bars()) == bars_before        # bars KEPT (no re-warm)
 
-    # a plain REAL->REAL re-deploy (e.g. params change) must NOT wipe real history
-    r2.runtime.restore(position=0, avg=0.0, realized=555.0, fills=[])
+    # a plain REAL->REAL re-deploy (e.g. params change) must NOT wipe real history OR
+    # zero a REAL position — only the paper->real ARMING flip resets.
+    r2.runtime.restore(position=2, avg=77000.0, realized=555.0, fills=[])
     host.persist()
     await host.handle_control(_deploy_rc(paper=False))
     assert host.robots["r1"].runtime.realized_pnl() == 555.0
+    assert host.robots["r1"].runtime.signed_position() == 2   # real position kept
 
 
 @pytest.mark.asyncio
