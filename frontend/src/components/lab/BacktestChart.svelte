@@ -13,7 +13,7 @@
   import { downloadCSV } from '$lib/csv';
   import {
     toFills, rolledPnl, priceMarkers,
-    positionRects, exitStats, commissionBreakdown, commissionFor,
+    positionRects, exitStats, tpSlByLevel, commissionBreakdown, commissionFor,
   } from '../../lib/lab-analytics';
 
   let {
@@ -113,6 +113,7 @@
   let error = $state('');
   let stats = $state<any>(null);
   let exits = $state<any>(null);   // TP/SL exit analytics
+  let levelStats = $state<any[]>([]);   // TP/SL distribution by peak averaging level
   let commission = $state<any>(null);   // broker/exchange commission breakdown
   let netResult = $state(0);            // Σ realized close PnL (₽, net of commission)
   let statsExpanded = $state(false);    // report collapsed to 2 lines by default
@@ -660,6 +661,7 @@
       // triangles at exact fill price + hover index; bright entry / dim AVG / TP-SL close
       const pm = priceMarkers(events, { buy: BUY_COLOR, sell: SELL_COLOR, tp: TP_COLOR, sl: SL_COLOR });
       exits = exitStats(events);
+      levelStats = tpSlByLevel(events);
       // Attach ALL markers to the CANDLE series so lightweight-charts snaps each to its
       // containing bar. Feeding them to separate line series via setData added off-grid
       // time points to the shared (index-based) time scale, which floated the arrows AND
@@ -976,6 +978,29 @@
               <div class="st-row"><span>Убыток SL</span><b class="neg">{fmtMoney(exits.slPnl)}</b></div>
             {/if}
 
+            {#if levelStats.length}
+              <div class="st-sep"></div>
+              <div class="st-lvl-h">TP/SL по глубине усреднения
+                <span class="st-sub">пик контрактов в сделке → исход. Стопа нет — смотри НЕТТО ₽, не только счёт: один глубокий SL съедает пачку мелких TP.</span></div>
+              <div class="st-lvl-tbl">
+                <div class="st-lvl-row st-lvl-head">
+                  <span>Ур.</span><span class="num">TP</span><span class="num">SL</span><span class="num">TP/SL</span>
+                  <span class="num">Σ TP</span><span class="num">Σ SL</span><span class="num">Нетто</span></div>
+                {#each levelStats as L}
+                  {@const net = L.tpPnl + L.slPnl}
+                  <div class="st-lvl-row">
+                    <span class="mono">{L.level}</span>
+                    <span class="num pos">{L.tp}</span>
+                    <span class="num neg">{L.sl}</span>
+                    <span class="num">{L.sl ? (L.tp / L.sl).toFixed(1) : (L.tp ? '∞' : '—')}</span>
+                    <span class="num pos">{L.tpPnl ? fmtMoney(L.tpPnl) : '—'}</span>
+                    <span class="num neg">{L.slPnl ? fmtMoney(L.slPnl) : '—'}</span>
+                    <span class="num" class:pos={net >= 0} class:neg={net < 0}>{fmtMoney(net)}</span>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+
             <button class="st-trades-btn" onclick={() => showTrades = true}>Открыть таблицу сделок бэктеста →</button>
             <div class="st-foot">Суммы в ₽, чистыми (за вычетом комиссии {taker ? 'тейкер: биржа + брокер' : 'мейкер: только брокер'}).</div>
           </div>
@@ -1154,6 +1179,13 @@
   .st-trades-btn { margin-top: 6px; padding: 4px 8px; background: #12203a; border: 1px solid #24406a; color: #9cf; border-radius: 3px; font-size: 10px; cursor: pointer; }
   .st-trades-btn:hover { border-color: #6aa8ff66; color: #cfe; }
   .st-foot { font-size: 10px; color: #555; margin-top: 4px; font-style: italic; }
+  .st-lvl-h { font-size: 10px; color: #9ab; margin: 2px 0 4px; }
+  .st-lvl-h .st-sub { display: block; margin-top: 2px; line-height: 1.35; }
+  .st-lvl-tbl { display: flex; flex-direction: column; gap: 1px; }
+  .st-lvl-row { display: grid; grid-template-columns: 20px 1fr 1fr 1.1fr 1.5fr 1.5fr 1.5fr; gap: 4px; font-size: 10px; color: #aaa; align-items: baseline; }
+  .st-lvl-head { color: #556; font-size: 9px; text-transform: uppercase; border-bottom: 1px solid #2d2d4a; padding-bottom: 2px; }
+  .st-lvl-row .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .st-lvl-row .mono { font-family: ui-monospace, Consolas, monospace; color: #cde; }
   .pos { color: #4caf50; } .neg { color: #f44336; }
 
   /* full trades table overlay */

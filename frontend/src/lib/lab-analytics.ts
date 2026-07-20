@@ -227,6 +227,32 @@ export function exitStats(events: TradeEvent[]): ExitStats {
   return s;
 }
 
+// ── TP/SL distribution by averaging depth ────────────────────────────────────
+// For an averaging strategy, group every closing episode by the PEAK contracts it
+// reached (close.maxContracts = 1..avg_max) and split TP (profit close) vs SL (loss
+// close), summing ₽ (net of commission). Answers "how deep is it safe to average" —
+// but COUNT ratio alone misleads (there is no stop-loss in make_on_bar, so deep
+// levels almost always grind to TP while the rare deep SL is huge), so P&L per level
+// is the honest signal — always read tpPnl/slPnl alongside the tp/sl counts.
+export interface LevelStat {
+  level: number;                    // peak contracts held in the episode
+  tp: number; sl: number;           // count of profit / loss closes at this peak
+  tpPnl: number; slPnl: number;     // Σ ₽ (net of commission)
+}
+
+export function tpSlByLevel(events: TradeEvent[]): LevelStat[] {
+  const m = new Map<number, LevelStat>();
+  for (const e of events) {
+    if (!e.close) continue;
+    const level = Math.max(1, Math.round(e.close.maxContracts || 1));
+    const s = m.get(level) ?? { level, tp: 0, sl: 0, tpPnl: 0, slPnl: 0 };
+    if (e.close.exit === 'TP') { s.tp++; s.tpPnl += e.close.pnl; }
+    else { s.sl++; s.slPnl += e.close.pnl; }
+    m.set(level, s);
+  }
+  return [...m.values()].sort((a, b) => a.level - b.level);
+}
+
 // Trade triangles placed STRICTLY at the trade price via an invisible anchor line
 // series + `inBar` markers (lightweight-charts markers can't take a free price).
 // Buy = up-triangle, sell = down-triangle. Colors passed in. Returns per-side
