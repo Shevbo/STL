@@ -23,6 +23,7 @@ API:  STL_API env var, default https://stl.shectory.ru
 from __future__ import annotations
 
 import argparse
+import itertools
 import math
 import os
 import sys
@@ -125,6 +126,15 @@ def _combo_count(grid: dict[str, list]) -> int:
     return n
 
 
+def valid_macd_config(cfg: dict) -> bool:
+    """A macd config with fast>=slow is degenerate (fast==slow -> zero MACD line;
+    fast>slow -> inverted). Non-macd configs (no fast/slow) always pass."""
+    f, s = cfg.get("fast"), cfg.get("slow")
+    if f is None or s is None:
+        return True
+    return f < s
+
+
 # ── main ─────────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -206,27 +216,46 @@ def main() -> None:
             base_params.setdefault("tp_atr", 0)
             base_params.setdefault("avg_atr_n", 14)
 
-        combos_per_sym = _combo_count(grid)
+        # macd/ema-crossover style strategies (fast+slow axes) grid-product into
+        # degenerate configs (fast>=slow). Expand + filter those locally, once per
+        # strategy, so remote workers never see them; every other strategy keeps
+        # the compact paramsGrid form (server-side product) unchanged.
+        param_sets = None
+        if "fast" in grid and "slow" in grid:
+            keys = list(grid.keys())
+            all_sets = [dict(zip(keys, combo))
+                       for combo in itertools.product(*(grid[k] for k in keys))]
+            param_sets = [c for c in all_sets if valid_macd_config(c)]
+            dropped = len(all_sets) - len(param_sets)
+            if dropped:
+                print(f"[campaign] {sid}: dropped {dropped} degenerate fast>=slow configs")
+
+        combos_per_sym = len(param_sets) if param_sets is not None else _combo_count(grid)
 
         for sym in symbols:
             if (sid, sym) in done:
                 continue
-            sym_grid = {**grid, "symbol": [sym]}
-            total_combos = combos_per_sym  # symbol is 1 value, doesn't multiply
+            if param_sets is not None and len(param_sets) == 0:
+                print(f"[campaign] SKIP {sid}/{sym}: all combos degenerate (fast>=slow), nothing to queue")
+                continue
+            payload = {
+                "scriptCode": script_code,
+                "baseParams": {**base_params, "symbol": sym},
+                "symbol": sym,
+                "dateFrom": date_from,
+                "dateTo": date_to,
+                "engine": "remote",
+            }
+            if param_sets is not None:
+                payload["paramSets"] = param_sets
+            else:
+                payload["paramsGrid"] = {**grid, "symbol": [sym]}
 
             jobs.append({
                 "strategy": sid,
                 "symbol": sym,
-                "combos": total_combos,
-                "payload": {
-                    "scriptCode": script_code,
-                    "baseParams": {**base_params, "symbol": sym},
-                    "paramsGrid": sym_grid,
-                    "symbol": sym,
-                    "dateFrom": date_from,
-                    "dateTo": date_to,
-                    "engine": "remote",
-                },
+                "combos": combos_per_sym,
+                "payload": payload,
             })
 
     total_combos = sum(j["combos"] for j in jobs)

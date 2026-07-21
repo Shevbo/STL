@@ -111,6 +111,12 @@ async def lifespan(app: FastAPI):
             "ALTER TABLE backtest_results ADD COLUMN IF NOT EXISTS recovery_factor DOUBLE PRECISION",
             "ALTER TABLE backtest_results ADD COLUMN IF NOT EXISTS point_value DOUBLE PRECISION",
             "ALTER TABLE robots ADD COLUMN IF NOT EXISTS retire_comment TEXT",
+            # MAE / OOS walk-forward metrics mirrored into the leaderboard (task 5)
+            "ALTER TABLE optimization_leaderboard ADD COLUMN IF NOT EXISTS max_mae DOUBLE PRECISION",
+            "ALTER TABLE optimization_leaderboard ADD COLUMN IF NOT EXISTS recovery_factor_mtm_oos DOUBLE PRECISION",
+            "ALTER TABLE optimization_leaderboard ADD COLUMN IF NOT EXISTS windows_profitable INTEGER",
+            "ALTER TABLE optimization_leaderboard ADD COLUMN IF NOT EXISTS windows_total INTEGER",
+            "ALTER TABLE optimization_leaderboard ADD COLUMN IF NOT EXISTS degrade DOUBLE PRECISION",
         ):
             try:
                 await db_pool.execute(_ddl)
@@ -552,8 +558,14 @@ def _campaign_score(r: dict) -> float:
 
 
 def _campaign_candidate(r: dict) -> bool:
+    # Honest mark-to-market drawdown (includes open-position risk) when the run
+    # has it; old rows / an unsynced i9 agent leave it NULL -> fall back to the
+    # closed-trade max_drawdown so nothing regresses or crashes.
+    dd = r.get("max_drawdown_mtm")
+    if dd is None:
+        dd = r.get("max_drawdown")
     return ((r.get("total_return") or 0) > 0 and (r.get("sharpe") or -9) >= 0.5
-            and (r.get("max_drawdown") or 9) <= 0.15 and 30 <= (r.get("total_trades") or 0) <= 3000)
+            and (dd or 9) <= 0.15 and 30 <= (r.get("total_trades") or 0) <= 3000)
 
 
 def _is_sweep_run(run_id: str) -> bool:
@@ -778,6 +790,9 @@ async def _run_remote_job_on_vds(row, app_state) -> None:
                         _campaign_score(entry["result"]), _campaign_candidate(entry["result"]),
                         entry["result"].get("net_profit"), entry["result"].get("recovery_factor"),
                         entry["result"].get("ann_return_go"), entry["result"].get("ann_return_full"),
+                        entry["result"].get("max_mae"), entry["result"].get("recovery_factor_mtm_oos"),
+                        entry["result"].get("windows_profitable"), entry["result"].get("windows_total"),
+                        entry["result"].get("degrade"),
                     )
                     for entry in graded if entry.get("ok")
                 ]
@@ -788,8 +803,11 @@ async def _run_remote_job_on_vds(row, app_state) -> None:
                                 """INSERT INTO optimization_leaderboard
                                      (campaign_run, strategy, symbol, params, total_return, sharpe,
                                       max_drawdown, win_rate, total_trades, score, candidate,
-                                      net_profit, recovery_factor, ann_return_go, ann_return_full)
-                                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)""",
+                                      net_profit, recovery_factor, ann_return_go, ann_return_full,
+                                      max_mae, recovery_factor_mtm_oos, windows_profitable,
+                                      windows_total, degrade)
+                                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
+                                           $16,$17,$18,$19,$20)""",
                                 lb_rows,
                             )
                     except Exception as exc:
@@ -1767,10 +1785,13 @@ def create_app() -> FastAPI:
             """
             SELECT campaign_run, symbol, params, total_return, sharpe, max_drawdown,
                    win_rate, total_trades, net_profit, recovery_factor, score,
-                   candidate, created_at, ann_return_go, ann_return_full
+                   candidate, created_at, ann_return_go, ann_return_full,
+                   max_mae, recovery_factor_mtm_oos, windows_profitable,
+                   windows_total, degrade
             FROM (
                 SELECT *, ROW_NUMBER() OVER (
-                    PARTITION BY symbol ORDER BY score DESC NULLS LAST) AS rn
+                    PARTITION BY symbol
+                    ORDER BY recovery_factor_mtm_oos DESC NULLS LAST, score DESC NULLS LAST) AS rn
                 FROM optimization_leaderboard
                 WHERE strategy=$1
             ) t WHERE rn <= 50
@@ -3131,6 +3152,8 @@ def create_app() -> FastAPI:
                 _fint(e, "total_trades"), _sv(_campaign_score(e["result"])), _campaign_candidate(e["result"]),
                 _fnum(e, "net_profit"), _fnum(e, "recovery_factor"),
                 _fnum(e, "ann_return_go"), _fnum(e, "ann_return_full"),
+                _fnum(e, "max_mae"), _fnum(e, "recovery_factor_mtm_oos"),
+                _fint(e, "windows_profitable"), _fint(e, "windows_total"), _fnum(e, "degrade"),
                 meta["date_from"].date() if meta and meta["date_from"] else None,
                 meta["date_to"].date() if meta and meta["date_to"] else None,
             )
@@ -3155,8 +3178,10 @@ def create_app() -> FastAPI:
                                  (campaign_run, strategy, symbol, params, total_return, sharpe,
                                   max_drawdown, win_rate, total_trades, score, candidate,
                                   net_profit, recovery_factor, ann_return_go, ann_return_full,
-                                  date_from, date_to)
-                               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)""",
+                                  max_mae, recovery_factor_mtm_oos, windows_profitable,
+                                  windows_total, degrade, date_from, date_to)
+                               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
+                                       $16,$17,$18,$19,$20,$21,$22)""",
                             lb_rows,
                         )
                     except Exception as exc:
