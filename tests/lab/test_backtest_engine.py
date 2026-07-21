@@ -15,10 +15,10 @@ def make_bars(n=100, trend="up") -> list[Bar]:
 
 
 _TRADES = [
-    {"side": "buy", "price": 100.0, "qty": 1},
-    {"side": "sell", "price": 105.0, "qty": 1},
-    {"side": "buy", "price": 103.0, "qty": 1},
-    {"side": "sell", "price": 108.0, "qty": 1},
+    {"side": "buy", "price": 100.0, "qty": 1, "time": 1000},
+    {"side": "sell", "price": 105.0, "qty": 1, "time": 2000},
+    {"side": "buy", "price": 103.0, "qty": 1, "time": 3000},
+    {"side": "sell", "price": 108.0, "qty": 1, "time": 4000},
 ]
 
 

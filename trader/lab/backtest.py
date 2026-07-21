@@ -64,7 +64,8 @@ def compute_metrics(trades: list[dict], initial_equity: float,
              "sharpe": None, "max_drawdown": 0.0, "recovery_factor": None,
              "net_profit": 0.0, "peak_contracts": 0, "margin_used": 0.0,
              "ann_return_go": None, "ann_return_full": None,
-             "max_mae": 0.0, "max_drawdown_mtm": 0.0, "recovery_factor_mtm": None}
+             "max_mae": 0.0, "max_drawdown_mtm": 0.0, "recovery_factor_mtm": None,
+             "closed_pairs": []}
     if not trades:
         return empty
 
@@ -78,46 +79,61 @@ def compute_metrics(trades: list[dict], initial_equity: float,
     if margin_used <= 0:
         margin_used = initial_equity
 
-    pairs = []          # realized PnL per closed round-trip, in RUB, NET of fees
-    entry = None        # (signed_qty, price, fee_carried) — entry commission carried to the close
+    pairs: list[dict] = []   # {"time": exit_time, "pnl": net_rub} per closed round-trip
+    pos_qty = 0               # signed open position, contracts
+    pos_avg = 0.0             # entry average of the OPEN position
+    carried_entry_fee = 0.0   # entry/averaging fees not yet realized against a close
     # Track weighted-average entry price across all round-trips for notional calc.
     _entry_price_sum = 0.0
     _entry_qty_sum = 0
     for t in trades:
         q = t["qty"] * (1 if t["side"] == "buy" else -1)
-        c = commission_for(symbol, t["price"], t["qty"], point_value, taker=True)
-        if entry is None:
-            entry = [q, t["price"], c]            # this opening fill's fee
-            _entry_price_sum += t["price"] * t["qty"]
+        p = t["price"]
+        c = commission_for(symbol, p, t["qty"], point_value, taker=True)
+        if pos_qty == 0:                       # flat → open
+            pos_qty, pos_avg, carried_entry_fee = q, p, c
+            _entry_price_sum += p * t["qty"]
             _entry_qty_sum += t["qty"]
-            continue
-        eq, ep, fee = entry
-        if (eq > 0) == (q > 0):          # same direction → average in
-            tot = eq + q
-            ep = (ep * eq + t["price"] * q) / tot if tot != 0 else t["price"]
-            entry = [tot, ep, fee + c]            # averaging fill adds a fee
-            _entry_price_sum += t["price"] * t["qty"]
+        elif (pos_qty > 0) == (q > 0):         # same direction → average in
+            tot = abs(pos_qty) + abs(q)
+            pos_avg = (pos_avg * abs(pos_qty) + p * abs(q)) / tot
+            pos_qty += q
+            carried_entry_fee += c
+            _entry_price_sum += p * t["qty"]
             _entry_qty_sum += t["qty"]
-        else:                            # opposite → close
-            closed = min(abs(eq), abs(q))
-            gross = (t["price"] - ep) * (1 if eq > 0 else -1) * closed * point_value
-            # Net of: this closing fill's fee + the carried entry/averaging fees.
-            pairs.append(gross - c - fee)
-            rem = eq + q
-            # Leftover (reverse/partial) carries one fee for its remaining entry.
-            if rem != 0:
-                entry = [rem, t["price"], c]
-                _entry_price_sum += t["price"] * abs(rem)
-                _entry_qty_sum += abs(rem)
+        else:                                  # opposite → close (fully or partially)
+            closed = min(abs(pos_qty), abs(q))
+            gross = (p - pos_avg) * (1 if pos_qty > 0 else -1) * closed * point_value
+            # Net of: this closing fill's fee share + the carried entry fee share.
+            entry_fee_closed = carried_entry_fee * closed / abs(pos_qty)
+            close_fee_closed = c * closed / abs(q)
+            pairs.append({"time": t["time"], "pnl": gross - entry_fee_closed - close_fee_closed})
+            new_qty = pos_qty + q
+            if new_qty == 0:
+                pos_qty, pos_avg, carried_entry_fee = 0, 0.0, 0.0
+            elif (new_qty > 0) == (pos_qty > 0):
+                # Partial reduce: fewer contracts at the SAME entry average. The
+                # old code re-based avg to the closing fill's price here, mis-
+                # realizing every later close of an averaging strategy — fixed
+                # identically in trader/lab/runtime.py and robot_runner/runtime.py.
+                pos_qty = new_qty
+                carried_entry_fee -= entry_fee_closed
+                _entry_price_sum += p * abs(new_qty)
+                _entry_qty_sum += abs(new_qty)
             else:
-                entry = None
+                # Flip through zero → the new leg opens fresh at the fill price.
+                pos_qty = new_qty
+                pos_avg = p
+                carried_entry_fee = c * abs(new_qty) / abs(q)
+                _entry_price_sum += p * abs(new_qty)
+                _entry_qty_sum += abs(new_qty)
 
     if not pairs:
         return empty
 
-    wins = sum(1 for p in pairs if p > 0)
+    wins = sum(1 for pr in pairs if pr["pnl"] > 0)
     win_rate = wins / len(pairs)
-    net_profit = sum(pairs)
+    net_profit = sum(pr["pnl"] for pr in pairs)
     total_return = net_profit / margin_used
 
     # Notional = peak_contracts × avg_entry_price × point_value.
@@ -142,7 +158,7 @@ def compute_metrics(trades: list[dict], initial_equity: float,
 
     if len(pairs) > 1:
         mean_r = net_profit / len(pairs)
-        std_r = math.sqrt(sum((p - mean_r) ** 2 for p in pairs) / len(pairs))
+        std_r = math.sqrt(sum((pr["pnl"] - mean_r) ** 2 for pr in pairs) / len(pairs))
         sharpe = (mean_r / std_r * math.sqrt(252)) if std_r > 0 else None
     else:
         sharpe = None
@@ -150,8 +166,8 @@ def compute_metrics(trades: list[dict], initial_equity: float,
     equity = initial_equity
     peak = equity
     max_dd_money = 0.0
-    for p in pairs:
-        equity += p
+    for pr in pairs:
+        equity += pr["pnl"]
         if equity > peak:
             peak = equity
         dd = peak - equity
@@ -172,6 +188,7 @@ def compute_metrics(trades: list[dict], initial_equity: float,
         "margin_used": margin_used,
         "ann_return_go": ann_return_go,
         "ann_return_full": ann_return_full,
+        "closed_pairs": pairs,
     }
 
 
@@ -222,31 +239,11 @@ async def run_single_backtest(
                               initial_margin=initial_margin, bars_days=bars_days)
     rf_mtm = (metrics["net_profit"] / max_dd_mtm) if max_dd_mtm > 0 else None
 
-    # Closed round-trips as (exit_time, net_pnl_RUB) for time-sliced IS/OOS +
-    # per-window scoring (window_metrics). Duplicates compute_metrics's signed-space
-    # close accounting (keyed by exit time instead of RUB pnl only) — accepted
-    # trade-off for this task; a shared helper is a possible later refactor.
-    pairs, _signed, _avg = [], 0, 0.0
-    for t in trades:
-        q = t["qty"]
-        px = t["price"]
-        delta = q if t["side"] == "buy" else -q
-        if _signed != 0 and (_signed > 0) != (delta > 0):
-            closed = min(q, abs(_signed))
-            pnl = ((px - _avg) if _signed > 0 else (_avg - px)) * closed * point_value
-            pairs.append({"time": t["time"], "pnl": pnl})
-        new_signed = _signed + delta
-        if new_signed == 0:
-            _avg = 0.0
-        elif _signed != 0 and (_signed > 0) == (delta > 0):
-            _avg = (_avg * abs(_signed) + px * q) / (abs(_signed) + q)
-        elif _signed != 0 and (new_signed > 0) == (_signed > 0):
-            pass  # partial reduce keeps avg
-        else:
-            _avg = px
-        _signed = new_signed
+    # Time-sliced IS/OOS + per-window scoring (window_metrics) consumes the SAME
+    # closed round-trips compute_metrics already built (net of fees, keyed by
+    # exit time) — single source, so window metrics reconcile with net_profit.
     span = (bars[0].time, bars[-1].time)
-    wm = window_metrics(pairs, span=span, is_frac=0.7, splits=4)
+    wm = window_metrics(metrics["closed_pairs"], span=span, is_frac=0.7, splits=4)
     # v1: whole-run mtm drawdown, not a per-slice OOS dd (later refinement).
     rf_mtm_oos = (wm["net_oos"] / max_dd_mtm) if max_dd_mtm > 0 else None
 
@@ -261,13 +258,17 @@ async def run_single_backtest(
     # open position that never closes is exactly the mirage this feature exists
     # to expose, so its real MAE/mtm-dd/RF-mtm must win, not get stomped back to
     # zero by compute_metrics's placeholder defaults.
-    return {"trades": trades, "equity_curve": equity_curve,
-            "point_value": point_value, **metrics,
-            "max_mae": max_mae, "max_drawdown_mtm": max_dd_mtm,
-            "recovery_factor_mtm": rf_mtm,
-            "net_oos": wm["net_oos"], "recovery_factor_mtm_oos": rf_mtm_oos,
-            "degrade": wm["degrade"], "windows_profitable": wm["windows_profitable"],
-            "windows_total": wm["windows_total"]}
+    res = {"trades": trades, "equity_curve": equity_curve,
+           "point_value": point_value, **metrics,
+           "max_mae": max_mae, "max_drawdown_mtm": max_dd_mtm,
+           "recovery_factor_mtm": rf_mtm,
+           "net_oos": wm["net_oos"], "recovery_factor_mtm_oos": rf_mtm_oos,
+           "degrade": wm["degrade"], "windows_profitable": wm["windows_profitable"],
+           "windows_total": wm["windows_total"]}
+    # closed_pairs is an INTERNAL handoff to window_metrics — pop it so it
+    # doesn't bloat every shipped result (a 3-month sweep can have thousands).
+    res.pop("closed_pairs", None)
+    return res
 
 
 def _subprocess_run_many(script_code: str, bars_data: list[dict], symbol: str,
