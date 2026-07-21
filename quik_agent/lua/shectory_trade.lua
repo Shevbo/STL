@@ -69,6 +69,15 @@ local CONFIG = {
 
   -- Account tables (positions/orders/trades) publish cadence for the agent showcase (ms).
   ACC_INTERVAL_MS  = 2000,
+
+  -- REPLAY GATE (2026-07-21 incident): after a QUIK terminal restart OnAllTrade
+  -- REPLAYS the whole day's trades; rows are receipt-stamped (see OnAllTrade), so
+  -- downstream runner bars got TODAY's timestamps with HOURS-old prices while
+  -- bid/ask stayed live -> averaging robots piled real longs 1 lot/min. Trades
+  -- whose EXCHANGE datetime is older than this many seconds vs the VDS clock are
+  -- dropped at the source (0 disables the gate). Generous default: covers batching
+  -- + queue latency + modest clock drift, while a replay lags minutes-to-hours.
+  TAPE_GATE_SEC    = 300,
 }
 
 ----------------------------------------------------------------------
@@ -712,13 +721,29 @@ function OnAllTrade(t)
   -- ASSUMPTION: the VDS OS clock/timezone is set to MSK, matching exchange time, so
   -- os.time() over QUIK's datetime table yields a correct epoch-ms trade timestamp — if
   -- the VDS clock/tz is ever changed this must be revisited.
+  local exch_ms = 0
   if type(t.datetime) == "table" then
     local dt = t.datetime
     local okts, ts = pcall(os.time, { year = dt.year, month = dt.month, day = dt.day,
       hour = dt.hour or 0, min = dt.min or 0, sec = dt.sec or 0 })
-    if okts and ts then md.last_trade_ts_ms = ts * 1000 end
+    if okts and ts then
+      exch_ms = ts * 1000
+      md.last_trade_ts_ms = exch_ms   -- lag metric sees ALL trades, replayed included
+    end
   end
-  buf[#buf + 1] = { tonumber(t.price) or 0, tonumber(t.qty) or 0, side, now_ms() }
+  -- REPLAY GATE: a restarted QUIK re-fires the WHOLE day through OnAllTrade; the
+  -- receipt stamp makes those rows look live, so runner bars carry hours-old prices
+  -- under fresh timestamps (2026-07-21: robots averaged into a phantom dip 1 lot/min,
+  -- real money). A trade whose EXCHANGE time is older than the gate never reaches the
+  -- buffer: the tape goes silent for the runner, bars fall back to live snapshot ticks
+  -- after TAPE_PRIORITY (30s) and stay truthful. Gate 0 = disabled.
+  local gate_s = tonumber(CONFIG.TAPE_GATE_SEC) or 300
+  if gate_s > 0 and exch_ms > 0 and (now_ms() - exch_ms) > gate_s * 1000 then
+    return
+  end
+  -- 5th element = the trade's exchange epoch-ms (0 when QUIK gave no datetime): lets
+  -- the Go agent run its own backstop gate. Older agents read only rows[0..3] — safe.
+  buf[#buf + 1] = { tonumber(t.price) or 0, tonumber(t.qty) or 0, side, now_ms(), exch_ms }
 end
 
 local function publish_tape()

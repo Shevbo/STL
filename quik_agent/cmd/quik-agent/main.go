@@ -406,6 +406,12 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 			return
 		}
 		if ev.IsTape {
+			// Backstop replay gate (layer 2; layer 1 lives in shectory_trade.lua):
+			// drop trades whose exchange time (row[4], when the Lua provides it) is
+			// stale — a restarted QUIK replays the whole day and receipt stamps make
+			// replayed rows look live (2026-07-21: bars poisoned, robots piled longs).
+			ev.Trades = quikdde.FilterStaleTapeRows(
+				ev.Trades, time.Now().UnixMilli(), quikdde.TapeGateMaxAgeMs)
 			trades := make([]*quikv1.TapeTrade, 0, len(ev.Trades))
 			var lastPx float64
 			for _, r := range ev.Trades {
