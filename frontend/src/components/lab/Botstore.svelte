@@ -147,7 +147,7 @@
   // ── Detail tab: all tested instruments × params for one strategy ──────────────
   let detail = $state<any | null>(null);          // {id, name, rows, period, schema, sweep, top3}
   let detailLoading = $state(false);
-  let sortBy = $state<{ col: string; dir: 1 | -1 }>({ col: 'net_profit', dir: -1 });
+  let sortBy = $state<{ col: string; dir: 1 | -1 }>({ col: 'recovery_factor_mtm_oos', dir: -1 });
   let expanded = $state<Set<string>>(new Set());   // instrument symbols shown in full
   const COLLAPSED_ROWS = 5;
   function toggleExpand(sym: string) {
@@ -172,7 +172,7 @@
         top3: data.top3 ?? robot.top3 ?? [],
         campaigns: data.campaigns ?? null,
       };
-      sortBy = { col: 'net_profit', dir: -1 };   // default: by financial result
+      sortBy = { col: 'recovery_factor_mtm_oos', dir: -1 };   // default: out-of-sample robustness
       expanded = new Set();
     } catch (e) {
       notice = 'Ошибка загрузки деталей: ' + String(e);
@@ -924,7 +924,11 @@
                       <th class="num" onclick={() => setSort('net_profit')}>Прибыль ₽{sortBy.col === 'net_profit' ? (sortBy.dir === 1 ? ' ▲' : ' ▼') : ''}</th>
                       <th class="num" onclick={() => setSort('max_drawdown')}>Просадка{sortBy.col === 'max_drawdown' ? (sortBy.dir === 1 ? ' ▲' : ' ▼') : ''}</th>
                       <th class="num" onclick={() => setSort('sharpe')}>Sharpe{sortBy.col === 'sharpe' ? (sortBy.dir === 1 ? ' ▲' : ' ▼') : ''}</th>
-                      <th class="num" onclick={() => setSort('recovery_factor')}>RF{sortBy.col === 'recovery_factor' ? (sortBy.dir === 1 ? ' ▲' : ' ▼') : ''}</th>
+                      <th class="num" onclick={() => setSort('recovery_factor')}>closed-trade RF{sortBy.col === 'recovery_factor' ? (sortBy.dir === 1 ? ' ▲' : ' ▼') : ''}</th>
+                      <th class="num th-hl" onclick={() => setSort('recovery_factor_mtm_oos')} title="Recovery Factor на OOS-отрезке (mark-to-market) — основной критерий устойчивости">RF (OOS){sortBy.col === 'recovery_factor_mtm_oos' ? (sortBy.dir === 1 ? ' ▲' : ' ▼') : ''}</th>
+                      <th class="num" onclick={() => setSort('max_mae')} title="худшая просадка по открытой позиции (Maximum Adverse Excursion)">MAE, ₽{sortBy.col === 'max_mae' ? (sortBy.dir === 1 ? ' ▲' : ' ▼') : ''}</th>
+                      <th class="num" onclick={() => setSort('windows_profitable')} title="сколько окон walk-forward закрылись в плюс, из скольких">окна{sortBy.col === 'windows_profitable' ? (sortBy.dir === 1 ? ' ▲' : ' ▼') : ''}</th>
+                      <th class="num" onclick={() => setSort('degrade')} title="OOS-доходность в % от IS-доходности (100% = деградации нет)">degrade %{sortBy.col === 'degrade' ? (sortBy.dir === 1 ? ' ▲' : ' ▼') : ''}</th>
                       <th class="num" onclick={() => setSort('total_trades')}>Сделок{sortBy.col === 'total_trades' ? (sortBy.dir === 1 ? ' ▲' : ' ▼') : ''}</th>
                       <th class="num" onclick={() => setSort('win_rate')}>Win%{sortBy.col === 'win_rate' ? (sortBy.dir === 1 ? ' ▲' : ' ▼') : ''}</th>
                       <th></th>
@@ -944,6 +948,10 @@
                         <td class="num">{fmtPct(r.max_drawdown)}</td>
                         <td class="num">{fmtNum(r.sharpe)}</td>
                         <td class="num">{fmtNum(r.recovery_factor)}</td>
+                        <td class="num">{fmtNum(r.recovery_factor_mtm_oos)}</td>
+                        <td class="num">{fmtMoney(r.max_mae)}</td>
+                        <td class="num">{r.windows_profitable ?? '—'}/{r.windows_total ?? '—'}</td>
+                        <td class="num">{fmtPct(r.degrade)}</td>
                         <td class="num">{r.total_trades ?? '—'}</td>
                         <td class="num">{fmtPct(r.win_rate)}</td>
                         <td class="dp-go">
