@@ -558,8 +558,14 @@ def _campaign_score(r: dict) -> float:
 
 
 def _campaign_candidate(r: dict) -> bool:
+    # Honest mark-to-market drawdown (includes open-position risk) when the run
+    # has it; old rows / an unsynced i9 agent leave it NULL -> fall back to the
+    # closed-trade max_drawdown so nothing regresses or crashes.
+    dd = r.get("max_drawdown_mtm")
+    if dd is None:
+        dd = r.get("max_drawdown")
     return ((r.get("total_return") or 0) > 0 and (r.get("sharpe") or -9) >= 0.5
-            and (r.get("max_drawdown") or 9) <= 0.15 and 30 <= (r.get("total_trades") or 0) <= 3000)
+            and (dd or 9) <= 0.15 and 30 <= (r.get("total_trades") or 0) <= 3000)
 
 
 def _is_sweep_run(run_id: str) -> bool:
@@ -1784,7 +1790,8 @@ def create_app() -> FastAPI:
                    windows_total, degrade
             FROM (
                 SELECT *, ROW_NUMBER() OVER (
-                    PARTITION BY symbol ORDER BY score DESC NULLS LAST) AS rn
+                    PARTITION BY symbol
+                    ORDER BY recovery_factor_mtm_oos DESC NULLS LAST, score DESC NULLS LAST) AS rn
                 FROM optimization_leaderboard
                 WHERE strategy=$1
             ) t WHERE rn <= 50
