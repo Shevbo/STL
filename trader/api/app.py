@@ -332,6 +332,13 @@ async def lifespan(app: FastAPI):
     quik_reconcile_task = asyncio.create_task(_quik_order_reconcile(app.state))
     # Exchange-latency sampler (5s clock probe -> in-memory ring + latency_samples table).
     latency_task = asyncio.create_task(latency_monitor.run())
+    # Operator's manual smart orders (SL/TP/Trail/OnFill): persisted book + 1s watcher
+    # firing through the validated human place path. See trader/quik/smart_orders.py.
+    from trader.api.quik_smart_orders import BOOK_PATH, run_watcher
+    from trader.quik.smart_orders import SmartOrderBook
+    app.state.smart_orders = SmartOrderBook(BOOK_PATH)
+    app.state.smart_orders.load()
+    smart_orders_task = asyncio.create_task(run_watcher(app.state))
 
     yield
 
@@ -340,6 +347,7 @@ async def lifespan(app: FastAPI):
     task_fallback_task.cancel()
     quik_reconcile_task.cancel()
     latency_task.cancel()
+    smart_orders_task.cancel()
     await latency_monitor.aclose()
 
     if ai46 is not None:
@@ -1196,6 +1204,9 @@ def create_app() -> FastAPI:
     fastapi_app.include_router(quik_orders_router)
     from trader.api.quik_robots import router as quik_robots_router
     fastapi_app.include_router(quik_robots_router)
+    # Operator's manual smart orders (SL/TP/Trail/OnFill; STL-side watcher).
+    from trader.api.quik_smart_orders import router as quik_smart_router
+    fastapi_app.include_router(quik_smart_router)
     # QA checklist web form (GET /qa) + verdict persistence.
     from trader.api.qa_routes import router as qa_router
     fastapi_app.include_router(qa_router)
