@@ -34,6 +34,27 @@ import (
 // QUIK order/trade carrying it is agent-owned and in-flight — skipped by classification.
 const reconTag = "recon"
 
+// maxBrokerrefLen is QUIK's order-COMMENT / brokerref field width. The agent stamps a
+// robot's FULL id into the COMMENT (trade.ownerTag), but QUIK stores only the first 20
+// chars, so a robot whose id is longer (a 24-char cuid) has its orders and trades tagged
+// with id[:20]. Attribution must compare against the SAME truncation or a cuid-named
+// robot never reconciles — a permanent phantom MISMATCH, and its live orders silently
+// fall through to MANUAL (seen live on l90z0afzceesll5izjjg0g8w, 2026-07-21). Named
+// robots (agent-*, <=20 chars) are unaffected: quikTag is a no-op on them.
+// ponytail: 20 is QUIK's observed brokerref width; if a build truncates at a different
+// length, this is the single knob to turn.
+const maxBrokerrefLen = 20
+
+// quikTag returns the tag as QUIK would store it in the brokerref: truncated to
+// maxBrokerrefLen. It is the identity on tags already within the width (all named robots,
+// "", "recon"). Robot IDs are ASCII slugs/cuids, so a byte slice is a rune slice here.
+func quikTag(fullTag string) string {
+	if len(fullTag) > maxBrokerrefLen {
+		return fullTag[:maxBrokerrefLen]
+	}
+	return fullTag
+}
+
 // staleThresholdMs gates the whole report STALE when either snapshot age exceeds it: an
 // align decision must never be computed from data this old, even though the individual
 // checks are still rendered from whatever data is at hand.
@@ -211,7 +232,11 @@ func Evaluate(in Inputs) Report {
 		}
 		realRobots = append(realRobots, r)
 		if r.Tag != "" && r.Tag != reconTag {
-			robotByTag[r.Tag] = r
+			// Key by the TRUNCATED tag so a QUIK order/trade (whose tag QUIK already cut
+			// to maxBrokerrefLen) resolves back to this robot. ponytail: a first-20-char
+			// collision between two robot IDs would clash here; cuids make that
+			// astronomically unlikely and named robots are unique within 20 chars.
+			robotByTag[quikTag(r.Tag)] = r
 		}
 	}
 
@@ -397,12 +422,13 @@ func robotKnowsOrder(r RobotView, num string) bool {
 }
 
 // evalTrades bidirectionally matches every real robot's believed FillKey against QUIK
-// trades tagged for that robot (tag == robot.Tag, order_num equal, qty equal). PRICE IS
+// trades tagged for that robot (tag == quikTag(robot.Tag), order_num equal, and the row
+// qtys SUMMING to the fill qty — one fill can arrive as several partial rows). PRICE IS
 // DELIBERATELY NOT COMPARED: a marketable order routinely fills better than its limit
 // price (price improvement — seen live 10.07, buy @87330 filled @87310, 2 price steps),
-// and the tag+order_num+qty triple already pins the trade to exactly one believed fill;
-// an exact/1-step price gate produced false MISMATCH on every improved fill. FillKey
-// keeps its Price field as diagnostic context only. It returns the per-fill forward
+// and the tag+order_num pins the rows to exactly one believed fill; an exact/1-step
+// price gate produced false MISMATCH on every improved fill. FillKey keeps its Price
+// field as diagnostic context only. It returns the per-fill forward
 // TradeChecks and the set of robot IDs whose fills do NOT line up — a robot fill with no
 // matching tagged QUIK trade (forward) OR a tagged QUIK trade no fill claimed (reverse).
 // Each QUIK trade row is consumed by at most one FillKey (a `used` set shared across all
@@ -414,18 +440,34 @@ func evalTrades(in Inputs, robotByTag map[string]RobotView, realRobots []RobotVi
 	used := make([]bool, len(in.Acc.Trades))
 
 	for _, r := range realRobots {
+		tag := quikTag(r.Tag) // compare against QUIK's truncated brokerref
 		for _, fk := range r.FillKeys {
 			matched, tradeID := false, ""
 			// A robot with no tag (a wiring quirk — real robots always carry one) can
 			// match no tagged trade; its fills stay unmatched.
-			if r.Tag != "" && r.Tag != reconTag {
+			if tag != "" && tag != reconTag {
+				// One believed fill can be reported by QUIK as SEVERAL partial trade rows
+				// (a multi-lot marketable order fills in pieces — the runner records the
+				// aggregate qty=N, QUIK the individual lots). Consume unused rows of the
+				// same (tag, order_num) until their qty SUM reaches this fill's qty; an
+				// exact-qty-per-row gate false-flagged every partially-filled order.
+				var acc int64
+				var take []int
 				for i, tr := range in.Acc.Trades {
-					if used[i] || tr.Tag != r.Tag || tr.OrderNum != fk.OrderNum || tr.Qty != fk.Qty {
+					if used[i] || tr.Tag != tag || tr.OrderNum != fk.OrderNum {
 						continue
 					}
-					matched, tradeID = true, tr.Num
-					used[i] = true
-					break
+					take = append(take, i)
+					acc += tr.Qty
+					if acc >= fk.Qty {
+						break
+					}
+				}
+				if acc == fk.Qty && len(take) > 0 {
+					matched, tradeID = true, in.Acc.Trades[take[0]].Num
+					for _, i := range take {
+						used[i] = true
+					}
 				}
 			}
 			checks = append(checks, TradeCheck{TradeID: tradeID, OrderNum: fk.OrderNum, Matched: matched})

@@ -50,6 +50,61 @@ func TestEvaluateManualNeverAligned(t *testing.T) {
 	}
 }
 
+// TestEvaluateTradeMatch_TruncatedTagAndPartialFills: a robot whose ID is longer than
+// QUIK's brokerref width (a 24-char cuid) has its trades tagged with id[:20]; and a
+// single believed multi-lot fill is reported by QUIK as several qty-1 rows. The matcher
+// must (a) resolve the truncated tag back to the robot and (b) SUM the partial rows to
+// the fill qty, or the robot never reconciles — a permanent phantom MISMATCH (seen live
+// on l90z0afzceesll5izjjg0g8w, 2026-07-21).
+func TestEvaluateTradeMatch_TruncatedTagAndPartialFills(t *testing.T) {
+	const id = "l90z0afzceesll5izjjg0g8w" // 24 chars
+	tag := id[:20]                        // what QUIK stores in the brokerref
+	in := Inputs{
+		Robots: []RobotView{{
+			ID: id, Tag: id, Symbol: "RIU6", Position: 2,
+			FillKeys: []FillKey{{OrderNum: "o1", Qty: 2, Price: 83250}},
+		}},
+		Acc: AccView{
+			Trades: []Trade{
+				{Num: "t1", OrderNum: "o1", Sec: "RIU6", Price: 83250, Qty: 1, Tag: tag},
+				{Num: "t2", OrderNum: "o1", Sec: "RIU6", Price: 83250, Qty: 1, Tag: tag},
+			},
+			PosAgeMs: 10, OrdAgeMs: 10,
+		},
+	}
+	rep := Evaluate(in)
+	if rep.State != "OK" {
+		t.Fatalf("truncated-tag + summed partial fills must reconcile OK, got %s", rep.State)
+	}
+	for _, rc := range rep.RobotChecks {
+		if rc.ID == id && !rc.TradesOK {
+			t.Errorf("robot with a truncated tag and summed partial fills must be TradesOK")
+		}
+	}
+}
+
+// TestEvaluateOrders_TruncatedTagAttributesToRobot: a cuid robot's active QUIK order
+// carries the 20-char truncated tag. Before the truncation-aware lookup it fell through
+// to MANUAL (silently hiding a would-be ROBOT_ORPHAN); it must attribute to the robot.
+func TestEvaluateOrders_TruncatedTagAttributesToRobot(t *testing.T) {
+	const id = "l90z0afzceesll5izjjg0g8w"
+	tag := id[:20]
+	in := Inputs{
+		Robots: []RobotView{{ID: id, Tag: id, Symbol: "RIU6", OrderNums: []string{"o9"}}},
+		Acc: AccView{
+			Orders:   []Order{{Num: "o9", Sec: "RIU6", Active: true, Tag: tag}},
+			PosAgeMs: 10, OrdAgeMs: 10,
+		},
+	}
+	rep := Evaluate(in)
+	if rep.State != "OK" {
+		t.Fatalf("robot's own known truncated-tag order must be OK, got %s", rep.State)
+	}
+	if len(rep.Manual.Orders) != 0 {
+		t.Fatalf("a robot's truncated-tag order must NOT be classified manual: %+v", rep.Manual.Orders)
+	}
+}
+
 // TestInvariant1_ManualNeverInAlignPlan: even when a REAL robot mismatch produces a plan,
 // no step may name a co-existing manual order or its symbol via that order.
 func TestInvariant1_ManualNeverInAlignPlan(t *testing.T) {

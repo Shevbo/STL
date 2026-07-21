@@ -241,6 +241,12 @@
     return min;
   }
 
+  // Price display: keep the instrument's real precision. Math.round truncated the
+  // cents on a sub-integer instrument (BRU6 showed 87 for a real fill of 86.63).
+  // ponytail: 2 dp fits every FORTS instrument we trade (BR tick 0.01, the rest
+  // integer); switch to a price-step-derived precision if a 0.001-tick one (NG) lands.
+  const fmtPrice = (p: number) => Number(p).toLocaleString('ru-RU', { maximumFractionDigits: 2 });
+
   async function load() {
     try {
       const q = agentId ? `?agent_id=${encodeURIComponent(agentId)}` : '';
@@ -753,7 +759,7 @@
           {#each plannedOrders as p}
             <div class="plan-row" class:buy={p.side === 'buy'} class:sell={p.side === 'sell'}>
               <b>{p.side === 'buy' ? '▲ BUY' : '▼ SELL'} {p.qty}</b>
-              <span class="mono">@ {Math.round(p.price).toLocaleString('ru-RU')}</span>
+              <span class="mono">@ {fmtPrice(p.price)}</span>
               <span class="why">{p.reason}</span>
             </div>
           {/each}
@@ -772,7 +778,7 @@
           {#each openOrders as o}
             <div class="plan-row live" class:buy={o.side === 'buy'} class:sell={o.side === 'sell'}>
               <b>{o.side === 'buy' ? '▲ BUY' : '▼ SELL'} {o.qty}</b>
-              <span class="mono">@ {Math.round(o.price).toLocaleString('ru-RU')}</span>
+              <span class="mono">@ {fmtPrice(o.price)}</span>
               <span class="why mono">{o.order_id}</span>
             </div>
           {/each}
@@ -798,7 +804,7 @@
                   <td class:buy={t.side === 'buy'} class:sell={t.side === 'sell'}>{t.side === 'buy' ? '▲ buy' : '▼ sell'}</td>
                   <td>{#if t.meta?.action}<span class="act {t.meta.cls}">{t.meta.action}</span>{/if}</td>
                   <td class="mono">{t.qty}</td>
-                  <td class="mono">{Math.round(t.price).toLocaleString('ru-RU')}</td>
+                  <td class="mono">{fmtPrice(t.price)}</td>
                   <td class="mono">{#if t.meta?.pnl != null && pointCoef != null}<span class={t.meta.pnl >= 0 ? 'buy' : 'sell'}>{t.meta.pnl >= 0 ? '+' : ''}{Math.round(t.meta.pnl).toLocaleString('ru-RU')} ₽</span>{/if}</td>
                   <td class="mono">{#if t.meta?.comm != null && t.meta.comm > 0}<span class="comm-cell" title="комиссия этого филла">−{t.meta.comm.toLocaleString('ru-RU', { maximumFractionDigits: 2 })} ₽</span>{/if}</td>
                   <td><span class="st st-{t.status}">{t.status}</span></td>
