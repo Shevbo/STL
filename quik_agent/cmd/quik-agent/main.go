@@ -677,6 +677,18 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 				if confirmID != id {
 					return fmt.Errorf("подтверждение не совпадает: введите точный ID робота")
 				}
+				// Arming guard: refuse a robot whose max_position exceeds the effective
+				// per-order/working cap — it could open via averaging but never close
+				// (the whole-book exit is one order that CheckPlace rejects). Left a real
+				// robot stuck long +14 unable to exit for hours (2026-07-21). Only on
+				// arming (paper=false); disarm/paper never needs it.
+				if !paper {
+					lim := mgr.EffectiveLimits()
+					if err := trade.CheckArmable(spec.GetMaxPositionContracts(),
+						lim.GetMaxContractsPerOrder(), lim.GetMaxWorkingContracts()); err != nil {
+						return err
+					}
+				}
 				st := runnerSrv.LastStatuses()[id] // nil-safe: proto getters tolerate nil
 				// forceDisarm: real->paper with the flat gate deliberately bypassed by
 				// the operator. NEVER honoured for arming (paper=false) — arming real
