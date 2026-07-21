@@ -228,7 +228,18 @@ func buildReconInputs(d Deps) recon.Inputs {
 			Num: o.Num, Sec: o.Sec, Active: o.Active, Price: o.Price, Balance: o.Balance, Qty: o.Qty, Tag: o.Tag,
 		})
 	}
+	// QUIK's acc_trd is a rolling ring that retains PRIOR-session trades for a thinly
+	// traded instrument (agent-ob-BRU6-v1's two 20.07 fills were still present 21.07
+	// morning). The forward matcher scopes FillKeys to the MSK-session floor, so those
+	// lingering trades match no fill and the reverse pass (recon.evalTrades) flagged
+	// them as "a tagged trade no fill claimed" -> phantom trade MISMATCH on a robot
+	// that simply had not traded today. Drop pre-session trades here, symmetric with
+	// the FillKey floor below, so both directions see the same session window.
+	tradeFloor := mskMidnightMs(d.nowMs())
 	for _, t := range acc.Trades {
+		if t.TsMs < tradeFloor {
+			continue // pre-session QUIK trade: unmatchable by design, not a divergence
+		}
 		accView.Trades = append(accView.Trades, recon.Trade{
 			Num: t.Num, OrderNum: t.OrderNum, Sec: t.Sec, Price: t.Price, Qty: t.Qty, TsMs: t.TsMs, Tag: t.Tag,
 		})

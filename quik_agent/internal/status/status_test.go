@@ -633,6 +633,47 @@ func TestEvaluateRecon_TradeOnlyMismatchIsRealInvolved(t *testing.T) {
 	}
 }
 
+// TestBuildReconInputs_DropsPreSessionQuikTrades: QUIK's acc_trd is a rolling
+// ring that keeps a PRIOR session's trades for a thinly-traded instrument. A
+// robot that did NOT trade today still has its old tagged trades sitting in
+// acc_trd; because the forward matcher scopes fills to the MSK-session floor,
+// the reverse pass used to flag those lingering trades as unmatched -> phantom
+// MISMATCH (seen live on agent-ob-BRU6-v1 with a flat-since-yesterday book,
+// 2026-07-21). buildReconInputs must drop trades older than the session floor,
+// symmetric with the FillKey filter, so a robot idle today reconciles clean.
+func TestBuildReconInputs_DropsPreSessionQuikTrades(t *testing.T) {
+	d := baseDeps()
+	now := int64(1_784_600_000_000) // 2026-07-21, well after MSK midnight
+	d.NowMs = func() int64 { return now }
+	floor := mskMidnightMs(now)
+	d.Robots = fakeRobots{
+		specs:  []*quikv1.RobotSpec{{RobotId: "agent-ob-BRU6-v1", Symbol: "BRU6", Paper: false}},
+		paused: map[string]bool{},
+		times:  map[string][2]int64{},
+	}
+	d.Runner = fakeRunner{statuses: map[string]*quikv1.RobotStatus{
+		"agent-ob-BRU6-v1": {RobotId: "agent-ob-BRU6-v1", Position: -3}, // no fills today
+	}}
+	d.Accounts = fakeAccounts{snap: accounts.Snapshot{
+		PosAgeMs: 10, OrdAgeMs: 10,
+		Trades: []accounts.Trade{
+			// Yesterday's tagged fill still lingering in the rolling acc_trd ring.
+			{Num: "t1", OrderNum: "o1", Sec: "BRU6", Price: 86.63, Qty: 3,
+				TsMs: floor - 3_600_000, Tag: "agent-ob-BRU6-v1", Side: "S"},
+		},
+	}}
+
+	rep := computeReport(d)
+	if rep.State != "OK" {
+		t.Fatalf("a pre-session lingering QUIK trade must not flip recon; got %s", rep.State)
+	}
+	for _, rc := range rep.RobotChecks {
+		if rc.ID == "agent-ob-BRU6-v1" && !rc.TradesOK {
+			t.Errorf("idle-today robot with only pre-session trades must be TradesOK")
+		}
+	}
+}
+
 func TestEvaluateRecon_StaleNeverRealInvolved(t *testing.T) {
 	d := baseDeps()
 	d.Accounts = fakeAccounts{snap: accounts.Snapshot{PosAgeMs: 999_999}}
