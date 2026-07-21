@@ -345,6 +345,42 @@ ssh hoster 'cd ~/apps/shectory-trader && set -a; . ~/.shectory_trade.env; set +a
   `agent-local-status` are in-memory mirrors — a restart empties them until the agent
   redials and re-reports (~15-60s); an empty mirror right after a restart is not an
   outage, and robots[0] indexing will throw.
+- **Robot order price is the RUNNER's, and it MUST land on the exchange step grid.** Robot
+  orders go marketable via `robot_runner/runtime.py` (fresh quote → SELL at the bid / BUY at
+  the ask; stale quote → cross by `_STALE_CROSS_FRAC`), NOT the agent maker engine
+  (`internal/trade/execution.go` StartExecution is human/explicit orders only —
+  `PlaceRunnerOrder` uses the plain `Orders.PlaceOrder`). The price must be a MULTIPLE of the
+  instrument price step; the RUNNER does not know the step, only the agent does (`PriceStep`
+  from the QLua params). An off-grid price is rejected by QUIK ("Неправильно указана цена …
+  не кратно шагу", TransReply status -1), never becomes active, and the robot re-emits it
+  every bar with zero fills — the position HANGS (2026-07-21: a cushioned 83533.12 off a
+  10-pt grid rejected every real order). Separately, SELL exactly at the bid RESTS when the
+  touch ticks away during exchange lag (~0.4-1.3s) in a fast market — the exit does not
+  cross. Any change to the marketable price must quantize to the step; put the quantization
+  on the AGENT (it alone knows PriceStep).
+- **A standalone-module strategy shows "стратегия X не найдена" in the signal box —
+  COSMETIC, not a break.** `robot_runner/explain.py` introspects only REGISTRY strategies
+  (+ a dedicated `_fvg_explain`); a standalone module (us_open_fvg, donchian_breakout, …) has
+  no registry entry, so the «Сигнал сейчас» box prints "не найдена". The robot STILL trades —
+  `host.resolve_on_bar` imports the module for `on_bar`.
+- **`record-fill-agent` (log an operator's by-hand close into the runner) leaves a TRANSIENT
+  recon trade-mismatch.** It fabricates a fill that realizes P&L + fixes the runner's position
+  but carries no tagged QUIK trade, so recon reads that robot "сделки не сходятся" until the
+  fill ages past MSK-midnight (the matcher is session-scoped). Benign — position is correct.
+  Gated: robot PAUSED + confirm_id == robot_id. Change a robot's trading WINDOW the same
+  family way: `POST …/robots/{id}/params` with a `schedule` field → full DeployRobot
+  re-deploy from the mirror echo (zero-loss; send `params_json` VERBATIM or you overwrite the
+  strategy). FORTS morning session opens 07:00 MSK; live window `07:00-23:50` (clearing 23:50).
+- **The hoster is a SHARED, resource-tight box.** Besides STL it runs `shectory-optimizer` +
+  `shectory-ai46` + a PM2 fleet of UNRELATED Node apps (komissionka, ourdiary, garden-manager,
+  eschool, bots) + Postgres. `earlyoom` SIGKILLs under memory pressure — STL (uvicorn) can
+  crash-loop OOM (`status=9/KILL` right after `lab.scheduler.robot_started`), and Restart can
+  leave it dead → needs a manual `sudo systemctl start shectory-trader`. A heavy Go
+  cross-build/sweep, or a full disk, on the hoster can tip STL over. To recover: free
+  memory/disk or `systemctl stop shectory-optimizer`; do NOT mass-kill the operator's OTHER
+  apps — server admin is the operator's call, report and let them decide. Related: publishing
+  the agent rebuilds the WHOLE agent from `~/quik_build` (a loose scp tree, NOT git) — any
+  uncommitted change there ships, so publish only from a verified-clean tree.
 
 ## Approach
 - Read existing files before writing. Don't re-read unless changed.
