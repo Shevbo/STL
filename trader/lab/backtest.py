@@ -8,6 +8,7 @@ from typing import Any
 from trader.lab.commission import commission_for
 from trader.lab.runtime import BacktestRuntime, Bar
 from trader.lab.script_guard import validate_script
+from trader.lab.window_metrics import window_metrics
 
 
 def _demote_to_background() -> None:
@@ -220,6 +221,35 @@ async def run_single_backtest(
     metrics = compute_metrics(trades, initial_equity, point_value, symbol=symbol,
                               initial_margin=initial_margin, bars_days=bars_days)
     rf_mtm = (metrics["net_profit"] / max_dd_mtm) if max_dd_mtm > 0 else None
+
+    # Closed round-trips as (exit_time, net_pnl_RUB) for time-sliced IS/OOS +
+    # per-window scoring (window_metrics). Duplicates compute_metrics's signed-space
+    # close accounting (keyed by exit time instead of RUB pnl only) — accepted
+    # trade-off for this task; a shared helper is a possible later refactor.
+    pairs, _signed, _avg = [], 0, 0.0
+    for t in trades:
+        q = t["qty"]
+        px = t["price"]
+        delta = q if t["side"] == "buy" else -q
+        if _signed != 0 and (_signed > 0) != (delta > 0):
+            closed = min(q, abs(_signed))
+            pnl = ((px - _avg) if _signed > 0 else (_avg - px)) * closed * point_value
+            pairs.append({"time": t["time"], "pnl": pnl})
+        new_signed = _signed + delta
+        if new_signed == 0:
+            _avg = 0.0
+        elif _signed != 0 and (_signed > 0) == (delta > 0):
+            _avg = (_avg * abs(_signed) + px * q) / (abs(_signed) + q)
+        elif _signed != 0 and (new_signed > 0) == (_signed > 0):
+            pass  # partial reduce keeps avg
+        else:
+            _avg = px
+        _signed = new_signed
+    span = (bars[0].time, bars[-1].time)
+    wm = window_metrics(pairs, span=span, is_frac=0.7, splits=4)
+    # v1: whole-run mtm drawdown, not a per-slice OOS dd (later refinement).
+    rf_mtm_oos = (wm["net_oos"] / max_dd_mtm) if max_dd_mtm > 0 else None
+
     # Return the EXACT point_value the engine used, so the chart's P&L (and its
     # commission, which scales with notional=price×point_value) is computed on the
     # same basis as net_profit — the two must never disagree ("единая логика").
@@ -234,7 +264,10 @@ async def run_single_backtest(
     return {"trades": trades, "equity_curve": equity_curve,
             "point_value": point_value, **metrics,
             "max_mae": max_mae, "max_drawdown_mtm": max_dd_mtm,
-            "recovery_factor_mtm": rf_mtm}
+            "recovery_factor_mtm": rf_mtm,
+            "net_oos": wm["net_oos"], "recovery_factor_mtm_oos": rf_mtm_oos,
+            "degrade": wm["degrade"], "windows_profitable": wm["windows_profitable"],
+            "windows_total": wm["windows_total"]}
 
 
 def _subprocess_run_many(script_code: str, bars_data: list[dict], symbol: str,
