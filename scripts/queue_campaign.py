@@ -148,6 +148,8 @@ def main() -> None:
     ap.add_argument("--include-avg-params", action="store_true")
     ap.add_argument("--pin", action="append", default=[], metavar="KEY=VALUE",
                     help="Fix a numeric param to one value (repeatable), e.g. --pin qty=1")
+    ap.add_argument("--campaign", default="", metavar="NAME",
+                    help="Campaign name (латиница/цифры): camp-... run_ids -> leaderboard/Botstore")
     ap.add_argument("--api", default="")
     args = ap.parse_args()
 
@@ -246,6 +248,8 @@ def main() -> None:
                 "dateTo": date_to,
                 "engine": "remote",
             }
+            if args.campaign:
+                payload["campaign"] = args.campaign
             if param_sets is not None:
                 payload["paramSets"] = param_sets
             else:
