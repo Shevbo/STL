@@ -112,6 +112,12 @@ class RobotScheduler:
         """Execute one robot tick (one bar)."""
         from trader.lab.runtime import LiveRuntime  # avoid import cycle
         from trader.lab.script_guard import validate_script
+        # Follow the front contract across expiry so the robot never freezes on a
+        # dead contract (paper robots only; real robots are rolled by a human).
+        try:
+            await self._maybe_roll(robot)
+        except Exception as exc:
+            log.warning("lab.roll_failed", robot_id=robot.id, error=str(exc))
         # Validate + compile once per script version, reuse the module across ticks.
         script_hash = hash(robot.script_code)
         cached = self._compiled.get(robot.id)
@@ -137,6 +143,36 @@ class RobotScheduler:
         await runtime.flush_state()
         # Update in-memory state so the next tick sees the fresh trend/position state.
         self._robot_states[robot.id] = runtime._state
+
+    async def _maybe_roll(self, robot) -> None:
+        """Roll a PAPER robot to the current front contract when its specific
+        contract is no longer the front (e.g. after expiry). Flat + fresh state.
+        Real robots are never auto-rolled (arming real money is human-initiated)."""
+        from trader.lab.contract_roll import front_contract, base_of
+        params = robot.params_json if isinstance(robot.params_json, dict) else {}
+        symbol = params.get("symbol")
+        if not symbol or base_of(symbol) is None:
+            return  # base-code symbol (already rolls via continuous bars) or missing
+        state = robot.state_json if isinstance(robot.state_json, dict) else {}
+        if bool(state.get("live_real", False)):
+            return  # never auto-roll a REAL robot
+        front = await front_contract(symbol)
+        if not front or front == symbol:
+            return
+        # ROLL: new symbol, flat, fresh strategy state (preserve only live_real).
+        new_params = {**params, "symbol": front}
+        new_state = {"live_real": bool(state.get("live_real", False))}
+        robot.params_json = new_params
+        robot.state_json = new_state
+        self._robot_states[robot.id] = dict(new_state)
+        if self._pool is not None:
+            import json as _json
+            async with self._pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE robots SET params_json=$1, state_json=$2 WHERE id=$3",
+                    _json.dumps(new_params), _json.dumps(new_state), robot.id,
+                )
+        log.info("lab.roll", robot_id=robot.id, old=symbol, new=front)
 
     async def stop_all(self) -> None:
         for robot_id in list(self._tasks):
