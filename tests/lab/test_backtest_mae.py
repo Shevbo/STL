@@ -49,3 +49,19 @@ def test_mae_and_mtm_drawdown_expose_open_position_risk():
     assert abs(res["max_mae"] - 40.0) < 1e-6
     assert abs(res["max_drawdown_mtm"] - 40.0) < 1e-6
     assert res["recovery_factor_mtm"] is not None
+
+
+def test_result_carries_window_metrics():
+    # 3 bars (as the brief's draft used) crash on_start's place_order: cursor
+    # seeds to len-1=2 with only 3 bars, and place_order fills at bars[cursor+1]
+    # which doesn't exist. Reuse the 9-bar path already proven safe above.
+    prices = [100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 60.0, 105.0, 105.0]
+    bars = [_bar(i * 60, p) for i, p in enumerate(prices)]
+    res = asyncio.run(backtest.run_single_backtest(
+        strategy_module=__import__(__name__, fromlist=["on_bar"]),
+        params={}, bars=bars, symbol="TEST", initial_equity=100_000.0,
+        point_value=1.0))
+    for k in ("net_oos", "recovery_factor_mtm_oos", "degrade",
+              "windows_profitable", "windows_total"):
+        assert k in res
+    assert res["windows_total"] == 4
