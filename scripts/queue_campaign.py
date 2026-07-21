@@ -235,6 +235,9 @@ def main() -> None:
         for sym in symbols:
             if (sid, sym) in done:
                 continue
+            if param_sets is not None and len(param_sets) == 0:
+                print(f"[campaign] SKIP {sid}/{sym}: all combos degenerate (fast>=slow), nothing to queue")
+                continue
             payload = {
                 "scriptCode": script_code,
                 "baseParams": {**base_params, "symbol": sym},
