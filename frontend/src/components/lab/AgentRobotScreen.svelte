@@ -13,6 +13,8 @@
   import AgentBookPane from './AgentBookPane.svelte';
   import ParamEditor from './ParamEditor.svelte';
   import RobotIdentity from './RobotIdentity.svelte';
+  import Splitter from './Splitter.svelte';
+  import Frame from './Frame.svelte';
   import NavMenu from '../NavMenu.svelte';
   import { fetchAgentLocalStatus, type AgentLocalStatus } from '../../lib/agent-robots';
 
@@ -20,6 +22,26 @@
 
   const MSK_OFFSET = 3 * 3600;
   const EXECUTED = new Set(['paper', 'filled', 'submitted', 'executed']);
+
+  // ── Layout profiles (VS Code-style) + draggable frame sizes ──────────────────
+  // 3 fixed profiles; EVERY frame border drags. Splitter persists each size to
+  // localStorage by its own storageKey; the chosen profile is stored separately.
+  // ponytail: fixed profiles (not free-form docking) — matches the VS Code mental
+  // model and reuses the existing Splitter; add drag-drop docking only if asked.
+  type Profile = 'stack' | 'chart-left' | 'chart-right';
+  let profile = $state<Profile>('stack');
+  try {
+    const p = localStorage.getItem('ars_layout');
+    if (p === 'stack' || p === 'chart-left' || p === 'chart-right') profile = p;
+  } catch { /* default stack */ }
+  function setProfile(p: Profile) { profile = p; try { localStorage.setItem('ars_layout', p); } catch {} }
+  // Frame sizes (px); Splitter loads/persists via storageKey, these are the defaults.
+  // st* = «stack» profile, sd* = «side» profiles (shared by chart-left/right mirror).
+  let stChart = $state(440), stPing = $state(120), stDiag = $state(175), stSig = $state(300), stTrd = $state(430);
+  let sdChart = $state(1050), sdPing = $state(110), sdDiag = $state(150), sdSig = $state(190), sdTrd = $state(230);
+  // Which frame (if any) is maximized to the whole work area. Shared across all
+  // Frame wrappers; a Frame hides itself when another id owns the maximize.
+  let maxId = $state<string | null>(null);
 
   let report = $state<any>(null);
   let localStatus = $state<AgentLocalStatus | null>(null);
@@ -635,6 +657,11 @@
       <span class="badge warn">робот {robotId} не найден на агенте</span>
     {/if}
     {#if error}<span class="badge warn">{error}</span>{/if}
+    <div class="lay-switch" title="Раскладка экрана (запоминается)">
+      <button class:on={profile === 'stack'} onclick={() => setProfile('stack')} title="Стопка: график сверху, панели снизу">▤</button>
+      <button class:on={profile === 'chart-left'} onclick={() => setProfile('chart-left')} title="График слева во всю высоту, панели справа">◧</button>
+      <button class:on={profile === 'chart-right'} onclick={() => setProfile('chart-right')} title="График справа во всю высоту, панели слева">◨</button>
+    </div>
   </div>
 
   {#if robot && !robot.bars_count}
@@ -645,6 +672,7 @@
     {/if}
   {/if}
 
+  {#snippet chartRegion()}
   <div class="ars-chart">
     <AgentBookPane {symbol} {agentId} depth={10} />
     <div class="ars-chart-body">
@@ -669,11 +697,15 @@
     {/if}
     </div>
   </div>
+  {/snippet}
 
+  {#snippet pingPanel()}
   <div class="ars-lat"><LatencyPane minutes={360} /></div>
+  {/snippet}
 
+  {#snippet diagPanel()}
   <!-- QUIK-link diagnostics + recon vs QUIK account tables (agent local status) -->
-  <div class="ars-diag-row">
+  <div class="ars-diag-row" class:col={profile !== 'stack'}>
     <div class="diag-box">
       <div class="p-title">Связь с биржей (QUIK-агент)</div>
       <div class="diag-grid">
@@ -735,10 +767,10 @@
       {/if}
     </div>
   </div>
+  {/snippet}
 
-  <div class="ars-bottom">
+  {#snippet signalPanel()}
     <div class="panel">
-      <div class="p-title">Сигнал сейчас</div>
       {#if signal}
         <div class="wait" class:sig={signal.want != null && signal.want !== 0}>{signal.waiting_for ?? '—'}</div>
         {#if signal.features}
@@ -788,9 +820,11 @@
       {/if}
     </div>
 
-    <div class="panel trades-frame">
-      <div class="p-title">Сделки робота ({trades.length})
-        <span class="pt-note">каждая строка = заявка робота; «Подтверждение» — ID из QUIK или paper</span></div>
+    {/snippet}
+
+    {#snippet tradesPanel()}
+    <div class="panel">
+      <div class="pt-note tnote">каждая строка = заявка робота; «Подтверждение» — ID из QUIK или paper</div>
       <div class="hist-scroll">
         <table>
           <thead><tr><th>Время (МСК)</th><th>Сторона</th><th title="роль сделки в жизненном цикле позиции: OPEN — открытие, AVG — усреднение против движения, ENF — усиление по движению, TP/SL — закрытие в плюс/минус, →OPEN — разворот">Действие</th><th>Кол-во</th><th>Цена</th><th title="реализованный результат сделки net комиссии, только на закрывающих (TP/SL/разворот)">P&amp;L ₽</th><th title="биржевая комиссия (taker) этого филла — платится на КАЖДОЙ сделке">Комиссия ₽</th><th>Статус</th><th>Подтверждение</th></tr></thead>
@@ -836,12 +870,10 @@
       </div>
     </div>
 
+    {/snippet}
+
+    {#snippet logicPanel()}
     <div class="panel">
-      <div class="p-title">Логика стратегии
-        <button class="pe-btn hist" onclick={toggleHistory}
-                title="все сохранённые прогоны перебора параметров этой стратегии">
-          История прогонов{#if strategyCampaigns.length} ({strategyCampaigns.length}){/if}</button>
-      </div>
       {#if showHistory}
         <div class="hist-box">
           {#if strategyCampaigns.length === 0}
@@ -894,7 +926,49 @@
         {#if saveMsg}<div class="pe-msg">{saveMsg}</div>{/if}
       {/if}
     </div>
-  </div>
+    {/snippet}
+
+  {#if profile === 'stack'}
+    <div class="work stack">
+      <Frame fid="chart" title="График + доходность" bind:maxId basis={stChart}>{@render chartRegion()}</Frame>
+      <Splitter dir="h" bind:size={stChart} min={200} def={440} storageKey="ars_st_chart" />
+      <div class="panels-col">
+        <Frame fid="ping" title="Задержка до биржи" bind:maxId basis={stPing}>{@render pingPanel()}</Frame>
+        <Splitter dir="h" bind:size={stPing} min={46} def={120} storageKey="ars_st_ping" />
+        <Frame fid="diag" title="Диагностика и сверка QUIK" bind:maxId basis={stDiag}>{@render diagPanel()}</Frame>
+        <Splitter dir="h" bind:size={stDiag} min={60} def={175} storageKey="ars_st_diag" />
+        <div class="bottom-row">
+          <Frame fid="signal" title="Сигнал сейчас" bind:maxId basis={stSig}>{@render signalPanel()}</Frame>
+          <Splitter dir="v" bind:size={stSig} min={120} def={300} storageKey="ars_st_sig" />
+          <Frame fid="trades" title={`Сделки робота (${trades.length})`} bind:maxId basis={stTrd}>{@render tradesPanel()}</Frame>
+          <Splitter dir="v" bind:size={stTrd} min={140} def={430} storageKey="ars_st_trd" />
+          <Frame fid="logic" title="Логика стратегии" bind:maxId>
+            {#snippet head()}<button class="pe-btn hist" onclick={toggleHistory} title="все сохранённые прогоны перебора параметров этой стратегии">История прогонов{#if strategyCampaigns.length} ({strategyCampaigns.length}){/if}</button>{/snippet}
+            {@render logicPanel()}
+          </Frame>
+        </div>
+      </div>
+    </div>
+  {:else}
+    <div class="work side" class:reverse={profile === 'chart-right'}>
+      <Frame fid="chart" title="График + доходность" bind:maxId basis={sdChart}>{@render chartRegion()}</Frame>
+      <Splitter dir="v" bind:size={sdChart} min={280} def={1050} invert={profile === 'chart-right'} storageKey="ars_sd_chart" />
+      <div class="panels-col scroll">
+        <Frame fid="ping" title="Задержка до биржи" bind:maxId basis={sdPing}>{@render pingPanel()}</Frame>
+        <Splitter dir="h" bind:size={sdPing} min={46} def={110} storageKey="ars_sd_ping" />
+        <Frame fid="diag" title="Диагностика и сверка QUIK" bind:maxId basis={sdDiag}>{@render diagPanel()}</Frame>
+        <Splitter dir="h" bind:size={sdDiag} min={60} def={150} storageKey="ars_sd_diag" />
+        <Frame fid="signal" title="Сигнал сейчас" bind:maxId basis={sdSig}>{@render signalPanel()}</Frame>
+        <Splitter dir="h" bind:size={sdSig} min={80} def={190} storageKey="ars_sd_sig" />
+        <Frame fid="trades" title={`Сделки робота (${trades.length})`} bind:maxId basis={sdTrd}>{@render tradesPanel()}</Frame>
+        <Splitter dir="h" bind:size={sdTrd} min={80} def={230} storageKey="ars_sd_trd" />
+        <Frame fid="logic" title="Логика стратегии" bind:maxId>
+          {#snippet head()}<button class="pe-btn hist" onclick={toggleHistory} title="все сохранённые прогоны перебора параметров этой стратегии">История прогонов{#if strategyCampaigns.length} ({strategyCampaigns.length}){/if}</button>{/snippet}
+          {@render logicPanel()}
+        </Frame>
+      </div>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -914,14 +988,15 @@
   .badge.dim { color: #667; }
   .feed-warn { background: #1a1000; border-bottom: 1px solid #ff980044; color: #ffb74d; font-size: 11px; padding: 5px 14px; flex-shrink: 0; }
   .feed-warn.calm { background: #0e1a12; border-bottom-color: #4caf5044; color: #81c784; }
-  .ars-chart { flex: 1 1 52%; min-height: 0; display: flex; }
+  .ars-chart { min-height: 0; min-width: 0; display: flex; width: 100%; height: 100%; }
   .ars-chart-body { flex: 1; min-width: 0; min-height: 0; }
-  .ars-lat { flex: 0 0 120px; min-height: 0; border-top: 1px solid #1a1a2e; }
+  .ars-lat { min-height: 0; height: 100%; width: 100%; border-top: 1px solid #1a1a2e; overflow: hidden; }
 
   /* QUIK-link diagnostics + recon */
   /* shrinkable + self-scrolling so a short viewport clips THIS row, never the
      bottom signal/orders/fills panels (root .ars is overflow:hidden) */
-  .ars-diag-row { flex: 0 1 auto; min-height: 0; max-height: 26%; display: flex; gap: 1px; border-top: 1px solid #22224a; background: #14142a; }
+  .ars-diag-row { min-height: 0; height: 100%; width: 100%; display: flex; gap: 1px; border-top: 1px solid #22224a; background: #14142a; overflow: auto; }
+  .ars-diag-row.col { flex-direction: column; }
   .diag-box { flex: 1; min-width: 0; padding: 8px 12px; background: #0a0a15; overflow-y: auto; }
   .diag-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 5px 14px; }
   .dg { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; border-bottom: 1px dotted #17172e; padding-bottom: 2px; }
@@ -949,7 +1024,21 @@
   .mlabel { color: #889; }
   .mchip { font-size: 10px; font-family: monospace; color: #b388ff; background: #14102a; border: 1px solid #2a1f4a; border-radius: 3px; padding: 1px 6px; }
 
-  .ars-bottom { flex: 0 0 30%; min-height: 180px; display: flex; border-top: 1px solid #22224a; overflow: hidden; }
+  /* ── layout profiles: draggable frame grid (stack / chart-left / chart-right) ── */
+  /* position:relative so a maximized Frame (position:absolute; inset:0) fills the
+     work area, not the whole viewport (it must not cover the header). */
+  .work { flex: 1; min-height: 0; min-width: 0; display: flex; position: relative; }
+  .tnote { padding: 2px 6px 4px; }
+  .work.stack { flex-direction: column; }
+  .work.side { flex-direction: row; }
+  .work.side.reverse { flex-direction: row-reverse; }
+  .panels-col { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
+  .panels-col.scroll { overflow-y: auto; overflow-x: hidden; }
+  .bottom-row { flex: 1; min-height: 0; min-width: 0; display: flex; border-top: 1px solid #22224a; }
+  .lay-switch { margin-left: auto; display: flex; gap: 2px; }
+  .lay-switch button { background: #16162c; border: 1px solid #2d2d4a; color: #99a; font-size: 13px; line-height: 1; padding: 2px 8px; border-radius: 3px; cursor: pointer; }
+  .lay-switch button:hover { color: #fff; border-color: #4d4d7a; }
+  .lay-switch button.on { background: #0e2a18; border-color: #2e7d32; color: #66bb6a; }
 
   /* params editor */
   .rc-btn { margin-left: 6px; font-size: 10px; font-weight: 600; padding: 3px 10px; border-radius: 3px; cursor: pointer;
