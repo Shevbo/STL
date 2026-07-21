@@ -38,7 +38,7 @@
 -- Bump on every change you deliver to the VDS. Logged FIRST on OnInit so the
 -- operator can confirm which version QUIK actually loaded (the running script is
 -- in MEMORY; a file on disk with the same name may be a different build).
-local SCRIPT_VERSION = "2026.07.10-cc4"
+local SCRIPT_VERSION = "2026.07.22-replaygate1"
 
 local CONFIG = {
   HOST          = "127.0.0.1",
