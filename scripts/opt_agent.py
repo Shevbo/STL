@@ -342,7 +342,7 @@ def _run_task_unit(module: str, func: str, arg):
     committed task (e.g. team-46 sweep) on the i9's cores without an agent rebuild —
     the task code arrives via self-update from the repo."""
     import importlib
-    _set_priority(idle=True)
+    _set_priority("idle")
     if os.environ.get("OPT_AGENT_INSECURE"):
         _patch_httpx_insecure()
     mod = importlib.import_module(module)
