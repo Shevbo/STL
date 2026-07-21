@@ -5,6 +5,39 @@ import (
 	"time"
 )
 
+func TestCheckArmable(t *testing.T) {
+	cases := []struct {
+		name                              string
+		maxPos, perOrder, working         int64
+		wantErr                           bool
+	}{
+		// The live incident: max_position 17 (params avg_max) > per-order cap 10.
+		{"incident_perorder", 17, 10, 20, true},
+		// Exactly at the per-order cap is fine: a close of exactly cap contracts passes
+		// CheckPlace (qty > cap is false when equal).
+		{"exactly_perorder", 10, 10, 20, false},
+		{"under_perorder", 5, 10, 20, false},
+		// Working cap too small even if per-order is fine.
+		{"working_too_small", 15, 20, 10, true},
+		// Unset caps (0) never block — "no opinion".
+		{"caps_unset", 17, 0, 0, false},
+		// maxPos<=0 is floored to 1 (matches the runner) and never blocks a sane cap.
+		{"maxpos_zero", 0, 2, 2, false},
+		{"maxpos_negative", -3, 2, 2, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := CheckArmable(tc.maxPos, tc.perOrder, tc.working)
+			if tc.wantErr && err == nil {
+				t.Fatalf("CheckArmable(%d,%d,%d) = nil, want refusal", tc.maxPos, tc.perOrder, tc.working)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("CheckArmable(%d,%d,%d) = %v, want armable", tc.maxPos, tc.perOrder, tc.working, err)
+			}
+		})
+	}
+}
+
 func baseLimits() Limits {
 	return Limits{
 		TradingEnabled:       true,

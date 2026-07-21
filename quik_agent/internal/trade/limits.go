@@ -1,6 +1,7 @@
 package trade
 
 import (
+	"fmt"
 	"math"
 	"strings"
 	"sync"
@@ -248,6 +249,32 @@ func (g *Guard) CommitPlace() (bool, RejectReason) {
 	}
 	g.placedToday++
 	return true, ""
+}
+
+// CheckArmable reports whether a robot with the given hard position cap can be
+// SAFELY armed to real money. A trend/averaging robot closes or reverses its whole
+// book with ONE order of size |max_position| (see robot_runner strategies:
+// place_order(..., abs(cur), ...)). That single placement must pass CheckPlace, so
+// the per-order cap has to admit it (maxPos <= perOrderCap) and the working cap has
+// to hold it (maxPos <= workingCap). If not, the robot can still OPEN via small
+// averaging orders but can NEVER close: every exit order is rejected as
+// ReasonQtyPerOrder, and it sits stuck in the position forever. That is exactly what
+// left a REAL robot long +14 with per-order cap 10, unable to exit for ~13h
+// (2026-07-21). This is the single arming chokepoint where real money begins, so the
+// guard lives here. A cap <= 0 means "no opinion" (unset) and never blocks. maxPos
+// <= 0 is floored to 1 to mirror the runner (robot_runner/host.py). Returns nil when
+// armable, else an operator-facing error naming the exact cap to raise.
+func CheckArmable(maxPos, perOrderCap, workingCap int64) error {
+	if maxPos <= 0 {
+		maxPos = 1
+	}
+	if perOrderCap > 0 && maxPos > perOrderCap {
+		return fmt.Errorf("нельзя арминговать в реал: max_position=%d больше лимита на заявку (%d) — робот не сможет закрыть позицию одной заявкой (заявка на закрытие режется). Подними QUIK_MAX_CONTRACTS_PER_ORDER до >=%d (рестарт STL, затем агента) или снизь max_position", maxPos, perOrderCap, maxPos)
+	}
+	if workingCap > 0 && maxPos > workingCap {
+		return fmt.Errorf("нельзя арминговать в реал: max_position=%d больше лимита рабочих контрактов (%d). Подними QUIK_MAX_WORKING_CONTRACTS до >=%d или снизь max_position", maxPos, workingCap, workingCap)
+	}
+	return nil
 }
 
 // CheckCollar reports whether price is within the collar around reference for the

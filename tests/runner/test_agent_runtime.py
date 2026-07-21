@@ -134,6 +134,33 @@ async def test_real_order_marketable_never_rests():
 
 
 @pytest.mark.asyncio
+async def test_rejected_order_surfaces_reason():
+    """A cap-rejected order must SHOUT its reason to the detailed log, not vanish
+    silently: a real robot re-emitted a capped close every bar with no visible
+    reason and stayed stuck long +14 for ~13h (2026-07-21)."""
+    now = time.time() * 1000
+    rt = AgentRuntime("r1", FakeBridge(), BarBuilder(), max_position=20, paper=False,
+                      quote_fn=lambda: (84240.0, 84250.0, now))
+    order = await rt.place_order("RIU6", "sell", 14, 84220.0)
+    assert order.status == "submitted"
+
+    events = []
+    rt.event = lambda kind, msg, **kw: events.append((kind, msg))
+
+    u = U(order.order_id, state=6, price=84220.0, qty=14, side=2)  # state 6 = REJECTED
+    u.text = "quantity exceeds max_contracts_per_order"
+    rt.on_order_event(u)
+
+    assert rt._orders[order.order_id].status == "rejected"
+    assert any(k == "REJECT" and "max_contracts_per_order" in m for k, m in events)
+
+    # A repeat of the same reject must NOT re-emit (order already rejected).
+    events.clear()
+    rt.on_order_event(u)
+    assert events == []
+
+
+@pytest.mark.asyncio
 async def test_paper_mode_fills_instantly_no_bridge():
     rt = AgentRuntime("r1", FakeBridge(), BarBuilder(), max_position=1, paper=True)
     order = await rt.place_order("RIU6", "buy", 1, 89000.0)

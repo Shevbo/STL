@@ -259,6 +259,15 @@ class AgentRuntime:
                                  ts_ms=int(getattr(u, "ts_unix_ms", 0)) or None)
         if order is not None:
             status = _STATE_TO_STATUS.get(state, order.status)
+            if status == "rejected" and order.status != "rejected":
+                # Surface WHY the agent rejected (per-order/working cap, collar,
+                # trading disabled). Previously silent: a real robot re-emitted a
+                # capped close every bar with NO visible reason for ~13h and stayed
+                # stuck long +14 (2026-07-21). ASCII-only wrapper; the agent's text
+                # is English (non-ASCII in a hot log line is a loaded gun, 2026-07-13).
+                self.event("REJECT", f"{order.side} {order.qty} {order.symbol} @ "
+                           f"{order.price:.0f}: agent rejected -> "
+                           f"{getattr(u, 'text', '') or 'no reason'}", level="error")
             self._orders[cid] = Order(order_id=cid, symbol=order.symbol,
                                       side=order.side, qty=order.qty,
                                       price=order.price, status=status)
