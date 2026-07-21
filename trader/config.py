@@ -66,4 +66,7 @@ class Settings(BaseSettings):
     quik_price_collar_frac: float = 0.002
     # Comma-separated instrument whitelist; anything else is rejected.
     quik_instrument_whitelist: str = "RIU6"
-    quik_daily_order_cap: int = 50
+    # 500, not 50: the old default was exhausted by ONE every-bar robot in ~3h and
+    # silently froze every robot order INCLUDING exits (2026-07-21). Runaway backstop,
+    # not a budget; the agent enforces min(agent backstop, this push).
+    quik_daily_order_cap: int = 500

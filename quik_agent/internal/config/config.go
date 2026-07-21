@@ -84,7 +84,11 @@ type Config struct {
 	// InstrumentWhitelist lists the only codes the agent will trade. Default
 	// ["RIU6"]. Anything else is rejected.
 	InstrumentWhitelist []string `json:"instrument_whitelist"`
-	// DailyOrderCap caps placements per calendar day. Default 50.
+	// DailyOrderCap caps placements per calendar day. Default 500: the old default
+	// of 50 was exhausted by ONE every-bar robot in ~3h of live trading (2026-07-21,
+	// 19:36) and silently froze every robot's orders INCLUDING exits — a 17-lot long
+	// could not take profit. The cap is a runaway-loop backstop, not a budget; STL
+	// can always TIGHTEN it via SetLimits push.
 	DailyOrderCap int `json:"daily_order_cap"`
 
 	// ---- Robot hosting (agent-side execution). All optional/additive. ----
@@ -219,7 +223,7 @@ func (c *Config) applyDefaults(raw map[string]json.RawMessage) {
 		c.InstrumentWhitelist = []string{"RIU6"}
 	}
 	if c.DailyOrderCap <= 0 {
-		c.DailyOrderCap = 50
+		c.DailyOrderCap = 500
 	}
 
 	// ---- Robot hosting defaults ----

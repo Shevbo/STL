@@ -47,6 +47,7 @@ func (f *fakeStatusSrc) LastReportAgeMs() int64                         { return
 func (f *fakeStatusSrc) RunnerHealthy() bool                            { return false }
 func (f *fakeStatusSrc) SnapshotWorking() []trade.WorkingSnapshot       { return nil }
 func (f *fakeStatusSrc) PendingTransViews() []trade.PendingTransView    { return nil }
+func (f *fakeStatusSrc) DailyOrderState() (int, int)                    { return 0, 500 }
 func (f *fakeStatusSrc) Ticks() []quikdde.Tick {
 	return []quikdde.Tick{{Code: "RIU6", Last: f.price}}
 }

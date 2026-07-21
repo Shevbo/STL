@@ -70,6 +70,7 @@ type runnerServer interface {
 type tradeManager interface {
 	SnapshotWorking() []trade.WorkingSnapshot
 	PendingTransViews() []trade.PendingTransView
+	DailyOrderState() (used, cap int)
 }
 
 // tickProvider is quikdde.Provider's read surface (tick freshness + params).
@@ -430,6 +431,10 @@ type healthJSON struct {
 	OrdAgeMs          int64      `json:"ord_age_ms"`
 	RunnerHealthy     bool       `json:"runner_healthy"`
 	RunnerReportAgeMs int64      `json:"runner_report_age_ms"`
+	// Daily placement counter vs the effective cap: at the cap every robot order
+	// (exits included) is guard-rejected — the watchdog alerts before that.
+	DailyOrdersUsed int `json:"daily_orders_used"`
+	DailyOrdersCap  int `json:"daily_orders_cap"`
 	// VDS guard: QUIK-hang watchdog state + OS memory health (nil when the
 	// guard is not wired). Opaque-mirrored to STL like the rest of this page.
 	VDS *vdsguard.StatusView `json:"vds,omitempty"`
@@ -793,6 +798,7 @@ func buildHealthJSON(d Deps, acc accounts.Snapshot) healthJSON {
 		RunnerHealthy:     d.Runner.RunnerHealthy(),
 		RunnerReportAgeMs: d.Runner.LastReportAgeMs(),
 	}
+	h.DailyOrdersUsed, h.DailyOrdersCap = d.Manager.DailyOrderState()
 	if d.VDSGuard != nil {
 		v := d.VDSGuard()
 		h.VDS = &v

@@ -574,6 +574,12 @@ func (m *Manager) PendingTransViews() []PendingTransView {
 	return out
 }
 
+// DailyOrderState surfaces the Guard's daily placement counter + effective cap for
+// the status page / watchdog (an exhausted cap freezes every robot order incl. exits).
+func (m *Manager) DailyOrderState() (used, cap int) {
+	return m.guard.DailyOrderState()
+}
+
 // ---- 1b maker execution ----
 
 // StartExecution begins passively working target_quantity near the touch (maker only,

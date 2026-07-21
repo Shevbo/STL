@@ -49,6 +49,7 @@ type fakeManager struct {
 
 func (f fakeManager) SnapshotWorking() []trade.WorkingSnapshot    { return f.working }
 func (f fakeManager) PendingTransViews() []trade.PendingTransView { return f.trans }
+func (f fakeManager) DailyOrderState() (int, int)                 { return 0, 500 }
 
 type fakeProvider struct {
 	ticks  []quikdde.Tick
