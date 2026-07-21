@@ -1,4 +1,6 @@
 scripts/opt_agent.py
+trader/lab/backtest.py
+trader/lab/window_metrics.py
 trader/lab/strategies/library.py
 trader/lab/indicators.py
 trader/util.py
