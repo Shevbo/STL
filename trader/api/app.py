@@ -332,6 +332,10 @@ async def lifespan(app: FastAPI):
     quik_reconcile_task = asyncio.create_task(_quik_order_reconcile(app.state))
     # Exchange-latency sampler (5s clock probe -> in-memory ring + latency_samples table).
     latency_task = asyncio.create_task(latency_monitor.run())
+    # Algo-trade ledger ingest: polls the in-memory agent mirrors every 30s and
+    # journals robot fills (QUIK fact for real, runner fills for paper) into
+    # algo_trades with per-fill gross/net P&L. Reports/charts read that table.
+    ledger_task = asyncio.create_task(_algo_ledger_ingest(app.state))
 
     yield
 
@@ -340,6 +344,7 @@ async def lifespan(app: FastAPI):
     task_fallback_task.cancel()
     quik_reconcile_task.cancel()
     latency_task.cancel()
+    ledger_task.cancel()
     await latency_monitor.aclose()
 
     if ai46 is not None:
@@ -1062,6 +1067,32 @@ async def _quik_order_reconcile(app_state) -> None:
         await asyncio.sleep(5)
 
 
+async def _algo_ledger_ingest(app_state) -> None:
+    """Algo-trade ledger ingest loop (30s): journal robot fills from the in-memory
+    agent mirrors into algo_trades (see trader/quik/algo_ledger.py). Best-effort;
+    never raises into the loop — a missed pass is retried on the next one (both
+    sources are rings far deeper than 30s of trading)."""
+    from trader.quik import algo_ledger
+
+    ensured = False
+    while True:
+        try:
+            pool = getattr(app_state, "db_pool", None)
+            store = getattr(app_state, "quik_store", None)
+            if pool is not None and store is not None:
+                if not ensured:
+                    await algo_ledger.ensure_tables(pool)
+                    ensured = True
+                n = await algo_ledger.ingest_once(pool, store, int(time.time() * 1000))
+                if n:
+                    log.info("quik.algo_ledger.ingested", rows=n)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — never let the loop die
+            log.warning("quik.algo_ledger.failed", error=str(exc))
+        await asyncio.sleep(30)
+
+
 # Chart-history cache: (symbol, tf, days) -> (epoch_ms, bars). The Finam REST /bars
 # endpoint is intermittently slow per-symbol (e.g. SRU6 took ~24s while RIU6 took ~2s),
 # which left the chart frame blank for many seconds and queued the browser's other
@@ -1196,6 +1227,9 @@ def create_app() -> FastAPI:
     fastapi_app.include_router(quik_orders_router)
     from trader.api.quik_robots import router as quik_robots_router
     fastapi_app.include_router(quik_robots_router)
+    # Algo-trade ledger: the journal + daily/per-robot report aggregates.
+    from trader.api.quik_algo_ledger import router as quik_algo_ledger_router
+    fastapi_app.include_router(quik_algo_ledger_router)
     # QA checklist web form (GET /qa) + verdict persistence.
     from trader.api.qa_routes import router as qa_router
     fastapi_app.include_router(qa_router)
