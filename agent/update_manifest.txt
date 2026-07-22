@@ -2,6 +2,11 @@ scripts/opt_agent.py
 trader/lab/backtest.py
 trader/lab/window_metrics.py
 trader/lab/strategies/library.py
+trader/lab/strategies/us_open_fvg.py
+trader/lab/strategies/donchian_breakout.py
+trader/lab/strategies/ema_crossover.py
+trader/lab/strategies/rsi_mean_reversion.py
+trader/lab/strategies/supertrend.py
 trader/lab/indicators.py
 trader/util.py
 trader/lab/runtime.py

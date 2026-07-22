@@ -1001,10 +1001,13 @@ async def _agent_task_fallback(app_state) -> None:
 async def _orphan_reaper(app_state) -> None:
     """Re-queue sweep jobs stuck in 'running' because their claimer (agent or fallback)
     died mid-job. A SINGLE orphan otherwise blocks the orchestrator from ever finishing
-    a round -> no r1/r2, the whole campaign freezes (this stalled it overnight). A sweep
-    job runs in well under a minute, so >8 min in 'running' means the claimer is gone.
-    Re-queued jobs are then re-claimed by the agent (or the VDS fallback when it's down),
-    so the campaign self-heals with no manual SQL."""
+    a round -> no r1/r2, the whole campaign freezes (this stalled it overnight). An opt-
+    round job runs in well under a minute, so >8 min in 'running' means the claimer is
+    gone. camp- jobs are full grids (thousands of combos, HOURS on the i9) — the 8-min
+    reap requeued them MID-RUN and the VDS fallback stole the requeued copy (2026-07-21:
+    duplicate leaderboard rows + a false 'Empty' failure), so they get 90 min like the
+    fallback's own jobs. Re-queued jobs are then re-claimed by the agent (or the VDS
+    fallback when it's down), so the campaign self-heals with no manual SQL."""
     pool = getattr(app_state, "db_pool", None)
     if pool is None:
         return
@@ -1013,9 +1016,10 @@ async def _orphan_reaper(app_state) -> None:
         try:
             res = await pool.execute(
                 "UPDATE backtest_runs SET status='queued', agent_id=NULL, claimed_at=NULL "
-                "WHERE (id LIKE 'opt-%' OR id LIKE 'camp-%') AND status='running' "
+                "WHERE status='running' "
                 "AND (agent_id IS NULL OR agent_id <> 'vds-fallback') "
-                "AND claimed_at < now() - interval '8 minutes'"
+                "AND ((id LIKE 'opt-%' AND claimed_at < now() - interval '8 minutes') "
+                "  OR (id LIKE 'camp-%' AND claimed_at < now() - interval '90 minutes'))"
             )
             if res and res != "UPDATE 0":
                 log.info("orphan_reaper.requeued", result=res)
