@@ -94,6 +94,19 @@ func (g *Guard) LastPushMs() int64 {
 	return g.lastPushMs
 }
 
+// DailyOrderState reports today's committed placement count and the effective
+// daily cap, for the status page / watchdog. An exhausted cap silently froze
+// every robot's orders INCLUDING exits for 2.5h (2026-07-21) with zero
+// visibility — this is the counter that makes it observable. Rolls the day
+// window first so a reader never sees yesterday's count.
+func (g *Guard) DailyOrderState() (used, cap int) {
+	g.mu.Lock()
+	g.rollDay()
+	used = g.placedToday
+	g.mu.Unlock()
+	return used, dailyCapOf(g.Limits())
+}
+
 // ApplyPushed adopts limits pushed by STL (the source of truth). The whitelist is
 // REPLACED when non-empty (an empty push is ignored — fail-safe so a bad push never
 // silently disables every instrument). The numeric caps are CEILING-only: the agent
