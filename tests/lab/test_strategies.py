@@ -146,3 +146,56 @@ async def test_cooldown_blocks_entry_after_profit_and_reversal_is_exit_only():
     # after the window expires it opens again
     await _run(rt, 1, 1320, 102.0, **cd)     # 1320 > 1260 -> allowed
     assert rt.signed == 1
+
+
+# ── «Разножка»: минимальная дистанция от прошлого входа (min_gap_pts) ─────────
+
+@pytest.mark.asyncio
+async def test_min_gap_blocks_reentry_within_gap_and_allows_beyond():
+    rt = _FakeRT()
+    g = dict(min_gap_pts=200)
+    await _run(rt, 1, 60, 87000.0, **g)        # flat -> вход long @87000
+    assert rt.orders[-1] == ("buy", 1, 87000.0)
+    await _run(rt, 0, 120, 87050.0, **g)       # сигнал flat -> выход (никогда не блокируется)
+    assert rt.orders[-1] == ("sell", 1, 87050.0)
+    n = len(rt.orders)
+    await _run(rt, 1, 180, 87100.0, **g)       # 100 пт от входа 87000 -> вход ЗАПРЕЩЁН
+    assert len(rt.orders) == n
+    await _run(rt, 1, 240, 87250.0, **g)       # 250 пт -> вход разрешён
+    assert rt.orders[-1] == ("buy", 1, 87250.0)
+
+
+@pytest.mark.asyncio
+async def test_min_gap_never_blocks_exit_or_reversal_close():
+    rt = _FakeRT()
+    g = dict(min_gap_pts=200)
+    await _run(rt, 1, 60, 87000.0, **g)        # вход long @87000
+    await _run(rt, -1, 120, 87020.0, **g)      # разворот в 20 пт: ЗАКРЫТИЕ обязано пройти
+    assert ("sell", 1, 87020.0) in rt.orders
+    assert rt.signed == 0                       # открытие обратной ноги отсечено разножкой
+    await _run(rt, -1, 180, 86700.0, **g)      # 300 пт от входа -> шорт открывается
+    assert rt.orders[-1] == ("sell", 1, 86700.0)
+
+
+@pytest.mark.asyncio
+async def test_min_gap_off_by_default_keeps_old_behaviour():
+    rt = _FakeRT()
+    await _run(rt, 1, 60, 87000.0)             # без параметра фильтр выключен
+    await _run(rt, 0, 120, 87010.0)
+    await _run(rt, 1, 180, 87010.0)            # повторный вход вплотную -> разрешён
+    assert rt.orders[-1] == ("buy", 1, 87010.0)
+
+
+@pytest.mark.asyncio
+async def test_min_gap_blocks_averaging_add_too():
+    rt = _FakeRT()
+    g = dict(min_gap_pts=200, avg_max=3, avg_step_atr=1, avg_atr_n=2)
+    for i, p in enumerate([87000.0, 86900.0, 87000.0]):   # прогрев + ненулевой ATR
+        await _run(rt, None, 60 + i * 60, p, **g)
+    await _run(rt, 1, 300, 87000.0, **g)       # вход long @87000
+    assert rt.orders[-1] == ("buy", 1, 87000.0)
+    n = len(rt.orders)
+    await _run(rt, None, 360, 86950.0, **g)    # против позиции, но всего 50 пт -> добора нет
+    assert len(rt.orders) == n
+    await _run(rt, None, 420, 86700.0, **g)    # 300 пт -> добор разрешён
+    assert rt.orders[-1] == ("buy", 1, 86700.0)

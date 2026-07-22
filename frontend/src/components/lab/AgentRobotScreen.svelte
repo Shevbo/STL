@@ -87,6 +87,42 @@
     return hb ? Math.round((Date.now() - hb) / 1000) : null;
   });
 
+  // Журнал сделок робота (algo_trades) — авторитетные ₽ по каждому филлу. Ключ —
+  // номер заявки QUIK; одна заявка может дать несколько сделок (частичные исполнения),
+  // поэтому суммируем. Пусто = журнал ещё не проглотил филл (инжест раз в 30с) или
+  // сделка старше журнала: тогда ₽ по строке НЕ показываем вовсе.
+  let ledgerByOrder = $state(new Map<string, { gross: number; comm: number }>());
+  async function loadLedger() {
+    try {
+      const res = await fetchWithAuth(
+        `/api/v1/quik/algo-trades?robot_id=${encodeURIComponent(robotId)}&limit=1000`,
+        { signal: AbortSignal.timeout(6000) } as any);
+      if (!res.ok) return;
+      const d = await res.json();
+      const m = new Map<string, { gross: number; comm: number }>();
+      for (const r of d.trades ?? []) {
+        const k = String(r.order_num ?? '');
+        if (!k) continue;
+        const prev = m.get(k) ?? { gross: 0, comm: 0 };
+        m.set(k, { gross: prev.gross + Number(r.pnl_gross_rub ?? 0),
+                   comm: prev.comm + Number(r.commission_rub ?? 0) });
+      }
+      ledgerByOrder = m;
+      // Строго по ВРЕМЕНИ: журнал отдаёт по seq, а дозаполненная история вставлена
+      // позже (seq выше) при более ранних датах — reverse() дал бы неверный порядок.
+      ledgerRows = [...(d.trades ?? [])].sort((a: any, b: any) => Number(a.ts_ms) - Number(b.ts_ms));
+    } catch { /* журнал недоступен -> строки останутся без ₽, но не с ВРАНЬЁМ */ }
+  }
+  let ledgerRows = $state<any[]>([]);
+  // Журнал годится как источник для ГРАФИКА только если его цепочка начинается С НУЛЯ:
+  // тогда replay-с-нуля в графике совпадает с реальной историей позиции. Проверяем по
+  // первой строке: pos_after должен равняться её же дельте.
+  const ledgerFromFlat = $derived.by(() => {
+    const f = ledgerRows[0];
+    if (!f) return false;
+    return Number(f.pos_after) === (f.side === 'buy' ? Number(f.qty) : -Number(f.qty));
+  });
+
   // mirror fills -> trade rows -> chart fills (+MSK shift onto MSK-stamped bars)
   const trades = $derived((robot?.recent_fills ?? []).map((f: any) => ({
     time: Math.floor(Number(f.ts_unix_ms ?? 0) / 1000),
@@ -103,10 +139,24 @@
   // (kept in the trades TABLE, labelled) — replaying paper+real through one book
   // fabricated "макс. позиция 2 конт" and a mixed-era net. Paper robots keep
   // counting their paper fills.
-  const chartFills = $derived(
-    toFills(trades.filter((t: any) =>
+  // ИСТОЧНИК ГРАФИКА — ЖУРНАЛ, когда его цепочка начинается с нуля. Хвост зеркала
+  // обрезан 200 филлами: replay-с-нуля по нему стартует ПОСЕРЕДИНЕ позиции, поэтому
+  // почти каждое закрытие выглядело убыточным (стена ярлыков «SL» у стратегии, где
+  // стоп-лосса нет вообще), а кривая доходности потом ещё и МАСШТАБИРОВАЛАСЬ, чтобы
+  // упереться в пожизненный реализованный P&L — рисуя внутри окна график, которого не
+  // было. Журнал ведёт позицию/среднюю непрерывно и хранит ₽/пункт в строке.
+  const chartFills = $derived.by(() => {
+    if (ledgerFromFlat) {
+      return ledgerRows.map((r: any) => ({
+        time: Math.floor(Number(r.ts_ms) / 1000) + MSK_OFFSET,
+        side: r.side, qty: Number(r.qty), price: Number(r.price),
+        order_id: String(r.order_num ?? ''),
+      }));
+    }
+    return toFills(trades.filter((t: any) =>
       robot?.paper ? EXECUTED.has(t.status) : t.status === 'filled'))
-      .map((f: any) => ({ ...f, time: f.time + MSK_OFFSET })));
+      .map((f: any) => ({ ...f, time: f.time + MSK_OFFSET }));
+  });
 
   // Per-fill lifecycle role (OPEN / AVG / ENF / TP / SL) + realized P&L on closes,
   // for the "Сделки робота" table. REUSES tradeEvents — the SAME classifier that
@@ -144,6 +194,18 @@
       const comm = pointCoef != null ? commissionFor(symbol, e.price, e.qty, pointCoef, true) : null;
       m.set(idx[k], { ...mapAction(e), comm });
     });
+    // P&L по строкам берём из ЖУРНАЛА (algo_trades), а не из этого replay: хвост
+    // зеркала обрезан 200 филлами, поэтому replay-с-нуля стартует ПОСЕРЕДИНЕ позиции
+    // и считает каждое закрытие от неверной средней. Живой MACD·RIU6 2026-07-22:
+    // колонка суммировала -28 000 ₽ при фактических +21 617 ₽ по журналу. Журнал
+    // ведёт среднюю непрерывно и хранит ₽/пункт в строке. Ярлык действия (AVG/TP/SL)
+    // берём по-прежнему из replay — он про ФОРМУ сделки, а не про деньги.
+    if (ledgerByOrder.size) {
+      for (const [i, meta] of m) {
+        const led = ledgerByOrder.get(String(trades[i]?.order_id ?? ''));
+        m.set(i, { ...meta, pnl: led ? led.gross : null, comm: led ? led.comm : null });
+      }
+    }
     return m;
   });
   // Detailed-log totals (₽): commission paid across all fills + net realized on closes.
@@ -602,9 +664,10 @@
   // resolved, so setInterval was never installed).
   let timers: Array<ReturnType<typeof setInterval>> = [];
   onMount(() => {
-    void load(); void pollTick(); void loadStatus();
+    void load(); void pollTick(); void loadStatus(); void loadLedger();
     timers = [setInterval(load, 3000), setInterval(pollTick, 1000),
-              setInterval(loadStatus, 4000), setInterval(loadCoef, 300_000)];
+              setInterval(loadStatus, 4000), setInterval(loadCoef, 300_000),
+              setInterval(loadLedger, 30_000)];   // журнал инжестится раз в 30с
   });
   onDestroy(() => { for (const t of timers) clearInterval(t); });
 </script>
@@ -703,7 +766,7 @@
       taker={true}
       openOrders={openOrders}
       plannedOrders={plannedOrders}
-      netOverride={robot?.paper ? null : pnlRub}
+      netOverride={robot?.paper || ledgerFromFlat ? null : pnlRub}
       floatRub={robot?.paper ? null : floatNetRub}
       livePosition={robot ? position : null}
       journalSuspect={reconCheck ? reconCheck.trades_ok === false : false}
@@ -872,7 +935,7 @@
           {#if trades.length && pointCoef != null}
             <tfoot>
               <tr class="hist-tot">
-                <td colspan="5" class="tot-lbl" title="по показанным в таблице сделкам (хвост до 200); полный реализованный P&L — в бейдже вверху">Итого (показанные, ₽):</td>
+                <td colspan="5" class="tot-lbl" title="сумма по журналу сделок за показанные строки (хвост до 200 филлов); полный реализованный P&L робота — в бейдже вверху">Итого (показанные, ₽):</td>
                 <td class="mono" class:buy={tradeTotals.net >= 0} class:sell={tradeTotals.net < 0}
                     title="сумма реализованного по закрытиям, net комиссии">{tradeTotals.net >= 0 ? '+' : ''}{Math.round(tradeTotals.net).toLocaleString('ru-RU')} ₽</td>
                 <td class="mono comm-cell" title="суммарная биржевая комиссия по всем филлам">−{Math.round(tradeTotals.comm).toLocaleString('ru-RU')} ₽</td>

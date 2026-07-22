@@ -724,7 +724,13 @@
           return { time: b.time as number, value: cum };
         });
         const rawEnd = raw.length ? raw[raw.length - 1].value : 0;
-        const scale = (anchorNet != null && rawEnd !== 0) ? anchorNet / rawEnd : 1;
+        // Масштабировать кривую под чужой итог можно ТОЛЬКО когда сам итог посчитан
+        // по этим же сделкам (бэктест: engineNet). Для живого робота netOverride —
+        // это ПОЖИЗНЕННЫЙ реализованный, а на графике лишь окно сделок: множитель
+        // anchorNet/rawEnd растягивал форму и рисовал день, которого не было
+        // (MACD·RIU6 2026-07-22: провал -30k и рост до +104k за сутки). Никакого
+        // масштабирования по netOverride — конец кривой честно равен сумме сделок.
+        const scale = (engineNet != null && rawEnd !== 0) ? engineNet / rawEnd : 1;
         const curve = raw.map(p => {
           const v = p.value * scale;
           if (v > peak) peak = v;

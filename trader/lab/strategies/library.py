@@ -64,6 +64,22 @@ def make_on_bar(rid: str):
         # pause) instead of reversing straight into the opposite side.
         cooldown_min = int(params.get("cooldown_min", 0) or 0)
         cooldown_frac = float(params.get("cooldown_pct", 1.0) or 1.0) / 100.0
+        # «Разножка» (min_gap_pts>0): не открывать и не доливать, пока цена не отошла
+        # от ПРОШЛОГО ВХОДА минимум на N пунктов цены. В боковике робот иначе крутит
+        # вход-выход по 20-50 пунктов, отдавая комиссию и спред (живой MACD·RIU6,
+        # 2026-07-22: 200 сделок за день внутри коридора 86 700-87 200). Гейт стоит
+        # ТОЛЬКО на добавлении объёма; выходы (разворотное закрытие, TP) не трогает
+        # никогда — иначе убыточная позиция осталась бы без выхода.
+        min_gap = float(params.get("min_gap_pts", 0) or 0)
+        gap_ref = float(stl.get_state("gap_ref", 0) or 0)
+
+        def gap_ok(p: float) -> bool:
+            return min_gap <= 0 or gap_ref <= 0 or abs(p - gap_ref) >= min_gap
+
+        def mark_entry(p: float) -> None:
+            if min_gap > 0:
+                stl.set_state("gap_ref", p)
+
         unit = base_unit + bet_extra + super_add                 # current entry size
         avg_max = max(unit, int(params.get("avg_max", 1) or 1) + super_add)  # max held
         k_step = float(params.get("avg_step_atr", 0) or 0) / 10.0  # add per k_step×ATR adverse
@@ -106,13 +122,15 @@ def make_on_bar(rid: str):
                 stl.set_state("bet_extra", bet_extra)
             on_exit(price, avg, cur_dir)
             await stl.place_order(symbol, "sell" if cur > 0 else "buy", abs(cur), price)
-            if want != 0 and cooldown_min == 0:   # reversal->exit-only when cooldown mode on
+            if want != 0 and cooldown_min == 0 and gap_ok(price):
                 await stl.place_order(symbol, "buy" if want > 0 else "sell", fresh_entry_size(), price)
+                mark_entry(price)
             return
         # 2) Flat → open a fresh base position on a signal (unless cooling down).
         if cur == 0:
-            if not in_cooldown and want is not None and want != 0:
+            if not in_cooldown and want is not None and want != 0 and gap_ok(price):
                 await stl.place_order(symbol, "buy" if want > 0 else "sell", fresh_entry_size(), price)
+                mark_entry(price)
             return
         # 3) Holding (signal agrees or is None) → manage take-profit + averaging by ATR.
         if not ((tp > 0) or (k_step > 0 and abs(cur) < avg_max)):
@@ -135,11 +153,13 @@ def make_on_bar(rid: str):
                 return
         if k_step > 0 and abs(cur) < avg_max:   # average in: add a unit on adverse move
             add = min(unit, avg_max - abs(cur))
-            if cur_dir > 0 and price <= avg - k_step * atrv:
+            if cur_dir > 0 and price <= avg - k_step * atrv and gap_ok(price):
                 await stl.place_order(symbol, "buy", add, price)
+                mark_entry(price)
                 return
-            if cur_dir < 0 and price >= avg + k_step * atrv:
+            if cur_dir < 0 and price >= avg + k_step * atrv and gap_ok(price):
                 await stl.place_order(symbol, "sell", add, price)
+                mark_entry(price)
                 return
 
     return on_bar
@@ -162,6 +182,7 @@ AVG_PARAMS = [
     P("avg_step_atr", "Усреднение: шаг ×ATR/10 (0=выкл)", 0, 0, 30),
     P("tp_atr", "Тейк-профит ×ATR/10 (0=по сигналу)", 0, 0, 60),
     P("avg_atr_n", "ATR период (усреднение)", 14, 5, 40),
+    P("min_gap_pts", "Разножка: мин. пунктов от прошлого входа (0=выкл)", 0, 0, 1000),
 ]
 # "M1" variants: averaging FORCED on (min ≥ 2 contracts, step always > 0), so the
 # modification always averages-instead-of-SL — distinct from the plain robot which
@@ -171,6 +192,7 @@ AVG_PARAMS_FORCED = [
     P("avg_step_atr", "Усреднение: шаг ×ATR/10", 10, 5, 30),
     P("tp_atr", "Тейк-профит ×ATR/10 (0=по сигналу)", 0, 0, 60),
     P("avg_atr_n", "ATR период (усреднение)", 14, 5, 40),
+    P("min_gap_pts", "Разножка: мин. пунктов от прошлого входа (0=выкл)", 0, 0, 1000),
 ]
 
 # ════════════════════════════════════════════════════════════════════════════
