@@ -13,6 +13,7 @@
   import AgentBookPane from './AgentBookPane.svelte';
   import ParamEditor from './ParamEditor.svelte';
   import RobotIdentity from './RobotIdentity.svelte';
+  import EquityChart from './EquityChart.svelte';
   import Splitter from './Splitter.svelte';
   import Frame from './Frame.svelte';
   import NavMenu from '../NavMenu.svelte';
@@ -37,8 +38,8 @@
   function setProfile(p: Profile) { profile = p; try { localStorage.setItem('ars_layout', p); } catch {} }
   // Frame sizes (px); Splitter loads/persists via storageKey, these are the defaults.
   // st* = «stack» profile, sd* = «side» profiles (shared by chart-left/right mirror).
-  let stChart = $state(440), stPing = $state(120), stDiag = $state(175), stSig = $state(300), stTrd = $state(430);
-  let sdChart = $state(1050), sdPing = $state(110), sdDiag = $state(150), sdSig = $state(190), sdTrd = $state(230);
+  let stChart = $state(440), stPing = $state(120), stDiag = $state(175), stSig = $state(300), stTrd = $state(430), stEq = $state(300);
+  let sdChart = $state(1050), sdPing = $state(110), sdDiag = $state(150), sdSig = $state(190), sdTrd = $state(230), sdEq = $state(220);
   // Which frame (if any) is maximized to the whole work area. Shared across all
   // Frame wrappers; a Frame hides itself when another id owns the maximize.
   let maxId = $state<string | null>(null);
@@ -942,6 +943,10 @@
           <Splitter dir="v" bind:size={stSig} min={120} def={300} storageKey="ars_st_sig" />
           <Frame fid="trades" title={`Сделки робота (${trades.length})`} bind:maxId basis={stTrd}>{@render tradesPanel()}</Frame>
           <Splitter dir="v" bind:size={stTrd} min={140} def={430} storageKey="ars_st_trd" />
+          <Frame fid="equity" title="Доходность (журнал)" bind:maxId basis={stEq}>
+            <EquityChart robotId={robotId} compact />
+          </Frame>
+          <Splitter dir="v" bind:size={stEq} min={140} def={300} storageKey="ars_st_eq" />
           <Frame fid="logic" title="Логика стратегии" bind:maxId>
             {#snippet head()}<button class="pe-btn hist" onclick={toggleHistory} title="все сохранённые прогоны перебора параметров этой стратегии">История прогонов{#if strategyCampaigns.length} ({strategyCampaigns.length}){/if}</button>{/snippet}
             {@render logicPanel()}
@@ -962,6 +967,10 @@
         <Splitter dir="h" bind:size={sdSig} min={80} def={190} storageKey="ars_sd_sig" />
         <Frame fid="trades" title={`Сделки робота (${trades.length})`} bind:maxId basis={sdTrd}>{@render tradesPanel()}</Frame>
         <Splitter dir="h" bind:size={sdTrd} min={80} def={230} storageKey="ars_sd_trd" />
+        <Frame fid="equity" title="Доходность (журнал)" bind:maxId basis={sdEq}>
+          <EquityChart robotId={robotId} compact />
+        </Frame>
+        <Splitter dir="h" bind:size={sdEq} min={120} def={220} storageKey="ars_sd_eq" />
         <Frame fid="logic" title="Логика стратегии" bind:maxId>
           {#snippet head()}<button class="pe-btn hist" onclick={toggleHistory} title="все сохранённые прогоны перебора параметров этой стратегии">История прогонов{#if strategyCampaigns.length} ({strategyCampaigns.length}){/if}</button>{/snippet}
           {@render logicPanel()}

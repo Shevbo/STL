@@ -99,12 +99,28 @@ async def algo_trades(request: Request, robot_id: str | None = None,
     return {"trades": [enrich(r) for r in rows], "count": len(rows)}
 
 
+def _margin_map(request: Request) -> dict[str, float]:
+    """symbol -> initial margin (₽/contract, BUYDEPO) from the agent's opaque
+    status mirror (health.params). Empty until the agent build that relays
+    margin is live — callers treat missing symbols as 'ГО unknown'."""
+    store = getattr(request.app.state, "quik_store", None)
+    status = store.agent_status(None) if store is not None else None
+    out: dict[str, float] = {}
+    for p in ((status or {}).get("health") or {}).get("params", []) or []:
+        m = float(p.get("margin") or 0)
+        if m > 0:
+            out[p.get("code", "")] = m
+    return out
+
+
 @router.get("/algo-report")
 async def algo_report(request: Request, days: int = 30, mode: str | None = None,
                       robot_id: str | None = None):
-    """Aggregates for reports/charts over the last N MSK days: per-day totals
-    (trades, contracts, gross, commission, net) and per-robot totals over the
-    same window. Cumulative net per day included for an equity-style chart."""
+    """Aggregates for reports/charts over the last N MSK days: per-day totals,
+    per-robot totals, per-robot DAILY series (cum net for the multi-line chart),
+    and занятое ГО (max held |position| x initial margin) per day/robot. The
+    period return (return_pct) is total net over the PEAK total ГО of the
+    period. ГО fields are null until the agent relays margin (health.params)."""
     _auth(request)
     pool = _pool(request)
     days = max(1, min(int(days), 366))
@@ -123,13 +139,25 @@ async def algo_report(request: Request, days: int = 30, mode: str | None = None,
         where.append(f"robot_id = ${len(args)}")
     cond = " AND ".join(where)
     rows = await pool.fetch(
-        f"SELECT robot_id, mode, ts_ms, qty, pnl_gross_rub, commission_rub, "
-        f"pnl_net_rub FROM algo_trades WHERE {cond} ORDER BY ts_ms", *args)
+        f"SELECT robot_id, mode, symbol, ts_ms, qty, pos_after, pnl_gross_rub, "
+        f"commission_rub, pnl_net_rub FROM algo_trades WHERE {cond} ORDER BY ts_ms",
+        *args)
+    # Positions carried INTO the window still занимают ГО on fill-less days:
+    # per robot, the last pos_after strictly before the window start.
+    carry = {r["robot_id"]: r["pos_after"] for r in await pool.fetch(
+        """SELECT DISTINCT ON (robot_id) robot_id, pos_after FROM algo_trades
+           WHERE ts_ms < $1 ORDER BY robot_id, seq DESC""", lo)}
+
+    margins = _margin_map(request)
+    all_dates = [(start.date() + datetime.timedelta(days=i)).isoformat()
+                 for i in range(days) if start.date() + datetime.timedelta(days=i) <= today]
 
     daily: dict[str, dict] = {}
     robots: dict[str, dict] = {}
+    by_robot_day: dict[str, dict[str, dict]] = {}
     for r in rows:
-        d = daily.setdefault(msk_date(r["ts_ms"]), {
+        date = msk_date(r["ts_ms"])
+        d = daily.setdefault(date, {
             "trades": 0, "contracts": 0, "gross": 0.0, "commission": 0.0, "net": 0.0})
         d["trades"] += 1
         d["contracts"] += r["qty"]
@@ -137,22 +165,75 @@ async def algo_report(request: Request, days: int = 30, mode: str | None = None,
         d["commission"] += r["commission_rub"]
         d["net"] += r["pnl_net_rub"]
         b = robots.setdefault(r["robot_id"], {
-            "mode": r["mode"], "trades": 0, "contracts": 0,
+            "mode": r["mode"], "symbol": r["symbol"], "trades": 0, "contracts": 0,
             "gross": 0.0, "commission": 0.0, "net": 0.0})
         b["trades"] += 1
         b["contracts"] += r["qty"]
         b["gross"] += r["pnl_gross_rub"]
         b["commission"] += r["commission_rub"]
         b["net"] += r["pnl_net_rub"]
+        rd = by_robot_day.setdefault(r["robot_id"], {}).setdefault(
+            date, {"net": 0.0, "pos_max": 0, "pos_last": 0})
+        rd["net"] += r["pnl_net_rub"]
+        rd["pos_max"] = max(rd["pos_max"], abs(r["pos_after"]))
+        rd["pos_last"] = r["pos_after"]
+
+    # Robots that only CARRY a position through the window still bind ГО.
+    for rid, pos in carry.items():
+        if pos and rid not in by_robot_day and (not robot_id or rid == robot_id):
+            by_robot_day[rid] = {}
+            robots.setdefault(rid, {"mode": None, "symbol": None, "trades": 0,
+                                    "contracts": 0, "gross": 0.0, "commission": 0.0,
+                                    "net": 0.0})
+
+    series: dict[str, list] = {}
+    day_go: dict[str, float] = {}
+    for rid, days_map in by_robot_day.items():
+        sym = robots.get(rid, {}).get("symbol")
+        margin = margins.get(sym) if sym else None
+        pos = carry.get(rid, 0)
+        cum = 0.0
+        out = []
+        for date in all_dates:
+            rd = days_map.get(date)
+            held = max(abs(pos), rd["pos_max"]) if rd else abs(pos)
+            net = rd["net"] if rd else 0.0
+            cum += net
+            go = round(held * margin, 2) if (margin and held) else (0.0 if margin else None)
+            if go:
+                day_go[date] = day_go.get(date, 0.0) + go
+            out.append({"date": date, "net": round(net, 2), "cum_net": round(cum, 2),
+                        "pos_max": held, "go_rub": go})
+            if rd:
+                pos = rd["pos_last"]
+        series[rid] = out
+        b = robots.get(rid)
+        if b is not None:
+            peaks = [p["go_rub"] for p in out if p["go_rub"]]
+            b["peak_go_rub"] = max(peaks) if peaks else None
 
     out_days, cum = [], 0.0
-    for date in sorted(daily):
-        d = daily[date]
+    for date in all_dates:
+        d = daily.get(date)
+        if not d and date not in day_go:
+            continue
+        d = d or {"trades": 0, "contracts": 0, "gross": 0.0, "commission": 0.0, "net": 0.0}
         cum += d["net"]
         out_days.append({"date": date, **{k: round(v, 2) for k, v in d.items()},
-                         "cum_net": round(cum, 2)})
-    out_robots = [{"robot_id": rid, **{k: (round(v, 2) if isinstance(v, float) else v)
-                                       for k, v in b.items()}}
-                  for rid, b in sorted(robots.items())]
-    return {"days": out_days, "robots": out_robots,
-            "total_net": round(sum(d["net"] for d in daily.values()), 2)}
+                         "cum_net": round(cum, 2),
+                         "go_rub": round(day_go[date], 2) if date in day_go else None})
+
+    total_net = round(sum(d["net"] for d in daily.values()), 2)
+    peak_go = max((v for v in day_go.values()), default=None)
+    out_robots = []
+    for rid, b in sorted(robots.items()):
+        row = {"robot_id": rid,
+               **{k: (round(v, 2) if isinstance(v, float) else v) for k, v in b.items()}}
+        pk = b.get("peak_go_rub")
+        row["return_pct"] = round(b["net"] / pk * 100, 2) if pk else None
+        out_robots.append(row)
+    return {"days": out_days, "robots": out_robots, "series": series,
+            "total_net": total_net,
+            "peak_go_rub": round(peak_go, 2) if peak_go else None,
+            "return_pct": round(total_net / peak_go * 100, 2) if peak_go else None,
+            "margin_known": bool(margins)}

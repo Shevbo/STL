@@ -17,6 +17,7 @@
   import Orders from './components/Orders.svelte';
   import OrderViz from './components/OrderViz.svelte';
   import ChartsGrid from './components/ChartsGrid.svelte';
+  import EquityChart from './components/lab/EquityChart.svelte';
   import LoginDialog from './components/LoginDialog.svelte';
   import AgentRobotScreen from './components/lab/AgentRobotScreen.svelte';
   import StrategyPage from './components/lab/StrategyPage.svelte';
@@ -50,6 +51,7 @@
   let showQuikTables = $state(false);
   let showQuikOrders = $state(false);
   let showCharts = $state(false);
+  let showEquity = $state(false);
   // OrderViz: default = auto (self-shows on active orders). Operator can pin it
   // open or hide it; "pin" forces it visible even with no active orders.
   let orderVizPinned = $state(false);
@@ -282,6 +284,8 @@
     onToggleQuikOrders={() => showQuikOrders = !showQuikOrders}
     {showCharts}
     onToggleCharts={() => showCharts = !showCharts}
+    {showEquity}
+    onToggleEquity={() => showEquity = !showEquity}
   />
   <div class="body">
     <!-- LEFT COLUMN -->
@@ -380,6 +384,11 @@
   {#if showCharts}
     <div class="quik-tables-wrap" style="height:{labH}px">
       <ChartsGrid />
+    </div>
+  {/if}
+  {#if showEquity}
+    <div class="quik-tables-wrap" style="height:{labH}px">
+      <EquityChart />
     </div>
   {/if}
   <!-- OrderViz: slim auto-frame (~1/8 height). Self-shows when there is >=1 active
