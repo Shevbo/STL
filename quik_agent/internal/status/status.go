@@ -437,6 +437,17 @@ type healthJSON struct {
 	// the real account state used for strict day-close accounting. Mirrored
 	// to STL opaquely; the hoster's day-close snapshot reads equity from here.
 	Money *moneyJSON `json:"money,omitempty"`
+	// Params: instrument reference params incl. initial margin (BUYDEPO) —
+	// the proto ParamsSnapshot lacks margin, so STL's equity/ГО report reads
+	// it from this opaque mirror instead of a proto change.
+	Params []paramJSON `json:"params,omitempty"`
+}
+
+type paramJSON struct {
+	Code      string  `json:"code"`
+	PriceStep float64 `json:"price_step"`
+	StepCost  float64 `json:"step_cost"`
+	Margin    float64 `json:"margin"` // ₽/contract, 0 on an old Lua build
 }
 
 type moneyJSON struct {
@@ -824,6 +835,13 @@ func buildHealthJSON(d Deps, acc accounts.Snapshot) healthJSON {
 	for _, t := range ticks {
 		h.Feed = append(h.Feed, feedJSON{
 			Code: t.Code, AgeMs: now - t.ReceivedUnixMs, Last: t.Last, Bid: t.Bid, Ask: t.Ask,
+		})
+	}
+	params := d.Provider.Params()
+	sort.Slice(params, func(i, j int) bool { return params[i].Code < params[j].Code })
+	for _, pr := range params {
+		h.Params = append(h.Params, paramJSON{
+			Code: pr.Code, PriceStep: pr.PriceStep, StepCost: pr.StepCost, Margin: pr.Margin,
 		})
 	}
 	return h

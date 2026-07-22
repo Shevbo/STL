@@ -161,6 +161,7 @@ type luaEvent struct {
 	Trades [][]float64 `json:"trades"` // tape: [[price, qty, side, ts_ms] ...]
 	PriceStep float64  `json:"price_step"` // param
 	StepCost  float64  `json:"step_cost"`  // param
+	Margin    float64  `json:"margin"`     // param: initial margin (BUYDEPO), ₽/contract
 }
 
 // MDEvent is a QLua market-data event (tick / book / tape / param) for the MD sink.
@@ -171,6 +172,7 @@ type MDEvent struct {
 	Trades         [][]float64 // tape: [[price, qty, side, ts_ms] ...]
 	PriceStep      float64     // param
 	StepCost       float64     // param
+	Margin         float64     // param: initial margin (BUYDEPO), ₽/contract
 	IsBook         bool
 	IsTape         bool
 	IsParam        bool
@@ -418,7 +420,7 @@ func (b *Bridge) dispatch(ev luaEvent) {
 	case "param":
 		if md != nil {
 			md(MDEvent{Code: ev.Code, PriceStep: ev.PriceStep, StepCost: ev.StepCost,
-				IsParam: true})
+				Margin: ev.Margin, IsParam: true})
 		}
 		return
 	case "acc_pos":
