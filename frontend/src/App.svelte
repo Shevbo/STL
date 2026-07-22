@@ -18,6 +18,7 @@
   import OrderViz from './components/OrderViz.svelte';
   import ChartsGrid from './components/ChartsGrid.svelte';
   import EquityChart from './components/lab/EquityChart.svelte';
+  import SmartOrdersPanel from './components/SmartOrdersPanel.svelte';
   import LoginDialog from './components/LoginDialog.svelte';
   import AgentRobotScreen from './components/lab/AgentRobotScreen.svelte';
   import StrategyPage from './components/lab/StrategyPage.svelte';
@@ -358,6 +359,7 @@
           quote={currentQuote}
           onSubmit={(order) => pendingOrder = order}
         />
+        <SmartOrdersPanel symbol={effectiveSymbol} />
       </div>
     </div>
   </div>
