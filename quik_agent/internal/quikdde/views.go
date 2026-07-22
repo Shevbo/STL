@@ -44,11 +44,13 @@ type Book struct {
 	ReceivedUnixMs int64
 }
 
-// ParamRow carries the commission inputs for one instrument.
+// ParamRow carries the commission inputs for one instrument. Margin is the
+// initial margin (BUYDEPO, ₽/contract) — 0 when unknown (DDE sheet / old Lua).
 type ParamRow struct {
 	Code           string
 	PriceStep      float64
 	StepCost       float64
+	Margin         float64
 	ReceivedUnixMs int64
 }
 

@@ -55,6 +55,20 @@ type Trade struct {
 	ExchTsMs int64
 }
 
+// Money mirrors the futures_limits money row (limit_type 0, "денежные средства") —
+// the REAL account state for strict day-close accounting. Equity() is QUIK's
+// "средства": limit + variation margin since the last clearing + accrued income.
+type Money struct {
+	Limit       float64 // cbplimit: money limit set at the last clearing
+	VarMargin   float64 // varmargin: ВМ accumulated since the last clearing
+	AccruedInt  float64 // accruedint: накопленный доход (earlier clearings today)
+	TsComission float64 // ts_comission: exchange fees for the session
+	Planned     float64 // cbplplanned: free money (planned limit)
+}
+
+// Equity is the QUIK "средства" figure: Limit + VarMargin + AccruedInt.
+func (m Money) Equity() float64 { return m.Limit + m.VarMargin + m.AccruedInt }
+
 // TransReply mirrors one OnTransReply (the QUIK транзакции table has no QLua
 // getItem access; this ring of replies is the programmatic equivalent for
 // transactions sent from this terminal).
@@ -88,6 +102,11 @@ type Snapshot struct {
 	// QuikFolder is the QUIK working folder reported by the Lua pong ("" until
 	// a cc3+ pong arrives); the status page tails info.log/news.log there.
 	QuikFolder string
+
+	// Money is the futures_limits money row; nil until the first acc_money
+	// frame arrives (old Lua build publishes none). MoneyAgeMs is -1 then.
+	Money      *Money
+	MoneyAgeMs int64
 
 	// PosAgeMs/OrdAgeMs are -1 when the corresponding table has NEVER been
 	// published (SetPositions/SetOrders not yet called) — never an
@@ -132,6 +151,9 @@ type Store struct {
 
 	transReplies []TransReply
 	quikFolder   string
+
+	money       *Money
+	moneyRecvMs int64
 
 	rttMs        int64
 	clockDriftMs int64
@@ -234,6 +256,15 @@ func (s *Store) AddTransReply(transID int64, status int32, orderNum, text string
 	}
 }
 
+// SetMoney records the latest futures_limits money row.
+func (s *Store) SetMoney(m Money) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := m
+	s.money = &cp
+	s.moneyRecvMs = s.now()
+}
+
 // SetQuikFolder records the QUIK working folder from a Lua pong (ignored when empty).
 func (s *Store) SetQuikFolder(dir string) {
 	if dir == "" {
@@ -310,6 +341,13 @@ func (s *Store) Snapshot() Snapshot {
 	if s.haveTapeLag {
 		exchLag = s.exchangeLagMs
 	}
+	var money *Money
+	moneyAge := int64(-1)
+	if s.money != nil {
+		cp := *s.money
+		money = &cp
+		moneyAge = nowMs - s.moneyRecvMs
+	}
 
 	return Snapshot{
 		Positions:    append([]Position(nil), s.positions...),
@@ -317,6 +355,9 @@ func (s *Store) Snapshot() Snapshot {
 		Trades:       append([]Trade(nil), s.trades...),
 		TransReplies: append([]TransReply(nil), s.transReplies...),
 		QuikFolder:   s.quikFolder,
+
+		Money:      money,
+		MoneyAgeMs: moneyAge,
 
 		PosAgeMs: posAge,
 		OrdAgeMs: ordAge,
@@ -495,6 +536,24 @@ func TradeFromRow(row []any) (Trade, bool) {
 		}
 	}
 	return out, true
+}
+
+// MoneyFromRow converts one acc_money row: [cbplimit, varmargin, accruedint,
+// ts_comission, cbplplanned].
+func MoneyFromRow(row []any) (Money, bool) {
+	if len(row) < 5 {
+		return Money{}, false
+	}
+	vals := make([]float64, 5)
+	for i := 0; i < 5; i++ {
+		f, ok := asFloat(row[i])
+		if !ok {
+			return Money{}, false
+		}
+		vals[i] = f
+	}
+	return Money{Limit: vals[0], VarMargin: vals[1], AccruedInt: vals[2],
+		TsComission: vals[3], Planned: vals[4]}, true
 }
 
 func asString(v any) (string, bool) {

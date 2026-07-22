@@ -161,6 +161,7 @@ type luaEvent struct {
 	Trades [][]float64 `json:"trades"` // tape: [[price, qty, side, ts_ms] ...]
 	PriceStep float64  `json:"price_step"` // param
 	StepCost  float64  `json:"step_cost"`  // param
+	Margin    float64  `json:"margin"`     // param: initial margin (BUYDEPO), ₽/contract
 }
 
 // MDEvent is a QLua market-data event (tick / book / tape / param) for the MD sink.
@@ -171,6 +172,7 @@ type MDEvent struct {
 	Trades         [][]float64 // tape: [[price, qty, side, ts_ms] ...]
 	PriceStep      float64     // param
 	StepCost       float64     // param
+	Margin         float64     // param: initial margin (BUYDEPO), ₽/contract
 	IsBook         bool
 	IsTape         bool
 	IsParam        bool
@@ -181,7 +183,7 @@ type MDEvent struct {
 // adapter (internal/accounts) does the type-tolerant conversion, mirroring how MDEvent
 // keeps decoding out of the bridge itself.
 type AccEvent struct {
-	Kind          string  // "pos" | "ord" | "trd" | "pong" | "trans"
+	Kind          string  // "pos" | "ord" | "trd" | "money" | "pong" | "trans"
 	Rows          [][]any // pos/ord/trd: raw decoded rows
 	T0            int64   // pong: agent-stamped send time (echoed back)
 	TS            int64   // pong: Lua-side receive time
@@ -418,7 +420,7 @@ func (b *Bridge) dispatch(ev luaEvent) {
 	case "param":
 		if md != nil {
 			md(MDEvent{Code: ev.Code, PriceStep: ev.PriceStep, StepCost: ev.StepCost,
-				IsParam: true})
+				Margin: ev.Margin, IsParam: true})
 		}
 		return
 	case "acc_pos":
@@ -429,6 +431,11 @@ func (b *Bridge) dispatch(ev luaEvent) {
 	case "acc_ord":
 		if acc != nil {
 			acc(AccEvent{Kind: "ord", Rows: ev.Rows})
+		}
+		return
+	case "acc_money":
+		if acc != nil {
+			acc(AccEvent{Kind: "money", Rows: ev.Rows})
 		}
 		return
 	case "acc_trd":

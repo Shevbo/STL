@@ -388,6 +388,14 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 				}
 			}
 			accStore.AddTrades(rows)
+		case "money":
+			// One row expected (limit_type 0); take the first convertible one.
+			for _, r := range ev.Rows {
+				if m, ok := accounts.MoneyFromRow(r); ok {
+					accStore.SetMoney(m)
+					break
+				}
+			}
 		case "pong":
 			// RTT is measured on the agent clock alone: feed the recorded send
 			// time (pingSentMs), NOT the Lua-echoed ev.T0 (see pingSentMs decl).
@@ -402,10 +410,16 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 	// clicks and has repeatedly died in production).
 	bridge.SetMDSink(func(ev trade.MDEvent) {
 		if ev.IsParam {
-			quikdde.Default.SetLuaParam(ev.Code, ev.PriceStep, ev.StepCost)
+			quikdde.Default.SetLuaParam(ev.Code, ev.PriceStep, ev.StepCost, ev.Margin)
 			return
 		}
 		if ev.IsTape {
+			// Backstop replay gate (layer 2; layer 1 lives in shectory_trade.lua):
+			// drop trades whose exchange time (row[4], when the Lua provides it) is
+			// stale — a restarted QUIK replays the whole day and receipt stamps make
+			// replayed rows look live (2026-07-21: bars poisoned, robots piled longs).
+			ev.Trades = quikdde.FilterStaleTapeRows(
+				ev.Trades, time.Now().UnixMilli(), quikdde.TapeGateMaxAgeMs)
 			trades := make([]*quikv1.TapeTrade, 0, len(ev.Trades))
 			var lastPx float64
 			for _, r := range ev.Trades {

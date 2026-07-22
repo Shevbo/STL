@@ -101,6 +101,7 @@ func TestDispatchAccountEvents(t *testing.T) {
 		`{"event":"acc_pos","rows":[["RIU6",2,89100.0]]}`,
 		`{"event":"acc_ord","rows":[["123","RIU6",1,89000,1,1]]}`,
 		`{"event":"acc_trd","rows":[["t1","123","RIU6",89050,1,1751700000000]]}`,
+		`{"event":"acc_money","rows":[[1500000.5,-2300.25,800,120.5,1400000]]}`,
 		`{"event":"pong","t0":100,"ts":200,"server_time":"12:00:01"}`,
 	} {
 		var ev luaEvent
@@ -109,7 +110,7 @@ func TestDispatchAccountEvents(t *testing.T) {
 		}
 		b.dispatch(ev)
 	}
-	if len(got) != 4 || got[0].Kind != "pos" || got[3].ServerTime != "12:00:01" {
+	if len(got) != 5 || got[0].Kind != "pos" || got[3].Kind != "money" || got[4].ServerTime != "12:00:01" {
 		t.Fatalf("got %+v", got)
 	}
 }
