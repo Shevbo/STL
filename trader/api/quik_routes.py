@@ -151,3 +151,64 @@ async def set_exchange_interface(body: ExchangeInterface, request: Request):
     # store (env/DB) is wired by sub-agent D's settings persistence layer.
     settings.exchange_interface = body.interface
     return {"interface": settings.exchange_interface, "ok": True}
+
+
+# ---- watchdog activation log ----
+# The trading-health watchdog (hoster ~/stl-watchdog-probe.sh, cron'd from smain
+# every 10 min) appends one JSONL record per activation to ~/stl-watchdog-runs.jsonl;
+# smain appends every SMS escalation to ~/stl-watchdog-escalations.jsonl. This
+# endpoint merges the two by timestamp for the watchdog-log.html page.
+
+_WD_RUNS = "~/stl-watchdog-runs.jsonl"
+_WD_ESCALATIONS = "~/stl-watchdog-escalations.jsonl"
+_WD_JOIN_MS = 5 * 60 * 1000  # an SMS belongs to the probe run within this window
+
+
+def _wd_read_jsonl(path: str) -> list[dict]:
+    import json as _json
+    import os as _os
+    full = _os.path.expanduser(path)
+    out: list[dict] = []
+    try:
+        with open(full, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    out.append(_json.loads(line))
+                except ValueError:
+                    continue
+    except OSError:
+        pass
+    return out
+
+
+@router.get("/watchdog-log")
+async def watchdog_log(request: Request, date_from: str | None = None,
+                       date_to: str | None = None):
+    """Watchdog activations for a period (MSK calendar dates, inclusive; default
+    today): what was checked, what was found, what remains unresolved, and
+    whether an SMS escalation went out for that run."""
+    import datetime as _dt
+    _auth(request)
+    msk = _dt.timezone(_dt.timedelta(hours=3))
+    today = _dt.datetime.now(tz=msk).date().isoformat()
+    d_from = date_from or today
+    d_to = date_to or d_from
+
+    def day_ms(d: str, end: bool = False) -> int:
+        t = _dt.datetime.strptime(d, "%Y-%m-%d").replace(tzinfo=msk)
+        return int(t.timestamp() * 1000) + (24 * 3600 * 1000 if end else 0)
+
+    lo, hi = day_ms(d_from), day_ms(d_to, end=True)
+    runs = [r for r in _wd_read_jsonl(_WD_RUNS) if lo <= (r.get("ts_ms") or 0) < hi]
+    esc = _wd_read_jsonl(_WD_ESCALATIONS)
+
+    for r in runs:
+        ts = r.get("ts_ms") or 0
+        r["sms"] = [e.get("text") for e in esc
+                    if abs((e.get("ts_ms") or 0) - ts) <= _WD_JOIN_MS]
+        r["dt_msk"] = _dt.datetime.fromtimestamp(ts / 1000, tz=msk).strftime(
+            "%Y-%m-%d %H:%M:%S")
+    return {"runs": runs, "date_from": d_from, "date_to": d_to}

@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Вотчер торговли — лог активаций</title>
+<style>
+  body { margin: 0; background: #0f0f1e; color: #ccc; font: 11px/1.4 'Segoe UI', sans-serif; }
+  header { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 8px 14px; border-bottom: 1px solid #2d2d4a; }
+  h1 { font-size: 14px; margin: 0; color: #eee; }
+  .sub { color: #667; font-size: 10px; }
+  input[type=date], input[type=text] { background: #1a1a2e; border: 1px solid #2d2d4a;
+    color: #ccc; padding: 3px 6px; border-radius: 3px; font-size: 11px; }
+  button { background: #1a1a2e; border: 1px solid #2d2d4a; color: #9aa0b4;
+    padding: 3px 10px; border-radius: 3px; cursor: pointer; font-size: 11px; }
+  button:hover { color: #e8e8f0; }
+  button.on { background: #2d2d4a; color: #e8e8f0; }
+  .wrap { padding: 8px 14px; overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 10px; }
+  th { text-align: left; color: #9aa0b4; font-weight: 600; padding: 4px 8px;
+    border-bottom: 1px solid #2d2d4a; vertical-align: bottom; white-space: nowrap; }
+  th input { width: 95%; min-width: 60px; margin-top: 3px; font-size: 10px; display: block; }
+  td { padding: 4px 8px; border-bottom: 1px solid #1e1e3a; vertical-align: top; }
+  td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .ok { color: #4caf50; }
+  .warn { color: #e0a53c; }
+  .bad { color: #f44336; }
+  .muted { color: #667; }
+  ul { margin: 0; padding-left: 14px; }
+  #empty { color: #667; padding: 16px; }
+  #summary { color: #9aa0b4; margin-left: auto; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Вотчер торговли</h1>
+  <span class="sub">активации probe каждые 10 мин, 06:55-23:55 МСК</span>
+  <label>с <input type="date" id="from"></label>
+  <label>по <input type="date" id="to"></label>
+  <button id="today" class="on">Сегодня</button>
+  <button id="load">Показать</button>
+  <button id="csv" title="выгрузить показанные строки в CSV">CSV</button>
+  <span id="summary"></span>
+</header>
+<div class="wrap">
+  <table id="tbl" style="display:none">
+    <thead>
+      <tr>
+        <th>№<input type="text" data-col="n" placeholder="фильтр"></th>
+        <th>Дата-время<input type="text" data-col="dt" placeholder="фильтр"></th>
+        <th>Проверено<input type="text" data-col="checked" placeholder="фильтр"></th>
+        <th>Найдено<input type="text" data-col="found" placeholder="фильтр"></th>
+        <th>Не решено<input type="text" data-col="unresolved" placeholder="фильтр"></th>
+        <th>SMS-эскалация<input type="text" data-col="sms" placeholder="фильтр"></th>
+      </tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <div id="empty">Загрузка…</div>
+</div>
+<script>
+let runs = [];
+const $ = (id) => document.getElementById(id);
+const mskToday = () => new Date(Date.now() + 3 * 3600e3).toISOString().slice(0, 10);
+
+function cellText(r, col) {
+  switch (col) {
+    case 'n': return String(r.n);
+    case 'dt': return r.dt_msk || '';
+    case 'checked': return (r.checked || []).join('; ');
+    case 'found': return (r.found || []).join('; ') || '—';
+    case 'unresolved': return (r.unresolved || []).join('; ') || '—';
+    case 'sms': return (r.sms || []).join('; ') || 'нет';
+  }
+  return '';
+}
+
+function render() {
+  const filters = {};
+  document.querySelectorAll('th input').forEach((i) => {
+    if (i.value.trim()) filters[i.dataset.col] = i.value.trim().toLowerCase();
+  });
+  const rows = runs.filter((r) =>
+    Object.entries(filters).every(([c, q]) => cellText(r, c).toLowerCase().includes(q)));
+
+  const tb = $('rows');
+  tb.innerHTML = '';
+  for (const r of [...rows].reverse()) {
+    const tr = document.createElement('tr');
+    const found = r.found || [], unres = r.unresolved || [], sms = r.sms || [];
+    const resolved = r.resolved || [];
+    const list = (arr, cls) => arr.length
+      ? '<ul>' + arr.map((t) => `<li class="${cls}">${esc(t)}</li>`).join('') + '</ul>'
+      : '<span class="muted">—</span>';
+    tr.innerHTML =
+      `<td class="num">${r.n}</td>` +
+      `<td class="num">${esc(r.dt_msk || '')}</td>` +
+      `<td class="muted">${esc((r.checked || []).join(', '))}</td>` +
+      `<td>${found.length ? list(found, 'warn') : '<span class="ok">чисто</span>'}` +
+        (resolved.length ? `<div class="ok">решено само: ${esc(resolved.join('; '))}</div>` : '') + `</td>` +
+      `<td>${unres.length ? list(unres, 'bad') : '<span class="muted">—</span>'}</td>` +
+      `<td>${sms.length ? list(sms, 'bad') : '<span class="muted">нет</span>'}</td>`;
+    tb.appendChild(tr);
+  }
+  $('tbl').style.display = rows.length ? '' : 'none';
+  $('empty').style.display = rows.length ? 'none' : '';
+  $('empty').textContent = runs.length ? 'Ничего не подходит под фильтры.' : 'Активаций за период нет.';
+  const alerts = rows.filter((r) => (r.found || []).length).length;
+  const smsN = rows.reduce((s, r) => s + ((r.sms || []).length ? 1 : 0), 0);
+  $('summary').textContent =
+    `активаций: ${rows.length}, с находками: ${alerts}, с SMS: ${smsN}`;
+}
+
+function esc(s) {
+  return String(s).replace(/[&<>"]/g, (c) =>
+    ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+}
+
+async function load() {
+  $('empty').style.display = '';
+  $('empty').textContent = 'Загрузка…';
+  try {
+    const q = new URLSearchParams({ date_from: $('from').value, date_to: $('to').value });
+    const res = await fetch('/api/v1/quik/watchdog-log?' + q, { credentials: 'include' });
+    if (res.status === 401) { $('empty').textContent = 'Нужен вход в STL (открой главную и залогинься).'; return; }
+    if (!res.ok) { $('empty').textContent = 'Ошибка API: HTTP ' + res.status; return; }
+    runs = (await res.json()).runs || [];
+    render();
+  } catch (e) {
+    $('empty').textContent = 'Ошибка загрузки: ' + e;
+  }
+}
+
+function exportCSV() {
+  const cols = ['n', 'dt', 'checked', 'found', 'unresolved', 'sms'];
+  const head = ['№', 'Дата-время', 'Проверено', 'Найдено', 'Не решено', 'SMS'];
+  const lines = [head.join(';')];
+  for (const r of runs) {
+    lines.push(cols.map((c) => {
+      let v = cellText(r, c);
+      if (/[";\n]/.test(v)) v = '"' + v.replace(/"/g, '""') + '"';
+      return v;
+    }).join(';'));
+  }
+  const blob = new Blob(['﻿' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'watchdog-log.csv';
+  a.click();
+}
+
+$('from').value = $('to').value = mskToday();
+$('today').onclick = () => { $('from').value = $('to').value = mskToday(); load(); };
+$('load').onclick = load;
+$('csv').onclick = exportCSV;
+document.querySelectorAll('th input').forEach((i) => i.addEventListener('input', render));
+load();
+setInterval(load, 60_000);
+</script>
+</body>
+</html>

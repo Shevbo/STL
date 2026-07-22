@@ -38,6 +38,8 @@
   </div>
   <div class="controls">
     <ExchangeInterface />
+    <a class="lab-btn wd-link" href="/watchdog-log.html" target="_blank"
+       title="лог активаций вотчера за здоровьем торговли">Вотчер</a>
     <button class="lab-btn" class:active={showEquity} onclick={onToggleEquity}
             title="график доходности алготорговли по журналу сделок">Доходность</button>
     <button class="lab-btn" class:active={showCharts} onclick={onToggleCharts}>Графики поз./заявок</button>
@@ -69,6 +71,7 @@
     transition: background 0.15s;
   }
   .lab-btn.active { background: #3d5af1; border-color: #3d5af1; color: #fff; }
+  .wd-link { text-decoration: none; display: inline-block; }
   .lab-panel-btn.active { background: #2d6a2d; border-color: #4caf50; color: #4caf50; }
   .dot { font-size: 18px; line-height: 1; }
   .dot.ok { color: #4caf50; }
