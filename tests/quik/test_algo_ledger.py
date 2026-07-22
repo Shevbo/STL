@@ -114,3 +114,31 @@ def test_msk_date_boundary():
     # 2026-07-21 23:59 MSK = 20:59 UTC; 2026-07-22 00:01 MSK = 21:01 UTC (21.07)
     assert msk_date(1784667540000) == "2026-07-21"
     assert msk_date(1784667660000) == "2026-07-22"
+
+
+def test_backfill_real_tail_replays_complete_history():
+    from trader.quik.algo_ledger import backfill_real_tail
+    tail = [
+        {"status": "filled", "ts_unix_ms": 100, "side": "SIDE_BUY", "qty": 2,
+         "price": 83000.0, "order_id": "rr:r1:1:aa", "symbol": "RIU6"},
+        {"status": "filled", "ts_unix_ms": 200, "side": "SIDE_SELL", "qty": 1,
+         "price": 83100.0, "order_id": "rr:r1:2:bb", "symbol": "RIU6"},
+        {"status": "paper", "ts_unix_ms": 150, "side": "SIDE_BUY", "qty": 9,
+         "price": 1.0, "order_id": "x", "symbol": "RIU6"},          # not a real fill
+        {"status": "filled", "ts_unix_ms": 900, "side": "SIDE_BUY", "qty": 5,
+         "price": 84000.0, "order_id": "rr:r1:3:cc", "symbol": "RIU6"},  # post-seed
+    ]
+    rows = backfill_real_tail("r1", "RIU6", tail, seeded_at_ms=500, seed_pos=1, pv=1.5)
+    assert rows is not None and len(rows) == 2
+    assert [r["pos_after"] for r in rows] == [2, 1]
+    # partial reduce: realized (83100-83000)*1 pt x 1.5 ₽/pt
+    assert abs(rows[1]["pnl_gross_rub"] - 150.0) < 1e-9
+    assert all(r["dedup_key"].startswith("bf:r1:") for r in rows)
+
+
+def test_backfill_real_tail_refuses_incomplete_tail():
+    from trader.quik.algo_ledger import backfill_real_tail
+    tail = [{"status": "filled", "ts_unix_ms": 100, "side": "SIDE_BUY", "qty": 1,
+             "price": 83000.0, "order_id": "o1", "symbol": "RIU6"}]
+    # replay ends at pos=1 but the ledger seeded pos=3 -> tail is cut -> refuse
+    assert backfill_real_tail("r1", "RIU6", tail, 500, seed_pos=3, pv=1.5) is None

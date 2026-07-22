@@ -175,6 +175,45 @@ def collect_fills(mirror: dict | None, status: dict | None) -> list[RawFill]:
     return fills
 
 
+def backfill_real_tail(rid: str, fallback_symbol: str, recent_fills: list[dict],
+                       seeded_at_ms: int, seed_pos: int, pv: float) -> list[dict] | None:
+    """Rows for a REAL robot's PRE-SEED history, replayed from flat through the
+    runner's persisted fills tail. The runner resets the tail on the paper->real
+    arming flip, so for a robot with under 200 real fills the tail IS its complete
+    real-money history. Replayed from pos=0 it must land EXACTLY on the position
+    the ledger seeded with — otherwise the tail is incomplete (200-cut or a
+    missed fill) and per-fill history cannot be trusted: return None, backfill
+    nothing. Post-seed fills are excluded (already ledgered from the QUIK fact)."""
+    fills: list[RawFill] = []
+    for f in recent_fills:
+        if (f.get("status") or "") != "filled":
+            continue
+        ts = int(f.get("ts_unix_ms") or 0)
+        if ts <= 0 or ts > seeded_at_ms:
+            continue
+        side_pb = (f.get("side") or "").upper()
+        side = "buy" if side_pb.endswith("BUY") else "sell" if side_pb.endswith("SELL") else ""
+        qty, price = int(f.get("qty") or 0), float(f.get("price") or 0)
+        if not side or qty <= 0 or price <= 0:
+            continue
+        oid = str(f.get("order_id") or "")
+        fills.append(RawFill(
+            robot_id=rid, mode="real", ts_ms=ts, trade_num=None,
+            order_num=oid or None, symbol=f.get("symbol") or fallback_symbol,
+            side=side, qty=qty, price=price,
+            dedup_key=f"bf:{rid}:{oid}:{ts}:{side}:{qty}:{price:g}"))
+    fills.sort(key=lambda f: (f.ts_ms, f.dedup_key))
+    pos, avg = 0, 0.0
+    rows: list[dict] = []
+    for f in fills:
+        row = price_row(f, pos, avg, pv)
+        pos, avg = row["pos_after"], row["avg_after"]
+        rows.append(row)
+    if pos != seed_pos:
+        return None
+    return rows
+
+
 def price_row(f: RawFill, pos: int, avg: float, pv: float) -> dict[str, Any]:
     """Apply one fill to (pos, avg) and price its P&L. Returns the DB row dict
     plus the advanced state under 'pos_after'/'avg_after'."""

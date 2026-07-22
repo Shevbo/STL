@@ -228,6 +228,15 @@ async def algo_report(request: Request, days: int = 30, mode: str | None = None,
                          "cum_net": round(cum, 2),
                          "go_rub": round(day_go[date], 2) if date in day_go else None})
 
+    # Per-fill cum-net series (chart «по сделкам»): exact trade ticks instead of
+    # daily cutoffs. rows are already ORDER BY ts_ms.
+    series_fills: dict[str, list] = {}
+    for r in rows:
+        sf = series_fills.setdefault(r["robot_id"], [])
+        cum = (sf[-1]["cum_net"] if sf else 0.0) + r["pnl_net_rub"]
+        sf.append({"ts_ms": r["ts_ms"], "net": round(r["pnl_net_rub"], 2),
+                   "cum_net": round(cum, 2)})
+
     total_net = round(sum(d["net"] for d in daily.values()), 2)
     peak_go = max((v for v in day_go.values()), default=None)
     out_robots = []
@@ -243,6 +252,7 @@ async def algo_report(request: Request, days: int = 30, mode: str | None = None,
         row["rf"] = round(b["net"] / maxdd, 2) if maxdd > 0 else None
         out_robots.append(row)
     return {"days": out_days, "robots": out_robots, "series": series,
+            "series_fills": series_fills,
             "total_net": total_net,
             "peak_go_rub": round(peak_go, 2) if peak_go else None,
             "return_pct": round(total_net / peak_go * 100, 2) if peak_go else None,

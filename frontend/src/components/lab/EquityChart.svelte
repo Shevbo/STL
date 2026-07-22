@@ -18,6 +18,7 @@
   const GO_COLOR = '#8a6d1f';
 
   let periodDays = $state(30);
+  let granularity = $state<'fill' | 'day'>('fill');
   let modeFilter = $state<'all' | 'real' | 'paper'>(robotId ? 'all' : 'real');
   let report = $state<any>(null);
   let error = $state<string | null>(null);
@@ -88,6 +89,63 @@
 
     const days: any[] = report.days || [];
     if (!days.length) return;
+
+    // «По сделкам»: кривая по тикам сделок (точный момент каждого филла), а не по
+    // дневным отсечкам. Требует series_fills от бэкенда; иначе — дневной режим.
+    const sf: Record<string, { ts_ms: number; net: number; cum_net: number }[]> =
+      report.series_fills || {};
+    const fillIds = Object.keys(sf).filter((k) => sf[k]?.length).sort();
+    if (granularity === 'fill' && fillIds.length) {
+      const tsSet = new Set<number>();
+      for (const rid of fillIds) for (const p of sf[rid]) tsSet.add(p.ts_ms);
+      const tsList = [...tsSet].sort((a, b) => a - b);
+      const xIdx = new Map(tsList.map((t, i) => [t, i]));
+      const seriesF: any[] = [{}];
+      const dataF: (number | null)[][] = [tsList.map((t) => t / 1000)];
+      const perTsNet = new Map<number, number>();
+      for (const rid of fillIds)
+        for (const p of sf[rid]) perTsNet.set(p.ts_ms, (perTsNet.get(p.ts_ms) || 0) + p.net);
+      seriesF.push({
+        label: 'Итог ₽', stroke: TOTAL_COLOR, width: 2,
+        value: (_u: any, v: number | null) => (v == null ? '—' : fmtRub(v)),
+      });
+      let cumT = 0;
+      dataF.push(tsList.map((t) => {
+        cumT += perTsNet.get(t) || 0;
+        return Math.round(cumT * 100) / 100;
+      }));
+      fillIds.forEach((rid, i) => {
+        if (fillIds.length === 1 && !compact) return; // единственный робот дублирует итог
+        seriesF.push({
+          label: report.robots?.find((r: any) => r.robot_id === rid)?.name || rid.slice(0, 14),
+          stroke: robotColor(i), width: 1, spanGaps: true,
+          value: (_u: any, v: number | null) => (v == null ? '—' : fmtRub(v)),
+        });
+        const arr: (number | null)[] = new Array(tsList.length).fill(null);
+        for (const p of sf[rid]) arr[xIdx.get(p.ts_ms)!] = p.cum_net;
+        dataF.push(arr);
+      });
+      const hF = compact ? 180 : Math.max(220, (chartEl.parentElement?.clientHeight || 320) - 120);
+      plot = new UPlotCtor(
+        {
+          width: chartEl.clientWidth || 600,
+          height: hF,
+          padding: [8, 8, 2, 0],
+          series: seriesF,
+          scales: { x: { time: true } },
+          axes: [
+            { stroke: '#888', grid: { stroke: '#1e1e3a' }, ticks: { stroke: '#2d2d4a' } },
+            { stroke: '#888', grid: { stroke: '#1e1e3a' }, ticks: { stroke: '#2d2d4a' },
+              size: 56, values: (_u: any, vs: number[]) => vs.map((v) => fmtNum(v)) },
+          ],
+          legend: { show: !compact },
+          cursor: { points: { size: 5 } },
+        },
+        dataF as any,
+        chartEl,
+      );
+      return;
+    }
     const xs = days.map((d) => new Date(d.date + 'T00:00:00+03:00').getTime() / 1000);
     const dayNets = days.map((d) => d.net || 0);
     const dateIdx = new Map(days.map((d, i) => [d.date, i]));
@@ -208,6 +266,11 @@
           <button class:on={modeFilter === m} onclick={() => setMode(m as any)}>{label}</button>
         {/each}
       {/if}
+      <span class="sep"></span>
+      <button class:on={granularity === 'fill'} title="кривая по тикам сделок"
+              onclick={() => { granularity = 'fill'; rebuild(); }}>по сделкам</button>
+      <button class:on={granularity === 'day'} title="кривая по дням + лента дневного net и ГО"
+              onclick={() => { granularity = 'day'; rebuild(); }}>по дням</button>
       <span class="sep"></span>
       <button onclick={exportCSV} title="выгрузить дневной отчёт в CSV">CSV отчёт</button>
       <button onclick={exportTradesCSV} title="выгрузить полный журнал сделок в CSV">CSV журнал</button>
