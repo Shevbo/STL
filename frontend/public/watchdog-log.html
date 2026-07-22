@@ -30,6 +30,15 @@
   ul { margin: 0; padding-left: 14px; }
   #empty { color: #667; padding: 16px; }
   #summary { color: #9aa0b4; margin-left: auto; }
+  .cfg { border-bottom: 1px solid #2d2d4a; padding: 6px 14px; }
+  .cfg summary { cursor: pointer; color: #9aa0b4; font-weight: 600; }
+  .cfg-grid { display: flex; gap: 28px; flex-wrap: wrap; padding: 8px 0 4px; }
+  .cfg-col { min-width: 260px; max-width: 380px; }
+  .cfg-h { color: #eee; font-weight: 600; margin-bottom: 5px; }
+  .cfg label { display: block; margin: 2px 0; cursor: pointer; }
+  .cfg input[type=number] { width: 70px; }
+  .thr-row { display: flex; justify-content: space-between; align-items: center;
+    gap: 8px; margin: 2px 0; }
 </style>
 </head>
 <body>
@@ -43,6 +52,30 @@
   <button id="csv" title="выгрузить показанные строки в CSV">CSV</button>
   <span id="summary"></span>
 </header>
+<details class="cfg" id="cfgBox">
+  <summary>Настройки вотчера</summary>
+  <div class="cfg-grid">
+    <div class="cfg-col">
+      <div class="cfg-h">Эскалация по SMS (событие → слать/молчать)</div>
+      <div id="escList"></div>
+      <div class="muted" style="margin-top:4px">выключенное событие остаётся в логе с пометкой, но SMS не шлётся</div>
+    </div>
+    <div class="cfg-col">
+      <div class="cfg-h">Критические случаи (авто-действия)</div>
+      <label><input type="checkbox" id="ap_tape"> авто-ПАУЗА всех реал-роботов при отставании тейпа (реплей QUIK)</label>
+      <label><input type="checkbox" id="ap_bars"> авто-ПАУЗА робота при расхождении его баров с рынком</label>
+      <div class="muted" style="margin-top:4px">пауза блокирует только новые ордера, позиции не трогаются; утренний авто-резюм снимает только эти паузы</div>
+      <div class="cfg-h" style="margin-top:10px">Пороги проверок</div>
+      <div id="thrList"></div>
+    </div>
+    <div class="cfg-col">
+      <div class="cfg-h">Периоды аудита (read-only, живут на smain)</div>
+      <div class="muted" id="roInfo">…</div>
+      <button id="cfgSave" style="margin-top:12px">Сохранить настройки</button>
+      <span id="cfgMsg" class="muted"></span>
+    </div>
+  </div>
+</details>
 <div class="wrap">
   <table id="tbl" style="display:none">
     <thead>
@@ -149,6 +182,65 @@ function exportCSV() {
   a.download = 'watchdog-log.csv';
   a.click();
 }
+
+// ---- настройки вотчера ----
+const ESC_LABELS = {
+  api_down: 'STL API не отвечает', link_down: 'агент не на связи',
+  runner_sick: 'runner нездоров', cap_near: 'лимит ордеров близок (предупреждение)',
+  cap_full: 'лимит ордеров исчерпан', tape_lag: 'отставание тейпа (реплей QUIK)',
+  bars: 'бары разошлись с рынком', hb: 'робот без heartbeat',
+  ord: 'заявки расходятся с QUIK', paused: 'робот авто-поставлен на паузу',
+  pausefail: 'НЕ удалось поставить на паузу',
+};
+const THR_LABELS = {
+  tape_lag_sec: 'отставание тейпа, сек', cap_warn_pct: 'предупреждение о лимите, %',
+  hb_sec: 'heartbeat молчит, сек', order_recheck_sec: 'пере-проверка заявок, сек',
+  bars_atr_mult: 'бары: множитель ATR', bars_pct: 'бары: порог, % от цены',
+};
+
+async function loadConfig() {
+  try {
+    const res = await fetch('/api/v1/quik/watchdog-config', { credentials: 'include' });
+    if (!res.ok) return;
+    const { config, readonly } = await res.json();
+    $('escList').innerHTML = Object.entries(ESC_LABELS).map(([k, label]) =>
+      `<label><input type="checkbox" data-esc="${k}" ${config.escalate[k] ? 'checked' : ''}> ${label}</label>`
+    ).join('');
+    $('ap_tape').checked = !!config.autopause_tape_lag;
+    $('ap_bars').checked = !!config.autopause_bars;
+    $('thrList').innerHTML = Object.entries(THR_LABELS).map(([k, label]) =>
+      `<div class="thr-row"><span>${label}</span><input type="number" step="any" data-thr="${k}" value="${config.thresholds[k]}"></div>`
+    ).join('');
+    $('roInfo').innerHTML =
+      `интервал активаций: каждые ${readonly.interval_min} мин<br>` +
+      `окно аудита: ${esc(readonly.session)}<br>` +
+      `кулдаун SMS: ${readonly.sms_cooldown_min} мин на тип проблемы<br>` +
+      `<i>${esc(readonly.note)}</i>`;
+  } catch { /* страница работает и без конфига */ }
+}
+
+async function saveConfig() {
+  const body = {
+    escalate: {}, thresholds: {},
+    autopause_tape_lag: $('ap_tape').checked,
+    autopause_bars: $('ap_bars').checked,
+  };
+  document.querySelectorAll('[data-esc]').forEach((i) => body.escalate[i.dataset.esc] = i.checked);
+  document.querySelectorAll('[data-thr]').forEach((i) => body.thresholds[i.dataset.thr] = parseFloat(i.value));
+  $('cfgMsg').textContent = '…';
+  try {
+    const res = await fetch('/api/v1/quik/watchdog-config', {
+      method: 'PUT', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    $('cfgMsg').textContent = res.ok
+      ? 'сохранено — действует со следующей активации'
+      : ('ошибка: ' + (data.detail || res.status));
+  } catch (e) { $('cfgMsg').textContent = 'ошибка: ' + e; }
+}
+$('cfgSave').onclick = saveConfig;
+loadConfig();
 
 $('from').value = $('to').value = mskToday();
 $('today').onclick = () => { $('from').value = $('to').value = mskToday(); load(); };

@@ -212,3 +212,95 @@ async def watchdog_log(request: Request, date_from: str | None = None,
         r["dt_msk"] = _dt.datetime.fromtimestamp(ts / 1000, tz=msk).strftime(
             "%Y-%m-%d %H:%M:%S")
     return {"runs": runs, "date_from": d_from, "date_to": d_to}
+
+
+# ---- watchdog operator config ----
+# ~/stl-watchdog-config.json on the hoster, read by the probe on every activation.
+# Editable from the watchdog-log page: per-event SMS escalation toggles, the two
+# auto-pause switches (critical-case actions) and check thresholds. smain-side
+# parameters (10-min cron interval, 06:55-23:55 window, 60-min SMS cooldown per
+# key) are NOT here — they live in smain cron/script and are shown read-only.
+
+_WD_CONFIG = "~/stl-watchdog-config.json"
+_WD_CFG_DEFAULTS: dict = {
+    "escalate": {"api_down": True, "link_down": True, "runner_sick": True,
+                 "cap_near": True, "cap_full": True, "tape_lag": True,
+                 "bars": True, "hb": True, "ord": True,
+                 "paused": True, "pausefail": True},
+    "autopause_tape_lag": True,
+    "autopause_bars": True,
+    "thresholds": {"tape_lag_sec": 120, "cap_warn_pct": 85, "hb_sec": 150,
+                   "order_recheck_sec": 15, "bars_atr_mult": 3.0, "bars_pct": 0.5},
+}
+_WD_THR_BOUNDS = {"tape_lag_sec": (10, 3600), "cap_warn_pct": (10, 100),
+                  "hb_sec": (30, 3600), "order_recheck_sec": (0, 120),
+                  "bars_atr_mult": (0.5, 20.0), "bars_pct": (0.05, 10.0)}
+
+
+def _wd_config_read() -> dict:
+    import copy
+    import json as _json
+    import os as _os
+    cfg = copy.deepcopy(_WD_CFG_DEFAULTS)
+    try:
+        with open(_os.path.expanduser(_WD_CONFIG), encoding="utf-8") as f:
+            user = _json.load(f)
+        for k, v in user.items():
+            if isinstance(v, dict) and isinstance(cfg.get(k), dict):
+                cfg[k].update(v)
+            elif k in cfg:
+                cfg[k] = v
+    except (OSError, ValueError):
+        pass
+    return cfg
+
+
+@router.get("/watchdog-config")
+async def watchdog_config_get(request: Request):
+    _auth(request)
+    return {"config": _wd_config_read(),
+            "readonly": {"interval_min": 10, "session": "06:55-23:55 МСК",
+                         "sms_cooldown_min": 60,
+                         "note": "интервал/окно/кулдаун живут в cron на smain"}}
+
+
+class WatchdogConfigBody(BaseModel):
+    escalate: dict[str, bool] | None = None
+    autopause_tape_lag: bool | None = None
+    autopause_bars: bool | None = None
+    thresholds: dict[str, float] | None = None
+
+
+@router.put("/watchdog-config")
+async def watchdog_config_put(body: WatchdogConfigBody, request: Request):
+    """Partial update; unknown escalate/threshold keys are rejected, thresholds
+    clamped to sane bounds so a typo cannot silence the watchdog entirely."""
+    import json as _json
+    import os as _os
+    _auth(request)
+    cfg = _wd_config_read()
+    if body.escalate is not None:
+        bad = set(body.escalate) - set(_WD_CFG_DEFAULTS["escalate"])
+        if bad:
+            raise HTTPException(status_code=422, detail=f"неизвестные события: {sorted(bad)}")
+        cfg["escalate"].update({k: bool(v) for k, v in body.escalate.items()})
+    if body.autopause_tape_lag is not None:
+        cfg["autopause_tape_lag"] = bool(body.autopause_tape_lag)
+    if body.autopause_bars is not None:
+        cfg["autopause_bars"] = bool(body.autopause_bars)
+    if body.thresholds is not None:
+        bad = set(body.thresholds) - set(_WD_THR_BOUNDS)
+        if bad:
+            raise HTTPException(status_code=422, detail=f"неизвестные пороги: {sorted(bad)}")
+        for k, v in body.thresholds.items():
+            lo, hi = _WD_THR_BOUNDS[k]
+            if not (lo <= float(v) <= hi):
+                raise HTTPException(status_code=422,
+                                    detail=f"{k}: допустимо {lo}..{hi}, получено {v}")
+            cfg["thresholds"][k] = float(v)
+    full = _os.path.expanduser(_WD_CONFIG)
+    tmp = full + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        _json.dump(cfg, f, ensure_ascii=False, indent=1)
+    _os.replace(tmp, full)
+    return {"ok": True, "config": cfg}
