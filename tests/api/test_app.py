@@ -258,3 +258,15 @@ async def test_get_instrument_params_502_on_finam_error(client):
         resp = await client.get("/api/v1/instruments/GZM6@RTSX/params")
 
     assert resp.status_code == 502
+
+
+# --- POST /api/v1/robots (optional readable id) ---
+
+async def test_create_robot_rejects_bad_readable_id(client):
+    base = {"userEmail": "u@x", "stlLinkId": "l1", "name": "t",
+            "scriptCode": "from trader.lab.strategies.library import make_on_bar; "
+                          "on_bar = make_on_bar('cci')"}
+    r = await client.post("/api/v1/robots", json={**base, "id": "плохой id!"})
+    assert r.status_code == 422
+    r = await client.post("/api/v1/robots", json={**base, "id": "x" * 21})
+    assert r.status_code == 422

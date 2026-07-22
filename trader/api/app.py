@@ -2196,15 +2196,29 @@ def create_app() -> FastAPI:
     async def create_robot(body: dict, request: Request):
         _auth(request)
         _validate_script_or_400(body.get("scriptCode"))
+        # Optional readable id ("paper-bo-SiU6"). Max 20 chars: the id becomes the QUIK
+        # order-comment attribution tag if the robot is ever promoted to the agent.
+        new_id = str(body.get("id") or "").strip()
+        if new_id:
+            import re as _re
+            if not _re.fullmatch(r"[A-Za-z0-9_-]{1,20}", new_id):
+                raise HTTPException(status_code=422,
+                                    detail="id: латиница/цифры/-/_, максимум 20 символов")
+        else:
+            new_id = cuid()
         pool = request.app.state.db_pool
-        new_id = cuid()
-        await pool.execute(
-            """INSERT INTO robots (id, user_email, stl_link_id, name, script_code, params_json, schedule)
-               VALUES ($1,$2,$3,$4,$5,$6,$7)""",
-            new_id, body["userEmail"], body["stlLinkId"], body["name"],
-            body["scriptCode"], body.get("paramsJson", {}),
-            body.get("schedule", "09:00-23:55"),
-        )
+        try:
+            await pool.execute(
+                """INSERT INTO robots (id, user_email, stl_link_id, name, script_code, params_json, schedule)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7)""",
+                new_id, body["userEmail"], body["stlLinkId"], body["name"],
+                body["scriptCode"], body.get("paramsJson", {}),
+                body.get("schedule", "09:00-23:55"),
+            )
+        except Exception as exc:
+            if "unique" in type(exc).__name__.lower():
+                raise HTTPException(status_code=409, detail=f"id '{new_id}' уже занят")
+            raise
         return {"id": new_id}
 
     @fastapi_app.put("/api/v1/robots/{robot_id}")
