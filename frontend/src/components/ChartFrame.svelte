@@ -184,8 +184,11 @@
       tickTimes.shift(); tickBids.shift(); tickAsks.shift();
     }
     tickTimes.push(t);
-    tickBids.push(quote.bid);
-    tickAsks.push(quote.ask);
+    // Пустой стакан (рестарт STL/агента, редиал) даёт bid/ask = 0; ноль в буфере
+    // растягивает автошкалу полоски до нуля — рисуется «обрыв» через весь график.
+    // null = разрыв линии, а не точка на нуле.
+    tickBids.push(quote.bid > 0 ? quote.bid : null);
+    tickAsks.push(quote.ask > 0 ? quote.ask : null);
     uplotInst.setData([tickTimes, tickBids, tickAsks]);
   });
 
