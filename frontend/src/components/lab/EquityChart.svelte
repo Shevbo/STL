@@ -231,6 +231,7 @@
           <th>Контр.</th><th>Gross ₽</th><th>Комиссия ₽</th><th>Net ₽</th>
           <th title="пик занятого ГО за период">Пик ГО ₽</th>
           <th title="net / пик ГО">Доходн. %</th>
+          <th title="фактический RF по журналу сделок: net / макс. реализованная просадка cum-net за период (просадка открытой позиции не учтена)">RF</th>
         </tr></thead>
         <tbody>
           {#each Object.keys(report.series || {}).sort() as rid, i}
@@ -249,6 +250,9 @@
                 <td class="num">{r.peak_go_rub != null ? fmtNum(r.peak_go_rub) : '—'}</td>
                 <td class="num" class:neg={(r.return_pct ?? 0) < 0}>
                   {r.return_pct != null ? fmtRub(r.return_pct, 1) + '%' : '—'}</td>
+                <td class="num" class:neg={(r.rf ?? 0) < 0}
+                    title={r.max_dd_rub != null ? 'макс. просадка ' + fmtNum(r.max_dd_rub) + ' ₽' : ''}>
+                  {r.rf != null ? r.rf : '—'}</td>
               </tr>
             {/if}
           {/each}

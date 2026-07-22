@@ -172,6 +172,11 @@ async def algo_report(request: Request, days: int = 30, mode: str | None = None,
         b["gross"] += r["pnl_gross_rub"]
         b["commission"] += r["commission_rub"]
         b["net"] += r["pnl_net_rub"]
+        # Per-fill cum-net curve -> realized max drawdown (rows come ORDER BY ts_ms).
+        # REALIZED only: open-position MTM drawdown is invisible to the fill journal.
+        cum = b["_cum"] = b.get("_cum", 0.0) + r["pnl_net_rub"]
+        b["_peak"] = max(b.get("_peak", cum), cum)
+        b["_maxdd"] = max(b.get("_maxdd", 0.0), b["_peak"] - cum)
         rd = by_robot_day.setdefault(r["robot_id"], {}).setdefault(
             date, {"net": 0.0, "pos_max": 0, "pos_last": 0})
         rd["net"] += r["pnl_net_rub"]
@@ -227,10 +232,15 @@ async def algo_report(request: Request, days: int = 30, mode: str | None = None,
     peak_go = max((v for v in day_go.values()), default=None)
     out_robots = []
     for rid, b in sorted(robots.items()):
+        maxdd = b.pop("_maxdd", 0.0)
+        b.pop("_cum", None)
+        b.pop("_peak", None)
         row = {"robot_id": rid,
                **{k: (round(v, 2) if isinstance(v, float) else v) for k, v in b.items()}}
         pk = b.get("peak_go_rub")
         row["return_pct"] = round(b["net"] / pk * 100, 2) if pk else None
+        row["max_dd_rub"] = round(maxdd, 2) if maxdd else None
+        row["rf"] = round(b["net"] / maxdd, 2) if maxdd > 0 else None
         out_robots.append(row)
     return {"days": out_days, "robots": out_robots, "series": series,
             "total_net": total_net,
