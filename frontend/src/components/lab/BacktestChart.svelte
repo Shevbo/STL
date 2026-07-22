@@ -21,7 +21,9 @@
     openOrders = [], plannedOrders = [], taker = true, runParams = {}, paramSchema = [], onRerun = null,
     segments = null, pointValues = null, live = 0, liveTick = null, onNet = null, floatRub = null,
     netOverride = null, livePosition = null, journalSuspect = false,
+    pointValueKnown = true,
   }: {
+    pointValueKnown?: boolean;
     result: any; symbol: string; strategy?: any; dateFrom: string; dateTo: string;
     pointValue?: number; defaultInterval?: number;
     openOrders?: Array<{ side: string; price: number; qty: number; order_id?: string; role?: string }>;
@@ -181,6 +183,9 @@
   const fmtRub = (v: number) => Math.round(v).toLocaleString('ru-RU') + ' ₽';
   // Commission for one fill, using this chart's instrument + taker/maker mode.
   const commissionForFill = (price: number, qty: number) => commissionFor(symbol, price, qty, pointValue, taker);
+  // pointValue = 1 может быть НАСТОЯЩИМ коэффициентом (GZ/Si/SR: пункт = 1 ₽) или
+  // заглушкой «коэффициент неизвестен» — различает только явный pointValueKnown.
+  const unitLabel = $derived(pointValueKnown === false ? 'пункты' : '₽');
   const KIND_RU: Record<string, string> = {
     open: 'Открытие', average: 'Усреднение', enforce: 'Усиление', partial: 'Част. закрытие',
     full: 'Полн. закрытие', reverse: 'Реверс',
@@ -1052,7 +1057,9 @@
   <!-- drag this divider up/down to resize the P&L field -->
   <div class="bt-resizer" title="потяни, чтобы изменить высоту графика доходности"
        onpointerdown={startEqResize} onpointermove={moveEqResize} onpointerup={endEqResize}></div>
-  <div class="bt-equity-label">P&L робота, ₽ (нарастающим по закрытым сделкам)</div>
+  <!-- Без известного ₽/пункт кривая идёт в ПУНКТАХ — подпись обязана это говорить,
+       иначе пункты читаются как рубли (у BR пункт = 785 ₽, у RTS = 1.57 ₽). -->
+  <div class="bt-equity-label">P&L робота, {unitLabel} (нарастающим по закрытым сделкам)</div>
   <div class="equity" bind:this={equityEl} style="height:{equityPx}px"></div>
 
   <!-- Custom horizontal scrollbar: drag the thumb to scroll across the data span. -->

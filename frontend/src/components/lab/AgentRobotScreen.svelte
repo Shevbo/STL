@@ -220,8 +220,18 @@
   let liveTick = $state<{ t: number; p: number } | null>(null);
   // ₽ per price POINT (step_cost/price_step from the QLua params feed). The runner
   // accumulates realized P&L in PRICE POINTS; the UI converts to honest rubles.
-  let pointCoef = $state<number | null>(null);
+  // The coef is stored WITH the symbol it belongs to and is only ever read back for
+  // that same symbol. A bare `pointCoef` number kept the LAST resolved instrument's
+  // value: the card mounts before the robot loads (symbol = another instrument), and
+  // if the robot's own resolution then failed/arrived late, the stale coef stayed and
+  // the card multiplied this robot's POINTS by a FOREIGN ₽/point. Seen live on
+  // agent-ob-BRU6-v1: -7.11 pts × 1.57108 (RIU6) = "-11 ₽" instead of × 785.54
+  // (BRU6) = -5 585 ₽ — a 500x understatement of a real loss. Symbol-bound state
+  // makes that structurally impossible: unknown coef renders as nothing, never as ₽.
+  let coefFor = $state<{ sym: string; coef: number } | null>(null);
+  const pointCoef = $derived(coefFor && coefFor.sym === symbol ? coefFor.coef : null);
   async function loadCoef(sym: string = symbol) {
+    if (!sym) return;
     try {
       const q = agentId ? `?agent_id=${encodeURIComponent(agentId)}` : '';
       const res = await fetchWithAuth(`/api/v1/quik/params${q}`,
@@ -229,15 +239,17 @@
       if (!res.ok) return;
       const d = await res.json();
       const row = (d.rows ?? []).find((r: any) => r.code === sym);
-      // Guard the async gap: only apply if the robot's symbol hasn't changed,
-      // else a stale response could stamp the WRONG instrument's ₽/point.
-      if (row?.coef > 0 && sym === symbol) pointCoef = Number(row.coef);
-    } catch { /* optional; badge falls back to points */ }
+      if (row?.coef > 0) coefFor = { sym, coef: Number(row.coef) };
+    } catch { /* optional; ₽ figures stay hidden until the coef is known */ }
   }
-  // Re-resolve the coef when the robot's symbol becomes known/changes (on mount
-  // the robot is still null, so a fixed onMount call could cache the default
-  // symbol's coef for 5 min — or the wrong instrument's).
+  // Re-resolve whenever the robot's symbol becomes known/changes, and keep retrying
+  // while it is still unknown (a params gap must not leave the card ₽-less forever).
   $effect(() => { void loadCoef(symbol); });
+  $effect(() => {
+    if (pointCoef != null || !symbol) return;
+    const id = setInterval(() => void loadCoef(symbol), 15_000);
+    return () => clearInterval(id);
+  });
   const pnlPoints = $derived(Number(robot?.realized_pnl ?? 0));
   const pnlRub = $derived(pointCoef ? pnlPoints * pointCoef : null);
   // pnlRub is the robot's AUTHORITATIVE realized — the agent's OWN number
@@ -687,6 +699,7 @@
       live={20}
       liveTick={liveTick}
       pointValue={pointCoef ?? 1}
+      pointValueKnown={pointCoef != null}
       taker={true}
       openOrders={openOrders}
       plannedOrders={plannedOrders}
