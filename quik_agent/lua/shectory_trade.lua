@@ -38,7 +38,7 @@
 -- Bump on every change you deliver to the VDS. Logged FIRST on OnInit so the
 -- operator can confirm which version QUIK actually loaded (the running script is
 -- in MEMORY; a file on disk with the same name may be a different build).
-local SCRIPT_VERSION = "2026.07.22-replaygate1"
+local SCRIPT_VERSION = "2026.07.22-replaygate2"
 
 local CONFIG = {
   HOST          = "127.0.0.1",
@@ -603,7 +603,8 @@ local function ser_rows(rows)
   return table.concat(parts, ";")
 end
 
-local acc = { last_pos = "", last_ord = "", last_pos_ms = 0, last_ord_ms = 0, trd_seen = 0 }
+local acc = { last_pos = "", last_ord = "", last_pos_ms = 0, last_ord_ms = 0, trd_seen = 0,
+              last_money = "", last_money_ms = 0 }
 
 -- QUIK datetime table -> epoch ms (0 when absent/unparsable). Same VDS-clock=MSK
 -- assumption as OnAllTrade's last_trade_ts_ms (see the comment there).
@@ -631,6 +632,7 @@ acc_resync = function()
   acc.trd_seen = 0
   acc.last_pos, acc.last_pos_ms = "", 0
   acc.last_ord, acc.last_ord_ms = "", 0
+  acc.last_money, acc.last_money_ms = "", 0
 end
 
 local function publish_acc_positions()
@@ -652,6 +654,30 @@ local function publish_acc_positions()
     acc.last_pos = key
     acc.last_pos_ms = t
     emit({ event = "acc_pos", rows = rows })
+  end
+end
+
+-- Money limits (futures_limits, limit_type 0 = денежные средства): the REAL account
+-- state for strict day-close accounting. Equity = cbplimit + varmargin + accruedint;
+-- ts_comission is the session's exchange fee. Published change-gated with the same
+-- first-pass + 15s keepalive as positions so a quiet account still reads fresh.
+local function publish_acc_money()
+  local n = getNumberOf("futures_limits") or 0
+  local rows = {}
+  for i = 0, n - 1 do
+    local r = getItem("futures_limits", i)
+    if r and tonumber(r.limit_type) == 0 then
+      rows[#rows + 1] = { tonumber(r.cbplimit) or 0, tonumber(r.varmargin) or 0,
+                          tonumber(r.accruedint) or 0, tonumber(r.ts_comission) or 0,
+                          tonumber(r.cbplplanned) or 0 }
+    end
+  end
+  local key = ser_rows(rows)
+  local t = now_ms()
+  if key ~= acc.last_money or acc.last_money_ms == 0 or (t - acc.last_money_ms) >= 15000 then
+    acc.last_money = key
+    acc.last_money_ms = t
+    emit({ event = "acc_money", rows = rows })
   end
 end
 
@@ -777,6 +803,7 @@ local function md_pump()
   if t - (md.last_acc_ms or 0) >= (CONFIG.ACC_INTERVAL_MS or 2000) then
     md.last_acc_ms = t
     pcall(publish_acc_positions)
+    pcall(publish_acc_money)
     pcall(publish_acc_orders)
     pcall(publish_acc_trades)
   end

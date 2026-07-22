@@ -433,6 +433,20 @@ type healthJSON struct {
 	// VDS guard: QUIK-hang watchdog state + OS memory health (nil when the
 	// guard is not wired). Opaque-mirrored to STL like the rest of this page.
 	VDS *vdsguard.StatusView `json:"vds,omitempty"`
+	// Money is the QUIK futures_limits money row (nil on an old Lua build) —
+	// the real account state used for strict day-close accounting. Mirrored
+	// to STL opaquely; the hoster's day-close snapshot reads equity from here.
+	Money *moneyJSON `json:"money,omitempty"`
+}
+
+type moneyJSON struct {
+	Equity      float64 `json:"equity"`       // limit + varmargin + accruedint = QUIK "средства"
+	Limit       float64 `json:"limit"`        // cbplimit
+	VarMargin   float64 `json:"varmargin"`    // ВМ since last clearing
+	AccruedInt  float64 `json:"accruedint"`   // накопленный доход
+	TsComission float64 `json:"ts_comission"` // session exchange fee
+	Planned     float64 `json:"planned"`      // cbplplanned (free money)
+	AgeMs       int64   `json:"age_ms"`
 }
 
 type fillJSON struct {
@@ -796,6 +810,13 @@ func buildHealthJSON(d Deps, acc accounts.Snapshot) healthJSON {
 	if d.VDSGuard != nil {
 		v := d.VDSGuard()
 		h.VDS = &v
+	}
+	if m := acc.Money; m != nil {
+		h.Money = &moneyJSON{
+			Equity: m.Equity(), Limit: m.Limit, VarMargin: m.VarMargin,
+			AccruedInt: m.AccruedInt, TsComission: m.TsComission, Planned: m.Planned,
+			AgeMs: acc.MoneyAgeMs,
+		}
 	}
 	now := d.nowMs()
 	ticks := d.Provider.Ticks()

@@ -181,7 +181,7 @@ type MDEvent struct {
 // adapter (internal/accounts) does the type-tolerant conversion, mirroring how MDEvent
 // keeps decoding out of the bridge itself.
 type AccEvent struct {
-	Kind          string  // "pos" | "ord" | "trd" | "pong" | "trans"
+	Kind          string  // "pos" | "ord" | "trd" | "money" | "pong" | "trans"
 	Rows          [][]any // pos/ord/trd: raw decoded rows
 	T0            int64   // pong: agent-stamped send time (echoed back)
 	TS            int64   // pong: Lua-side receive time
@@ -429,6 +429,11 @@ func (b *Bridge) dispatch(ev luaEvent) {
 	case "acc_ord":
 		if acc != nil {
 			acc(AccEvent{Kind: "ord", Rows: ev.Rows})
+		}
+		return
+	case "acc_money":
+		if acc != nil {
+			acc(AccEvent{Kind: "money", Rows: ev.Rows})
 		}
 		return
 	case "acc_trd":

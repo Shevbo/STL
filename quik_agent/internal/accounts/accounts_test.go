@@ -420,3 +420,28 @@ func TestStoreAgesNegativeBeforeFirstPublish(t *testing.T) {
 		t.Fatalf("OrdAgeMs must still be -1 (orders never published), got %d", snap.OrdAgeMs)
 	}
 }
+
+func TestMoneyFromRowAndStore(t *testing.T) {
+	m, ok := MoneyFromRow([]any{1500000.5, -2300.25, 800.0, 120.5, 1400000.0})
+	if !ok {
+		t.Fatal("valid acc_money row must convert")
+	}
+	if got, want := m.Equity(), 1500000.5-2300.25+800.0; got != want {
+		t.Fatalf("Equity = %v, want %v", got, want)
+	}
+	if _, ok := MoneyFromRow([]any{1.0, 2.0}); ok {
+		t.Fatal("short row must be rejected")
+	}
+
+	now := int64(1000)
+	s := New(func() int64 { return now })
+	if snap := s.Snapshot(); snap.Money != nil || snap.MoneyAgeMs != -1 {
+		t.Fatalf("fresh store must report no money data, got %+v", snap.Money)
+	}
+	s.SetMoney(m)
+	now = 6000
+	snap := s.Snapshot()
+	if snap.Money == nil || snap.Money.Limit != 1500000.5 || snap.MoneyAgeMs != 5000 {
+		t.Fatalf("got money %+v age %d", snap.Money, snap.MoneyAgeMs)
+	}
+}

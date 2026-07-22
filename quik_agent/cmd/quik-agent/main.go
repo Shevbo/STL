@@ -388,6 +388,14 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 				}
 			}
 			accStore.AddTrades(rows)
+		case "money":
+			// One row expected (limit_type 0); take the first convertible one.
+			for _, r := range ev.Rows {
+				if m, ok := accounts.MoneyFromRow(r); ok {
+					accStore.SetMoney(m)
+					break
+				}
+			}
 		case "pong":
 			// RTT is measured on the agent clock alone: feed the recorded send
 			// time (pingSentMs), NOT the Lua-echoed ev.T0 (see pingSentMs decl).
