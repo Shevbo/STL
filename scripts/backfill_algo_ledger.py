@@ -21,8 +21,10 @@ import os
 import sys
 import urllib.request
 
-from trader.auth.portal import make_session_token
-from trader.quik.algo_ledger import backfill_real_tail
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from trader.auth.portal import make_session_token  # noqa: E402
+from trader.quik.algo_ledger import backfill_real_tail  # noqa: E402
 
 API = os.environ.get("STL_API_LOCAL", "http://localhost:8000")
 _COLS = ("robot_id", "mode", "ts_ms", "trade_num", "order_num", "symbol", "side",
