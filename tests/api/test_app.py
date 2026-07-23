@@ -270,3 +270,12 @@ async def test_create_robot_rejects_bad_readable_id(client):
     assert r.status_code == 422
     r = await client.post("/api/v1/robots", json={**base, "id": "x" * 21})
     assert r.status_code == 422
+
+
+# --- GET /api/v1/agent/stuck-backtests ---
+
+async def test_stuck_backtests_empty_when_no_pool(client):
+    # app.state.db_pool is unset in this harness -> endpoint must degrade, not 500.
+    r = await client.get("/api/v1/agent/stuck-backtests?sec=1800")
+    assert r.status_code == 200
+    assert r.json() == {"stuck": []}

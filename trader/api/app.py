@@ -1985,6 +1985,23 @@ def create_app() -> FastAPI:
         } for r in lr]
         return out
 
+    @fastapi_app.get("/api/v1/agent/stuck-backtests")
+    async def stuck_backtests(request: Request, sec: int = 3600):
+        """Backtests stuck in 'running' longer than `sec` — the trading-health
+        watchdog probe polls this to SMS the operator (a hung sweep once pegged the
+        i9 for 12h with no alert). Read-only, no action taken here."""
+        _require_any_auth(request)
+        pool = getattr(request.app.state, "db_pool", None)
+        if pool is None:
+            return {"stuck": []}
+        sec = max(1, min(int(sec), 86400))
+        rows = await pool.fetch(
+            "SELECT id, EXTRACT(EPOCH FROM (now() - coalesce(claimed_at, created_at)))::int "
+            "AS elapsed FROM backtest_runs WHERE status='running' "
+            "AND coalesce(claimed_at, created_at) < now() - make_interval(secs => $1::int) "
+            "ORDER BY elapsed DESC", sec)
+        return {"stuck": [{"id": r["id"], "elapsed_sec": int(r["elapsed"])} for r in rows]}
+
     @fastapi_app.get("/api/v1/agent/campaign")
     async def agent_campaign(request: Request, id: str = ""):
         """Detail of one sweep campaign for the click-to-expand view: meta (strategies,

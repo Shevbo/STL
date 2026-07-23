@@ -226,15 +226,17 @@ _WD_CFG_DEFAULTS: dict = {
     "escalate": {"api_down": True, "link_down": True, "runner_sick": True,
                  "cap_near": True, "cap_full": True, "tape_lag": True,
                  "bars": True, "hb": True, "ord": True,
-                 "paused": True, "pausefail": True},
+                 "paused": True, "pausefail": True, "backtest_stuck": True},
     "autopause_tape_lag": True,
     "autopause_bars": True,
     "thresholds": {"tape_lag_sec": 120, "cap_warn_pct": 85, "hb_sec": 150,
-                   "order_recheck_sec": 15, "bars_atr_mult": 3.0, "bars_pct": 0.5},
+                   "order_recheck_sec": 15, "bars_atr_mult": 3.0, "bars_pct": 0.5,
+                   "backtest_stuck_sec": 3600},
 }
 _WD_THR_BOUNDS = {"tape_lag_sec": (10, 3600), "cap_warn_pct": (10, 100),
                   "hb_sec": (30, 3600), "order_recheck_sec": (0, 120),
-                  "bars_atr_mult": (0.5, 20.0), "bars_pct": (0.05, 10.0)}
+                  "bars_atr_mult": (0.5, 20.0), "bars_pct": (0.05, 10.0),
+                  "backtest_stuck_sec": (60, 86400)}
 
 
 def _wd_config_read() -> dict:
