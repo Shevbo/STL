@@ -142,3 +142,35 @@ def test_backfill_real_tail_refuses_incomplete_tail():
              "price": 83000.0, "order_id": "o1", "symbol": "RIU6"}]
     # replay ends at pos=1 but the ledger seeded pos=3 -> tail is cut -> refuse
     assert backfill_real_tail("r1", "RIU6", tail, 500, seed_pos=3, pv=1.5) is None
+
+
+def test_parse_runner_log_real_only_and_arming_reset():
+    from trader.quik.algo_ledger import parse_runner_log
+    log = """2026-07-14 15:59:06 [LIFECYCLE] деплой: стратегия=x режим=РЕАЛ max_pos=7 окно=09:00-23:55
+2026-07-14 16:00:01 [FILL] buy 1 @ 100 → позиция 1 @ 100, реализовано 0 п.
+2026-07-14 16:05:00 [FILL] sell 1 @ 110 → позиция 0 @ 0, реализовано 10 п.
+2026-07-14 17:06:49 [LIFECYCLE] АРМИНГ paper->РЕАЛ: статистика обнулена
+2026-07-14 18:40:01 [FILL] buy 3 @ 85990 (paper) → позиция 3 @ 85990, реализовано 0 п.
+2026-07-14 18:41:01 [FILL] buy 3 @ 85990 → позиция 3 @ 85990, реализовано 0 п.
+2026-07-14 20:45:09 [FILL] sell 3 @ 85560 → позиция 0 @ 0, реализовано -1290 п.
+2026-07-14 21:00:00 [FILL] sell 2 @ 85000 → позиция -2 @ 85000, реализовано -1290 п.
+"""
+    fills = parse_runner_log(log)
+    # arming discards the pre-arming real fills; the (paper) line is never real
+    assert len(fills) == 3
+    assert [f["ts"][-8:] for f in fills] == ["18:41:01", "20:45:09", "21:00:00"]
+    # per-fill P&L is the delta of the runner's cumulative realized
+    assert [f["gross_points"] for f in fills] == [0.0, -1290.0, 0.0]
+    assert fills[1]["pos_after"] == 0 and fills[2]["pos_after"] == -2
+    assert fills[2]["avg_after"] == 85000.0
+
+
+def test_parse_runner_log_lumps_pre_log_realized_into_first_fill():
+    from trader.quik.algo_ledger import parse_runner_log
+    # log starts mid-history (no arming): realized already -6154 on the first fill
+    log = ("2026-07-14 00:42:41 [FILL] sell 1 @ 88370 → позиция 0 @ 0, реализовано -6154 п.\n"
+           "2026-07-14 01:00:00 [FILL] sell 1 @ 88000 → позиция -1 @ 88000, реализовано -6154 п.\n")
+    fills = parse_runner_log(log)
+    assert [f["gross_points"] for f in fills] == [-6154.0, 0.0]
+    # running total stays exact even though the first fill absorbs the opening
+    assert fills[-1]["realized_cum"] == -6154.0

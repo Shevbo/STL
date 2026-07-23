@@ -28,6 +28,7 @@ carry no tagged QUIK trade and are not ingested.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -212,6 +213,52 @@ def backfill_real_tail(rid: str, fallback_symbol: str, recent_fills: list[dict],
     if pos != seed_pos:
         return None
     return rows
+
+
+_LOG_FILL = re.compile(
+    r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) \[FILL\] (buy|sell) (\d+) @ ([\d.]+)"
+    r"(?: \(([^)]*)\))? .*? позиция (-?\d+) @ ([\d.]+), реализовано (-?[\d.]+) п\.")
+_LOG_ARM = re.compile(r"\[LIFECYCLE\] АРМИНГ paper->РЕАЛ")
+
+
+def parse_runner_log(text: str) -> list[dict]:
+    """REAL-money fills from a per-robot runner log (docs/logs.zip).
+
+    The runner logs every fill as
+        `TS [FILL] side qty @ price [(status)] -> позиция POS @ AVG, реализовано R п.`
+    A PAPER fill carries a "(paper)" status; a REAL fill has no parenthetical at all —
+    that is the only marker distinguishing them. `реализовано` is the runner's own
+    CUMULATIVE realized in POINTS, so each fill's own P&L is the delta from the
+    previous line; the position/avg after the fill are taken verbatim rather than
+    recomputed (the runner's arithmetic is the authority).
+
+    An `АРМИНГ paper->РЕАЛ` line resets realized to 0 AND discards the prior real
+    history (the runner does exactly this), so anything before the LAST arming is
+    dropped. When a log starts mid-history (no arming line, realized already
+    non-zero), that opening amount lands on the first logged fill — the running
+    TOTAL stays exact, only that one fill's share is overstated.
+    """
+    out: list[dict] = []
+    prev_realized = 0.0
+    for line in text.splitlines():
+        if _LOG_ARM.search(line):
+            out.clear()
+            prev_realized = 0.0
+            continue
+        m = _LOG_FILL.match(line)
+        if not m:
+            continue
+        ts, side, qty, price, status, pos, avg, realized = m.groups()
+        if status:                       # "(paper)" and friends -> not real money
+            continue
+        realized = float(realized)
+        out.append({
+            "ts": ts, "side": side, "qty": int(qty), "price": float(price),
+            "pos_after": int(pos), "avg_after": float(avg),
+            "realized_cum": realized, "gross_points": realized - prev_realized,
+        })
+        prev_realized = realized
+    return out
 
 
 def price_row(f: RawFill, pos: int, avg: float, pv: float) -> dict[str, Any]:
