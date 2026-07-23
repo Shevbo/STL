@@ -118,6 +118,23 @@ def make_on_bar(rid: str):
                 stl.set_state("gap_pending", 0)
             stl.set_state("gap_pos", cur)
 
+        def note_skip(kind: str, p: float) -> None:
+            """Счётчик отсева входа фильтром (kind='gap' разножка / 'cooldown' остывание):
+            копит нарастающий итог в состоянии робота + пишет событие в журнал. Порядок
+            заявок не меняет — только наблюдаемость (сколько входов фильтр не пустил)."""
+            key = kind + "_skips"
+            n = int(stl.get_state(key, 0) or 0) + 1
+            stl.set_state(key, n)
+            what = "разножка" if kind == "gap" else "остывание"
+            msg = f"{what} отсеяла вход @ {p:.0f} (всего {n})"
+            # В раннере -> SKIP-событие детального лога робота (видно на карточке +
+            # считается из per-robot логов); в бэктест/STL event() нет -> обычный log.
+            ev = getattr(stl, "event", None)
+            if callable(ev):
+                ev("SKIP", msg)
+            else:
+                stl.log("[SKIP] " + msg)
+
         def on_exit(exit_price: float, entry_avg: float, direction: int) -> None:
             """Book a close: update SuperAverage escalation + the cooldown timer.
             ret>0 is a winner (resets escalation), ret<0 a loser (escalates)."""
@@ -141,15 +158,23 @@ def make_on_bar(rid: str):
                 stl.set_state("bet_extra", bet_extra)
             on_exit(price, avg, cur_dir)
             await stl.place_order(symbol, "sell" if cur > 0 else "buy", abs(cur), price)
-            if want != 0 and cooldown_min == 0 and gap_ok(price):
-                await stl.place_order(symbol, "buy" if want > 0 else "sell", fresh_entry_size(), price)
-                mark_entry(price)
+            if want != 0 and cooldown_min == 0:      # cooldown mode -> exit-only, not a skip
+                if gap_ok(price):
+                    await stl.place_order(symbol, "buy" if want > 0 else "sell", fresh_entry_size(), price)
+                    mark_entry(price)
+                else:
+                    note_skip("gap", price)
             return
         # 2) Flat → open a fresh base position on a signal (unless cooling down).
         if cur == 0:
-            if not in_cooldown and want is not None and want != 0 and gap_ok(price):
-                await stl.place_order(symbol, "buy" if want > 0 else "sell", fresh_entry_size(), price)
-                mark_entry(price)
+            if want is not None and want != 0:
+                if in_cooldown:
+                    note_skip("cooldown", price)
+                elif not gap_ok(price):
+                    note_skip("gap", price)
+                else:
+                    await stl.place_order(symbol, "buy" if want > 0 else "sell", fresh_entry_size(), price)
+                    mark_entry(price)
             return
         # 3) Holding (signal agrees or is None) → manage take-profit + averaging by ATR.
         if not ((tp > 0) or (k_step > 0 and abs(cur) < avg_max)):
@@ -178,13 +203,19 @@ def make_on_bar(rid: str):
                 return
         if k_step > 0 and abs(cur) < avg_max:   # average in: add a unit on adverse move
             add = min(unit, avg_max - abs(cur))
-            if cur_dir > 0 and price <= avg - k_step * atrv and gap_ok(price):
-                await stl.place_order(symbol, "buy", add, price)
-                mark_entry(price)
+            if cur_dir > 0 and price <= avg - k_step * atrv:
+                if gap_ok(price):
+                    await stl.place_order(symbol, "buy", add, price)
+                    mark_entry(price)
+                else:
+                    note_skip("gap", price)
                 return
-            if cur_dir < 0 and price >= avg + k_step * atrv and gap_ok(price):
-                await stl.place_order(symbol, "sell", add, price)
-                mark_entry(price)
+            if cur_dir < 0 and price >= avg + k_step * atrv:
+                if gap_ok(price):
+                    await stl.place_order(symbol, "sell", add, price)
+                    mark_entry(price)
+                else:
+                    note_skip("gap", price)
                 return
 
     return on_bar

@@ -103,6 +103,9 @@ class _FakeRT:
     def set_state(self, k, v):
         self._st[k] = v
 
+    def log(self, msg, level="info"):
+        pass
+
 
 async def _run(rt, want, t, price, **params):
     _WANT["v"] = want
@@ -244,3 +247,27 @@ def test_pivot_hlc_cache_is_keyed_by_symbol():
     assert sig_pivot(a, {"symbol": "AAA", "level": 1}) == 1
     assert sig_pivot(b, {"symbol": "BBB", "level": 1}) == -1   # утёк бы кэш -> вернуло бы 1
     assert {k[0] for k in _PIVOT_HLC} == {"AAA", "BBB"}        # по записи на инструмент
+
+
+@pytest.mark.asyncio
+async def test_filter_skip_counters():
+    """Разножка и остывание копят счётчик отсева, не меняя порядок заявок."""
+    rt = _FakeRT()
+    g = dict(min_gap_pts=200)
+    await _run(rt, 1, 60, 87000.0, **g)        # вход @87000 (исполнился)
+    await _run(rt, 0, 120, 87050.0, **g)       # выход -> отсчёт подтверждён = 87000
+    n = len(rt.orders)
+    await _run(rt, 1, 180, 87080.0, **g)       # 80 пт -> разножка отсеяла
+    assert len(rt.orders) == n                  # заявки нет
+    assert rt.get_state("gap_skips") == 1
+    await _run(rt, 1, 240, 87120.0, **g)       # 120 пт -> снова отсеяла
+    assert rt.get_state("gap_skips") == 2
+
+    # остывание: отдельный счётчик
+    rt2 = _FakeRT()
+    cd = dict(cooldown_min=10, cooldown_pct=1.0)
+    await _run(rt2, 1, 600, 100.0, **cd)       # вход
+    await _run(rt2, 0, 660, 102.0, **cd)       # выход в +2% -> взвёл остывание
+    await _run(rt2, 1, 900, 102.0, **cd)       # в окне остывания -> отсеяло
+    assert rt2.get_state("cooldown_skips") == 1
+    assert rt2.get_state("gap_skips") is None    # не перепутаны
