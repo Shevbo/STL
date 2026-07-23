@@ -236,9 +236,20 @@ func buildReconInputs(d Deps) recon.Inputs {
 	// them as "a tagged trade no fill claimed" -> phantom trade MISMATCH on a robot
 	// that simply had not traded today. Drop pre-session trades here, symmetric with
 	// the FillKey floor below, so both directions see the same session window.
+	// The floor MUST judge the EXCHANGE trade time when the Lua provides it
+	// (cc3+), not the receipt stamp: after a cross-midnight agent restart the
+	// Lua acc_resync re-sends the FULL QUIK trades table and every YESTERDAY
+	// trade arrives with a receipt stamp of TODAY — receipt-floored they read
+	// as today's phantom trades and flipped trades_ok on every robot that
+	// traded yesterday (2026-07-23 morning: 4/4 «сделки не сходятся» after the
+	// 03:00 self-update). Receipt stays the fallback for an old Lua build.
 	tradeFloor := mskMidnightMs(d.nowMs())
 	for _, t := range acc.Trades {
-		if t.TsMs < tradeFloor {
+		floorTs := t.TsMs
+		if t.ExchTsMs > 0 {
+			floorTs = t.ExchTsMs
+		}
+		if floorTs < tradeFloor {
 			continue // pre-session QUIK trade: unmatchable by design, not a divergence
 		}
 		accView.Trades = append(accView.Trades, recon.Trade{

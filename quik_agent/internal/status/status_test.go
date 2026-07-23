@@ -763,3 +763,44 @@ func TestTailLogLines_CP1251NewestFirst(t *testing.T) {
 		t.Fatalf("missing file must return nil, got %q", missing)
 	}
 }
+
+// TestBuildReconInputs_DropsResyncedYesterdayTrades: after a CROSS-MIDNIGHT agent
+// restart (03:00 self-update) the Lua acc_resync re-sends the FULL QUIK trades
+// table; every YESTERDAY trade arrives with a receipt stamp of TODAY. Floored by
+// receipt they read as today's phantom tagged trades and flipped trades_ok on
+// every robot that traded yesterday (2026-07-23 morning: 4/4 «сделки не
+// сходятся»). The floor must judge the EXCHANGE trade time (cc3+) instead.
+func TestBuildReconInputs_DropsResyncedYesterdayTrades(t *testing.T) {
+	d := baseDeps()
+	now := int64(1_784_600_000_000)
+	d.NowMs = func() int64 { return now }
+	floor := mskMidnightMs(now)
+	d.Robots = fakeRobots{
+		specs:  []*quikv1.RobotSpec{{RobotId: "lxk22tsffsxiiotb8kmpsato", Symbol: "RIU6", Paper: false}},
+		paused: map[string]bool{},
+		times:  map[string][2]int64{},
+	}
+	d.Runner = fakeRunner{statuses: map[string]*quikv1.RobotStatus{
+		"lxk22tsffsxiiotb8kmpsato": {RobotId: "lxk22tsffsxiiotb8kmpsato", Position: 1},
+	}}
+	d.Accounts = fakeAccounts{snap: accounts.Snapshot{
+		PosAgeMs: 10, OrdAgeMs: 10,
+		Trades: []accounts.Trade{
+			// Yesterday's fill RESENT after the restart: receipt = today (post-floor),
+			// exchange time = yesterday (pre-floor). Truncated 20-char tag as live.
+			{Num: "t1", OrderNum: "o1", Sec: "RIU6", Price: 86000, Qty: 1,
+				TsMs: floor + 3 * 3_600_000, ExchTsMs: floor - 2 * 3_600_000,
+				Tag: "lxk22tsffsxiiotb8kmpsato"[:20], Side: "B"},
+		},
+	}}
+
+	rep := computeReport(d)
+	if rep.State != "OK" {
+		t.Fatalf("a resynced yesterday trade must not flip recon; got %s", rep.State)
+	}
+	for _, rc := range rep.RobotChecks {
+		if rc.ID == "lxk22tsffsxiiotb8kmpsato" && !rc.TradesOK {
+			t.Errorf("robot must be TradesOK when the only unmatched trade is yesterday's resync")
+		}
+	}
+}
