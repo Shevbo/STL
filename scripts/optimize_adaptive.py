@@ -192,7 +192,11 @@ async def main():
 
     pool = await asyncpg.create_pool(s.lab_db_url, init=_init_codec)
 
-    syms = await top_instruments(args.instruments, always=ALWAYS_ASSETS)
+    # OPT_LOOP_SYMBOLS фиксирует список контрактов (перебор ТОЛЬКО их), обходя выбор по
+    # обороту — чтобы приоритетные инструменты не делили бокс с второстепенными. Пусто =
+    # прежнее поведение (топ-N по обороту + ALWAYS_ASSETS).
+    _fixed = [x.strip() for x in os.environ.get("OPT_LOOP_SYMBOLS", "").split(",") if x.strip()]
+    syms = _fixed or await top_instruments(args.instruments, always=ALWAYS_ASSETS)
     strategies = list_strategies()
     print(f"campaign {args.campaign}: {len(strategies)} strategies x {len(syms)} symbols")
     print("symbols:", ", ".join(syms), flush=True)
