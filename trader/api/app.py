@@ -1014,12 +1014,30 @@ async def _orphan_reaper(app_state) -> None:
     await asyncio.sleep(90)
     while True:
         try:
+            # NEVER reap what the agent says it is working on RIGHT NOW. The 8-min
+            # opt- threshold assumes a sub-minute round, but a slow strategy breaks
+            # that: pivot_reversal sweeps ran 25-70 min, so each was requeued at the
+            # 8-min mark, re-claimed and re-run from scratch — the box burned hours
+            # redoing the same job (2026-07-23). A FRESH heartbeat naming the run is
+            # proof its claimer is alive, which is what the timeout only guesses at.
+            active_id = None
+            try:
+                _hb = await pool.fetchval(
+                    "SELECT value FROM agent_control WHERE key='i9_heartbeat'")
+                if _hb:
+                    _h = json.loads(_hb)
+                    if time.time() - float(_h.get("_recv_ts") or 0) < 120:
+                        active_id = (_h.get("activity") or {}).get("run_id") or None
+            except Exception:  # noqa: BLE001 — heartbeat unreadable -> plain timeout
+                active_id = None
             res = await pool.execute(
                 "UPDATE backtest_runs SET status='queued', agent_id=NULL, claimed_at=NULL "
                 "WHERE status='running' "
                 "AND (agent_id IS NULL OR agent_id <> 'vds-fallback') "
+                "AND id <> coalesce($1, '') "
                 "AND ((id LIKE 'opt-%' AND claimed_at < now() - interval '8 minutes') "
-                "  OR (id LIKE 'camp-%' AND claimed_at < now() - interval '90 minutes'))"
+                "  OR (id LIKE 'camp-%' AND claimed_at < now() - interval '90 minutes'))",
+                active_id,
             )
             if res and res != "UPDATE 0":
                 log.info("orphan_reaper.requeued", result=res)
