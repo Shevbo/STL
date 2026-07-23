@@ -38,7 +38,7 @@
 -- Bump on every change you deliver to the VDS. Logged FIRST on OnInit so the
 -- operator can confirm which version QUIK actually loaded (the running script is
 -- in MEMORY; a file on disk with the same name may be a different build).
-local SCRIPT_VERSION = "2026.07.22-replaygate2"
+local SCRIPT_VERSION = "2026.07.23-money3"
 
 local CONFIG = {
   HOST          = "127.0.0.1",
@@ -661,16 +661,60 @@ end
 -- state for strict day-close accounting. Equity = cbplimit + varmargin + accruedint;
 -- ts_comission is the session's exchange fee. Published change-gated with the same
 -- first-pass + 15s keepalive as positions so a quiet account still reads fresh.
+-- 2026-07-23: on THIS terminal getItem("futures_limits") returns nothing (money
+-- stayed null on the replaygate2 build) — fall back to the direct getFuturesLimit()
+-- call, with firmid/trdaccid discovered from the holdings table (cached: holdings
+-- are empty when flat). A one-time diagnostic goes to the QUIK messages window so
+-- the operator sees WHICH path feeds the money.
+local acc_money_diag_done = false
+local acc_money_ids = { firmid = nil, trdacc = nil }
+
+local function money_row_of(r)
+  return { tonumber(r.cbplimit) or 0, tonumber(r.varmargin) or 0,
+           tonumber(r.accruedint) or 0, tonumber(r.ts_comission) or 0,
+           tonumber(r.cbplplanned) or 0 }
+end
+
 local function publish_acc_money()
   local n = getNumberOf("futures_limits") or 0
   local rows = {}
+  local types_seen = {}
   for i = 0, n - 1 do
     local r = getItem("futures_limits", i)
-    if r and tonumber(r.limit_type) == 0 then
-      rows[#rows + 1] = { tonumber(r.cbplimit) or 0, tonumber(r.varmargin) or 0,
-                          tonumber(r.accruedint) or 0, tonumber(r.ts_comission) or 0,
-                          tonumber(r.cbplplanned) or 0 }
+    if r then
+      types_seen[#types_seen + 1] = tostring(r.limit_type)
+      if tonumber(r.limit_type) == 0 then
+        rows[#rows + 1] = money_row_of(r)
+      end
     end
+  end
+  local src = "table"
+  if #rows == 0 then
+    -- remember firmid/trdaccid whenever holdings are visible (empty when flat)
+    local nh = getNumberOf("futures_client_holding") or 0
+    for i = 0, nh - 1 do
+      local h = getItem("futures_client_holding", i)
+      if h and h.firmid and h.firmid ~= "" then
+        acc_money_ids.firmid = h.firmid
+        if h.trdaccid and h.trdaccid ~= "" then acc_money_ids.trdacc = h.trdaccid end
+        break
+      end
+    end
+    if acc_money_ids.firmid and getFuturesLimit then
+      local ok, l = pcall(getFuturesLimit, acc_money_ids.firmid,
+                          acc_money_ids.trdacc or CONFIG.ACCOUNT, 0, "SUR")
+      if ok and type(l) == "table" then
+        rows[#rows + 1] = money_row_of(l)
+        src = "getFuturesLimit"
+      end
+    end
+  end
+  if not acc_money_diag_done then
+    acc_money_diag_done = true
+    log("acc_money: futures_limits rows=" .. n ..
+        " types=[" .. table.concat(types_seen, ",") .. "]" ..
+        " firmid=" .. tostring(acc_money_ids.firmid) ..
+        " src=" .. (#rows > 0 and src or "NONE") .. " out=" .. #rows)
   end
   local key = ser_rows(rows)
   local t = now_ms()
