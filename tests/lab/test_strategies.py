@@ -65,6 +65,7 @@ class _FakeRT:
         self.orders = []
         self.signed = 0
         self.avg = 0.0
+        self.fills_enabled = True
         self._bars = []
 
     def push(self, t, price):
@@ -81,6 +82,8 @@ class _FakeRT:
 
     async def place_order(self, sym, side, qty, price):
         self.orders.append((side, qty, price))
+        if not self.fills_enabled:      # живая заявка может простоять неисполненной
+            return
         delta = qty if side == "buy" else -qty
         s, a = self.signed, self.avg
         newp = s + delta
@@ -199,3 +202,24 @@ async def test_min_gap_blocks_averaging_add_too():
     assert len(rt.orders) == n
     await _run(rt, None, 420, 86700.0, **g)    # 300 пт -> добор разрешён
     assert rt.orders[-1] == ("buy", 1, 86700.0)
+
+
+@pytest.mark.asyncio
+async def test_min_gap_ignores_an_order_that_never_filled():
+    """Отсчёт разножки двигает только ИСПОЛНИВШИЙСЯ вход, не выставленная заявка."""
+    rt = _FakeRT()
+    g = dict(min_gap_pts=200)
+    await _run(rt, 1, 60, 87000.0, **g)        # вход @87000 — исполнился
+    assert rt.orders[-1] == ("buy", 1, 87000.0)
+    await _run(rt, 0, 120, 87500.0, **g)       # выход (отсчёт подтверждён = 87000)
+    assert rt.signed == 0
+
+    rt.fills_enabled = False                    # следующая заявка «зависнет»
+    await _run(rt, 1, 180, 86700.0, **g)       # 300 пт от 87000 -> заявка уходит
+    assert rt.orders[-1] == ("buy", 1, 86700.0)
+    assert rt.signed == 0                       # но НЕ исполнилась
+    rt.fills_enabled = True
+
+    n = len(rt.orders)
+    await _run(rt, 1, 240, 86960.0, **g)       # 260 пт от НЕисполненной, но 40 от 87000
+    assert len(rt.orders) == n                  # -> запрещено (старое поведение пускало)

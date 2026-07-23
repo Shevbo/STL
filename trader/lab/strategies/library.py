@@ -77,8 +77,11 @@ def make_on_bar(rid: str):
             return min_gap <= 0 or gap_ref <= 0 or abs(p - gap_ref) >= min_gap
 
         def mark_entry(p: float) -> None:
+            # Запоминаем ПОПЫТКУ. Точкой отсчёта она станет только когда вход реально
+            # исполнится (см. подтверждение ниже): живая заявка может простоять
+            # неисполненной и быть снята перед следующим баром.
             if min_gap > 0:
-                stl.set_state("gap_ref", p)
+                stl.set_state("gap_pending", p)
 
         unit = base_unit + bet_extra + super_add                 # current entry size
         avg_max = max(unit, int(params.get("avg_max", 1) or 1) + super_add)  # max held
@@ -98,6 +101,22 @@ def make_on_bar(rid: str):
         cur = pos.quantity if pos.side == "long" else (-pos.quantity if pos.side == "short" else 0)
         avg = float(pos.avg_price)
         cur_dir = 1 if cur > 0 else (-1 if cur < 0 else 0)
+
+        # «Разножка», подтверждение: точкой отсчёта становится только ИСПОЛНИВШИЙСЯ
+        # вход. Считать отсчётом саму ЗАЯВКУ нельзя — цепочка неисполненных заявок
+        # «уводит» отсчёт и пропускает добор вплотную к прошлому исполнению (живой
+        # MACD·RIU6 2026-07-23: заявка 11:22 по 85240 не исполнилась, но сдвинула
+        # отсчёт, и добор 11:42 прошёл в 40 пунктах от исполнения 11:14 по 85490).
+        # Позиция, УШЕДШАЯ от нуля или сменившая знак = вход исполнился; сокращение
+        # к нулю (выход) отсчёт не двигает, иначе развороту некуда открываться.
+        if min_gap > 0:
+            gap_prev_pos = int(stl.get_state("gap_pos", cur) or 0)
+            gap_pending = float(stl.get_state("gap_pending", 0) or 0)
+            if gap_pending > 0 and (abs(cur) > abs(gap_prev_pos) or cur * gap_prev_pos < 0):
+                gap_ref = gap_pending
+                stl.set_state("gap_ref", gap_pending)
+                stl.set_state("gap_pending", 0)
+            stl.set_state("gap_pos", cur)
 
         def on_exit(exit_price: float, entry_avg: float, direction: int) -> None:
             """Book a close: update SuperAverage escalation + the cooldown timer.
