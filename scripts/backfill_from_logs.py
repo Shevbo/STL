@@ -97,7 +97,11 @@ async def main() -> None:
                     "commission_rub": round(comm, 2),
                     "pnl_net_rub": round(gross - comm, 2),
                     "pos_after": f["pos_after"], "avg_after": f["avg_after"],
-                    "dedup_key": f"lg:{rid}:{ts_ms}:{f['side']}:{f['qty']}:{f['price']:g}",
+                    # pos_after discriminates a reversal's two fills: the close and the
+                    # opposite open land in the SAME second at the SAME price/qty/side
+                    # and collide without it (9 fills were swallowed on the first run).
+                    "dedup_key": (f"lg:{rid}:{ts_ms}:{f['side']}:{f['qty']}"
+                                  f":{f['price']:g}:{f['pos_after']}"),
                 })
             if not rows:
                 print(f"{rid}: журнал уже покрывает весь лог — добавлять нечего")
