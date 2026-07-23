@@ -285,6 +285,11 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 		go wd.Run(ctx)
 	}
 
+	// Объявлен ДО link.Options: QuikAlive ниже читает его понг, а сам стор
+	// создаётся позже (ему нужен уже собранный bridge). Замыкание берёт значение
+	// в момент вызова — к первому heartbeat стор уже присвоен.
+	var accStore *accounts.Store
+
 	lk := link.New(link.Options{
 		Target:            cfg.STLGRPCURL,
 		Insecure:          cfg.STLInsecure,
@@ -297,7 +302,19 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 		PollInterval:      time.Duration(cfg.PollIntervalSec) * time.Second,
 		Provider:          quikdde.Default,
 		StatusSnapshotMinSec: cfg.StatusSnapshotMinSec,
-		QuikAlive:         func() bool { return quikdde.Alive() },
+		// Живость ТЕРМИНАЛА = свежий Lua-понг, а НЕ quikdde.Alive(): DDE выведен из
+		// эксплуатации и по умолчанию выключен, поэтому Alive() всегда false и канал
+		// QUIK вечно горел DOWN — панель заявок писала «НЕ готов» при исправно
+		// исполняющихся заявках (2026-07-23). Постоянно красный индикатор хуже, чем
+		// его отсутствие: настоящую остановку терминала на нём уже не заметить.
+		// Понг — тот же сигнал, по которому сторож судит о зависании QUIK.
+		QuikAlive: func() bool {
+			if accStore == nil {
+				return false
+			}
+			age := accStore.Snapshot().PongAgeMs
+			return age >= 0 && age < int64(cfg.QuikGuardHungSec)*1000
+		},
 		Thresholds: health.Thresholds{
 			StaleTickMs: int64(cfg.StaleTickMs),
 			DDEDownMs:   int64(cfg.DDEDownMs),
@@ -339,7 +356,7 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 	// acc_ord/acc_trd/pong publisher via bridge.SetAccSink below. The local
 	// status showcase (Deps.Accounts) reads it; recon compares it against the
 	// robots' believed books.
-	accStore := accounts.New(func() int64 { return time.Now().UnixMilli() })
+	accStore = accounts.New(func() int64 { return time.Now().UnixMilli() })
 	// pingSentMs records the agent-clock send time of the most recent ping so the
 	// pong handler can compute RTT on the agent clock ALONE (never the Lua-echoed
 	// t0, which does not survive QUIK's 32-bit Lua integer encoding). One ping is
