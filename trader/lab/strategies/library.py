@@ -154,7 +154,13 @@ def make_on_bar(rid: str):
         # 3) Holding (signal agrees or is None) → manage take-profit + averaging by ATR.
         if not ((tp > 0) or (k_step > 0 and abs(cur) < avg_max)):
             return
-        atrv = I.atr(_h(bars), _l(bars), _c(bars), atr_n)
+        # ATR только по ХВОСТУ, не по всему окну: pivot тянет 2200 баров ради прошлого
+        # дня, а Уайлдеровский ATR экспоненциально забывает старое (вес (n-1)/n за шаг),
+        # поэтому atr_n*40 баров дают значение, неотличимое от полного (проверено: net
+        # бит-в-бит). Без этого atr() гонял 2200-баровый цикл на КАЖДОМ баре — 84с из 142
+        # в профиле pivot с усреднением (2026-07-23). Касается ВСЕХ стратегий с avg/TP.
+        _atr_tail = bars[-(atr_n * 40 + 1):]
+        atrv = I.atr(_h(_atr_tail), _l(_atr_tail), _c(_atr_tail), atr_n)
         if atrv <= 0:
             return
         if tp > 0:    # take-profit measured from the (averaged) entry (a TP is a win)
