@@ -30,13 +30,15 @@ def test_atr_tail_equals_full_window():
     """ATR по хвосту == ATR по всему окну (Уайлдер забывает старое): защищает
     оптимизацию library.py, которая кормит atr только хвостом bars[-(n*40+1):]."""
     import trader.lab.indicators as I
-    h, l, c = [], [], []
+    hi, lo, cl = [], [], []
     px = 100000.0
     for i in range(3000):                       # окно длиннее любого хвоста
         px += (((i * 37) % 101) - 50) * 3.0
-        h.append(px + 60); l.append(px - 60); c.append(px)
+        hi.append(px + 60)
+        lo.append(px - 60)
+        cl.append(px)
     for n in (5, 14, 20, 40):
         tail = n * 40 + 1
-        full = I.atr(h, l, c, n)
-        cut = I.atr(h[-tail:], l[-tail:], c[-tail:], n)
+        full = I.atr(hi, lo, cl, n)
+        cut = I.atr(hi[-tail:], lo[-tail:], cl[-tail:], n)
         assert full == cut, f"atr(n={n}) хвост {tail} != полное окно: {full} vs {cut}"
