@@ -223,3 +223,24 @@ async def test_min_gap_ignores_an_order_that_never_filled():
     n = len(rt.orders)
     await _run(rt, 1, 240, 86960.0, **g)       # 260 пт от НЕисполненной, но 40 от 87000
     assert len(rt.orders) == n                  # -> запрещено (старое поведение пускало)
+
+
+def test_pivot_hlc_cache_is_keyed_by_symbol():
+    """Кэш прошлого дня не должен подсовывать одному инструменту уровни другого."""
+    from trader.lab.strategies.library import _PIVOT_HLC, sig_pivot
+    _PIVOT_HLC.clear()
+
+    def series(base: float, last_close: float):
+        t = 1_700_000_000
+        out = [_Bar(time=t + i * 60, open=base, high=base + 100, low=base - 100,
+                    close=base, volume=1) for i in range(3)]
+        out.append(_Bar(time=t + 86400, open=base, high=base, low=base,
+                        close=last_close, volume=1))          # следующий день
+        return out
+
+    # день назад: H=base+100 L=base-100 C=base -> pivot=base, S1=base-100, R1=base+100
+    a = series(100000.0, 99500.0)      # ушёл ниже S1 -> лонг
+    b = series(50000.0, 50500.0)       # ушёл выше R1 -> шорт
+    assert sig_pivot(a, {"symbol": "AAA", "level": 1}) == 1
+    assert sig_pivot(b, {"symbol": "BBB", "level": 1}) == -1   # утёк бы кэш -> вернуло бы 1
+    assert {k[0] for k in _PIVOT_HLC} == {"AAA", "BBB"}        # по записи на инструмент

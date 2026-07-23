@@ -3136,6 +3136,15 @@ def create_app() -> FastAPI:
             )
             return {"ok": True, "status": "failed"}
         results = body.get("results", [])
+        # A combo that raised is posted with ok=false and was then silently dropped —
+        # sweeps quietly lost 5-10% of the grid ("done 284/300" in the agent log) with
+        # no way to see why. Log the count + one sample so the cause is one grep away.
+        _failed = [e for e in results if not e.get("ok")]
+        if _failed:
+            log.warning("agent_result.combos_failed", run_id=run_id,
+                        failed=len(_failed), total=len(results),
+                        sample_error=str(_failed[0].get("error"))[:300],
+                        sample_params=_failed[0].get("params"))
         import json as _json
         # If this run is part of a campaign (job_body has script_code), also mirror
         # results into optimization_leaderboard so Botstore shows the hit-parade.

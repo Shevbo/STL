@@ -525,17 +525,33 @@ def _prev_day_hlc(bars):
         i -= 1
     return hi, lo, close
 
+# Prev-day HLC is CONSTANT for a whole trading day, yet _prev_day_hlc rescanned up
+# to two days of 1-min bars on EVERY bar: 71% of this strategy's runtime (profiled
+# 2026-07-23 — 300 combos took ~1500s vs ~40s for the other strategies, and a sweep
+# of it pegged the i9 for hours). Keyed by (symbol, day) it is computed once per day.
+# Historical bars are immutable, so the cache is valid across combos AND runs in the
+# same worker. A None (history not deep enough yet) is NEVER cached — a later bar of
+# the same day may reach far enough back.
+_PIVOT_HLC: dict[tuple, tuple] = {}
+
+
 def sig_pivot(bars, p):
-    hlc = _prev_day_hlc(bars)
+    key = (p.get("symbol", ""), _date_of(bars[-1].time))
+    hlc = _PIVOT_HLC.get(key)
     if hlc is None:
-        return 0
+        hlc = _prev_day_hlc(bars)
+        if hlc is None:
+            return 0
+        if len(_PIVOT_HLC) > 4096:      # bounded: ~1 entry per symbol-day
+            _PIVOT_HLC.clear()
+        _PIVOT_HLC[key] = hlc
     ph, pl, pc = hlc
     pivot = (ph + pl + pc) / 3.0
     rng = ph - pl
     lvl = int(p.get("level", 1))                       # 1 → R1/S1, 2 → R2/S2
     r = pivot + rng if lvl == 2 else 2 * pivot - pl
     s = pivot - rng if lvl == 2 else 2 * pivot - ph
-    price = _c(bars)[-1]
+    price = bars[-1].close     # был _c(bars)[-1]: список из 2200 закрытий ради одного
     if price <= s:
         return 1
     if price >= r:
