@@ -274,10 +274,12 @@ ssh hoster 'cd ~/apps/shectory-trader && set -a; . ~/.shectory_trade.env; set +a
 
 - **SAFE deploy (default; `deploy/deploy.sh`'s remote `npm build` once thrashed the VDS
   into an operator hard-reboot):** build the frontend LOCALLY, then
-  `git push` → `ssh hoster 'cd ~/apps/shectory-trader && git pull'` → scp
-  `frontend/dist/index.html` + the new hashed `assets/index-*.js`/`.css` into
-  `~/apps/shectory-trader/frontend/dist/`. Frontend-only = NO service restart (nginx
-  serves dist). Backend change = `sudo systemctl restart shectory-trader` (drops the agent
+  `git push` → `ssh hoster 'cd ~/apps/shectory-trader && git pull'` → **`bash
+  deploy/deploy_dist.sh`** — it ships index.html + exactly the assets index.html
+  references and then re-reads them THROUGH nginx, failing loudly on a 404. Never
+  hand-pick asset files: a deploy that ships index.html+JS but forgets the new hashed
+  CSS leaves the site unstyled ("сайт лежит") — happened twice, 23-24.07.2026.
+  Frontend-only = NO service restart (nginx serves dist). Backend change = `sudo systemctl restart shectory-trader` (drops the agent
   gRPC link briefly — agent redials; never restart while the operator live-tests trading).
   Assets are hashed + served `Cache-Control: immutable` 1y, so only the FIRST visit pays
   download cost; scp never cleans old hashes so `frontend/dist/assets/` accumulates dozens of
