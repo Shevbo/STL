@@ -72,6 +72,29 @@ func MissingFills(statuses map[string]*quikv1.RobotStatus, trades []accounts.Tra
 		}
 		views[id] = v
 	}
+	// QUIK truncates the brokerref COMMENT to 20 chars, so a tagged trade carries
+	// only the first 20 chars of the robot id. Match by that truncation — the
+	// exact-key lookup left the heal DEAD for every cuid-named robot (24 chars):
+	// l90z0's lost 13:30 fill on 2026-07-24 sat unhealed for 4 hours while the
+	// short-named robots healed fine. Same trap recon fixed on 2026-07-21
+	// (recon.quikTag); an ambiguous truncation (two robots sharing a prefix)
+	// heals neither — safety over coverage.
+	const brokerrefLen = 20
+	viewByTag := map[string]*robotView{}
+	robotByTag := map[string]string{}
+	for id, v := range views {
+		tag := id
+		if len(tag) > brokerrefLen {
+			tag = tag[:brokerrefLen]
+		}
+		if _, dup := viewByTag[tag]; dup {
+			delete(viewByTag, tag) // ambiguous prefix: refuse to heal either
+			delete(robotByTag, tag)
+			continue
+		}
+		viewByTag[tag] = v
+		robotByTag[tag] = id
+	}
 
 	// Aggregate today's settled tagged QUIK trades per (robot, order).
 	type orderAgg struct {
@@ -88,7 +111,8 @@ func MissingFills(statuses map[string]*quikv1.RobotStatus, trades []accounts.Tra
 		if tr.Tag == "" || tr.Tag == "recon" || tr.OrderNum == "" || tr.Qty <= 0 {
 			continue
 		}
-		if _, ok := views[tr.Tag]; !ok {
+		robotID, ok := robotByTag[tr.Tag]
+		if !ok {
 			continue // not a (healable) robot
 		}
 		if tr.TsMs < floor || nowMs-tr.TsMs < syncMinTradeAgeMs {
@@ -97,10 +121,10 @@ func MissingFills(statuses map[string]*quikv1.RobotStatus, trades []accounts.Tra
 		if tr.Side != "B" && tr.Side != "S" {
 			continue // old Lua build without a side column: cannot synthesize safely
 		}
-		k := tr.Tag + "\x00" + tr.OrderNum
+		k := robotID + "\x00" + tr.OrderNum
 		a := aggs[k]
 		if a == nil {
-			a = &orderAgg{robot: tr.Tag, sec: tr.Sec, side: tr.Side}
+			a = &orderAgg{robot: robotID, sec: tr.Sec, side: tr.Side}
 			aggs[k] = a
 			keys = append(keys, k)
 		}

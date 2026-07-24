@@ -142,3 +142,40 @@ func TestMissingFillsPrefersExchangeTime(t *testing.T) {
 		t.Fatalf("want exchange ts, got %+v", ups)
 	}
 }
+
+// The 2026-07-24 l90z0 incident: QUIK truncates brokerref to 20 chars, so a
+// cuid-named robot's (24 chars) tagged trades matched no view key and the heal
+// was DEAD for exactly the most active robots — a lost 13:30 fill sat unhealed
+// for 4 hours. The heal must match by the 20-char truncation and emit the
+// synthetic update under the FULL robot id (the rr:<id> fan-out key).
+func TestMissingFillsMatchesTruncatedTag(t *testing.T) {
+	const rid = "l90z0afzceesll5izjjg0g8w" // 24 chars, live shape
+	st := map[string]*quikv1.RobotStatus{
+		rid: status(false, nowMs-5000, []*quikv1.RobotFill{fill("100", 1, nowMs-3600_000)}, nil),
+	}
+	trades := []accounts.Trade{
+		trade(rid[:20], "100", "B", 1, 87000, nowMs-3600_000), // known -> skip
+		trade(rid[:20], "200", "S", 1, 87700, nowMs-600_000),  // LOST -> restore
+	}
+	ups := MissingFills(st, trades, nowMs)
+	if len(ups) != 1 {
+		t.Fatalf("truncated-tag trade must heal; got %d updates", len(ups))
+	}
+	if got := ups[0].GetClientId(); got != "rr:"+rid+":qsync:200:1" {
+		t.Fatalf("synthetic client_id must carry the FULL robot id, got %q", got)
+	}
+}
+
+// Two robots sharing the same 20-char prefix cannot be attributed safely —
+// heal NEITHER rather than guess.
+func TestMissingFillsAmbiguousPrefixHealsNeither(t *testing.T) {
+	a, b := "prefix-prefix-prefix-AAAA", "prefix-prefix-prefix-BBBB"
+	st := map[string]*quikv1.RobotStatus{
+		a: status(false, nowMs-5000, nil, nil),
+		b: status(false, nowMs-5000, nil, nil),
+	}
+	trades := []accounts.Trade{trade(a[:20], "300", "B", 1, 87000, nowMs-600_000)}
+	if ups := MissingFills(st, trades, nowMs); len(ups) != 0 {
+		t.Fatalf("ambiguous prefix must heal neither, got %d", len(ups))
+	}
+}
