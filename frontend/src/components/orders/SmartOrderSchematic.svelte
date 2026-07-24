@@ -85,7 +85,9 @@
 
 <style>
   .so-schem { margin: 0; }
-  svg { width: 100%; height: auto; max-height: 190px; display: block; }
+  /* Схема поясняет, а не украшает: ограничиваем ШИРИНУ, иначе на широком
+     экране она раздувается на всю колонку и подминает под себя текст. */
+  svg { width: 100%; max-width: 430px; height: auto; display: block; }
   .px { fill: none; stroke: #8f96b3; stroke-width: 1.6; }
   .lvl { stroke: var(--accent); stroke-width: 1.6; stroke-dasharray: 6 4; }
   .trail { fill: none; stroke: var(--accent); stroke-width: 1.6; stroke-dasharray: 2 3; }

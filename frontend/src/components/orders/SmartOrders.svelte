@@ -335,7 +335,10 @@
 </div>
 
 <style>
-  .so { padding: 10px 14px 16px; color: #d7dbe8; font-size: 12px; overflow: auto; height: 100%; }
+  /* Ширину ограничиваем: на широком мониторе строка объяснения иначе
+     растягивается на полтора метра и перестаёт читаться. */
+  .so { padding: 10px 14px 16px; color: #d7dbe8; font-size: 12px; overflow: auto;
+        height: 100%; max-width: 1180px; }
   .so-h {
     display: flex; align-items: center; gap: 8px;
     font-size: 10px; letter-spacing: .16em; text-transform: uppercase;
@@ -355,7 +358,7 @@
   .so-kind-name { font-size: 14px; color: #e8e8f0; }
   .so-kind-ess { font-size: 11px; color: #8a90a8; line-height: 1.35; }
 
-  .so-main { display: grid; grid-template-columns: minmax(300px, 1fr) minmax(280px, 380px); gap: 16px; margin-top: 14px; }
+  .so-main { display: grid; grid-template-columns: minmax(300px, 1fr) minmax(300px, 360px); gap: 20px; margin-top: 14px; }
   @media (max-width: 900px) { .so-main { grid-template-columns: 1fr; } }
 
   /* объяснение */

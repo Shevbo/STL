@@ -180,9 +180,10 @@ export function fmtPts(n: number): string {
   return Math.round(n).toLocaleString('ru-RU') + ' п.';
 }
 
+/** Рубли БЕЗ знака: здесь это расстояние до уровня, а не прибыль. Знак «+»
+ *  читался бы как «заработаете», хотя цена может и не дойти. */
 export function fmtRub(n: number): string {
-  const v = Math.round(n);
-  return (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v).toLocaleString('ru-RU') + ' ₽';
+  return Math.abs(Math.round(n)).toLocaleString('ru-RU') + ' ₽';
 }
 
 export interface PreviewInput {
