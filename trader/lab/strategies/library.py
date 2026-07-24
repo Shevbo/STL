@@ -118,6 +118,29 @@ def make_on_bar(rid: str):
                 stl.set_state("gap_pending", 0)
             stl.set_state("gap_pos", cur)
 
+        # Эффект фильтров в ПУНКТАХ. Каждый отсеянный вход записывается «фантомом» и
+        # оценивается ровно через SKIP_HORIZON_SEC: сколько он принёс бы, если бы
+        # состоялся. Сумма их P&L с ОБРАТНЫМ знаком = сколько фильтр сберёг (минус =
+        # недозаработал). Правило одно и то же для всех — не зависит от того, как
+        # сложилась реальная позиция, поэтому его легко объяснить и проверить.
+        # Рубли считает UI (пункты x ₽/пункт) — стратегия про рубли не знает.
+        SKIP_HORIZON_SEC = 3600
+
+        def settle_phantoms(now_ts: int, cur_price: float) -> None:
+            ph = stl.get_state("skip_phantoms", None) or []
+            if not ph:
+                return
+            due = [e for e in ph if int(e.get("t", 0)) + SKIP_HORIZON_SEC <= now_ts]
+            if not due:
+                return
+            pnl = sum((cur_price - float(e["p"])) * int(e["d"]) * int(e["q"]) for e in due)
+            stl.set_state("filter_saved_pts",
+                          float(stl.get_state("filter_saved_pts", 0) or 0) - pnl)
+            stl.set_state("skip_phantoms",
+                          [e for e in ph if int(e.get("t", 0)) + SKIP_HORIZON_SEC > now_ts])
+
+        settle_phantoms(int(bar_time), price)   # дозревшие фантомы -> копилка эффекта
+
         def note_skip(kind: str, p: float) -> None:
             """Счётчик отсева входа фильтром (kind='gap' разножка / 'cooldown' остывание):
             копит нарастающий итог в состоянии робота + пишет событие в журнал. Порядок
@@ -125,6 +148,12 @@ def make_on_bar(rid: str):
             key = kind + "_skips"
             n = int(stl.get_state(key, 0) or 0) + 1
             stl.set_state(key, n)
+            # фантом отсеянного входа: направление = сторона, которую хотел сигнал
+            d = 1 if (want or 0) > 0 else -1
+            ph = list(stl.get_state("skip_phantoms", None) or [])
+            if len(ph) < 200:                       # ограничитель, чтобы состояние не росло
+                ph.append({"p": p, "d": d, "q": fresh_entry_size(), "t": int(bar_time)})
+                stl.set_state("skip_phantoms", ph)
             what = "разножка" if kind == "gap" else "остывание"
             msg = f"{what} отсеяла вход @ {p:.0f} (всего {n})"
             # В раннере -> SKIP-событие детального лога робота (видно на карточке +

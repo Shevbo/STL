@@ -360,6 +360,24 @@ class RobotHost:
                                  ensure_ascii=False)
             except Exception as exc:  # noqa: BLE001 — showcase must never break status
                 sig = json.dumps({"error": str(exc)}, ensure_ascii=False)
+            # Статистика фильтров входа (разножка/остывание) едет наружу ВНУТРИ
+            # signal_json — свободного поля отчёта, чтобы не менять proto/агент/STL.
+            # saved_pts в ПУНКТАХ: рубли считает карточка через ₽/пункт инструмента.
+            try:
+                gs = int(r.runtime.get_state("gap_skips", 0) or 0)
+                cs = int(r.runtime.get_state("cooldown_skips", 0) or 0)
+                if gs or cs:
+                    _d = json.loads(sig)
+                    if isinstance(_d, dict):
+                        _d["filter_stats"] = {
+                            "gap_skips": gs, "cooldown_skips": cs,
+                            "saved_pts": round(float(
+                                r.runtime.get_state("filter_saved_pts", 0) or 0), 2),
+                            "pending": len(r.runtime.get_state("skip_phantoms", None) or []),
+                        }
+                        sig = json.dumps(_d, ensure_ascii=False)
+            except Exception:  # noqa: BLE001 — статистика никогда не ломает отчёт
+                pass
             robots.append(pb.RobotStatus(
                 robot_id=rid, running=not (self.killed or r.paused), paused=r.paused,
                 position=r.runtime.signed_position(), avg_price=r.runtime.avg_price(),

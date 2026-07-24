@@ -271,3 +271,34 @@ async def test_filter_skip_counters():
     await _run(rt2, 1, 900, 102.0, **cd)       # в окне остывания -> отсеяло
     assert rt2.get_state("cooldown_skips") == 1
     assert rt2.get_state("gap_skips") is None    # не перепутаны
+
+
+@pytest.mark.asyncio
+async def test_filter_effect_counts_saved_points():
+    """Отсеянный вход дозревает через час: если он был бы убыточным — фильтр сберёг."""
+    rt = _FakeRT()
+    g = dict(min_gap_pts=200)
+    await _run(rt, 1, 60, 87000.0, **g)          # вход @87000
+    await _run(rt, 0, 120, 87050.0, **g)         # выход -> отсчёт = 87000
+    await _run(rt, 1, 180, 87080.0, **g)         # 80 пт -> ОТСЕЯН (фантом buy @87080)
+    assert rt.get_state("gap_skips") == 1
+    assert len(rt.get_state("skip_phantoms")) == 1
+    assert rt.get_state("filter_saved_pts") in (None, 0)   # ещё не дозрел
+
+    # через час цена НИЖЕ -> фантомный лонг был бы в минусе -> фильтр сберёг
+    await _run(rt, None, 180 + 3600, 86800.0, **g)
+    saved = rt.get_state("filter_saved_pts")
+    assert saved == pytest.approx(280.0)          # -(86800-87080)*1*1 = +280 пт сбережено
+    assert rt.get_state("skip_phantoms") == []    # дозревший фантом закрыт
+
+
+@pytest.mark.asyncio
+async def test_filter_effect_negative_when_skip_would_have_won():
+    """Если отсеянный вход был бы прибыльным — эффект отрицательный (недозаработали)."""
+    rt = _FakeRT()
+    g = dict(min_gap_pts=200)
+    await _run(rt, 1, 60, 87000.0, **g)
+    await _run(rt, 0, 120, 87050.0, **g)
+    await _run(rt, 1, 180, 87080.0, **g)         # отсеян лонг @87080
+    await _run(rt, None, 180 + 3600, 87400.0, **g)   # цена ВЫШЕ -> лонг был бы в плюсе
+    assert rt.get_state("filter_saved_pts") == pytest.approx(-320.0)

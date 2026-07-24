@@ -60,6 +60,14 @@
   const signal = $derived.by(() => {
     try { return robot?.signal_json ? JSON.parse(robot.signal_json) : null; } catch { return null; }
   });
+  // Статистика фильтров входа приезжает ВНУТРИ signal_json (раннер кладёт её туда,
+  // чтобы не менять proto). saved_pts в ПУНКТАХ — в рубли переводим тем же ₽/пункт,
+  // что и P&L робота; без коэффициента показываем пункты, а не врём рублями.
+  const filterStats = $derived.by(() => {
+    const fs = signal?.filter_stats;
+    if (!fs) return null;
+    return { ...fs, savedRub: pointCoef != null ? Number(fs.saved_pts) * pointCoef : null };
+  });
   const params = $derived.by(() => {
     try { return robot?.params_json ? JSON.parse(robot.params_json) : {}; } catch { return {}; }
   });
@@ -848,6 +856,23 @@
 
   {#snippet signalPanel()}
     <div class="panel">
+      {#if filterStats}
+        {@const fs = filterStats}
+        <div class="fstats" title="Фильтры входа: сколько раз не пустили сделку и во что это обошлось/сберегло">
+          <div class="fs-head">Фильтры входа</div>
+          <div class="kv-grid">
+            <div class="kv"><span>Разножка отсеяла</span><b>{fs.gap_skips ?? 0}</b></div>
+            <div class="kv"><span>Остывание отсеяло</span><b>{fs.cooldown_skips ?? 0}</b></div>
+            <div class="kv" title="Отсеянные входы оцениваются через час после блокировки: сколько они принесли бы. Плюс = фильтр сберёг деньги, минус = недозаработали.">
+              <span>Эффект фильтров</span>
+              <b class:yes={(fs.savedRub ?? 0) > 0} class:neg={(fs.savedRub ?? 0) < 0}>
+                {fs.savedRub == null ? `${fs.saved_pts} пт`
+                  : `${fs.savedRub >= 0 ? '+' : ''}${Math.round(fs.savedRub).toLocaleString('ru-RU')} ₽`}</b>
+            </div>
+            {#if fs.pending}<div class="kv"><span>Ещё дозревает</span><b>{fs.pending}</b></div>{/if}
+          </div>
+        </div>
+      {/if}
       {#if signal}
         <div class="wait" class:sig={signal.want != null && signal.want !== 0}>{signal.waiting_for ?? '—'}</div>
         {#if signal.features}
@@ -1181,6 +1206,9 @@
   .p-title.sub { margin-top: 12px; }
   .wait { font-size: 12px; line-height: 1.5; color: #cfd4ff; background: #12122a; border: 1px solid #2d2d5a; border-radius: 4px; padding: 8px 10px; margin-bottom: 8px; }
   .wait.sig { color: #00e676; border-color: #00e67666; background: #0a1a0d; font-weight: 600; }
+  .fstats { border: 1px solid #3a3a6a; border-radius: 4px; padding: 6px 8px; margin-bottom: 8px; background: #101024; }
+  .fs-head { font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: #8a8ab8; margin-bottom: 4px; }
+  .fstats .kv b.neg { color: #ff5252; }
   .kv-grid { display: flex; flex-direction: column; gap: 3px; }
   .kv { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; padding: 3px 6px; background: #0e0e1c; border-radius: 3px; }
   .kv span { color: #889; }
