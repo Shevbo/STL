@@ -104,7 +104,10 @@
     try {
       const res = await fetchWithAuth(
         `/api/v1/quik/algo-trades?robot_id=${encodeURIComponent(robotId)}&limit=1000`,
-        { signal: AbortSignal.timeout(6000) } as any);
+        // 6 с не хватало: у активного робота это ~200 КБ, и на тонком канале
+        // запрос обрывался. Молча — а карточка после этого переключалась на
+        // заведомо неверный пересчёт обрезанного хвоста и рисовала его как правду.
+        { signal: AbortSignal.timeout(20000) } as any);
       if (!res.ok) return;
       const d = await res.json();
       const m = new Map<string, { gross: number; comm: number }>();
@@ -129,6 +132,22 @@
     const f = ledgerRows[0];
     if (!f) return false;
     return Number(f.pos_after) === (f.side === 'buy' ? Number(f.qty) : -Number(f.qty));
+  });
+
+  // ЖИВОЙ робот платит МЕЙКЕРСКИЙ тариф (брокер), а не тейкерский (биржа +
+  // брокер): в график уходит taker={false}. Тейкерская модель приписывала роботу
+  // биржевой сбор, которого он не платил. См. «Commission model» в CLAUDE.md.
+  //
+  // Кривая доходности берётся ИЗ ЖУРНАЛА: у него настоящая комиссия по каждому
+  // филлу и непрерывная позиция. Пересчёт филлов по средней цене годится для
+  // ярлыков сделок, но не для денег — он давал свой дрейф на каждой модели
+  // комиссии, а на частичных выходах ещё и переплачивал комиссию входа.
+  const closeSeries = $derived.by(() => {
+    if (!ledgerFromFlat) return null;
+    return ledgerRows
+      .filter((r: any) => Number(r.pnl_net_rub) !== 0)
+      .map((r: any) => ({ time: Math.floor(Number(r.ts_ms) / 1000) + MSK_OFFSET,
+                          pnl: Number(r.pnl_net_rub) }));
   });
 
   // mirror fills -> trade rows -> chart fills (+MSK shift onto MSK-stamped bars)
@@ -771,9 +790,10 @@
       liveTick={liveTick}
       pointValue={pointCoef ?? 1}
       pointValueKnown={pointCoef != null}
-      taker={true}
+      taker={false}
       openOrders={openOrders}
       plannedOrders={plannedOrders}
+      closeSeries={closeSeries}
       netOverride={robot?.paper ? null : pnlRub}
       floatRub={robot?.paper ? null : floatNetRub}
       livePosition={robot ? position : null}

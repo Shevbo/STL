@@ -177,11 +177,17 @@ export function tradeEvents(trades: Fill[], bucketSecs: number, pointValue = 1, 
       const dir = Math.sign(pos);
       const closeQty = Math.min(Math.abs(pos), q);
       const pnlPts = dir > 0 ? (t.price - avg) * closeQty : (avg - t.price) * closeQty;
-      // Net of: this closing fill's fee + carried entry/averaging fees.
-      const pnl = pnlPts * pointValue - c - carriedFee;
+      // Net of: this closing fill's fee + the entry fees OF THE CONTRACTS BEING
+      // CLOSED. Раньше здесь списывался весь carriedFee целиком и не уменьшался,
+      // поэтому каждый следующий частичный выход платил комиссию входа ЗАНОВО за
+      // всю позицию. Стратегия, которая усредняется до 18 контрактов и выходит
+      // кусками, получала минус на ровном месте: у живого MACD·RIU6 155 частичных
+      // выходов превращали +129 тыс ₽ в −103 тыс ₽ и рисовали стену липовых SL.
       const isPartial = q < Math.abs(pos);
+      const feeShare = isPartial ? carriedFee * (closeQty / Math.abs(pos)) : carriedFee;
+      const pnl = pnlPts * pointValue - c - feeShare;
       close = { holdSecs: t.time - epStart, maxContracts: epMaxAbs, pnl, ...exitLabel(pnl, isPartial) };
-      if (isPartial) { kind = 'partial'; pos += signed; }
+      if (isPartial) { kind = 'partial'; carriedFee -= feeShare; pos += signed; }
       else if (q === Math.abs(pos)) { kind = 'full'; pos = 0; avg = 0; carriedFee = 0; }
       else {
         kind = 'reverse'; pos += signed;        // flips through zero (full close + new open)

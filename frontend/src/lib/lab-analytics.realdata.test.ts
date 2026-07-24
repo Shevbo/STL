@@ -75,10 +75,14 @@ describe('real FVG RI robot — rolledPnl reproduces the molecule numbers', () =
     expect(Math.round(sumPnl)).toBe(Math.round(r.net));
   });
 
-  it('the NAIVE single-book replay reproduces the +228,528 phantom (3.0x) — the bug we are removing', () => {
+  it('the NAIVE single-book replay reproduces the +228,987 phantom (3.0x) — the bug we are removing', () => {
     const naive = tradeEvents(fills, 60, PV.RIU6, '', false)
       .reduce((a, e) => a + (e.close ? e.close.pnl : 0), 0);
-    expect(Math.round(naive)).toBe(228528);
+    // Было 228 528 до правки комиссии на частичных выходах: тогда carriedFee
+    // списывался целиком на КАЖДОМ частичном закрытии, то есть фантом ещё и
+    // переплачивал комиссию входа. Смысл теста прежний — наивный реплей
+    // выдумывает ~229к там, где по-контрактно ~76к.
+    expect(Math.round(naive)).toBe(228987);
     expect(naive / rolledPnl(fills, PV, false).net).toBeGreaterThan(2.9);
   });
 });

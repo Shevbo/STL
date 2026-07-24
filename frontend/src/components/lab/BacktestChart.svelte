@@ -21,8 +21,13 @@
     openOrders = [], plannedOrders = [], taker = true, runParams = {}, paramSchema = [], onRerun = null,
     segments = null, pointValues = null, live = 0, liveTick = null, onNet = null, floatRub = null,
     netOverride = null, livePosition = null, journalSuspect = false,
-    pointValueKnown = true,
+    pointValueKnown = true, closeSeries = null,
   }: {
+    // ГОТОВЫЙ ряд реализованных результатов (₽ на момент закрытия) — журнал
+    // алготорговли. Когда он есть, кривая доходности строится ПО НЕМУ, а не по
+    // пересчёту филлов: журнал знает НАСТОЯЩУЮ комиссию каждой сделки и ведёт
+    // позицию непрерывно, а любой пересчёт по цене входа даёт свой дрейф.
+    closeSeries?: Array<{ time: number; pnl: number }> | null;
     pointValueKnown?: boolean;
     result: any; symbol: string; strategy?: any; dateFrom: string; dateTo: string;
     pointValue?: number; defaultInterval?: number;
@@ -121,6 +126,8 @@
   // Живой робот: сколько реализовано ДО первой сделки в журнале (200-хвост не
   // достаёт дальше). Не null → кривая стартует не с нуля, и подпись это объясняет.
   let equityCarry = $state<{ rub: number; fromTs: number } | null>(null);
+  // Живой робот без журнала: кривую не рисуем и говорим об этом прямо.
+  let equityBlind = $state(false);
   let statsExpanded = $state(false);    // report collapsed to 2 lines by default
   let showTrades = $state(false);       // trades-table overlay
   let tradeRows = $state<any[]>([]);    // per-trade rows for the table
@@ -718,8 +725,22 @@
       // resets) — v2 drew -42373 while realized was -15790. Now curve endpoint == badge.
       const anchorNet = engineNet != null ? engineNet
         : (netOverride != null && Number.isFinite(netOverride) ? netOverride : null);
-      const closes = events.filter((e: any) => e.close).sort((a: any, b: any) => a.time - b.time);
+      // Источник кривой: журнал, если он передан, иначе пересчёт филлов.
+      // У ЖИВОГО робота (netOverride задан) без журнала кривую не рисуем вовсе:
+      // пересчёт обрезанного 200-хвоста с флэта стартует посреди позиции и врёт
+      // — а нарисованное враньё хуже пустого места, потому что выглядит правдой.
+      const haveJournal = !!(closeSeries && closeSeries.length);
+      equityBlind = netOverride != null && !haveJournal;
+      const closes = haveJournal
+        ? closeSeries!.map((p) => ({ time: p.time, close: { pnl: p.pnl } }))
+            .sort((a: any, b: any) => a.time - b.time)
+        : events.filter((e: any) => e.close).sort((a: any, b: any) => a.time - b.time);
       let maxDD = 0;
+      if (equityBlind) {
+        equitySeries.setData([]);
+        equityCarry = null;
+        lastEquityValue = 0;
+      }
       // Кривая рисуется ТОЛЬКО с первой известной сделки. Смещение (см. ниже)
       // поднимает всю кривую к пожизненному итогу, и на барах ДО журнала это
       // рисовало ровную полку на уровне, которого тогда не было: робот ещё не
@@ -733,7 +754,7 @@
         startIdx = i < 0 ? bars.length : Math.max(0, i - 1);  // один бар до входа — базовая линия
       }
       const curveBars = bars.slice(startIdx);
-      if (curveBars.length) {
+      if (curveBars.length && !equityBlind) {
         let k = 0, cum = 0, peak = 0;
         const raw = curveBars.map(b => {
           while (k < closes.length && closes[k].time <= b.time) { cum += closes[k].close.pnl; k++; }
@@ -757,12 +778,16 @@
           : (netOverride != null && Number.isFinite(netOverride))
             ? (v: number) => v + offset
             : (v: number) => v;
-        // Уровень, с которого стартует кривая, — это реализованное ДО журнала
-        // (пожизненный итог минус то, что видно в журнале). Величина настоящая,
-        // но необъяснённая она читается как «взялось из воздуха», поэтому её
-        // подписываем над графиком вместе с датой начала журнала.
-        equityCarry = (engineNet == null && offset !== 0)
-          ? { rub: offset, fromTs: raw.length ? raw[0].time : 0 } : null;
+        // Подписываем РОВНО ТО, ЧТО ВИДНО: уровень, с которого начинается
+        // нарисованная кривая. Он не ноль, когда часть сделок случилась раньше
+        // первого загруженного бара (график грузит окно в несколько дней, а
+        // журнал живёт дольше). Полка слева без подписи читается как «прибыль
+        // взялась из воздуха» — именно на этом график ловили дважды.
+        // Порог: мелочь — это дрейф модели комиссии, а не спрятанная история.
+        const startValue = raw.length ? raw[0].value + offset : 0;
+        const material = Math.abs(startValue) > Math.max(1000, Math.abs(netOverride ?? 0) * 0.02);
+        equityCarry = (engineNet == null && material)
+          ? { rub: startValue, fromTs: raw.length ? raw[0].time : 0 } : null;
         const curve = raw.map(p => {
           const v = adj(p.value);
           if (v > peak) peak = v;
@@ -1098,9 +1123,12 @@
   <!-- Без известного ₽/пункт кривая идёт в ПУНКТАХ — подпись обязана это говорить,
        иначе пункты читаются как рубли (у BR пункт = 785 ₽, у RTS = 1.57 ₽). -->
   <div class="bt-equity-label">P&L робота, {unitLabel} (нарастающим по закрытым сделкам)
+    {#if equityBlind}<span class="bt-equity-blind"
+      >· журнал сделок не загрузился — кривая не строится, чтобы не показать неверную</span
+      >{/if}
     {#if equityCarry}<span class="bt-equity-carry"
-      >· кривая с {fmtDay(equityCarry.fromTs)}, до неё реализовано {fmtMoney(equityCarry.rub)} {unitLabel}
-      (журнал хранит последние 200 сделок)</span>{/if}</div>
+      >· кривая с {fmtDay(equityCarry.fromTs)}: к этому моменту робот уже
+      реализовал {fmtMoney(equityCarry.rub)} {unitLabel}, более ранние сделки вне окна графика</span>{/if}</div>
   <div class="equity" bind:this={equityEl} style="height:{equityPx}px"></div>
 
   <!-- Custom horizontal scrollbar: drag the thumb to scroll across the data span. -->
@@ -1254,6 +1282,7 @@
     background: #0f0f1e; border-top: 1px solid #1a1a2e; border-bottom: 1px solid #1a1a2e; flex-shrink: 0;
   }
   .bt-equity-carry { color: #9aa0b4; text-transform: none; letter-spacing: 0; }
+  .bt-equity-blind { color: #e0a53c; text-transform: none; letter-spacing: 0; }
   .equity { flex: 0 0 auto; min-height: 0; }
   .bt-resizer { flex: 0 0 8px; cursor: ns-resize; background: #12203a;
     border-top: 1px solid #24406a; border-bottom: 1px solid #24406a; touch-action: none; }
