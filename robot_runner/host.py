@@ -326,7 +326,8 @@ class RobotHost:
         desired position (want) CHANGES — entry/exit/reversal — not every bar."""
         try:
             sig = explain(r.spec["strategy_id"], r.bars.bars(), r.spec["params"],
-                          r.runtime.signed_position(), avg=r.runtime.avg_price())
+                          r.runtime.signed_position(), avg=r.runtime.avg_price(),
+                          state=r.runtime.state_snapshot())
         except Exception:  # noqa: BLE001 — introspection must never break the bar
             return
         want = sig.get("want")
@@ -356,7 +357,8 @@ class RobotHost:
                 sig = json.dumps(explain(r.spec["strategy_id"], r.bars.bars(),
                                          r.spec["params"],
                                          r.runtime.signed_position(),
-                                         avg=r.runtime.avg_price()),
+                                         avg=r.runtime.avg_price(),
+                                         state=r.runtime.state_snapshot()),
                                  ensure_ascii=False)
             except Exception as exc:  # noqa: BLE001 — showcase must never break status
                 sig = json.dumps({"error": str(exc)}, ensure_ascii=False)

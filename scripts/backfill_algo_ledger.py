@@ -24,7 +24,7 @@ import urllib.request
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from trader.auth.portal import make_session_token  # noqa: E402
-from trader.quik.algo_ledger import backfill_real_tail  # noqa: E402
+from trader.quik.algo_ledger import backfill_real_tail, drop_already_ledgered  # noqa: E402
 
 API = os.environ.get("STL_API_LOCAL", "http://localhost:8000")
 _COLS = ("robot_id", "mode", "ts_ms", "trade_num", "order_num", "symbol", "side",
@@ -83,6 +83,17 @@ async def main() -> None:
             if not rows:
                 print(f"{rid}: no pre-seed real fills in tail — nothing to do")
                 continue
+            # The OTHER backfill (scripts/backfill_from_logs.py, `lg:` keys) may
+            # already hold these fills under a different dedup_key — the UNIQUE
+            # index cannot see that, and a double insert corrupts the replay
+            # (2026-07-24: one boundary fill per real robot, OPEN drawn as AVR).
+            have = [dict(x) for x in await conn.fetch(
+                "SELECT ts_ms, side, qty, price FROM algo_trades WHERE robot_id=$1", rid)]
+            before = len(rows)
+            rows = drop_already_ledgered(have, rows)
+            if before != len(rows):
+                print(f"{rid}: {before - len(rows)} fills already in the ledger "
+                      f"(other backfill) — skipped")
             ins = 0
             if not dry:
                 for row in rows:

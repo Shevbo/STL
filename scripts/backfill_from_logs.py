@@ -29,7 +29,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from trader.lab.commission import commission_for  # noqa: E402
-from trader.quik.algo_ledger import parse_runner_log  # noqa: E402
+from trader.quik.algo_ledger import drop_already_ledgered, parse_runner_log  # noqa: E402
 
 _MSK = datetime.timezone(datetime.timedelta(hours=3))
 _ORDER_SYM = re.compile(r"\[ORDER\] (?:buy|sell) \d+ ([A-Za-z0-9]+) @")
@@ -105,6 +105,18 @@ async def main() -> None:
                 })
             if not rows:
                 print(f"{rid}: журнал уже покрывает весь лог — добавлять нечего")
+                continue
+            # Страховка поверх cutoff: та же сделка могла попасть в журнал ДРУГИМ
+            # бэкфиллом (bf:/q:) под другим dedup_key — UNIQUE это не ловит, а
+            # двойная запись ломает реплей (24.07.2026: OPEN рисовался как AVR).
+            have = [dict(x) for x in await conn.fetch(
+                "SELECT ts_ms, side, qty, price FROM algo_trades WHERE robot_id=$1", rid)]
+            before = len(rows)
+            rows = drop_already_ledgered(have, rows)
+            if before != len(rows):
+                print(f"{rid}: {before - len(rows)} сделок уже есть в журнале "
+                      f"(другой бэкфилл) — пропущены")
+            if not rows:
                 continue
             ins = 0
             if not args.dry_run:

@@ -282,6 +282,17 @@
     const planned: any[] = [];
     for (const p of signal?.planned_orders ?? [])
       planned.push({ side: p.side, price: p.price, qty: p.qty, reason: p.reason });
+    // A standalone-module strategy (us_open_fvg…) keeps its EXACT exit levels in
+    // the strategy state, not in planned_orders — draw those too, they are real
+    // price triggers the robot acts on (operator: «если точный расчёт — рисовать
+    // на графике и показывать в этом фрейме»).
+    const el = signal?.exit_levels;
+    if (el && el.tp && el.sl) {
+      const closeSide = el.dir > 0 ? 'sell' : 'buy';
+      const qty = Math.abs(Number(robot?.position ?? 0)) || 1;
+      planned.push({ side: closeSide, price: el.tp, qty, reason: 'тейк-профит (TP) — выход в плюс' });
+      planned.push({ side: closeSide, price: el.sl, qty, reason: 'стоп-лосс (SL) — выход в минус' });
+    }
     const armedList: any[] = [];
     for (const p of signal?.armed ?? [])
       armedList.push({ side: p.side, price: p.price, qty: p.qty, reason: p.reason });
@@ -908,7 +919,28 @@
               <b class="mono">{f.bar_i2.h}/{f.bar_i2.l}</b></div>{/if}
           </div>
         {/if}
-        <div class="p-title sub">Планируемые заявки</div>
+        {#if signal.exit_levels}
+          {@const el = signal.exit_levels}
+          <div class="kv-grid">
+            <div class="kv" title="точный уровень выхода в плюс: робот закроет позицию по рынку, когда бар его коснётся">
+              <span>Тейк-профит (TP)</span><b class="mono yes">{fmtPrice(el.tp)}</b></div>
+            <div class="kv" title="точный уровень выхода в минус: робот закроет позицию по рынку, когда бар его коснётся">
+              <span>Стоп-лосс (SL)</span><b class="mono neg">{fmtPrice(el.sl)}</b></div>
+            <div class="kv"><span>Вход был по</span><b class="mono">{fmtPrice(el.entry)}</b></div>
+          </div>
+        {/if}
+        {#if signal.range}
+          <div class="kv-grid">
+            <div class="kv" title="диапазон первых минут после открытия США — от его границ считается вход">
+              <span>Диапазон открытия</span>
+              <b class="mono">{fmtPrice(signal.range.lo)} — {fmtPrice(signal.range.hi)}</b></div>
+          </div>
+        {/if}
+        <div class="p-title sub">Планируемые заявки
+          <span class="where" title="ПЛАН и УРОВНИ живут только внутри робота на VDS: в QUIK заявки нет, пока условие не сработает. В QUIK уходит только «Выставленная заявка» ниже (у неё есть номер QUIK).">
+            план робота · в QUIK ещё не отправлены
+          </span>
+        </div>
         {#if plannedOrders.length || armedOrders.length}
           {#each plannedOrders as p}
             <div class="plan-row" class:buy={p.side === 'buy'} class:sell={p.side === 'sell'}>
@@ -928,12 +960,16 @@
           <div class="empty">Нет — жду сигнала.</div>
         {/if}
         {#if openOrders.length}
-          <div class="p-title sub">Выставленные заявки</div>
+          <div class="p-title sub">Выставленные заявки
+            <span class="where live-where" title="эти заявки УЖЕ на бирже: номер — ключ QUIK, по нему сделка ищется в таблицах терминала">
+              уже в QUIK · на бирже
+            </span>
+          </div>
           {#each openOrders as o}
             <div class="plan-row live" class:buy={o.side === 'buy'} class:sell={o.side === 'sell'}>
               <b>{o.side === 'buy' ? '▲ BUY' : '▼ SELL'} {o.qty}</b>
               <span class="mono">@ {fmtPrice(o.price)}</span>
-              <span class="why mono">{o.order_id}</span>
+              <span class="why mono">QUIK №{o.order_id}</span>
             </div>
           {/each}
         {/if}
@@ -1012,6 +1048,13 @@
         </div>
       {/if}
       <div class="desc">{strategyDesc || 'Fair Value Gap (ICT) — вход по 3-барному ценовому разрыву с подтверждением телом свечи.'}</div>
+      {#if robot?.strategy_id}
+        <a class="strat-longread" href={'/?strategy=' + encodeURIComponent(robot.strategy_id)}
+           target="_blank" rel="noopener"
+           title="полное описание стратегии: как работает, что означает каждый параметр, иллюстрации">
+          Подробное описание стратегии и всех параметров ↗
+        </a>
+      {/if}
       <div class="p-title sub">Параметры
         {#if !editMode}
           <button class="pe-btn" onclick={startEdit}>Изменить</button>
@@ -1252,4 +1295,10 @@
   .tot-lbl { text-align: right; color: #9ab; }
   .empty { color: #556; font-size: 11px; padding: 6px 0; }
   .desc { font-size: 11px; line-height: 1.55; color: #aab; white-space: pre-wrap; max-height: 180px; overflow-y: auto; }
+  .where { font-size: 10px; font-weight: 400; color: #8a7a3a; background: #2a240f;
+    border: 1px solid #4a3f18; border-radius: 3px; padding: 1px 6px; margin-left: 8px; }
+  .where.live-where { color: #4caf50; background: #10240f; border-color: #24501e; }
+  .strat-longread { display: inline-block; margin: 6px 0 2px; font-size: 11px; color: #6aa8ff;
+    text-decoration: none; border-bottom: 1px dotted #6aa8ff55; }
+  .strat-longread:hover { color: #9cc6ff; border-bottom-color: #9cc6ff; }
 </style>

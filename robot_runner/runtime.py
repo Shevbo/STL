@@ -202,6 +202,11 @@ class AgentRuntime:
     def get_state(self, key: str, default: Any = None) -> Any:
         return self._state.get(key, default)
 
+    def state_snapshot(self) -> dict[str, Any]:
+        """Read-only copy of the strategy's own state — the showcase explainer
+        reads a standalone module's live exit levels (sl/tp/entry) from here."""
+        return dict(self._state)
+
     def set_state(self, key: str, value: Any) -> None:
         self._state[key] = value
 

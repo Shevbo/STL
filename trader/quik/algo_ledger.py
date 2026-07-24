@@ -288,6 +288,43 @@ def msk_date(ts_ms: int) -> str:
         (ts_ms + _MSK_OFFSET_MS) / 1000, tz=datetime.timezone.utc).strftime("%Y-%m-%d")
 
 
+def drop_already_ledgered(existing: list[dict], rows: list[dict],
+                          tol_ms: int = 2000) -> list[dict]:
+    """Filter out rows the ledger ALREADY holds under a different dedup_key.
+
+    The two backfills key rows differently (`lg:` replays the runner's text log,
+    `bf:` replays the status tail, `q:` is the live QUIK ingest), so the UNIQUE
+    dedup_key cannot see that they describe the SAME fill. On 2026-07-24 that put
+    one boundary fill in twice for every real robot: the chart replay then read
+    the second copy as an add-on and every later fill's role was wrong (an OPEN
+    drawn as AVR) while the replayed position drifted by that quantity.
+
+    Match = same side+qty, timestamps within tol_ms, price equal to 0.01%. Each
+    existing row is CONSUMED by at most one candidate, so two genuinely separate
+    identical fills in the same second still both survive.
+    """
+    pool_ = [dict(e) for e in existing]
+    used = [False] * len(pool_)
+    out = []
+    for r in rows:
+        hit = -1
+        for i, e in enumerate(pool_):
+            if used[i] or e.get("side") != r.get("side") or int(e.get("qty", 0)) != int(r.get("qty", 0)):
+                continue
+            if abs(int(e.get("ts_ms", 0)) - int(r.get("ts_ms", 0))) > tol_ms:
+                continue
+            ep, rp = float(e.get("price", 0)), float(r.get("price", 0))
+            if abs(ep - rp) > max(1e-9, abs(rp) * 1e-4):
+                continue
+            hit = i
+            break
+        if hit >= 0:
+            used[hit] = True
+            continue
+        out.append(r)
+    return out
+
+
 # ---- DB layer ----
 
 async def ensure_tables(pool) -> None:

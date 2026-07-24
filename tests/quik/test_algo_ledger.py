@@ -174,3 +174,40 @@ def test_parse_runner_log_lumps_pre_log_realized_into_first_fill():
     assert [f["gross_points"] for f in fills] == [-6154.0, 0.0]
     # running total stays exact even though the first fill absorbs the opening
     assert fills[-1]["realized_cum"] == -6154.0
+
+
+def test_drop_already_ledgered_kills_cross_backfill_dup():
+    from trader.quik.algo_ledger import drop_already_ledgered
+    # The 2026-07-24 shape: the log backfill (`lg:`) wrote the fill with a rounded
+    # price, the tail backfill (`bf:`) with the exact one — same fill, two keys.
+    have = [{"ts_ms": 1784298785000, "side": "sell", "qty": 3, "price": 78753.0}]
+    rows = [
+        {"ts_ms": 1784298785000, "side": "sell", "qty": 3, "price": 78753.33333},  # dup
+        {"ts_ms": 1784306945000, "side": "buy", "qty": 3, "price": 76880.0},       # new
+    ]
+    out = drop_already_ledgered(have, rows)
+    assert [r["price"] for r in out] == [76880.0]
+
+
+def test_drop_already_ledgered_keeps_two_genuine_identical_fills():
+    from trader.quik.algo_ledger import drop_already_ledgered
+    # Two separate 1-lot fills in the same second are REAL (QUIK splits a marketable
+    # order); one existing row may consume only one candidate.
+    have = [{"ts_ms": 1_000_000, "side": "buy", "qty": 1, "price": 86690.0}]
+    rows = [
+        {"ts_ms": 1_000_000, "side": "buy", "qty": 1, "price": 86690.0},
+        {"ts_ms": 1_000_500, "side": "buy", "qty": 1, "price": 86690.0},
+    ]
+    assert len(drop_already_ledgered(have, rows)) == 1
+
+
+def test_drop_already_ledgered_respects_side_qty_and_window():
+    from trader.quik.algo_ledger import drop_already_ledgered
+    have = [{"ts_ms": 1_000_000, "side": "buy", "qty": 1, "price": 100.0}]
+    rows = [
+        {"ts_ms": 1_000_000, "side": "sell", "qty": 1, "price": 100.0},   # other side
+        {"ts_ms": 1_000_000, "side": "buy", "qty": 2, "price": 100.0},    # other qty
+        {"ts_ms": 1_009_000, "side": "buy", "qty": 1, "price": 100.0},    # outside window
+        {"ts_ms": 1_000_000, "side": "buy", "qty": 1, "price": 140.0},    # other price
+    ]
+    assert len(drop_already_ledgered(have, rows)) == 4

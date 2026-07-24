@@ -60,12 +60,46 @@ def _fvg_explain(bars, params: dict) -> dict:
 _EXPLAINERS = {"fvg": _fvg_explain}
 
 
-def _generic_explain(strategy_id: str, bars, params: dict) -> dict:
+def _module_explain(strategy_id: str, bars, params: dict, state: dict) -> dict:
+    """Standalone-module strategy (us_open_fvg, donchian_breakout, ...): there is no
+    REGISTRY signal function to re-run read-only, but the module keeps its LIVE
+    decision state (entry/sl/tp/dir/entered/done) in the runtime — those are the
+    EXACT levels the robot will exit on, so report them instead of the old scary
+    «стратегия X не найдена» (operator, 2026-07-24: «непонятно и тревожно… надо
+    писать что именно ждёт стратегия — когда сработает TP и SL»)."""
+    sl = state.get("sl")
+    tp = state.get("tp")
+    dirn = state.get("dir") or 0
+    entry = state.get("entry")
+    out: dict = {"ready": True, "want": None, "module_strategy": True,
+                 "levels_from_state": True}
+    if state.get("done"):
+        out["waiting_for"] = ("сделка дня уже сделана — до конца сессии робот не входит "
+                              "(стратегия «одна сделка в день»)")
+    elif state.get("entered") and sl and tp:
+        side = "лонг" if dirn > 0 else "шорт"
+        out["waiting_for"] = (
+            f"в позиции ({side} от {entry:.0f}): выход по TP {tp:.0f} или по SL {sl:.0f} — "
+            f"робот сам закроет по рынку, когда бар их коснётся")
+        out["exit_levels"] = {"tp": round(float(tp), 2), "sl": round(float(sl), 2),
+                              "entry": round(float(entry or 0), 2), "dir": int(dirn)}
+    elif state.get("rh") and state.get("rl"):
+        out["waiting_for"] = (
+            f"диапазон открытия построен: {state['rl']:.0f}—{state['rh']:.0f}; "
+            f"жду пробой и возврат (FVG) для входа")
+        out["range"] = {"hi": round(float(state["rh"]), 2), "lo": round(float(state["rl"]), 2)}
+    else:
+        out["waiting_for"] = ("жду окно открытия США: строится диапазон первых "
+                              f"{params.get('range_min', 6)} минут, вход — только после него")
+    return out
+
+
+def _generic_explain(strategy_id: str, bars, params: dict, state: dict) -> dict:
     """Fallback for strategies without a dedicated explainer: run the registered
     signal function read-only and report the desired position."""
     spec = REGISTRY.get(strategy_id)
     if spec is None:
-        return {"ready": False, "waiting_for": f"стратегия {strategy_id} не найдена"}
+        return _module_explain(strategy_id, bars, params, state)
     # Merge registry defaults under the robot's params — warmup/signal expect the
     # full schema, а робот может нести только переопределённые ключи.
     params = {**spec["default_params"], **params}
@@ -141,10 +175,13 @@ def management_levels(bars, params: dict, position: int, avg: float) -> list[dic
 
 
 def explain(strategy_id: str, bars, params: dict, position: int,
-            avg: float = 0.0) -> dict:
-    """Full introspection blob for RobotStatus.signal_json."""
+            avg: float = 0.0, state: dict | None = None) -> dict:
+    """Full introspection blob for RobotStatus.signal_json. `state` is the
+    strategy's own live state dict (STLRuntime get_state/set_state) — the only
+    place a standalone module keeps its real exit levels."""
+    state = state or {}
     fn = _EXPLAINERS.get(strategy_id)
-    d = fn(bars, params) if fn else _generic_explain(strategy_id, bars, params)
+    d = fn(bars, params) if fn else _generic_explain(strategy_id, bars, params, state)
     d["strategy_id"] = strategy_id
     d["bars_count"] = len(bars)
     d["position"] = position

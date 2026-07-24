@@ -49,3 +49,35 @@ def test_generic_explainer_runs_registered_signal():
     d = explain("shectory_2ema", bars, {"fast": 3, "slow": 5, "qty": 1}, position=0)
     assert d["ready"] is True
     assert "strategy_id" in d and d["bars_count"] == 150
+
+
+# 2026-07-24, operator: «стратегия us_open_fvg не найдена» in the signal box was
+# alarming and uninformative — it reads like the robot has no strategy at all.
+# A standalone-module strategy has no REGISTRY entry, but its LIVE exit levels
+# live in the runtime state; explain must report those instead.
+def test_module_strategy_reports_live_exit_levels():
+    from robot_runner.explain import explain
+    state = {"entered": 1, "dir": -1, "entry": 88230.0, "sl": 88600.0, "tp": 87100.0,
+             "rh": 88400.0, "rl": 88100.0}
+    d = explain("us_open_fvg", [], {"qty": 5}, position=-5, avg=88230.0, state=state)
+    assert "не найдена" not in d["waiting_for"]
+    assert d["exit_levels"] == {"tp": 87100.0, "sl": 88600.0, "entry": 88230.0, "dir": -1}
+    assert "TP 87100" in d["waiting_for"] and "SL 88600" in d["waiting_for"]
+
+
+def test_module_strategy_before_entry_and_after_done():
+    from robot_runner.explain import explain
+    waiting = explain("us_open_fvg", [], {"range_min": 6}, 0, state={})
+    assert "окно открытия" in waiting["waiting_for"] and "не найдена" not in waiting["waiting_for"]
+
+    ranged = explain("us_open_fvg", [], {}, 0, state={"rh": 88400.0, "rl": 88100.0})
+    assert ranged["range"] == {"hi": 88400.0, "lo": 88100.0}
+
+    done = explain("us_open_fvg", [], {}, 0, state={"done": 1})
+    assert "уже сделана" in done["waiting_for"]
+
+
+def test_registry_strategy_unaffected_by_state_arg():
+    from robot_runner.explain import explain
+    d = explain("fvg", [], {}, 0, state={"sl": 1, "tp": 2})
+    assert "exit_levels" not in d          # registry path untouched
