@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>STL Companion</title>
+<!-- Панель компаньона (трей-приложение STLCompanion.exe).
+
+     Живёт внутри WebView2 без рамки окна: фон рисует DWM (тёплая бумага, 50%),
+     здесь фон ПРОЗРАЧНЫЙ, иначе окно станет глухим. Данные — один запрос
+     /snapshot к локальному прокси компаньона, который подставляет токен.
+     Страницу можно открыть и в обычном браузере (тогда работает сессия STL):
+     https://stl.shectory.ru/companion.html — удобно править вёрстку.
+
+     Шрифты только системные: Bahnschrift (узкий DIN, подписи) и Consolas
+     (табличные цифры). Никаких веб-шрифтов — страница грузится через прокси
+     на 127.0.0.1 и внешние запросы туда не ходят. -->
+<style>
+  :root {
+    /* Фон полупрозрачный, поэтому реальная подложка зависит от того, что за
+       окном. Приглушённые тона держим ТЁМНЫМИ: светло-серая подпись на 50%
+       фоне поверх тёмного стола перестаёт читаться — проверено на стенде. */
+    --ink: #1a1815;
+    --muted: #4a453d;
+    --faint: #6b655b;
+    --rule: rgba(26, 24, 21, .22);
+    --up: #15571a;
+    --down: #8d1a1a;
+    --rail-flat: rgba(26, 24, 21, .22);
+    --pad: 9px;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    /* Прозрачно: тёплый полупрозрачный фон даёт композитор Windows. */
+    background: transparent;
+    color: var(--ink);
+    font: 9px/1.5 Consolas, "Cascadia Mono", monospace;
+    font-variant-numeric: tabular-nums;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+    cursor: default;
+    user-select: none;
+  }
+  body { padding: 6px var(--pad) 8px; }
+
+  /* Шапка: имя, свежесть, спрятать, выход. */
+  .top { display: flex; align-items: baseline; gap: 6px; margin-bottom: 5px; }
+  .brand {
+    font: 400 10px/1 Bahnschrift, "Segoe UI Semilight", sans-serif;
+    letter-spacing: .18em; text-transform: uppercase; color: var(--muted);
+  }
+  .fresh { flex: 1; color: var(--faint); font-size: 8px; letter-spacing: .04em; }
+  .fresh.stale { color: var(--down); }
+  .btn {
+    font: 400 11px/1 "Segoe UI", sans-serif; color: var(--faint);
+    cursor: pointer; padding: 0 2px;
+  }
+  .btn:hover { color: var(--ink); }
+  .btn.quit:hover { color: var(--down); }
+
+  /* Заголовок секции: подпись, дальше волосяная линия до края. */
+  .sec {
+    display: flex; align-items: center; gap: 6px;
+    margin: 7px 0 2px;
+    font: 400 9px/1 Bahnschrift, "Segoe UI Semilight", sans-serif;
+    letter-spacing: .16em; text-transform: uppercase; color: var(--muted);
+  }
+  .sec::after { content: ""; flex: 1; height: 1px; background: var(--rule); }
+  .sec a { color: var(--muted); text-decoration: none; border-bottom: 1px dotted var(--rule); }
+  .sec a:hover { color: var(--ink); }
+
+  /* Рельс слева — фирменный элемент: столбик знаковых отметок на всю панель. */
+  .row {
+    display: flex; align-items: baseline; gap: 6px;
+    padding: 1px 0 1px 6px;
+    border-left: 2px solid var(--rail-flat);
+  }
+  .row.up { border-left-color: var(--up); }
+  .row.down { border-left-color: var(--down); }
+  .row .k { color: var(--muted); white-space: nowrap; }
+  .row .sp { flex: 1; }
+  .row .v { white-space: nowrap; }
+  .v.up { color: var(--up); }
+  .v.down { color: var(--down); }
+  .v.nil { color: var(--faint); }
+  .sub { color: var(--faint); font-size: 8px; }
+
+  /* Робот: две строки — имя со ссылкой, под ней цифры. */
+  .rob { padding: 2px 0 2px 6px; border-left: 2px solid var(--rail-flat); margin-top: 1px; }
+  .rob.up { border-left-color: var(--up); }
+  .rob.down { border-left-color: var(--down); }
+  .rob .hd { display: flex; align-items: baseline; gap: 5px; }
+  .rob a { color: var(--ink); text-decoration: none; border-bottom: 1px solid var(--rule); }
+  .rob a:hover { border-bottom-color: var(--ink); }
+  .tag {
+    font: 400 8px/1 Bahnschrift, sans-serif; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--faint);
+  }
+  .tag.real { color: var(--down); }
+  .rob .nums { display: flex; gap: 8px; flex-wrap: wrap; color: var(--muted); }
+  .rob .nums b { font-weight: 400; color: var(--ink); }
+
+  /* Вотчер: точка статуса + текст проблемы. */
+  .chk { display: flex; align-items: baseline; gap: 5px; padding: 1px 0 1px 6px;
+         border-left: 2px solid var(--up); }
+  .chk.bad { border-left-color: var(--down); }
+  .chk .n { color: var(--muted); min-width: 74px; }
+  .chk .s { color: var(--up); }
+  .chk.bad .s { color: var(--down); }
+  .alert { padding-left: 6px; border-left: 2px solid var(--down); color: var(--down); }
+  .empty { color: var(--faint); padding-left: 8px; }
+</style>
+</head>
+<body>
+<div class="top">
+  <span class="brand">STL</span>
+  <span class="fresh" id="fresh">…</span>
+  <span class="btn" id="hide" title="Свернуть в трей">✕</span>
+  <span class="btn quit" id="quit" title="Закрыть приложение">⏻</span>
+</div>
+<div id="body"></div>
+
+<script>
+'use strict';
+const STL = 'https://stl.shectory.ru';
+// Страница живёт в двух местах. Внутри компаньона её отдаёт локальный прокси
+// (127.0.0.1), он же подставляет токен и умеет /hide, /quit, /height, /open.
+// Открытая в браузере из STL, она ходит прямо в API по сессии оператора —
+// так вёрстку можно править и смотреть без пересборки exe.
+const LOCAL = location.hostname === '127.0.0.1';
+const API = LOCAL ? '' : '/api/v1/quik/companion';
+const shell = (path) => LOCAL ? fetch(path).catch(() => {}) : Promise.resolve();
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g,
+  (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+// Деньги: узкий пробел между тысячами, знак всегда, "—" когда данных нет.
+function rub(v, opts) {
+  if (v == null || !isFinite(v)) return null;
+  const o = opts || {};
+  const n = Math.round(v);
+  const sign = o.signed && n > 0 ? '+' : (n < 0 ? '-' : '');
+  const body = Math.abs(n).toLocaleString('ru-RU').replace(/ /g, ' ');
+  return sign + body + ' ₽';
+}
+function cls(v) { return v == null ? '' : (v > 0 ? 'up' : (v < 0 ? 'down' : '')); }
+function val(txt, k) { return txt == null ? '<span class="v nil">—</span>'
+  : `<span class="v ${k || ''}">${esc(txt)}</span>`; }
+function hhmmss(ms) {
+  if (!ms) return null;
+  return new Date(ms).toLocaleTimeString('ru-RU', { timeZone: 'Europe/Moscow' });
+}
+
+// Строка "подпись ... значение" с рельсом по знаку.
+function row(label, value, signValue, sub) {
+  const k = cls(signValue);
+  return `<div class="row ${k}"><span class="k">${esc(label)}</span>` +
+    `<span class="sp"></span>${sub ? `<span class="sub">${esc(sub)}</span>` : ''}` +
+    `${val(value, k)}</div>`;
+}
+
+function renderAccount(a) {
+  if (!a || !a.has_data) return '<div class="empty">счёт: агент ещё не прислал деньги</div>';
+  return row('Лимит откр. поз.', rub(a.limit)) +
+    row('Тек. чист. поз.', rub(a.used)) +
+    row('План. чист. поз.', rub(a.planned)) +
+    row('Вариац. маржа', rub(a.varmargin, { signed: true }), a.varmargin) +
+    row('Биржевые сборы', rub(a.ts_comission), a.ts_comission ? -1 : 0);
+}
+
+function renderPositions(list) {
+  if (!list || !list.length) return '<div class="empty">позиций нет</div>';
+  return list.map((p) => {
+    const vm = p.varmargin;
+    return `<div class="row ${cls(vm)}"><span class="k">${esc(p.sec)}</span>` +
+      `<span class="sub">${p.net > 0 ? '+' : ''}${p.net}</span>` +
+      `<span class="sp"></span>${val(rub(vm, { signed: true }), cls(vm))}</div>`;
+  }).join('');
+}
+
+function renderRobots(list) {
+  if (!list || !list.length) return '<div class="empty">роботов нет</div>';
+  return list.map((r) => {
+    // Итог с запуска = реализованное раннером + плавающее по открытой позиции.
+    const live = (r.pnl_rub == null && r.float_rub == null)
+      ? null : (r.pnl_rub || 0) + (r.float_rub || 0);
+    const k = cls(live);
+    const last = hhmmss(r.last_trade_ms);
+    return `<div class="rob ${k}">
+      <div class="hd">
+        <a href="${STL}/?agent_robot=${encodeURIComponent(r.id)}" data-ext>${esc(r.name)}</a>
+        <span class="tag ${r.mode === 'real' ? 'real' : ''}">${r.mode === 'real' ? 'реал' : 'бумага'}${r.paused ? ' · пауза' : ''}</span>
+        <span class="sp" style="flex:1"></span>
+        ${val(rub(live, { signed: true }), k)}
+      </div>
+      <div class="nums">
+        <span>сегодня <b class="${cls(r.today_net)}">${r.today_net == null ? '—' : rub(r.today_net, { signed: true })}</b></span>
+        <span>поз <b>${r.position == null ? '—' : r.position}</b></span>
+        <span>сделок <b>${r.today_trades || 0}</b></span>
+        <span>${last ? 'посл. ' + last : 'сделок сегодня нет'}</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function check(name, block) {
+  const bad = block && block.ok === false;
+  const txt = bad ? (block.issues || []).join('; ') : 'ОК';
+  return `<div class="chk ${bad ? 'bad' : ''}"><span class="n">${esc(name)}</span>` +
+    `<span class="s">${esc(txt)}</span></div>`;
+}
+
+function renderWatch(w) {
+  if (!w) return '<div class="empty">нет данных</div>';
+  const bt = w.backtests || {};
+  const pl = w.platform || {};
+  const i9 = pl.i9;
+  const plat = [
+    'хостер LA ' + (pl.hoster && pl.hoster.load != null ? pl.hoster.load : '—'),
+    'i9 ' + (i9 ? (i9.stale ? 'молчит' : (i9.cpu_pct != null ? i9.cpu_pct + '% CPU' : 'онлайн')) : 'нет данных'),
+    'вотчер ' + (pl.watchdog_last_ms ? hhmmss(pl.watchdog_last_ms) : 'нет'),
+  ].join(' · ');
+  return check('раннер + lua', w.runner) +
+    check('бэктесты', bt) +
+    `<div class="row"><span class="k">очередь</span><span class="sp"></span>` +
+      `<span class="sub">в работе ${bt.running || 0} · ждут ${bt.queued || 0}</span></div>` +
+    check('платформа', pl) +
+    `<div class="row"><span class="k"></span><span class="sp"></span><span class="sub">${esc(plat)}</span></div>`;
+}
+
+function renderAlerts(a) {
+  if (!a) return '';
+  const items = (a.unresolved || []).concat(a.sms_today || []);
+  if (!items.length) return '<div class="empty">тихо, эскалаций нет</div>';
+  return items.slice(-4).map((t) => `<div class="alert">${esc(t)}</div>`).join('');
+}
+
+let lastGood = 0;
+function paint(d) {
+  $('body').innerHTML =
+    '<div class="sec">счёт</div>' + renderAccount(d.account) +
+    '<div class="sec">позиции</div>' + renderPositions(d.positions) +
+    `<div class="sec">роботы <a href="${STL}/?lab=live&equity=1" data-ext>витрина ↗</a></div>` +
+      renderRobots(d.robots) +
+    `<div class="sec">вотчер <a href="${STL}/?lab=botstore" data-ext>хитпарад ↗</a></div>` +
+      renderWatch(d.watch) +
+    `<div class="sec">уведомления <a href="${STL}/watchdog-log.html" data-ext>детали ↗</a></div>` +
+      renderAlerts(d.alerts);
+  fitWindow();
+}
+
+// Внешние ссылки открывает системный браузер: внутри WebView2 новое окно
+// либо не откроется, либо утащит панель на чужую страницу.
+document.addEventListener('click', (e) => {
+  const a = e.target.closest('a[data-ext]');
+  if (!a || !LOCAL) return;   // в браузере ссылка работает сама собой
+  e.preventDefault();
+  shell('/open?url=' + encodeURIComponent(a.href));
+});
+$('hide').onclick = () => shell('/hide');
+$('quit').onclick = () => shell('/quit');
+if (!LOCAL) { $('hide').style.display = $('quit').style.display = 'none'; }
+
+// Окно ровно по содержимому: высоту считает страница, размер ставит Go.
+let lastH = 0;
+function fitWindow() {
+  const h = Math.ceil(document.body.getBoundingClientRect().height) + 10;
+  if (h === lastH) return;
+  lastH = h;
+  shell('/height?h=' + h);
+}
+
+async function tick() {
+  try {
+    const r = await fetch(API + '/snapshot', { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+    lastGood = d.ts_ms || Date.now();
+    paint(d);
+    $('fresh').className = 'fresh';
+    $('fresh').textContent = hhmmss(lastGood) || '';
+  } catch (err) {
+    $('fresh').className = 'fresh stale';
+    $('fresh').textContent = lastGood
+      ? 'нет связи · данные от ' + hhmmss(lastGood)
+      : 'нет связи с STL';
+  }
+}
+tick();
+setInterval(tick, 5000);
+</script>
+</body>
+</html>

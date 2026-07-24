@@ -457,6 +457,19 @@ type healthJSON struct {
 	// the proto ParamsSnapshot lacks margin, so STL's equity/ГО report reads
 	// it from this opaque mirror instead of a proto change.
 	Params []paramJSON `json:"params,omitempty"`
+	// Positions: the raw QUIK account position table (futures_client_holding),
+	// per instrument, with ВМ. Separate from recon's Manual.AccountNet, which
+	// deliberately carries only sec/net for the reconciliation view.
+	Positions []positionJSON `json:"positions,omitempty"`
+}
+
+type positionJSON struct {
+	Sec string  `json:"sec"`
+	Net int64   `json:"net"`
+	Avg float64 `json:"avg"`
+	// VarMargin is null (not 0) while the Lua build publishes no ВМ column, so
+	// the UI shows "—" instead of a fake break-even.
+	VarMargin *float64 `json:"varmargin"`
 }
 
 type paramJSON struct {
@@ -473,7 +486,10 @@ type moneyJSON struct {
 	AccruedInt  float64 `json:"accruedint"`   // накопленный доход
 	TsComission float64 `json:"ts_comission"` // session exchange fee
 	Planned     float64 `json:"planned"`      // cbplplanned (free money)
-	AgeMs       int64   `json:"age_ms"`
+	// Used is cbplused ("Тек. чист. поз."); null while the Lua build sends no
+	// 6th money column, so the UI prints "—" rather than a fake zero.
+	Used  *float64 `json:"used"`
+	AgeMs int64    `json:"age_ms"`
 }
 
 type fillJSON struct {
@@ -845,6 +861,20 @@ func buildHealthJSON(d Deps, acc accounts.Snapshot) healthJSON {
 			AccruedInt: m.AccruedInt, TsComission: m.TsComission, Planned: m.Planned,
 			AgeMs: acc.MoneyAgeMs,
 		}
+		if m.HasUsed {
+			u := m.Used
+			h.Money.Used = &u
+		}
+	}
+	positions := append([]accounts.Position(nil), acc.Positions...)
+	sort.Slice(positions, func(i, j int) bool { return positions[i].Sec < positions[j].Sec })
+	for _, p := range positions {
+		row := positionJSON{Sec: p.Sec, Net: p.Net, Avg: p.Avg}
+		if p.HasVarMargin {
+			vm := p.VarMargin
+			row.VarMargin = &vm
+		}
+		h.Positions = append(h.Positions, row)
 	}
 	now := d.nowMs()
 	ticks := d.Provider.Ticks()

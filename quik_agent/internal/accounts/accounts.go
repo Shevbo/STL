@@ -20,6 +20,11 @@ type Position struct {
 	Sec string
 	Net int64
 	Avg float64
+	// VarMargin is futures_client_holding.varmargin — the per-instrument ВМ.
+	// 0 on an old Lua build that publishes only [sec, net, avg]; HasVarMargin
+	// tells the two apart so the UI can print "—" instead of a fake zero.
+	VarMargin    float64
+	HasVarMargin bool
 }
 
 // Order mirrors one row of the QUIK working-orders table.
@@ -64,6 +69,10 @@ type Money struct {
 	AccruedInt  float64 // accruedint: накопленный доход (earlier clearings today)
 	TsComission float64 // ts_comission: exchange fees for the session
 	Planned     float64 // cbplplanned: free money (planned limit)
+	// Used is cbplused ("Тек. чист. поз." — money currently bound by positions).
+	// 0 on an old Lua build; HasUsed tells "no data" from a real zero.
+	Used    float64
+	HasUsed bool
 }
 
 // Equity is the QUIK "средства" figure: Limit + VarMargin + AccruedInt.
@@ -422,7 +431,9 @@ func parseHHMMSS(s string) (int64, bool) {
 // numeric string for numeric fields, and reject (ok=false) a row that is short or
 // carries an unconvertible value, so one malformed row cannot corrupt the whole batch.
 
-// PositionFromRow converts one acc_pos row: [sec, net, avg].
+// PositionFromRow converts one acc_pos row: [sec, net, avg], plus an OPTIONAL
+// trailing 4th element (varmargin) — absent on an old Lua build, in which case
+// VarMargin stays 0 and HasVarMargin false.
 func PositionFromRow(row []any) (Position, bool) {
 	if len(row) < 3 {
 		return Position{}, false
@@ -439,7 +450,15 @@ func PositionFromRow(row []any) (Position, bool) {
 	if !ok {
 		return Position{}, false
 	}
-	return Position{Sec: sec, Net: net, Avg: avg}, true
+	p := Position{Sec: sec, Net: net, Avg: avg}
+	if len(row) >= 4 {
+		// A malformed 4th element must not drop the whole row: the position
+		// itself is still valid, only the ВМ is unknown.
+		if vm, ok := asFloat(row[3]); ok {
+			p.VarMargin, p.HasVarMargin = vm, true
+		}
+	}
+	return p, true
 }
 
 // OrderFromRow converts one acc_ord row: [order_num, sec, active(0|1), price, balance,
@@ -539,7 +558,8 @@ func TradeFromRow(row []any) (Trade, bool) {
 }
 
 // MoneyFromRow converts one acc_money row: [cbplimit, varmargin, accruedint,
-// ts_comission, cbplplanned].
+// ts_comission, cbplplanned], plus an OPTIONAL trailing 6th element (cbplused,
+// "Тек. чист. поз.") — absent on an old Lua build, HasUsed false then.
 func MoneyFromRow(row []any) (Money, bool) {
 	if len(row) < 5 {
 		return Money{}, false
@@ -552,8 +572,14 @@ func MoneyFromRow(row []any) (Money, bool) {
 		}
 		vals[i] = f
 	}
-	return Money{Limit: vals[0], VarMargin: vals[1], AccruedInt: vals[2],
-		TsComission: vals[3], Planned: vals[4]}, true
+	m := Money{Limit: vals[0], VarMargin: vals[1], AccruedInt: vals[2],
+		TsComission: vals[3], Planned: vals[4]}
+	if len(row) >= 6 {
+		if u, ok := asFloat(row[5]); ok {
+			m.Used, m.HasUsed = u, true
+		}
+	}
+	return m, true
 }
 
 func asString(v any) (string, bool) {

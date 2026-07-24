@@ -74,6 +74,18 @@
       <button id="cfgSave" style="margin-top:12px">Сохранить настройки</button>
       <span id="cfgMsg" class="muted"></span>
     </div>
+    <div class="cfg-col">
+      <div class="cfg-h">Компаньоны (панель в трее)</div>
+      <div class="muted">Учётная запись Windows, например WIN10-HYPERV\admin. Код
+        действует 15 минут и срабатывает один раз; токен компаньона только на чтение.</div>
+      <div style="display:flex; gap:6px; margin:6px 0">
+        <input type="text" id="cmpAcct" placeholder="DOMAIN\user" style="flex:1">
+        <button id="cmpAdd">Добавить</button>
+      </div>
+      <div id="cmpCode" class="ok" style="font: 600 15px/1.6 Consolas, monospace; letter-spacing:.2em"></div>
+      <div id="cmpMsg" class="muted"></div>
+      <table style="margin-top:6px"><tbody id="cmpList"></tbody></table>
+    </div>
   </div>
 </details>
 <div class="wrap">
@@ -243,6 +255,55 @@ async function saveConfig() {
 }
 $('cfgSave').onclick = saveConfig;
 loadConfig();
+
+// ── Компаньоны: выдать код сопряжения, посмотреть и отозвать устройства ──────
+const CMP = '/api/v1/quik/companion';
+const ago = (ms) => ms ? new Date(ms).toLocaleString('ru-RU') : 'ни разу';
+
+async function loadCompanions() {
+  try {
+    const res = await fetch(CMP + '/devices', { credentials: 'include' });
+    if (!res.ok) return;
+    const { devices, codes } = await res.json();
+    const rows = devices.map((d) =>
+      `<tr><td>${esc(d.account)}</td><td class="muted">${esc(d.machine || '')}</td>` +
+      `<td class="muted">видели: ${esc(ago(d.last_seen_ms))}</td>` +
+      `<td><button data-revoke="${esc(d.id)}">Отозвать</button></td></tr>`).join('');
+    const pend = codes.map((c) =>
+      `<tr><td>${esc(c.account)}</td><td colspan="3" class="warn">код ${esc(c.code)} ждёт ввода</td></tr>`).join('');
+    $('cmpList').innerHTML = rows + pend || '<tr><td class="muted">компаньонов нет</td></tr>';
+    document.querySelectorAll('[data-revoke]').forEach((b) => b.onclick = () => revokeCompanion(b.dataset.revoke));
+  } catch { /* без компаньонов страница работает как раньше */ }
+}
+
+async function addCompanion() {
+  const account = $('cmpAcct').value.trim();
+  $('cmpMsg').textContent = ''; $('cmpCode').textContent = '';
+  if (!account) { $('cmpMsg').textContent = 'Укажите учётную запись'; return; }
+  try {
+    const res = await fetch(CMP + '/pairing-code', {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ account }),
+    });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) { $('cmpMsg').textContent = 'ошибка: ' + (d.detail || res.status); return; }
+    $('cmpCode').textContent = d.code;
+    $('cmpMsg').textContent = 'введите код в компаньоне на ' + d.account + ' в течение 15 минут';
+    loadCompanions();
+  } catch (e) { $('cmpMsg').textContent = 'ошибка: ' + e; }
+}
+
+async function revokeCompanion(id) {
+  try {
+    await fetch(CMP + '/revoke', {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }),
+    });
+  } catch { /* показать актуальный список всё равно */ }
+  loadCompanions();
+}
+$('cmpAdd').onclick = addCompanion;
+loadCompanions();
 
 $('from').value = $('to').value = mskToday();
 $('today').onclick = () => { $('from').value = $('to').value = mskToday(); load(); };

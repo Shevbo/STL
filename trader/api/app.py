@@ -1266,6 +1266,9 @@ def create_app() -> FastAPI:
     # QA checklist web form (GET /qa) + verdict persistence.
     from trader.api.qa_routes import router as qa_router
     fastapi_app.include_router(qa_router)
+    # STL Companion (tray panel): pairing + ONE read-only snapshot endpoint.
+    from trader.api.quik_companion import router as quik_companion_router
+    fastapi_app.include_router(quik_companion_router)
 
     @fastapi_app.post("/api/auth/login")
     async def login(body: LoginRequest, request: Request, response: Response):

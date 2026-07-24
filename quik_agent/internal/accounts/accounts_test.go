@@ -21,6 +21,24 @@ func TestPositionFromRow(t *testing.T) {
 	}
 }
 
+// The 4th element (varmargin) is optional: an old Lua build sends 3 columns and
+// must still parse, with HasVarMargin false so the UI can tell "no data" from 0.
+func TestPositionFromRowVarMargin(t *testing.T) {
+	p, ok := PositionFromRow([]any{"RIU6", 2.0, 89100.0, -3015.5})
+	if !ok || !p.HasVarMargin || p.VarMargin != -3015.5 {
+		t.Fatalf("4-column row: got %+v ok=%v", p, ok)
+	}
+	p, ok = PositionFromRow([]any{"RIU6", 2.0, 89100.0})
+	if !ok || p.HasVarMargin || p.VarMargin != 0 {
+		t.Fatalf("3-column row must parse without ВМ: got %+v ok=%v", p, ok)
+	}
+	// A junk ВМ must not drop the position itself.
+	p, ok = PositionFromRow([]any{"RIU6", 2.0, 89100.0, "хрень"})
+	if !ok || p.Net != 2 || p.HasVarMargin {
+		t.Fatalf("junk ВМ must keep the row: got %+v ok=%v", p, ok)
+	}
+}
+
 func TestOrderFromRow(t *testing.T) {
 	o, ok := OrderFromRow([]any{"123", "RIU6", 1.0, 89000.0, 1.0, 1.0})
 	if !ok {

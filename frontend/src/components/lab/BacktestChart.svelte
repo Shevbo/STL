@@ -118,6 +118,9 @@
   let levelStats = $state<any[]>([]);   // TP/SL distribution by peak averaging level
   let commission = $state<any>(null);   // broker/exchange commission breakdown
   let netResult = $state(0);            // Σ realized close PnL (₽, net of commission)
+  // Живой робот: сколько реализовано ДО первой сделки в журнале (200-хвост не
+  // достаёт дальше). Не null → кривая стартует не с нуля, и подпись это объясняет.
+  let equityCarry = $state<{ rub: number; fromTs: number } | null>(null);
   let statsExpanded = $state(false);    // report collapsed to 2 lines by default
   let showTrades = $state(false);       // trades-table overlay
   let tradeRows = $state<any[]>([]);    // per-trade rows for the table
@@ -717,9 +720,22 @@
         : (netOverride != null && Number.isFinite(netOverride) ? netOverride : null);
       const closes = events.filter((e: any) => e.close).sort((a: any, b: any) => a.time - b.time);
       let maxDD = 0;
-      if (bars.length) {
+      // Кривая рисуется ТОЛЬКО с первой известной сделки. Смещение (см. ниже)
+      // поднимает всю кривую к пожизненному итогу, и на барах ДО журнала это
+      // рисовало ровную полку на уровне, которого тогда не было: робот ещё не
+      // торговал, а график показывал +200k за месяц до первой сделки, а дальше
+      // «падение» с 310k до 126k. Форма была верной, вранья добавляла полка.
+      const firstEvTime = events.length
+        ? Math.min(...events.map((e: any) => e.time)) : null;
+      let startIdx = 0;
+      if (firstEvTime != null) {
+        const i = bars.findIndex(b => (b.time as number) >= firstEvTime);
+        startIdx = i < 0 ? bars.length : Math.max(0, i - 1);  // один бар до входа — базовая линия
+      }
+      const curveBars = bars.slice(startIdx);
+      if (curveBars.length) {
         let k = 0, cum = 0, peak = 0;
-        const raw = bars.map(b => {
+        const raw = curveBars.map(b => {
           while (k < closes.length && closes[k].time <= b.time) { cum += closes[k].close.pnl; k++; }
           return { time: b.time as number, value: cum };
         });
@@ -734,11 +750,19 @@
         //    КАЖДЫЙ шаг между сделками точным. Масштаб здесь растягивал форму в день,
         //    которого не было (MACD·RIU6: -30k->+104k из ниоткуда). Полный журнал ->
         //    смещение ≈ 0; обрезанный -> смещение = нераскрытая ранняя история.
+        const offset = (netOverride != null && Number.isFinite(netOverride))
+          ? netOverride - rawEnd : 0;
         const adj = (engineNet != null && rawEnd !== 0)
           ? (v: number) => v * (engineNet / rawEnd)
           : (netOverride != null && Number.isFinite(netOverride))
-            ? (v: number) => v + (netOverride - rawEnd)
+            ? (v: number) => v + offset
             : (v: number) => v;
+        // Уровень, с которого стартует кривая, — это реализованное ДО журнала
+        // (пожизненный итог минус то, что видно в журнале). Величина настоящая,
+        // но необъяснённая она читается как «взялось из воздуха», поэтому её
+        // подписываем над графиком вместе с датой начала журнала.
+        equityCarry = (engineNet == null && offset !== 0)
+          ? { rub: offset, fromTs: raw.length ? raw[0].time : 0 } : null;
         const curve = raw.map(p => {
           const v = adj(p.value);
           if (v > peak) peak = v;
@@ -1073,7 +1097,10 @@
        onpointerdown={startEqResize} onpointermove={moveEqResize} onpointerup={endEqResize}></div>
   <!-- Без известного ₽/пункт кривая идёт в ПУНКТАХ — подпись обязана это говорить,
        иначе пункты читаются как рубли (у BR пункт = 785 ₽, у RTS = 1.57 ₽). -->
-  <div class="bt-equity-label">P&L робота, {unitLabel} (нарастающим по закрытым сделкам)</div>
+  <div class="bt-equity-label">P&L робота, {unitLabel} (нарастающим по закрытым сделкам)
+    {#if equityCarry}<span class="bt-equity-carry"
+      >· кривая с {fmtDay(equityCarry.fromTs)}, до неё реализовано {fmtMoney(equityCarry.rub)} {unitLabel}
+      (журнал хранит последние 200 сделок)</span>{/if}</div>
   <div class="equity" bind:this={equityEl} style="height:{equityPx}px"></div>
 
   <!-- Custom horizontal scrollbar: drag the thumb to scroll across the data span. -->
@@ -1226,6 +1253,7 @@
     padding: 3px 10px; font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.5px;
     background: #0f0f1e; border-top: 1px solid #1a1a2e; border-bottom: 1px solid #1a1a2e; flex-shrink: 0;
   }
+  .bt-equity-carry { color: #9aa0b4; text-transform: none; letter-spacing: 0; }
   .equity { flex: 0 0 auto; min-height: 0; }
   .bt-resizer { flex: 0 0 8px; cursor: ns-resize; background: #12203a;
     border-top: 1px solid #24406a; border-bottom: 1px solid #24406a; touch-action: none; }

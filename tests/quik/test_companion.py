@@ -1,0 +1,225 @@
+"""STL Companion: pairing, token scope, and the snapshot's watch verdicts.
+
+The security claim this file defends: a companion device token opens EXACTLY ONE
+door (GET /snapshot) and nothing else in the app. If that ever stops being true,
+`test_companion_token_is_useless_on_other_routes` fails.
+"""
+
+from __future__ import annotations
+
+import json
+import time
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from trader.api.quik_companion import _watch_runner
+from trader.api.quik_companion import router as companion_router
+from trader.api.quik_robots import router as quik_robots_router
+from trader.auth.portal import make_session_token
+from trader.quik.store import QuikAgentStore
+
+SECRET = "test-bridge-secret"
+ACCOUNT = "WIN10-HYPERV\\admin"
+
+
+class _Settings:
+    shectory_auth_bridge_secret = SECRET
+
+
+class FakePool:
+    """Enough asyncpg surface for the companion module: agent_control as a dict,
+    every other SELECT answers empty."""
+
+    def __init__(self):
+        self.kv: dict[str, str] = {}
+
+    async def execute(self, sql: str, *args):
+        if sql.startswith("INSERT INTO agent_control"):
+            self.kv[args[0]] = args[1]
+        elif sql.startswith("DELETE FROM agent_control"):
+            self.kv.pop(args[0], None)
+        return "OK"
+
+    async def fetchval(self, sql: str, *args):
+        if "FROM agent_control WHERE key=$1" in sql:
+            return self.kv.get(args[0])
+        return None
+
+    async def fetch(self, sql: str, *args):
+        if "FROM agent_control" in sql and "LIKE" in sql:
+            pats = [a.rstrip("%") for a in args]
+            return [{"key": k, "value": v} for k, v in self.kv.items()
+                    if any(k.startswith(p) for p in pats)]
+        return []
+
+
+def _client(monkeypatch) -> tuple[TestClient, FakePool]:
+    monkeypatch.delenv("SHECTORY_AUTH_DEV_BYPASS", raising=False)
+    app = FastAPI()
+    app.include_router(companion_router)
+    app.include_router(quik_robots_router)
+    app.state.settings = _Settings()
+    app.state.db_pool = FakePool()
+    app.state.quik_store = QuikAgentStore()
+    app.state.quik_server = None
+    return TestClient(app), app.state.db_pool
+
+
+def _operator_headers() -> dict:
+    return {"Authorization": "Bearer " + make_session_token("op@example.com", SECRET)}
+
+
+def _mint_code(client: TestClient, account: str = ACCOUNT) -> str:
+    r = client.post("/api/v1/quik/companion/pairing-code",
+                    json={"account": account}, headers=_operator_headers())
+    assert r.status_code == 200, r.text
+    return r.json()["code"]
+
+
+def _pair(client: TestClient, code: str, account: str = ACCOUNT):
+    return client.post("/api/v1/quik/companion/pair",
+                       json={"code": code, "account": account, "machine": "WIN10-HYPERV"})
+
+
+def test_pair_then_read_snapshot(monkeypatch):
+    client, _ = _client(monkeypatch)
+    r = _pair(client, _mint_code(client))
+    assert r.status_code == 200, r.text
+    token = r.json()["token"]
+    assert token.startswith("stlc_")
+
+    snap = client.get("/api/v1/quik/companion/snapshot",
+                      headers={"Authorization": "Bearer " + token})
+    assert snap.status_code == 200, snap.text
+    body = snap.json()
+    assert set(body) >= {"account", "positions", "robots", "watch", "alerts"}
+
+
+def test_pairing_code_is_single_use_and_account_bound(monkeypatch):
+    client, _ = _client(monkeypatch)
+
+    # A code issued for one account never pairs another, even with the right code.
+    code = _mint_code(client)
+    assert _pair(client, code, account="OTHERPC\\bob").status_code == 403
+    # ...and that attempt burned the code, so the rightful owner cannot reuse it.
+    assert _pair(client, code, account=ACCOUNT).status_code == 403
+
+    # A fresh code works exactly once.
+    code = _mint_code(client)
+    assert _pair(client, code).status_code == 200
+    assert _pair(client, code).status_code == 403
+
+
+def test_expired_code_is_refused(monkeypatch):
+    client, pool = _client(monkeypatch)
+    code = _mint_code(client)
+    rec = json.loads(pool.kv["companion:code:" + code])
+    rec["expires_ms"] = int(time.time() * 1000) - 1
+    pool.kv["companion:code:" + code] = json.dumps(rec)
+    assert _pair(client, code).status_code == 403
+
+
+def test_revoked_companion_loses_access(monkeypatch):
+    client, _ = _client(monkeypatch)
+    token = _pair(client, _mint_code(client)).json()["token"]
+    hdr = {"Authorization": "Bearer " + token}
+    assert client.get("/api/v1/quik/companion/snapshot", headers=hdr).status_code == 200
+
+    devices = client.get("/api/v1/quik/companion/devices", headers=_operator_headers()).json()
+    dev_id = devices["devices"][0]["id"]
+    assert client.post("/api/v1/quik/companion/revoke", json={"id": dev_id},
+                       headers=_operator_headers()).status_code == 200
+    assert client.get("/api/v1/quik/companion/snapshot", headers=hdr).status_code == 401
+
+
+def test_companion_token_is_useless_on_other_routes(monkeypatch):
+    """The whole safety story: the token authenticates the snapshot and NOTHING
+    else — not a read of the robot mirror, not any control route."""
+    client, _ = _client(monkeypatch)
+    token = _pair(client, _mint_code(client)).json()["token"]
+    hdr = {"Authorization": "Bearer " + token}
+
+    assert client.get("/api/v1/quik/robots-mirror", headers=hdr).status_code == 401
+    assert client.get("/api/v1/quik/agent-local-status", headers=hdr).status_code == 401
+    assert client.post("/api/v1/quik/robots/x/pause-agent", json={},
+                       headers=hdr).status_code == 401
+    # Unauthenticated is unauthenticated.
+    assert client.get("/api/v1/quik/companion/snapshot").status_code == 401
+    assert client.get("/api/v1/quik/companion/devices", headers=hdr).status_code == 401
+
+
+def test_snapshot_reads_the_agent_mirror_shape(monkeypatch):
+    """The mirror is the agent's own status JSON (agent/health/robots/recon) with
+    _received_at_ms added at the TOP level — NOT wrapped in a "status" key. Read
+    it wrong and every block renders empty while the API still answers 200, so
+    this pins the shape with a realistic snapshot."""
+    monkeypatch.delenv("SHECTORY_AUTH_DEV_BYPASS", raising=False)
+    app = FastAPI()
+    app.include_router(companion_router)
+    app.state.settings = _Settings()
+    app.state.db_pool = FakePool()
+    store = QuikAgentStore()
+    store.set_agent_status("A1", json.dumps({
+        "agent": {"version": "x", "link_up": True},
+        "health": {
+            "runner_healthy": True, "exchange_lag_ms": 700, "pong_age_ms": 900,
+            "money": {"limit": 1_842_500.0, "used": 412_300.0, "planned": 1_430_200.0,
+                      "varmargin": 12_480.0, "ts_comission": -1204.0, "age_ms": 900},
+            "positions": [{"sec": "RIU6", "net": 2, "avg": 89_120.0, "varmargin": -3015.0},
+                          {"sec": "GZU6", "net": 0, "avg": 0.0, "varmargin": None}],
+        },
+        "robots": [{"id": "agent-macd-RIU6-lxk22", "symbol": "RIU6", "mode": "real",
+                    "paused": False, "position": 2, "pnl_rub": 24_180.0,
+                    "float_rub": -3015.0}],
+    }), 0)
+    app.state.quik_store = store
+    client = TestClient(app)
+
+    body = client.get("/api/v1/quik/companion/snapshot",
+                      headers=_operator_headers()).json()
+    assert body["account"]["has_data"] is True
+    assert body["account"]["used"] == 412_300.0
+    # Flat instruments are dropped; the open one keeps its ВМ.
+    assert [p["sec"] for p in body["positions"]] == ["RIU6"]
+    assert body["positions"][0]["varmargin"] == -3015.0
+    assert len(body["robots"]) == 1
+    assert body["robots"][0]["pnl_rub"] == 24_180.0
+    assert body["agent_seen_ms"] > 0
+    assert body["watch"]["runner"]["ok"] is True
+
+
+def test_operator_can_read_snapshot_from_a_browser(monkeypatch):
+    """The panel must be openable at /companion.html in a normal STL session, or
+    fixing its layout would mean rebuilding the exe every time."""
+    client, _ = _client(monkeypatch)
+    r = client.get("/api/v1/quik/companion/snapshot", headers=_operator_headers())
+    assert r.status_code == 200
+
+
+@pytest.mark.parametrize("health,expect_ok,needle", [
+    ({"runner_healthy": True, "exchange_lag_ms": 800, "pong_age_ms": 1200}, True, ""),
+    ({"runner_healthy": False}, False, "раннер"),
+    ({"runner_healthy": True, "exchange_lag_ms": 300_000}, False, "лента"),
+    ({"runner_healthy": True, "pong_age_ms": 400_000}, False, "QUIK"),
+    ({"runner_healthy": True, "daily_orders_used": 470, "daily_orders_cap": 500}, False, "лимит"),
+    # vdsguard reports quik_state, not state — a wrong key here would silently
+    # disable the check, so the field name is pinned by this case.
+    ({"runner_healthy": True, "vds": {"quik_state": "HUNG"}}, False, "QUIK-гард"),
+    ({"runner_healthy": True, "vds": {"quik_state": "DISABLED"}}, True, ""),
+    ({"runner_healthy": True, "vds": {"quik_state": "OK", "low_memory": True}},
+     False, "мало памяти"),
+])
+def test_watch_runner_verdicts(health, expect_ok, needle):
+    now = 1_700_000_000_000
+    out = _watch_runner(health, now - 5_000, now)
+    assert out["ok"] is expect_ok
+    assert needle in "; ".join(out["issues"])
+
+
+def test_watch_runner_flags_a_dead_agent_link():
+    now = 1_700_000_000_000
+    out = _watch_runner({"runner_healthy": True}, now - 600_000, now)
+    assert out["ok"] is False
+    assert "нет связи с агентом" in "; ".join(out["issues"])

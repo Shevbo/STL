@@ -52,7 +52,9 @@
   let showQuikTables = $state(false);
   let showQuikOrders = $state(false);
   let showCharts = $state(false);
-  let showEquity = $state(false);
+  // Deep-link: ?equity=1 разворачивает общий график доходности всех роботов —
+  // на него ссылается панель компаньона из блока «Роботы».
+  let showEquity = $state(_qs.has('equity'));
   // OrderViz: default = auto (self-shows on active orders). Operator can pin it
   // open or hide it; "pin" forces it visible even with no active orders.
   let orderVizPinned = $state(false);

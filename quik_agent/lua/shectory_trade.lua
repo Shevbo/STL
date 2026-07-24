@@ -38,7 +38,7 @@
 -- Bump on every change you deliver to the VDS. Logged FIRST on OnInit so the
 -- operator can confirm which version QUIK actually loaded (the running script is
 -- in MEMORY; a file on disk with the same name may be a different build).
-local SCRIPT_VERSION = "2026.07.23-money3"
+local SCRIPT_VERSION = "2026.07.24-posvm"
 
 local CONFIG = {
   HOST          = "127.0.0.1",
@@ -603,8 +603,8 @@ local function ser_rows(rows)
   return table.concat(parts, ";")
 end
 
-local acc = { last_pos = "", last_ord = "", last_pos_ms = 0, last_ord_ms = 0, trd_seen = 0,
-              last_money = "", last_money_ms = 0 }
+local acc = { last_pos = "", last_pos_vm = "", last_ord = "", last_pos_ms = 0,
+              last_ord_ms = 0, trd_seen = 0, last_money = "", last_money_ms = 0 }
 
 -- QUIK datetime table -> epoch ms (0 when absent/unparsable). Same VDS-clock=MSK
 -- assumption as OnAllTrade's last_trade_ts_ms (see the comment there).
@@ -630,28 +630,41 @@ end
 -- (Assigns the forward-declared local near the top of the file.)
 acc_resync = function()
   acc.trd_seen = 0
-  acc.last_pos, acc.last_pos_ms = "", 0
+  acc.last_pos, acc.last_pos_vm, acc.last_pos_ms = "", "", 0
   acc.last_ord, acc.last_ord_ms = "", 0
   acc.last_money, acc.last_money_ms = "", 0
 end
 
+-- Rows are [sec_code, totalnet, avrposnprice, varmargin]. The 4th element is new
+-- (2026.07.24); the agent tolerates a 3-element row, so an older agent build keeps
+-- working and this script keeps working against an older agent.
+--
+-- Two gates, because ВМ moves with every tick and must NOT turn a change-gated
+-- frame into a per-poll firehose (agent flush discipline):
+--   * structural key (sec/net/avg) — emits immediately, as before;
+--   * a ВМ-only move — emits at most once per 5s;
+--   * 15s keepalive regardless, so a flat account stays GREEN, not STALE.
 local function publish_acc_positions()
   local n = getNumberOf("futures_client_holding") or 0
-  local rows = {}
+  local rows, struct = {}, {}
   for i = 0, n - 1 do
     local r = getItem("futures_client_holding", i)
     if r and r.sec_code and r.sec_code ~= "" then
-      rows[#rows + 1] = { r.sec_code, tonumber(r.totalnet) or 0, tonumber(r.avrposnprice) or 0 }
+      local net = tonumber(r.totalnet) or 0
+      local avg = tonumber(r.avrposnprice) or 0
+      local vm = tonumber(r.varmargin) or 0
+      rows[#rows + 1] = { r.sec_code, net, avg, vm }
+      struct[#struct + 1] = { r.sec_code, net, avg }
     end
   end
-  local key = ser_rows(rows)
+  local key = ser_rows(struct)
+  local vmkey = ser_rows(rows)
   local t = now_ms()
-  -- Emit on change, on the first pass (last_pos_ms == 0, so a flat/empty account
-  -- still sends one frame and recon reads OK-empty instead of STALE), or as a
-  -- keepalive under the 30s recon-STALE threshold so a flat, unchanging account
-  -- stays GREEN instead of ageing back to STALE.
-  if key ~= acc.last_pos or acc.last_pos_ms == 0 or (t - acc.last_pos_ms) >= 15000 then
+  local structural = key ~= acc.last_pos or acc.last_pos_ms == 0
+  local vm_moved = vmkey ~= acc.last_pos_vm and (t - acc.last_pos_ms) >= 5000
+  if structural or vm_moved or (t - acc.last_pos_ms) >= 15000 then
     acc.last_pos = key
+    acc.last_pos_vm = vmkey
     acc.last_pos_ms = t
     emit({ event = "acc_pos", rows = rows })
   end
@@ -669,10 +682,12 @@ end
 local acc_money_diag_done = false
 local acc_money_ids = { firmid = nil, trdacc = nil }
 
+-- The 6th element (cbplused, "Тек. чист. поз.") is new in 2026.07.24; the agent
+-- accepts a 5-element row, so old agent + new script and vice versa both work.
 local function money_row_of(r)
   return { tonumber(r.cbplimit) or 0, tonumber(r.varmargin) or 0,
            tonumber(r.accruedint) or 0, tonumber(r.ts_comission) or 0,
-           tonumber(r.cbplplanned) or 0 }
+           tonumber(r.cbplplanned) or 0, tonumber(r.cbplused) or 0 }
 end
 
 local function publish_acc_money()
