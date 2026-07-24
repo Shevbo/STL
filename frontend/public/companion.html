@@ -26,34 +26,37 @@
     --up: #15571a;
     --down: #8d1a1a;
     --rail-flat: rgba(26, 24, 21, .22);
-    --pad: 9px;
+    --pad: 11px;
   }
   * { box-sizing: border-box; }
   html, body {
     margin: 0;
-    /* Прозрачно: тёплый полупрозрачный фон даёт композитор Windows. */
-    background: transparent;
+    /* Тёплую подложку рисует композитор Windows (DWM, ~50%). Поверх кладём ещё
+       один слой бумаги: вместе даёт ~70% непрозрачности — оператор просил меньше
+       прозрачности ради читаемости. В браузере (правка вёрстки) слой работает
+       сам по себе. */
+    background: rgba(247, 243, 236, .4);
     color: var(--ink);
-    font: 9px/1.5 Consolas, "Cascadia Mono", monospace;
+    font: 12px/1.5 Consolas, "Cascadia Mono", monospace;
     font-variant-numeric: tabular-nums;
     -webkit-font-smoothing: antialiased;
     overflow: hidden;
     cursor: default;
     user-select: none;
   }
-  body { padding: 6px var(--pad) 8px; }
+  body { padding: 8px var(--pad) 10px; }
 
   /* Шапка: имя, свежесть, спрятать, выход. */
-  .top { display: flex; align-items: baseline; gap: 6px; margin-bottom: 5px; }
+  .top { display: flex; align-items: baseline; gap: 7px; margin-bottom: 6px; }
   .brand {
-    font: 400 10px/1 Bahnschrift, "Segoe UI Semilight", sans-serif;
+    font: 400 13px/1 Bahnschrift, "Segoe UI Semilight", sans-serif;
     letter-spacing: .18em; text-transform: uppercase; color: var(--muted);
   }
-  .fresh { flex: 1; color: var(--faint); font-size: 8px; letter-spacing: .04em; }
+  .fresh { flex: 1; color: var(--faint); font-size: 10px; letter-spacing: .04em; }
   .fresh.stale { color: var(--down); }
   .btn {
-    font: 400 11px/1 "Segoe UI", sans-serif; color: var(--faint);
-    cursor: pointer; padding: 0 2px;
+    font: 400 15px/1 "Segoe UI", sans-serif; color: var(--faint);
+    cursor: pointer; padding: 0 3px;
   }
   .btn:hover { color: var(--ink); }
   .btn.quit:hover { color: var(--down); }
@@ -61,13 +64,19 @@
   /* Заголовок секции: подпись, дальше волосяная линия до края. */
   .sec {
     display: flex; align-items: center; gap: 6px;
-    margin: 7px 0 2px;
-    font: 400 9px/1 Bahnschrift, "Segoe UI Semilight", sans-serif;
+    margin: 9px 0 3px;
+    font: 400 12px/1 Bahnschrift, "Segoe UI Semilight", sans-serif;
     letter-spacing: .16em; text-transform: uppercase; color: var(--muted);
   }
   .sec::after { content: ""; flex: 1; height: 1px; background: var(--rule); }
-  .sec a { color: var(--muted); text-decoration: none; border-bottom: 1px dotted var(--rule); }
+  .sec a { color: var(--muted); text-decoration: none; border-bottom: 1px dotted var(--rule);
+    text-transform: none; letter-spacing: 0; }
   .sec a:hover { color: var(--ink); }
+  /* «копировать» в шапке уведомлений: выглядит как ссылка, но это действие. */
+  .sec .copy { cursor: pointer; color: var(--muted); border-bottom: 1px dotted var(--rule);
+    text-transform: none; letter-spacing: 0; }
+  .sec .copy:hover { color: var(--ink); }
+  .sec .copy.done { color: var(--up); border-color: transparent; }
 
   /* Рельс слева — фирменный элемент: столбик знаковых отметок на всю панель. */
   .row {
@@ -79,35 +88,43 @@
   .row.down { border-left-color: var(--down); }
   .row .k { color: var(--muted); white-space: nowrap; }
   .row .sp { flex: 1; }
-  .row .v { white-space: nowrap; }
+  /* Цифры — главное на панели: крупнее подписей и полужирные. */
+  .row .v { white-space: nowrap; font-weight: 600; font-size: 14px; }
   .v.up { color: var(--up); }
   .v.down { color: var(--down); }
-  .v.nil { color: var(--faint); }
-  .sub { color: var(--faint); font-size: 8px; }
+  .v.nil { color: var(--faint); font-weight: 400; }
+  .sub { color: var(--faint); font-size: 10px; }
+  /* Итоговая строка по роботам: жирнее рамка, чтобы читалась как сумма. */
+  .row.total { border-left-width: 3px; margin-top: 2px; padding-top: 2px; }
+  .row.total .k { color: var(--ink); }
 
   /* Робот: две строки — имя со ссылкой, под ней цифры. */
   .rob { padding: 2px 0 2px 6px; border-left: 2px solid var(--rail-flat); margin-top: 1px; }
   .rob.up { border-left-color: var(--up); }
   .rob.down { border-left-color: var(--down); }
-  .rob .hd { display: flex; align-items: baseline; gap: 5px; }
-  .rob a { color: var(--ink); text-decoration: none; border-bottom: 1px solid var(--rule); }
+  .rob .hd { display: flex; align-items: baseline; gap: 6px; }
+  .rob a { color: var(--ink); text-decoration: none; border-bottom: 1px solid var(--rule);
+    font-size: 13px; }
   .rob a:hover { border-bottom-color: var(--ink); }
+  .rob .hd .v { font-size: 14px; }
   .tag {
-    font: 400 8px/1 Bahnschrift, sans-serif; letter-spacing: .1em;
+    font: 400 10px/1 Bahnschrift, sans-serif; letter-spacing: .1em;
     text-transform: uppercase; color: var(--faint);
   }
   .tag.real { color: var(--down); }
-  .rob .nums { display: flex; gap: 8px; flex-wrap: wrap; color: var(--muted); }
-  .rob .nums b { font-weight: 400; color: var(--ink); }
+  /* Пауза — важный маркер: реал на паузе значит защита сработала. Выделяем. */
+  .tag.paused { color: var(--down); font-weight: 600; }
+  .rob .nums { display: flex; gap: 9px; flex-wrap: wrap; color: var(--muted); font-size: 11px; }
+  .rob .nums b { font-weight: 600; color: var(--ink); }
 
   /* Вотчер: точка статуса + текст проблемы. */
   .chk { display: flex; align-items: baseline; gap: 5px; padding: 1px 0 1px 6px;
          border-left: 2px solid var(--up); }
   .chk.bad { border-left-color: var(--down); }
-  .chk .n { color: var(--muted); min-width: 74px; }
+  .chk .n { color: var(--muted); min-width: 92px; }
   .chk .s { color: var(--up); }
   .chk.bad .s { color: var(--down); }
-  .alert { padding-left: 6px; border-left: 2px solid var(--down); color: var(--down); }
+  .alert { padding: 1px 0 1px 6px; border-left: 2px solid var(--down); color: var(--down); }
   .empty { color: var(--faint); padding-left: 8px; }
 </style>
 </head>
@@ -178,18 +195,50 @@ function renderPositions(list) {
   }).join('');
 }
 
+// Итог робота с запуска = реализованное раннером + плавающее по открытой позиции.
+function robotLive(r) {
+  return (r.pnl_rub == null && r.float_rub == null)
+    ? null : (r.pnl_rub || 0) + (r.float_rub || 0);
+}
+
+// Сумма финреза по роботам, РАЗДЕЛЬНО реал и бумага. Складывать их в одно число
+// нельзя: бумага это не деньги, а один прибыльный реал + убыточная бумага дают
+// «минус», которого на счёте нет. Каждый итог — с запуска и за сегодня.
+function robotsTotal(list) {
+  if (!list || !list.length) return '';
+  const acc = {
+    real: { live: 0, today: 0, hasL: false, hasT: false, n: 0 },
+    paper: { live: 0, today: 0, hasL: false, hasT: false, n: 0 },
+  };
+  for (const r of list) {
+    const g = acc[r.mode === 'real' ? 'real' : 'paper'];
+    g.n += 1;
+    const l = robotLive(r);
+    if (l != null) { g.live += l; g.hasL = true; }
+    if (r.today_net != null) { g.today += r.today_net; g.hasT = true; }
+  }
+  const rowFor = (label, g) => !g.n ? '' :
+    `<div class="row total ${cls(g.hasL ? g.live : null)}">` +
+    `<span class="k">${label} (${g.n})</span><span class="sp"></span>` +
+    `<span class="sub">сегодня ${g.hasT ? rub(g.today, { signed: true }) : '—'}</span>` +
+    `${val(g.hasL ? rub(g.live, { signed: true }) : null, cls(g.live))}</div>`;
+  return rowFor('Итог реал', acc.real) + rowFor('Итог бумага', acc.paper);
+}
+
 function renderRobots(list) {
   if (!list || !list.length) return '<div class="empty">роботов нет</div>';
   return list.map((r) => {
-    // Итог с запуска = реализованное раннером + плавающее по открытой позиции.
-    const live = (r.pnl_rub == null && r.float_rub == null)
-      ? null : (r.pnl_rub || 0) + (r.float_rub || 0);
+    const live = robotLive(r);
     const k = cls(live);
     const last = hhmmss(r.last_trade_ms);
+    const real = r.mode === 'real';
+    // «реал · пауза» = робот на реальных деньгах, остановлен. Чаще всего это
+    // авто-пауза вотчера (реплей тейпа после рестарта QUIK) — не сбой, а защита.
+    const tag = (real ? 'реал' : 'бумага') + (r.paused ? ' · ПАУЗА' : '');
     return `<div class="rob ${k}">
       <div class="hd">
         <a href="${STL}/?agent_robot=${encodeURIComponent(r.id)}" data-ext>${esc(r.name)}</a>
-        <span class="tag ${r.mode === 'real' ? 'real' : ''}">${r.mode === 'real' ? 'реал' : 'бумага'}${r.paused ? ' · пауза' : ''}</span>
+        <span class="tag ${real ? 'real' : ''} ${r.paused ? 'paused' : ''}">${tag}</span>
         <span class="sp" style="flex:1"></span>
         ${val(rub(live, { signed: true }), k)}
       </div>
@@ -236,22 +285,59 @@ function renderAlerts(a) {
 }
 
 let lastGood = 0;
+let lastData = null;   // последний снапшот — для копирования уведомлений
 function paint(d) {
+  lastData = d;
   $('body').innerHTML =
     '<div class="sec">счёт</div>' + renderAccount(d.account) +
     '<div class="sec">позиции</div>' + renderPositions(d.positions) +
     `<div class="sec">роботы <a href="${STL}/?lab=live&equity=1" data-ext>витрина ↗</a></div>` +
-      renderRobots(d.robots) +
+      robotsTotal(d.robots) + renderRobots(d.robots) +
     `<div class="sec">вотчер <a href="${STL}/?lab=botstore" data-ext>хитпарад ↗</a></div>` +
       renderWatch(d.watch) +
-    `<div class="sec">уведомления <a href="${STL}/watchdog-log.html" data-ext>детали ↗</a></div>` +
+    `<div class="sec">уведомления <a href="${STL}/watchdog-log.html" data-ext>детали ↗</a>` +
+      `<span class="sp" style="flex:1"></span><span class="copy" id="copyAlerts">копировать</span></div>` +
       renderAlerts(d.alerts);
   fitWindow();
+}
+
+// Текст для буфера: то, что оператор перешлёт в чат. Собираем контекст —
+// свежесть, паузы роботов, проблемы вотчера и эскалации — не только сырые SMS.
+function alertsText() {
+  const d = lastData || {};
+  const L = ['STL companion · ' + (hhmmss(lastGood) || '?')];
+  const paused = (d.robots || []).filter((r) => r.paused)
+    .map((r) => r.name + (r.mode === 'real' ? ' (реал)' : ''));
+  if (paused.length) L.push('на паузе: ' + paused.join(', '));
+  const w = d.watch || {};
+  for (const [name, blk] of [['раннер+lua', w.runner], ['бэктесты', w.backtests], ['платформа', w.platform]]) {
+    if (blk && blk.ok === false && (blk.issues || []).length) L.push(name + ': ' + blk.issues.join('; '));
+  }
+  const a = d.alerts || {};
+  (a.unresolved || []).forEach((t) => L.push('не решено: ' + t));
+  (a.sms_today || []).forEach((t) => L.push('SMS: ' + t));
+  if (L.length === 1) L.push('всё в норме, эскалаций нет');
+  return L.join('\n');
+}
+
+async function copyAlerts(btn) {
+  const text = alertsText();
+  let ok = false;
+  if (LOCAL) {
+    // Через прокси компаньона — буфер Windows ставит Go, без ограничений WebView2.
+    try { const r = await fetch('/clip', { method: 'POST', body: text }); ok = r.ok; } catch { /**/ }
+  } else {
+    try { await navigator.clipboard.writeText(text); ok = true; } catch { /**/ }
+  }
+  if (btn) { btn.textContent = ok ? 'скопировано' : 'не вышло'; btn.classList.toggle('done', ok); }
+  setTimeout(() => { if (btn) { btn.textContent = 'копировать'; btn.classList.remove('done'); } }, 1600);
 }
 
 // Внешние ссылки открывает системный браузер: внутри WebView2 новое окно
 // либо не откроется, либо утащит панель на чужую страницу.
 document.addEventListener('click', (e) => {
+  const copyBtn = e.target.closest('.copy');
+  if (copyBtn) { copyAlerts(copyBtn); return; }
   const a = e.target.closest('a[data-ext]');
   if (!a || !LOCAL) return;   // в браузере ссылка работает сама собой
   e.preventDefault();
@@ -262,8 +348,13 @@ $('quit').onclick = () => shell('/quit');
 if (!LOCAL) { $('hide').style.display = $('quit').style.display = 'none'; }
 
 // Окно ровно по содержимому: высоту считает страница, размер ставит Go.
+// Ширину задаём один раз при старте — так «размер» не зависит от config.json
+// на машине оператора (страница — авторитет размера).
+const PANEL_WIDTH = 500;
+let widthSet = false;
 let lastH = 0;
 function fitWindow() {
+  if (!widthSet) { widthSet = true; shell('/width?w=' + PANEL_WIDTH); }
   const h = Math.ceil(document.body.getBoundingClientRect().height) + 10;
   if (h === lastH) return;
   lastH = h;

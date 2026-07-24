@@ -113,6 +113,8 @@ type link struct {
 	onHide   func()
 	onQuit   func()
 	onHeight func(int)
+	onWidth  func(int)
+	onClip   func(string) error
 }
 
 func newLink(cfg config) *link {
@@ -154,6 +156,22 @@ func (l *link) serve() (string, error) {
 	mux.HandleFunc("/height", func(w http.ResponseWriter, r *http.Request) {
 		if h, err := strconv.Atoi(r.URL.Query().Get("h")); err == nil && l.onHeight != nil {
 			l.onHeight(h)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("/width", func(w http.ResponseWriter, r *http.Request) {
+		if px, err := strconv.Atoi(r.URL.Query().Get("w")); err == nil && l.onWidth != nil {
+			l.onWidth(px)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("/clip", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(io.LimitReader(r.Body, 256<<10))
+		if l.onClip != nil {
+			if err := l.onClip(string(body)); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})

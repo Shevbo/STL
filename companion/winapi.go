@@ -42,10 +42,18 @@ var (
 	pDestroyMenu      = user32.NewProc("DestroyMenu")
 	pGetCursorPos     = user32.NewProc("GetCursorPos")
 
+	pOpenClipboard    = user32.NewProc("OpenClipboard")
+	pEmptyClipboard   = user32.NewProc("EmptyClipboard")
+	pSetClipboardData = user32.NewProc("SetClipboardData")
+	pCloseClipboard   = user32.NewProc("CloseClipboard")
+
 	pShellNotifyIconW = shell32.NewProc("Shell_NotifyIconW")
 	pShellExecuteW    = shell32.NewProc("ShellExecuteW")
 	pGetModuleHandleW = kernel32.NewProc("GetModuleHandleW")
 	pCreateMutexW     = kernel32.NewProc("CreateMutexW")
+	pGlobalAlloc      = kernel32.NewProc("GlobalAlloc")
+	pGlobalLock       = kernel32.NewProc("GlobalLock")
+	pGlobalUnlock     = kernel32.NewProc("GlobalUnlock")
 
 	pCryptProtectData   = crypt32.NewProc("CryptProtectData")
 	pCryptUnprotectData = crypt32.NewProc("CryptUnprotectData")
@@ -71,6 +79,7 @@ const (
 	wmSetSize   = wmApp + 2
 	wmQuitApp   = wmApp + 3
 	wmToggle    = wmApp + 4
+	wmSetWidth  = wmApp + 5
 	wmLButtonUp = 0x0202
 	wmRButtonUp = 0x0205
 
@@ -185,6 +194,45 @@ func shellOpen(target string) {
 	_, _, _ = pShellExecuteW.Call(0,
 		uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("open"))),
 		uintptr(unsafe.Pointer(windows.StringToUTF16Ptr(target))), 0, 0, 1 /*SW_SHOWNORMAL*/)
+}
+
+const (
+	cfUnicodeText = 13
+	gmemMoveable  = 0x0002
+)
+
+// setClipboard кладёт текст в буфер обмена Windows. Нужно оператору, чтобы
+// выделить уведомления и вставить их в чат — WebView2 не всегда пускает
+// navigator.clipboard без жеста/разрешения, а этот путь работает всегда.
+// После успешного SetClipboardData память принадлежит системе — не освобождаем.
+func setClipboard(hwnd uintptr, text string) error {
+	u16, err := windows.UTF16FromString(text)
+	if err != nil {
+		return err
+	}
+	h, _, _ := pGlobalAlloc.Call(gmemMoveable, uintptr(len(u16)*2))
+	if h == 0 {
+		return errors.New("GlobalAlloc")
+	}
+	ptr, _, _ := pGlobalLock.Call(h)
+	if ptr == 0 {
+		return errors.New("GlobalLock")
+	}
+	// go vet флагует uintptr->Pointer как «возможное неправильное использование»,
+	// но здесь ptr указывает на память ОС из GlobalAlloc (не куча Go), зафиксирована
+	// GlobalLock и не двигается GC. Это канонический путь буфера обмена Win32.
+	dst := unsafe.Slice((*uint16)(unsafe.Pointer(ptr)), len(u16)) //nolint:govet
+	copy(dst, u16)
+	_, _, _ = pGlobalUnlock.Call(h)
+	if r, _, _ := pOpenClipboard.Call(hwnd); r == 0 {
+		return errors.New("OpenClipboard")
+	}
+	defer pCloseClipboard.Call()
+	_, _, _ = pEmptyClipboard.Call()
+	if r, _, _ := pSetClipboardData.Call(cfUnicodeText, h); r == 0 {
+		return errors.New("SetClipboardData")
+	}
+	return nil
 }
 
 // singleInstance returns false when another companion already owns the mutex.

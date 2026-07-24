@@ -39,6 +39,7 @@ type app struct {
 	browser *edge.Chromium
 	nid     notifyIconData
 	height  int
+	width   int // текущая ширина окна; страница может её менять (см. /width)
 }
 
 var a app
@@ -61,7 +62,10 @@ func main() {
 	a.lnk.onHide = func() { post(wmToggle, 0) }
 	a.lnk.onQuit = func() { post(wmQuitApp, 0) }
 	a.lnk.onHeight = func(h int) { post(wmSetSize, uintptr(h)) }
+	a.lnk.onWidth = func(w int) { post(wmSetWidth, uintptr(w)) }
+	a.lnk.onClip = func(s string) error { return setClipboard(a.hwnd, s) }
 
+	a.width = a.cfg.Width
 	a.height = 320
 	createWindow()
 	setBackdrop(a.hwnd, a.cfg.BGAlpha)
@@ -147,9 +151,31 @@ func resizePanel(h int) {
 		return
 	}
 	a.height = h
-	x, y := panelOrigin(a.cfg.Width, h)
+	applyBounds()
+}
+
+// resizeWidth меняет ширину окна по запросу страницы. Так «увеличить размер»
+// работает независимо от config.json на машине оператора: авторитет размера —
+// страница, а не файл, который правится руками.
+func resizeWidth(w int) {
+	if w < 260 {
+		w = 260
+	}
+	wa := workArea()
+	if max := int(wa.Right-wa.Left) - 2*marginPx; w > max {
+		w = max
+	}
+	if w == a.width {
+		return
+	}
+	a.width = w
+	applyBounds()
+}
+
+func applyBounds() {
+	x, y := panelOrigin(a.width, a.height)
 	_, _, _ = pSetWindowPos.Call(a.hwnd, hwndTopMost, uintptr(x), uintptr(y),
-		uintptr(a.cfg.Width), uintptr(h), swpNoActivate)
+		uintptr(a.width), uintptr(a.height), swpNoActivate)
 }
 
 func panelVisible() bool {
@@ -159,9 +185,9 @@ func panelVisible() bool {
 
 func showPanel() {
 	// Пересчитываем позицию: панель задач могла переехать, разрешение измениться.
-	x, y := panelOrigin(a.cfg.Width, a.height)
+	x, y := panelOrigin(a.width, a.height)
 	_, _, _ = pSetWindowPos.Call(a.hwnd, hwndTopMost, uintptr(x), uintptr(y),
-		uintptr(a.cfg.Width), uintptr(a.height), swpShowWindow|swpNoActivate)
+		uintptr(a.width), uintptr(a.height), swpShowWindow|swpNoActivate)
 	_, _, _ = pSetForegroundWin.Call(a.hwnd)
 }
 
@@ -183,6 +209,8 @@ func wndProc(hwnd uintptr, msg uint32, wparam, lparam uintptr) uintptr {
 		}
 	case wmSetSize:
 		resizePanel(int(wparam))
+	case wmSetWidth:
+		resizeWidth(int(wparam))
 	case wmToggle:
 		togglePanel()
 	case wmQuitApp:
