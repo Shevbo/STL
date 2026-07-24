@@ -14,11 +14,9 @@
   import { startQuikOrderbookBridge } from './lib/quik_md';
   import LabPanel from './components/LabPanel.svelte';
   import QuikTables from './components/QuikTables.svelte';
-  import Orders from './components/Orders.svelte';
+  import OrdersFrame from './components/orders/OrdersFrame.svelte';
   import OrderViz from './components/OrderViz.svelte';
-  import ChartsGrid from './components/ChartsGrid.svelte';
   import EquityChart from './components/lab/EquityChart.svelte';
-  import SmartOrdersPanel from './components/SmartOrdersPanel.svelte';
   import LoginDialog from './components/LoginDialog.svelte';
   import AgentRobotScreen from './components/lab/AgentRobotScreen.svelte';
   import StrategyPage from './components/lab/StrategyPage.svelte';
@@ -51,7 +49,6 @@
   let showLab = $state(_qs.has('campaign') || _qs.has('lab'));
   let showQuikTables = $state(false);
   let showQuikOrders = $state(false);
-  let showCharts = $state(false);
   // Deep-link: ?equity=1 разворачивает общий график доходности всех роботов —
   // на него ссылается панель компаньона из блока «Роботы».
   let showEquity = $state(_qs.has('equity'));
@@ -285,8 +282,6 @@
     onToggleQuikTables={() => showQuikTables = !showQuikTables}
     {showQuikOrders}
     onToggleQuikOrders={() => showQuikOrders = !showQuikOrders}
-    {showCharts}
-    onToggleCharts={() => showCharts = !showCharts}
     {showEquity}
     onToggleEquity={() => showEquity = !showEquity}
   />
@@ -361,7 +356,6 @@
           quote={currentQuote}
           onSubmit={(order) => pendingOrder = order}
         />
-        <SmartOrdersPanel symbol={effectiveSymbol} />
       </div>
     </div>
   </div>
@@ -382,12 +376,7 @@
   {/if}
   {#if showQuikOrders}
     <div class="quik-tables-wrap" style="height:{labH}px">
-      <Orders />
-    </div>
-  {/if}
-  {#if showCharts}
-    <div class="quik-tables-wrap" style="height:{labH}px">
-      <ChartsGrid />
+      <OrdersFrame symbol={effectiveSymbol} />
     </div>
   {/if}
   {#if showEquity}

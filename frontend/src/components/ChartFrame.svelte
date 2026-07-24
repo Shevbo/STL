@@ -9,6 +9,8 @@
   import { instrumentStore } from '$lib/stores/instrument.svelte';
   import { orderbookStore } from '$lib/stores/orderbook.svelte';
   import { mskTickFormatter, mskCrosshairFormatter } from '$lib/chart-time';
+  import { smartOrdersStore, type SmartOrder } from '$lib/stores/smart-orders.svelte';
+  import { KIND_BY_ID, fmtPts } from '$lib/smart-order-help';
 
   let {
     symbol,
@@ -134,6 +136,27 @@
   // price lines map: order_id → priceLine
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let orderLines = new Map<string, any>();
+  // Умные заявки: уровень срабатывания на графике. Ключ — so_id + роль линии
+  // (у скользящего стопа их две: активация и текущий уровень выхода).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let smartLines = new Map<string, any>();
+  let unsubSmart: (() => void) | null = null;
+  const chartCode = $derived((selectedSymbol || '').split('@')[0]);
+  // Легенда показывает ТОЛЬКО те типы, что реально на графике: постоянный
+  // список стилей превращается в шум, который перестают читать.
+  const smartOnChart = $derived(
+    smartOrdersStore.armed.filter((o) => o.code === chartCode));
+  const legend = $derived.by(() => {
+    const seen = new Set<string>();
+    const out: Array<{ color: string; style: number; text: string }> = [];
+    for (const o of smartOnChart) {
+      if (seen.has(o.kind)) continue;
+      seen.add(o.kind);
+      const m = KIND_BY_ID[o.kind];
+      out.push({ color: m.color, style: m.lineStyle, text: m.legend });
+    }
+    return out;
+  });
 
   // Load REST history whenever the EFFECTIVE symbol or timeframe changes — including a
   // change driven by the `symbol` PROP (robot select / activeSymbol on the main screen),
@@ -296,6 +319,57 @@
     }
   });
 
+  // Умные заявки на графике. У скользящего стопа уровень ЖИВОЙ: он считается от
+  // пика, который сторож подтягивает за ценой, поэтому линия ползёт сама — это и
+  // есть анимация. Пересоздавать линию нельзя, иначе она будет мигать: двигаем
+  // существующую через applyOptions.
+  function smartLevels(o: SmartOrder): Array<{ key: string; price: number; title: string; dim?: boolean }> {
+    const m = KIND_BY_ID[o.kind];
+    const who = `${o.side === 'buy' ? 'ПОКУПКА' : 'ПРОДАЖА'} ${o.qty}`;
+    if (o.kind === 'sl' || o.kind === 'tp') {
+      return [{ key: o.so_id, price: o.trigger_price, title: `${m.short} ${who}` }];
+    }
+    if (o.kind === 'trail_tp') {
+      const out = [];
+      if (!o.activated && o.trigger_price > 0) {
+        out.push({ key: o.so_id + ':act', price: o.trigger_price,
+                   title: `${m.short} активация`, dim: true });
+      }
+      if (o.activated && o.peak > 0) {
+        const stop = o.side === 'sell' ? o.peak - o.trail_offset : o.peak + o.trail_offset;
+        out.push({ key: o.so_id + ':stop', price: stop,
+                   title: `${m.short} ${who} · откат ${fmtPts(o.trail_offset)}` });
+        out.push({ key: o.so_id + ':peak', price: o.peak, title: `${m.short} пик`, dim: true });
+      }
+      return out;
+    }
+    return o.child_price > 0
+      ? [{ key: o.so_id, price: o.child_price, title: `${m.short} ${who}` }] : [];
+  }
+
+  $effect(() => {
+    if (!tvCandle) return;
+    const want = new Map<string, { price: number; title: string; color: string; style: number; dim?: boolean }>();
+    for (const o of smartOnChart) {
+      const m = KIND_BY_ID[o.kind];
+      for (const lv of smartLevels(o)) {
+        if (lv.price > 0) want.set(lv.key, { ...lv, color: m.color, style: m.lineStyle });
+      }
+    }
+    for (const [key, line] of smartLines) {
+      if (!want.has(key)) { tvCandle.removePriceLine(line); smartLines.delete(key); }
+    }
+    for (const [key, lv] of want) {
+      const opts = {
+        price: lv.price, color: lv.color, lineWidth: lv.dim ? 1 : 2,
+        lineStyle: lv.dim ? 1 : lv.style, axisLabelVisible: true, title: lv.title,
+      };
+      const existing = smartLines.get(key);
+      if (existing) existing.applyOptions(opts);
+      else smartLines.set(key, tvCandle.createPriceLine(opts));
+    }
+  });
+
   // Task 6: trade markers merged with any lab markers
   $effect(() => {
     if (!tvCandle) return;
@@ -340,6 +414,8 @@
   const TICK_H = 80;
 
   onMount(async () => {
+    // Книга умных заявок общая с фреймом «Заявки»: один опрос на приложение.
+    unsubSmart = smartOrdersStore.subscribe(2000);
     const uPlotMod = await import('uplot');
     const UPlot = uPlotMod.default;
 
@@ -439,6 +515,7 @@
   });
 
   onDestroy(() => {
+    unsubSmart?.();
     uplotInst?.destroy();
     tvChart?.remove();
   });
@@ -478,6 +555,25 @@
         <div class="chart-loading"><span class="cl-spin"></span>Загрузка истории…</div>
       {/if}
     </div>
+    {#if legend.length}
+      <!-- Легенда: линия на графике без подписи это ребус. Показываем только то,
+           что сейчас нарисовано, и ровно тем же цветом и штрихом. -->
+      <div class="so-legend">
+        {#each legend as l}
+          <span class="so-l">
+            <svg viewBox="0 0 22 8" aria-hidden="true">
+              <line x1="1" y1="4" x2="21" y2="4" stroke={l.color} stroke-width="2"
+                    stroke-dasharray={l.style === 3 ? '2 3' : l.style === 2 ? '5 3' : '0'} />
+            </svg>{l.text}
+          </span>
+        {/each}
+        <span class="so-l muted">
+          <svg viewBox="0 0 22 8" aria-hidden="true">
+            <line x1="1" y1="4" x2="21" y2="4" stroke="#8a90a8" stroke-width="1" stroke-dasharray="1 2" />
+          </svg>тонкая линия — вспомогательный уровень (активация, пик)
+        </span>
+      </div>
+    {/if}
     <div class="scrollbar-container">
       <input
         type="range"
@@ -533,6 +629,14 @@
     animation: cl-spin 0.8s linear infinite;
   }
   @keyframes cl-spin { to { transform: rotate(360deg); } }
+  .so-legend {
+    flex-shrink: 0; display: flex; flex-wrap: wrap; gap: 4px 14px;
+    padding: 3px 8px; background: #0f0f1e; border-top: 1px solid #1a1a2e;
+    font-size: 10px; color: #8a90a8;
+  }
+  .so-l { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+  .so-l svg { width: 22px; height: 8px; flex-shrink: 0; }
+  .so-l.muted { color: #6f7590; }
   .scrollbar-container { flex-shrink: 0; padding: 2px 0; background: #0f0f1e; }
   .chart-scrollbar {
     width: 100%; height: 12px; cursor: pointer;

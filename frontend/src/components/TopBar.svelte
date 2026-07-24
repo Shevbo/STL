@@ -5,7 +5,7 @@
   import ExchangeInterface from './ExchangeInterface.svelte';
 
   let { showLab, onToggleLabPanel, showQuikTables, onToggleQuikTables,
-        showQuikOrders, onToggleQuikOrders, showCharts, onToggleCharts,
+        showQuikOrders, onToggleQuikOrders,
         showEquity, onToggleEquity }: {
     showLab?: boolean;
     onToggleLabPanel?: () => void;
@@ -13,8 +13,6 @@
     onToggleQuikTables?: () => void;
     showQuikOrders?: boolean;
     onToggleQuikOrders?: () => void;
-    showCharts?: boolean;
-    onToggleCharts?: () => void;
     showEquity?: boolean;
     onToggleEquity?: () => void;
   } = $props();
@@ -42,9 +40,9 @@
        title="лог активаций вотчера за здоровьем торговли">Вотчер</a>
     <button class="lab-btn" class:active={showEquity} onclick={onToggleEquity}
             title="график доходности алготорговли по журналу сделок">Доходность</button>
-    <button class="lab-btn" class:active={showCharts} onclick={onToggleCharts}>Графики поз./заявок</button>
     <button class="lab-btn" class:active={showQuikTables} onclick={onToggleQuikTables}>Таблицы QUIK</button>
-    <button class="lab-btn" class:active={showQuikOrders} onclick={onToggleQuikOrders}>Заявки</button>
+    <button class="lab-btn" class:active={showQuikOrders} onclick={onToggleQuikOrders}
+            title="ручные заявки: обычная, умные (SL/TP/Trail/по исполнению) и позиции на графиках">Заявки</button>
     <button class="lab-btn lab-panel-btn" class:active={showLab} onclick={onToggleLabPanel}>Бэктест</button>
     <span
       class="dot"

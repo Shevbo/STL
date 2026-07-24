@@ -1,0 +1,293 @@
+// Умные ручные заявки: тексты, алгоритмы и единые визуальные токены.
+//
+// ОДИН источник правды для трёх мест: фрейма «Заявки», линий на графике и
+// легенды под ним. Если цвет или формулировка живут в двух местах, они
+// разъезжаются — а здесь речь о том, что оператор поймёт про свои деньги.
+//
+// Все формулировки сверены с движком (trader/quik/smart_orders.py). Меняется
+// движок — правится и текст, иначе интерфейс начнёт обещать не то, что будет.
+
+export type Kind = 'sl' | 'tp' | 'trail_tp' | 'on_fill';
+export type Side = 'buy' | 'sell';
+
+export interface KindMeta {
+  id: Kind;
+  name: string;
+  short: string;
+  /** Одной строкой: зачем эта заявка нужна. */
+  essence: string;
+  /** Что сторож делает по шагам. Порядок = порядок исполнения в движке. */
+  algorithm: string[];
+  /** Поля, которые заполняет оператор. */
+  fields: Array<{ key: string; label: string; hint: string }>;
+  /** Цвет линии на графике и чипа в легенде. */
+  color: string;
+  /** lightweight-charts LineStyle: 0 сплошная, 2 пунктир, 3 точки. */
+  lineStyle: number;
+  legend: string;
+}
+
+export const KINDS: KindMeta[] = [
+  {
+    id: 'sl',
+    name: 'Стоп-лосс',
+    short: 'SL',
+    essence: 'Ограничить убыток: выйти, если цена ушла против позиции.',
+    algorithm: [
+      'Сторож раз в секунду смотрит цену последней сделки.',
+      'Для ПРОДАЖИ срабатывает, когда цена опустилась ДО уровня или ниже (защита лонга).',
+      'Для ПОКУПКИ срабатывает, когда цена поднялась ДО уровня или выше (защита шорта).',
+      'В момент срабатывания ставится лимитная заявка, пробивающая рынок, и заявка помечается исполненной.',
+    ],
+    fields: [
+      { key: 'trigger_price', label: 'Стоп-цена', hint: 'уровень, на котором выходим' },
+    ],
+    color: '#ff6b5a',
+    lineStyle: 2,
+    legend: 'стоп-лосс: уровень выхода',
+  },
+  {
+    id: 'tp',
+    name: 'Тейк-профит',
+    short: 'TP',
+    essence: 'Забрать прибыль на заранее назначенной цене.',
+    algorithm: [
+      'Сторож раз в секунду смотрит цену последней сделки.',
+      'Для ПРОДАЖИ срабатывает, когда цена поднялась ДО цели или выше.',
+      'Для ПОКУПКИ срабатывает, когда цена опустилась ДО цели или ниже.',
+      'В момент срабатывания ставится лимитная заявка, пробивающая рынок.',
+    ],
+    fields: [
+      { key: 'trigger_price', label: 'Цель', hint: 'цена, на которой фиксируем' },
+    ],
+    color: '#2ecc71',
+    lineStyle: 2,
+    legend: 'тейк-профит: цель',
+  },
+  {
+    id: 'trail_tp',
+    name: 'Скользящий стоп',
+    short: 'Trail',
+    essence: 'Идти за ценой и забрать прибыль, когда движение развернулось.',
+    algorithm: [
+      'Пока цена не дошла до уровня активации, заявка спит. Уровень 0 — включается сразу.',
+      'После активации сторож запоминает лучшую достигнутую цену: пик для продажи, дно для покупки.',
+      'Пик подтягивается за ценой и никогда не откатывается назад.',
+      'Срабатывает, когда цена отошла от пика на заданный отступ в пунктах.',
+      'В момент срабатывания ставится лимитная заявка, пробивающая рынок.',
+    ],
+    fields: [
+      { key: 'trigger_price', label: 'Активация', hint: '0 — следить сразу' },
+      { key: 'trail_offset', label: 'Отступ, пункты', hint: 'откат от пика, на котором выходим' },
+    ],
+    color: '#ffb300',
+    lineStyle: 3,
+    legend: 'скользящий стоп: пик и уровень отката',
+  },
+  {
+    id: 'on_fill',
+    name: 'По исполнению',
+    short: 'По исп.',
+    essence: 'Поставить заявку в тот момент, когда исполнится другая. Так вешают защиту на вход.',
+    algorithm: [
+      'Сторож следит за конкретной заявкой по её client_id.',
+      'Как только та отчиталась об исполнении, ставится дочерняя заявка.',
+      'Цена дочерней: указанная, либо пробивающая рынок, если не указана.',
+      'Цена не зависит от уровня — здесь нет уровня срабатывания, есть событие.',
+    ],
+    fields: [
+      { key: 'watch_client_id', label: 'Ждём исполнения', hint: 'client_id заявки, за которой следим' },
+      { key: 'child_price', label: 'Цена', hint: 'пусто — по рынку' },
+    ],
+    color: '#7aa2f7',
+    lineStyle: 3,
+    legend: 'по исполнению: цена дочерней заявки',
+  },
+];
+
+export const KIND_BY_ID: Record<Kind, KindMeta> =
+  Object.fromEntries(KINDS.map((k) => [k.id, k])) as Record<Kind, KindMeta>;
+
+/** Цвет сработавшей заявки: тот же тон, но линия сплошная и приглушённая. */
+export const FIRED_COLOR = '#9aa0b4';
+
+export const STATUS_RU: Record<string, string> = {
+  armed: 'взведена',
+  fired: 'сработала',
+  cancelled: 'отменена',
+  expired: 'истёк срок',
+  error: 'ошибка',
+  orphaned: 'дочерняя заявка не дожила',
+};
+
+/** Условия, одинаковые для всех типов. Взяты из движка, не выдуманы. */
+export const COMMON_FACTS: Array<{ label: string; text: string; warn?: boolean }> = [
+  {
+    label: 'Где живёт',
+    text: 'Книга умных заявок лежит на сервере STL в data/smart_orders.json и переживает его перезапуск.',
+  },
+  {
+    label: 'Кто сторожит',
+    text: 'Сторож работает ВНУТРИ процесса STL и обходит книгу раз в секунду. Пока STL недоступен, ни одна умная заявка не сработает.',
+    warn: true,
+  },
+  {
+    label: 'По какой цене считается',
+    text: 'По цене последней сделки. Если лента молчит — по середине стакана.',
+  },
+  {
+    label: 'Защита от мёртвых данных',
+    text: 'По котировке старше 30 секунд не срабатывает никогда.',
+  },
+  {
+    label: 'Kill-switch',
+    text: 'При включённом kill-switch заявка остаётся взведённой и не стреляет.',
+  },
+  {
+    label: 'Чем отвечает',
+    text: 'Лимитной заявкой, пробивающей рынок: отступ 0,05% от цены, но не меньше 3 шагов и не больше 0,15%. Цена всегда кратна шагу инструмента.',
+  },
+  {
+    label: 'Проверки перед выставлением',
+    text: 'Дочерняя заявка идёт тем же путём, что и ручная: мастер-флаг, ценовой коллар, лимиты на объём и число заявок за день.',
+  },
+  {
+    label: 'Кто её видит',
+    text: 'Для агента это РУЧНАЯ заявка. Роботы и сверка её не видят и никогда не трогают.',
+  },
+];
+
+export function ocoFact(group: string): string {
+  return group
+    ? `Связка OCO «${group}»: как только сработает одна заявка группы, остальные снимаются автоматически.`
+    : 'Связка OCO не задана: заявка живёт сама по себе.';
+}
+
+export function tillFact(goodTillMs: number): string {
+  if (!goodTillMs) return 'Срок не ограничен: заявка ждёт, пока не сработает или пока её не снимут.';
+  return `Действует до ${fmtWhen(goodTillMs)}. После этого сама пометится «истёк срок» и стрелять не будет.`;
+}
+
+export function fmtWhen(ms: number): string {
+  if (!ms) return '—';
+  return new Date(ms).toLocaleString('ru-RU', {
+    timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit',
+    hour: '2-digit', minute: '2-digit',
+  });
+}
+
+export function fmtPts(n: number): string {
+  return Math.round(n).toLocaleString('ru-RU') + ' п.';
+}
+
+export function fmtRub(n: number): string {
+  const v = Math.round(n);
+  return (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v).toLocaleString('ru-RU') + ' ₽';
+}
+
+export interface PreviewInput {
+  kind: Kind;
+  side: Side;
+  qty: number;
+  code: string;
+  trigger: number;
+  trailOffset: number;
+  watchId: string;
+  childPrice: number;
+  /** Текущая цена инструмента, 0 если неизвестна. */
+  price: number;
+  /** ₽ за пункт цены, 0/undefined — считать в пунктах. */
+  pointValue?: number;
+}
+
+export interface Preview {
+  /** Главное предложение: что именно произойдёт. */
+  sentence: string;
+  /** Пояснение расстояния до срабатывания, пусто если неприменимо. */
+  distance: string;
+  /** Причина, по которой взводить нельзя. Пусто — можно. */
+  error: string;
+}
+
+const SIDE_RU: Record<Side, string> = { buy: 'ПОКУПКУ', sell: 'ПРОДАЖУ' };
+
+/**
+ * Фраза «что произойдёт» — человеческим языком, до нажатия кнопки.
+ *
+ * Направление сравнения повторяет движок: у SL продажа ждёт цену НИЖЕ уровня,
+ * покупка — ВЫШЕ; у TP наоборот. Перепутать здесь стороны значит пообещать
+ * оператору не то, что случится с его деньгами.
+ */
+export function preview(p: PreviewInput): Preview {
+  const qty = Math.max(0, Math.floor(p.qty || 0));
+  const what = `${SIDE_RU[p.side]} ${qty} ${plural(qty, 'контракт', 'контракта', 'контрактов')}`;
+  const code = p.code || 'инструмент';
+  let sentence = '';
+  let distance = '';
+  let error = '';
+
+  if (!p.code) error = 'Не выбран инструмент.';
+  else if (qty <= 0) error = 'Количество должно быть больше нуля.';
+
+  if (p.kind === 'sl' || p.kind === 'tp') {
+    if (!error && !(p.trigger > 0)) error = 'Укажите уровень срабатывания.';
+    const down = (p.kind === 'sl' && p.side === 'sell') || (p.kind === 'tp' && p.side === 'buy');
+    const verb = down ? 'опустится до' : 'поднимется до';
+    sentence = `Если ${code} ${verb} ${fmtNum(p.trigger)}, сторож поставит ${what} по рынку.`;
+    if (p.price > 0 && p.trigger > 0) {
+      const gap = Math.abs(p.trigger - p.price);
+      const wrongWay = down ? p.trigger > p.price : p.trigger < p.price;
+      distance = wrongWay
+        ? `Внимание: цена уже ${fmtNum(p.price)}, уровень пройден — сторож выставит заявку сразу же.`
+        : `Сейчас ${fmtNum(p.price)}, до срабатывания ${fmtPts(gap)}` +
+          (p.pointValue ? ` = ${fmtRub(gap * p.pointValue * qty)} хода по ${qty} ` +
+            plural(qty, 'контракту', 'контрактам', 'контрактам') : '') + '.';
+    }
+  } else if (p.kind === 'trail_tp') {
+    if (!error && !(p.trailOffset > 0)) error = 'Укажите отступ от пика в пунктах.';
+    const peak = p.side === 'sell' ? 'пиком' : 'дном';
+    const back = p.side === 'sell' ? 'откатится вниз' : 'отойдёт вверх';
+    const act = p.trigger > 0
+      ? `Сторож начнёт следить, когда ${code} дойдёт до ${fmtNum(p.trigger)}.`
+      : 'Сторож начнёт следить сразу.';
+    sentence = `${act} Дальше он идёт за ${peak} и поставит ${what} по рынку, ` +
+      `как только цена ${back} на ${fmtPts(p.trailOffset)} от лучшей достигнутой.`;
+    if (p.pointValue && p.trailOffset > 0) {
+      distance = `Отступ ${fmtPts(p.trailOffset)} это ${fmtRub(p.trailOffset * p.pointValue * qty)} ` +
+        `по ${qty} ${plural(qty, 'контракту', 'контрактам', 'контрактам')}.`;
+    }
+  } else {
+    if (!error && !p.watchId) error = 'Укажите заявку, за исполнением которой следим.';
+    const px = p.childPrice > 0 ? `по цене ${fmtNum(p.childPrice)}` : 'по рынку';
+    sentence = `Как только исполнится заявка ${p.watchId || '—'}, сторож поставит ${what} ${px}.`;
+    distance = 'Уровня цены здесь нет: заявка ждёт события, а не котировки.';
+  }
+
+  return { sentence, distance, error };
+}
+
+function fmtNum(n: number): string {
+  return Number(n).toLocaleString('ru-RU', { maximumFractionDigits: 6 });
+}
+
+function plural(n: number, one: string, few: string, many: string): string {
+  const a = Math.abs(n) % 100;
+  const b = a % 10;
+  if (a > 10 && a < 20) return many;
+  if (b > 1 && b < 5) return few;
+  if (b === 1) return one;
+  return many;
+}
+
+/** Строка условия для списка взведённых заявок. */
+export function conditionText(o: any): string {
+  const k: Kind = o.kind;
+  if (k === 'trail_tp') {
+    const act = o.trigger_price > 0 ? `активация ${fmtNum(o.trigger_price)}, ` : 'следит сразу, ';
+    const peak = o.activated && o.peak ? `, пик ${fmtNum(o.peak)}` : '';
+    return `${act}откат ${fmtPts(o.trail_offset)}${peak}`;
+  }
+  if (k === 'on_fill') return `после исполнения ${String(o.watch_client_id || '—').slice(0, 18)}`;
+  const down = (k === 'sl' && o.side === 'sell') || (k === 'tp' && o.side === 'buy');
+  return `${down ? 'цена ≤' : 'цена ≥'} ${fmtNum(o.trigger_price)}`;
+}

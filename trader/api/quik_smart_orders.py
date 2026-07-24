@@ -124,11 +124,42 @@ def _price_steps(store: Any, agent: str) -> dict[str, float]:
     return out
 
 
+# Дочерняя заявка живёт в QUIK, а QUIK чистит неисполненные на границе сессии.
+# Сработавшая умная заявка, чей ребёнок умер не исполнившись, оставляла оператора
+# с ложным чувством защиты: в книге написано «сработала», а в рынке ничего нет.
+# Помечаем такие как orphaned — интерфейс предлагает перевзвести. Автоматически
+# НЕ перевзводим: цена наутро другая, решение за человеком.
+_ORPHAN_GRACE_MS = 5 * 60 * 1000
+_DEAD_STATES = ("cancelled", "rejected")
+
+
+def _mark_orphans(book: SmartOrderBook, ost: Any, agent: str, now: int) -> bool:
+    fired = [o for o in book.orders
+             if o.status == "fired" and o.fired_client_id and o.fired_ms]
+    if not fired:
+        return False
+    by_cid = {d["client_id"]: d for d in ost.working_orders(agent)}
+    dirty = False
+    for so in fired:
+        rec = by_cid.get(so.fired_client_id)
+        aged = now - so.fired_ms > _ORPHAN_GRACE_MS
+        if rec is not None:
+            if rec.get("state") in _DEAD_STATES and not rec.get("filled"):
+                so.status = "orphaned"
+                so.note = f"дочерняя заявка {rec.get('state')} и не исполнилась"
+                dirty = True
+        elif aged:
+            # Заявки нет в таблице вовсе: сессия закрылась и QUIK её снял, либо
+            # агент перезапустился. Ни исполнения, ни заявки — защиты нет.
+            so.status = "orphaned"
+            so.note = "дочерняя заявка не найдена: снята на границе сессии"
+            dirty = True
+    return dirty
+
+
 async def _watch_once(state: Any) -> None:
     book: SmartOrderBook = state.smart_orders
     active = book.active()
-    if not active:
-        return
     store = getattr(state, "quik_store", None)
     ost = getattr(state, "quik_order_store", None)
     srv = getattr(state, "quik_server", None)
@@ -138,6 +169,12 @@ async def _watch_once(state: Any) -> None:
         agent = resolve_agent(store, None)
     except Exception:
         return  # no/ambiguous agent -> nothing to fire against
+    # Осиротевших ищем ДАЖЕ когда взведённых нет: сработавшая заявка может
+    # потерять ребёнка уже после того, как книга опустела.
+    if _mark_orphans(book, ost, agent, so_mod.now_ms()):
+        book.save()
+    if not active:
+        return
     if ost.is_blocked(agent):
         return  # kill-switch: keep orders armed, fire nothing
 
