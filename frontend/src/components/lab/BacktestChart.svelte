@@ -218,6 +218,18 @@
   // Reset zoom to show the WHOLE test period (all bars) on screen.
   function fitAll() { try { tvCandle?.timeScale().fitContent(); } catch { /* not ready */ } }
 
+  // Readable default view: the newest bars at >= MIN_CANDLE_PX per candle, so a
+  // candle is a candle (not a hairline) and markers spread out instead of stacking.
+  const MIN_CANDLE_PX = 6;
+  function showTail(total: number) {
+    try {
+      const w = candleEl?.clientWidth || 1200;
+      const want = Math.max(60, Math.floor(w / MIN_CANDLE_PX));
+      if (total <= want) { tvCandle.timeScale().fitContent(); return; }
+      tvCandle.timeScale().setVisibleLogicalRange({ from: total - want, to: total - 1 });
+    } catch { try { tvCandle?.timeScale().fitContent(); } catch { /* not ready */ } }
+  }
+
   async function loadMeta() {
     try {
       const res = await fetchWithAuth(`/api/v1/instruments/${encodeURIComponent(symbol)}/meta`);
@@ -839,13 +851,18 @@
         label: e.label,
       }));
 
-      // First load of this symbol/interval: fit all data into the view.
+      // First load of this symbol/interval: show the READABLE TAIL, not everything.
+      // fitContent() squeezed the whole loaded window into the canvas — at 5m over a
+      // 14-day live window that is ~2500 candles in ~1500px, i.e. sub-pixel candles
+      // drawn as hairline dashes with every trade marker piled into one unreadable
+      // blob (operator: «фантомные чёрточки», «чухня»). «Весь период» stays one click
+      // away (fitAll) for the rare full-window look.
       // Same-view LIVE reload: restore the operator's zoom/pan instead.
       if (keepRange) {
         try { tvCandle.timeScale().setVisibleLogicalRange(keepRange); }
         catch { tvCandle.timeScale().fitContent(); }
       } else {
-        tvCandle.timeScale().fitContent();
+        showTail(bars.length);
       }
       _viewKey = viewKey;
       syncReady = true;
