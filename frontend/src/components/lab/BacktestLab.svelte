@@ -122,6 +122,23 @@
   let engine = $state<'auto' | 'local' | 'remote'>('local');
   let strategyInfo = $state<any | null>(null);  // popover: show desc for a strategy
 
+  // ── Draggable splitter: width of the left config panel (px) ────────────
+  let configW = $state<number>(Number(localStorage.getItem('btl.configW')) || 420);
+  function startDragSplit(e: PointerEvent) {
+    e.preventDefault();
+    const x0 = e.clientX, w0 = configW;
+    const move = (m: PointerEvent) => {
+      configW = Math.max(300, Math.min(760, w0 + (m.clientX - x0)));
+    };
+    const up = () => {
+      localStorage.setItem('btl.configW', String(configW));
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  }
+
   // ── Sweep rounds ───────────────────────────────────────────────────────
   // maxLocal = cap on the small VDS (one subprocess, serial — keep modest so a run
   // finishes in minutes). maxRemote = cap on the i9 agent (16 workers — handles 10x).
@@ -621,7 +638,7 @@
 
 <div class="btl">
   <!-- ── LEFT: Config panel ──────────────────────────────────────────── -->
-  <div class="btl-config">
+  <div class="btl-config" style="width: {configW}px">
     <div class="btl-section">
       <div class="btl-sec-title">Стратегия</div>
       <div class="btl-cat-list">
@@ -794,6 +811,10 @@
       </div>
     {/if}
   </div>
+
+  <!-- draggable splitter: тяни границу мышкой, ширина запоминается -->
+  <div class="btl-splitter" role="separator" aria-orientation="vertical"
+       title="потяни, чтобы изменить ширину панели" onpointerdown={startDragSplit}></div>
 
   <!-- ── RIGHT: Results ───────────────────────────────────────────────── -->
   <div class="btl-results">
@@ -987,10 +1008,17 @@
 <style>
   .btl { display: flex; height: 100%; overflow: hidden; gap: 0; }
 
+  /* Перетаскиваемая граница между конфигом и результатами */
+  .btl-splitter {
+    flex-shrink: 0; width: 6px; cursor: col-resize; background: #1e1e3a;
+    transition: background 0.12s;
+  }
+  .btl-splitter:hover, .btl-splitter:active { background: #3a6ea5; }
+
   /* ── Config panel ──────────────────────────────────────────────────── */
   .btl-config {
     width: 420px; flex-shrink: 0; overflow-y: auto; overflow-x: hidden;
-    background: #0c0c1a; border-right: 1px solid #1e1e3a;
+    background: #0c0c1a;
     display: flex; flex-direction: column; gap: 1px;
     padding-bottom: 20px;
   }

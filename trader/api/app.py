@@ -2228,8 +2228,8 @@ def create_app() -> FastAPI:
                    date_from, date_to
             FROM optimization_leaderboard
             WHERE campaign_run IS NOT NULL AND net_profit IS NOT NULL
-              AND COALESCE(NULLIF(params->>'qty','')::int, 1) <= 10
-              AND COALESCE(NULLIF(params->>'avg_max','')::int, 1) <= 10
+              AND COALESCE(NULLIF(params->>'qty','')::numeric, 1) <= 10
+              AND COALESCE(NULLIF(params->>'avg_max','')::numeric, 1) <= 10
             ORDER BY campaign_run, net_profit DESC NULLS LAST
             """)
         lead = {r["campaign_run"]: r for r in leaders}
