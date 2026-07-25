@@ -3,6 +3,7 @@
   import { accountStore } from '$lib/stores/account.svelte';
   import { servicesStore } from '$lib/stores/services.svelte';
   import ExchangeInterface from './ExchangeInterface.svelte';
+  import NavMenu from './NavMenu.svelte';
 
   let { showLab, onToggleLabPanel, showQuikTables, onToggleQuikTables,
         showQuikOrders, onToggleQuikOrders,
@@ -26,6 +27,7 @@
 </script>
 
 <header class="topbar">
+  <NavMenu />
   <div class="account">
     <span>Депозит: <b>{fmt(acc.deposit)} ₽</b></span>
     <span>Свободно: <b>{fmt(acc.free)} ₽</b></span>

@@ -47,8 +47,10 @@
   // the tab). NavMenu on the full-page screens links here to get back into the shell.
   const labTab = _qs.get('lab');
   let showLab = $state(_qs.has('campaign') || _qs.has('lab'));
-  let showQuikTables = $state(false);
-  let showQuikOrders = $state(false);
+  // Дип-линки бургер-меню: ?orders=1 открывает фрейм «Заявки», ?tables=1 —
+  // «Таблицы QUIK» (симметрично ?equity=1 ниже).
+  let showQuikTables = $state(_qs.has('tables'));
+  let showQuikOrders = $state(_qs.has('orders'));
   // Deep-link: ?equity=1 разворачивает общий график доходности всех роботов —
   // на него ссылается панель компаньона из блока «Роботы».
   let showEquity = $state(_qs.has('equity'));
