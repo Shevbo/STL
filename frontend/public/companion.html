@@ -53,7 +53,9 @@
   .brand {
     flex: 1; font: 400 12px/1.2 Bahnschrift, "Segoe UI Semilight", sans-serif;
     letter-spacing: .02em; color: var(--muted);
+    text-decoration: none; cursor: pointer;
   }
+  .brand:hover { color: var(--ink); }
   .fresh { color: var(--faint); font-size: 10px; letter-spacing: .04em; white-space: nowrap; }
   .fresh.stale { color: var(--down); }
   .btn {
@@ -128,13 +130,21 @@
   .chk .n { color: var(--muted); min-width: 92px; }
   .chk .s { color: var(--up); }
   .chk.bad .s { color: var(--down); }
+  /* Уведомления: свежие сверху; тревога красная, норма («восстановилось») зелёная. */
   .alert { padding: 1px 0 1px 6px; border-left: 2px solid var(--down); color: var(--down); }
+  .alert.ok { border-left-color: var(--up); color: var(--up); }
+  .alert .at { color: var(--faint); font-size: 9px; margin-right: 4px; }
+  /* Лампа перебора: пульсирует, пока есть свежий отличный кандидат. */
+  .star { display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+    background: #b58900; margin-right: 4px; animation: starpulse 2s infinite; }
+  @keyframes starpulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
   .empty { color: var(--faint); padding-left: 8px; }
 </style>
 </head>
 <body>
 <div class="top">
-  <span class="brand" id="brand">STL</span>
+  <a class="brand" id="brand" href="https://stl.shectory.ru/" data-ext
+     title="Открыть STL в браузере">STL</a>
   <span class="fresh" id="fresh">…</span>
   <span class="btn" id="hide" title="Свернуть в трей">✕</span>
   <span class="btn quit" id="quit" title="Закрыть приложение">⏻</span>
@@ -236,8 +246,26 @@ function robotsTotal(list) {
 
 // Только РЕАЛЬНЫЕ ДЕНЬГИ. Число робота = весь его реальный итог из журнала,
 // включая тех, кого потом перевели в бумагу (их реальный убыток не теряется).
-function renderRobots(list) {
-  if (!list || !list.length) return '<div class="empty">реальных роботов нет</div>';
+// Выведенные из реала (в бумагу/сняты) схлопнуты в ОДНУ строку суммой — их
+// детали больше не операционные, но реальный результат из виду не пропадает.
+function renderRobots(all) {
+  if (!all || !all.length) return '<div class="empty">реальных роботов нет</div>';
+  const active = all.filter((r) => r.state === 'реал' || r.state === 'пауза');
+  const retired = all.filter((r) => r.state !== 'реал' && r.state !== 'пауза');
+  let out = renderActiveRobots(active);
+  if (retired.length) {
+    let net = 0, hasN = false;
+    for (const r of retired) if (r.real_net != null) { net += r.real_net; hasN = true; }
+    out += `<div class="row ${cls(hasN ? net : null)}">` +
+      `<span class="k">Выведены из реала (${retired.length})</span>` +
+      `<span class="sub">итог их реальной торговли</span><span class="sp"></span>` +
+      `${val(hasN ? rub(net, { signed: true }) : null, cls(net))}</div>`;
+  }
+  return out;
+}
+
+function renderActiveRobots(list) {
+  if (!list.length) return '';
   return list.map((r) => {
     const net = r.real_net;               // весь реальный P&L, в т.ч. до перевода в бумагу
     const k = cls(net);
@@ -268,29 +296,46 @@ function check(name, block) {
     `<span class="s">${esc(txt)}</span></div>`;
 }
 
+// Вотчер компактно, В ОДНУ СТРОКУ на проверку: имя + ОК/текст проблемы.
+// Плюс лампа перебора: свежий отличный кандидат (прибыльный, RF>=3, сделок>=30
+// за 24ч) — жёлтая пульсация со ссылкой на его кампанию в Ботсторе.
 function renderWatch(w) {
   if (!w) return '<div class="empty">нет данных</div>';
   const bt = w.backtests || {};
   const pl = w.platform || {};
   const i9 = pl.i9;
-  const plat = [
-    'хостер LA ' + (pl.hoster && pl.hoster.load != null ? pl.hoster.load : '—'),
-    'i9 ' + (i9 ? (i9.stale ? 'молчит' : (i9.cpu_pct != null ? i9.cpu_pct + '% CPU' : 'онлайн')) : 'нет данных'),
-    'вотчер ' + (pl.watchdog_last_ms ? hhmmss(pl.watchdog_last_ms) : 'нет'),
-  ].join(' · ');
-  return check('раннер + lua', w.runner) +
-    check('бэктесты', bt) +
-    `<div class="row"><span class="k">очередь</span><span class="sp"></span>` +
-      `<span class="sub">в работе ${bt.running || 0} · ждут ${bt.queued || 0}</span></div>` +
-    check('платформа', pl) +
-    `<div class="row"><span class="k"></span><span class="sp"></span><span class="sub">${esc(plat)}</span></div>`;
+  const oneLine = (name, blk, extra) => {
+    const bad = blk && blk.ok === false;
+    const txt = bad ? (blk.issues || []).join('; ') : 'ОК' + (extra ? ' · ' + extra : '');
+    return `<div class="chk ${bad ? 'bad' : ''}"><span class="n">${esc(name)}</span>` +
+      `<span class="s">${esc(txt)}</span></div>`;
+  };
+  const btExtra = `в работе ${bt.running || 0} · ждут ${bt.queued || 0}`;
+  const platExtra = 'LA ' + (pl.hoster && pl.hoster.load != null ? pl.hoster.load : '—') +
+    ' · i9 ' + (i9 ? (i9.stale ? 'молчит' : (i9.cpu_pct != null ? i9.cpu_pct + '%' : 'он')) : 'н/д');
+  let star = '';
+  if (bt.star) {
+    const s = bt.star;
+    star = `<div class="chk"><span class="n"><span class="star"></span>кандидат</span>` +
+      `<span class="s"><a href="${STL}/?campaign=${encodeURIComponent(s.campaign)}" data-ext` +
+      ` style="color:inherit">${esc(s.strategy)} · ${esc(s.symbol)}: +${Number(s.net).toLocaleString('ru-RU')} ₽,` +
+      ` RF ${s.rf}, ${s.trades} сд. ↗</a></span></div>`;
+  }
+  return oneLine('раннер + lua', w.runner) +
+    oneLine('бэктесты', bt, btExtra) +
+    oneLine('платформа', pl, platExtra) +
+    star;
 }
 
 function renderAlerts(a) {
   if (!a) return '';
-  const items = (a.unresolved || []).concat(a.sms_today || []);
+  // Свежие СВЕРХУ; ok=зелёная норма, иначе красная тревога. items уже
+  // отсортированы бэкендом по ts_ms desc.
+  const items = a.items || [];
   if (!items.length) return '<div class="empty">тихо, эскалаций нет</div>';
-  return items.slice(-4).map((t) => `<div class="alert">${esc(t)}</div>`).join('');
+  return items.map((it) =>
+    `<div class="alert ${it.ok ? 'ok' : ''}">` +
+    `<span class="at">${esc(hhmmss(it.ts_ms) || '')}</span>${esc(it.text)}</div>`).join('');
 }
 
 // Строка состояния биржи: открыта / закрыта по ISS. Снимает главную путаницу —

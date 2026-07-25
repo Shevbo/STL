@@ -88,6 +88,11 @@
   .chk .s { color: var(--up); } .chk.bad .s { color: var(--down); }
   .alert { margin: 0 8px 4px; padding: 6px 12px; border-left: 3px solid var(--down);
     background: var(--panel); border-radius: 4px; color: var(--down); font-size: 13px; line-height: 1.45; }
+  .alert.ok { border-left-color: var(--up); color: var(--up); }
+  .alert .at { color: var(--faint); font-size: 11px; }
+  .star { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: #e0a53c; margin-right: 5px; animation: sp 2s infinite; }
+  @keyframes sp { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
   .empty { color: var(--faint); padding: 4px 22px; font-size: 14px; }
 
   /* Экран привязки */
@@ -192,8 +197,23 @@ function robotsTotal(list) {
     `${val(hasN ? rub(net, { signed: true }) : null, cls(net))}</div>`;
 }
 
-function renderRobots(list) {
-  if (!list || !list.length) return '<div class="empty">реальных роботов нет</div>';
+function renderRobots(all) {
+  if (!all || !all.length) return '<div class="empty">реальных роботов нет</div>';
+  const active = all.filter((r) => r.state === 'реал' || r.state === 'пауза');
+  const retired = all.filter((r) => r.state !== 'реал' && r.state !== 'пауза');
+  let out = renderActive(active);
+  if (retired.length) {
+    let net = 0, hasN = false;
+    for (const r of retired) if (r.real_net != null) { net += r.real_net; hasN = true; }
+    out += `<div class="row ${cls(hasN ? net : null)}">` +
+      `<span class="k">Выведены из реала (${retired.length})</span><span class="sp"></span>` +
+      `${val(hasN ? rub(net, { signed: true }) : null, cls(net))}</div>`;
+  }
+  return out;
+}
+
+function renderActive(list) {
+  if (!list.length) return '';
   return list.map((r) => {
     const k = cls(r.real_net);
     const last = hhmmss(r.last_trade_ms);
@@ -224,27 +244,39 @@ function check(name, blk) {
 function renderWatch(w) {
   if (!w) return '<div class="empty">нет данных</div>';
   const bt = w.backtests || {}, pl = w.platform || {}, i9 = pl.i9;
-  const plat = ['хостер LA ' + (pl.hoster && pl.hoster.load != null ? pl.hoster.load : '—'),
-    'i9 ' + (i9 ? (i9.stale ? 'молчит' : (i9.cpu_pct != null ? i9.cpu_pct + '% CPU' : 'онлайн')) : 'н/д')].join(' · ');
-  return check('раннер + lua', w.runner) + check('бэктесты', bt) +
-    `<div class="row"><span class="k">очередь</span><span class="sp"></span>` +
-    `<span class="sub">в работе ${bt.running || 0} · ждут ${bt.queued || 0}</span></div>` +
-    check('платформа', pl) +
-    `<div class="row"><span class="k"></span><span class="sp"></span><span class="sub">${esc(plat)}</span></div>`;
+  const one = (name, blk, extra) => {
+    const bad = blk && blk.ok === false;
+    const txt = bad ? (blk.issues || []).join('; ') : 'ОК' + (extra ? ' · ' + extra : '');
+    return `<div class="chk ${bad ? 'bad' : ''}"><span class="n">${esc(name)}</span>` +
+      `<span class="s">${esc(txt)}</span></div>`;
+  };
+  let star = '';
+  if (bt.star) {
+    const s2 = bt.star;
+    star = `<div class="chk"><span class="n"><span class="star"></span>кандидат</span>` +
+      `<span class="s"><a href="/?campaign=${encodeURIComponent(s2.campaign)}" style="color:inherit">` +
+      `${esc(s2.strategy)} · ${esc(s2.symbol)}: +${Number(s2.net).toLocaleString('ru-RU')} ₽, RF ${s2.rf}, ${s2.trades} сд. ↗</a></span></div>`;
+  }
+  return one('раннер + lua', w.runner) +
+    one('бэктесты', bt, `в работе ${bt.running || 0} · ждут ${bt.queued || 0}`) +
+    one('платформа', pl, 'LA ' + (pl.hoster && pl.hoster.load != null ? pl.hoster.load : '—') +
+      ' · i9 ' + (i9 ? (i9.stale ? 'молчит' : (i9.cpu_pct != null ? i9.cpu_pct + '%' : 'он')) : 'н/д')) +
+    star;
 }
 
 function renderAlerts(a) {
   if (!a) return '';
-  const items = (a.unresolved || []).concat(a.sms_today || []);
+  const items = a.items || [];   // свежие сверху, ok = норма (зелёная)
   if (!items.length) return '<div class="empty">тихо, эскалаций нет</div>';
-  return items.slice(-6).map((t) => `<div class="alert">${esc(t)}</div>`).join('');
+  return items.map((it) => `<div class="alert ${it.ok ? 'ok' : ''}">` +
+    `<span class="at">${esc(hhmmss(it.ts_ms) || '')}</span> ${esc(it.text)}</div>`).join('');
 }
 
 // ── экраны ────────────────────────────────────────────────────────────────────
 function paintPanel(d) {
   $('app').innerHTML = `
     <div class="top">
-      <span class="brand" id="brand">${esc(brand(d))}</span>
+      <a class="brand" id="brand" href="/" style="color:inherit;text-decoration:none">${esc(brand(d))}</a>
       <span class="fresh" id="fresh">●</span>
       <button class="logout" id="logout" title="Отвязать телефон">отвязать</button>
     </div>

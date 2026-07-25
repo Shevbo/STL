@@ -474,6 +474,29 @@ async def snapshot(request: Request, agent_id: str | None = None):
     platform = {"ok": not plat_issues, "issues": plat_issues, "hoster": hoster,
                 "i9": i9, "watchdog_last_ms": last_run_ms, "in_session": in_session}
 
+    # Сигнальная лампа перебора: лучший СВЕЖИЙ кандидат из хитпарада за 24ч.
+    # «Отличный» = не вершина-выброс: прибыльный, RF >= 3 и достаточно сделок
+    # (survivorship-урок: конфиги на 1-3 сделках с RF под 78 — шум, не сигнал).
+    sweep_star = None
+    try:
+        row = await pool.fetchrow(
+            "SELECT campaign_run, strategy, symbol, net_profit, recovery_factor, "
+            "total_trades FROM optimization_leaderboard "
+            "WHERE created_at > now() - interval '24 hours' "
+            "AND net_profit > 0 AND recovery_factor >= 3 AND total_trades >= 30 "
+            "ORDER BY recovery_factor DESC LIMIT 1")
+        if row:
+            sweep_star = {
+                "campaign": row["campaign_run"], "strategy": row["strategy"],
+                "symbol": row["symbol"],
+                "net": round(float(row["net_profit"] or 0)),
+                "rf": round(float(row["recovery_factor"] or 0), 2),
+                "trades": int(row["total_trades"] or 0),
+            }
+    except Exception:
+        pass
+    bt["star"] = sweep_star
+
     # Каждой тревоге — пометка контроля: рассосётся само или требует оператора.
     # По просьбе оператора каждый алерт заканчивается двоеточием и статусом.
     market_open = (market or {}).get("open")
@@ -481,13 +504,24 @@ async def snapshot(request: Request, agent_id: str | None = None):
         blk["issues"] = [_with_control(t, market_open) for t in blk.get("issues", [])]
 
     # 5. Escalations: what the watchdog left unresolved + today's SMS.
+    # items — структурировано для панели: свежие СВЕРХУ, каждая запись несёт
+    # ok-флаг («восстановилось» = норма-зелёная, остальное — тревога-красная).
     esc = _wd_read_jsonl("~/stl-watchdog-escalations.jsonl")
-    today_sms = [e.get("text") for e in esc if (e.get("ts_ms") or 0) >= today_lo]
+    today = [e for e in esc if (e.get("ts_ms") or 0) >= today_lo]
+    items = [{"ts_ms": int(e.get("ts_ms") or 0),
+              "text": _with_control(e.get("text") or "", market_open),
+              "ok": "восстановилось" in (e.get("text") or "").lower()}
+             for e in today]
+    for t in (last_run or {}).get("unresolved") or []:
+        items.append({"ts_ms": last_run_ms, "text": _with_control(t, market_open),
+                      "ok": False})
+    items.sort(key=lambda x: x["ts_ms"], reverse=True)
     alerts = {
+        "items": items[:8],
         "unresolved": [_with_control(t, market_open) for t in (last_run or {}).get("unresolved") or []],
         "found": (last_run or {}).get("found") or [],
-        "sms_today": [_with_control(t, market_open) for t in today_sms[-5:]],
-        "sms_count": len(today_sms),
+        "sms_today": [_with_control(e.get("text") or "", market_open) for e in today[-5:]],
+        "sms_count": len(today),
         "last_run_ms": last_run_ms,
     }
 
