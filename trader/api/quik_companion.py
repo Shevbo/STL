@@ -475,16 +475,19 @@ async def snapshot(request: Request, agent_id: str | None = None):
                 "i9": i9, "watchdog_last_ms": last_run_ms, "in_session": in_session}
 
     # Сигнальная лампа перебора: лучший СВЕЖИЙ кандидат из хитпарада за 24ч.
-    # «Отличный» = не вершина-выброс: прибыльный, RF >= 3 и достаточно сделок
-    # (survivorship-урок: конфиги на 1-3 сделках с RF под 78 — шум, не сигнал).
+    # «Отличный» = ПРИБЫЛЬ при разумной устойчивости: сортируем по net_profit,
+    # RF — только ФИЛЬТР (сортировка по RF выносит наверх вырожденные конфиги
+    # с нулевой просадкой: RF 3.7 млн при +6к ₽ — шум, было на бою). Порог
+    # прибыли отсекает копеечных чемпионов; сделок >= 30 — анти-survivorship.
     sweep_star = None
     try:
         row = await pool.fetchrow(
             "SELECT campaign_run, strategy, symbol, net_profit, recovery_factor, "
             "total_trades FROM optimization_leaderboard "
             "WHERE created_at > now() - interval '24 hours' "
-            "AND net_profit > 0 AND recovery_factor >= 3 AND total_trades >= 30 "
-            "ORDER BY recovery_factor DESC LIMIT 1")
+            "AND net_profit >= 50000 AND recovery_factor BETWEEN 3 AND 1000 "
+            "AND total_trades >= 30 "
+            "ORDER BY net_profit DESC LIMIT 1")
         if row:
             sweep_star = {
                 "campaign": row["campaign_run"], "strategy": row["strategy"],
