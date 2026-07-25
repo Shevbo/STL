@@ -2825,12 +2825,20 @@ def create_app() -> FastAPI:
         if body.get("scriptCode") and not body.get("paramSets") and not (body.get("paramsGrid") or {}):
             try:
                 _eff = json.dumps({**(body.get("baseParams") or {})})
+                # ТОЛЬКО одиночные чарт-прогоны: фронт берёт rows[0], а у раунда перебора
+                # сотни комбо под одним run_id — вернули бы ЧУЖОЙ комбо. Раунды перебора
+                # (opt-/camp-) исключаем ПО ПРЕФИКСУ до всего остального (иначе count по
+                # их 300 строкам вешал запрос), а среди оставшихся bare-cuid прогонов
+                # короткозамыкающим NOT EXISTS отсекаем безымянные bulk-свёртки.
                 _hit = await pool.fetchval(
                     """SELECT br.id FROM backtest_runs br
                          JOIN backtest_results r ON r.run_id = br.id
                         WHERE br.symbol=$1 AND br.date_from=$2 AND br.date_to=$3
                           AND br.status='done' AND r.trades IS NOT NULL
+                          AND br.id NOT LIKE 'opt-%' AND br.id NOT LIKE 'camp-%'
                           AND r.params @> $4::jsonb AND $4::jsonb @> r.params
+                          AND NOT EXISTS (SELECT 1 FROM backtest_results r2
+                                            WHERE r2.run_id = br.id AND r2.id <> r.id)
                         ORDER BY br.finished_at DESC NULLS LAST LIMIT 1""",
                     symbol, _parse_dt(body["dateFrom"]), _parse_dt(body["dateTo"]), _eff)
                 if _hit:
