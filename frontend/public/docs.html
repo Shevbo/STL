@@ -1,0 +1,947 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Документация платформы STL</title>
+<style>
+  :root {
+    --bg: #0f0f1e;
+    --panel: #14142a;
+    --panel2: #1a1a2e;
+    --border: #2d2d4a;
+    --text: #d7dbe8;
+    --muted: #8a90a8;
+    --accent: #4dd0e1;
+    --accent2: #6aa8ff;
+    --ok: #4caf50;
+    --warn: #e0a53c;
+    --bad: #f44336;
+    --code-bg: #10101f;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.6 -apple-system, "Segoe UI", Roboto, sans-serif;
+    min-height: 100vh;
+  }
+  a { color: var(--accent2); }
+  a:hover { color: var(--accent); }
+  code, .mono { font: 12px/1.5 Consolas, "SFMono-Regular", monospace; }
+  code {
+    background: var(--code-bg); border: 1px solid var(--border);
+    border-radius: 3px; padding: 1px 5px; color: #b9d8ff;
+  }
+  pre {
+    background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px;
+    padding: 12px 14px; overflow-x: auto; font: 12px/1.55 Consolas, monospace; color: #b9d8ff;
+  }
+  h1, h2, h3, h4 { font-weight: 600; color: #f0f2f8; line-height: 1.3; }
+  p { margin: 8px 0; }
+  ul, ol { margin: 8px 0; padding-left: 22px; }
+  li { margin: 4px 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; margin: 10px 0; }
+  th, td { text-align: left; padding: 5px 9px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  .muted { color: var(--muted); }
+  .hint { color: var(--muted); font-size: 12px; }
+
+  /* ── прогресс-бар чтения ─────────────────────────────────────────── */
+  #progress {
+    position: fixed; top: 0; left: 0; height: 3px; width: 0%;
+    background: linear-gradient(90deg, var(--accent2), var(--accent));
+    z-index: 500; transition: width .08s linear;
+  }
+
+  /* ── шапка "в терминал" ──────────────────────────────────────────── */
+  .backlink {
+    position: fixed; top: 8px; right: 14px; z-index: 300;
+    background: var(--panel2); border: 1px solid var(--border); border-radius: 4px;
+    padding: 5px 12px; font-size: 12px; text-decoration: none; color: var(--text);
+  }
+  .backlink:hover { border-color: var(--accent2); color: #fff; }
+
+  /* ── мобильный тоггл оглавления ──────────────────────────────────── */
+  #tocToggle {
+    display: none; position: fixed; top: 8px; left: 10px; z-index: 300;
+    background: var(--panel2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 4px; font-size: 16px; padding: 4px 10px; cursor: pointer;
+  }
+
+  /* ── сайдбар-оглавление ───────────────────────────────────────────── */
+  .toc {
+    position: fixed; top: 0; left: 0; bottom: 0; width: 268px;
+    background: var(--panel); border-right: 1px solid var(--border);
+    overflow-y: auto; padding: 16px 0 40px; z-index: 200;
+  }
+  .toc-brand { padding: 0 18px 14px; border-bottom: 1px solid var(--border); margin-bottom: 10px; }
+  .toc-brand b { color: #f0f2f8; font-size: 14px; }
+  .toc-brand div { color: var(--muted); font-size: 10px; margin-top: 2px; }
+  .toc nav { padding: 0 8px; }
+  .toc a {
+    display: block; padding: 6px 10px; border-radius: 4px; text-decoration: none;
+    color: var(--text); font-size: 13px; border-left: 2px solid transparent;
+  }
+  .toc a.sub { padding-left: 24px; font-size: 12px; color: var(--muted); }
+  .toc a:hover { background: var(--panel2); color: #fff; }
+  .toc a.active { border-left-color: var(--accent); color: var(--accent); background: #17223a; }
+  .toc a.sub.active { color: var(--accent); }
+  .toc-sec { margin-bottom: 4px; }
+
+  /* ── основной контент ─────────────────────────────────────────────── */
+  main { margin-left: 268px; padding: 18px 34px 80px; max-width: 900px; }
+  .hero { padding: 18px 0 22px; border-bottom: 1px solid var(--border); margin-bottom: 26px; }
+  .hero h1 { font-size: 25px; margin: 0 0 6px; }
+  .hero .sub { color: var(--muted); font-size: 14px; margin-bottom: 16px; }
+  .verpanel {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px 16px;
+  }
+  .verpanel .verhead { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 8px; }
+  .verpanel .verrel { color: var(--accent); font-weight: 600; font-size: 15px; margin-bottom: 8px; }
+  .verpanel ul { margin: 0; padding-left: 18px; font-size: 13px; }
+  .verpanel li { margin: 3px 0; }
+  .verpanel .verrule { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--border); color: var(--muted); font-size: 12px; }
+
+  section { margin-bottom: 46px; }
+  section > h2 { font-size: 21px; padding-top: 6px; margin-bottom: 4px; scroll-margin-top: 14px; }
+  section > .lead { color: var(--muted); font-size: 13px; margin-bottom: 16px; }
+  h3 { font-size: 16px; scroll-margin-top: 14px; }
+  .anchor {
+    opacity: 0; margin-left: 6px; font-size: 13px; color: var(--muted); text-decoration: none;
+  }
+  h2:hover .anchor, h3:hover .anchor, summary:hover .anchor { opacity: 1; }
+
+  .req-group { margin: 14px 0 22px; }
+  .req-group h3 { margin-bottom: 6px; }
+  .req-list { list-style: none; padding-left: 0; }
+  .req-list li {
+    padding: 6px 0 6px 34px; position: relative; border-bottom: 1px solid #1e1e3a;
+  }
+  .req-list .tag {
+    position: absolute; left: 0; top: 6px; color: var(--accent); font: 11px/1.4 Consolas, monospace;
+    background: #12233a; border: 1px solid #234; border-radius: 3px; padding: 1px 5px;
+  }
+
+  /* ── детали / сворачиваемые блоки ─────────────────────────────────── */
+  details {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    margin: 10px 0; padding: 0;
+  }
+  details[open] { padding-bottom: 4px; }
+  summary {
+    cursor: pointer; padding: 11px 16px; font-size: 15px; font-weight: 600;
+    color: #f0f2f8; list-style: none; display: flex; align-items: center; gap: 8px;
+    scroll-margin-top: 14px;
+  }
+  summary::-webkit-details-marker { display: none; }
+  summary::before { content: '▸'; color: var(--accent); font-size: 12px; width: 10px; }
+  details[open] summary::before { content: '▾'; }
+  .details-body { padding: 2px 16px 14px; }
+  .details-body > *:first-child { margin-top: 0; }
+
+  .badge {
+    display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 3px;
+    border: 1px solid var(--border); color: var(--muted); margin-left: 6px; vertical-align: middle;
+    text-transform: uppercase; letter-spacing: .04em;
+  }
+  .badge.registry { color: var(--accent); border-color: #235; background: #12233a; }
+  .badge.module { color: var(--warn); border-color: #543; background: #2a1f10; }
+  .badge.inv { color: #ff8f8f; border-color: #522; background: #2a1414; }
+
+  .strat {
+    border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; margin: 10px 0;
+    background: var(--panel2);
+  }
+  .strat h4 { margin: 0 0 4px; font-size: 14px; display: flex; align-items: center; flex-wrap: wrap; }
+  .strat .desc { font-size: 13px; margin: 4px 0 8px; }
+  .strat .params { list-style: none; padding: 0; margin: 0; font-size: 12px; }
+  .strat .params li { padding: 2px 0; border-bottom: none; }
+  .strat .params b { color: #cfe; }
+  .strat .params .rng { color: var(--muted); font: 11px Consolas, monospace; margin-left: 4px; }
+
+  .fact-table td:first-child { color: var(--muted); width: 220px; white-space: nowrap; }
+
+  #toTop {
+    position: fixed; right: 20px; bottom: 22px; z-index: 250;
+    width: 38px; height: 38px; border-radius: 50%; border: 1px solid var(--border);
+    background: var(--panel2); color: var(--accent); font-size: 16px; cursor: pointer;
+    opacity: 0; pointer-events: none; transition: opacity .15s;
+  }
+  #toTop.show { opacity: 1; pointer-events: auto; }
+  #toTop:hover { border-color: var(--accent); }
+
+  footer { border-top: 1px solid var(--border); padding-top: 14px; color: var(--muted); font-size: 11px; }
+
+  @media (max-width: 900px) {
+    .toc { transform: translateX(-100%); transition: transform .18s; box-shadow: 0 0 30px #0008; }
+    .toc.open { transform: translateX(0); }
+    main { margin-left: 0; padding: 54px 18px 80px; }
+    #tocToggle { display: block; }
+    .backlink { right: auto; left: 56px; }
+  }
+</style>
+</head>
+<body>
+
+<div id="progress"></div>
+<a class="backlink" href="/">&larr; в терминал</a>
+<button id="tocToggle" aria-label="Оглавление">&#9776;</button>
+
+<aside class="toc" id="toc">
+  <div class="toc-brand"><b>STL · Документация</b><div>справка платформы</div></div>
+  <nav id="tocNav">
+    <div class="toc-sec"><a href="#req" data-lvl="0">1. Требования</a></div>
+    <div class="toc-sec"><a href="#arch" data-lvl="0">2. Архитектура</a></div>
+    <div class="toc-sec"><a href="#guide" data-lvl="0">3. Инструкции пользователя</a>
+      <a class="sub" href="#guide-terminal">Терминал</a>
+      <a class="sub" href="#guide-orders">Заявки</a>
+      <a class="sub" href="#guide-live">LIVE роботы</a>
+      <a class="sub" href="#guide-botstore">Ботстор</a>
+      <a class="sub" href="#guide-backtest">Бэктест</a>
+      <a class="sub" href="#guide-equity">Доходность</a>
+      <a class="sub" href="#guide-companion">Компаньон</a>
+      <a class="sub" href="#guide-nav">Навигация</a>
+    </div>
+    <div class="toc-sec"><a href="#admin" data-lvl="0">4. Администрирование</a>
+      <a class="sub" href="#admin-deploy">Деплой</a>
+      <a class="sub" href="#admin-watchdog">Вотчер</a>
+      <a class="sub" href="#admin-companions">Компаньоны</a>
+      <a class="sub" href="#admin-limits">Лимиты</a>
+      <a class="sub" href="#admin-operator">Операторские зоны</a>
+      <a class="sub" href="#admin-recovery">Восстановление</a>
+    </div>
+    <div class="toc-sec"><a href="#appendix" data-lvl="0">5. Стратегии</a>
+      <a class="sub" href="#strat-trend">Трендследящие</a>
+      <a class="sub" href="#strat-mr">Контртрендовые</a>
+      <a class="sub" href="#strat-bo">Пробойные</a>
+      <a class="sub" href="#strat-ict">ICT / smart-money</a>
+      <a class="sub" href="#strat-mods">Модификаторы</a>
+    </div>
+  </nav>
+</aside>
+
+<main>
+
+<header class="hero">
+  <h1>Документация платформы STL</h1>
+  <div class="sub">Shectory Trade &amp; Lab &mdash; торговая платформа FORTS: живая торговля через QUIK, бумажные роботы, бэктест и перебор параметров, ручные заявки со сторожем.</div>
+  <div class="verpanel">
+    <div class="verhead">Версии</div>
+    <div class="verrel">Релиз системы: STL 2026.07.25</div>
+    <ul>
+      <li>STL backend + frontend: релиз 2026.07.25 (git main)</li>
+      <li>QUIK-агент + robot-runner: build_rev 1784961467 (самообновление, зона VDS)</li>
+      <li>Опт-агент i9: 2026-07-19-control-leaders (самообновление по манифесту)</li>
+      <li>Компаньон STLCompanion.exe: sha256 3463dd77&hellip;</li>
+      <li>Документация: v2026.07.25-1</li>
+    </ul>
+    <div class="verrule">Документация нумеруется тем же датовым релизом, что и система. Сателлиты несут свои build_rev, но привязаны к релизу этой таблицей.</div>
+  </div>
+</header>
+
+<!-- ══════════════════════════════════════════════════════════════════ -->
+<section id="req">
+  <h2>1. Требования<a class="anchor" href="#req">#</a></h2>
+  <div class="lead">Что платформа обязана делать. Сгруппировано по областям, каждый пункт с номером.</div>
+
+  <div class="req-group">
+    <h3 id="req-live">Живая торговля<a class="anchor" href="#req-live">#</a></h3>
+    <ul class="req-list">
+      <li><span class="tag">Т-1</span>Роботы на реальные деньги торгуют НЕ в процессе STL, а на QUIK-агенте (Windows VDS рядом с терминалом QUIK). Падение STL не останавливает торговлю &mdash; агент дозванивается сам и продолжает вести открытые позиции.</li>
+      <li><span class="tag">Т-2</span>Ордера идут в QUIK через QLua-мост (файловая очередь, не LuaSocket). Робот-ордера всегда маркетабельны (BUY по аску / SELL по биду) и квантованы на шаг цены инструмента &mdash; иначе заявка отклоняется биржей и не исполняется никогда.</li>
+      <li><span class="tag">Т-3</span>Торговля включается ДВУМЯ независимыми флагами разом: `quik_trading_enabled` на стороне STL и локальный флаг в `agent_config.json` на агенте. STL не может удалённо взвести флаг агента.</li>
+      <li><span class="tag">Т-4</span>Иммунитет к рестартам: закрытые бары и состояние робота персистятся на агенте (`runner_state.json`), исторический бар не переисполняется повторно после любого перезапуска.</li>
+    </ul>
+  </div>
+
+  <div class="req-group">
+    <h3 id="req-paper">Бумажная торговля и Lab<a class="anchor" href="#req-paper">#</a></h3>
+    <ul class="req-list">
+      <li><span class="tag">Т-5</span>Paper-роботы живут в Postgres (таблица <code>robots</code>) и исполняются планировщиком STL (`trader/lab/scheduler.py`).</li>
+      <li><span class="tag">Т-6</span>Один и тот же протокол исполнения (`STLRuntime`) обслуживает бэктест, paper-робота в STL и live-робота на агенте &mdash; одна и та же стратегия ведёт себя идентично во всех трёх режимах.</li>
+    </ul>
+  </div>
+
+  <div class="req-group">
+    <h3 id="req-heavy">Бэктест и переборы параметров<a class="anchor" href="#req-heavy">#</a></h3>
+    <ul class="req-list">
+      <li><span class="tag">Т-7</span>Никакие тяжёлые вычисления (свипы параметров, переборы) не выполняются в процессе STL API &mdash; они уходят на выносные агенты (i9, VDS-фолбэк), чтобы не блокировать событийный цикл и не ронять живую торговлю.</li>
+      <li><span class="tag">Т-8</span>Результаты сводятся в единый хитпарад (Ботстор / `optimization_leaderboard`) независимо от того, какой агент считал.</li>
+    </ul>
+  </div>
+
+  <div class="req-group">
+    <h3 id="req-money">Честный учёт денег<a class="anchor" href="#req-money">#</a></h3>
+    <ul class="req-list">
+      <li><span class="tag">Т-9</span>Пофилловый журнал <code>algo_trades</code> &mdash; каждая сделка учтена отдельно, gross/net с комиссией.</li>
+      <li><span class="tag">Т-10</span>P&amp;L робота на раннере считается в ЦЕНОВЫХ ПУНКТАХ, а не в рублях; перевод в рубли делает UI через коэффициент <code>step_cost / price_step</code> инструмента. Точку и рубль путать нельзя &mdash; коэффициент чужого инструмента даёт результат, отличающийся в сотни раз.</li>
+    </ul>
+  </div>
+
+  <div class="req-group">
+    <h3 id="req-integrity">Защита от ложных данных<a class="anchor" href="#req-integrity">#</a></h3>
+    <ul class="req-list">
+      <li><span class="tag">Т-11</span>После рестарта QUIK лента сделок какое-то время реплеит уже прошедший день &mdash; бары становятся стухшими при живых котировках. Реальные роботы должны автоматически ставиться на паузу, пока задержка биржи (`exchange_lag_ms`) не станет нормальной.</li>
+      <li><span class="tag">Т-12</span>Оракул торговой сессии MOEX (`trader/market_session.py`) отличает «биржа закрыта» от «лента умерла при открытой бирже» по факту SYSTIME ISS, а не по зашитому в код календарю (расписание меняется, праздники и торги выходного дня меняются).</li>
+    </ul>
+  </div>
+
+  <div class="req-group">
+    <h3 id="req-observe">Наблюдаемость<a class="anchor" href="#req-observe">#</a></h3>
+    <ul class="req-list">
+      <li><span class="tag">Т-13</span>Вотчер прогоняет проверки каждые 10 минут в торговое окно (06:55&ndash;23:55 МСК), логирует найденное и умеет эскалировать критичные случаи по SMS.</li>
+      <li><span class="tag">Т-14</span>Компаньон в трее Windows даёт оператору счёт, позиции, роботов и здоровье STL без открытия браузера, токен только на чтение.</li>
+    </ul>
+  </div>
+
+  <div class="req-group">
+    <h3 id="req-manual">Ручные заявки<a class="anchor" href="#req-manual">#</a></h3>
+    <ul class="req-list">
+      <li><span class="tag">Т-15</span>Оператор может выставлять обычные лимитные заявки и «умные» заявки (SL/TP/трейлинг/по исполнению/OCO) со сторожем, который следит за ценой и сам ставит дочернюю заявку при срабатывании.</li>
+      <li><span class="tag">Т-16</span>Умная заявка никогда не стреляет по неактуальной цене (стухший тик) и всегда квантуется на шаг цены при выставлении.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════════════ -->
+<section id="arch">
+  <h2>2. Спецификация и архитектура<a class="anchor" href="#arch">#</a></h2>
+  <div class="lead">Платформа и её сателлиты, чем они обмениваются и как обновляются.</div>
+
+  <h3 id="arch-diagram">Схема<a class="anchor" href="#arch-diagram">#</a></h3>
+  <pre>
+                    HTTPS (claim/report)
+   ┌──────────────┐  ◄──────────────────────  ┌───────────────────┐
+   │  i9 опт-агент │                            │   STL backend      │
+   │  (Win10-HyperV│  ─────────────────────►    │   (хостер, FastAPI │
+   │   свипы i9)   │   backtest_runs / claim     │   + gRPC сервер)   │
+   └──────────────┘                            └─────────┬──────────┘
+                                                            │ gRPC bidi stream
+                                                            │ (agent DIALS OUT,
+                                                            │  нет входящего порта)
+                                                  ┌─────────▼──────────┐
+                                                  │   QUIK-агент         │
+                                                  │   (Windows VDS)      │
+   ┌───────────────┐   read-only HTTPS           │   ├─ trade.Manager    │
+   │  Компаньон     │  ◄─────────────────────────┤   ├─ health/watchdog  │
+   │  (трей, exe)   │   /companion API             │   ├─ vdsguard        │
+   └───────────────┘                              │   └─ robots/*.json   │
+                                                    └───┬──────────┬──────┘
+                                            loopback gRPC│          │файловая очередь
+                                          127.0.0.1:50071│          │C:\quik-bridge\cmd.jsonl
+                                                    ┌────▼───┐  ┌───▼─────────────┐
+                                                    │ robot-  │  │ shectory_trade.lua│
+                                                    │ runner  │  │ (QLua, в памяти   │
+                                                    │ .exe    │  │  QUIK-терминала)  │
+                                                    └─────────┘  └───────┬──────────┘
+                                                                          │ sendTransaction
+                                                                    ┌─────▼─────┐
+                                                                    │   QUIK     │
+                                                                    │  терминал  │
+                                                                    └────────────┘
+  </pre>
+
+  <h3 id="arch-stl">STL backend + frontend<a class="anchor" href="#arch-stl">#</a></h3>
+  <p>Python 3.12 / FastAPI / asyncio, хостится на Ubuntu-сервере (`shectory-trader.service`, uvicorn :8000). Контрольная плоскость + монитор + исполнение через Finam Trade API (HTTP/2), хостинг Lab-фреймворка стратегий и бэктестера. Никакие тяжёлые вычисления не выполняются внутри &mdash; см. Т-7. Фронтенд &mdash; Svelte 5 SPA (lightweight-charts + uplot), статика через nginx, `/api` и `/ws` проксируются на uvicorn. Обновление: сборка фронтенда локально + git push + scp хешированных бандлов, сервис бэкенда рестартуется только при изменении Python-кода (раздел 4).</p>
+
+  <h3 id="arch-agent">QUIK-агент<a class="anchor" href="#arch-agent">#</a></h3>
+  <p>Go single-exe на Windows VDS рядом с терминалом QUIK. Дозванивается до STL по одному живому bidi gRPC-стриму (на Windows нет входящего порта). Рыночные данные приходят из QLua-паблишера через файловую очередь (тики, книга L2, обезличенная лента всех сделок, параметры инструмента); заявки идут через тот же Lua-мост. Хостит живых роботов (см. ниже). Самообновляется: применяет новый релиз на старте, в 03:00 МСК, либо по явной команде из STL; апдейт &mdash; zip, который апдейт-скрипт агента разворачивает поверх текущей установки.</p>
+
+  <h3 id="arch-runner">Robot runner<a class="anchor" href="#arch-runner">#</a></h3>
+  <p>Python, собран в единый <code>robot-runner.exe</code> (PyInstaller), упакован ВНУТРЬ релизного zip агента. Исполняет стратегии `trader/lab` 1:1 (тот же протокол `STLRuntime`) против локальных данных QUIK через loopback-мост агента (127.0.0.1:50071). Персистит роботов и состояние рядом с агентом, зеро-тач резюм после любого рестарта &mdash; агент реплеит сохранённые спеки роботов при каждом переподключении раннера. Обновляется вместе с агентом (тот же zip, тот же апдейт-цикл 03:00).</p>
+
+  <h3 id="arch-i9">Опт-агент i9<a class="anchor" href="#arch-i9">#</a></h3>
+  <p>Отдельная машина (Win10-HyperV, копия репозитория БЕЗ git &mdash; синхронизация вручную или через манифест самообновления агента) забирает джобы перебора параметров через <code>/api/v1/agent/claim</code> по HTTPS и считает бэктесты пачками комбинаций. Результаты уходят в <code>backtest_results</code>, кампании с префиксом <code>camp-</code>/<code>opt-</code> дополнительно зеркалятся в <code>optimization_leaderboard</code> (Ботстор). Обновляется по манифесту <code>agent/update_manifest.txt</code> самостоятельно.</p>
+
+  <h3 id="arch-companion">Компаньон<a class="anchor" href="#arch-companion">#</a></h3>
+  <p><code>STLCompanion.exe</code> &mdash; трей-панель Windows, read-only. WebView2 без рамки, вёрстка приезжает с STL (<code>companion.html</code>), exe отвечает только за окно/трей/токен/локальный прокси. Токен на чтение выдаётся один раз по короткоживущему коду сопряжения (15 минут, одноразовый) и хранится через DPAPI под учётной записью Windows &mdash; пароль не запрашивается никогда. Доставляется скачиванием exe оператором вручную (не самообновляется как агент).</p>
+
+  <h3 id="arch-contracts">Два wire-контракта<a class="anchor" href="#arch-contracts">#</a></h3>
+  <p>Центр тяжести обмена данными &mdash; два protobuf-контракта в <code>proto/shectory/quik/v1/</code>:</p>
+  <table class="fact-table">
+    <tr><td><code>quik_agent.proto</code></td><td>агент↔STL стрим. Агент → STL: Register/Heartbeat/тики/книги/OrderUpdate/TransReply/LimitsState/RobotStatusReport. STL → агент: Ack/PlaceOrder/CancelOrder/ReplaceOrder/KillSwitch/SetLimits/DeployRobot/UndeployRobot/SetRobotParams/PauseRobot/StartRobot.</td></tr>
+    <tr><td><code>runner_bridge.proto</code></td><td>loopback агент↔раннер: StreamTicks/StreamTape/StreamControl/StreamOrderEvents/PlaceRunnerOrder/ReportStatus.</td></tr>
+  </table>
+  <p class="hint">Оба контракта регенерируются вместе (<code>make gen</code>) при любой правке любого из proto-файлов.</p>
+
+  <h3 id="arch-lua">Файловая очередь Lua<a class="anchor" href="#arch-lua">#</a></h3>
+  <p>DDE-сервер отключён по умолчанию (легаси, включается только `SHECTORY_ENABLE_DDE=1`). Рыночные данные и заявки ходят через файловую очередь скрипта <code>shectory_trade.lua</code>, живущего в ПАМЯТИ терминала QUIK: тики (500 мс), книга L2 (1 c, только пока в терминале открыто окно стакана по инструменту), обезличенная лента всех сделок (батчи по 300 мс, требует открытого окна «Таблица всех сделок»), параметры инструмента (шаг цены/стоимость шага/ГО, раз в 60 c). Заявки идут через <code>sendTransaction</code> того же скрипта. Копия файла на диске не значит, что код в терминале обновился &mdash; скрипт нужно перезапустить руками через Сервисы → Lua-скрипты.</p>
+
+  <h3 id="arch-safety">Dual trading safety<a class="anchor" href="#arch-safety">#</a></h3>
+  <p>Заявка в QUIK требует, чтобы мастер-флаг торговли был включён С ОБЕИХ сторон разом: в STL (`quik_trading_enabled`) и локально в `agent_config.json` на агенте. STL никогда не взводит флаг агента удалённо &mdash; она может только толкать вайтлист инструментов и числовые лимиты через <code>SetLimits</code> при подключении, агент эхает свои действующие лимиты обратно через <code>LimitsState</code>. Эффективный лимит &mdash; минимум из бэкстопа агента и пуша STL; агент только УЖЕСТОЧАЕТ лимит на лету, более широкие значения перечитывает только при старте.</p>
+
+  <h3 id="arch-price">Маркетабельные цены и шаг цены<a class="anchor" href="#arch-price">#</a></h3>
+  <p>Робот-ордера идут маркетабельно (SELL по биду / BUY по аску от свежей котировки, крест шире при стухшей котировке), а не через движок-мейкер ручных заявок. Цена ОБЯЗАНА быть кратна шагу цены инструмента &mdash; квантование делает АГЕНТ, потому что только он знает `PriceStep` из параметров QLua; раннер шага не знает. Заявка не на сетке шага отклоняется биржей («не кратно шагу») и не исполняется никогда, а робот переотправляет её на каждом баре &mdash; позиция зависает без исполнения.</p>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════════════ -->
+<section id="guide">
+  <h2>3. Инструкции пользователя<a class="anchor" href="#guide">#</a></h2>
+  <div class="lead">По экранам платформы. Бургер-меню (&#9776;) стоит на каждом экране и открывает карту всего сайта.</div>
+
+  <details id="guide-terminal">
+    <summary>Терминал (главный экран)<a class="anchor" href="#guide-terminal">#</a></summary>
+    <div class="details-body">
+      <p>Стартовый экран (<code>/</code>). Три ключевые панели:</p>
+      <ul>
+        <li><b>Стакан</b> &mdash; книга заявок по выбранному инструменту, обновляется в реальном времени.</li>
+        <li><b>Тикет</b> &mdash; форма выставления заявки: инструмент, сторона, количество, цена.</li>
+        <li><b>Позиции</b> &mdash; открытые позиции по счёту с текущим P&amp;L.</li>
+      </ul>
+      <p>Отсюда же доступен бургер-меню со ссылками на все остальные экраны платформы.</p>
+    </div>
+  </details>
+
+  <details id="guide-orders">
+    <summary>Заявки: обычная / умные / графики<a class="anchor" href="#guide-orders">#</a></summary>
+    <div class="details-body">
+      <p>Экран <code>/?orders=1</code>, три вкладки:</p>
+      <ol>
+        <li><b>Обычная заявка</b> &mdash; классический лимитный ордер: инструмент, сторона, количество, цена.</li>
+        <li><b>Умные заявки</b> &mdash; заявка со сторожем. Вкладка держит счётчик взведённых прямо на корешке, чтобы было видно даже когда открыта другая вкладка &mdash; умная заявка сработает без вашего участия.</li>
+        <li><b>Позиции и заявки на графиках</b> &mdash; те же данные визуально, поверх ценового графика.</li>
+      </ol>
+      <h4>Типы умных заявок</h4>
+      <table>
+        <tr><th>Тип</th><th>Что делает</th></tr>
+        <tr><td><b>Стоп-лосс (SL)</b></td><td>Ограничивает убыток. Сторож раз в секунду смотрит цену последней сделки; для продажи срабатывает, когда цена опустилась до стоп-цены или ниже (защита лонга), для покупки &mdash; когда поднялась до уровня или выше (защита шорта). В момент срабатывания ставится маркетабельная лимитка.</td></tr>
+        <tr><td><b>Тейк-профит (TP)</b></td><td>Фиксирует прибыль на заранее назначенной цене &mdash; зеркально стоп-лоссу по направлению срабатывания.</td></tr>
+        <tr><td><b>Скользящий стоп (Trail)</b></td><td>Пока цена не дошла до уровня активации (0 = следить сразу), заявка спит. После активации сторож запоминает лучшую достигнутую цену (пик для продажи / дно для покупки) и подтягивает её за движением, никогда не откатывая назад. Срабатывает, когда цена отошла от пика на заданный отступ в пунктах.</td></tr>
+        <tr><td><b>По исполнению (on_fill)</b></td><td>Заявка-на-заявку: сторож следит за client_id другого ордера и в момент его исполнения ставит дочернюю заявку (например защиту сразу после входа). Цена дочерней заявки &mdash; указанная явно, либо по рынку.</td></tr>
+        <tr><td><b>Связка OCO</b></td><td>Любые заявки с одинаковой непустой группой отменяют друг друга при срабатывании одной &mdash; классическая пара SL+TP.</td></tr>
+      </table>
+      <p class="hint">Взвод в два клика: сначала показывается фраза «что произойдёт» (условие срабатывания человеческим языком), потом кнопка подтверждения. Дочерние заявки всегда квантуются на шаг цены и никогда не стреляют по стухшему тику (старше 30 с).</p>
+      <p class="hint">Умная заявка живёт внутри процесса STL и переживает его перезапуск (файл на диске), но следящий цикл работает только пока STL запущен &mdash; в отличие от роботов на агенте.</p>
+    </div>
+  </details>
+
+  <details id="guide-live">
+    <summary>LIVE роботы и витрина робота<a class="anchor" href="#guide-live">#</a></summary>
+    <div class="details-body">
+      <p>Экран <code>/?lab=live</code> &mdash; список роботов (paper в STL и live на агенте вперемешку). Открытие робота ведёт на его персональную витрину (<code>/?agent_robot=&lt;robot_id&gt;</code> для агентских).</p>
+      <h4>Что показывает витрина</h4>
+      <ul>
+        <li><b>P&amp;L</b> &mdash; пожизненный реализованный результат раннера (<code>realized_pnl</code> в пунктах × ₽/пункт инструмента), НЕ результат перерисовки графика по журналу сделок.</li>
+        <li><b>P&amp;L + Маржа</b> &mdash; тот же реализованный результат плюс то, что получится, если закрыть открытую позицию по рынку прямо сейчас (за вычетом комиссии выхода). Показывает «что будет, если зафиксировать всё немедленно».</li>
+        <li><b>Пауза</b> &mdash; блокирует новые входы БЕЗ закрытия позиции: открытая позиция остаётся как есть, работающие заявки снимаются.</li>
+        <li><b>«Сигнал сейчас»</b> &mdash; интроспекция стратегии (что бы она сделала на этом баре). Для standalone-модулей (донгиан, EMA/RSI-кроссовер и др.) может показывать «стратегия не найдена» &mdash; это косметика: сама торговля продолжает идти штатно, просто у этого типа стратегий нет разбора сигнала для панели.</li>
+      </ul>
+      <p class="hint">Форма кривой на графике идёт из журнала сделок, а конец кривой (последняя точка) смещён на пожизненный <code>realized_pnl</code> раннера &mdash; смещением, а не масштабом. Журнал «с флэта» не значит полную историю робота.</p>
+    </div>
+  </details>
+
+  <details id="guide-botstore">
+    <summary>Ботстор (хитпарад)<a class="anchor" href="#guide-botstore">#</a></summary>
+    <div class="details-body">
+      <p>Экран <code>/?lab=botstore</code> &mdash; таблица лучших комбинаций стратегия+инструмент+параметры по итогам переборов на i9 и VDS-фолбэке. Клик по строке пересчитывает и открывает график с реальными сделками и P&amp;L.</p>
+      <p><b>Как читать хитпарад:</b> верхняя строка по чистому результату (net) &mdash; не единственный ориентир. У сортировки по колонке доступен <b>Win%</b> (доля прибыльных сделок). Долю прибыльных сделок и медианный результат по соседним комбинациям параметров стоит смотреть вместе с вершиной, а не вместо неё: одна аномально удачная комбинация на вершине рейтинга &mdash; типичный survivorship bias перебора (из тысяч комбинаций одна всегда окажется лучшей случайно). Устойчивая стратегия &mdash; та, у которой соседние по параметрам комбинации тоже прибыльны, а не только сам рекордсмен.</p>
+      <p class="hint">Контр-стратегии (фейд базового сигнала) видны в списке с пометкой «(контр)» у имени &mdash; это тот же индикатор, но с инвертированным сигналом входа (суффикс <code>__inv</code>, раздел 5).</p>
+    </div>
+  </details>
+
+  <details id="guide-backtest">
+    <summary>Бэктест<a class="anchor" href="#guide-backtest">#</a></summary>
+    <div class="details-body">
+      <p>Экран <code>/?lab=backtest</code> &mdash; ручной прогон одной стратегии на выбранном инструменте и периоде без постановки в очередь переборщика. Годится, чтобы быстро проверить одну гипотезу или один набор параметров перед тем, как отправлять его в перебор.</p>
+    </div>
+  </details>
+
+  <details id="guide-equity">
+    <summary>Доходность алготорговли<a class="anchor" href="#guide-equity">#</a></summary>
+    <div class="details-body">
+      <p>Экран <code>/?equity=1</code> &mdash; глобальный график доходности по журналу <code>algo_trades</code>: пофилловый учёт всей алготорговли (paper и live вместе), gross/net с комиссией. Это единственное место, где видна СУММАРНАЯ доходность по всем роботам разом, а не по одному роботу.</p>
+    </div>
+  </details>
+
+  <details id="guide-companion">
+    <summary>Компаньон (веб-версия панели)<a class="anchor" href="#guide-companion">#</a></summary>
+    <div class="details-body">
+      <p>Страница <code>/companion.html</code> &mdash; та же вёрстка, что показывает трей-приложение <code>STLCompanion.exe</code> на Windows, только в браузере. Сопряжение по короткому коду, который выдаётся на странице вотчера (раздел 4): счёт, позиции, роботы, здоровье STL, эскалации &mdash; всё read-only.</p>
+    </div>
+  </details>
+
+  <details id="guide-nav">
+    <summary>Навигация: бургер-меню<a class="anchor" href="#guide-nav">#</a></summary>
+    <div class="details-body">
+      <p>Значок &#9776; в шапке любого экрана открывает карту сайта, сгруппированную по смыслу:</p>
+      <table>
+        <tr><th>Группа</th><th>Экраны</th></tr>
+        <tr><td>Торговля</td><td>Терминал, Заявки, Доходность алготорговли, Таблицы QUIK</td></tr>
+        <tr><td>Лаборатория</td><td>LIVE роботы, Ботстор, Бэктест, Графики рынка</td></tr>
+        <tr><td>Мониторинг</td><td>Вотчер, QUIK-агент (статус и сверка), i9 (ресурсы переборщика), Компаньон</td></tr>
+        <tr><td>Справка</td><td>Эта документация</td></tr>
+      </table>
+      <p class="hint">Группы открыты по умолчанию (меню &mdash; карта сайта, а не тест на память); клик по заголовку группы сворачивает её.</p>
+    </div>
+  </details>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════════════ -->
+<section id="admin">
+  <h2>4. Администрирование<a class="anchor" href="#admin">#</a></h2>
+  <div class="lead">Деплой, вотчер, компаньоны, лимиты, операторские зоны, восстановление.</div>
+
+  <details id="admin-deploy">
+    <summary>Деплой<a class="anchor" href="#admin-deploy">#</a></summary>
+    <div class="details-body">
+      <p><b>Безопасный деплой (по умолчанию):</b> фронтенд собирается ЛОКАЛЬНО (<code>node ./node_modules/vite/bin/vite.js build</code>), затем <code>git push</code> → <code>ssh hoster</code> <code>git pull</code> → scp хешированных <code>index.html</code> и новых <code>assets/index-*.js/.css</code> в <code>~/apps/shectory-trader/frontend/dist/</code>. Сборка фронтенда только фронтенд-изменением &mdash; сервис НЕ рестартуется, nginx раздаёт статику напрямую. Бэкенд-изменение требует <code>sudo systemctl restart shectory-trader</code> (кратко роняет gRPC-линк с агентом, он передозвонится сам) &mdash; никогда не рестартовать во время живого теста торговли оператором.</p>
+      <p><b>QUIK-агент + раннер:</b> изменённые Go-файлы и proto скопом (scp) в <code>~/quik_build</code> на хостере, затем <code>publish_quik_agent.sh [agent_id]</code>. Раннер собирается на Windows (PyInstaller не кросс-компилирует) отдельно и укладывается в <code>~/quik_build/quik_agent/dist/</code> до публикации. С <code>agent_id</code> обновление применяется немедленно, без него &mdash; в окне самообновления 03:00 МСК без лишнего рестарта живых роботов.</p>
+      <p class="hint">Перед публикацией агента сверять sha256 собранного раннера с эталоном и проверять запись в опубликованном zip &mdash; оборванный scp однажды оставил правильный РАЗМЕР файла при неверных байтах, и три публикации подряд ушли с битым архивом.</p>
+    </div>
+  </details>
+
+  <details id="admin-watchdog">
+    <summary>Вотчер<a class="anchor" href="#admin-watchdog">#</a></summary>
+    <div class="details-body">
+      <p>Страница <code>/watchdog-log.html</code>. Активации проверок каждые 10 минут в окне 06:55&ndash;23:55 МСК. Настройки:</p>
+      <ul>
+        <li><b>Эскалация по SMS</b> &mdash; список событий, для каждого включается/выключается отправка SMS; выключенное событие всё равно остаётся в логе с пометкой, просто без SMS.</li>
+        <li><b>Критические случаи (авто-действия)</b> &mdash; переключатели авто-паузы: при отставании тейпа (реплей после рестарта QUIK) и при расхождении баров робота с рынком. Пауза блокирует только новые ордера, позиции не трогаются; утренний авто-резюм снимает ТОЛЬКО паузы, поставленные вотчером.</li>
+        <li><b>Пороги проверок</b> &mdash; числовые границы срабатывания для каждой проверки.</li>
+      </ul>
+    </div>
+  </details>
+
+  <details id="admin-companions">
+    <summary>Компаньоны<a class="anchor" href="#admin-companions">#</a></summary>
+    <div class="details-body">
+      <p>Там же, на <code>/watchdog-log.html</code>, блок «Компаньоны»: вводится учётная запись Windows (например <code>WIN10-HYPERV\admin</code>), выдаётся код сопряжения &mdash; действует 15 минут, срабатывает один раз. Код вводится в приложении <code>STLCompanion.exe</code> на стороне пользователя, после чего у него read-only токен, зашифрованный DPAPI под его же учётку. Список выданных устройств тут же, у каждого кнопка «Отозвать».</p>
+    </div>
+  </details>
+
+  <details id="admin-limits">
+    <summary>Лимиты<a class="anchor" href="#admin-limits">#</a></summary>
+    <div class="details-body">
+      <p>Дневной кап заявок (<code>quik_daily_order_cap</code>, по умолчанию 500) и капы контрактов на заявку / в работе действуют с ОБЕИХ сторон (STL push + бэкстоп агента), эффективное значение &mdash; минимум из двух. Правило поднятия капов: сначала переменные окружения STL (<code>QUIK_MAX_CONTRACTS_PER_ORDER</code> / <code>QUIK_MAX_WORKING_CONTRACTS</code>) + рестарт STL, ПОТОМ рестарт агента &mdash; обратный порядок оставляет старые тесные капы в силе. Робот-разворот занимает working-бюджет вдвойне (закрыть N + открыть N = 2N контрактов одновременно) &mdash; working-кап должен быть минимум ×2 от per-order.</p>
+    </div>
+  </details>
+
+  <details id="admin-operator">
+    <summary>Операторские зоны<a class="anchor" href="#admin-operator">#</a></summary>
+    <div class="details-body">
+      <p>Часть действий доступна ТОЛЬКО с локальной консоли VDS, никогда удалённо через STL:</p>
+      <ul>
+        <li>Перезапуск Lua-скрипта в QUIK (Сервисы → Lua-скрипты) &mdash; копия файла на диске не значит, что бегущий код обновился.</li>
+        <li>Арминг робота в реал (переключатель paper/real) &mdash; существует только на агенте, требует, чтобы робот был плоским (позиция 0, нет работающих/в полёте заявок, статус известен) и ввода ID робота вручную для подтверждения.</li>
+        <li>Перед ЛЮБЫМ ручным обслуживанием Lua/терминала &mdash; выставить <code>quik_guard_disabled: true</code> (или остановить агент), иначе вотчдог vdsguard перезапустит QUIK посреди обслуживания.</li>
+      </ul>
+    </div>
+  </details>
+
+  <details id="admin-recovery">
+    <summary>Восстановление<a class="anchor" href="#admin-recovery">#</a></summary>
+    <div class="details-body">
+      <ul>
+        <li><b>Реплей тейпа</b> &mdash; после рестарта QUIK лента какое-то время повторяет прошедший день; авто-пауза реальных роботов держится, пока <code>exchange_lag_ms</code> не опустится до нормы.</li>
+        <li><b>Оракул сессии MOEX</b> &mdash; читает поле SYSTIME из ISS по нескольким инструментам сразу и берёт самое свежее; одна сетевая ошибка не должна разблокировать ложную тревогу, при полном провале запроса статус «неизвестно», а не «закрыто».</li>
+        <li><b>Журнал auto-heal</b> &mdash; агент раз в 60 c сверяет сделки QUIK, помеченные тегом робота, с тем, что раннер считает своей книгой, и синтезирует пропущенный филл обратно через обычный событийный путь (идемпотентно, по client_id). Факт QUIK всегда старше убеждения агента.</li>
+      </ul>
+    </div>
+  </details>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════════════ -->
+<section id="appendix">
+  <h2>5. Приложения: стратегии торговли<a class="anchor" href="#appendix">#</a></h2>
+  <div class="lead">
+    Полный каталог из <code>trader/lab/strategies/library.py</code> (реестр индикаторных стратегий, 17 штук) и
+    отдельных модулей <code>trader/lab/strategies/*.py</code> (5 standalone). Реестровые стратегии проходят через
+    общий <code>make_on_bar</code> и автоматически получают универсальные модификаторы позиции (усреднение, тейк,
+    разножка, ставки, остывание, суперусреднение &mdash; см. последний блок). Standalone-модули имеют собственный
+    протокол <code>on_bar</code>/<code>on_start</code>/<code>on_stop</code> и модификаторы реестра НЕ наследуют.
+  </div>
+
+  <h3 id="strat-trend">Трендследящие<a class="anchor" href="#strat-trend">#</a></h3>
+  <details><summary>Пересечения средних, импульс, каналы ATR (8 стратегий)<a class="anchor" href="#strat-trend">#</a></summary>
+  <div class="details-body">
+
+    <div class="strat">
+      <h4>MACD Crossover <span class="badge registry">реестр</span> <code>macd_cross</code></h4>
+      <div class="desc">MACD = быстрая EMA минус медленная EMA, сигнальная линия &mdash; EMA от MACD. MACD выше сигнальной &mdash; держим лонг, ниже &mdash; шорт. Всегда в рынке после прогрева, переворот на каждом пересечении.</div>
+      <ul class="params">
+        <li><b>fast</b> <span class="rng">12; 3&ndash;30</span> &mdash; период быстрой EMA</li>
+        <li><b>slow</b> <span class="rng">26; 10&ndash;60</span> &mdash; период медленной EMA</li>
+        <li><b>signal</b> <span class="rng">9; 3&ndash;30</span> &mdash; период сигнальной линии</li>
+        <li><b>qty</b> <span class="rng">1; 1&ndash;10</span> &mdash; контрактов на сделку</li>
+      </ul>
+    </div>
+
+    <div class="strat">
+      <h4>Shectory-2EMA <span class="badge registry">реестр</span> <code>shectory_2ema</code></h4>
+      <div class="desc">Две EMA, быстрая выше медленной &mdash; лонг, ниже &mdash; шорт. Всегда в рынке. Встроена система ставок: объём растёт после убыточной сделки и сбрасывается после прибыльной.</div>
+      <ul class="params">
+        <li><b>ema1</b> <span class="rng">10; 3&ndash;60</span> &mdash; быстрая EMA</li>
+        <li><b>ema2</b> <span class="rng">140; 20&ndash;400</span> &mdash; медленная EMA</li>
+        <li><b>qty</b> <span class="rng">1; 1&ndash;20</span> &mdash; базовый объём</li>
+        <li><b>bet_step</b> <span class="rng">1; 0&ndash;5</span> &mdash; добавка контрактов после убытка (0=выкл)</li>
+        <li><b>bet_max</b> <span class="rng">10; 1&ndash;30</span> &mdash; потолок добавки по ставкам</li>
+      </ul>
+    </div>
+
+    <div class="strat">
+      <h4>Triple SMA Alignment <span class="badge registry">реестр</span> <code>triple_sma</code></h4>
+      <div class="desc">Три SMA разного периода. Все три выстроились по возрастанию &mdash; лонг, по убыванию &mdash; шорт, перемешаны &mdash; выходим в плоскую позицию. Жёсткий фильтр, мало сделок.</div>
+      <ul class="params">
+        <li><b>fast</b> <span class="rng">5; 2&ndash;30</span></li>
+        <li><b>mid</b> <span class="rng">20; 10&ndash;60</span></li>
+        <li><b>slow</b> <span class="rng">50; 30&ndash;200</span></li>
+        <li><b>qty</b> <span class="rng">1; 1&ndash;10</span></li>
+      </ul>
+    </div>
+
+    <div class="strat">
+      <h4>EMA Trend + ATR Filter <span class="badge registry">реестр</span> <code>ema_atr</code></h4>
+      <div class="desc">Пересечение двух EMA плюс подтверждение импульсом: цена должна оторваться от медленной EMA на mult×ATR в сторону тренда. Без ATR-подтверждения вход не идёт даже при пересечении EMA.</div>
+      <ul class="params">
+        <li><b>fast</b> <span class="rng">9; 3&ndash;40</span></li>
+        <li><b>slow</b> <span class="rng">30; 15&ndash;120</span></li>
+        <li><b>atr_period</b> <span class="rng">14; 5&ndash;40</span></li>
+        <li><b>mult</b> <span class="rng">5; 1&ndash;30</span> &mdash; множитель ATR ×10</li>
+        <li><b>qty</b> <span class="rng">1; 1&ndash;10</span></li>
+      </ul>
+    </div>
+
+    <div class="strat">
+      <h4>Momentum <span class="badge registry">реестр</span> <code>momentum</code></h4>
+      <div class="desc">Моментум = цена сейчас минус цена period баров назад. Положительный &mdash; лонг, отрицательный &mdash; шорт. Простейший тренд-фолловер.</div>
+      <ul class="params">
+        <li><b>period</b> <span class="rng">10; 2&ndash;60</span></li>
+        <li><b>qty</b> <span class="rng">1; 1&ndash;10</span></li>
+      </ul>
+    </div>
+
+    <div class="strat">
+      <h4>Rate of Change <span class="badge registry">реестр</span> <code>roc</code></h4>
+      <div class="desc">Момент в процентах с порогом фильтрации слабых движений &mdash; отличие от Momentum. Выше порога &mdash; лонг, ниже минус порога &mdash; шорт, внутри &mdash; держим что есть.</div>
+      <ul class="params">
+        <li><b>period</b> <span class="rng">12; 2&ndash;60</span></li>
+        <li><b>threshold</b> <span class="rng">50; 5&ndash;300</span> &mdash; порог %×100 (50=0.5%)</li>
+        <li><b>qty</b> <span class="rng">1; 1&ndash;10</span></li>
+      </ul>
+    </div>
+
+    <div class="strat">
+      <h4>EMA Crossover <span class="badge module">модуль</span> <code>ema_crossover</code></h4>
+      <div class="desc">Эталонный standalone-кроссовер двух EMA на TF=5. Пересечение снизу вверх &mdash; лонг фиксированным объёмом 1 контракт, сверху вниз &mdash; закрытие лонга. Не переворачивает в шорт.</div>
+      <ul class="params">
+        <li><b>fast_period</b> <span class="rng">9; 2&ndash;50</span></li>
+        <li><b>slow_period</b> <span class="rng">21; 5&ndash;200</span></li>
+      </ul>
+    </div>
+
+    <div class="strat">
+      <h4>SuperTrend (ATR) <span class="badge module">модуль</span> <code>supertrend</code></h4>
+      <div class="desc">Классический индикатор SuperTrend (Olivier Seban). Полосы = базовая линия (H+L)/2 предыдущего бара ± mult×ATR. Пробой верхней полосы вверх &mdash; переворот в лонг, пробой нижней вниз &mdash; в шорт. Состояние тренда персистится между барами, повторных входов на каждом баре нет. Публикует плановые уровни переворота (пунктирная линия на графике робота).</div>
+      <ul class="params">
+        <li><b>atr_period</b> <span class="rng">10; 5&ndash;50</span></li>
+        <li><b>multiplier</b> <span class="rng">30; 10&ndash;60</span> &mdash; ширина полос ×10 (30=3.0×ATR)</li>
+        <li><b>qty</b> <span class="rng">1; 1&ndash;10</span></li>
+      </ul>
+    </div>
+
+  </div>
+  </details>
+
+  <h3 id="strat-mr">Контртрендовые</h3>
+  <details><summary>Возврат к среднему, перекупленность/перепроданность (7 стратегий)<a class="anchor" href="#strat-mr">#</a></summary>
+  <div class="details-body">
+
+    <div class="strat">
+      <h4>Bollinger Mean-Reversion <span class="badge registry">реестр</span> <code>bollinger_mr</code></h4>
+      <div class="desc">Полоса Боллинджера: SMA(period) ± mult×σ. Цена ниже нижней полосы &mdash; «перепродано», покупаем; выше верхней &mdash; «перекуплено», продаём; внутри &mdash; выходим в плоскую позицию.</div>
+      <ul class="params">
+        <li><b>period</b> <span class="rng">20; 5&ndash;60</span></li>
+        <li><b>mult</b> <span class="rng">20; 10&ndash;40</span> &mdash; сигма ×10 (20=2.0σ)</li>
+        <li><b>qty</b> <span class="rng">1; 1&ndash;10</span></li>
+      </ul>
+    </div>
+
+    <div class="strat">
+      <h4>Stochastic Oscillator <span class="badge registry">реестр</span> <code>stochastic</code></h4>
+      <div class="desc">%K &mdash; положение цены в диапазоне high-low за period баров. Ниже уровня перепроданности &mdash; лонг, выше перекупленности &mdash; шорт.</div>
+      <ul class="params">
+        <li><b>period</b> <span class="rng">14; 5&ndash;40</span></li>
+        <li><b>oversold</b> <span class="rng">20; 5&ndash;40</span></li>
+        <li><b>overbought</b> <span class="rng">80; 60&ndash;95</span></li>
+        <li><b>qty</b> <span class="rng">1; 1&ndash;10</span></li>
+      </ul>
+    </div>
+
+    <div class="strat">
+      <h4>CCI Reversal <span class="badge registry">реестр</span> <code>cci</code></h4>
+      <div class="desc">Commodity Channel Index &mdash; не ограничен 0&ndash;100 как RSI/Stochastic, может показывать более сильные выбросы. Ниже &minus;threshold &mdash; лонг, выше +threshold &mdash; шорт.</div>
+      <ul class="params">
+        <li><b>period</b> <span class="rng">20; 5&ndash;50</span></li>
+        <li><b>threshold</b> <span class="rng">100; 50&ndash;200</span></li>
+        <li><b>qty</b> <span class="rng">1; 1&ndash;10</span></li>
+      </ul>
+    </div>
+
+    <div class="strat">
+      <h4>Williams %R <span class="badge registry">реестр</span> <code>williams_r</code></h4>
+      <div class="desc">Аналог Stochastic, перевёрнутый (от &minus;100 до 0), более чувствителен к крайним значениям.</div>
+      <ul class="params">
+        <li><b>period</b> <span class="rng">14; 5&ndash;40</span></li>
+        <li><b>oversold</b> <span class="rng">80; 60&ndash;95</span></li>
+        <li><b>overbought</b> <span class="rng">20; 5&ndash;40</span></li>
+        <li><b>qty</b> <span class="rng">1; 1&ndash;10</span></li>
+      </ul>
+    </div>
+
+    <div class="strat">
+      <h4>RSI + Trend Filter <span class="badge registry">реестр</span> <code>rsi_trend</code></h4>
+      <div class="desc">Вход по RSI только В НАПРАВЛЕНИИ тренда (цена относительно EMA-фильтра) &mdash; откат RSI внутри тренда, не разворот против него.</div>
+      <ul class="params">
+        <li><b>rsi_period</b> <span class="rng">14; 5&ndash;40</span></li>
+        <li><b>ema_period</b> <span class="rng">50; 20&ndash;200</span> &mdash; фильтр тренда</li>
+        <li><b>oversold</b> <span class="rng">40; 20&ndash;50</span></li>
+        <li><b>overbought</b> <span class="rng">60; 50&ndash;80</span></li>
+        <li><b>qty</b> <span class="rng">1; 1&ndash;10</span></li>
+      </ul>
+    </div>
+
+    <div class="strat">
+      <h4>Pivot Points Reversal <span class="badge registry">реестр</span> <code>pivot_reversal</code></h4>
+      <div class="desc">Классические floor-пивоты от вчерашних H/L/C: P=(H+L+C)/3, R1=2P&minus;L, S1=2P&minus;H (уровень 2: R2=P+(H&minus;L), S2=P&minus;(H&minus;L)). Цена у поддержки &mdash; лонг, у сопротивления &mdash; шорт, между уровнями &mdash; выход.</div>
+      <ul class="params">
+        <li><b>level</b> <span class="rng">1; 1&ndash;2</span> &mdash; 1=R1/S1 (ближние), 2=R2/S2 (дальние)</li>
+        <li><b>qty</b> <span class="rng">1; 1&ndash;10</span></li>
+      </ul>
+    </div>
+
+    <div class="strat">
+      <h4>RSI Mean Reversion <span class="badge module">модуль</span> <code>rsi_mean_reversion</code></h4>
+      <div class="desc">Эталонный standalone RSI на TF=5. RSI ниже oversold &mdash; вход в лонг фиксированным объёмом 1 контракт; выше overbought &mdash; закрытие лонга. Не переворачивает в шорт.</div>
+      <ul class="params">
+        <li><b>period</b> <span class="rng">14; 5&ndash;100</span></li>
+        <li><b>oversold</b> <span class="rng">30; 10&ndash;45</span></li>
+        <li><b>overbought</b> <span class="rng">70; 55&ndash;90</span></li>
+      </ul>
+    </div>
+
+  </div>
+  </details>
+
+  <h3 id="strat-bo">Пробойные</h3>
+  <details><summary>Пробой канала волатильности (4 стратегии)<a class="anchor" href="#strat-bo">#</a></summary>
+  <div class="details-body">
+
+    <div class="strat">
+      <h4>Bollinger Breakout <span class="badge registry">реестр</span> <code>bollinger_bo</code></h4>
+      <div class="desc">Идёт ЗА пробоем полосы Боллинджера (в отличие от Mean-Reversion, которая идёт против). Пробой верхней полосы &mdash; лонг, нижней &mdash; шорт, внутри полосы &mdash; держим позицию без изменений.</div>
+      <ul class="params">
+        <li><b>period</b> <span class="rng">20; 5&ndash;60</span></li>
+        <li><b>mult</b> <span class="rng">20; 10&ndash;40</span> &mdash; сигма ×10</li>
+        <li><b>qty</b> <span class="rng">1; 1&ndash;10</span></li>
+      </ul>
+    </div>
+
+    <div class="strat">
+      <h4>Bollinger Breakout M1 <span class="badge registry">реестр</span> <code>bollinger_bo_m1</code></h4>
+      <div class="desc">Та же логика входа, что у Bollinger Breakout, но с ПРИНУДИТЕЛЬНЫМ усреднением вместо стоп-лосса: усреднение включено с рождения (avg_max стартует с 5, avg_step_atr с 10 &times;ATR/10), в отличие от базовой версии, где усреднение по умолчанию выключено и доступно как опция.</div>
+      <ul class="params">
+        <li><b>period / mult / qty</b> &mdash; как у Bollinger Breakout</li>
+        <li><b>avg_max</b> <span class="rng">5; 2&ndash;10</span> &mdash; форсировано включено</li>
+        <li><b>avg_step_atr</b> <span class="rng">10; 5&ndash;30</span> &mdash; форсировано включено</li>
+      </ul>
+    </div>
+
+    <div class="strat">
+      <h4>Keltner Breakout <span class="badge registry">реестр</span> <code>keltner_bo</code></h4>
+      <div class="desc">Канал на EMA ± mult×ATR вместо SMA ± σ у Боллинджера &mdash; ATR лучше отражает реальный размер движения на волатильном FORTS. Пробой верхней границы &mdash; лонг, нижней &mdash; шорт.</div>
+      <ul class="params">
+        <li><b>ema_period</b> <span class="rng">20; 5&ndash;60</span></li>
+        <li><b>atr_period</b> <span class="rng">10; 5&ndash;40</span></li>
+        <li><b>mult</b> <span class="rng">20; 10&ndash;40</span> &mdash; множитель ATR ×10</li>
+        <li><b>qty</b> <span class="rng">1; 1&ndash;10</span></li>
+      </ul>
+    </div>
+
+    <div class="strat">
+      <h4>Donchian Channel Breakout <span class="badge module">модуль</span> <code>donchian_breakout</code></h4>
+      <div class="desc">Turtle Trading System 1 (Dennis &amp; Eckhardt, 1983). Только лонг: покупка при пробое N-барового максимума, продажа при пробое M-барового минимума (M &lt; N). Классика, проверенная десятилетиями; для шортов на FORTS нужен отдельный доступ.</div>
+      <ul class="params">
+        <li><b>entry_period</b> <span class="rng">20; 5&ndash;200</span> &mdash; пробой входа (N)</li>
+        <li><b>exit_period</b> <span class="rng">10; 2&ndash;100</span> &mdash; пробой выхода (M)</li>
+        <li><b>qty</b> <span class="rng">1; 1&ndash;10</span></li>
+      </ul>
+    </div>
+
+  </div>
+  </details>
+
+  <h3 id="strat-ict">ICT / smart-money</h3>
+  <details><summary>Порты из SkrimerForever/moex-trading-bot + собственная модификация (3 стратегии)<a class="anchor" href="#strat-ict">#</a></summary>
+  <div class="details-body">
+
+    <div class="strat">
+      <h4>Fair Value Gap (ICT) <span class="badge registry">реестр</span> <code>fvg</code></h4>
+      <div class="desc">3-барный ценовой разрыв: бычий FVG &mdash; low текущего бара выше high позапрошлого (импульс вверх, лонг); медвежий &mdash; зеркально. Подтверждение &mdash; тело текущей свечи в сторону разрыва не меньше min_frac (фильтр шума).</div>
+      <ul class="params">
+        <li><b>min_frac</b> <span class="rng">5; 0&ndash;50</span> &mdash; мин. тело подтверждающей свечи ×10000 (5=0.05%)</li>
+        <li><b>qty</b> <span class="rng">1; 1&ndash;10</span></li>
+      </ul>
+    </div>
+
+    <div class="strat">
+      <h4>Order Block (ICT) <span class="badge registry">реестр</span> <code>order_block</code></h4>
+      <div class="desc">Ищет импульсную свечу в последних lookback барах (|тело|/цена ≥ impulse_frac), зоной заказов считает последнюю ПРОТИВОПОЛОЖНУЮ свечу перед импульсом. Вход при возврате цены (ретест) в диапазон [low, high] этой зоны, в сторону импульса.</div>
+      <ul class="params">
+        <li><b>lookback</b> <span class="rng">20; 5&ndash;60</span> &mdash; окно поиска импульса</li>
+        <li><b>impulse_frac</b> <span class="rng">30; 5&ndash;100</span> &mdash; порог импульса ×10000 (30=0.3%)</li>
+        <li><b>qty</b> <span class="rng">1; 1&ndash;10</span></li>
+      </ul>
+    </div>
+
+    <div class="strat">
+      <h4>US-Open Range + FVG/Ретест <span class="badge module">модуль</span> <code>us_open_fvg</code></h4>
+      <div class="desc">ICT «Silver Bullet» + фильтр ложных пробоев из видео В. Дудукчанова «Свеча 9:30». Одна сделка в день от открытия биржи США (9:30 Нью-Йорк = 16:30 МСК при летнем времени США ~март&ndash;ноябрь, 17:30 зимой). Первая range_min-минутная свеча после открытия задаёт диапазон дня; вход по пробою с подтверждением FVG, по ретесту с отвержением, либо любому из двух; стоп/тейк как доля высоты диапазона, опциональный трейлинг вместо фиксированного тейка; принудительный флэт в 23:45 МСК.</div>
+      <ul class="params">
+        <li><b>open_hour / open_min</b> <span class="rng">16 / 30</span> &mdash; час/минута открытия США в МСК (переключать при переводе часов в США)</li>
+        <li><b>range_min</b> <span class="rng">5; 3&ndash;30</span> &mdash; длина опорной свечи</li>
+        <li><b>signal_min</b> <span class="rng">60; 15&ndash;180</span> &mdash; окно входа после диапазона</li>
+        <li><b>entry_mode</b> <span class="rng">1; 0&ndash;2</span> &mdash; 0=FVG+пробой, 1=ретест+отвержение, 2=любой</li>
+        <li><b>rr_x10</b> <span class="rng">20; 5&ndash;50</span> &mdash; R:R ×10 (20=2:1)</li>
+        <li><b>stop_pct</b> <span class="rng">0; &minus;100&ndash;100</span> &mdash; стоп, % высоты диапазона от края</li>
+        <li><b>tp_trail / trail_act / trail_dist / trail_slip</b> &mdash; опциональный трейлинг вместо фиксированного тейка</li>
+        <li><b>flatten_eod</b> <span class="rng">1; 0/1</span> &mdash; флэт в 23:45 МСК, если TP/SL не сработали</li>
+        <li><b>allow_long / allow_short</b> &mdash; разрешить лонги/шорты по отдельности</li>
+        <li><b>qty</b> <span class="rng">1; 1&ndash;10</span></li>
+      </ul>
+      <p class="hint">bar_offset_min &mdash; инфраструктурный параметр (0 в бэктест/STL, 180 при деплое на агент из-за разной эпохи баров), НЕ выведен в форму, никогда не участвует в переборе.</p>
+    </div>
+
+  </div>
+  </details>
+
+  <h3 id="strat-mods">Универсальные модификаторы<a class="anchor" href="#strat-mods">#</a></h3>
+  <details open><summary>Усреднение, тейк, разножка, остывание, ставки, суперусреднение, контр-стратегии<a class="anchor" href="#strat-mods">#</a></summary>
+  <div class="details-body">
+    <p>Общая логика позиций <code>make_on_bar</code> добавляется КАЖДОЙ реестровой стратегии автоматически (по умолчанию выключена &mdash; поведение не меняется, пока параметр не тронут). Standalone-модули её не получают: у <code>us_open_fvg</code> своя собственная система стоп/тейк/трейлинг, у остальных модулей (донгиан, EMA/RSI-кроссовер, supertrend) управления позицией сверх чистого сигнала нет вовсе.</p>
+
+    <table>
+      <tr><th>Параметр</th><th>В форме UI</th><th>Что делает</th></tr>
+      <tr><td><code>avg_max</code></td><td>да (все реестровые)</td><td>Максимум контрактов в позиции при усреднении. 1 = усреднение выключено.</td></tr>
+      <tr><td><code>avg_step_atr</code></td><td>да</td><td>Шаг усреднения в долях ATR ×10 (24 = 2.4×ATR хода против позиции). 0 = выключено. Докупает ТОЛЬКО против движения, никогда в плюс.</td></tr>
+      <tr><td><code>tp_atr</code></td><td>да</td><td>Тейк-профит от средней цены входа в долях ATR ×10. 0 = тейка нет, выход только по обратному сигналу.</td></tr>
+      <tr><td><code>avg_atr_n</code></td><td>да</td><td>Период ATR в барах М1 для тейка и шага усреднения.</td></tr>
+      <tr><td><code>min_gap_pts</code></td><td>да</td><td>«Разножка»: не открывать и не доливать, пока цена не отошла от прошлого ИСПОЛНИВШЕГОСЯ входа минимум на N пунктов. Гейт стоит только на входах/доборах, выходы никогда не блокирует.</td></tr>
+      <tr><td><code>cooldown_min</code> / <code>cooldown_pct</code></td><td>нет &mdash; только через params_json/API</td><td>«Остывание»: после выхода, зафиксировавшего движение ≥ cooldown_pct, новые входы блокируются на cooldown_min минут; на это время смена сигнала становится выходом в плоскую позицию, а не разворотом.</td></tr>
+      <tr><td><code>bet_step</code> / <code>bet_max</code></td><td>только у Shectory-2EMA, логика доступна любой реестровой стратегии через params_json</td><td>Система ставок: объём следующего входа растёт на bet_step после убыточной сделки (до потолка bet_max), сбрасывается к базовому после прибыльной.</td></tr>
+      <tr><td><code>super_y</code> / <code>super_z</code></td><td>нет &mdash; только через params_json/API</td><td>Суперусреднение: после убыточного выхода растут И объём входа, И потолок усреднения (avg_max) на super_y контрактов, до super_z эскалаций; сброс после прибыльного выхода. Складывается с системой ставок.</td></tr>
+    </table>
+
+    <h4>Контр-стратегии <code>__inv</code> <span class="badge inv">инверсия</span></h4>
+    <p>Любая реестровая стратегия доступна в инвертированном виде: <code>make_on_bar('&lt;id&gt;__inv')</code> фейдит базовый сигнал (там, где база покупает &mdash; контра продаёт). На некоторых контрактах выгоднее фейдить сигнал, чем следовать ему. В Ботсторе и бэктесте такие роботы отображаются с пометкой «(контр)» у имени стратегии.</p>
+  </div>
+  </details>
+</section>
+
+<footer>
+  Документация v2026.07.25-1 &middot; релиз системы STL 2026.07.25 &middot; источники: CLAUDE.md, trader/lab/strategies/*, trader/quik/smart_orders.py, trader/market_session.py, frontend/src/components/*
+</footer>
+
+</main>
+
+<button id="toTop" aria-label="Наверх" title="Наверх">&#9650;</button>
+
+<script>
+(function () {
+  "use strict";
+
+  // ── прогресс-бар чтения ─────────────────────────────────────────────
+  var bar = document.getElementById('progress');
+  function onScroll() {
+    var h = document.documentElement;
+    var scrolled = h.scrollTop;
+    var max = h.scrollHeight - h.clientHeight;
+    bar.style.width = (max > 0 ? (scrolled / max) * 100 : 0) + '%';
+    toTop.classList.toggle('show', scrolled > 400);
+  }
+  document.addEventListener('scroll', onScroll, { passive: true });
+
+  // ── наверх ───────────────────────────────────────────────────────────
+  var toTop = document.getElementById('toTop');
+  toTop.addEventListener('click', function () {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+
+  // ── мобильное оглавление ────────────────────────────────────────────
+  var toc = document.getElementById('toc');
+  var tocToggle = document.getElementById('tocToggle');
+  tocToggle.addEventListener('click', function () { toc.classList.toggle('open'); });
+  toc.addEventListener('click', function (e) {
+    if (e.target.tagName === 'A') toc.classList.remove('open');
+  });
+
+  // ── раскрыть свёрнутый <details>, если якорь ведёт внутрь него ──────
+  function openAncestors(el) {
+    var n = el;
+    while (n) {
+      if (n.tagName === 'DETAILS') n.open = true;
+      n = n.parentElement;
+    }
+  }
+  document.addEventListener('click', function (e) {
+    var a = e.target.closest('a[href^="#"]');
+    if (!a) return;
+    var id = a.getAttribute('href').slice(1);
+    var target = document.getElementById(id);
+    if (!target) return;
+    openAncestors(target);
+    // let the browser's native anchor jump happen after details opened
+  });
+
+  // ── подсветка активного пункта оглавления при скролле ────────────────
+  var tocLinks = Array.prototype.slice.call(document.querySelectorAll('#tocNav a'));
+  var linkById = {};
+  tocLinks.forEach(function (a) { linkById[a.getAttribute('href').slice(1)] = a; });
+
+  var targets = [];
+  ['req', 'arch', 'guide', 'admin', 'appendix'].forEach(function (id) {
+    var el = document.getElementById(id);
+    if (el) targets.push(el);
+  });
+  tocLinks.filter(function (a) { return a.classList.contains('sub'); }).forEach(function (a) {
+    var id = a.getAttribute('href').slice(1);
+    var el = document.getElementById(id);
+    if (el) targets.push(el);
+  });
+
+  var current = null;
+  function setActive(id) {
+    if (id === current) return;
+    current = id;
+    tocLinks.forEach(function (a) { a.classList.remove('active'); });
+    var link = linkById[id];
+    if (link) {
+      link.classList.add('active');
+      var parentSec = link.closest('.toc-sec');
+      if (parentSec) {
+        var top = parentSec.querySelector('a:not(.sub)');
+        if (top && top !== link) top.classList.add('active');
+      }
+    }
+  }
+
+  if ('IntersectionObserver' in window) {
+    var io = new IntersectionObserver(function (entries) {
+      var best = null, bestTop = -Infinity;
+      entries.forEach(function (en) {
+        if (en.isIntersecting && en.boundingClientRect.top <= 120 && en.boundingClientRect.top > bestTop) {
+          bestTop = en.boundingClientRect.top; best = en.target;
+        }
+      });
+      if (best) setActive(best.id);
+    }, { rootMargin: '0px 0px -60% 0px', threshold: [0, 1] });
+    targets.forEach(function (t) { io.observe(t); });
+  }
+
+  onScroll();
+})();
+</script>
+
+</body>
+</html>
