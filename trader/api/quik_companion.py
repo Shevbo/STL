@@ -481,12 +481,16 @@ async def snapshot(request: Request, agent_id: str | None = None):
     # прибыли отсекает копеечных чемпионов; сделок >= 30 — анти-survivorship.
     sweep_star = None
     try:
+        # fast >= slow — вырожденный MACD-класс конфиг (нулевая линия, сделки =
+        # числовой шум): такие в кандидаты не берём, даже пока они ещё в базе.
         row = await pool.fetchrow(
             "SELECT campaign_run, strategy, symbol, net_profit, recovery_factor, "
             "total_trades FROM optimization_leaderboard "
             "WHERE created_at > now() - interval '24 hours' "
             "AND net_profit >= 50000 AND recovery_factor BETWEEN 3 AND 1000 "
             "AND total_trades >= 30 "
+            "AND NOT (params ? 'fast' AND params ? 'slow' "
+            "         AND (params->>'fast')::numeric >= (params->>'slow')::numeric) "
             "ORDER BY net_profit DESC LIMIT 1")
         if row:
             sweep_star = {

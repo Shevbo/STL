@@ -303,6 +303,7 @@
         const rows = rr.ok ? await rr.json() : [];
         const result = rows[0] ?? null;
         if (!result) throw new Error('Прогон завершён, но результат пуст');
+        result.run_id = result.run_id || run_id;   // избранное хранит указатель на результат
         return result;
       }
       if (sd.status === 'failed') throw new Error(sd.error_msg || 'Бэктест завершился ошибкой (см. логи VDS)');
@@ -1057,7 +1058,11 @@
               taker={true}
               runParams={chart.params}
               paramSchema={detail?.schema ?? []}
-              onRerun={(p) => openChart(chart.symbol, p, chart.opts)}
+              strategy={chart.opts?.strategyId ?? detail?.id ?? null}
+              onRerun={(p, dates) => openChart(chart.symbol, p,
+                { ...(chart.opts || {}), rank: undefined,
+                  ...(dates?.dateFrom ? { dateFrom: dates.dateFrom } : {}),
+                  ...(dates?.dateTo ? { dateTo: dates.dateTo } : {}) })}
             />
           {/if}
         </div>

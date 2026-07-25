@@ -57,6 +57,18 @@ from trader.lab.iss_loader import top_instruments  # shared (was copy-pasted her
 from trader.lab.strategies.library import numeric_params  # shared (was copy-pasted here)
 
 
+def sane_combo(combo: dict) -> bool:
+    """Отсев вырожденных конфигов ДО постановки в очередь (тот же фильтр, что в
+    queue_campaign.valid_macd_config, но для раундов оптимизатора — здесь его не
+    было, и опт наплодил фантомных чемпионов: fast=slow=24 у MACD даёт тождественно
+    нулевую линию, чьи «сделки» — числовой шум флоатов; один такой конфиг вышел в
+    топ хитпарада с +623k и попал в лампу кандидата, 2026-07-25)."""
+    f, s = combo.get("fast"), combo.get("slow")
+    if f is not None and s is not None and int(f) >= int(s):
+        return False
+    return True
+
+
 def random_combos(nums: list[dict], n: int, rng: random.Random) -> list[dict]:
     """n DISTINCT random points over the full ranges (the wide net)."""
     if not nums:
@@ -67,7 +79,7 @@ def random_combos(nums: list[dict], n: int, rng: random.Random) -> list[dict]:
         attempts += 1
         combo = {p["key"]: rng.randint(p["lo"], p["hi"]) for p in nums}
         key = tuple(sorted(combo.items()))
-        if key in seen:
+        if key in seen or not sane_combo(combo):
             continue
         seen.add(key)
         out.append(combo)
@@ -89,7 +101,8 @@ def refine_grid(center: dict, nums: list[dict], rnd: int, steps: int) -> list[di
         vals = sorted(set(list(range(a, b + 1, step)) + [c]))
         axes[k] = vals
     keys = list(axes)
-    return [dict(zip(keys, combo)) for combo in product(*[axes[k] for k in keys])]
+    combos = [dict(zip(keys, combo)) for combo in product(*[axes[k] for k in keys])]
+    return [c for c in combos if sane_combo(c)]   # уточнение вокруг лидера тоже без вырожденных
 
 
 def passes(row: dict, args) -> bool:

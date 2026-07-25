@@ -140,6 +140,42 @@
   // ── Leader ──────────────────────────────────────────────────────────────
   let leaderId = $state<string | null>(null);
   let leaderResult = $state<any | null>(null);
+
+  // ── ⭐ Избранные наборы ──────────────────────────────────────────────────────
+  let favorites = $state<any[]>([]);
+  let favMsg = $state('');
+  async function loadFavorites() {
+    try {
+      const r = await fetchWithAuth('/api/v1/lab/favorites');
+      if (r.ok) favorites = (await r.json()).favorites || [];
+    } catch { /* панель работает и без избранного */ }
+  }
+  async function openFavorite(f: any) {
+    favMsg = '';
+    // Быстрый путь: готовый результат по run_id. Без него честно говорим, что
+    // надо пересчитать (результат мог быть вычищен из БД).
+    if (f.run_id) {
+      try {
+        const r = await fetchWithAuth(`/api/v1/backtest/${encodeURIComponent(f.run_id)}/results?full=1`);
+        const rows = r.ok ? await r.json() : [];
+        const res = rows[0];
+        if (res && Array.isArray(res.trades) && res.trades.length) {
+          if (f.date_from) dateFrom = f.date_from.slice(0, 10);
+          if (f.date_to) dateTo = f.date_to.slice(0, 10);
+          leaderResult = { result: res, params: f.params || {} };
+          await resolveLeaderPV(leaderResult);
+          return;
+        }
+      } catch { /* упадём в сообщение ниже */ }
+    }
+    favMsg = `«${f.name}»: сохранённый результат не найден в БД — открой стратегию в Ботсторе и пересчитай с этими параметрами (${f.strategy_id} · ${f.symbol}).`;
+  }
+  async function deleteFavorite(name: string) {
+    try {
+      await fetchWithAuth(`/api/v1/lab/favorites/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    } catch { /* список перезагрузим в любом случае */ }
+    loadFavorites();
+  }
   let chartLoading = $state(false);
   let chartPoll = $state<any>(null);
 
@@ -580,7 +616,7 @@
   });
 
   // ── Init ────────────────────────────────────────────────────────────────
-  $effect(() => { loadCatalog(); loadInstruments(); });
+  $effect(() => { loadCatalog(); loadInstruments(); loadFavorites(); });
 </script>
 
 <div class="btl">
@@ -893,6 +929,32 @@
       </div>
     {/if}
 
+    <!-- ⭐ Избранное: именованные наборы (стратегия+параметры+период+результат),
+         сохранённые из карточки прогона. Открытие поднимает ГОТОВЫЙ результат из
+         БД (run_id в backtest_results) — без пересчёта. -->
+    {#if favorites.length}
+      <div class="btl-section">
+        <div class="btl-sec-title">⭐ Избранное
+          <span class="btl-sec-sub">{favorites.length} наборов · клик — открыть без пересчёта</span>
+        </div>
+        <div class="btl-fav-list">
+          {#each favorites as f (f.name)}
+            <div class="btl-fav">
+              <button class="btl-fav-open" onclick={() => openFavorite(f)}
+                      title={`${f.strategy_id || '?'} · ${f.symbol} · ${f.date_from || '?'}—${f.date_to || '?'}`}>
+                <b>{f.name}</b>
+                <span class="btl-fav-meta">{f.strategy_id || '?'} · {f.symbol}
+                  {#if f.net_profit != null}· {Math.round(f.net_profit).toLocaleString('ru-RU')} ₽{/if}</span>
+              </button>
+              <button class="btl-fav-del" title="Удалить из избранного"
+                      onclick={() => deleteFavorite(f.name)}>✕</button>
+            </div>
+          {/each}
+        </div>
+        {#if favMsg}<div class="btl-fav-msg">{favMsg}</div>{/if}
+      </div>
+    {/if}
+
     {#if leaderResult?.result}
       <div class="btl-section">
         <div class="btl-sec-title">
@@ -933,6 +995,21 @@
     padding-bottom: 20px;
   }
   .btl-section { padding: 14px 16px; border-bottom: 1px solid #15152a; }
+  .btl-fav-list { display: flex; flex-wrap: wrap; gap: 6px; }
+  .btl-fav { display: inline-flex; align-items: stretch; }
+  .btl-fav-open {
+    display: flex; flex-direction: column; gap: 1px; text-align: left; cursor: pointer;
+    background: #14142a; border: 1px solid #6a5a1f; border-right: none;
+    border-radius: 4px 0 0 4px; color: #e8e8f0; padding: 5px 9px; font-size: 12px;
+  }
+  .btl-fav-open:hover { border-color: #c8a62f; }
+  .btl-fav-meta { color: #9aa0b4; font-size: 10px; }
+  .btl-fav-del {
+    background: #14142a; border: 1px solid #6a5a1f; border-radius: 0 4px 4px 0;
+    color: #667; cursor: pointer; padding: 0 7px; font-size: 11px;
+  }
+  .btl-fav-del:hover { color: #f44336; border-color: #a03030; }
+  .btl-fav-msg { color: #e0a53c; font-size: 11px; margin-top: 6px; }
   .btl-sec-title {
     font-size: 12px; color: #4caf50; text-transform: uppercase; letter-spacing: 1.5px;
     margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center;

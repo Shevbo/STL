@@ -1305,6 +1305,9 @@ def create_app() -> FastAPI:
     # STL Companion (tray panel): pairing + ONE read-only snapshot endpoint.
     from trader.api.quik_companion import router as quik_companion_router
     fastapi_app.include_router(quik_companion_router)
+    # Избранные наборы бэктестов (именованные, с указателем на результат).
+    from trader.api.lab_favorites import router as lab_favorites_router
+    fastapi_app.include_router(lab_favorites_router)
 
     @fastapi_app.post("/api/auth/login")
     async def login(body: LoginRequest, request: Request, response: Response):

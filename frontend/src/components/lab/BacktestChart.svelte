@@ -44,7 +44,7 @@
     // Editable params panel: current params + their schema (labels) + a re-run callback.
     runParams?: Record<string, any>;
     paramSchema?: Array<{ key: string; label?: string }>;
-    onRerun?: ((p: Record<string, any>) => void) | null;
+    onRerun?: ((p: Record<string, any>, dates?: { dateFrom: string; dateTo: string }) => void) | null;
     // live > 0: refresh the candle TAIL every `live` seconds via series.update()
     // (no setData, zoom preserved) so a LIVE robot's chart moves with the market.
     live?: number;
@@ -84,6 +84,11 @@
   let paramsOpen = $state(false);
   let editParams = $state<Record<string, any>>({});
   $effect(() => { editParams = { ...(params || {}) }; });   // resync when a new result loads
+  // Период исторических данных — тоже редактируемый: пересчёт может идти на
+  // другом окне, чем исходный прогон (просьба оператора 2026-07-25).
+  let editFrom = $state('');
+  let editTo = $state('');
+  $effect(() => { editFrom = (dateFrom || '').slice(0, 10); editTo = (dateTo || '').slice(0, 10); });
   const labelFor = (k: string) => paramSchema.find((s) => s.key === k)?.label || k;
   const editKeys = $derived(Object.keys(editParams).filter((k) => k !== 'symbol'));
   function applyParams() {
@@ -92,9 +97,36 @@
     for (const k of Object.keys(out)) {                     // numeric fields → numbers
       if (typeof params[k] === 'number') out[k] = Number(out[k]);
     }
-    onRerun(out);
+    onRerun(out, { dateFrom: editFrom, dateTo: editTo });
   }
-  const paramsDirty = $derived(editKeys.some((k) => String(editParams[k]) !== String((params || {})[k])));
+  const paramsDirty = $derived(
+    editKeys.some((k) => String(editParams[k]) !== String((params || {})[k]))
+    || editFrom !== (dateFrom || '').slice(0, 10) || editTo !== (dateTo || '').slice(0, 10));
+
+  // ── Избранное: сохранить текущий прогон под своим именем ────────────────────
+  let favName = $state('');
+  let favMsg = $state('');
+  async function saveFavorite() {
+    const name = favName.trim();
+    if (!name) { favMsg = 'дай имя набору'; return; }
+    favMsg = '…';
+    try {
+      const res = await fetchWithAuth('/api/v1/lab/favorites', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name,
+          strategy_id: (strategy && (strategy.id || strategy)) || runParams?.strategy_id || '',
+          symbol, params: params || {},
+          date_from: editFrom, date_to: editTo,
+          run_id: (result && result.run_id) || '',
+          net_profit: result?.net_profit ?? null,
+        }),
+      });
+      const d = await res.json().catch(() => ({}));
+      favMsg = res.ok ? 'сохранено ⭐' : (d?.detail || 'HTTP ' + res.status);
+      if (res.ok) favName = '';
+    } catch (e: any) { favMsg = e?.message || 'ошибка'; }
+  }
 
   // Trade triangle colors — distinct teal/rose tonality, brighter than candles.
   const BUY_COLOR = '#2ee6a6';   // teal-green (entry / averaging, buy side)
@@ -114,6 +146,63 @@
   let buyMarkSeries: any = null, sellMarkSeries: any = null;
   let orderPriceLines: any[] = [];
   let markIndex: Array<{ time: number; price: number; side: 'buy' | 'sell'; label: string; rawTime: number; close?: any }> = [];
+
+  // ── Кластеризация стрелок сделок ──────────────────────────────────────────
+  // Сотни стрелок на ширину экрана рябят и не читаются. Когда видимых маркеров
+  // больше порога (localStorage stl_cluster_threshold, по умолчанию 50), экран
+  // делится на колонки ~30px и стрелки одной колонки и стороны схлопываются в
+  // одну с подписью ×N. Зум внутрь — кластеры распадаются на живые стрелки.
+  const CLUSTER_PX = 30;
+  function clusterThreshold(): number {
+    const v = Number(localStorage.getItem('stl_cluster_threshold') || 50);
+    return Number.isFinite(v) && v >= 5 ? v : 50;
+  }
+  let allMarkers: any[] = [];
+  let markerBarTimes: number[] = [];
+  let markerApplyTimer: ReturnType<typeof setTimeout> | null = null;
+  function scheduleMarkerApply() {
+    if (markerApplyTimer) clearTimeout(markerApplyTimer);
+    markerApplyTimer = setTimeout(applyMarkers, 120);
+  }
+  function barIdxByTime(t: number): number {
+    let lo = 0, hi = markerBarTimes.length - 1;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (markerBarTimes[m] < t) lo = m + 1; else hi = m; }
+    return lo;
+  }
+  function applyMarkers() {
+    if (!tvCandle || !candleSeries) return;
+    if (!allMarkers.length || !markerBarTimes.length) { candleSeries.setMarkers(allMarkers); return; }
+    let lr: any = null;
+    try { lr = tvCandle.timeScale().getVisibleLogicalRange(); } catch { /* not ready */ }
+    if (!lr) { candleSeries.setMarkers(allMarkers); return; }
+    const from = Math.max(0, Math.floor(lr.from));
+    const to = Math.min(markerBarTimes.length - 1, Math.ceil(lr.to));
+    if (to <= from) { candleSeries.setMarkers(allMarkers); return; }
+    const t0 = markerBarTimes[from], t1 = markerBarTimes[to];
+    const visible = allMarkers.filter((m) => m.time >= t0 && m.time <= t1);
+    if (visible.length <= clusterThreshold()) { candleSeries.setMarkers(allMarkers); return; }
+    // Ширина колонки в барах: ширина шкалы / 30px.
+    let widthPx = 900;
+    try { widthPx = tvCandle.timeScale().width() || widthPx; } catch { /* оставим дефолт */ }
+    const cols = Math.max(1, Math.floor(widthPx / CLUSTER_PX));
+    const barsPerCol = Math.max(1, Math.ceil((to - from + 1) / cols));
+    const groups = new Map<string, any[]>();
+    for (const m of visible) {
+      const col = Math.floor((barIdxByTime(m.time) - from) / barsPerCol);
+      const key = col + '|' + m.position;      // выше/ниже бара кластеруем раздельно
+      const g = groups.get(key);
+      if (g) g.push(m); else groups.set(key, [m]);
+    }
+    const out: any[] = [];
+    for (const arr of groups.values()) {
+      if (arr.length === 1) { out.push(arr[0]); continue; }
+      const mid = arr[Math.floor(arr.length / 2)];
+      out.push({ time: mid.time, position: mid.position, shape: mid.shape,
+                 color: mid.color, text: '×' + arr.length });
+    }
+    out.sort((a, b) => (a.time as number) - (b.time as number));
+    candleSeries.setMarkers(out);
+  }
   let syncReady = false;
 
   let loading = $state(true);
@@ -329,6 +418,7 @@
       if (syncReady && !draggingBar) updateThumb(lr);
       updateRects();   // boxes track the candles on pan/zoom
       positionLiveLine();
+      scheduleMarkerApply();   // пере-кластеризация стрелок под новый зум
     });
 
     // Shift+wheel = horizontal pan (QUIK). Plain wheel is left to handleScale (zoom).
@@ -695,9 +785,10 @@
       // the P&L boxes away from the candles. Keep the anchor series empty.
       buyMarkSeries.setData([]);
       sellMarkSeries.setData([]);
-      candleSeries.setMarkers(
-        [...pm.buy.markers, ...pm.sell.markers].sort((a, b) => (a.time as number) - (b.time as number)),
-      );
+      allMarkers = [...pm.buy.markers, ...pm.sell.markers]
+        .sort((a, b) => (a.time as number) - (b.time as number));
+      markerBarTimes = bars.map((b) => b.time as number);
+      applyMarkers();   // с кластеризацией по текущему зуму (see applyMarkers)
       markIndex = pm.index;
 
       // Position RECTANGLES per episode (replaces the old dashed connectors): box from
@@ -835,7 +926,13 @@
         maxLoss: closesPnl.length ? Math.min(...closesPnl) : 0,
         netProfit: shownNet,
         maxDDmoney: maxDD,
-        recovery: maxDD > 0 ? shownNet / maxDD : null,
+        // «Фактор восст.»: у бэктеста ЕСТЬ движковый RF — берём его (то же число,
+        // что в хитпараде). Свой пересчёт по кривой оставлен фолбэком: на
+        // сглаженной ресемплом кривой maxDD занулялся и RF печатался прочерком,
+        // хотя движок его посчитал (карточка лидера GDU6, 2026-07-25).
+        recovery: (result && result.recovery_factor != null)
+          ? Number(result.recovery_factor)
+          : (maxDD > 0 ? shownNet / maxDD : null),
       };
       netResult = shownNet;     // parent-supplied authoritative net (live) else engine/replay
       onNet?.(netResult);       // parent header badge shows the SAME number
@@ -982,11 +1079,27 @@
               {/if}
             </label>
           {/each}
+          <label class="bc-prow" title="Начало окна исторических данных">
+            <span class="bc-pk">Период с</span>
+            <input class="bc-pv" type="date" bind:value={editFrom} />
+          </label>
+          <label class="bc-prow" title="Конец окна исторических данных">
+            <span class="bc-pk">по</span>
+            <input class="bc-pv" type="date" bind:value={editTo} />
+          </label>
           {#if onRerun}
             <button class="bc-apply" class:dirty={paramsDirty} onclick={applyParams}>
               Пересчитать бэктест
             </button>
           {/if}
+          <!-- Избранное: набор параметров + период + результат под своим именем.
+               Открывается потом из «Бэктест → Избранное» без пересчёта. -->
+          <div class="bc-fav">
+            <input class="bc-pv" type="text" bind:value={favName} placeholder="имя набора"
+                   onkeydown={(e) => e.key === 'Enter' && saveFavorite()} />
+            <button class="bc-fav-btn" onclick={saveFavorite} title="Сохранить этот набор параметров и результат в избранное">⭐ В избранное</button>
+          </div>
+          {#if favMsg}<div class="bc-fav-msg">{favMsg}</div>{/if}
         </div>
       {/if}
     </div>
@@ -1235,6 +1348,12 @@
     font-size: 10px; border-radius: 3px; padding: 3px 6px; cursor: pointer; }
   .bc-apply:hover { background: #267346; }
   .bc-apply.dirty { background: #8a5a1f; border-color: #c8862f; }
+  .bc-fav { display: flex; gap: 4px; margin-top: 6px; }
+  .bc-fav .bc-pv { flex: 1; min-width: 0; }
+  .bc-fav-btn { background: #1a1a2e; border: 1px solid #6a5a1f; color: #e0c36a;
+    border-radius: 3px; font-size: 11px; padding: 3px 8px; cursor: pointer; white-space: nowrap; }
+  .bc-fav-btn:hover { border-color: #c8a62f; }
+  .bc-fav-msg { color: #9aa0b4; font-size: 10px; margin-top: 3px; }
 
   .trade-tip {
     position: absolute; z-index: 8; pointer-events: none;
