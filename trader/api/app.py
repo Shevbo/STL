@@ -3485,13 +3485,23 @@ def create_app() -> FastAPI:
         used_agent = False
         if _os.path.exists(_ab):
             try:
-                for r in _agent_bars_rows(_ab):
-                    t = r[0]
-                    if t > last_cached:
-                        last_cached = t
-                    if lo <= t <= hi:
-                        _merge(t, r[1], r[2], r[3], r[4], r[5])
-                used_agent = True
+                _rows_ab = _agent_bars_rows(_ab)
+                # agent_bars — скользящий хвост (~75 дней). Для окна, начинающегося
+                # РАНЬШЕ его первого бара, файл не годится: график молча обрезал бы
+                # период к началу кэша (пересчёт «с 01.04» показывал 11.05 — бой
+                # 2026-07-25). Тогда идём в ohlcv_bars, чью голову дотягивает
+                # бэктестовый загрузчик (fetch_iss_head).
+                if _rows_ab and _rows_ab[0][0] <= lo + 3 * 86400:
+                    for r in _rows_ab:
+                        t = r[0]
+                        if t > last_cached:
+                            last_cached = t
+                        if lo <= t <= hi:
+                            _merge(t, r[1], r[2], r[3], r[4], r[5])
+                    used_agent = True
+                elif _rows_ab:
+                    log.info("api.market_bars_agent_short", symbol=symbol,
+                             want_from=int(lo), have_from=int(_rows_ab[0][0]))
             except Exception as exc:  # noqa: BLE001 — fall through to the DB cache
                 log.warning("api.market_bars_agent_failed", symbol=symbol, exc=str(exc))
         if not used_agent:
