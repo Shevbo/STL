@@ -348,10 +348,14 @@
       const tmpl = tmplOf(opts?.strategyId ?? detail?.id);
       if (!tmpl) throw new Error('Сохранённый результат ещё не готов (идёт бэкфилл топ-3), а пересчёт контр-стратегии из витрины недоступен. Обнови через минуту.');
       const sc = tmpl.script_code;
+      // Контр-стратегии (__inv) считаем на VDS напрямую: у i9 синхронизируемая
+      // руками копия без свежей логики __inv (падает KeyError). VDS = код STL,
+      // где инверсия уже есть. Обычные стратегии — как раньше, приоритет i9.
+      const isInv = String(opts?.strategyId ?? detail?.id ?? '').endsWith('__inv');
       let result: any;
       try {
         // Prefer the i9 agent (keeps load off the VDS); backend picks remote if alive.
-        result = await _runAndPoll('auto', sc, params, symbol, dateFrom, dateTo, t0);
+        result = await _runAndPoll(isInv ? 'local' : 'auto', sc, params, symbol, dateFrom, dateTo, t0);
       } catch (e1) {
         // i9 flaps its corporate network (ISS unreachable → "All connection attempts
         // failed"). Fall back to the VDS, which has cached bars + reliable ISS.
