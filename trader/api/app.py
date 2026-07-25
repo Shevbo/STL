@@ -1226,8 +1226,16 @@ async def _fetch_bars_for_backtest(symbol: str, date_from: str, date_to: str, ap
             rows = _json.load(open(_ab, encoding="utf-8")).get("rows", [])
             out = [_Bar(time=r[0], open=r[1], high=r[2], low=r[3], close=r[4], volume=r[5])
                    for r in rows if lo <= r[0] <= hi]
-            if out:
+            # Быстрый путь ГОДИТСЯ только когда кэш ПОКРЫВАЕТ запрошенное начало.
+            # agent_bars — скользящий хвост (~75 дней): раньше непустой out
+            # возвращался всегда, и запрос «с 01.04» молча обрезался к началу
+            # файла (~11.05) — и график, и пересчёт игнорировали дату оператора
+            # (2026-07-25). Допуск 3 дня покрывает выходные/праздники на границе.
+            if out and out[0].time <= lo + 3 * 86400:
                 return out
+            if out:
+                log.info("backtest.agent_bars_short", symbol=symbol,
+                         want_from=str(d_from), have_from=int(out[0].time))
         except Exception as exc:  # noqa: BLE001 — fall through to ISS/cache on any issue
             log.warning("backtest.agent_bars_failed", symbol=symbol, error=str(exc))
 
@@ -1238,6 +1246,7 @@ async def _fetch_bars_for_backtest(symbol: str, date_from: str, date_to: str, ap
     # 1. What do we already have?
     cov = await get_coverage(pool, symbol)
     cached_max = _date.fromisoformat(cov["max_date"]) if cov else None
+    cached_min = _date.fromisoformat(cov["min_date"]) if cov else None
 
     # 2. Decide what tail (if any) we must pull. Fetch from the day after the last
     #    cached bar (or the full range if nothing cached) up to d_to.
@@ -1254,6 +1263,18 @@ async def _fetch_bars_for_backtest(symbol: str, date_from: str, date_to: str, ap
                 await upsert_bars(pool, symbol, fresh)
         except Exception as exc:
             log.warning("backtest.fetch_iss_failed", symbol=symbol, error=str(exc))
+    # 2b. ГОЛОВА: кэш начинается позже запрошенного d_from — дотянуть недостающее
+    # НАЧАЛО. Раньше расширялся только хвост, и окно «с 01.04» при кэше с мая
+    # молча обрезалось (та же болезнь, что у agent_bars, слоем ниже).
+    if cached_min is not None and cached_min > d_from:
+        log.info("backtest.fetch_iss_head", symbol=symbol,
+                 from_date=str(d_from), to_date=str(cached_min))
+        try:
+            head = await load_bars_iss(symbol, d_from, cached_min, interval=1)
+            if head:
+                await upsert_bars(pool, symbol, head)
+        except Exception as exc:
+            log.warning("backtest.fetch_iss_head_failed", symbol=symbol, error=str(exc))
 
     # 3. Return the complete range from cache.
     return await get_bars(pool, symbol, d_from, d_to)

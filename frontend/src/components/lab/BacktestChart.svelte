@@ -89,7 +89,23 @@
   let editFrom = $state('');
   let editTo = $state('');
   $effect(() => { editFrom = (dateFrom || '').slice(0, 10); editTo = (dateTo || '').slice(0, 10); });
-  const labelFor = (k: string) => paramSchema.find((s) => s.key === k)?.label || k;
+  // Русские метки: сначала схема стратегии, затем общий словарь модификаторов —
+  // открытая из витрины кампании карточка схемы не имеет, и параметры печатались
+  // сырыми ключами (bet_max/bet_step, вопрос оператора 2026-07-25).
+  const RU_LABELS: Record<string, string> = {
+    qty: 'Контрактов на вход', tp_atr: 'Тейк-профит, ×ATR (×10)',
+    avg_max: 'Усреднение: макс контрактов', avg_step_atr: 'Усреднение: шаг, ×ATR (×10)',
+    avg_atr_n: 'ATR период усреднения', min_gap_pts: 'Разножка: мин. отступ, пункты',
+    cooldown_min: 'Остывание после профита, мин', cooldown_pct: 'Остывание: порог профита, %',
+    bet_step: 'Ставка: +N конт. после убытка (0=выкл)', bet_max: 'Ставка: потолок добавки, конт.',
+    super_y: 'Суперусреднение: +N конт. (0=выкл)', super_z: 'Суперусреднение: макс эскалаций',
+    fast: 'Быстрый период', slow: 'Медленный период', signal: 'Сигнальный период',
+    period: 'Период', mult: 'Множитель', lookback: 'Окно поиска, баров',
+    atr_period: 'ATR период', ema_period: 'EMA период',
+    ema1: 'EMA1 (быстрая)', ema2: 'EMA2 (медленная)',
+  };
+  const labelFor = (k: string) =>
+    paramSchema.find((s) => s.key === k)?.label || RU_LABELS[k] || k;
   const editKeys = $derived(Object.keys(editParams).filter((k) => k !== 'symbol'));
   function applyParams() {
     if (!onRerun) return;
