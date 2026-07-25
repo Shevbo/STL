@@ -344,9 +344,24 @@
           }
         } catch { /* fall through to a live re-run */ }
       }
-      // A live re-run needs the strategy template. Counter variants have none -> clear msg.
-      const tmpl = tmplOf(opts?.strategyId ?? detail?.id);
-      if (!tmpl) throw new Error('Сохранённый результат ещё не готов (идёт бэкфилл топ-3), а пересчёт контр-стратегии из витрины недоступен. Обнови через минуту.');
+      // A live re-run needs the strategy template. Если список стратегий пуст —
+      // его загрузка на монтировании могла попасть в рестарт STL и молча дать []
+      // (после этого КАЖДЫЙ клик по лидеру бился об «нет шаблона» до F5, бои
+      // 25.07). Дозапрашиваем один раз прямо здесь, прежде чем сдаться.
+      const sid = opts?.strategyId ?? detail?.id;
+      let tmpl = tmplOf(sid);
+      if (!tmpl && !strategies.length) {
+        try {
+          const sr = await fetchWithAuth('/api/v1/strategies');
+          if (sr.ok) strategies = await sr.json();
+        } catch { /* ниже честная ошибка */ }
+        tmpl = tmplOf(sid);
+      }
+      if (!tmpl) {
+        throw new Error(sid
+          ? `Шаблон стратегии «${sid}» не найден: список стратегий не загрузился (рестарт STL?). Обнови страницу (F5) и открой ещё раз.`
+          : 'Не передан id стратегии для пересчёта — открой прогон из витрины кампании ещё раз.');
+      }
       const sc = tmpl.script_code;
       // Контр-стратегии (__inv) считаем на VDS напрямую: у i9 синхронизируемая
       // руками копия без свежей логики __inv (падает KeyError). VDS = код STL,
