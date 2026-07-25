@@ -48,11 +48,13 @@
 
   /* Шапка: имя, свежесть, спрятать, выход. */
   .top { display: flex; align-items: baseline; gap: 7px; margin-bottom: 6px; }
+  /* Заголовок теперь несёт дату/день/время/режим биржи — читаемая строка, не
+     разрядка капсом. */
   .brand {
-    font: 400 13px/1 Bahnschrift, "Segoe UI Semilight", sans-serif;
-    letter-spacing: .18em; text-transform: uppercase; color: var(--muted);
+    flex: 1; font: 400 12px/1.2 Bahnschrift, "Segoe UI Semilight", sans-serif;
+    letter-spacing: .02em; color: var(--muted);
   }
-  .fresh { flex: 1; color: var(--faint); font-size: 10px; letter-spacing: .04em; }
+  .fresh { color: var(--faint); font-size: 10px; letter-spacing: .04em; white-space: nowrap; }
   .fresh.stale { color: var(--down); }
   .btn {
     font: 400 15px/1 "Segoe UI", sans-serif; color: var(--faint);
@@ -114,6 +116,8 @@
   .tag.real { color: var(--down); }
   /* Пауза — важный маркер: реал на паузе значит защита сработала. Выделяем. */
   .tag.paused { color: var(--down); font-weight: 600; }
+  /* Переведён в бумагу / снят — уже не рискует реалом, приглушаем. */
+  .tag.off { color: var(--faint); }
   .rob .nums { display: flex; gap: 9px; flex-wrap: wrap; color: var(--muted); font-size: 11px; }
   .rob .nums b { font-weight: 600; color: var(--ink); }
 
@@ -130,7 +134,7 @@
 </head>
 <body>
 <div class="top">
-  <span class="brand">STL</span>
+  <span class="brand" id="brand">STL</span>
   <span class="fresh" id="fresh">…</span>
   <span class="btn" id="hide" title="Свернуть в трей">✕</span>
   <span class="btn quit" id="quit" title="Закрыть приложение">⏻</span>
@@ -168,6 +172,20 @@ function hhmmss(ms) {
   return new Date(ms).toLocaleTimeString('ru-RU', { timeZone: 'Europe/Moscow' });
 }
 
+// Заголовок: STL, дата, день недели, время (МСК), режим работы биржи.
+const DOW = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
+function renderBrand(d) {
+  const now = new Date(d && d.ts_ms ? d.ts_ms : Date.now());
+  const p = new Intl.DateTimeFormat('ru-RU', {
+    timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', year: 'numeric',
+    weekday: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }).formatToParts(now).reduce((a, x) => (a[x.type] = x.value, a), {});
+  const open = d && d.market ? d.market.open : undefined;
+  const mode = open === true ? 'торги идут' : open === false ? 'биржа закрыта'
+    : 'режим биржи: н/д';
+  return `STL · ${p.day}.${p.month}.${p.year} ${p.weekday} ${p.hour}:${p.minute}:${p.second} · ${mode}`;
+}
+
 // Строка "подпись ... значение" с рельсом по знаку.
 function row(label, value, signValue, sub) {
   const k = cls(signValue);
@@ -178,8 +196,14 @@ function row(label, value, signValue, sub) {
 
 function renderAccount(a) {
   if (!a || !a.has_data) return '<div class="empty">счёт: агент ещё не прислал деньги</div>';
+  // «Тек. чист. поз.» это колонка cbplused из QUIK. Её отдаёт только новая Lua
+  // (v2026.07.24-posvm). Пока скрипт не перезагружён в терминале — данных нет,
+  // и это честно подписываем, а не рисуем прочерк как будто сломалось.
+  const used = a.used == null
+    ? '<span class="v nil">нужна перезагрузка Lua</span>'
+    : val(rub(a.used));
   return row('Лимит откр. поз.', rub(a.limit)) +
-    row('Тек. чист. поз.', rub(a.used)) +
+    `<div class="row"><span class="k">Тек. чист. поз.</span><span class="sp"></span>${used}</div>` +
     row('План. чист. поз.', rub(a.planned)) +
     row('Вариац. маржа', rub(a.varmargin, { signed: true }), a.varmargin) +
     row('Биржевые сборы', rub(a.ts_comission), a.ts_comission ? -1 : 0);
@@ -195,58 +219,43 @@ function renderPositions(list) {
   }).join('');
 }
 
-// Итог робота с запуска = реализованное раннером + плавающее по открытой позиции.
-function robotLive(r) {
-  return (r.pnl_rub == null && r.float_rub == null)
-    ? null : (r.pnl_rub || 0) + (r.float_rub || 0);
-}
-
-// Сумма финреза по роботам, РАЗДЕЛЬНО реал и бумага. Складывать их в одно число
-// нельзя: бумага это не деньги, а один прибыльный реал + убыточная бумага дают
-// «минус», которого на счёте нет. Каждый итог — с запуска и за сегодня.
+// Итог по ВСЕМ реальным роботам: только реальные деньги. Один осмысленный итог,
+// а не смесь реала с бумагой.
 function robotsTotal(list) {
   if (!list || !list.length) return '';
-  const acc = {
-    real: { live: 0, today: 0, hasL: false, hasT: false, n: 0 },
-    paper: { live: 0, today: 0, hasL: false, hasT: false, n: 0 },
-  };
+  let net = 0, today = 0, hasN = false, hasT = false;
   for (const r of list) {
-    const g = acc[r.mode === 'real' ? 'real' : 'paper'];
-    g.n += 1;
-    const l = robotLive(r);
-    if (l != null) { g.live += l; g.hasL = true; }
-    if (r.today_net != null) { g.today += r.today_net; g.hasT = true; }
+    if (r.real_net != null) { net += r.real_net; hasN = true; }
+    if (r.real_today != null) { today += r.real_today; hasT = true; }
   }
-  const rowFor = (label, g) => !g.n ? '' :
-    `<div class="row total ${cls(g.hasL ? g.live : null)}">` +
-    `<span class="k">${label} (${g.n})</span><span class="sp"></span>` +
-    `<span class="sub">сегодня ${g.hasT ? rub(g.today, { signed: true }) : '—'}</span>` +
-    `${val(g.hasL ? rub(g.live, { signed: true }) : null, cls(g.live))}</div>`;
-  return rowFor('Итог реал', acc.real) + rowFor('Итог бумага', acc.paper);
+  return `<div class="row total ${cls(hasN ? net : null)}">` +
+    `<span class="k">Итог реал (${list.length})</span><span class="sp"></span>` +
+    `<span class="sub">сегодня ${hasT ? rub(today, { signed: true }) : '—'}</span>` +
+    `${val(hasN ? rub(net, { signed: true }) : null, cls(net))}</div>`;
 }
 
+// Только РЕАЛЬНЫЕ ДЕНЬГИ. Число робота = весь его реальный итог из журнала,
+// включая тех, кого потом перевели в бумагу (их реальный убыток не теряется).
 function renderRobots(list) {
-  if (!list || !list.length) return '<div class="empty">роботов нет</div>';
+  if (!list || !list.length) return '<div class="empty">реальных роботов нет</div>';
   return list.map((r) => {
-    const live = robotLive(r);
-    const k = cls(live);
+    const net = r.real_net;               // весь реальный P&L, в т.ч. до перевода в бумагу
+    const k = cls(net);
     const last = hhmmss(r.last_trade_ms);
-    const real = r.mode === 'real';
-    // «реал · пауза» = робот на реальных деньгах, остановлен. Чаще всего это
-    // авто-пауза вотчера (реплей тейпа после рестарта QUIK) — не сбой, а защита.
-    const tag = (real ? 'реал' : 'бумага') + (r.paused ? ' · ПАУЗА' : '');
+    const st = r.state;                    // 'реал' | 'пауза' | 'переведён в бумагу' | 'снят'
+    const stCls = st === 'пауза' ? 'paused' : (st === 'реал' ? 'real' : 'off');
     return `<div class="rob ${k}">
       <div class="hd">
         <a href="${STL}/?agent_robot=${encodeURIComponent(r.id)}" data-ext>${esc(r.name)}</a>
-        <span class="tag ${real ? 'real' : ''} ${r.paused ? 'paused' : ''}">${tag}</span>
+        <span class="tag ${stCls}">${esc(st)}</span>
         <span class="sp" style="flex:1"></span>
-        ${val(rub(live, { signed: true }), k)}
+        ${val(rub(net, { signed: true }), k)}
       </div>
       <div class="nums">
-        <span>сегодня <b class="${cls(r.today_net)}">${r.today_net == null ? '—' : rub(r.today_net, { signed: true })}</b></span>
-        <span>поз <b>${r.position == null ? '—' : r.position}</b></span>
-        <span>сделок <b>${r.today_trades || 0}</b></span>
-        <span>${last ? 'посл. ' + last : 'сделок сегодня нет'}</span>
+        <span>сегодня <b class="${cls(r.real_today)}">${r.real_today == null ? '—' : rub(r.real_today, { signed: true })}</b></span>
+        ${r.position == null ? '' : `<span>поз <b>${r.position}</b></span>`}
+        <span>сделок сегодня <b>${r.real_trades_today || 0}</b></span>
+        <span>${last ? 'посл. реал ' + last : 'реальных сделок нет'}</span>
       </div>
     </div>`;
   }).join('');
@@ -284,11 +293,30 @@ function renderAlerts(a) {
   return items.slice(-4).map((t) => `<div class="alert">${esc(t)}</div>`).join('');
 }
 
+// Строка состояния биржи: открыта / закрыта по ISS. Снимает главную путаницу —
+// замершая лента при закрытом рынке это норма, при открытом — авария QUIK.
+function renderMarket(m) {
+  if (!m) return '';
+  const open = m.open;
+  const st = open === true ? 'открыта' : open === false ? 'закрыта' : 'не определено (ISS?)';
+  const kls = open === true ? 'up' : open === false ? '' : 'nil';
+  const sys = m.systime_ms ? new Date(m.systime_ms).toLocaleString('ru-RU',
+    { timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+  const sub = open === false
+    ? 'посл. сессия ' + sys + ' — пауза ленты ожидаема'
+    : (open === true ? 'торги идут' : 'нет ответа ISS');
+  return `<div class="row ${kls === 'up' ? 'up' : ''}"><span class="k">Биржа MOEX</span>` +
+    `<span class="sub">${esc(sub)}</span><span class="sp"></span>` +
+    `<span class="v ${kls}">${st}</span></div>`;
+}
+
 let lastGood = 0;
 let lastData = null;   // последний снапшот — для копирования уведомлений
 function paint(d) {
   lastData = d;
+  $('brand').textContent = renderBrand(d);
   $('body').innerHTML =
+    '<div class="sec">биржа</div>' + renderMarket(d.market) +
     '<div class="sec">счёт</div>' + renderAccount(d.account) +
     '<div class="sec">позиции</div>' + renderPositions(d.positions) +
     `<div class="sec">роботы <a href="${STL}/?lab=live&equity=1" data-ext>витрина ↗</a></div>` +
@@ -305,10 +333,9 @@ function paint(d) {
 // свежесть, паузы роботов, проблемы вотчера и эскалации — не только сырые SMS.
 function alertsText() {
   const d = lastData || {};
-  const L = ['STL companion · ' + (hhmmss(lastGood) || '?')];
-  const paused = (d.robots || []).filter((r) => r.paused)
-    .map((r) => r.name + (r.mode === 'real' ? ' (реал)' : ''));
-  if (paused.length) L.push('на паузе: ' + paused.join(', '));
+  const L = [renderBrand(d)];
+  const paused = (d.robots || []).filter((r) => r.state === 'пауза').map((r) => r.name);
+  if (paused.length) L.push('на паузе (реал): ' + paused.join(', '));
   const w = d.watch || {};
   for (const [name, blk] of [['раннер+lua', w.runner], ['бэктесты', w.backtests], ['платформа', w.platform]]) {
     if (blk && blk.ok === false && (blk.issues || []).length) L.push(name + ': ' + blk.issues.join('; '));
@@ -368,13 +395,14 @@ async function tick() {
     const d = await r.json();
     lastGood = d.ts_ms || Date.now();
     paint(d);
+    // Время уже в заголовке; здесь только индикатор связи.
     $('fresh').className = 'fresh';
-    $('fresh').textContent = hhmmss(lastGood) || '';
+    $('fresh').textContent = '● на связи';
   } catch (err) {
     $('fresh').className = 'fresh stale';
     $('fresh').textContent = lastGood
-      ? 'нет связи · данные от ' + hhmmss(lastGood)
-      : 'нет связи с STL';
+      ? '● нет связи, данные от ' + hhmmss(lastGood)
+      : '● нет связи с STL';
   }
 }
 tick();

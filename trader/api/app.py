@@ -343,8 +343,15 @@ async def lifespan(app: FastAPI):
     app.state.smart_orders = SmartOrderBook(BOOK_PATH)
     app.state.smart_orders.load()
     smart_orders_task = asyncio.create_task(run_watcher(app.state))
+    # Оракул торговой сессии MOEX: читает ISS SYSTIME и держит на app.state факт
+    # «биржа открыта / закрыта». Вотчер и компаньон гейтят по нему тревогу о
+    # замершей ленте — чтобы закрытый рынок не читался как авария QUIK.
+    app.state.market_session = None
+    market_session_task = asyncio.create_task(_market_session_poller(app.state))
 
     yield
+
+    market_session_task.cancel()
 
     fallback_task.cancel()
     reaper_task.cancel()
@@ -996,6 +1003,35 @@ async def _agent_task_fallback(app_state) -> None:
             raise
         except Exception as exc:  # noqa: BLE001
             log.warning("agent_task_fallback.loop_error", error=str(exc))
+
+
+async def _market_session_poller(app_state) -> None:
+    """Каждые ~45с спрашивает MOEX ISS, торгует ли биржа сейчас, и кладёт факт на
+    app_state.market_session. Коды берёт из фида агента (следуют роллу сами),
+    иначе запасные. Сетевые сбои переживает: при провале держит ПРОШЛЫЙ ответ,
+    а первый раз оставляет None (потребитель трактует None защитно)."""
+    from trader import market_session as ms
+    while True:
+        try:
+            store = getattr(app_state, "quik_store", None)
+            status = (store.agent_status(None) or {}) if store is not None else {}
+            feed = ((status.get("health") or {}).get("feed")) or []
+            codes = ms.codes_from_feed(feed)
+            state = await ms.probe(codes, int(time.time() * 1000))
+            # Не затираем валидный прошлый ответ ошибочным: если ISS не ответил,
+            # но раньше знали состояние — оставляем прошлое, только помечаем.
+            prev = getattr(app_state, "market_session", None)
+            if state.open is None and prev is not None:
+                prev = dict(prev)
+                prev["stale_error"] = state.error
+                app_state.market_session = prev
+            else:
+                app_state.market_session = state.as_dict()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — оракул не должен падать
+            log.warning("market_session.poll_error", error=str(exc))
+        await asyncio.sleep(45)
 
 
 async def _orphan_reaper(app_state) -> None:

@@ -27,6 +27,20 @@ def _store(request: Request):
     return getattr(request.app.state, "quik_store", None)
 
 
+@router.get("/market-session")
+async def market_session(request: Request):
+    """Торгует ли биржа MOEX FORTS прямо сейчас — по ISS SYSTIME, не по календарю.
+    {open: true|false|null, lag_sec, systime_ms, source_code, checked_ms}. open=null
+    = не удалось определить (ISS недоступен); потребитель трактует защитно.
+
+    Смысл: замершая лента агента при ОТКРЫТОМ рынке — авария (фид QUIK умер), при
+    ЗАКРЫТОМ — норма. Вотчер гейтит авто-паузу по этому полю (см. probe)."""
+    _auth(request)
+    st = getattr(request.app.state, "market_session", None)
+    return st or {"open": None, "lag_sec": 0, "systime_ms": 0,
+                  "source_code": "", "checked_ms": 0, "error": "ещё не проверяли"}
+
+
 @router.get("/status")
 async def quik_status(request: Request, agent_id: str | None = None):
     """Per-agent link status: lamp (green/yellow/red), diagnostics, last_seen."""

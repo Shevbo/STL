@@ -14,7 +14,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from trader.api.quik_companion import _watch_runner
+from trader.api.quik_companion import _watch_runner, _with_control
 from trader.api.quik_companion import router as companion_router
 from trader.api.quik_robots import router as quik_robots_router
 from trader.auth.portal import make_session_token
@@ -184,8 +184,11 @@ def test_snapshot_reads_the_agent_mirror_shape(monkeypatch):
     # Flat instruments are dropped; the open one keeps its ВМ.
     assert [p["sec"] for p in body["positions"]] == ["RIU6"]
     assert body["positions"][0]["varmargin"] == -3015.0
+    # Робот в реале по зеркалу -> показан со статусом «реал» (real_net из журнала,
+    # тут журнал пуст -> None; важно, что робот попал в список как реальный).
     assert len(body["robots"]) == 1
-    assert body["robots"][0]["pnl_rub"] == 24_180.0
+    assert body["robots"][0]["state"] == "реал"
+    assert "real_net" in body["robots"][0]
     assert body["agent_seen_ms"] > 0
     assert body["watch"]["runner"]["ok"] is True
 
@@ -223,3 +226,34 @@ def test_watch_runner_flags_a_dead_agent_link():
     out = _watch_runner({"runner_healthy": True}, now - 600_000, now)
     assert out["ok"] is False
     assert "нет связи с агентом" in "; ".join(out["issues"])
+
+
+def test_every_alert_gets_a_control_note():
+    """Оператор просил: каждая тревога заканчивается пометкой — рассосётся само
+    или требует его включения."""
+    assert "исправится автоматически" in _with_control("робот ПОСТАВЛЕН НА ПАУЗУ", False)
+    assert "ТРЕБУЕТ" in _with_control("дневной лимит заявок 490/500", True)
+    assert "ТРЕБУЕТ" in _with_control("на VDS мало памяти", True)
+    # хорошая новость — без пометки
+    assert _with_control("восстановилось: все проверки в норме", None) == \
+        "восстановилось: все проверки в норме"
+    # неизвестная тревога — считаем под наблюдением, а не молчим
+    assert "контроле" in _with_control("что-то странное", None)
+
+
+def test_stale_tape_is_silent_when_the_market_is_closed():
+    """Гвоздь всей задачи: замершая лента при ЗАКРЫТОМ рынке — норма, не авария.
+    При открытом (или неизвестном) рынке — по-прежнему тревога."""
+    now = 1_700_000_000_000
+    health = {"runner_healthy": True, "exchange_lag_ms": 8 * 3600 * 1000}
+    # Рынок закрыт по ISS — лаг ленты НЕ поднимаем.
+    closed = _watch_runner(health, now - 5_000, now, {"open": False})
+    assert closed["ok"] is True
+    assert "лента" not in "; ".join(closed["issues"])
+    # Рынок открыт — лаг ленты это авария (окно всех сделок умерло).
+    opened = _watch_runner(health, now - 5_000, now, {"open": True})
+    assert opened["ok"] is False
+    assert "лента отстаёт" in "; ".join(opened["issues"])
+    # ISS недоступен (None) — трактуем защитно, тревога остаётся.
+    unknown = _watch_runner(health, now - 5_000, now, {"open": None})
+    assert "лента отстаёт" in "; ".join(unknown["issues"])

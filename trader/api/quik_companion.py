@@ -238,10 +238,51 @@ def _wd_read_jsonl(path: str) -> list[dict]:
     return out
 
 
-def _watch_runner(health: dict, received_ms: int | None, now_ms: int) -> dict:
+# Правила пометки контроля: (подстрока в тексте тревоги) -> (статус, нужен_оператор).
+# Первое совпадение выигрывает. Статус приписывается после двоеточия, чтобы оператор
+# сразу видел — рассосётся само или нужно его включение.
+_AUTO = "на контроле, исправится автоматически"
+_MANUAL = "ТРЕБУЕТ твоего включения"
+_CONTROL_RULES: list[tuple[str, str, bool]] = [
+    ("восстановилось", "", False),                    # это уже хорошая новость, без пометки
+    ("ПОСТАВЛЕН НА ПАУЗУ", f"{_AUTO} (снимется при живой ленте)", False),
+    ("на паузу", f"{_AUTO} (снимется при живой ленте)", False),
+    ("реплей", f"{_AUTO}, если рынок закрыт; при открытом — открой окно «Все сделки» в QUIK", False),
+    ("отстаёт", f"{_AUTO}, если рынок закрыт; при открытом — {_MANUAL}: открой окно «Все сделки» в QUIK", False),
+    ("QUIK-гард", f"{_AUTO} (гард сам перезапустит QUIK)", False),
+    ("мало памяти", f"{_MANUAL}: освободи память на VDS", True),
+    ("лимит заявок", f"{_MANUAL}: подними дневной лимит", True),
+    ("зависших прогонов", f"{_AUTO} (репер перезапустит); если висит — проверь i9", False),
+    ("i9 молчит", f"{_MANUAL}: проверь агента на i9", True),
+    ("нет связи с агентом", f"{_MANUAL}: проверь агента/VDS", True),
+    ("раннер не отвечает", f"{_MANUAL}: проверь раннер на VDS", True),
+    ("QUIK молчит", f"{_MANUAL}: проверь QUIK на VDS", True),
+    ("вотчер молчит", f"{_MANUAL}: проверь cron на smain", True),
+    ("хостер загружен", f"{_AUTO} (разгрузится); если долго — {_MANUAL}", False),
+]
+
+
+def _with_control(text: str, market_open: bool | None) -> str:
+    """Дописать к тексту тревоги пометку контроля после двоеточия."""
+    if not text:
+        return text
+    low = text.lower()
+    for needle, note, _ in _CONTROL_RULES:
+        if needle.lower() in low:
+            return text if not note else f"{text} — {note}"
+    return f"{text} — {_AUTO}"  # неизвестная тревога: считаем, что под наблюдением
+
+
+def _watch_runner(health: dict, received_ms: int | None, now_ms: int,
+                  market: dict | None = None) -> dict:
     """4.1 — runner + Lua. Everything here is a FACT from the agent's own status
-    mirror; nothing is inferred from the watchdog's prose."""
+    mirror; nothing is inferred from the watchdog's prose.
+
+    market — состояние сессии MOEX. Замершая лента при ЗАКРЫТОМ рынке это норма
+    (ночь/выходная пауза/праздник), а не авария QUIK, поэтому в этом случае
+    «лента отстаёт» не поднимаем."""
     issues = []
+    market_open = (market or {}).get("open")  # True | False | None(неизвестно)
     if received_ms and now_ms - received_ms > 120_000:
         issues.append(f"нет связи с агентом {(now_ms - received_ms) // 1000} с")
     if not health.get("runner_healthy", False):
@@ -250,7 +291,9 @@ def _watch_runner(health: dict, received_ms: int | None, now_ms: int) -> dict:
     if isinstance(age, int) and age > 120_000:
         issues.append(f"отчёт раннера {age // 1000} с назад")
     lag = health.get("exchange_lag_ms")
-    if isinstance(lag, int) and lag > 120_000:
+    # Гейт по сессии: лаг ленты тревожит только когда биржа реально торгует
+    # (open True или неизвестно). При закрытом рынке замершая лента ожидаема.
+    if isinstance(lag, int) and lag > 120_000 and market_open is not False:
         issues.append(f"лента отстаёт на {lag // 1000} с")
     pong = health.get("pong_age_ms")
     if isinstance(pong, int) and pong > 120_000:
@@ -306,7 +349,11 @@ async def snapshot(request: Request, agent_id: str | None = None):
         for p in (health.get("positions") or []) if p.get("net")
     ]
 
-    # 3. Robots: agent truth + today's ledger + the operator's display names.
+    # 3. Robots — ТОЛЬКО РЕАЛЬНЫЕ ДЕНЬГИ. По просьбе оператора: показываем реальный
+    # P&L каждого робота, КОТОРЫЙ ТОРГОВАЛ РЕАЛОМ, включая тех, кого потом перевели
+    # в бумагу (их РЕАЛЬНЫЙ убыток раньше терялся: зеркало отдавало paper-эру).
+    # Источник — журнал algo_trades с mode='real', а не pnl_rub из зеркала.
+    # Бумажную информацию не показываем вовсе.
     names = {}
     try:
         rows = await pool.fetch(
@@ -315,33 +362,63 @@ async def snapshot(request: Request, agent_id: str | None = None):
     except Exception:
         pass
     today_lo = _msk_midnight_ms()
-    ledger = {}
+    real_all, real_today = {}, {}
     try:
         for r in await pool.fetch(
-                "SELECT robot_id, count(*) AS trades, sum(pnl_net_rub) AS net, "
-                "max(ts_ms) AS last_ts FROM algo_trades WHERE ts_ms >= $1 "
-                "GROUP BY robot_id", today_lo):
-            ledger[r["robot_id"]] = {"trades": int(r["trades"]),
-                                     "net": float(r["net"] or 0),
-                                     "last_ts": int(r["last_ts"] or 0)}
+                "SELECT robot_id, sum(pnl_net_rub) AS net, count(*) AS trades, "
+                "max(ts_ms) AS last_ts, sum(qty) AS qty FROM algo_trades "
+                "WHERE mode='real' GROUP BY robot_id"):
+            real_all[r["robot_id"]] = {"net": float(r["net"] or 0),
+                                       "trades": int(r["trades"]),
+                                       "last_ts": int(r["last_ts"] or 0)}
+        for r in await pool.fetch(
+                "SELECT robot_id, sum(pnl_net_rub) AS net, count(*) AS trades "
+                "FROM algo_trades WHERE mode='real' AND ts_ms >= $1 GROUP BY robot_id",
+                today_lo):
+            real_today[r["robot_id"]] = {"net": float(r["net"] or 0),
+                                         "trades": int(r["trades"])}
     except Exception:
         pass
+    # Текущее состояние робота из зеркала (позиция/пауза/режим сейчас).
+    mirror_by_id = {rob.get("id"): rob for rob in status.get("robots") or []}
+    # Список = все, у кого есть РЕАЛЬНАЯ история, плюс те, кто ПРЯМО СЕЙЧАС в реале
+    # (даже если ещё не наторговал ни одного филла в журнале).
+    ids = set(real_all) | {rid for rid, rob in mirror_by_id.items()
+                           if rob.get("mode") == "real"}
     robots = []
-    for rob in status.get("robots") or []:
-        rid = rob.get("id")
-        led = ledger.get(rid) or {}
+    for rid in ids:
+        ra = real_all.get(rid) or {}
+        rt = real_today.get(rid) or {}
+        rob = mirror_by_id.get(rid) or {}
+        cur_mode = rob.get("mode")           # 'real' | 'paper' | None(снят)
+        # Статус для оператора: торгует ли робот реалом ПРЯМО СЕЙЧАС.
+        if cur_mode == "real":
+            state = "пауза" if rob.get("paused") else "реал"
+        elif cur_mode == "paper":
+            state = "переведён в бумагу"     # реальные деньги больше НЕ рискует
+        else:
+            state = "снят"
         robots.append({
-            "id": rid, "name": names.get(rid) or rid, "symbol": rob.get("symbol"),
-            "mode": rob.get("mode"), "paused": rob.get("paused"),
-            "position": rob.get("position"),
-            "pnl_rub": rob.get("pnl_rub"), "float_rub": rob.get("float_rub"),
-            "today_net": led.get("net"), "today_trades": led.get("trades") or 0,
-            "last_trade_ms": led.get("last_ts") or 0,
+            "id": rid, "name": names.get(rid) or rid,
+            "symbol": rob.get("symbol"),
+            "state": state,
+            "real_net": ra.get("net"),            # ВЕСЬ реальный итог (в т.ч. убыток до бумаги)
+            "real_today": rt.get("net"),
+            "real_trades_today": rt.get("trades") or 0,
+            "position": rob.get("position") if cur_mode == "real" else None,
+            "last_trade_ms": ra.get("last_ts") or 0,
         })
-    robots.sort(key=lambda r: (r.get("mode") != "real", r.get("name") or ""))
+    # Сортировка: сначала активный реал, потом переведённые в бумагу, потом снятые;
+    # внутри — по имени.
+    _ord = {"реал": 0, "пауза": 0, "переведён в бумагу": 1, "снят": 2}
+    robots.sort(key=lambda r: (_ord.get(r["state"], 3), r.get("name") or ""))
+
+    # Состояние сессии MOEX (открыта/закрыта по ISS) — нужно и вотчеру раннера
+    # (гейт лага ленты), и панели (отдельная строка «биржа»).
+    market = getattr(request.app.state, "market_session", None)
 
     # 4.1 runner + Lua
-    watch_runner = _watch_runner(health, received_ms, now_ms)
+    watch_runner = _watch_runner(health, received_ms, now_ms, market)
 
     # 4.2 backtests
     bt = {"ok": True, "issues": [], "running": 0, "queued": 0, "stuck": []}
@@ -397,13 +474,19 @@ async def snapshot(request: Request, agent_id: str | None = None):
     platform = {"ok": not plat_issues, "issues": plat_issues, "hoster": hoster,
                 "i9": i9, "watchdog_last_ms": last_run_ms, "in_session": in_session}
 
+    # Каждой тревоге — пометка контроля: рассосётся само или требует оператора.
+    # По просьбе оператора каждый алерт заканчивается двоеточием и статусом.
+    market_open = (market or {}).get("open")
+    for blk in (watch_runner, bt, platform):
+        blk["issues"] = [_with_control(t, market_open) for t in blk.get("issues", [])]
+
     # 5. Escalations: what the watchdog left unresolved + today's SMS.
     esc = _wd_read_jsonl("~/stl-watchdog-escalations.jsonl")
     today_sms = [e.get("text") for e in esc if (e.get("ts_ms") or 0) >= today_lo]
     alerts = {
-        "unresolved": (last_run or {}).get("unresolved") or [],
+        "unresolved": [_with_control(t, market_open) for t in (last_run or {}).get("unresolved") or []],
         "found": (last_run or {}).get("found") or [],
-        "sms_today": today_sms[-5:],
+        "sms_today": [_with_control(t, market_open) for t in today_sms[-5:]],
         "sms_count": len(today_sms),
         "last_run_ms": last_run_ms,
     }
@@ -412,5 +495,5 @@ async def snapshot(request: Request, agent_id: str | None = None):
         "ts_ms": now_ms, "agent_seen_ms": received_ms,
         "account": account, "positions": positions, "robots": robots,
         "watch": {"runner": watch_runner, "backtests": bt, "platform": platform},
-        "alerts": alerts,
+        "alerts": alerts, "market": market,
     }
