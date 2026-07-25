@@ -193,6 +193,24 @@ def main() -> None:
             except Exception as exc:
                 print(f"Warning: could not fetch done-pairs ({exc}) — will queue all")
 
+    # Контр-стратегии: `<id>__inv` шаблона в /api/v1/strategies не имеет — это та
+    # же базовая логика с инвертированным сигналом (make_on_bar понимает суффикс).
+    # Синтезируем шаблон из базы, чтобы контр-кампании ставились тем же путём,
+    # что и обычные, и были ВОСПРОИЗВОДИМЫ закоммиченным кодом.
+    by_id = {s["id"]: s for s in strategies}
+    for want in sorted(only_strats):
+        if want.endswith("__inv") and want not in by_id:
+            base = by_id.get(want[:-len("__inv")])
+            if base and "make_on_bar" in (base.get("script_code") or ""):
+                inv = dict(base)
+                inv["id"] = want
+                inv["script_code"] = ("from trader.lab.strategies.library import "
+                                      f"make_on_bar; on_bar = make_on_bar('{want}')")
+                strategies.append(inv)
+                print(f"[campaign] synthesized counter-strategy template: {want}")
+            else:
+                print(f"[campaign] WARNING: no base for {want} — skipped")
+
     if only_strats:
         strategies = [s for s in strategies if s["id"] in only_strats]
         print(f"Filtered to {len(strategies)} strategies: {', '.join(s['id'] for s in strategies)}")
