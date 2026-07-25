@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>STL · мобильный компаньон</title>
+<!-- Мобильный клон компаньона для телефона (iPhone и любой браузер).
+
+     Авторизация — тем же кодом привязки, что и трей-компаньон: оператор на
+     /watchdog-log.html выдаёт код для учётки (например MOBILE\iphone), сюда
+     вводятся учётка и код, страница меняет их на долгий read-only токен
+     (POST /api/v1/quik/companion/pair) и хранит его в localStorage. Токен
+     открывает РОВНО ОДИН endpoint — snapshot, торговых действий у него нет,
+     поэтому хранение в браузере телефона допустимо.
+
+     Открытая с десктопа под STL-сессией, страница работает и без токена. -->
+<style>
+  :root {
+    --bg: #0f0f1e; --panel: #14142a; --bd: #2d2d4a;
+    --ink: #e2e6f0; --muted: #8a90a8; --faint: #6f7590;
+    --up: #2ecc71; --down: #ff6b5a; --rail: #3a3a5c;
+    --accent: #4dd0e1;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-variant-numeric: tabular-nums;
+    -webkit-text-size-adjust: 100%;
+  }
+  body { padding: 0 0 40px; }
+
+  .top {
+    position: sticky; top: 0; z-index: 10;
+    display: flex; align-items: baseline; gap: 8px;
+    padding: calc(env(safe-area-inset-top, 0px) + 10px) 14px 8px;
+    background: rgba(15, 15, 30, .92); backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--bd);
+  }
+  .brand { font-weight: 600; letter-spacing: .04em; font-size: 14px; }
+  .fresh { flex: 1; color: var(--faint); font-size: 12px; }
+  .fresh.stale { color: var(--down); }
+  .logout { color: var(--faint); font-size: 12px; background: none; border: none; padding: 4px; }
+
+  .sec {
+    display: flex; align-items: center; gap: 8px;
+    margin: 16px 14px 6px;
+    font-size: 11px; letter-spacing: .16em; text-transform: uppercase; color: var(--muted);
+  }
+  .sec::after { content: ""; flex: 1; height: 1px; background: var(--bd); }
+  .sec a { color: var(--muted); text-decoration: none; border-bottom: 1px dotted var(--bd);
+    text-transform: none; letter-spacing: 0; }
+
+  .row {
+    display: flex; align-items: baseline; gap: 8px;
+    padding: 5px 14px 5px 12px; margin: 0 8px 2px;
+    border-left: 3px solid var(--rail); background: var(--panel); border-radius: 4px;
+  }
+  .row.up { border-left-color: var(--up); }
+  .row.down { border-left-color: var(--down); }
+  .row .k { color: var(--muted); }
+  .row .sp { flex: 1; }
+  .row .v { font-weight: 600; font-size: 17px; white-space: nowrap; }
+  .v.up { color: var(--up); } .v.down { color: var(--down); } .v.nil { color: var(--faint); font-weight: 400; }
+  .sub { color: var(--faint); font-size: 12px; }
+  .row.total { border-left-width: 4px; }
+  .row.total .k { color: var(--ink); font-weight: 600; }
+
+  .rob {
+    margin: 0 8px 6px; padding: 8px 12px;
+    border-left: 3px solid var(--rail); background: var(--panel); border-radius: 4px;
+  }
+  .rob.up { border-left-color: var(--up); } .rob.down { border-left-color: var(--down); }
+  .rob .hd { display: flex; align-items: baseline; gap: 8px; }
+  .rob .hd a { color: var(--ink); text-decoration: none; font-weight: 600; font-size: 15px; }
+  .tag { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--faint); }
+  .tag.real { color: var(--down); } .tag.paused { color: var(--down); font-weight: 700; }
+  .rob .hd .v { margin-left: auto; font-weight: 700; font-size: 17px; }
+  .rob .nums { display: flex; gap: 12px; flex-wrap: wrap; color: var(--muted); font-size: 13px; margin-top: 3px; }
+  .rob .nums b { color: var(--ink); font-weight: 600; }
+
+  .chk { display: flex; gap: 8px; padding: 4px 14px 4px 12px; margin: 0 8px 2px;
+    border-left: 3px solid var(--up); background: var(--panel); border-radius: 4px; font-size: 14px; }
+  .chk.bad { border-left-color: var(--down); }
+  .chk .n { color: var(--muted); min-width: 108px; flex-shrink: 0; }
+  .chk .s { color: var(--up); } .chk.bad .s { color: var(--down); }
+  .alert { margin: 0 8px 4px; padding: 6px 12px; border-left: 3px solid var(--down);
+    background: var(--panel); border-radius: 4px; color: var(--down); font-size: 13px; line-height: 1.45; }
+  .empty { color: var(--faint); padding: 4px 22px; font-size: 14px; }
+
+  /* Экран привязки */
+  .pair { max-width: 420px; margin: 12vh auto 0; padding: 0 20px; }
+  .pair h1 { font-size: 18px; letter-spacing: .06em; }
+  .pair p { color: var(--muted); font-size: 14px; line-height: 1.55; }
+  .pair label { display: block; margin: 14px 0 4px; font-size: 11px; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--muted); }
+  .pair input {
+    width: 100%; padding: 12px; font-size: 18px; border-radius: 6px;
+    border: 1px solid var(--bd); background: var(--panel); color: var(--ink);
+  }
+  .pair input.code { letter-spacing: .3em; text-transform: uppercase; font-family: ui-monospace, monospace; }
+  .pair button {
+    width: 100%; margin-top: 18px; padding: 13px; font-size: 16px; font-weight: 600;
+    border: none; border-radius: 6px; background: var(--accent); color: #08222a;
+  }
+  .pair .err { color: var(--down); margin-top: 10px; min-height: 20px; font-size: 14px; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script>
+'use strict';
+const API = '/api/v1/quik/companion';
+const STL = '';                       // страница живёт на том же домене
+const LS_TOKEN = 'stl_companion_token';
+const LS_ACCT = 'stl_companion_account';
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g,
+  (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function rub(v, opts) {
+  if (v == null || !isFinite(v)) return null;
+  const n = Math.round(v);
+  const sign = (opts && opts.signed && n > 0) ? '+' : (n < 0 ? '-' : '');
+  return sign + Math.abs(n).toLocaleString('ru-RU') + ' ₽';
+}
+function cls(v) { return v == null ? '' : (v > 0 ? 'up' : (v < 0 ? 'down' : '')); }
+function val(txt, k) { return txt == null ? '<span class="v nil">—</span>'
+  : `<span class="v ${k || ''}">${esc(txt)}</span>`; }
+function hhmmss(ms) {
+  return ms ? new Date(ms).toLocaleTimeString('ru-RU', { timeZone: 'Europe/Moscow' }) : null;
+}
+function row(label, value, signValue, sub) {
+  const k = cls(signValue);
+  return `<div class="row ${k}"><span class="k">${esc(label)}</span>` +
+    `<span class="sp"></span>${sub ? `<span class="sub">${esc(sub)}</span>` : ''}${val(value, k)}</div>`;
+}
+
+const DOW = { }; // Intl даёт день недели сам
+function brand(d) {
+  const now = new Date(d && d.ts_ms ? d.ts_ms : Date.now());
+  const p = new Intl.DateTimeFormat('ru-RU', { timeZone: 'Europe/Moscow',
+    day: '2-digit', month: '2-digit', weekday: 'short', hour: '2-digit', minute: '2-digit',
+  }).formatToParts(now).reduce((a, x) => (a[x.type] = x.value, a), {});
+  const open = d && d.market ? d.market.open : undefined;
+  const mode = open === true ? 'торги идут' : open === false ? 'биржа закрыта' : 'биржа: н/д';
+  return `STL · ${p.day}.${p.month} ${p.weekday} ${p.hour}:${p.minute} · ${mode}`;
+}
+
+function renderMarket(m) {
+  if (!m) return '';
+  const open = m.open;
+  const st = open === true ? 'открыта' : open === false ? 'закрыта' : 'н/д';
+  const sys = m.systime_ms ? new Date(m.systime_ms).toLocaleString('ru-RU',
+    { timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+  const sub = open === false ? 'посл. сессия ' + sys : (open === true ? 'торги идут' : 'нет ответа ISS');
+  return `<div class="row ${open === true ? 'up' : ''}"><span class="k">Биржа MOEX</span>` +
+    `<span class="sub">${esc(sub)}</span><span class="sp"></span>` +
+    `<span class="v ${open === true ? 'up' : open === false ? '' : 'nil'}">${st}</span></div>`;
+}
+
+function renderAccount(a) {
+  if (!a || !a.has_data) return '<div class="empty">счёт: агент ещё не прислал деньги</div>';
+  const used = a.used == null ? '<span class="v nil">нужна перезагрузка Lua</span>' : val(rub(a.used));
+  return row('Лимит откр. поз.', rub(a.limit)) +
+    `<div class="row"><span class="k">Тек. чист. поз.</span><span class="sp"></span>${used}</div>` +
+    row('План. чист. поз.', rub(a.planned)) +
+    row('Вариац. маржа', rub(a.varmargin, { signed: true }), a.varmargin) +
+    row('Биржевые сборы', rub(a.ts_comission), a.ts_comission ? -1 : 0);
+}
+
+function renderPositions(list) {
+  if (!list || !list.length) return '<div class="empty">позиций нет</div>';
+  return list.map((p) => `<div class="row ${cls(p.varmargin)}"><span class="k">${esc(p.sec)}</span>` +
+    `<span class="sub">${p.net > 0 ? '+' : ''}${p.net}</span><span class="sp"></span>` +
+    `${val(rub(p.varmargin, { signed: true }), cls(p.varmargin))}</div>`).join('');
+}
+
+function robotsTotal(list) {
+  if (!list || !list.length) return '';
+  let net = 0, today = 0, hasN = false, hasT = false;
+  for (const r of list) {
+    if (r.real_net != null) { net += r.real_net; hasN = true; }
+    if (r.real_today != null) { today += r.real_today; hasT = true; }
+  }
+  return `<div class="row total ${cls(hasN ? net : null)}">` +
+    `<span class="k">Итог реал (${list.length})</span><span class="sp"></span>` +
+    `<span class="sub">сегодня ${hasT ? rub(today, { signed: true }) : '—'}</span>` +
+    `${val(hasN ? rub(net, { signed: true }) : null, cls(net))}</div>`;
+}
+
+function renderRobots(list) {
+  if (!list || !list.length) return '<div class="empty">реальных роботов нет</div>';
+  return list.map((r) => {
+    const k = cls(r.real_net);
+    const last = hhmmss(r.last_trade_ms);
+    const st = r.state;
+    const stCls = st === 'пауза' ? 'paused' : (st === 'реал' ? 'real' : '');
+    return `<div class="rob ${k}">
+      <div class="hd">
+        <a href="/?agent_robot=${encodeURIComponent(r.id)}">${esc(r.name)}</a>
+        <span class="tag ${stCls}">${esc(st)}</span>
+        ${val(rub(r.real_net, { signed: true }), k)}
+      </div>
+      <div class="nums">
+        <span>сегодня <b class="${cls(r.real_today)}">${r.real_today == null ? '—' : rub(r.real_today, { signed: true })}</b></span>
+        ${r.position == null ? '' : `<span>поз <b>${r.position}</b></span>`}
+        <span>сделок <b>${r.real_trades_today || 0}</b></span>
+        <span>${last ? 'посл. ' + last : ''}</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function check(name, blk) {
+  const bad = blk && blk.ok === false;
+  return `<div class="chk ${bad ? 'bad' : ''}"><span class="n">${esc(name)}</span>` +
+    `<span class="s">${bad ? esc((blk.issues || []).join('; ')) : 'ОК'}</span></div>`;
+}
+
+function renderWatch(w) {
+  if (!w) return '<div class="empty">нет данных</div>';
+  const bt = w.backtests || {}, pl = w.platform || {}, i9 = pl.i9;
+  const plat = ['хостер LA ' + (pl.hoster && pl.hoster.load != null ? pl.hoster.load : '—'),
+    'i9 ' + (i9 ? (i9.stale ? 'молчит' : (i9.cpu_pct != null ? i9.cpu_pct + '% CPU' : 'онлайн')) : 'н/д')].join(' · ');
+  return check('раннер + lua', w.runner) + check('бэктесты', bt) +
+    `<div class="row"><span class="k">очередь</span><span class="sp"></span>` +
+    `<span class="sub">в работе ${bt.running || 0} · ждут ${bt.queued || 0}</span></div>` +
+    check('платформа', pl) +
+    `<div class="row"><span class="k"></span><span class="sp"></span><span class="sub">${esc(plat)}</span></div>`;
+}
+
+function renderAlerts(a) {
+  if (!a) return '';
+  const items = (a.unresolved || []).concat(a.sms_today || []);
+  if (!items.length) return '<div class="empty">тихо, эскалаций нет</div>';
+  return items.slice(-6).map((t) => `<div class="alert">${esc(t)}</div>`).join('');
+}
+
+// ── экраны ────────────────────────────────────────────────────────────────────
+function paintPanel(d) {
+  $('app').innerHTML = `
+    <div class="top">
+      <span class="brand" id="brand">${esc(brand(d))}</span>
+      <span class="fresh" id="fresh">●</span>
+      <button class="logout" id="logout" title="Отвязать телефон">отвязать</button>
+    </div>
+    <div class="sec">биржа</div>${renderMarket(d.market)}
+    <div class="sec">счёт</div>${renderAccount(d.account)}
+    <div class="sec">позиции</div>${renderPositions(d.positions)}
+    <div class="sec">роботы (реал) <a href="/?lab=live&equity=1">витрина ↗</a></div>
+      ${robotsTotal(d.robots)}${renderRobots(d.robots)}
+    <div class="sec">вотчер</div>${renderWatch(d.watch)}
+    <div class="sec">уведомления <a href="/watchdog-log.html">детали ↗</a></div>${renderAlerts(d.alerts)}`;
+  $('logout').onclick = () => {
+    if (confirm('Отвязать телефон от STL? Понадобится новый код.')) {
+      localStorage.removeItem(LS_TOKEN); location.reload();
+    }
+  };
+}
+
+function paintPairing(msg) {
+  $('app').innerHTML = `
+    <div class="pair">
+      <h1>STL · привязка телефона</h1>
+      <p>На странице вотчера STL нажмите «Добавить компаньона», укажите учётку
+         (например <b>MOBILE\\iphone</b>) и получите код. Введите их здесь —
+         спрашивается один раз, доступ только на чтение.</p>
+      <label>Учётка (как при выдаче кода)</label>
+      <input id="acct" autocomplete="off" spellcheck="false"
+             value="${esc(localStorage.getItem(LS_ACCT) || 'MOBILE\\iphone')}">
+      <label>Код привязки</label>
+      <input id="code" class="code" maxlength="8" autocomplete="one-time-code"
+             spellcheck="false" placeholder="••••••••">
+      <button id="go">Привязать</button>
+      <div class="err" id="err">${esc(msg || '')}</div>
+    </div>`;
+  $('code').focus();
+  const submit = async () => {
+    $('err').textContent = '';
+    const account = $('acct').value.trim();
+    const code = $('code').value.trim().toUpperCase();
+    if (!account || code.length < 4) { $('err').textContent = 'Заполните учётку и код.'; return; }
+    try {
+      const r = await fetch(API + '/pair', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, account, machine: 'mobile-web' }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.token) { $('err').textContent = d.detail || ('HTTP ' + r.status); return; }
+      localStorage.setItem(LS_TOKEN, d.token);
+      localStorage.setItem(LS_ACCT, account);
+      start();
+    } catch (e) { $('err').textContent = String(e); }
+  };
+  $('go').onclick = submit;
+  $('code').addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+}
+
+let lastGood = 0;
+let timer = null;
+async function tick() {
+  const token = localStorage.getItem(LS_TOKEN);
+  const headers = token ? { 'Authorization': 'Bearer ' + token } : {};
+  try {
+    const r = await fetch(API + '/snapshot', { headers, cache: 'no-store',
+      credentials: token ? 'omit' : 'same-origin' });
+    if (r.status === 401) {
+      // токен отозван (или сессии нет) — обратно на привязку
+      clearInterval(timer); timer = null;
+      localStorage.removeItem(LS_TOKEN);
+      paintPairing(token ? 'Доступ отозван — привяжите телефон заново.' : '');
+      return;
+    }
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+    lastGood = d.ts_ms || Date.now();
+    paintPanel(d);
+    $('fresh').className = 'fresh';
+    $('fresh').textContent = '● на связи';
+  } catch (e) {
+    const f = $('fresh');
+    if (f) { f.className = 'fresh stale';
+      f.textContent = lastGood ? '● нет связи · ' + hhmmss(lastGood) : '● нет связи'; }
+  }
+}
+
+function start() {
+  tick();
+  if (!timer) timer = setInterval(tick, 5000);
+}
+
+if (localStorage.getItem(LS_TOKEN)) start();
+else {
+  // Возможно, открыто с десктопа под STL-сессией — пробуем без токена.
+  fetch(API + '/snapshot', { cache: 'no-store', credentials: 'same-origin' })
+    .then((r) => { if (r.ok) start(); else paintPairing(''); })
+    .catch(() => paintPairing(''));
+}
+</script>
+</body>
+</html>
