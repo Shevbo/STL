@@ -19,6 +19,13 @@
   function fmt(n: number, decimals = 2): string {
     return n.toLocaleString('ru-RU', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
   }
+
+  // Средней цены 0 не бывает: ноль здесь значит «источник не отдал среднюю»
+  // (Finam на FORTS её часто не шлёт). Печатать 0.00 как среднюю — враньё,
+  // которое читается как «вошёл по нулю»; честный ответ — прочерк.
+  function fmtPrice(n: number): string {
+    return n > 0 ? fmt(n) : '—';
+  }
 </script>
 
 <section class="positions-panel">
@@ -44,8 +51,8 @@
               <td class="symbol">{pos.symbol}</td>
               <td style="color: {SIDE_COLOR[pos.side]}">{SIDE_LABEL[pos.side]}</td>
               <td class="num">{pos.quantity}</td>
-              <td class="num">{fmt(pos.avg_price)}</td>
-              <td class="num">{fmt(pos.current_price)}</td>
+              <td class="num">{fmtPrice(pos.avg_price)}</td>
+              <td class="num">{fmtPrice(pos.current_price)}</td>
               <td class="num" style="color: {pos.var_margin >= 0 ? '#4caf50' : '#f44336'}">
                 {pos.var_margin >= 0 ? '+' : ''}{fmt(pos.var_margin)}
               </td>

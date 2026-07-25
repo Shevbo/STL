@@ -37,10 +37,19 @@
   let tickCost = $derived(fmtNum(params?.price_step_cost ?? params?.tick_cost ?? null));
   let lotSize = $derived(fmtNum(params?.lot_size ?? params?.board_lot_size ?? null));
   let expiration = $derived(fmtDate(params?.expiration_date ?? params?.maturity_date ?? null));
+  // Всё пусто = справочник по инструменту не пришёл вовсе. Столбик из шести
+  // прочерков читается как поломка панели; честнее сказать одной строкой, что
+  // данных нет и откуда они берутся.
+  let anyData = $derived([minPrice, maxPrice, margin, tickSize, tickCost, lotSize, expiration]
+    .some((v) => v !== '—'));
 </script>
 
 <aside class="instrument-panel">
-  {#if symbol}
+  {#if symbol && !anyData}
+    <div class="title">{symbol}</div>
+    <div class="empty">Источник не отдал справочник по этому коду:
+      ГО, шаг цены и экспирация неизвестны.</div>
+  {:else if symbol}
     <div class="title">{symbol}</div>
     <div class="section">
       <div class="label">Коридор цен</div>
