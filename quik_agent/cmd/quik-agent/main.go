@@ -23,10 +23,12 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -291,16 +293,16 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 	var accStore *accounts.Store
 
 	lk := link.New(link.Options{
-		Target:            cfg.STLGRPCURL,
-		Insecure:          cfg.STLInsecure,
-		Token:             opt.token,
-		AgentVersion:      agentVersion,
-		BuildRev:          buildRev(),
-		HostName:          host,
-		QuikDataRoot:      cfg.QuikDataRoot,
-		HeartbeatInterval: time.Duration(cfg.HeartbeatSec) * time.Second,
-		PollInterval:      time.Duration(cfg.PollIntervalSec) * time.Second,
-		Provider:          quikdde.Default,
+		Target:               cfg.STLGRPCURL,
+		Insecure:             cfg.STLInsecure,
+		Token:                opt.token,
+		AgentVersion:         agentVersion,
+		BuildRev:             buildRev(),
+		HostName:             host,
+		QuikDataRoot:         cfg.QuikDataRoot,
+		HeartbeatInterval:    time.Duration(cfg.HeartbeatSec) * time.Second,
+		PollInterval:         time.Duration(cfg.PollIntervalSec) * time.Second,
+		Provider:             quikdde.Default,
 		StatusSnapshotMinSec: cfg.StatusSnapshotMinSec,
 		// Живость ТЕРМИНАЛА = свежий Lua-понг, а НЕ quikdde.Alive(): DDE выведен из
 		// эксплуатации и по умолчанию выключен, поэтому Alive() всегда false и канал
@@ -374,7 +376,7 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 	}, bridge, guard, lk, func(f string, a ...any) {
 		fmt.Printf("trade: "+f+"\n", a...)
 	})
-	bridge.SetHandler(mgr)                       // Lua events -> manager
+	bridge.SetHandler(mgr) // Lua events -> manager
 	// acc_pos/acc_ord/acc_trd/pong -> accStore: the account-snapshot half of
 	// the QLua publisher (separate from the md/book/tape/param feed above).
 	// Converters are type-tolerant (accounts.*FromRow); a malformed row is
@@ -473,8 +475,8 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 		}
 		quikdde.Default.SetLuaTick(ev.Code, ev.Last, ev.Bid, ev.Ask)
 	})
-	mgr.SetBookSource(ctx, quikdde.Default)      // local book for the 1b maker loop
-	lk.SetTrade(mgr)                             // STL Phase 2 commands -> manager
+	mgr.SetBookSource(ctx, quikdde.Default) // local book for the 1b maker loop
+	lk.SetTrade(mgr)                        // STL Phase 2 commands -> manager
 	go func() {
 		if err := bridge.Run(ctx); err != nil && ctx.Err() == nil {
 			fmt.Println("trade-bridge:", err)
@@ -502,6 +504,33 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 		}
 	}()
 
+	// Часы VDS: ежечасный w32tm /resync. Часы этой машины дрейфовали минутами
+	// (мешает свежести данных и измерению лага), а SSH-доступа к VDS нет —
+	// агент единственный, кто может чинить их сам. Best-effort: w32tm требует
+	// прав службы времени; отказ логируем и пробуем через час. Первый прогон
+	// сразу при старте — дрейф чаще всего замечают после перезагрузки.
+	go func() {
+		resync := func() {
+			out, err := exec.CommandContext(ctx, "w32tm", "/resync").CombinedOutput()
+			if err != nil {
+				fmt.Println("clock resync failed:", err, strings.TrimSpace(string(out)))
+				return
+			}
+			fmt.Println("clock resync ok")
+		}
+		resync()
+		t := time.NewTicker(time.Hour)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				resync()
+			}
+		}
+	}()
+
 	// ---- Robot hosting: local store + runner bridge + supervised runner ----
 	// Zero-touch: the agent is the SINGLE entrypoint. It persists deployed
 	// RobotSpecs (auto-resume after reboot), serves the loopback bridge, and
@@ -515,8 +544,8 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 	var runnerSrv *runner.Server
 	if robotStore != nil {
 		runnerSrv = runner.NewServer(runner.ServerCfg{
-			Store: robotStore,
-			Ticks: runner.ProviderTicks{P: quikdde.Default},
+			Store:  robotStore,
+			Ticks:  runner.ProviderTicks{P: quikdde.Default},
 			Orders: mgr, Status: lk,
 			Logf: func(f string, a ...any) { fmt.Printf("runner-bridge: "+f+"\n", a...) },
 		})
