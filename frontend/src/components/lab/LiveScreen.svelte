@@ -9,7 +9,7 @@
   import { fetchLatency, pingColor, pingLabel, fmtMs, type LatencyResponse } from '../../lib/latency';
   import { fetchAgentRobots, openAgentRobot, type AgentRobotRow } from '../../lib/agent-robots';
 
-  let { onOpen }: { onOpen: (id: string) => void } = $props();
+  let { onOpen, onShowRobots }: { onOpen: (id: string) => void; onShowRobots?: () => void } = $props();
 
   let robots = $state<any[]>([]);
   let agentRobots = $state<AgentRobotRow[]>([]);
@@ -20,6 +20,12 @@
   const liveRobots = $derived(robots.filter(r => r.deployed && r.paper === false));
   // Real-money robots hosted ON the QUIK agent (separate world; open their full stand).
   const agentLive = $derived(agentRobots.filter(r => !r.paper));
+  // Развёрнутые БУМАЖНЫЕ роботы: они не тут (LIVE = только реал), а во вкладке «Роботы».
+  // Кнопка «Запустить в торговлю» создаёт именно paper — оператор искал их здесь и не
+  // находил. Показываем счётчик + переход, чтобы не блуждать.
+  const paperCount = $derived(
+    robots.filter(r => r.deployed && r.paper === true).length
+    + agentRobots.filter(r => r.paper).length);
   const fmtRub = (v: number) => (v >= 0 ? '+' : '') + Math.round(v).toLocaleString('ru-RU') + ' ₽';
 
   const lastRtt = $derived(lat?.summary?.last_rtt_ms ?? null);
@@ -94,10 +100,19 @@
     заявки. Замер каждые {lat?.interval_s ?? 5}с, лог хранится. Разбивка исходящая/входящая — в окне робота.
   </div>
 
+  {#if paperCount > 0}
+    <div class="paper-hint">
+      Здесь только роботы на <b>реальные деньги</b>. Ваши бумажные (paper) роботы —
+      их <b>{paperCount}</b> — торгуют в разделе
+      <button class="paper-link" onclick={() => onShowRobots?.()}>«Роботы» →</button>
+      («Запустить в торговлю» создаёт именно бумажного робота).
+    </div>
+  {/if}
+
   {#if loading}
     <div class="empty">Загрузка…</div>
   {:else if liveRobots.length === 0 && agentLive.length === 0}
-    <div class="empty">Нет LIVE-роботов на реальные деньги.</div>
+    <div class="empty">Нет LIVE-роботов на реальные деньги.{#if paperCount > 0} Бумажные — в разделе «Роботы» (см. выше).{/if}</div>
   {:else}
     {#if agentLive.length}
       <div class="group-band">Роботы на бирже QUIK · агент · реальные деньги</div>
@@ -187,6 +202,12 @@
   .stat .v { font-size: 12px; color: #bbb; font-family: monospace; }
 
   .method-note { font-size: 10px; color: #667; line-height: 1.5; }
+  .paper-hint { font-size: 11px; color: #9ab; background: #0c1322; border: 1px solid #24406a;
+    border-radius: 5px; padding: 7px 10px; line-height: 1.5; }
+  .paper-hint b { color: #cde; }
+  .paper-link { background: #12203a; color: #6aa8ff; border: 1px solid #24406a; border-radius: 3px;
+    font-size: 11px; padding: 1px 7px; cursor: pointer; }
+  .paper-link:hover { color: #cfe; border-color: #6aa8ff66; }
 
   .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
   .card { background: #0a0a15; border: 1px solid #1e1e3a; border-radius: 6px; padding: 12px; cursor: pointer; transition: border-color 0.12s, background 0.12s; }

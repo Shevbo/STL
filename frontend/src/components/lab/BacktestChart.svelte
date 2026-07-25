@@ -913,8 +913,16 @@
           if (peak - v > maxDD) maxDD = peak - v;
           return { time: p.time, value: v };
         });
+        // Выравниваем шкалу времени equity со свечами: перед кривой добавляем
+        // WHITESPACE-точки на КАЖДЫЙ бар до первой сделки. Тогда число точек у обеих
+        // серий одинаково, и односторонний logical-range sync мапит индекс-в-индекс
+        // БЕЗ сдвига. Whitespace ничего не рисует — фикс «полки до первой сделки» цел.
+        // Раньше equity стартовала с startIdx и была на startIdx баров короче свечей:
+        // нижний график уезжал вбок, а смена интервала меняла startIdx и рождала
+        // «второй график из ниоткуда» + отставание.
+        const lead = bars.slice(0, startIdx).map(b => ({ time: b.time as number }));
         equitySeries.applyOptions({ baseValue: { type: 'price', price: 0 } });
-        equitySeries.setData(curve);
+        equitySeries.setData([...lead, ...curve]);
         lastEquityValue = curve.length ? curve[curve.length - 1].value : 0;
       } else {
         equitySeries.setData([]);

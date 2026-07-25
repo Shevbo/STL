@@ -2130,7 +2130,10 @@ def create_app() -> FastAPI:
             if not isinstance(p, dict):
                 return True
             try:
-                return int(p.get("qty", 1) or 1) <= 10 and int(p.get("avg_max", 1) or 1) <= 10
+                # float, НЕ int: параметры кое-где хранятся как "1.0"/"28.0" — int("1.0")
+                # бросал ValueError, фильтр молча пропускал ВСЁ и расходился с ::numeric
+                # у истории. float("1.0")=1.0 работает и совпадает с запросом истории.
+                return float(p.get("qty", 1) or 1) <= 10 and float(p.get("avg_max", 1) or 1) <= 10
             except Exception:
                 return True
         rows = [r for r in rows if _pos_le10(r)]
@@ -2179,8 +2182,20 @@ def create_app() -> FastAPI:
         out["return_range"] = [r_lo, r_hi]
         out["rf_range"] = [f_lo, f_hi]
 
-        best = sorted([r for r in rows if r["net_profit"] is not None],
-                      key=lambda r: r["net_profit"], reverse=True)[:6]
+        # «Лучшие по финрезу» — ОТДЕЛЬНЫЙ запрос с ORDER BY, а не срез из усечённой
+        # LIMIT 80000-выборки тепловой карты: у крупных кампаний (113k комбинаций у
+        # opt-20260719-1037) настоящий топ выпадал из произвольного среза, и витрина
+        # показывала НЕ глобального лидера (573k вместо 724k) — расходясь с «Историей
+        # прогонов». Тот же фильтр ≤10, что у лидера истории (lab_campaigns) => best[0]
+        # == лидер строки истории, клик по строке ведёт РОВНО на показанного лидера.
+        best_rows = await pool.fetch(
+            "SELECT total_return, recovery_factor, net_profit, total_trades, strategy, "
+            "symbol, params, date_from, date_to FROM optimization_leaderboard "
+            "WHERE campaign_run=$1 AND net_profit IS NOT NULL "
+            "AND COALESCE(NULLIF(params->>'qty','')::numeric, 1) <= 10 "
+            "AND COALESCE(NULLIF(params->>'avg_max','')::numeric, 1) <= 10 "
+            "ORDER BY net_profit DESC NULLS LAST LIMIT 6", id)
+        best = list(best_rows)
         for r in best:
             p = r["params"]
             if isinstance(p, str):
@@ -2251,7 +2266,11 @@ def create_app() -> FastAPI:
                     return int(p.get(k, d) or d)
                 except Exception:
                     return d
-            max_pos = max(_pi("qty", 1), _pi("avg_max", 1)) if L else None
+            # Пиковая позиция = потолок усреднения bet_max (макс. контрактов в позиции),
+            # НЕ базовый qty: у 2ema qty=1, bet_max=30 реально набирает до 30 (на графике
+            # ×9..×11). Раньше показывали max(qty, avg_max)=1 — «1 контракт с нереальным
+            # доходом». bet_max — то число, по которому сверяют лимиты агента и ГО.
+            max_pos = (_pi("bet_max", 0) or max(_pi("qty", 1), _pi("avg_max", 1))) if L else None
             margin = margin_of.get(L["symbol"]) if L else None
             max_go = round(margin * max_pos) if (margin and max_pos) else None
             strat = L["strategy"] if L else (list(r["strategies"] or [None])[0])
@@ -2796,6 +2815,28 @@ def create_app() -> FastAPI:
         if engine == "auto":
             engine = "remote" if await _agent_alive_any(request.app.state, pool) else "local"
         symbol = body.get("symbol", "")
+        # Кэш повторных ОДИНОЧНЫХ прогонов: открыл график лидера из витрины/истории на
+        # тех же настройках — отдаём готовый прошлый прогон из БД, не пересчитывая ~150с
+        # (заказ оператора: «запоминать графики и сделки, не ждать прогона»). Идентичность
+        # = symbol + окно дат + РОВНО те же params (JSONB @> в обе стороны, порядок
+        # ключей неважен). Только single-config (без paramSets/непустого grid) — у свёрток
+        # перебора свой путь. Первый показ считает и пишет, каждый следующий берёт из БД.
+        # Промах (иная стратегия дописала дефолты) безопасно уходит в обычный расчёт.
+        if body.get("scriptCode") and not body.get("paramSets") and not (body.get("paramsGrid") or {}):
+            try:
+                _eff = json.dumps({**(body.get("baseParams") or {})})
+                _hit = await pool.fetchval(
+                    """SELECT br.id FROM backtest_runs br
+                         JOIN backtest_results r ON r.run_id = br.id
+                        WHERE br.symbol=$1 AND br.date_from=$2 AND br.date_to=$3
+                          AND br.status='done' AND r.trades IS NOT NULL
+                          AND r.params @> $4::jsonb AND $4::jsonb @> r.params
+                        ORDER BY br.finished_at DESC NULLS LAST LIMIT 1""",
+                    symbol, _parse_dt(body["dateFrom"]), _parse_dt(body["dateTo"]), _eff)
+                if _hit:
+                    return {"run_id": _hit, "engine": "cached", "campaign": _sweep_campaign(_hit)}
+            except Exception:
+                pass   # кэш — оптимизация; любой сбой => обычный прогон
         # Remote agent expects snake_case fields. An on-demand chart run (single
         # backtest) has no combos → default to one empty set. A sweep run already
         # carries paramSets/paramsGrid → translate field names for the agent.

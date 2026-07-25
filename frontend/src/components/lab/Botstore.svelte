@@ -470,7 +470,7 @@
       if (launchMode === 'paper') {
         const d = await fetchWithAuth(`/api/v1/robots/${id}/deploy`, { method: 'POST' });
         if (!d.ok) throw new Error(await d.text());
-        launchMsg = `Запущен в PAPER: «${launchName}». Смотри его в Live Robots / витрине.`;
+        launchMsg = `Запущен в PAPER: «${launchName}». Ищи его во вкладке «Live Robots» → подвкладка «Роботы» (в «LIVE» — только реальные деньги).`;
         await load();
       } else {
         const d = await fetchWithAuth(`/api/v1/quik/robots/${id}/deploy-agent`, {
@@ -1010,9 +1010,11 @@
     </div>
   {/if}
 
-  <!-- BACKTEST WINDOW: fresh single run for the chosen (instrument, params) -->
+  <!-- BACKTEST WINDOW: fresh single run for the chosen (instrument, params).
+       z-index 50 > витрина(40): график ложится ПОВЕРХ карточки кампании, а не
+       закрывает её — закрыл график и вернулся на карточку (#3, тупик навигации). -->
   {#if chart || chartLoading || chartErr}
-    <div class="chart-modal" role="dialog" tabindex="-1">
+    <div class="chart-modal" style="z-index:50" role="dialog" tabindex="-1">
       <div class="cm-box">
         <div class="cm-head">
           <span class="cm-title">
@@ -1190,7 +1192,7 @@
                     {#each campaign.best as b, i}
                       <tr class="cmp-click"
                           title="Открыть график этого набора: цена со сделками + кривая доходности"
-                          onclick={() => { const o = { strategyId: b.strategy, dateFrom: b.date_from, dateTo: b.date_to, campaign: campaign.campaign, rank: i }; closeCampaign(); openChart(b.symbol, b.params, o); }}>
+                          onclick={() => { const o = { strategyId: b.strategy, dateFrom: b.date_from, dateTo: b.date_to, campaign: campaign.campaign, rank: i }; openChart(b.symbol, b.params, o); }}>
                         <td class="cmp-l">{robotName(b.strategy)}</td>
                         <td class="mono">{b.symbol}</td>
                         <td class:pos={b.net_profit > 0} class:neg={b.net_profit < 0}>{fmtMoney(b.net_profit)}</td>

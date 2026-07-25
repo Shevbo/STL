@@ -206,7 +206,7 @@
   </div>
 
   {#if view === 'live'}
-    <div class="showcase-wrap"><LiveScreen onOpen={(id) => (windowRobotId = id)} /></div>
+    <div class="showcase-wrap"><LiveScreen onOpen={(id) => (windowRobotId = id)} onShowRobots={() => (view = 'robots')} /></div>
   {:else if view === 'showcase'}
     <div class="showcase-wrap"><Showcase /></div>
   {:else}

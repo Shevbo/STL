@@ -122,8 +122,9 @@
   let engine = $state<'auto' | 'local' | 'remote'>('local');
   let strategyInfo = $state<any | null>(null);  // popover: show desc for a strategy
 
-  // ── Draggable splitter: width of the left config panel (px) ────────────
+  // ── Draggable splitters: config-panel width + strategy-list height (px) ──
   let configW = $state<number>(Number(localStorage.getItem('btl.configW')) || 420);
+  let listH = $state<number>(Number(localStorage.getItem('btl.listH')) || 260);
   function startDragSplit(e: PointerEvent) {
     e.preventDefault();
     const x0 = e.clientX, w0 = configW;
@@ -132,6 +133,20 @@
     };
     const up = () => {
       localStorage.setItem('btl.configW', String(configW));
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  }
+  function startDragList(e: PointerEvent) {
+    e.preventDefault();
+    const y0 = e.clientY, h0 = listH;
+    const move = (m: PointerEvent) => {
+      listH = Math.max(120, Math.min(640, h0 + (m.clientY - y0)));
+    };
+    const up = () => {
+      localStorage.setItem('btl.listH', String(listH));
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
     };
@@ -641,7 +656,7 @@
   <div class="btl-config" style="width: {configW}px">
     <div class="btl-section">
       <div class="btl-sec-title">Стратегия</div>
-      <div class="btl-cat-list">
+      <div class="btl-cat-list" style="max-height: {listH}px">
         {#each catalog as s}
           {@const active = selectedStrategyId === s.id}
           <button class="btl-cat-card" class:active
@@ -694,6 +709,10 @@
         </div>
       {/if}
     </div>
+
+    <!-- горизонтальный сплиттер: тяни, чтобы менять высоту списка стратегий -->
+    <div class="btl-hsplit" role="separator" aria-orientation="horizontal"
+         title="потяни, чтобы изменить высоту списка стратегий" onpointerdown={startDragList}></div>
 
     {#if selectedStrategy}
       <div class="btl-section">
@@ -1014,6 +1033,13 @@
     transition: background 0.12s;
   }
   .btl-splitter:hover, .btl-splitter:active { background: #3a6ea5; }
+
+  /* Горизонтальная граница между списком стратегий и параметрами */
+  .btl-hsplit {
+    height: 6px; flex-shrink: 0; cursor: row-resize; background: #15152a;
+    border-top: 1px solid #1e1e3a; transition: background 0.12s;
+  }
+  .btl-hsplit:hover, .btl-hsplit:active { background: #3a6ea5; }
 
   /* ── Config panel ──────────────────────────────────────────────────── */
   .btl-config {
