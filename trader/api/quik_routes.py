@@ -245,12 +245,12 @@ _WD_CFG_DEFAULTS: dict = {
     "autopause_bars": True,
     "thresholds": {"tape_lag_sec": 120, "cap_warn_pct": 85, "hb_sec": 150,
                    "order_recheck_sec": 15, "bars_atr_mult": 3.0, "bars_pct": 0.5,
-                   "backtest_stuck_sec": 3600},
+                   "bars_min_lag_sec": 60, "backtest_stuck_sec": 3600},
 }
 _WD_THR_BOUNDS = {"tape_lag_sec": (10, 3600), "cap_warn_pct": (10, 100),
                   "hb_sec": (30, 3600), "order_recheck_sec": (0, 120),
                   "bars_atr_mult": (0.5, 20.0), "bars_pct": (0.05, 10.0),
-                  "backtest_stuck_sec": (60, 86400)}
+                  "bars_min_lag_sec": (5, 3600), "backtest_stuck_sec": (60, 86400)}
 
 
 def _wd_config_read() -> dict:
