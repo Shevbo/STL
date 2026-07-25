@@ -45,3 +45,11 @@ poetry.lock
 .harness/notes/
 *.tar.gz
 *.jpeg
+
+# Собирается из companion/*.go, не версионируется
+companion/STLCompanion.exe
+
+# Сессионные артефакты браузера и кэш graphify — не версионируются
+.playwright-mcp/
+graphify-out/cache/
+graphify-out/20*/
