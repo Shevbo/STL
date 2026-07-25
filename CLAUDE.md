@@ -21,7 +21,20 @@ codebases in one repo, joined by two gRPC contracts:
   bridge (127.0.0.1:50071). Persists robots/state next to the agent; auto-resumes.
 - **Frontend** (`frontend/`) — Svelte 5 SPA (lightweight-charts + uplot), static assets via
   nginx; `/api` + `/ws` proxied to uvicorn. Per-robot showcase:
-  `/?agent_robot=<robot_id>` (AgentRobotScreen).
+  `/?agent_robot=<robot_id>` (AgentRobotScreen). Two-level burger nav (`NavMenu.svelte`)
+  is mounted on EVERY screen; deep links `?orders=1`/`?tables=1`/`?equity=1` open frames.
+- **Companion** (`companion/`) — pure-Go (NO cgo) Windows tray panel `STLCompanion.exe`:
+  frameless always-on-top WebView2 window bottom-right. The exe is only a shell (tray,
+  window, token, loopback proxy); the PAGE is `frontend/public/companion.html` served
+  from STL — visual changes deploy with the frontend, no exe rebuild. Auth: one-time
+  pairing code (issued on /watchdog-log.html) -> long token, DPAPI-encrypted per Windows
+  account; the token opens EXACTLY ONE endpoint (`GET /api/v1/quik/companion/snapshot`,
+  read-only) — pinned by tests in `tests/quik/test_companion.py`.
+
+Product docs live at `frontend/public/docs.html` («Справка → Документация платформы STL»,
+5 разделов). Versioning: one date-based system release (e.g. `STL 2026.07.25`) shared by
+platform + docs; satellites keep their build_rev but are mapped in the doc's version
+table. When shipping a meaningful release, bump that block.
 
 Deploy target: a hoster (Ubuntu, ssh alias `hoster`, 83.69.248.175) running
 `shectory-trader.service` (uvicorn :8000) + `shectory-ai46.service` (standalone team-46
@@ -194,7 +207,33 @@ scriptCode `from ...strategies.<name> import on_bar, on_start, on_stop`. Either 
 row is tagged back to its strategy id on ingest by `_strat_id_from_code` (`api/app.py`) parsing
 the scriptCode — a strategy the regex can't match lands untagged. Param ranges in each schema
 drive both the Optimizer UI and campaign grids. The backtester + optimizer sweep jobs live
-here too (self-healing orphan reaper in `api/app.py`).
+here too (self-healing orphan reaper in `api/app.py`). COUNTER-strategies: any registry id
+plus suffix `__inv` (e.g. `macd_cross__inv`) is first-class — `make_on_bar` strips the
+suffix and NEGATES the base signal (on some contracts fading the signal is robustly
+profitable where following it loses). `queue_campaign.py` and Botstore synthesize the
+`__inv` template from the base on the fly. `__inv` is NOT a P&L mirror of the base
+(averaging/TP make it asymmetric). Pre-2026-07-25 counter-campaign numbers in the
+leaderboard were computed by a LOST uncommitted i9 build and are NOT reproducible —
+trust only `camp-20260725-contrredo` and later.
+
+**Market-session oracle** (`trader/market_session.py`): is MOEX FORTS trading RIGHT NOW,
+derived from ISS `SYSTIME` (ticks while trading, freezes when closed) — never from a
+hardcoded calendar (weekends/holidays have their own sessions; a frozen tape while the
+market is CLOSED is normal, while OPEN it is a real QUIK-feed failure). Polled by a
+lifespan task onto `app.state.market_session`, served at `GET /api/v1/quik/market-session`,
+gates the companion's tape-lag alarm AND the hoster watchdog probe's auto-pause
+(`~/stl-watchdog-probe.sh` — lives ON the hoster, not in the repo). `open=None` (ISS
+unreachable) is treated protectively (keep alarming).
+
+**Manual smart orders** (`trader/quik/smart_orders.py` = pure engine,
+`api/quik_smart_orders.py` = 1s in-process watcher): operator SL/TP/Trail/on-fill/OCO.
+Book persists in `data/smart_orders.json`; fired children go through the SAME validated
+human place path, client_id `so:<id>` = MANUAL class (robots/recon never touch them).
+While STL is down smart orders DO NOT fire — the UI says so explicitly. QUIK expires
+unfilled children at session end: the watcher marks those `orphaned` («дочерняя заявка
+не дожила») and the UI offers re-arm; never auto-rearm. UI: `components/orders/`
+(OrdersFrame tabs: обычная/умные/графики позиций; texts+colors in
+`lib/smart-order-help.ts` — one source for the frame, chart lines and legend).
 
 **Strategy time semantics (nearly cost real money):** backtest/ISS bars are MSK-wall
 stamped as UTC; the AGENT RUNNER builds TRUE-UTC bars from the QUIK tape. A wall-clock
@@ -247,12 +286,16 @@ poetry run pytest tests/quik/test_store.py::test_pick_prefers_single_green_when_
 poetry run pytest -m integration -q                 # needs FINAM_SECRET_TOKEN
 poetry run ruff check trader/ tests/ robot_runner/  # lint (or: make lint)
 
-# Go (QUIK agent). No Go toolchain locally — run ON THE HOSTER after scp'ing changed
-# files into ~/quik_build (export PATH=$HOME/go-sdk/go/bin:$HOME/go/bin:$HOME/protoc/bin:$PATH).
+# Go (QUIK agent). Local Go exists, but the agent's internal/pb stubs are generated
+# ONLY on the hoster — build/test the agent THERE after scp'ing changed files into
+# ~/quik_build (export PATH=$HOME/go-sdk/go/bin:$HOME/go/bin:$HOME/protoc/bin:$PATH).
 cd quik_agent && go test ./...                      # or: make test-go
 go test ./internal/trade/ -run TestReconcileStalePending
 make gen                                            # regen Go + Python proto stubs (BOTH protos)
 make build                                          # cross-build windows exe (amd64+386)
+
+# Companion (pure Go, no cgo, builds LOCALLY; exe is gitignored):
+cd companion && CGO_ENABLED=0 go build -ldflags "-H=windowsgui -s -w" -o STLCompanion.exe .
 
 # Robot runner exe (PyInstaller cannot cross-compile — build ON WINDOWS):
 bash deploy/build_runner.sh                         # -> dist/runner/robot-runner.exe
@@ -334,15 +377,45 @@ ssh hoster 'cd ~/apps/shectory-trader && set -a; . ~/.shectory_trade.env; set +a
 - **Runner P&L is in PRICE POINTS**, not rubles. Convert with the instrument point value
   (`coef = step_cost / price_step`, served by `/api/v1/quik/params` from the QLua feed).
 - **VDS environment:** PyInstaller exes need the Universal CRT (vc_redist.x64) installed
-  there; the VDS clock has drifted minutes before (`w32tm /resync`) — check the clock
-  FIRST when data freshness looks wrong.
+  there; the VDS clock has drifted minutes before — the agent now runs `w32tm /resync`
+  hourly itself (main.go), but still check the clock FIRST when freshness looks wrong.
+- **Never claim "market closed" from the calendar.** FORTS trades weekends/holidays on
+  its own schedules; a weekend problem is as urgent as a weekday one (session opens
+  07:00 MSK daily). Read `GET /api/v1/quik/market-session` (ISS SYSTIME oracle) — a
+  frozen tape with the market CLOSED is normal; with it OPEN and `last=0` in the feed it
+  means the QUIK «Таблица всех сделок» window is closed (operator must open it).
+- **WebView2 in the companion (both verified on Win10 19042):** the controller will NOT
+  be created on a `WS_EX_LAYERED` parent (comes back nil → crash), and the DWM acrylic
+  accent (state 4) renders the window fully INVISIBLE — use accent 2
+  (TRANSPARENTGRADIENT). Translucency = DWM composition, not layered windows.
+- **i9 runs a hand-synced repo copy** (self-update via `agent/update_manifest.txt`,
+  RAW_BASE raw.githubusercontent — intermittently RST-blocked from that network, jsdelivr
+  mirror serves the same bytes). NEVER leave strategy logic only on the i9: the original
+  `__inv` inversion lived there uncommitted, got wiped by a resync, and left the
+  leaderboard with unreproducible numbers. Everything the i9 executes must be in git +
+  the manifest. Trigger self-update: `INSERT INTO agent_control(key,value)
+  VALUES('update_token', now()::text) ON CONFLICT (key) DO UPDATE ...`.
+- **The watchdog probe lives ON the hoster** (`~/stl-watchdog-probe.sh` + morning resume
+  `~/stl-morning-resume.sh`, auto-pause marker `~/.stl-autopaused`) — NOT in the repo.
+  Repo-side session-oracle changes don't reach it until the hoster script is patched too.
+- **Live-robot equity curves come from the LEDGER (`algo_trades`), never from replaying
+  the 200-fill mirror tail** — the tail starts mid-position and its fee model double-
+  counted entry fees on partial exits (drew −103k where the journal said +129k). The
+  chart takes `closeSeries` from the journal; with no journal it draws NOTHING plus an
+  honest note (a drawn lie looks like truth). `tradeEvents` fee share on partial closes
+  is pinned by `lab-analytics.fees.test.ts`.
 - **Agent flush discipline:** the link sends only CHANGED securities/params/ticks
   (poll_interval_sec=1 in prod); keep new frame types change-gated or STL CPU pays x5.
   Gate by CONTENT when the publisher re-stamps unchanged data every cycle (the Lua book
   ts advances every second — a timestamp gate passes everything).
 - **Lua on the VDS runs from MEMORY.** Copying a newer `shectory_trade.lua` over the file
   changes nothing until the operator stops/starts the script in QUIK (Сервисы →
-  Lua-скрипты). File mtime identical to repo ≠ the running code is current.
+  Lua-скрипты). File mtime identical to repo ≠ the running code is current. The agent
+  installs the script under a VERSION-stamped name (`shectory_trade_v<SCRIPT_VERSION>.lua`
+  from the file's own constant) so the load dialog shows WHICH build the operator picks.
+  Optional row columns are how Lua/agent stay compatible across versions: acc_pos row 4
+  = per-instrument varmargin, acc_money row 6 = cbplused («Тек. чист. поз.») — a null in
+  the UI means «старый Lua ещё запущен», not a bug (v2026.07.24-posvm ships both).
 - **Never restart the STL service mid-diagnosis of the mirror**: `robots-mirror` /
   `agent-local-status` are in-memory mirrors — a restart empties them until the agent
   redials and re-reports (~15-60s); an empty mirror right after a restart is not an
