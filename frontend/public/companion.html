@@ -190,9 +190,7 @@ function renderBrand(d) {
     timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', year: 'numeric',
     weekday: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit',
   }).formatToParts(now).reduce((a, x) => (a[x.type] = x.value, a), {});
-  const open = d && d.market ? d.market.open : undefined;
-  const mode = open === true ? 'торги идут' : open === false ? 'биржа закрыта'
-    : 'режим биржи: н/д';
+  const mode = marketMode(d && d.market);
   return `STL · ${p.day}.${p.month}.${p.year} ${p.weekday} ${p.hour}:${p.minute}:${p.second} · ${mode}`;
 }
 
@@ -338,21 +336,31 @@ function renderAlerts(a) {
     `<span class="at">${esc(hhmmss(it.ts_ms) || '')}</span>${esc(it.text)}</div>`).join('');
 }
 
-// Строка состояния биржи: открыта / закрыта по ISS. Снимает главную путаницу —
-// замершая лента при закрытом рынке это норма, при открытом — авария QUIK.
+// Режим биржи ОФИЦИАЛЬНО (ISS: TRADE_SESSION_DATE + последняя сделка):
+// торги / клиринг-пауза / сессия завершена / выходной / до открытия.
+function marketMode(m) {
+  if (!m) return 'биржа: н/д';
+  const nxt = m.next_session ? ' · след. ' + m.next_session.slice(5).split('-').reverse().join('.') : '';
+  switch (m.phase) {
+    case 'trading': return 'торги идут';
+    case 'break': return 'клиринг/пауза';
+    case 'pre_open': return 'до открытия';
+    case 'done': return 'сессия завершена' + nxt;
+    case 'holiday': return 'выходной (MOEX)' + nxt;
+    default: return m.open === true ? 'торги идут' : m.open === false ? 'биржа закрыта' : 'биржа: н/д';
+  }
+}
+
 function renderMarket(m) {
   if (!m) return '';
   const open = m.open;
-  const st = open === true ? 'открыта' : open === false ? 'закрыта' : 'не определено (ISS?)';
   const kls = open === true ? 'up' : open === false ? '' : 'nil';
-  const sys = m.systime_ms ? new Date(m.systime_ms).toLocaleString('ru-RU',
+  const lt = m.last_trade_ms ? new Date(m.last_trade_ms).toLocaleString('ru-RU',
     { timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
-  const sub = open === false
-    ? 'посл. сессия ' + sys + ' — пауза ленты ожидаема'
-    : (open === true ? 'торги идут' : 'нет ответа ISS');
+  const sub = 'посл. сделка ' + lt;
   return `<div class="row ${kls === 'up' ? 'up' : ''}"><span class="k">Биржа MOEX</span>` +
     `<span class="sub">${esc(sub)}</span><span class="sp"></span>` +
-    `<span class="v ${kls}">${st}</span></div>`;
+    `<span class="v ${kls}">${esc(marketMode(m))}</span></div>`;
 }
 
 let lastGood = 0;

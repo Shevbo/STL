@@ -150,21 +150,31 @@ function brand(d) {
   const p = new Intl.DateTimeFormat('ru-RU', { timeZone: 'Europe/Moscow',
     day: '2-digit', month: '2-digit', weekday: 'short', hour: '2-digit', minute: '2-digit',
   }).formatToParts(now).reduce((a, x) => (a[x.type] = x.value, a), {});
-  const open = d && d.market ? d.market.open : undefined;
-  const mode = open === true ? 'торги идут' : open === false ? 'биржа закрыта' : 'биржа: н/д';
+  const mode = marketMode(d && d.market);
   return `STL · ${p.day}.${p.month} ${p.weekday} ${p.hour}:${p.minute} · ${mode}`;
+}
+
+function marketMode(m) {
+  if (!m) return 'биржа: н/д';
+  const nxt = m.next_session ? ' · след. ' + m.next_session.slice(5).split('-').reverse().join('.') : '';
+  switch (m.phase) {
+    case 'trading': return 'торги идут';
+    case 'break': return 'клиринг/пауза';
+    case 'pre_open': return 'до открытия';
+    case 'done': return 'сессия завершена' + nxt;
+    case 'holiday': return 'выходной (MOEX)' + nxt;
+    default: return m.open === true ? 'торги идут' : m.open === false ? 'биржа закрыта' : 'биржа: н/д';
+  }
 }
 
 function renderMarket(m) {
   if (!m) return '';
   const open = m.open;
-  const st = open === true ? 'открыта' : open === false ? 'закрыта' : 'н/д';
-  const sys = m.systime_ms ? new Date(m.systime_ms).toLocaleString('ru-RU',
+  const lt = m.last_trade_ms ? new Date(m.last_trade_ms).toLocaleString('ru-RU',
     { timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
-  const sub = open === false ? 'посл. сессия ' + sys : (open === true ? 'торги идут' : 'нет ответа ISS');
   return `<div class="row ${open === true ? 'up' : ''}"><span class="k">Биржа MOEX</span>` +
-    `<span class="sub">${esc(sub)}</span><span class="sp"></span>` +
-    `<span class="v ${open === true ? 'up' : open === false ? '' : 'nil'}">${st}</span></div>`;
+    `<span class="sub">${esc('посл. сделка ' + lt)}</span><span class="sp"></span>` +
+    `<span class="v ${open === true ? 'up' : open === false ? '' : 'nil'}">${esc(marketMode(m))}</span></div>`;
 }
 
 function renderAccount(a) {

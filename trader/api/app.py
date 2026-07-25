@@ -1006,18 +1006,35 @@ async def _agent_task_fallback(app_state) -> None:
 
 
 async def _market_session_poller(app_state) -> None:
-    """Каждые ~45с спрашивает MOEX ISS, торгует ли биржа сейчас, и кладёт факт на
-    app_state.market_session. Коды берёт из фида агента (следуют роллу сами),
-    иначе запасные. Сетевые сбои переживает: при провале держит ПРОШЛЫЙ ответ,
-    а первый раз оставляет None (потребитель трактует None защитно)."""
+    """Каждые ~45с спрашивает MOEX ISS, торгует ли биржа сейчас (официальные
+    поля TRADE_SESSION_DATE + TIME), и кладёт факт на app_state.market_session.
+    Официальный календарь исключений (dailytable) подтягивается раз в сутки —
+    первый прогон нового дня, это и есть заказанный «парсинг расписания в 03:00»
+    без отдельного крона. Сетевые сбои переживает: при провале держит ПРОШЛЫЙ
+    ответ, а первый раз оставляет None (потребитель трактует защитно)."""
+    import datetime as _dt
+
     from trader import market_session as ms
+    _msk = _dt.timezone(_dt.timedelta(hours=3))
+    cal: dict = {}
+    cal_day = ""
     while True:
         try:
+            today = _dt.datetime.now(tz=_msk).date().isoformat()
+            if today != cal_day:
+                try:
+                    import httpx as _hx
+                    async with _hx.AsyncClient(timeout=10.0) as _cl:
+                        cal = await ms.fetch_calendar(_cl)
+                    cal_day = today
+                    log.info("market_session.calendar", calendar=cal)
+                except Exception as exc:  # noqa: BLE001 — календарь не критичен
+                    log.warning("market_session.calendar_failed", error=str(exc))
             store = getattr(app_state, "quik_store", None)
             status = (store.agent_status(None) or {}) if store is not None else {}
             feed = ((status.get("health") or {}).get("feed")) or []
             codes = ms.codes_from_feed(feed)
-            state = await ms.probe(codes, int(time.time() * 1000))
+            state = await ms.probe(codes, int(time.time() * 1000), calendar=cal)
             # Не затираем валидный прошлый ответ ошибочным: если ISS не ответил,
             # но раньше знали состояние — оставляем прошлое, только помечаем.
             prev = getattr(app_state, "market_session", None)
