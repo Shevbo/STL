@@ -156,7 +156,22 @@
     expanded = s;
   }
 
-  function tmplOf(id: string) { return strategies.find(s => s.id === id); }
+  function tmplOf(id: string) {
+    const t = strategies.find((s) => s.id === id);
+    if (t) return t;
+    // Контр-стратегия <base>__inv: своего шаблона в списке нет, но это та же
+    // логика с инвертированным сигналом. Синтезируем шаблон из базы — бэкенд
+    // make_on_bar('<base>__inv') сам инвертирует. Так лидер-контра открывается
+    // пересчётом, а не упирается в «шаблона нет».
+    if (id && id.endsWith('__inv')) {
+      const base = strategies.find((s) => s.id === id.slice(0, -'__inv'.length));
+      if (base && String(base.script_code || '').includes('make_on_bar')) {
+        return { ...base, id,
+          script_code: `from trader.lab.strategies.library import make_on_bar; on_bar = make_on_bar('${id}')` };
+      }
+    }
+    return undefined;
+  }
 
   async function openDetail(robot: any) {
     detailLoading = true; notice = ''; detail = null;

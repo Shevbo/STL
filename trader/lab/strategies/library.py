@@ -35,8 +35,17 @@ def register(rid, name, source, params_schema, signal, warmup, avg=None):
 
 
 def make_on_bar(rid: str):
-    """Build a STL on_bar(stl, params) from a registered signal function."""
-    spec = REGISTRY[rid]
+    """Build a STL on_bar(stl, params) from a registered signal function.
+
+    Суффикс `__inv` = КОНТР-стратегия: та же логика, но сигнал инвертирован (где
+    база покупает — контра продаёт). Нужен, потому что на некоторых контрактах
+    выгоднее ФЕЙДИТЬ сигнал, чем следовать ему (RIU6: macd_cross__inv медиана
+    +193k против −75k у прямой). Раньше инверсия жила только на i9 (без git), и
+    контр-лидеры не открывались в витрине и не перебирались оптимизатором —
+    теперь `make_on_bar('<id>__inv')` работает везде одинаково."""
+    inv = rid.endswith("__inv")
+    base_rid = rid[:-len("__inv")] if inv else rid
+    spec = REGISTRY[base_rid]
     signal = spec["signal"]
     warmup = spec["warmup"]
 
@@ -94,6 +103,8 @@ def make_on_bar(rid: str):
         if len(bars) < need:
             return
         want = signal(bars, params)        # +1 / -1 / 0 / None
+        if inv and want:                   # контр-стратегия: фейдим базовый сигнал
+            want = -want
         price = bars[-1].close
         bar_time = bars[-1].time
         in_cooldown = cooldown_min > 0 and bar_time < int(stl.get_state("cooldown_until", 0) or 0)

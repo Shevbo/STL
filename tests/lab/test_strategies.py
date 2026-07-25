@@ -115,6 +115,39 @@ async def _run(rt, want, t, price, **params):
 
 
 @pytest.mark.asyncio
+async def test_inv_suffix_fades_the_base_signal():
+    """Контр-стратегия <id>__inv: та же логика, но сигнал инвертирован. Раньше
+    жила только на i9 (без git) — контр-лидеры не открывались и не перебирались.
+    Теперь make_on_bar('<id>__inv') работает: base=BUY -> inv=SELL."""
+    # База: сигнал +1 (лонг) на разогретых барах -> покупка.
+    base = _FakeRT()
+    for i in range(3):
+        _WANT["v"] = 1
+        base.push(i, 100.0)
+        await _mob("_cdtest")(base, {"symbol": "SIM6", "qty": 1, "avg_max": 1})
+    assert base.signed > 0, "база должна открыть ЛОНГ на сигнале +1"
+
+    # Контра: тот же сигнал +1, но __inv инвертирует -> шорт.
+    inv = _FakeRT()
+    for i in range(3):
+        _WANT["v"] = 1
+        inv.push(i, 100.0)
+        await _mob("_cdtest__inv")(inv, {"symbol": "SIM6", "qty": 1, "avg_max": 1})
+    assert inv.signed < 0, "контра должна открыть ШОРТ на том же сигнале +1"
+
+
+@pytest.mark.asyncio
+async def test_inv_leaves_flat_signal_flat():
+    """Сигнал 0/None инвертировать нечего — контра тоже стоит вне рынка."""
+    inv = _FakeRT()
+    for i in range(3):
+        _WANT["v"] = 0
+        inv.push(i, 100.0)
+        await _mob("_cdtest__inv")(inv, {"symbol": "SIM6", "qty": 1, "avg_max": 1})
+    assert inv.signed == 0
+
+
+@pytest.mark.asyncio
 async def test_superaverage_escalates_qty_and_avgmax_on_loss_resets_on_win():
     rt = _FakeRT()
     sp = dict(super_y=1, super_z=3)
