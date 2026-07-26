@@ -38,7 +38,7 @@
   <div class="cap">
     Бычий FVG: <b>low текущего бара выше high позапрошлого</b> (разрыв) И тело
     текущей 1-мин свечи ≥ порога.
-    {#if price > 0 && fracPct > 0}<br><b class="live">тело ≥ {pts(price * fracPct / 100)}</b> при цене {Math.round(price).toLocaleString('ru-RU')} ({fracPct.toFixed(2)}%){/if}
+    {#if price > 0 && fracPct > 0}<br><b class="live">тело ≥ {pts(price * fracPct / 100)}</b> при цене {price.toLocaleString('ru-RU', { maximumFractionDigits: 6 })} ({fracPct.toFixed(2)}%){/if}
   </div>
 
 {:else if kind === 'atr'}

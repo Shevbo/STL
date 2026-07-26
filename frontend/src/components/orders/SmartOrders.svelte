@@ -6,6 +6,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { fetchWithAuth } from '$lib/fetch-auth';
   import { downloadCSV } from '$lib/csv';
+  import { fmtPrice } from '$lib/format';
   import { smartOrdersStore, type SmartOrder } from '$lib/stores/smart-orders.svelte';
   import SmartOrderSchematic from './SmartOrderSchematic.svelte';
   import {
@@ -297,12 +298,12 @@
           {@const fire = o.side === 'buy' ? o.peak + o.trail_offset : o.peak - o.trail_offset}
           <div class="so-c-track" class:active={o.activated}>
             {#if o.activated}
-              ● АКТИВНА · слежение от пика <b>{Math.round(o.peak).toLocaleString('ru-RU')}</b>
+              ● АКТИВНА · слежение от пика <b>{fmtPrice(o.peak)}</b>
               · сделка при цене {o.side === 'buy' ? '≥' : '≤'}
-              <b class="fire">{Math.round(fire).toLocaleString('ru-RU')}</b>
+              <b class="fire">{fmtPrice(fire)}</b>
               (откат {o.trail_offset} п. от пика)
             {:else}
-              ○ ждёт пробоя уровня <b>{Math.round(o.trigger_price).toLocaleString('ru-RU')}</b>,
+              ○ ждёт пробоя уровня <b>{fmtPrice(o.trigger_price)}</b>,
               затем встанет в слежение и выкупит на откате {o.trail_offset} п.
             {/if}
           </div>

@@ -12,6 +12,7 @@
   import { fetchWithAuth } from '../../lib/fetch-auth';
   import RobotIdentity from './RobotIdentity.svelte';
   import ScreenTag from './ScreenTag.svelte';
+  import { fmtPrice, csvPrice } from '../../lib/format';
   import { toFills, rolledPnl } from '../../lib/lab-analytics';
   import BacktestChart from './BacktestChart.svelte';
   import LatencyPane from './LatencyPane.svelte';
@@ -199,7 +200,7 @@
     for (const t of (live?.trades ?? [])) {            // API order = chronological ascending
       const ev = tradeEvent(t);
       lines.push([
-        fmtTime(t.iso), tradeTypeLabel(ev).text, t.side, t.qty, Math.round(t.price),
+        fmtTime(t.iso), tradeTypeLabel(ev).text, t.side, t.qty, csvPrice(t.price),
         t.symbol ?? '', ev?.close ? Math.round(ev.close.pnl) : '', t.status, t.order_id ?? '',
       ].map(q).join(';'));
     }
@@ -414,7 +415,7 @@
                         <td class:buy={t.side === 'buy'} class:sell={t.side === 'sell'}>
                           {t.side === 'buy' ? '▲ buy' : '▼ sell'}</td>
                         <td class="mono">{t.qty}</td>
-                        <td class="mono">{Math.round(t.price).toLocaleString('ru-RU')}</td>
+                        <td class="mono">{fmtPrice(t.price)}</td>
                         <td class="num mono" class:pos={ev?.close && ev.close.pnl > 0} class:neg={ev?.close && ev.close.pnl < 0}>
                           {ev?.close ? fmtMoney(ev.close.pnl) + ' ₽' : '—'}</td>
                         <td><span class="st-badge st-{t.status}">{t.status}</span></td>

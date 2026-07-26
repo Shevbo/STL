@@ -10,6 +10,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { fetchWithAuth } from '../../lib/fetch-auth';
+  import { fmtPrice } from '$lib/format';
   import { downloadCSV } from '$lib/csv';
   import {
     toFills, rolledPnl, priceMarkers,
@@ -557,7 +558,7 @@
           head = best.close.exitLabel;                 // "Частичный TP · ..." etc.
           headKind = best.close.exit === 'TP' ? 'tp' : 'sl';
           lines.push(best.label);                      // "Полн. закрытие N (всего в поз. V)"
-          lines.push(`${best.side === 'buy' ? 'Покупка' : 'Продажа'} @ ${Math.round(best.price).toLocaleString('ru-RU')}`);
+          lines.push(`${best.side === 'buy' ? 'Покупка' : 'Продажа'} @ ${fmtPrice(best.price)}`);
           lines.push(fmtTs(best.rawTime));
           lines.push(`В позиции: ${fmtDur(best.close.holdSecs)}`);
           lines.push(`Макс. контрактов: ${best.close.maxContracts}`);
@@ -565,7 +566,7 @@
         } else {
           // Entry / averaging fills.
           head = best.label;
-          lines.push(`${best.side === 'buy' ? 'Покупка' : 'Продажа'} @ ${Math.round(best.price).toLocaleString('ru-RU')}`);
+          lines.push(`${best.side === 'buy' ? 'Покупка' : 'Продажа'} @ ${fmtPrice(best.price)}`);
           lines.push(fmtTs(best.rawTime));
         }
         if (best.id) lines.push(`ID: ${best.id}`);
@@ -1068,7 +1069,7 @@
         axisLabelVisible: true, title: (role || `заявка ${buy ? 'BUY' : 'SELL'}`) + qtyTxt,
       }));
       lineIndex.push({ price: o.price, text:
-        `${role ? role + ' — ' : ''}${buy ? 'покупка' : 'продажа'}${o.qty ? ' ' + o.qty + ' конт.' : ''} @ ${Math.round(o.price).toLocaleString('ru-RU')}`.trim() });
+        `${role ? role + ' — ' : ''}${buy ? 'покупка' : 'продажа'}${o.qty ? ' ' + o.qty + ' конт.' : ''} @ ${fmtPrice(o.price)}`.trim() });
     }
     for (const o of plannedOrders ?? []) {
       const buy = o.side === 'buy';
@@ -1077,7 +1078,7 @@
         axisLabelVisible: true, title: `план ${buy ? 'BUY' : 'SELL'}`,
       }));
       const why = (o as any).reason ? ` — ${(o as any).reason}` : '';
-      lineIndex.push({ price: o.price, text: `План ${buy ? 'BUY' : 'SELL'} ${o.qty || ''} @ ${Math.round(o.price).toLocaleString('ru-RU')}${why}`.trim() });
+      lineIndex.push({ price: o.price, text: `План ${buy ? 'BUY' : 'SELL'} ${o.qty || ''} @ ${fmtPrice(o.price)}${why}`.trim() });
     }
   }
 
@@ -1304,7 +1305,7 @@
                   <td>{KIND_RU[r.kind] ?? r.kind}</td>
                   <td class={r.side === 'buy' ? 'pos' : 'neg'}>{r.side === 'buy' ? 'покупка' : 'продажа'}</td>
                   <td class="num">{r.qty}</td>
-                  <td class="num">{Math.round(r.price).toLocaleString('ru-RU')}</td>
+                  <td class="num">{fmtPrice(r.price)}</td>
                   <td class="num neg">−{fmtRub(r.comm)}</td>
                   <td class="num">{r.posAfter}</td>
                   <td class="num" class:pos={r.pnl > 0} class:neg={r.pnl < 0}>{r.pnl != null ? fmtMoney(r.pnl) : '—'}</td>
