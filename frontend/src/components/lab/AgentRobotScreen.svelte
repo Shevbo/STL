@@ -9,6 +9,7 @@
   import { fetchWithAuth } from '../../lib/fetch-auth';
   import { toFills, commissionFor, tradeEvents } from '../../lib/lab-analytics';
   import BacktestChart from './BacktestChart.svelte';
+  import ScreenTag from './ScreenTag.svelte';
   import LatencyPane from './LatencyPane.svelte';
   import AgentBookPane from './AgentBookPane.svelte';
   import ParamEditor from './ParamEditor.svelte';
@@ -711,6 +712,7 @@
 </script>
 
 <div class="ars">
+  <ScreenTag id="AGENT-ROBOT" name="стенд робота на агенте" />
   <div class="ars-head">
     <NavMenu />
     <span class="ars-icon">🤖</span>
@@ -794,6 +796,7 @@
     <BacktestChart
       result={chartResult}
       {symbol}
+      screenId="AGENT-CHART"
       dateFrom={dateFrom}
       dateTo={dateTo}
       defaultInterval={1}
@@ -1145,7 +1148,7 @@
 </div>
 
 <style>
-  .ars { display: flex; flex-direction: column; height: 100vh; background: #0a0a12; color: #ccc; overflow: hidden; }
+  .ars { display: flex; flex-direction: column; height: 100vh; background: #0a0a12; color: #ccc; overflow: hidden; position: relative; }
   .ars-head { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid #22224a; flex-wrap: wrap; flex-shrink: 0; }
   .ars-icon { font-size: 16px; }
   .ars-name { font-size: 14px; font-weight: 600; color: #eee; font-family: monospace; }

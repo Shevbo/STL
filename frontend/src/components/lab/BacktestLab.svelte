@@ -3,6 +3,7 @@
   import { fetchWithAuth } from '../../lib/fetch-auth';
   import RobotIdentity from './RobotIdentity.svelte';
   import BacktestChart from './BacktestChart.svelte';
+  import ScreenTag from './ScreenTag.svelte';
   import ParamHelp from './ParamHelp.svelte';
   import MustDescription from './MustDescription.svelte';
   import { helpFor } from '$lib/strategy-help';
@@ -176,6 +177,15 @@
   // ── Leader ──────────────────────────────────────────────────────────────
   let leaderId = $state<string | null>(null);
   let leaderResult = $state<any | null>(null);
+  // scriptCode + id стратегии ОТКРЫТОГО графика (лидер ИЛИ избранное) — нужны, чтобы
+  // «Пересчитать» с изменёнными параметрами работал и на графике из избранного.
+  let chartStratCode = $state<string | null>(null);
+  let chartStratId = $state<string | null>(null);
+  function codeForStrategy(id: string | null | undefined): string | null {
+    if (!id) return null;
+    const c = catalog.find((x: any) => x.id === id || x.robotId === id);
+    return c?.scriptCode ?? c?.script_code ?? null;
+  }
 
   // ── ⭐ Избранные наборы ──────────────────────────────────────────────────────
   let favorites = $state<any[]>([]);
@@ -199,6 +209,8 @@
           if (f.date_from) dateFrom = f.date_from.slice(0, 10);
           if (f.date_to) dateTo = f.date_to.slice(0, 10);
           leaderResult = { result: res, params: f.params || {} };
+          chartStratId = f.strategy_id || null;
+          chartStratCode = codeForStrategy(f.strategy_id);
           await resolveLeaderPV(leaderResult);
           return;
         }
@@ -568,6 +580,8 @@
     leaderResult = row;   // show metrics immediately; chart fills once trades arrive
     const sym = row.params.symbol || paramValues.symbol || 'RIM6';
     const scriptCode = selectedStrategy?.scriptCode ?? selectedStrategy?.script_code;
+    chartStratId = selectedStrategy?.id ?? null;
+    chartStratCode = scriptCode ?? null;
     const body: any = {
       symbol: sym,
       dateFrom: new Date(dateFrom).toISOString(),
@@ -604,6 +618,58 @@
                 const rd = await rr.json();
                 const full = (Array.isArray(rd) ? rd : (rd.results ?? []))[0];
                 if (full) leaderResult = { params: row.params, result: full };
+              }
+            }
+            chartLoading = false;
+          }
+        } catch { /* keep polling */ }
+      }, 1500);
+    } catch {
+      chartLoading = false;
+    }
+  }
+
+  // «Пересчитать бэктест» на открытом графике (лидер ИЛИ избранное): одиночный прогон
+  // с ИЗМЕНЁННЫМИ параметрами/периодом, результат заменяет leaderResult. scriptCode берём
+  // у открытого графика (chartStratCode) — работает и когда стратегия не выбрана в списке.
+  async function rerunFromChart(params: Record<string, any>, dates?: { dateFrom: string; dateTo: string }) {
+    if (dates?.dateFrom) dateFrom = dates.dateFrom.slice(0, 10);
+    if (dates?.dateTo) dateTo = dates.dateTo.slice(0, 10);
+    const sym = params.symbol || paramValues.symbol || leaderResult?.params?.symbol || 'RIM6';
+    const scriptCode = chartStratCode ?? codeForStrategy(chartStratId) ?? selectedStrategy?.scriptCode;
+    if (chartPoll) { clearInterval(chartPoll); chartPoll = null; }
+    chartLoading = true;
+    const body: any = {
+      symbol: sym,
+      dateFrom: new Date(dateFrom).toISOString(),
+      dateTo: new Date(dateTo).toISOString(),
+      paramSets: [{ ...params, symbol: sym }],
+      engine: 'auto',
+      robotId: selectedStrategy?.robotId || (installed[0]?.id ?? ''),
+    };
+    if (scriptCode) { body.scriptCode = scriptCode; body.baseParams = { symbol: sym }; }
+    try {
+      const res = await fetchWithAuth('/api/v1/backtest/run', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const { run_id } = await res.json();
+      let attempts = 0;
+      chartPoll = setInterval(async () => {
+        attempts++;
+        if (attempts > 120) { clearInterval(chartPoll); chartPoll = null; chartLoading = false; return; }
+        try {
+          const sr = await fetchWithAuth(`/api/v1/backtest/${run_id}/status`);
+          if (!sr.ok) return;
+          const st = await sr.json();
+          if (st.status === 'done' || st.status === 'failed') {
+            clearInterval(chartPoll); chartPoll = null;
+            if (st.status === 'done') {
+              const rr = await fetchWithAuth(`/api/v1/backtest/${run_id}/results?full=1`);
+              if (rr.ok) {
+                const rd = await rr.json();
+                const full = (Array.isArray(rd) ? rd : (rd.results ?? []))[0];
+                if (full) leaderResult = { params, result: full, strategy_id: chartStratId };
               }
             }
             chartLoading = false;
@@ -656,6 +722,7 @@
 </script>
 
 <div class="btl">
+  <ScreenTag id="LAB" name="Backtest Lab" />
   <!-- ── LEFT: Config panel ──────────────────────────────────────────── -->
   <div class="btl-config" style="width: {configW}px">
     <div class="btl-section">
@@ -1018,6 +1085,10 @@
               dateFrom={dateFrom}
               dateTo={dateTo}
               pointValue={leaderPV}
+              runParams={leaderResult.params ?? {}}
+              paramSchema={selectedStrategy?.params_schema ?? []}
+              onRerun={rerunFromChart}
+              screenId="LAB-CHART"
             />
           {/key}
         </div>
@@ -1034,7 +1105,7 @@
 </div>
 
 <style>
-  .btl { display: flex; height: 100%; overflow: hidden; gap: 0; }
+  .btl { display: flex; height: 100%; overflow: hidden; gap: 0; position: relative; }
 
   /* Перетаскиваемая граница между конфигом и результатами */
   .btl-splitter {

@@ -8,6 +8,7 @@
   import { fetchWithAuth } from '../../lib/fetch-auth';
   import RobotIdentity from './RobotIdentity.svelte';
   import BacktestChart from './BacktestChart.svelte';
+  import ScreenTag from './ScreenTag.svelte';
   import MustDescription from './MustDescription.svelte';
   import { nameFor, docBase, behaviorFor } from '$lib/strategy-help';
 
@@ -588,6 +589,7 @@
 </script>
 
 <div class="bs-root">
+  <ScreenTag id="STORE" name="Botstore" />
   <div class="bs-preamble">
     <div class="bs-title">Botstore — каталог и установка роботов</div>
     <div class="bs-note">
@@ -1016,6 +1018,7 @@
   {#if chart || chartLoading || chartErr}
     <div class="chart-modal" style="z-index:50" role="dialog" tabindex="-1">
       <div class="cm-box">
+        <ScreenTag id="STORE-CHART-WIN" name="окно графика бэктеста" corner="tl" />
         <div class="cm-head">
           <span class="cm-title">
             {#if chart?.opts?.strategyId}
@@ -1065,6 +1068,7 @@
                 { ...(chart.opts || {}), rank: undefined,
                   ...(dates?.dateFrom ? { dateFrom: dates.dateFrom } : {}),
                   ...(dates?.dateTo ? { dateTo: dates.dateTo } : {}) })}
+              screenId="STORE-CHART"
             />
           {/if}
         </div>
@@ -1076,6 +1080,7 @@
   {#if launchOpen}
     <div class="lp-modal" role="dialog" tabindex="-1">
       <div class="lp-box">
+        <ScreenTag id="LAUNCH" name="запуск в торговлю" corner="tl" />
         <div class="lp-head">
           <span class="lp-h-title">Запустить в торговлю</span>
           <button class="cm-close" onclick={() => launchOpen = false}>✕</button>
@@ -1132,6 +1137,7 @@
   {#if campaign || campaignLoading}
     <div class="chart-modal" role="dialog" tabindex="-1">
       <div class="cmp-box">
+        <ScreenTag id="SHOWCASE" name="витрина кампании" corner="tl" />
         <div class="cm-head">
           <span class="cm-title cm-title-big">
             Витрина кампании перебора параметров
@@ -1394,7 +1400,7 @@
 
   /* backtest window modal */
   .chart-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 40; padding: 24px; }
-  .cm-box { width: min(1280px, 96vw); height: min(86vh, 900px); background: #0a0a15; border: 1px solid #2d2d4a; border-radius: 6px; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 10px 40px rgba(0,0,0,0.6); }
+  .cm-box { position: relative; width: min(1280px, 96vw); height: min(86vh, 900px); background: #0a0a15; border: 1px solid #2d2d4a; border-radius: 6px; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 10px 40px rgba(0,0,0,0.6); }
   .cm-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 12px; border-bottom: 1px solid #1e1e3a; flex-shrink: 0; }
   .cm-title { font-size: 12px; color: #ccc; font-weight: 600; display: flex; align-items: baseline; gap: 8px; min-width: 0; }
   .cm-params { font-family: monospace; font-size: 10px; color: #666; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1413,7 +1419,7 @@
 
   /* Launch-into-trading panel */
   .lp-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.66); display: flex; align-items: center; justify-content: center; z-index: 60; padding: 24px; }
-  .lp-box { width: min(560px, 96vw); max-height: 90vh; overflow-y: auto; background: #0e1220; border: 1px solid #2a3552; border-radius: 12px; box-shadow: 0 16px 48px rgba(0,0,0,0.6); }
+  .lp-box { position: relative; width: min(560px, 96vw); max-height: 90vh; overflow-y: auto; background: #0e1220; border: 1px solid #2a3552; border-radius: 12px; box-shadow: 0 16px 48px rgba(0,0,0,0.6); }
   .lp-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid #1c2540; }
   .lp-h-title { font-size: 15px; font-weight: 700; color: #eaf2ff; }
   .lp-body { padding: 16px 18px; display: flex; flex-direction: column; gap: 14px; }
@@ -1506,7 +1512,7 @@
   .cmp-click { cursor: pointer; }
   .cmp-click:hover td { background: rgba(122, 184, 255, .08); }
   /* campaign modal */
-  .cmp-box { width: min(960px, 96vw); max-height: 90vh; background: #0a0a15; border: 1px solid #2d2d4a;
+  .cmp-box { position: relative; width: min(960px, 96vw); max-height: 90vh; background: #0a0a15; border: 1px solid #2d2d4a;
              border-radius: 6px; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 10px 40px rgba(0,0,0,0.6); }
   .cmp-body { padding: 14px 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
   .cmp-meta { display: flex; flex-wrap: wrap; gap: 8px 22px; }

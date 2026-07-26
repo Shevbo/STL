@@ -5,6 +5,7 @@
   import { fetchWithAuth } from '../../lib/fetch-auth';
   import { toFills, rolledPnl } from '../../lib/lab-analytics';
   import RobotIdentity from './RobotIdentity.svelte';
+  import ScreenTag from './ScreenTag.svelte';
   import RobotEditor from './RobotEditor.svelte';
   import RobotWindow from './RobotWindow.svelte';
   import Showcase from './Showcase.svelte';
@@ -199,6 +200,8 @@
 </script>
 
 <div class="live-robots">
+  <ScreenTag id={view === 'robots' ? 'ROBOTS' : view === 'showcase' ? 'LIVE-SHOWCASE' : 'LIVE-REAL'}
+             name="Live Robots" />
   <div class="tab-bar">
     <button class="tab-btn" class:active={view === 'robots'} onclick={() => (view = 'robots')}>Роботы</button>
     <button class="tab-btn showcase-tab" class:active={view === 'showcase'} onclick={() => (view = 'showcase')}>Витрина</button>
@@ -435,7 +438,7 @@
     --green: #43c463; --cyan: #4dd0e1; --red: #ff5757; --amber: #f5a623;
     --mono: ui-monospace, "Cascadia Code", "JetBrains Mono", Consolas, monospace;
     display: flex; flex-direction: column; height: 100%; overflow: hidden;
-    color: var(--ink); font-size: 13px;
+    color: var(--ink); font-size: 13px; position: relative;
   }
   .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
   .muted { color: var(--ink2); }

@@ -15,14 +15,16 @@
     toFills, rolledPnl, priceMarkers,
     positionRects, exitStats, tpSlByLevel, commissionBreakdown, commissionFor,
   } from '../../lib/lab-analytics';
+  import ScreenTag from './ScreenTag.svelte';
 
   let {
     result, symbol, strategy = null, dateFrom, dateTo, pointValue = 1, defaultInterval = 60,
     openOrders = [], plannedOrders = [], taker = true, runParams = {}, paramSchema = [], onRerun = null,
     segments = null, pointValues = null, live = 0, liveTick = null, onNet = null, floatRub = null,
     netOverride = null, livePosition = null, journalSuspect = false,
-    pointValueKnown = true, closeSeries = null,
+    pointValueKnown = true, closeSeries = null, screenId = '',
   }: {
+    screenId?: string;   // ID окна для дебага (см. ScreenTag)
     // ГОТОВЫЙ ряд реализованных результатов (₽ на момент закрытия) — журнал
     // алготорговли. Когда он есть, кривая доходности строится ПО НЕМУ, а не по
     // пересчёту филлов: журнал знает НАСТОЯЩУЮ комиссию каждой сделки и ведёт
@@ -1056,6 +1058,7 @@
         <button class:active={resampleMin === iv.v} onclick={() => pickInterval(iv.v)}>{iv.label}</button>
       {/each}
     </div>
+    {#if screenId}<ScreenTag id={screenId} name="график бэктеста" inline />{/if}
   </div>
 
   <div class="bt-candle-area">
