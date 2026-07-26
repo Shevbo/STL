@@ -2969,6 +2969,11 @@ def create_app() -> FastAPI:
         # ОДИН запрос с CTE: сравниваем params лидерборда и результата ПРЯМО jsonb-к-jsonb
         # в SQL. Не гоняем params через Python — asyncpg-кодек jsonb двоил кодировку строки
         # ($2::jsonb от предсериализованной строки давал jsonb-скаляр, @> не совпадал → null).
+        # ВАЖНО: перебор хранит комбо БЕЗ сделок (trades=[], только метрики — ради места на
+        # 100k+ комбо). Поэтому гард jsonb_array_length(trades)>0: без реальных сделок вернём
+        # null, и фронт уйдёт в обычный прогон (первый показ считает; кэш повторных прогонов
+        # в run_backtest затем отдаёт тот же прогон из БД). Если появится бэкфилл сделок
+        # топ-N — этот путь начнёт отдавать лидера из БД сразу, без пересчёта.
         row = await pool.fetchrow(
             """
             WITH ld AS (
@@ -2982,6 +2987,7 @@ def create_app() -> FastAPI:
                    r.point_value, r.peak_contracts
             FROM ld JOIN backtest_results r
               ON r.run_id LIKE $1 || '-%' AND r.trades IS NOT NULL
+             AND jsonb_array_length(r.trades) > 0
              AND r.params @> ld.params AND ld.params @> r.params
             LIMIT 1
             """,
