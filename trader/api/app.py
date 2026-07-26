@@ -2962,29 +2962,30 @@ def create_app() -> FastAPI:
         «Лучшие по финрезу» (net_profit desc, ≤10); (2) находим его сохранённые сделки
         среди прогонов кампании (run_id LIKE '<campaign>-%', теперь индекс по run_id).
         Промах (лидерборд/результат разошлись по ключам) => null => фронт считает как раньше."""
-        import json as _jr
         _auth(request)
         pool = request.app.state.db_pool
         if pool is None or rank < 0:
             return None
-        prow = await pool.fetchrow(
-            "SELECT params FROM optimization_leaderboard "
-            "WHERE campaign_run=$1 AND net_profit IS NOT NULL "
-            "AND COALESCE(NULLIF(params->>'qty','')::numeric, 1) <= 10 "
-            "AND COALESCE(NULLIF(params->>'avg_max','')::numeric, 1) <= 10 "
-            "ORDER BY net_profit DESC NULLS LAST OFFSET $2 LIMIT 1",
-            campaign_run, rank)
-        if not prow:
-            return None
-        p = prow["params"]
-        p_json = p if isinstance(p, str) else _jr.dumps(p)
+        # ОДИН запрос с CTE: сравниваем params лидерборда и результата ПРЯМО jsonb-к-jsonb
+        # в SQL. Не гоняем params через Python — asyncpg-кодек jsonb двоил кодировку строки
+        # ($2::jsonb от предсериализованной строки давал jsonb-скаляр, @> не совпадал → null).
         row = await pool.fetchrow(
-            "SELECT r.run_id, r.params, r.trades, r.sharpe, r.max_drawdown, r.win_rate, "
-            "r.total_return, r.total_trades, r.net_profit, r.recovery_factor, r.point_value, "
-            "r.peak_contracts FROM backtest_results r "
-            "WHERE r.run_id LIKE $1 AND r.trades IS NOT NULL "
-            "AND r.params @> $2::jsonb AND $2::jsonb @> r.params LIMIT 1",
-            campaign_run + "-%", p_json)
+            """
+            WITH ld AS (
+              SELECT params FROM optimization_leaderboard
+               WHERE campaign_run=$1 AND net_profit IS NOT NULL
+                 AND COALESCE(NULLIF(params->>'qty','')::numeric, 1) <= 10
+                 AND COALESCE(NULLIF(params->>'avg_max','')::numeric, 1) <= 10
+               ORDER BY net_profit DESC NULLS LAST OFFSET $2 LIMIT 1)
+            SELECT r.run_id, r.params, r.trades, r.sharpe, r.max_drawdown, r.win_rate,
+                   r.total_return, r.total_trades, r.net_profit, r.recovery_factor,
+                   r.point_value, r.peak_contracts
+            FROM ld JOIN backtest_results r
+              ON r.run_id LIKE $1 || '-%' AND r.trades IS NOT NULL
+             AND r.params @> ld.params AND ld.params @> r.params
+            LIMIT 1
+            """,
+            campaign_run, rank)
         return dict(row) if row else None
 
     # ── Optimization AGENT (external Windows host) ───────────────────────────
