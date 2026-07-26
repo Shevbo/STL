@@ -2220,6 +2220,14 @@ def create_app() -> FastAPI:
         if pool is None:
             return []
         import json as _json2
+        import time as _time
+        # TTL-кэш: список кампаний одинаков для всех, а его GROUP BY сканирует ВСЮ
+        # optimization_leaderboard (миллионы строк, ~10с) — на нагруженном хостере это
+        # давало 504 при частых перезагрузках истории. Считаем не чаще раза в 45с; между
+        # запросами отдаём из памяти. Данные меняются медленно (кампании копятся минутами).
+        _cc = getattr(request.app.state, "_campaigns_cache", None)
+        if _cc and (_time.monotonic() - _cc[0]) < 45:
+            return _cc[1]
         rows = await pool.fetch(
             """
             SELECT campaign_run, count(*) AS combos,
@@ -2266,11 +2274,14 @@ def create_app() -> FastAPI:
                     return int(p.get(k, d) or d)
                 except Exception:
                     return d
-            # Пиковая позиция = потолок усреднения bet_max (макс. контрактов в позиции),
-            # НЕ базовый qty: у 2ema qty=1, bet_max=30 реально набирает до 30 (на графике
-            # ×9..×11). Раньше показывали max(qty, avg_max)=1 — «1 контракт с нереальным
-            # доходом». bet_max — то число, по которому сверяют лимиты агента и ГО.
-            max_pos = (_pi("bet_max", 0) or max(_pi("qty", 1), _pi("avg_max", 1))) if L else None
+            # Абсолютный потолок позиции = qty + bet_max (ставочная система растит сам
+            # вход после убытков), а НЕ базовый qty и НЕ avg_max: у 2ema qty=1, bet_max=28
+            # реально набирает до 29 (на графике ×20..×42). Раньше показывали max(qty,
+            # avg_max)=1 — «1 контракт с нереальным доходом». Это число сверяют с лимитами
+            # агента и ГО. Фолбэк на max(qty,avg_max) для стратегий без ставочной системы.
+            max_pos = (_pi("qty", 1) + _pi("bet_max", 0)
+                       if _pi("bet_max", 0) > 0
+                       else max(_pi("qty", 1), _pi("avg_max", 1))) if L else None
             margin = margin_of.get(L["symbol"]) if L else None
             max_go = round(margin * max_pos) if (margin and max_pos) else None
             strat = L["strategy"] if L else (list(r["strategies"] or [None])[0])
@@ -2289,6 +2300,7 @@ def create_app() -> FastAPI:
                 "leader_params": p if L else None,
                 "max_pos": max_pos, "max_go": max_go,
             })
+        request.app.state._campaigns_cache = (_time.monotonic(), out)
         return out
 
     # ── LAB: STL Links ───────────────────────────────────────────────
@@ -2815,21 +2827,20 @@ def create_app() -> FastAPI:
         if engine == "auto":
             engine = "remote" if await _agent_alive_any(request.app.state, pool) else "local"
         symbol = body.get("symbol", "")
-        # Кэш повторных ОДИНОЧНЫХ прогонов: открыл график лидера из витрины/истории на
-        # тех же настройках — отдаём готовый прошлый прогон из БД, не пересчитывая ~150с
-        # (заказ оператора: «запоминать графики и сделки, не ждать прогона»). Идентичность
-        # = symbol + окно дат + РОВНО те же params (JSONB @> в обе стороны, порядок
-        # ключей неважен). Только single-config (без paramSets/непустого grid) — у свёрток
-        # перебора свой путь. Первый показ считает и пишет, каждый следующий берёт из БД.
-        # Промах (иная стратегия дописала дефолты) безопасно уходит в обычный расчёт.
-        if body.get("scriptCode") and not body.get("paramSets") and not (body.get("paramsGrid") or {}):
+        # Кэш повторных ОДИНОЧНЫХ прогонов: открыл график лидера на тех же настройках —
+        # отдаём готовый прошлый прогон из БД (заказ оператора: «не ждать прогона»). Ключ
+        # = symbol+даты+params. Быстрый ТОЛЬКО с индексом backtest_results(run_id): без
+        # него JOIN сканирует всю таблицу (833k строк) на КАЖДОЕ открытие — грузит хостер.
+        # Гейт _RESULT_RUNID_INDEXED ставится один раз при старте (см. lifespan): нет
+        # индекса -> кэш выключен, чтобы не добавлять полный скан под нагрузкой сверхов.
+        if (getattr(request.app.state, "result_runid_indexed", False)
+                and body.get("scriptCode") and not body.get("paramSets")
+                and not (body.get("paramsGrid") or {})):
             try:
                 _eff = json.dumps({**(body.get("baseParams") or {})})
                 # ТОЛЬКО одиночные чарт-прогоны: фронт берёт rows[0], а у раунда перебора
                 # сотни комбо под одним run_id — вернули бы ЧУЖОЙ комбо. Раунды перебора
-                # (opt-/camp-) исключаем ПО ПРЕФИКСУ до всего остального (иначе count по
-                # их 300 строкам вешал запрос), а среди оставшихся bare-cuid прогонов
-                # короткозамыкающим NOT EXISTS отсекаем безымянные bulk-свёртки.
+                # (opt-/camp-) исключаем ПО ПРЕФИКСУ; NOT EXISTS отсекает bulk-свёртки.
                 _hit = await pool.fetchval(
                     """SELECT br.id FROM backtest_runs br
                          JOIN backtest_results r ON r.run_id = br.id

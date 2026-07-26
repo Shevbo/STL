@@ -18,13 +18,17 @@
   // (operator couldn't find where the run history lived). Lazy-loaded on first open.
   let labCampaigns = $state<any[]>([]);
   let showLabHistory = $state(false);
+  let histLoading = $state(false);   // отличаем «грузим» от «пусто» (запрос ~10с)
+  let histLoaded = $state(false);
   async function toggleLabHistory() {
     showLabHistory = !showLabHistory;
-    if (showLabHistory && labCampaigns.length === 0) {
+    if (showLabHistory && !histLoaded && !histLoading) {
+      histLoading = true;
       try {
         const r = await fetchWithAuth('/api/v1/lab/campaigns');
-        if (r.ok) labCampaigns = await r.json();
+        if (r.ok) { labCampaigns = await r.json(); histLoaded = true; }
       } catch { /* history is auxiliary */ }
+      finally { histLoading = false; }
     }
   }
 
@@ -845,7 +849,9 @@
         <span class="btl-hist-chev">{showLabHistory ? '▴' : '▾'}</span>
       </button>
       {#if showLabHistory}
-        {#if labCampaigns.length === 0}
+        {#if histLoading}
+          <div class="btl-hist-empty">Загрузка истории прогонов… (перебор кампаний в БД, обычно несколько секунд)</div>
+        {:else if labCampaigns.length === 0}
           <div class="btl-hist-empty">Сохранённых прогонов пока нет. Задай «Имя перебора» и запусти R0 — кампания сохранится сюда.</div>
         {:else}
           <div class="btl-hist-tools">
@@ -881,7 +887,10 @@
                       <span class="ht-bar" style="width:{Math.round(90 * Math.abs(c.leader_net ?? 0) / histMaxAbsNet)}%"></span>
                       <span class="ht-pnlv">{fmtRub(c.leader_net)}</span>
                     </td>
-                    <td class="mono ht-num">{fmtRf(c.leader_rf)}</td>
+                    <td class="mono ht-num" class:ht-rf-mirage={(c.leader_rf ?? 0) > 100}
+                        title={(c.leader_rf ?? 0) > 100 ? 'RF-мираж: просадка почти нулевая (переобучение под период). Реально сравнимы RF до ~20-30.' : ''}>
+                      {(c.leader_rf ?? 0) > 100 ? '⚠ ' + fmtRf(c.leader_rf) : fmtRf(c.leader_rf)}
+                    </td>
                     <td class="mono ht-num">{c.leader_trades ?? '—'}</td>
                     <td class="ht-doc-cell">{#if c.strategy_base}<a class="ht-doc" href={'/?strategy=' + encodeURIComponent(c.strategy_base)} target="_blank" rel="noopener" title="описание стратегии">описание ↗</a>{:else}—{/if}</td>
                     <td class="ht-params">
@@ -1196,6 +1205,7 @@
   .ht-strat { color: #dfe; }
   .ht-period { color: #9ab; font-size: 11px; }
   .ht-num { color: #bcd; }
+  .ht-rf-mirage { color: #ffb86b; }   /* RF-мираж: почти нулевая просадка, переобучение */
   .ht-pnl { position: relative; min-width: 128px; }
   .ht-bar { position: absolute; right: 8px; top: 4px; bottom: 4px; border-radius: 2px; opacity: .20; }
   .ht-pnl.pos .ht-bar { background: #00e676; }

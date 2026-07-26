@@ -1103,13 +1103,13 @@
               {/if}
             </label>
           {/each}
-          <label class="bc-prow" title="Начало окна исторических данных">
+          <label class="bc-prow bc-prow-date" title="Начало окна исторических данных">
             <span class="bc-pk">Период с</span>
-            <input class="bc-pv" type="date" bind:value={editFrom} />
+            <input class="bc-pv bc-pv-date" type="date" bind:value={editFrom} />
           </label>
-          <label class="bc-prow" title="Конец окна исторических данных">
+          <label class="bc-prow bc-prow-date" title="Конец окна исторических данных">
             <span class="bc-pk">по</span>
-            <input class="bc-pv" type="date" bind:value={editTo} />
+            <input class="bc-pv bc-pv-date" type="date" bind:value={editTo} />
           </label>
           {#if onRerun}
             <button class="bc-apply" class:dirty={paramsDirty} onclick={applyParams}>
@@ -1356,7 +1356,7 @@
   }
 
   /* Editable params frame (top-left, collapsible). */
-  .bc-params { position: absolute; top: 6px; left: 8px; z-index: 8; width: 142px;
+  .bc-params { position: absolute; top: 6px; left: 8px; z-index: 8; width: 156px;
     background: #0c0c18ee; border: 1px solid #2d2d4a; border-radius: 4px; overflow: hidden; }
   .bc-params.open { box-shadow: 0 6px 22px rgba(0,0,0,0.5); }
   .bc-params-h { width: 100%; text-align: left; background: #14223a; border: none;
@@ -1368,6 +1368,11 @@
   .bc-pv { width: 52px; flex-shrink: 0; background: #0a1120; border: 1px solid #24406a; color: #cfe;
     font-size: 10px; border-radius: 3px; padding: 1px 4px; text-align: right; }
   .bc-pv:focus { outline: none; border-color: #4a7ad0; }
+  /* Дата не влезала в 52px («01.0») — строку дат кладём вертикально, поле на всю
+     ширину панели, чтобы дата показывалась целиком (1.5). */
+  .bc-prow-date { flex-direction: column; align-items: stretch; gap: 1px; }
+  .bc-prow-date .bc-pk { flex: none; }
+  .bc-pv-date { width: 100%; box-sizing: border-box; text-align: left; padding: 2px 4px; }
   .bc-apply { margin-top: 4px; background: #1f5e3a; border: 1px solid #2e8b57; color: #cfe;
     font-size: 10px; border-radius: 3px; padding: 3px 6px; cursor: pointer; }
   .bc-apply:hover { background: #267346; }
