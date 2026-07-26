@@ -385,9 +385,19 @@ async def snapshot(request: Request, agent_id: str | None = None):
     # (даже если ещё не наторговал ни одного филла в журнале).
     ids = set(real_all) | {rid for rid, rob in mirror_by_id.items()
                            if rob.get("mode") == "real"}
-    # ВМ позиции робота — по его инструменту из таблицы позиций QUIK (sec == symbol).
-    vm_by_sec = {p.get("sec"): p.get("varmargin")
-                 for p in (health.get("positions") or []) if p.get("sec")}
+    # ВМ позиции робота. QUIK отдаёт варьмаржу на ИНСТРУМЕНТ целиком, не на робота;
+    # если на одном коде несколько роботов (или ещё ручная торговля), делим ВМ инструмента
+    # пропорционально позиции робота: vm_robot = vm_sec * pos_robot / net_sec. Flat-робот
+    # (поз 0) варьмаржи не несёт -> None.
+    _pos_by_sec = {p.get("sec"): p for p in (health.get("positions") or []) if p.get("sec")}
+    def _robot_vm(sym, pos):
+        p = _pos_by_sec.get(sym)
+        if not p or not pos:
+            return None
+        vm, net = p.get("varmargin"), p.get("net")
+        if vm is None or not net:
+            return None
+        return vm * pos / net
     robots = []
     for rid in ids:
         ra = real_all.get(rid) or {}
@@ -409,7 +419,7 @@ async def snapshot(request: Request, agent_id: str | None = None):
             "real_today": rt.get("net"),
             "real_trades_today": rt.get("trades") or 0,
             "position": rob.get("position") if cur_mode == "real" else None,
-            "varmargin": vm_by_sec.get(rob.get("symbol")) if cur_mode == "real" else None,
+            "varmargin": _robot_vm(rob.get("symbol"), rob.get("position")) if cur_mode == "real" else None,
             "last_trade_ms": ra.get("last_ts") or 0,
         })
     # Сортировка: сначала активный реал, потом переведённые в бумагу, потом снятые;
