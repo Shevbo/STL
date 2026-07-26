@@ -323,7 +323,7 @@
   // пика, который сторож подтягивает за ценой, поэтому линия ползёт сама — это и
   // есть анимация. Пересоздавать линию нельзя, иначе она будет мигать: двигаем
   // существующую через applyOptions.
-  function smartLevels(o: SmartOrder): Array<{ key: string; price: number; title: string; dim?: boolean }> {
+  function smartLevels(o: SmartOrder): Array<{ key: string; price: number; title: string; dim?: boolean; color?: string }> {
     const m = KIND_BY_ID[o.kind];
     const who = `${o.side === 'buy' ? 'ПОКУПКА' : 'ПРОДАЖА'} ${o.qty}`;
     if (o.kind === 'sl' || o.kind === 'tp') {
@@ -337,8 +337,8 @@
       }
       if (o.activated && o.peak > 0) {
         const stop = o.side === 'sell' ? o.peak - o.trail_offset : o.peak + o.trail_offset;
-        out.push({ key: o.so_id + ':stop', price: stop,
-                   title: `${m.short} ${who} · откат ${fmtPts(o.trail_offset)}` });
+        out.push({ key: o.so_id + ':stop', price: stop, color: '#b98cff',
+                   title: `${m.short} ${who} · слежение · откат ${fmtPts(o.trail_offset)}` });
         out.push({ key: o.so_id + ':peak', price: o.peak, title: `${m.short} пик`, dim: true });
       }
       return out;
@@ -353,7 +353,7 @@
     for (const o of smartOnChart) {
       const m = KIND_BY_ID[o.kind];
       for (const lv of smartLevels(o)) {
-        if (lv.price > 0) want.set(lv.key, { ...lv, color: m.color, style: m.lineStyle });
+        if (lv.price > 0) want.set(lv.key, { ...lv, color: lv.color ?? m.color, style: m.lineStyle });
       }
     }
     for (const [key, line] of smartLines) {

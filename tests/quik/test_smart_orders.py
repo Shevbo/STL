@@ -175,3 +175,30 @@ def test_validate_rejects_nonsense():
     assert so(kind="trail_tp", trail_offset=0).validate()
     assert so(kind="on_fill", watch_client_id="").validate()
     assert so(kind="sl", trigger_price=83000).validate() is None
+
+
+# ---- trail catch-up (активация, пропущенная за простой STL) ----
+
+def test_catch_up_activates_buy_on_window_low():
+    from trader.quik.smart_orders import catch_up_trail
+    o = so(kind="trail_tp", side="buy", trigger_price=88500, trail_offset=350)
+    assert catch_up_trail(o, wmin=88270, wmax=89600)
+    assert o.activated and o.peak == 88270
+
+
+def test_catch_up_ignores_uncrossed_and_activated():
+    from trader.quik.smart_orders import catch_up_trail
+    o = so(kind="trail_tp", side="buy", trigger_price=88500, trail_offset=350)
+    assert not catch_up_trail(o, wmin=88510, wmax=89600)   # минимум не дошёл
+    assert not o.activated
+    o2 = so(kind="trail_tp", side="sell", trigger_price=90000, trail_offset=350,
+            activated=True, peak=90100)
+    assert not catch_up_trail(o2, wmin=88000, wmax=91000)  # уже активна — не трогаем
+    assert o2.peak == 90100
+
+
+def test_catch_up_sell_on_window_high():
+    from trader.quik.smart_orders import catch_up_trail
+    o = so(kind="trail_tp", side="sell", trigger_price=90000, trail_offset=350)
+    assert catch_up_trail(o, wmin=88000, wmax=90050)
+    assert o.activated and o.peak == 90050

@@ -14,8 +14,10 @@ operator; the watcher only executes the operator's standing instruction.
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
+import httpx
 import structlog
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
@@ -160,6 +162,10 @@ def _price_steps(store: Any, agent: str) -> dict[str, float]:
 # НЕ перевзводим: цена наутро другая, решение за человеком.
 _ORPHAN_GRACE_MS = 5 * 60 * 1000
 _DEAD_STATES = ("cancelled", "rejected")
+# OrderStore живёт в памяти: рестарт STL стирает записи. Сработавшая ДО старта
+# процесса заявка отсутствует в сторе не потому, что умерла — судить о ней нельзя
+# (26.07 ложный orphaned звал оператора перевзвести УЖЕ исполненный выкуп 14 конт.).
+_PROC_START_MS = so_mod.now_ms()
 
 
 def _mark_orphans(book: SmartOrderBook, ost: Any, agent: str, now: int) -> bool:
@@ -177,7 +183,7 @@ def _mark_orphans(book: SmartOrderBook, ost: Any, agent: str, now: int) -> bool:
                 so.status = "orphaned"
                 so.note = f"дочерняя заявка {rec.get('state')} и не исполнилась"
                 dirty = True
-        elif aged:
+        elif aged and so.fired_ms >= _PROC_START_MS:
             # Заявки нет в таблице вовсе: сессия закрылась и QUIK её снял, либо
             # агент перезапустился. Ни исполнения, ни заявки — защиты нет.
             so.status = "orphaned"
@@ -264,15 +270,65 @@ async def _watch_once(state: Any) -> None:
         book.save()
 
 
+# ---- авто-догон trail_tp (пробой уровня пропущен, пока STL лежал) ----
+# Дневные экстремумы берём из ISS-свечей M10 С МОМЕНТА СОЗДАНИЯ заявки: дневной
+# LOW/HIGH из marketdata брать нельзя — экстремум ДО создания заявки активировал
+# бы её задним числом и мгновенно выкупил по рынку. Публичный ISS задержан ~15
+# минут; живое пересечение ловит обычный 1с-цикл, догон закрывает только простой.
+_CATCHUP_SEC = 300
+_ISS_CANDLES = ("https://iss.moex.com/iss/engines/futures/markets/forts"
+                "/securities/{code}/candles.json")
+_MSK = timezone(timedelta(hours=3))
+
+
+async def _catch_up_trails(state: Any) -> None:
+    book: SmartOrderBook = state.smart_orders
+    todo = [o for o in book.orders
+            if o.status == "armed" and o.kind == "trail_tp"
+            and not o.activated and o.trigger_price > 0]
+    if not todo:
+        return
+    dirty = False
+    async with httpx.AsyncClient(timeout=10.0, headers={"User-Agent": "STL/1.0"}) as cl:
+        for so in todo:
+            frm = datetime.fromtimestamp(so.created_ms / 1000, _MSK).strftime(
+                "%Y-%m-%d %H:%M:%S")
+            r = await cl.get(_ISS_CANDLES.format(code=so.code),
+                             params={"interval": 10, "from": frm, "iss.meta": "off"})
+            c = r.json().get("candles") or {}
+            cols, rows = c.get("columns") or [], c.get("data") or []
+            if not rows:
+                continue
+            i_lo, i_hi, i_beg = cols.index("low"), cols.index("high"), cols.index("begin")
+            # первая свеча может захватывать время ДО создания — выкидываем её
+            rows = [row for row in rows if str(row[i_beg]) >= frm]
+            # ponytail: одна страница ISS = 500 свечей M10 (~3.5 торговых суток от
+            # создания); более старые заявки догоняются живыми тиками
+            if not rows:
+                continue
+            wmin = min(float(row[i_lo]) for row in rows)
+            wmax = max(float(row[i_hi]) for row in rows)
+            if so_mod.catch_up_trail(so, wmin, wmax):
+                dirty = True
+                log.info("smart_order.auto_activated", so_id=so.so_id, code=so.code,
+                         side=so.side, peak=so.peak, trigger=so.trigger_price)
+    if dirty:
+        book.save()
+
+
 async def run_watcher(state: Any) -> None:
     """Background task: evaluate the book every second. Never dies on an error —
     a broken pass is logged and the next tick retries (the trade path stays
     guarded by validate_place either way)."""
     log.info("smart_orders.watcher_started", path=BOOK_PATH)
+    ticks = 0
     while True:
         await asyncio.sleep(_TICK_SEC)
+        ticks += 1
         try:
             await _watch_once(state)
+            if ticks % int(_CATCHUP_SEC / _TICK_SEC) == 0:
+                await _catch_up_trails(state)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 — watcher must survive

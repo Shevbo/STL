@@ -60,7 +60,9 @@ def test_child_partially_filled_is_not_an_orphan():
     assert so.status == "fired"
 
 
-def test_child_missing_from_the_table_becomes_orphan_only_after_the_grace():
+def test_child_missing_from_the_table_becomes_orphan_only_after_the_grace(monkeypatch):
+    import trader.api.quik_smart_orders as w
+    monkeypatch.setattr(w, "_PROC_START_MS", NOW - 60_000)  # сработала при ЭТОМ процессе
     so = _fired(fired_ms=NOW - 1_000)
     book = _book(so)
     ost = FakeOrderStore([])                       # заявки в таблице нет вовсе
@@ -72,6 +74,19 @@ def test_child_missing_from_the_table_becomes_orphan_only_after_the_grace():
     assert _mark_orphans(book, ost, "A1", later) is True
     assert so.status == "orphaned"
     assert "границе сессии" in so.note
+
+
+def test_fired_before_restart_is_never_declared_orphan(monkeypatch):
+    """Рестарт STL стирает OrderStore: про сработавшую ДО старта процесса заявку
+    ничего не известно — она могла исполниться (26.07: выкуп 14 конт. исполнился,
+    а ложный orphaned предлагал перевзвести его второй раз)."""
+    import trader.api.quik_smart_orders as w
+    monkeypatch.setattr(w, "_PROC_START_MS", NOW)  # процесс стартовал ПОСЛЕ срабатывания
+    so = _fired(fired_ms=NOW - 10_000)
+    book = _book(so)
+    assert _mark_orphans(book, FakeOrderStore([]), "A1",
+                         NOW + 10 * _ORPHAN_GRACE_MS) is False
+    assert so.status == "fired"
 
 
 def test_armed_and_cancelled_orders_are_untouched():

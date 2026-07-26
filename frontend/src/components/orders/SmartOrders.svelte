@@ -293,6 +293,20 @@
           <span class="so-c-status">{STATUS_RU[o.status] ?? o.status}</span>
           <button class="so-btn sm" onclick={() => cancel(o.so_id)}>Снять</button>
         </div>
+        {#if o.kind === 'trail_tp'}
+          {@const fire = o.side === 'buy' ? o.peak + o.trail_offset : o.peak - o.trail_offset}
+          <div class="so-c-track" class:active={o.activated}>
+            {#if o.activated}
+              ● АКТИВНА · слежение от пика <b>{Math.round(o.peak).toLocaleString('ru-RU')}</b>
+              · сделка при цене {o.side === 'buy' ? '≥' : '≤'}
+              <b class="fire">{Math.round(fire).toLocaleString('ru-RU')}</b>
+              (откат {o.trail_offset} п. от пика)
+            {:else}
+              ○ ждёт пробоя уровня <b>{Math.round(o.trigger_price).toLocaleString('ru-RU')}</b>,
+              затем встанет в слежение и выкупит на откате {o.trail_offset} п.
+            {/if}
+          </div>
+        {/if}
         <div class="so-c-facts">
           <span>id {o.so_id}</span>
           <span>взведена {fmtWhen(o.created_ms)}</span>
@@ -441,6 +455,12 @@
   .so-c-side.buy { color: #7ef0a6; }
   .so-c-cond { color: #b9bfd4; font-family: Consolas, monospace; }
   .so-c-sp { flex: 1; }
+  .so-c-track { margin: 6px 0 2px; padding: 5px 9px; border-radius: 5px; font-size: 12px;
+    color: #9aa0b4; background: #14142400; border: 1px dashed #33335a; }
+  .so-c-track.active { color: #d7c4ff; background: #2a1a4a55; border: 1px solid #7a5cff88; }
+  .so-c-track b { color: #cfe; }
+  .so-c-track.active b { color: #e6d8ff; }
+  .so-c-track .fire { color: #b98cff; }
   .so-c-status { color: #e0a53c; font-size: 11px; }
   .so-c-status.warn { color: #ff9d90; }
   .so-c-facts { display: flex; gap: 12px; flex-wrap: wrap; color: #6f7590; font-size: 11px; margin-top: 3px; }

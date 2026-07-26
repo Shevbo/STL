@@ -156,6 +156,30 @@ def _trail_step(so: SmartOrder, price: float) -> bool:
     return price >= so.peak + so.trail_offset
 
 
+def catch_up_trail(so: SmartOrder, wmin: float, wmax: float) -> bool:
+    """Догон пропущенной активации trail_tp по экстремумам окна С МОМЕНТА СОЗДАНИЯ
+    заявки (пробой уровня случился, пока STL/watcher лежал). buy: минимум окна
+    пробил trigger вниз -> активируем от этого минимума; sell: зеркально по
+    максимуму. Только активация — дальше ведёт обычный evaluate() по живым тикам.
+    Возвращает True, если состояние изменилось."""
+    if (so.kind != "trail_tp" or so.activated or so.status != "armed"
+            or so.trigger_price <= 0 or wmin <= 0 or wmax <= 0):
+        return False
+    if so.side == "buy" and wmin <= so.trigger_price:
+        so.activated = True
+        so.peak = wmin
+        so.note = ((so.note + " ") if so.note else "") + \
+            f"авто-активация: минимум {wmin:g} пробил {so.trigger_price:g} (ISS, задержка ~15 мин)"
+        return True
+    if so.side == "sell" and wmax >= so.trigger_price:
+        so.activated = True
+        so.peak = wmax
+        so.note = ((so.note + " ") if so.note else "") + \
+            f"авто-активация: максимум {wmax:g} пробил {so.trigger_price:g} (ISS, задержка ~15 мин)"
+        return True
+    return False
+
+
 def evaluate(orders: list[SmartOrder], code: str, *, last: float, bid: float,
              ask: float, tick_ms: int, now_ms: int,
              filled_client_ids: set[str], step: float) -> list[Fire | Cancel]:
