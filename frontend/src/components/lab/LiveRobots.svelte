@@ -17,7 +17,10 @@
   let selected = $state<any | null>(null);
   let loading = $state(true);
   let mode = $state<'list' | 'edit' | 'new'>('list');
-  let windowRobotId = $state<string | null>(null);  // "Открыть стенд" → detail window
+  // "Открыть стенд" → detail window. Deep-link ?robot_win=<id> открывает стенд сразу —
+  // это URL, который копирует ScreenTag окна (ROBOT-WIN) для дебага.
+  let windowRobotId = $state<string | null>(
+    new URLSearchParams(location.search).get('robot_win'));
   let view = $state<'robots' | 'showcase' | 'live'>('robots');
 
   const EXECUTED = new Set(['paper', 'filled', 'submitted', 'executed']);

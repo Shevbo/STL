@@ -11,11 +11,18 @@
   import { onMount } from 'svelte';
   import { fetchWithAuth } from '../../lib/fetch-auth';
   import RobotIdentity from './RobotIdentity.svelte';
+  import ScreenTag from './ScreenTag.svelte';
   import { toFills, rolledPnl } from '../../lib/lab-analytics';
   import BacktestChart from './BacktestChart.svelte';
   import LatencyPane from './LatencyPane.svelte';
 
   let { robotId, onClose }: { robotId: string; onClose: () => void } = $props();
+  // ID окна для дебага (правило: у каждого окна в левом верхнем углу копируемый
+  // путь). Копирует deep-link, открывающий ИМЕННО этот стенд.
+  let winUrl = $derived(`${location.origin}/?lab=live&robot_win=${encodeURIComponent(robotId)}`);
+  // ВМ открытой позиции — приходит из графика (у него свежая цена); правило
+  // оператора 26.07: фин.рез везде = фикс + варьмаржа.
+  let vmOpen = $state(0);
 
   let loading = $state(true);
   let error = $state('');
@@ -261,6 +268,7 @@
        onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
 
     <div class="win-header">
+      <ScreenTag inline id="ROBOT-WIN" name="стенд робота" copyText={winUrl} />
       <span class="win-icon">🤖</span>
       <RobotIdentity name={live?.robot?.name ?? robotId} id={robotId} size="title" />
       {#if live}
@@ -296,6 +304,7 @@
             taker={false}
             openOrders={live.open_orders ?? []}
             plannedOrders={live.planned_orders ?? []}
+            onVm={(v) => (vmOpen = v)}
           />
         </div>
 
@@ -353,9 +362,14 @@
 
             <div class="panel-title res-title">Текущий результат</div>
             <div class="result-grid">
-              <div class="r-row"><span>Доход</span>
-                <b class:pos={summary.net > 0} class:neg={summary.net < 0}>{fmtMoney(summary.net)} ₽</b>
+              <div class="r-row"><span>Доход (фикс + ВМ)</span>
+                <b class:pos={summary.net + vmOpen > 0} class:neg={summary.net + vmOpen < 0}>{fmtMoney(summary.net + vmOpen)} ₽</b>
                 <span class="sub">({summary.retPct >= 0 ? '+' : ''}{summary.retPct.toFixed(2)}% от ГО)</span></div>
+              {#if vmOpen !== 0}
+                <div class="r-row"><span>из них: фикс / ВМ откр. поз.</span>
+                  <b class:pos={summary.net > 0} class:neg={summary.net < 0}>{fmtMoney(summary.net)}</b>
+                  <span class="sub"><b class:pos={vmOpen > 0} class:neg={vmOpen < 0}>{fmtMoney(vmOpen)}</b> ₽</span></div>
+              {/if}
               <div class="r-row"><span>ГО (макс. задейств.)</span>
                 <b>{summary.go > 0 ? Math.round(summary.go).toLocaleString('ru-RU') + ' ₽' : '—'}</b></div>
               <div class="r-row"><span>Позиция сейчас</span>

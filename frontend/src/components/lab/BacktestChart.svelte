@@ -20,7 +20,7 @@
   let {
     result, symbol, strategy = null, dateFrom, dateTo, pointValue = 1, defaultInterval = 60,
     openOrders = [], plannedOrders = [], taker = true, runParams = {}, paramSchema = [], onRerun = null,
-    segments = null, pointValues = null, live = 0, liveTick = null, onNet = null, floatRub = null,
+    segments = null, pointValues = null, live = 0, liveTick = null, onNet = null, onVm = null, floatRub = null,
     netOverride = null, livePosition = null, journalSuspect = false,
     pointValueKnown = true, closeSeries = null, screenId = '',
   }: {
@@ -57,6 +57,7 @@
     // Fires the authoritative net result (₽, net of commission) so a parent can
     // show the SAME number in a header badge instead of recomputing it.
     onNet?: ((net: number) => void) | null;
+    onVm?: ((vm: number) => void) | null;  // ВМ откр. позиции — для панелей родителя
     // Live robot floating (unrealized) P&L on the open position (₽). null = n/a
     // (backtest). Shown in the Результат panel so it isn't seen as frozen.
     floatRub?: number | null;
@@ -230,6 +231,9 @@
   let levelStats = $state<any[]>([]);   // TP/SL distribution by peak averaging level
   let commission = $state<any>(null);   // broker/exchange commission breakdown
   let netResult = $state(0);            // Σ realized close PnL (₽, net of commission)
+  // ВМ открытой позиции (правило оператора 26.07: фин.рез ВЕЗДЕ = фикс + варьмаржа,
+  // «+0 ₽ при 10 продажах в рынке» — враньё). floatRub от родителя приоритетен.
+  let vmOpen = $state(0);
   // Живой робот: сколько реализовано ДО первой сделки в журнале (200-хвост не
   // достаёт дальше). Не null → кривая стартует не с нуля, и подпись это объясняет.
   let equityCarry = $state<{ rub: number; fromTs: number } | null>(null);
@@ -995,6 +999,16 @@
       };
       netResult = shownNet;     // parent-supplied authoritative net (live) else engine/replay
       onNet?.(netResult);       // parent header badge shows the SAME number
+      // ВМ открытой позиции: pv строго ТЕКУЩЕГО контракта (чужой множитель запрещён —
+      // point-coef trap). Реплей без доверия (обрезанный журнал) ВМ не считает: лучше
+      // честный фикс, чем ВМ от вранной позиции. floatRub (агент-экран) приоритетен.
+      const replayTrusted = !(journalSuspect || (livePosition != null && endPos !== livePosition));
+      const pvCur = (pointValues && rolled.currentSymbol && pointValues[rolled.currentSymbol] != null)
+        ? pointValues[rolled.currentSymbol] : (pointValue ?? 1);
+      vmOpen = floatRub != null ? floatRub
+        : (replayTrusted && rolled.position !== 0 && rolled.openAvg > 0 && bars.length
+            ? (bars[bars.length - 1].close - rolled.openAvg) * rolled.position * pvCur : 0);
+      onVm?.(vmOpen);
       // Broker vs exchange commission split (transparency).
       commission = commissionBreakdown(fills, pointValue, symbol, taker);
       // Per-trade rows for the trades table (one row per fill, with role + close PnL).
@@ -1184,21 +1198,20 @@
         <!-- collapsed: 2 lines. click to expand (frees up chart area). -->
         <button class="st-toggle" onclick={() => statsExpanded = !statsExpanded}
                 title={statsExpanded ? 'Свернуть отчёт' : 'Развернуть отчёт'}>
+          <!-- Правило: «Результат» = фикс + ВМ открытой позиции. Разбивка строкой ниже,
+               чтобы фикс (закрытые сделки) оставался виден и сверяем. -->
           <div class="st-head">
             <span>Результат</span>
-            <b class:pos={netResult > 0} class:neg={netResult < 0}>{fmtMoney(netResult)} ₽</b>
+            <b class:pos={netResult + vmOpen > 0} class:neg={netResult + vmOpen < 0}>{fmtMoney(netResult + vmOpen)} ₽</b>
             <span class="st-chev">{statsExpanded ? '▴' : '▾'}</span>
           </div>
           <div class="st-head2">
             <span>{stats.roundTrips} сделок · комиссия {commission ? fmtRub(commission.total) : '—'}</span>
           </div>
-          {#if floatRub != null}
-            <!-- live robot: «Результат» above = realized (closed trades, static). This
-                 line = flatten-at-market now (realized + variation margin − exit comm),
-                 moves with price. floatRub prop already nets the exit commission. -->
+          {#if vmOpen !== 0}
             <div class="st-head2 st-live">
-              <span>P&L+Маржа <b class:pos={netResult + floatRub > 0} class:neg={netResult + floatRub < 0}>{fmtMoney(netResult + floatRub)} ₽</b>
-                <span class="st-sub">(закрыть всё сейчас)</span></span>
+              <span>фикс <b class:pos={netResult > 0} class:neg={netResult < 0}>{fmtMoney(netResult)}</b>
+                · ВМ откр. поз. <b class:pos={vmOpen > 0} class:neg={vmOpen < 0}>{fmtMoney(vmOpen)}</b> ₽</span>
             </div>
           {/if}
         </button>

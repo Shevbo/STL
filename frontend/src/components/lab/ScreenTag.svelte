@@ -3,17 +3,19 @@
      оба ссылаемся на ОДИН экран. Родитель должен иметь position: relative/absolute.
      Использование: <ScreenTag id="LAB-CHART" name="график лидера" /> -->
 <script lang="ts">
-  let { id, name = '', corner = 'tr', inline = false }:
-    { id: string; name?: string; corner?: 'tr' | 'tl' | 'br' | 'bl'; inline?: boolean } = $props();
+  // copyText: что кладём в буфер (полный путь/URL к окну); по умолчанию — сам id.
+  let { id, name = '', corner = 'tr', inline = false, copyText = '' }:
+    { id: string; name?: string; corner?: 'tr' | 'tl' | 'br' | 'bl'; inline?: boolean; copyText?: string } = $props();
   let copied = $state(false);
   async function copy(e: MouseEvent) {
     e.stopPropagation();
+    const text = copyText || id;
     try {
-      await navigator.clipboard.writeText(id);
+      await navigator.clipboard.writeText(text);
     } catch {
       // clipboard может быть недоступен (не https/нет фокуса) — деградируем на выделение
       const ta = document.createElement('textarea');
-      ta.value = id; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
       document.body.appendChild(ta); ta.select();
       try { document.execCommand('copy'); } catch { /* ignore */ }
       document.body.removeChild(ta);

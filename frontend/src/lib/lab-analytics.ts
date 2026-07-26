@@ -27,6 +27,7 @@ export interface TradeEvent {
   // enforce = add at a price WORSE than avg entry (price moved in our favour → усиление).
   kind: 'open' | 'average' | 'enforce' | 'partial' | 'full' | 'reverse';
   posAfter: number;       // signed total position after this fill
+  avgAfter: number;       // avg entry of the position after this fill (0 when flat)
   label: string;          // RU label e.g. "Открытие позиции 1 (всего в поз. 1)"
   close?: {               // present on partial/full/reverse (a closing fill)
     holdSecs: number;     // time in position from episode open to this close
@@ -201,7 +202,7 @@ export function tradeEvents(trades: Fill[], bucketSecs: number, pointValue = 1, 
       rawTime: t.time, id: (t as any).order_id ?? (t as any).id,
       synthetic: (t as any).synthetic || undefined,
       side: t.side, qty: q, price: t.price,
-      kind, posAfter: pos, close,
+      kind, posAfter: pos, avgAfter: avg, close,
       label: `${KIND_LABEL[kind]} ${q} (всего в поз. ${totalInPos})`,
     });
   }
@@ -342,6 +343,7 @@ export interface RolledPnl {
   closes: number;         // total round trips
   peakContracts: number;  // max contracts held on any single contract (never summed across)
   position: number;       // open position on the CURRENT (latest-traded) contract
+  openAvg: number;        // avg entry of that open position (0 when flat)
   currentSymbol: string;
   byContract: ContractPnl[];
   events: TradeEvent[];   // every fill's event, contract-correct lifecycle, time-ordered
@@ -403,7 +405,10 @@ export function rolledPnl(
   }
   allEvents.sort((a, b) => a.rawTime - b.rawTime);
   const cur = byContract.find(c => c.symbol === currentSymbol);
-  return { net, closes, peakContracts: peak, position: cur?.position ?? 0, currentSymbol, byContract, events: allEvents };
+  const lastEv = cur?.events.length ? cur.events[cur.events.length - 1] : null;
+  return { net, closes, peakContracts: peak, position: cur?.position ?? 0,
+           openAvg: (cur?.position ?? 0) !== 0 ? (lastEv?.avgAfter ?? 0) : 0,
+           currentSymbol, byContract, events: allEvents };
 }
 
 // One RECTANGLE per position episode (open → full close), for the chart overlay:
