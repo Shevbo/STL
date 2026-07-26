@@ -272,6 +272,8 @@
   function yesterday() { const d = new Date(); d.setDate(d.getDate() - 1); return d; }
   function daysAgo(n: number) { const d = new Date(); d.setDate(d.getDate() - n); return d; }
   const ruStatus = (s: string) => ({ queued: 'в очереди', pending: 'запуск', running: 'считается', done: 'готово', failed: 'ошибка' } as any)[s] || s || '…';
+  const fmtEta = (s: number | null | undefined) =>
+    s == null ? '' : (s < 60 ? Math.max(1, Math.round(s)) + 'с' : Math.round(s / 60) + ' мин');
 
   // One run+poll attempt on a given engine. Returns the result row, sets chartStatus
   // live, throws on failure (the agent's error text bubbles up).
@@ -291,12 +293,12 @@
         if (!sr.ok) throw new Error('status ' + sr.status);
         sd = await sr.json();
       } catch {
-        chartStatus = { ...chartStatus, vds_down: true, elapsed: Math.round((Date.now() - t0) / 1000) };
+        chartStatus = { ...chartStatus, elapsed: Math.round((Date.now() - t0) / 1000) };
         continue;
       }
       chartStatus = {
         runner: sd.runner, status: sd.status, elapsed: Math.round((Date.now() - t0) / 1000),
-        vds_load: sd.vds_load, agent_alive: sd.agent_alive, vds_down: false,
+        eta_sec: sd.eta_sec, i9_offline: sd.i9_offline, agent_alive: sd.agent_alive,
       };
       if (sd.status === 'done') {
         // full=1: bare /results strips trades/equity (sweep fast-path) — the chart needs the fills
@@ -307,7 +309,7 @@
         result.run_id = result.run_id || run_id;   // избранное хранит указатель на результат
         return result;
       }
-      if (sd.status === 'failed') throw new Error(sd.error_msg || 'Бэктест завершился ошибкой (см. логи VDS)');
+      if (sd.status === 'failed') throw new Error(sd.error_msg || 'Бэктест завершился ошибкой (см. логи i9)');
     }
     throw new Error('Бэктест не вернул результат за 6 мин (таймаут ожидания)');
   }
@@ -318,7 +320,7 @@
     if (!detail && !opts) return;
     chartErr = ''; chartLoading = true; chart = null;
     chartJob = { symbol, params };
-    chartStatus = { runner: '…', status: 'queued', elapsed: 0, vds_load: null, agent_alive: null, vds_down: false };
+    chartStatus = { runner: 'очередь на i9', status: 'queued', elapsed: 0, eta_sec: null, i9_offline: false, agent_alive: null };
     const t0 = Date.now();
     try {
       // Reproduce the EXACT leaderboard window so the chart MATCHES the table number.
@@ -365,26 +367,11 @@
           : 'Не передан id стратегии для пересчёта — открой прогон из витрины кампании ещё раз.');
       }
       const sc = tmpl.script_code;
-      // Контр-стратегии (__inv) считаем на VDS напрямую: у i9 синхронизируемая
-      // руками копия без свежей логики __inv (падает KeyError). VDS = код STL,
-      // где инверсия уже есть. Обычные стратегии — как раньше, приоритет i9.
-      const isInv = String(opts?.strategyId ?? detail?.id ?? '').endsWith('__inv');
-      let result: any;
-      try {
-        // Prefer the i9 agent (keeps load off the VDS); backend picks remote if alive.
-        result = await _runAndPoll(isInv ? 'local' : 'auto', sc, params, symbol, dateFrom, dateTo, t0);
-      } catch (e1) {
-        // i9 flaps its corporate network (ISS unreachable → "All connection attempts
-        // failed"). Fall back to the VDS, which has cached bars + reliable ISS.
-        const msg = String(e1);
-        const netFail = /connection|All connection attempts|ISS|timeout|таймаут|connect/i.test(msg);
-        if (chartStatus?.runner === 'i9' || netFail) {
-          chartStatus = { ...chartStatus, runner: 'VDS (фолбэк)', status: 'queued', vds_down: false };
-          result = await _runAndPoll('local', sc, params, symbol, dateFrom, dateTo, t0);
-        } else {
-          throw e1;
-        }
-      }
+      // ТОЛЬКО i9 (заказ оператора): перебор НИКОГДА не уходит на VDS/хостер. Если i9
+      // офлайн — задача ждёт в очереди i9 (см. статус), фолбэка на хостер НЕТ. Бэкенд
+      // тоже принудительно ставит engine=remote. __inv считается на i9 (фикс инверсии в
+      // git+манифесте); если i9 отстал — синхронизировать i9, а не сваливаться на VDS.
+      const result = await _runAndPoll('remote', sc, params, symbol, dateFrom, dateTo, t0);
       let pv = 1;
       try {
         const mr = await fetchWithAuth(`/api/v1/instruments/${encodeURIComponent(symbol)}/meta`);
@@ -1037,15 +1024,20 @@
             <div class="cm-status">
               <div class="cm-spin">Прогоняю бэктест…</div>
               <div class="cm-line">Инструмент: <b>{chartJob?.symbol}</b> · <span class="cm-p">{JSON.stringify(chartJob?.params)}</span></div>
-              <div class="cm-line">Где считается: <b>{chartStatus?.runner ?? '…'}</b> · {ruStatus(chartStatus?.status)} · прошло {chartStatus?.elapsed ?? 0}с</div>
-              <div class="cm-line" class:warn={chartStatus?.vds_down}>
-                {#if chartStatus?.vds_down}
-                  ⚠ VDS не отвечает на опрос (возможно перегрузка) — продолжаю ждать…
+              <!-- ГДЕ считается — крупно, ярко, только i9 -->
+              <div class="cm-where" class:offline={chartStatus?.i9_offline}>
+                {#if chartStatus?.i9_offline}
+                  ⚠ i9 ОФЛАЙН — задача ждёт в очереди i9. На хостере перебор НЕ считается.
                 {:else}
-                  VDS жив · loadavg {chartStatus?.vds_load ?? '—'} · i9-агент {chartStatus?.agent_alive ? 'онлайн' : 'офлайн'}
+                  🖥 Считается на <b>i9</b> — {chartStatus?.runner ?? 'очередь на i9'}
                 {/if}
               </div>
-              <div class="cm-hint">Считается на i9 (если онлайн) или на VDS в фоне (низкий приоритет), важный хост не нагружается. Обычно 10–60с; первый прогон по некэшированному инструменту — до ~2.5 мин (тянет историю с ISS).</div>
+              <div class="cm-line cm-eta">
+                {ruStatus(chartStatus?.status)} · прошло {chartStatus?.elapsed ?? 0}с
+                {#if chartStatus?.eta_sec != null}<b class="cm-eta-v"> · осталось ~{fmtEta(chartStatus.eta_sec)}</b>
+                {:else if chartStatus?.i9_offline}<span class="cm-eta-unk"> · ETA неизвестен (i9 офлайн)</span>{/if}
+              </div>
+              <div class="cm-hint">Перебор считается ТОЛЬКО на выделенном i9 — хостер (прод) не нагружается. Обычно 10–60с; первый прогон по некэшированному инструменту — до ~2.5 мин (тянет историю с ISS).</div>
             </div>
           {:else if chartErr}
             <div class="cm-status">
@@ -1463,6 +1455,15 @@
   .cm-line { font-size: 12px; color: #aaa; }
   .cm-line b { color: #cfe; }
   .cm-line.warn { color: #ffb86b; }
+  /* ГДЕ считается — крупная яркая плашка, только i9 */
+  .cm-where { font-size: 15px; font-weight: 700; color: #0a0a15; background: #4caf50;
+    border-radius: 6px; padding: 8px 12px; display: inline-block; }
+  .cm-where b { color: #0a0a15; text-decoration: underline; }
+  .cm-where.offline { background: #ffb020; color: #241a00; }
+  .cm-where.offline b { color: #241a00; }
+  .cm-eta { font-size: 13px; color: #cde; }
+  .cm-eta-v { color: #4caf50; }
+  .cm-eta-unk { color: #ffb86b; }
   .cm-p { font-family: monospace; font-size: 11px; color: #789; }
   .cm-hint { font-size: 11px; color: #667; line-height: 1.5; margin-top: 4px; }
 

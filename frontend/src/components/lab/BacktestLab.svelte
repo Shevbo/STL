@@ -591,7 +591,7 @@
       // ohlcv_bars store keeps the continuous contract as «RI» ending mid-June, so a
       // 'local' re-run of «RIU6» over a July window found 0 bars → 0 trades (the empty
       // leader chart). i9 resolves the real bars and matches the hit-parade numbers.
-      engine: 'auto',
+      engine: 'remote',   // перебор ТОЛЬКО на i9, никогда на хостере
       robotId: selectedStrategy?.robotId || (installed[0]?.id ?? ''),
     };
     if (scriptCode) { body.scriptCode = scriptCode; body.baseParams = { symbol: sym }; }
@@ -644,7 +644,7 @@
       dateFrom: new Date(dateFrom).toISOString(),
       dateTo: new Date(dateTo).toISOString(),
       paramSets: [{ ...params, symbol: sym }],
-      engine: 'auto',
+      engine: 'remote',   // перебор ТОЛЬКО на i9, никогда на хостере
       robotId: selectedStrategy?.robotId || (installed[0]?.id ?? ''),
     };
     if (scriptCode) { body.scriptCode = scriptCode; body.baseParams = { symbol: sym }; }

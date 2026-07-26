@@ -318,9 +318,14 @@ async def lifespan(app: FastAPI):
             ai46 = None
     app.state.ai46 = ai46
 
-    # VDS fallback sweeper: drains queued remote sweeps locally (throttled) only when
-    # the i9 agent is down. No-op while the agent claims jobs promptly.
-    fallback_task = asyncio.create_task(_vds_fallback_sweeper(app.state))
+    # VDS fallback sweeper: drains queued remote sweeps ON THE HOSTER. ОТКЛЮЧЁН ПО
+    # УМОЛЧАНИЮ (заказ оператора, 5 раз): перебор НИКОГДА не должен считаться на VDS —
+    # только i9. Очередь ждёт i9, а не сваливается на хостер (риск повесить прод).
+    # Включить обратно можно env VDS_FALLBACK_ENABLED=1, но это осознанное действие.
+    fallback_task = None
+    if os.environ.get("VDS_FALLBACK_ENABLED", "0") == "1":
+        fallback_task = asyncio.create_task(_vds_fallback_sweeper(app.state))
+        log.warning("vds_fallback.ENABLED — перебор МОЖЕТ считаться на хостере")
     # Self-heal: re-queue sweep jobs orphaned in 'running' by a dead claimer, so one
     # stuck job can't freeze a whole campaign (no r1/r2) the way it did overnight.
     reaper_task = asyncio.create_task(_orphan_reaper(app.state))
@@ -353,7 +358,8 @@ async def lifespan(app: FastAPI):
 
     market_session_task.cancel()
 
-    fallback_task.cancel()
+    if fallback_task is not None:
+        fallback_task.cancel()
     reaper_task.cancel()
     task_fallback_task.cancel()
     quik_reconcile_task.cancel()
@@ -2825,11 +2831,15 @@ def create_app() -> FastAPI:
         def _parse_dt(s: str) -> _dt:
             return _dt.fromisoformat(s.replace("Z", "+00:00"))
 
-        # engine: "local" → run on the VDS now; "remote" → enqueue for the i9 agent;
-        # "auto" → i9 if it's alive (keeps load off the important host), else VDS.
-        engine = body.get("engine", "local")
-        if engine == "auto":
-            engine = "remote" if await _agent_alive_any(request.app.state, pool) else "local"
+        # ПЕРЕБОР СЧИТАЕТСЯ ТОЛЬКО НА i9 (заказ оператора, повторён 5 раз): НИКОГДА на
+        # VDS/хостере. Любой движок ('local'/'auto'/'remote') принудительно уходит в
+        # ОЧЕРЕДЬ i9 (remote). i9 офлайн → задача ЖДЁТ в очереди, а не сваливается на
+        # хостер in-process (это и есть риск «повесить прод»). VDS-фолбэк тоже отключён.
+        # Вернуть локальный расчёт можно только осознанно: engine='local' + env
+        # ALLOW_LOCAL_BACKTEST=1 (по умолчанию запрещено).
+        engine = body.get("engine", "remote")
+        if engine != "remote" and os.environ.get("ALLOW_LOCAL_BACKTEST", "0") != "1":
+            engine = "remote"
         symbol = body.get("symbol", "")
         # Кэш повторных ОДИНОЧНЫХ прогонов: открыл график лидера на тех же настройках —
         # отдаём готовый прошлый прогон из БД (заказ оператора: «не ждать прогона»). Ключ
@@ -2920,20 +2930,56 @@ def create_app() -> FastAPI:
         if not row:
             raise HTTPException(status_code=404, detail="Run not found")
         d = dict(row)
+        claimed_at = d.get("claimed_at")
+        created_at = d.get("created_at")
         for k in ("finished_at", "claimed_at", "created_at"):
             if d.get(k) is not None:
                 d[k] = d[k].isoformat()
-        # where it runs + the host's pulse, so the UI can reassure the user it's alive.
         aid = d.get("agent_id") or ""
-        d["runner"] = ("i9" if (aid and aid != "vds-fallback") else
-                       "VDS (фоновый)" if aid == "vds-fallback" else
-                       "VDS" if d.get("engine") == "local" else "очередь")
-        d["agent_alive"] = await _agent_alive_any(request.app.state, pool)
-        try:
-            la = os.getloadavg()
-            d["vds_load"] = round(la[0], 2)
-        except Exception:
-            d["vds_load"] = None
+        i9_alive = await _agent_alive_any(request.app.state, pool)
+        d["agent_alive"] = i9_alive
+        # ГДЕ считается — ясно и без VDS (перебор только на i9). Claimed => на i9;
+        # queued => в очереди на i9 (с позицией). vds-fallback давно выключен.
+        status = d.get("status")
+        # позиция в очереди: сколько queued-задач создано не позже этой
+        qpos = 0
+        if status == "queued" and created_at is not None:
+            qpos = int(await pool.fetchval(
+                "SELECT count(*) FROM backtest_runs WHERE status='queued' AND created_at <= $1",
+                created_at) or 1)
+        if status == "queued":
+            d["runner"] = f"очередь на i9 (№{qpos})" if qpos else "очередь на i9"
+        elif aid and aid.startswith("vds"):
+            d["runner"] = "хостер (fallback ВКЛючён!)"   # не должно случаться — сигнал
+        else:
+            d["runner"] = "i9"
+        # ETA: медиана длительности недавних ОДИНОЧНЫХ прогонов (кэш 120с, не грузим БД
+        # на каждый опрос) × позиция в очереди, минус уже прошедшее у бегущего.
+        import time as _t
+        _typ = getattr(request.app.state, "_bt_typ_sec", None)
+        if _typ is None or _t.time() - getattr(request.app.state, "_bt_typ_at", 0) > 120:
+            try:
+                _typ = await pool.fetchval(
+                    "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY dur) FROM ("
+                    "  SELECT EXTRACT(EPOCH FROM (finished_at - claimed_at)) dur"
+                    "  FROM backtest_runs WHERE status='done' AND claimed_at IS NOT NULL"
+                    "    AND finished_at IS NOT NULL AND id NOT LIKE 'opt-%' AND id NOT LIKE 'camp-%'"
+                    "  ORDER BY finished_at DESC LIMIT 50) s")
+            except Exception:
+                _typ = None
+            _typ = int(_typ) if _typ else 25
+            request.app.state._bt_typ_sec = _typ
+            request.app.state._bt_typ_at = _t.time()
+        d["typical_sec"] = _typ
+        eta = None
+        if status == "queued":
+            eta = (max(1, qpos) * _typ) if i9_alive else None   # i9 офлайн => ETA неизвестен
+        elif status in ("running", "pending") and claimed_at is not None:
+            import datetime as _dt2
+            elapsed = (_dt2.datetime.now(tz=claimed_at.tzinfo) - claimed_at).total_seconds()
+            eta = max(3, int(_typ - elapsed))
+        d["eta_sec"] = eta
+        d["i9_offline"] = (not i9_alive)
         return d
 
     @fastapi_app.get("/api/v1/backtest/{run_id}/results")
