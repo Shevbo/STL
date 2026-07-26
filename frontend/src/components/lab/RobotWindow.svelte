@@ -62,6 +62,18 @@
     window.removeEventListener('pointerup', onDragUp);
   }
 
+  // МУЛЬТИ-ИНСТРУМЕНТНЫЙ робот (team-46: 20 тикеров сразу). Стенд одно-инструментный:
+  // без этого флага 12 тыс. сделок 20 инструментов валились в одну таблицу, роллы
+  // выдумывались между ЖИВЫМИ инструментами, а чужие цены рисовались на чужом графике.
+  let allSymbols = $derived(
+    [...new Set(((live?.trades ?? []) as any[]).map((t) => t.symbol).filter(Boolean))] as string[]);
+  let multi = $derived(allSymbols.length > 2);
+  let histSym = $state('');                 // фильтр таблицы по инструменту ('' = все)
+  const HIST_CAP = 500;                     // ponytail: рендер-потолок; всё целиком — в CSV
+  let histAll = $derived(live
+    ? [...(live.trades ?? [])].reverse().filter((t: any) => !histSym || t.symbol === histSym)
+    : []);
+
   // Fills that actually changed the position (exclude rejected/skipped).
   let chartFills = $derived(
     live
@@ -74,6 +86,7 @@
   // time (fill epoch + MSK_OFFSET) so each contract's bars are clipped to its own span.
   // Returns null for a single-contract robot → BacktestChart does its normal one fetch.
   let segments = $derived.by(() => {
+    if (multi) return null;   // сегменты = роллы; у мульти-робота их нет
     const ex = (live?.trades ?? []).filter((t: any) => EXECUTED.has(t.status) && t.symbol);
     if (!ex.length) return null;
     const order: string[] = []; const firstT: Record<string, number> = {};
@@ -110,7 +123,10 @@
   // Roll-aware analytics: P&L summed PER CONTRACT (RIM6 + RIU6 separately), never
   // cross-paired (that invents phantom profit). Single source of truth for money,
   // lifecycle, equity, and the summary. Live = MAKER model (broker fee only).
-  let rolled = $derived(rolledPnl(chartFills, pvMap, false, { bucketSecs: 60 }));
+  // multi: settleCarried=false — «не текущие» инструменты у мульти-робота ЖИВЫЕ,
+  // принудительный ролл-досчёт выдумывал их закрытия по последней цене.
+  let rolled = $derived(rolledPnl(chartFills, pvMap, false,
+    { bucketSecs: 60, settleCarried: !multi }));
   let events = $derived(rolled.events);
   let closes = $derived(events.filter(e => e.close).map(e => e.close!));
 
@@ -154,7 +170,12 @@
   // trades = ALL fills (every contract); the chart shows the whole history across the
   // roll, and BacktestChart computes the same roll-aware per-contract analytics.
   let chartResult = $derived(
-    live ? { trades: chartFills, equity_curve: equityCurve, params: live.robot?.params_json ?? {} } : null
+    live ? {
+      // multi: на графике ТОЛЬКО сделки инструмента графика — маркер по цене нефти
+      // на графике Si висит в космосе и ломает шкалу.
+      trades: multi ? chartFills.filter((f: any) => f.symbol === (live.chart_symbol ?? live.symbol)) : chartFills,
+      equity_curve: equityCurve, params: live.robot?.params_json ?? {},
+    } : null
   );
 
   // Current result summary (rubles, net of commission) — all roll-aware.
@@ -392,7 +413,13 @@
 
           <div class="panel right">
             <div class="panel-title hist-head">
-              <span>История сделок ({(live.trades ?? []).length})</span>
+              <span>История сделок ({histAll.length}{histSym ? ` · ${histSym}` : ''})</span>
+              {#if multi}
+                <select class="hist-sym" bind:value={histSym} title="Фильтр по инструменту (робот торгует несколько)">
+                  <option value="">все инстр. ({allSymbols.length})</option>
+                  {#each allSymbols as s}<option value={s}>{s}</option>{/each}
+                </select>
+              {/if}
               {#if (live.trades ?? []).length}
                 <button class="csv-btn" onclick={downloadCsv} title="Выгрузить таблицу сделок в CSV (для сверки P&L)">⭳ CSV</button>
               {/if}
@@ -403,10 +430,10 @@
               {:else}
                 <table>
                   <thead>
-                    <tr><th>Время (МСК)</th><th>Тип</th><th>Сторона</th><th>Кол-во</th><th>Цена</th><th class="num">Фин. рез</th><th>Статус</th><th>ID</th></tr>
+                    <tr><th>Время (МСК)</th><th>Тип</th><th>Сторона</th><th>Кол-во</th><th>Цена</th>{#if multi}<th>Инстр.</th>{/if}<th class="num">Фин. рез</th><th>Статус</th><th>ID</th></tr>
                   </thead>
                   <tbody>
-                    {#each [...live.trades].reverse() as t}
+                    {#each histAll.slice(0, HIST_CAP) as t}
                       {@const ev = tradeEvent(t)}
                       {@const tt = tradeTypeLabel(ev)}
                       <tr class:rejected={t.status === 'rejected' || t.status === 'skipped'}>
@@ -416,6 +443,7 @@
                           {t.side === 'buy' ? '▲ buy' : '▼ sell'}</td>
                         <td class="mono">{t.qty}</td>
                         <td class="mono">{fmtPrice(t.price)}</td>
+                        {#if multi}<td class="mono">{t.symbol ?? '—'}</td>{/if}
                         <td class="num mono" class:pos={ev?.close && ev.close.pnl > 0} class:neg={ev?.close && ev.close.pnl < 0}>
                           {ev?.close ? fmtMoney(ev.close.pnl) + ' ₽' : '—'}</td>
                         <td><span class="st-badge st-{t.status}">{t.status}</span></td>
@@ -424,6 +452,9 @@
                     {/each}
                   </tbody>
                 </table>
+                {#if histAll.length > HIST_CAP}
+                  <div class="empty">Показаны последние {HIST_CAP} из {histAll.length} — полная история в CSV.</div>
+                {/if}
               {/if}
             </div>
           </div>
@@ -497,6 +528,10 @@
   .csv-btn {
     font-size: 10px; color: #6aa8ff; background: #12203a; border: 1px solid #24406a;
     border-radius: 3px; padding: 2px 8px; cursor: pointer; letter-spacing: 0; text-transform: none;
+  }
+  .hist-sym {
+    font-size: 10px; background: #12121f; color: #cde; border: 1px solid #2d2d4a;
+    border-radius: 3px; padding: 1px 4px; text-transform: none; letter-spacing: 0;
   }
   .csv-btn:hover { border-color: #6aa8ff66; color: #cfe; }
   .res-title { margin-top: 14px; }
