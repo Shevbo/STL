@@ -105,6 +105,35 @@ async def cancel_order(so_id: str, request: Request):
     return {"ok": True, "so_id": so_id}
 
 
+@router.post("/{so_id}/activate")
+async def activate_order(so_id: str, body: dict, request: Request):
+    """Ручная активация trail_tp от указанного пика: оператор ставит заявку в режим
+    слежения (например, пробой уровня активации был ПРОПУЩЕН из-за простоя STL/watcher).
+    Дальше watcher ведёт её как обычно — выкупит на откате trail_offset пунктов от пика.
+    Человеко-инициировано: это стоящая инструкция оператора, watcher лишь исполняет."""
+    _auth(request)
+    book = _book(request)
+    so = book.get(so_id)
+    if so is None:
+        raise HTTPException(status_code=404, detail="Нет такой умной заявки.")
+    if so.kind != "trail_tp":
+        raise HTTPException(status_code=409, detail="Активация вручную — только для trail_tp.")
+    if so.status != "armed":
+        raise HTTPException(status_code=409, detail=f"Заявка уже {so.status}.")
+    try:
+        peak = float((body or {}).get("peak") or 0)
+    except (TypeError, ValueError):
+        peak = 0.0
+    if peak <= 0:
+        raise HTTPException(status_code=422, detail="peak (уровень пика/активации) обязателен.")
+    so.activated = True
+    so.peak = peak
+    so.note = (so.note + " " if so.note else "") + f"активирована оператором от {peak:g}"
+    book.save()
+    log.info("smart_orders.manual_activate", so_id=so_id, peak=peak, side=so.side, code=so.code)
+    return {"ok": True, "so_id": so_id, "activated": True, "peak": peak}
+
+
 # ---- watcher ----
 
 def _price_steps(store: Any, agent: str) -> dict[str, float]:
