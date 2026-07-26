@@ -2833,8 +2833,16 @@ def create_app() -> FastAPI:
         # него JOIN сканирует всю таблицу (833k строк) на КАЖДОЕ открытие — грузит хостер.
         # Гейт _RESULT_RUNID_INDEXED ставится один раз при старте (см. lifespan): нет
         # индекса -> кэш выключен, чтобы не добавлять полный скан под нагрузкой сверхов.
-        if (getattr(request.app.state, "result_runid_indexed", False)
-                and body.get("scriptCode") and not body.get("paramSets")
+        _idx = getattr(request.app.state, "result_runid_indexed", None)
+        if _idx is None:   # один раз за жизнь процесса: есть ли индекс backtest_results(run_id)
+            try:
+                _idx = bool(await pool.fetchval(
+                    "SELECT 1 FROM pg_indexes WHERE tablename='backtest_results' "
+                    "AND indexdef LIKE '%(run_id)%' LIMIT 1"))
+            except Exception:
+                _idx = False
+            request.app.state.result_runid_indexed = _idx
+        if (_idx and body.get("scriptCode") and not body.get("paramSets")
                 and not (body.get("paramsGrid") or {})):
             try:
                 _eff = json.dumps({**(body.get("baseParams") or {})})
@@ -2944,21 +2952,39 @@ def create_app() -> FastAPI:
 
     @fastapi_app.get("/api/v1/lab/campaign-result")
     async def lab_campaign_result(campaign_run: str, rank: int, request: Request):
-        """Return a STORED full result (with trades) for one campaign hit-parade row so the
-        showcase opens it from the DB with no i9/VDS re-run. Matched by RANK: the backfill
-        stores the top-N <=10-contract configs as `<campaign_run>-bf<rank>` in net_profit
-        desc order, exactly the order the `best` list is rendered in, so best[rank] maps to
-        -bf<rank>. null when nothing is stored yet → the frontend re-runs once."""
+        """Return the STORED full result (with trades) for one showcase hit-parade row so the
+        leader opens INSTANTLY from the DB — БЕЗ пересчёта на i9/VDS (заказ оператора 1.3).
+
+        Перебор уже посчитал КАЖДЫЙ комбо и сложил сделки в backtest_results под run_id
+        раунда (opt-...-r2-...). Раньше читали несуществующий ключ `<campaign>-bf<rank>`
+        (бэкфилл так и не написали) → всегда null → фронт пересчитывал заново каждый раз.
+        Теперь: (1) берём params rank-го лидера в ТОМ ЖЕ порядке/фильтре, что список
+        «Лучшие по финрезу» (net_profit desc, ≤10); (2) находим его сохранённые сделки
+        среди прогонов кампании (run_id LIKE '<campaign>-%', теперь индекс по run_id).
+        Промах (лидерборд/результат разошлись по ключам) => null => фронт считает как раньше."""
+        import json as _jr
         _auth(request)
         pool = request.app.state.db_pool
         if pool is None or rank < 0:
             return None
+        prow = await pool.fetchrow(
+            "SELECT params FROM optimization_leaderboard "
+            "WHERE campaign_run=$1 AND net_profit IS NOT NULL "
+            "AND COALESCE(NULLIF(params->>'qty','')::numeric, 1) <= 10 "
+            "AND COALESCE(NULLIF(params->>'avg_max','')::numeric, 1) <= 10 "
+            "ORDER BY net_profit DESC NULLS LAST OFFSET $2 LIMIT 1",
+            campaign_run, rank)
+        if not prow:
+            return None
+        p = prow["params"]
+        p_json = p if isinstance(p, str) else _jr.dumps(p)
         row = await pool.fetchrow(
-            "SELECT run_id, params, trades, sharpe, max_drawdown, win_rate, total_return, "
-            "total_trades, net_profit, recovery_factor, point_value, peak_contracts "
-            "FROM backtest_results WHERE run_id=$1 AND trades IS NOT NULL LIMIT 1",
-            f"{campaign_run}-bf{rank}",
-        )
+            "SELECT r.run_id, r.params, r.trades, r.sharpe, r.max_drawdown, r.win_rate, "
+            "r.total_return, r.total_trades, r.net_profit, r.recovery_factor, r.point_value, "
+            "r.peak_contracts FROM backtest_results r "
+            "WHERE r.run_id LIKE $1 AND r.trades IS NOT NULL "
+            "AND r.params @> $2::jsonb AND $2::jsonb @> r.params LIMIT 1",
+            campaign_run + "-%", p_json)
         return dict(row) if row else None
 
     # ── Optimization AGENT (external Windows host) ───────────────────────────
