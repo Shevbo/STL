@@ -1034,7 +1034,12 @@ async def _market_session_poller(app_state) -> None:
             status = (store.agent_status(None) or {}) if store is not None else {}
             feed = ((status.get("health") or {}).get("feed")) or []
             codes = ms.codes_from_feed(feed)
-            state = await ms.probe(codes, int(time.time() * 1000), calendar=cal)
+            # Прошлый TIME последней сделки — чтобы classify увидел, СДВИНУЛСЯ ли он
+            # (сделки идут) или замер (закрытие). Точнее любой пороговой свежести.
+            _prev = getattr(app_state, "market_session", None) or {}
+            _prev_tms = int(_prev.get("last_trade_ms") or 0)
+            state = await ms.probe(codes, int(time.time() * 1000), calendar=cal,
+                                   prev_trade_ms=_prev_tms)
             # Не затираем валидный прошлый ответ ошибочным: если ISS не ответил,
             # но раньше знали состояние — оставляем прошлое, только помечаем.
             prev = getattr(app_state, "market_session", None)

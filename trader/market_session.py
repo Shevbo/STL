@@ -39,9 +39,12 @@ import httpx
 _MSK = datetime.timezone(datetime.timedelta(hours=3))
 _ISS_MD = "https://iss.moex.com/iss/engines/futures/markets/forts/securities/{code}.json"
 _ISS_CAL = "https://iss.moex.com/iss/engines/futures.json"
-# Свежесть последней сделки, при которой считаем «торги идут». 3 минуты: ликвидные
-# фьючерсы печатают сделки каждые секунды; больше — уже пауза/клиринг/закрытие.
-_TRADE_FRESH_SEC = 180
+# Свежесть последней сделки, при которой считаем «торги идут». 18 минут — чуть выше
+# задержки публичного ISS (~15-16 мин): во время торгов lag=SYSTIME-TIME сам по себе ~16
+# мин и проходит, а застой клиринга (~5 мин пауза + задержка ≈ 21 мин) и закрытие уже
+# отсекаются. Порог 3 мин (было) считал живой рынок «закрытым». Главную точность даёт
+# СДВИГ TIME между опросами (prev_trade_ms) — см. classify; порог — фолбэк на первый опрос.
+_TRADE_FRESH_SEC = 1080
 # Инструменты по умолчанию (фид агента их заменяет — коды следуют роллу сами).
 _FALLBACK_CODES = ("RIU6", "SiU6")
 
@@ -82,30 +85,35 @@ def _parse_dt_ms(day: str, hms: str) -> int:
 
 
 def classify(*, today: str, session_date: str, systime_ms: int, trade_ms: int,
-             holiday: bool = False,
+             holiday: bool = False, prev_trade_ms: int = 0,
              fresh_sec: int = _TRADE_FRESH_SEC) -> tuple[bool | None, str, int]:
     """Чистая логика: (open, phase, iss_lag_sec). Все времена — часы ISS.
 
-    Ключевое: session_date > today означает «биржа объявила: на сегодня торги
-    закончены (или сегодня их нет)» — это ОФИЦИАЛЬНОЕ закрытие, каким бы свежим
-    ни был SYSTIME.
+    ОТКРЫТОСТЬ = ДВИЖЕНИЕ/свежесть ПОСЛЕДНЕЙ СДЕЛКИ, а НЕ TRADE_SESSION_DATE.
+    Урок 2026-07-26 (дорогая ошибка): TRADE_SESSION_DATE — дата КЛИРИНГА (T+1). Во
+    время активных торгов она ВСЕГДА завтрашняя (сегодня 26-е торгуют на миллиарды, а
+    поле = 27-е). Прошлая логика `session_date > today → закрыто` поэтому говорила
+    «биржа закрыта, курите до понедельника» ПРЯМО ВО ВРЕМЯ ТОРГОВ. Больше это поле
+    открытость НЕ решает — только справочно (next_session).
+
+    Публичный ISS отдаёт данные с задержкой ~15 мин, поэтому:
+      1) если TIME сдвинулся с прошлого опроса (prev_trade_ms) — сделки ИДУТ, открыто;
+      2) иначе свежесть: lag = SYSTIME-TIME <= fresh_sec (порог > задержки ISS) — открыто;
+      3) иначе TIME замер: короткая пауза = break (клиринг/тонкий рынок), долгая = done.
+    session_date НЕ участвует в решении.
     """
-    if not session_date or systime_ms <= 0:
+    if systime_ms <= 0:
         return None, "unknown", 0
     lag = max(0, (systime_ms - trade_ms) // 1000) if trade_ms > 0 else 10**9
-    if holiday and session_date != today:
+    if holiday:
         return False, "holiday", lag
-    if session_date > today:
-        return False, "done", lag
-    if session_date < today:
-        # Биржа ещё «в vчерашней» сессии не бывает; трактуем как pre_open нового дня.
-        return False, "pre_open", lag
-    # Сессия объявлена на сегодня.
     if trade_ms <= 0:
         return False, "pre_open", lag
+    if prev_trade_ms and trade_ms > prev_trade_ms:
+        return True, "trading", lag          # TIME продвинулся между опросами → торги идут
     if lag <= fresh_sec:
-        return True, "trading", lag
-    return False, "break", lag
+        return True, "trading", lag          # свежая сделка в пределах задержки ISS
+    return (False, "break", lag) if lag < 1800 else (False, "done", lag)
 
 
 def codes_from_feed(feed: list[dict] | None) -> list[str]:
@@ -134,7 +142,7 @@ async def fetch_calendar(client: httpx.AsyncClient) -> dict:
 
 
 async def probe(codes: list[str], now_ms: int, *, client: httpx.AsyncClient | None = None,
-                calendar: dict | None = None) -> SessionState:
+                calendar: dict | None = None, prev_trade_ms: int = 0) -> SessionState:
     """Опрос ISS по нескольким кодам; берём инструмент с САМОЙ СВЕЖЕЙ сделкой
     (торгуется хоть один — рынок открыт). Полный провал -> open=None."""
     own = client is None
@@ -175,7 +183,8 @@ async def probe(codes: list[str], now_ms: int, *, client: httpx.AsyncClient | No
     holiday = not cal.get(today, {}).get("work", True) if today in cal else False
     is_open, phase, lag = classify(
         today=today, session_date=best["session_date"],
-        systime_ms=best["systime_ms"], trade_ms=best["trade_ms"], holiday=holiday)
+        systime_ms=best["systime_ms"], trade_ms=best["trade_ms"], holiday=holiday,
+        prev_trade_ms=prev_trade_ms)
     nxt = best["session_date"] if best["session_date"] and best["session_date"] > today else ""
     err = "" if best["systime_ms"] else ("; ".join(errs) or "ISS не ответил")
     return SessionState(

@@ -1,9 +1,10 @@
-"""Оракул сессии MOEX v2 — по ОФИЦИАЛЬНЫМ полям ISS.
+"""Оракул сессии MOEX — по СВЕЖЕСТИ/ДВИЖЕНИЮ последней сделки, НЕ по TRADE_SESSION_DATE.
 
-Закреплён урок 2026-07-25: SYSTIME — часы сервера ISS, они тикают и после
-закрытия; открытость решает связка TRADE_SESSION_DATE + свежесть последней
-сделки (TIME). Первая версия по «now vs SYSTIME» показывала «торги идут» в
-субботу после закрытия выходной сессии в 19:00.
+Урок 2026-07-26 (дорогая ошибка): TRADE_SESSION_DATE — дата КЛИРИНГА (T+1). Во время
+активных торгов она ВСЕГДА завтрашняя. Прошлая логика `session_date > today → закрыто`
+говорила «биржа закрыта, курите до понедельника» ПРЯМО ВО ВРЕМЯ ТОРГОВ на миллиарды.
+Открытость решает: (1) сдвинулся ли TIME между опросами, (2) свежесть с поправкой на
+задержку публичного ISS ~16 мин. session_date в решении НЕ участвует.
 """
 from __future__ import annotations
 
@@ -14,36 +15,48 @@ def _ms(day: str, hms: str) -> int:
     return _parse_dt_ms(day, hms)
 
 
-def test_trading_now():
-    # Сессия объявлена на сегодня, последняя сделка 20 секунд назад.
-    is_open, phase, lag = classify(
-        today="2026-07-25", session_date="2026-07-25",
-        systime_ms=_ms("2026-07-25", "15:00:20"), trade_ms=_ms("2026-07-25", "15:00:00"))
-    assert (is_open, phase, lag) == (True, "trading", 20)
+def test_clearing_date_tomorrow_does_not_mean_closed():
+    """РЕГРЕСС дня 2026-07-26: торгуют СЕЙЧАС, TRADE_SESSION_DATE уже завтрашнее (клиринг
+    T+1). Свежая сделка (lag ~16 мин из-за задержки ISS) => ОТКРЫТО, несмотря на дату."""
+    is_open, phase, _ = classify(
+        today="2026-07-26", session_date="2026-07-27",
+        systime_ms=_ms("2026-07-26", "12:10:00"), trade_ms=_ms("2026-07-26", "11:54:00"))
+    assert is_open is True
+    assert phase == "trading"
 
 
-def test_saturday_after_1900_close_is_done_even_with_fresh_systime():
-    """Ровно сегодняшний прокол: 19:23 сб, SYSTIME свежий (сервер жив), но биржа
-    уже объявила следующей сессией понедельник — торги ЗАКРЫТЫ."""
+def test_trading_via_time_advancement():
+    # TIME сдвинулся с прошлого опроса — сделки идут, даже если lag не мелкий.
+    is_open, phase, _ = classify(
+        today="2026-07-26", session_date="2026-07-27",
+        systime_ms=_ms("2026-07-26", "12:11:00"), trade_ms=_ms("2026-07-26", "11:55:00"),
+        prev_trade_ms=_ms("2026-07-26", "11:54:00"))
+    assert (is_open, phase) == (True, "trading")
+
+
+def test_closed_detected_by_frozen_stale_time_not_session_date():
+    """Субботний прокол наоборот: после закрытия TIME ЗАМЕР (== прошлому опросу) и lag
+    большой — ЗАКРЫТО. Определяется по застывшей сделке, а НЕ по session_date."""
+    frozen = _ms("2026-07-25", "19:00:00")
     is_open, phase, _ = classify(
         today="2026-07-25", session_date="2026-07-27",
-        systime_ms=_ms("2026-07-25", "19:22:48"), trade_ms=_ms("2026-07-25", "18:59:55"))
+        systime_ms=_ms("2026-07-25", "19:35:00"), trade_ms=frozen, prev_trade_ms=frozen)
     assert is_open is False
     assert phase == "done"
 
 
-def test_clearing_break_reads_as_break_not_failure():
-    # Сессия сегодня, сделок нет 4 минуты (клиринг 14:00-14:05): пауза, не торги.
-    is_open, phase, lag = classify(
-        today="2026-07-24", session_date="2026-07-24",
-        systime_ms=_ms("2026-07-24", "14:04:00"), trade_ms=_ms("2026-07-24", "14:00:00"))
+def test_clearing_break_is_not_open_but_not_done():
+    # Клиринг: TIME замер, lag умеренный (в пределах получаса) — пауза, не торги, не закрытие.
+    frozen = _ms("2026-07-24", "13:44:00")
+    is_open, phase, _ = classify(
+        today="2026-07-24", session_date="2026-07-25",
+        systime_ms=_ms("2026-07-24", "14:04:00"), trade_ms=frozen, prev_trade_ms=frozen)
     assert is_open is False
     assert phase == "break"
-    assert lag == 240
 
 
 def test_pre_open_morning():
-    # Утро торгового дня: сессия объявлена, сделок ещё нет.
+    # Утро торгового дня: сделок ещё не было.
     is_open, phase, _ = classify(
         today="2026-07-27", session_date="2026-07-27",
         systime_ms=_ms("2026-07-27", "06:45:00"), trade_ms=0)
@@ -62,7 +75,7 @@ def test_official_holiday_from_dailytable():
 
 def test_unknown_when_iss_silent():
     is_open, phase, _ = classify(
-        today="2026-07-25", session_date="", systime_ms=0, trade_ms=0)
+        today="2026-07-26", session_date="", systime_ms=0, trade_ms=0)
     assert is_open is None
     assert phase == "unknown"
 
