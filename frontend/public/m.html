@@ -138,6 +138,15 @@ function val(txt, k) { return txt == null ? '<span class="v nil">—</span>'
 function hhmmss(ms) {
   return ms ? new Date(ms).toLocaleTimeString('ru-RU', { timeZone: 'Europe/Moscow' }) : null;
 }
+// Последняя сделка: ЧЧ:ММ (без секунд); если НЕ сегодня — с датой ДД.ММ (МСК).
+function lastTradeFmt(ms) {
+  if (!ms) return null;
+  const opt = { timeZone: 'Europe/Moscow' };
+  const dd = new Date(ms).toLocaleDateString('ru-RU', { ...opt, day: '2-digit', month: '2-digit' });
+  const nd = new Date().toLocaleDateString('ru-RU', { ...opt, day: '2-digit', month: '2-digit' });
+  const hm = new Date(ms).toLocaleTimeString('ru-RU', { ...opt, hour: '2-digit', minute: '2-digit' });
+  return dd === nd ? hm : (dd + ' ' + hm);
+}
 function row(label, value, signValue, sub) {
   const k = cls(signValue);
   return `<div class="row ${k}"><span class="k">${esc(label)}</span>` +
@@ -226,7 +235,7 @@ function renderActive(list) {
   if (!list.length) return '';
   return list.map((r) => {
     const k = cls(r.real_net);
-    const last = hhmmss(r.last_trade_ms);
+    const last = lastTradeFmt(r.last_trade_ms);
     const st = r.state;
     const stCls = st === 'пауза' ? 'paused' : (st === 'реал' ? 'real' : '');
     return `<div class="rob ${k}">
@@ -238,6 +247,7 @@ function renderActive(list) {
       <div class="nums">
         <span>сегодня <b class="${cls(r.real_today)}">${r.real_today == null ? '—' : rub(r.real_today, { signed: true })}</b></span>
         ${r.position == null ? '' : `<span>поз <b>${r.position}</b></span>`}
+        ${r.varmargin == null ? '' : `<span>ВМ <b class="${cls(r.varmargin)}">${rub(r.varmargin, { signed: true })}</b></span>`}
         <span>сделок <b>${r.real_trades_today || 0}</b></span>
         <span>${last ? 'посл. ' + last : ''}</span>
       </div>

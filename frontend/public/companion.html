@@ -37,8 +37,11 @@
        сам по себе. */
     background: rgba(247, 243, 236, .4);
     color: var(--ink);
-    font: 12px/1.5 Consolas, "Cascadia Mono", monospace;
+    /* Сжатый в ширину шрифт (Bahnschrift — condensed, есть в Win10): панель уже на ~30%.
+       tabular-nums держит цифры моноширинными, колонки значений не пляшут. */
+    font: 12px/1.45 Bahnschrift, "Segoe UI", "Segoe UI Semilight", sans-serif;
     font-variant-numeric: tabular-nums;
+    letter-spacing: .01em;
     -webkit-font-smoothing: antialiased;
     overflow: hidden;
     cursor: default;
@@ -181,6 +184,15 @@ function hhmmss(ms) {
   if (!ms) return null;
   return new Date(ms).toLocaleTimeString('ru-RU', { timeZone: 'Europe/Moscow' });
 }
+// Последняя сделка: ЧЧ:ММ (без секунд); если НЕ сегодня — с датой ДД.ММ (МСК).
+function lastTradeFmt(ms) {
+  if (!ms) return null;
+  const opt = { timeZone: 'Europe/Moscow' };
+  const dd = new Date(ms).toLocaleDateString('ru-RU', { ...opt, day: '2-digit', month: '2-digit' });
+  const nd = new Date().toLocaleDateString('ru-RU', { ...opt, day: '2-digit', month: '2-digit' });
+  const hm = new Date(ms).toLocaleTimeString('ru-RU', { ...opt, hour: '2-digit', minute: '2-digit' });
+  return dd === nd ? hm : (dd + ' ' + hm);
+}
 
 // Заголовок: STL, дата, день недели, время (МСК), режим работы биржи.
 const DOW = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
@@ -267,7 +279,7 @@ function renderActiveRobots(list) {
   return list.map((r) => {
     const net = r.real_net;               // весь реальный P&L, в т.ч. до перевода в бумагу
     const k = cls(net);
-    const last = hhmmss(r.last_trade_ms);
+    const last = lastTradeFmt(r.last_trade_ms);
     const st = r.state;                    // 'реал' | 'пауза' | 'переведён в бумагу' | 'снят'
     const stCls = st === 'пауза' ? 'paused' : (st === 'реал' ? 'real' : 'off');
     return `<div class="rob ${k}">
@@ -280,8 +292,9 @@ function renderActiveRobots(list) {
       <div class="nums">
         <span>сегодня <b class="${cls(r.real_today)}">${r.real_today == null ? '—' : rub(r.real_today, { signed: true })}</b></span>
         ${r.position == null ? '' : `<span>поз <b>${r.position}</b></span>`}
+        ${r.varmargin == null ? '' : `<span>ВМ <b class="${cls(r.varmargin)}">${rub(r.varmargin, { signed: true })}</b></span>`}
         <span>сделок сегодня <b>${r.real_trades_today || 0}</b></span>
-        <span>${last ? 'посл. реал ' + last : 'реальных сделок нет'}</span>
+        <span>${last ? 'посл. ' + last : 'реальных сделок нет'}</span>
       </div>
     </div>`;
   }).join('');
@@ -430,7 +443,7 @@ if (!LOCAL) { $('hide').style.display = $('quit').style.display = 'none'; }
 // Окно ровно по содержимому: высоту считает страница, размер ставит Go.
 // Ширину задаём один раз при старте — так «размер» не зависит от config.json
 // на машине оператора (страница — авторитет размера).
-const PANEL_WIDTH = 500;
+const PANEL_WIDTH = 350;   // -30% ширины: сжатый шрифт Bahnschrift позволяет
 let widthSet = false;
 let lastH = 0;
 function fitWindow() {
@@ -448,9 +461,9 @@ async function tick() {
     const d = await r.json();
     lastGood = d.ts_ms || Date.now();
     paint(d);
-    // Время уже в заголовке; здесь только индикатор связи.
+    // Время уже в заголовке; здесь индикатор связи + пинг агент<->QUIK.
     $('fresh').className = 'fresh';
-    $('fresh').textContent = '● на связи';
+    $('fresh').textContent = '● на связи' + (d.ping_ms != null ? ' (' + d.ping_ms + ' мс)' : '');
   } catch (err) {
     $('fresh').className = 'fresh stale';
     $('fresh').textContent = lastGood
