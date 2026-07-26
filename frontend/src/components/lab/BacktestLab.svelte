@@ -1081,7 +1081,7 @@
           {#key JSON.stringify(leaderResult.params)}
             <BacktestChart
               result={leaderResult.result}
-              symbol={paramValues.symbol ?? (leaderResult.result.params?.symbol) ?? 'RIM6'}
+              symbol={leaderResult.params?.symbol ?? leaderResult.result?.params?.symbol ?? paramValues.symbol ?? 'RIM6'}
               dateFrom={dateFrom}
               dateTo={dateTo}
               pointValue={leaderPV}
