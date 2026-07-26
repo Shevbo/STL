@@ -178,6 +178,9 @@
     };
   });
 
+  // % от ГО тоже по правилу фикс+ВМ, не по голому фиксу.
+  let totalPct = $derived(summary.go > 0 ? ((summary.net + vmOpen) / summary.go) * 100 : 0);
+
   const fmtMoney = (v: number) =>
     (v >= 0 ? '+' : '') + v.toLocaleString('ru-RU', { maximumFractionDigits: 0 });
   const fmtTime = (iso: string) =>
@@ -364,7 +367,7 @@
             <div class="result-grid">
               <div class="r-row"><span>Доход (фикс + ВМ)</span>
                 <b class:pos={summary.net + vmOpen > 0} class:neg={summary.net + vmOpen < 0}>{fmtMoney(summary.net + vmOpen)} ₽</b>
-                <span class="sub">({summary.retPct >= 0 ? '+' : ''}{summary.retPct.toFixed(2)}% от ГО)</span></div>
+                <span class="sub">({totalPct >= 0 ? '+' : ''}{totalPct.toFixed(2)}% от ГО)</span></div>
               {#if vmOpen !== 0}
                 <div class="r-row"><span>из них: фикс / ВМ откр. поз.</span>
                   <b class:pos={summary.net > 0} class:neg={summary.net < 0}>{fmtMoney(summary.net)}</b>
