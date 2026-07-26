@@ -2845,7 +2845,10 @@ def create_app() -> FastAPI:
         if (_idx and body.get("scriptCode") and not body.get("paramSets")
                 and not (body.get("paramsGrid") or {})):
             try:
-                _eff = json.dumps({**(body.get("baseParams") or {})})
+                # params как DICT напрямую: пул регистрирует jsonb-кодек (db._setup_json_codec),
+                # он сам сериализует объект. json.dumps + ::jsonb двоил кодировку (jsonb-скаляр
+                # вместо объекта) → @> НИКОГДА не совпадал, кэш молча не срабатывал.
+                _eff = {**(body.get("baseParams") or {})}
                 # ТОЛЬКО одиночные чарт-прогоны: фронт берёт rows[0], а у раунда перебора
                 # сотни комбо под одним run_id — вернули бы ЧУЖОЙ комбо. Раунды перебора
                 # (opt-/camp-) исключаем ПО ПРЕФИКСУ; NOT EXISTS отсекает bulk-свёртки.
@@ -2855,7 +2858,7 @@ def create_app() -> FastAPI:
                         WHERE br.symbol=$1 AND br.date_from=$2 AND br.date_to=$3
                           AND br.status='done' AND r.trades IS NOT NULL
                           AND br.id NOT LIKE 'opt-%' AND br.id NOT LIKE 'camp-%'
-                          AND r.params @> $4::jsonb AND $4::jsonb @> r.params
+                          AND r.params @> $4 AND $4 @> r.params
                           AND NOT EXISTS (SELECT 1 FROM backtest_results r2
                                             WHERE r2.run_id = br.id AND r2.id <> r.id)
                         ORDER BY br.finished_at DESC NULLS LAST LIMIT 1""",
