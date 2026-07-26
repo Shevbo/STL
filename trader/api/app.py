@@ -2941,20 +2941,32 @@ def create_app() -> FastAPI:
         # ГДЕ считается — ясно и без VDS (перебор только на i9). Claimed => на i9;
         # queued => в очереди на i9 (с позицией). vds-fallback давно выключен.
         status = d.get("status")
-        # позиция в очереди: сколько queued-задач создано не позже этой
-        qpos = 0
+        import datetime as _dt2
+        _now = _dt2.datetime.now(tz=_dt2.timezone.utc)
+        is_camp = run_id.startswith("opt-") or run_id.startswith("camp-")
+        # Позиция в очереди — ПРИОРИТЕТ-ОСОЗНАННО, как claim: интерактивные bare-cuid
+        # прогоны идут ПЕРВЫМИ, кампании (opt-/camp-) — последними. Раньше считал ВСЕ
+        # кампании впереди -> «№86, осталось 29 мин» на прогоне, который реально следующий.
+        jobs_before = 0
         if status == "queued" and created_at is not None:
-            qpos = int(await pool.fetchval(
-                "SELECT count(*) FROM backtest_runs WHERE status='queued' AND created_at <= $1",
-                created_at) or 1)
+            if is_camp:
+                jobs_before = int(await pool.fetchval(
+                    "SELECT count(*) FROM backtest_runs WHERE status='queued' AND id<>$2 AND "
+                    "((id NOT LIKE 'opt-%' AND id NOT LIKE 'camp-%') OR created_at < $1)",
+                    created_at, run_id) or 0)
+            else:  # интерактивный: впереди только другие интерактивные, кампании пропускаются
+                jobs_before = int(await pool.fetchval(
+                    "SELECT count(*) FROM backtest_runs WHERE status='queued' AND id<>$2 AND "
+                    "id NOT LIKE 'opt-%' AND id NOT LIKE 'camp-%' AND created_at < $1",
+                    created_at, run_id) or 0)
+        d["queue_pos"] = jobs_before + 1
         if status == "queued":
-            d["runner"] = f"очередь на i9 (№{qpos})" if qpos else "очередь на i9"
+            d["runner"] = f"очередь на i9 (№{jobs_before + 1})"
         elif aid and aid.startswith("vds"):
             d["runner"] = "хостер (fallback ВКЛючён!)"   # не должно случаться — сигнал
         else:
             d["runner"] = "i9"
-        # ETA: медиана длительности недавних ОДИНОЧНЫХ прогонов (кэш 120с, не грузим БД
-        # на каждый опрос) × позиция в очереди, минус уже прошедшее у бегущего.
+        # Типичная длительность ОДИНОЧНОГО прогона (кэш 120с, не грузим БД на каждый опрос).
         import time as _t
         _typ = getattr(request.app.state, "_bt_typ_sec", None)
         if _typ is None or _t.time() - getattr(request.app.state, "_bt_typ_at", 0) > 120:
@@ -2971,11 +2983,25 @@ def create_app() -> FastAPI:
             request.app.state._bt_typ_sec = _typ
             request.app.state._bt_typ_at = _t.time()
         d["typical_sec"] = _typ
+        # Сколько доигрывает ТЕКУЩИЙ бегущий джоб (интерактивный ждёт его окончания):
+        # раунд кампании ~120с, одиночный ~typical. Оценка, не точность до секунды.
+        cur_remain = 0.0
+        try:
+            rn = await pool.fetchrow(
+                "SELECT id, claimed_at FROM backtest_runs WHERE status='running' "
+                "AND (agent_id IS NULL OR agent_id NOT LIKE 'vds%') "
+                "ORDER BY claimed_at DESC NULLS LAST LIMIT 1")
+            if rn and rn["claimed_at"]:
+                el = (_now - rn["claimed_at"]).total_seconds()
+                dur = 120 if str(rn["id"]).startswith(("opt-", "camp-")) else _typ
+                cur_remain = max(0.0, dur - el)
+        except Exception:
+            pass
         eta = None
         if status == "queued":
-            eta = (max(1, qpos) * _typ) if i9_alive else None   # i9 офлайн => ETA неизвестен
+            # ждём: текущий джоб + прогоны впереди по приоритету + свой прогон
+            eta = int(cur_remain + jobs_before * _typ + _typ) if i9_alive else None
         elif status in ("running", "pending") and claimed_at is not None:
-            import datetime as _dt2
             elapsed = (_dt2.datetime.now(tz=claimed_at.tzinfo) - claimed_at).total_seconds()
             eta = max(3, int(_typ - elapsed))
         d["eta_sec"] = eta
