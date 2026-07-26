@@ -235,6 +235,9 @@
   let equityCarry = $state<{ rub: number; fromTs: number } | null>(null);
   // Живой робот без журнала: кривую не рисуем и говорим об этом прямо.
   let equityBlind = $state(false);
+  // Сколько закрытых сделок легло ЗА пределами загруженных баров (источник баров графика
+  // короче теста) — их P&L сжат в последнюю точку; предупреждаем оператора.
+  let equityTailBeyond = $state(0);
   let statsExpanded = $state(false);    // report collapsed to 2 lines by default
   let showTrades = $state(false);       // trades-table overlay
   let tradeRows = $state<any[]>([]);    // per-trade rows for the table
@@ -680,12 +683,26 @@
   // is fine, but 30m/1h/4h need weeks-months or the chart "starts at 01.07".
   // Backtest charts keep their exact requested period (dateFrom untouched).
   function liveWindow(): { from: string; to: string } {
-    if (!live) return { from: dateFrom, to: dateTo };
+    const isoD = (t: number) => new Date(t).toISOString().slice(0, 10);
+    if (!live) {
+      // Окно баров ОБЯЗАНО покрывать сделки результата. Избранное/лидер мог прийти с
+      // коротким/чужим окном дат (editFrom/editTo), а бары тянутся по нему — тогда часть
+      // сделок вылезает за бары, и привязка кривой к итогу переворачивает её в ±млн.
+      // Расширяем запрос до реального диапазона сделок (время сделки — unix-сек).
+      let from = dateFrom, to = dateTo;
+      const fills = toFills(result?.trades);
+      if (fills.length) {
+        const tMin = isoD(Math.min(...fills.map((f: any) => f.time)) * 1000);
+        const tMax = isoD((Math.max(...fills.map((f: any) => f.time)) + 86400) * 1000);
+        if (tMin < from) from = tMin;
+        if (tMax > to) to = tMax;
+      }
+      return { from, to };
+    }
     const days = resampleMin >= 720 ? 730 : resampleMin >= 240 ? 365
       : resampleMin >= 120 ? 180 : resampleMin >= 60 ? 120
       : resampleMin >= 30 ? 60 : resampleMin >= 15 ? 30
       : resampleMin >= 5 ? 14 : 4;
-    const isoD = (t: number) => new Date(t).toISOString().slice(0, 10);
     const from = isoD(Date.now() - days * 86400_000);
     const to = isoD(Date.now() + 86400_000);   // recomputed per load: long-lived tabs keep moving
     return { from: from < dateFrom ? from : dateFrom, to: to > dateTo ? to : dateTo };
@@ -881,6 +898,15 @@
           while (k < closes.length && closes[k].time <= b.time) { cum += closes[k].close.pnl; k++; }
           return { time: b.time as number, value: cum };
         });
+        // Сделки ПОСЛЕ последнего загруженного бара (бар-источник графика короче теста —
+        // напр. открыли из избранного с чужим/коротким окном дат) обязаны попасть в сумму.
+        // Иначе rawEnd — ЧАСТИЧНЫЙ огрызок, и привязка engineNet/rawEnd ниже ПЕРЕВОРАЧИВАЕТ
+        // и раздувает форму в ±2.5М при честном итоге +724k — ровно тот «бред» на графике.
+        const kBefore = k;
+        while (k < closes.length) { cum += closes[k].close.pnl; k++; }
+        equityTailBeyond = k - kBefore;
+        if (raw.length && equityTailBeyond > 0)
+          raw[raw.length - 1] = { time: raw[raw.length - 1].time, value: cum };
         const rawEnd = raw.length ? raw[raw.length - 1].value : 0;
         // Привязка конца кривой к авторитетному итогу — ДВУМЯ способами:
         //  - бэктест (engineNet): МАСШТАБ. raw уже ≈ engineNet по тем же сделкам,
@@ -894,8 +920,15 @@
         //    смещение ≈ 0; обрезанный -> смещение = нераскрытая ранняя история.
         const offset = (netOverride != null && Number.isFinite(netOverride))
           ? netOverride - rawEnd : 0;
-        const adj = (engineNet != null && rawEnd !== 0)
-          ? (v: number) => v * (engineNet / rawEnd)
+        // engineNet-масштаб — ТОЛЬКО копеечная поправка дрейфа округления/ролла: одинаковый
+        // знак и кратность в [0.4, 2.5]. Вне этих границ rawEnd структурно не равен итогу
+        // (бары не покрыли сделки, дрейф модели комиссии) — тогда множитель СОЛЖЁТ о форме
+        // (перевернёт/раздует), поэтому рисуем ЧЕСТНЫЙ raw как есть. Конец может не точно
+        // сойтись с бейджем, но кривая перестаёт врать (никаких ±2.5М из воздуха).
+        const _ratio = (engineNet != null && rawEnd !== 0) ? engineNet / rawEnd : 1;
+        const _scaleOk = engineNet != null && rawEnd !== 0 && _ratio >= 0.4 && _ratio <= 2.5;
+        const adj = _scaleOk
+          ? (v: number) => v * _ratio
           : (netOverride != null && Number.isFinite(netOverride))
             ? (v: number) => v + offset
             : (v: number) => v;
@@ -1285,7 +1318,9 @@
       >{/if}
     {#if equityCarry}<span class="bt-equity-carry"
       >· кривая с {fmtDay(equityCarry.fromTs)}: к этому моменту робот уже
-      реализовал {fmtMoney(equityCarry.rub)} {unitLabel}, более ранние сделки вне окна графика</span>{/if}</div>
+      реализовал {fmtMoney(equityCarry.rub)} {unitLabel}, более ранние сделки вне окна графика</span>{/if}
+    {#if equityTailBeyond > 0}<span class="bt-equity-blind"
+      >· ⚠ данные графика короче теста: {equityTailBeyond} сделок после последнего бара сжаты в конец кривой</span>{/if}</div>
   <div class="equity" bind:this={equityEl} style="height:{equityPx}px"></div>
 
   <!-- Custom horizontal scrollbar: drag the thumb to scroll across the data span. -->
