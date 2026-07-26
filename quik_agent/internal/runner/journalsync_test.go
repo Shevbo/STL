@@ -166,6 +166,35 @@ func TestMissingFillsMatchesTruncatedTag(t *testing.T) {
 	}
 }
 
+// The 2026-07-24->26 double-debit: the 13:30 sell was recorded by hand
+// (record-fill-agent, order_id "manual-<ts>") at 17:41, then the heal
+// synthesized the SAME trade again at 23:08 — its dedup keys on the QUIK
+// order num, which the manual record does not carry. A manual record of the
+// same sec+side at ~the order's VWAP must credit the shortfall.
+func TestMissingFillsManualRecordCredits(t *testing.T) {
+	manualRec := &quikv1.RobotFill{OrderId: "manual-1784889005000", Symbol: "RIU6",
+		Side: quikv1.Side_SIDE_SELL, Qty: 1, Price: 87700, Status: "filled",
+		TsUnixMs: nowMs - 3600_000}
+	st := map[string]*quikv1.RobotStatus{
+		"r1": status(false, nowMs-5000, []*quikv1.RobotFill{manualRec}, nil),
+	}
+	// The same real trade, robot-tagged in QUIK's table -> must NOT re-synthesize.
+	same := []accounts.Trade{trade("r1", "800", "S", 1, 87700, nowMs-600_000)}
+	if got := MissingFills(st, same, nowMs); len(got) != 0 {
+		t.Fatalf("manually recorded trade healed again (double debit): %+v", got)
+	}
+	// A DIFFERENT lost trade (far price) must still heal — and the one credit
+	// must not be consumed twice across orders.
+	far := []accounts.Trade{
+		trade("r1", "800", "S", 1, 87700, nowMs-600_000), // covered by the record
+		trade("r1", "801", "S", 1, 89600, nowMs-500_000), // genuinely lost
+	}
+	got := MissingFills(st, far, nowMs)
+	if len(got) != 1 || got[0].GetOrderId() != "801" {
+		t.Fatalf("distinct lost trade must still heal exactly once: %+v", got)
+	}
+}
+
 // Two robots sharing the same 20-char prefix cannot be attributed safely —
 // heal NEITHER rather than guess.
 func TestMissingFillsAmbiguousPrefixHealsNeither(t *testing.T) {

@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"shectory/quik_agent/internal/accounts"
@@ -40,9 +41,20 @@ func MissingFills(statuses map[string]*quikv1.RobotStatus, trades []accounts.Tra
 	// journalQty[robot][orderNum] = qty the robot's book already accounts for:
 	// recorded real fills + still-working orders (their fills are in flight on
 	// the normal path and must never be pre-empted).
+	// manual = operator record-fill entries (order_id "manual-<ts>", link/robots.go):
+	// they book a REAL trade under a non-QUIK order id, so journalQty never sees
+	// them — 2026-07-24 the same sell was debited twice (manual record 17:41 +
+	// qsync heal 23:08) and the account ran +1 vs the robots. Credited below.
+	type manualCredit struct {
+		sec   string
+		side  quikv1.Side
+		price float64
+		qty   int64
+	}
 	type robotView struct {
 		journalQty map[string]int64
 		working    map[string]bool
+		manual     []manualCredit
 	}
 	views := map[string]*robotView{}
 	for id, st := range statuses {
@@ -63,6 +75,10 @@ func MissingFills(statuses map[string]*quikv1.RobotStatus, trades []accounts.Tra
 		for _, f := range fills {
 			if f.GetStatus() == "filled" && f.GetOrderId() != "" {
 				v.journalQty[f.GetOrderId()] += f.GetQty()
+				if strings.HasPrefix(f.GetOrderId(), "manual-") {
+					v.manual = append(v.manual, manualCredit{sec: f.GetSymbol(),
+						side: f.GetSide(), price: f.GetPrice(), qty: f.GetQty()})
+				}
 			}
 		}
 		for _, w := range st.GetWorkingOrders() {
@@ -148,6 +164,35 @@ func MissingFills(statuses map[string]*quikv1.RobotStatus, trades []accounts.Tra
 			continue // normal event path still owns this order
 		}
 		missing := a.qty - v.journalQty[orderNum]
+		if missing <= 0 {
+			continue
+		}
+		// Consume operator manual records: same sec+side at ~the order's VWAP
+		// (0.2% — the collar's order of magnitude) is the SAME trade already
+		// booked by hand; synthesizing it again double-debits the book.
+		vwap := a.vwapNum / float64(a.qty)
+		sideEnum := quikv1.Side_SIDE_BUY
+		if a.side == "S" {
+			sideEnum = quikv1.Side_SIDE_SELL
+		}
+		for i := range v.manual {
+			m := &v.manual[i]
+			if missing <= 0 {
+				break
+			}
+			if m.qty <= 0 || m.sec != a.sec || m.side != sideEnum {
+				continue
+			}
+			if d := m.price - vwap; d > 0.002*vwap || d < -0.002*vwap {
+				continue
+			}
+			use := m.qty
+			if use > missing {
+				use = missing
+			}
+			m.qty -= use
+			missing -= use
+		}
 		if missing <= 0 {
 			continue
 		}
