@@ -42,6 +42,13 @@
 </style>
 </head>
 <body>
+<!-- ID окна для дебага: клик копирует код. См. общий принцип ScreenTag. -->
+<button id="screen-tag" title="ID окна для дебага — клик копирует код"
+  style="position:fixed;top:4px;right:6px;z-index:9999;display:inline-flex;align-items:center;gap:3px;
+  background:#0c0c18cc;border:1px solid #2a2a44;border-radius:3px;padding:0 6px;height:16px;
+  font:9px ui-monospace,monospace;color:#6aa8ff;cursor:pointer;line-height:1"
+  onclick="(function(b){var id='WATCHDOG';(navigator.clipboard&&navigator.clipboard.writeText(id))||0;b.lastChild.textContent='✓';setTimeout(function(){b.lastChild.textContent='⧉';},1200);})(this)"
+>#WATCHDOG <span>⧉</span></button>
 <header>
   <h1>Вотчер торговли</h1>
   <span class="sub">активации probe каждые 10 мин, 06:55-23:55 МСК</span>

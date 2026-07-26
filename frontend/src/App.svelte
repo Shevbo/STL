@@ -2,6 +2,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import TopBar from './components/TopBar.svelte';
+  import ScreenTag from './components/lab/ScreenTag.svelte';
   import RobotsPanel from './components/RobotsPanel.svelte';
   import ActiveOrdersPanel from './components/ActiveOrdersPanel.svelte';
   import ChartFrame from './components/ChartFrame.svelte';
@@ -277,6 +278,7 @@
   <AgentRobotScreen robotId={agentRobotId} agentId={agentIdParam} />
 {:else}
 <div class="shell" onpointermove={onPointerMove} onpointerup={onPointerUp} onpointerleave={onPointerUp}>
+  <ScreenTag id="TERMINAL" name="главный терминал" />
   <TopBar
     {showLab}
     onToggleLabPanel={() => showLab = !showLab}
@@ -431,7 +433,7 @@
   .ss-text { font-size: 13px; opacity: 0.8; }
   @keyframes ss-spin { to { transform: rotate(360deg); } }
 
-  .shell { height: 100%; display: flex; flex-direction: column; }
+  .shell { height: 100%; display: flex; flex-direction: column; position: relative; }
   .body { flex: 1; display: flex; overflow: hidden; min-height: 0; }
   .left-col {
     flex-shrink: 0; position: relative;

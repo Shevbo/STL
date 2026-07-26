@@ -45,6 +45,7 @@
   .st.ok{color:var(--grn)} .st.bad{color:var(--red);font-weight:700}
   .warn{color:var(--amb);font-size:12px} #err{color:var(--red);font-size:12px}
 </style></head><body>
+<button id="screen-tag" title="ID окна для дебага — клик копирует код" style="position:fixed;top:4px;right:6px;z-index:9999;display:inline-flex;align-items:center;gap:3px;background:#0c0c18cc;border:1px solid #2a2a44;border-radius:3px;padding:0 6px;height:16px;font:9px ui-monospace,monospace;color:#6aa8ff;cursor:pointer;line-height:1" onclick="(function(b){var id='I9';(navigator.clipboard&&navigator.clipboard.writeText(id))||0;b.lastChild.textContent='✓';setTimeout(function(){b.lastChild.textContent='⧉';},1200);})(this)">#I9 <span>⧉</span></button>
   <h1>🖥 i9 · ресурсы (зеркало на STL)</h1>
   <div class="top">
     <button id="refresh">↻ Обновить</button>

@@ -3,6 +3,7 @@
      поз./заявок» и свёрнутая панель умных заявок в правой колонке. Оператор
      искал, где что. Теперь одна кнопка и три вкладки. -->
 <script lang="ts">
+  import ScreenTag from '../lab/ScreenTag.svelte';
   import Orders from '../Orders.svelte';
   import ChartsGrid from '../ChartsGrid.svelte';
   import SmartOrders from './SmartOrders.svelte';
@@ -23,6 +24,7 @@
 </script>
 
 <div class="of">
+  <ScreenTag id="ORDERS" name="ручные заявки" corner="tl" />
   <nav class="of-tabs">
     <button class:on={tab === 'plain'} onclick={() => tab = 'plain'}>Обычная заявка</button>
     <button class:on={tab === 'smart'} onclick={() => tab = 'smart'}>
@@ -38,7 +40,7 @@
 </div>
 
 <style>
-  .of { display: flex; flex-direction: column; height: 100%; background: #0f0f1e; }
+  .of { display: flex; flex-direction: column; height: 100%; background: #0f0f1e; position: relative; }
   .of-tabs { display: flex; gap: 2px; padding: 5px 10px 0; border-bottom: 1px solid #2d2d4a; flex-shrink: 0; }
   .of-tabs button {
     background: none; border: 1px solid transparent; border-bottom: none;
