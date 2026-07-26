@@ -331,7 +331,10 @@
   let periodLabel = $state('');   // actual loaded data span, shown in the header
 
   // Reset zoom to show the WHOLE test period (all bars) on screen.
-  function fitAll() { try { tvCandle?.timeScale().fitContent(); } catch { /* not ready */ } }
+  function fitAll() {
+    try { tvCandle?.timeScale().fitContent(); } catch { /* not ready */ }
+    scheduleRects();   // если видимый диапазон не изменился, событие не придёт
+  }
 
   // Readable default view: the newest bars at >= MIN_CANDLE_PX per candle, so a
   // candle is a candle (not a hairline) and markers spread out instead of stacking.
@@ -442,7 +445,11 @@
       if (!lr) return;
       try { tvEquity.timeScale().setVisibleLogicalRange(lr); } catch { /* transient */ }
       if (syncReady && !draggingBar) updateThumb(lr);
-      updateRects();   // boxes track the candles on pan/zoom
+      // МИРАЖ-фикс (26.07): после fitContent автоскейл цены доезжает на СЛЕДУЮЩЕМ
+      // кадре; одиночный синхронный updateRects брал старую шкалу и растягивал
+      // боксы позиций в «свечи-призраки» над графиком («Весь период» на 1ч).
+      // scheduleRects гонит пересчёт несколько кадров, пока шкала не устаканится.
+      scheduleRects();
       positionLiveLine();
       scheduleMarkerApply();   // пере-кластеризация стрелок под новый зум
     });
