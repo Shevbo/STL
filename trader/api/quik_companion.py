@@ -434,6 +434,25 @@ async def snapshot(request: Request, agent_id: str | None = None):
     _ord = {"реал": 0, "пауза": 0, "переведён в бумагу": 1, "снят": 2}
     robots.sort(key=lambda r: (_ord.get(r["state"], 3), r.get("name") or ""))
 
+    # Разбивка позиции инструмента: сколько от РОБОТОВ (сумма их позиций) и сколько
+    # РУКАМИ (остаток QUIK-нетто минус роботы — торговля оператора мимо STL).
+    _robot_net_by_sec: dict[str, float] = {}
+    for _rid in ids:
+        _rob = mirror_by_id.get(_rid) or {}
+        if _rob.get("mode") == "real" and _rob.get("symbol"):
+            try:
+                _robot_net_by_sec[_rob["symbol"]] = (
+                    _robot_net_by_sec.get(_rob["symbol"], 0.0) + float(_rob.get("position") or 0))
+            except (TypeError, ValueError):
+                pass
+    for p in positions:
+        rn = _robot_net_by_sec.get(p["sec"], 0.0)
+        p["robot_net"] = rn
+        try:
+            p["manual_net"] = float(p["net"]) - rn   # ручное = факт QUIK минус роботы
+        except (TypeError, ValueError):
+            p["manual_net"] = None
+
     # Состояние сессии MOEX (открыта/закрыта по ISS) — нужно и вотчеру раннера
     # (гейт лага ленты), и панели (отдельная строка «биржа»).
     market = getattr(request.app.state, "market_session", None)

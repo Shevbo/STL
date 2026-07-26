@@ -198,9 +198,14 @@ function renderAccount(a) {
 
 function renderPositions(list) {
   if (!list || !list.length) return '<div class="empty">позиций нет</div>';
-  return list.map((p) => `<div class="row ${cls(p.varmargin)}"><span class="k">${esc(p.sec)}</span>` +
-    `<span class="sub">${p.net > 0 ? '+' : ''}${p.net}</span><span class="sp"></span>` +
-    `${val(rub(p.varmargin, { signed: true }), cls(p.varmargin))}</div>`).join('');
+  const sg = (v) => v == null ? '—' : (v > 0 ? '+' : '') + v;
+  return list.map((p) => {
+    const bd = (p.robot_net != null || p.manual_net != null)
+      ? `Роботы <b>${sg(p.robot_net)}</b> · Ручные <b>${sg(p.manual_net)}</b>` : sg(p.net);
+    return `<div class="row ${cls(p.varmargin)}"><span class="k">${esc(p.sec)}</span>` +
+      `<span class="sub">${bd}</span><span class="sp"></span>` +
+      `${val(rub(p.varmargin, { signed: true }), cls(p.varmargin))}</div>`;
+  }).join('');
 }
 
 function robotsTotal(list) {

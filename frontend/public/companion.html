@@ -231,10 +231,16 @@ function renderAccount(a) {
 
 function renderPositions(list) {
   if (!list || !list.length) return '<div class="empty">позиций нет</div>';
+  const sg = (v) => v == null ? '—' : (v > 0 ? '+' : '') + v;
   return list.map((p) => {
     const vm = p.varmargin;
+    // Разбивка: Роботы (сумма позиций роботов) + Ручные (остаток мимо STL). Сумма = ВМ инстр.
+    const rn = p.robot_net, mn = p.manual_net;
+    const breakdown = (rn != null || mn != null)
+      ? `<span class="sub">Роботы <b>${sg(rn)}</b> · Ручные <b>${sg(mn)}</b></span>`
+      : `<span class="sub">${sg(p.net)}</span>`;
     return `<div class="row ${cls(vm)}"><span class="k">${esc(p.sec)}</span>` +
-      `<span class="sub">${p.net > 0 ? '+' : ''}${p.net}</span>` +
+      breakdown +
       `<span class="sp"></span>${val(rub(vm, { signed: true }), cls(vm))}</div>`;
   }).join('');
 }
