@@ -1015,31 +1015,30 @@ async def _market_session_poller(app_state) -> None:
     import datetime as _dt
 
     from trader import market_session as ms
-    _msk = _dt.timezone(_dt.timedelta(hours=3))
-    cal: dict = {}
-    cal_day = ""
+    sched: dict = {}
+    sched_at = 0.0
     while True:
         try:
-            today = _dt.datetime.now(tz=_msk).date().isoformat()
-            if today != cal_day:
+            # Официальное расписание FORTS (ISS session_schedule) почти статично — тянем
+            # раз в час (и дополняется новыми датами). Решение об открытости — по нему.
+            now_s = time.time()
+            if not sched.get("sessions") or (now_s - sched_at) > 3600:
                 try:
                     import httpx as _hx
                     async with _hx.AsyncClient(timeout=10.0) as _cl:
-                        cal = await ms.fetch_calendar(_cl)
-                    cal_day = today
-                    log.info("market_session.calendar", calendar=cal)
-                except Exception as exc:  # noqa: BLE001 — календарь не критичен
-                    log.warning("market_session.calendar_failed", error=str(exc))
+                        _new = await ms.fetch_schedule(_cl)
+                    if _new.get("sessions"):
+                        sched = _new
+                        sched_at = now_s
+                        log.info("market_session.schedule",
+                                 windows=len(sched["sessions"]), holidays=len(sched["holidays"]))
+                except Exception as exc:  # noqa: BLE001 — держим прошлое расписание
+                    log.warning("market_session.schedule_failed", error=str(exc))
             store = getattr(app_state, "quik_store", None)
             status = (store.agent_status(None) or {}) if store is not None else {}
             feed = ((status.get("health") or {}).get("feed")) or []
             codes = ms.codes_from_feed(feed)
-            # Прошлый TIME последней сделки — чтобы classify увидел, СДВИНУЛСЯ ли он
-            # (сделки идут) или замер (закрытие). Точнее любой пороговой свежести.
-            _prev = getattr(app_state, "market_session", None) or {}
-            _prev_tms = int(_prev.get("last_trade_ms") or 0)
-            state = await ms.probe(codes, int(time.time() * 1000), calendar=cal,
-                                   prev_trade_ms=_prev_tms)
+            state = await ms.probe(codes, int(time.time() * 1000), schedule=sched)
             # Не затираем валидный прошлый ответ ошибочным: если ISS не ответил,
             # но раньше знали состояние — оставляем прошлое, только помечаем.
             prev = getattr(app_state, "market_session", None)

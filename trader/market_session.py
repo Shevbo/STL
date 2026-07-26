@@ -1,33 +1,31 @@
-"""Оракул торговой сессии MOEX FORTS — по ОФИЦИАЛЬНЫМ полям ISS.
+"""Оракул торговой сессии MOEX FORTS — по ОФИЦИАЛЬНОМУ машиночитаемому расписанию ISS.
 
-Заказ оператора: сверяться с режимом/расписанием ММВБ из официального источника,
-а не с зашитым календарём. Официальные машинные сигналы ISS (iss.moex.com):
+Единый источник правды (заказ оператора): расписание торгов MOEX — moex.com/s1167.
+Его МАШИНОЧИТАЕМАЯ подложка — ISS `engines/futures.json`, блок `session_schedule`:
+точные окна сессий по датам (утренняя/основная/вечерняя/доп. сессия ВЫХОДНОГО ДНЯ,
+плюс аукцион открытия, клиринг, расчётная). Это те же данные, что на странице биржи.
 
-  * marketdata.TRADE_SESSION_DATE — биржа САМА объявляет дату текущей/следующей
-    сессии. В сб 19:23 после закрытия выходной сессии там уже стоит понедельник:
-    «на сегодня всё, воскресенье торгов нет». Покрывает праздники, выходные
-    сессии и их ранние закрытия БЕЗ какого-либо календаря в коде.
-  * marketdata.TIME — время ПОСЛЕДНЕЙ СДЕЛКИ (биржевые часы). Замер по нему
-    против SYSTIME (часы сервера ISS) даёт «торгуют ли прямо сейчас» на ОДНИХ
-    часах ISS — локальные часы и их дрейф не участвуют.
-  * engines/futures.json dailytable — официальный календарь исключений по датам
-    (праздники, нерабочие выходные вроде 01–02.08.2026). Обновляется раз в
-    сутки (первый запрос нового дня, «03:00-парсинг» без отдельного крона).
+ЖЕЛЕЗОБЕТОННЫЙ АЛГОРИТМ (никаких эвристик по дню недели или самодельных полей):
+  1. «Сейчас» = SYSTIME из ISS marketdata (часы БИРЖИ, не локальные — иммунитет к дрейфу
+     часов хостера/VDS). SYSTIME — реальное серверное время (в отличие от TIME/последней
+     сделки, которая на публичном ISS задержана ~15 мин).
+  2. Открыт ли рынок = попадает ли SYSTIME в ТОРГОВОЕ окно сегодняшней даты из
+     session_schedule (типы morning/main/evening/weekend). Клиринг/расчёт/аукцион — не торги.
+  3. Праздник/сокращённый день — из dailytable (is_work_day=0). Но session_schedule и так
+     не даёт торговых окон в нерабочий день, dailytable — ремень+подтяжки.
+  4. Свежесть последней сделки (SYSTIME-TIME) — ВТОРИЧНый сигнал здоровья фида (лаг ленты),
+     а НЕ решение open/closed. Расписание авторитетно.
 
-Урок v1 (2026-07-25): SYSTIME — часы СЕРВЕРА ISS, они тикают и после закрытия
-сессии; сравнение «now vs SYSTIME» показывало «торги идут» в сб после 19:00.
-Открытость определяет ТОЛЬКО связка TRADE_SESSION_DATE + свежесть TIME.
+Дорогие ошибки, которые это закрывает:
+  * 2026-07-25: эмпирика «now vs SYSTIME» (SYSTIME тикает после закрытия) → «торги идут» в
+    сб после 19:00.
+  * 2026-07-26: `TRADE_SESSION_DATE > today → закрыто`. Но это дата КЛИРИНГА (T+1), во
+    время торгов ВСЕГДА завтрашняя → «биржа закрыта, до понедельника» ПРЯМО ВО ВРЕМЯ
+    торгов на миллиарды. Теперь TRADE_SESSION_DATE в решении НЕ участвует.
 
-Фазы (phase):
-  trading   — сессия сегодня, последняя сделка свежая: торги идут.
-  break     — сессия сегодня, сделок нет несколько минут: клиринг/пауза/тишина.
-  pre_open  — сессия объявлена на сегодня, сделок ещё не было.
-  done      — TRADE_SESSION_DATE уже в будущем: на сегодня биржа закрыла торги.
-  holiday   — сегодняшняя дата в dailytable с is_work_day=0.
-  unknown   — ISS недоступен (open=None, потребитель трактует защитно).
-
-`open` == (phase == 'trading'). Потребители (вотчер-probe, компаньон, SMS)
-дополнительно получают phase/next_session для честных формулировок.
+Фазы (phase): trading | break | pre_open | done | holiday | unknown.
+`open` == (phase == 'trading'). Потребители (вотчер-probe, компаньон, SMS) дополнительно
+получают phase/session_type/next_session для честных формулировок.
 """
 from __future__ import annotations
 
@@ -38,45 +36,43 @@ import httpx
 
 _MSK = datetime.timezone(datetime.timedelta(hours=3))
 _ISS_MD = "https://iss.moex.com/iss/engines/futures/markets/forts/securities/{code}.json"
-_ISS_CAL = "https://iss.moex.com/iss/engines/futures.json"
-# Свежесть последней сделки, при которой считаем «торги идут». 18 минут — чуть выше
-# задержки публичного ISS (~15-16 мин): во время торгов lag=SYSTIME-TIME сам по себе ~16
-# мин и проходит, а застой клиринга (~5 мин пауза + задержка ≈ 21 мин) и закрытие уже
-# отсекаются. Порог 3 мин (было) считал живой рынок «закрытым». Главную точность даёт
-# СДВИГ TIME между опросами (prev_trade_ms) — см. classify; порог — фолбэк на первый опрос.
-_TRADE_FRESH_SEC = 1080
-# Инструменты по умолчанию (фид агента их заменяет — коды следуют роллу сами).
+_ISS_SCHED = "https://iss.moex.com/iss/engines/futures.json"
+# Типы окон, в которых РЕАЛЬНО идут сделки. Клиринг/расчёт/аукцион открытия — НЕ торги.
+_TRADING_TYPES = frozenset({"morning_session", "main_session", "evening_session", "weekend_session"})
+# Инструменты по умолчанию для чтения SYSTIME (фид агента их заменяет — коды следуют роллу).
 _FALLBACK_CODES = ("RIU6", "SiU6")
 
 
 @dataclass
 class SessionState:
-    open: bool | None            # True/False; None = ISS недоступен
+    open: bool | None            # True/False; None = данных нет (защитная трактовка)
     phase: str                   # trading|break|pre_open|done|holiday|unknown
-    last_trade_ms: int           # эпоха-ms последней сделки (0 = неизвестно)
-    iss_lag_sec: int             # SYSTIME - last_trade (сек): «тишина» по данным биржи
-    session_date: str            # TRADE_SESSION_DATE как отдала биржа ('' = н/д)
-    next_session: str            # следующая сессия, если сегодня торгов больше нет
+    session_type: str            # morning|main|evening|weekend|'' — какое окно сейчас/след.
+    now_ms: int                  # часы БИРЖИ (SYSTIME), эпоха-ms
+    next_open_ms: int            # старт следующего торгового окна (0 = неизвестно)
+    last_trade_ms: int           # последняя сделка (для лага ленты)
+    iss_lag_sec: int             # SYSTIME - last_trade: «тишина» по данным биржи (здоровье фида)
     source_code: str
     checked_ms: int
-    calendar: dict = field(default_factory=dict)   # {date: {'work': bool}} на сегодня/завтра
     error: str = ""
+    calendar: dict = field(default_factory=dict)
 
     def as_dict(self) -> dict:
+        nxt = _iso_ms(self.next_open_ms)
         return {
-            "open": self.open, "phase": self.phase,
-            "last_trade_ms": self.last_trade_ms, "iss_lag_sec": self.iss_lag_sec,
-            "session_date": self.session_date, "next_session": self.next_session,
-            "source_code": self.source_code, "checked_ms": self.checked_ms,
-            "calendar": self.calendar, "error": self.error,
-            # Совместимость с v1-потребителями (probe читает .open; лаг был в
-            # lag_sec) — не ломаем то, что уже задеплоено на хостере.
-            "lag_sec": self.iss_lag_sec, "systime_ms": self.last_trade_ms,
+            "open": self.open, "phase": self.phase, "session_type": self.session_type,
+            "now_ms": self.now_ms, "next_open_ms": self.next_open_ms,
+            "next_session": nxt, "last_trade_ms": self.last_trade_ms,
+            "iss_lag_sec": self.iss_lag_sec, "source_code": self.source_code,
+            "checked_ms": self.checked_ms, "calendar": self.calendar, "error": self.error,
+            # Совместимость с прежними потребителями (probe/вотчдог читают .open; лаг был в
+            # lag_sec; часы биржи были в systime_ms) — не ломаем задеплоенное.
+            "lag_sec": self.iss_lag_sec, "systime_ms": self.now_ms,
         }
 
 
 def _parse_dt_ms(day: str, hms: str) -> int:
-    """'2026-07-25' + '18:59:55' (МСК) -> epoch-ms; 0 при мусоре."""
+    """'2026-07-26' + '11:54:37' (МСК) -> epoch-ms; 0 при мусоре."""
     try:
         dt = datetime.datetime.strptime(f"{day} {hms}", "%Y-%m-%d %H:%M:%S").replace(tzinfo=_MSK)
         return int(dt.timestamp() * 1000)
@@ -84,36 +80,94 @@ def _parse_dt_ms(day: str, hms: str) -> int:
         return 0
 
 
-def classify(*, today: str, session_date: str, systime_ms: int, trade_ms: int,
-             holiday: bool = False, prev_trade_ms: int = 0,
-             fresh_sec: int = _TRADE_FRESH_SEC) -> tuple[bool | None, str, int]:
-    """Чистая логика: (open, phase, iss_lag_sec). Все времена — часы ISS.
+def _parse_iss_dt(s: str) -> int:
+    """'YYYY-MM-DD HH:MM:SS' (МСК) -> epoch-ms; 0 при пустом/мусоре."""
+    day, _, hms = str(s or "").partition(" ")
+    return _parse_dt_ms(day, hms)
 
-    ОТКРЫТОСТЬ = ДВИЖЕНИЕ/свежесть ПОСЛЕДНЕЙ СДЕЛКИ, а НЕ TRADE_SESSION_DATE.
-    Урок 2026-07-26 (дорогая ошибка): TRADE_SESSION_DATE — дата КЛИРИНГА (T+1). Во
-    время активных торгов она ВСЕГДА завтрашняя (сегодня 26-е торгуют на миллиарды, а
-    поле = 27-е). Прошлая логика `session_date > today → закрыто` поэтому говорила
-    «биржа закрыта, курите до понедельника» ПРЯМО ВО ВРЕМЯ ТОРГОВ. Больше это поле
-    открытость НЕ решает — только справочно (next_session).
 
-    Публичный ISS отдаёт данные с задержкой ~15 мин, поэтому:
-      1) если TIME сдвинулся с прошлого опроса (prev_trade_ms) — сделки ИДУТ, открыто;
-      2) иначе свежесть: lag = SYSTIME-TIME <= fresh_sec (порог > задержки ISS) — открыто;
-      3) иначе TIME замер: короткая пауза = break (клиринг/тонкий рынок), долгая = done.
-    session_date НЕ участвует в решении.
+def _iso_ms(ms: int) -> str:
+    if ms <= 0:
+        return ""
+    return datetime.datetime.fromtimestamp(ms / 1000, tz=_MSK).isoformat()
+
+
+def parse_schedule(session_rows: list, session_cols: list,
+                   daily_rows: list, daily_cols: list) -> dict:
+    """Разбирает ISS session_schedule + dailytable в структуру для classify.
+
+    Возвращает {'sessions': [(from_ms, till_ms, type)], 'holidays': {date_str}}.
+    В session_schedule ФАКТИЧЕСКАЯ дата окна лежит в time_from/time_till (а НЕ в
+    trade_session_date — там дата клиринга T+1)."""
+    sessions: list[tuple[int, int, str]] = []
+    if session_cols:
+        i_type = session_cols.index("type") if "type" in session_cols else -1
+        i_from = session_cols.index("time_from") if "time_from" in session_cols else -1
+        i_till = session_cols.index("time_till") if "time_till" in session_cols else -1
+        for r in session_rows:
+            typ = str(r[i_type]) if i_type >= 0 else ""
+            if typ not in _TRADING_TYPES:
+                continue
+            f_ms = _parse_iss_dt(r[i_from]) if i_from >= 0 else 0
+            t_ms = _parse_iss_dt(r[i_till]) if i_till >= 0 else 0
+            if f_ms and t_ms:
+                sessions.append((f_ms, t_ms, typ))
+    sessions.sort()
+    holidays: set[str] = set()
+    if daily_cols and "date" in daily_cols and "is_work_day" in daily_cols:
+        i_d, i_w = daily_cols.index("date"), daily_cols.index("is_work_day")
+        for r in daily_rows:
+            if not int(r[i_w] or 0):
+                holidays.add(str(r[i_d]))
+    return {"sessions": sessions, "holidays": holidays}
+
+
+async def fetch_schedule(client: httpx.AsyncClient) -> dict:
+    """Тянет ОФИЦИАЛЬНОЕ расписание FORTS из ISS (session_schedule + dailytable).
+    Обновлять раз в ~час/сутки — оно почти статично, лишь дополняется новыми датами."""
+    r = await client.get(_ISS_SCHED, params={"iss.meta": "off",
+                                              "iss.only": "session_schedule,dailytable"})
+    r.raise_for_status()
+    d = r.json()
+    ss = d.get("session_schedule", {})
+    dt = d.get("dailytable", {})
+    return parse_schedule(ss.get("data", []), ss.get("columns", []),
+                          dt.get("data", []), dt.get("columns", []))
+
+
+def _short_type(typ: str) -> str:
+    return {"morning_session": "morning", "main_session": "main",
+            "evening_session": "evening", "weekend_session": "weekend"}.get(typ, "")
+
+
+def classify(*, now_ms: int, schedule: dict) -> tuple[bool | None, str, str, int]:
+    """ЖЕЛЕЗОБЕТОН: (open, phase, session_type, next_open_ms) по официальным окнам.
+
+    now_ms — часы БИРЖИ (SYSTIME). Решение — ТОЛЬКО по попаданию в торговое окно из
+    session_schedule + праздники dailytable. Никаких дней недели и самодельных полей.
     """
-    if systime_ms <= 0:
-        return None, "unknown", 0
-    lag = max(0, (systime_ms - trade_ms) // 1000) if trade_ms > 0 else 10**9
-    if holiday:
-        return False, "holiday", lag
-    if trade_ms <= 0:
-        return False, "pre_open", lag
-    if prev_trade_ms and trade_ms > prev_trade_ms:
-        return True, "trading", lag          # TIME продвинулся между опросами → торги идут
-    if lag <= fresh_sec:
-        return True, "trading", lag          # свежая сделка в пределах задержки ISS
-    return (False, "break", lag) if lag < 1800 else (False, "done", lag)
+    sessions = (schedule or {}).get("sessions") or []
+    holidays = (schedule or {}).get("holidays") or set()
+    if now_ms <= 0 or not sessions:
+        return None, "unknown", "", 0
+    day = datetime.datetime.fromtimestamp(now_ms / 1000, tz=_MSK).date().isoformat()
+    if day in holidays:
+        return False, "holiday", "", 0
+    today = [s for s in sessions if _iso_ms(s[0]).startswith(day)]
+    # В торговом окне прямо сейчас?
+    for f_ms, t_ms, typ in today:
+        if f_ms <= now_ms <= t_ms:
+            return True, "trading", _short_type(typ), t_ms
+    # Не в окне: до первого окна дня / между окнами / после последнего.
+    future = [s for s in today if s[0] > now_ms]
+    if future:
+        nxt = min(s[0] for s in future)
+        # если сегодня уже были окна раньше — это ПАУЗА между сессиями/клиринг, иначе утро
+        had_earlier = any(s[1] < now_ms for s in today)
+        return False, ("break" if had_earlier else "pre_open"), "", nxt
+    # окон сегодня больше нет — следующее в будущих датах
+    nxt_all = [s[0] for s in sessions if s[0] > now_ms]
+    return False, "done", "", (min(nxt_all) if nxt_all else 0)
 
 
 def codes_from_feed(feed: list[dict] | None) -> list[str]:
@@ -121,33 +175,14 @@ def codes_from_feed(feed: list[dict] | None) -> list[str]:
     return codes or list(_FALLBACK_CODES)
 
 
-async def fetch_calendar(client: httpx.AsyncClient) -> dict:
-    """Официальный календарь исключений (dailytable) на сегодня и завтра.
-    {date: {'work': bool}}. Пусто — исключений нет (обычный день)."""
-    r = await client.get(_ISS_CAL, params={"iss.meta": "off", "iss.only": "dailytable"})
-    r.raise_for_status()
-    dt = r.json().get("dailytable", {})
-    cols, rows = dt.get("columns", []), dt.get("data", [])
-    if "date" not in cols:
-        return {}
-    idx_d, idx_w = cols.index("date"), cols.index("is_work_day")
-    today = datetime.datetime.now(tz=_MSK).date()
-    want = {today.isoformat(), (today + datetime.timedelta(days=1)).isoformat()}
-    out = {}
-    for r_ in rows:
-        d = str(r_[idx_d])
-        if d in want:
-            out[d] = {"work": bool(r_[idx_w])}
-    return out
-
-
 async def probe(codes: list[str], now_ms: int, *, client: httpx.AsyncClient | None = None,
-                calendar: dict | None = None, prev_trade_ms: int = 0) -> SessionState:
-    """Опрос ISS по нескольким кодам; берём инструмент с САМОЙ СВЕЖЕЙ сделкой
-    (торгуется хоть один — рынок открыт). Полный провал -> open=None."""
+                schedule: dict | None = None) -> SessionState:
+    """Опрос: берём SYSTIME (часы биржи) и свежесть сделки из ISS marketdata по нескольким
+    кодам, решение об открытости — по ОФИЦИАЛЬНОМУ расписанию `schedule` (см. fetch_schedule).
+    Расписание не передали / ISS молчит -> open=None (потребитель трактует защитно)."""
     own = client is None
     cl = client or httpx.AsyncClient(timeout=8.0)
-    best = {"trade_ms": 0, "systime_ms": 0, "session_date": "", "code": ""}
+    best = {"systime_ms": 0, "trade_ms": 0, "code": ""}
     errs: list[str] = []
     try:
         for code in codes[:4]:
@@ -160,35 +195,29 @@ async def probe(codes: list[str], now_ms: int, *, client: httpx.AsyncClient | No
                 if not rows or "SYSTIME" not in cols:
                     continue
                 m = dict(zip(cols, rows[0]))
-                sys_raw = str(m.get("SYSTIME") or "")           # 'YYYY-MM-DD HH:MM:SS'
+                sys_raw = str(m.get("SYSTIME") or "")           # 'YYYY-MM-DD HH:MM:SS' (часы биржи)
                 sys_day, _, sys_hms = sys_raw.partition(" ")
                 systime_ms = _parse_dt_ms(sys_day, sys_hms)
-                # TIME — часы последней сделки ТЕКУЩЕГО торгового дня (биржевые).
-                # День берём из SYSTIME: обе метки живут на часах ISS.
                 trade_ms = _parse_dt_ms(sys_day, str(m.get("TIME") or "")) if m.get("TIME") else 0
                 if trade_ms > systime_ms and trade_ms - systime_ms > 3_600_000:
                     trade_ms -= 86_400_000    # сделка «позже» сервера на часы = вчерашняя
-                if trade_ms >= best["trade_ms"]:
-                    best = {"trade_ms": trade_ms, "systime_ms": systime_ms,
-                            "session_date": str(m.get("TRADE_SESSION_DATE") or ""),
-                            "code": code}
+                # берём инструмент с самой свежей сделкой (SYSTIME у всех одинаков)
+                if systime_ms and (not best["systime_ms"] or trade_ms >= best["trade_ms"]):
+                    best = {"systime_ms": systime_ms, "trade_ms": trade_ms, "code": code}
             except Exception as exc:  # noqa: BLE001 — терпим по одному коду
                 errs.append(f"{code}: {exc.__class__.__name__}")
     finally:
         if own:
             await cl.aclose()
 
-    today = datetime.datetime.now(tz=_MSK).date().isoformat()
-    cal = calendar or {}
-    holiday = not cal.get(today, {}).get("work", True) if today in cal else False
-    is_open, phase, lag = classify(
-        today=today, session_date=best["session_date"],
-        systime_ms=best["systime_ms"], trade_ms=best["trade_ms"], holiday=holiday,
-        prev_trade_ms=prev_trade_ms)
-    nxt = best["session_date"] if best["session_date"] and best["session_date"] > today else ""
-    err = "" if best["systime_ms"] else ("; ".join(errs) or "ISS не ответил")
+    now_biz = best["systime_ms"]
+    is_open, phase, stype, next_ms = classify(now_ms=now_biz, schedule=schedule or {})
+    lag = max(0, (now_biz - best["trade_ms"]) // 1000) if (now_biz and best["trade_ms"] > 0) else 0
+    err = "" if now_biz else ("; ".join(errs) or "ISS не ответил")
+    if not (schedule or {}).get("sessions"):
+        err = (err + "; расписание не загружено").strip("; ")
     return SessionState(
-        open=is_open, phase=phase, last_trade_ms=best["trade_ms"],
-        iss_lag_sec=int(lag if lag < 10**9 else 0),
-        session_date=best["session_date"], next_session=nxt,
-        source_code=best["code"], checked_ms=now_ms, calendar=cal, error=err)
+        open=is_open, phase=phase, session_type=stype, now_ms=now_biz,
+        next_open_ms=next_ms, last_trade_ms=best["trade_ms"], iss_lag_sec=int(lag),
+        source_code=best["code"], checked_ms=now_ms,
+        calendar={"holidays": sorted((schedule or {}).get("holidays") or set())[:10]}, error=err)
