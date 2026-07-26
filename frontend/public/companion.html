@@ -306,6 +306,38 @@ function renderActiveRobots(list) {
   }).join('');
 }
 
+// #6: ручные заявки — простые (таблица заявок QUIK, без тега = ручной класс)
+// и умные (книга STL). Только статус, действия — в терминале STL.
+function renderOrders(o) {
+  if (!o || (!(o.manual || []).length && !(o.smart || []).length))
+    return '<div class="empty">ручных заявок нет</div>';
+  const sideRu = (s) => s === 'buy' ? 'покупка' : 'продажа';
+  const num = (v) => v == null ? '—' : Number(v).toLocaleString('ru-RU');
+  let out = '';
+  for (const m of o.manual || []) {
+    out += `<div class="row"><span class="k">${esc(m.sec)} ${sideRu(m.side)} ${m.qty}</span>` +
+      `<span class="sub">@ ${num(m.price)}${m.active && m.balance < m.qty ? ` · осталось ${m.balance}` : ''}</span>` +
+      `<span class="sp"></span><span class="v ${m.active ? 'up' : 'nil'}">${esc(m.state)}</span></div>`;
+  }
+  const KIND = { sl: 'SL', tp: 'TP', trail_tp: 'TRAIL', on_fill: 'по сделке' };
+  const ST = { armed: 'взведена', fired: 'сработала', cancelled: 'снята',
+    expired: 'истекла', orphaned: 'осиротела', error: 'ошибка' };
+  for (const s of o.smart || []) {
+    let sub = s.trigger ? `уровень ${num(s.trigger)}` : '';
+    if (s.kind === 'trail_tp' && s.status === 'armed') {
+      sub = s.activated
+        ? `● от пика ${num(s.peak)}, сделка при ${s.side === 'buy' ? '≥' : '≤'} ` +
+          num(s.side === 'buy' ? s.peak + s.trail_offset : s.peak - s.trail_offset)
+        : `ждёт пробоя ${num(s.trigger)}`;
+    }
+    const live = s.status === 'armed';
+    out += `<div class="row"><span class="k">умная ${KIND[s.kind] || s.kind} · ${esc(s.code)} ${sideRu(s.side)} ${s.qty}</span>` +
+      `<span class="sub">${esc(sub)}</span><span class="sp"></span>` +
+      `<span class="v ${live ? (s.activated ? 'up' : '') : 'nil'}">${esc(ST[s.status] || s.status)}</span></div>`;
+  }
+  return out;
+}
+
 function check(name, block) {
   const bad = block && block.ok === false;
   const txt = bad ? (block.issues || []).join('; ') : 'ОК';
@@ -393,6 +425,8 @@ function paint(d) {
     '<div class="sec">позиции</div>' + renderPositions(d.positions) +
     `<div class="sec">роботы <a href="${STL}/?lab=live&equity=1" data-ext>витрина ↗</a></div>` +
       robotsTotal(d.robots) + renderRobots(d.robots) +
+    `<div class="sec">заявки ручные <a href="${STL}/?orders=1" data-ext>терминал ↗</a></div>` +
+      renderOrders(d.orders) +
     `<div class="sec">вотчер <a href="${STL}/?lab=botstore" data-ext>хитпарад ↗</a></div>` +
       renderWatch(d.watch) +
     `<div class="sec">уведомления <a href="${STL}/watchdog-log.html" data-ext>детали ↗</a>` +

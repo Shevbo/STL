@@ -397,7 +397,7 @@ async def snapshot(request: Request, agent_id: str | None = None):
     _last_by = {f.get("code"): f.get("last") for f in (health.get("feed") or []) if f.get("code")}
     def _robot_vm(sym, pos, avg):
         try:
-            pos = float(pos); avg = float(avg)
+            pos, avg = float(pos), float(avg)
         except (TypeError, ValueError):
             return None
         px, c = _last_by.get(sym), _coef_by.get(sym)
@@ -452,6 +452,40 @@ async def snapshot(request: Request, agent_id: str | None = None):
             p["manual_net"] = float(p["net"]) - rn   # ручное = факт QUIK минус роботы
         except (TypeError, ValueError):
             p["manual_net"] = None
+
+    # 3.5 Ручные заявки (#6): простые — из таблицы заявок QUIK (без тега = ручной
+    # класс, включая детей умных заявок so:), умные — из книги STL. Только чтение.
+    manual_orders = []
+    for o in (status.get("quik") or {}).get("orders") or []:
+        if o.get("tag"):
+            continue  # роботные/recon — не ручные
+        try:
+            qty, bal = int(o.get("qty") or 0), int(o.get("balance") or 0)
+        except (TypeError, ValueError):
+            qty, bal = 0, 0
+        if o.get("active"):
+            st = "активна"
+        elif bal == 0 and qty > 0:
+            st = "исполнена"
+        else:
+            st = "снята" + (f", исполнено {qty - bal}" if qty > bal else "")
+        manual_orders.append({"num": o.get("num"), "sec": o.get("sec"),
+                              "side": o.get("side"), "price": o.get("price"),
+                              "qty": qty, "balance": bal, "state": st,
+                              "active": bool(o.get("active")),
+                              "ts_ms": o.get("ts_ms")})
+    manual_orders.sort(key=lambda d: (not d["active"], -(d.get("ts_ms") or 0)))
+    smart_list = []
+    so_book = getattr(request.app.state, "smart_orders", None)
+    for so in (so_book.orders if so_book else []):
+        if so.status != "armed" and max(so.created_ms, so.fired_ms) < today_lo:
+            continue  # старую историю в панель не тянем
+        smart_list.append({
+            "so_id": so.so_id, "kind": so.kind, "code": so.code, "side": so.side,
+            "qty": so.qty, "trigger": so.trigger_price,
+            "trail_offset": so.trail_offset, "activated": so.activated,
+            "peak": so.peak, "status": so.status, "fired_ms": so.fired_ms})
+    orders_block = {"manual": manual_orders[:8], "smart": smart_list[:8]}
 
     # Состояние сессии MOEX (открыта/закрыта по ISS) — нужно и вотчеру раннера
     # (гейт лага ленты), и панели (отдельная строка «биржа»).
@@ -576,6 +610,7 @@ async def snapshot(request: Request, agent_id: str | None = None):
         "ts_ms": now_ms, "agent_seen_ms": received_ms,
         "ping_ms": health.get("rtt_ms"),   # пинг агент<->QUIK (pong RTT) для шапки
         "account": account, "positions": positions, "robots": robots,
+        "orders": orders_block,
         "watch": {"runner": watch_runner, "backtests": bt, "platform": platform},
         "alerts": alerts, "market": market,
     }
