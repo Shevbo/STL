@@ -385,19 +385,25 @@ async def snapshot(request: Request, agent_id: str | None = None):
     # (даже если ещё не наторговал ни одного филла в журнале).
     ids = set(real_all) | {rid for rid, rob in mirror_by_id.items()
                            if rob.get("mode") == "real"}
-    # ВМ позиции робота. QUIK отдаёт варьмаржу на ИНСТРУМЕНТ целиком, не на робота;
-    # если на одном коде несколько роботов (или ещё ручная торговля), делим ВМ инструмента
-    # пропорционально позиции робота: vm_robot = vm_sec * pos_robot / net_sec. Flat-робот
-    # (поз 0) варьмаржи не несёт -> None.
-    _pos_by_sec = {p.get("sec"): p for p in (health.get("positions") or []) if p.get("sec")}
-    def _robot_vm(sym, pos):
-        p = _pos_by_sec.get(sym)
-        if not p or not pos:
+    # ВМ позиции робота = ЕГО СОБСТВЕННАЯ нереализованная прибыль по ЕГО позиции:
+    #   vm = position * (текущая цена - средняя входа) * coef(₽/пункт).
+    # QUIK отдаёт варьмаржу только на ИНСТРУМЕНТ целиком (не на робота), и позиции
+    # роботов НЕ обязаны сходиться с нетто счёта (несколько роботов на коде + ручная
+    # торговля). Прошлый вариант делил инструментальную ВМ на позицию робота и при
+    # разных знаках переворачивал её в бред (+5481 из -6851). Теперь считаем по данным
+    # САМОГО робота: цена — из фида агента (last по коду), coef — из QLua-параметров.
+    _params = (store.params(agent_id) if store is not None else None) or {}
+    _coef_by = {r.get("code"): r.get("coef") for r in (_params.get("rows") or []) if r.get("code")}
+    _last_by = {f.get("code"): f.get("last") for f in (health.get("feed") or []) if f.get("code")}
+    def _robot_vm(sym, pos, avg):
+        try:
+            pos = float(pos); avg = float(avg)
+        except (TypeError, ValueError):
             return None
-        vm, net = p.get("varmargin"), p.get("net")
-        if vm is None or not net:
+        px, c = _last_by.get(sym), _coef_by.get(sym)
+        if not pos or not avg or px in (None, 0) or c in (None, 0):
             return None
-        return vm * pos / net
+        return pos * (float(px) - avg) * float(c)
     robots = []
     for rid in ids:
         ra = real_all.get(rid) or {}
@@ -419,7 +425,8 @@ async def snapshot(request: Request, agent_id: str | None = None):
             "real_today": rt.get("net"),
             "real_trades_today": rt.get("trades") or 0,
             "position": rob.get("position") if cur_mode == "real" else None,
-            "varmargin": _robot_vm(rob.get("symbol"), rob.get("position")) if cur_mode == "real" else None,
+            "varmargin": (_robot_vm(rob.get("symbol"), rob.get("position"), rob.get("avg_price"))
+                          if cur_mode == "real" else None),
             "last_trade_ms": ra.get("last_ts") or 0,
         })
     # Сортировка: сначала активный реал, потом переведённые в бумагу, потом снятые;
