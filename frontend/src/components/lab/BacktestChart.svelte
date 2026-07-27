@@ -728,7 +728,10 @@
       const all: any[] = [];
       for (const seg of segments) {
         const part = await fetchBars(seg.symbol, seg.dateFrom, seg.dateTo);
-        for (const b of part) if (b.time >= seg.fromTs && b.time < seg.toTs) all.push(b);
+        // Помним КОНТРАКТ каждого бара: ВМ открытой позиции нельзя считать по
+        // цене чужого контракта (27.07: последним баром оказался мёртвый RIM6
+        // @105 250, средняя позиции — RIU6 @90 005, и стенд нарисовал −261 715 ₽).
+        for (const b of part) if (b.time >= seg.fromTs && b.time < seg.toTs) all.push({ ...b, sym: seg.symbol });
       }
       all.sort((a, b) => a.time - b.time);
       const out: any[] = []; let lastT = -Infinity;
@@ -736,7 +739,8 @@
       return out;
     }
     const w = liveWindow();
-    return await fetchBars(symbol, w.from, w.to);
+    const rows = await fetchBars(symbol, w.from, w.to);
+    return rows.map((b: any) => ({ ...b, sym: symbol }));
   }
 
   // Position rectangles (chart-axis time → pixels), recomputed on every pan/zoom so the
@@ -1007,15 +1011,24 @@
       };
       netResult = shownNet;     // parent-supplied authoritative net (live) else engine/replay
       onNet?.(netResult);       // parent header badge shows the SAME number
-      // ВМ открытой позиции: pv строго ТЕКУЩЕГО контракта (чужой множитель запрещён —
-      // point-coef trap). Реплей без доверия (обрезанный журнал) ВМ не считает: лучше
-      // честный фикс, чем ВМ от вранной позиции. floatRub (агент-экран) приоритетен.
+      // ВМ открытой позиции. ТРИ ЖЁСТКИХ ГЕЙТА (каждый ловил живой фантом):
+      //  1) множитель ₽/пункт — строго текущего контракта (point-coef trap);
+      //  2) ЦЕНА — с ТОГО ЖЕ контракта, что и позиция: последний бар может
+      //     принадлежать умершему контракту после ролла (−261 715 ₽, 27.07);
+      //  3) бар не старше 4 суток — по мёртвому контракту ВМ не считаем вовсе.
+      // Реплей без доверия (обрезанный журнал) ВМ тоже не считает: лучше честный
+      // фикс, чем ВМ от вранной позиции. floatRub (агент-экран) приоритетен.
       const replayTrusted = !(journalSuspect || (livePosition != null && endPos !== livePosition));
       const pvCur = (pointValues && rolled.currentSymbol && pointValues[rolled.currentSymbol] != null)
         ? pointValues[rolled.currentSymbol] : (pointValue ?? 1);
+      const vmBar: any = bars.length ? bars[bars.length - 1] : null;
+      const barSym = String(vmBar?.sym ?? symbol ?? '').toUpperCase();
+      const posSym = String(rolled.currentSymbol || symbol || '').toUpperCase();
+      const barFresh = !!vmBar && (Date.now() / 1000 - vmBar.time) < 4 * 86400;
+      const priceOk = !!vmBar && barSym === posSym && barFresh;
       vmOpen = floatRub != null ? floatRub
-        : (replayTrusted && rolled.position !== 0 && rolled.openAvg > 0 && bars.length
-            ? (bars[bars.length - 1].close - rolled.openAvg) * rolled.position * pvCur : 0);
+        : (replayTrusted && priceOk && rolled.position !== 0 && rolled.openAvg > 0
+            ? (vmBar.close - rolled.openAvg) * rolled.position * pvCur : 0);
       onVm?.(vmOpen);
       // Broker vs exchange commission split (transparency).
       commission = commissionBreakdown(fills, pointValue, symbol, taker);
