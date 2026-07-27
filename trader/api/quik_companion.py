@@ -457,6 +457,9 @@ async def snapshot(request: Request, agent_id: str | None = None):
             "real_today": rt.get("net"),
             "real_trades_today": rt.get("trades") or 0,
             "position": rob.get("position") if cur_mode == "real" else None,
+            # Потолок позиции, который агент реально сторожит (из спеки робота) —
+            # панель печатает «поз 3 из 6», иначе число без масштаба ни о чём.
+            "max_position": rob.get("max_position") if cur_mode == "real" else None,
             "varmargin": vm,
             "max_go": max_go or None,
             "started_ms": first_ts or None,

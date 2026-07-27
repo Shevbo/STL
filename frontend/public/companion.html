@@ -112,7 +112,10 @@
   .row.total .k { color: var(--ink); }
 
   /* Робот: две строки — имя со ссылкой, под ней цифры. */
-  .rob { padding: 2px 0 2px 6px; border-left: 2px solid var(--rail-flat); margin-top: 1px; }
+  /* Робот: две строки БЕЗ воздуха между ними — оператор читает их как одну
+     карточку. Межстрочный интервал одинарный (в body он 1.45 «для прозы»). */
+  .rob { padding: 1px 0 2px 6px; border-left: 2px solid var(--rail-flat); margin-top: 2px;
+    line-height: 1.15; }
   .rob.up { border-left-color: var(--up); }
   .rob.down { border-left-color: var(--down); }
   .rob .hd { display: flex; align-items: baseline; gap: 6px; }
@@ -129,8 +132,13 @@
   .tag.paused { color: var(--down); font-weight: 600; }
   /* Переведён в бумагу / снят — уже не рискует реалом, приглушаем. */
   .tag.off { color: var(--faint); }
-  .rob .nums { display: flex; gap: 9px; flex-wrap: wrap; color: var(--muted); font-size: 11px; }
+  .rob .nums { display: flex; gap: 9px; flex-wrap: wrap; color: var(--muted); font-size: 11px;
+    line-height: 1.15; }
   .rob .nums b { font-weight: 600; color: var(--ink); }
+  /* Знак деньгам — цветом: без этого .rob .nums b перекрывал .up/.down
+     специфичностью и фикс/ВМ/сегодня печатались нейтральными. */
+  .rob .nums b.up { color: var(--up); }
+  .rob .nums b.down { color: var(--down); }
 
   /* Вотчер: точка статуса + текст проблемы. */
   .chk { display: flex; align-items: baseline; gap: 5px; padding: 1px 0 1px 6px;
@@ -143,6 +151,10 @@
   .alert { padding: 1px 0 1px 6px; border-left: 2px solid var(--down); color: var(--down); }
   .alert.ok { border-left-color: var(--up); color: var(--up); }
   .alert .at { color: var(--faint); font-size: 9px; margin-right: 4px; }
+  /* Уведомления схлопнуты: видно последнее, остальные — по стрелке. */
+  .more { cursor: pointer; color: var(--muted); border-bottom: 1px dotted var(--rule);
+    text-transform: none; letter-spacing: 0; margin-left: 6px; }
+  .more:hover { color: var(--ink); }
   /* Лампа перебора: пульсирует, пока есть свежий отличный кандидат. */
   .star { display: inline-block; width: 7px; height: 7px; border-radius: 50%;
     background: #b58900; margin-right: 4px; animation: starpulse 2s infinite; }
@@ -202,14 +214,17 @@ function lastTradeFmt(ms) {
 
 // Заголовок: STL, дата, день недели, время (МСК), режим работы биржи.
 const DOW = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
-function renderBrand(d) {
+function renderBrand(d, withMode) {
   const now = new Date(d && d.ts_ms ? d.ts_ms : Date.now());
   const p = new Intl.DateTimeFormat('ru-RU', {
     timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', year: 'numeric',
     weekday: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit',
   }).formatToParts(now).reduce((a, x) => (a[x.type] = x.value, a), {});
+  // Режим биржи в шапку НЕ пишем: он и так есть строкой ниже, с цветом. В текст
+  // для буфера (withMode=true) добавляем — там контекст важнее краткости.
   const mode = marketMode(d && d.market);
-  return `STL · ${p.day}.${p.month}.${p.year} ${p.weekday} ${p.hour}:${p.minute}:${p.second} · ${mode}`;
+  const head = `STL · ${p.day}.${p.month}.${p.year} ${p.weekday} ${p.hour}:${p.minute}:${p.second}`;
+  return withMode ? `${head} · ${mode}` : head;
 }
 
 // Строка "подпись ... значение" с рельсом по знаку.
@@ -333,7 +348,7 @@ function renderActiveRobots(list) {
       <div class="nums">
         ${r.varmargin ? `<span title="фикс по закрытым сделкам + ВМ открытой позиции (от входа)">фикс <b class="${cls(r.real_net)}">${rub(r.real_net, { signed: true })}</b> · ВМ <b class="${cls(r.varmargin)}">${rub(r.varmargin, { signed: true })}</b></span>`
           : `<span>сегодня <b class="${cls(r.real_today)}">${r.real_today == null ? '—' : rub(r.real_today, { signed: true })}</b></span>`}
-        ${r.position == null ? '' : `<span>поз <b>${r.position}</b></span>`}
+        ${r.position == null ? '' : `<span title="текущая позиция из максимально допустимой (потолок робота на агенте)">поз <b class="${cls(r.position)}">${r.position}</b>${r.max_position ? ` из <b>${r.max_position}</b>` : ''}</span>`}
         ${ann == null ? '' : `<span title="доходность в год: (фикс+ВМ) к максимальному задействованному ГО${r.max_go ? ' ' + Math.round(r.max_go).toLocaleString('ru-RU') + ' ₽' : ''}, линейно экстраполировано с ${annDays} дн">год <b class="${cls(r.ann_pct)}">${ann}</b>${annDays ? ` <span style="opacity:.7">за ${annDays} дн</span>` : ''}</span>`}
         <span>сделок сегодня <b>${r.real_trades_today || 0}</b></span>
         <span>${last ? 'посл. ' + last : 'реальных сделок нет'}</span>
@@ -412,15 +427,25 @@ function renderWatch(w) {
     star;
 }
 
+// Уведомления схлопнуты до ПОСЛЕДНЕГО: панель не должна расти вниз лентой
+// истории. Остальные раскрываются стрелкой рядом с «копировать».
+let alertsOpen = false;
 function renderAlerts(a) {
   if (!a) return '';
   // Свежие СВЕРХУ; ok=зелёная норма, иначе красная тревога. items уже
   // отсортированы бэкендом по ts_ms desc.
   const items = a.items || [];
   if (!items.length) return '<div class="empty">тихо, эскалаций нет</div>';
-  return items.map((it) =>
+  const shown = alertsOpen ? items : items.slice(0, 1);
+  return shown.map((it) =>
     `<div class="alert ${it.ok ? 'ok' : ''}">` +
     `<span class="at">${esc(hhmmss(it.ts_ms) || '')}</span>${esc(it.text)}</div>`).join('');
+}
+function alertsToggle(a) {
+  const n = ((a && a.items) || []).length;
+  if (n <= 1) return '';
+  return `<span class="more" id="moreAlerts" title="${alertsOpen ? 'свернуть' : 'показать ещё ' + (n - 1)}">`
+    + `${alertsOpen ? '▴' : '▾'} ${alertsOpen ? 'свернуть' : 'ещё ' + (n - 1)}</span>`;
 }
 
 // Режим биржи ОФИЦИАЛЬНО (ISS: TRADE_SESSION_DATE + последняя сделка):
@@ -466,7 +491,8 @@ function paint(d) {
     `<div class="sec">вотчер <a href="${STL}/?lab=botstore" data-ext>хитпарад ↗</a></div>` +
       renderWatch(d.watch) +
     `<div class="sec">уведомления <a href="${STL}/watchdog-log.html" data-ext>детали ↗</a>` +
-      `<span class="sp" style="flex:1"></span><span class="copy" id="copyAlerts">копировать</span></div>` +
+      `<span class="sp" style="flex:1"></span><span class="copy" id="copyAlerts">копировать</span>` +
+      alertsToggle(d.alerts) + `</div>` +
       renderAlerts(d.alerts);
   fitWindow();
 }
@@ -475,7 +501,7 @@ function paint(d) {
 // свежесть, паузы роботов, проблемы вотчера и эскалации — не только сырые SMS.
 function alertsText() {
   const d = lastData || {};
-  const L = [renderBrand(d)];
+  const L = [renderBrand(d, true)];
   const paused = (d.robots || []).filter((r) => r.state === 'пауза').map((r) => r.name);
   if (paused.length) L.push('на паузе (реал): ' + paused.join(', '));
   const w = d.watch || {};
@@ -507,6 +533,7 @@ async function copyAlerts(btn) {
 document.addEventListener('click', (e) => {
   const copyBtn = e.target.closest('.copy');
   if (copyBtn) { copyAlerts(copyBtn); return; }
+  if (e.target.closest('.more')) { alertsOpen = !alertsOpen; if (lastData) paint(lastData); return; }
   const a = e.target.closest('a[data-ext]');
   if (!a || !LOCAL) return;   // в браузере ссылка работает сама собой
   e.preventDefault();
