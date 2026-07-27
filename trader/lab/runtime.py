@@ -362,20 +362,47 @@ class LiveRuntime:
                         quantity=0, avg_price=Decimal(0), current_price=Decimal(0), var_margin=Decimal(0))
 
     async def _paper_position(self, symbol: str) -> Position:
-        signed = 0
+        """Позиция бумажного робота из его же записанных филлов — С НАСТОЯЩЕЙ
+        СРЕДНЕЙ ЦЕНОЙ ВХОДА.
+
+        Раньше avg_price жёстко возвращалась 0, и это ЛОМАЛО СТРАТЕГИИ (найдено
+        2026-07-27, 10 роботов стояли с 18.06):
+          • тейк лонга `price >= avg + tp*ATR` при avg=0 срабатывал на ПЕРВОМ же
+            баре — лонг закрывался мгновенно;
+          • тейк шорта `price <= avg - tp*ATR` при avg=0 не мог сработать НИКОГДА —
+            шорт висел вечно (все зависшие роботы были в шорте, 100% совпадение);
+          • усреднение считало «ход против позиции» от нуля, то есть невпопад.
+        Лестница жизненного цикла — та же, что в BacktestRuntime и robot_runner
+        (частичное закрытие СОХРАНЯЕТ среднюю, разворот через ноль — переоткрывает).
+        """
+        signed, avg = 0, 0.0
         if self._pool is not None:
             async with self._pool.acquire() as conn:
                 rows = await conn.fetch(
-                    """SELECT side, qty FROM live_trades
+                    """SELECT side, qty, price FROM live_trades
                        WHERE robot_id=$1 AND symbol=$2 AND status='paper'
                        ORDER BY timestamp""",
                     self._robot_id, symbol,
                 )
             for r in rows:
-                signed += r["qty"] if r["side"] == "buy" else -r["qty"]
+                qty = int(r["qty"])
+                px = float(r["price"])
+                delta = qty if r["side"] == "buy" else -qty
+                new_signed = signed + delta
+                if signed == 0:                                  # открытие с флэта
+                    avg = px
+                elif new_signed == 0:                            # полное закрытие
+                    avg = 0.0
+                elif (signed > 0) == (delta > 0):                # долив в ту же сторону
+                    avg = (avg * abs(signed) + px * qty) / (abs(signed) + qty)
+                elif (signed > 0) == (new_signed > 0):           # частичное закрытие
+                    pass                                         # средняя НЕ меняется
+                else:                                            # разворот через ноль
+                    avg = px
+                signed = new_signed
         side = "long" if signed > 0 else ("short" if signed < 0 else "flat")
         return Position(symbol=symbol, account_id="paper", side=side,
-                        quantity=abs(signed), avg_price=Decimal(0),
+                        quantity=abs(signed), avg_price=Decimal(str(avg if signed else 0.0)),
                         current_price=Decimal(0), var_margin=Decimal(0))
 
     async def get_account(self) -> AccountSummary:
