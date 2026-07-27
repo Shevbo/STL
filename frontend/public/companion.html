@@ -103,6 +103,9 @@
   .v.up { color: var(--up); }
   .v.down { color: var(--down); }
   .v.nil { color: var(--faint); font-weight: 400; }
+  /* Живая котировка рядом с кодом инструмента. Мельче значения, но чётче подписи. */
+  .q { color: var(--ink); font-size: 11px; font-weight: 600; }
+  .q-stale { color: var(--faint); font-weight: 400; text-decoration: line-through; }
   .sub { color: var(--faint); font-size: 10px; }
   /* Итоговая строка по роботам: жирнее рамка, чтобы читалась как сумма. */
   .row.total { border-left-width: 3px; margin-top: 2px; padding-top: 2px; }
@@ -232,11 +235,23 @@ function renderAccount(a) {
     row('Биржевые сборы', rub(a.ts_comission), a.ts_comission ? -1 : 0);
 }
 
+// Цена инструмента: НИКОГДА не округляем до целого (у BR шаг 0.01) — только
+// гасим float-пыль. Правило поймано дважды, см. lib/format.ts.
+function px(v) {
+  return v == null || !isFinite(v) ? null
+    : Number(v).toLocaleString('ru-RU', { maximumFractionDigits: 6 });
+}
+
 function renderPositions(list) {
   if (!list || !list.length) return '<div class="empty">позиций нет</div>';
   const sg = (v) => v == null ? '—' : (v > 0 ? '+' : '') + v;
   return list.map((p) => {
     const vm = p.varmargin;
+    // Живая котировка рядом с позицией: видно, по какой цене её мерить.
+    const q = px(p.last);
+    const stale = p.quote_age_ms != null && p.quote_age_ms > 120000;
+    const quote = q == null ? '' :
+      `<span class="q${stale ? ' q-stale' : ''}" title="последняя сделка${p.bid ? ' · bid ' + px(p.bid) : ''}${p.ask ? ' · ask ' + px(p.ask) : ''}${stale ? ' · котировка не обновлялась > 2 мин' : ''}">${q}</span>`;
     // Разбивка: Роботы (сумма позиций роботов) + Ручные (остаток мимо STL). Сумма = ВМ инстр.
     const rn = p.robot_net, mn = p.manual_net;
     const breakdown = (rn != null || mn != null)
@@ -247,7 +262,7 @@ function renderPositions(list) {
     // клиринговой цены, а не от входа. У робота ниже — ВМ ОТ ВХОДА. Это разные
     // величины, поэтому подписаны по-разному (иначе выглядит как расхождение).
     return `<div class="row ${cls(vm)}" title="Вариационная маржа QUIK за текущую сессию (с последнего клиринга)">` +
-      `<span class="k">${esc(p.sec)}</span>` + breakdown +
+      `<span class="k">${esc(p.sec)}</span>` + quote + breakdown +
       `<span class="sp"></span><span class="sub">ВМ сессии</span>` +
       `${val(rub(vm, { signed: true }), cls(vm))}</div>`;
   }).join('');

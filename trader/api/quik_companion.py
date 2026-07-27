@@ -343,9 +343,16 @@ async def snapshot(request: Request, agent_id: str | None = None):
     }
 
     # 2. Positions per instrument (ВМ is null on an old Lua build).
+    # last/bid/ask — живая котировка инструмента из фида агента (панель их показывает
+    # рядом с позицией). Цену НИКОГДА не округляем: у BR шаг 0.01.
+    _feed = {f.get("code"): f for f in (health.get("feed") or []) if f.get("code")}
     positions = [
         {"sec": p.get("sec"), "net": p.get("net"), "avg": p.get("avg"),
-         "varmargin": p.get("varmargin")}
+         "varmargin": p.get("varmargin"),
+         "last": (_feed.get(p.get("sec")) or {}).get("last"),
+         "bid": (_feed.get(p.get("sec")) or {}).get("bid"),
+         "ask": (_feed.get(p.get("sec")) or {}).get("ask"),
+         "quote_age_ms": (_feed.get(p.get("sec")) or {}).get("age_ms")}
         for p in (health.get("positions") or []) if p.get("net")
     ]
 
