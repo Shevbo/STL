@@ -302,6 +302,9 @@ function renderActiveRobots(list) {
     const stCls = st === 'пауза' ? 'paused' : (st === 'реал' ? 'real' : 'off');
     const ann = r.ann_pct == null ? null
       : (r.ann_pct > 0 ? '+' : '') + r.ann_pct.toFixed(1) + '%';
+    // Горизонт рядом с годовой: на 7 днях истории ×52 даёт ±1800%, и без
+    // подписи это читается как баг, а не как экстраполяция.
+    const annDays = r.started_ms ? Math.max(1, Math.round((Date.now() - r.started_ms) / 86400000)) : null;
     return `<div class="rob ${k}">
       <div class="hd">
         <a href="${STL}/?agent_robot=${encodeURIComponent(r.id)}" data-ext>${esc(r.name)}</a>
@@ -313,7 +316,7 @@ function renderActiveRobots(list) {
         ${r.varmargin ? `<span title="фикс по закрытым сделкам + ВМ открытой позиции (от входа)">фикс <b class="${cls(r.real_net)}">${rub(r.real_net, { signed: true })}</b> · ВМ <b class="${cls(r.varmargin)}">${rub(r.varmargin, { signed: true })}</b></span>`
           : `<span>сегодня <b class="${cls(r.real_today)}">${r.real_today == null ? '—' : rub(r.real_today, { signed: true })}</b></span>`}
         ${r.position == null ? '' : `<span>поз <b>${r.position}</b></span>`}
-        ${ann == null ? '' : `<span title="доходность в год: (фикс+ВМ) к максимальному задействованному ГО${r.max_go ? ' ' + Math.round(r.max_go).toLocaleString('ru-RU') + ' ₽' : ''}, линейно к году">год <b class="${cls(r.ann_pct)}">${ann}</b></span>`}
+        ${ann == null ? '' : `<span title="доходность в год: (фикс+ВМ) к максимальному задействованному ГО${r.max_go ? ' ' + Math.round(r.max_go).toLocaleString('ru-RU') + ' ₽' : ''}, линейно экстраполировано с ${annDays} дн">год <b class="${cls(r.ann_pct)}">${ann}</b>${annDays ? ` <span style="opacity:.7">за ${annDays} дн</span>` : ''}</span>`}
         <span>сделок сегодня <b>${r.real_trades_today || 0}</b></span>
         <span>${last ? 'посл. ' + last : 'реальных сделок нет'}</span>
       </div>

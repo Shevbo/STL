@@ -298,7 +298,8 @@
                   {#if m?.annPct != null}
                     <span class="rann" class:pos={m.annPct > 0} class:neg={m.annPct < 0}
                           title="Доходность в год: (фикс+ВМ) к максимальному задействованному ГО {Math.round(m.maxGo).toLocaleString('ru-RU')} ₽, линейно к году">
-                      год {m.annPct > 0 ? '+' : ''}{m.annPct.toFixed(1)}%</span>
+                      год {m.annPct > 0 ? '+' : ''}{m.annPct.toFixed(1)}%
+                      <span class="rstart">за {Math.max(1, Math.round((Date.now() - m.startedMs) / 86400000))} дн</span></span>
                   {/if}
                   {#if m?.startedMs}<span class="rstart">с {new Date(m.startedMs).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' })}</span>{/if}
                 </span>
