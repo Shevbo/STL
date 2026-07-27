@@ -366,11 +366,15 @@ async def snapshot(request: Request, agent_id: str | None = None):
     try:
         for r in await pool.fetch(
                 "SELECT robot_id, sum(pnl_net_rub) AS net, count(*) AS trades, "
-                "max(ts_ms) AS last_ts, sum(qty) AS qty FROM algo_trades "
+                "max(ts_ms) AS last_ts, min(ts_ms) AS first_ts, sum(qty) AS qty, "
+                # пик контрактов = максимальное ГО, хоть раз задействованное
+                "max(abs(pos_after)) AS peak FROM algo_trades "
                 "WHERE mode='real' GROUP BY robot_id"):
             real_all[r["robot_id"]] = {"net": float(r["net"] or 0),
                                        "trades": int(r["trades"]),
-                                       "last_ts": int(r["last_ts"] or 0)}
+                                       "last_ts": int(r["last_ts"] or 0),
+                                       "first_ts": int(r["first_ts"] or 0),
+                                       "peak": int(r["peak"] or 0)}
         for r in await pool.fetch(
                 "SELECT robot_id, sum(pnl_net_rub) AS net, count(*) AS trades "
                 "FROM algo_trades WHERE mode='real' AND ts_ms >= $1 GROUP BY robot_id",
@@ -395,6 +399,10 @@ async def snapshot(request: Request, agent_id: str | None = None):
     _params = (store.params(agent_id) if store is not None else None) or {}
     _coef_by = {r.get("code"): r.get("coef") for r in (_params.get("rows") or []) if r.get("code")}
     _last_by = {f.get("code"): f.get("last") for f in (health.get("feed") or []) if f.get("code")}
+    # ГО/контракт — из QLua-параметров (агент), иначе из справочника инструментов.
+    _margin_by = {r.get("code"): r.get("margin")
+                  for r in ((health.get("params") or []) if isinstance(health.get("params"), list) else [])
+                  if r.get("code")}
     def _robot_vm(sym, pos, avg):
         try:
             pos, avg = float(pos), float(avg)
@@ -417,16 +425,35 @@ async def snapshot(request: Request, agent_id: str | None = None):
             state = "переведён в бумагу"     # реальные деньги больше НЕ рискует
         else:
             state = "снят"
+        vm = (_robot_vm(rob.get("symbol"), rob.get("position"), rob.get("avg_price"))
+              if cur_mode == "real" else None)
+        fix = ra.get("net")
+        # ПРАВИЛО: фин.рез = фикс + ВМ открытой позиции. Голый фикс при живой
+        # позиции врёт (робот сидит в минусе, а карточка рисует «итог»).
+        total = None if fix is None else float(fix) + float(vm or 0)
+        # «Доходность в год» = (фикс + ВМ) / МАКС. ГО, хоть раз задействованное,
+        # линейно приведённое к году. Пик контрактов — из журнала, ГО/контракт —
+        # из QLua-параметров. Меньше 3 дней истории => не считаем (враньё масштаба).
+        margin = _margin_by.get(rob.get("symbol"))
+        max_go = (float(margin) * int(ra.get("peak") or 0)) if margin else 0.0
+        first_ts, ann = int(ra.get("first_ts") or 0), None
+        if total is not None and max_go > 0 and first_ts > 0:
+            days = (now_ms - first_ts) / 86_400_000
+            if days >= 3:
+                ann = (total / max_go) * (365 / days) * 100
         robots.append({
             "id": rid, "name": names.get(rid) or rid,
             "symbol": rob.get("symbol"),
             "state": state,
-            "real_net": ra.get("net"),            # ВЕСЬ реальный итог (в т.ч. убыток до бумаги)
+            "real_net": fix,                      # ФИКС: весь реальный итог по закрытым
+            "real_total": total,                  # фикс + ВМ открытой позиции
             "real_today": rt.get("net"),
             "real_trades_today": rt.get("trades") or 0,
             "position": rob.get("position") if cur_mode == "real" else None,
-            "varmargin": (_robot_vm(rob.get("symbol"), rob.get("position"), rob.get("avg_price"))
-                          if cur_mode == "real" else None),
+            "varmargin": vm,
+            "max_go": max_go or None,
+            "started_ms": first_ts or None,
+            "ann_pct": ann,
             "last_trade_ms": ra.get("last_ts") or 0,
         })
     # Сортировка: сначала активный реал, потом переведённые в бумагу, потом снятые;

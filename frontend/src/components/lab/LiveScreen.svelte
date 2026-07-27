@@ -132,9 +132,16 @@
             </div>
             <div class="agent-metrics">
               <div class="am">
-                <span class="amk">P&amp;L</span>
-                <span class="amv" class:pos={(r.netRub ?? 0) > 0} class:neg={(r.netRub ?? 0) < 0}>
-                  {r.netRub != null ? fmtRub(r.netRub) : `${r.pnlPoints} п`}
+                <span class="amk" title="фикс по закрытым сделкам + ВМ открытой позиции">P&amp;L</span>
+                <span class="amv" class:pos={(r.totalRub ?? 0) > 0} class:neg={(r.totalRub ?? 0) < 0}
+                      title={r.vmRub ? `фикс ${fmtRub(r.netRub ?? 0)} + ВМ ${fmtRub(r.vmRub)}` : 'фикс по закрытым сделкам'}>
+                  {r.totalRub != null ? fmtRub(r.totalRub) : `${r.pnlPoints} п`}
+                </span>
+              </div>
+              <div class="am">
+                <span class="amk" title="доходность в год: (фикс+ВМ) к максимальному задействованному ГО{r.maxGo ? ' ' + Math.round(r.maxGo).toLocaleString('ru-RU') + ' ₽' : ''}, линейно к году">Год</span>
+                <span class="amv" class:pos={(r.annPct ?? 0) > 0} class:neg={(r.annPct ?? 0) < 0}>
+                  {r.annPct == null ? '—' : (r.annPct > 0 ? '+' : '') + r.annPct.toFixed(1) + '%'}
                 </span>
               </div>
               <div class="am">

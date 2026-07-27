@@ -44,6 +44,26 @@ _COLS = ("seq", "robot_id", "mode", "ts_ms", "trade_num", "order_num", "symbol",
          "pnl_net_rub", "pos_after")
 
 
+@router.get("/algo-robot-stats")
+async def algo_robot_stats(request: Request, mode: str = "real"):
+    """Пожизненная сводка по роботу из журнала — то, из чего считается
+    «Доходность в год»: фикс (сумма net), дата НАЧАЛА торговли (первый филл) и
+    ПИК контрактов (максимальное ГО, хоть раз задействованное). Пик берём из
+    журнала, а не из мирора: мирор помнит только хвост.
+    """
+    _auth(request)
+    pool = _pool(request)
+    rows = await pool.fetch(
+        "SELECT robot_id, sum(pnl_net_rub) AS fix, min(ts_ms) AS first_ts, "
+        "max(ts_ms) AS last_ts, max(abs(pos_after)) AS peak, count(*) AS trades "
+        "FROM algo_trades WHERE mode=$1 GROUP BY robot_id", mode)
+    return {r["robot_id"]: {"fix": float(r["fix"] or 0),
+                            "first_ts": int(r["first_ts"] or 0),
+                            "last_ts": int(r["last_ts"] or 0),
+                            "peak": int(r["peak"] or 0),
+                            "trades": int(r["trades"])} for r in rows}
+
+
 @router.get("/algo-trades")
 async def algo_trades(request: Request, robot_id: str | None = None,
                       mode: str | None = None, symbol: str | None = None,

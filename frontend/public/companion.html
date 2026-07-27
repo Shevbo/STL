@@ -239,9 +239,14 @@ function renderPositions(list) {
     const breakdown = (rn != null || mn != null)
       ? `<span class="sub">Роботы <b>${sg(rn)}</b> · Ручные <b>${sg(mn)}</b></span>`
       : `<span class="sub">${sg(p.net)}</span>`;
-    return `<div class="row ${cls(vm)}"><span class="k">${esc(p.sec)}</span>` +
-      breakdown +
-      `<span class="sp"></span>${val(rub(vm, { signed: true }), cls(vm))}</div>`;
+    // ВМ здесь — ЧИСЛО QUIK: вариационная маржа ЗА СЕССИЮ (с последнего клиринга),
+    // включая закрытые за сессию сделки; перенесённая позиция считается от
+    // клиринговой цены, а не от входа. У робота ниже — ВМ ОТ ВХОДА. Это разные
+    // величины, поэтому подписаны по-разному (иначе выглядит как расхождение).
+    return `<div class="row ${cls(vm)}" title="Вариационная маржа QUIK за текущую сессию (с последнего клиринга)">` +
+      `<span class="k">${esc(p.sec)}</span>` + breakdown +
+      `<span class="sp"></span><span class="sub">ВМ сессии</span>` +
+      `${val(rub(vm, { signed: true }), cls(vm))}</div>`;
   }).join('');
 }
 
@@ -249,15 +254,21 @@ function renderPositions(list) {
 // а не смесь реала с бумагой.
 function robotsTotal(list) {
   if (!list || !list.length) return '';
-  let net = 0, today = 0, hasN = false, hasT = false;
+  // ПРАВИЛО: итог = фикс + ВМ открытых позиций. Раньше суммировался голый фикс,
+  // и итог не видел живого минуса по открытой позиции.
+  let fix = 0, vm = 0, today = 0, hasN = false, hasT = false;
   for (const r of list) {
-    if (r.real_net != null) { net += r.real_net; hasN = true; }
+    if (r.real_net != null) { fix += r.real_net; hasN = true; }
+    if (r.varmargin != null) vm += r.varmargin;
     if (r.real_today != null) { today += r.real_today; hasT = true; }
   }
-  return `<div class="row total ${cls(hasN ? net : null)}">` +
+  const total = fix + vm;
+  const split = vm ? `фикс ${rub(fix, { signed: true })} · ВМ ${rub(vm, { signed: true })}`
+                   : `сегодня ${hasT ? rub(today, { signed: true }) : '—'}`;
+  return `<div class="row total ${cls(hasN ? total : null)}">` +
     `<span class="k">Итог реал (${list.length})</span><span class="sp"></span>` +
-    `<span class="sub">сегодня ${hasT ? rub(today, { signed: true }) : '—'}</span>` +
-    `${val(hasN ? rub(net, { signed: true }) : null, cls(net))}</div>`;
+    `<span class="sub">${split}</span>` +
+    `${val(hasN ? rub(total, { signed: true }) : null, cls(total))}</div>`;
 }
 
 // Только РЕАЛЬНЫЕ ДЕНЬГИ. Число робота = весь его реальный итог из журнала,
@@ -283,11 +294,14 @@ function renderRobots(all) {
 function renderActiveRobots(list) {
   if (!list.length) return '';
   return list.map((r) => {
-    const net = r.real_net;               // весь реальный P&L, в т.ч. до перевода в бумагу
+    // ПРАВИЛО: в заголовке фин.рез = фикс + ВМ открытой позиции; разбивка строкой ниже.
+    const net = r.real_total != null ? r.real_total : r.real_net;
     const k = cls(net);
     const last = lastTradeFmt(r.last_trade_ms);
     const st = r.state;                    // 'реал' | 'пауза' | 'переведён в бумагу' | 'снят'
     const stCls = st === 'пауза' ? 'paused' : (st === 'реал' ? 'real' : 'off');
+    const ann = r.ann_pct == null ? null
+      : (r.ann_pct > 0 ? '+' : '') + r.ann_pct.toFixed(1) + '%';
     return `<div class="rob ${k}">
       <div class="hd">
         <a href="${STL}/?agent_robot=${encodeURIComponent(r.id)}" data-ext>${esc(r.name)}</a>
@@ -296,9 +310,10 @@ function renderActiveRobots(list) {
         ${val(rub(net, { signed: true }), k)}
       </div>
       <div class="nums">
-        <span>сегодня <b class="${cls(r.real_today)}">${r.real_today == null ? '—' : rub(r.real_today, { signed: true })}</b></span>
+        ${r.varmargin ? `<span title="фикс по закрытым сделкам + ВМ открытой позиции (от входа)">фикс <b class="${cls(r.real_net)}">${rub(r.real_net, { signed: true })}</b> · ВМ <b class="${cls(r.varmargin)}">${rub(r.varmargin, { signed: true })}</b></span>`
+          : `<span>сегодня <b class="${cls(r.real_today)}">${r.real_today == null ? '—' : rub(r.real_today, { signed: true })}</b></span>`}
         ${r.position == null ? '' : `<span>поз <b>${r.position}</b></span>`}
-        ${r.varmargin == null ? '' : `<span>ВМ <b class="${cls(r.varmargin)}">${rub(r.varmargin, { signed: true })}</b></span>`}
+        ${ann == null ? '' : `<span title="доходность в год: (фикс+ВМ) к максимальному задействованному ГО${r.max_go ? ' ' + Math.round(r.max_go).toLocaleString('ru-RU') + ' ₽' : ''}, линейно к году">год <b class="${cls(r.ann_pct)}">${ann}</b></span>`}
         <span>сделок сегодня <b>${r.real_trades_today || 0}</b></span>
         <span>${last ? 'посл. ' + last : 'реальных сделок нет'}</span>
       </div>

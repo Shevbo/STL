@@ -395,6 +395,41 @@ _ISS_TAIL_CACHE: dict[tuple, tuple[float, list]] = {}
 _ISS_TAIL_INFLIGHT: dict[tuple, "asyncio.Future"] = {}
 _AGENT_BARS_CACHE: dict[str, tuple[float, list]] = {}   # path -> (mtime, rows)
 
+# ── FORTS board prices (для ВМ открытых позиций в витрине/списках) ──────────
+# ОДИН запрос на всю доску вместо запроса на инструмент: у витрины ~15 разных
+# кодов, а 15 HTTP-вызовов внутри UI-запроса кладут event loop (см. кэши выше).
+# ISS marketdata задержан ~15 мин — для бумажного робота приемлемо; у РЕАЛЬНЫХ
+# роботов цена берётся из живого QUIK-фида (см. companion snapshot).
+_BOARD_URL = ("https://iss.moex.com/iss/engines/futures/markets/forts/securities.json"
+              "?iss.only=marketdata&marketdata.columns=SECID,LAST,SETTLEPRICE&iss.meta=off")
+_BOARD_TTL = 60.0
+_BOARD_CACHE: dict[str, float | dict] = {"ts": 0.0, "px": {}}
+
+
+async def _board_prices() -> dict[str, float]:
+    """SECID -> последняя цена (LAST, иначе расчётная). Кэш 60с; при сбое ISS
+    отдаём прошлый снимок (пустой словарь = ВМ просто не покажем)."""
+    now = time.time()
+    if now - float(_BOARD_CACHE["ts"]) < _BOARD_TTL:
+        return _BOARD_CACHE["px"]  # type: ignore[return-value]
+    try:
+        async with httpx.AsyncClient(timeout=8.0, headers={"User-Agent": "STL/1.0"}) as c:
+            j = (await c.get(_BOARD_URL)).json()
+        md = j.get("marketdata") or {}
+        cols = {c: i for i, c in enumerate(md.get("columns") or [])}
+        px: dict[str, float] = {}
+        for row in md.get("data") or []:
+            sec = row[cols["SECID"]]
+            val = row[cols.get("LAST", -1)] if "LAST" in cols else None
+            if not val:
+                val = row[cols["SETTLEPRICE"]] if "SETTLEPRICE" in cols else None
+            if sec and val:
+                px[str(sec)] = float(val)
+        _BOARD_CACHE["px"], _BOARD_CACHE["ts"] = px, now
+    except Exception:
+        _BOARD_CACHE["ts"] = now - _BOARD_TTL / 2   # не долбим ISS в цикле
+    return _BOARD_CACHE["px"]  # type: ignore[return-value]
+
 
 async def _iss_tail_cached(symbol: str, d0, d1) -> list:
     """ISS tail fetch with a short TTL + in-flight collapse: N tabs polling the
@@ -2458,6 +2493,19 @@ def create_app() -> FastAPI:
 
         await ensure_instrument_meta_table(pool)
 
+        # Цены для ВМ открытых позиций: живой QUIK-фид (агентские коды) + доска ISS.
+        board_px = await _board_prices()
+        live_px: dict[str, float] = {}
+        _store = getattr(request.app.state, "quik_store", None)
+        if _store is not None:
+            try:
+                _st = _store.agent_status(None) or {}
+                for f in ((_st.get("health") or {}).get("feed") or []):
+                    if f.get("code") and f.get("last"):
+                        live_px[str(f["code"])] = float(f["last"])
+            except Exception:
+                pass
+
         result = []
         for row in rows:
             d = dict(row)
@@ -2521,6 +2569,13 @@ def create_app() -> FastAPI:
                 "initial_margin": initial_margin,
                 "point_values": point_values,
                 "initial_margins": initial_margins,
+                # Текущие цены по КАЖДОМУ торговавшемуся контракту: фронт считает ВМ
+                # открытой позиции (правило «фин.рез = фикс + ВМ»). Живой QUIK-фид
+                # приоритетнее задержанного ISS для кодов, которые агент действительно
+                # отдаёт.
+                "last_prices": {s: p for s, p in (
+                    (s, live_px.get(s) or board_px.get(s)) for s in point_values)
+                    if p},
                 "params": params,
                 "trades": trades,
             })

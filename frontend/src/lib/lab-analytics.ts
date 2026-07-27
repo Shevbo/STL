@@ -320,6 +320,38 @@ export function priceMarkers(
   return { buy, sell, index };
 }
 
+// ─── Финрез с открытой позицией + доходность в год ──────────────────────────
+// ПРАВИЛО ОПЕРАТОРА (STRICT): фин.рез ВЕЗДЕ = фикс (закрытые сделки) + ВМ
+// открытой позиции. Голый realized при живой позиции — враньё: робот может
+// сидеть в минусе и показывать «+0».
+
+// ВМ открытой позиции робота = его СОБСТВЕННАЯ нереализованная прибыль от входа:
+// pos × (тек. цена − средняя входа) × ₽/пункт ЭТОГО инструмента.
+// Внимание: QUIK в таблице позиций даёт ВМ ЗА СЕССИЮ (с последнего клиринга,
+// перенесённые позиции считаются от клиринговой цены, а не от входа) — это
+// ДРУГАЯ величина, их нельзя сравнивать напрямую.
+export function openVm(position: number, openAvg: number, last: number | null | undefined,
+                       pointValue: number): number {
+  const px = Number(last);
+  if (!position || !(openAvg > 0) || !Number.isFinite(px) || px <= 0) return 0;
+  const pv = Number(pointValue);
+  if (!Number.isFinite(pv) || pv <= 0) return 0;
+  return position * (px - openAvg) * pv;
+}
+
+// «Доходность в год»: прибыль (фикс + ВМ) к МАКСИМАЛЬНОМУ ГО, хоть раз
+// задействованному с запуска, приведённая к году ЛИНЕЙНО (не сложным процентом:
+// у робота с 10 днями истории компаундинг рисует астрономию).
+// null = считать нечестно (нет ГО, нет даты старта или прошло < MIN_DAYS).
+export const ANN_MIN_DAYS = 3;
+export function annualizedPct(net: number, maxGo: number, startMs: number,
+                              nowMs: number = Date.now()): number | null {
+  if (!(maxGo > 0) || !(startMs > 0)) return null;
+  const days = (nowMs - startMs) / 86400_000;
+  if (!(days >= ANN_MIN_DAYS)) return null;      // слишком короткая история
+  return (net / maxGo) * (365 / days) * 100;
+}
+
 // ─── Per-contract (roll-aware) P&L ──────────────────────────────────────────
 // A robot that rolled (RIM6 → RIU6 → …) traded DISTINCT instruments at very
 // different price levels. Realized P&L MUST be computed per contract and summed —

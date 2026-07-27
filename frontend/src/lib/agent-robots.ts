@@ -8,6 +8,7 @@
 // the instrument point value — NEVER recomputed from recent_fills, which the
 // mirror truncates to the last 20 (a client recompute would understate net).
 import { fetchWithAuth } from './fetch-auth';
+import { annualizedPct, openVm } from './lab-analytics';
 
 const EXEC = new Set(['paper', 'filled', 'submitted', 'executed']);
 
@@ -19,9 +20,16 @@ export interface AgentRobotRow {
   mode: 'real' | 'paper';
   paper: boolean;
   deployed: boolean;        // running && !paused
-  netRub: number | null;    // realized_pnl(points) * coef; null when coef unknown
+  netRub: number | null;    // ФИКС: realized_pnl(points) * coef; null when coef unknown
   pnlPoints: number;
+  // ПРАВИЛО оператора: фин.рез = фикс + ВМ открытой позиции (от входа робота).
+  vmRub: number;            // 0 when flat / price or coef unknown
+  totalRub: number | null;  // netRub + vmRub — то, что показываем как фин.рез
   position: number;
+  avgPrice: number;
+  maxGo: number;            // ГО/контракт × пик контрактов (из журнала)
+  startedMs: number;        // первый филл по журналу = дата начала торговли
+  annPct: number | null;    // доходность в год; null = мало истории / нет ГО
   working: number;          // resting/in-flight orders
   fillsWindow: number;      // fills visible in the mirror window (last <=20)
   heartbeatAgeSec: number | null;
@@ -41,6 +49,32 @@ async function fetchCoefs(agentId?: string | null): Promise<Record<string, numbe
   } catch { return {}; }
 }
 
+// Живая цена + ГО инструмента из статуса агента (для ВМ открытой позиции и ГО).
+async function fetchLive(agentId?: string | null):
+    Promise<{ last: Record<string, number>; margin: Record<string, number> }> {
+  const out = { last: {} as Record<string, number>, margin: {} as Record<string, number> };
+  try {
+    const q = agentId ? `?agent_id=${encodeURIComponent(agentId)}` : '';
+    const res = await fetchWithAuth(`/api/v1/quik/agent-local-status${q}`,
+      { signal: AbortSignal.timeout(5000) } as any);
+    if (!res.ok) return out;
+    const h = (await res.json())?.health ?? {};
+    for (const f of h.feed ?? []) if (f.code && f.last) out.last[f.code] = Number(f.last);
+    for (const p of h.params ?? []) if (p.code && p.margin) out.margin[p.code] = Number(p.margin);
+  } catch { /* агент недоступен — просто без ВМ */ }
+  return out;
+}
+
+// Пожизненная сводка из ЖУРНАЛА: дата старта и пик контрактов (мирор хранит
+// только хвост филлов, по нему пик не восстановить).
+async function fetchLedgerStats(): Promise<Record<string, any>> {
+  try {
+    const res = await fetchWithAuth('/api/v1/quik/algo-robot-stats?mode=real',
+      { signal: AbortSignal.timeout(5000) } as any);
+    return res.ok ? await res.json() : {};
+  } catch { return {}; }
+}
+
 /** Fetch agent-hosted robots as compact rows. Returns [] on any failure (the
  *  caller degrades gracefully — an agent outage must not blank the page). */
 export async function fetchAgentRobots(agentId?: string | null): Promise<AgentRobotRow[]> {
@@ -52,7 +86,9 @@ export async function fetchAgentRobots(agentId?: string | null): Promise<AgentRo
     const data = await res.json();
     const robots: any[] = data?.robots ?? [];
     if (!robots.length) return [];
-    const coefs = await fetchCoefs(agentId);
+    const [coefs, live, stats] = await Promise.all([
+      fetchCoefs(agentId), fetchLive(agentId), fetchLedgerStats(),
+    ]);
     const now = Date.now();
     // Drop id-less rows: an empty '' each-key would crash the keyed {#each}
     // (Svelte 5 throws each_key_duplicate on two '' keys).
@@ -61,6 +97,15 @@ export async function fetchAgentRobots(agentId?: string | null): Promise<AgentRo
       const pnlPoints = Number(r.realized_pnl ?? 0);
       const coef = coefs[r.symbol];
       const hb = Number(r.heartbeat_unix_ms ?? 0);
+      const netRub = coef != null && coef > 0 ? pnlPoints * coef : null;
+      const position = Number(r.position ?? 0);
+      const avgPrice = Number(r.avg_price ?? 0);
+      // ВМ ОТ ВХОДА робота (не «ВМ сессии» из таблицы позиций QUIK — там своя база).
+      const vmRub = openVm(position, avgPrice, live.last[r.symbol], coef ?? 0);
+      const st = stats[String(r.robot_id ?? '')] ?? {};
+      const maxGo = (live.margin[r.symbol] ?? 0) * Number(st.peak ?? 0);
+      const startedMs = Number(st.first_ts ?? 0);
+      const totalRub = netRub == null ? null : netRub + vmRub;
       return {
         id: String(r.robot_id ?? ''),
         name: String(r.display_name || r.robot_id || ''),   // operator override, else the raw id
@@ -69,9 +114,15 @@ export async function fetchAgentRobots(agentId?: string | null): Promise<AgentRo
         mode: paper ? 'paper' : 'real',
         paper,
         deployed: !!r.running && !r.paused,
-        netRub: coef != null && coef > 0 ? pnlPoints * coef : null,
+        netRub,
         pnlPoints,
-        position: Number(r.position ?? 0),
+        vmRub,
+        totalRub,
+        avgPrice,
+        maxGo,
+        startedMs,
+        annPct: totalRub == null ? null : annualizedPct(totalRub, maxGo, startedMs),
+        position,
         working: (r.working_orders ?? []).length,
         fillsWindow: (r.recent_fills ?? []).filter((f: any) => EXEC.has(f.status)).length,
         heartbeatAgeSec: hb ? Math.round((now - hb) / 1000) : null,

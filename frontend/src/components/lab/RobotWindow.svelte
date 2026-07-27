@@ -13,7 +13,7 @@
   import RobotIdentity from './RobotIdentity.svelte';
   import ScreenTag from './ScreenTag.svelte';
   import { fmtPrice, csvPrice } from '../../lib/format';
-  import { toFills, rolledPnl } from '../../lib/lab-analytics';
+  import { toFills, rolledPnl, annualizedPct } from '../../lib/lab-analytics';
   import BacktestChart from './BacktestChart.svelte';
   import LatencyPane from './LatencyPane.svelte';
 
@@ -202,6 +202,10 @@
 
   // % от ГО тоже по правилу фикс+ВМ, не по голому фиксу.
   let totalPct = $derived(summary.go > 0 ? ((summary.net + vmOpen) / summary.go) * 100 : 0);
+  // Дата начала торговли = первый филл; «доходность в год» — от максимального
+  // задействованного ГО, линейно приведённая к году.
+  let startedMs = $derived(chartFills.length ? (chartFills[0].time - MSK_OFFSET) * 1000 : 0);
+  let annPct = $derived(annualizedPct(summary.net + vmOpen, summary.go, startedMs));
 
   const fmtMoney = (v: number) =>
     (v >= 0 ? '+' : '') + v.toLocaleString('ru-RU', { maximumFractionDigits: 0 });
@@ -395,6 +399,12 @@
                   <b class:pos={summary.net > 0} class:neg={summary.net < 0}>{fmtMoney(summary.net)}</b>
                   <span class="sub"><b class:pos={vmOpen > 0} class:neg={vmOpen < 0}>{fmtMoney(vmOpen)}</b> ₽</span></div>
               {/if}
+              <div class="r-row"><span>Доходность в год</span>
+                <b class:pos={(annPct ?? 0) > 0} class:neg={(annPct ?? 0) < 0}
+                   title="(фикс + ВМ) к максимальному задействованному ГО, линейно приведено к году">
+                  {annPct == null ? '—' : (annPct > 0 ? '+' : '') + annPct.toFixed(1) + '%'}</b>
+                {#if annPct == null}<span class="sub">нужно ≥3 дней торговли</span>
+                {:else}<span class="sub">с {new Date(startedMs).toLocaleDateString('ru-RU')}</span>{/if}</div>
               <div class="r-row"><span>ГО (макс. задейств.)</span>
                 <b>{summary.go > 0 ? Math.round(summary.go).toLocaleString('ru-RU') + ' ₽' : '—'}</b></div>
               <div class="r-row"><span>Позиция сейчас</span>

@@ -3,7 +3,7 @@
      fills, exactly like the Showcase/RobotWindow screens. -->
 <script lang="ts">
   import { fetchWithAuth } from '../../lib/fetch-auth';
-  import { toFills, rolledPnl } from '../../lib/lab-analytics';
+  import { toFills, rolledPnl, openVm, annualizedPct } from '../../lib/lab-analytics';
   import RobotIdentity from './RobotIdentity.svelte';
   import ScreenTag from './ScreenTag.svelte';
   import RobotEditor from './RobotEditor.svelte';
@@ -43,7 +43,9 @@
   // position drawdown, same as every other screen — keep it consistent).
   function metricsOf(id: string) {
     const sc = showcase.find((s) => s.id === id);
-    const empty = { net: 0, trades: 0, winRate: 0, rf: null as number | null, maxDD: 0, position: 0, symbol: '', paper: true, hasData: false };
+    const empty = { net: 0, fix: 0, vm: 0, trades: 0, winRate: 0, rf: null as number | null,
+      maxDD: 0, position: 0, symbol: '', paper: true, hasData: false,
+      startedMs: 0, maxGo: 0, annPct: null as number | null };
     if (!sc) return empty;
     const fills = toFills((sc.trades ?? []).filter((t: any) => EXECUTED.has(t.status)));
     const pvMap = sc.point_values && Object.keys(sc.point_values).length ? sc.point_values : (sc.point_value || 1);
@@ -53,9 +55,21 @@
       cum += e.close.pnl; peak = Math.max(peak, cum); maxDD = Math.max(maxDD, peak - cum);
       if (e.close.pnl > 0) wins++; n++;
     }
-    return { net: rolled.net, trades: n, winRate: n ? wins / n : 0,
+    // ПРАВИЛО: фин.рез = фикс + ВМ открытой позиции (цена текущего контракта,
+    // ₽/пункт ТОГО ЖЕ контракта — чужой множитель запрещён).
+    const cur = rolled.currentSymbol;
+    const pv = typeof pvMap === 'number' ? pvMap : (pvMap[cur] ?? sc.point_value ?? 1);
+    const vm = openVm(rolled.position, rolled.openAvg, sc.last_prices?.[cur], pv);
+    // Дата начала торговли = первый филл (иначе — дата развёртывания).
+    const startedMs = fills.length ? fills[0].time * 1000
+      : (sc.deployed_at ? Date.parse(sc.deployed_at) : 0);
+    // Максимальное ГО, хоть раз задействованное: ГО/контракт × пик контрактов.
+    const marginPer = sc.initial_margins?.[cur] ?? sc.initial_margin ?? 0;
+    const maxGo = marginPer * rolled.peakContracts;
+    return { net: rolled.net + vm, fix: rolled.net, vm, trades: n, winRate: n ? wins / n : 0,
       rf: maxDD > 0 ? rolled.net / maxDD : null, maxDD, position: rolled.position,
-      symbol: sc.symbol, paper: sc.paper, hasData: n > 0 };
+      symbol: sc.symbol, paper: sc.paper, hasData: n > 0,
+      startedMs, maxGo, annPct: annualizedPct(rolled.net + vm, maxGo, startedMs) };
   }
   let metricsById = $derived.by(() => {
     const m = new Map<string, ReturnType<typeof metricsOf>>();
@@ -65,7 +79,7 @@
 
   // ── Roster: search + sort + filter ──────────────────────────────────────────────
   let search = $state('');
-  let sortKey = $state<'net' | 'rf' | 'trades' | 'name' | 'symbol'>('net');
+  let sortKey = $state<'net' | 'ann' | 'started' | 'rf' | 'trades' | 'name' | 'symbol'>('net');
   let fltMode = $state<'all' | 'paper' | 'real'>('all');
   let fltStatus = $state<'all' | 'live' | 'off'>('all');
   let fltSym = $state('');
@@ -82,6 +96,9 @@
     if (fltStatus !== 'all') arr = arr.filter(({ r }) => (fltStatus === 'live' ? r.deployed : !r.deployed));
     const cmp: Record<string, (a: any, b: any) => number> = {
       net: (a, b) => (b.m?.net ?? 0) - (a.m?.net ?? 0),
+      ann: (a, b) => (b.m?.annPct ?? -1e9) - (a.m?.annPct ?? -1e9),
+      // «дата начала торговли»: свежие сверху; не торговавшие — в хвост
+      started: (a, b) => (b.m?.startedMs ?? 0) - (a.m?.startedMs ?? 0),
       rf: (a, b) => (b.m?.rf ?? -1e9) - (a.m?.rf ?? -1e9),
       trades: (a, b) => (b.m?.trades ?? 0) - (a.m?.trades ?? 0),
       name: (a, b) => (a.r.name || '').localeCompare(b.r.name || ''),
@@ -230,6 +247,8 @@
               <span>Сортировка</span>
               <select bind:value={sortKey}>
                 <option value="net">P&amp;L ↓</option>
+                <option value="ann">Доходность в год ↓</option>
+                <option value="started">Дата начала торговли ↓</option>
                 <option value="rf">RF ↓</option>
                 <option value="trades">Сделок ↓</option>
                 <option value="name">Имя</option>
@@ -271,7 +290,17 @@
                     <span class="bar-fill" class:pos={m?.net >= 0} class:neg={m?.net < 0}
                           style="width:{Math.min(100, (Math.abs(m?.net ?? 0) / maxAbsNet) * 100)}%"></span>
                   </span>
-                  <span class="rnet mono" class:pos={m?.net >= 0} class:neg={m?.net < 0}>{m?.hasData ? fmtRub(m.net) : '—'}</span>
+                  <span class="rnet mono" class:pos={m?.net >= 0} class:neg={m?.net < 0}
+                        title={m?.vm ? `фикс ${fmtRub(m.fix)} + ВМ открытой позиции ${fmtRub(m.vm)}` : 'фикс по закрытым сделкам'}>{m?.hasData || m?.vm ? fmtRub(m.net) : '—'}</span>
+                </span>
+                <span class="rrow-sub">
+                  {#if m?.vm}<span class="rsplit">фикс {fmtRub(m.fix)} · ВМ {fmtRub(m.vm)}</span>{/if}
+                  {#if m?.annPct != null}
+                    <span class="rann" class:pos={m.annPct > 0} class:neg={m.annPct < 0}
+                          title="Доходность в год: (фикс+ВМ) к максимальному задействованному ГО {Math.round(m.maxGo).toLocaleString('ru-RU')} ₽, линейно к году">
+                      год {m.annPct > 0 ? '+' : ''}{m.annPct.toFixed(1)}%</span>
+                  {/if}
+                  {#if m?.startedMs}<span class="rstart">с {new Date(m.startedMs).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' })}</span>{/if}
                 </span>
               </span>
               <span class="rmode" class:real={m && !m.paper}>{m?.paper === false ? 'РЕАЛ' : 'pp'}</span>
@@ -496,6 +525,10 @@
   .bar-fill { display: block; height: 100%; border-radius: 3px; }
   .bar-fill.pos { background: linear-gradient(90deg, #2f8f49, var(--green)); }
   .bar-fill.neg { background: linear-gradient(90deg, #a83636, var(--red)); }
+  .rrow-sub { display: flex; gap: 8px; flex-wrap: wrap; font-size: 10px; color: #6f7590; margin-top: 1px; }
+  .rsplit { white-space: nowrap; }
+  .rann { white-space: nowrap; font-weight: 700; }
+  .rstart { white-space: nowrap; opacity: 0.8; }
   .rnet { font-size: 11px; min-width: 74px; text-align: right; }
   .rnet.pos, .pos { color: var(--green); }
   .rnet.neg, .neg { color: var(--red); }

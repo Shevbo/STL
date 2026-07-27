@@ -6,7 +6,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { fetchWithAuth } from '../../lib/fetch-auth';
   import RobotIdentity from './RobotIdentity.svelte';
-  import { toFills, rolledPnl } from '../../lib/lab-analytics';
+  import { toFills, rolledPnl, openVm, annualizedPct } from '../../lib/lab-analytics';
   import { fetchAgentRobots, openAgentRobot, type AgentRobotRow } from '../../lib/agent-robots';
   import RobotWindow from './RobotWindow.svelte';
 
@@ -32,7 +32,7 @@
       ? robot.point_values : (robot.point_value ?? 1);
   }
 
-  function computePnl(robot: any): { net: number; retPct: number; position: number; trades: number; margin: number } {
+  function computePnl(robot: any) {
     const fills = toFills(
       (robot.trades ?? []).filter((t: any) => EXECUTED.has(t.status))
     );
@@ -43,12 +43,21 @@
     // ГО (margin at risk) = current contract's per-contract margin × peak contracts.
     const curMargin = robot.initial_margins?.[r.currentSymbol] ?? robot.initial_margin ?? 0;
     const margin = curMargin * r.peakContracts;
+    // ПРАВИЛО: фин.рез = фикс + ВМ открытой позиции (цена и ₽/пункт — текущего контракта).
+    const pvm = pvMap(robot);
+    const pv = typeof pvm === 'number' ? pvm : (pvm[r.currentSymbol] ?? robot.point_value ?? 1);
+    const vm = openVm(r.position, r.openAvg, robot.last_prices?.[r.currentSymbol], pv);
+    const net = r.net + vm;
+    const startedMs = fills.length ? fills[0].time * 1000
+      : (robot.deployed_at ? Date.parse(robot.deployed_at) : 0);
     return {
-      net: r.net,
-      retPct: margin > 0 ? (r.net / margin) * 100 : 0,
+      net, fix: r.net, vm,
+      retPct: margin > 0 ? (net / margin) * 100 : 0,
       position: r.position,
       trades: r.closes,
       margin,
+      startedMs,
+      annPct: annualizedPct(net, margin, startedMs),
     };
   }
 
@@ -231,6 +240,7 @@
               <th>Инструмент</th>
               <th>Режим</th>
               <th class="num">P&amp;L ₽</th>
+              <th class="num" title="Доходность в год: (фикс+ВМ) к максимальному задействованному ГО, линейно к году">Год %</th>
               <th class="num">Позиция</th>
               <th class="num">Заявок</th>
               <th class="num">Heartbeat</th>
@@ -248,8 +258,13 @@
                     ondblclick={(e) => e.stopPropagation()}>✏</button></td>
                 <td class="sc-sym">{r.symbol}</td>
                 <td><span class="mode-pill" class:real={r.mode === 'real'}>{r.mode === 'real' ? 'РЕАЛ' : 'бумага'}</span></td>
-                <td class="num sc-pnl" class:pos={(r.netRub ?? 0) > 0} class:neg={(r.netRub ?? 0) < 0}>
-                  {r.netRub != null ? fmtMoney(r.netRub) : `${r.pnlPoints} п`}
+                <td class="num sc-pnl" class:pos={(r.totalRub ?? 0) > 0} class:neg={(r.totalRub ?? 0) < 0}
+                    title={r.vmRub ? `фикс ${fmtMoney(r.netRub ?? 0)} + ВМ открытой позиции ${fmtMoney(r.vmRub)}` : 'фикс по закрытым сделкам'}>
+                  {r.totalRub != null ? fmtMoney(r.totalRub) : `${r.pnlPoints} п`}
+                </td>
+                <td class="num sc-pct" class:pos={(r.annPct ?? 0) > 0} class:neg={(r.annPct ?? 0) < 0}
+                    title={r.annPct == null ? 'меньше 3 дней торговли или нет ГО — считать нечестно' : `от максимального задействованного ГО ${Math.round(r.maxGo).toLocaleString('ru-RU')} ₽`}>
+                  {r.annPct == null ? '—' : (r.annPct > 0 ? '+' : '') + r.annPct.toFixed(1) + '%'}
                 </td>
                 <td class="num" class:pos={r.position > 0} class:neg={r.position < 0}>
                   {r.position !== 0 ? (r.position > 0 ? '+' : '') + r.position + ' к' : '—'}
@@ -286,6 +301,7 @@
               <th>Инструмент</th>
               <th class="num">P&amp;L ₽</th>
               <th class="num">P&amp;L %</th>
+              <th class="num" title="Доходность в год: (фикс+ВМ) к максимальному задействованному ГО, линейно к году">Год %</th>
               <th class="num">ГО ₽</th>
               <th class="num">Позиция</th>
               <th class="num">Сделок</th>
@@ -308,11 +324,16 @@
                   {/if}
                 </td>
                 <td class="sc-sym">{r.symbol || '—'}</td>
-                <td class="num sc-pnl" class:pos={s.net > 0} class:neg={s.net < 0}>
-                  {s.trades > 0 ? fmtMoney(s.net) : '—'}
+                <td class="num sc-pnl" class:pos={s.net > 0} class:neg={s.net < 0}
+                    title={s.vm ? `фикс ${fmtMoney(s.fix)} + ВМ открытой позиции ${fmtMoney(s.vm)}` : 'фикс по закрытым сделкам'}>
+                  {s.trades > 0 || s.vm ? fmtMoney(s.net) : '—'}
                 </td>
                 <td class="num sc-pct" class:pos={s.net > 0} class:neg={s.net < 0}>
                   {s.trades > 0 ? fmtPct(s.retPct) : '—'}
+                </td>
+                <td class="num sc-pct" class:pos={(s.annPct ?? 0) > 0} class:neg={(s.annPct ?? 0) < 0}
+                    title={s.annPct == null ? 'меньше 3 дней торговли или нет ГО — считать нечестно' : 'доходность в год от максимального задействованного ГО'}>
+                  {s.annPct == null ? '—' : fmtPct(s.annPct)}
                 </td>
                 <td class="num sc-go">
                   {s.margin > 0 ? Math.round(s.margin).toLocaleString('ru-RU') : '—'}
