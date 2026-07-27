@@ -65,9 +65,10 @@
   .fresh { color: var(--faint); font-size: 10px; letter-spacing: .04em; white-space: nowrap; }
   .fresh.stale { color: var(--down); }
   /* Сама лампа — цветом: зелёная на связи, красная без связи. Текст остаётся
-     приглушённым, чтобы шапка не кричала. */
-  .fresh .lamp { color: var(--up); font-weight: 700; }
-  .fresh.stale .lamp { color: var(--down); }
+     приглушённым, чтобы шапка не кричала. Оттенки СВЕТЛЕЕ денежных: --up/--down
+     подобраны под текст, и точка 10px ими читалась как серая. */
+  .fresh .lamp { color: #1d8b28; font-size: 13px; line-height: 1; vertical-align: -1px; }
+  .fresh.stale .lamp { color: #cc2222; }
   .btn {
     font: 400 15px/1 "Segoe UI", sans-serif; color: var(--faint);
     cursor: pointer; padding: 0 3px;
