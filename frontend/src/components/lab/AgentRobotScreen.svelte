@@ -19,6 +19,7 @@
   import Frame from './Frame.svelte';
   import NavMenu from '../NavMenu.svelte';
   import { fetchAgentLocalStatus, type AgentLocalStatus } from '../../lib/agent-robots';
+  import { annualizedPct } from '../../lib/lab-analytics';
 
   let { robotId, agentId = null }: { robotId: string; agentId?: string | null } = $props();
 
@@ -353,6 +354,30 @@
   });
   const pnlPoints = $derived(Number(robot?.realized_pnl ?? 0));
   const pnlRub = $derived(pointCoef ? pnlPoints * pointCoef : null);
+
+  // «Доходность в год»: (фикс + ВМ) к МАКСИМАЛЬНОМУ ГО, хоть раз задействованному,
+  // линейно приведённая к году. Пик контрактов и дату старта берём из ЖУРНАЛА
+  // (зеркало хранит только хвост филлов — по нему пик не восстановить), ГО/контракт
+  // — из QLua-параметров агента.
+  let ledgerStat = $state<{ peak: number; first_ts: number } | null>(null);
+  async function loadLedgerStat() {
+    try {
+      const res = await fetchWithAuth('/api/v1/quik/algo-robot-stats?mode=real',
+        { signal: AbortSignal.timeout(6000) } as any);
+      if (!res.ok) return;
+      const d = await res.json();
+      const s = d[robotId];
+      if (s) ledgerStat = { peak: Number(s.peak ?? 0), first_ts: Number(s.first_ts ?? 0) };
+    } catch { /* без журнала просто не покажем годовую */ }
+  }
+  $effect(() => { void robotId; void loadLedgerStat(); });
+  const marginPer = $derived(
+    (status?.health?.params ?? []).find((p: any) => p.code === symbol)?.margin ?? 0);
+  const maxGo = $derived(marginPer * (ledgerStat?.peak ?? 0));
+  const annPct = $derived(
+    pnlMargin == null ? null : annualizedPct(pnlMargin, maxGo, ledgerStat?.first_ts ?? 0));
+  const annDays = $derived(ledgerStat?.first_ts
+    ? Math.max(1, Math.round((Date.now() - ledgerStat.first_ts) / 86_400_000)) : null);
   // pnlRub is the robot's AUTHORITATIVE realized — the agent's OWN number
   // (realized_pnl × ₽/point), matching its 127.0.0.1:8071 page. Both the header
   // badge and the chart's «Результат» (via netOverride) use it, so they can never
@@ -740,6 +765,11 @@
         <span class="badge pnl" class:up={(pnlMargin ?? 0) > 0} class:dn={(pnlMargin ?? 0) < 0}
               title={`Если ударить по рынку и закрыть ВСЮ позицию прямо сейчас: реализованный ${Math.round(pnlRub).toLocaleString('ru-RU')} + вариац. маржа ${floatRub !== null ? (floatRub > 0 ? '+' : '') + Math.round(floatRub).toLocaleString('ru-RU') : '0'} − комиссия закрытия ${Math.round(closeComm).toLocaleString('ru-RU')} ₽.`}>
           P&L+Маржа {(pnlMargin ?? 0) > 0 ? '+' : ''}{Math.round(pnlMargin ?? pnlRub).toLocaleString('ru-RU')} ₽</span>
+        <span class="badge pnl" class:up={(annPct ?? 0) > 0} class:dn={(annPct ?? 0) < 0}
+              title={annPct == null
+                ? 'Доходность в год: нужно ≥3 дней торговли и известное ГО'
+                : `Доходность в год: (фикс+ВМ) к максимальному задействованному ГО ${Math.round(maxGo).toLocaleString('ru-RU')} ₽, линейно экстраполировано с ${annDays} дн торговли.`}>
+          год {annPct == null ? '—' : (annPct > 0 ? '+' : '') + annPct.toFixed(1) + '%'}{annDays && annPct != null ? ` за ${annDays} дн` : ''}</span>
       {:else}
         <span class="badge pnl dim">P&L …</span>
       {/if}

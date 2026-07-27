@@ -2,6 +2,9 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
+<!-- Страница живёт в WebView2 и в браузере. Без этого браузер эвристически
+     кэшировал её и после деплоя панель считала по СТАРОМУ коду (27.07). -->
+<meta http-equiv="Cache-Control" content="no-cache, must-revalidate">
 <title>STL Companion</title>
 <!-- Панель компаньона (трей-приложение STLCompanion.exe).
 
