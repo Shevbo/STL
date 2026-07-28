@@ -390,6 +390,11 @@
   let launchOpen = $state(false);
   let launchMode = $state<'paper' | 'live'>('paper');
   let launchName = $state('');
+  let launchNameDefault = $state('');
+  const launchNameUntouched = $derived(launchName.trim() === launchNameDefault.trim());
+  const launchNameTaken = $derived(
+    !!launchName.trim() &&
+    installed.some((r) => (r.name ?? '').trim().toLowerCase() === launchName.trim().toLowerCase()));
   let launchBusy = $state(false);
   let launchMsg = $state('');
   let launchOk = $state(false);
@@ -432,8 +437,30 @@
   function openLaunchFor(sid: string, symbol: string, params: any) {
     launchSid = sid; launchSymbol = symbol;
     launchName = `${nameFor(sid)} · ${symbol}`.slice(0, 64);
+    launchNameDefault = launchName;      // помним подсказанное имя, чтобы отличить «не тронул»
     launchParams = { ...(params ?? {}) };   // editable copy — change before GO
     launchMode = 'paper'; launchMsg = ''; launchOk = false; launchOpen = true;
+  }
+  // Имя видно ВЕЗДЕ: в списке роботов, в компаньоне, в алертах. Имя по умолчанию
+  // одинаково для любых двух запусков одной стратегии по одному инструменту — так
+  // в списке и появились неразличимые близнецы. Поэтому при открытии окна поле
+  // выделено (набор текста сразу заменяет подсказку) и мы явно предупреждаем,
+  // если такое имя уже занято.
+  function selectName(node: HTMLInputElement) {
+    // Один rAF не годится: окно монтируется анимацией, и фокус успевает забрать
+    // кнопка, по которой кликнули. Пробуем несколько раз и прекращаем, как только
+    // фокус наш ИЛИ пользователь уже щёлкнул в другое поле.
+    let n = 0;
+    const grab = () => {
+      if (document.activeElement === node) return;
+      if (n++ > 6) return;
+      const inModal = node.closest('.lp-box')?.contains(document.activeElement);
+      if (n > 1 && inModal && document.activeElement !== document.body) return;
+      node.focus({ preventScroll: true });
+      node.select();
+      setTimeout(grab, 60);
+    };
+    setTimeout(grab, 0);
   }
   async function doLaunch() {
     if (!launchSid || !launchSymbol) return;
@@ -1079,14 +1106,22 @@
         </div>
         <div class="lp-body">
           <div class="lp-strat">{nameFor(launchSid)}<span class="lp-sym">· {launchSymbol}</span></div>
+          <label class="lp-field"><span class="lp-k">Имя робота
+              {#if launchNameUntouched}<span class="lp-k-note">— имя по умолчанию, задай своё</span>{/if}</span>
+            <input class="lp-input" class:warn={launchNameTaken} bind:value={launchName}
+                   maxlength="64" use:selectName
+                   placeholder="как ты будешь звать его в списке" />
+            {#if launchNameTaken}
+              <span class="lp-name-warn">Такое имя уже занято другим роботом — в списке и в алертах их будет не отличить.</span>
+            {:else if launchNameUntouched}
+              <span class="lp-name-hint">Под этим именем робот появится в списке роботов, в компаньоне и в уведомлениях. Два запуска одной стратегии по одному инструменту получат ОДИНАКОВОЕ имя по умолчанию.</span>
+            {/if}</label>
           {#if launchBehavior}
             <div class="lp-behavior">
               <div class="lp-b-label">Что будет делать робот</div>
               <p class="lp-b-text">{launchBehavior}</p>
             </div>
           {/if}
-          <label class="lp-field"><span class="lp-k">Имя робота</span>
-            <input class="lp-input" bind:value={launchName} maxlength="64" /></label>
           <div class="lp-field"><span class="lp-k">Режим</span>
             <div class="lp-modes">
               <label class="lp-mode" class:sel={launchMode === 'paper'}>
@@ -1424,6 +1459,9 @@
   .lp-k { font-size: 11px; letter-spacing: .5px; text-transform: uppercase; color: #7c88a3; font-weight: 600; }
   .lp-input { background: #0a0f1c; border: 1px solid #2a3552; border-radius: 6px; color: #dfe6f2; font-size: 13px; padding: 8px 10px; }
   .lp-input:focus { outline: none; border-color: #3a7; }
+  .lp-input.warn { border-color: #b8792b; }
+  .lp-name-hint { font-size: 11px; color: #7c88a3; line-height: 1.45; }
+  .lp-name-warn { font-size: 11.5px; color: #e0a53c; line-height: 1.45; }
   .lp-modes { display: flex; flex-direction: column; gap: 6px; }
   .lp-mode { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #c5cddd; padding: 9px 12px;
     border: 1px solid #24304c; border-radius: 7px; cursor: pointer; }
