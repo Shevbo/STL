@@ -636,7 +636,11 @@ async def snapshot(request: Request, agent_id: str | None = None):
             "so_id": so.so_id, "kind": so.kind, "code": so.code, "side": so.side,
             "qty": so.qty, "trigger": so.trigger_price,
             "trail_offset": so.trail_offset, "activated": so.activated,
-            "peak": so.peak, "status": so.status, "fired_ms": so.fired_ms})
+            "peak": so.peak, "status": so.status, "fired_ms": so.fired_ms,
+            # цена РЕАЛЬНОЙ сделки, а не уровень срабатывания: по уровню не понять,
+            # во что обошёлся вход
+            "fired_price": so.fired_price, "fired_qty": so.fired_qty,
+            "sl_offset": so.sl_offset, "parent_id": so.parent_id})
     orders_block = {"manual": manual_orders[:8], "smart": smart_list[:8]}
 
     # Состояние сессии MOEX (открыта/закрыта по ISS) — нужно и вотчеру раннера

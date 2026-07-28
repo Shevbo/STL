@@ -74,6 +74,8 @@ class SmartOrder:
     created_ms: int = 0
     fired_ms: int = 0
     fired_client_id: str = ""
+    fired_price: float = 0.0     # РЕАЛЬНАЯ средняя цена исполнения дочерней заявки
+    fired_qty: int = 0           # сколько контрактов реально исполнилось
 
     def validate(self) -> str | None:
         """Returns a human error or None. Kept dumb and explicit."""

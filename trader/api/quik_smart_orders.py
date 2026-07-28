@@ -193,6 +193,49 @@ def _mark_orphans(book: SmartOrderBook, ost: Any, agent: str, now: int) -> bool:
     return dirty
 
 
+def _fill_price(status: dict, order_id: str) -> tuple[float, int]:
+    """Средняя цена и объём РЕАЛЬНОГО исполнения заявки по таблице сделок QUIK.
+    Лимитная цена дочерней заявки — не цена сделки: она маркетабельная и
+    исполняется по встречным заявкам, часто лучше своего лимита."""
+    num, vol = 0.0, 0
+    for t in ((status.get("quik") or {}).get("trades") or []):
+        if str(t.get("order_num") or "") != str(order_id):
+            continue
+        try:
+            q, px = int(t.get("qty") or 0), float(t.get("price") or 0)
+        except (TypeError, ValueError):
+            continue
+        if q > 0 and px > 0:
+            num += px * q
+            vol += q
+    return (num / vol, vol) if vol else (0.0, 0)
+
+
+def _track_fills(book: SmartOrderBook, ost: Any, store: Any, agent: str) -> bool:
+    """Дописать сработавшим заявкам ЦЕНУ СДЕЛКИ. Оператору нужен факт («купил по
+    88 340»), а не уровень срабатывания — по уровню нельзя понять, во что обошёлся
+    вход. Цена берётся из таблицы сделок QUIK по номеру заявки; если сделок ещё
+    нет (заявка только ушла), пробуем на следующем проходе."""
+    want = [o for o in book.orders
+            if o.status in ("fired", "orphaned") and o.fired_client_id and not o.fired_price]
+    if not want:
+        return False
+    by_cid = {d["client_id"]: d for d in ost.working_orders(agent)}
+    status = (store.agent_status(agent) if store is not None else None) or {}
+    dirty = False
+    for so in want:
+        rec = by_cid.get(so.fired_client_id) or {}
+        oid = rec.get("order_id")
+        if not oid:
+            continue
+        px, vol = _fill_price(status, oid)
+        if px > 0:
+            so.fired_price, so.fired_qty = px, vol
+            dirty = True
+            log.info("smart_order.fill_price", so_id=so.so_id, price=px, qty=vol)
+    return dirty
+
+
 async def _watch_once(state: Any) -> None:
     book: SmartOrderBook = state.smart_orders
     active = book.active()
@@ -207,7 +250,9 @@ async def _watch_once(state: Any) -> None:
         return  # no/ambiguous agent -> nothing to fire against
     # Осиротевших ищем ДАЖЕ когда взведённых нет: сработавшая заявка может
     # потерять ребёнка уже после того, как книга опустела.
-    if _mark_orphans(book, ost, agent, so_mod.now_ms()):
+    dirty_meta = _mark_orphans(book, ost, agent, so_mod.now_ms())
+    dirty_meta = _track_fills(book, ost, store, agent) or dirty_meta
+    if dirty_meta:
         book.save()
     if not active:
         return

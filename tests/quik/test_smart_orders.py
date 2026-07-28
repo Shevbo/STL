@@ -246,3 +246,25 @@ def test_protective_sl_fires_like_a_normal_stop():
 
 def test_sl_offset_rejected_on_plain_stop():
     assert so(kind="sl", side="sell", trigger_price=88000, sl_offset=100).validate()
+
+
+# ---- цена сделки у сработавшей заявки ----
+
+def test_fill_price_is_vwap_of_quik_trades():
+    """Лимит дочерней заявки — не цена сделки: она маркетабельная и часто
+    исполняется лучше лимита, а крупная — несколькими сделками по разным ценам."""
+    from trader.api.quik_smart_orders import _fill_price
+    status = {"quik": {"trades": [
+        {"order_num": "777", "qty": 10, "price": 88_340.0},
+        {"order_num": "777", "qty": 4, "price": 88_350.0},
+        {"order_num": "999", "qty": 5, "price": 90_000.0},   # чужая заявка
+    ]}}
+    px, vol = _fill_price(status, "777")
+    assert vol == 14
+    assert round(px, 4) == round((88_340 * 10 + 88_350 * 4) / 14, 4)
+
+
+def test_fill_price_absent_when_no_trades_yet():
+    from trader.api.quik_smart_orders import _fill_price
+    assert _fill_price({"quik": {"trades": []}}, "777") == (0.0, 0)
+    assert _fill_price({}, "777") == (0.0, 0)
