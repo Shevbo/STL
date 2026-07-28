@@ -59,6 +59,7 @@ class SmartOrderBody(BaseModel):
     child_price: float = 0.0
     oco_group: str = ""
     good_till_ms: int = 0
+    sl_offset: float = 0.0         # защитный стоп в пунктах после входа (0 = без стопа)
     note: str = ""
 
 
@@ -70,7 +71,7 @@ async def create(body: SmartOrderBody, request: Request):
         so_id=so_mod.new_id(), kind=body.kind, code=body.code,
         side=body.side.lower(), qty=int(body.qty),
         trigger_price=float(body.trigger_price),
-        trail_offset=float(body.trail_offset),
+        trail_offset=float(body.trail_offset), sl_offset=float(body.sl_offset),
         watch_client_id=body.watch_client_id, child_price=float(body.child_price),
         oco_group=body.oco_group, good_till_ms=int(body.good_till_ms),
         note=body.note, created_ms=so_mod.now_ms(),
@@ -261,6 +262,15 @@ async def _watch_once(state: Any) -> None:
                 so.fired_client_id = client_id
                 log.info("smart_order.fired", so_id=so.so_id, kind=so.kind,
                          code=so.code, side=so.side, qty=so.qty, price=act.price)
+                # Защитный стоп после входа (если оператор его заказал): trail и
+                # on_fill только ВХОДЯТ и после срабатывания забывают про позицию —
+                # без стопа выходить нечем, когда цена пошла против.
+                child_sl = so_mod.protective_sl(so, act.price, now)
+                if child_sl is not None:
+                    book.orders.append(child_sl)
+                    log.info("smart_order.protective_sl", parent=so.so_id,
+                             so_id=child_sl.so_id, side=child_sl.side,
+                             trigger=child_sl.trigger_price, offset=so.sl_offset)
             except LimitError as exc:
                 so.status = "error"
                 so.note = f"отклонено лимитами: {exc}"

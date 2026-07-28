@@ -67,6 +67,8 @@ class SmartOrder:
     good_till_ms: int = 0        # 0 = no expiry
     status: str = "armed"        # armed | fired | cancelled | expired | error
     note: str = ""
+    sl_offset: float = 0.0       # trail/on_fill: защитный стоп в ПУНКТАХ после входа (0 = без стопа)
+    parent_id: str = ""          # у защитного стопа — so_id заявки, которая его породила
     peak: float = 0.0            # trail bookkeeping (best price since activation)
     activated: bool = False      # trail: activation level crossed
     created_ms: int = 0
@@ -89,6 +91,10 @@ class SmartOrder:
             return "trail_offset (пункты) обязателен для trail_tp"
         if self.kind == "on_fill" and not self.watch_client_id:
             return "watch_client_id обязателен для on_fill"
+        if self.sl_offset < 0:
+            return "sl_offset (пункты) не может быть отрицательным"
+        if self.sl_offset > 0 and self.kind not in ("trail_tp", "on_fill"):
+            return "защитный стоп задаётся только для trail_tp и on_fill"
         return None
 
 
@@ -228,6 +234,36 @@ def evaluate(orders: list[SmartOrder], code: str, *, last: float, bid: float,
                     and so.so_id not in fired_ids):
                 actions.append(Cancel(so, "OCO: сработала парная заявка"))
     return actions
+
+
+def protective_sl(parent: SmartOrder, entry_price: float, now: int) -> SmartOrder | None:
+    """Защитный стоп ПОСЛЕ входа по родительской заявке (trail/on_fill).
+
+    Родитель только ВХОДИТ в позицию и после срабатывания забывает про неё. Если
+    цена пойдёт против входа, выходить нечем. Этот стоп — противоположная сторона
+    на sl_offset пунктов от цены входа: купили по 89 000 со стопом 300 -> продажа
+    при цене <= 88 700.
+
+    Точка отсчёта — цена ДОЧЕРНЕЙ заявки родителя (она маркетабельная, реальное
+    исполнение отличается на проскальзывание в пределах тика-двух). Порог задан в
+    пунктах, поэтому такая точность достаточна; выдумывать среднюю цену исполнения,
+    которой у нас нет, было бы хуже.
+    """
+    if parent.sl_offset <= 0 or entry_price <= 0:
+        return None
+    # Вход покупкой -> защищаемся продажей НИЖЕ входа, и наоборот.
+    if parent.side == "buy":
+        side, trigger = "sell", entry_price - parent.sl_offset
+    else:
+        side, trigger = "buy", entry_price + parent.sl_offset
+    if trigger <= 0:
+        return None
+    return SmartOrder(
+        so_id=new_id(), kind="sl", code=parent.code, side=side, qty=parent.qty,
+        trigger_price=trigger, oco_group=parent.oco_group,
+        good_till_ms=parent.good_till_ms, parent_id=parent.so_id,
+        created_ms=now,
+        note=f"защитный стоп от {parent.so_id}: вход {entry_price:g}, порог {parent.sl_offset:g} п.")
 
 
 # ---- book with JSON persistence (survives an STL restart) ----

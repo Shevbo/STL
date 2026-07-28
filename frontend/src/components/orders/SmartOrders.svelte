@@ -22,6 +22,7 @@
   let code = $state('');
   let trigger = $state('');
   let trailOffset = $state('');
+  let slOffset = $state('');          // защитный стоп после входа, пункты (0 = без стопа)
   let watchId = $state('');
   let childPrice = $state('');
   let ocoGroup = $state('');
@@ -94,6 +95,7 @@
       kind, code, side, qty: Math.floor(qty),
       trigger_price: parseFloat(trigger) || 0,
       trail_offset: parseFloat(trailOffset) || 0,
+      sl_offset: parseFloat(slOffset) || 0,
       watch_client_id: watchId.trim(),
       child_price: parseFloat(childPrice) || 0,
       oco_group: ocoGroup.trim(),
@@ -108,7 +110,7 @@
       if (!res.ok) { msgKind = 'err'; msg = d?.detail || `HTTP ${res.status}`; return; }
       msgKind = 'ok';
       msg = `Заявка ${d.so_id} взведена. Сторож следит.`;
-      trigger = ''; trailOffset = ''; watchId = ''; childPrice = '';
+      trigger = ''; trailOffset = ''; slOffset = ''; watchId = ''; childPrice = '';
       confirming = false;
       await smartOrdersStore.refresh();
     } catch (e: any) { msgKind = 'err'; msg = e?.message || 'ошибка'; }
@@ -128,6 +130,7 @@
     kind = o.kind; side = o.side; qty = o.qty; code = o.code;
     trigger = o.trigger_price ? String(o.trigger_price) : '';
     trailOffset = o.trail_offset ? String(o.trail_offset) : '';
+    slOffset = o.sl_offset ? String(o.sl_offset) : '';
     watchId = o.watch_client_id || '';
     childPrice = o.child_price ? String(o.child_price) : '';
     ocoGroup = o.oco_group || '';
@@ -207,6 +210,8 @@
               <input class="so-in" type="number" step="any" bind:value={trigger} placeholder="0" />
             {:else if f.key === 'trail_offset'}
               <input class="so-in" type="number" step="any" bind:value={trailOffset} placeholder="0" />
+            {:else if f.key === 'sl_offset'}
+              <input class="so-in" type="number" step="any" min="0" bind:value={slOffset} placeholder="0 — без стопа" />
             {:else if f.key === 'watch_client_id'}
               <input class="so-in text" bind:value={watchId} placeholder="client_id" spellcheck="false" />
             {:else}
@@ -305,6 +310,10 @@
             {:else}
               ○ ждёт пробоя уровня <b>{fmtPrice(o.trigger_price)}</b>,
               затем встанет в слежение и выкупит на откате {o.trail_offset} п.
+            {/if}
+            {#if o.sl_offset}
+              <div class="so-c-sl">после входа автоматически встанет защитный стоп в
+                <b>{o.sl_offset}</b> п. от цены сделки</div>
             {/if}
           </div>
         {/if}
@@ -462,6 +471,8 @@
   .so-c-track b { color: #cfe; }
   .so-c-track.active b { color: #e6d8ff; }
   .so-c-track .fire { color: #b98cff; }
+  .so-c-sl { margin-top: 3px; color: #9aa0b4; font-size: 11px; }
+  .so-c-sl b { color: #ffb3a7; }
   .so-c-status { color: #e0a53c; font-size: 11px; }
   .so-c-status.warn { color: #ff9d90; }
   .so-c-facts { display: flex; gap: 12px; flex-wrap: wrap; color: #6f7590; font-size: 11px; margin-top: 3px; }

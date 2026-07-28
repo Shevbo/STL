@@ -202,3 +202,47 @@ def test_catch_up_sell_on_window_high():
     o = so(kind="trail_tp", side="sell", trigger_price=90000, trail_offset=350)
     assert catch_up_trail(o, wmin=88000, wmax=90050)
     assert o.activated and o.peak == 90050
+
+
+# ---- защитный стоп после входа (trail/on_fill) ----
+
+def test_protective_sl_after_buy_entry():
+    from trader.quik.smart_orders import protective_sl
+    parent = so(kind="trail_tp", side="buy", trigger_price=88500, trail_offset=350,
+                qty=14, sl_offset=300)
+    child = protective_sl(parent, entry_price=89000, now=NOW)
+    assert child is not None
+    assert child.kind == "sl" and child.side == "sell"      # вход покупкой -> выход продажей
+    assert child.trigger_price == 88700                     # 89000 - 300
+    assert child.qty == 14 and child.code == parent.code
+    assert child.parent_id == parent.so_id
+    assert child.validate() is None
+
+
+def test_protective_sl_after_sell_entry_is_mirrored():
+    from trader.quik.smart_orders import protective_sl
+    parent = so(kind="trail_tp", side="sell", trail_offset=200, qty=2, sl_offset=150)
+    child = protective_sl(parent, entry_price=90000, now=NOW)
+    assert child.side == "buy" and child.trigger_price == 90150
+
+
+def test_protective_sl_off_by_default_and_on_bad_price():
+    from trader.quik.smart_orders import protective_sl
+    plain = so(kind="trail_tp", side="buy", trail_offset=350)
+    assert protective_sl(plain, entry_price=89000, now=NOW) is None      # sl_offset=0
+    armed = so(kind="trail_tp", side="buy", trail_offset=350, sl_offset=300)
+    assert protective_sl(armed, entry_price=0, now=NOW) is None          # нет цены входа
+
+
+def test_protective_sl_fires_like_a_normal_stop():
+    """Родившийся стоп обязан вести себя как обычный SL: продажа при цене <= порога."""
+    from trader.quik.smart_orders import protective_sl
+    parent = so(kind="trail_tp", side="buy", trail_offset=350, qty=1, sl_offset=300)
+    child = protective_sl(parent, entry_price=89000, now=NOW)
+    assert run([child], last=88710) == []                    # ещё выше порога
+    acts = run([child], last=88700)
+    assert len(acts) == 1 and isinstance(acts[0], Fire)
+
+
+def test_sl_offset_rejected_on_plain_stop():
+    assert so(kind="sl", side="sell", trigger_price=88000, sl_offset=100).validate()
