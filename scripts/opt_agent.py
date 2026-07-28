@@ -132,7 +132,7 @@ except Exception:  # noqa: BLE001
 
 # Bumped whenever the agent's wire behaviour changes; reported in the heartbeat so the
 # monitor shows whether the i9 is running the latest opt_agent.
-AGENT_VERSION = "2026-07-19-control-leaders"
+AGENT_VERSION = "2026-07-28-leader-strat"
 
 # ── self-update ────────────────────────────────────────────────────────────────
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
