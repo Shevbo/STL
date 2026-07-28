@@ -690,9 +690,12 @@
             <div class="i9-leaders">
               <span class="i9-sub">формирующийся хитпарад · клик → график + сделки + P&amp;L:</span>
               {#each activity.i9.leaders as L}
-                <button class="i9-leader" onclick={() => openChart(L.symbol, L.params, { strategyId: L.strategy })}
-                        title="Пересчитать эту комбо и открыть график со сделками и P&L">
-                  <b class="mono">{nameFor(L.strategy)}·{L.symbol}</b>
+                <button class="i9-leader" disabled={!L.strategy}
+                        onclick={() => L.strategy && openChart(L.symbol, L.params, { strategyId: L.strategy })}
+                        title={L.strategy
+                          ? 'Пересчитать эту комбо и открыть график со сделками и P&L'
+                          : 'Строку прислал старый агент i9 без id стратегии — пересчитать нельзя. Обновится после доставки agent-обновления на i9.'}>
+                  <b class="mono">{L.strategy ? nameFor(L.strategy) : 'без id стратегии'}·{L.symbol}</b>
                   <span class="mono" class:pos={L.net >= 0} class:neg={L.net < 0}>{L.net >= 0 ? '+' : ''}{(L.net ?? 0).toLocaleString('ru-RU')} ₽</span>
                   <span class="i9-sub">RF {L.rf == null ? '—' : (+L.rf).toFixed(2)} · {L.trades ?? '—'} сд.</span>
                 </button>
@@ -1282,6 +1285,7 @@
   .i9-cpubar-fill { height: 100%; background: linear-gradient(90deg, #2f8f49, #6fd08a); transition: width 0.5s; }
   .i9-cpubar-fill.hot { background: linear-gradient(90deg, #b5502a, #ff8a5c); }
   .i9-leaders { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; margin-top: 2px; }
+  .i9-leader:disabled { opacity: .45; cursor: not-allowed; }
   .i9-leader { display: inline-flex; align-items: center; gap: 6px; font-size: 10.5px; padding: 2px 8px;
     background: #0c1626; border: 1px solid #24406a; border-radius: 4px; color: #9ab; cursor: pointer; }
   .i9-leader:hover { border-color: #4dd0e1; background: #10203a; }

@@ -26,6 +26,7 @@ import collections
 import itertools
 import json
 import os
+import re
 import socket
 import sys
 import threading
@@ -644,7 +645,19 @@ class Agent:
             # Forming hit-parade: top-3 combos of THIS job by net profit, with full
             # params so the monitor can re-run any into a chart (grabbed BEFORE the
             # trades/equity strip below — but we keep only metrics + params here).
+            # id стратегии для клика «пересчитать» в мониторе. По имени прогона он
+            # угадывается только у кампаний (opt-…-<strategy>-<symbol>); у
+            # ИНТЕРАКТИВНОГО прогона имя это голый cuid без дефисов, и раньше сюда
+            # уезжала пустая строка — клик по такому лидеру в Ботсторе падал с
+            # «Не передан id стратегии» (найдено 28.07). Достаём из кода стратегии,
+            # тем же способом, что и сервер: make_on_bar('<id>') либо имя модуля.
             strat = run_id.split("-")[-2] if run_id.count("-") >= 2 else ""
+            if not strat:
+                code = job.get("script_code") or ""
+                m = re.search(r"make_on_bar\(\s*['\"]([^'\"]+)['\"]", code)
+                if not m:
+                    m = re.search(r"strategies\.([A-Za-z_][A-Za-z0-9_]*)\s+import", code)
+                strat = m.group(1) if m else ""
             oks = [e for e in results if e.get("ok") and isinstance(e.get("result"), dict)]
             top = sorted(oks, key=lambda e: (e["result"].get("net_profit") or -1e18), reverse=True)[:3]
             self._leaders = [{"strategy": strat, "symbol": symbol, "run_id": run_id,
