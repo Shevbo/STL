@@ -211,6 +211,37 @@ def _fill_price(status: dict, order_id: str) -> tuple[float, int]:
     return (num / vol, vol) if vol else (0.0, 0)
 
 
+def _match_trades(status: dict, so: SmartOrder, window_ms: int = 180_000) -> tuple[float, int]:
+    """Запасной путь, когда номера заявки нет: стор заявок живёт В ПАМЯТИ и
+    обнуляется рестартом STL, а сработала заявка раньше. Ищем в сделках QUIK
+    РУЧНОЙ класс (тег пустой — роботные и recon исключены) по тому же инструменту
+    и стороне рядом со временем срабатывания, группируем по номеру заявки и берём
+    группу, ближайшую по времени, с подходящим объёмом."""
+    groups: dict[str, list] = {}
+    for t in ((status.get("quik") or {}).get("trades") or []):
+        if (t.get("tag") or "") != "" or t.get("sec") != so.code:
+            continue
+        if str(t.get("side") or "").lower() != so.side:
+            continue
+        ts = int(t.get("ts_ms") or 0)
+        if not ts or abs(ts - so.fired_ms) > window_ms:
+            continue
+        groups.setdefault(str(t.get("order_num") or ts), []).append(t)
+    best, best_dt = None, None
+    for rows in groups.values():
+        vol = sum(int(r.get("qty") or 0) for r in rows)
+        if vol <= 0 or vol > so.qty:
+            continue                      # чужая заявка большего объёма — не наша
+        dt = min(abs(int(r.get("ts_ms") or 0) - so.fired_ms) for r in rows)
+        if best_dt is None or dt < best_dt:
+            best, best_dt = rows, dt
+    if not best:
+        return 0.0, 0
+    vol = sum(int(r.get("qty") or 0) for r in best)
+    num = sum(float(r.get("price") or 0) * int(r.get("qty") or 0) for r in best)
+    return (num / vol, vol) if vol else (0.0, 0)
+
+
 def _track_fills(book: SmartOrderBook, ost: Any, store: Any, agent: str) -> bool:
     """Дописать сработавшим заявкам ЦЕНУ СДЕЛКИ. Оператору нужен факт («купил по
     88 340»), а не уровень срабатывания — по уровню нельзя понять, во что обошёлся
@@ -226,9 +257,9 @@ def _track_fills(book: SmartOrderBook, ost: Any, store: Any, agent: str) -> bool
     for so in want:
         rec = by_cid.get(so.fired_client_id) or {}
         oid = rec.get("order_id")
-        if not oid:
-            continue
-        px, vol = _fill_price(status, oid)
+        px, vol = _fill_price(status, oid) if oid else (0.0, 0)
+        if px <= 0:
+            px, vol = _match_trades(status, so)
         if px > 0:
             so.fired_price, so.fired_qty = px, vol
             dirty = True

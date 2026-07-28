@@ -268,3 +268,36 @@ def test_fill_price_absent_when_no_trades_yet():
     from trader.api.quik_smart_orders import _fill_price
     assert _fill_price({"quik": {"trades": []}}, "777") == (0.0, 0)
     assert _fill_price({}, "777") == (0.0, 0)
+
+
+def test_match_trades_fallback_after_restart():
+    """Стор заявок в памяти обнуляется рестартом. Тогда сделку ищем по таблице
+    QUIK: ручной класс, тот же инструмент и сторона, рядом по времени."""
+    from trader.api.quik_smart_orders import _match_trades
+    o = so(kind="trail_tp", side="buy", qty=14, trail_offset=350)
+    o.fired_ms = NOW
+    status = {"quik": {"trades": [
+        {"order_num": "A", "sec": "RIU6", "side": "buy", "qty": 10, "price": 88_340.0,
+         "ts_ms": NOW + 1_000, "tag": ""},
+        {"order_num": "A", "sec": "RIU6", "side": "buy", "qty": 4, "price": 88_360.0,
+         "ts_ms": NOW + 1_500, "tag": ""},
+        {"order_num": "R", "sec": "RIU6", "side": "buy", "qty": 1, "price": 88_300.0,
+         "ts_ms": NOW + 900, "tag": "l90z0afzceesll5izjjg"},      # робот — не наша
+        {"order_num": "B", "sec": "BRU6", "side": "buy", "qty": 14, "price": 85.0,
+         "ts_ms": NOW + 800, "tag": ""},                          # другой инструмент
+    ]}}
+    px, vol = _match_trades(status, o)
+    assert vol == 14
+    assert round(px, 2) == round((88_340 * 10 + 88_360 * 4) / 14, 2)
+
+
+def test_match_trades_ignores_far_and_oversized():
+    from trader.api.quik_smart_orders import _match_trades
+    o = so(kind="trail_tp", side="sell", qty=2, trail_offset=100)
+    o.fired_ms = NOW
+    far = {"quik": {"trades": [{"order_num": "A", "sec": "RIU6", "side": "sell", "qty": 2,
+                                "price": 90_000.0, "ts_ms": NOW + 10 * 60_000, "tag": ""}]}}
+    assert _match_trades(far, o) == (0.0, 0)          # слишком далеко по времени
+    big = {"quik": {"trades": [{"order_num": "A", "sec": "RIU6", "side": "sell", "qty": 9,
+                                "price": 90_000.0, "ts_ms": NOW + 500, "tag": ""}]}}
+    assert _match_trades(big, o) == (0.0, 0)          # объём больше нашего — чужая

@@ -388,7 +388,16 @@ function renderActiveRobots(list) {
 
 // #6: ручные заявки — простые (таблица заявок QUIK, без тега = ручной класс)
 // и умные (книга STL). Только статус, действия — в терминале STL.
-function renderOrders(o) {
+// Полночь по Москве: таблица сделок QUIK держит только текущую сессию, поэтому
+// вчерашним заявкам цену уже не найти — им честнее оставить уровень.
+function todayLo(d) {
+  const now = new Date(d && d.ts_ms ? d.ts_ms : Date.now());
+  const msk = new Date(now.getTime() + (now.getTimezoneOffset() + 180) * 60000);
+  msk.setHours(0, 0, 0, 0);
+  return msk.getTime() - (now.getTimezoneOffset() + 180) * 60000;
+}
+
+function renderOrders(o, d) {
   if (!o || (!(o.manual || []).length && !(o.smart || []).length))
     return '<div class="empty">ручных заявок нет</div>';
   const sideRu = (s) => s === 'buy' ? 'покупка' : 'продажа';
@@ -407,7 +416,9 @@ function renderOrders(o) {
     // уровень уже история, а оператору нужен факт — по чём вошёл.
     let sub = s.trigger ? `уровень ${num(s.trigger)}` : '';
     if (s.fired_price) sub = `сделка по ${px(s.fired_price)}${s.fired_qty ? ' × ' + s.fired_qty : ''}`;
-    else if (s.status === 'fired' || s.status === 'orphaned') sub = 'цена сделки уточняется';
+    else if ((s.status === 'fired' || s.status === 'orphaned') && s.fired_ms > todayLo(d))
+      sub = 'цена сделки уточняется';   // сегодняшнюю подтянем из таблицы сделок QUIK
+    if (s.sl_offset) sub += ` · стоп ${s.sl_offset} п.`;
     if (s.kind === 'trail_tp' && s.status === 'armed') {
       sub = s.activated
         ? `● от пика ${num(s.peak)}, сделка при ${s.side === 'buy' ? '≥' : '≤'} ` +
@@ -520,7 +531,7 @@ function paint(d) {
     `<div class="sec">роботы <a href="${STL}/?lab=live&equity=1" data-ext>витрина ↗</a></div>` +
       robotsTotal(d.robots) + renderRobots(d.robots) +
     `<div class="sec">заявки ручные <a href="${STL}/?orders=1" data-ext>терминал ↗</a></div>` +
-      renderOrders(d.orders) +
+      renderOrders(d.orders, d) +
     `<div class="sec">вотчер <a href="${STL}/?lab=botstore" data-ext>хитпарад ↗</a></div>` +
       renderWatch(d.watch) +
     `<div class="sec">уведомления <a href="${STL}/watchdog-log.html" data-ext>детали ↗</a>` +
