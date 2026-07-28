@@ -415,7 +415,7 @@
 
   <!-- working orders -->
   <div class="section-title">В работе</div>
-  <div class="grid-wrap">
+  <div class="grid-wrap gw-working">
     <table>
       <thead>
         <tr><th>Время</th><th>Инстр.</th><th>Сторона</th><th>Цена</th>
@@ -459,7 +459,7 @@
 
   <!-- executions -->
   <div class="section-title">Исполнение (мейкер)</div>
-  <div class="grid-wrap">
+  <div class="grid-wrap gw-exec">
     <table>
       <thead>
         <tr><th>Время</th><th>Инстр.</th><th>Цель</th><th>Исполн.</th>
