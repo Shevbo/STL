@@ -310,6 +310,10 @@ class RobotHost:
                 # still applies via on_order_event by client_id, so this is safe.
                 r.runtime.expire_order(w["order_id"])
         try:
+            # Режим «только на выход» живёт в params робота (инфраструктурный флаг,
+            # как bar_offset_min): приходит штатным SetRobotParams, переживает
+            # рестарт вместе со спекой, не требует правки протокола.
+            r.runtime.exit_only = bool((r.spec.get("params") or {}).get("exit_only"))
             await r.on_bar(r.runtime, r.spec["params"])
             r.last_error = ""
             self._log_signal_change(r)

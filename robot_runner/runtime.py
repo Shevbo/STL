@@ -79,6 +79,12 @@ class AgentRuntime:
         # robot's symbol (fed by the host's tick consumer). Real orders price
         # marketable off it; paper never uses it (same-bar close fills).
         self._quote_fn = quote_fn
+        # «Только на выход»: робот доводит открытую позицию до закрытия по своему
+        # же сигналу (TP/SL/разворот) и НЕ открывает новую. Нужен, чтобы вывести
+        # робота из боя без обрыва сделки: на экспирации контракта, при разводе
+        # встречных роботов (кросс-заявки), перед переводом в бумагу. Значение
+        # приходит из params робота (host выставляет его перед каждым баром).
+        self.exit_only = False
         self._signed = 0
         self._avg = 0.0
         self._realized = 0.0          # GROSS price points (entry↔exit diff), no fees
@@ -111,6 +117,20 @@ class AgentRuntime:
 
     async def place_order(self, symbol: str, side: str, qty: int, price: float) -> Order:
         delta = qty if side == "buy" else -qty
+        # Режим «только на выход»: наружу пропускаем ТОЛЬКО то, что уменьшает
+        # позицию. Заявку на разворот (через ноль) урезаем до закрытия — робот
+        # выходит, но в противоположную сторону не встаёт.
+        if self.exit_only:
+            if self._signed == 0 or (delta > 0) == (self._signed > 0):
+                self.event("SKIP", f"{side} {qty} {symbol}: режим «только на выход», "
+                           f"новых позиций не открываем (позиция {self._signed})")
+                return Order(order_id="skipped-exitonly", symbol=symbol, side=side,
+                             qty=qty, price=price, status="skipped")
+            if qty > abs(self._signed):
+                self.event("TRIM", f"{side} {qty} -> {abs(self._signed)} {symbol}: "
+                           "режим «только на выход», разворот урезан до закрытия")
+                qty = abs(self._signed)
+                delta = qty if side == "buy" else -qty
         # Reducing is always allowed; growing beyond max_position is refused.
         grows = abs(self._signed + delta) > abs(self._signed)
         if grows and abs(self._signed + delta) > self._max_position:

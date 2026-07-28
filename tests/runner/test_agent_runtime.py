@@ -212,3 +212,54 @@ async def test_partial_reduce_keeps_avg():
     await rt.place_order("RIU6", "buy", 1, 87500.0)    # close 1 more
     assert rt.avg_price() == 88000.0
     assert rt.realized_gross() == 1500.0                 # 1000 + 500, both vs 88000
+
+
+# ---- режим «только на выход» ----
+
+@pytest.mark.asyncio
+async def test_exit_only_blocks_new_position():
+    """Флэт + сигнал на вход = ничего не делаем: заявка наружу не уходит."""
+    rt = AgentRuntime("r1", FakeBridge(), BarBuilder(), max_position=5, paper=True)
+    rt.exit_only = True
+    o = await rt.place_order("RIU6", "buy", 2, 90000)
+    assert o.status == "skipped" and o.order_id == "skipped-exitonly"
+    assert rt.signed_position() == 0
+    assert rt._bridge.placed == []
+
+
+@pytest.mark.asyncio
+async def test_exit_only_blocks_adding_to_position():
+    rt = AgentRuntime("r1", FakeBridge(), BarBuilder(), max_position=5, paper=True)
+    await rt.place_order("RIU6", "buy", 2, 90000)      # обычный вход до режима
+    rt.exit_only = True
+    o = await rt.place_order("RIU6", "buy", 1, 89900)  # долив запрещён
+    assert o.status == "skipped"
+    assert rt.signed_position() == 2
+
+
+@pytest.mark.asyncio
+async def test_exit_only_allows_closing():
+    """Выход по сигналу робота (TP/SL) проходит как обычно."""
+    rt = AgentRuntime("r1", FakeBridge(), BarBuilder(), max_position=5, paper=True)
+    await rt.place_order("RIU6", "buy", 3, 90000)
+    rt.exit_only = True
+    o = await rt.place_order("RIU6", "sell", 3, 90500)
+    assert o.status == "paper" and rt.signed_position() == 0
+
+
+@pytest.mark.asyncio
+async def test_exit_only_trims_reversal_to_flat():
+    """Разворот через ноль урезаем до закрытия: выходим, но в шорт не встаём."""
+    rt = AgentRuntime("r1", FakeBridge(), BarBuilder(), max_position=5, paper=True)
+    await rt.place_order("RIU6", "buy", 2, 90000)
+    rt.exit_only = True
+    o = await rt.place_order("RIU6", "sell", 5, 90500)   # сигнал «перевернуться»
+    assert o.qty == 2 and rt.signed_position() == 0      # ровно закрытие, без шорта
+
+
+@pytest.mark.asyncio
+async def test_exit_only_off_by_default():
+    rt = AgentRuntime("r1", FakeBridge(), BarBuilder(), max_position=5, paper=True)
+    assert rt.exit_only is False
+    o = await rt.place_order("RIU6", "buy", 1, 90000)
+    assert o.status == "paper" and rt.signed_position() == 1

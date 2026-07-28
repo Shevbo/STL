@@ -16,9 +16,13 @@ import time
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+import structlog
+
 from trader.auth.guard import require_auth
 from trader.quik.pb.shectory.quik.v1 import quik_agent_pb2 as pb
 from trader.quik.store import resolve_agent
+
+log = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/api/v1/quik", tags=["quik-robots"])
 
@@ -246,6 +250,52 @@ async def relay_robot_params(robot_id: str, body: ParamsRelayBody, request: Requ
             robot_id=robot_id,
             params_json=body.params_json)))
     return {"ok": True, "agent_id": agent, "robot_id": robot_id, "redeployed": False}
+
+
+class ExitOnlyBody(BaseModel):
+    agent_id: str | None = None
+    on: bool = True
+
+
+@router.post("/robots/{robot_id}/exit-only")
+async def set_exit_only(robot_id: str, body: ExitOnlyBody, request: Request):
+    """Режим «ТОЛЬКО НА ВЫХОД»: робот доводит открытую позицию до закрытия по
+    своему же сигналу (TP/SL/разворот) и НЕ открывает новую. «Пуск» снимает.
+
+    Зачем: вывести робота из боя, не обрывая сделку — экспирация контракта,
+    развод встречных роботов (кросс-заявки биржа отклоняет), подготовка к
+    переводу в бумагу. Пауза для этого не годится: она замораживает робота
+    ВМЕСТЕ с открытой позицией, и выходить будет некому.
+
+    Флаг едет штатным SetRobotParams внутри params_json (инфраструктурный
+    параметр, как bar_offset_min): переживает рестарт вместе со спекой и не
+    требует правки протокола. Параметры берём ИЗ ЗЕРКАЛА робота, чтобы не
+    затереть его настройки — как в /params.
+    """
+    _auth(request)
+    srv = _server(request)
+    store = _store(request)
+    agent = _resolve_agent(request, body.agent_id)
+    report = store.robot_report(body.agent_id) or {}
+    cur = next((r for r in report.get("robots", []) if r.get("robot_id") == robot_id), None)
+    if cur is None:
+        raise HTTPException(status_code=409, detail=(
+            "Робот не найден в зеркале агента — обнови страницу / проверь линк."))
+    try:
+        params = json.loads(cur.get("params_json") or "{}")
+    except ValueError:
+        raise HTTPException(status_code=409, detail=(
+            "Не читаются параметры робота из зеркала — режим не меняю вслепую.")) from None
+    if body.on:
+        params["exit_only"] = True
+    else:
+        params.pop("exit_only", None)
+    srv.enqueue_order(agent, pb.OrchestratorMessage(
+        set_robot_params=pb.SetRobotParams(
+            robot_id=robot_id,
+            params_json=json.dumps(params, ensure_ascii=False))))
+    log.info("quik.robot_exit_only", robot_id=robot_id, agent_id=agent, on=bool(body.on))
+    return {"ok": True, "agent_id": agent, "robot_id": robot_id, "exit_only": bool(body.on)}
 
 
 @router.get("/agent/{agent_id}/robots")

@@ -42,6 +42,42 @@
   // st* = «stack» profile, sd* = «side» profiles (shared by chart-left/right mirror).
   let stChart = $state(440), stPing = $state(120), stDiag = $state(175), stSig = $state(300), stTrd = $state(430), stEq = $state(300);
   let sdChart = $state(1050), sdPing = $state(110), sdDiag = $state(150), sdSig = $state(190), sdTrd = $state(230), sdEq = $state(220);
+  // ПЕРВОЕ ОТКРЫТИЕ: раскладываем фреймы ПО РАЗМЕРУ ЭКРАНА, а не по фиксированным
+  // пикселям. Константы выше рассчитаны на один монитор: на широком снизу зияла
+  // пустота, на ноутбуке нижний ряд схлопывался в полоски. Считаем доли от окна и
+  // делим ряд поровну — все фреймы открыты и границы стоят равноудалённо.
+  // Размеры, которые оператор УЖЕ подвинул (есть ключ в localStorage), не трогаем:
+  // Splitter при монтировании возьмёт их и перезапишет наш расчёт.
+  const SPLIT_PX = 6;                       // толщина разделителя
+  function fitFrames() {
+    const has = (k: string) => {
+      try { return localStorage.getItem(k) != null; } catch { return true; }
+    };
+    // Рабочая область = окно минус шапка экрана и строка заголовков фреймов.
+    const H = Math.max(520, window.innerHeight - 150);
+    const W = Math.max(880, window.innerWidth - 16);
+    // Стопка: график забирает 44% высоты (он главный), два узких пояса под ним,
+    // остаток достаётся нижнему ряду.
+    if (!has('ars_st_chart')) stChart = Math.round(H * 0.44);
+    if (!has('ars_st_ping')) stPing = Math.round(Math.min(140, Math.max(64, H * 0.09)));
+    if (!has('ars_st_diag')) stDiag = Math.round(Math.min(220, Math.max(96, H * 0.14)));
+    // Нижний ряд: 4 фрейма (сигнал, сделки, доходность, логика) делят ширину
+    // поровну; последний тянется остатком, поэтому задаём три первых.
+    const col = Math.max(160, Math.round((W - 3 * SPLIT_PX) / 4));
+    if (!has('ars_st_sig')) stSig = col;
+    if (!has('ars_st_trd')) stTrd = col;
+    if (!has('ars_st_eq')) stEq = col;
+    // Боковые профили: график 55% ширины, правая колонка делит высоту на 6 равных
+    // (пинг, диагностика, сигнал, сделки, доходность, логика-остаток).
+    if (!has('ars_sd_chart')) sdChart = Math.round(W * 0.55);
+    const row = Math.max(80, Math.round((H - 5 * SPLIT_PX) / 6));
+    if (!has('ars_sd_ping')) sdPing = Math.min(row, 150);
+    if (!has('ars_sd_diag')) sdDiag = row;
+    if (!has('ars_sd_sig')) sdSig = row;
+    if (!has('ars_sd_trd')) sdTrd = row;
+    if (!has('ars_sd_eq')) sdEq = row;
+  }
+  if (typeof window !== 'undefined') fitFrames();
   // Which frame (if any) is maximized to the whole work area. Shared across all
   // Frame wrappers; a Frame hides itself when another id owns the maximize.
   let maxId = $state<string | null>(null);
@@ -514,6 +550,28 @@
     } catch (e) { flattenMsg = `Ошибка: ${String(e).slice(0, 80)}`; }
     finally { pausing = false; }
   }
+  // «ТОЛЬКО НА ВЫХОД»: робот доводит открытую позицию до закрытия по своему же
+  // сигналу и не открывает новую. Пауза для этого не годится — она замораживает
+  // робота ВМЕСТЕ с позицией. Нужен на экспирации, при разводе встречных роботов
+  // (кросс-заявки) и перед выводом в бумагу. Снимается «Пуском».
+  let exitBusy = $state(false);
+  const exitOnly = $derived.by(() => {
+    try { return !!JSON.parse(robot?.params_json || '{}').exit_only; } catch { return false; }
+  });
+  async function setExitOnly(on: boolean) {
+    flattenMsg = ''; exitBusy = true;
+    try {
+      const res = await fetchWithAuth(
+        `/api/v1/quik/robots/${encodeURIComponent(robotId)}/exit-only`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ agent_id: agentId, on }) });
+      flattenMsg = res.ok
+        ? (on ? 'Режим «только на выход». Робот закроет позицию по своему сигналу и новых открывать не будет.'
+              : 'Обычный режим восстановлен.')
+        : `Ошибка: ${res.status}`;
+    } catch (e) { flattenMsg = `Ошибка: ${String(e).slice(0, 80)}`; }
+    finally { exitBusy = false; }
+  }
   // Operator belief-correction from the STL stand: force the runner's believed position
   // to reality (e.g. 0 after a manual close the robot never emitted). BELIEF-ONLY — the
   // agent relays it as a runner fix_state, NEVER a real order. Server + agent both gate
@@ -786,6 +844,15 @@
                   title="записать РУЧНУЮ сделку (закрытие руками в терминале): реализует P&L и попадёт в историю, реальный ордер НЕ выставляется">
             {fillBusy ? '…' : '＋ Сделка'}</button>
         {:else}
+          {#if exitOnly}
+            <button class="rc-btn go" disabled={exitBusy} onclick={() => setExitOnly(false)}
+                    title="вернуть робота в обычную работу: снова открывает позиции">
+              {exitBusy ? '…' : '▶ Пуск'}</button>
+          {:else}
+            <button class="rc-btn" disabled={exitBusy} onclick={() => setExitOnly(true)}
+                    title="дать роботу закрыть позицию по СВОЕМУ сигналу (TP/SL) и больше не открывать новых — экспирация, развод встречных роботов, вывод в бумагу">
+              {exitBusy ? '…' : '⇥ Только на выход'}</button>
+          {/if}
           <button class="rc-btn" disabled={pausing} onclick={pauseRobot}
                   title="остановить новые входы; открытая позиция ОСТАЁТСЯ">
             {pausing ? '…' : '⏸ Пауза'}</button>
