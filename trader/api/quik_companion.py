@@ -216,6 +216,72 @@ async def _companion_or_operator(request: Request) -> str:
 
 # --------------------------------------------------------------- snapshot ----
 
+# Цена закрытия ПРОШЛОЙ торговой сессии — точка отсчёта для «ВМ за сегодня».
+# Без неё перенесённая со вчера позиция приписывала бы сегодняшнему дню весь свой
+# накопленный ход. В QLua-параметрах такого поля нет, берём дневные свечи ISS.
+# Кэш на сутки: панель дёргает снапшот раз в 5 секунд, ISS долбить нельзя.
+_PREV_CLOSE: dict[tuple[str, str], float | None] = {}
+
+
+async def _prev_close(symbol: str) -> float | None:
+    if not symbol:
+        return None
+    day = datetime.datetime.now(tz=_MSK).date().isoformat()
+    key = (symbol, day)
+    if key in _PREV_CLOSE:
+        return _PREV_CLOSE[key]
+    val: float | None = None
+    try:
+        import httpx
+        frm = (datetime.date.fromisoformat(day) - datetime.timedelta(days=12)).isoformat()
+        url = ("https://iss.moex.com/iss/engines/futures/markets/forts/securities/"
+               f"{symbol}/candles.json")
+        async with httpx.AsyncClient(timeout=8.0, headers={"User-Agent": "STL/1.0"}) as cl:
+            r = await cl.get(url, params={"interval": 24, "from": frm, "iss.meta": "off"})
+            c = (r.json() or {}).get("candles") or {}
+            cols, rows = c.get("columns") or [], c.get("data") or []
+            if rows and "close" in cols and "begin" in cols:
+                i_c, i_b = cols.index("close"), cols.index("begin")
+                # строго ДО сегодняшней даты: сегодняшняя свеча ещё не закрыта
+                past = [row for row in rows if str(row[i_b])[:10] < day]
+                if past:
+                    val = float(past[-1][i_c])
+    except Exception:  # noqa: BLE001 — панель не должна падать из-за ISS
+        val = None
+    _PREV_CLOSE[key] = val
+    return val
+
+
+def _pos_at(fills: list, cutoff_ms: int) -> tuple[float, float]:
+    """Позиция и средняя цена робота НА МОМЕНТ cutoff_ms по его же филлам.
+    Лестница та же, что в рантайме: долив усредняет, частичное закрытие среднюю
+    не двигает, разворот через ноль переоткрывает."""
+    pos, avg = 0.0, 0.0
+    for f in sorted(fills or [], key=lambda x: int(x.get("ts_unix_ms") or 0)):
+        if int(f.get("ts_unix_ms") or 0) >= cutoff_ms:
+            break
+        if (f.get("status") or "") != "filled":
+            continue
+        try:
+            qty, px = float(f.get("qty") or 0), float(f.get("price") or 0)
+        except (TypeError, ValueError):
+            continue
+        if qty <= 0 or px <= 0:
+            continue
+        delta = qty if (f.get("side") or "").lower() in ("buy", "b") else -qty
+        new = pos + delta
+        if pos == 0:
+            avg = px
+        elif new == 0:
+            avg = 0.0
+        elif (pos > 0) == (delta > 0):
+            avg = (avg * abs(pos) + px * qty) / (abs(pos) + qty)
+        elif (pos > 0) != (new > 0):
+            avg = px
+        pos = new
+    return pos, avg
+
+
 def _msk_midnight_ms() -> int:
     today = datetime.datetime.now(tz=_MSK).date()
     return int(datetime.datetime.combine(today, datetime.time.min, tzinfo=_MSK).timestamp() * 1000)
@@ -440,12 +506,50 @@ async def snapshot(request: Request, agent_id: str | None = None):
         vm = (_robot_vm(rob.get("symbol"), rob.get("position"), rob.get("avg_price"))
               if cur_mode == "real" else None)
         fix = ra.get("net")
+        # РЕЗУЛЬТАТ ЗА СЕГОДНЯ показываем ВСЕГДА, а не только на флэте: пока робот
+        # в позиции, оператор иначе не понимает, что он сделал за день.
+        #   сегодня = фикс за сегодня (журнал) + ИЗМЕНЕНИЕ ВМ за сегодня.
+        # ВМ за сегодня = ВМ сейчас − ВМ на закрытии прошлой сессии; иначе позиция,
+        # перенесённая со вчера, приписала бы сегодняшнему дню весь свой ход.
+        vm_today, vm_y = None, None
+        if cur_mode == "real" and vm is not None:
+            sym = rob.get("symbol")
+            fills = rob.get("recent_fills") or []
+            pos_y, avg_y = _pos_at(fills, today_lo)
+            # Хвост филлов обрезан 200 записями: если по нему позиция НЕ сходится с
+            # той, что робот считает своей, доверять снимку нельзя — молчим честно.
+            pos_tail, _ = _pos_at(fills, now_ms + 60_000)
+            try:
+                pos_now = float(rob.get("position") or 0)
+            except (TypeError, ValueError):
+                pos_now = 0.0
+            coef = _coef_by.get(sym)
+            if abs(pos_tail - pos_now) < 1e-9 and coef:
+                if pos_y == 0:
+                    vm_y = 0.0                      # позиция открыта сегодня — весь ход наш
+                else:
+                    pc = await _prev_close(sym)
+                    if pc:
+                        vm_y = pos_y * (float(pc) - avg_y) * float(coef)
+                if vm_y is not None:
+                    vm_today = float(vm) - vm_y
         # ПРАВИЛО: фин.рез = фикс + ВМ открытой позиции. Голый фикс при живой
         # позиции врёт (робот сидит в минусе, а карточка рисует «итог»).
         total = None if fix is None else float(fix) + float(vm or 0)
         # «Доходность в год» = (фикс + ВМ) / МАКС. ГО, хоть раз задействованное,
         # линейно приведённое к году. Пик контрактов — из журнала, ГО/контракт —
         # из QLua-параметров. Меньше 3 дней истории => не считаем (враньё масштаба).
+        # Итог за сегодня и насколько он сдвинул общий результат: % считаем к
+        # ФИНРЕЗУ НА КОНЕЦ ВЧЕРА (фикс без сегодняшнего + ВМ на вчерашнем закрытии).
+        today_fix = rt.get("net")
+        today_total = None
+        if today_fix is not None or vm_today is not None:
+            today_total = float(today_fix or 0) + float(vm_today or 0)
+        chg_pct = None
+        if total is not None and today_total is not None and vm_y is not None:
+            base = float(total) - today_total
+            if abs(base) >= 100:          # у копеечной базы процент — шум
+                chg_pct = today_total / abs(base) * 100
         margin = _margin_by.get(rob.get("symbol"))
         max_go = (float(margin) * int(ra.get("peak") or 0)) if margin else 0.0
         first_ts, ann = int(ra.get("first_ts") or 0), None
@@ -460,6 +564,9 @@ async def snapshot(request: Request, agent_id: str | None = None):
             "real_net": fix,                      # ФИКС: весь реальный итог по закрытым
             "real_total": total,                  # фикс + ВМ открытой позиции
             "real_today": rt.get("net"),
+            "vm_today": vm_today,                 # изменение ВМ за сегодня (None = не знаем)
+            "today_total": today_total,           # фикс сегодня + ВМ сегодня
+            "chg_pct": chg_pct,                   # % к финрезу на конец вчера
             "real_trades_today": rt.get("trades") or 0,
             "position": rob.get("position") if cur_mode == "real" else None,
             # Потолок позиции, который агент реально сторожит (из спеки робота) —

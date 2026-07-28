@@ -147,6 +147,10 @@
      специфичностью и фикс/ВМ/сегодня печатались нейтральными. */
   .rob .nums b.up { color: var(--up); }
   .rob .nums b.down { color: var(--down); }
+  /* % к вчерашнему закрытию — рядом с итоговой суммой, мельче её. */
+  .chg { font-size: 10px; font-weight: 600; margin-left: 5px; color: var(--faint); }
+  .chg.up { color: var(--up); }
+  .chg.down { color: var(--down); }
 
   /* Вотчер: точка статуса + текст проблемы. */
   .chk { display: flex; align-items: baseline; gap: 5px; padding: 1px 0 1px 6px;
@@ -346,16 +350,27 @@ function renderActiveRobots(list) {
     // Горизонт рядом с годовой: на 7 днях истории ×52 даёт ±1800%, и без
     // подписи это читается как баг, а не как экстраполяция.
     const annDays = r.started_ms ? Math.max(1, Math.round((Date.now() - r.started_ms) / 86400000)) : null;
+    // СЕГОДНЯ показываем ВСЕГДА, даже когда робот в позиции: иначе за день не
+    // видно, что он наработал. Это фикс ЗА СЕГОДНЯ + изменение ВМ ЗА СЕГОДНЯ
+    // (не вся ВМ позиции: перенесённая со вчера уже частью отработана вчера).
+    const tSum = r.today_total;
+    const today = `<span title="результат ЗА СЕГОДНЯ: закрытые сделки сегодня + изменение варьмаржи за сегодня${r.vm_today == null ? ' (ВМ за сегодня неизвестна: хвост сделок обрезан или нет вчерашнего закрытия)' : ''}">сегодня <b class="${cls(tSum)}">${tSum == null ? '—' : rub(tSum, { signed: true })}</b>`
+      + `<span style="opacity:.75"> = фикс ${r.real_today == null ? '—' : rub(r.real_today, { signed: true })}`
+      + ` ${r.vm_today == null ? '· ВМ —' : '· ВМ ' + rub(r.vm_today, { signed: true })}</span></span>`;
+    // Рядом с общим итогом — насколько он сдвинулся против вчерашнего закрытия.
+    const chg = r.chg_pct == null ? ''
+      : `<span class="chg ${cls(r.chg_pct)}" title="изменение общего фин.результата по сравнению с концом вчерашнего дня">${r.chg_pct > 0 ? '+' : ''}${r.chg_pct.toFixed(1)}%</span>`;
     return `<div class="rob ${k}">
       <div class="hd">
         <a href="${STL}/?agent_robot=${encodeURIComponent(r.id)}" data-ext>${esc(r.name)}</a>
         <span class="tag ${stCls}">${esc(st)}</span>
         <span class="sp" style="flex:1"></span>
         ${val(rub(net, { signed: true }), k)}
+        ${chg}
       </div>
       <div class="nums">
-        ${r.varmargin ? `<span title="фикс по закрытым сделкам + ВМ открытой позиции (от входа)">фикс <b class="${cls(r.real_net)}">${rub(r.real_net, { signed: true })}</b> · ВМ <b class="${cls(r.varmargin)}">${rub(r.varmargin, { signed: true })}</b></span>`
-          : `<span>сегодня <b class="${cls(r.real_today)}">${r.real_today == null ? '—' : rub(r.real_today, { signed: true })}</b></span>`}
+        <span title="фикс по закрытым сделкам за всё время + ВМ открытой позиции (от входа)">итого фикс <b class="${cls(r.real_net)}">${rub(r.real_net, { signed: true })}</b>${r.varmargin ? ` · ВМ <b class="${cls(r.varmargin)}">${rub(r.varmargin, { signed: true })}</b>` : ''}</span>
+        ${today}
         ${r.position == null ? '' : `<span title="текущая позиция из максимально допустимой (потолок робота на агенте)">поз <b class="${cls(r.position)}">${r.position}</b>${r.max_position ? ` из <b>${r.max_position}</b>` : ''}</span>`}
         ${ann == null ? '' : `<span title="доходность в год: (фикс+ВМ) к максимальному задействованному ГО${r.max_go ? ' ' + Math.round(r.max_go).toLocaleString('ru-RU') + ' ₽' : ''}, линейно экстраполировано с ${annDays} дн">год <b class="${cls(r.ann_pct)}">${ann}</b>${annDays ? ` <span style="opacity:.7">за ${annDays} дн</span>` : ''}</span>`}
         <span>сделок сегодня <b>${r.real_trades_today || 0}</b></span>
