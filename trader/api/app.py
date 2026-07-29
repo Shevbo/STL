@@ -1053,8 +1053,6 @@ async def _market_session_poller(app_state) -> None:
     первый прогон нового дня, это и есть заказанный «парсинг расписания в 03:00»
     без отдельного крона. Сетевые сбои переживает: при провале держит ПРОШЛЫЙ
     ответ, а первый раз оставляет None (потребитель трактует защитно)."""
-    import datetime as _dt
-
     from trader import market_session as ms
     sched: dict = {}
     sched_at = 0.0

@@ -9,6 +9,7 @@ export type SchematicId = 'fvg' | 'atr' | 'ladder' | null;
 export interface LiveCtx {
   atr: number;    // current ATR in price points (0 if unknown)
   price: number;  // current/last price
+  tp?: number;    // raw tp_atr of the SAME robot (stop is a % of the TP distance)
 }
 
 export interface ParamHelp {
@@ -50,6 +51,20 @@ const SHARED: Record<string, ParamHelp> = {
     how: 'Лонг закрывается когда цена ≥ средняя + (tp_atr/10)×ATR. Шорт — когда цена ≤ средняя − (tp_atr/10)×ATR.',
     schematic: 'ladder',
     live: (v, c) => (v > 0 && c.atr > 0) ? `${(v / 10).toFixed(1)}×ATR = ${pts((v / 10) * c.atr)} от средней` : null,
+  },
+  sl_frac: {
+    title: 'Стоп-лосс',
+    short: 'Доля дистанции тейка, на которой режем убыток',
+    what: 'Стоп задаётся не отдельным расстоянием, а ДОЛЕЙ тейка в процентах: 50 = стоп ровно на половине пути тейка. 0 = стопа нет (убыток ограничивает только разворот сигнала). Без тейка (tp_atr=0) стоп не работает.',
+    how: 'Лонг закрывается когда цена ≤ средняя − (sl_frac/100)×(tp_atr/10)×ATR. Шорт — зеркально. Стоп проверяется РАНЬШЕ усреднения: если он ближе шага добора, робот выходит, а не доливает в убыток. После стопа тот же сигнал в ту же сторону заблокирован, пока не сменится или не пропадёт.',
+    schematic: 'ladder',
+    live: (v, c) => {
+      const tp = Number(c.tp ?? 0);
+      if (!(v > 0) || !(tp > 0)) return null;
+      const k = (v / 100) * (tp / 10);          // стоп в ×ATR
+      return c.atr > 0 ? `${k.toFixed(1)}×ATR = ${pts(k * c.atr)} от средней`
+                       : `${k.toFixed(1)}×ATR от средней`;
+    },
   },
   avg_atr_n: {
     title: 'Период ATR',
@@ -166,11 +181,12 @@ export interface StrategyOverview {
 }
 
 // Timeframe + TP + SL are shared: all strategies run on M1 and use the SAME
-// position-management layer (make_on_bar) — take-profit by tp_atr and NO stop-loss
-// (averaging instead). Only the ENTRY signal differs per strategy.
+// position-management layer (make_on_bar) — take-profit by tp_atr and an OPTIONAL
+// stop-loss by sl_frac (% of the TP distance, off by default — averaging instead).
+// Only the ENTRY signal differs per strategy.
 const TF = 'М1 — минутные бары (жёстко, tf=1). Стратегия считается один раз по закрытию каждой минутки; бары строятся из ленты сделок QUIK.';
 const TP = 'Тейк-профит на «средняя цена входа ± tp_atr×ATR» (если tp_atr>0). При tp_atr=0 тейка нет — выход только по смене сигнала.';
-const SL = 'СТОП-ЛОССА НЕТ. Убыток закрывается сменой сигнала (или тейком). При avg_step_atr>0 робот докупает ПРОТИВ движения до avg_max — усреднение вместо стопа; «усиление» на графике — это ярлык, не отдельная логика. Жёсткий потолок «max позиция» лишь блокирует новые доборы, но не закрывает.';
+const SL = 'Стоп-лосс включается параметром sl_frac — доля дистанции тейка в процентах (50 = половина пути тейка, считается от средней входа). При sl_frac=0 стопа НЕТ: убыток закрывается только сменой сигнала или тейком, а при avg_step_atr>0 робот докупает ПРОТИВ движения до avg_max (усреднение вместо стопа; «усиление» на графике — ярлык, не отдельная логика). Стоп важнее усреднения: сработал раньше добора — выходим. После стопа тот же сигнал не пускает обратно, пока не сменится. Жёсткий потолок «max позиция» лишь блокирует новые доборы, но не закрывает.';
 
 export const STRATEGY_OVERVIEW: Record<string, StrategyOverview> = {
   fvg: { timeframe: TF, tp: TP, sl: SL,

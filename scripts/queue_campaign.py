@@ -39,7 +39,7 @@ DEFAULT_SYMBOLS = [
 
 # Params managed by the averaging/TP layer — excluded from sweep by default to
 # keep combo counts manageable. Pinned at their off-defaults instead.
-AVG_PARAM_KEYS = {"avg_max", "avg_step_atr", "tp_atr", "avg_atr_n"}
+AVG_PARAM_KEYS = {"avg_max", "avg_step_atr", "tp_atr", "sl_frac", "avg_atr_n"}
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 

@@ -349,3 +349,74 @@ async def test_filter_effect_negative_when_skip_would_have_won():
     # значит фильтр НЕДОзаработал (эффект отрицательный).
     await _run(rt, -1, 180 + 3600, 87400.0, **g)
     assert rt.get_state("filter_saved_pts") == pytest.approx(-320.0)
+
+
+# ── Стоп-лосс долей тейка (sl_frac) ──────────────────────────────────────────
+# Живой agent-ob-BRU6-v1 (28.07.2026): выходов было два — тейк и разворот сигнала,
+# поэтому убыток ограничивал только разворот. Один лонг просидел 3 дня и отдал 8.2
+# пункта против среднего выигрыша 0.9 — порог безубыточности уехал на 78% побед.
+# Бары ниже двигаются ровно на 1.0 за шаг, поэтому ATR(2) = 1.0 и расстояния
+# читаются прямо в единицах цены.
+
+_SL = dict(avg_atr_n=2, tp_atr=40)        # тейк 4.0×ATR; стоп при sl_frac=50 -> 2.0
+
+
+async def _warm_long(rt, **params):
+    """3 бара разогрева + вход в лонг по 103. Средняя = 103."""
+    for i, p in enumerate((100.0, 101.0, 102.0)):
+        await _run(rt, None, i * 60, p, **params)
+    await _run(rt, 1, 180, 103.0, **params)
+    assert rt.signed == 1 and rt.avg == 103.0
+
+
+@pytest.mark.asyncio
+async def test_sl_frac_exits_at_half_the_take_profit_distance():
+    rt = _FakeRT()
+    p = dict(_SL, sl_frac=50)
+    await _warm_long(rt, **p)
+    await _run(rt, None, 240, 102.0, **p)         # -1.0: ближе стопа, держим
+    assert rt.signed == 1
+    await _run(rt, None, 300, 101.0, **p)         # -2.0 = 2.0×ATR -> стоп
+    assert rt.signed == 0
+    assert rt.orders[-1] == ("sell", 1, 101.0)
+
+
+@pytest.mark.asyncio
+async def test_sl_frac_off_by_default_keeps_old_behaviour():
+    rt = _FakeRT()
+    await _warm_long(rt, **_SL)
+    for t, price in ((240, 102.0), (300, 101.0), (360, 100.0)):
+        await _run(rt, None, t, price, **_SL)
+    assert rt.signed == 1, "без sl_frac позицию держим до тейка/разворота, как раньше"
+
+
+@pytest.mark.asyncio
+async def test_stop_wins_over_averaging_when_it_is_nearer():
+    """Оба срабатывают на ходе ПРОТИВ позиции. Если стоп ближе шага добора,
+    робот обязан выйти, а не долить в убыточную позицию."""
+    rt = _FakeRT()
+    p = dict(_SL, sl_frac=50, avg_max=3, avg_step_atr=30)   # стоп 2.0, добор 3.0
+    await _warm_long(rt, **p)
+    await _run(rt, None, 240, 102.0, **p)
+    await _run(rt, None, 300, 101.0, **p)
+    assert rt.signed == 0
+    assert [o for o in rt.orders if o[0] == "buy"] == [("buy", 1, 103.0)], "добора быть не должно"
+
+
+@pytest.mark.asyncio
+async def test_no_reentry_on_the_same_signal_after_a_stop():
+    """Сигнал после стопа никуда не девается (у OB цена ещё в зоне блока). Без
+    запрета робот встал бы в ту же позицию следующим баром и стоп не ограничивал
+    бы ничего. Блок снимается со сменой сигнала."""
+    rt = _FakeRT()
+    p = dict(_SL, sl_frac=50)
+    await _warm_long(rt, **p)
+    await _run(rt, None, 240, 102.0, **p)
+    await _run(rt, None, 300, 101.0, **p)         # стоп
+    assert rt.signed == 0
+    n = len(rt.orders)
+    await _run(rt, 1, 360, 100.0, **p)            # тот же лонговый сигнал -> не пускаем
+    assert len(rt.orders) == n and rt.signed == 0
+    assert rt.get_state("sl_skips") == 1
+    await _run(rt, -1, 420, 101.0, **p)           # сигнал сменился -> блок снят
+    assert rt.signed == -1

@@ -919,6 +919,7 @@
   const paramCtx = $derived({
     price: Number(signal?.last_close ?? liveTick?.p ?? avgPrice ?? 0) || 0,
     atr: Number(signal?.atr ?? 0) || 0,
+    tp: Number(draft?.tp_atr ?? 0) || 0,   // стоп считается ДОЛЕЙ дистанции тейка
   });
   // Editor schema: the strategy's own params_schema when loaded, else synthesize
   // rows from the deployed params so the editor still renders before the fetch.
