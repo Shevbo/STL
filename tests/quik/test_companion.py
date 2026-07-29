@@ -257,3 +257,37 @@ def test_stale_tape_is_silent_when_the_market_is_closed():
     # ISS недоступен (None) — трактуем защитно, тревога остаётся.
     unknown = _watch_runner(health, now - 5_000, now, {"open": None})
     assert "лента отстаёт" in "; ".join(unknown["issues"])
+
+
+def test_exit_only_is_a_flag_next_to_state_not_a_new_state(monkeypatch):
+    """«Только на выход» — режим ПОВЕРХ реала (робот закрывает свою позицию и
+    новых не берёт). Панель делит роботов на активных и выведенных сравнением
+    state с 'реал'/'пауза', поэтому отдельной строки state тут быть не должно:
+    такой робот молча уехал бы в «выведены из реала»."""
+    monkeypatch.delenv("SHECTORY_AUTH_DEV_BYPASS", raising=False)
+    app = FastAPI()
+    app.include_router(companion_router)
+    app.state.settings = _Settings()
+    app.state.db_pool = FakePool()
+    store = QuikAgentStore()
+    store.set_agent_status("A1", json.dumps({
+        "agent": {"version": "x", "link_up": True},
+        "health": {"runner_healthy": True},
+        "robots": [
+            {"id": "r-exit", "symbol": "RIU6", "mode": "real", "paused": False,
+             "params_json": '{"qty": 1, "exit_only": true}'},
+            {"id": "r-plain", "symbol": "RIU6", "mode": "real", "paused": False,
+             "params_json": '{"qty": 1}'},
+            {"id": "r-broken", "symbol": "RIU6", "mode": "real", "paused": False,
+             "params_json": "не json"},
+        ],
+    }), 0)
+    app.state.quik_store = store
+
+    body = TestClient(app).get("/api/v1/quik/companion/snapshot",
+                               headers=_operator_headers()).json()
+    by_id = {r["id"]: r for r in body["robots"]}
+    assert by_id["r-exit"]["exit_only"] is True
+    assert by_id["r-exit"]["state"] == "реал", "состояние остаётся реалом"
+    assert by_id["r-plain"]["exit_only"] is False
+    assert by_id["r-broken"]["exit_only"] is False, "битый params_json не должен ронять панель"

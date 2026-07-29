@@ -552,10 +552,20 @@ async def snapshot(request: Request, agent_id: str | None = None):
             days = (now_ms - first_ts) / 86_400_000
             if days >= 3:
                 ann = (total / max_go) * (365 / days) * 100
+        # «Только на выход» — ОТДЕЛЬНЫЙ флаг, а не ещё одно значение state: панель
+        # делит роботов на активных и выведенных сравнением state с 'реал'/'пауза',
+        # и новая строка молча схлопнула бы такого робота в «выведены из реала».
+        exit_only = False
+        if cur_mode == "real":
+            try:
+                exit_only = bool(json.loads(rob.get("params_json") or "{}").get("exit_only"))
+            except (TypeError, ValueError):
+                exit_only = False
         robots.append({
             "id": rid, "name": names.get(rid) or rid,
             "symbol": rob.get("symbol"),
             "state": state,
+            "exit_only": exit_only,               # закрывает свою позицию, новых не берёт
             "real_net": fix,                      # ФИКС: весь реальный итог по закрытым
             "real_total": total,                  # фикс + ВМ открытой позиции
             "real_today": today_fix,

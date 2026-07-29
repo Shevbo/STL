@@ -137,6 +137,9 @@
   .tag.paused { color: var(--down); font-weight: 600; }
   /* Переведён в бумагу / снят — уже не рискует реалом, приглушаем. */
   .tag.off { color: var(--faint); }
+  /* Только на выход — режим поверх реала, риск сворачивается. Ярче приглушённого,
+     но не как пауза: робот ещё работает. */
+  .tag.exitonly { color: #8a5a12; font-weight: 600; }
   /* gap здесь был общий: при переносе строки row-gap 9px рвал карточку — вторая
      строка цифр отходила дальше, чем первая от имени. Разводим: по горизонтали
      9px, по вертикали 0, ритм держит line-height (он же у имени). */
@@ -345,6 +348,12 @@ function renderActiveRobots(list) {
     const last = lastTradeFmt(r.last_trade_ms);
     const st = r.state;                    // 'реал' | 'пауза' | 'переведён в бумагу' | 'снят'
     const stCls = st === 'пауза' ? 'paused' : (st === 'реал' ? 'real' : 'off');
+    // «Только на выход» — не состояние, а режим поверх реала: робот закрывает свою
+    // позицию по своему сигналу и новых не открывает. Отдельным тегом, чтобы
+    // деление на активных/выведенных (по state) осталось нетронутым.
+    const exitTag = r.exit_only
+      ? '<span class="tag exitonly" title="робот закрывает позицию по своему сигналу и новых не открывает">только на выход</span>'
+      : '';
     const ann = r.ann_pct == null ? null
       : (r.ann_pct > 0 ? '+' : '') + r.ann_pct.toFixed(1) + '%';
     // Горизонт рядом с годовой: на 7 днях истории ×52 даёт ±1800%, и без
@@ -382,6 +391,7 @@ function renderActiveRobots(list) {
       <div class="hd">
         <a href="${STL}/?agent_robot=${encodeURIComponent(r.id)}" data-ext>${esc(r.name)}</a>
         <span class="tag ${stCls}">${esc(st)}</span>
+        ${exitTag}
         <span class="sp" style="flex:1"></span>
         ${val(rub(net, { signed: true }), k)}
         ${chg}
@@ -560,6 +570,8 @@ function alertsText() {
   const L = [renderBrand(d, true)];
   const paused = (d.robots || []).filter((r) => r.state === 'пауза').map((r) => r.name);
   if (paused.length) L.push('на паузе (реал): ' + paused.join(', '));
+  const exitOnly = (d.robots || []).filter((r) => r.exit_only).map((r) => r.name);
+  if (exitOnly.length) L.push('только на выход: ' + exitOnly.join(', '));
   const w = d.watch || {};
   for (const [name, blk] of [['раннер+lua', w.runner], ['бэктесты', w.backtests], ['платформа', w.platform]]) {
     if (blk && blk.ok === false && (blk.issues || []).length) L.push(name + ': ' + blk.issues.join('; '));
