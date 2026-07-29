@@ -558,11 +558,12 @@ async def snapshot(request: Request, agent_id: str | None = None):
         # из QLua-параметров. Меньше 3 дней истории => не считаем (враньё масштаба).
         # Итог за сегодня и насколько он сдвинул общий результат: % считаем к
         # ФИНРЕЗУ НА КОНЕЦ ВЧЕРА (фикс без сегодняшнего + ВМ на вчерашнем закрытии).
-        today_fix = rt.get("net")
-        # Складываем ТОЛЬКО когда известны обе части. Иначе строка «сегодня» молча
-        # меняла смысл: то фикс+ВМ, то один фикс — и число прыгало на десятки тысяч.
-        today_total = (None if vm_today is None or today_fix is None
-                       else float(today_fix) + float(vm_today))
+        # Нет строк в журнале за сегодня — значит закрытых сделок не было, и фикс
+        # за сегодня РАВЕН НУЛЮ (это факт, а не «неизвестно»). Неизвестной бывает
+        # только ВМ за сегодня — без неё сумму не показываем вовсе, иначе строка
+        # молча меняет смысл и число прыгает на величину ВМ (жалоба 29.07).
+        today_fix = float(rt.get("net") or 0)
+        today_total = None if vm_today is None else today_fix + float(vm_today)
         chg_pct = None
         if total is not None and today_total is not None and vm_y is not None:
             base = float(total) - today_total
@@ -581,7 +582,7 @@ async def snapshot(request: Request, agent_id: str | None = None):
             "state": state,
             "real_net": fix,                      # ФИКС: весь реальный итог по закрытым
             "real_total": total,                  # фикс + ВМ открытой позиции
-            "real_today": rt.get("net"),
+            "real_today": today_fix,
             "vm_today": vm_today,                 # изменение ВМ за сегодня (None = не знаем)
             "today_total": today_total,           # фикс сегодня + ВМ сегодня
             "chg_pct": chg_pct,                   # % к финрезу на конец вчера
