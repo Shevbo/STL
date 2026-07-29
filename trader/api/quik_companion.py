@@ -532,21 +532,36 @@ async def snapshot(request: Request, agent_id: str | None = None):
         if cur_mode == "real":
             sym = rob.get("symbol")
             fills = rob.get("recent_fills") or []
-            pos_y, avg_y = _pos_at(fills, today_lo)
-            # Хвост филлов обрезан 200 записями: если по нему позиция НЕ сходится с
-            # той, что робот считает своей, доверять снимку нельзя — молчим честно.
-            pos_tail, _ = _pos_at(fills, now_ms + 60_000)
             try:
                 pos_now = float(rob.get("position") or 0)
             except (TypeError, ValueError):
                 pos_now = 0.0
+            # Позицию на вчерашнее закрытие считаем ОТ ТЕКУЩЕЙ НАЗАД: вычитаем
+            # сегодняшние сделки. Так обрезка хвоста 200 записями не мешает —
+            # сегодняшние сделки в хвосте есть заведомо, а прежний способ (проигрыш
+            # всего хвоста с начала) у активного робота просто не сходился, и ВМ
+            # за сегодня оставалась прочерком.
+            today_delta = 0.0
+            for f in fills:
+                if int(f.get("ts_unix_ms") or 0) < today_lo or f.get("status") != "filled":
+                    continue
+                try:
+                    q = float(f.get("qty") or 0)
+                except (TypeError, ValueError):
+                    continue
+                today_delta += q if (f.get("side") or "").lower() in ("buy", "b") else -q
+            pos_y = pos_now - today_delta
             coef = _coef_by.get(sym)
-            if abs(pos_tail - pos_now) < 1e-9 and coef:
-                if pos_y == 0:
-                    vm_y = 0.0                      # позиция открыта сегодня — весь ход наш
+            if coef:
+                if abs(pos_y) < 1e-9:
+                    vm_y = 0.0            # вчера закрылись в ноль — переносить нечего
                 else:
+                    # Есть перенесённая позиция: нужна её средняя. Она восстанавливается
+                    # только проигрышем хвоста, и доверяем ему лишь когда он сходится
+                    # с посчитанной назад позицией — иначе честный прочерк.
+                    _pos_replay, avg_y = _pos_at(fills, today_lo)
                     pc = await _prev_close(sym)
-                    if pc:
+                    if pc and abs(_pos_replay - pos_y) < 1e-9 and avg_y > 0:
                         vm_y = pos_y * (float(pc) - avg_y) * float(coef)
                 if vm_y is not None:
                     vm_today = float(vm or 0) - vm_y
