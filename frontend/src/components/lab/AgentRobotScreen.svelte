@@ -800,7 +800,7 @@
   // выключенными фильтрами. Оба считаются по ОДНИМ И ТЕМ ЖЕ барам, поэтому
   // разница net — чистый вклад фильтров, с комиссией. Это МОДЕЛЬ на биржевых
   // минутках, а не реплей живой ленты робота: сделки не совпадут поштучно.
-  type Ffx = { run_id: string; status?: string; elapsed?: number; queue?: string;
+  type Ffx = { run_id: string; status?: string; elapsed?: number; queue?: string; period?: string;
                withF?: number; withoutF?: number; trF?: number; trNoF?: number; err?: string };
   let ffx = $state<Ffx | null>(null);
   let ffxBusy = $state(false);
@@ -869,7 +869,11 @@
       });
       if (!res.ok) { ffx = { run_id: '', err: await res.text() }; return; }
       const { run_id } = await res.json();
-      ffx = { run_id, status: 'queued', elapsed: 0 };
+      // Период показываем ФАКТИЧЕСКИЙ: без журнала точки старта нет и «весь срок»
+      // было бы враньём — там просто последние 30 дней.
+      const d = (x: Date) => x.toLocaleDateString('ru-RU');
+      ffx = { run_id, status: 'queued', elapsed: 0,
+              period: `${d(from)} — ${d(new Date())}${ledgerStat?.first_ts ? ' (от первой сделки)' : ' (журнала нет: 30 дней)'}` };
       localStorage.setItem(ffxKey, run_id);
       await ffxPoll(run_id);
     } catch (e: any) {
@@ -1149,7 +1153,7 @@
             {#if ffx?.err}
               <div class="ffx-err">{ffx.err}</div>
             {:else if ffx && ffx.status !== 'done'}
-              <div class="ffx-run">{ruStatusFfx(ffx.status)}{ffx.queue ? ` · ${ffx.queue}` : ''}{ffx.elapsed ? ` · идёт ${ffx.elapsed}с` : ''}</div>
+              <div class="ffx-run">{ffx.queue || ruStatusFfx(ffx.status)}{ffx.elapsed ? ` · идёт ${ffx.elapsed}с` : ''}</div>
             {:else if ffx?.status === 'done' && ffx.withF != null && ffx.withoutF != null}
               {@const diff = ffx.withF - ffx.withoutF}
               <div class="kv-grid ffx-res">
@@ -1160,7 +1164,7 @@
                   <b class:yes={diff > 0} class:neg={diff < 0}>{diff >= 0 ? '+' : ''}{Math.round(diff).toLocaleString('ru-RU')} ₽</b>
                 </div>
               </div>
-              <div class="ffx-note">модель на биржевых минутках за весь срок робота, комиссия taker; поштучно со сделками робота не совпадает</div>
+              <div class="ffx-note">{ffx.period ? ffx.period + ' · ' : ''}модель на биржевых минутках, комиссия taker; поштучно со сделками робота не совпадает</div>
             {/if}
           </div>
         </div>
