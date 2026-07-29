@@ -811,6 +811,11 @@
   let ffxBusy = $state(false);
   const ffxKey = $derived(`ffx:${robotId}`);
   const FFX_OFF = { min_gap_pts: 0, cooldown_min: 0 };
+  // Сравнивать нечего, когда у робота фильтры и так выключены: обе ветки — один
+  // и тот же прогон, «+0 ₽» под заголовками «с фильтрами / без фильтров» читается
+  // как «фильтры бесплатны», а это неправда — их просто нет.
+  const filtersOn = $derived(Number((params as any)?.min_gap_pts ?? 0) > 0
+                          || Number((params as any)?.cooldown_min ?? 0) > 0);
   const ruStatusFfx = (s?: string) => (
     { queued: 'в очереди на i9', pending: 'запуск', running: 'считается на i9' } as any
   )[s ?? ''] ?? 'ждём i9';
@@ -1162,12 +1167,14 @@
             {#if fs.dropped}<div class="kv" title="переполнение буфера несостоявшихся сделок: эти отсевы в сумму НЕ вошли"><span>Не учтено отсевов</span><b>{fs.dropped}</b></div>{/if}
           </div>
           <div class="ffx">
-            <button class="ffx-btn" disabled={ffxBusy || (!!ffx && ffx.status !== 'done' && !ffx.err)}
+            <button class="ffx-btn" disabled={!filtersOn || ffxBusy || (!!ffx && ffx.status !== 'done' && !ffx.err)}
                     onclick={runFilterEffect}
                     title="Один прогон на i9 с двумя наборами параметров: как у робота и он же с выключенными фильтрами. Оба считаются по ОДНИМ барам за весь срок жизни робота, разница финреза — точный вклад фильтров, комиссия учтена. Это модель на биржевых минутках, а не повтор живой ленты: сделки не совпадут поштучно.">
               {ffxBusy || (ffx && ffx.status !== 'done' && !ffx.err) ? 'Считается на i9…' : 'Рассчитать эффект точно'}
             </button>
-            {#if ffx?.err}
+            {#if !filtersOn}
+              <div class="ffx-run">фильтры входа сейчас выключены (разножка 0, остывание 0) — сравнивать не с чем. Счётчики выше историчные.</div>
+            {:else if ffx?.err}
               <div class="ffx-err">{ffx.err}</div>
             {:else if ffx && ffx.status !== 'done'}
               <div class="ffx-run">{ffx.queue || ruStatusFfx(ffx.status)}{ffx.elapsed ? ` · идёт ${ffx.elapsed}с` : ''}</div>
