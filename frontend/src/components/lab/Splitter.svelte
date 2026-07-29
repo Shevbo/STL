@@ -2,6 +2,17 @@
   export function clampSize(v: number, lo: number, hi: number): number {
     return Math.min(hi, Math.max(lo, v));
   }
+
+  /** Размер из localStorage. ОТСУТСТВУЮЩИЙ ключ — это не ноль: возвращаем то, что
+      задал родитель. Раньше здесь было Number(null) === 0 -> isFinite(0) === true,
+      и на чистом браузере каждый фрейм схлопывался до своего min (экран робота
+      открывался колонками по 120-140 px с вертикальным текстом, найдено 29.07). */
+  export function savedSize(raw: string | null, min: number, max: number, current: number): number {
+    if (raw == null || raw === '') return current;
+    const v = Number(raw);
+    if (!Number.isFinite(v) || v <= 0) return current;
+    return clampSize(v, min, max);
+  }
 </script>
 
 <script lang="ts">
@@ -20,10 +31,7 @@
   let base = 0;    // size at pointerdown
 
   if (storageKey) {
-    try {
-      const raw = Number(localStorage.getItem(storageKey));
-      if (Number.isFinite(raw)) size = clampSize(raw, min, max);
-    } catch {}
+    try { size = savedSize(localStorage.getItem(storageKey), min, max, size); } catch {}
   }
 
   function persist() {
