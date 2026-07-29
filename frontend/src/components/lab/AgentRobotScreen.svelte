@@ -19,7 +19,7 @@
   import Frame from './Frame.svelte';
   import NavMenu from '../NavMenu.svelte';
   import { fetchAgentLocalStatus, type AgentLocalStatus } from '../../lib/agent-robots';
-  import { annualizedPct } from '../../lib/lab-analytics';
+  import { annualizedPct, splitFilterRuns } from '../../lib/lab-analytics';
 
   let { robotId, agentId = null }: { robotId: string; agentId?: string | null } = $props();
 
@@ -776,6 +776,7 @@
   }
 
   let paramSchema = $state<any[]>([]);
+  let strategyCode = $state('');
   async function loadDesc(sid: string) {
     try {
       const res = await fetchWithAuth('/api/v1/strategies');
@@ -784,7 +785,96 @@
       const hit = (list ?? []).find((s: any) => s.id === sid);
       if (hit?.description) strategyDesc = hit.description;
       if (Array.isArray(hit?.params_schema)) paramSchema = hit.params_schema;
+      // Контр-стратегии (<base>__inv) в списке нет — её код синтезируется так же,
+      // как в Ботсторе: make_on_bar сам снимает суффикс и фейдит базовый сигнал.
+      strategyCode = hit?.script_code
+        || (/^[a-z0-9_]+$/.test(sid)
+            ? `from trader.lab.strategies.library import make_on_bar; on_bar = make_on_bar('${sid}')`
+            : '');
     } catch { /* description is optional */ }
+  }
+
+  // ── «Рассчитать эффект точно» ───────────────────────────────────────────────
+  // Копилка в signal_json — ОЦЕНКА (фантомы отсеянных входов). Точный ответ даёт
+  // один прогон на i9 с ДВУМЯ комбо: параметры робота как есть и они же с
+  // выключенными фильтрами. Оба считаются по ОДНИМ И ТЕМ ЖЕ барам, поэтому
+  // разница net — чистый вклад фильтров, с комиссией. Это МОДЕЛЬ на биржевых
+  // минутках, а не реплей живой ленты робота: сделки не совпадут поштучно.
+  type Ffx = { run_id: string; status?: string; elapsed?: number; queue?: string;
+               withF?: number; withoutF?: number; trF?: number; trNoF?: number; err?: string };
+  let ffx = $state<Ffx | null>(null);
+  let ffxBusy = $state(false);
+  const ffxKey = $derived(`ffx:${robotId}`);
+  const FFX_OFF = { min_gap_pts: 0, cooldown_min: 0 };
+  const ruStatusFfx = (s?: string) => (
+    { queued: 'в очереди на i9', pending: 'запуск', running: 'считается на i9' } as any
+  )[s ?? ''] ?? 'ждём i9';
+
+  async function ffxPoll(run_id: string) {
+    const t0 = Date.now();
+    for (let i = 0; i < 900; i++) {              // до 30 мин: i9 может доедать раунд
+      await new Promise((r) => setTimeout(r, 2000));
+      let sd: any;
+      try {
+        const sr = await fetchWithAuth(`/api/v1/backtest/${run_id}/status`);
+        if (!sr.ok) throw new Error('status ' + sr.status);
+        sd = await sr.json();
+      } catch { continue; }
+      ffx = { ...(ffx ?? { run_id }), run_id, status: sd.status,
+              elapsed: Math.round((Date.now() - t0) / 1000),
+              queue: [sd.i9_offline ? 'i9 не на связи' : sd.runner,
+                      sd.eta_sec ? `осталось ~${sd.eta_sec < 60 ? sd.eta_sec + 'с'
+                                                : Math.round(sd.eta_sec / 60) + ' мин'}` : '']
+                     .filter(Boolean).join(' · ') };
+      if (sd.status === 'failed') {
+        ffx = { ...ffx, err: sd.error_msg || 'прогон завершился ошибкой (логи i9)' };
+        localStorage.removeItem(ffxKey); return;
+      }
+      if (sd.status !== 'done') continue;
+      const rr = await fetchWithAuth(`/api/v1/backtest/${run_id}/results`);
+      const rows = rr.ok ? await rr.json() : [];
+      const split = splitFilterRuns(rows);
+      if (!split) {
+        ffx = { ...ffx, err: 'прогон вернул не обе ветки — считать эффект не из чего' };
+        localStorage.removeItem(ffxKey); return;
+      }
+      const { on, off } = split;
+      ffx = { ...ffx, status: 'done',
+              withF: Number(on.net_profit ?? 0), withoutF: Number(off.net_profit ?? 0),
+              trF: Number(on.total_trades ?? 0), trNoF: Number(off.total_trades ?? 0) };
+      localStorage.removeItem(ffxKey);
+      return;
+    }
+    ffx = { ...(ffx ?? { run_id }), run_id, err: 'нет результата за 30 мин' };
+  }
+
+  async function runFilterEffect() {
+    if (ffxBusy) return;
+    ffxBusy = true;
+    try {
+      if (!strategyCode) { ffx = { run_id: '', err: 'не знаю код стратегии робота' }; return; }
+      const from = ledgerStat?.first_ts
+        ? new Date(ledgerStat.first_ts) : new Date(Date.now() - 30 * 86_400_000);
+      // bar_offset_min — инфраструктурный сдвиг ТОЛЬКО для агентских баров (истинный
+      // UTC); бэктест идёт по биржевым минуткам, где он обязан быть нулевым.
+      const { bar_offset_min, ...p } = params as any;
+      const res = await fetchWithAuth('/api/v1/backtest/run', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scriptCode: strategyCode, symbol,
+          baseParams: { ...p, symbol },
+          paramSets: [{}, FFX_OFF],
+          dateFrom: from.toISOString(), dateTo: new Date().toISOString(),
+        }),
+      });
+      if (!res.ok) { ffx = { run_id: '', err: await res.text() }; return; }
+      const { run_id } = await res.json();
+      ffx = { run_id, status: 'queued', elapsed: 0 };
+      localStorage.setItem(ffxKey, run_id);
+      await ffxPoll(run_id);
+    } catch (e: any) {
+      ffx = { ...(ffx ?? { run_id: '' }), err: String(e?.message ?? e) };
+    } finally { ffxBusy = false; }
   }
   // «История прогонов»: all saved parameter sweeps of THIS robot's strategy, so the
   // operator reviews every hit-parade without re-running (each row opens the standard
@@ -825,6 +915,9 @@
   let timers: Array<ReturnType<typeof setInterval>> = [];
   onMount(() => {
     void load(); void pollTick(); void loadStatus(); void loadLedger();
+    // Прогон живёт на i9 минутами: после F5 подхватываем свой run_id и досматриваем.
+    const prev = localStorage.getItem(`ffx:${robotId}`);
+    if (prev) { ffx = { run_id: prev, status: 'queued' }; void ffxPoll(prev); }
     timers = [setInterval(load, 3000), setInterval(pollTick, 1000),
               setInterval(loadStatus, 4000), setInterval(loadCoef, 300_000),
               setInterval(loadLedger, 30_000)];   // журнал инжестится раз в 30с
@@ -1046,6 +1139,29 @@
             {#if fs.pending}<div class="kv" title="несостоявшиеся сделки, которые ещё «в позиции»: ждут своего тейка или разворота сигнала"><span>Ещё в позиции</span><b>{fs.pending}</b></div>{/if}
             {#if fs.since}<div class="kv" title="методику оценки меняли 29.07.2026 (был фиксированный час) — копилка считается с этого момента"><span>Считается с</span><b>{new Date(fs.since * 1000).toLocaleDateString('ru-RU')}</b></div>{/if}
             {#if fs.dropped}<div class="kv" title="переполнение буфера несостоявшихся сделок: эти отсевы в сумму НЕ вошли"><span>Не учтено отсевов</span><b>{fs.dropped}</b></div>{/if}
+          </div>
+          <div class="ffx">
+            <button class="ffx-btn" disabled={ffxBusy || (!!ffx && ffx.status !== 'done' && !ffx.err)}
+                    onclick={runFilterEffect}
+                    title="Один прогон на i9 с двумя наборами параметров: как у робота и он же с выключенными фильтрами. Оба считаются по ОДНИМ барам за весь срок жизни робота, разница финреза — точный вклад фильтров, комиссия учтена. Это модель на биржевых минутках, а не повтор живой ленты: сделки не совпадут поштучно.">
+              {ffxBusy || (ffx && ffx.status !== 'done' && !ffx.err) ? 'Считается на i9…' : 'Рассчитать эффект точно'}
+            </button>
+            {#if ffx?.err}
+              <div class="ffx-err">{ffx.err}</div>
+            {:else if ffx && ffx.status !== 'done'}
+              <div class="ffx-run">{ruStatusFfx(ffx.status)}{ffx.queue ? ` · ${ffx.queue}` : ''}{ffx.elapsed ? ` · идёт ${ffx.elapsed}с` : ''}</div>
+            {:else if ffx?.status === 'done' && ffx.withF != null && ffx.withoutF != null}
+              {@const diff = ffx.withF - ffx.withoutF}
+              <div class="kv-grid ffx-res">
+                <div class="kv"><span>С фильтрами</span><b>{Math.round(ffx.withF).toLocaleString('ru-RU')} ₽ · {ffx.trF} сд.</b></div>
+                <div class="kv"><span>Без фильтров</span><b>{Math.round(ffx.withoutF).toLocaleString('ru-RU')} ₽ · {ffx.trNoF} сд.</b></div>
+                <div class="kv" title="точный вклад фильтров: плюс = фильтры заработали, минус = отняли">
+                  <span>Эффект точно</span>
+                  <b class:yes={diff > 0} class:neg={diff < 0}>{diff >= 0 ? '+' : ''}{Math.round(diff).toLocaleString('ru-RU')} ₽</b>
+                </div>
+              </div>
+              <div class="ffx-note">модель на биржевых минутках за весь срок робота, комиссия taker; поштучно со сделками робота не совпадает</div>
+            {/if}
           </div>
         </div>
       {/if}
@@ -1435,6 +1551,15 @@
   .fs-est { font-size: 9px; color: #7a7a9a; border: 1px solid #33335a; border-radius: 3px; padding: 0 4px; margin-left: 4px; }
   .fs-head { font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: #8a8ab8; margin-bottom: 4px; }
   .fstats .kv b.neg { color: #ff5252; }
+  .ffx { margin-top: 6px; border-top: 1px dashed #2a2a52; padding-top: 6px; }
+  .ffx-btn { font-size: 10px; padding: 3px 8px; background: #1b1b3a; color: #b9b9e6;
+    border: 1px solid #3a3a6a; border-radius: 3px; cursor: pointer; }
+  .ffx-btn:hover:not(:disabled) { background: #24244a; }
+  .ffx-btn:disabled { opacity: .55; cursor: default; }
+  .ffx-run { font-size: 10px; color: #8a8ab8; margin-top: 4px; }
+  .ffx-err { font-size: 10px; color: #ff5252; margin-top: 4px; }
+  .ffx-res { margin-top: 4px; }
+  .ffx-note { font-size: 9px; color: #6a6a8a; margin-top: 3px; }
   .kv-grid { display: flex; flex-direction: column; gap: 3px; }
   .kv { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; padding: 3px 6px; background: #0e0e1c; border-radius: 3px; }
   .kv span { color: #889; }

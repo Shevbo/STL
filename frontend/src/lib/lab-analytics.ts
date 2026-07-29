@@ -482,3 +482,17 @@ export function positionRects(events: TradeEvent[], lastTime?: number, lastPrice
   if (pos !== 0) rects.push({ dir, tIn, pIn, tOut: lastTime ?? tIn, pOut: lastPrice ?? pIn, pnl: epPnl, open: true });
   return rects;
 }
+
+// «Рассчитать эффект точно»: один прогон несёт ДВА комбо — параметры робота как
+// есть и они же с выключенными фильтрами входа. /results сортирует строки по
+// доходности, поэтому ветку узнаём по САМИМ параметрам, а не по порядку: без
+// фильтров = обе ручки в нуле. Ноль строк / одна строка / обе без фильтров
+// (робот и так без них) => null, звать это «эффектом» нельзя.
+export function splitFilterRuns(rows: any[]): { on: any; off: any } | null {
+  if (!Array.isArray(rows) || rows.length < 2) return null;
+  const isOff = (r: any) => Number(r?.params?.min_gap_pts ?? 0) === 0
+                         && Number(r?.params?.cooldown_min ?? 0) === 0;
+  const off = rows.find(isOff);
+  const on = rows.find((r) => !isOff(r));
+  return off && on ? { on, off } : null;
+}
