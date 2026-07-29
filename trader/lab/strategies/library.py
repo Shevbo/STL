@@ -34,6 +34,43 @@ def register(rid, name, source, params_schema, signal, warmup, avg=None):
     }
 
 
+# ── Оценка эффекта фильтров входа ──────────────────────────────────────────────
+# Каждый отсеянный фильтром вход записывается «фантомом» и оценивается так, КАК ЕГО
+# ЗАКРЫЛ БЫ САМ РОБОТ: по своему тейку (tp x ATR) или на развороте сигнала. Раньше
+# стоял фиксированный час — оператор справедливо возразил (29.07): робот держит
+# позицию до СВОЕГО сигнала выхода, иногда сутками, и часовой срез мерил совсем
+# другую величину. Жёсткий предохранитель по времени остаётся, но он не модель
+# выхода, а защита состояния от бесконечного роста.
+SKIP_HORIZON_SEC = 3 * 24 * 3600
+# Версия методики: при смене копилка обнуляется, иначе в одном числе смешались бы
+# две разные модели и сравнивать его было бы не с чем.
+FILTER_STATS_V = 2
+
+
+def settle_skip_phantoms(phantoms: list, price: float, atrv: float, tp: float,
+                         want, now_ts: int, horizon: int = SKIP_HORIZON_SEC):
+    """Закрыть дозревшие фантомы. Возвращает (сбережено_пунктов, оставшиеся).
+
+    Знак: сбережено = МИНУС результат несостоявшейся сделки. Отсеяли вход, который
+    принёс бы убыток -> фильтр сберёг деньги (плюс). Отсеяли прибыльный -> минус.
+    """
+    keep, pnl = [], 0.0
+    for e in phantoms or []:
+        try:
+            d, q, p0, t0 = int(e["d"]), int(e["q"]), float(e["p"]), int(e.get("t", 0))
+        except (KeyError, TypeError, ValueError):
+            continue                      # битая запись не должна ломать статистику
+        move = (price - p0) * d           # ход в пользу несостоявшейся сделки
+        hit_tp = tp > 0 and atrv > 0 and move >= tp * atrv
+        flipped = want is not None and (want == 0 or (want > 0) != (d > 0))
+        expired = t0 + horizon <= now_ts
+        if hit_tp or flipped or expired:
+            pnl += move * q
+        else:
+            keep.append(e)
+    return -pnl, keep
+
+
 def make_on_bar(rid: str):
     """Build a STL on_bar(stl, params) from a registered signal function.
 
@@ -110,6 +147,14 @@ def make_on_bar(rid: str):
             want = -want
         price = bars[-1].close
         bar_time = bars[-1].time
+        # ATR считаем ЗДЕСЬ и переиспользуем ниже: он нужен и тейку с усреднением, и
+        # оценке отсеянных входов (она идёт на КАЖДОМ баре, а ветка удержания — нет).
+        # Хвост atr_n*40 баров — та же оптимизация, что стояла ниже (см. комментарий
+        # там же): Уайлдеровский ATR экспоненциально забывает старое.
+        atrv = 0.0
+        if atr_active:
+            _atr_tail = bars[-(atr_n * 40 + 1):]
+            atrv = I.atr(_h(_atr_tail), _l(_atr_tail), _c(_atr_tail), atr_n)
         in_cooldown = cooldown_min > 0 and bar_time < int(stl.get_state("cooldown_until", 0) or 0)
         pos = await stl.get_position(symbol)
         cur = pos.quantity if pos.side == "long" else (-pos.quantity if pos.side == "short" else 0)
@@ -132,28 +177,23 @@ def make_on_bar(rid: str):
                 stl.set_state("gap_pending", 0)
             stl.set_state("gap_pos", cur)
 
-        # Эффект фильтров в ПУНКТАХ. Каждый отсеянный вход записывается «фантомом» и
-        # оценивается ровно через SKIP_HORIZON_SEC: сколько он принёс бы, если бы
-        # состоялся. Сумма их P&L с ОБРАТНЫМ знаком = сколько фильтр сберёг (минус =
-        # недозаработал). Правило одно и то же для всех — не зависит от того, как
-        # сложилась реальная позиция, поэтому его легко объяснить и проверить.
-        # Рубли считает UI (пункты x ₽/пункт) — стратегия про рубли не знает.
-        SKIP_HORIZON_SEC = 3600
-
-        def settle_phantoms(now_ts: int, cur_price: float) -> None:
-            ph = stl.get_state("skip_phantoms", None) or []
-            if not ph:
-                return
-            due = [e for e in ph if int(e.get("t", 0)) + SKIP_HORIZON_SEC <= now_ts]
-            if not due:
-                return
-            pnl = sum((cur_price - float(e["p"])) * int(e["d"]) * int(e["q"]) for e in due)
-            stl.set_state("filter_saved_pts",
-                          float(stl.get_state("filter_saved_pts", 0) or 0) - pnl)
-            stl.set_state("skip_phantoms",
-                          [e for e in ph if int(e.get("t", 0)) + SKIP_HORIZON_SEC > now_ts])
-
-        settle_phantoms(int(bar_time), price)   # дозревшие фантомы -> копилка эффекта
+        # Эффект фильтров в ПУНКТАХ (рубли считает UI через ₽/пункт). Методика — в
+        # settle_skip_phantoms: фантом живёт до тейка или разворота сигнала, как
+        # живёт реальная сделка робота. Смена методики обнуляет копилку, иначе в
+        # одном числе смешались бы две разные модели.
+        if int(stl.get_state("filter_stats_v", 0) or 0) != FILTER_STATS_V:
+            stl.set_state("filter_stats_v", FILTER_STATS_V)
+            stl.set_state("filter_saved_pts", 0.0)
+            stl.set_state("skip_phantoms", [])
+            stl.set_state("filter_since", int(bar_time))
+        _ph = stl.get_state("skip_phantoms", None) or []
+        if _ph:
+            _saved, _keep = settle_skip_phantoms(_ph, price, atrv, tp, want,
+                                                 int(bar_time))
+            if _saved or len(_keep) != len(_ph):
+                stl.set_state("filter_saved_pts",
+                              float(stl.get_state("filter_saved_pts", 0) or 0) + _saved)
+                stl.set_state("skip_phantoms", _keep)
 
         def note_skip(kind: str, p: float) -> None:
             """Счётчик отсева входа фильтром (kind='gap' разножка / 'cooldown' остывание):
@@ -162,12 +202,26 @@ def make_on_bar(rid: str):
             key = kind + "_skips"
             n = int(stl.get_state(key, 0) or 0) + 1
             stl.set_state(key, n)
-            # фантом отсеянного входа: направление = сторона, которую хотел сигнал
+            # Фантом отсеянного входа: направление = сторона, которую хотел сигнал.
+            # ОДИН фантом на «окно входа»: стратегия повторяет намерение КАЖДЫЙ бар,
+            # пока фильтр держит, и без схлопывания 3653 отсева превращались в 3653
+            # отдельные сделки — сумма таких «сделок» не имеет отношения к тому, что
+            # заработал бы робот без фильтра (он вошёл бы ОДИН раз и упёрся в потолок
+            # позиции). Поэтому повтор в пределах того же окна разножки не пишем.
             d = 1 if (want or 0) > 0 else -1
             ph = list(stl.get_state("skip_phantoms", None) or [])
-            if len(ph) < 200:                       # ограничитель, чтобы состояние не росло
-                ph.append({"p": p, "d": d, "q": fresh_entry_size(), "t": int(bar_time)})
-                stl.set_state("skip_phantoms", ph)
+            near = min_gap if min_gap > 0 else (atrv if atrv > 0 else 0.0)
+            dup = any(int(e.get("d", 0)) == d and near > 0
+                      and abs(float(e.get("p", 0)) - p) < near for e in ph)
+            if not dup:
+                if len(ph) < 200:                   # ограничитель роста состояния
+                    ph.append({"p": p, "d": d, "q": fresh_entry_size(), "t": int(bar_time)})
+                    stl.set_state("skip_phantoms", ph)
+                else:
+                    # Копилка перестала бы сходиться со счётчиком отсевов молча —
+                    # считаем потерянные и показываем это оператору.
+                    stl.set_state("skip_dropped",
+                                  int(stl.get_state("skip_dropped", 0) or 0) + 1)
             what = "разножка" if kind == "gap" else "остывание"
             msg = f"{what} отсеяла вход @ {p:.0f} (всего {n})"
             # В раннере -> SKIP-событие детального лога робота (видно на карточке +
@@ -222,13 +276,11 @@ def make_on_bar(rid: str):
         # 3) Holding (signal agrees or is None) → manage take-profit + averaging by ATR.
         if not ((tp > 0) or (k_step > 0 and abs(cur) < avg_max)):
             return
-        # ATR только по ХВОСТУ, не по всему окну: pivot тянет 2200 баров ради прошлого
-        # дня, а Уайлдеровский ATR экспоненциально забывает старое (вес (n-1)/n за шаг),
-        # поэтому atr_n*40 баров дают значение, неотличимое от полного (проверено: net
-        # бит-в-бит). Без этого atr() гонял 2200-баровый цикл на КАЖДОМ баре — 84с из 142
-        # в профиле pivot с усреднением (2026-07-23). Касается ВСЕХ стратегий с avg/TP.
-        _atr_tail = bars[-(atr_n * 40 + 1):]
-        atrv = I.atr(_h(_atr_tail), _l(_atr_tail), _c(_atr_tail), atr_n)
+        # ATR посчитан выше по ХВОСТУ (atr_n*40 баров): pivot тянет 2200 баров ради
+        # прошлого дня, а Уайлдеровский ATR экспоненциально забывает старое, поэтому
+        # хвост даёт значение, неотличимое от полного (проверено: net бит-в-бит).
+        # Без этого atr() гонял 2200-баровый цикл на КАЖДОМ баре — 84с из 142 в
+        # профиле pivot с усреднением (2026-07-23). Касается ВСЕХ стратегий с avg/TP.
         if atrv <= 0:
             return
         if tp > 0:    # take-profit measured from the (averaged) entry (a TP is a win)

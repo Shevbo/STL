@@ -705,6 +705,40 @@
     editMode = true;
   }
 
+  // Применить параметры ИЗ ПАНЕЛИ НА ГРАФИКЕ. Там оператор правит те же значения,
+  // но кнопки сохранения не было вовсе: поля редактируются, а деть их некуда.
+  // Дальше идём тем же путём, что и редактор «Логика стратегии» — /params.
+  let chartApplyBusy = $state(false);
+  let chartApplyMsg = $state('');
+  async function applyParamsFromChart(next: Record<string, any>) {
+    const isReal = !robot?.paper;
+    const changed = Object.entries(next)
+      .filter(([k, v]) => String(params?.[k] ?? '') !== String(v))
+      .map(([k, v]) => `${k}=${v}`);
+    if (!changed.length) { chartApplyMsg = 'Значения не изменились.'; return; }
+    if (isReal && !window.confirm(
+      `Робот торгует РЕАЛЬНЫМИ деньгами.
+Применить: ${changed.join(', ')}?`)) return;
+    chartApplyBusy = true; chartApplyMsg = '';
+    try {
+      // symbol не трогаем: инструмент робота меняется только редеплоем спеки.
+      const clean: Record<string, any> = { ...(params || {}) };
+      for (const [k, v] of Object.entries(next)) {
+        if (k === 'symbol') continue;
+        clean[k] = Number.isFinite(Number(v)) ? Number(v) : v;
+      }
+      const res = await fetchWithAuth(`/api/v1/quik/robots/${encodeURIComponent(robotId)}/params`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agent_id: agentId, params_json: JSON.stringify(clean) }),
+      });
+      const d = await res.json().catch(() => ({}));
+      chartApplyMsg = res.ok ? 'Применено — вступит в силу с нового бара.'
+                             : `Ошибка: ${d?.detail ?? res.status}`;
+    } catch (e) {
+      chartApplyMsg = `Ошибка: ${String(e).slice(0, 80)}`;
+    } finally { chartApplyBusy = false; }
+  }
+
   async function saveParams() {
     const isReal = !robot?.paper;
     const summary = `qty=${draft.qty} avg_max=${draft.avg_max} max_position=${draftMaxPos}`;
@@ -909,6 +943,11 @@
       floatRub={robot?.paper ? null : floatNetRub}
       livePosition={robot ? position : null}
       journalSuspect={reconCheck ? reconCheck.trades_ok === false : false}
+      runParams={params}
+      paramSchema={editorSchema}
+      onApplyParams={applyParamsFromChart}
+      applyBusy={chartApplyBusy}
+      applyMsg={chartApplyMsg}
     />
     {/if}
     </div>
@@ -994,13 +1033,15 @@
           <div class="kv-grid">
             <div class="kv"><span>Разножка отсеяла</span><b>{fs.gap_skips ?? 0}</b></div>
             <div class="kv"><span>Остывание отсеяло</span><b>{fs.cooldown_skips ?? 0}</b></div>
-            <div class="kv" title="Отсеянные входы оцениваются через час после блокировки: сколько они принесли бы. Плюс = фильтр сберёг деньги, минус = недозаработали.">
-              <span>Эффект фильтров</span>
+            <div class="kv" title="ОЦЕНКА, а не факт. Каждый отсеянный вход считается несостоявшейся сделкой и держится до того же выхода, каким вышел бы робот: свой тейк (tp_atr x ATR) или разворот сигнала. Плюс = отсеянные входы были бы убыточными, фильтр сберёг деньги. Минус = недозаработали. Повторные отсевы в одном ценовом окне считаются ОДНОЙ несостоявшейся сделкой, иначе одно и то же намерение множилось бы каждый бар. Комиссия не учитывается; взаимное влияние на среднюю и потолок позиции — тоже.">
+              <span>Эффект фильтров <span class="fs-est">оценка</span></span>
               <b class:yes={(fs.savedRub ?? 0) > 0} class:neg={(fs.savedRub ?? 0) < 0}>
                 {fs.savedRub == null ? `${fs.saved_pts} пт`
                   : `${fs.savedRub >= 0 ? '+' : ''}${Math.round(fs.savedRub).toLocaleString('ru-RU')} ₽`}</b>
             </div>
-            {#if fs.pending}<div class="kv"><span>Ещё дозревает</span><b>{fs.pending}</b></div>{/if}
+            {#if fs.pending}<div class="kv" title="несостоявшиеся сделки, которые ещё «в позиции»: ждут своего тейка или разворота сигнала"><span>Ещё в позиции</span><b>{fs.pending}</b></div>{/if}
+            {#if fs.since}<div class="kv" title="методику оценки меняли 29.07.2026 (был фиксированный час) — копилка считается с этого момента"><span>Считается с</span><b>{new Date(fs.since * 1000).toLocaleDateString('ru-RU')}</b></div>{/if}
+            {#if fs.dropped}<div class="kv" title="переполнение буфера несостоявшихся сделок: эти отсевы в сумму НЕ вошли"><span>Не учтено отсевов</span><b>{fs.dropped}</b></div>{/if}
           </div>
         </div>
       {/if}
@@ -1184,6 +1225,7 @@
           </label>
         </div>
         <div class="pe-actions">
+          <span class="pe-hint">параметры применятся на следующем баре</span>
           <button class="pe-btn" onclick={() => { editMode = false; saveMsg = ''; }}>Отмена</button>
           <button class="pe-btn save" disabled={saving} onclick={saveParams}>
             {saving ? 'Сохраняю…' : 'Сохранить'}</button>
@@ -1346,9 +1388,19 @@
   .pe-in { width: 90px; background: #080810; border: 1px solid #2d2d4a; color: #dde; font-size: 11px; padding: 3px 6px; border-radius: 3px; text-align: right; }
   .pe-in:focus { outline: none; border-color: #4caf50; }
   .pe-in:disabled { opacity: 0.5; }
-  .pe-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+  /* Кнопки формы ПРИБИТЫ к низу панели: список параметров длиннее окна фрейма, и
+     «Сохранить» иначе не видно — оператор менял значения и не понимал, чем
+     подтвердить. Фон непрозрачный, чтобы текст не просвечивал под кнопками. */
+  .pe-actions { position: sticky; bottom: 0; z-index: 2; display: flex; align-items: center;
+    justify-content: flex-end; gap: 8px; margin-top: 10px; padding: 8px 0 2px;
+    background: linear-gradient(to bottom, #0a0a1500, #0a0a15 22%); }
+  .pe-hint { margin-right: auto; font-size: 10px; color: #667; }
   .pe-msg { margin-top: 8px; font-size: 11px; color: #8bc34a; }
-  .panel { flex: 1; min-width: 0; overflow-y: auto; padding: 10px 12px; border-right: 1px solid #1a1a2e; }
+  /* height:100% обязателен: .fbody фрейма — блок с заданной высотой, и без этого
+     .panel вырастал под контент (1525 px в окне 330), сам не прокручивался, а
+     прокрутку брал на себя .fbody. Из-за этого sticky-кнопки внизу формы не
+     работали, и «Сохранить» уезжала на полтора экрана вниз (найдено 29.07). */
+  .panel { flex: 1; min-width: 0; height: 100%; overflow-y: auto; padding: 10px 12px; border-right: 1px solid #1a1a2e; }
   /* Trades: an explicit framed table, visible even when empty */
   .trades-frame { border: 1px solid #2a2a52; border-radius: 6px; margin: 4px; background: #0a0a15; }
   .pt-note { font-size: 10px; color: #556; text-transform: none; letter-spacing: 0; margin-left: 8px; }
@@ -1370,6 +1422,7 @@
   .wait { font-size: 12px; line-height: 1.5; color: #cfd4ff; background: #12122a; border: 1px solid #2d2d5a; border-radius: 4px; padding: 8px 10px; margin-bottom: 8px; }
   .wait.sig { color: #00e676; border-color: #00e67666; background: #0a1a0d; font-weight: 600; }
   .fstats { border: 1px solid #3a3a6a; border-radius: 4px; padding: 6px 8px; margin-bottom: 8px; background: #101024; }
+  .fs-est { font-size: 9px; color: #7a7a9a; border: 1px solid #33335a; border-radius: 3px; padding: 0 4px; margin-left: 4px; }
   .fs-head { font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: #8a8ab8; margin-bottom: 4px; }
   .fstats .kv b.neg { color: #ff5252; }
   .kv-grid { display: flex; flex-direction: column; gap: 3px; }

@@ -21,6 +21,7 @@
   let {
     result, symbol, strategy = null, dateFrom, dateTo, pointValue = 1, defaultInterval = 60,
     openOrders = [], plannedOrders = [], taker = true, runParams = {}, paramSchema = [], onRerun = null,
+    onApplyParams = null, applyBusy = false, applyMsg = '',
     segments = null, pointValues = null, live = 0, liveTick = null, onNet = null, onVm = null, floatRub = null,
     netOverride = null, livePosition = null, journalSuspect = false,
     pointValueKnown = true, closeSeries = null, screenId = '',
@@ -48,6 +49,12 @@
     runParams?: Record<string, any>;
     paramSchema?: Array<{ key: string; label?: string }>;
     onRerun?: ((p: Record<string, any>, dates?: { dateFrom: string; dateTo: string }) => void) | null;
+    // Стенд ЖИВОГО робота: у панели параметров должно быть действие «применить к
+    // роботу», иначе оператор правит поля, а сохранить нечем (жалоба 29.07).
+    // Бэктест передаёт onRerun, живой стенд — onApplyParams. Оба сразу не нужны.
+    onApplyParams?: ((p: Record<string, any>) => void) | null;
+    applyBusy?: boolean;
+    applyMsg?: string;
     // live > 0: refresh the candle TAIL every `live` seconds via series.update()
     // (no setData, zoom preserved) so a LIVE robot's chart moves with the market.
     live?: number;
@@ -1187,6 +1194,14 @@
               Пересчитать бэктест
             </button>
           {/if}
+          {#if onApplyParams}
+            <button class="bc-apply live" class:dirty={paramsDirty} disabled={applyBusy}
+                    title="записать эти значения в РАБОТАЮЩЕГО робота — применятся на следующем баре"
+                    onclick={() => onApplyParams({ ...editParams })}>
+              {applyBusy ? 'Сохраняю…' : '✔ Сохранить в робота'}
+            </button>
+            {#if applyMsg}<div class="bc-apply-msg">{applyMsg}</div>{/if}
+          {/if}
           <!-- Избранное: набор параметров + период + результат под своим именем.
                Открывается потом из «Бэктест → Избранное» без пересчёта. -->
           <div class="bc-fav">
@@ -1454,6 +1469,9 @@
   .bc-fav-btn { background: #1a1a2e; border: 1px solid #6a5a1f; color: #e0c36a;
     border-radius: 3px; font-size: 11px; padding: 3px 8px; cursor: pointer; white-space: nowrap; }
   .bc-fav-btn:hover { border-color: #c8a62f; }
+  .bc-apply.live { background: #0e2a18; border-color: #2e7d32; color: #7ee2a0; font-weight: 600; }
+  .bc-apply.live:disabled { opacity: .55; cursor: default; }
+  .bc-apply-msg { margin-top: 4px; font-size: 10px; color: #9fd8b0; }
   .bc-fav-msg { color: #9aa0b4; font-size: 10px; margin-top: 3px; }
 
   .trade-tip {

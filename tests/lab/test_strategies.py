@@ -308,7 +308,11 @@ async def test_filter_skip_counters():
 
 @pytest.mark.asyncio
 async def test_filter_effect_counts_saved_points():
-    """Отсеянный вход дозревает через час: если он был бы убыточным — фильтр сберёг."""
+    """Отсеянный вход живёт до СВОЕГО выхода (разворот/тейк), а не ровно час.
+
+    До 29.07.2026 фантом закрывался через фиксированный час. Оператор возразил
+    справедливо: робот держит позицию до собственного сигнала выхода, иногда
+    сутками, поэтому часовой срез мерил не ту величину."""
     rt = _FakeRT()
     g = dict(min_gap_pts=200)
     await _run(rt, 1, 60, 87000.0, **g)          # вход @87000
@@ -316,13 +320,21 @@ async def test_filter_effect_counts_saved_points():
     await _run(rt, 1, 180, 87080.0, **g)         # 80 пт -> ОТСЕЯН (фантом buy @87080)
     assert rt.get_state("gap_skips") == 1
     assert len(rt.get_state("skip_phantoms")) == 1
-    assert rt.get_state("filter_saved_pts") in (None, 0)   # ещё не дозрел
+    assert rt.get_state("filter_saved_pts") in (None, 0)   # ещё в позиции
 
-    # через час цена НИЖЕ -> фантомный лонг был бы в минусе -> фильтр сберёг
-    await _run(rt, None, 180 + 3600, 86800.0, **g)
+    # Час прошёл, сигнал ПРЕЖНИЙ (лонг) — фантом ещё держится, как держался бы робот.
+    await _run(rt, 1, 180 + 3600, 86800.0, **g)
+    assert len(rt.get_state("skip_phantoms")) == 1
+    assert rt.get_state("filter_saved_pts") in (None, 0)
+
+    # Разворот сигнала = робот закрыл бы позицию здесь -> вот теперь считаем.
+    await _run(rt, -1, 180 + 7200, 86800.0, **g)
     saved = rt.get_state("filter_saved_pts")
     assert saved == pytest.approx(280.0)          # -(86800-87080)*1*1 = +280 пт сбережено
-    assert rt.get_state("skip_phantoms") == []    # дозревший фантом закрыт
+    # Тот самый фантом закрыт. Список может быть НЕ пуст: на этом же баре разворот
+    # мог породить новый отсев — это нормальная работа фильтра, а не остаток.
+    assert not any(abs(float(e["p"]) - 87080.0) < 1e-9
+                   for e in (rt.get_state("skip_phantoms") or []))
 
 
 @pytest.mark.asyncio
@@ -333,5 +345,7 @@ async def test_filter_effect_negative_when_skip_would_have_won():
     await _run(rt, 1, 60, 87000.0, **g)
     await _run(rt, 0, 120, 87050.0, **g)
     await _run(rt, 1, 180, 87080.0, **g)         # отсеян лонг @87080
-    await _run(rt, None, 180 + 3600, 87400.0, **g)   # цена ВЫШЕ -> лонг был бы в плюсе
+    # Цена ВЫШЕ и сигнал развернулся -> отсеянный лонг закрылся бы в плюс,
+    # значит фильтр НЕДОзаработал (эффект отрицательный).
+    await _run(rt, -1, 180 + 3600, 87400.0, **g)
     assert rt.get_state("filter_saved_pts") == pytest.approx(-320.0)

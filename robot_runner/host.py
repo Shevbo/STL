@@ -380,6 +380,10 @@ class RobotHost:
                             "saved_pts": round(float(
                                 r.runtime.get_state("filter_saved_pts", 0) or 0), 2),
                             "pending": len(r.runtime.get_state("skip_phantoms", None) or []),
+                            # с какого момента копится (методика менялась 29.07 —
+                            # копилка обнуляется, иначе смешались бы две модели)
+                            "since": int(r.runtime.get_state("filter_since", 0) or 0),
+                            "dropped": int(r.runtime.get_state("skip_dropped", 0) or 0),
                         }
                         sig = json.dumps(_d, ensure_ascii=False)
             except Exception:  # noqa: BLE001 — статистика никогда не ломает отчёт
