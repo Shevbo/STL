@@ -483,16 +483,33 @@ export function positionRects(events: TradeEvent[], lastTime?: number, lastPrice
   return rects;
 }
 
-// «Рассчитать эффект точно»: один прогон несёт ДВА комбо — параметры робота как
-// есть и они же с выключенными фильтрами входа. /results сортирует строки по
-// доходности, поэтому ветку узнаём по САМИМ параметрам, а не по порядку: без
-// фильтров = обе ручки в нуле. Ноль строк / одна строка / обе без фильтров
-// (робот и так без них) => null, звать это «эффектом» нельзя.
-export function splitFilterRuns(rows: any[]): { on: any; off: any } | null {
-  if (!Array.isArray(rows) || rows.length < 2) return null;
-  const isOff = (r: any) => Number(r?.params?.min_gap_pts ?? 0) === 0
-                         && Number(r?.params?.cooldown_min ?? 0) === 0;
-  const off = rows.find(isOff);
-  const on = rows.find((r) => !isOff(r));
-  return off && on ? { on, off } : null;
+export type EqPt = { time: number; equity: number };
+
+/** Две кривые эквити в ОДНОЙ шкале (иначе они несравнимы: каждая ушла бы на всю
+ *  высоту и «хуже» рисовалось бы как «лучше»). Возвращает готовые polyline-точки
+ *  для SVG-бокса w×h, диапазоны — для подписей. Кривая прореживается до maxPts:
+ *  на минутках за месяц это десятки тысяч точек, браузеру они не нужны. Последняя
+ *  точка сохраняется всегда — конец кривой это итог, его нельзя срезать шагом. */
+export function equityPaths(a: EqPt[], b: EqPt[], w: number, h: number, maxPts = 400) {
+  const A = (a ?? []).filter((p) => Number.isFinite(p?.equity));
+  const B = (b ?? []).filter((p) => Number.isFinite(p?.equity));
+  if (A.length < 2 || B.length < 2) return null;
+  const all = [...A, ...B];
+  const t0 = Math.min(...all.map((p) => p.time));
+  const t1 = Math.max(...all.map((p) => p.time));
+  let lo = Math.min(...all.map((p) => p.equity));
+  let hi = Math.max(...all.map((p) => p.equity));
+  if (hi === lo) { hi = lo + 1; }
+  const tSpan = t1 - t0 || 1;
+  const thin = (pts: EqPt[]) => {
+    const step = Math.max(1, Math.ceil(pts.length / maxPts));
+    const out = pts.filter((_, i) => i % step === 0);
+    if (out[out.length - 1] !== pts[pts.length - 1]) out.push(pts[pts.length - 1]);
+    return out;
+  };
+  const path = (pts: EqPt[]) => thin(pts)
+    .map((p) => `${(((p.time - t0) / tSpan) * w).toFixed(1)},`
+              + `${(h - ((p.equity - lo) / (hi - lo)) * h).toFixed(1)}`)
+    .join(' ');
+  return { pa: path(A), pb: path(B), lo, hi, t0, t1 };
 }

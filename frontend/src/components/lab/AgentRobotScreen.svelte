@@ -19,7 +19,7 @@
   import Frame from './Frame.svelte';
   import NavMenu from '../NavMenu.svelte';
   import { fetchAgentLocalStatus, type AgentLocalStatus } from '../../lib/agent-robots';
-  import { annualizedPct, splitFilterRuns } from '../../lib/lab-analytics';
+  import { annualizedPct, equityPaths, type EqPt as Pt } from '../../lib/lab-analytics';
 
   let { robotId, agentId = null }: { robotId: string; agentId?: string | null } = $props();
 
@@ -800,8 +800,13 @@
   // выключенными фильтрами. Оба считаются по ОДНИМ И ТЕМ ЖЕ барам, поэтому
   // разница net — чистый вклад фильтров, с комиссией. Это МОДЕЛЬ на биржевых
   // минутках, а не реплей живой ленты робота: сделки не совпадут поштучно.
-  type Ffx = { run_id: string; status?: string; elapsed?: number; queue?: string; period?: string;
-               withF?: number; withoutF?: number; trF?: number; trNoF?: number; err?: string };
+  // ВАЖНО: два ОТДЕЛЬНЫХ прогона, а не два комбо в одном. Многокомбовый прогон
+  // приезжает БЕЗ кривой (i9 режет trades+equity_curve на len>1, чтобы не топить
+  // маленький Postgres), а нам нужны обе кривые. Бонусом одиночные прогоны ловит
+  // кэш повторных прогонов — второй раз те же настройки отдаются мгновенно.
+  type Ffx = { runs: string[]; status?: string; elapsed?: number; queue?: string; period?: string;
+               withF?: number; withoutF?: number; trF?: number; trNoF?: number; err?: string;
+               curveOn?: Pt[]; curveOff?: Pt[] };
   let ffx = $state<Ffx | null>(null);
   let ffxBusy = $state(false);
   const ffxKey = $derived(`ffx:${robotId}`);
@@ -810,74 +815,81 @@
     { queued: 'в очереди на i9', pending: 'запуск', running: 'считается на i9' } as any
   )[s ?? ''] ?? 'ждём i9';
 
-  async function ffxPoll(run_id: string) {
-    const t0 = Date.now();
+  /** Один прогон: ждём готовности, возвращаем строку результата (с кривой). */
+  async function ffxWait(run_id: string, t0: number): Promise<any> {
     for (let i = 0; i < 900; i++) {              // до 30 мин: i9 может доедать раунд
-      await new Promise((r) => setTimeout(r, 2000));
       let sd: any;
       try {
         const sr = await fetchWithAuth(`/api/v1/backtest/${run_id}/status`);
         if (!sr.ok) throw new Error('status ' + sr.status);
         sd = await sr.json();
-      } catch { continue; }
-      ffx = { ...(ffx ?? { run_id }), run_id, status: sd.status,
-              elapsed: Math.round((Date.now() - t0) / 1000),
-              queue: [sd.i9_offline ? 'i9 не на связи' : sd.runner,
-                      sd.eta_sec ? `осталось ~${sd.eta_sec < 60 ? sd.eta_sec + 'с'
-                                                : Math.round(sd.eta_sec / 60) + ' мин'}` : '']
-                     .filter(Boolean).join(' · ') };
-      if (sd.status === 'failed') {
-        ffx = { ...ffx, err: sd.error_msg || 'прогон завершился ошибкой (логи i9)' };
-        localStorage.removeItem(ffxKey); return;
+      } catch { await new Promise((r) => setTimeout(r, 2000)); continue; }
+      if (ffx && ffx.status !== 'done') {
+        ffx = { ...ffx, status: sd.status, elapsed: Math.round((Date.now() - t0) / 1000),
+                queue: [sd.i9_offline ? 'i9 не на связи' : sd.runner,
+                        sd.eta_sec ? `осталось ~${sd.eta_sec < 60 ? sd.eta_sec + 'с'
+                                                  : Math.round(sd.eta_sec / 60) + ' мин'}` : '']
+                       .filter(Boolean).join(' · ') };
       }
-      if (sd.status !== 'done') continue;
-      const rr = await fetchWithAuth(`/api/v1/backtest/${run_id}/results`);
-      const rows = rr.ok ? await rr.json() : [];
-      const split = splitFilterRuns(rows);
-      if (!split) {
-        ffx = { ...ffx, err: 'прогон вернул не обе ветки — считать эффект не из чего' };
-        localStorage.removeItem(ffxKey); return;
+      if (sd.status === 'failed') throw new Error(sd.error_msg || 'прогон завершился ошибкой (логи i9)');
+      if (sd.status === 'done') {
+        const rr = await fetchWithAuth(`/api/v1/backtest/${run_id}/results?full=1`);
+        const rows = rr.ok ? await rr.json() : [];
+        if (!rows[0]) throw new Error('прогон завершён, но результат пуст');
+        return rows[0];
       }
-      const { on, off } = split;
-      ffx = { ...ffx, status: 'done',
-              withF: Number(on.net_profit ?? 0), withoutF: Number(off.net_profit ?? 0),
-              trF: Number(on.total_trades ?? 0), trNoF: Number(off.total_trades ?? 0) };
-      localStorage.removeItem(ffxKey);
-      return;
+      await new Promise((r) => setTimeout(r, 2000));
     }
-    ffx = { ...(ffx ?? { run_id }), run_id, err: 'нет результата за 30 мин' };
+    throw new Error('нет результата за 30 мин');
+  }
+
+  async function ffxStart(extra: any, from: Date, to: Date): Promise<string> {
+    // bar_offset_min — инфраструктурный сдвиг ТОЛЬКО для агентских баров (истинный
+    // UTC); бэктест идёт по биржевым минуткам, где он обязан быть нулевым.
+    const { bar_offset_min, ...p } = params as any;
+    const res = await fetchWithAuth('/api/v1/backtest/run', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        scriptCode: strategyCode, symbol, paramsGrid: {},
+        baseParams: { ...p, ...extra, symbol },
+        dateFrom: from.toISOString(), dateTo: to.toISOString(),
+      }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    return (await res.json()).run_id;
+  }
+
+  async function ffxCollect(runs: string[]) {
+    const t0 = Date.now();
+    try {
+      const [on, off] = await Promise.all(runs.map((r) => ffxWait(r, t0)));
+      ffx = { ...(ffx ?? { runs }), runs, status: 'done',
+              withF: Number(on.net_profit ?? 0), withoutF: Number(off.net_profit ?? 0),
+              trF: Number(on.total_trades ?? 0), trNoF: Number(off.total_trades ?? 0),
+              curveOn: on.equity_curve ?? [], curveOff: off.equity_curve ?? [] };
+    } catch (e: any) {
+      ffx = { ...(ffx ?? { runs }), runs, err: String(e?.message ?? e) };
+    } finally { localStorage.removeItem(ffxKey); }
   }
 
   async function runFilterEffect() {
     if (ffxBusy) return;
     ffxBusy = true;
     try {
-      if (!strategyCode) { ffx = { run_id: '', err: 'не знаю код стратегии робота' }; return; }
+      if (!strategyCode) { ffx = { runs: [], err: 'не знаю код стратегии робота' }; return; }
       const from = ledgerStat?.first_ts
         ? new Date(ledgerStat.first_ts) : new Date(Date.now() - 30 * 86_400_000);
-      // bar_offset_min — инфраструктурный сдвиг ТОЛЬКО для агентских баров (истинный
-      // UTC); бэктест идёт по биржевым минуткам, где он обязан быть нулевым.
-      const { bar_offset_min, ...p } = params as any;
-      const res = await fetchWithAuth('/api/v1/backtest/run', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          scriptCode: strategyCode, symbol,
-          baseParams: { ...p, symbol },
-          paramSets: [{}, FFX_OFF],
-          dateFrom: from.toISOString(), dateTo: new Date().toISOString(),
-        }),
-      });
-      if (!res.ok) { ffx = { run_id: '', err: await res.text() }; return; }
-      const { run_id } = await res.json();
+      const to = new Date();
+      const runs = await Promise.all([ffxStart({}, from, to), ffxStart(FFX_OFF, from, to)]);
       // Период показываем ФАКТИЧЕСКИЙ: без журнала точки старта нет и «весь срок»
       // было бы враньём — там просто последние 30 дней.
       const d = (x: Date) => x.toLocaleDateString('ru-RU');
-      ffx = { run_id, status: 'queued', elapsed: 0,
-              period: `${d(from)} — ${d(new Date())}${ledgerStat?.first_ts ? ' (от первой сделки)' : ' (журнала нет: 30 дней)'}` };
-      localStorage.setItem(ffxKey, run_id);
-      await ffxPoll(run_id);
+      ffx = { runs, status: 'queued', elapsed: 0,
+              period: `${d(from)} — ${d(to)}${ledgerStat?.first_ts ? ' (от первой сделки)' : ' (журнала нет: 30 дней)'}` };
+      localStorage.setItem(ffxKey, JSON.stringify(runs));
+      await ffxCollect(runs);
     } catch (e: any) {
-      ffx = { ...(ffx ?? { run_id: '' }), err: String(e?.message ?? e) };
+      ffx = { ...(ffx ?? { runs: [] }), err: String(e?.message ?? e) };
     } finally { ffxBusy = false; }
   }
   // «История прогонов»: all saved parameter sweeps of THIS robot's strategy, so the
@@ -919,9 +931,14 @@
   let timers: Array<ReturnType<typeof setInterval>> = [];
   onMount(() => {
     void load(); void pollTick(); void loadStatus(); void loadLedger();
-    // Прогон живёт на i9 минутами: после F5 подхватываем свой run_id и досматриваем.
-    const prev = localStorage.getItem(`ffx:${robotId}`);
-    if (prev) { ffx = { run_id: prev, status: 'queued' }; void ffxPoll(prev); }
+    // Прогоны живут на i9 минутами: после F5 подхватываем свои run_id и досматриваем.
+    try {
+      const prev = JSON.parse(localStorage.getItem(`ffx:${robotId}`) || 'null');
+      if (Array.isArray(prev) && prev.length === 2) {
+        ffx = { runs: prev, status: 'queued' };
+        void ffxCollect(prev);
+      }
+    } catch { localStorage.removeItem(`ffx:${robotId}`); }
     timers = [setInterval(load, 3000), setInterval(pollTick, 1000),
               setInterval(loadStatus, 4000), setInterval(loadCoef, 300_000),
               setInterval(loadLedger, 30_000)];   // журнал инжестится раз в 30с
@@ -1164,6 +1181,19 @@
                   <b class:yes={diff > 0} class:neg={diff < 0}>{diff >= 0 ? '+' : ''}{Math.round(diff).toLocaleString('ru-RU')} ₽</b>
                 </div>
               </div>
+              {@const eq = equityPaths(ffx.curveOn ?? [], ffx.curveOff ?? [], 300, 90)}
+              {#if eq}
+                <svg class="ffx-chart" viewBox="0 0 300 90" preserveAspectRatio="none" role="img"
+                     aria-label="кривые финреза с фильтрами и без">
+                  <polyline points={eq.pb} class="c-off" />
+                  <polyline points={eq.pa} class="c-on" />
+                </svg>
+                <div class="ffx-legend">
+                  <span class="lg on">— с фильтрами</span>
+                  <span class="lg off">— без фильтров</span>
+                  <span class="lg sc">шкала: {Math.round(eq.lo).toLocaleString('ru-RU')} … {Math.round(eq.hi).toLocaleString('ru-RU')} ₽</span>
+                </div>
+              {/if}
               <div class="ffx-note">{ffx.period ? ffx.period + ' · ' : ''}модель на биржевых минутках, комиссия taker; поштучно со сделками робота не совпадает</div>
             {/if}
           </div>
@@ -1564,6 +1594,14 @@
   .ffx-err { font-size: 10px; color: #ff5252; margin-top: 4px; }
   .ffx-res { margin-top: 4px; }
   .ffx-note { font-size: 9px; color: #6a6a8a; margin-top: 3px; }
+  .ffx-chart { width: 100%; height: 90px; display: block; margin-top: 6px;
+    background: #0b0b18; border: 1px solid #23234a; border-radius: 3px; }
+  .ffx-chart polyline { fill: none; vector-effect: non-scaling-stroke; stroke-width: 1.2; }
+  .ffx-chart .c-on { stroke: #2ee6a6; }
+  .ffx-chart .c-off { stroke: #7a7ad0; stroke-dasharray: 3 2; }
+  .ffx-legend { display: flex; gap: 10px; flex-wrap: wrap; font-size: 9px; margin-top: 2px; }
+  .ffx-legend .on { color: #2ee6a6; } .ffx-legend .off { color: #7a7ad0; }
+  .ffx-legend .sc { color: #6a6a8a; }
   .kv-grid { display: flex; flex-direction: column; gap: 3px; }
   .kv { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; padding: 3px 6px; background: #0e0e1c; border-radius: 3px; }
   .kv span { color: #889; }
