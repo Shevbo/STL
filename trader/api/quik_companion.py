@@ -263,36 +263,6 @@ async def _prev_close(symbol: str) -> float | None:
     return val
 
 
-def _pos_at(fills: list, cutoff_ms: int) -> tuple[float, float]:
-    """Позиция и средняя цена робота НА МОМЕНТ cutoff_ms по его же филлам.
-    Лестница та же, что в рантайме: долив усредняет, частичное закрытие среднюю
-    не двигает, разворот через ноль переоткрывает."""
-    pos, avg = 0.0, 0.0
-    for f in sorted(fills or [], key=lambda x: int(x.get("ts_unix_ms") or 0)):
-        if int(f.get("ts_unix_ms") or 0) >= cutoff_ms:
-            break
-        if (f.get("status") or "") != "filled":
-            continue
-        try:
-            qty, px = float(f.get("qty") or 0), float(f.get("price") or 0)
-        except (TypeError, ValueError):
-            continue
-        if qty <= 0 or px <= 0:
-            continue
-        delta = qty if (f.get("side") or "").lower() in ("buy", "b") else -qty
-        new = pos + delta
-        if pos == 0:
-            avg = px
-        elif new == 0:
-            avg = 0.0
-        elif (pos > 0) == (delta > 0):
-            avg = (avg * abs(pos) + px * qty) / (abs(pos) + qty)
-        elif (pos > 0) != (new > 0):
-            avg = px
-        pos = new
-    return pos, avg
-
-
 def _msk_midnight_ms() -> int:
     today = datetime.datetime.now(tz=_MSK).date()
     return int(datetime.datetime.combine(today, datetime.time.min, tzinfo=_MSK).timestamp() * 1000)
@@ -454,6 +424,12 @@ async def snapshot(request: Request, agent_id: str | None = None):
     except Exception:
         pass
     today_lo = _msk_midnight_ms()
+    # Позиция и средняя цена на КОНЕЦ ВЧЕРА — из журнала algo_trades: он пишет
+    # pos_after/avg_after на каждой сделке и хранит ВСЮ историю робота. Прежний
+    # способ (проигрыш 200-филлового хвоста из зеркала) у активного робота не
+    # сходился: хвост обрезан, среднюю перенесённой позиции восстановить нечем,
+    # и ВМ за сегодня оставалась прочерком (29.07).
+    carry: dict[str, tuple[float, float]] = {}
     real_all, real_today = {}, {}
     try:
         for r in await pool.fetch(
@@ -474,6 +450,14 @@ async def snapshot(request: Request, agent_id: str | None = None):
             real_today[r["robot_id"]] = {"net": float(r["net"] or 0),
                                          "trades": int(r["trades"])}
     except Exception:
+        pass
+    try:
+        for r in await pool.fetch(
+                "SELECT DISTINCT ON (robot_id) robot_id, pos_after, avg_after "
+                "FROM algo_trades WHERE mode='real' AND ts_ms < $1 "
+                "ORDER BY robot_id, ts_ms DESC, seq DESC", today_lo):
+            carry[r["robot_id"]] = (float(r["pos_after"] or 0), float(r["avg_after"] or 0))
+    except Exception:  # noqa: BLE001 — панель не должна падать из-за журнала
         pass
     # Текущее состояние робота из зеркала (позиция/пауза/режим сейчас).
     mirror_by_id = {rob.get("id"): rob for rob in status.get("robots") or []}
@@ -531,37 +515,14 @@ async def snapshot(request: Request, agent_id: str | None = None):
         vm_today, vm_y = None, None
         if cur_mode == "real":
             sym = rob.get("symbol")
-            fills = rob.get("recent_fills") or []
-            try:
-                pos_now = float(rob.get("position") or 0)
-            except (TypeError, ValueError):
-                pos_now = 0.0
-            # Позицию на вчерашнее закрытие считаем ОТ ТЕКУЩЕЙ НАЗАД: вычитаем
-            # сегодняшние сделки. Так обрезка хвоста 200 записями не мешает —
-            # сегодняшние сделки в хвосте есть заведомо, а прежний способ (проигрыш
-            # всего хвоста с начала) у активного робота просто не сходился, и ВМ
-            # за сегодня оставалась прочерком.
-            today_delta = 0.0
-            for f in fills:
-                if int(f.get("ts_unix_ms") or 0) < today_lo or f.get("status") != "filled":
-                    continue
-                try:
-                    q = float(f.get("qty") or 0)
-                except (TypeError, ValueError):
-                    continue
-                today_delta += q if (f.get("side") or "").lower() in ("buy", "b") else -q
-            pos_y = pos_now - today_delta
             coef = _coef_by.get(sym)
+            pos_y, avg_y = carry.get(rid, (0.0, 0.0))
             if coef:
                 if abs(pos_y) < 1e-9:
                     vm_y = 0.0            # вчера закрылись в ноль — переносить нечего
                 else:
-                    # Есть перенесённая позиция: нужна её средняя. Она восстанавливается
-                    # только проигрышем хвоста, и доверяем ему лишь когда он сходится
-                    # с посчитанной назад позицией — иначе честный прочерк.
-                    _pos_replay, avg_y = _pos_at(fills, today_lo)
                     pc = await _prev_close(sym)
-                    if pc and abs(_pos_replay - pos_y) < 1e-9 and avg_y > 0:
+                    if pc and avg_y > 0:
                         vm_y = pos_y * (float(pc) - avg_y) * float(coef)
                 if vm_y is not None:
                     vm_today = float(vm or 0) - vm_y
