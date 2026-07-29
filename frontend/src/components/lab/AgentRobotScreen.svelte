@@ -732,8 +732,12 @@
         body: JSON.stringify({ agent_id: agentId, params_json: JSON.stringify(clean) }),
       });
       const d = await res.json().catch(() => ({}));
-      chartApplyMsg = res.ok ? 'Применено — вступит в силу с нового бара.'
-                             : `Ошибка: ${d?.detail ?? res.status}`;
+      chartApplyMsg = res.ok
+        ? 'Применено — вступит в силу с нового бара.'
+        : (res.status === 502 || res.status === 503
+            ? `Сервер STL недоступен (${res.status}) — обычно это перезапуск, займёт до минуты. `
+              + 'Ваши значения в полях сохранены, нажмите «Сохранить» ещё раз.'
+            : `Ошибка: ${d?.detail ?? res.status}`);
     } catch (e) {
       chartApplyMsg = `Ошибка: ${String(e).slice(0, 80)}`;
     } finally { chartApplyBusy = false; }

@@ -94,7 +94,19 @@
   // ── Editable parameters panel (collapsed by default; edit → re-run backtest) ──
   let paramsOpen = $state(false);
   let editParams = $state<Record<string, any>>({});
-  $effect(() => { editParams = { ...(params || {}) }; });   // resync when a new result loads
+  // Пересинхронизация с приходящими параметрами — но НЕ поверх правки оператора.
+  // На стенде живого робота зеркало обновляется каждые 3 секунды, и набранные
+  // значения молча затирались: оператор правил поле, жал «Сохранить», ловил
+  // ошибку — и его цифры уже подменились текущими (29.07, отказ по 502 при
+  // рестарте бэкенда). Пока панель открыта и в ней есть несохранённые изменения,
+  // держим ввод оператора.
+  let editTouched = $state(false);
+  $effect(() => {
+    const incoming = { ...(params || {}) };
+    if (paramsOpen && editTouched) return;    // не трогаем незаконченную правку
+    editParams = incoming;
+  });
+  $effect(() => { if (!paramsOpen) editTouched = false; });   // закрыли панель — правка сброшена
   // Период исторических данных — тоже редактируемый: пересчёт может идти на
   // другом окне, чем исходный прогон (просьба оператора 2026-07-25).
   let editFrom = $state('');
@@ -1174,9 +1186,11 @@
               <span class="bc-pk">{labelFor(k)}</span>
               {#if typeof params[k] === 'number'}
                 <input class="bc-pv" type="number" step="any" bind:value={editParams[k]}
+                       oninput={() => editTouched = true}
                        onkeydown={(e) => e.key === 'Enter' && applyParams()} />
               {:else}
                 <input class="bc-pv" type="text" bind:value={editParams[k]}
+                       oninput={() => editTouched = true}
                        onkeydown={(e) => e.key === 'Enter' && applyParams()} />
               {/if}
             </label>

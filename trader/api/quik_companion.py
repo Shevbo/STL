@@ -221,6 +221,8 @@ async def _companion_or_operator(request: Request) -> str:
 # накопленный ход. В QLua-параметрах такого поля нет, берём дневные свечи ISS.
 # Кэш на сутки: панель дёргает снапшот раз в 5 секунд, ISS долбить нельзя.
 _PREV_CLOSE: dict[tuple[str, str], float | None] = {}
+_PREV_CLOSE_FAIL: dict[str, float] = {}     # symbol -> когда сорвалось (ретрай через 5 мин)
+_PREV_CLOSE_RETRY_SEC = 300
 
 
 async def _prev_close(symbol: str) -> float | None:
@@ -230,6 +232,9 @@ async def _prev_close(symbol: str) -> float | None:
     key = (symbol, day)
     if key in _PREV_CLOSE:
         return _PREV_CLOSE[key]
+    failed_at = _PREV_CLOSE_FAIL.get(symbol)
+    if failed_at and time.time() - failed_at < _PREV_CLOSE_RETRY_SEC:
+        return None                       # недавно не получилось — не долбим ISS
     val: float | None = None
     try:
         import httpx
@@ -248,6 +253,12 @@ async def _prev_close(symbol: str) -> float | None:
                     val = float(past[-1][i_c])
     except Exception:  # noqa: BLE001 — панель не должна падать из-за ISS
         val = None
+    if val is None:
+        # НЕ кэшируем неудачу на сутки: одна осечка ISS означала бы прочерк до
+        # завтра, а карточка при этом молча меняла смысл строки «сегодня»
+        # (оператор видел скачки на десятки тысяч, 29.07). Повторим через 5 минут.
+        _PREV_CLOSE_FAIL[symbol] = time.time()
+        return None
     _PREV_CLOSE[key] = val
     return val
 
@@ -514,8 +525,11 @@ async def snapshot(request: Request, agent_id: str | None = None):
         #   сегодня = фикс за сегодня (журнал) + ИЗМЕНЕНИЕ ВМ за сегодня.
         # ВМ за сегодня = ВМ сейчас − ВМ на закрытии прошлой сессии; иначе позиция,
         # перенесённая со вчера, приписала бы сегодняшнему дню весь свой ход.
+        # ВМ за сегодня считаем и когда робот СЕЙЧАС во флэте: он мог закрыть
+        # позицию сегодня, и перенесённая со вчера нереализованная часть обязана
+        # вернуться — иначе «сегодня» завышено ровно на неё.
         vm_today, vm_y = None, None
-        if cur_mode == "real" and vm is not None:
+        if cur_mode == "real":
             sym = rob.get("symbol")
             fills = rob.get("recent_fills") or []
             pos_y, avg_y = _pos_at(fills, today_lo)
@@ -535,7 +549,7 @@ async def snapshot(request: Request, agent_id: str | None = None):
                     if pc:
                         vm_y = pos_y * (float(pc) - avg_y) * float(coef)
                 if vm_y is not None:
-                    vm_today = float(vm) - vm_y
+                    vm_today = float(vm or 0) - vm_y
         # ПРАВИЛО: фин.рез = фикс + ВМ открытой позиции. Голый фикс при живой
         # позиции врёт (робот сидит в минусе, а карточка рисует «итог»).
         total = None if fix is None else float(fix) + float(vm or 0)
@@ -545,9 +559,10 @@ async def snapshot(request: Request, agent_id: str | None = None):
         # Итог за сегодня и насколько он сдвинул общий результат: % считаем к
         # ФИНРЕЗУ НА КОНЕЦ ВЧЕРА (фикс без сегодняшнего + ВМ на вчерашнем закрытии).
         today_fix = rt.get("net")
-        today_total = None
-        if today_fix is not None or vm_today is not None:
-            today_total = float(today_fix or 0) + float(vm_today or 0)
+        # Складываем ТОЛЬКО когда известны обе части. Иначе строка «сегодня» молча
+        # меняла смысл: то фикс+ВМ, то один фикс — и число прыгало на десятки тысяч.
+        today_total = (None if vm_today is None or today_fix is None
+                       else float(today_fix) + float(vm_today))
         chg_pct = None
         if total is not None and today_total is not None and vm_y is not None:
             base = float(total) - today_total
