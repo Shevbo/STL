@@ -127,11 +127,30 @@ def planned_orders(want, position: int, price: float, params: dict) -> list[dict
                     "price": price, "reason": "закрытие позиции (смена/снятие сигнала)"})
         if want != 0:
             out.append({"side": "buy" if want > 0 else "sell", "qty": qty,
-                        "price": price, "reason": "открытие по новому сигналу"})
+                        "price": price, "reason": "открытие по новому сигналу",
+                        "entry": True})
     elif position == 0 and want in (1, -1):
         out.append({"side": "buy" if want > 0 else "sell", "qty": qty,
-                    "price": price, "reason": "вход по сигналу"})
+                    "price": price, "reason": "вход по сигналу", "entry": True})
     return out
+
+
+def entry_block(price: float, params: dict, state: dict, bar_time: int) -> str:
+    """Почему вход НЕ пройдёт прямо сейчас: разножка или остывание. Зеркало
+    гейтов make_on_bar (gap_ok / in_cooldown) — оба стоят только на НАБОРЕ
+    объёма, выходы и тейк они не трогают. Без этого карточка показывала
+    «вход по сигналу» ровно в тот час, когда фильтр вход не пускал, и молчание
+    робота выглядело поломкой (живой MACD·RIU6, 29.07.2026)."""
+    min_gap = float(params.get("min_gap_pts", 0) or 0)
+    gap_ref = float(state.get("gap_ref", 0) or 0)
+    if min_gap > 0 and gap_ref > 0 and price > 0 and abs(price - gap_ref) < min_gap:
+        return (f"разножка держит: {abs(price - gap_ref):.0f} из {min_gap:.0f} пт "
+                f"от прошлого входа {gap_ref:.0f}")
+    cd_min = int(params.get("cooldown_min", 0) or 0)
+    until = int(state.get("cooldown_until", 0) or 0)
+    if cd_min > 0 and bar_time and bar_time < until:
+        return f"остывание держит: ещё {(until - bar_time) // 60 + 1} мин"
+    return ""
 
 
 def management_levels(bars, params: dict, position: int, avg: float) -> list[dict]:
@@ -168,7 +187,7 @@ def management_levels(bars, params: dict, position: int, avg: float) -> list[dic
         qty = max(1, int(params.get("qty", 1)))
         add = min(qty, avg_max - abs(position))
         out.append({"side": "buy" if cur_dir > 0 else "sell", "qty": add,
-                    "price": round(level, 2), "level": True,
+                    "price": round(level, 2), "level": True, "entry": True,
                     "reason": f"усреднение: avg {'−' if cur_dir > 0 else '+'} "
                               f"{k_step:g}×ATR({atr_n})={atrv:.0f}"})
     return out
@@ -216,4 +235,12 @@ def explain(strategy_id: str, bars, params: dict, position: int,
     # Position-management PRICE LEVELS (TP / averaging) — drawn as chart lines.
     d["planned_orders"] = d.get("planned_orders", []) + management_levels(
         bars, params, position, avg)
+    # Гейты входа: план, который фильтр прямо сейчас не пустит, помечаем — иначе
+    # карточка обещает заявку, которой не будет.
+    blk = entry_block(price, params, state, int(bars[-1].time) if bars else 0)
+    if blk:
+        d["entry_blocked"] = blk
+        for o in d["planned_orders"]:
+            if o.get("entry"):
+                o["blocked"] = blk
     return d

@@ -45,3 +45,38 @@ def test_flat_position_no_levels():
 def test_explain_merges_levels_into_planned():
     d = explain("fvg", _bars(), PARAMS, position=1, avg=89060.0)
     assert any(o.get("level") for o in d["planned_orders"])
+
+
+# ── гейты входа (разножка / остывание) ────────────────────────────────────────
+def test_entry_block_gap_marks_plan():
+    """Разножка держит вход -> план помечен, выход/тейк не помечен."""
+    from robot_runner.explain import entry_block
+    bars = _bars()
+    price = bars[-1].close
+    p = {**PARAMS, "min_gap_pts": 200, "avg_max": 3}
+    st = {"gap_ref": price - 140}                 # 140 пт < 200 -> держит
+    assert "разножка" in entry_block(price, p, st, int(bars[-1].time))
+    d = explain("macd_cross", bars, p, position=1, avg=price, state=st)
+    assert "разножка" in d["entry_blocked"]
+    for o in d["planned_orders"]:
+        assert bool(o.get("blocked")) == bool(o.get("entry"))
+    assert any(o.get("entry") for o in d["planned_orders"])   # усреднение помечено
+
+
+def test_entry_block_clears_when_price_left():
+    from robot_runner.explain import entry_block
+    bars = _bars()
+    price = bars[-1].close
+    p = {**PARAMS, "min_gap_pts": 200}
+    assert entry_block(price, p, {"gap_ref": price - 260}, int(bars[-1].time)) == ""
+    assert entry_block(price, p, {}, int(bars[-1].time)) == ""      # нет отсчёта
+    assert entry_block(price, PARAMS, {"gap_ref": price}, 0) == ""  # фильтр выключен
+
+
+def test_entry_block_cooldown():
+    from robot_runner.explain import entry_block
+    bars = _bars()
+    t = int(bars[-1].time)
+    p = {**PARAMS, "cooldown_min": 5}
+    assert "остывание" in entry_block(bars[-1].close, p, {"cooldown_until": t + 120}, t)
+    assert entry_block(bars[-1].close, p, {"cooldown_until": t - 1}, t) == ""

@@ -1086,12 +1086,18 @@
             план робота · в QUIK ещё не отправлены
           </span>
         </div>
+        {#if signal.entry_blocked}
+          <div class="blocked-note" title="фильтр входа (разножка / остывание) стоит только на НАБОРЕ объёма: выход из позиции и тейк-профит он не задерживает">
+            Вход сейчас закрыт фильтром: {signal.entry_blocked}
+          </div>
+        {/if}
         {#if plannedOrders.length || armedOrders.length}
           {#each plannedOrders as p}
-            <div class="plan-row" class:buy={p.side === 'buy'} class:sell={p.side === 'sell'}>
+            <div class="plan-row" class:buy={p.side === 'buy'} class:sell={p.side === 'sell'}
+                 class:blocked={p.blocked}>
               <b>{p.side === 'buy' ? '▲ BUY' : '▼ SELL'} {p.qty}</b>
               <span class="mono">@ {fmtPrice(p.price)}</span>
-              <span class="why">{p.reason}</span>
+              <span class="why">{p.reason}{p.blocked ? ` — НЕ УЙДЁТ: ${p.blocked}` : ''}</span>
             </div>
           {/each}
           {#each armedOrders as p}
@@ -1438,6 +1444,10 @@
   .plan-row.live { border-left-style: solid; }
   .plan-row.buy b { color: #2ee6a6; } .plan-row.sell b { color: #ff5c8a; }
   .plan-row .why { color: #778; font-size: 10px; }
+  .plan-row.blocked { opacity: 0.6; border-left-color: #ffb300; }
+  .plan-row.blocked .why { color: #ffb300; }
+  .blocked-note { font-size: 10px; color: #ffb300; background: #1d1708; border-left: 2px solid #ffb300;
+    padding: 4px 6px; margin-bottom: 4px; }
   .hist-scroll { overflow-y: auto; max-height: 100%; }
   table { width: 100%; border-collapse: collapse; font-size: 11px; }
   th { text-align: left; color: #556; font-size: 10px; text-transform: uppercase; padding: 3px 6px; position: sticky; top: 0; background: #0a0a12; }

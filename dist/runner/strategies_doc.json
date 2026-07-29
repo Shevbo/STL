@@ -11,7 +11,8 @@
       "avg_max": 1,
       "avg_step_atr": 0,
       "tp_atr": 0,
-      "avg_atr_n": 14
+      "avg_atr_n": 14,
+      "min_gap_pts": 0
     }
   },
   "bollinger_mr": {
@@ -25,7 +26,8 @@
       "avg_max": 1,
       "avg_step_atr": 0,
       "tp_atr": 0,
-      "avg_atr_n": 14
+      "avg_atr_n": 14,
+      "min_gap_pts": 0
     }
   },
   "bollinger_bo": {
@@ -39,7 +41,8 @@
       "avg_max": 1,
       "avg_step_atr": 0,
       "tp_atr": 0,
-      "avg_atr_n": 14
+      "avg_atr_n": 14,
+      "min_gap_pts": 0
     }
   },
   "bollinger_bo_m1": {
@@ -53,7 +56,8 @@
       "avg_max": 5,
       "avg_step_atr": 10,
       "tp_atr": 0,
-      "avg_atr_n": 14
+      "avg_atr_n": 14,
+      "min_gap_pts": 0
     }
   },
   "shectory_2ema": {
@@ -69,7 +73,8 @@
       "avg_max": 1,
       "avg_step_atr": 0,
       "tp_atr": 0,
-      "avg_atr_n": 14
+      "avg_atr_n": 14,
+      "min_gap_pts": 0
     }
   },
   "stochastic": {
@@ -84,7 +89,8 @@
       "avg_max": 1,
       "avg_step_atr": 0,
       "tp_atr": 0,
-      "avg_atr_n": 14
+      "avg_atr_n": 14,
+      "min_gap_pts": 0
     }
   },
   "cci": {
@@ -98,7 +104,8 @@
       "avg_max": 1,
       "avg_step_atr": 0,
       "tp_atr": 0,
-      "avg_atr_n": 14
+      "avg_atr_n": 14,
+      "min_gap_pts": 0
     }
   },
   "williams_r": {
@@ -113,7 +120,8 @@
       "avg_max": 1,
       "avg_step_atr": 0,
       "tp_atr": 0,
-      "avg_atr_n": 14
+      "avg_atr_n": 14,
+      "min_gap_pts": 0
     }
   },
   "momentum": {
@@ -126,7 +134,8 @@
       "avg_max": 1,
       "avg_step_atr": 0,
       "tp_atr": 0,
-      "avg_atr_n": 14
+      "avg_atr_n": 14,
+      "min_gap_pts": 0
     }
   },
   "roc": {
@@ -140,7 +149,8 @@
       "avg_max": 1,
       "avg_step_atr": 0,
       "tp_atr": 0,
-      "avg_atr_n": 14
+      "avg_atr_n": 14,
+      "min_gap_pts": 0
     }
   },
   "triple_sma": {
@@ -155,7 +165,8 @@
       "avg_max": 1,
       "avg_step_atr": 0,
       "tp_atr": 0,
-      "avg_atr_n": 14
+      "avg_atr_n": 14,
+      "min_gap_pts": 0
     }
   },
   "keltner_bo": {
@@ -170,7 +181,8 @@
       "avg_max": 1,
       "avg_step_atr": 0,
       "tp_atr": 0,
-      "avg_atr_n": 14
+      "avg_atr_n": 14,
+      "min_gap_pts": 0
     }
   },
   "rsi_trend": {
@@ -186,7 +198,8 @@
       "avg_max": 1,
       "avg_step_atr": 0,
       "tp_atr": 0,
-      "avg_atr_n": 14
+      "avg_atr_n": 14,
+      "min_gap_pts": 0
     }
   },
   "ema_atr": {
@@ -202,7 +215,8 @@
       "avg_max": 1,
       "avg_step_atr": 0,
       "tp_atr": 0,
-      "avg_atr_n": 14
+      "avg_atr_n": 14,
+      "min_gap_pts": 0
     }
   },
   "fvg": {
@@ -215,7 +229,8 @@
       "avg_max": 1,
       "avg_step_atr": 0,
       "tp_atr": 0,
-      "avg_atr_n": 14
+      "avg_atr_n": 14,
+      "min_gap_pts": 0
     }
   },
   "order_block": {
@@ -229,7 +244,8 @@
       "avg_max": 1,
       "avg_step_atr": 0,
       "tp_atr": 0,
-      "avg_atr_n": 14
+      "avg_atr_n": 14,
+      "min_gap_pts": 0
     }
   },
   "pivot_reversal": {
@@ -242,7 +258,8 @@
       "avg_max": 1,
       "avg_step_atr": 0,
       "tp_atr": 0,
-      "avg_atr_n": 14
+      "avg_atr_n": 14,
+      "min_gap_pts": 0
     }
   }
 }

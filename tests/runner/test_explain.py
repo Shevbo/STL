@@ -16,7 +16,8 @@ def test_fvg_bullish_signal_confirmed():
     assert d["features"]["gap_up"] is True
     assert "СИГНАЛ ЛОНГ" in d["waiting_for"]
     assert d["planned_orders"] == [
-        {"side": "buy", "qty": 1, "price": 103.0, "reason": "вход по сигналу"}]
+        {"side": "buy", "qty": 1, "price": 103.0, "reason": "вход по сигналу",
+         "entry": True}]
 
 
 def test_fvg_gap_without_body_confirmation():
