@@ -804,9 +804,11 @@
   // приезжает БЕЗ кривой (i9 режет trades+equity_curve на len>1, чтобы не топить
   // маленький Postgres), а нам нужны обе кривые. Бонусом одиночные прогоны ловит
   // кэш повторных прогонов — второй раз те же настройки отдаются мгновенно.
+  // withoutF/trNoF = null у ОДИНОЧНОГО прогона (сравнивать не с чем): по ним же
+  // разметка выбирает, что рисовать — сравнение или один результат.
   type Ffx = { runs: string[]; status?: string; elapsed?: number; queue?: string; period?: string;
-               withF?: number; withoutF?: number; trF?: number; trNoF?: number; err?: string;
-               curveOn?: Pt[]; curveOff?: Pt[] };
+               withF?: number; withoutF?: number | null; trF?: number; trNoF?: number | null;
+               err?: string; curveOn?: Pt[]; curveOff?: Pt[] };
   let ffx = $state<Ffx | null>(null);
   let ffxBusy = $state(false);
   const ffxKey = $derived(`ffx:${robotId}`);
@@ -867,11 +869,15 @@
   async function ffxCollect(runs: string[]) {
     const t0 = Date.now();
     try {
+      // Один прогон (просто «прогнать эти параметры») или два (сравнение с
+      // выключенными фильтрами) — второй ряд полей просто остаётся пустым.
       const [on, off] = await Promise.all(runs.map((r) => ffxWait(r, t0)));
       ffx = { ...(ffx ?? { runs }), runs, status: 'done',
-              withF: Number(on.net_profit ?? 0), withoutF: Number(off.net_profit ?? 0),
-              trF: Number(on.total_trades ?? 0), trNoF: Number(off.total_trades ?? 0),
-              curveOn: on.equity_curve ?? [], curveOff: off.equity_curve ?? [] };
+              withF: Number(on.net_profit ?? 0),
+              withoutF: off ? Number(off.net_profit ?? 0) : null,
+              trF: Number(on.total_trades ?? 0),
+              trNoF: off ? Number(off.total_trades ?? 0) : null,
+              curveOn: on.equity_curve ?? [], curveOff: off?.equity_curve ?? [] };
     } catch (e: any) {
       ffx = { ...(ffx ?? { runs }), runs, err: String(e?.message ?? e) };
     } finally { localStorage.removeItem(ffxKey); }
@@ -882,15 +888,27 @@
     ffxBusy = true;
     try {
       if (!strategyCode) { ffx = { runs: [], err: 'не знаю код стратегии робота' }; return; }
-      const from = ledgerStat?.first_ts
-        ? new Date(ledgerStat.first_ts) : new Date(Date.now() - 30 * 86_400_000);
+      // Фильтры выключены — сравнивать не с чем, но сам прогон текущих параметров
+      // нужен всегда: иначе увидеть, что даёт живая настройка (тот же новый стоп),
+      // можно было только руками в Лаборатории, перенабирая все параметры.
+      const ab = filtersOn;
+      // Срок жизни робота — правильное окно ДЛЯ СРАВНЕНИЯ (обе ветки по одним
+      // барам). Для одиночного прогона он же был бы бессмысленно коротким:
+      // берём 90 дней, а если робот старше — весь его срок.
+      const start = ledgerStat?.first_ts ?? null;
+      const from = ab
+        ? new Date(start ?? Date.now() - 30 * 86_400_000)
+        : new Date(Math.min(start ?? Date.now(), Date.now() - 90 * 86_400_000));
       const to = new Date();
-      const runs = await Promise.all([ffxStart({}, from, to), ffxStart(FFX_OFF, from, to)]);
+      const runs = ab
+        ? await Promise.all([ffxStart({}, from, to), ffxStart(FFX_OFF, from, to)])
+        : [await ffxStart({}, from, to)];
       // Период показываем ФАКТИЧЕСКИЙ: без журнала точки старта нет и «весь срок»
       // было бы враньём — там просто последние 30 дней.
       const d = (x: Date) => x.toLocaleDateString('ru-RU');
+      const note = ab ? (start ? ' (от первой сделки)' : ' (журнала нет: 30 дней)') : '';
       ffx = { runs, status: 'queued', elapsed: 0,
-              period: `${d(from)} — ${d(to)}${ledgerStat?.first_ts ? ' (от первой сделки)' : ' (журнала нет: 30 дней)'}` };
+              period: `${d(from)} — ${d(to)}${note}` };
       localStorage.setItem(ffxKey, JSON.stringify(runs));
       await ffxCollect(runs);
     } catch (e: any) {
@@ -1168,14 +1186,16 @@
             {#if fs.dropped}<div class="kv" title="переполнение буфера несостоявшихся сделок: эти отсевы в сумму НЕ вошли"><span>Не учтено отсевов</span><b>{fs.dropped}</b></div>{/if}
           </div>
           <div class="ffx">
-            <button class="ffx-btn" disabled={!filtersOn || ffxBusy || (!!ffx && ffx.status !== 'done' && !ffx.err)}
+            <button class="ffx-btn" disabled={ffxBusy || (!!ffx && ffx.status !== 'done' && !ffx.err)}
                     onclick={runFilterEffect}
-                    title="Один прогон на i9 с двумя наборами параметров: как у робота и он же с выключенными фильтрами. Оба считаются по ОДНИМ барам за весь срок жизни робота, разница финреза — точный вклад фильтров, комиссия учтена. Это модель на биржевых минутках, а не повтор живой ленты: сделки не совпадут поштучно.">
-              {ffxBusy || (ffx && ffx.status !== 'done' && !ffx.err) ? 'Считается на i9…' : 'Рассчитать эффект точно'}
+                    title={filtersOn
+                      ? 'Два прогона на i9: параметры робота как есть и они же с выключенными фильтрами. Оба по ОДНИМ барам за весь срок жизни робота, разница финреза — точный вклад фильтров, комиссия учтена. Это модель на биржевых минутках, а не повтор живой ленты: сделки не совпадут поштучно.'
+                      : 'Прогон на i9 с ТЕКУЩИМИ параметрами робота (включая правки, которые ещё не отработали в бою) за последние 90 дней или весь срок робота, если он старше. Модель на биржевых минутках, комиссия taker: поштучно со сделками робота не совпадает.'}>
+              {ffxBusy || (ffx && ffx.status !== 'done' && !ffx.err)
+                ? 'Считается на i9…'
+                : (filtersOn ? 'Рассчитать эффект точно' : 'Прогнать эти параметры')}
             </button>
-            {#if !filtersOn}
-              <div class="ffx-run">фильтры входа сейчас выключены (разножка 0, остывание 0) — сравнивать не с чем. Счётчики выше историчные.</div>
-            {:else if ffx?.err}
+            {#if ffx?.err}
               <div class="ffx-err">{ffx.err}</div>
             {:else if ffx && ffx.status !== 'done'}
               <div class="ffx-run">{ffx.queue || ruStatusFfx(ffx.status)}{ffx.elapsed ? ` · идёт ${ffx.elapsed}с` : ''}</div>
@@ -1203,6 +1223,27 @@
                 </div>
               {/if}
               <div class="ffx-note">{ffx.period ? ffx.period + ' · ' : ''}модель на биржевых минутках, комиссия taker; поштучно со сделками робота не совпадает</div>
+            {:else if ffx?.status === 'done' && ffx.withF != null}
+              <div class="kv-grid ffx-res">
+                <div class="kv" title="финрез прогона с текущими параметрами робота, комиссия taker учтена">
+                  <span>Финрез прогона</span>
+                  <b class:yes={ffx.withF > 0} class:neg={ffx.withF < 0}>{ffx.withF >= 0 ? '+' : ''}{Math.round(ffx.withF).toLocaleString('ru-RU')} ₽</b>
+                </div>
+                <div class="kv"><span>Сделок</span><b>{ffx.trF}</b></div>
+              </div>
+              {@const eq1 = equityPaths(ffx.curveOn ?? [], ffx.curveOn ?? [], 300, 90)}
+              {#if eq1}
+                <svg class="ffx-chart" viewBox="0 0 300 90" preserveAspectRatio="none" role="img"
+                     aria-label="кривая финреза прогона">
+                  <polyline points={eq1.pa} class="c-on" />
+                </svg>
+                <div class="ffx-legend">
+                  <span class="lg sc">шкала: {Math.round(eq1.lo).toLocaleString('ru-RU')} … {Math.round(eq1.hi).toLocaleString('ru-RU')} ₽</span>
+                </div>
+              {/if}
+              <div class="ffx-note">{ffx.period ? ffx.period + ' · ' : ''}текущие параметры робота, модель на биржевых минутках, комиссия taker; поштучно со сделками робота не совпадает</div>
+            {:else if !filtersOn}
+              <div class="ffx-run">фильтры входа выключены (разножка 0, остывание 0) — сравнивать не с чем, счётчики выше историчные. Кнопка прогоняет текущие параметры как есть.</div>
             {/if}
           </div>
         </div>
