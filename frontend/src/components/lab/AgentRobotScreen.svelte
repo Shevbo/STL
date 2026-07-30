@@ -6,7 +6,7 @@
      mirror every 5s; the agent's local state is the source of truth. -->
 <script module lang="ts">
   // Чистая часть «Системного монитора» — тестируется без DOM (см. AgentRobotScreen.monitor.test.ts).
-  export type LogKind = 'cmd' | 'ok' | 'err' | 'sys';
+  export type LogKind = 'cmd' | 'ok' | 'err' | 'sys' | 'me' | 'ai';
   export type LogLine = { t: number; kind: LogKind; text: string };
   /** Снимок состояния робота для ленты переходов. */
   export type RobotSnap = { mode: string; run: string; eo: boolean };
@@ -608,6 +608,40 @@
     if (!logBox) return;
     logStick = stickToBottom(logBox.scrollHeight, logBox.scrollTop, logBox.clientHeight);
   }
+  // ── Напарник робота: двусторонний чат в той же ленте ────────────────────────
+  // Отвечает LLM через Lineman (единственный разрешённый путь к моделям). Знает
+  // ТОЛЬКО своего робота и только на ЧТЕНИЕ: менять параметры/режим/заявки он не
+  // может по устройству ручки. История диалога живёт здесь, в браузере.
+  let ask = $state('');
+  let asking = $state(false);
+  let chatHistory: Array<{ role: 'user' | 'bot'; text: string }> = [];
+  async function sendAsk() {
+    const q = ask.trim();
+    if (!q || asking) return;
+    ask = '';
+    asking = true;
+    pushLog(q, 'me');
+    try {
+      const res = await fetchWithAuth(
+        `/api/v1/quik/robots/${encodeURIComponent(robotId)}/chat`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ agent_id: agentId, message: q, history: chatHistory }),
+          signal: AbortSignal.timeout(70_000) } as any);
+      if (res.ok) {
+        const d = await res.json();
+        const text = String(d.text || '').trim() || '(пустой ответ)';
+        pushLog(text, 'ai');
+        chatHistory = [...chatHistory, { role: 'user', text: q }, { role: 'bot', text }].slice(-12);
+      } else {
+        let why = `HTTP ${res.status}`;
+        try { why = (await res.json())?.detail || why; } catch { /* не JSON */ }
+        pushLog(why, 'err');
+      }
+    } catch (e) {
+      pushLog(`Напарник не ответил: ${String(e).slice(0, 90)}`, 'err');
+    } finally { asking = false; }
+  }
+
   // Смена состояния робота — тоже событие монитора: именно её оператор и не мог
   // прочитать по бейджам. Первый снимок пишем молча (это не «переход»).
   let seenSnap: RobotSnap | null = null;
@@ -1321,8 +1355,14 @@
               {l.text}
             </div>
           {/each}
+          {#if asking}<div class="crt-line dim">напарник думает…</div>{/if}
           <div class="crt-line prompt">
-            <span class="crt-ps">OUTPUT:&gt;</span><span class="crt-cur">█</span>
+            <span class="crt-ps">OUTPUT:&gt;</span>
+            <!-- Ввод живёт ПРЯМО в ленте, на строке промпта: консоль, а не форма. -->
+            <input class="crt-in" bind:value={ask} disabled={asking}
+                   placeholder="спросить напарника о торговле этого робота…"
+                   onkeydown={(e) => { if (e.key === 'Enter') sendAsk(); }} />
+            {#if !ask && !asking}<span class="crt-cur">█</span>{/if}
           </div>
         </div>
       </div>
@@ -1830,7 +1870,17 @@
   .crt-line.cmd { color: #9dffbe; }
   .crt-line.err { color: #ff9a3c; text-shadow: 0 0 4px rgba(255,154,60,.45); }
   .crt-line.sys { color: #66ffa6; }
+  /* Реплики диалога: вопрос оператора ярче ленты команд, ответ напарника — обычный
+     фосфор, но с отбивкой, чтобы абзац читался как ответ, а не как строка лога. */
+  .crt-line.me { color: #d6ffe4; }
+  .crt-line.ai { color: #4dffa0; margin: 2px 0 4px; padding-left: 10px; border-left: 1px solid #1c4a2a; }
   .crt-ts { color: #1f8a44; text-shadow: none; }
+  .crt-in {
+    flex: 1 1 auto; min-width: 120px; margin-left: 6px; background: none; border: none;
+    outline: none; color: #9dffbe; font: inherit; text-shadow: inherit; caret-color: #33ff66;
+  }
+  .crt-in::placeholder { color: #1f8a44; }
+  .crt-line.prompt { display: flex; align-items: center; }
   .crt-ps { color: #33ff66; }
   .crt-cur { display: inline-block; margin-left: 2px; animation: crtblink 1.05s step-end infinite; }
   @keyframes crtblink { 50% { opacity: 0; } }

@@ -76,3 +76,11 @@ class Settings(BaseSettings):
     # считались по биржевому и завышали доходность ровно в это число раз.
     # 1.0 = брокер берёт биржевое (прежнее поведение).
     quik_margin_multiplier: float = 1.0
+
+    # ── Lineman: ЕДИНСТВЕННЫЙ путь к LLM (политика федерации от 18.06.2026) ──
+    # Никаких провайдерских ключей в сервисе: хостер в WG и ходит на прокси
+    # напрямую. Секрета здесь нет — только адрес и имя агента.
+    lineman_url: str = "http://10.66.0.1:9090"
+    lineman_agent_id: str = "klod-stl"
+    lineman_model_hint: str = "normal"
+    lineman_max_tokens: int = 900

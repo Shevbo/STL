@@ -1380,6 +1380,10 @@ def create_app() -> FastAPI:
     # Operator's manual smart orders (SL/TP/Trail/OnFill; STL-side watcher).
     from trader.api.quik_smart_orders import router as quik_smart_router
     fastapi_app.include_router(quik_smart_router)
+    # Чат с «напарником» робота в системном мониторе стенда. READ ONLY: ручка
+    # ничего не меняет, LLM идёт ТОЛЬКО через Lineman (политика федерации).
+    from trader.api.quik_robot_chat import router as quik_robot_chat_router
+    fastapi_app.include_router(quik_robot_chat_router)
     # QA checklist web form (GET /qa) + verdict persistence.
     from trader.api.qa_routes import router as qa_router
     fastapi_app.include_router(qa_router)
