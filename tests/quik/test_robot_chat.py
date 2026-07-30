@@ -269,4 +269,30 @@ def test_all_hints_busy_reports_honestly(monkeypatch):
     r = client.post("/api/v1/quik/robots/lxk22/chat",
                     json={"agent_id": "A1", "message": "как дела?"}, headers=_hdr())
     assert r.status_code == 503
-    assert "лимит" in r.json()["detail"]
+    assert "лимит" in r.json()["detail"]          # тут действительно 429
+    assert "normal, fast" in r.json()["detail"]   # видно, что перепробовали
+
+
+def test_non_quota_failure_is_not_reported_as_a_quota(monkeypatch):
+    """«bad JSON» от прокси — не лимит провайдера. Раньше любая ошибка печаталась
+    как «все модели заняты» и уводила оператора не туда (30.07.2026, 20:19)."""
+    class _Resp:
+        status_code = 400
+        text = '{"error": "bad JSON"}'
+        @staticmethod
+        def json(): return {}
+
+    class _Client:
+        def __init__(self, *a, **kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, *a, **kw): return _Resp()
+
+    monkeypatch.setattr(httpx, "AsyncClient", _Client)
+    client = TestClient(_app(monkeypatch))
+    r = client.post("/api/v1/quik/robots/lxk22/chat",
+                    json={"agent_id": "A1", "message": "как дела?"}, headers=_hdr())
+    detail = r.json()["detail"]
+    assert r.status_code == 503
+    assert "лимит" not in detail
+    assert "ошибкой" in detail and "bad JSON" in detail

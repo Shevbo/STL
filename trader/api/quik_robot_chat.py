@@ -319,8 +319,14 @@ async def robot_chat(robot_id: str, body: ChatBody, request: Request):
                         "provider": data.get("provider"), "elapsed_ms": data.get("elapsed_ms")}
             last = (res.text or "")[:200]
             log.warning("robot_chat.lineman_error", robot_id=robot_id, hint=hint,
-                        status=res.status_code)
+                        status=res.status_code, body=last)
 
+    # Причину НЕ выдумываем: 429 у провайдера и «bad JSON» от прокси — разные
+    # вещи, а раньше обе печатались как «все модели заняты» (30.07.2026, 20:19).
+    # Показываем, что перепробовали и что ответил Lineman, дальше решает оператор.
+    quota = "429" in last or "rate_limit" in last.lower()
+    why = ("у провайдеров кончился лимит" if quota
+           else "провайдеры ответили ошибкой")
     raise HTTPException(status_code=503, detail=(
-        "Все модели сейчас заняты (у провайдеров лимит), напарник ответит чуть позже. "
-        f"Последний ответ Lineman: {last}"))
+        f"Напарник не смог получить ответ: {why}. Перепробовал {', '.join(hints)}. "
+        f"Ответ Lineman: {last} — попробуйте спросить ещё раз."))
