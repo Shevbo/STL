@@ -179,3 +179,103 @@ def test_params_relay_only_forwards_params_json_field():
     assert fields == ["robot_id", "params_json"]
     assert not hasattr(pb.SetRobotParams(), "schedule")
     assert not hasattr(pb.SetRobotParams(), "max_position")
+
+
+# ── РЕАЛ -> PAPER (разоружение) ───────────────────────────────────────────────
+# Односторонний маршрут: обратно (арминг) из STL нельзя и не появится — это
+# инвариант #2 (арминг живёт только на консоли VDS). Ворота повторяют агентский
+# ModeSet для направления «разоружить»: зеркало, confirm_id, нулевая позиция,
+# нет активных заявок.
+
+def _real_robot(**over):
+    row = {"robot_id": "r1", "strategy_id": "order_block", "symbol": "BRU6",
+           "schedule": "07:00-23:50", "max_position": "3", "paper": False,
+           "position": 0, "params_json": json.dumps({"qty": 3, "sl_frac": 50})}
+    row.update(over)
+    return row
+
+
+def _store_with(row) -> QuikAgentStore:
+    store = QuikAgentStore()
+    store.ensure_agent("A1")
+    store.set_robot_report("A1", {"robots": [row]})
+    return store
+
+
+def test_to_paper_redeploys_the_same_spec_with_paper_true(monkeypatch):
+    srv = _FakeServer()
+    client = _client(monkeypatch, server=srv, store=_store_with(_real_robot()))
+
+    r = client.post("/api/v1/quik/robots/r1/to-paper",
+                    json={"agent_id": "A1", "confirm_id": "r1"})
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "agent_id": "A1", "robot_id": "r1", "paper": True}
+
+    assert len(srv.enqueued) == 1
+    _, msg = srv.enqueued[0]
+    assert msg.WhichOneof("payload") == "deploy_robot"
+    spec = msg.deploy_robot.spec
+    assert spec.paper is True
+    # Всё остальное — из зеркала ДОСЛОВНО: переводим режим, а не переписываем робота.
+    assert spec.robot_id == "r1"
+    assert spec.strategy_id == "order_block"
+    assert spec.symbol == "BRU6"
+    assert spec.schedule == "07:00-23:50"
+    assert spec.max_position_contracts == 3
+    assert json.loads(spec.params_json) == {"qty": 3, "sl_frac": 50}
+
+
+def test_to_paper_refuses_a_non_flat_robot(monkeypatch):
+    # Иначе РЕАЛЬНАЯ позиция останется на счёте, а робот будет считать её бумажной.
+    srv = _FakeServer()
+    client = _client(monkeypatch, server=srv, store=_store_with(_real_robot(position=-3)))
+
+    r = client.post("/api/v1/quik/robots/r1/to-paper",
+                    json={"agent_id": "A1", "confirm_id": "r1"})
+    assert r.status_code == 409
+    assert "-3" in r.json()["detail"]
+    assert srv.enqueued == []
+
+
+def test_to_paper_refuses_while_an_order_is_working(monkeypatch):
+    srv = _FakeServer()
+    store = _store_with(_real_robot(working_orders=[{"order_num": "12345"}]))
+    client = _client(monkeypatch, server=srv, store=store)
+
+    r = client.post("/api/v1/quik/robots/r1/to-paper",
+                    json={"agent_id": "A1", "confirm_id": "r1"})
+    assert r.status_code == 409
+    assert "12345" in r.json()["detail"]
+    assert srv.enqueued == []
+
+
+def test_to_paper_needs_the_exact_id_typed(monkeypatch):
+    srv = _FakeServer()
+    client = _client(monkeypatch, server=srv, store=_store_with(_real_robot()))
+
+    r = client.post("/api/v1/quik/robots/r1/to-paper",
+                    json={"agent_id": "A1", "confirm_id": "r"})
+    assert r.status_code == 400
+    assert srv.enqueued == []
+
+
+def test_to_paper_refuses_a_robot_missing_from_the_mirror(monkeypatch):
+    srv = _FakeServer()
+    client = _client(monkeypatch, server=srv, store=QuikAgentStore())
+
+    r = client.post("/api/v1/quik/robots/ghost/to-paper",
+                    json={"agent_id": "A1", "confirm_id": "ghost"})
+    assert r.status_code == 409
+    assert srv.enqueued == []
+
+
+def test_to_paper_is_one_way_a_paper_robot_is_refused(monkeypatch):
+    # Симметричного «в реал» тут нет и быть не может: арминг — только с консоли VDS.
+    srv = _FakeServer()
+    client = _client(monkeypatch, server=srv, store=_store_with(_real_robot(paper=True)))
+
+    r = client.post("/api/v1/quik/robots/r1/to-paper",
+                    json={"agent_id": "A1", "confirm_id": "r1"})
+    assert r.status_code == 409
+    assert "уже в PAPER" in r.json()["detail"]
+    assert srv.enqueued == []

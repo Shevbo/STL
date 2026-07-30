@@ -12,7 +12,7 @@
   export type RobotSnap = { mode: string; run: string; eo: boolean };
 
   /** Лог из localStorage: мусор и битый JSON дают пустую ленту, хвост обрезаем. */
-  export function parseLog(raw: string | null, max = 200): LogLine[] {
+  export function parseLog(raw: string | null, max = 1000): LogLine[] {
     try {
       const v = JSON.parse(raw || '[]');
       if (!Array.isArray(v)) return [];
@@ -20,7 +20,7 @@
     } catch { return []; }
   }
   /** Добавление строки с ограничением длины (лента живёт в localStorage). */
-  export function appendLog(lines: LogLine[], line: LogLine, max = 200): LogLine[] {
+  export function appendLog(lines: LogLine[], line: LogLine, max = 1000): LogLine[] {
     return [...lines, line].slice(-max);
   }
   /** Прилипание к низу: пока оператор не отскроллил вверх, новая строка видна сама. */
@@ -59,6 +59,7 @@
   import NavMenu from '../NavMenu.svelte';
   import { fetchAgentLocalStatus, type AgentLocalStatus } from '../../lib/agent-robots';
   import { annualizedPct, equityPaths, type EqPt as Pt } from '../../lib/lab-analytics';
+  import { setTitle } from '../../lib/page-title';
 
   let { robotId, agentId = null }: { robotId: string; agentId?: string | null } = $props();
 
@@ -555,7 +556,7 @@
   // Ключ считаем функцией, а не константой: robotId — пропс, константа замораживает
   // его начальное значение (svelte state_referenced_locally).
   const logKey = () => `ars_mon_${robotId}`;
-  const LOG_MAX = 200;
+  const LOG_MAX = 1000;
   let logLines = $state<LogLine[]>(loadLog());
   let logBox = $state<HTMLDivElement | null>(null);
   let logStick = $state(true);       // прилипание к низу, как в терминале
@@ -755,6 +756,39 @@
   // Clone this robot's exact strategy+params+symbol into a fresh PAPER robot on the
   // agent. deploy-agent needs no scriptCode/STL record — the runner resolves the
   // strategy by id. New robot_id must be colon-free (attribution parses on ':').
+  // РЕАЛ -> PAPER (разоружение) ЭТОГО робота, статистика реала сохраняется:
+  // раннер обнуляет realized/филлы только на обратном переходе paper->РЕАЛ
+  // (arming), а журнал algo_trades навсегда держит строки mode='real'.
+  // Обратно из STL нельзя: арминг реальных денег — только с консоли VDS.
+  let toPaperBusy = $state(false);
+  const flatForPaper = $derived(position === 0 && (robot?.working_orders ?? []).length === 0);
+  async function toPaper() {
+    if (!robot || robot.paper) return;
+    if (!window.confirm(
+      `Перевести робота «${robotId}» из РЕАЛА в PAPER?\n\n` +
+      `Робот перестанет рисковать реальными деньгами и продолжит торговать в бумаге.\n` +
+      `Статистика реала СОХРАНЯЕТСЯ: фикс, история сделок и журнал остаются как есть.\n` +
+      `Обратно в реал — только с консоли VDS (агент), из STL нельзя.`)) return;
+    const conf = window.prompt(`Подтверди: впиши точный ID робота\n${robotId}`, '');
+    if (conf !== robotId) { pushLog('ID не совпал — перевод в PAPER отменён.', 'err'); return; }
+    toPaperBusy = true;
+    pushLog('→ перевести робота из РЕАЛА в PAPER (статистика реала сохраняется).', 'cmd');
+    try {
+      const res = await fetchWithAuth(
+        `/api/v1/quik/robots/${encodeURIComponent(robotId)}/to-paper`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ agent_id: agentId, confirm_id: robotId }) });
+      if (res.ok) pushLog('Перевод в PAPER отправлен. Режим сменится через пару секунд.', 'ok');
+      else {
+        // detail сервера — это и есть причина отказа (не в нуле / есть заявка / нет в зеркале)
+        let why = `HTTP ${res.status}`;
+        try { why = (await res.json())?.detail || why; } catch { /* не JSON */ }
+        pushLog(`Отказ: ${why}`, 'err');
+      }
+    } catch (e) { pushLog(`Сбой связи: ${String(e).slice(0, 80)}`, 'err'); }
+    finally { toPaperBusy = false; }
+  }
+
   let cloneBusy = $state(false);
   async function cloneToPaper() {
     const sid = robot?.strategy_id;
@@ -789,6 +823,14 @@
 
   // Display name overlay (agent robots have no name of their own — robot_id is the key).
   const displayName = $derived(robot?.display_name || robotId);
+  // Закладка браузера: имя робота ПЕРВЫМ (в узкой закладке видны только первые
+  // символы), затем режим и пауза — по ним оператор различает свои закладки, не
+  // открывая их. Уточняем титул, который App.svelte поставил по id из URL.
+  $effect(() => {
+    const mode = robot ? (robot.paper ? 'PAPER' : 'РЕАЛ') : 'нет связи';
+    const st = robot && !robot.running ? (robot.paused ? ' · пауза' : ' · стоп') : '';
+    setTitle(`${displayName} · ${mode}${st}`);
+  });
   async function renameRobot() {
     const cur = (robot?.display_name as string) || '';
     const next = window.prompt(`Имя робота (id: ${robotId})\nПусто = вернуть к id:`, cur);
@@ -1219,6 +1261,12 @@
                   ? 'Записать РУЧНУЮ сделку (закрытие руками в терминале): реализует P&L и попадёт в историю, реальный ордер НЕ выставляется'
                   : 'Нужна пауза: ручная сделка записывается только у остановленного робота'}>
           {fillBusy ? '…' : '＋ Сделка'}</button>
+        <button class="rc-btn" disabled={toPaperBusy || robot.paper || !flatForPaper} onclick={toPaper}
+                title={robot.paper ? 'Робот уже в PAPER'
+                  : !flatForPaper
+                    ? 'Нужен нуль: закрой позицию и сними заявки, иначе РЕАЛЬНАЯ позиция останется на счёте, а робот будет считать её бумажной'
+                    : 'Снять ЭТОГО робота с реальных денег: продолжит торговать в бумаге, статистика реала сохраняется. Обратно в реал — только с консоли VDS'}>
+          {toPaperBusy ? '…' : '⇄ Перевести в PAPER'}</button>
         <button class="rc-btn go" disabled={cloneBusy} onclick={cloneToPaper}
                 title="Скопировать параметры этого робота и запустить НОВЫЙ робот в PAPER. Этот робот не меняется.">
           {cloneBusy ? '…' : '⧉ Клон в PAPER (новый робот)'}</button>
@@ -1231,9 +1279,9 @@
              в обычном атрибуте Svelte читает {id} как выражение и падает с
              ReferenceError, унося рендер всего фрейма (поймано в браузере). -->
         <div class="acts-hint"
-             title={`Арминг real↔paper живёт только на агенте (/api/robot/{id}/mode) и требует флэта: из STL его нет по проекту, чтобы реальные деньги нельзя было включить удалённо.`}>
-          Клон = <b>новый</b> бумажный робот, этот остаётся {robot.paper ? 'в PAPER' : 'РЕАЛЬНЫМ'}.
-          Перевод real ↔ paper — только с консоли VDS.
+             title={`Арминг (paper -> РЕАЛ) живёт только на агенте (/api/robot/{id}/mode) и требует флэта: из STL его нет по проекту, чтобы реальные деньги нельзя было включить удалённо. Разоружение (РЕАЛ -> paper) безопасно и потому доступно отсюда.`}>
+          <b>Перевести в PAPER</b> снимает ЭТОГО робота с реала (статистика реала сохраняется),
+          <b>Клон</b> создаёт отдельного бумажного робота. Обратно в реал — только с консоли VDS.
         </div>
       </div>
       {/if}
@@ -1256,7 +1304,7 @@
             </div>
           {/each}
           <div class="crt-line prompt">
-            <span class="crt-ps">C:\STL\{robotId.toUpperCase()}&gt;</span><span class="crt-cur">█</span>
+            <span class="crt-ps">OUTPUT:&gt;</span><span class="crt-cur">█</span>
           </div>
         </div>
       </div>

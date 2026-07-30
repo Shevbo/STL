@@ -252,6 +252,75 @@ async def relay_robot_params(robot_id: str, body: ParamsRelayBody, request: Requ
     return {"ok": True, "agent_id": agent, "robot_id": robot_id, "redeployed": False}
 
 
+class ToPaperBody(BaseModel):
+    agent_id: str | None = None
+    confirm_id: str = ""
+
+
+@router.post("/robots/{robot_id}/to-paper")
+async def robot_to_paper(robot_id: str, body: ToPaperBody, request: Request):
+    """Перевести робота РЕАЛ -> PAPER (разоружение), сохранив статистику реала.
+
+    ОДНОСТОРОННЯЯ операция. Обратно (paper -> РЕАЛ) из STL нельзя и не будет:
+    арминг реальных денег живёт только на консоли VDS (агент, ModeSet). Здесь
+    только безопасное направление — снять робота с реальных денег удалённо.
+
+    Статистика реала НЕ теряется: раннер обнуляет realized/филлы ТОЛЬКО на живом
+    переходе paper->РЕАЛ (`arming` в robot_runner/host.py), обратный переход идёт
+    штатной ветвью re-deploy и сохраняет realized P&L, историю филлов, позицию и
+    бары. Журнал algo_trades тем более не трогается: его строки навсегда
+    остаются mode='real'.
+
+    Механика: полный DeployRobot из ЗЕРКАЛЬНОГО эха спеки с paper=true. Отдельные
+    ворота протокола для этого не нужны — агент persist'ит спеку через Put и
+    релеит Deploy раннеру.
+
+    Ворота повторяют агентский ModeSet для направления «разоружить»:
+    робот есть в зеркале, confirm_id совпадает с id, позиция НУЛЕВАЯ и нет
+    активных заявок робота. Без нулевой позиции перевод оставил бы РЕАЛЬНУЮ
+    позицию на счёте, про которую робот думает, что она бумажная.
+    """
+    _auth(request)
+    srv = _server(request)
+    store = _store(request)
+    agent = _resolve_agent(request, body.agent_id)
+
+    report = store.robot_report(body.agent_id) or {}
+    cur = next((r for r in report.get("robots", []) if r.get("robot_id") == robot_id), None)
+    if cur is None:
+        raise HTTPException(status_code=409, detail=(
+            "Робот не найден в зеркале агента — режим не меняю вслепую. "
+            "Обнови страницу / проверь линк."))
+    if bool(cur.get("paper", False)):
+        raise HTTPException(status_code=409, detail="Робот уже в PAPER.")
+    if body.confirm_id != robot_id:
+        raise HTTPException(status_code=400, detail=(
+            "Подтверждение не совпадает: впиши точный ID робота."))
+    pos = int(cur.get("position", 0) or 0)
+    if pos != 0:
+        raise HTTPException(status_code=409, detail=(
+            f"Робот не в нуле (позиция {pos:+d}): закрой позицию перед переводом в бумагу, "
+            f"иначе РЕАЛЬНАЯ позиция останется на счёте, а робот будет считать её бумажной."))
+    working = cur.get("working_orders") or []
+    if working:
+        ref = (working[0].get("order_num") or "(в полёте)")
+        raise HTTPException(status_code=409, detail=(
+            f"У робота есть активная заявка {ref}: сними её перед переводом в бумагу."))
+
+    spec = pb.RobotSpec(
+        robot_id=robot_id,
+        strategy_id=cur.get("strategy_id") or "",
+        params_json=cur.get("params_json") or "{}",
+        symbol=cur.get("symbol") or "",
+        schedule=cur.get("schedule") or "",
+        max_position_contracts=max(1, int(cur.get("max_position", 1) or 1)),
+        paper=True,                       # единственное, что меняем
+    )
+    srv.enqueue_order(agent, pb.OrchestratorMessage(deploy_robot=pb.DeployRobot(spec=spec)))
+    log.info("quik.robot_to_paper", robot_id=robot_id, agent_id=agent)
+    return {"ok": True, "agent_id": agent, "robot_id": robot_id, "paper": True}
+
+
 class ExitOnlyBody(BaseModel):
     agent_id: str | None = None
     on: bool = True

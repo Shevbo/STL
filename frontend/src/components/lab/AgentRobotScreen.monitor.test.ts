@@ -15,18 +15,24 @@ describe('монитор: лента из localStorage', () => {
   });
 
   it('хвост обрезается по лимиту, порядок сохраняется', () => {
-    const many = Array.from({ length: 250 }, (_, i) => L(i));
-    const got = parseLog(JSON.stringify(many), 200);
-    expect(got).toHaveLength(200);
-    expect(got[0].t).toBe(50);
-    expect(got[199].t).toBe(249);
+    const many = Array.from({ length: 1200 }, (_, i) => L(i));
+    const got = parseLog(JSON.stringify(many), 1000);
+    expect(got).toHaveLength(1000);
+    expect(got[0].t).toBe(200);
+    expect(got[999].t).toBe(1199);
+  });
+
+  it('лимит по умолчанию — 1000 строк (заказ оператора)', () => {
+    const many = Array.from({ length: 1500 }, (_, i) => L(i));
+    expect(parseLog(JSON.stringify(many))).toHaveLength(1000);
+    expect(appendLog(Array.from({ length: 1000 }, (_, i) => L(i)), L(9999))).toHaveLength(1000);
   });
 
   it('appendLog не даёт ленте расти бесконечно', () => {
-    let lines: LogLine[] = Array.from({ length: 200 }, (_, i) => L(i));
-    lines = appendLog(lines, L(999, 'новая'), 200);
-    expect(lines).toHaveLength(200);
-    expect(lines[199].text).toBe('новая');
+    let lines: LogLine[] = Array.from({ length: 1000 }, (_, i) => L(i));
+    lines = appendLog(lines, L(9999, 'новая'), 1000);
+    expect(lines).toHaveLength(1000);
+    expect(lines[999].text).toBe('новая');
     expect(lines[0].t).toBe(1);                        // самая старая ушла
   });
 });

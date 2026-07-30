@@ -28,6 +28,7 @@
   import { instrumentStore } from '$lib/stores/instrument.svelte';
   import { placeOrder, loadFeeConfig } from '$lib/api';
   import { fetchWithAuth } from '$lib/fetch-auth';
+  import { setTitle, titleFromQuery } from '$lib/page-title';
   import type { OrderRequest } from '$lib/types';
 
   let authed = $state(false);
@@ -244,6 +245,21 @@
   });
   onDestroy(() => {
     ws?.disconnect();
+  });
+
+  // Заголовок закладки: с десятком открытых закладок один «Shectory Trader» на
+  // все экраны не читается. Считаем из того, что открыто; фреймы-оверлеи
+  // (заявки/таблицы/доходность/лаборатория) переключаются кнопками, а не URL,
+  // поэтому берём их из состояния, а не из query. Стенд робота уточняет титул
+  // своим именем сам, когда приедет зеркало.
+  $effect(() => {
+    if (strategyId) { setTitle(`Стратегия ${strategyId}`); return; }
+    if (agentRobotId) { setTitle(`Робот ${agentRobotId}`); return; }
+    if (showLab) { setTitle(titleFromQuery(new URLSearchParams(window.location.search))); return; }
+    if (showQuikOrders) { setTitle('Заявки'); return; }
+    if (showQuikTables) { setTitle('Таблицы QUIK'); return; }
+    if (showEquity) { setTitle('Доходность роботов'); return; }
+    setTitle('Терминал');
   });
 
   async function handleConfirmOrder(order: OrderRequest): Promise<void> {

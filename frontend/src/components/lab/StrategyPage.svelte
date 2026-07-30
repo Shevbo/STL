@@ -7,6 +7,7 @@
   import { onMount } from 'svelte';
   import { fetchWithAuth } from '$lib/fetch-auth';
   import { helpFor, overviewFor, behaviorFor, nameFor } from '$lib/strategy-help';
+  import { setTitle } from '$lib/page-title';
   import ParamHelp from './ParamHelp.svelte';
 
   let { strategyId }: { strategyId: string } = $props();
@@ -17,6 +18,9 @@
 
   const ov = $derived(overviewFor(strategyId));
   const name = $derived(nameFor(strategyId));
+  // Закладка: человеческое имя стратегии вместо id — по нему оператор находит
+  // нужную закладку среди десятка открытых.
+  $effect(() => setTitle(`Стратегия ${name || strategyId}`));
   // Representative behavior from the schema defaults (no live params on the doc page).
   const defaults = $derived.by(() => {
     const o: Record<string, any> = {};
