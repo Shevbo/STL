@@ -38,6 +38,10 @@ LEDGER_TAIL = 40
 # хранит, поэтому длину ограничиваем здесь.
 HISTORY_MAX = 12
 MSG_MAX = 2000
+# Lineman отбивает тело больше ~32 000 символов ответом {"error": "bad JSON"} —
+# это ЛИМИТ РАЗМЕРА, а не разбор (замерено 30.07.2026: 24k проходит, 32k нет).
+# Держим запас под JSON-обёртку и режем сами, в понятном порядке приоритетов.
+PROMPT_BUDGET = 26_000
 
 
 class ChatBody(BaseModel):
@@ -88,14 +92,8 @@ def _num(v, default=0.0) -> float:
         return default
 
 
-def build_prompt(ctx: dict, history: list[dict] | None, question: str) -> str:
-    """Собирает единый текст запроса: личность + факты о роботе + диалог + вопрос.
-
-    Чистая функция (никаких сетевых вызовов) — на неё и написаны тесты.
-    Lineman принимает ОДНУ строку prompt, отдельного system-канала в контракте нет,
-    поэтому границы роли задаются первым блоком и повторяются в конце: так они не
-    теряются под длинным контекстом.
-    """
+def _assemble(ctx: dict, history: list[dict] | None, question: str) -> str:
+    """Сборка запроса без оглядки на бюджет: личность + факты + диалог + вопрос."""
     rid = str(ctx.get("robot_id") or "")
     parts = [persona(rid, str(ctx.get("name") or rid)), "=== ДАННЫЕ О РОБОТЕ ==="]
 
@@ -122,6 +120,39 @@ def build_prompt(ctx: dict, history: list[dict] | None, question: str) -> str:
         "только по приведённым данным, доступ к изменениям у тебя отсутствует."
     )
     return "\n".join(parts)
+
+
+def build_prompt(ctx: dict, history: list[dict] | None, question: str) -> str:
+    """Запрос, гарантированно влезающий в лимит Lineman.
+
+    Чистая функция (никаких сетевых вызовов) — на неё и написаны тесты.
+    Lineman принимает ОДНУ строку prompt, отдельного system-канала в контракте нет,
+    поэтому границы роли задаются первым блоком и повторяются в конце: так они не
+    теряются под длинным контекстом.
+
+    Прокси отбивает тело больше ~32 000 символов ответом {"error": "bad JSON"} —
+    это лимит РАЗМЕРА, а не разбора, и чат от него падал на ровном месте
+    (30.07.2026). Поэтому если не влезли, режем САМИ и по приоритету: правила роли
+    (начало) и вопрос (конец) не трогаем никогда, иначе напарник теряет либо
+    границы, либо сам вопрос. Первой уходит история диалога, затем описания
+    стратегии и параметров, затем хвост сделок.
+    """
+    out = _assemble(ctx, history, question)
+    if len(out) <= PROMPT_BUDGET:
+        return out
+    rows = [r for r in str(ctx.get("trades") or "").split("\n") if r]
+    plan = ((len(rows), True), (20, True), (10, False), (3, False))
+    for keep, docs in plan:
+        trimmed = dict(ctx)
+        if not docs:
+            trimmed["strategy_doc"] = ""
+            trimmed["params_doc"] = ""
+        if rows:
+            trimmed["trades"] = "\n".join(rows[-max(1, keep):])
+        out = _assemble(trimmed, None, question)      # история уходит первой
+        if len(out) <= PROMPT_BUDGET:
+            return out
+    return out[:PROMPT_BUDGET]
 
 
 def _facts(rob: dict, extra: dict) -> list[str]:

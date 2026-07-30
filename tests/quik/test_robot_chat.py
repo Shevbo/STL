@@ -305,3 +305,40 @@ def test_persona_demands_a_short_answer():
     assert "1-2 предложения" in p
     assert "не пересказывай данные" in p
     assert "никаких вступлений" in p
+
+
+# ── лимит размера у Lineman ─────────────────────────────────────────────────
+# Замер 30.07.2026: тело 24k символов проходит, 32k возвращает {"error": "bad JSON"}.
+# Это лимит РАЗМЕРА, а не разбора, и чат от него падал на ровном месте.
+
+def test_prompt_never_exceeds_the_lineman_body_limit():
+    from trader.api.quik_robot_chat import PROMPT_BUDGET
+    ctx = {"robot_id": "r", "name": "r",
+           "facts": [f"факт {i}: " + "ф" * 200 for i in range(40)],
+           "strategy_doc": "с" * 4000, "params_doc": "п" * 4000,
+           "trades": "\n".join(f"сделка {i} " + "т" * 120 for i in range(400))}
+    hist = [{"role": "user", "text": "и" * 1500} for _ in range(12)]
+    out = build_prompt(ctx, hist, "вопрос")
+    assert len(out) <= PROMPT_BUDGET
+
+
+def test_trimming_keeps_the_rules_and_the_question():
+    """Режем контекст, но НЕ границы роли и НЕ сам вопрос: без них напарник
+    либо забывает, что он read-only, либо отвечает не на то."""
+    ctx = {"robot_id": "r", "name": "r", "facts": ["позиция: +2"],
+           "strategy_doc": "с" * 9000, "params_doc": "п" * 9000,
+           "trades": "\n".join(f"сделка {i} " + "т" * 200 for i in range(300))}
+    out = build_prompt(ctx, [{"role": "user", "text": "и" * 2000}], "что с позицией?")
+    assert "только на чтение" in out
+    assert "что с позицией?" in out
+    assert "доступ к изменениям у тебя отсутствует" in out
+    assert "позиция: +2" in out                  # факты состояния остаются
+    assert "и" * 2000 not in out                 # история ушла первой
+
+
+def test_short_context_is_not_trimmed():
+    ctx = {"robot_id": "r", "name": "r", "facts": ["позиция: +2"], "trades": "сделка 1"}
+    hist = [{"role": "user", "text": "прошлый вопрос"}]
+    out = build_prompt(ctx, hist, "новый вопрос")
+    assert "прошлый вопрос" in out               # влезло — ничего не режем
+    assert "сделка 1" in out
