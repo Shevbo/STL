@@ -342,3 +342,39 @@ def test_short_context_is_not_trimmed():
     out = build_prompt(ctx, hist, "новый вопрос")
     assert "прошлый вопрос" in out               # влезло — ничего не режем
     assert "сделка 1" in out
+
+
+def test_money_on_the_open_position_is_precomputed(monkeypatch):
+    """Модель не должна перемножать пункты на контракты: 30.07.2026 она выдала
+    «минус 262 тысячи» там, где было минус 8,9 тысячи. Даём готовое число."""
+    seen: dict = {}
+
+    class _Resp:
+        status_code = 200
+        @staticmethod
+        def json():
+            return {"text": "ок", "model_used": "m", "provider": "p", "elapsed_ms": 1}
+
+    class _Client:
+        def __init__(self, *a, **kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, url, json=None):        # noqa: A002 — имя из httpx
+            seen["prompt"] = json["prompt"]
+            return _Resp()
+
+    monkeypatch.setattr(httpx, "AsyncClient", _Client)
+    robot = dict(ROBOT, position="34", avg_price=88675.0,
+                 signal_json=json.dumps({"waiting_for": "ждём", "last_close": 88510.0}))
+    app = _app(monkeypatch, robot=robot)
+    # ₽/пункт кладём в параметры агента, как в проде.
+    app.state.quik_store.set_params("A1", {"rows": [{"code": "RIU6", "coef": 1.58714}]})
+    r = TestClient(app).post("/api/v1/quik/robots/lxk22/chat",
+                             json={"agent_id": "A1", "message": "какой риск?"}, headers=_hdr())
+    assert r.status_code == 200
+    prompt = seen["prompt"]
+    # 34 x (88510 - 88675) x 1.58714 = -8 904 руб (а не «минус 262 тысячи»)
+    assert "-8 904 руб" in prompt
+    assert "перемножать ничего не нужно" in prompt
+    assert "один пункт хода по всей позиции стоит 54 руб" in prompt
+    assert "деньги в уме не считаешь" in persona("x", "y").lower()
