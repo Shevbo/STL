@@ -1835,7 +1835,7 @@
   /* Потолок полосы держит монитор: он самый высокий (ровно 8 строк вывода +
      шапка фрейма). Фреймы не растягиваются (align-items: start), поэтому статусу
      и действиям больший потолок ничего не портит — они по-прежнему по содержимому. */
-  .ars-strip > :global(.frame) { max-height: 168px; }
+  .ars-strip > :global(.frame) { max-height: 192px; }
   .ars-strip > :global(.frame.max) { max-height: none; }
   /* Развёрнутый на весь экран монитор обязан занять экран, а не остаться в 8 строк.
      :global() у Svelte разрешён только в начале или конце цепочки, поэтому вся
@@ -1853,14 +1853,14 @@
      Фосфорный люминофор, скан-линии и мигающий блочный курсор. Шрифты берём
      системные консольные (Consolas/Lucida Console есть в Windows) — внешние
      файлы на витрине не грузим. */
-  /* Ровно 8 строк вывода (заказ оператора): 8 × межстрочный (11px × 1.5 = 16.5px)
+  /* Ровно 8 строк вывода (заказ оператора): 8 × межстрочный (13px × 1.5 = 19.5px)
      + вертикальные паддинги тела. Всё, что не влезло, живёт в скролле. Высоту
      задаём телу, а не фрейму: шапка фрейма меняется независимо от нас. */
   .crt { position: relative; background: #030803; overflow: hidden; }
   .crt-scan { position: absolute; inset: 0; pointer-events: none; z-index: 2;
     background: repeating-linear-gradient(to bottom, rgba(0,0,0,.28) 0 1px, transparent 1px 3px); }
-  .crt-body { position: relative; z-index: 1; height: calc(8 * 16.5px + 8px); overflow-y: auto; padding: 5px 9px 3px;
-    font: 11px/1.5 Consolas, "Lucida Console", "Courier New", monospace;
+  .crt-body { position: relative; z-index: 1; height: calc(8 * 19.5px + 8px); overflow-y: auto; padding: 5px 9px 3px;
+    font: 13px/1.5 Consolas, "Lucida Console", "Courier New", monospace;
     color: #33ff66; text-shadow: 0 0 4px rgba(51,255,102,.45); letter-spacing: .02em; }
   .crt-body::-webkit-scrollbar { width: 9px; }
   .crt-body::-webkit-scrollbar-thumb { background: #1c4a2a; border-radius: 0; }
