@@ -46,7 +46,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { fetchWithAuth } from '../../lib/fetch-auth';
-  import { toFills, commissionFor, tradeEvents } from '../../lib/lab-analytics';
+  import { toFills, commissionFor, tradeEvents, fromLastFlat } from '../../lib/lab-analytics';
   import BacktestChart from './BacktestChart.svelte';
   import ScreenTag from './ScreenTag.svelte';
   import LatencyPane from './LatencyPane.svelte';
@@ -203,18 +203,20 @@
     } catch { /* журнал недоступен -> строки останутся без ₽, но не с ВРАНЬЁМ */ }
   }
   let ledgerRows = $state<any[]>([]);
-  // Журнал годится как источник для ГРАФИКА только если его цепочка начинается С НУЛЯ:
-  // тогда replay-с-нуля в графике совпадает с реальной историей позиции. Проверяем по
-  // первой строке: pos_after должен равняться её же дельте.
-  const ledgerFromFlat = $derived.by(() => {
-    const f = ledgerRows[0];
-    if (!f) return false;
-    return Number(f.pos_after) === (f.side === 'buy' ? Number(f.qty) : -Number(f.qty));
-  });
+  // Журнал годится как источник для ГРАФИКА с ближайшего ДОКАЗУЕМОГО нуля позиции:
+  // только оттуда replay-с-нуля совпадает с реальной историей. Раньше требовали
+  // нуля от ПЕРВОЙ строки, но выборка обрезана лимитом (1000): как только история
+  // робота переросла лимит, признак навсегда стал false и график молча уходил на
+  // пересчёт хвоста зеркала, тоже с середины позиции (см. fromLastFlat).
+  const ledgerTail = $derived(fromLastFlat(ledgerRows as any[]));
+  const ledgerFromFlat = $derived(ledgerTail.length > 0);
 
-  // ЖИВОЙ робот платит МЕЙКЕРСКИЙ тариф (брокер), а не тейкерский (биржа +
-  // брокер): в график уходит taker={false}. Тейкерская модель приписывала роботу
-  // биржевой сбор, которого он не платил. См. «Commission model» в CLAUDE.md.
+  // Агентский робот выставляет МАРКЕТАБЕЛЬНЫЕ заявки (переходит спред), то есть
+  // платит ТЕЙКЕРСКИЙ тариф. По нему же считают журнал algo_trades
+  // (commission_for(..., taker=True)) и сам раннер (taker_points) — поэтому в
+  // график уходит taker={true}, как и в таблицу сделок. Мейкерская модель здесь
+  // была наследством от maker-движка человеческих заявок: она занижала комиссию,
+  // и одни и те же сделки получали в графике и таблице РАЗНЫЕ ярлыки TP/SL.
   //
   // Кривая доходности берётся ИЗ ЖУРНАЛА: у него настоящая комиссия по каждому
   // филлу и непрерывная позиция. Пересчёт филлов по средней цене годится для
@@ -222,7 +224,7 @@
   // комиссии, а на частичных выходах ещё и переплачивал комиссию входа.
   const closeSeries = $derived.by(() => {
     if (!ledgerFromFlat) return null;
-    return ledgerRows
+    return ledgerTail
       .filter((r: any) => Number(r.pnl_net_rub) !== 0)
       .map((r: any) => ({ time: Math.floor(Number(r.ts_ms) / 1000) + MSK_OFFSET,
                           pnl: Number(r.pnl_net_rub) }));
@@ -252,7 +254,7 @@
   // было. Журнал ведёт позицию/среднюю непрерывно и хранит ₽/пункт в строке.
   const chartFills = $derived.by(() => {
     if (ledgerFromFlat) {
-      return ledgerRows.map((r: any) => ({
+      return ledgerTail.map((r: any) => ({
         time: Math.floor(Number(r.ts_ms) / 1000) + MSK_OFFSET,
         side: r.side, qty: Number(r.qty), price: Number(r.price),
         order_id: String(r.order_num ?? ''),
@@ -1350,7 +1352,7 @@
       liveTick={liveTick}
       pointValue={pointCoef ?? 1}
       pointValueKnown={pointCoef != null}
-      taker={false}
+      taker={true}
       openOrders={openOrders}
       plannedOrders={plannedOrders}
       closeSeries={closeSeries}

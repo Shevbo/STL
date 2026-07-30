@@ -513,3 +513,30 @@ export function equityPaths(a: EqPt[], b: EqPt[], w: number, h: number, maxPts =
     .join(' ');
   return { pa: path(A), pb: path(B), lo, hi, t0, t1 };
 }
+
+/** Строка журнала algo_trades, из которой видно позицию ПОСЛЕ сделки. */
+export type LedgerRow = { side: string; qty: number | string; pos_after: number | string };
+
+/**
+ * Обрезает журнал до куска, который ГАРАНТИРОВАННО начинается с нулевой позиции:
+ * только по такому куску replay-с-нуля (tradeEvents) даёт настоящую среднюю цену,
+ * а значит и настоящие ярлыки TP/SL.
+ *
+ * Зачем не «первая строка обязана быть с нуля»: выборка журнала ограничена лимитом
+ * (limit=1000), и как только история робота переросла лимит, первая строка стала
+ * серединой позиции — признак «журнал годится» навсегда стал ложным, график молча
+ * переключался на пересчёт 200-филлового хвоста зеркала, тоже начинающийся с
+ * середины, и красил ПРИБЫЛЬНЫЕ закрытия в «SL» (живой MACD·RIU6, 30.07.2026,
+ * закрытие 16:11 выше средней показывалось как SL). Ищем ближайший доказуемый
+ * ноль и берём всё после него — окно короче, зато правда.
+ *
+ * Пустой результат = доказуемого нуля в окне нет, источнику доверять нельзя.
+ */
+export function fromLastFlat<T extends LedgerRow>(rows: T[]): T[] {
+  if (!rows.length) return [];
+  const f = rows[0];
+  const delta = f.side === 'buy' ? Number(f.qty) : -Number(f.qty);
+  if (Number(f.pos_after) === delta) return rows;      // окно и так начинается с нуля
+  const i = rows.findIndex((r) => Number(r.pos_after) === 0);
+  return i >= 0 ? rows.slice(i + 1) : [];
+}
