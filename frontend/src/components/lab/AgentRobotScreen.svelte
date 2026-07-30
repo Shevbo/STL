@@ -454,8 +454,12 @@
   }
   $effect(() => { void robotId; void loadLedgerStat(); });
   // ГО/контракт по ФАКТУ счёта = биржевое из фида × множитель брокера.
+  // ВНИМАНИЕ: тут стояло `status?.health?.params`, а переменной `status` в
+  // компоненте нет — выражение молча читало ГЛОБАЛЬНЫЙ window.status (строка),
+  // давало 0, и «доходность в год» на карточке всегда была «—». Ошибка не
+  // падала именно потому, что window.status существует. Источник — localStatus.
   const marginPer = $derived(
-    ((status?.health?.params ?? []).find((p: any) => p.code === symbol)?.margin ?? 0) * marginMult);
+    ((health?.params ?? []).find((p: any) => p.code === symbol)?.margin ?? 0) * marginMult);
   const maxGo = $derived(marginPer * (ledgerStat?.peak ?? 0));
   const annPct = $derived(
     pnlMargin == null ? null : annualizedPct(pnlMargin, maxGo, ledgerStat?.first_ts ?? 0));
