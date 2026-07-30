@@ -407,6 +407,7 @@
   // (BRU6) = -5 585 ₽ — a 500x understatement of a real loss. Symbol-bound state
   // makes that structurally impossible: unknown coef renders as nothing, never as ₽.
   let coefFor = $state<{ sym: string; coef: number } | null>(null);
+  let marginMult = $state(1);          // множитель ГО брокера (из /quik/params)
   const pointCoef = $derived(coefFor && coefFor.sym === symbol ? coefFor.coef : null);
   async function loadCoef(sym: string = symbol) {
     if (!sym) return;
@@ -418,6 +419,11 @@
       const d = await res.json();
       const row = (d.rows ?? []).find((r: any) => r.code === sym);
       if (row?.coef > 0) coefFor = { sym, coef: Number(row.coef) };
+      // Множитель ГО брокера: фид агента отдаёт БИРЖЕВОЕ ГО (BUYDEPO), а со счёта
+      // списывается кратно больше. Без него «пик ГО» и годовая завышены во столько
+      // же раз (RIU6 30.07.2026: биржа 22 375 ₽, счёт 53 672 ₽ = 2.4x).
+      const mm = Number(d.margin_multiplier ?? 1);
+      if (mm > 0) marginMult = mm;
     } catch { /* optional; ₽ figures stay hidden until the coef is known */ }
   }
   // Re-resolve whenever the robot's symbol becomes known/changes, and keep retrying
@@ -447,8 +453,9 @@
     } catch { /* без журнала просто не покажем годовую */ }
   }
   $effect(() => { void robotId; void loadLedgerStat(); });
+  // ГО/контракт по ФАКТУ счёта = биржевое из фида × множитель брокера.
   const marginPer = $derived(
-    (status?.health?.params ?? []).find((p: any) => p.code === symbol)?.margin ?? 0);
+    ((status?.health?.params ?? []).find((p: any) => p.code === symbol)?.margin ?? 0) * marginMult);
   const maxGo = $derived(marginPer * (ledgerStat?.peak ?? 0));
   const annPct = $derived(
     pnlMargin == null ? null : annualizedPct(pnlMargin, maxGo, ledgerStat?.first_ts ?? 0));
@@ -1216,7 +1223,10 @@
           <div class="dg" class:ok={(annPct ?? 0) > 0} class:bad={(annPct ?? 0) < 0}
                title={annPct == null
                  ? 'Доходность в год: нужно ≥3 дней торговли и известное ГО'
-                 : `Доходность в год: (фикс+ВМ) к максимальному задействованному ГО ${Math.round(maxGo).toLocaleString('ru-RU')} ₽, линейно экстраполировано с ${annDays} дн торговли.`}>
+                 : `Доходность в год: (фикс+ВМ) к максимальному задействованному ГО ${Math.round(maxGo).toLocaleString('ru-RU')} ₽, линейно экстраполировано с ${annDays} дн торговли.`
+                   + (marginMult !== 1
+                       ? ` ГО считается по факту счёта: биржевое × ${marginMult} (множитель брокера), то есть ${Math.round(marginPer).toLocaleString('ru-RU')} ₽ за контракт.`
+                       : '')}>
             <span class="dgk">Доходность в год</span>
             <span class="dgv">{annPct == null ? '—' : (annPct > 0 ? '+' : '') + annPct.toFixed(1) + '%'}{annDays && annPct != null ? ` / ${annDays} дн` : ''}</span>
           </div>

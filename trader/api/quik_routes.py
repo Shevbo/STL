@@ -94,10 +94,18 @@ async def quik_order_book(code: str, request: Request, agent_id: str | None = No
 
 @router.get("/params")
 async def quik_params(request: Request, agent_id: str | None = None):
-    """Price step / step cost params (commission coef) reported by the agent."""
+    """Price step / step cost params (commission coef) reported by the agent.
+
+    Плюс `margin_multiplier` — множитель ГО брокера к БИРЖЕВОМУ (фид отдаёт
+    BUYDEPO, а списывается кратно больше). Отдаём скаляром рядом с рядами, чтобы
+    UI считал «пик ГО» и годовую по реальным деньгам, а не по биржевым.
+    """
     _auth(request)
     store = _store(request)
-    return store.params(agent_id) if store else None
+    out = (store.params(agent_id) if store else None) or {}
+    out["margin_multiplier"] = float(
+        getattr(request.app.state.settings, "quik_margin_multiplier", 1.0) or 1.0)
+    return out
 
 
 # ---- generic QUIK tables (any DDE sheet exported by the agent, read-only) ----

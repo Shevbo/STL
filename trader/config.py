@@ -70,3 +70,9 @@ class Settings(BaseSettings):
     # silently froze every robot order INCLUDING exits (2026-07-21). Runaway backstop,
     # not a budget; the agent enforces min(agent backstop, this push).
     quik_daily_order_cap: int = 500
+    # Множитель ГО брокера. Фид QUIK (BUYDEPO) и MOEX ISS дают БИРЖЕВОЕ ГО, а
+    # брокер списывает со счёта своё, кратно большее: 30.07.2026 на RIU6 биржа
+    # 22 375 ₽, счёт 53 672 ₽ = 2.4x. Отчёты («пик ГО», «доходность в год»)
+    # считались по биржевому и завышали доходность ровно в это число раз.
+    # 1.0 = брокер берёт биржевое (прежнее поведение).
+    quik_margin_multiplier: float = 1.0

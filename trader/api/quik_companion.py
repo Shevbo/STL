@@ -476,7 +476,11 @@ async def snapshot(request: Request, agent_id: str | None = None):
     _coef_by = {r.get("code"): r.get("coef") for r in (_params.get("rows") or []) if r.get("code")}
     _last_by = {f.get("code"): f.get("last") for f in (health.get("feed") or []) if f.get("code")}
     # ГО/контракт — из QLua-параметров (агент), иначе из справочника инструментов.
-    _margin_by = {r.get("code"): r.get("margin")
+    # Фид отдаёт БИРЖЕВОЕ ГО (BUYDEPO), а брокер списывает своё, кратно большее
+    # (RIU6 30.07.2026: биржа 22 375 ₽, счёт 53 672 ₽). Без множителя «пик ГО» и
+    # годовая завышены ровно в это число раз.
+    _mult = float(getattr(request.app.state.settings, "quik_margin_multiplier", 1.0) or 1.0)
+    _margin_by = {r.get("code"): float(r.get("margin") or 0) * _mult
                   for r in ((health.get("params") or []) if isinstance(health.get("params"), list) else [])
                   if r.get("code")}
     def _robot_vm(sym, pos, avg):

@@ -324,3 +324,79 @@ def test_mode_and_pause_are_separate_fields(monkeypatch):
     # Чисто бумажный робот без реальной истории в панель не попадает вовсе (панель
     # только про реальные деньги) — режим показываем тем, кто в списке есть.
     assert "r-paper" not in by_id
+
+
+class _LedgerPool(FakePool):
+    """FakePool + одна строка пожизненной статистики робота из algo_trades,
+    чтобы «пик ГО» и «доходность в год» реально считались."""
+
+    def __init__(self, *, peak: int, net: float, first_ts: int):
+        super().__init__()
+        self.row = {"robot_id": "r1", "net": net, "trades": 10, "last_ts": first_ts,
+                    "first_ts": first_ts, "qty": 10, "peak": peak}
+
+    async def fetch(self, sql: str, *args):
+        if "FROM algo_trades" in sql and "min(ts_ms)" in sql:
+            return [self.row]
+        return await super().fetch(sql, *args)
+
+
+def test_margin_multiplier_lifts_peak_go_and_lowers_annual_return(monkeypatch):
+    """Фид агента отдаёт БИРЖЕВОЕ ГО (BUYDEPO), а брокер списывает своё, кратно
+    большее (RIU6 30.07.2026: биржа 22 375 ₽, счёт 53 672 ₽ = 2.4x). Без
+    множителя «пик ГО» занижен, а доходность в год завышена ровно во столько же
+    раз — деньги считаются по бирже, а рискует счёт."""
+    monkeypatch.delenv("SHECTORY_AUTH_DEV_BYPASS", raising=False)
+    day = 86_400_000
+    first_ts = int(time.time() * 1000) - 30 * day        # 30 дней торговли
+
+    def snap(mult: float) -> dict:
+        app = FastAPI()
+        app.include_router(companion_router)
+        settings = _Settings()
+        settings.quik_margin_multiplier = mult
+        app.state.settings = settings
+        app.state.db_pool = _LedgerPool(peak=10, net=100_000.0, first_ts=first_ts)
+        store = QuikAgentStore()
+        store.set_agent_status("A1", json.dumps({
+            "agent": {"version": "x", "link_up": True},
+            "health": {"runner_healthy": True,
+                       "params": [{"code": "RIU6", "margin": 22_375.0}]},
+            "robots": [{"id": "r1", "symbol": "RIU6", "mode": "real", "paused": False,
+                        "position": 0}],
+        }), 0)
+        app.state.quik_store = store
+        body = TestClient(app).get("/api/v1/quik/companion/snapshot",
+                                   headers=_operator_headers()).json()
+        return {r["id"]: r for r in body["robots"]}["r1"]
+
+    plain, lifted = snap(1.0), snap(2.4)
+
+    # Пик ГО = биржевое × множитель × пик контрактов.
+    assert plain["max_go"] == pytest.approx(22_375.0 * 10)
+    assert lifted["max_go"] == pytest.approx(22_375.0 * 2.4 * 10)
+
+    # Годовая падает ровно во столько же раз: тот же фикс к втрое большему ГО.
+    assert plain["ann_pct"] is not None and lifted["ann_pct"] is not None
+    assert lifted["ann_pct"] == pytest.approx(plain["ann_pct"] / 2.4)
+
+
+def test_margin_multiplier_defaults_to_exchange_margin(monkeypatch):
+    """Без настройки поведение прежнее: ГО = биржевое (множитель 1)."""
+    monkeypatch.delenv("SHECTORY_AUTH_DEV_BYPASS", raising=False)
+    app = FastAPI()
+    app.include_router(companion_router)
+    app.state.settings = _Settings()          # атрибута quik_margin_multiplier нет вовсе
+    app.state.db_pool = _LedgerPool(peak=4, net=1_000.0,
+                                    first_ts=int(time.time() * 1000) - 10 * 86_400_000)
+    store = QuikAgentStore()
+    store.set_agent_status("A1", json.dumps({
+        "agent": {"version": "x", "link_up": True},
+        "health": {"runner_healthy": True, "params": [{"code": "RIU6", "margin": 22_375.0}]},
+        "robots": [{"id": "r1", "symbol": "RIU6", "mode": "real", "paused": False}],
+    }), 0)
+    app.state.quik_store = store
+
+    body = TestClient(app).get("/api/v1/quik/companion/snapshot",
+                               headers=_operator_headers()).json()
+    assert {r["id"]: r for r in body["robots"]}["r1"]["max_go"] == pytest.approx(22_375.0 * 4)
