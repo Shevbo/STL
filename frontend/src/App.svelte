@@ -253,6 +253,13 @@
   // поэтому берём их из состояния, а не из query. Стенд робота уточняет титул
   // своим именем сам, когда приедет зеркало.
   $effect(() => {
+    // Полноэкранные экраны (стратегия, стенд робота) ставят титул сами и точнее:
+    // человеческое имя стратегии, имя+режим+пауза робота. Родительский эффект их
+    // не трогает — иначе он перетирает уточнение ребёнка (поймано в браузере:
+    // закладка осталась «Стратегия order_block» вместо «Order Block (ICT)»).
+    // Пока идёт проверка сессии, ребёнок ещё не смонтирован, и титул по URL —
+    // единственный, поэтому ставим его.
+    if ((strategyId || agentRobotId) && authed && !checking) return;
     if (strategyId) { setTitle(`Стратегия ${strategyId}`); return; }
     if (agentRobotId) { setTitle(`Робот ${agentRobotId}`); return; }
     if (showLab) { setTitle(titleFromQuery(new URLSearchParams(window.location.search))); return; }
