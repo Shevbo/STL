@@ -30,6 +30,7 @@ class _Settings:
     lineman_url = "http://lineman.test"
     lineman_agent_id = "klod-stl"
     lineman_model_hint = "normal"
+    lineman_model_fallbacks = "fast"
     lineman_max_tokens = 900
 
 
@@ -214,3 +215,58 @@ def test_broken_json_from_the_mirror_does_not_break_the_chat(monkeypatch, field)
     r = client.post("/api/v1/quik/robots/lxk22/chat",
                     json={"agent_id": "A1", "message": "привет"}, headers=_hdr())
     assert r.status_code == 200
+
+
+def test_busy_provider_falls_back_to_the_next_hint(monkeypatch):
+    """Квоты в федерации общие: «normal» регулярно отдаёт 502 поверх upstream 429.
+    Чат обязан ответить — спускаемся по цепочке хинтов, а не падаем."""
+    tried: list[str] = []
+
+    class _Resp:
+        def __init__(self, code, payload=None, text=""):
+            self.status_code = code
+            self._p = payload or {}
+            self.text = text
+        def json(self):
+            return self._p
+
+    class _Client:
+        def __init__(self, *a, **kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, url, json=None):        # noqa: A002 — имя из httpx
+            hint = json["model_hint"]
+            tried.append(hint)
+            if hint == "normal":
+                return _Resp(502, text='{"error": "upstream HTTP 429"}')
+            return _Resp(200, {"text": "ответ", "model_used": "claude-haiku",
+                               "provider": "anthropic", "elapsed_ms": 900})
+
+    monkeypatch.setattr(httpx, "AsyncClient", _Client)
+    client = TestClient(_app(monkeypatch))
+    r = client.post("/api/v1/quik/robots/lxk22/chat",
+                    json={"agent_id": "A1", "message": "как дела?"}, headers=_hdr())
+    assert r.status_code == 200
+    assert r.json()["model_used"] == "claude-haiku"
+    assert tried == ["normal", "fast"]
+
+
+def test_all_hints_busy_reports_honestly(monkeypatch):
+    class _Resp:
+        status_code = 502
+        text = '{"error": "upstream HTTP 429"}'
+        @staticmethod
+        def json(): return {}
+
+    class _Client:
+        def __init__(self, *a, **kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, *a, **kw): return _Resp()
+
+    monkeypatch.setattr(httpx, "AsyncClient", _Client)
+    client = TestClient(_app(monkeypatch))
+    r = client.post("/api/v1/quik/robots/lxk22/chat",
+                    json={"agent_id": "A1", "message": "как дела?"}, headers=_hdr())
+    assert r.status_code == 503
+    assert "лимит" in r.json()["detail"]

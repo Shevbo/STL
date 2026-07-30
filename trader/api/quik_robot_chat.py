@@ -280,27 +280,41 @@ async def robot_chat(robot_id: str, body: ChatBody, request: Request):
     url = str(getattr(settings, "lineman_url", "") or "").rstrip("/")
     if not url:
         raise HTTPException(status_code=503, detail="Lineman не настроен (LINEMAN_URL)")
-    payload = {
+    base = {
         "agent": getattr(settings, "lineman_agent_id", "klod-stl"),
         "prompt": prompt,
-        "model_hint": getattr(settings, "lineman_model_hint", "normal"),
         "max_tokens": int(getattr(settings, "lineman_max_tokens", 900) or 900),
     }
-    t0 = time.time()
-    try:
-        async with httpx.AsyncClient(timeout=60) as client:
-            res = await client.post(f"{url}/api/klod/ask", json=payload)
-    except Exception as exc:  # noqa: BLE001 — канал в федерацию может лежать
-        log.warning("robot_chat.lineman_unreachable", robot_id=robot_id, error=str(exc))
-        raise HTTPException(status_code=503, detail=(
-            "Lineman не отвечает — напарник сейчас офлайн. Данные робота на стенде "
-            "как обычно, они идут не через него.")) from None
-    if res.status_code != 200:
-        log.warning("robot_chat.lineman_error", robot_id=robot_id, status=res.status_code)
-        raise HTTPException(status_code=502, detail=f"Lineman вернул {res.status_code}")
+    # Квоты провайдеров общие на всю федерацию: «normal» регулярно отдаёт 502
+    # поверх upstream 429. Спускаемся по цепочке до первого живого хинта, а не
+    # роняем чат в лицо оператору.
+    hints = [str(getattr(settings, "lineman_model_hint", "normal") or "normal")]
+    hints += [h.strip() for h in
+              str(getattr(settings, "lineman_model_fallbacks", "") or "").split(",") if h.strip()]
 
-    data = res.json()
-    log.info("robot_chat.answered", robot_id=robot_id, model=data.get("model_used"),
-             prompt_chars=len(prompt), elapsed_ms=int((time.time() - t0) * 1000))
-    return {"text": data.get("text") or "", "model_used": data.get("model_used"),
-            "provider": data.get("provider"), "elapsed_ms": data.get("elapsed_ms")}
+    t0 = time.time()
+    last = ""
+    async with httpx.AsyncClient(timeout=60) as client:
+        for hint in hints:
+            try:
+                res = await client.post(f"{url}/api/klod/ask", json={**base, "model_hint": hint})
+            except Exception as exc:  # noqa: BLE001 — канал в федерацию может лежать
+                log.warning("robot_chat.lineman_unreachable", robot_id=robot_id,
+                            hint=hint, error=str(exc))
+                raise HTTPException(status_code=503, detail=(
+                    "Lineman не отвечает — напарник сейчас офлайн. Данные робота на стенде "
+                    "как обычно, они идут не через него.")) from None
+            if res.status_code == 200:
+                data = res.json()
+                log.info("robot_chat.answered", robot_id=robot_id, hint=hint,
+                         model=data.get("model_used"), prompt_chars=len(prompt),
+                         elapsed_ms=int((time.time() - t0) * 1000))
+                return {"text": data.get("text") or "", "model_used": data.get("model_used"),
+                        "provider": data.get("provider"), "elapsed_ms": data.get("elapsed_ms")}
+            last = (res.text or "")[:200]
+            log.warning("robot_chat.lineman_error", robot_id=robot_id, hint=hint,
+                        status=res.status_code)
+
+    raise HTTPException(status_code=503, detail=(
+        "Все модели сейчас заняты (у провайдеров лимит), напарник ответит чуть позже. "
+        f"Последний ответ Lineman: {last}"))

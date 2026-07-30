@@ -83,4 +83,8 @@ class Settings(BaseSettings):
     lineman_url: str = "http://10.66.0.1:9090"
     lineman_agent_id: str = "klod-stl"
     lineman_model_hint: str = "normal"
+    # Квоты провайдеров в федерации общие на всех агентов, и «normal» регулярно
+    # отдаёт 502 поверх upstream 429. Чат обязан ответить, поэтому спускаемся по
+    # цепочке хинтов до первого живого (порядок = убывание «умности»).
+    lineman_model_fallbacks: str = "fast,gemini-flash-lite"
     lineman_max_tokens: int = 900
