@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { fromLastFlat, tradeEvents } from './lab-analytics';
+import { fromLastFlat, tradeEvents, groupByOrder } from './lab-analytics';
 
 const row = (side: string, qty: number, pos_after: number) => ({ side, qty, pos_after });
 
@@ -47,5 +47,61 @@ describe('ярлыки TP/SL', () => {
     const evs = tradeEvents([F('sell', 34, 89590, 2000)], 60, 1.58714, 'RIU6', true);
     expect(evs[0].kind).toBe('open');
     expect(evs[0].close).toBeUndefined();
+  });
+});
+
+describe('частичные исполнения одного ордера', () => {
+  const L = (ts: number, side: string, qty: number, price: number, order: string, pos: number) =>
+    ({ ts_ms: ts * 1000, side, qty, price, order_num: order, pos_after: pos }) as any;
+
+  it('один ордер = одна сделка, цена средневзвешенная', () => {
+    // Живой agent-usopen 30.07.2026 16:57: ордер …612775 исполнился 1+1+1+2.
+    const got = groupByOrder([
+      L(1000, 'sell', 1, 88950, 'A', -1),
+      L(1000, 'sell', 1, 88950, 'A', -2),
+      L(1000, 'sell', 1, 88940, 'A', -3),
+      L(1001, 'sell', 2, 88940, 'A', -5),
+    ]);
+    expect(got).toHaveLength(1);
+    expect(got[0].qty).toBe(5);
+    expect(got[0].price).toBeCloseTo((88950 * 2 + 88940 * 3) / 5, 6);
+    expect(got[0].time).toBe(1001);            // время последнего исполнения
+  });
+
+  it('без схлопывания вход одним ордером читался как усреднение', () => {
+    const parts = [
+      L(1000, 'sell', 1, 88950, 'A', -1),
+      L(1000, 'sell', 1, 88950, 'A', -2),
+      L(1000, 'sell', 1, 88940, 'A', -3),
+      L(1001, 'sell', 2, 88940, 'A', -5),
+    ];
+    const raw = tradeEvents(parts.map((r: any) => ({
+      time: Math.floor(r.ts_ms / 1000), side: r.side, qty: r.qty, price: r.price })) as any,
+      60, 1.58714, 'RIU6', true);
+    // Части одного ордера читались как добор: «усреднение», потом дважды «усиление»
+    // (цена ушла в сторону позиции) — четыре решения там, где было одно.
+    expect(raw.map((e: any) => e.kind)).toEqual(['open', 'average', 'enforce', 'enforce']);
+
+    const grouped = tradeEvents(groupByOrder(parts) as any, 60, 1.58714, 'RIU6', true);
+    expect(grouped.map((e: any) => e.kind)).toEqual(['open']);
+    expect(grouped[0].qty).toBe(5);
+  });
+
+  it('разные ордера остаются разными сделками и идут по времени', () => {
+    const got = groupByOrder([
+      L(2000, 'buy', 3, 89220, 'B', -2),
+      L(1000, 'sell', 5, 88940, 'A', -5),
+      L(2001, 'buy', 2, 89220, 'B', 0),
+    ]);
+    expect(got.map((g) => g.order_id)).toEqual(['A', 'B']);
+    expect(got[1].qty).toBe(5);
+  });
+
+  it('строка без номера ордера не сливается с чужой', () => {
+    const got = groupByOrder([
+      { ts_ms: 1000, side: 'buy', qty: 1, price: 100, pos_after: 1, seq: 1 } as any,
+      { ts_ms: 1001, side: 'buy', qty: 1, price: 101, pos_after: 2, seq: 2 } as any,
+    ]);
+    expect(got).toHaveLength(2);
   });
 });

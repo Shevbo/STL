@@ -540,3 +540,42 @@ export function fromLastFlat<T extends LedgerRow>(rows: T[]): T[] {
   const i = rows.findIndex((r) => Number(r.pos_after) === 0);
   return i >= 0 ? rows.slice(i + 1) : [];
 }
+
+/** Сделка журнала: номер ордера + время/сторона/объём/цена. */
+export type LedgerFill = LedgerRow & {
+  ts_ms: number | string; price: number | string; order_num?: string | null; seq?: number;
+};
+
+/**
+ * Схлопывает ЧАСТИЧНЫЕ ИСПОЛНЕНИЯ одного ордера в одну сделку.
+ *
+ * Журнал algo_trades хранит строку на КАЖДУЮ сделку QUIK, а робот принимает одно
+ * решение на ОРДЕР. Без схлопывания вход одним ордером на 5 контрактов приезжал в
+ * график как OPEN 1 + три «усреднения», хотя никакого добора не было (живой
+ * agent-usopen-RIU6-v1, 30.07.2026 16:57: ордер …612775 исполнился 1+1+1+2).
+ * Таблица сделок берёт филлы из зеркала, уже сгруппированные по ордеру, — отсюда
+ * и расхождение «в таблице OPEN 5, на графике AVG по одному».
+ *
+ * Цена — средневзвешенная по объёму, время — последнего исполнения (момент, когда
+ * позиция реально набрана). Строки без номера ордера остаются как есть.
+ */
+export function groupByOrder<T extends LedgerFill>(rows: T[]): Array<{
+  time: number; side: string; qty: number; price: number; order_id: string;
+}> {
+  const by = new Map<string, { time: number; side: string; qty: number; notional: number; order_id: string }>();
+  rows.forEach((r, i) => {
+    const key = String(r.order_num ?? '') || `seq:${r.seq ?? i}`;
+    const qty = Number(r.qty) || 0;
+    const price = Number(r.price) || 0;
+    const time = Math.floor(Number(r.ts_ms) / 1000);
+    const cur = by.get(key);
+    // Разворот через одну заявку невозможен (робот шлёт закрытие и вход разными
+    // ордерами), поэтому сторона внутри ключа всегда одна.
+    if (!cur) by.set(key, { time, side: r.side, qty, notional: price * qty, order_id: key });
+    else { cur.qty += qty; cur.notional += price * qty; cur.time = Math.max(cur.time, time); }
+  });
+  return [...by.values()]
+    .map((o) => ({ time: o.time, side: o.side, qty: o.qty,
+                   price: o.qty ? o.notional / o.qty : 0, order_id: o.order_id }))
+    .sort((a, b) => a.time - b.time);
+}

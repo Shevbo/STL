@@ -46,7 +46,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { fetchWithAuth } from '../../lib/fetch-auth';
-  import { toFills, commissionFor, tradeEvents, fromLastFlat } from '../../lib/lab-analytics';
+  import { toFills, commissionFor, tradeEvents, fromLastFlat, groupByOrder } from '../../lib/lab-analytics';
   import BacktestChart from './BacktestChart.svelte';
   import ScreenTag from './ScreenTag.svelte';
   import LatencyPane from './LatencyPane.svelte';
@@ -254,11 +254,13 @@
   // было. Журнал ведёт позицию/среднюю непрерывно и хранит ₽/пункт в строке.
   const chartFills = $derived.by(() => {
     if (ledgerFromFlat) {
-      return ledgerTail.map((r: any) => ({
-        time: Math.floor(Number(r.ts_ms) / 1000) + MSK_OFFSET,
-        side: r.side, qty: Number(r.qty), price: Number(r.price),
-        order_id: String(r.order_num ?? ''),
-      }));
+      // Схлопываем частичные исполнения ОДНОГО ордера: робот принимает решение на
+      // ордер, а журнал хранит строку на каждую сделку QUIK. Без этого вход одним
+      // ордером на 5 контрактов рисовался как OPEN 1 + три «усреднения», которых
+      // не было, и график расходился с таблицей (она берёт филлы из зеркала, уже
+      // сгруппированные по ордеру).
+      return groupByOrder(ledgerTail as any[])
+        .map((f) => ({ ...f, time: f.time + MSK_OFFSET }));
     }
     return toFills(trades.filter((t: any) =>
       robot?.paper ? EXECUTED.has(t.status) : t.status === 'filled'))
