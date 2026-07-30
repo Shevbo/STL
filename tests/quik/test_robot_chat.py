@@ -296,3 +296,12 @@ def test_non_quota_failure_is_not_reported_as_a_quota(monkeypatch):
     assert r.status_code == 503
     assert "лимит" not in detail
     assert "ошибкой" in detail and "bad JSON" in detail
+
+
+def test_persona_demands_a_short_answer():
+    """Оператор просил вывод короче на 70%: правило длины должно быть в личности
+    явным и жёстким, иначе модель скатывается в пересказ стенда."""
+    p = persona("lxk22", "MACD trend A").lower()
+    assert "1-2 предложения" in p
+    assert "не пересказывай данные" in p
+    assert "никаких вступлений" in p

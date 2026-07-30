@@ -1357,7 +1357,7 @@
           {/each}
           {#if asking}<div class="crt-line dim">напарник думает…</div>{/if}
           <div class="crt-line prompt">
-            <span class="crt-ps">OUTPUT:&gt;</span>
+            <span class="crt-ps">STL: {displayName}&gt;</span>
             <!-- Ввод живёт ПРЯМО в ленте, на строке промпта: консоль, а не форма. -->
             <input class="crt-in" bind:value={ask} disabled={asking}
                    placeholder="спросить напарника о торговле этого робота…"
