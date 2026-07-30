@@ -1774,8 +1774,15 @@
     padding: 6px 8px 0; flex: 0 0 auto; align-items: start; }
   /* Свёрнутый фрейм должен отдавать высоту, поэтому ограничиваем не полосу, а сам
      фрейм; развёрнутый на весь экран (position:absolute) лимит обязан снять. */
-  .ars-strip > :global(.frame) { max-height: 148px; }
+  /* Потолок полосы держит монитор: он самый высокий (ровно 8 строк вывода +
+     шапка фрейма). Фреймы не растягиваются (align-items: start), поэтому статусу
+     и действиям больший потолок ничего не портит — они по-прежнему по содержимому. */
+  .ars-strip > :global(.frame) { max-height: 168px; }
   .ars-strip > :global(.frame.max) { max-height: none; }
+  /* Развёрнутый на весь экран монитор обязан занять экран, а не остаться в 8 строк.
+     :global() у Svelte разрешён только в начале или конце цепочки, поэтому вся
+     часть с чужим классом .frame.max завёрнута целиком. */
+  :global(.ars-strip .frame.max) .crt-body { height: 100%; }
   @media (max-width: 1100px) { .ars-strip { grid-template-columns: 1fr; } }
   .st-grid { padding: 5px 8px; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 3px 12px; }
 
@@ -1788,10 +1795,13 @@
      Фосфорный люминофор, скан-линии и мигающий блочный курсор. Шрифты берём
      системные консольные (Consolas/Lucida Console есть в Windows) — внешние
      файлы на витрине не грузим. */
-  .crt { position: relative; height: 100%; background: #030803; overflow: hidden; }
+  /* Ровно 8 строк вывода (заказ оператора): 8 × межстрочный (11px × 1.5 = 16.5px)
+     + вертикальные паддинги тела. Всё, что не влезло, живёт в скролле. Высоту
+     задаём телу, а не фрейму: шапка фрейма меняется независимо от нас. */
+  .crt { position: relative; background: #030803; overflow: hidden; }
   .crt-scan { position: absolute; inset: 0; pointer-events: none; z-index: 2;
     background: repeating-linear-gradient(to bottom, rgba(0,0,0,.28) 0 1px, transparent 1px 3px); }
-  .crt-body { position: relative; z-index: 1; height: 100%; overflow-y: auto; padding: 5px 9px 3px;
+  .crt-body { position: relative; z-index: 1; height: calc(8 * 16.5px + 8px); overflow-y: auto; padding: 5px 9px 3px;
     font: 11px/1.5 Consolas, "Lucida Console", "Courier New", monospace;
     color: #33ff66; text-shadow: 0 0 4px rgba(51,255,102,.45); letter-spacing: .02em; }
   .crt-body::-webkit-scrollbar { width: 9px; }
