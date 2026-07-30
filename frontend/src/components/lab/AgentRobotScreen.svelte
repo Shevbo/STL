@@ -1227,10 +1227,10 @@
              target="_blank" rel="noopener" title="открыть стенд нового бумажного робота">
             ↗ {newPaperId}</a>
         {/if}
-        <div class="acts-hint">
-          Перевод <b>этого</b> робота real ↔ paper из STL невозможен по проекту: арминг живёт
-          только на консоли VDS (агент, <code>/api/robot/{'{'}id{'}'}/mode</code>, требует флэт).
-          Кнопка клона создаёт <b>новый</b> бумажный робот, а этот остаётся {robot.paper ? 'в PAPER' : 'РЕАЛЬНЫМ'}.
+        <div class="acts-hint"
+             title="Арминг real↔paper живёт только на агенте (/api/robot/{id}/mode) и требует флэта: из STL его нет по проекту, чтобы реальные деньги нельзя было включить удалённо.">
+          Клон = <b>новый</b> бумажный робот, этот остаётся {robot.paper ? 'в PAPER' : 'РЕАЛЬНЫМ'}.
+          Перевод real ↔ paper — только с консоли VDS.
         </div>
       </div>
       {/if}
@@ -1731,7 +1731,6 @@
   .acts { display: flex; flex-wrap: wrap; gap: 5px; padding: 6px 8px; align-content: flex-start; }
   .acts-hint { flex: 1 0 100%; font-size: 10px; line-height: 1.45; color: #778; margin-top: 2px; }
   .acts-hint b { color: #adb; }
-  .acts-hint code { font-family: monospace; color: #8ab; }
   .rc-btn.link { text-decoration: none; display: inline-flex; align-items: center; color: #7fdba0; border-color: #2b5c3a; }
 
   /* ── «Системный монитор»: зелёный монохром IBM ──────────────────────────────
