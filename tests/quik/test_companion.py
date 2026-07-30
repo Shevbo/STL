@@ -291,3 +291,36 @@ def test_exit_only_is_a_flag_next_to_state_not_a_new_state(monkeypatch):
     assert by_id["r-exit"]["state"] == "реал", "состояние остаётся реалом"
     assert by_id["r-plain"]["exit_only"] is False
     assert by_id["r-broken"]["exit_only"] is False, "битый params_json не должен ронять панель"
+
+
+def test_mode_and_pause_are_separate_fields(monkeypatch):
+    """«пауза» сама по себе не говорит, реал это или бумага: оператор не мог понять
+    по панели, чем робот рискует. Режим и пауза — ОТДЕЛЬНЫЕ поля рядом со state
+    (строки state трогать нельзя, по ним панель делит активных и выведенных)."""
+    monkeypatch.delenv("SHECTORY_AUTH_DEV_BYPASS", raising=False)
+    app = FastAPI()
+    app.include_router(companion_router)
+    app.state.settings = _Settings()
+    app.state.db_pool = FakePool()
+    store = QuikAgentStore()
+    store.set_agent_status("A1", json.dumps({
+        "agent": {"version": "x", "link_up": True},
+        "health": {"runner_healthy": True},
+        "robots": [
+            {"id": "r-real-paused", "symbol": "BRU6", "mode": "real", "paused": True},
+            {"id": "r-real-live", "symbol": "BRU6", "mode": "real", "paused": False},
+            {"id": "r-paper", "symbol": "BRU6", "mode": "paper", "paused": False},
+        ],
+    }), 0)
+    app.state.quik_store = store
+
+    body = TestClient(app).get("/api/v1/quik/companion/snapshot",
+                               headers=_operator_headers()).json()
+    by_id = {r["id"]: r for r in body["robots"]}
+    assert by_id["r-real-paused"]["mode"] == "real"
+    assert by_id["r-real-paused"]["paused"] is True
+    assert by_id["r-real-paused"]["state"] == "пауза", "деление активных/выведенных не менять"
+    assert by_id["r-real-live"]["paused"] is False
+    # Чисто бумажный робот без реальной истории в панель не попадает вовсе (панель
+    # только про реальные деньги) — режим показываем тем, кто в списке есть.
+    assert "r-paper" not in by_id

@@ -140,6 +140,9 @@
   /* Только на выход — режим поверх реала, риск сворачивается. Ярче приглушённого,
      но не как пауза: робот ещё работает. */
   .tag.exitonly { color: #8a5a12; font-weight: 600; }
+  /* Режим: чем робот рискует прямо сейчас. Реал выделяем, бумагу приглушаем. */
+  .tag.mode.real { color: var(--down); font-weight: 700; }
+  .tag.mode.paper { color: var(--muted); }
   /* gap здесь был общий: при переносе строки row-gap 9px рвал карточку — вторая
      строка цифр отходила дальше, чем первая от имени. Разводим: по горизонтали
      9px, по вертикали 0, ритм держит line-height (он же у имени). */
@@ -348,6 +351,13 @@ function renderActiveRobots(list) {
     const last = lastTradeFmt(r.last_trade_ms);
     const st = r.state;                    // 'реал' | 'пауза' | 'переведён в бумагу' | 'снят'
     const stCls = st === 'пауза' ? 'paused' : (st === 'реал' ? 'real' : 'off');
+    // Режим ОТДЕЛЬНЫМ тегом: «пауза» сама по себе не говорила, реал это или бумага,
+    // и оператор не понимал, чем робот сейчас рискует (30.07.2026).
+    const modeTag = r.mode
+      ? `<span class="tag mode ${r.mode}" title="${r.mode === 'real'
+          ? 'реальные деньги: заявки уходят в QUIK на реальный счёт'
+          : 'бумага: сделки только в памяти раннера'}">${r.mode === 'real' ? 'реал' : 'бумага'}</span>`
+      : '';
     // «Только на выход» — не состояние, а режим поверх реала: робот закрывает свою
     // позицию по своему сигналу и новых не открывает. Отдельным тегом, чтобы
     // деление на активных/выведенных (по state) осталось нетронутым.
@@ -390,6 +400,7 @@ function renderActiveRobots(list) {
     return `<div class="rob ${k}">
       <div class="hd">
         <a href="${STL}/?agent_robot=${encodeURIComponent(r.id)}" data-ext>${esc(r.name)}</a>
+        ${modeTag}
         <span class="tag ${stCls}">${esc(st)}</span>
         ${exitTag}
         <span class="sp" style="flex:1"></span>

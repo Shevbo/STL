@@ -495,6 +495,10 @@ async def snapshot(request: Request, agent_id: str | None = None):
         rob = mirror_by_id.get(rid) or {}
         cur_mode = rob.get("mode")           # 'real' | 'paper' | None(снят)
         # Статус для оператора: торгует ли робот реалом ПРЯМО СЕЙЧАС.
+        # ВАЖНО: «пауза» сама по себе не говорит, реал это или бумага — оператор
+        # 30.07.2026 не мог понять по панели, в каком режиме робот. Режим отдаём
+        # ОТДЕЛЬНЫМ полем (строки state трогать нельзя: по ним панель делит
+        # роботов на активных и выведенных).
         if cur_mode == "real":
             state = "пауза" if rob.get("paused") else "реал"
         elif cur_mode == "paper":
@@ -565,6 +569,8 @@ async def snapshot(request: Request, agent_id: str | None = None):
             "id": rid, "name": names.get(rid) or rid,
             "symbol": rob.get("symbol"),
             "state": state,
+            "mode": cur_mode,                     # real | paper | None(снят с агента)
+            "paused": bool(rob.get("paused")) if cur_mode else None,
             "exit_only": exit_only,               # закрывает свою позицию, новых не берёт
             "real_net": fix,                      # ФИКС: весь реальный итог по закрытым
             "real_total": total,                  # фикс + ВМ открытой позиции

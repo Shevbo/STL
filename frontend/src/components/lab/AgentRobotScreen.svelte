@@ -4,6 +4,45 @@
      signal internals (what the robot waits for, computed FVG features), planned
      orders, order history incl. rejected/skipped, latency pane. Polls the STL
      mirror every 5s; the agent's local state is the source of truth. -->
+<script module lang="ts">
+  // Чистая часть «Системного монитора» — тестируется без DOM (см. AgentRobotScreen.monitor.test.ts).
+  export type LogKind = 'cmd' | 'ok' | 'err' | 'sys';
+  export type LogLine = { t: number; kind: LogKind; text: string };
+  /** Снимок состояния робота для ленты переходов. */
+  export type RobotSnap = { mode: string; run: string; eo: boolean };
+
+  /** Лог из localStorage: мусор и битый JSON дают пустую ленту, хвост обрезаем. */
+  export function parseLog(raw: string | null, max = 200): LogLine[] {
+    try {
+      const v = JSON.parse(raw || '[]');
+      if (!Array.isArray(v)) return [];
+      return v.filter((l) => l && typeof l.text === 'string' && typeof l.t === 'number').slice(-max);
+    } catch { return []; }
+  }
+  /** Добавление строки с ограничением длины (лента живёт в localStorage). */
+  export function appendLog(lines: LogLine[], line: LogLine, max = 200): LogLine[] {
+    return [...lines, line].slice(-max);
+  }
+  /** Прилипание к низу: пока оператор не отскроллил вверх, новая строка видна сама. */
+  export function stickToBottom(scrollHeight: number, scrollTop: number, clientHeight: number): boolean {
+    return scrollHeight - scrollTop - clientHeight < 24;
+  }
+  /**
+   * Строки о СМЕНЕ состояния робота — именно их оператор не мог прочитать по
+   * бейджам (РЕАЛ + ПАУЗА + «Развёрнут в PAPER» одновременно, 30.07.2026).
+   * Первый снимок молчит: это не переход.
+   */
+  export function stateTransitions(prev: RobotSnap | null, next: RobotSnap): string[] {
+    if (!prev) return [];
+    const out: string[] = [];
+    if (prev.mode !== next.mode) out.push(`Режим робота: ${prev.mode} → ${next.mode}.`);
+    if (prev.run !== next.run) out.push(`Состояние: ${prev.run} → ${next.run}.`);
+    if (prev.eo !== next.eo)
+      out.push(next.eo ? 'Робот перешёл в «только на выход».' : 'Робот вернулся в обычный режим.');
+    return out;
+  }
+</script>
+
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { fetchWithAuth } from '../../lib/fetch-auth';
@@ -507,47 +546,108 @@
     localStatus = await fetchAgentLocalStatus(agentId);
   }
 
+  // ── Системный монитор ───────────────────────────────────────────────────────
+  // Что оператор ОТПРАВИЛ роботу и что у робота МЕНЯЛОСЬ, одной лентой со
+  // скроллом. Раньше ответ команды жил в ОДНОЙ перезаписываемой строке рядом с
+  // бейджами, и «Пауза отправлена» висела одновременно с «Развёрнут в PAPER» у
+  // робота, который остался РЕАЛЬНЫМ: читалось как смена режима ЭТОГО робота
+  // (30.07.2026, живая путаница оператора). Лента с временем такого не допускает.
+  // Ключ считаем функцией, а не константой: robotId — пропс, константа замораживает
+  // его начальное значение (svelte state_referenced_locally).
+  const logKey = () => `ars_mon_${robotId}`;
+  const LOG_MAX = 200;
+  let logLines = $state<LogLine[]>(loadLog());
+  let logBox = $state<HTMLDivElement | null>(null);
+  let logStick = $state(true);       // прилипание к низу, как в терминале
+
+  function loadLog(): LogLine[] {
+    try { return parseLog(localStorage.getItem(logKey()), LOG_MAX); }
+    catch { return []; }             // приватный режим: getItem бросает
+  }
+  function pushLog(text: string, kind: LogKind = 'ok') {
+    logLines = appendLog(logLines, { t: Date.now(), kind, text }, LOG_MAX);
+    try { localStorage.setItem(logKey(), JSON.stringify(logLines)); } catch { /* приватный режим */ }
+  }
+  /** Ответ команды: ok -> текст, иначе HTTP-код. Один вид записи для всех кнопок. */
+  function logRes(ok: boolean, status: number, okText: string) {
+    if (ok) pushLog(okText, 'ok');
+    else pushLog(`Ошибка ${status}: команда не принята.`, 'err');
+  }
+  const logTime = (t: number) => new Date(t).toLocaleTimeString('ru-RU');
+  function clearLog() {
+    logLines = [];
+    try { localStorage.removeItem(logKey()); } catch { /* приватный режим */ }
+  }
+  async function copyLog() {
+    const txt = logLines.map((l) => `${logTime(l.t)}  ${l.text}`).join('\n');
+    try { await navigator.clipboard.writeText(txt); pushLog('Лог скопирован в буфер.', 'sys'); }
+    catch { pushLog('Буфер обмена недоступен (нужен https или разрешение).', 'err'); }
+  }
+  // Прилипание к низу: пока оператор не отскроллил вверх, новая строка видна сама.
+  $effect(() => {
+    logLines.length;                                   // зависимость: новая строка
+    if (logStick && logBox) logBox.scrollTop = logBox.scrollHeight;
+  });
+  function onLogScroll() {
+    if (!logBox) return;
+    logStick = stickToBottom(logBox.scrollHeight, logBox.scrollTop, logBox.clientHeight);
+  }
+  // Смена состояния робота — тоже событие монитора: именно её оператор и не мог
+  // прочитать по бейджам. Первый снимок пишем молча (это не «переход»).
+  let seenSnap: RobotSnap | null = null;
+  $effect(() => {
+    if (!robot) return;
+    const snap: RobotSnap = {
+      mode: robot.paper ? 'PAPER' : 'РЕАЛ',
+      run: robot.running ? 'РАБОТАЕТ' : (robot.paused ? 'ПАУЗА' : 'СТОП'),
+      eo: exitOnly,
+    };
+    for (const line of stateTransitions(seenSnap, snap)) pushLog(line, 'sys');
+    seenSnap = snap;
+  });
+
   // Operator flatten: market-close the whole position + pause. Real money -> confirm.
   let flattening = $state(false);
-  let flattenMsg = $state('');
   async function flattenNow() {
     if (!window.confirm(
       `ЗАКРЫТЬ ВСЮ позицию робота по рынку и ОСТАНОВИТЬ его?\n` +
-      `Позиция: ${position > 0 ? '+' : ''}${position} конт. Это РЕАЛЬНЫЕ деньги.\n` +
+      `Позиция: ${position > 0 ? '+' : ''}${position} конт. ` +
+      `${robot?.paper ? 'Робот в PAPER: реальные деньги не задействуются.' : 'Это РЕАЛЬНЫЕ деньги.'}\n` +
       `Робот встанет на паузу до нажатия «Пуск».`)) return;
-    flattening = true; flattenMsg = '';
+    flattening = true;
+    pushLog(`→ закрыть всю позицию по рынку и остановить (позиция ${position}).`, 'cmd');
     try {
       const res = await fetchWithAuth(
         `/api/v1/quik/robots/${encodeURIComponent(robotId)}/flatten-agent`,
         { method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ agent_id: agentId }) });
-      flattenMsg = res.ok ? 'Закрытие по рынку отправлено. Робот на паузе.'
-                          : `Ошибка: ${res.status}`;
-    } catch (e) { flattenMsg = `Ошибка: ${String(e).slice(0, 80)}`; }
+      logRes(res.ok, res.status, 'Закрытие по рынку отправлено. Робот на паузе.');
+    } catch (e) { pushLog(`Сбой связи: ${String(e).slice(0, 80)}`, 'err'); }
     finally { flattening = false; }
   }
   async function startRobot() {
-    flattenMsg = '';
+    pushLog('→ пуск робота.', 'cmd');
     try {
       const res = await fetchWithAuth(
         `/api/v1/quik/robots/${encodeURIComponent(robotId)}/start-agent`,
         { method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ agent_id: agentId }) });
-      flattenMsg = res.ok ? 'Пуск отправлен.' : `Ошибка: ${res.status}`;
-    } catch (e) { flattenMsg = `Ошибка: ${String(e).slice(0, 80)}`; }
+      logRes(res.ok, res.status, 'Пуск отправлен.');
+    } catch (e) { pushLog(`Сбой связи: ${String(e).slice(0, 80)}`, 'err'); }
   }
   // Пауза БЕЗ закрытия: блокирует новые входы, открытая позиция остаётся как есть
   // (в отличие от «Закрыть всё + стоп»). Тот же pause-agent, что и operator-pause.
   let pausing = $state(false);
   async function pauseRobot() {
-    flattenMsg = ''; pausing = true;
+    pausing = true;
+    pushLog('→ пауза (новые входы стоп, позиция остаётся).', 'cmd');
     try {
       const res = await fetchWithAuth(
         `/api/v1/quik/robots/${encodeURIComponent(robotId)}/pause-agent`,
         { method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ agent_id: agentId }) });
-      flattenMsg = res.ok ? 'Пауза отправлена. Позиция остаётся открытой.' : `Ошибка: ${res.status}`;
-    } catch (e) { flattenMsg = `Ошибка: ${String(e).slice(0, 80)}`; }
+      logRes(res.ok, res.status, 'Пауза отправлена. Позиция остаётся открытой.');
+    } catch (e) { pushLog(`Сбой связи: ${String(e).slice(0, 80)}`, 'err'); }
     finally { pausing = false; }
   }
   // «ТОЛЬКО НА ВЫХОД»: робот доводит открытую позицию до закрытия по своему же
@@ -559,17 +659,17 @@
     try { return !!JSON.parse(robot?.params_json || '{}').exit_only; } catch { return false; }
   });
   async function setExitOnly(on: boolean) {
-    flattenMsg = ''; exitBusy = true;
+    exitBusy = true;
+    pushLog(on ? '→ включить «только на выход».' : '→ вернуть обычный режим.', 'cmd');
     try {
       const res = await fetchWithAuth(
         `/api/v1/quik/robots/${encodeURIComponent(robotId)}/exit-only`,
         { method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ agent_id: agentId, on }) });
-      flattenMsg = res.ok
-        ? (on ? 'Режим «только на выход». Робот закроет позицию по своему сигналу и новых открывать не будет.'
-              : 'Обычный режим восстановлен.')
-        : `Ошибка: ${res.status}`;
-    } catch (e) { flattenMsg = `Ошибка: ${String(e).slice(0, 80)}`; }
+      logRes(res.ok, res.status, on
+        ? 'Режим «только на выход» отправлен: закроет позицию по своему сигналу, новых не откроет.'
+        : 'Обычный режим отправлен.');
+    } catch (e) { pushLog(`Сбой связи: ${String(e).slice(0, 80)}`, 'err'); }
     finally { exitBusy = false; }
   }
   // Operator belief-correction from the STL stand: force the runner's believed position
@@ -583,25 +683,25 @@
       `id: ${robotId}\nТекущая вера: ${position}. Новая позиция (обычно 0):`, '0');
     if (raw === null) return;
     const pos = Number(raw);
-    if (!Number.isInteger(pos)) { flattenMsg = 'Позиция должна быть целым числом.'; return; }
+    if (!Number.isInteger(pos)) { pushLog('Позиция должна быть целым числом — отменено.', 'err'); return; }
     let avg = 0;
     if (pos !== 0) {
       const a = window.prompt(`Средняя цена для позиции ${pos}:`, String(robot?.avg_price ?? 0));
       if (a === null) return;
       avg = Number(a);
-      if (!(avg > 0)) { flattenMsg = 'Для ненулевой позиции нужна средняя цена > 0.'; return; }
+      if (!(avg > 0)) { pushLog('Для ненулевой позиции нужна средняя цена > 0 — отменено.', 'err'); return; }
     }
     const conf = window.prompt(`Подтверди: впиши точный ID робота\n${robotId}`, '');
-    if (conf !== robotId) { flattenMsg = 'ID не совпал — отменено.'; return; }
-    posBusy = true; flattenMsg = '';
+    if (conf !== robotId) { pushLog('ID не совпал — отменено.', 'err'); return; }
+    posBusy = true;
+    pushLog(`→ записать веру о позиции: ${position} → ${pos}${pos ? ` @ ${avg}` : ''}.`, 'cmd');
     try {
       const res = await fetchWithAuth(
         `/api/v1/quik/robots/${encodeURIComponent(robotId)}/set-position-agent`,
         { method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ agent_id: agentId, position: pos, avg_price: avg, confirm_id: robotId }) });
-      flattenMsg = res.ok ? `Вера обновлена: позиция ← ${pos}. Проверь через пару секунд.`
-                          : `Ошибка: ${res.status}`;
-    } catch (e) { flattenMsg = `Ошибка: ${String(e).slice(0, 80)}`; }
+      logRes(res.ok, res.status, `Вера обновлена: позиция ← ${pos}. Проверь через пару секунд.`);
+    } catch (e) { pushLog(`Сбой связи: ${String(e).slice(0, 80)}`, 'err'); }
     finally { posBusy = false; }
   }
   // Record a MANUAL trade the robot never emitted (e.g. a position the operator closed
@@ -616,15 +716,15 @@
       position > 0 ? 'sell' : 'buy');
     if (sideRaw === null) return;
     const side = sideRaw.trim().toLowerCase();
-    if (side !== 'buy' && side !== 'sell') { flattenMsg = 'Сторона — buy или sell.'; return; }
+    if (side !== 'buy' && side !== 'sell') { pushLog('Сторона — buy или sell. Отменено.', 'err'); return; }
     const qRaw = window.prompt('Кол-во контрактов:', String(Math.abs(position) || 1));
     if (qRaw === null) return;
     const qty = Number(qRaw);
-    if (!Number.isInteger(qty) || qty <= 0) { flattenMsg = 'Кол-во — целое > 0.'; return; }
+    if (!Number.isInteger(qty) || qty <= 0) { pushLog('Кол-во — целое > 0. Отменено.', 'err'); return; }
     const pRaw = window.prompt('Цена сделки:', String(robot?.last_close ?? ''));
     if (pRaw === null) return;
     const price = Number(pRaw);
-    if (!(price > 0)) { flattenMsg = 'Цена должна быть > 0.'; return; }
+    if (!(price > 0)) { pushLog('Цена должна быть > 0. Отменено.', 'err'); return; }
     const tRaw = window.prompt('Время сделки ЧЧ:ММ по МСК (сегодня). Пусто = сейчас:', '');
     if (tRaw === null) return;
     let ts_unix_ms = 0;
@@ -635,33 +735,40 @@
                             Number(m[1]) - 3, Number(m[2]), 0);  // MSK = UTC+3
     }
     const conf = window.prompt(`Подтверди: впиши точный ID робота\n${robotId}`, '');
-    if (conf !== robotId) { flattenMsg = 'ID не совпал — отменено.'; return; }
+    if (conf !== robotId) { pushLog('ID не совпал — отменено.', 'err'); return; }
     if (!window.confirm(
       `Записать ${side.toUpperCase()} ${qty} @ ${price}${m ? ' в ' + tRaw.trim() + ' МСК' : ''}?\n` +
       `Реализует P&L робота. Реальный ордер НЕ выставляется.`)) return;
-    fillBusy = true; flattenMsg = '';
+    fillBusy = true;
+    pushLog(`→ записать ручную сделку ${side} ${qty} @ ${price}${m ? ` (${tRaw.trim()} МСК)` : ''}.`, 'cmd');
     try {
       const res = await fetchWithAuth(
         `/api/v1/quik/robots/${encodeURIComponent(robotId)}/record-fill-agent`,
         { method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ agent_id: agentId, side, qty, price,
             ts_unix_ms: ts_unix_ms || undefined, confirm_id: robotId }) });
-      flattenMsg = res.ok ? `Сделка записана: ${side} ${qty} @ ${price}. Статистика обновится через пару секунд.`
-                          : `Ошибка: ${res.status}`;
-    } catch (e) { flattenMsg = `Ошибка: ${String(e).slice(0, 80)}`; }
+      logRes(res.ok, res.status,
+        `Сделка записана: ${side} ${qty} @ ${price}. Статистика обновится через пару секунд.`);
+    } catch (e) { pushLog(`Сбой связи: ${String(e).slice(0, 80)}`, 'err'); }
     finally { fillBusy = false; }
   }
   // Clone this robot's exact strategy+params+symbol into a fresh PAPER robot on the
   // agent. deploy-agent needs no scriptCode/STL record — the runner resolves the
   // strategy by id. New robot_id must be colon-free (attribution parses on ':').
   let cloneBusy = $state(false);
-  let cloneMsg = $state('');
   async function cloneToPaper() {
     const sid = robot?.strategy_id;
-    if (!sid) { cloneMsg = 'Нет strategy_id — робот ещё не отобразился из зеркала.'; return; }
-    if (!window.confirm(`Скопировать параметры робота «${robotId}» и запустить НОВЫЙ робот в PAPER?\nСтратегия: ${sid} · ${symbol}. Реальные деньги не задействуются.`)) return;
+    if (!sid) { pushLog('Нет strategy_id — робот ещё не отобразился из зеркала.', 'err'); return; }
+    // Явно про НОВЫЙ робот: оператор нажал это, думая, что переводит ЭТОГО в бумагу,
+    // и остался с РЕАЛЬНЫМ роботом на паузе плюс отдельным бумажным (30.07.2026).
+    if (!window.confirm(
+      `Создать НОВЫЙ робот в PAPER по параметрам «${robotId}»?\n\n` +
+      `Стратегия: ${sid} · ${symbol}. Реальные деньги не задействуются.\n` +
+      `ЭТОТ робот останется как есть (${robot?.paper ? 'PAPER' : 'РЕАЛ'}), его режим не меняется.\n` +
+      `Перевод самого робота real↔paper делается только с консоли VDS.`)) return;
     const newId = `${sid}-${symbol}-c${Date.now().toString(36)}`.replace(/[^A-Za-z0-9_-]/g, '');
-    cloneBusy = true; cloneMsg = '';
+    cloneBusy = true;
+    pushLog(`→ развернуть НОВЫЙ робот в PAPER: «${newId}».`, 'cmd');
     try {
       const res = await fetchWithAuth(`/api/v1/quik/robots/${encodeURIComponent(newId)}/deploy-agent`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -670,10 +777,15 @@
           max_position: Math.max(1, Number(robot?.max_position ?? 1) || 1), paper: true }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      cloneMsg = `Развёрнут в PAPER: «${newId}».`;
-    } catch (e) { cloneMsg = `Ошибка клонирования: ${String(e).slice(0, 80)}`; }
+      pushLog(`Развёрнут НОВЫЙ бумажный робот «${newId}». ` +
+              `Этот робот («${robotId}») остался ${robot?.paper ? 'в PAPER' : 'РЕАЛЬНЫМ'}.`, 'ok');
+      newPaperId = newId;
+    } catch (e) { pushLog(`Ошибка клонирования: ${String(e).slice(0, 80)}`, 'err'); }
     finally { cloneBusy = false; }
   }
+  // Ссылка на только что созданный бумажный клон: без неё оператор ищет новый id
+  // руками, а он и есть источник путаницы «так в каком режиме робот?».
+  let newPaperId = $state('');
 
   // Display name overlay (agent robots have no name of their own — robot_id is the key).
   const displayName = $derived(robot?.display_name || robotId);
@@ -978,80 +1090,176 @@
     <RobotIdentity name={displayName} id={robotId} size="title" />
     <button class="ars-rename" title="Переименовать" onclick={renameRobot}>✏</button>
     {#if robot}
-      <span class="badge" class:real={!robot.paper}>{robot.paper ? 'PAPER' : 'РЕАЛ'}</span>
-      <span class="badge sym">{symbol}</span>
-      <span class="badge" class:ok={robot.running} class:warn={!robot.running}>
-        {robot.running ? 'РАБОТАЕТ' : (robot.paused ? 'ПАУЗА' : 'СТОП')}</span>
-      <span class="badge dim">окно {robot.schedule}</span>
-      <span class="badge dim">баров: {robot.bars_count ?? 0}</span>
-      <span class="badge" class:ok={heartbeatAge !== null && heartbeatAge < 45} class:warn={heartbeatAge === null || heartbeatAge >= 45}>
-        пульс {heartbeatAge === null ? '—' : heartbeatAge + 'с'}</span>
-      <span class="badge pos" class:long={position > 0} class:short={position < 0}>
-        позиция {position > 0 ? '+' : ''}{position}</span>
-      <!-- Two metrics per operator spec: (1) realized P&L (closed trades − commission,
-           WITHOUT the open position, static); (2) P&L + Маржа = flatten-at-market now
-           value (realized + variation margin − exit commission), moves with price. -->
-      {#if pnlRub !== null}
-        <span class="badge pnl" class:up={pnlRub > 0} class:dn={pnlRub < 0}
-              title="Реализованный P&L робота: закрытые сделки × ₽/пункт — авторитетное число самого агента (совпадает с его страницей 127.0.0.1:8071). Считается по филлам робота, БЕЗ учёта текущей позиции, но УЖЕ ЗА ВЫЧЕТОМ биржевой комиссии (taker, как в бэктесте); включает бумажный период до перевода на реал.">
-
-          P&L {pnlRub > 0 ? '+' : ''}{Math.round(pnlRub).toLocaleString('ru-RU')} ₽</span>
-        <span class="badge pnl" class:up={(pnlMargin ?? 0) > 0} class:dn={(pnlMargin ?? 0) < 0}
-              title={`Если ударить по рынку и закрыть ВСЮ позицию прямо сейчас: реализованный ${Math.round(pnlRub).toLocaleString('ru-RU')} + вариац. маржа ${floatRub !== null ? (floatRub > 0 ? '+' : '') + Math.round(floatRub).toLocaleString('ru-RU') : '0'} − комиссия закрытия ${Math.round(closeComm).toLocaleString('ru-RU')} ₽.`}>
-          P&L+Маржа {(pnlMargin ?? 0) > 0 ? '+' : ''}{Math.round(pnlMargin ?? pnlRub).toLocaleString('ru-RU')} ₽</span>
-        <span class="badge pnl" class:up={(annPct ?? 0) > 0} class:dn={(annPct ?? 0) < 0}
-              title={annPct == null
-                ? 'Доходность в год: нужно ≥3 дней торговли и известное ГО'
-                : `Доходность в год: (фикс+ВМ) к максимальному задействованному ГО ${Math.round(maxGo).toLocaleString('ru-RU')} ₽, линейно экстраполировано с ${annDays} дн торговли.`}>
-          год {annPct == null ? '—' : (annPct > 0 ? '+' : '') + annPct.toFixed(1) + '%'}{annDays && annPct != null ? ` за ${annDays} дн` : ''}</span>
-      {:else}
-        <span class="badge pnl dim">P&L …</span>
-      {/if}
-      <span class="badge" class:ok={tickAge !== null && tickAge <= 10} class:warn={tickAge === null || tickAge > 10}
-            title="возраст последнего тика QUIK (поток данных)">
-        тик {tickAge === null ? '—' : tickAge + 'с'}</span>
-      {#if !robot.paper}
-        {#if robot.paused}
-          <button class="rc-btn go" onclick={startRobot} title="возобновить работу робота">▶ Пуск</button>
-          <button class="rc-btn" disabled={posBusy} onclick={zeroBelief}
-                  title="исправить веру робота о позиции (фантом) — только вера, без реализации P&L и без реального ордера">
-            {posBusy ? '…' : '✎ Позиция'}</button>
-          <button class="rc-btn" disabled={fillBusy} onclick={recordFill}
-                  title="записать РУЧНУЮ сделку (закрытие руками в терминале): реализует P&L и попадёт в историю, реальный ордер НЕ выставляется">
-            {fillBusy ? '…' : '＋ Сделка'}</button>
-        {:else}
-          {#if exitOnly}
-            <button class="rc-btn go" disabled={exitBusy} onclick={() => setExitOnly(false)}
-                    title="вернуть робота в обычную работу: снова открывает позиции">
-              {exitBusy ? '…' : '▶ Пуск'}</button>
-          {:else}
-            <button class="rc-btn" disabled={exitBusy} onclick={() => setExitOnly(true)}
-                    title="дать роботу закрыть позицию по СВОЕМУ сигналу (TP/SL) и больше не открывать новых — экспирация, развод встречных роботов, вывод в бумагу">
-              {exitBusy ? '…' : '⇥ Только на выход'}</button>
-          {/if}
-          <button class="rc-btn" disabled={pausing} onclick={pauseRobot}
-                  title="остановить новые входы; открытая позиция ОСТАЁТСЯ">
-            {pausing ? '…' : '⏸ Пауза'}</button>
-          <button class="rc-btn danger" disabled={flattening} onclick={flattenNow}
-                  title="закрыть всю позицию по рынку и остановить робота">
-            {flattening ? '…' : '⏻ Закрыть всё + стоп'}</button>
-        {/if}
-        {#if flattenMsg}<span class="rc-msg">{flattenMsg}</span>{/if}
-      {/if}
-      <button class="rc-btn go" disabled={cloneBusy} onclick={cloneToPaper}
-              title="скопировать параметры этого робота и запустить НОВЫЙ робот в PAPER на агенте">
-        {cloneBusy ? '…' : '▶ Запустить в торговлю (paper)'}</button>
-      {#if cloneMsg}<span class="rc-msg">{cloneMsg}</span>{/if}
+      <!-- Шапка держит ТОЛЬКО опознание робота: режим, состояние и цифры живут в
+           мини-фрейме «Информация и статус» ниже. Раньше здесь стояли 12 бейджей,
+           4 кнопки и 2 строки ответов подряд, и «РЕАЛ» рядом с «Развёрнут в PAPER»
+           читалось как смена режима этого робота (жалоба оператора 30.07.2026). -->
+      <span class="hd-mode" class:real={!robot.paper}>{robot.paper ? 'PAPER' : 'РЕАЛ'}</span>
+      <span class="hd-sym">{symbol}</span>
     {:else if report}
       <span class="badge warn">робот {robotId} не найден на агенте</span>
     {/if}
     {#if error}<span class="badge warn">{error}</span>{/if}
+    <span class="hd-sp"></span>
     <div class="lay-switch" title="Раскладка экрана (запоминается)">
       <button class:on={profile === 'stack'} onclick={() => setProfile('stack')} title="Стопка: график сверху, панели снизу">▤</button>
       <button class:on={profile === 'chart-left'} onclick={() => setProfile('chart-left')} title="График слева во всю высоту, панели справа">◧</button>
       <button class:on={profile === 'chart-right'} onclick={() => setProfile('chart-right')} title="График справа во всю высоту, панели слева">◨</button>
     </div>
   </div>
+
+  <!-- Полоса рисуется ВСЕГДА: «робот не найден в зеркале» — как раз тот случай,
+       когда консоль и нужна (там видно, что оператор отправлял и что отвечал STL). -->
+  <div class="ars-strip">
+    <Frame fid="state" title="Информация и статус" bind:maxId>
+      {#if !robot}
+        <div class="acts-hint">
+          {report ? `Робот «${robotId}» не найден в зеркале агента. Либо снят с агента, либо агент не на связи.`
+                  : 'Ждём зеркало агента…'}
+        </div>
+      {:else}
+      <div class="diag-grid st-grid">
+        <div class="dg" class:bad={!robot.paper} class:ok={robot.paper}
+             title={robot.paper
+               ? 'PAPER: сделки только в памяти раннера, реальные деньги не задействованы.'
+               : 'РЕАЛ: заявки уходят в QUIK на реальный счёт. Перевод в PAPER возможен только с консоли VDS.'}>
+          <span class="dgk">Режим</span><span class="dgv">{robot.paper ? 'PAPER' : 'РЕАЛ'}</span>
+        </div>
+        <div class="dg" class:ok={robot.running} class:warn={!robot.running}
+             title={robot.running ? 'Робот считает бары и может открывать позиции.'
+               : (robot.paused ? 'ПАУЗА: новые входы заблокированы, открытая позиция остаётся как есть.'
+                               : 'СТОП: робот не выполняется на раннере.')}>
+          <span class="dgk">Состояние</span>
+          <span class="dgv">{robot.running ? 'РАБОТАЕТ' : (robot.paused ? 'ПАУЗА' : 'СТОП')}</span>
+        </div>
+        <div class="dg" class:warn={exitOnly}
+             title={exitOnly ? 'Только на выход: закроет позицию по своему сигналу, новых не откроет.'
+                             : 'Обычный режим: робот открывает новые позиции по сигналу.'}>
+          <span class="dgk">Режим выхода</span>
+          <span class="dgv">{exitOnly ? 'ТОЛЬКО НА ВЫХОД' : 'обычный'}</span>
+        </div>
+        <div class="dg"><span class="dgk">Контракт</span><span class="dgv">{symbol}</span></div>
+        <div class="dg" class:ok={position > 0} class:bad={position < 0}
+             title="Позиция по вере раннера. Средняя — цена входа этой позиции.">
+          <span class="dgk">Позиция</span>
+          <span class="dgv">{position > 0 ? '+' : ''}{position}{robot.max_position ? ` из ${robot.max_position}` : ''}{position && avgPrice ? ` @ ${avgPrice}` : ''}</span>
+        </div>
+        <div class="dg"><span class="dgk">Окно торговли</span><span class="dgv">{robot.schedule}</span></div>
+        <div class="dg"><span class="dgk">Баров</span><span class="dgv">{robot.bars_count ?? 0}</span></div>
+        <div class="dg" class:ok={heartbeatAge !== null && heartbeatAge < 45}
+             class:bad={heartbeatAge === null || heartbeatAge >= 45}
+             title="Возраст последнего отчёта раннера. Больше 45с — робот молчит.">
+          <span class="dgk">Пульс</span>
+          <span class="dgv">{heartbeatAge === null ? '—' : heartbeatAge + 'с'}</span>
+        </div>
+        <div class="dg" class:ok={tickAge !== null && tickAge <= 10}
+             class:bad={tickAge === null || tickAge > 10}
+             title="Возраст последнего тика QUIK (поток данных).">
+          <span class="dgk">Тик</span><span class="dgv">{tickAge === null ? '—' : tickAge + 'с'}</span>
+        </div>
+        <!-- Two metrics per operator spec: (1) realized P&L (closed trades − commission,
+             WITHOUT the open position, static); (2) P&L + Маржа = flatten-at-market now
+             value (realized + variation margin − exit commission), moves with price. -->
+        {#if pnlRub !== null}
+          <div class="dg" class:ok={pnlRub > 0} class:bad={pnlRub < 0}
+               title="Реализованный P&L робота: закрытые сделки × ₽/пункт — авторитетное число самого агента (совпадает с его страницей 127.0.0.1:8071). Считается по филлам робота, БЕЗ учёта текущей позиции, но УЖЕ ЗА ВЫЧЕТОМ биржевой комиссии (taker, как в бэктесте); включает бумажный период до перевода на реал.">
+            <span class="dgk">Фикс (P&L)</span>
+            <span class="dgv">{pnlRub > 0 ? '+' : ''}{Math.round(pnlRub).toLocaleString('ru-RU')} ₽</span>
+          </div>
+          <div class="dg" class:ok={(pnlMargin ?? 0) > 0} class:bad={(pnlMargin ?? 0) < 0}
+               title={`Если ударить по рынку и закрыть ВСЮ позицию прямо сейчас: реализованный ${Math.round(pnlRub).toLocaleString('ru-RU')} + вариац. маржа ${floatRub !== null ? (floatRub > 0 ? '+' : '') + Math.round(floatRub).toLocaleString('ru-RU') : '0'} − комиссия закрытия ${Math.round(closeComm).toLocaleString('ru-RU')} ₽.`}>
+            <span class="dgk">Фикс + маржа</span>
+            <span class="dgv">{(pnlMargin ?? 0) > 0 ? '+' : ''}{Math.round(pnlMargin ?? pnlRub).toLocaleString('ru-RU')} ₽</span>
+          </div>
+          <div class="dg" class:ok={(annPct ?? 0) > 0} class:bad={(annPct ?? 0) < 0}
+               title={annPct == null
+                 ? 'Доходность в год: нужно ≥3 дней торговли и известное ГО'
+                 : `Доходность в год: (фикс+ВМ) к максимальному задействованному ГО ${Math.round(maxGo).toLocaleString('ru-RU')} ₽, линейно экстраполировано с ${annDays} дн торговли.`}>
+            <span class="dgk">Доходность в год</span>
+            <span class="dgv">{annPct == null ? '—' : (annPct > 0 ? '+' : '') + annPct.toFixed(1) + '%'}{annDays && annPct != null ? ` / ${annDays} дн` : ''}</span>
+          </div>
+        {:else}
+          <div class="dg"><span class="dgk">Фикс (P&L)</span><span class="dgv">…</span></div>
+        {/if}
+      </div>
+      {/if}
+    </Frame>
+
+    <Frame fid="acts" title="Доступные действия" bind:maxId>
+      {#if !robot}
+        <div class="acts-hint">Действия доступны, когда робот виден в зеркале агента.</div>
+      {:else}
+      <div class="acts">
+        <!-- ВСЕ действия видны ВСЕГДА, недоступные — выключены с причиной в подсказке.
+             Раньше кнопки появлялись и исчезали по состоянию (а у бумажного робота их
+             не было вовсе), и понять, что вообще можно сделать, было нельзя. -->
+        <button class="rc-btn go" disabled={!robot.paused} onclick={startRobot}
+                title={robot.paused ? 'Возобновить работу робота' : 'Робот уже не на паузе'}>▶ Пуск</button>
+        <button class="rc-btn" disabled={pausing || robot.paused} onclick={pauseRobot}
+                title={robot.paused ? 'Робот уже на паузе' : 'Остановить новые входы; открытая позиция ОСТАЁТСЯ'}>
+          {pausing ? '…' : '⏸ Пауза'}</button>
+        <button class="rc-btn" disabled={exitBusy || exitOnly} onclick={() => setExitOnly(true)}
+                title={exitOnly ? 'Режим уже включён'
+                  : 'Дать роботу закрыть позицию по СВОЕМУ сигналу (TP/SL) и больше не открывать новых — экспирация, развод встречных роботов, вывод в бумагу'}>
+          {exitBusy ? '…' : '⇥ Только на выход'}</button>
+        <button class="rc-btn" disabled={exitBusy || !exitOnly} onclick={() => setExitOnly(false)}
+                title={exitOnly ? 'Вернуть робота в обычную работу: снова открывает позиции'
+                                : 'Робот и так в обычном режиме'}>
+          {exitBusy ? '…' : '↺ Обычный режим'}</button>
+        <button class="rc-btn danger" disabled={flattening} onclick={flattenNow}
+                title="Закрыть всю позицию по рынку и остановить робота">
+          {flattening ? '…' : '⏻ Закрыть всё + стоп'}</button>
+        <button class="rc-btn" disabled={posBusy || !robot.paused} onclick={zeroBelief}
+                title={robot.paused
+                  ? 'Исправить веру робота о позиции (фантом) — только вера, без реализации P&L и без реального ордера'
+                  : 'Нужна пауза: правка веры разрешена только у остановленного робота'}>
+          {posBusy ? '…' : '✎ Позиция'}</button>
+        <button class="rc-btn" disabled={fillBusy || !robot.paused} onclick={recordFill}
+                title={robot.paused
+                  ? 'Записать РУЧНУЮ сделку (закрытие руками в терминале): реализует P&L и попадёт в историю, реальный ордер НЕ выставляется'
+                  : 'Нужна пауза: ручная сделка записывается только у остановленного робота'}>
+          {fillBusy ? '…' : '＋ Сделка'}</button>
+        <button class="rc-btn go" disabled={cloneBusy} onclick={cloneToPaper}
+                title="Скопировать параметры этого робота и запустить НОВЫЙ робот в PAPER. Этот робот не меняется.">
+          {cloneBusy ? '…' : '⧉ Клон в PAPER (новый робот)'}</button>
+        {#if newPaperId}
+          <a class="rc-btn link" href={'/?agent_robot=' + encodeURIComponent(newPaperId)}
+             target="_blank" rel="noopener" title="открыть стенд нового бумажного робота">
+            ↗ {newPaperId}</a>
+        {/if}
+        <div class="acts-hint">
+          Перевод <b>этого</b> робота real ↔ paper из STL невозможен по проекту: арминг живёт
+          только на консоли VDS (агент, <code>/api/robot/{'{'}id{'}'}/mode</code>, требует флэт).
+          Кнопка клона создаёт <b>новый</b> бумажный робот, а этот остаётся {robot.paper ? 'в PAPER' : 'РЕАЛЬНЫМ'}.
+        </div>
+      </div>
+      {/if}
+    </Frame>
+
+    <Frame fid="mon" title="Системный монитор" bind:maxId>
+      {#snippet head()}
+        <button class="mon-hb" onclick={copyLog} title="скопировать лог в буфер">копировать</button>
+        <button class="mon-hb" onclick={clearLog} title="очистить лог этого робота">очистить</button>
+      {/snippet}
+      <div class="crt">
+        <div class="crt-scan"></div>
+        <div class="crt-body" bind:this={logBox} onscroll={onLogScroll}>
+          <div class="crt-line dim">SHECTORY TRADE &amp; LAB · AGENT ROBOT CONSOLE</div>
+          <div class="crt-line dim">ROBOT {robotId.toUpperCase()} · {robot ? (robot.paper ? 'PAPER' : 'REAL') : 'OFFLINE'} · READY</div>
+          {#each logLines as l (l.t + l.text)}
+            <div class="crt-line {l.kind}">
+              <span class="crt-ts">[{new Date(l.t).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' })} {logTime(l.t)}]</span>
+              {l.text}
+            </div>
+          {/each}
+          <div class="crt-line prompt">
+            <span class="crt-ps">C:\STL\{robotId.toUpperCase()}&gt;</span><span class="crt-cur">█</span>
+          </div>
+        </div>
+      </div>
+    </Frame>
+  </div>
+
 
   {#if robot && !robot.bars_count}
     {#if tickAge !== null && tickAge <= 10}
@@ -1502,14 +1710,61 @@
   .ars-name { font-size: 14px; font-weight: 600; color: #eee; font-family: monospace; }
   .ars-rename { background: none; border: none; color: #667; cursor: pointer; font-size: 12px; padding: 0 2px; }
   .ars-rename:hover { color: #6aa8ff; }
+  .hd-sp { flex: 1 1 auto; }
+  /* Режим и контракт остаются в шапке: они опознают робота (и видны, когда фрейм
+     статуса свёрнут). Всё остальное ушло в мини-фрейм. */
+  .hd-mode { font-size: 10px; font-weight: 700; letter-spacing: .06em; padding: 2px 8px; border-radius: 3px;
+    background: #10231a; border: 1px solid #2b5c3a; color: #7fdba0; }
+  .hd-mode.real { background: #2a0a0a; border-color: #f44336; color: #ff6b5e; }
+  .hd-sym { font-size: 11px; font-family: monospace; color: #4caf50; }
+
+  /* ── полоса мини-фреймов: статус / действия / монитор ── */
+  .ars-strip { display: grid; grid-template-columns: 1.55fr 1.15fr 1.3fr; gap: 6px;
+    padding: 6px 8px 0; flex: 0 0 auto; align-items: start; }
+  /* Свёрнутый фрейм должен отдавать высоту, поэтому ограничиваем не полосу, а сам
+     фрейм; развёрнутый на весь экран (position:absolute) лимит обязан снять. */
+  .ars-strip > :global(.frame) { max-height: 148px; }
+  .ars-strip > :global(.frame.max) { max-height: none; }
+  @media (max-width: 1100px) { .ars-strip { grid-template-columns: 1fr; } }
+  .st-grid { padding: 5px 8px; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 3px 12px; }
+
+  .acts { display: flex; flex-wrap: wrap; gap: 5px; padding: 6px 8px; align-content: flex-start; }
+  .acts-hint { flex: 1 0 100%; font-size: 10px; line-height: 1.45; color: #778; margin-top: 2px; }
+  .acts-hint b { color: #adb; }
+  .acts-hint code { font-family: monospace; color: #8ab; }
+  .rc-btn.link { text-decoration: none; display: inline-flex; align-items: center; color: #7fdba0; border-color: #2b5c3a; }
+
+  /* ── «Системный монитор»: зелёный монохром IBM ──────────────────────────────
+     Фосфорный люминофор, скан-линии и мигающий блочный курсор. Шрифты берём
+     системные консольные (Consolas/Lucida Console есть в Windows) — внешние
+     файлы на витрине не грузим. */
+  .crt { position: relative; height: 100%; background: #030803; overflow: hidden; }
+  .crt-scan { position: absolute; inset: 0; pointer-events: none; z-index: 2;
+    background: repeating-linear-gradient(to bottom, rgba(0,0,0,.28) 0 1px, transparent 1px 3px); }
+  .crt-body { position: relative; z-index: 1; height: 100%; overflow-y: auto; padding: 5px 9px 3px;
+    font: 11px/1.5 Consolas, "Lucida Console", "Courier New", monospace;
+    color: #33ff66; text-shadow: 0 0 4px rgba(51,255,102,.45); letter-spacing: .02em; }
+  .crt-body::-webkit-scrollbar { width: 9px; }
+  .crt-body::-webkit-scrollbar-thumb { background: #1c4a2a; border-radius: 0; }
+  .crt-body::-webkit-scrollbar-track { background: #061206; }
+  .crt-line { white-space: pre-wrap; word-break: break-word; }
+  .crt-line.dim { color: #1f8a44; text-shadow: none; }
+  .crt-line.cmd { color: #9dffbe; }
+  .crt-line.err { color: #ff9a3c; text-shadow: 0 0 4px rgba(255,154,60,.45); }
+  .crt-line.sys { color: #66ffa6; }
+  .crt-ts { color: #1f8a44; text-shadow: none; }
+  .crt-ps { color: #33ff66; }
+  .crt-cur { display: inline-block; margin-left: 2px; animation: crtblink 1.05s step-end infinite; }
+  @keyframes crtblink { 50% { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .crt-cur { animation: none; } }
+  .mon-hb { background: none; border: 1px solid #1c4a2a; color: #2f9c50; cursor: pointer;
+    font-size: 9px; text-transform: uppercase; letter-spacing: .06em; padding: 0 5px; border-radius: 2px; }
+  .mon-hb:hover { color: #7fdba0; border-color: #2f9c50; }
+
+  /* Остался ОДИН вид бейджа: «робот не найден» и текст ошибки. Цвета состояния и
+     цифры переехали в мини-фрейм статуса (.dg), поэтому лишние модификаторы убраны. */
   .badge { font-size: 10px; padding: 2px 8px; border-radius: 3px; background: #16162c; border: 1px solid #2d2d4a; color: #99a; }
-  .badge.real { background: #2a0a0a; border-color: #f44336; color: #ff6b5e; font-weight: 700; }
-  .badge.sym { color: #4caf50; font-family: monospace; }
-  .badge.ok { color: #00e676; border-color: #00e67655; }
   .badge.warn { color: #ffb300; border-color: #ffb30055; }
-  .badge.pos.long { color: #00e676; } .badge.pos.short { color: #ff5c8a; }
-  .badge.pnl.up { color: #00e676; } .badge.pnl.dn { color: #f44336; }
-  .badge.dim { color: #667; }
   .feed-warn { background: #1a1000; border-bottom: 1px solid #ff980044; color: #ffb74d; font-size: 11px; padding: 5px 14px; flex-shrink: 0; }
   .feed-warn.calm { background: #0e1a12; border-bottom-color: #4caf5044; color: #81c784; }
   .ars-chart { min-height: 0; min-width: 0; display: flex; width: 100%; height: 100%; }
@@ -1574,7 +1829,6 @@
   .rc-btn.danger:disabled { opacity: .5; cursor: default; }
   .rc-btn.go { background: #0e2a18; border: 1px solid #2e7d32; color: #66bb6a; }
   .rc-btn.go:hover { background: #123520; }
-  .rc-msg { font-size: 10px; color: #8bc34a; margin-left: 6px; }
   .pe-btn { margin-left: 8px; font-size: 10px; padding: 2px 10px; background: #16162c; border: 1px solid #2d2d4a; color: #aab; border-radius: 3px; cursor: pointer; }
   .pe-btn:hover { color: #fff; border-color: #4d4d7a; }
   .pe-btn.save { background: #0e2a18; border-color: #2e7d32; color: #66bb6a; font-weight: 600; }
