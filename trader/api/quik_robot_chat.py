@@ -191,6 +191,12 @@ async def _gather(request: Request, robot_id: str, agent_id: str | None) -> dict
     store = getattr(request.app.state, "quik_store", None)
     if store is None:
         raise HTTPException(status_code=503, detail="Зеркало агента недоступно")
+    # Тем же резолвером, что и остальные robots-ручки: store._pick(None) выбирает
+    # агента только когда он ЕДИНСТВЕННЫЙ живой, а в проде накапливаются старые
+    # записи сессий — стенд без &agent= получал «робот не найден».
+    if not agent_id:
+        from trader.quik.store import resolve_agent
+        agent_id = resolve_agent(store, None)
     report = store.robot_report(agent_id) or {}
     rob = next((r for r in report.get("robots", []) if r.get("robot_id") == robot_id), None)
     if rob is None:
