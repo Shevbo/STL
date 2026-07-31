@@ -572,6 +572,7 @@ async def _run_backtest_task(run_id: str, body: dict, pool, app_state) -> None:
             script_code, bars, symbol, param_sets,
             timeout=max(120, 8 * len(param_sets)),
             point_value=point_value, initial_margin=initial_margin,
+            extra=await _fetch_extra_for_backtest(base_params, body["dateFrom"], body["dateTo"], app_state),
         )
 
         # Batch all combo rows into one executemany instead of one round-trip per
@@ -837,6 +838,8 @@ async def _run_remote_job_on_vds(row, app_state) -> None:
                 script_code, bars, symbol, param_sets,
                 timeout=max(300, 30 * len(param_sets)), point_value=point_value,
                 initial_margin=initial_margin, metrics_only=True,   # sweeps: never hold equity → no OOM
+                extra=await _fetch_extra_for_backtest(base_params, job.get("dateFrom"),
+                                                      job.get("dateTo"), app_state),
             )
 
             strat_id = _strat_id_from_code(script_code or "")
@@ -1323,6 +1326,26 @@ async def _fetch_bars_for_backtest(symbol: str, date_from: str, date_to: str, ap
     return await get_bars(pool, symbol, d_from, d_to)
 
 
+async def _fetch_extra_for_backtest(base_params: dict, date_from: str, date_to: str,
+                                    app_state) -> dict:
+    """Reference series the strategy READS but never trades -> BacktestRuntime.extra.
+
+    Today that is only `basket` (shaving_ri reads RTSI, the MOEX-computed index the
+    RI futures is written on). A strategy without a `basket` param gets nothing, so
+    every existing run is untouched.
+    """
+    ref = str((base_params or {}).get("basket") or "").strip().upper()
+    if not ref:
+        return {}
+    try:
+        bars = await asyncio.wait_for(
+            _fetch_bars_for_backtest(ref, date_from, date_to, app_state), timeout=150)
+    except Exception as exc:
+        log.warning("backtest.basket_failed", basket=ref, error=str(exc))
+        return {}
+    return {ref: bars} if bars else {}
+
+
 async def _market_update_task(symbols: list[str], date_from: str, date_to: str, pool) -> None:
     """Background: download ISS bars for multiple symbols and cache in DB."""
     from datetime import date as _date
@@ -1664,6 +1687,7 @@ def create_app() -> FastAPI:
         """Return available built-in strategy templates with param schemas."""
         _require_any_auth(request)
         from trader.lab.strategies.donchian_breakout import STRATEGY_META as donchian_meta
+        from trader.lab.strategies.shaving_ri import STRATEGY_META as shaving_ri_meta
         from trader.lab.strategies.us_open_fvg import STRATEGY_META as us_open_fvg_meta
         core = [
             {
@@ -1812,6 +1836,33 @@ def create_app() -> FastAPI:
                 "params_schema": us_open_fvg_meta["params_schema"],
                 "script_code": "from trader.lab.strategies.us_open_fvg import on_bar, on_start, on_stop",
                 "default_params": {p["key"]: p["default"] for p in us_open_fvg_meta["params_schema"]},
+            },
+            {
+                "id": "shaving_ri",
+                "name": shaving_ri_meta["name"],
+                "description": (
+                    "Shaving RI 1 — выкуп отклонения фьючерса RI от индексной корзины.\n\n"
+                    "КАК РАБОТАЕТ:\n"
+                    "1. Корзина = индекс RTSI, то есть Σ вес×цена по 40+ бумагам, уже посчитанная МосБиржей\n"
+                    "   (текущие веса, делитель, корпоративные действия, перевод в доллары). Минутки с ISS.\n"
+                    "2. ratio = RI / корзина. Масштаб (RI ≈ RTSI×100) снимается сам.\n"
+                    "3. Ось X = EMA2(ratio, ema_slow) — медленный честный базис. Голая разность не годится:\n"
+                    "   базис фьючерса дрейфует (май–июль 2026 отношение гуляло 96.3…102.0, почти 6%).\n"
+                    "4. Отклонение dev = (ratio − ось) × корзина, В ПУНКТАХ ЦЕНЫ RI. Сигнал = EMA1(dev, ema_fast),\n"
+                    "   нормируем на СКО за z_win баров → z в сигмах.\n"
+                    "5. ВХОД: z ≥ +entry_z → ПРОДАЁМ RI (дорог); z ≤ −entry_z → ПОКУПАЕМ RI (дёшев).\n"
+                    "6. ВЫХОД: z вернулся в полосу ±exit_z («догон до оси»), либо стоп sl_pts,\n"
+                    "   либо max_hold_min, либо корзина перестала считаться.\n\n"
+                    "ЧТО ВАЖНО ПОНИМАТЬ: торгуется ОДНА нога — только RI, корзина не покупается.\n"
+                    "Значит P&L = отклонение + движение самого рынка, и второе — голый направленный риск.\n"
+                    "Это не безрисковый арбитраж, а сигнал тайминга; отсюда короткое удержание и денежный стоп.\n\n"
+                    "ОКНО: индекс РТС считают только в основную сессию акций (~10:00–18:45 МСК), FORTS — до 23:50.\n"
+                    "Вне окна корзины сигнала нет: новых входов не будет, открытая позиция закрывается."
+                ),
+                "source": shaving_ri_meta["source"],
+                "params_schema": shaving_ri_meta["params_schema"],
+                "script_code": "from trader.lab.strategies.shaving_ri import on_bar, on_start, on_stop",
+                "default_params": {p["key"]: p["default"] for p in shaving_ri_meta["params_schema"]},
             },
         ]
         # append the whole strategy LIBRARY (12+ classic robots)

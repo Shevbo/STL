@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shaving RI 1 — стенд стратегии</title>
+<style>
+  :root {
+    --bg:#0f0f1e; --panel:#14142a; --panel2:#1a1a2e; --border:#2d2d4a;
+    --text:#d7dbe8; --muted:#8a90a8; --accent:#4dd0e1; --accent2:#6aa8ff;
+    --ok:#4caf50; --warn:#e0a53c; --bad:#f44336; --code-bg:#10101f;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font:14px/1.6 -apple-system,"Segoe UI",Roboto,sans-serif; }
+  a { color:var(--accent2); text-decoration:none; }
+  a:hover { color:var(--accent); }
+  code { background:var(--code-bg); border:1px solid var(--border); border-radius:3px;
+         padding:1px 5px; color:#b9d8ff; font:12px/1.5 Consolas,monospace; }
+  pre { background:var(--code-bg); border:1px solid var(--border); border-radius:6px;
+        padding:11px 13px; overflow-x:auto; font:12px/1.6 Consolas,monospace; color:#b9d8ff; }
+  h1 { font-size:22px; margin:0; }
+  h2 { font-size:16px; margin:0 0 10px; color:#f0f2f8; }
+  h3 { font-size:13px; margin:16px 0 6px; color:var(--accent); text-transform:uppercase;
+       letter-spacing:.05em; }
+  .wrap { max-width:1180px; margin:0 auto; padding:14px 16px 60px; }
+  .card { background:var(--panel); border:1px solid var(--border); border-radius:8px;
+          padding:14px 16px; margin:12px 0; }
+  .idbar { display:flex; align-items:center; gap:8px; font:11px/1.4 Consolas,monospace;
+           color:var(--muted); margin-bottom:8px; }
+  .idbar button { font:10px/1 Consolas,monospace; background:var(--panel2);
+                  color:var(--muted); border:1px solid var(--border); border-radius:3px;
+                  padding:3px 7px; cursor:pointer; }
+  .idbar button:hover { color:var(--accent); border-color:var(--accent); }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+  .chip { background:var(--panel2); border:1px solid var(--border); border-radius:11px;
+          padding:2px 10px; font-size:11px; color:var(--muted); }
+  .chip b { color:var(--text); font-weight:600; }
+  table { border-collapse:collapse; width:100%; font-size:12px; }
+  th, td { text-align:left; padding:4px 8px; border-bottom:1px solid var(--border); }
+  th { color:var(--muted); font-size:10px; text-transform:uppercase; letter-spacing:.04em;
+       font-weight:600; position:sticky; top:0; background:var(--panel); }
+  th.s { cursor:pointer; user-select:none; }
+  th.s:hover { color:var(--accent); }
+  td.n, th.n { text-align:right; font-family:Consolas,monospace; }
+  tr.row { cursor:pointer; }
+  tr.row:hover td { background:var(--panel2); }
+  tr.det td { background:var(--code-bg); font:11px/1.6 Consolas,monospace; color:var(--muted); }
+  .pos { color:var(--ok); } .neg { color:var(--bad); }
+  .muted { color:var(--muted); }
+  .small { font-size:11px; }
+  .warnbox { border-left:3px solid var(--warn); background:rgba(224,165,60,.07);
+             padding:9px 13px; margin:10px 0; border-radius:0 5px 5px 0; }
+  .okbox { border-left:3px solid var(--accent); background:rgba(77,208,225,.07);
+           padding:9px 13px; margin:10px 0; border-radius:0 5px 5px 0; }
+  canvas { width:100%; display:block; background:var(--code-bg);
+           border:1px solid var(--border); border-radius:5px; }
+  .legend { display:flex; flex-wrap:wrap; gap:14px; font-size:11px; color:var(--muted);
+            margin:7px 0 3px; }
+  .legend i { display:inline-block; width:16px; height:2px; vertical-align:middle;
+              margin-right:5px; }
+  .toolbar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:9px; }
+  .toolbar button, .toolbar select {
+    font-size:11px; background:var(--panel2); color:var(--text);
+    border:1px solid var(--border); border-radius:4px; padding:4px 9px; cursor:pointer; }
+  .toolbar button:hover { border-color:var(--accent); color:var(--accent); }
+  .tblwrap { max-height:520px; overflow:auto; border:1px solid var(--border); border-radius:5px; }
+  ul { margin:6px 0; padding-left:20px; } li { margin:3px 0; }
+  .grid2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:10px; }
+  .kpi { background:var(--panel2); border:1px solid var(--border); border-radius:6px; padding:9px 11px; }
+  .kpi .v { font:17px/1.2 Consolas,monospace; color:#f0f2f8; }
+  .kpi .l { font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="card">
+    <div class="idbar">
+      <span id="pageurl"></span>
+      <button onclick="cp(location.href,this)">копировать ссылку</button>
+      <button onclick="cp('shaving_ri',this)">id: shaving_ri</button>
+    </div>
+    <h1>Shaving RI 1</h1>
+    <div class="muted small">Выкуп отклонения фьючерса RI от индексной корзины RTSI.
+      «Догон до оси X».</div>
+    <div class="chips" id="chips"></div>
+  </div>
+
+  <!-- ─────────────────────────── ДОКУМЕНТАЦИЯ ─────────────────────────── -->
+  <div class="card">
+    <h2>1. Идея и как она превращается в сигнал</h2>
+
+    <h3>Корзина</h3>
+    <p>Фьючерс RI написан на индекс РТС, а индекс РТС это взвешенная корзина акций
+      <code>Σ вес × цена</code>: веса публикует МосБиржа. Строить эту сумму руками по
+      40+ бумагам не нужно: биржа уже считает её и публикует как индекс
+      <code>RTSI</code> с текущими весами, делителем, поправками на корпоративные
+      действия и переводом в доллары. Ручная сумма даёт худшую копию того же числа
+      и добавляет 40 источников сбоя (пропущенные бары, стоп-торги, дивидендные
+      гэпы, ежеквартальный пересмотр весов). Опорная серия здесь минутные свечи
+      RTSI с MOEX ISS. Сверку «ручная корзина против RTSI» делает
+      <code>scripts/shaving_ri_basket_check.py</code>.</p>
+
+    <h3>Почему «RI минус корзина» само по себе не осциллятор</h3>
+    <p>RI котируется примерно как <code>RTSI × 100</code>, но коэффициент не
+      константа. За окно прогона отношение <code>RI/RTSI</code> гуляло на несколько
+      процентов: это фьючерсный <b>базис</b> (контанго и стоимость денег), он
+      дрейфует и стягивается к нулю к экспирации. Правило «график выше нуля значит
+      продавай» на голой разности просто шортило бы контанго весь квартал. Поэтому
+      ось X не ноль, а медленная скользящая самого отношения.</p>
+
+    <h3>Формулы (здесь и живут EMA1 / EMA2)</h3>
+<pre>ratio_t = RI_t / КОРЗИНА_t                  масштаб снимается автоматически
+axis_t  = EMA(ratio, ema_slow)              EMA2 — «ось X», медленный честный базис
+dev_t   = (ratio_t − axis_t) × КОРЗИНА_t    отклонение В ПУНКТАХ ЦЕНЫ RI
+sig_t   = EMA(dev, ema_fast)                EMA1 — снятие минутного шума
+sd_t    = СКО(dev) за z_win баров
+z_t     = sig_t / sd_t                      отклонение в сигмах
+
+ВХОД   z ≥ +entry_z  → ПРОДАЁМ RI (дорог относительно корзины)
+       z ≤ −entry_z  → ПОКУПАЕМ RI (дёшев)
+ВЫХОД  z вернулся в полосу ±exit_z (догон до оси)
+       либо стоп sl_pts, либо max_hold_min, либо корзина перестала считаться</pre>
+
+    <div class="warnbox">
+      <b>Это не безрисковый арбитраж, а сигнал тайминга.</b> Настоящий арбитраж
+      требует обеих ног: продать RI и купить корзину. Здесь торгуется одна нога,
+      только RI. Значит результат = (изменение отклонения) + (изменение самого
+      рынка), и второе слагаемое это голый направленный риск, к идее отношения
+      не имеющий. Отсюда три решения в параметрах: держать коротко
+      (<code>max_hold_min</code>), денежный стоп в пунктах RI
+      (<code>sl_pts</code>), а не «стоп по спреду», и порог окупаемости
+      <code>min_dev_pts</code> (тейкерский круг по RI около 12 пунктов).
+    </div>
+
+    <div class="warnbox">
+      <b>Окно торговли задаёт корзина.</b> Индекс РТС считают только в основную
+      сессию акций, примерно 10:00–18:45 МСК (около 530 минут в день). FORTS
+      торгуется 09:00–23:50. Вне окна корзины сигнала нет: робот не открывает
+      новых позиций, а открытую по умолчанию закрывает
+      (<code>hold_no_basket=0</code>). Держать голый RI ночью против отклонения,
+      которое невозможно измерить, это уже не стратегия.
+    </div>
+
+    <div class="warnbox">
+      <b>Ликвидность дальнего контракта.</b> Пока контракт не стал ближним, его
+      минутки редкие, а цены несвежие. Несвежая цена RI даёт фальшивое отклонение,
+      которое «возвращается», когда RI наконец печатает: на такой бумаге бэктест
+      рисует прибыль, которую нельзя исполнить. Фильтр <code>min_vol</code>
+      отсекает такие минуты, но полностью проблему снимает только окно, где
+      контракт уже ближний.
+    </div>
+
+    <h3>Параметры</h3>
+    <div class="toolbar">
+      <button onclick="csvParams()">выгрузить CSV</button>
+      <span class="muted small">строка кликабельна: разворачивает подсказку</span>
+    </div>
+    <div class="tblwrap"><table id="ptbl"><thead><tr>
+      <th>ключ</th><th>название</th><th class="n">по умолчанию</th><th class="n">мин</th>
+      <th class="n">макс</th></tr></thead><tbody></tbody></table></div>
+    <p class="muted small">Без усреднения намеренно: доливаться в расходящийся спред
+      это стандартный способ разориться на возврате к среднему. Позиция всегда
+      <code>qty</code> контрактов.</p>
+  </div>
+
+  <!-- ─────────────────────────── ГРАФИК ─────────────────────────── -->
+  <div class="card">
+    <div class="idbar"><span>#chart</span>
+      <button onclick="cp(location.origin+location.pathname+'#chart',this)">копировать ссылку на окно</button></div>
+    <h2 id="chart">2. График отклонения</h2>
+    <div class="legend">
+      <span><i style="background:#6aa8ff"></i>RI, цена</span>
+      <span><i style="background:#8a90a8"></i>справедливая цена по корзине (RI − отклонение)</span>
+      <span style="color:var(--ok)">▲ покупка</span>
+      <span style="color:var(--bad)">▼ продажа</span>
+    </div>
+    <canvas id="c1" height="260"></canvas>
+    <div class="legend">
+      <span><i style="background:#4dd0e1"></i>отклонение sig, пунктов RI</span>
+      <span><i style="background:#e0a53c"></i>порог входа ±entry_z × СКО</span>
+      <span><i style="background:#2d2d4a"></i>ось X (ноль)</span>
+    </div>
+    <canvas id="c2" height="180"></canvas>
+    <div class="legend"><span><i style="background:#4caf50"></i>эквити лучшей комбинации, ₽ (нетто комиссии)</span></div>
+    <canvas id="c3" height="150"></canvas>
+    <p class="muted small" id="chartnote"></p>
+  </div>
+
+  <!-- ─────────────────────────── ПРОГОН ─────────────────────────── -->
+  <div class="card">
+    <div class="idbar"><span>#sweep</span>
+      <button onclick="cp(location.origin+location.pathname+'#sweep',this)">копировать ссылку на окно</button></div>
+    <h2 id="sweep">3. Прогон: 100 комбинаций</h2>
+    <div class="grid2" id="kpis"></div>
+    <div class="toolbar" style="margin-top:11px">
+      <button onclick="csvResults()">выгрузить CSV</button>
+      <select id="flt" onchange="draw()">
+        <option value="all">все комбинации</option>
+        <option value="trades">только со сделками</option>
+        <option value="pos">только прибыльные</option>
+      </select>
+      <span class="muted small">клик по строке разворачивает все метрики</span>
+    </div>
+    <div class="tblwrap"><table id="rtbl"><thead><tr>
+      <th class="s" data-k="ema_slow">EMA2 ось</th>
+      <th class="s" data-k="ema_fast">EMA1 сглаж.</th>
+      <th class="s" data-k="entry_z">вход, σ</th>
+      <th class="s" data-k="exit_z">выход, σ</th>
+      <th class="s n" data-k="trades">сделок</th>
+      <th class="s n" data-k="win_rate">винрейт</th>
+      <th class="s n" data-k="net">итог, ₽</th>
+      <th class="s n" data-k="dd_mtm">просадка, ₽</th>
+      <th class="s n" data-k="rf_mtm">RF</th>
+      <th class="s n" data-k="ann_go">% годовых на ГО</th>
+    </tr></thead><tbody></tbody></table></div>
+    <p class="muted small" id="verdict"></p>
+  </div>
+
+  <div class="card small muted">
+    Артефакт стенда: <code id="src">shaving-ri-sweep.json</code>, генерируется
+    <code>scripts/shaving_ri_sweep.py</code> на хостере (MOEX ISS с дев-машины
+    недоступен). Стратегия <code>trader/lab/strategies/shaving_ri.py</code>,
+    тесты <code>tests/lab/test_shaving_ri.py</code>.
+    Комиссия во всех цифрах тейкерская: биржевой сбор по группе «индекс» на
+    номинал плюс брокер 0.45 ₽ за контракт, начисляется на каждый филл.
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+let D = null, sortK = 'net', sortDir = -1;
+
+function cp(t, btn) {
+  navigator.clipboard.writeText(t).then(() => {
+    const o = btn.textContent; btn.textContent = 'скопировано'; setTimeout(() => btn.textContent = o, 1200);
+  });
+}
+const fmt = (v, d = 0) => v === null || v === undefined ? '—'
+  : Number(v).toLocaleString('ru-RU', { minimumFractionDigits: d, maximumFractionDigits: d });
+const pct = v => v === null || v === undefined ? '—' : (v * 100).toFixed(1) + '%';
+const cls = v => v > 0 ? 'pos' : v < 0 ? 'neg' : '';
+
+function dl(name, rows) {
+  const csv = rows.map(r => r.map(c => {
+    const s = c === null || c === undefined ? '' : String(c);
+    return /[";\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }).join(';')).join('\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' }));
+  a.download = name; a.click(); URL.revokeObjectURL(a.href);
+}
+
+// ── таблица параметров ──────────────────────────────────────────────────────
+function drawParams() {
+  const tb = $('#ptbl tbody'); tb.innerHTML = '';
+  (D.params_schema || []).forEach(p => {
+    const tr = document.createElement('tr'); tr.className = 'row';
+    tr.innerHTML = `<td><code>${p.key}</code></td><td>${p.label}</td>
+      <td class="n">${p.default}</td><td class="n">${p.min ?? '—'}</td><td class="n">${p.max ?? '—'}</td>`;
+    const det = document.createElement('tr'); det.className = 'det'; det.style.display = 'none';
+    det.innerHTML = `<td colspan="5">${p.hint || ''}</td>`;
+    tr.onclick = () => det.style.display = det.style.display === 'none' ? '' : 'none';
+    tb.append(tr, det);
+  });
+}
+const csvParams = () => dl('shaving-ri-params.csv',
+  [['ключ', 'название', 'по умолчанию', 'мин', 'макс', 'подсказка']].concat(
+    (D.params_schema || []).map(p => [p.key, p.label, p.default, p.min, p.max, p.hint])));
+
+// ── графики (canvas, без внешних библиотек) ─────────────────────────────────
+function panel(id, series, opts) {
+  const cv = $(id), dpr = devicePixelRatio || 1;
+  const W = cv.clientWidth, H = +cv.getAttribute('height');
+  cv.width = W * dpr; cv.height = H * dpr;
+  const g = cv.getContext('2d'); g.scale(dpr, dpr);
+  g.clearRect(0, 0, W, H);
+  const PL = 58, PR = 8, PT = 8, PB = 18;
+  const xs = series.flatMap(s => s.pts.map(p => p[0]));
+  if (!xs.length) return null;
+  const x0 = Math.min(...xs), x1 = Math.max(...xs);
+  let lo = Infinity, hi = -Infinity;
+  series.forEach(s => s.pts.forEach(p => { if (p[1] < lo) lo = p[1]; if (p[1] > hi) hi = p[1]; }));
+  if (opts && opts.zero) { lo = Math.min(lo, 0); hi = Math.max(hi, 0); }
+  if (hi === lo) { hi += 1; lo -= 1; }
+  const pad = (hi - lo) * 0.06; lo -= pad; hi += pad;
+  const X = t => PL + (t - x0) / (x1 - x0 || 1) * (W - PL - PR);
+  const Y = v => PT + (hi - v) / (hi - lo) * (H - PT - PB);
+  // сетка + подписи
+  g.strokeStyle = '#22223c'; g.fillStyle = '#8a90a8'; g.font = '10px Consolas,monospace';
+  for (let i = 0; i <= 4; i++) {
+    const v = lo + (hi - lo) * i / 4, y = Y(v);
+    g.beginPath(); g.moveTo(PL, y); g.lineTo(W - PR, y); g.stroke();
+    g.fillText(Math.abs(v) >= 1000 ? (v / 1000).toFixed(1) + 'k' : v.toFixed(Math.abs(hi - lo) < 10 ? 1 : 0), 4, y + 3);
+  }
+  for (let i = 0; i <= 5; i++) {
+    const t = x0 + (x1 - x0) * i / 5, x = X(t);
+    g.fillText(new Date(t * 1000).toISOString().slice(5, 10).replace('-', '.'), x - 14, H - 5);
+  }
+  series.forEach(s => {
+    g.strokeStyle = s.color; g.lineWidth = s.w || 1; g.beginPath();
+    s.pts.forEach((p, i) => i ? g.lineTo(X(p[0]), Y(p[1])) : g.moveTo(X(p[0]), Y(p[1])));
+    g.stroke();
+  });
+  return { X, Y, g, x0, x1 };
+}
+
+function drawCharts() {
+  const ch = D.chart || [];
+  if (!ch.length) { $('#chartnote').textContent = 'рядов графика в артефакте нет'; return; }
+  const ez = (D.best.entry_z_x10 ?? 20) / 10;
+  const ax = panel('#c1', [
+    { pts: ch.map(r => [r[0], r[1] - r[3]]), color: '#8a90a8' },
+    { pts: ch.map(r => [r[0], r[1]]), color: '#6aa8ff' },
+  ], {});
+  if (ax) (D.best_trades || []).forEach(t => {
+    if (!t.fill_time || t.fill_time < ax.x0 || t.fill_time > ax.x1) return;
+    const g = ax.g, x = ax.X(t.fill_time), y = ax.Y(t.fill_price ?? t.price);
+    g.fillStyle = t.side === 'buy' ? '#4caf50' : '#f44336';
+    g.beginPath();
+    if (t.side === 'buy') { g.moveTo(x, y - 5); g.lineTo(x - 4, y + 3); g.lineTo(x + 4, y + 3); }
+    else { g.moveTo(x, y + 5); g.lineTo(x - 4, y - 3); g.lineTo(x + 4, y - 3); }
+    g.closePath(); g.fill();
+  });
+  // порог входа = entry_z × СКО; СКО восстанавливаем как sig/z там, где z != 0
+  const band = ch.filter(r => r[4]).map(r => [r[0], Math.abs(r[3] / r[4]) * ez]);
+  panel('#c2', [
+    { pts: ch.map(r => [r[0], r[3]]), color: '#4dd0e1' },
+    { pts: band, color: '#e0a53c' },
+    { pts: band.map(p => [p[0], -p[1]]), color: '#e0a53c' },
+    { pts: [[ch[0][0], 0], [ch[ch.length - 1][0], 0]], color: '#3d3d5f' },
+  ], { zero: true });
+  if ((D.equity || []).length)
+    panel('#c3', [{ pts: D.equity, color: '#4caf50' }], { zero: false });
+  $('#chartnote').textContent =
+    `Лучшая комбинация: EMA2=${D.best.ema_slow} EMA1=${D.best.ema_fast} ` +
+    `вход ${ez.toFixed(1)}σ выход ${((D.best.exit_z_x10 ?? 0) / 10).toFixed(1)}σ. ` +
+    `Ряды прорежены, точек ${ch.length}. Общих минут RI и корзины: ${fmt(D.bars_common)}.`;
+}
+
+// ── таблица результатов ─────────────────────────────────────────────────────
+const key = r => ({
+  ema_slow: r.params.ema_slow, ema_fast: r.params.ema_fast,
+  entry_z: r.params.entry_z_x10 / 10, exit_z: r.params.exit_z_x10 / 10,
+  trades: r.trades, win_rate: r.win_rate, net: r.net,
+  dd_mtm: r.dd_mtm, rf_mtm: r.rf_mtm, ann_go: r.ann_go,
+});
+
+function rowsFiltered() {
+  const f = $('#flt').value;
+  let rs = D.results || [];
+  if (f === 'trades') rs = rs.filter(r => r.trades > 0);
+  if (f === 'pos') rs = rs.filter(r => (r.net || 0) > 0);
+  return rs.slice().sort((a, b) => {
+    const x = key(a)[sortK], y = key(b)[sortK];
+    const xv = x === null || x === undefined ? -Infinity : x;
+    const yv = y === null || y === undefined ? -Infinity : y;
+    return (xv - yv) * sortDir;
+  });
+}
+
+function draw() {
+  const tb = $('#rtbl tbody'); tb.innerHTML = '';
+  rowsFiltered().forEach(r => {
+    const k = key(r), tr = document.createElement('tr'); tr.className = 'row';
+    tr.innerHTML = `<td class="n">${k.ema_slow}</td><td class="n">${k.ema_fast}</td>
+      <td class="n">${k.entry_z.toFixed(1)}</td><td class="n">${k.exit_z.toFixed(1)}</td>
+      <td class="n">${k.trades ?? 0}</td><td class="n">${pct(k.win_rate)}</td>
+      <td class="n ${cls(k.net)}">${fmt(k.net)}</td>
+      <td class="n">${fmt(k.dd_mtm)}</td>
+      <td class="n">${k.rf_mtm === null || k.rf_mtm === undefined ? '—' : k.rf_mtm.toFixed(2)}</td>
+      <td class="n ${cls(k.ann_go)}">${pct(k.ann_go)}</td>`;
+    const det = document.createElement('tr'); det.className = 'det'; det.style.display = 'none';
+    det.innerHTML = `<td colspan="10">
+      доход на ГО ${pct(r.ret)} · просадка по закрытым ${pct(r.dd)} · RF по закрытым
+      ${r.rf === null || r.rf === undefined ? '—' : r.rf.toFixed(2)} ·
+      Шарп ${r.sharpe === null || r.sharpe === undefined ? '—' : r.sharpe.toFixed(2)} ·
+      пик контрактов ${r.peak} · ГО в работе ${fmt(r.margin)} ₽ ·
+      вне выборки ${fmt(r.net_oos)} ₽ · прибыльных окон ${r.wins_win ?? '—'}/${r.wins_tot ?? '—'} ·
+      деградация ${r.degrade === null || r.degrade === undefined ? '—' : r.degrade.toFixed(2)}</td>`;
+    tr.onclick = () => det.style.display = det.style.display === 'none' ? '' : 'none';
+    tb.append(tr, det);
+  });
+}
+const csvResults = () => dl('shaving-ri-sweep.csv',
+  [['EMA2', 'EMA1', 'вход_сигм', 'выход_сигм', 'сделок', 'винрейт', 'итог_руб', 'просадка_руб',
+    'RF', 'проц_годовых_ГО', 'доход_на_ГО', 'Шарп', 'пик_контрактов', 'вне_выборки_руб',
+    'прибыльных_окон', 'всего_окон', 'деградация']].concat(
+    rowsFiltered().map(r => { const k = key(r); return [
+      k.ema_slow, k.ema_fast, k.entry_z, k.exit_z, k.trades, k.win_rate, k.net, k.dd_mtm,
+      k.rf_mtm, k.ann_go, r.ret, r.sharpe, r.peak, r.net_oos, r.wins_win, r.wins_tot, r.degrade];
+    })));
+
+function drawKpis() {
+  const rs = (D.results || []).filter(r => r.trades > 0);
+  const best = rs.length ? rs.reduce((a, b) => (b.net || 0) > (a.net || 0) ? b : a) : null;
+  const profitable = rs.filter(r => (r.net || 0) > 0).length;
+  const med = rs.length ? rs.map(r => r.net || 0).sort((a, b) => a - b)[Math.floor(rs.length / 2)] : null;
+  const kpi = (l, v, c) => `<div class="kpi"><div class="l">${l}</div><div class="v ${c || ''}">${v}</div></div>`;
+  $('#kpis').innerHTML =
+    kpi('комбинаций / со сделками', `${(D.results || []).length} / ${rs.length}`) +
+    kpi('прибыльных', `${profitable} (${rs.length ? Math.round(profitable / rs.length * 100) : 0}%)`,
+        cls(profitable * 2 - rs.length)) +
+    kpi('медиана итога, ₽', fmt(med), cls(med)) +
+    kpi('лучший итог, ₽', best ? fmt(best.net) : '—', best ? cls(best.net) : '') +
+    kpi('сделок у лучшей', best ? fmt(best.trades) : '—') +
+    kpi('просадка лучшей, ₽', best ? fmt(best.dd_mtm) : '—');
+
+  const share = rs.length ? profitable / rs.length : 0;
+  $('#verdict').innerHTML = !rs.length
+    ? 'Ни одна комбинация не совершила сделок: пороги не были достигнуты на этой истории.'
+    : `Прибыльны ${profitable} из ${rs.length} комбинаций со сделками (${Math.round(share * 100)}%). ` +
+      (share >= 0.6
+        ? 'Плюс держится на большей части сетки, а не в одной точке: это аргумент за то, что эффект не подгонка. Проверять дальше вне выборки.'
+        : share >= 0.3
+          ? 'Плюс есть, но меньше чем на половине сетки: результат чувствителен к параметрам, к одиночному лидеру относиться как к подгонке.'
+          : 'Сетка в основном убыточна: одиночные плюсовые точки это почти наверняка подгонка, а не преимущество.') +
+      ' Колонка «вне выборки» в развороте строки показывает результат на последних 30% истории.';
+}
+
+// ── загрузка ────────────────────────────────────────────────────────────────
+$('#pageurl').textContent = location.origin + location.pathname;
+document.querySelectorAll('th.s').forEach(th => th.onclick = () => {
+  const k = th.dataset.k;
+  sortDir = sortK === k ? -sortDir : -1; sortK = k; draw();
+});
+
+fetch('./shaving-ri-sweep.json?v=' + Date.now()).then(r => {
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  return r.json();
+}).then(d => {
+  D = d;
+  $('#chips').innerHTML = [
+    ['инструмент', d.symbol], ['корзина', d.basket],
+    ['окно', `${d.date_from} … ${d.date_to}`],
+    ['баров RI', fmt(d.bars_ri)], ['общих минут', fmt(d.bars_common)],
+    ['₽/пункт', d.point_value], ['ГО, ₽', fmt(d.initial_margin)],
+    ['прогон от', (d.generated_at || '').replace('T', ' ').replace('+00:00', ' UTC')],
+  ].concat(d.label ? [['метка', d.label]] : [])
+   .map(([l, v]) => `<span class="chip">${l} <b>${v}</b></span>`).join('');
+  drawParams(); drawKpis(); draw(); drawCharts();
+}).catch(e => {
+  $('#kpis').innerHTML = `<div class="kpi"><div class="l">артефакт не загружен</div>
+    <div class="v">${e.message}</div></div>`;
+  $('#verdict').textContent = 'Запустите scripts/shaving_ri_sweep.py на хостере.';
+});
+addEventListener('resize', () => { if (D) drawCharts(); });
+</script>
+</body>
+</html>

@@ -200,9 +200,11 @@ async def run_single_backtest(
     initial_equity: float = 100_000.0,
     point_value: float = 1.0,
     initial_margin: float = 0.0,
+    extra: dict[str, list[Bar]] | None = None,
 ) -> dict[str, Any]:
     runtime = BacktestRuntime(bars=bars, symbol=symbol,
-                              initial_equity=initial_equity, point_value=point_value)
+                              initial_equity=initial_equity, point_value=point_value,
+                              extra=extra)
 
     if hasattr(strategy_module, "on_start"):
         await strategy_module.on_start(runtime, params)
@@ -274,7 +276,8 @@ async def run_single_backtest(
 def _subprocess_run_many(script_code: str, bars_data: list[dict], symbol: str,
                          param_sets: list[dict], result_queue: multiprocessing.Queue,
                          point_value: float = 1.0, initial_margin: float = 0.0,
-                         metrics_only: bool = False) -> None:
+                         metrics_only: bool = False,
+                         extra_data: dict[str, list[dict]] | None = None) -> None:
     """Run MANY param combos in ONE subprocess — bars pickled once, not per combo.
     Runs as a background-priority process and yields the CPU between combos so the
     box stays responsive during a big sweep. metrics_only=True drops the per-combo
@@ -288,6 +291,7 @@ def _subprocess_run_many(script_code: str, bars_data: list[dict], symbol: str,
     _demote_to_background()
     validate_script(script_code)
     bars = [Bar(**b) for b in bars_data]
+    extra = {k: [Bar(**b) for b in v] for k, v in (extra_data or {}).items()}
     mod = types.ModuleType("robot_script")
     exec(compile(script_code, "<robot>", "exec"), mod.__dict__)
 
@@ -296,7 +300,7 @@ def _subprocess_run_many(script_code: str, bars_data: list[dict], symbol: str,
         for i, ps in enumerate(param_sets):
             try:
                 r = await run_single_backtest(mod, bars, symbol, ps, point_value=point_value,
-                                              initial_margin=initial_margin)
+                                              initial_margin=initial_margin, extra=extra)
                 if metrics_only:
                     r.pop("trades", None)
                     r.pop("equity_curve", None)
@@ -323,20 +327,27 @@ async def run_backtest_grid(
     point_value: float = 1.0,
     initial_margin: float = 0.0,
     metrics_only: bool = False,
+    extra: dict[str, list[Bar]] | None = None,
 ) -> list[dict[str, Any]]:
     """
     Run a whole parameter grid in ONE subprocess (bars serialized once).
     Returns list of {ok, params, result|error} in input order.
+    `extra` = reference series the strategy reads but never trades (see BacktestRuntime).
     """
-    bars_data = [
-        {"time": b.time, "open": b.open, "high": b.high,
-         "low": b.low, "close": b.close, "volume": b.volume}
-        for b in bars
-    ]
+    def _ser(bs: list[Bar]) -> list[dict]:
+        return [
+            {"time": b.time, "open": b.open, "high": b.high,
+             "low": b.low, "close": b.close, "volume": b.volume}
+            for b in bs
+        ]
+
+    bars_data = _ser(bars)
+    extra_data = {k: _ser(v) for k, v in (extra or {}).items()}
     q: multiprocessing.Queue = multiprocessing.Queue()
     proc = multiprocessing.Process(
         target=_subprocess_run_many,
-        args=(script_code, bars_data, symbol, param_sets, q, point_value, initial_margin, metrics_only),
+        args=(script_code, bars_data, symbol, param_sets, q, point_value, initial_margin,
+              metrics_only, extra_data),
         daemon=True,
     )
     proc.start()

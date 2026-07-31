@@ -82,10 +82,23 @@ class STLRuntime(Protocol):
 
 
 class BacktestRuntime:
+    """Backtest execution context for ONE traded symbol.
+
+    `extra` carries REFERENCE series a strategy reads but never trades — e.g. the
+    RTSI index basket for shaving_ri. get_bars(sym) routes to them by symbol, the
+    same way LiveRuntime already does, so a spread strategy is identical code in
+    backtest and live. Reference bars are cut at the CURRENT bar's time (bisect),
+    never ahead of it, and they are NOT part of the bar loop: the traded symbol
+    alone drives the clock and the fills.
+    """
+
     def __init__(self, bars: list[Bar], symbol: str, initial_equity: float,
-                 point_value: float = 1.0) -> None:
+                 point_value: float = 1.0,
+                 extra: dict[str, list[Bar]] | None = None) -> None:
         self._bars = bars
         self._symbol = symbol
+        self._extra = {k: v for k, v in (extra or {}).items() if k != symbol}
+        self._extra_times = {k: [b.time for b in v] for k, v in self._extra.items()}
         self._equity = initial_equity
         # RUB value of one index point (= step_price / min_step). Without it,
         # PnL is in raw index points, not rubles. RIM6 ≈ 1.42 ₽/point.
@@ -103,6 +116,11 @@ class BacktestRuntime:
         return True
 
     async def get_bars(self, symbol: str, tf: int, n: int) -> list[Bar]:
+        series = self._extra.get(symbol)
+        if series is not None:
+            import bisect
+            hi = bisect.bisect_right(self._extra_times[symbol], self._bars[self._cursor].time)
+            return series[max(0, hi - n):hi]
         start = max(0, self._cursor - n + 1)
         return self._bars[start : self._cursor + 1]
 

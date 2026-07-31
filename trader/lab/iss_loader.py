@@ -20,6 +20,12 @@ _ISS_BASE = "https://iss.moex.com/iss"
 _MONTH_LETTERS = "FGHJKMNQUVXZ"  # Jan-Dec per FORTS convention
 _PAGE = 500
 
+# Index secids live on a DIFFERENT ISS engine (stock/index, not futures/forts) and
+# carry no expiry, so the contract-roll path must never see them. RTSI is the RI
+# futures' underlying basket (shaving_ri); IMOEX is its ruble twin.
+# ponytail: an explicit two-name set, not a pattern — add a line per index needed.
+INDEX_SECIDS = {"RTSI", "IMOEX"}
+
 
 async def top_instruments(n: int, always: list[str] | None = None) -> list[str]:
     """Top-n FORTS futures by today's turnover (front contract per asset), via ISS.
@@ -367,9 +373,13 @@ async def load_bars_iss(
 ) -> list[Bar]:
     """
     High-level entry point.
+    - Index secid (RTSI): fetch from the stock/index engine.
     - Specific contract (RIM6): fetch directly.
     - Base code (RI): fetch continuous with roll logic.
     """
+    if symbol.upper() in INDEX_SECIDS:
+        async with IssLoader(engine="stock", market="index") as loader:
+            return await loader.fetch_contract_bars(symbol.upper(), date_from, date_to, interval)
     async with IssLoader() as loader:
         if is_specific_contract(symbol):
             return await loader.fetch_contract_bars(symbol, date_from, date_to, interval)
