@@ -197,10 +197,13 @@ class Ai46Service:
         # Время берём фактическое время филла, а не now() момента записи: батч
         # executemany ставил всем строкам одну метку, и филлы разных инструментов
         # склеивались в одну секунду.
+        # seq = время филла + номер в батче: счётчик _persisted обнуляется рестартом,
+        # и голого номера хватило бы ровно до первого перезапуска.
         base = self._persisted
         rows = [
             (uuid4().hex, ROBOT_ID, f.ticker, f.side, 1, Decimal(str(f.price)),
-             f"ai46:{base + i}:{f.kind}:{round(f.size_pct * 10000)}", "paper",
+             f"ai46:{int(f.time or time.time())}-{base + i}:{f.kind}:{round(f.size_pct * 10000)}",
+             "paper",
              datetime.datetime.fromtimestamp(f.time or time.time(), tz=datetime.timezone.utc))
             for i, f in enumerate(new)
         ]
