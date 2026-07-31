@@ -110,12 +110,16 @@ def make_on_bar(rid: str):
         # pause) instead of reversing straight into the opposite side.
         cooldown_min = int(params.get("cooldown_min", 0) or 0)
         cooldown_frac = float(params.get("cooldown_pct", 1.0) or 1.0) / 100.0
-        # «Разножка» (min_gap_pts>0): не открывать и не доливать, пока цена не отошла
-        # от ПРОШЛОГО ВХОДА минимум на N пунктов цены. В боковике робот иначе крутит
-        # вход-выход по 20-50 пунктов, отдавая комиссию и спред (живой MACD·RIU6,
-        # 2026-07-22: 200 сделок за день внутри коридора 86 700-87 200). Гейт стоит
-        # ТОЛЬКО на добавлении объёма; выходы (разворотное закрытие, TP) не трогает
-        # никогда — иначе убыточная позиция осталась бы без выхода.
+        # «Разножка» (min_gap_pts>0): не ДОЛИВАТЬ, пока цена не отошла от прошлого
+        # входа минимум на N пунктов. В боковике робот иначе крутит добор за добором
+        # по 20-50 пунктов, отдавая комиссию и спред (живой MACD·RIU6, 2026-07-22:
+        # 200 сделок за день внутри коридора 86 700-87 200).
+        # ДЕЙСТВУЕТ ТОЛЬКО ПРИ НЕНУЛЕВОЙ ПОЗИЦИИ (правило оператора, 31.07.2026):
+        # это фильтр лестницы усреднения, а не право войти в рынок. Раньше он гейтил
+        # и вход с нуля, и робот простаивал часами при живом сигнале («разножка
+        # держит: 120 из 220 пт от прошлого входа», 31.07 19:02-23:00). Выходы
+        # (разворотное закрытие, тейк, стоп) не трогает никогда — иначе убыточная
+        # позиция осталась бы без выхода.
         min_gap = float(params.get("min_gap_pts", 0) or 0)
         gap_ref = float(stl.get_state("gap_ref", 0) or 0)
         # Разножка «Авто» (gap_auto=1): вместо фиксированных пунктов берём
@@ -252,7 +256,11 @@ def make_on_bar(rid: str):
             # отдельные сделки — сумма таких «сделок» не имеет отношения к тому, что
             # заработал бы робот без фильтра (он вошёл бы ОДИН раз и упёрся в потолок
             # позиции). Поэтому повтор в пределах того же окна разножки не пишем.
-            d = 1 if (want or 0) > 0 else -1
+            # Сторона несостоявшейся сделки: у ДОБОРА это сторона позиции (сигнал в
+            # ветке удержания бывает None), у входа с нуля — сторона сигнала. Раньше
+            # смотрели только на want, и отсев добора в ЛОНГЕ записывался шортом —
+            # копилка эффекта считала его с обратным знаком.
+            d = cur_dir if cur_dir else (1 if (want or 0) > 0 else -1)
             ph = list(stl.get_state("skip_phantoms", None) or [])
             near = min_gap if min_gap > 0 else (atrv if atrv > 0 else 0.0)
             dup = any(int(e.get("d", 0)) == d and near > 0
@@ -300,12 +308,11 @@ def make_on_bar(rid: str):
             on_exit(price, avg, cur_dir)
             await stl.place_order(symbol, "sell" if cur > 0 else "buy", abs(cur), price)
             if want != 0 and cooldown_min == 0:      # cooldown mode -> exit-only, not a skip
-                if gap_ok(price):
-                    await stl.place_order(symbol, "buy" if want > 0 else "sell", fresh_entry_size(), price)
-                    stl.set_state("avg_add", 0)      # новая позиция -> лестница k_avg с начала
-                    mark_entry(price)
-                else:
-                    note_skip("gap", price)
+                # Разножка НЕ трогает вход с нуля (позиция только что закрыта): она
+                # про доборы внутри позиции, а не про право войти в рынок.
+                await stl.place_order(symbol, "buy" if want > 0 else "sell", fresh_entry_size(), price)
+                stl.set_state("avg_add", 0)      # новая позиция -> лестница k_avg с начала
+                mark_entry(price)
             return
         # 2) Flat → open a fresh base position on a signal (unless cooling down).
         if cur == 0:
@@ -322,8 +329,6 @@ def make_on_bar(rid: str):
                     note_skip("sl", price)
                 elif in_cooldown:
                     note_skip("cooldown", price)
-                elif not gap_ok(price):
-                    note_skip("gap", price)
                 else:
                     await stl.place_order(symbol, "buy" if want > 0 else "sell", fresh_entry_size(), price)
                     stl.set_state("avg_add", 0)      # новая позиция -> лестница k_avg с начала

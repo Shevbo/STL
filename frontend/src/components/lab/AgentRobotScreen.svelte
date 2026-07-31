@@ -46,7 +46,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { fetchWithAuth } from '../../lib/fetch-auth';
-  import { toFills, commissionFor, tradeEvents, fromLastFlat, groupByOrder } from '../../lib/lab-analytics';
+  import { toFills, commissionFor, tradeEvents, fromLastFlat, groupByOrder, sortLedger } from '../../lib/lab-analytics';
   import BacktestChart from './BacktestChart.svelte';
   import ScreenTag from './ScreenTag.svelte';
   import LatencyPane from './LatencyPane.svelte';
@@ -197,9 +197,9 @@
                    comm: prev.comm + Number(r.commission_rub ?? 0) });
       }
       ledgerByOrder = m;
-      // Строго по ВРЕМЕНИ: журнал отдаёт по seq, а дозаполненная история вставлена
-      // позже (seq выше) при более ранних датах — reverse() дал бы неверный порядок.
-      ledgerRows = [...(d.trades ?? [])].sort((a: any, b: any) => Number(a.ts_ms) - Number(b.ts_ms));
+      // Хронология журнала — одной функцией (см. sortLedger): по времени, а внутри
+      // одной метки по seq. Порядок здесь определяет ВСЁ последующее: разбор позиции.
+      ledgerRows = sortLedger(d.trades ?? []);
     } catch { /* журнал недоступен -> строки останутся без ₽, но не с ВРАНЬЁМ */ }
   }
   let ledgerRows = $state<any[]>([]);

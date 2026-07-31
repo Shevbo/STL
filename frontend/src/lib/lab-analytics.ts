@@ -158,6 +158,19 @@ export function tradeEvents(trades: Fill[], bucketSecs: number, pointValue = 1, 
   for (const t of sorted) {
     const q = Number(t.qty) || 1;
     const signed = t.side === 'buy' ? q : -q;
+    // ПОЗИЦИЯ ИЗ ЖУРНАЛА ВАЖНЕЕ ПЕРЕСЧЁТА. Журнал (algo_trades) хранит pos_after в
+    // каждой строке, и это единственная величина, устойчивая к дырам в выборке.
+    // Дыры реальны: окно ограничено лимитом, а у живого MACD·RIU6 в журнале не
+    // хватало двух суток (21.07 позиция 0 -> 23.07 позиция 16). Пересчёт по строкам
+    // уезжал ровно на пропущенное и переворачивал ЗНАК: лонг раскладывался как шорт
+    // на 30 контрактов, в таблице не было ни одного OPEN, все выходы «частичные», а
+    // доборы носили ярлык стопа (31.07.2026). Расходится — доверяем журналу и
+    // начинаем эпизод заново: средняя до дыры неизвестна, врать про неё нельзя.
+    const pa = (t as any).pos_after;
+    if (pa != null) {
+      const before = Number(pa) - signed;
+      if (before !== pos) { pos = before; avg = t.price; epStart = t.time; epMaxAbs = Math.abs(before); carriedFee = 0; }
+    }
     const c = commissionFor(symbol, t.price, q, pointValue, taker);
     let kind: TradeEvent['kind'];
     let close: TradeEvent['close'];
@@ -532,6 +545,23 @@ export type LedgerRow = { side: string; qty: number | string; pos_after: number 
  *
  * Пустой результат = доказуемого нуля в окне нет, источнику доверять нельзя.
  */
+/**
+ * Хронологический порядок строк журнала: по времени, а ВНУТРИ одной метки — по seq.
+ *
+ * У QUIK время сделки с точностью до СЕКУНДЫ, поэтому все исполнения одной заявки
+ * делят один ts_ms, а API отдаёт журнал новыми вперёд. Сортировка только по ts_ms
+ * устойчива и сохраняла этот обратный порядок: цепочка pos_after читалась как
+ * 0,1,2 вместо 2,1,0. Дальше fromLastFlat отрезал историю по ЛОЖНОМУ нулю, разбор
+ * позиции стартовал с продажи, и лонговый робот раскладывался как ШОРТ — в таблице
+ * ни одного OPEN, все выходы «частичные», доборы с ярлыком стопа (живой MACD·RIU6,
+ * 31.07.2026). Первичный ключ именно ts_ms: seq глобально НЕ хронологичен —
+ * дозаполненная история вставлена позже (seq выше) при более ранних датах.
+ */
+export function sortLedger<T extends { ts_ms: number | string; seq?: number }>(rows: T[]): T[] {
+  return [...rows].sort((a, b) =>
+    Number(a.ts_ms) - Number(b.ts_ms) || Number(a.seq ?? 0) - Number(b.seq ?? 0));
+}
+
 export function fromLastFlat<T extends LedgerRow>(rows: T[]): T[] {
   if (!rows.length) return [];
   const f = rows[0];
@@ -560,9 +590,10 @@ export type LedgerFill = LedgerRow & {
  * позиция реально набрана). Строки без номера ордера остаются как есть.
  */
 export function groupByOrder<T extends LedgerFill>(rows: T[]): Array<{
-  time: number; side: string; qty: number; price: number; order_id: string;
+  time: number; side: string; qty: number; price: number; order_id: string; pos_after?: number;
 }> {
-  const by = new Map<string, { time: number; side: string; qty: number; notional: number; order_id: string }>();
+  const by = new Map<string, { time: number; side: string; qty: number; notional: number;
+                               order_id: string; pos_after?: number }>();
   rows.forEach((r, i) => {
     const key = String(r.order_num ?? '') || `seq:${r.seq ?? i}`;
     const qty = Number(r.qty) || 0;
@@ -571,11 +602,14 @@ export function groupByOrder<T extends LedgerFill>(rows: T[]): Array<{
     const cur = by.get(key);
     // Разворот через одну заявку невозможен (робот шлёт закрытие и вход разными
     // ордерами), поэтому сторона внутри ключа всегда одна.
-    if (!cur) by.set(key, { time, side: r.side, qty, notional: price * qty, order_id: key });
-    else { cur.qty += qty; cur.notional += price * qty; cur.time = Math.max(cur.time, time); }
+    // pos_after заявки = позиция после ПОСЛЕДНЕГО её исполнения, поэтому строки
+    // обязаны прийти в хронологии (sortLedger) — иначе возьмём промежуточное.
+    const pa = (r as any).pos_after == null ? undefined : Number((r as any).pos_after);
+    if (!cur) by.set(key, { time, side: r.side, qty, notional: price * qty, order_id: key, pos_after: pa });
+    else { cur.qty += qty; cur.notional += price * qty; cur.time = Math.max(cur.time, time); cur.pos_after = pa; }
   });
   return [...by.values()]
     .map((o) => ({ time: o.time, side: o.side, qty: o.qty,
-                   price: o.qty ? o.notional / o.qty : 0, order_id: o.order_id }))
+                   price: o.qty ? o.notional / o.qty : 0, order_id: o.order_id, pos_after: o.pos_after }))
     .sort((a, b) => a.time - b.time);
 }

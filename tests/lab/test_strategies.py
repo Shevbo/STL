@@ -190,18 +190,21 @@ async def test_cooldown_blocks_entry_after_profit_and_reversal_is_exit_only():
 # ── «Разножка»: минимальная дистанция от прошлого входа (min_gap_pts) ─────────
 
 @pytest.mark.asyncio
-async def test_min_gap_blocks_reentry_within_gap_and_allows_beyond():
+async def test_min_gap_never_blocks_entry_from_flat():
+    """Разножка относится ТОЛЬКО к ненулевой позиции (правило оператора 31.07.2026).
+
+    Вход с нуля она не гейтит: это фильтр лестницы усреднения, а не право войти в
+    рынок. Раньше гейтила, и живой MACD·RIU6 простоял часы флэтом при сигнале ЛОНГ
+    («разножка держит: 120 из 220 пт от прошлого входа»)."""
     rt = _FakeRT()
     g = dict(min_gap_pts=200)
     await _run(rt, 1, 60, 87000.0, **g)        # flat -> вход long @87000
     assert rt.orders[-1] == ("buy", 1, 87000.0)
     await _run(rt, 0, 120, 87050.0, **g)       # сигнал flat -> выход (никогда не блокируется)
     assert rt.orders[-1] == ("sell", 1, 87050.0)
-    n = len(rt.orders)
-    await _run(rt, 1, 180, 87100.0, **g)       # 100 пт от входа 87000 -> вход ЗАПРЕЩЁН
-    assert len(rt.orders) == n
-    await _run(rt, 1, 240, 87250.0, **g)       # 250 пт -> вход разрешён
-    assert rt.orders[-1] == ("buy", 1, 87250.0)
+    await _run(rt, 1, 180, 87100.0, **g)       # 100 пт от прошлого входа -> ВХОД РАЗРЕШЁН
+    assert rt.orders[-1] == ("buy", 1, 87100.0)
+    assert not rt.get_state("gap_skips", 0)    # на входах отсева быть не может
 
 
 @pytest.mark.asyncio
@@ -209,11 +212,9 @@ async def test_min_gap_never_blocks_exit_or_reversal_close():
     rt = _FakeRT()
     g = dict(min_gap_pts=200)
     await _run(rt, 1, 60, 87000.0, **g)        # вход long @87000
-    await _run(rt, -1, 120, 87020.0, **g)      # разворот в 20 пт: ЗАКРЫТИЕ обязано пройти
+    await _run(rt, -1, 120, 87020.0, **g)      # разворот в 20 пт: закрытие И вход обратно
     assert ("sell", 1, 87020.0) in rt.orders
-    assert rt.signed == 0                       # открытие обратной ноги отсечено разножкой
-    await _run(rt, -1, 180, 86700.0, **g)      # 300 пт от входа -> шорт открывается
-    assert rt.orders[-1] == ("sell", 1, 86700.0)
+    assert rt.signed == -1                      # обратная нога — тоже вход с нуля
 
 
 @pytest.mark.asyncio
@@ -242,22 +243,22 @@ async def test_min_gap_blocks_averaging_add_too():
 
 @pytest.mark.asyncio
 async def test_min_gap_ignores_an_order_that_never_filled():
-    """Отсчёт разножки двигает только ИСПОЛНИВШИЙСЯ вход, не выставленная заявка."""
+    """Отсчёт разножки двигает только ИСПОЛНИВШИЙСЯ добор, не выставленная заявка."""
     rt = _FakeRT()
-    g = dict(min_gap_pts=200)
-    await _run(rt, 1, 60, 87000.0, **g)        # вход @87000 — исполнился
+    g = dict(min_gap_pts=200, avg_max=3, avg_step_atr=1, avg_atr_n=2)
+    for i, p in enumerate([87000.0, 86900.0, 87000.0]):   # прогрев + ненулевой ATR
+        await _run(rt, None, 60 + i * 60, p, **g)
+    await _run(rt, 1, 300, 87000.0, **g)       # вход @87000 — исполнился
     assert rt.orders[-1] == ("buy", 1, 87000.0)
-    await _run(rt, 0, 120, 87500.0, **g)       # выход (отсчёт подтверждён = 87000)
-    assert rt.signed == 0
 
     rt.fills_enabled = False                    # следующая заявка «зависнет»
-    await _run(rt, 1, 180, 86700.0, **g)       # 300 пт от 87000 -> заявка уходит
+    await _run(rt, None, 360, 86700.0, **g)    # 300 пт от 87000 -> добор уходит
     assert rt.orders[-1] == ("buy", 1, 86700.0)
-    assert rt.signed == 0                       # но НЕ исполнилась
+    assert rt.signed == 1                       # но НЕ исполнился
     rt.fills_enabled = True
 
     n = len(rt.orders)
-    await _run(rt, 1, 240, 86960.0, **g)       # 260 пт от НЕисполненной, но 40 от 87000
+    await _run(rt, None, 420, 86960.0, **g)    # 260 пт от НЕисполненной, но 40 от 87000
     assert len(rt.orders) == n                  # -> запрещено (старое поведение пускало)
 
 
@@ -286,14 +287,15 @@ def test_pivot_hlc_cache_is_keyed_by_symbol():
 async def test_filter_skip_counters():
     """Разножка и остывание копят счётчик отсева, не меняя порядок заявок."""
     rt = _FakeRT()
-    g = dict(min_gap_pts=200)
-    await _run(rt, 1, 60, 87000.0, **g)        # вход @87000 (исполнился)
-    await _run(rt, 0, 120, 87050.0, **g)       # выход -> отсчёт подтверждён = 87000
+    g = dict(min_gap_pts=200, avg_max=3, avg_step_atr=1, avg_atr_n=2)
+    for i, p in enumerate([87000.0, 86900.0, 87000.0]):
+        await _run(rt, None, 60 + i * 60, p, **g)
+    await _run(rt, 1, 300, 87000.0, **g)       # вход @87000 (исполнился)
     n = len(rt.orders)
-    await _run(rt, 1, 180, 87080.0, **g)       # 80 пт -> разножка отсеяла
+    await _run(rt, None, 360, 86950.0, **g)    # добор в 50 пт -> разножка отсеяла
     assert len(rt.orders) == n                  # заявки нет
     assert rt.get_state("gap_skips") == 1
-    await _run(rt, 1, 240, 87120.0, **g)       # 120 пт -> снова отсеяла
+    await _run(rt, None, 420, 86900.0, **g)    # 100 пт -> снова отсеяла
     assert rt.get_state("gap_skips") == 2
 
     # остывание: отдельный счётчик
@@ -314,41 +316,41 @@ async def test_filter_effect_counts_saved_points():
     справедливо: робот держит позицию до собственного сигнала выхода, иногда
     сутками, поэтому часовой срез мерил не ту величину."""
     rt = _FakeRT()
-    g = dict(min_gap_pts=200)
-    await _run(rt, 1, 60, 87000.0, **g)          # вход @87000
-    await _run(rt, 0, 120, 87050.0, **g)         # выход -> отсчёт = 87000
-    await _run(rt, 1, 180, 87080.0, **g)         # 80 пт -> ОТСЕЯН (фантом buy @87080)
+    g = dict(min_gap_pts=200, avg_max=3, avg_step_atr=1, avg_atr_n=2)
+    for i, p in enumerate([87000.0, 86900.0, 87000.0]):
+        await _run(rt, None, 60 + i * 60, p, **g)
+    await _run(rt, 1, 300, 87000.0, **g)         # вход @87000
+    await _run(rt, None, 360, 86950.0, **g)      # добор в 50 пт -> ОТСЕЯН (фантом лонга)
     assert rt.get_state("gap_skips") == 1
     assert len(rt.get_state("skip_phantoms")) == 1
-    assert rt.get_state("filter_saved_pts") in (None, 0)   # ещё в позиции
+    assert rt.get_state("skip_phantoms")[0]["d"] == 1     # сторона ПОЗИЦИИ, не сигнала
+    assert rt.get_state("filter_saved_pts") in (None, 0)  # ещё в позиции
 
     # Час прошёл, сигнал ПРЕЖНИЙ (лонг) — фантом ещё держится, как держался бы робот.
-    await _run(rt, 1, 180 + 3600, 86800.0, **g)
-    assert len(rt.get_state("skip_phantoms")) == 1
+    await _run(rt, 1, 360 + 3600, 86930.0, **g)
     assert rt.get_state("filter_saved_pts") in (None, 0)
 
     # Разворот сигнала = робот закрыл бы позицию здесь -> вот теперь считаем.
-    await _run(rt, -1, 180 + 7200, 86800.0, **g)
+    await _run(rt, -1, 360 + 7200, 86700.0, **g)
     saved = rt.get_state("filter_saved_pts")
-    assert saved == pytest.approx(280.0)          # -(86800-87080)*1*1 = +280 пт сбережено
-    # Тот самый фантом закрыт. Список может быть НЕ пуст: на этом же баре разворот
-    # мог породить новый отсев — это нормальная работа фильтра, а не остаток.
-    assert not any(abs(float(e["p"]) - 87080.0) < 1e-9
+    assert saved == pytest.approx(250.0)          # -(86700-86950)*1 = +250 пт сбережено
+    assert not any(abs(float(e["p"]) - 86950.0) < 1e-9
                    for e in (rt.get_state("skip_phantoms") or []))
 
 
 @pytest.mark.asyncio
 async def test_filter_effect_negative_when_skip_would_have_won():
-    """Если отсеянный вход был бы прибыльным — эффект отрицательный (недозаработали)."""
+    """Если отсеянный добор был бы прибыльным — эффект отрицательный (недозаработали)."""
     rt = _FakeRT()
-    g = dict(min_gap_pts=200)
-    await _run(rt, 1, 60, 87000.0, **g)
-    await _run(rt, 0, 120, 87050.0, **g)
-    await _run(rt, 1, 180, 87080.0, **g)         # отсеян лонг @87080
-    # Цена ВЫШЕ и сигнал развернулся -> отсеянный лонг закрылся бы в плюс,
+    g = dict(min_gap_pts=200, avg_max=3, avg_step_atr=1, avg_atr_n=2)
+    for i, p in enumerate([87000.0, 86900.0, 87000.0]):
+        await _run(rt, None, 60 + i * 60, p, **g)
+    await _run(rt, 1, 300, 87000.0, **g)
+    await _run(rt, None, 360, 86950.0, **g)      # отсеян добор в лонг @86950
+    # Цена ВЫШЕ и сигнал развернулся -> отсеянный добор закрылся бы в плюс,
     # значит фильтр НЕДОзаработал (эффект отрицательный).
-    await _run(rt, -1, 180 + 3600, 87400.0, **g)
-    assert rt.get_state("filter_saved_pts") == pytest.approx(-320.0)
+    await _run(rt, -1, 360 + 3600, 87400.0, **g)
+    assert rt.get_state("filter_saved_pts") == pytest.approx(-450.0)
 
 
 # ── Стоп-лосс долей тейка (sl_frac) ──────────────────────────────────────────

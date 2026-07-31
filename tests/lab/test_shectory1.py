@@ -130,6 +130,35 @@ async def test_gap_auto_uses_amplitude_over_nd_days():
 
 
 @pytest.mark.asyncio
+async def test_gap_never_blocks_entry_from_flat():
+    """Разножка — фильтр ЛЕСТНИЦЫ: вход с нуля она пропускает всегда.
+
+    31.07.2026 живой MACD·RIU6 простоял часы флэтом при сигнале ЛОНГ, потому что
+    разножка мерила расстояние до входа ПРОШЛОЙ, уже закрытой позиции.
+    """
+    p = {**BASE, "min_gap_pts": 500, "avg_step_atr": 0, "tp_atr": 0}
+    rt = _FakeRT()
+    for i in range(8):                       # вход в лонг @100
+        await step(rt, 1, i * 60, 100.0, p)
+    assert rt.signed == 2
+    await step(rt, -1, 9 * 60, 100.1, p)     # разворот: закрыть и тут же войти в шорт
+    assert rt.signed == -2, "вход с нуля разножка гейтить не должна"
+    await step(rt, 1, 10 * 60, 100.2, p)     # обратный разворот, цена рядом
+    assert rt.signed == 2
+    assert not rt.get_state("gap_skips", 0), "отсева на входах быть не может"
+
+
+@pytest.mark.asyncio
+async def test_gap_still_blocks_adds_inside_position():
+    """А вот добор внутри позиции разножка обязана держать."""
+    p = {**BASE, "min_gap_pts": 500}
+    rt = _FakeRT()
+    await _fall(rt, p, bars=12)              # вход, дальше цена падает по 1 пункту
+    assert rt.signed == 2, "доборы ближе 500 пунктов не проходят"
+    assert rt.get_state("gap_skips", 0) > 0
+
+
+@pytest.mark.asyncio
 async def test_gap_auto_off_is_unchanged():
     """Тот же рынок с gap_auto=0 — доборы идут каждый бар, отсева нет."""
     p = {**BASE, "avg_max": 10, "nd_days": 5, "gap_auto": 0}
