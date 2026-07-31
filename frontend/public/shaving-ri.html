@@ -316,9 +316,12 @@ function drawCharts() {
     { pts: ch.map(r => [r[0], r[1] - r[3]]), color: '#8a90a8' },
     { pts: ch.map(r => [r[0], r[1]]), color: '#6aa8ff' },
   ], {});
+  // Движок отдаёт сделку как {side, price, qty, time}: price это УЖЕ цена филла
+  // (fill_price или, если его нет, заявленная). Ключей fill_time/fill_price в ней
+  // нет — читать их значило бы молча не нарисовать ни одной метки.
   if (ax) (D.best_trades || []).forEach(t => {
-    if (!t.fill_time || t.fill_time < ax.x0 || t.fill_time > ax.x1) return;
-    const g = ax.g, x = ax.X(t.fill_time), y = ax.Y(t.fill_price ?? t.price);
+    if (!t.time || t.time < ax.x0 || t.time > ax.x1) return;
+    const g = ax.g, x = ax.X(t.time), y = ax.Y(t.price);
     g.fillStyle = t.side === 'buy' ? '#4caf50' : '#f44336';
     g.beginPath();
     if (t.side === 'buy') { g.moveTo(x, y - 5); g.lineTo(x - 4, y + 3); g.lineTo(x + 4, y + 3); }
