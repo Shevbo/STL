@@ -29,10 +29,20 @@ def _get(url: str) -> dict:
 
 
 def weights() -> list[tuple[str, float]]:
-    """Текущий состав индекса РТС с весами, % капитализации."""
-    j = _get(f"{ISS}/statistics/engines/stock/markets/index/analytics/RTSI.json?iss.meta=off")
-    a = j["analytics"]
-    rows = [dict(zip(a["columns"], r)) for r in a["data"]]
+    """Текущий состав индекса РТС с весами, % капитализации.
+
+    Эндпоинт страничный и по умолчанию отдаёт ~20 строк в алфавитном порядке: без
+    пагинации корзина молча собиралась бы из первых по алфавиту бумаг на ~39% веса
+    (и сверка с RTSI показывала бы фальшиво низкую корреляцию)."""
+    rows, start = [], 0
+    while True:
+        a = _get(f"{ISS}/statistics/engines/stock/markets/index/analytics/RTSI.json"
+                 f"?iss.meta=off&start={start}")["analytics"]
+        page = [dict(zip(a["columns"], r)) for r in a["data"]]
+        rows += page
+        if not page:
+            break
+        start += len(page)
     last = max(r["tradedate"] for r in rows)
     return [(r["ticker"], float(r["weight"])) for r in rows if r["tradedate"] == last]
 

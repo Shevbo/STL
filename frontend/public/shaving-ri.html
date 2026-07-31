@@ -80,6 +80,8 @@
       <span id="pageurl"></span>
       <button onclick="cp(location.href,this)">копировать ссылку</button>
       <button onclick="cp('shaving_ri',this)">id: shaving_ri</button>
+      <a href="?src=shaving-ri-sweep.json">3 месяца</a>
+      <a href="?src=shaving-ri-sweep-jul.json">контроль: июль</a>
     </div>
     <h1>Shaving RI 1</h1>
     <div class="muted small">Выкуп отклонения фьючерса RI от индексной корзины RTSI.
@@ -426,7 +428,13 @@ document.querySelectorAll('th.s').forEach(th => th.onclick = () => {
   sortDir = sortK === k ? -sortDir : -1; sortK = k; draw();
 });
 
-fetch('./shaving-ri-sweep.json?v=' + Date.now()).then(r => {
+// ?src=<файл> открывает другой артефакт (контрольный прогон на другом окне).
+// Только имя файла: путь и схема отбрасываются, чтобы параметр из чужой ссылки
+// не мог утащить страницу на посторонний адрес.
+const SRC = (new URLSearchParams(location.search).get('src') || 'shaving-ri-sweep.json')
+  .split(/[/\\?#]/).pop().replace(/[^\w.-]/g, '') || 'shaving-ri-sweep.json';
+$('#src').textContent = SRC;
+fetch('./' + SRC + '?v=' + Date.now()).then(r => {
   if (!r.ok) throw new Error('HTTP ' + r.status);
   return r.json();
 }).then(d => {
