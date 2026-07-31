@@ -47,6 +47,7 @@ async def _run_one(bars_by, mode, args) -> dict:
 
 
 def main() -> None:
+    global DATA
     p = argparse.ArgumentParser()
     p.add_argument("--symbols", default="Si,GD")
     p.add_argument("--mode", default="both", choices=["zero", "proxy", "both"])
@@ -60,8 +61,6 @@ def main() -> None:
     p.add_argument("--data", default=DATA, help="каталог кэша баров")
     p.add_argument("--json-out", default="", dest="json_out", help="файл для полных метрик")
     args = p.parse_args()
-
-    global DATA
     DATA = args.data
     keys = _all_keys() if args.symbols == "all" else [s.strip() for s in args.symbols.split(",")]
     bars_by = {}
