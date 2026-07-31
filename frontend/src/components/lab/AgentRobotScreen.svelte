@@ -293,9 +293,40 @@
         fills.push({ time: t.time, side: t.side, qty: t.qty, price: t.price, order_id: t.order_id });
       }
     });
-    // Agent robots trade MARKETABLE (cross the spread) in BOTH paper and real, so the
-    // per-trade P&L is netted with the TAKER model — matching the runner's realized and
-    // the backtest (paper used to net maker here, disagreeing with the runner).
+    // ЯРЛЫК И ДЕНЬГИ — ИЗ ОДНОЙ ПОЗИЦИОННОЙ ИСТОРИИ. Ярлык считался пересчётом хвоста
+    // ЗЕРКАЛА (200 филлов): хвост начинается ПОСЕРЕДИНЕ позиции, и если первым в нём
+    // стоит sell, пересчёт решает, что робот в ШОРТЕ. У лонгового MACD·RIU6 (31.07.2026)
+    // из-за этого покупки-доборы получали ярлык «SL ч.», продажи-закрытия — «AVG», а
+    // деньги журнала садились на противоположные строки: колонка P&L показывала 0 ₽ у
+    // строки с ярлыком стопа. Журнал ведёт позицию непрерывно (pos_after), поэтому роль
+    // сделки берём из НЕГО — тем же потоком событий, что рисует график.
+    if (ledgerFromFlat) {
+      const byOrder = new Map<string, any>();
+      for (const e of tradeEvents(groupByOrder(ledgerTail as any[]), 60, pointCoef ?? 1, symbol, true))
+        byOrder.set(String((e as any).id ?? ''), e);
+      const m = new Map<number, { action: string; cls: string; pnl: number | null; comm: number | null }>();
+      const seen = new Set<string>();
+      for (const i of idx) {
+        const oid = String(trades[i]?.order_id ?? '');
+        const e = byOrder.get(oid);
+        const led = ledgerByOrder.get(oid);
+        // Ордер, исполнившийся несколькими сделками, стоит в таблице несколькими
+        // строками, а решение и деньги у него ОДНИ (журнал уже суммирован по ордеру):
+        // показываем их на первой строке, иначе колонка и итог удвоят один результат.
+        const first = !!oid && !seen.has(oid);
+        if (oid) seen.add(oid);
+        // Нет сделки в окне журнала -> роль НЕ выдумываем: пустая ячейка честнее
+        // ярлыка, посчитанного от неизвестной позиции.
+        m.set(i, e ? { ...mapAction(e), pnl: first && led ? led.gross : null,
+                       comm: first && led ? led.comm : null }
+                   : { action: '', cls: '', pnl: null, comm: null });
+      }
+      return m;
+    }
+    // Журнала нет (бумажный робот / сделки старше журнала) — прежний пересчёт филлов
+    // зеркала по индексу. Agent robots trade MARKETABLE (cross the spread) in BOTH paper
+    // and real, so the per-trade P&L is netted with the TAKER model — matching the
+    // runner's realized and the backtest.
     const evs = tradeEvents(fills, 60, pointCoef ?? 1, symbol, true);
     const m = new Map<number, { action: string; cls: string; pnl: number | null; comm: number | null }>();
     evs.forEach((e: any, k: number) => {
