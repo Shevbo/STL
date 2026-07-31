@@ -73,6 +73,45 @@ async def test_ladder_never_exceeds_avg_max():
 
 
 @pytest.mark.asyncio
+async def test_sl_pct_exits_at_percent_of_entry():
+    """Стоп процентом от цены входа: вход 100, sl_pct=100 (1%) -> выход на 99."""
+    p = {**BASE, "avg_step_atr": 0, "tp_atr": 0, "sl_pct": 100}
+    rt = _FakeRT()
+    for i in range(8):                       # прогрев + вход в лонг @100
+        await step(rt, 1, i * 60, 100.0, p)
+    assert rt.signed == 2
+    await step(rt, 1, 9 * 60, 99.5, p)       # -0.5% — рано
+    assert rt.signed == 2
+    await step(rt, 1, 10 * 60, 98.9, p)      # -1.1% — стоп
+    assert rt.signed == 0
+    assert rt.orders[-1][0] == "sell"
+
+
+@pytest.mark.asyncio
+async def test_nearest_of_the_two_stops_wins():
+    """Включены оба стопа — выходим по ближнему, иначе потолка убытка нет."""
+    # tp=10×ATR, sl_frac=50 -> стоп в 5×ATR. ATR тут ~0.5, значит ~2.5 пункта.
+    # sl_pct=50 (0.5% от 100) = 0.5 пункта — он ближе и обязан сработать первым.
+    p = {**BASE, "avg_step_atr": 0, "tp_atr": 100, "sl_frac": 50, "sl_pct": 50}
+    rt = _FakeRT()
+    for i in range(8):
+        await step(rt, 1, i * 60, 100.0 + (i % 2), p)   # движение -> ATR > 0
+    entry = rt.avg
+    await step(rt, 1, 9 * 60, entry - entry * 0.006, p)
+    assert rt.signed == 0, "ближний (процентный) стоп обязан сработать"
+
+
+@pytest.mark.asyncio
+async def test_sl_pct_off_changes_nothing():
+    p = {**BASE, "avg_step_atr": 0, "tp_atr": 0, "sl_pct": 0}
+    rt = _FakeRT()
+    for i in range(8):
+        await step(rt, 1, i * 60, 100.0, p)
+    await step(rt, 1, 9 * 60, 90.0, p)       # -10% и никакого стопа
+    assert rt.signed == 2
+
+
+@pytest.mark.asyncio
 async def test_gap_auto_uses_amplitude_over_nd_days():
     """Разножка «Авто» = [амплитуда за ND дней] / avg_max и реально режет доборы.
 

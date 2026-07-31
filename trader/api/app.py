@@ -2183,7 +2183,13 @@ def create_app() -> FastAPI:
                 return float(p.get("qty", 1) or 1) <= 10 and float(p.get("avg_max", 1) or 1) <= 10
             except Exception:
                 return True
-        rows = [r for r in rows if _pos_le10(r)]
+        # Кампания, ЦЕЛИКОМ собранная из конфигов крупнее 10 контрактов (перебор вокруг
+        # живого робота: avg_max=34), обнулялась этим фильтром, и витрина печатала
+        # «кампания только стартовала» про ЗАКОНЧЕННЫЙ перебор — то есть врала. Пустой
+        # остаток = показываем кампанию как есть и помечаем, что она вне ≤10-универсума.
+        kept = [r for r in rows if _pos_le10(r)]
+        out["big_position"] = bool(rows) and not kept
+        rows = kept or rows
         out["combos"] = len(rows)
         if not rows:
             return out
