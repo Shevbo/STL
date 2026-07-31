@@ -57,8 +57,12 @@ def main() -> None:
     p.add_argument("--days", type=int, default=0, help="keep last N days only (0=full)")
     p.add_argument("--llm", action="store_true")
     p.add_argument("--blend", action="store_true")
+    p.add_argument("--data", default=DATA, help="каталог кэша баров")
+    p.add_argument("--json-out", default="", dest="json_out", help="файл для полных метрик")
     args = p.parse_args()
 
+    global DATA
+    DATA = args.data
     keys = _all_keys() if args.symbols == "all" else [s.strip() for s in args.symbols.split(",")]
     bars_by = {}
     for k in keys:
@@ -80,9 +84,15 @@ def main() -> None:
         per = m.pop("per_symbol", {})
         print(f"\n=== mode={mode}  wall={m['wall_secs']}s  ticks={m['ticks']} ===")
         print(json.dumps(m, ensure_ascii=False))
-        for sym, d in per.items():
-            print(f"  {sym:10} open={d['opens']:>3} (L{d['longs']}/S{d['shorts']}) "
-                  f"close={d['closes']:>3} win={d['wins']:>3} pnl={d['pnl']:+.4f}")
+        for sym, d in sorted(per.items(), key=lambda kv: -kv[1]["net"]):
+            print(f"  {sym:10} open={d['opens']:>4} (L{d['longs']}/S{d['shorts']}) "
+                  f"close={d['closes']:>4} win={d['wins']:>4} "
+                  f"gross={d['pnl'] * 100:+.2f}% fee={d['fees'] * 100:.2f}% net={d['net'] * 100:+.2f}%")
+        m["per_symbol"] = per
+    if args.json_out:
+        with open(args.json_out, "w", encoding="utf-8") as f:
+            json.dump(out, f, ensure_ascii=False, indent=1)
+        print(f"\nметрики: {args.json_out}")
 
 
 if __name__ == "__main__":
