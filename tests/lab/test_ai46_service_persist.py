@@ -53,6 +53,29 @@ def test_persist_encodes_role_weight_and_fill_time():
     assert s["closes"] == 1 and abs(trades[1]["ret_pct"] - 1.0) < 1e-9
 
 
+def test_flush_closes_paper_positions_when_the_session_ends():
+    """Биржа закрылась — позиции закрываются, а не висят через ночь.
+
+    Раньше сессионный автомат тикал по стенным часам на ЗАМОРОЖЕННЫХ барах: около
+    3 600 из 14 040 филлов записаны в 00:00-07:00 МСК по вчерашним ценам.
+    """
+    pool = _StubPool()
+    svc = _svc(pool)
+    svc.runner.exec.set_time(1_780_000_000.0)
+    svc.runner.exec.set_price("SiU6", 80000.0)
+    svc.runner.exec.enter_long("SiU6", "contrarian", 0.02, 0.015, 0.025)
+    svc.runner.sessions["SiU6"] = object()
+
+    asyncio.run(svc._flush_positions())
+    assert svc.runner.exec.positions == {}
+    assert svc.runner.sessions == {}
+    kinds = [PF.parse_meta(r[6])["kind"] for r in pool.rows]
+    assert kinds == ["open", "close_hard"]
+
+    asyncio.run(svc._flush_positions())          # повторный вызов ничего не пишет
+    assert len(pool.rows) == 2
+
+
 def test_seq_survives_a_service_restart():
     """Счётчик _persisted обнуляется рестартом — order_id всё равно не должен совпасть."""
     pool = _StubPool()
