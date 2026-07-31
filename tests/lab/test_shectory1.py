@@ -32,6 +32,20 @@ async def _fall(rt, params, bars=20, start=100.0, t0=DAY):
         await step(rt, 1, t0 + i * 60, start - i, params)
 
 
+def test_warmup_covers_the_longest_ema():
+    """Прогрев обязан покрывать САМУЮ ДЛИННУЮ EMA, даже когда fast > slow.
+
+    Живой конфиг fast=57/slow=48: формула slow+signal+2 даёт окно 60 баров, и на
+    RIU6 M1 за 01.06-31.07.2026 сигнал не перевернулся НИ РАЗУ (при окне 120+ —
+    ~1450 переворотов). Робот в таком бэктесте набирает потолок за три дня и стоит
+    в позиции два месяца.
+    """
+    from trader.lab.strategies.library import REGISTRY
+    w = REGISTRY["macd_shectory1"]["warmup"]
+    assert w({"fast": 57, "slow": 48, "signal": 10}) >= 4 * 57
+    assert w({"fast": 12, "slow": 26, "signal": 9}) >= 4 * 26
+
+
 @pytest.mark.asyncio
 async def test_k_avg_grows_each_add_half_up():
     """k_avg=1.5: доборы 3, 5, 8, 12 после базового входа 2 (округление вверх)."""

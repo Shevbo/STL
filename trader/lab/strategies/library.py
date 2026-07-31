@@ -455,8 +455,15 @@ register("macd_shectory1", "MACD trend Shectory1",
          "https://github.com/topics/macd",
          [SYM, P("fast", "Быстрая EMA", 12, 3, 60), P("slow", "Медленная EMA", 26, 10, 60),
           P("signal", "Сигнальная", 9, 3, 30), P("qty", "Контрактов", 1, 1, 10)],
-         sig_macd, lambda p: int(p["slow"]) + int(p["signal"]) + 2,
+         sig_macd, lambda p: 4 * max(int(p["fast"]), int(p["slow"])) + int(p["signal"]),
          avg=AVG_PARAMS + SHECTORY1_PARAMS)
+# ПРОГРЕВ: 4 × САМОГО ДЛИННОГО периода, а не slow+signal+2 (формула macd_cross).
+# Измерено на RIU6 M1, 01.06-31.07.2026, конфиг живого робота fast=57/slow=48:
+# окно 60 баров (= slow+signal+2) даёт 0 переворотов сигнала за два месяца, окно
+# 120+ даёт ~1450. Причина: при fast > slow окно едва длиннее самой длинной EMA,
+# она не успевает разойтись с сигнальной линией, и знак MACD залипает навсегда.
+# Робот тогда набирает потолок позиции за первые дни и стоит в ней месяцами —
+# бэктест такого набора параметров измеряет не стратегию, а первые три дня.
 
 
 # 2. Bollinger Bands mean-reversion
