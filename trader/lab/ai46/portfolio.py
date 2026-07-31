@@ -24,6 +24,14 @@ reversal_hold 30 мин), а усреднений у неё нет ПО КОНС
 from __future__ import annotations
 
 _PREFIX = "ai46"
+# Позиция, открытая раньше этого срока относительно КОНЦА истории, открытой быть не
+# может: выход у стратегии строго по времени, максимум reversal_hold = 30 минут. Всё
+# старше — вход, чей выход потерян рестартом сервиса (PaperExecutor держит позиции в
+# памяти). Без этой отсечки витрина показывала «открыто сейчас: 15» при лимите 5, с
+# входами месячной давности по уже истёкшим контрактам.
+# ponytail: константа, а не чтение primary_hold/reversal_hold из BotParams — параметры
+# живут в другом процессе; понадобится точность, прокинуть их сюда.
+_LOST_AFTER_SECS = 3 * 3600
 
 
 def parse_meta(order_id) -> dict | None:
@@ -107,6 +115,11 @@ def enrich(trades: list[dict]) -> dict:
 
     times = [t["time"] for t in trades if t.get("time") is not None]
     days = ((max(times) - min(times)) / 86400.0) if len(times) > 1 else 0.0
+    # Живые позиции против потерянных рестартом (см. _LOST_AFTER_SECS).
+    end = max(times) if times else 0
+    live_pos = {s: p for s, p in open_pos.items()
+                if end - (p.get("time") or 0) <= _LOST_AFTER_SECS}
+    lost = len(open_pos) - len(live_pos)
     return {
         "mode": "portfolio",
         "instruments": len({t.get("symbol") for t in trades if t.get("symbol")}),
@@ -124,11 +137,12 @@ def enrich(trades: list[dict]) -> dict:
         "weighted_closes": weighted,
         "ann_pct": (port_sum * 100.0 * 365.0 / days) if (weighted and days >= 3) else None,
         "orphans": orphans,
+        "lost": lost,
         "days": days,
         "open_now": [
             {"symbol": s, "side": p.get("side"), "price": float(p.get("price") or 0),
              "iso": p.get("iso"), "size_pct": p.get("size_pct")}
-            for s, p in sorted(open_pos.items())
+            for s, p in sorted(live_pos.items())
         ],
         "by_symbol": sorted(by_sym.values(), key=lambda x: x["ret_sum_pct"], reverse=True),
     }
@@ -161,6 +175,13 @@ def demo() -> None:
     assert abs(s["port_pct"] - 0.015) < 1e-9      # взвешенный итог — только по SiU6
     assert s["weighted_closes"] == 1 and s["instruments"] == 3
     assert [o["symbol"] for o in s["open_now"]] == ["GDU6"]
+
+    # Вход месячной давности при выходе строго по времени = позиция потеряна рестартом,
+    # «открытой сейчас» она быть не может.
+    old = [{"time": 0, "symbol": "BRN6", "side": "buy", "price": 72.9, "order_id": "ai46:0:open:100"},
+           {"time": 30 * 86400, "symbol": "SiU6", "side": "buy", "price": 80000, "order_id": "ai46:1:open:100"}]
+    s2 = enrich(old)
+    assert s2["lost"] == 1 and [o["symbol"] for o in s2["open_now"]] == ["SiU6"]
     print("ai46.portfolio demo ok")
 
 

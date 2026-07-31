@@ -448,9 +448,9 @@
                   <span class="sub">{pf.fills} филлов</span></div>
                 <div class="r-row"><span>Открыто сейчас</span><b>{pf.open_now.length}</b>
                   <span class="sub">{pf.open_now.map((o: any) => o.symbol).join(' ') || '—'}</span></div>
-                {#if pf.orphans}
-                  <div class="r-row"><span>Филлов без пары</span><b class="neg">{pf.orphans}</b>
-                    <span class="sub">потеряны рестартом сервиса</span></div>
+                {#if pf.orphans || pf.lost}
+                  <div class="r-row"><span>Позиций потеряно</span><b class="neg">{pf.lost + pf.orphans}</b>
+                    <span class="sub">рестарты сервиса</span></div>
                 {/if}
               </div>
               {#if pf.weighted_closes < pf.closes}
