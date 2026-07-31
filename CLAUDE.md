@@ -23,6 +23,11 @@ codebases in one repo, joined by two gRPC contracts:
   nginx; `/api` + `/ws` proxied to uvicorn. Per-robot showcase:
   `/?agent_robot=<robot_id>` (AgentRobotScreen). Two-level burger nav (`NavMenu.svelte`)
   is mounted on EVERY screen; deep links `?orders=1`/`?tables=1`/`?equity=1` open frames.
+  Panels are `Frame.svelte` (collapse + maximize via a shared `maxId`) split by
+  `Splitter.svelte`, each size persisted per layout profile. The browser tab title is set
+  from what is open (`lib/page-title.ts`) — content first, product suffix last, since a
+  narrow tab shows only the first characters; a full-page screen owns its own title and
+  the shell must not overwrite it.
 - **Companion** (`companion/`) — pure-Go (NO cgo) Windows tray panel `STLCompanion.exe`:
   frameless always-on-top WebView2 window bottom-right. The exe is only a shell (tray,
   window, token, loopback proxy); the PAGE is `frontend/public/companion.html` served
@@ -96,9 +101,14 @@ robots included — label it that way). Robots are edited from the GUI: params v
 params_json alone = light SetRobotParams (next bar); a different max_position/schedule =
 full spec re-deploy built from the MIRROR echo (paper strictly from the mirror — that
 route can never arm/disarm; 409 when the robot is absent from the mirror, never a silent
-ignore). The paper/real toggle via `/api/robot/{id}/mode` exists ONLY on the agent (never
-STL) and refuses a non-flat robot — arming real money is local-console-only, gated on
-FLAT (position 0 + no working/in-flight order + status known) + typed robot-ID confirm.
+ignore). Mode flips are ASYMMETRIC by design: ARMING (paper->real) exists ONLY on the
+agent (`/api/robot/{id}/mode`, local console), gated on FLAT (position 0 + no
+working/in-flight order + status known) + typed robot-ID confirm. DISARMING (real->paper)
+is safe and therefore also remote: `POST /api/v1/quik/robots/{id}/to-paper` relays a full
+DeployRobot from the mirror echo with `paper=true`, re-checking the same gates (in mirror,
+typed id, flat, no working order). Real statistics survive it — the runner resets
+realized/fills only on the paper->real transition (`arming` in `robot_runner/host.py`), and
+`algo_trades` keeps its rows `mode='real'` forever. There is no STL route that can arm.
 Recon never generates a `close_position` step (a position is contextual — it can include
 the operator's manual trading); align does `cancel_order` (orphan) + `fix_state` only,
 and the Aligner is structurally unable to place an account-net order. On the stand the P&L
@@ -152,11 +162,17 @@ master flag; it pushes only the whitelist + numeric caps via `SetLimits` on conn
 two whitelists cannot silently diverge), and the agent echoes its effective limits back via
 `LimitsState`. A rejected order text "Торговля QUIK отключена" therefore means the AGENT's
 local flag is off. Numeric caps: effective = min(agent_config backstop, STL push), and the
-agent only TIGHTENS a push live — it re-reads WIDER caps ONLY at start. To raise caps:
-STL env (`QUIK_MAX_CONTRACTS_PER_ORDER`/`QUIK_MAX_WORKING_CONTRACTS`) + restart STL FIRST,
-THEN restart the agent (wrong order leaves the old tight caps in force; bit live). Chain
-sizing sanity: a robot reversal = close N + open N = 2N contracts in flight at once, so
-working cap ≥ 2×per-order. Phantom orders QUIK never acknowledges are reconciled to
+agent only TIGHTENS a push live (`Guard.ApplyPushed` is ceiling-only) — it re-reads WIDER
+caps ONLY at start, from `agent_config.json`, which is VDS-side and operator-only. To raise
+caps: STL env (`QUIK_MAX_CONTRACTS_PER_ORDER`/`QUIK_MAX_WORKING_CONTRACTS`) + restart STL
+FIRST, THEN restart the agent (wrong order leaves the old tight caps in force; bit live).
+A wider push that the agent ignores STILL bumps `last_push_unix_ms`, so judge "applied" by
+the numbers in `LimitsState`, never by the push timestamp (30.07.2026: env 34/70 pushed,
+effective stayed 18/20, then 20/20 = the file's own backstop until the operator edited it).
+Chain sizing sanity: the whole-book exit is ONE order, and a reversal holds exit + fresh
+entry in flight, so `max_position ≤ per-order cap` AND `max_position + qty ≤ working cap`.
+Exceed either and the robot can OPEN via averaging but never CLOSE (bit live 21.07.2026).
+Phantom orders QUIK never acknowledges are reconciled to
 terminal on BOTH sides (STL `OrderStore.reconcile_pending`, agent
 `Manager.reconcileStalePending`, ~20s) so they cannot occupy the working-contracts budget
 forever. The agent does NOT persist its own working-order table across restarts: orders
@@ -207,7 +223,22 @@ scriptCode `from ...strategies.<name> import on_bar, on_start, on_stop`. Either 
 row is tagged back to its strategy id on ingest by `_strat_id_from_code` (`api/app.py`) parsing
 the scriptCode — a strategy the regex can't match lands untagged. Param ranges in each schema
 drive both the Optimizer UI and campaign grids. The backtester + optimizer sweep jobs live
-here too (self-healing orphan reaper in `api/app.py`). COUNTER-strategies: any registry id
+here too (self-healing orphan reaper in `api/app.py`).
+
+`make_on_bar` is the position-management layer every REGISTRY strategy inherits (AVG_PARAMS,
+injected by `register`): averaging ladder (`avg_max`/`avg_step_atr`), take-profit `tp_atr`
+(×ATR/10), «разножка» `min_gap_pts`, cooldown, betting/SuperAverage — and since 30.07.2026 a
+STOP-LOSS `sl_frac`, expressed as a PERCENT OF THE TP DISTANCE (50 = half-way to the take),
+0 = off = the historic "averaging instead of a stop". Three rules make it real, keep them:
+the stop is checked BEFORE averaging (else the robot tops up a position it should be
+leaving), it books as a LOSS for the betting/escalation state, and after it fires the SAME
+signal is blocked until it flips or disappears (`sl_block`) — without that the strategy
+re-enters on the very next bar and the stop bounds nothing. Standalone modules do NOT get
+this layer; each carries its own exits (e.g. `us_open_fvg`: stop from the range edge,
+target at `rr_x10` × risk, so widening the stop widens the target — sweep the pair, never
+the stop alone).
+
+COUNTER-strategies: any registry id
 plus suffix `__inv` (e.g. `macd_cross__inv`) is first-class — `make_on_bar` strips the
 suffix and NEGATES the base signal (on some contracts fading the signal is robustly
 profitable where following it loses). `queue_campaign.py` and Botstore synthesize the
@@ -234,6 +265,25 @@ unfilled children at session end: the watcher marks those `orphaned` («доче
 не дожила») and the UI offers re-arm; never auto-rearm. UI: `components/orders/`
 (OrdersFrame tabs: обычная/умные/графики позиций; texts+colors in
 `lib/smart-order-help.ts` — one source for the frame, chart lines and legend).
+
+**Robot stand «системный монитор» + LLM companion** (`trader/api/quik_robot_chat.py`,
+console in `AgentRobotScreen`): the stand's header is three mini-frames (status / actions /
+monitor). The monitor is a green-monochrome console that logs operator COMMANDS, their
+replies and STATE TRANSITIONS (mode, pause, exit-only) with a date-time prefix, 1000 lines
+in localStorage — and doubles as a chat with a per-robot LLM companion. Hard boundaries,
+pinned by `tests/quik/test_robot_chat.py`: the router exposes exactly ONE endpoint and it
+mutates NOTHING (read-only by construction, the model has no tools); the persona answers
+only about THIS robot; and money is precomputed server-side and handed over as finished
+numbers, because the model multiplies points by contracts wrong (it once reported −262k
+where the truth was −8.9k). LLM access is Lineman-only (federation policy 18.06.2026):
+`POST {LINEMAN_URL}/api/klod/ask`, hoster is inside WireGuard so it dials the proxy
+directly, and NO provider key ever lives in this service. Two operational traps: the
+`normal` hint routinely 502s over a shared-quota upstream 429, so the code walks a hint
+chain (`lineman_model_hint` + `lineman_model_fallbacks`) to the first live one; and Lineman
+answers `{"error": "bad JSON"}` to any body over ~32 000 chars — that is a SIZE limit, not
+a parse error, so `build_prompt` trims to `PROMPT_BUDGET` by priority (history first, then
+docs, then the trade tail) and never touches the persona at the head or the question at the
+tail.
 
 **Strategy time semantics (nearly cost real money):** backtest/ISS bars are MSK-wall
 stamped as UTC; the AGENT RUNNER builds TRUE-UTC bars from the QUIK tape. A wall-clock
@@ -304,6 +354,13 @@ bash deploy/build_runner.sh                         # -> dist/runner/robot-runne
 # directly, or use PowerShell.
 cd frontend && node ./node_modules/vite/bin/vite.js build
 node ./node_modules/vitest/vitest.mjs run           # tests
+node ./node_modules/vitest/vitest.mjs run src/lib/lab-analytics.flat.test.ts   # one file
+
+# Ad-hoc backtest of a live config (answering "what would X have done"): run it ON THE
+# HOSTER — MOEX ISS is unreachable from the dev box (httpx ConnectTimeout), and the i9
+# queue is for sweeps. load_bars_iss + run_single_backtest directly, one combo at a time,
+# `nice -n 15` (shared box). To try UNCOMMITTED strategy code there, load the patched
+# library by PATH (importlib) instead of overwriting the prod file.
 
 # Portal-authed API from a shell (mirror/status/orders endpoints) — mint a session
 # Bearer ON THE HOSTER with the app's own signer (never print the secret):
@@ -376,6 +433,14 @@ ssh hoster 'cd ~/apps/shectory-trader && set -a; . ~/.shectory_trade.env; set +a
   before running any wall-clock-anchored strategy on the agent.
 - **Runner P&L is in PRICE POINTS**, not rubles. Convert with the instrument point value
   (`coef = step_cost / price_step`, served by `/api/v1/quik/params` from the QLua feed).
+- **The QLua/ISS `margin` is the EXCHANGE's ГО, not what the account pays.** The broker
+  charges a multiple (30.07.2026, RIU6: exchange 22 375 ₽, account 53 672 ₽ = 2.4x), so
+  every report built on the feed value understated capital and overstated «доходность в
+  год» by exactly that factor. `QUIK_MARGIN_MULTIPLIER` (default 1.0) is applied where
+  exchange margin becomes money for reporting: the companion snapshot and the robot card
+  (shipped to the UI as `margin_multiplier` in `/api/v1/quik/params`). It is a REPORTING
+  correction only — nothing sizes orders off it. The truth for the account is
+  `cbplused`/`cbplplanned` in the agent's money block.
 - **VDS environment:** PyInstaller exes need the Universal CRT (vc_redist.x64) installed
   there; the VDS clock has drifted minutes before — the agent now runs `w32tm /resync`
   hourly itself (main.go), but still check the clock FIRST when freshness looks wrong.
@@ -404,6 +469,18 @@ ssh hoster 'cd ~/apps/shectory-trader && set -a; . ~/.shectory_trade.env; set +a
   chart takes `closeSeries` from the journal; with no journal it draws NOTHING plus an
   honest note (a drawn lie looks like truth). `tradeEvents` fee share on partial closes
   is pinned by `lab-analytics.fees.test.ts`.
+- **One classifier, one fill set, one fee model — or the stand contradicts itself.** The
+  chart markers and the «Сделки робота» table both label TP/SL/AVG through `tradeEvents`,
+  so any divergence in their INPUTS shows up as the same trade labelled two ways (both
+  seen live 30.07.2026). Three invariants: (1) the journal window must start from a
+  PROVABLE flat — `fromLastFlat` trims to the last `pos_after == 0`, because the fetch is
+  capped (`limit=1000`) and a robot that outgrew it silently fell back to the mid-position
+  tail replay and painted profitable closes as SL; (2) fills are grouped by ORDER
+  (`groupByOrder`) — the journal stores a row per QUIK trade, and one order filling 1+1+1+2
+  read as OPEN plus three phantom «усреднений»; (3) agent robots cross the spread, so the
+  fee model is TAKER everywhere — the ledger (`commission_for(..., taker=True)`) and the
+  runner (`taker_points`) already are, the chart's old maker default was legacy from the
+  human maker engine.
 - **Agent flush discipline:** the link sends only CHANGED securities/params/ticks
   (poll_interval_sec=1 in prod); keep new frame types change-gated or STL CPU pays x5.
   Gate by CONTENT when the publisher re-stamps unchanged data every cycle (the Lua book
