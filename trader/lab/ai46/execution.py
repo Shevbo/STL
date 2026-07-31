@@ -42,6 +42,27 @@ class PaperExecutor:
 
     def set_price(self, ticker: str, price: float) -> None:
         self.prices[ticker] = price
+        self._check_exits(ticker, price)
+
+    def _check_exits(self, ticker: str, price: float) -> None:
+        """Стоп/тейк, которые сессия задаёт при входе (stop_pct 1.5% / take_pct 2.5%
+        в contrarian.go), НИКТО не проверял: _Pos их хранил, и позиция закрывалась
+        ТОЛЬКО по таймеру удержания (15 мин основная нога, 30 мин разворотная).
+        Прибыль срезалась таймером, убыток шёл до конца — 7 014 сделок за 41 день,
+        win rate 23%, суммарная доходность −12.6%. Уровни были мёртвым параметром.
+
+        ponytail: проверка на закрытии бара (цены приходят из 1m-баров), внутрибарных
+        касаний не видим — понадобится точность, кормить исполнение лентой сделок.
+        """
+        pos = self.positions.get(ticker)
+        if pos is None or pos.entry <= 0:
+            return
+        dirmul = 1.0 if pos.side == "long" else -1.0
+        ret = (price - pos.entry) / pos.entry * dirmul
+        if pos.take_pct and ret >= pos.take_pct:
+            self._close(ticker, "close_take")
+        elif pos.stop_pct and ret <= -pos.stop_pct:
+            self._close(ticker, "close_stop")
 
     def set_time(self, now: float) -> None:
         self._now = now

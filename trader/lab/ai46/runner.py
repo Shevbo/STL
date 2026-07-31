@@ -81,8 +81,10 @@ class Ai46Runner:
             feat = self.fe.compute(sym, bars, self.flow)
             if feat is None:
                 continue
-            self.exec.set_price(sym, bars[-1].close)
+            # set_time ПЕРЕД set_price: цена может закрыть позицию по стопу/тейку прямо
+            # внутри set_price, и филл должен получить время ЭТОГО тика, а не прошлого.
             self.exec.set_time(now)
+            self.exec.set_price(sym, bars[-1].close)
             self.risk.set_regime(feat.hmm_state)
 
             sigs = self.detector.check_ticker(sym, feat, now)

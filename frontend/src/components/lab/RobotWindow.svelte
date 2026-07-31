@@ -166,6 +166,8 @@
     open: { text: 'вход', cls: 'tt-open' },
     close_soft: { text: 'выход · время', cls: 'tt-enf' },
     close_hard: { text: 'выход · принуд.', cls: 'tt-rev' },
+    close_take: { text: 'тейк', cls: 'tt-tp' },
+    close_stop: { text: 'стоп', cls: 'tt-sl' },
     close: { text: 'выход', cls: 'tt-enf' },
   };
   const pfTypeLabel = (t: any) => PF_KIND[t?.kind] ?? { text: t?.kind ?? '—', cls: 'tt-none' };
