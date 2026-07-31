@@ -2241,13 +2241,16 @@ def create_app() -> FastAPI:
         # показывала НЕ глобального лидера (573k вместо 724k) — расходясь с «Историей
         # прогонов». Тот же фильтр ≤10, что у лидера истории (lab_campaigns) => best[0]
         # == лидер строки истории, клик по строке ведёт РОВНО на показанного лидера.
-        best_rows = await pool.fetch(
+        _best_sql = (
             "SELECT total_return, recovery_factor, net_profit, total_trades, strategy, "
             "symbol, params, date_from, date_to FROM optimization_leaderboard "
-            "WHERE campaign_run=$1 AND net_profit IS NOT NULL "
-            "AND COALESCE(NULLIF(params->>'qty','')::numeric, 1) <= 10 "
-            "AND COALESCE(NULLIF(params->>'avg_max','')::numeric, 1) <= 10 "
-            "ORDER BY net_profit DESC NULLS LAST LIMIT 6", id)
+            "WHERE campaign_run=$1 AND net_profit IS NOT NULL {flt}"
+            "ORDER BY net_profit DESC NULLS LAST LIMIT 6")
+        _le10 = ("AND COALESCE(NULLIF(params->>'qty','')::numeric, 1) <= 10 "
+                 "AND COALESCE(NULLIF(params->>'avg_max','')::numeric, 1) <= 10 ")
+        best_rows = await pool.fetch(_best_sql.format(flt=_le10), id)
+        if not best_rows:      # кампания целиком крупнее 10 контрактов — показываем её
+            best_rows = await pool.fetch(_best_sql.format(flt=""), id)
         best = list(best_rows)
         for r in best:
             p = r["params"]
@@ -2304,9 +2307,10 @@ def create_app() -> FastAPI:
                    date_from, date_to
             FROM optimization_leaderboard
             WHERE campaign_run IS NOT NULL AND net_profit IS NOT NULL
-              AND COALESCE(NULLIF(params->>'qty','')::numeric, 1) <= 10
-              AND COALESCE(NULLIF(params->>'avg_max','')::numeric, 1) <= 10
-            ORDER BY campaign_run, net_profit DESC NULLS LAST
+            ORDER BY campaign_run,
+                     (COALESCE(NULLIF(params->>'qty','')::numeric, 1) <= 10
+                      AND COALESCE(NULLIF(params->>'avg_max','')::numeric, 1) <= 10) DESC,
+                     net_profit DESC NULLS LAST
             """)
         lead = {r["campaign_run"]: r for r in leaders}
         # ГО (initial margin) per contract lives in instrument_meta, not the leaderboard.
