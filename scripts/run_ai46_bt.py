@@ -23,22 +23,60 @@ from trader.lab.runtime import Bar
 DATA = os.path.join("data", "ai46_bt")
 
 
-def _load(key: str) -> list[Bar]:
+def _load(key: str) -> tuple[list[Bar], str]:
     with open(os.path.join(DATA, key + ".pkl"), "rb") as f:
         d = pickle.load(f)
-    return [Bar(time=r[0], open=r[1], high=r[2], low=r[3], close=r[4], volume=r[5])
-            for r in d["rows"]]
+    return ([Bar(time=r[0], open=r[1], high=r[2], low=r[3], close=r[4], volume=r[5])
+             for r in d["rows"]], d.get("secid") or key)
+
+
+async def _point_values(secids: dict[str, str]) -> dict[str, float]:
+    """₽ за пункт по каждому инструменту из instrument_meta (кэш ISS).
+
+    Без них Ai46Backtester считал комиссию при pointValue=1, то есть от «ноционала»
+    = цена в пунктах: у BR (цена ~70) это давало 0.64% за сторону вместо сотых долей
+    процента и в одиночку топило результат. Комиссия FORTS берётся от НОМИНАЛА
+    контракта, а он равен цена × ₽/пункт.
+    """
+    from trader.config import Settings
+    from trader.db import close_pool, get_pool, init_pool
+    from trader.lab.market_store import (
+        ensure_instrument_meta_table, get_instrument_meta, refresh_instrument_spec,
+    )
+    s = Settings()
+    if not s.lab_db_url:
+        print("WARN: lab_db_url не задан — комиссия будет считаться при ₽/пункт=1")
+        return {}
+    await init_pool(s.lab_db_url)
+    pool = get_pool()
+    await ensure_instrument_meta_table(pool)
+    out: dict[str, float] = {}
+    for key, secid in secids.items():
+        m = await get_instrument_meta(pool, secid)
+        if not m or m.get("point_value") is None:
+            try:
+                m = await refresh_instrument_spec(pool, secid)
+            except Exception as exc:  # noqa: BLE001
+                print(f"WARN: {key}/{secid}: {type(exc).__name__} {exc}")
+                m = None
+        if m and m.get("point_value"):
+            out[key] = float(m["point_value"])
+        else:
+            print(f"WARN: нет ₽/пункт для {key}/{secid} — комиссия по нему занижена")
+    await close_pool()
+    return out
 
 
 def _all_keys() -> list[str]:
     return sorted(f[:-4] for f in os.listdir(DATA) if f.endswith(".pkl"))
 
 
-async def _run_one(bars_by, mode, args) -> dict:
+async def _run_one(bars_by, mode, args, pvs) -> dict:
     bt = Ai46Backtester(
         bars_by, step_secs=args.step, window_secs=args.window_days * 86400,
         ofi_mode=mode, model_refresh_secs=args.refresh, model_window=args.model_window,
         llm_enabled=args.llm, blend_tick=args.blend,
+        point_values=pvs, taker=True,
     )
     t0 = time.time()
     m = await bt.run()
@@ -63,22 +101,25 @@ def main() -> None:
     args = p.parse_args()
     DATA = args.data
     keys = _all_keys() if args.symbols == "all" else [s.strip() for s in args.symbols.split(",")]
-    bars_by = {}
+    bars_by, secids = {}, {}
     for k in keys:
-        b = _load(k)
+        b, secid = _load(k)
         if args.days > 0 and b:
             cutoff = b[-1].time - args.days * 86400
             b = [x for x in b if x.time >= cutoff]
         bars_by[k] = b
+        secids[k] = secid
     tot = sum(len(v) for v in bars_by.values())
     print(f"loaded {len(bars_by)} symbols, {tot} bars; "
           f"step={args.step}s window={args.window_days}d model_window={args.model_window} "
           f"refresh={args.refresh}s days={args.days or 'full'}")
+    pvs = asyncio.run(_point_values(secids))
+    print(f"₽/пункт: {pvs}")
 
     modes = ["zero", "proxy"] if args.mode == "both" else [args.mode]
     out = {}
     for mode in modes:
-        m = asyncio.run(_run_one({k: list(v) for k, v in bars_by.items()}, mode, args))
+        m = asyncio.run(_run_one({k: list(v) for k, v in bars_by.items()}, mode, args, pvs))
         out[mode] = m
         per = m.pop("per_symbol", {})
         print(f"\n=== mode={mode}  wall={m['wall_secs']}s  ticks={m['ticks']} ===")
