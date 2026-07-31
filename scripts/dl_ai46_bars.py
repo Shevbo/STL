@@ -7,10 +7,16 @@ the continuous front-roll loader (base code, e.g. Si/GD); perpetual *F futures
 data/ai46_bt/. Run repeatedly until all 20 are cached (one run may hit a wall
 clock limit; the next resumes).
 
-    python scripts/dl_ai46_bars.py
+    python scripts/dl_ai46_bars.py [--days 95] [--out data/ai46_bt_3m]
+
+--days глубина истории (по умолчанию ~6 месяцев), --out каталог кэша: прогон за
+конкретное окно не должен затирать общий кэш и наоборот (скрипт пропускает уже
+скачанные символы, поэтому «свежий» прогон в старом каталоге молча взял бы
+устаревшие бары).
 """
 from __future__ import annotations
 
+import argparse
 import asyncio
 import os
 import pickle
@@ -73,4 +79,9 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    _p = argparse.ArgumentParser()
+    _p.add_argument("--days", type=int, default=DAYS)
+    _p.add_argument("--out", default=OUT)
+    _a = _p.parse_args()
+    DAYS, OUT = _a.days, _a.out
     asyncio.run(main())
