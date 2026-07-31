@@ -13,21 +13,25 @@ network for the LLM gate and gRPC streams, which script_guard forbids).
 from __future__ import annotations
 
 import asyncio
+import datetime
 import time
 from decimal import Decimal
 from uuid import uuid4
 
+import httpx
 import structlog
 
 from trader.lab.ai46 import llm as LLM
 from trader.lab.ai46.order_flow import TradesStream
 from trader.lab.ai46.runner import Ai46Runner
+from trader.market_session import fetch_schedule, probe
 
 log = structlog.get_logger()
 
 ROBOT_ID = "team-46"
 ROBOT_NAME = "MOEX AI Trading Bot — team-46"
 _TICK_SECS = 60.0
+_SCHED_TTL = 3600.0        # официальное расписание почти статично
 _STL_LINK = "stl-finam-forts-01"
 _OWNER = "bshevelev75@gmail.com"
 
@@ -43,6 +47,10 @@ class Ai46Service:
         self._task: asyncio.Task | None = None
         self._running = False
         self._persisted = 0
+        self._http: httpx.AsyncClient | None = None
+        self._sched: dict = {}
+        self._sched_at = 0.0
+        self._was_open = True
 
     async def start(self) -> None:
         await self._bootstrap_robot()
@@ -63,6 +71,20 @@ class Ai46Service:
             self._task.cancel()
         if self._trades is not None:
             await self._trades.close()
+        if self._http is not None:
+            await self._http.aclose()
+        await self._set_deployed(False)
+
+    async def _set_deployed(self, on: bool) -> None:
+        """Флаг «робот работает» в витрине. Раньше bootstrap ставил его только при
+        создании строки (ON CONFLICT DO NOTHING), поэтому стенд месяц показывал
+        «остановлен» у робота, который торговал каждую минуту."""
+        if self.pool is None:
+            return
+        try:
+            await self.pool.execute("UPDATE robots SET deployed=$2 WHERE id=$1", ROBOT_ID, on)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("ai46.deployed_flag_failed", error=str(exc))
 
     async def _bootstrap_robot(self) -> None:
         if self.pool is None:
@@ -77,13 +99,68 @@ class Ai46Service:
                 "# team-46 backend AI strategy (not a sandbox script)",
                 {"symbol": self.symbols[0] if self.symbols else ""}, "09:00-23:55",
             )
+            # Список инструментов пишем КАЖДЫЙ старт: он пересчитывается по обороту,
+            # а витрина без него показывала один тикер у портфеля из двух десятков.
+            await self.pool.execute(
+                "UPDATE robots SET params_json=$2, deployed=true WHERE id=$1",
+                ROBOT_ID, {"symbol": self.symbols[0] if self.symbols else "",
+                           "symbols": self.symbols},
+            )
         except Exception as exc:  # noqa: BLE001
             log.warning("ai46.bootstrap_failed", error=str(exc))
+
+    async def _session_open(self) -> bool:
+        """Идут ли торги FORTS ПРЯМО СЕЙЧАС — по официальному расписанию ISS и часам
+        БИРЖИ (SYSTIME), а не по локальному календарю.
+
+        ISS молчит (open=None) -> считаем, что торги идут: бары всё равно приедут
+        пустыми/несвежими, и глушить робота из-за сетевого сбоя нельзя.
+        """
+        if self._http is None:
+            self._http = httpx.AsyncClient(timeout=8.0)
+        now = time.time()
+        if now - self._sched_at > _SCHED_TTL:
+            try:
+                self._sched = await fetch_schedule(self._http)
+                self._sched_at = now
+            except Exception as exc:  # noqa: BLE001
+                log.warning("ai46.schedule_fetch_failed", error=str(exc))
+        try:
+            st = await probe(self.symbols[:2], int(now * 1000),
+                             client=self._http, schedule=self._sched)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("ai46.session_probe_failed", error=str(exc))
+            return True
+        return st.open is not False
+
+    async def _flush_positions(self) -> None:
+        """Биржа закрылась — закрываем бумажные позиции по последней известной цене.
+
+        Без этого позиция висела через ночь, а сессионный автомат продолжал тикать по
+        стенным часам на ЗАМОРОЖЕННЫХ барах: из 14 040 филлов team-46 за месяц около
+        3 600 записаны в 00:00-07:00 МСК, когда FORTS закрыт, по ценам вчерашнего
+        закрытия. Это не сделки, а шум, который портил всю статистику.
+        """
+        if not self.runner.exec.positions:
+            return
+        self.runner.exec.set_time(time.time())
+        for sym in list(self.runner.exec.positions):
+            self.runner.exec.close_hard(sym, "contrarian")
+        self.runner.sessions.clear()
+        await self._persist_fills()
+        log.info("ai46.session_closed_flush")
 
     async def _loop(self) -> None:
         from trader.lab.runtime import _load_bars_shared
         while self._running:
             try:
+                if not await self._session_open():
+                    if self._was_open:
+                        await self._flush_positions()
+                        self._was_open = False
+                    await asyncio.sleep(_TICK_SECS)
+                    continue
+                self._was_open = True
                 bars_by: dict[str, list] = {}
                 for s in self.symbols:
                     try:
@@ -105,15 +182,33 @@ class Ai46Service:
         new = fills[self._persisted:]
         if not new:
             return
+        # ponytail: метаданные филла упакованы в order_id (`ai46:<seq>:<роль>:<вес в
+        # сотых долях процента>`), а не в новые колонки live_trades — таблица общая
+        # для всех роботов Lab, мигрировать её ради одного бумажного портфельного
+        # робота незачем. Понадобится больше полей — тогда колонки.
+        # ДВЕ ошибки, которые это чинит:
+        #  * order_id был КОНСТАНТОЙ 'ai46' у всех 14 тыс. филлов, а витрина
+        #    сопоставляет строку таблицы с событием ИМЕННО по order_id — карта
+        #    схлопывалась в ОДНО событие, и вся колонка «Тип» показывала один ярлык
+        #    (отсюда «сделки только AVG») и один и тот же фин.рез в каждой строке;
+        #  * qty=1 — заглушка: у стратегии нет контрактов, размер позиции это доля
+        #    портфеля. Теперь она записана и витрина считает доходность, а не рубли
+        #    несуществующих контрактов.
+        # Время берём фактическое время филла, а не now() момента записи: батч
+        # executemany ставил всем строкам одну метку, и филлы разных инструментов
+        # склеивались в одну секунду.
+        base = self._persisted
         rows = [
-            (uuid4().hex, ROBOT_ID, f.ticker, f.side, 1, Decimal(str(f.price)), "ai46", "paper")
-            for f in new
+            (uuid4().hex, ROBOT_ID, f.ticker, f.side, 1, Decimal(str(f.price)),
+             f"ai46:{base + i}:{f.kind}:{round(f.size_pct * 10000)}", "paper",
+             datetime.datetime.fromtimestamp(f.time or time.time(), tz=datetime.timezone.utc))
+            for i, f in enumerate(new)
         ]
         try:
             await self.pool.executemany(
                 """INSERT INTO live_trades
                      (id, robot_id, symbol, side, qty, price, order_id, status, timestamp)
-                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8, now())""",
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)""",
                 rows,
             )
             self._persisted = len(fills)

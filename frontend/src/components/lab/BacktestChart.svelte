@@ -24,9 +24,13 @@
     onApplyParams = null, applyBusy = false, applyMsg = '',
     segments = null, pointValues = null, live = 0, liveTick = null, onNet = null, onVm = null, floatRub = null,
     netOverride = null, livePosition = null, journalSuspect = false,
-    pointValueKnown = true, closeSeries = null, screenId = '',
+    pointValueKnown = true, closeSeries = null, screenId = '', hideStats = false,
   }: {
     screenId?: string;   // ID окна для дебага (см. ScreenTag)
+    // Спрятать рублёвый отчёт «Результат». Нужен ПОРТФЕЛЬНОМУ роботу (team-46): он
+    // держит доли портфеля в разных инструментах, и пересчёт филлов ОДНОГО тикера
+    // в рубли «как будто это контракты» — враньё. Маркеры на графике остаются.
+    hideStats?: boolean;
     // ГОТОВЫЙ ряд реализованных результатов (₽ на момент закрытия) — журнал
     // алготорговли. Когда он есть, кривая доходности строится ПО НЕМУ, а не по
     // пересчёту филлов: журнал знает НАСТОЯЩУЮ комиссию каждой сделки и ведёт
@@ -1243,7 +1247,7 @@
       </div>
     {/if}
 
-    {#if stats}
+    {#if stats && !hideStats}
       <div class="stats-overlay" class:open={statsExpanded}>
         <!-- collapsed: 2 lines. click to expand (frees up chart area). -->
         <button class="st-toggle" onclick={() => statsExpanded = !statsExpanded}

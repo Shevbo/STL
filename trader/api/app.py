@@ -2750,6 +2750,15 @@ def create_app() -> FastAPI:
             for r in trade_rows
         ]
 
+        # ПОРТФЕЛЬНЫЙ робот (team-46/AI46): позиция это доля портфеля в РАЗНЫХ
+        # инструментах, а не контракты. Считаем его отдельно и отдаём витрине готовые
+        # проценты — рублёвый пересчёт по контрактам для него бессмыслен (см.
+        # trader/lab/ai46/portfolio.py). Признак — упаковка в order_id.
+        from trader.lab.ai46 import portfolio as _pf
+        portfolio = None
+        if trades and _pf.is_portfolio_fill(trades[0].get("order_id")):
+            portfolio = _pf.enrich(trades)
+
         # ruble economics from instrument_meta (cache; refresh once if missing)
         from trader.lab.market_store import (
             ensure_instrument_meta_table, get_instrument_meta, refresh_instrument_spec,
@@ -2769,7 +2778,9 @@ def create_app() -> FastAPI:
         # contract, so it needs each contract's own numbers (cached in instrument_meta).
         point_values: dict[str, float] = {}
         initial_margins: dict[str, float] = {}
-        for fsym in {t["symbol"] for t in trades if t.get("symbol")}:
+        # У портфельного робота этот цикл лишний (проценты считаются без ₽/пункт) и
+        # дорогой: три десятка инструментов на КАЖДЫЙ запрос стенда, с походами в ISS.
+        for fsym in ({} if portfolio else {t["symbol"] for t in trades if t.get("symbol")}):
             fmeta = await get_instrument_meta(pool, fsym)
             if not fmeta or fmeta.get("point_value") is None:
                 try:
@@ -2865,6 +2876,7 @@ def create_app() -> FastAPI:
             "open_orders": open_orders,
             "planned_orders": planned_orders,
             "strategy": strategy,
+            "portfolio": portfolio,
             "date_from": date_from.isoformat(),
             # +1 day so TODAY's intraday bars are included — date_to is parsed as
             # midnight, and `ts BETWEEN from AND to` would otherwise drop everything

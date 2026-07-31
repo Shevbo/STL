@@ -62,6 +62,12 @@
     window.removeEventListener('pointerup', onDragUp);
   }
 
+  // ПОРТФЕЛЬНЫЙ робот (team-46/AI46): позиция это ДОЛЯ ПОРТФЕЛЯ в разных инструментах,
+  // а не контракты. Бэкенд отдаёт готовую сводку в процентах (trader/lab/ai46/
+  // portfolio.py) — рублёвая машинерия стенда (ГО, ₽/пункт, TP/SL, усреднения) для
+  // него выключена целиком: складывать 1 контракт RI и 1 контракт ED нельзя, а
+  // усреднений у стратегии нет по конструкции.
+  let pf = $derived(live?.portfolio ?? null);
   // МУЛЬТИ-ИНСТРУМЕНТНЫЙ робот (team-46: 20 тикеров сразу). Стенд одно-инструментный:
   // без этого флага 12 тыс. сделок 20 инструментов валились в одну таблицу, роллы
   // выдумывались между ЖИВЫМИ инструментами, а чужие цены рисовались на чужом графике.
@@ -153,6 +159,18 @@
     if (ev.kind === 'reverse') return { text: 'реверс', cls: 'tt-rev' };
     return { text: 'вход', cls: 'tt-open' };
   }
+  // Портфельный робот: роль филла приходит с бэкенда (она известна ТОЧНО, стратегия
+  // сама её пишет), а не угадывается пересчётом позиции. Выход у неё только по
+  // времени удержания — никаких TP/SL, их у стратегии нет.
+  const PF_KIND: Record<string, { text: string; cls: string }> = {
+    open: { text: 'вход', cls: 'tt-open' },
+    close_soft: { text: 'выход · время', cls: 'tt-enf' },
+    close_hard: { text: 'выход · принуд.', cls: 'tt-rev' },
+    close: { text: 'выход', cls: 'tt-enf' },
+  };
+  const pfTypeLabel = (t: any) => PF_KIND[t?.kind] ?? { text: t?.kind ?? '—', cls: 'tt-none' };
+  const fmtPct = (v: number | null | undefined, d = 2) =>
+    v == null ? '—' : (v >= 0 ? '+' : '') + Number(v).toFixed(d) + '%';
 
   // Cumulative realized P&L curve in rubles (NET of commission), starting at 0 —
   // there is no start capital; the curve is running profit/loss, not account equity.
@@ -174,7 +192,9 @@
       // multi: на графике ТОЛЬКО сделки инструмента графика — маркер по цене нефти
       // на графике Si висит в космосе и ломает шкалу.
       trades: multi ? chartFills.filter((f: any) => f.symbol === (live.chart_symbol ?? live.symbol)) : chartFills,
-      equity_curve: equityCurve, params: live.robot?.params_json ?? {},
+      // У портфельного робота рублёвой кривой не существует: доход считается в % от
+      // портфеля, а филлы одного тикера — лишь его кусок. Рисовать «₽» по ним нельзя.
+      equity_curve: pf ? [] : equityCurve, params: live.robot?.params_json ?? {},
     } : null
   );
 
@@ -219,15 +239,22 @@
   // ';'-separated + UTF-8 BOM = opens cleanly in Excel (RU locale). The Фин. рез column
   // sums to the robot's net realized P&L (only TP/SL/реверс rows carry a value).
   function downloadCsv() {
-    const head = ['Время (МСК)', 'Тип', 'Сторона', 'Кол-во', 'Цена', 'Контракт', 'Фин. рез (₽)', 'Статус', 'order_id'];
+    const head = pf
+      ? ['Время (МСК)', 'Тип', 'Сторона', 'Вес портфеля (%)', 'Цена', 'Инструмент',
+         'Доходность сделки (%)', 'Вклад в портфель (%)', 'Статус', 'order_id']
+      : ['Время (МСК)', 'Тип', 'Сторона', 'Кол-во', 'Цена', 'Контракт', 'Фин. рез (₽)', 'Статус', 'order_id'];
     const q = (v: any) => `"${String(v ?? '').replace(/"/g, '""')}"`;
     const lines = [head.map(q).join(';')];
     for (const t of (live?.trades ?? [])) {            // API order = chronological ascending
-      const ev = tradeEvent(t);
-      lines.push([
-        fmtTime(t.iso), tradeTypeLabel(ev).text, t.side, t.qty, csvPrice(t.price),
-        t.symbol ?? '', ev?.close ? Math.round(ev.close.pnl) : '', t.status, t.order_id ?? '',
-      ].map(q).join(';'));
+      const ev = pf ? null : tradeEvent(t);
+      lines.push((pf
+        ? [fmtTime(t.iso), pfTypeLabel(t).text, t.side,
+           t.size_pct != null ? (t.size_pct * 100).toFixed(3) : '', csvPrice(t.price), t.symbol ?? '',
+           t.ret_pct != null ? t.ret_pct.toFixed(4) : '', t.port_pct != null ? t.port_pct.toFixed(5) : '',
+           t.status, t.order_id ?? '']
+        : [fmtTime(t.iso), tradeTypeLabel(ev).text, t.side, t.qty, csvPrice(t.price),
+           t.symbol ?? '', ev?.close ? Math.round(ev.close.pnl) : '', t.status, t.order_id ?? '']
+      ).map(q).join(';'));
     }
     const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
@@ -302,13 +329,20 @@
       <RobotIdentity name={live?.robot?.name ?? robotId} id={robotId} size="title" />
       {#if live}
         <span class="badge" class:real={!live.paper}>{live.paper ? 'PAPER' : 'РЕАЛ'}</span>
-        <span class="badge sym">{live.symbol}</span>
+        <!-- У портфельного робота одного инструмента нет: показывать live.symbol
+             (первый тикер из params) значило врать про 30+ торгуемых. -->
+        <span class="badge sym" title={pf ? allSymbols.join(' ') : ''}>
+          {pf ? `портфель · ${pf.instruments} инстр.` : live.symbol}</span>
         <span class="badge dim">{live.robot?.deployed ? 'LIVE' : 'остановлен'}</span>
         <span class="badge dim">окно {live.robot?.schedule}</span>
-        <button class="rw-launch" disabled={cloneBusy} onclick={cloneToPaper}
-                title="развернуть НА АГЕНТ в PAPER (верхняя таблица) — real-ready, армится с консоли VDS">
-          {cloneBusy ? '…' : '▶ На агент в торговлю (paper)'}</button>
-        {#if cloneMsg}<span class="rw-launch-msg">{cloneMsg}</span>{/if}
+        <!-- Портфельную стратегию на агент не развернуть: раннер исполняет контрактные
+             on_bar-стратегии, а team-46 это доли портфеля в десятках инструментов. -->
+        {#if !pf}
+          <button class="rw-launch" disabled={cloneBusy} onclick={cloneToPaper}
+                  title="развернуть НА АГЕНТ в PAPER (верхняя таблица) — real-ready, армится с консоли VDS">
+            {cloneBusy ? '…' : '▶ На агент в торговлю (paper)'}</button>
+          {#if cloneMsg}<span class="rw-launch-msg">{cloneMsg}</span>{/if}
+        {/if}
       {/if}
       <button class="close" onclick={onClose} title="Закрыть (Esc)">✕</button>
     </div>
@@ -333,7 +367,8 @@
             taker={false}
             openOrders={live.open_orders ?? []}
             plannedOrders={live.planned_orders ?? []}
-            onVm={(v) => (vmOpen = v)}
+            hideStats={!!pf}
+            onVm={(v) => (vmOpen = pf ? 0 : v)}
           />
         </div>
 
@@ -383,12 +418,60 @@
                   <span class="v">{v}</span>
                 </div>
               {/each}
-              <div class="kv"><span class="k">ГО / контракт</span>
-                <span class="v">{live.initial_margin != null ? Math.round(live.initial_margin).toLocaleString('ru-RU') + ' ₽' : '—'}</span></div>
-              <div class="kv"><span class="k">пункт = ₽</span><span class="v">{pv}</span></div>
-              <div class="kv"><span class="k">комиссия</span><span class="v">4 ₽ / заявка (тейкер)</span></div>
+              {#if !pf}
+                <div class="kv"><span class="k">ГО / контракт</span>
+                  <span class="v">{live.initial_margin != null ? Math.round(live.initial_margin).toLocaleString('ru-RU') + ' ₽' : '—'}</span></div>
+                <div class="kv"><span class="k">пункт = ₽</span><span class="v">{pv}</span></div>
+                <div class="kv"><span class="k">комиссия</span><span class="v">4 ₽ / заявка (тейкер)</span></div>
+              {/if}
             </div>
 
+            {#if pf}
+              <!-- Портфельная стратегия: считаем ДОХОДНОСТЬ, а не рубли. Капитала у
+                   бумажного портфеля не задано, любая рублёвая цифра была бы вымыслом. -->
+              <div class="panel-title res-title">Текущий результат (портфель)</div>
+              <div class="result-grid">
+                <div class="r-row"><span>Сумма доходностей сделок</span>
+                  <b class:pos={pf.ret_sum_pct > 0} class:neg={pf.ret_sum_pct < 0}
+                     title="равный вес в каждой сделке — не зависит от размера позиции">{fmtPct(pf.ret_sum_pct)}</b>
+                  <span class="sub">ср. {fmtPct(pf.ret_avg_pct, 3)}</span></div>
+                <div class="r-row"><span>С учётом веса позиции</span>
+                  <b class:pos={(pf.port_pct ?? 0) > 0} class:neg={(pf.port_pct ?? 0) < 0}
+                     title="вклад в портфель: доходность × доля портфеля в позиции">{fmtPct(pf.port_pct)}</b>
+                  <span class="sub">{pf.weighted_closes} из {pf.closes} сд.</span></div>
+                <div class="r-row"><span>Доходность в год</span>
+                  <b class:pos={(pf.ann_pct ?? 0) > 0} class:neg={(pf.ann_pct ?? 0) < 0}>{fmtPct(pf.ann_pct, 1)}</b>
+                  <span class="sub">{pf.days >= 1 ? pf.days.toFixed(0) + ' дн.' : '—'}</span></div>
+                <div class="r-row"><span>Сделок (круг)</span><b>{pf.closes}</b>
+                  <span class="sub">win {pf.win_rate.toFixed(0)}%</span></div>
+                <div class="r-row"><span>Инструментов</span><b>{pf.instruments}</b>
+                  <span class="sub">{pf.fills} филлов</span></div>
+                <div class="r-row"><span>Открыто сейчас</span><b>{pf.open_now.length}</b>
+                  <span class="sub">{pf.open_now.map((o: any) => o.symbol).join(' ') || '—'}</span></div>
+                {#if pf.orphans}
+                  <div class="r-row"><span>Филлов без пары</span><b class="neg">{pf.orphans}</b>
+                    <span class="sub">потеряны рестартом сервиса</span></div>
+                {/if}
+              </div>
+              {#if pf.weighted_closes < pf.closes}
+                <div class="basis">
+                  Вес позиции записывается с 31.07.2026. По более ранним {pf.closes - pf.weighted_closes} сделкам
+                  известна только доходность инструмента, вклад в портфель не восстановим.
+                </div>
+              {/if}
+              {#if pf.by_symbol.length}
+                <div class="panel-title res-title">По инструментам</div>
+                <div class="pf-syms">
+                  {#each pf.by_symbol as s}
+                    <div class="pf-sym">
+                      <span class="k">{s.symbol}</span>
+                      <span class="sub">{s.closes} сд · win {s.closes ? Math.round(s.wins / s.closes * 100) : 0}%</span>
+                      <b class:pos={s.ret_sum_pct > 0} class:neg={s.ret_sum_pct < 0}>{fmtPct(s.ret_sum_pct)}</b>
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+            {:else}
             <div class="panel-title res-title">Текущий результат</div>
             <div class="result-grid">
               <div class="r-row"><span>Доход (фикс + ВМ)</span>
@@ -416,6 +499,7 @@
               <div class="r-row"><span>Всего заявок</span><b>{summary.orders}</b></div>
             </div>
             <div class="basis">P&L % — доход относительно макс. задействованного ГО (ГО/контракт × пик контрактов)</div>
+            {/if}
           </div>
 
           <!-- drag handle: resize left panel vs trades -->
@@ -440,22 +524,30 @@
               {:else}
                 <table>
                   <thead>
-                    <tr><th>Время (МСК)</th><th>Тип</th><th>Сторона</th><th>Кол-во</th><th>Цена</th>{#if multi}<th>Инстр.</th>{/if}<th class="num">Фин. рез</th><th>Статус</th><th>ID</th></tr>
+                    <tr><th>Время (МСК)</th><th>Тип</th><th>Сторона</th><th>{pf ? 'Вес' : 'Кол-во'}</th><th>Цена</th>{#if multi}<th>Инстр.</th>{/if}<th class="num">{pf ? 'Доходн.' : 'Фин. рез'}</th><th>Статус</th><th>ID</th></tr>
                   </thead>
                   <tbody>
                     {#each histAll.slice(0, HIST_CAP) as t}
-                      {@const ev = tradeEvent(t)}
-                      {@const tt = tradeTypeLabel(ev)}
+                      <!-- pf: контрактный пересчёт (rolledPnl по 14 тыс. филлов) не
+                           трогаем вовсе — он и не нужен, и стоит CPU на каждом опросе -->
+                      {@const ev = pf ? null : tradeEvent(t)}
+                      {@const tt = pf ? pfTypeLabel(t) : tradeTypeLabel(ev)}
                       <tr class:rejected={t.status === 'rejected' || t.status === 'skipped'}>
                         <td class="mono">{fmtTime(t.iso)}</td>
                         <td><span class="tt-badge {tt.cls}">{tt.text}</span></td>
                         <td class:buy={t.side === 'buy'} class:sell={t.side === 'sell'}>
                           {t.side === 'buy' ? '▲ buy' : '▼ sell'}</td>
-                        <td class="mono">{t.qty}</td>
+                        <td class="mono">{pf ? (t.size_pct != null ? (t.size_pct * 100).toFixed(2) + '%' : '—') : t.qty}</td>
                         <td class="mono">{fmtPrice(t.price)}</td>
                         {#if multi}<td class="mono">{t.symbol ?? '—'}</td>{/if}
+                        {#if pf}
+                          <td class="num mono" class:pos={t.ret_pct > 0} class:neg={t.ret_pct < 0}
+                              title={t.port_pct != null ? `вклад в портфель ${fmtPct(t.port_pct, 3)}` : 'вес позиции не записан'}>
+                            {t.ret_pct == null ? '—' : fmtPct(t.ret_pct)}</td>
+                        {:else}
                         <td class="num mono" class:pos={ev?.close && ev.close.pnl > 0} class:neg={ev?.close && ev.close.pnl < 0}>
                           {ev?.close ? fmtMoney(ev.close.pnl) + ' ₽' : '—'}</td>
+                        {/if}
                         <td><span class="st-badge st-{t.status}">{t.status}</span></td>
                         <td class="mono id-cell" title={t.order_id ?? ''}>{t.order_id ?? '—'}</td>
                       </tr>
@@ -576,7 +668,12 @@
   .r-row span:first-child { flex: 1; }
   .r-row b { color: #ccc; font-size: 12px; font-family: monospace; }
   .r-row .sub { color: #666; font-size: 10px; flex: none; }
-  .basis { margin-top: 8px; font-size: 10px; color: #555; font-style: italic; }
+  .basis { margin-top: 8px; font-size: 10px; color: #555; font-style: italic; line-height: 1.5; }
+  .pf-syms { display: flex; flex-direction: column; gap: 2px; }
+  .pf-sym { display: flex; align-items: baseline; gap: 6px; padding: 2px 7px; background: #0f0f1e; border-radius: 3px; }
+  .pf-sym .k { font-size: 11px; color: #6aa8ff; font-family: monospace; flex: none; width: 52px; }
+  .pf-sym .sub { flex: 1; font-size: 10px; color: #666; }
+  .pf-sym b { font-size: 11px; font-family: monospace; color: #ccc; }
   .pos { color: #4caf50 !important; } .neg { color: #f44336 !important; }
 
   .history-scroll { flex: 1; overflow-y: auto; min-height: 0; }
