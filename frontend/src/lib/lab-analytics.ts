@@ -395,7 +395,12 @@ export interface RolledPnl {
 }
 
 // Group fills by contract symbol, replay each group independently, sum the realized
-// P&L. `taker` selects the fee model (live = maker/false, backtest = taker/true).
+// P&L. `taker` selects the fee model, и умолчание — ТЕЙКЕР: роботы кроссят спред,
+// так считают бэктест, раннер (taker_points) и журнал algo_trades. Мейкерское
+// умолчание осталось от человеческого лимитного движка и занижало комиссию в 5 раз
+// (0.45 ₽ с филла вместо ~2.35 ₽ на газе) — карточка бумажного робота показывала
+// +2 715 ₽ там, где на деле −2 101 ₽. Мейкер остаётся доступен явным false, но ни
+// один экран роботов его больше не просит.
 //   pointValue: a number (one ₽/point for all) OR a {symbol: pv} map. A rolled robot's
 //     contracts have slightly different point values, so the map is molecule-exact.
 //   opts.settleCarried (default true): a position left open on an EXPIRED (non-current)
@@ -405,7 +410,7 @@ export interface RolledPnl {
 export function rolledPnl(
   fills: RawFill[],
   pointValue: number | Record<string, number> = 1,
-  taker = false,
+  taker = true,
   opts: { settleCarried?: boolean; bucketSecs?: number } = {},
 ): RolledPnl {
   const { settleCarried = true, bucketSecs = 60 } = opts;

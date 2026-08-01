@@ -49,7 +49,7 @@
     if (!sc) return empty;
     const fills = toFills((sc.trades ?? []).filter((t: any) => EXECUTED.has(t.status)));
     const pvMap = sc.point_values && Object.keys(sc.point_values).length ? sc.point_values : (sc.point_value || 1);
-    const rolled = rolledPnl(fills, pvMap, false, { bucketSecs: 60 });
+    const rolled = rolledPnl(fills, pvMap, true, { bucketSecs: 60 });   // тейкер: роботы кроссят спред
     let cum = 0, peak = 0, maxDD = 0, wins = 0, n = 0;
     for (const e of rolled.events) if (e.close) {
       cum += e.close.pnl; peak = Math.max(peak, cum); maxDD = Math.max(maxDD, peak - cum);

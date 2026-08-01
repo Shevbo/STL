@@ -39,7 +39,7 @@
     // Roll-aware: P&L is summed PER CONTRACT (RIM6 + RIU6 separately). Replaying both
     // as one book pairs a RIM6 sell against a RIU6 buy → phantom profit. peakContracts
     // is the max on a single contract (never 9+9=18), so ГО is not doubled.
-    const r = rolledPnl(fills, pvMap(robot), false);
+    const r = rolledPnl(fills, pvMap(robot), true);   // тейкер, как в бэктесте и журнале
     // ГО (margin at risk) = current contract's per-contract margin × peak contracts.
     const curMargin = robot.initial_margins?.[r.currentSymbol] ?? robot.initial_margin ?? 0;
     const margin = curMargin * r.peakContracts;
@@ -83,7 +83,7 @@
     const rows: any[] = [];
     for (const r of robots) {
       const fills = toFills((r.trades ?? []).filter((t: any) => EXECUTED.has(t.status)));
-      const evs = rolledPnl(fills, pvMap(r), false).events;
+      const evs = rolledPnl(fills, pvMap(r), true).events;
       for (const e of evs) {
         rows.push({
           time: e.rawTime, robot_name: r.name, symbol: r.symbol,

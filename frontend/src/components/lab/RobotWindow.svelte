@@ -128,10 +128,17 @@
   let hoverInfo = $state<string | null>(null);
   // Roll-aware analytics: P&L summed PER CONTRACT (RIM6 + RIU6 separately), never
   // cross-paired (that invents phantom profit). Single source of truth for money,
-  // lifecycle, equity, and the summary. Live = MAKER model (broker fee only).
+  // lifecycle, equity, and the summary.
+  // Комиссия — ТЕЙКЕР, как в бэктесте, у раннера (taker_points) и в журнале
+  // algo_trades. Мейкерская модель здесь осталась от человеческого лимитного
+  // движка и врала в 5 раз: у бумажного Williams %R (GZU6) она показала
+  // 1 141 ₽ вместо 5 957 ₽ на 2 535 филлах, и робот выглядел как +2 715 ₽ там,
+  // где на самом деле −2 101 ₽ (02.08.2026, оператор так и решил, что он
+  // перспективный). Робот, отправленный на агент, кроссит спред — значит платит
+  // биржевую часть, и показывать надо её.
   // multi: settleCarried=false — «не текущие» инструменты у мульти-робота ЖИВЫЕ,
   // принудительный ролл-досчёт выдумывал их закрытия по последней цене.
-  let rolled = $derived(rolledPnl(chartFills, pvMap, false,
+  let rolled = $derived(rolledPnl(chartFills, pvMap, true,
     { bucketSecs: 60, settleCarried: !multi }));
   let events = $derived(rolled.events);
   let closes = $derived(events.filter(e => e.close).map(e => e.close!));
@@ -366,7 +373,7 @@
             pointValues={live.point_values ?? null}
             segments={segments}
             defaultInterval={5}
-            taker={false}
+            taker={true}
             openOrders={live.open_orders ?? []}
             plannedOrders={live.planned_orders ?? []}
             hideStats={!!pf}
