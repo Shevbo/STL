@@ -463,20 +463,62 @@
     try { await navigator.clipboard.writeText(txt); say('Лог скопирован в буфер.', 'sys'); }
     catch { say('Буфер обмена недоступен (нужен https).', 'err'); }
   }
+  // Живой хит-парад ТЕКУЩЕГО прогона: агент шлёт свой топ-10 (ранг тот же —
+  // прибыль×RF) в каждом heartbeat'е, пока считает. Таблица наполняется на глазах,
+  // а по готовности её сменяет настоящий хит-парад из БД.
+  let liveRun = $state<{ runId: string; done: number; total: number; since: number; top: any[] } | null>(null);
+  let liveLeaderKey = '';
+  const liveRate = $derived.by(() => {
+    if (!liveRun?.since) return 0;
+    const el = Date.now() / 1000 - liveRun.since;
+    return el > 0 ? liveRun.done / el : 0;
+  });
+
   /** Телеметрия i9: чем занят хост ПРЯМО сейчас (heartbeat агента, не наша догадка). */
-  async function sayI9() {
+  async function sayI9(runId?: string) {
     try {
       const r = await fetchWithAuth('/api/v1/agent/activity');
       if (!r.ok) return;
       const i9 = (await r.json())?.i9;
       if (!i9 || i9.stale) { say('i9: телеметрия молчит (агент не шлёт heartbeat)', 'dim'); return; }
       const a = i9.activity ?? {};
-      const what = a.state === 'job'
-        ? `считает ${a.symbol ?? '?'} · ${a.combos ?? '?'} комбо${a.since ? ' · ' + fmtEta(Date.now() / 1000 - a.since) : ''}`
-        : a.state === 'task' ? `задача ${a.func ?? '?'}` : 'простаивает';
-      say(`i9: CPU ${Math.round(i9.cpu_pct ?? 0)}% · ${i9.workers ?? '?'} воркеров · `
-        + `RAM ${Math.round(i9.ram_pct ?? 0)}% · ${what}`, 'dim');
+      const cpu = `CPU ${Math.round(i9.cpu_pct ?? 0)}%`;
+      if (a.state !== 'job') {
+        say(`i9: ${a.state === 'task' ? `задача ${a.func ?? '?'}` : 'простаивает'} · ${cpu}`, 'dim');
+        return;
+      }
+      // Считает ЧУЖОЕ задание (наше ещё в очереди) — не подмешиваем его кандидатов
+      // в наш хит-парад, иначе таблица покажет чужие параметры как свои.
+      if (runId && a.run_id && a.run_id !== runId) {
+        say(`i9 занят другим заданием: ${String(a.run_id).slice(0, 28)} · ${cpu}`, 'dim');
+        return;
+      }
+      liveRun = { runId: a.run_id ?? '', done: a.done ?? 0, total: a.combos ?? 0,
+                  since: a.since ?? 0, top: a.top ?? [] };
+      const done = a.done ?? 0, total = a.combos ?? 0;
+      const el = a.since ? Date.now() / 1000 - a.since : 0;
+      const rate = el > 0 ? done / el : 0;
+      const left = rate > 0 && total > done ? (total - done) / rate : null;
+      say(`i9: ${done}/${total} комб. (${total ? Math.round(100 * done / total) : 0}%) · `
+        + `${rate.toFixed(1)} комб/с · осталось ~${fmtEta(left)} · ${cpu}`, 'dim');
+      const lead = (a.top ?? [])[0];
+      const key = lead ? JSON.stringify(lead.params) : '';
+      if (lead && key !== liveLeaderKey) {
+        liveLeaderKey = key;
+        say(`лидер: ${paramsShort(lead.params)} → ${fmtRub(lead.net)} · RF ${fmtRf(lead.rf)} · `
+          + `${fmtPct(lead.ann)} год (ГО) · сделок ${lead.trades ?? '—'}`,
+          (lead.net ?? 0) > 0 ? 'ok' : 'err');
+      } else if (lead) {
+        say(`лидер прежний: ${fmtRub(lead.net)} · RF ${fmtRf(lead.rf)}`, 'dim');
+      }
     } catch { /* телеметрия необязательна */ }
+  }
+
+  function liveCsv() {
+    downloadCSV((liveRun?.top ?? []).map((t: any, i: number) => ({
+      rank: i + 1, ...(t.params ?? {}), net_profit: t.net, recovery_factor: t.rf,
+      ann_return_go: t.ann, total_trades: t.trades,
+    })), 'live-' + (campaignName || 'sweep'));
   }
 
   // ── Run sweep round ────────────────────────────────────────────────────
@@ -612,9 +654,8 @@
               + `старт примерно через ${fmtEta(st.eta_sec)}`
               + ((st.priority ?? 0) >= MANUAL_PRIORITY ? ' · ручной прогон: фоновые кампании пропускаю' : ''), 'sys');
           } else if (st.status === 'running') {
-            say(`взято в работу: ${st.agent_id || st.runner || 'i9'} · считает `
-              + `(типовой одиночный прогон ~${fmtEta(st.typical_sec)}, осталось ~${fmtEta(st.eta_sec)})`, 'sys');
-            void sayI9();
+            say(`взято в работу: ${st.agent_id || st.runner || 'i9'} · считает…`, 'sys');
+            void sayI9(runId);
           } else if (st.status === 'pending') {
             say('задание запускается на движке…', 'dim');
           }
@@ -623,7 +664,9 @@
           warnedOffline = true;
           say('i9 не отвечает (агент офлайн) — задание будет ждать. Нужен результат сейчас — переключи движок на «VDS (сервер)».', 'err');
         }
-        if (attempts % 10 === 0 && st.status === 'running') void sayI9();
+        // Раз в ~10 с: сколько комбинаций уже проверено, с какой скоростью и кто
+        // сейчас лидер. Чаще — стена текста, реже — «висит и молчит».
+        if (attempts % 7 === 0 && st.status === 'running') void sayI9(runId);
         if (st.status === 'done' || st.status === 'failed') {
           clearInterval(polling);
           polling = null;
@@ -662,6 +705,8 @@
           }
           runPhase = `${ROUNDS[ri].label}: готово — ${roundResults[ri].length} результатов`;
           progPct = 100;
+          liveRun = null;        // живой список сменил настоящий хит-парад из БД
+          liveLeaderKey = '';
           running = false;
         }
       } catch { /* keep polling */ }
@@ -1157,6 +1202,47 @@
       </div>
     </div>
 
+    <!-- Живой хит-парад: наполняется ПОКА идёт расчёт (агент шлёт свой топ-10 в
+         heartbeat'е). Ранг тот же, что у итогового — прибыль × RF. По готовности
+         его сменяет настоящий хит-парад из БД. -->
+    {#if liveRun && liveRun.top.length}
+      <div class="btl-section btl-live">
+        <div class="btl-sec-title">
+          ⏳ Формируется: лучшие кандидаты
+          <span class="btl-sec-sub">
+            проверено {liveRun.done} из {liveRun.total}
+            {#if liveRate > 0}· {liveRate.toFixed(1)} комб/с{/if}
+            · ранг: прибыль × RF ↓ · таблица живая, обновляется на ходу
+          </span>
+          <button class="btl-csv" onclick={liveCsv}>Выгрузить в CSV</button>
+        </div>
+        <table class="btl-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Параметры</th>
+              <th>Чистая прибыль</th>
+              <th class="th-hl">% год (ГО)</th>
+              <th>RF</th>
+              <th>Сделок</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each liveRun.top as t, i (JSON.stringify(t.params))}
+              <tr class="btl-row">
+                <td class="btl-rank">{i + 1}</td>
+                <td class="btl-params">{paramsShort(t.params)}</td>
+                <td class="btl-num" class:pos={(t.net ?? 0) > 0} class:neg={(t.net ?? 0) < 0}>{fmtRub(t.net)}</td>
+                <td class="btl-num btl-ann" class:pos={(t.ann ?? 0) > 0} class:neg={(t.ann ?? 0) < 0}>{fmtPct(t.ann)}</td>
+                <td class="btl-num">{fmtRf(t.rf)}</td>
+                <td class="btl-num">{t.trades ?? '—'}</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    {/if}
+
     {#if error}
       <div class="btl-error">{error}</div>
     {/if}
@@ -1495,6 +1581,9 @@
   .crt-ts { color: #1f8a44; text-shadow: none; }
   .crt-line.prompt { display: flex; align-items: center; }
   .crt-ps { color: #33ff66; }
+  /* Живой хит-парад строится ПОКА идёт счёт — рамка «в работе», чтобы его не
+     спутали с итоговым (он ещё изменится). */
+  .btl-live { border: 1px solid #2f9c5044; border-radius: 6px; padding: 8px 10px; background: #0a1410; }
   .crt-cur { display: inline-block; margin-left: 2px; animation: btlblink 1.05s step-end infinite; }
   @keyframes btlblink { 50% { opacity: 0; } }
   @media (prefers-reduced-motion: reduce) { .crt-cur, .btl-mon-live { animation: none; } }

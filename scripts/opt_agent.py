@@ -25,6 +25,7 @@ import asyncio
 import collections
 import itertools
 import json
+import multiprocessing
 import os
 import re
 import socket
@@ -85,10 +86,33 @@ def _set_priority(prio: str = "below") -> None:
         pass
 
 
-def _worker_init() -> None:
+# Канал прогресса воркер -> агент. Чанк = 1/N всей сетки и считается минутами, поэтому
+# по завершению чанков прогресса нет: полоса стоит немой до самого конца. Воркер шлёт
+# результат КАЖДОГО комбо (~5/с на всю сетку — для очереди это ничто), агент складывает
+# в счётчик + лидера, а heartbeat увозит их в монитор.
+# Очередь — Manager-прокси: сырой mp.Queue нельзя передать в ProcessPoolExecutor на
+# Windows (spawn пиклит initargs, а Queue разрешён только по наследованию).
+_PROGRESS_Q = None
+# Сколько кандидатов держим в ЖИВОМ хит-параде (уезжает в каждом heartbeat'е).
+_LIVE_TOP = 10
+
+
+def _profit_rf(e: dict) -> float:
+    """Ранг комбинации = прибыль × recovery factor, как в хит-параде LAB. Наивное
+    net×RF ломается на убытке (RF тоже отрицательный -> net²/dd > 0 и катастрофы
+    всплывают наверх), поэтому убыточные ранжируем самой прибылью."""
+    net = e.get("net") or 0
+    if net <= 0:
+        return net
+    return net * max(e.get("rf") or 0, 0.01)
+
+
+def _worker_init(progress_q=None) -> None:
     # Pool workers are pure CPU crunch. Priority is chosen by the operator (env set
     # before the pool is built); default idle = use only spare cores.
     _set_priority(os.environ.get("OPT_AGENT_WORKER_PRIO", "idle"))
+    global _PROGRESS_Q
+    _PROGRESS_Q = progress_q
 
 
 def _tee_log(path: str) -> None:
@@ -314,6 +338,16 @@ def _run_chunk(args: tuple) -> list[dict]:
             out.append(curve[-1])
         return out
 
+    def _tick(payload) -> None:
+        """Строка прогресса в монитор. Телеметрия НИКОГДА не роняет расчёт: мёртвый
+        Manager, полная очередь, что угодно — молча пропускаем комбо в отчёте."""
+        if _PROGRESS_Q is None:
+            return
+        try:
+            _PROGRESS_Q.put_nowait(payload)
+        except Exception:  # noqa: BLE001
+            pass
+
     async def _all():
         out = []
         for ps in param_sets:
@@ -323,8 +357,12 @@ def _run_chunk(args: tuple) -> list[dict]:
                 if isinstance(r.get("equity_curve"), list):
                     r["equity_curve"] = _downsample(r["equity_curve"])
                 out.append({"ok": True, "params": ps, "result": r})
+                _tick({"net": r.get("net_profit"), "rf": r.get("recovery_factor"),
+                       "ann": r.get("ann_return_go"), "trades": r.get("total_trades"),
+                       "params": ps})
             except Exception as exc:  # noqa: BLE001
                 out.append({"ok": False, "params": ps, "error": str(exc)})
+                _tick(None)
         return out
 
     return _asyncio.run(_all())
@@ -381,6 +419,11 @@ class Agent:
         # Top combos of the last finished job (the forming hit-parade), with full params
         # so the monitor can re-run any of them into a chart. Refilled per job.
         self._leaders: list = []
+        # Прогресс ТЕКУЩЕГО прогона: очередь от воркеров + свёртка (сколько комбо уже
+        # посчитано и кто лидер по чистой прибыли). Живёт в _activity, уезжает
+        # heartbeat'ом в монитор стенда.
+        self._progress_q = None
+        self._progress: dict = {"done": 0, "top": []}
         self._started = time.time()
         if psutil is not None:
             try:
@@ -476,9 +519,38 @@ class Agent:
         r.raise_for_status()
         return r.json()
 
+    def _drain_progress(self, cap: int = 4000) -> None:
+        """Забрать всё, что воркеры успели насчитать, в счётчик + формирующийся
+        хит-парад. Вызывается из heartbeat'а (клеймящий цикл в это время заблокирован
+        на пуле). cap держит один заход коротким: остаток разберём следующим ударом."""
+        q = self._progress_q
+        if q is None:
+            return
+        top = list(self._progress.get("top") or [])
+        done = self._progress.get("done", 0)
+        got = False
+        for _ in range(cap):
+            try:
+                item = q.get_nowait()
+            except Exception:  # noqa: BLE001 — пусто или Manager умер: не наша беда
+                break
+            done += 1
+            if item and item.get("net") is not None:
+                top.append(item)
+                got = True
+        if got:
+            # Ранжируем ТЕМ ЖЕ ключом, что итоговый хит-парад (прибыль × RF), иначе
+            # живой список и финальный разойдутся и оператор не поймёт, какому верить.
+            top.sort(key=_profit_rf, reverse=True)
+            del top[_LIVE_TOP:]
+        self._progress = {"done": done, "top": top}
+        if self._activity.get("state") == "job":
+            self._activity = {**self._activity, "done": done, "top": top}
+
     def _metrics(self) -> dict:
         """Snapshot of what the i9 CPU is doing, for the heartbeat. All best-effort —
         psutil may be absent; never raise from here."""
+        self._drain_progress()
         m = {"agent_id": self.agent_id, "version": AGENT_VERSION, "workers": self.workers,
              "priority": self._priority, "cpu_count": os.cpu_count() or 0,
              "psutil": psutil is not None, "activity": self._activity,
@@ -623,8 +695,18 @@ class Agent:
                 param_sets = self._expand(job["base_params"], job["params_grid"])
             _log(f"[{run_id}] {symbol} {len(bars)} bars × {len(param_sets)} combos "
                  f"on {self.workers} workers")
+            # Прогресс считаем с нуля и выбрасываем хвост прошлого прогона: иначе
+            # монитор покажет «посчитано 2900 из 2816» и чужого лидера.
+            self._progress = {"done": 0, "top": []}
+            if self._progress_q is not None:
+                while True:
+                    try:
+                        self._progress_q.get_nowait()
+                    except Exception:  # noqa: BLE001
+                        break
             self._activity = {"state": "job", "run_id": run_id, "symbol": symbol,
-                              "combos": len(param_sets), "since": time.time()}
+                              "combos": len(param_sets), "since": time.time(),
+                              "done": 0, "top": []}
 
             chunks = _chunked(param_sets, self.workers)
             im = job.get("initial_margin", 0) or 0
@@ -689,15 +771,33 @@ class Agent:
              + (f"  proxy={self.proxy}" if self.proxy else ""))
         _set_priority("below")           # main process: below-normal (yields to the user)
         os.environ["OPT_AGENT_WORKER_PRIO"] = self._priority   # spawned workers read this
-        with ProcessPoolExecutor(max_workers=self.workers, initializer=_worker_init) as pool:
-            async with self._client() as client:
-                # Independent heartbeat so CPU%/activity keep flowing WHILE a job blocks
-                # the claim loop below. Cancelled when this life ends.
-                hb = asyncio.create_task(self._heartbeat_loop(client))
+        # Канал прогресса живёт ровно столько же, сколько пул. Manager не поднялся —
+        # считаем без прогресса, а не падаем: расчёт важнее телеметрии.
+        mgr = None
+        try:
+            mgr = multiprocessing.Manager()
+            self._progress_q = mgr.Queue()
+        except Exception as exc:  # noqa: BLE001
+            self._progress_q = None
+            _log(f"progress channel disabled ({exc}) — sweep runs without live progress")
+        try:
+            with ProcessPoolExecutor(max_workers=self.workers, initializer=_worker_init,
+                                     initargs=(self._progress_q,)) as pool:
+                async with self._client() as client:
+                    # Independent heartbeat so CPU%/activity keep flowing WHILE a job blocks
+                    # the claim loop below. Cancelled when this life ends.
+                    hb = asyncio.create_task(self._heartbeat_loop(client))
+                    try:
+                        return await self._claim_loop(client, pool)
+                    finally:
+                        hb.cancel()
+        finally:
+            self._progress_q = None
+            if mgr is not None:
                 try:
-                    return await self._claim_loop(client, pool)
-                finally:
-                    hb.cancel()
+                    mgr.shutdown()
+                except Exception:  # noqa: BLE001
+                    pass
 
     async def _claim_loop(self, client: httpx.AsyncClient, pool: ProcessPoolExecutor):
         idle_note = True
