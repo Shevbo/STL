@@ -99,7 +99,8 @@ class Ai46Runner:
                         primary_size_base=p.size_base, min_agreement=p.min_agreement,
                         long_ofi_boost=p.long_ofi_boost, monitoring_dur=p.monitoring_dur,
                         primary_hold=p.primary_hold, wait_reversal=p.wait_reversal,
-                        reversal_hold=p.reversal_hold, reversal_sigs=p.reversal_sigs)
+                        reversal_hold=p.reversal_hold, reversal_sigs=p.reversal_sigs,
+                        stop_pct=p.stop_pct, take_pct=p.take_pct)
                     sess.start(now, s.ofi, feat.agreement_ratio("long"),
                                feat.agreement_ratio("short"), s.type)
                     self.sessions[sym] = sess

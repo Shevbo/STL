@@ -88,7 +88,8 @@ class ContrarianSession:
                  primary_hold: float = PRIMARY_HOLD,
                  wait_reversal: float = WAIT_REVERSAL,
                  reversal_hold: float = REVERSAL_HOLD,
-                 reversal_sigs: int = REVERSAL_SIGS) -> None:
+                 reversal_sigs: int = REVERSAL_SIGS,
+                 stop_pct: float = 0.015, take_pct: float = 0.025) -> None:
         self.ticker = ticker
         self.exec = executor or _DefaultExecutor()
         self.risk = risk or _DefaultRisk()
@@ -101,6 +102,8 @@ class ContrarianSession:
         self.wait_reversal = wait_reversal
         self.reversal_hold = reversal_hold
         self.reversal_sigs = reversal_sigs
+        self.stop_pct = stop_pct
+        self.take_pct = take_pct
         self.state = MONITORING
         self.primary = "short"
         self.event_id = ""
@@ -154,7 +157,8 @@ class ContrarianSession:
                 self.state = DONE
                 return self.state
             size = self.size_base * agr * self._role_mult
-            if self._open_leg(self._primary, self.primary, size, 0.015, 0.025, "contrarian primary entry", agr):
+            if self._open_leg(self._primary, self.primary, size, self.stop_pct, self.take_pct,
+                              "contrarian primary entry", agr):
                 self.state = PRIMARY_ACTIVE
                 self._phase_start = now
             else:
@@ -181,7 +185,8 @@ class ContrarianSession:
                     self.state = DONE
                     return self.state
                 size = self.size_base * agr * self._role_mult
-                if self._open_leg(self._reversal, rev, size, 0.015, 0.02, "contrarian reversal entry", agr):
+                if self._open_leg(self._reversal, rev, size, self.stop_pct, self.take_pct,
+                                  "contrarian reversal entry", agr):
                     self.state = REVERSAL_ACTIVE
                     self._phase_start = now
                 else:

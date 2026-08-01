@@ -27,6 +27,12 @@ class BotParams:
     reversal_hold: float = C.REVERSAL_HOLD
     reversal_sigs: int = C.REVERSAL_SIGS
     size_base: float = C.SIZE_BASE
+    # Уровни выхода. Были ЛИТЕРАЛАМИ в contrarian.step (0.015/0.025), то есть не
+    # перебирались вообще — а именно они задают эдж на сделку, ради которого стратегия
+    # и держит позицию. Один комплект на обе ноги: разница 0.025 против 0.02 у
+    # разворотной ноги была косметической.
+    stop_pct: float = 0.015
+    take_pct: float = 0.025
     # ── risk ────────────────────────────────────────────────────────────────
     max_positions: int = 5
     max_exposure: float = 0.30
