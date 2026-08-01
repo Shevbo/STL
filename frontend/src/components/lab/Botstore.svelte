@@ -1242,6 +1242,37 @@
                 </table>
               </div>
             {/if}
+
+            <!-- Второй хит-парад: по УСТОЙЧИВОСТИ. Ранжирование по одному финрезу
+                 выносит наверх наборы с огромной просадкой открытой позиции, а рядом
+                 в той же кампании стоят комбинации с втрое меньшим MAE и вдвое
+                 большим RF — и увидеть их было негде. Ранг сюда НЕ передаём: он
+                 разрешается на сервере по порядку «финрез вниз», и для этого списка
+                 указал бы на ЧУЖУЮ строку. Без ранга график считается по параметрам. -->
+            {#if campaign.best_rf?.length}
+              <div class="cmp-best">
+                <div class="cmp-h-title">Лучшие по устойчивости <span class="cmp-sub2">RF при ≥100 сделках; MAE — худшая просадка открытой позиции</span>
+                  <button class="cl-csv" onclick={() => downloadCSV(campaign.best_rf, campaign.campaign + '-best-rf')}>Выгрузить в CSV</button></div>
+                <table class="cmp-bt">
+                  <thead><tr><th>робот</th><th>инстр.</th><th>RF</th><th>финрез</th><th>MAE</th><th>сделок</th><th>параметры</th></tr></thead>
+                  <tbody>
+                    {#each campaign.best_rf as b}
+                      <tr class="cmp-click"
+                          title="Открыть график этого набора: цена со сделками + кривая доходности"
+                          onclick={() => openChart(b.symbol, b.params, { strategyId: b.strategy, dateFrom: b.date_from, dateTo: b.date_to, campaign: campaign.campaign })}>
+                        <td class="cmp-l">{robotName(b.strategy)}</td>
+                        <td class="mono">{b.symbol}</td>
+                        <td>{fmtNum(b.recovery_factor)}</td>
+                        <td class:pos={b.net_profit > 0} class:neg={b.net_profit < 0}>{fmtMoney(b.net_profit)}</td>
+                        <td class="mono">{b.max_mae != null ? fmtMoney(b.max_mae) : '—'}</td>
+                        <td class="mono">{b.total_trades ?? '—'}</td>
+                        <td class="cmp-params-cell mono">{JSON.stringify(b.params)}</td>
+                      </tr>
+                    {/each}
+                  </tbody>
+                </table>
+              </div>
+            {/if}
           {/if}
         </div>
       </div>

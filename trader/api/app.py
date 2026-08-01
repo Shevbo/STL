@@ -2208,7 +2208,7 @@ def create_app() -> FastAPI:
         pool = request.app.state.db_pool
         out = {"campaign": id, "combos": 0, "strategies": [], "symbols": [], "rounds": [],
                "return_range": None, "rf_range": None, "grid": [], "grid_w": 0, "grid_h": 0,
-               "max_count": 0, "best": [], "started": None}
+               "max_count": 0, "best": [], "best_rf": [], "started": None}
         if pool is None or not id:
             return out
         rows = await pool.fetch(
@@ -2294,7 +2294,7 @@ def create_app() -> FastAPI:
         # == лидер строки истории, клик по строке ведёт РОВНО на показанного лидера.
         _best_sql = (
             "SELECT total_return, recovery_factor, net_profit, total_trades, strategy, "
-            "symbol, params, date_from, date_to FROM optimization_leaderboard "
+            "symbol, params, date_from, date_to, max_mae FROM optimization_leaderboard "
             "WHERE campaign_run=$1 AND net_profit IS NOT NULL {flt}"
             "ORDER BY net_profit DESC NULLS LAST LIMIT 6")
         _le10 = ("AND COALESCE(NULLIF(params->>'qty','')::numeric, 1) <= 10 "
@@ -2302,19 +2302,34 @@ def create_app() -> FastAPI:
         best_rows = await pool.fetch(_best_sql.format(flt=_le10), id)
         if not best_rows:      # кампания целиком крупнее 10 контрактов — показываем её
             best_rows = await pool.fetch(_best_sql.format(flt=""), id)
-        best = list(best_rows)
-        for r in best:
+        # Второй хит-парад — ПО УСТОЙЧИВОСТИ. Ранжирование по одному финрезу выносит
+        # наверх комбо с огромной просадкой открытой позиции, а рядом в той же кампании
+        # стоят наборы с втрое меньшим MAE и вдвое большим RF — и увидеть их было негде.
+        # Порог по сделкам отсекает «повезло два раза» (RF по трём сделкам не метрика).
+        _rf_sql = (
+            "SELECT total_return, recovery_factor, net_profit, total_trades, strategy, "
+            "symbol, params, date_from, date_to, max_mae FROM optimization_leaderboard "
+            "WHERE campaign_run=$1 AND net_profit>0 AND total_trades>=100 {flt}"
+            "ORDER BY recovery_factor DESC NULLS LAST LIMIT 6")
+        rf_rows = await pool.fetch(_rf_sql.format(flt=_le10), id)
+        if not rf_rows:
+            rf_rows = await pool.fetch(_rf_sql.format(flt=""), id)
+        def _row(r):
             p = r["params"]
             if isinstance(p, str):
                 p = _json.loads(p)
-            out["best"].append({
+            return {
                 "strategy": r["strategy"], "symbol": r["symbol"],
                 "total_return": r["total_return"], "recovery_factor": r["recovery_factor"],
                 "net_profit": r["net_profit"], "total_trades": r["total_trades"], "params": p,
+                "max_mae": r["max_mae"],
                 # sweep window: lets the UI re-run this row 1:1 and open its chart
                 "date_from": r["date_from"].isoformat() if r["date_from"] else None,
                 "date_to": r["date_to"].isoformat() if r["date_to"] else None,
-            })
+            }
+
+        out["best"] = [_row(r) for r in best_rows]
+        out["best_rf"] = [_row(r) for r in rf_rows]
         return out
 
     @fastapi_app.get("/api/v1/lab/campaigns")
@@ -3188,9 +3203,13 @@ def create_app() -> FastAPI:
             WITH ld AS (
               SELECT params FROM optimization_leaderboard
                WHERE campaign_run=$1 AND net_profit IS NOT NULL
-                 AND COALESCE(NULLIF(params->>'qty','')::numeric, 1) <= 10
-                 AND COALESCE(NULLIF(params->>'avg_max','')::numeric, 1) <= 10
-               ORDER BY net_profit DESC NULLS LAST OFFSET $2 LIMIT 1)
+               -- Тот же порядок, что у списка «Лучшие по финрезу»: сначала конфиги
+               -- <=10 контрактов, и только если таких в кампании НЕТ — остальные.
+               -- Жёсткий фильтр давал у крупной кампании пустой ld -> null -> фронт
+               -- молча пересчитывал каждый клик заново.
+               ORDER BY (COALESCE(NULLIF(params->>'qty','')::numeric, 1) <= 10
+                         AND COALESCE(NULLIF(params->>'avg_max','')::numeric, 1) <= 10) DESC,
+                        net_profit DESC NULLS LAST OFFSET $2 LIMIT 1)
             SELECT r.run_id, r.params, r.trades, r.sharpe, r.max_drawdown, r.win_rate,
                    r.total_return, r.total_trades, r.net_profit, r.recovery_factor,
                    r.point_value, r.peak_contracts
