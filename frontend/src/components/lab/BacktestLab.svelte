@@ -9,6 +9,60 @@
   }
   /** Приоритет ручного прогона: движок берёт его вперёд фоновых кампаний (0). */
   export const MANUAL_PRIORITY = 100;
+
+  /** Подпись результата: две комбинации «одинаковы», если совпали деньги и сделки. */
+  const resSig = (r: any) => `${r?.net_profit ?? ''}|${r?.total_trades ?? ''}`;
+
+  /**
+   * Оси перебора, которые не сдвинули результат НИ РАЗУ. Считаем честно: фиксируем
+   * все остальные параметры и смотрим, менялся ли результат внутри такой группы.
+   *
+   * Зачем: 2816 комбинаций «TP и SL» дали 256 одинаковых строк в хит-параде и
+   * вопрос «почему нет различий» (01.08.2026). Мёртвая ось — это не мелочь: она
+   * множит время прогона на число своих значений, не давая ничего.
+   */
+  export function deadAxes(rows: any[]): string[] {
+    if (rows.length < 2) return [];
+    const keys = [...new Set(rows.flatMap((r) => Object.keys(r?.params ?? {})))]
+      .filter((k) => k !== 'symbol' && new Set(rows.map((r) => r?.params?.[k])).size > 1);
+    return keys.filter((k) => {
+      const seen = new Map<string, string>();
+      for (const r of rows) {
+        const rest = JSON.stringify(Object.entries(r?.params ?? {})
+          .filter(([kk]) => kk !== k).sort());
+        const s = resSig(r?.result);
+        const prev = seen.get(rest);
+        if (prev === undefined) seen.set(rest, s);
+        else if (prev !== s) return false;      // ось что-то меняет — живая
+      }
+      return true;
+    });
+  }
+
+  /**
+   * Схлопывание одинаковых результатов подряд. 256 строк с одними и теми же
+   * деньгами — это ОДИН кандидат, размноженный параметрами, которые ни на что не
+   * влияют; в таблице они выглядели как 256 разных находок.
+   */
+  export function collapseTies(rows: any[]): Array<{ row: any; n: number; varied: string[] }> {
+    const out: Array<{ row: any; n: number; varied: string[]; seen: any[] }> = [];
+    for (const r of rows) {
+      const last = out[out.length - 1];
+      if (last && resSig(last.row?.result) === resSig(r?.result)) {
+        last.n++;
+        last.seen.push(r?.params ?? {});
+      } else {
+        out.push({ row: r, n: 1, varied: [], seen: [r?.params ?? {}] });
+      }
+    }
+    for (const g of out) {
+      if (g.n > 1) {
+        g.varied = [...new Set(g.seen.flatMap((p) => Object.keys(p)))]
+          .filter((k) => k !== 'symbol' && new Set(g.seen.map((p) => p[k])).size > 1);
+      }
+    }
+    return out.map(({ row, n, varied }) => ({ row, n, varied }));
+  }
   /**
    * Честный процент прогона. Движок прогресс по комбинациям не отдаёт (результаты
    * приходят одним пакетом в конце), поэтому считаем долю пройденного времени
@@ -697,6 +751,22 @@
                 + `RF ${fmtRf(r.recovery_factor)} · сделок ${r.total_trades ?? '—'}`,
                 (r.net_profit ?? 0) > 0 ? 'ok' : 'err');
             }
+            // Мёртвые оси: перебирали, а результат не сдвинулся ни разу. Молчать
+            // об этом нельзя — оператор смотрит на стену одинаковых строк и решает,
+            // что сломан перебор.
+            const dead = deadAxes(items);
+            if (dead.length) {
+              say(`оси без влияния: ${dead.join(', ')} — результат не изменился ни разу. `
+                + `Каждая множит время прогона впустую.`, 'sys');
+              if (dead.includes('sl_frac') && items.every((r: any) => !Number(r.params?.tp_atr))) {
+                say('sl_frac — это ДОЛЯ ДИСТАНЦИИ ТЕЙКА: при tp_atr=0 тейка нет, значит нет и стопа. '
+                  + 'Нужен стоп без тейка — перебирай sl_pct (% от цены входа), он от тейка не зависит.', 'sys');
+              }
+              if (dead.includes('min_gap_pts') && items.every((r: any) => Number(r.params?.avg_max ?? 1) <= 1)) {
+                say('min_gap_pts (разножка) гейтит только ДОБОРЫ: при avg_max=1 лестницы усреднения нет, '
+                  + 'и вход с нуля она не фильтрует.', 'sys');
+              }
+            }
             if (lb.length && profitRF(lb[0].result) > 0) {
               selectLeader(lb[0]);   // auto-show best; fetches trades if stripped
             } else if (lb.length) {
@@ -1248,11 +1318,11 @@
     {/if}
 
     {#if leaderboard().length}
-      {@const lb = leaderboard()}
+      {@const lb = collapseTies(leaderboard())}
       <div class="btl-section">
         <div class="btl-sec-title">
           🏆 Хит-парад
-          <span class="btl-sec-sub">сортировка: прибыль × recovery factor ↓</span>
+          <span class="btl-sec-sub">сортировка: прибыль × recovery factor ↓ · одинаковые результаты схлопнуты</span>
           <button class="btl-csv" onclick={() => downloadCSV(
             leaderboard().map((r: any) => ({ ...(r.params ?? {}), ...Object.fromEntries(Object.entries(r.result ?? {}).filter(([k]) => k !== 'trades' && k !== 'equity_curve')) })),
             'backtest-' + (campaignName || 'sweep'))}>Выгрузить в CSV</button>
@@ -1276,14 +1346,18 @@
               </tr>
             </thead>
             <tbody>
-              {#each lb.slice(0, 50) as row, i}
+              {#each lb.slice(0, 50) as g, i}
+                {@const row = g.row}
                 {@const r = row.result}
                 {@const isLeader = JSON.stringify(row.params) === leaderId}
                 <tr class="btl-row" class:btl-leader={isLeader}
                     onclick={() => selectLeader(row)}>
                   <td class="btl-rank">{i + 1}</td>
                   <td class="btl-sym">{paramValues.symbol ?? r.symbol ?? '—'}</td>
-                  <td class="btl-params">{Object.entries(row.params).filter(([k]) => k !== 'symbol').map(([k,v]) => `${k}=${v}`).join(', ')}</td>
+                  <td class="btl-params">{Object.entries(row.params).filter(([k]) => k !== 'symbol').map(([k,v]) => `${k}=${v}`).join(', ')}
+                    {#if g.n > 1}<span class="btl-tie"
+                      title="столько комбинаций дали ОДИН И ТОТ ЖЕ результат — перечисленные параметры на него не влияют"
+                      >×{g.n}{#if g.varied.length} · не влияют: {g.varied.join(', ')}{/if}</span>{/if}</td>
                   <td class="btl-num" class:pos={r.net_profit > 0} class:neg={r.net_profit < 0}>{fmtMoney(r.net_profit)}</td>
                   <td class="btl-num btl-ann" class:pos={(r.ann_return_go ?? 0) > 0} class:neg={(r.ann_return_go ?? 0) < 0}>{fmtPct(r.ann_return_go)}</td>
                   <td class="btl-num btl-ann" class:pos={(r.ann_return_full ?? 0) > 0} class:neg={(r.ann_return_full ?? 0) < 0}>{fmtPct(r.ann_return_full)}</td>
@@ -1584,6 +1658,10 @@
   /* Живой хит-парад строится ПОКА идёт счёт — рамка «в работе», чтобы его не
      спутали с итоговым (он ещё изменится). */
   .btl-live { border: 1px solid #2f9c5044; border-radius: 6px; padding: 8px 10px; background: #0a1410; }
+  /* «×256 · не влияют: sl_frac, min_gap_pts» — сколько комбинаций дали ОДИН и тот
+     же результат. Без этого стена одинаковых строк читается как 256 находок. */
+  .btl-tie { margin-left: 6px; font-size: 10px; color: #ffb300; background: #1a1400;
+    border: 1px solid #ffb30044; border-radius: 3px; padding: 0 5px; white-space: nowrap; }
   .crt-cur { display: inline-block; margin-left: 2px; animation: btlblink 1.05s step-end infinite; }
   @keyframes btlblink { 50% { opacity: 0; } }
   @media (prefers-reduced-motion: reduce) { .crt-cur, .btl-mon-live { animation: none; } }
