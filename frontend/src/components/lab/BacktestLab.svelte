@@ -7,6 +7,8 @@
     const s = Math.max(0, sec);
     return s >= 60 ? `${Math.round(s / 60)} мин` : `${Math.round(s)} с`;
   }
+  /** Приоритет ручного прогона: движок берёт его вперёд фоновых кампаний (0). */
+  export const MANUAL_PRIORITY = 100;
   /**
    * Честный процент прогона. Движок прогресс по комбинациям не отдаёт (результаты
    * приходят одним пакетом в конце), поэтому считаем долю пройденного времени
@@ -539,6 +541,10 @@
       paramSets,
       engine,
       robotId: selectedStrategy?.robotId || (installed[0]?.id ?? ''),
+      // Ручной прогон с экрана: вперёд очереди фоновых кампаний — за ним сидит
+      // человек. Приоритет ЯВНЫЙ: по имени прогона его не угадать (именованный
+      // ручной перебор тоже camp-… и раньше уезжал в самый хвост).
+      priority: MANUAL_PRIORITY,
     };
     if (campaignName.trim()) body.campaign = campaignName.trim();
     if (scriptCode) {
@@ -603,7 +609,8 @@
           lastStatus = st.status;
           if (st.status === 'queued') {
             say(`в очереди на ${st.runner ?? 'i9'}: впереди ${Math.max(0, (st.queue_pos ?? 1) - 1)} заданий · `
-              + `старт примерно через ${fmtEta(st.eta_sec)}`, 'sys');
+              + `старт примерно через ${fmtEta(st.eta_sec)}`
+              + ((st.priority ?? 0) >= MANUAL_PRIORITY ? ' · ручной прогон: фоновые кампании пропускаю' : ''), 'sys');
           } else if (st.status === 'running') {
             say(`взято в работу: ${st.agent_id || st.runner || 'i9'} · считает `
               + `(типовой одиночный прогон ~${fmtEta(st.typical_sec)}, осталось ~${fmtEta(st.eta_sec)})`, 'sys');
@@ -718,6 +725,7 @@
       // leader chart). i9 resolves the real bars and matches the hit-parade numbers.
       engine: 'remote',   // перебор ТОЛЬКО на i9, никогда на хостере
       robotId: selectedStrategy?.robotId || (installed[0]?.id ?? ''),
+      priority: MANUAL_PRIORITY,   // график открывает человек — вперёд фона
     };
     if (scriptCode) { body.scriptCode = scriptCode; body.baseParams = { symbol: sym }; }
     try {
@@ -780,6 +788,7 @@
       paramSets: [{ ...params, symbol: sym }],
       engine: 'remote',   // перебор ТОЛЬКО на i9, никогда на хостере
       robotId: selectedStrategy?.robotId || (installed[0]?.id ?? ''),
+      priority: MANUAL_PRIORITY,   // пересчёт с графика — человек ждёт
     };
     if (scriptCode) { body.scriptCode = scriptCode; body.baseParams = { symbol: sym }; }
     try {

@@ -1094,6 +1094,8 @@
         scriptCode: strategyCode, symbol, paramsGrid: {},
         baseParams: { ...p, ...extra, symbol },
         dateFrom: from.toISOString(), dateTo: to.toISOString(),
+        // Оператор ждёт ответа на стенде — вперёд фоновых кампаний.
+        priority: 100,
       }),
     });
     if (!res.ok) throw new Error(await res.text());

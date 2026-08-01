@@ -2,6 +2,21 @@
 import json
 from decimal import Decimal
 
+QUEUE_PRIORITY_MANUAL = 100
+
+
+def queue_priority(value) -> int:
+    """Приоритет задания в очереди движка, 0..100 (0 = фон, 100 = ручной прогон).
+
+    Поле приходит из тела запроса POST /api/v1/backtest/run: экран LAB/Ботстор шлют
+    100 (за прогоном сидит человек), скрипты кампаний не шлют ничего. Мусор и выход
+    за границы схлопываем в 0..100 — сортировка очереди не должна зависеть от того,
+    что прислал клиент."""
+    try:
+        return max(0, min(QUEUE_PRIORITY_MANUAL, int(value or 0)))
+    except (TypeError, ValueError):
+        return 0
+
 
 def i9_hb_view(raw: "str | None", now_ts: float, stale_after: float = 15.0) -> "dict | None":
     """Turn the stored i9 heartbeat JSON into a monitor view: passthrough metrics plus a

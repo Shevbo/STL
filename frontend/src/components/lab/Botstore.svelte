@@ -281,7 +281,9 @@
                              dateFrom: string, dateTo: string, t0: number) {
     const res = await fetchWithAuth('/api/v1/backtest/run', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ scriptCode, baseParams: { ...params, symbol }, symbol, paramsGrid: {}, engine, dateFrom, dateTo }),
+      // priority=100: прогон открывает ЧЕЛОВЕК с экрана — движок берёт его вперёд
+      // фоновых кампаний оптимизатора (см. очередь в /api/v1/agent/claim).
+      body: JSON.stringify({ scriptCode, baseParams: { ...params, symbol }, symbol, paramsGrid: {}, engine, dateFrom, dateTo, priority: 100 }),
     });
     if (!res.ok) throw new Error(await res.text());
     const { run_id } = await res.json();

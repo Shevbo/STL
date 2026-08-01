@@ -106,6 +106,11 @@ async def lifespan(app: FastAPI):
             "ALTER TABLE backtest_runs ADD COLUMN IF NOT EXISTS job_body JSONB",
             "ALTER TABLE backtest_runs ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ",
             "ALTER TABLE backtest_runs ADD COLUMN IF NOT EXISTS agent_id TEXT",
+            # Очередь движка: 0 = фоновое задание (кампании оптимизатора, queue_campaign),
+            # выше = вперёд очереди. Ручной прогон с экрана LAB шлёт 100: за ним сидит
+            # человек. Раньше приоритет ВЫВОДИЛСЯ из префикса run_id, и именованный
+            # ручной перебор (camp-...) молча уезжал в хвост за фоновые кампании.
+            "ALTER TABLE backtest_runs ADD COLUMN IF NOT EXISTS priority SMALLINT NOT NULL DEFAULT 0",
             # Columns the agent/optimizer writes into backtest_results for sweeps
             "ALTER TABLE backtest_results ADD COLUMN IF NOT EXISTS net_profit DOUBLE PRECISION",
             "ALTER TABLE backtest_results ADD COLUMN IF NOT EXISTS recovery_factor DOUBLE PRECISION",
@@ -926,7 +931,7 @@ async def _vds_fallback_sweeper(app_state) -> None:
                      SELECT id FROM backtest_runs
                      WHERE engine='remote' AND status='queued'
                        AND created_at < now() - make_interval(secs => $1::int)
-                     ORDER BY created_at LIMIT 1
+                     ORDER BY priority DESC, created_at LIMIT 1
                      FOR UPDATE SKIP LOCKED)
                    RETURNING id, job_body, symbol""",
                 _FB_STALE_SEC,
@@ -3020,14 +3025,19 @@ def create_app() -> FastAPI:
                 robot_id = await pool.fetchval("SELECT id FROM robots ORDER BY created_at LIMIT 1")
         if not robot_id:
             raise HTTPException(status_code=422, detail="robotId required (no robot available as FK)")
+        # Приоритет в очереди движка: явное поле запроса, а не догадка по имени прогона.
+        # Экран LAB/Ботстор шлют 100 (за прогоном сидит человек), скрипты кампаний не
+        # шлют ничего => 0 => фон.
+        from trader.util import queue_priority
+        priority = queue_priority(body.get("priority"))
         await pool.execute(
             """INSERT INTO backtest_runs
-                 (id, robot_id, params_grid, date_from, date_to, status, engine, symbol, job_body)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)""",
+                 (id, robot_id, params_grid, date_from, date_to, status, engine, symbol, job_body, priority)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)""",
             run_id, robot_id, body.get("paramsGrid", {}),
             _parse_dt(body["dateFrom"]), _parse_dt(body["dateTo"]),
             ("queued" if engine == "remote" else "pending"),
-            engine, symbol, json.dumps(body),
+            engine, symbol, json.dumps(body), priority,
         )
         if engine != "remote":
             _asyncio.create_task(
@@ -3040,7 +3050,7 @@ def create_app() -> FastAPI:
         _auth(request)
         pool = request.app.state.db_pool
         row = await pool.fetchrow(
-            "SELECT status, error_msg, finished_at, engine, agent_id, claimed_at, created_at "
+            "SELECT status, error_msg, finished_at, engine, agent_id, claimed_at, created_at, priority "
             "FROM backtest_runs WHERE id=$1", run_id
         )
         if not row:
@@ -3060,21 +3070,18 @@ def create_app() -> FastAPI:
         import datetime as _dt2
         _now = _dt2.datetime.now(tz=_dt2.timezone.utc)
         is_camp = run_id.startswith("opt-") or run_id.startswith("camp-")
-        # Позиция в очереди — ПРИОРИТЕТ-ОСОЗНАННО, как claim: интерактивные bare-cuid
-        # прогоны идут ПЕРВЫМИ, кампании (opt-/camp-) — последними. Раньше считал ВСЕ
-        # кампании впереди -> «№86, осталось 29 мин» на прогоне, который реально следующий.
+        # Позиция в очереди считается ТЕМ ЖЕ ключом, что claim выдаёт задания
+        # (priority DESC, кампании после интерактивных, created_at) — иначе монитор
+        # врёт: «№86, осталось 29 мин» на прогоне, который реально следующий. Ключ
+        # нормализован в возрастающий кортеж, чтобы сравнить одной строкой.
         jobs_before = 0
         if status == "queued" and created_at is not None:
-            if is_camp:
-                jobs_before = int(await pool.fetchval(
-                    "SELECT count(*) FROM backtest_runs WHERE status='queued' AND id<>$2 AND "
-                    "((id NOT LIKE 'opt-%' AND id NOT LIKE 'camp-%') OR created_at < $1)",
-                    created_at, run_id) or 0)
-            else:  # интерактивный: впереди только другие интерактивные, кампании пропускаются
-                jobs_before = int(await pool.fetchval(
-                    "SELECT count(*) FROM backtest_runs WHERE status='queued' AND id<>$2 AND "
-                    "id NOT LIKE 'opt-%' AND id NOT LIKE 'camp-%' AND created_at < $1",
-                    created_at, run_id) or 0)
+            jobs_before = int(await pool.fetchval(
+                "SELECT count(*) FROM backtest_runs "
+                " WHERE engine='remote' AND status='queued' AND id<>$4 "
+                "   AND (-priority, (id LIKE 'opt-%' OR id LIKE 'camp-%')::int, created_at) "
+                "     < ($1::int, $2::int, $3)",
+                -int(d.get("priority") or 0), int(is_camp), created_at, run_id) or 0)
         d["queue_pos"] = jobs_before + 1
         if status == "queued":
             d["runner"] = f"очередь на i9 (№{jobs_before + 1})"
@@ -3230,14 +3237,16 @@ def create_app() -> FastAPI:
             request.app.state.last_agent_seen = asyncio.get_event_loop().time()
         except Exception:
             pass
-        # Interactive UI runs (bare cuid, NOT camp-/opt-) jump ahead of sweep jobs so a
-        # chart opens fast even mid-campaign.
+        # Порядок выдачи (тот же ключ считает queue_pos в /status — правьте ВМЕСТЕ):
+        #   1) priority DESC — ручной прогон с экрана LAB (100) идёт вперёд фона (0);
+        #   2) кампании (opt-/camp-) после голых интерактивных прогонов старого образца;
+        #   3) created_at — внутри группы честная FIFO.
         row = await pool.fetchrow(
             """UPDATE backtest_runs SET status='running', claimed_at=now(), agent_id=$1
                WHERE id = (
                  SELECT id FROM backtest_runs
                  WHERE engine='remote' AND status='queued'
-                 ORDER BY (id LIKE 'opt-%' OR id LIKE 'camp-%'), created_at
+                 ORDER BY priority DESC, (id LIKE 'opt-%' OR id LIKE 'camp-%'), created_at
                  LIMIT 1
                  FOR UPDATE SKIP LOCKED)
                RETURNING id, robot_id, job_body, symbol""",
