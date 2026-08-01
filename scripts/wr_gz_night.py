@@ -37,7 +37,11 @@ import sys
 import time
 from datetime import datetime
 
-import httpx
+# Корень репозитория в sys.path: под nohup/cron scripts/ лежит в path, а сам пакет
+# `trader` — нет (poetry install --no-root проект не ставит).
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import httpx  # noqa: E402
 
 API = os.environ.get("STL_API_LOCAL", "http://localhost:8000")
 EMAIL = os.environ.get("STL_REPORT_EMAIL", "bshevelev75@gmail.com")
