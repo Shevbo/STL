@@ -1,3 +1,28 @@
+<script module lang="ts">
+  // Чистая часть «Системного монитора прогона» — тестируется без DOM
+  // (см. BacktestLab.progress.test.ts).
+  /** Человеческая длительность: секунды до минуты, дальше минуты. */
+  export function fmtEta(sec: number | null | undefined): string {
+    if (sec == null || !Number.isFinite(sec)) return '—';
+    const s = Math.max(0, sec);
+    return s >= 60 ? `${Math.round(s / 60)} мин` : `${Math.round(s)} с`;
+  }
+  /**
+   * Честный процент прогона. Движок прогресс по комбинациям не отдаёт (результаты
+   * приходят одним пакетом в конце), поэтому считаем долю пройденного времени
+   * против серверного ETA. Прежние 0%/50% на работающем прогоне читались как
+   * «ничего не происходит» — нарисованная ложь выглядит как правда.
+   */
+  export function progressPct(status: string, elapsedSec: number, etaSec: number | null | undefined): number {
+    if (status === 'done') return 100;
+    if (etaSec != null && Number.isFinite(etaSec) && etaSec >= 0) {
+      const total = elapsedSec + etaSec;
+      return total > 0 ? Math.min(97, Math.round(100 * elapsedSec / total)) : 0;
+    }
+    return Math.min(90, Math.round(elapsedSec / 3));   // ETA нет: медленный тик, но не ноль
+  }
+</script>
+
 <script lang="ts">
   import { downloadCSV } from '$lib/csv';
   import { fetchWithAuth } from '../../lib/fetch-auth';
@@ -406,10 +431,57 @@
     }
   }
 
+  // ── Системный монитор прогона ───────────────────────────────────────────
+  // Весь ход расчёта жил в ОДНОЙ перезаписываемой строке («в очереди · 0% [2м]»):
+  // не видно ни размера сетки, ни кто её взял, ни почему стоит. Лента с временем —
+  // тот же зелёный монохром, что на стенде робота, только про движок.
+  // ponytail: CRT-стили скопированы из AgentRobotScreen. Появится третья консоль —
+  // выносить в общий компонент, на двух дублирование дешевле связки.
+  type CrtKind = 'cmd' | 'ok' | 'err' | 'sys' | 'dim';
+  const CRT_MAX = 500;
+  let crt = $state<{ t: number; kind: CrtKind; text: string }[]>([]);
+  let crtBox = $state<HTMLDivElement | null>(null);
+  let crtStick = $state(true);
+  let progPct = $state(0);
+  function say(text: string, kind: CrtKind = 'ok') {
+    crt = [...crt, { t: Date.now(), kind, text }].slice(-CRT_MAX);
+  }
+  const crtTime = (t: number) => new Date(t).toLocaleTimeString('ru-RU');
+  // Прилипание к низу: пока оператор не отскроллил вверх, новая строка видна сама.
+  $effect(() => {
+    crt.length;
+    if (crtStick && crtBox) crtBox.scrollTop = crtBox.scrollHeight;
+  });
+  function onCrtScroll() {
+    if (!crtBox) return;
+    crtStick = crtBox.scrollHeight - crtBox.scrollTop - crtBox.clientHeight < 24;
+  }
+  async function crtCopy() {
+    const txt = crt.map((l) => `${crtTime(l.t)}  ${l.text}`).join('\n');
+    try { await navigator.clipboard.writeText(txt); say('Лог скопирован в буфер.', 'sys'); }
+    catch { say('Буфер обмена недоступен (нужен https).', 'err'); }
+  }
+  /** Телеметрия i9: чем занят хост ПРЯМО сейчас (heartbeat агента, не наша догадка). */
+  async function sayI9() {
+    try {
+      const r = await fetchWithAuth('/api/v1/agent/activity');
+      if (!r.ok) return;
+      const i9 = (await r.json())?.i9;
+      if (!i9 || i9.stale) { say('i9: телеметрия молчит (агент не шлёт heartbeat)', 'dim'); return; }
+      const a = i9.activity ?? {};
+      const what = a.state === 'job'
+        ? `считает ${a.symbol ?? '?'} · ${a.combos ?? '?'} комбо${a.since ? ' · ' + fmtEta(Date.now() / 1000 - a.since) : ''}`
+        : a.state === 'task' ? `задача ${a.func ?? '?'}` : 'простаивает';
+      say(`i9: CPU ${Math.round(i9.cpu_pct ?? 0)}% · ${i9.workers ?? '?'} воркеров · `
+        + `RAM ${Math.round(i9.ram_pct ?? 0)}% · ${what}`, 'dim');
+    } catch { /* телеметрия необязательна */ }
+  }
+
   // ── Run sweep round ────────────────────────────────────────────────────
   async function runRound(ri: number) {
     error = '';
     running = true;
+    progPct = 0;
     activeRound = ri;
     const sym = paramValues.symbol || 'RIM6';
     const schema = selectedStrategy?.params_schema ?? [];
@@ -431,6 +503,14 @@
     }
     const keys = Object.keys(dims);
     let combos = cartesian(keys.map(k => dims[k]));
+    const engLabel = engine === 'auto' ? 'авто' : engine === 'remote' ? 'i9' : 'VDS';
+    const swept = keys.filter((k) => dims[k].length > 1)
+      .map((k) => `${k} ${dims[k][0]}…${dims[k][dims[k].length - 1]} (${dims[k].length})`);
+    say(`> ${ROUNDS[ri].label} · ${selectedStrategy?.id ?? '?'} · ${sym} · ${dateFrom}…${dateTo}`, 'cmd');
+    say(swept.length
+      ? `сетка: ${combos.length} комбинаций · перебираю ${swept.join(', ')}`
+      : `сетка: 1 комбинация · перебора нет, считаю текущие параметры как есть`, 'dim');
+    const gridTotal = combos.length;
     // VDS runs serially in one subprocess → small cap; i9 has 16 workers → large.
     const maxC = engine === 'local' ? ROUNDS[ri].maxLocal : ROUNDS[ri].maxRemote;
     // R0: random shuffle + cap; R1/R2: take all (already refined)
@@ -465,8 +545,13 @@
       body.scriptCode = scriptCode;
       body.baseParams = { symbol: sym };
     }
-    const engLabel = engine === 'auto' ? 'авто' : engine === 'remote' ? 'i9' : 'VDS';
+    if (combos.length < gridTotal) {
+      say(`лимит движка ${engLabel} на раунд — ${maxC}: беру ${combos.length} из ${gridTotal}`
+        + `${ri === 0 ? ' случайной выборкой' : ' подряд'}`, 'sys');
+    }
     runPhase = `${ROUNDS[ri].label}: ${paramSets.length} вариантов → ${engLabel}…`;
+    say(`отправляю задание: ${paramSets.length} прогонов, движок ${engLabel}`
+      + `${body.campaign ? `, кампания «${body.campaign}»` : ''}…`);
     try {
       const res = await fetchWithAuth('/api/v1/backtest/run', {
         method: 'POST',
@@ -478,15 +563,20 @@
       if (data.campaign) lastCampaign = data.campaign;
       const actualEng = data.engine === 'remote' ? 'i9 (очередь)' : data.engine === 'local' ? 'VDS' : data.engine;
       runPhase = `${ROUNDS[ri].label}: ${paramSets.length} вариантов · ${actualEng}…`;
+      say(`задание принято: run_id ${data.run_id} · движок ${actualEng}`
+        + `${data.campaign ? ` · кампания ${data.campaign}` : ''}`);
       await pollRun(data.run_id, ri, paramSets);
     } catch (e: any) {
       error = String(e);
+      say(`задание НЕ принято: ${String(e).slice(0, 200)}`, 'err');
       running = false;
     }
   }
 
   async function pollRun(runId: string, ri: number, paramSets: any[]) {
     let attempts = 0;
+    let lastStatus = '';
+    let warnedOffline = false;
     const MAX_ATTEMPTS = 1800; // 45 min: an i9 sweep keeps running server-side; do not abandon it early
     polling = setInterval(async () => {
       attempts++;
@@ -494,6 +584,7 @@
         clearInterval(polling); polling = null;
         runPhase = `${ROUNDS[ri].label}: таймаут (>15 мин) — проверь агента или запусти локально`;
         error = 'Таймаут ожидания. Если движок "Авто" или "Мощный хост" — агент i9 может быть неактивен. Переключи на VDS (сервер).';
+        say('таймаут ожидания (45 мин). Задание на движке могло остаться в работе — смотри «Историю прогонов».', 'err');
         running = false;
         return;
       }
@@ -501,20 +592,42 @@
         const sr = await fetchWithAuth(`/api/v1/backtest/${runId}/status`);
         if (!sr.ok) return;
         const st = await sr.json();
-        const pct = st.progress_pct ?? (st.status === 'done' ? 100 : (st.status === 'queued' ? 0 : Math.min(99, attempts * 2)));
+        const elapsed = attempts * 1.5;
+        const pct = progressPct(st.status, elapsed, st.eta_sec);
+        progPct = pct;
         const statusLabel = st.status === 'queued' ? 'в очереди (ждёт агента)' :
                             st.status === 'running' ? 'считается' :
                             st.status === 'pending' ? 'запускается' : (st.status ?? '?');
-        runPhase = `${ROUNDS[ri].label}: ${statusLabel} · ${pct}% [${Math.floor(attempts/40)}м]`;
+        runPhase = `${ROUNDS[ri].label}: ${statusLabel} · ${pct}% [${Math.floor(attempts / 40)}м]`;
+        if (st.status !== lastStatus) {
+          lastStatus = st.status;
+          if (st.status === 'queued') {
+            say(`в очереди на ${st.runner ?? 'i9'}: впереди ${Math.max(0, (st.queue_pos ?? 1) - 1)} заданий · `
+              + `старт примерно через ${fmtEta(st.eta_sec)}`, 'sys');
+          } else if (st.status === 'running') {
+            say(`взято в работу: ${st.agent_id || st.runner || 'i9'} · считает `
+              + `(типовой одиночный прогон ~${fmtEta(st.typical_sec)}, осталось ~${fmtEta(st.eta_sec)})`, 'sys');
+            void sayI9();
+          } else if (st.status === 'pending') {
+            say('задание запускается на движке…', 'dim');
+          }
+        }
+        if (st.i9_offline && !warnedOffline) {
+          warnedOffline = true;
+          say('i9 не отвечает (агент офлайн) — задание будет ждать. Нужен результат сейчас — переключи движок на «VDS (сервер)».', 'err');
+        }
+        if (attempts % 10 === 0 && st.status === 'running') void sayI9();
         if (st.status === 'done' || st.status === 'failed') {
           clearInterval(polling);
           polling = null;
           if (st.status === 'failed') {
             error = `Расчёт не удался: ${st.error_msg ?? 'неизвестная ошибка'}`;
             runPhase = `${ROUNDS[ri].label}: ошибка`;
+            say(`расчёт не удался: ${st.error_msg ?? 'неизвестная ошибка'}`, 'err');
             running = false;
             return;
           }
+          say(`расчёт закончен за ${fmtEta(elapsed)} · забираю результаты…`);
           // full=1 so the BEST row carries its trades/equity (the ingest keeps them
           // only for the top combo); without it every row is metrics-only and the
           // leader chart shows «0 сделок» + a needless VDS re-run that can diverge.
@@ -527,11 +640,21 @@
             }));
             roundResults[ri] = items;
             const lb = [...items].sort((a, b) => profitRF(b.result) - profitRF(a.result));
+            say(`получено ${items.length} результатов`);
+            if (lb.length) {
+              const r = lb[0].result;
+              say(`лидер: ${paramsShort(lb[0].params) || '(без параметров)'} → ${fmtRub(r.net_profit)} · `
+                + `RF ${fmtRf(r.recovery_factor)} · сделок ${r.total_trades ?? '—'}`,
+                (r.net_profit ?? 0) > 0 ? 'ok' : 'err');
+            }
             if (lb.length && profitRF(lb[0].result) > 0) {
               selectLeader(lb[0]);   // auto-show best; fetches trades if stripped
+            } else if (lb.length) {
+              say('прибыльных комбинаций нет — график лидера не открываю (клик по строке хит-парада откроет любой)', 'dim');
             }
           }
           runPhase = `${ROUNDS[ri].label}: готово — ${roundResults[ri].length} результатов`;
+          progPct = 100;
           running = false;
         }
       } catch { /* keep polling */ }
@@ -542,6 +665,7 @@
     if (polling) { clearInterval(polling); polling = null; }
     running = false;
     runPhase = 'Остановлено';
+    say('слежение остановлено оператором. Задание на движке продолжает считаться — результат ищи в «Истории прогонов».', 'sys');
   }
 
   function clearRounds() {
@@ -573,10 +697,11 @@
     leaderId = JSON.stringify(row.params);
     await resolveLeaderPV(row);
     const hasTrades = Array.isArray(row.result?.trades) && row.result.trades.length > 0;
-    if (hasTrades) { leaderResult = row; return; }
+    if (hasTrades) { leaderResult = row; say('график: сделки уже есть в результате, рисую без пересчёта', 'dim'); return; }
     // Run a single backtest for these exact params.
     if (chartPoll) { clearInterval(chartPoll); chartPoll = null; }
     chartLoading = true;
+    say(`график: у комбинации ${paramsShort(row.params)} сделки не сохранены — гоню одиночный прогон на i9…`, 'dim');
     leaderResult = row;   // show metrics immediately; chart fills once trades arrive
     const sym = row.params.symbol || paramValues.symbol || 'RIM6';
     const scriptCode = selectedStrategy?.scriptCode ?? selectedStrategy?.script_code;
@@ -605,7 +730,11 @@
       let attempts = 0;
       chartPoll = setInterval(async () => {
         attempts++;
-        if (attempts > 120) { clearInterval(chartPoll); chartPoll = null; chartLoading = false; return; }
+        if (attempts > 120) {
+          clearInterval(chartPoll); chartPoll = null; chartLoading = false;
+          say('график: прогон для сделок не дождался ответа (3 мин)', 'err');
+          return;
+        }
         try {
           const sr = await fetchWithAuth(`/api/v1/backtest/${run_id}/status`);
           if (!sr.ok) return;
@@ -618,7 +747,10 @@
                 const rd = await rr.json();
                 const full = (Array.isArray(rd) ? rd : (rd.results ?? []))[0];
                 if (full) leaderResult = { params: row.params, result: full };
+                say(`график готов: ${full?.total_trades ?? 0} сделок`, 'dim');
               }
+            } else {
+              say(`график: прогон не удался — ${st.error_msg ?? 'причина неизвестна'}`, 'err');
             }
             chartLoading = false;
           }
@@ -626,6 +758,7 @@
       }, 1500);
     } catch {
       chartLoading = false;
+      say('график: задание на прогон не принято', 'err');
     }
   }
 
@@ -639,6 +772,7 @@
     const scriptCode = chartStratCode ?? codeForStrategy(chartStratId) ?? selectedStrategy?.scriptCode;
     if (chartPoll) { clearInterval(chartPoll); chartPoll = null; }
     chartLoading = true;
+    say(`> пересчёт с графика: ${sym} · ${dateFrom}…${dateTo} · ${paramsShort(params)}`, 'cmd');
     const body: any = {
       symbol: sym,
       dateFrom: new Date(dateFrom).toISOString(),
@@ -654,10 +788,15 @@
       });
       if (!res.ok) throw new Error(await res.text());
       const { run_id } = await res.json();
+      say(`пересчёт принят: run_id ${run_id} · движок i9`, 'dim');
       let attempts = 0;
       chartPoll = setInterval(async () => {
         attempts++;
-        if (attempts > 120) { clearInterval(chartPoll); chartPoll = null; chartLoading = false; return; }
+        if (attempts > 120) {
+          clearInterval(chartPoll); chartPoll = null; chartLoading = false;
+          say('пересчёт не дождался ответа (3 мин)', 'err');
+          return;
+        }
         try {
           const sr = await fetchWithAuth(`/api/v1/backtest/${run_id}/status`);
           if (!sr.ok) return;
@@ -670,7 +809,11 @@
                 const rd = await rr.json();
                 const full = (Array.isArray(rd) ? rd : (rd.results ?? []))[0];
                 if (full) leaderResult = { params, result: full, strategy_id: chartStratId };
+                say(`пересчёт готов: ${fmtRub(full?.net_profit)} · RF ${fmtRf(full?.recovery_factor)} · `
+                  + `сделок ${full?.total_trades ?? 0}`, (full?.net_profit ?? 0) > 0 ? 'ok' : 'err');
               }
+            } else {
+              say(`пересчёт не удался: ${st.error_msg ?? 'причина неизвестна'}`, 'err');
             }
             chartLoading = false;
           }
@@ -678,6 +821,7 @@
       }, 1500);
     } catch {
       chartLoading = false;
+      say('пересчёт: задание не принято', 'err');
     }
   }
 
@@ -975,17 +1119,34 @@
       {/if}
     </div>
 
-    {#if running || runPhase}
-      <div class="btl-progress">
-        <div class="btl-prog-bar">
-          <div class="btl-prog-fill" style="width:{(() => {
-            const all = roundResults.flat().length;
-            return Math.min(100, Math.max(0, running ? 50 : (all > 0 ? 100 : 0)));
-          })()}%"></div>
-        </div>
-        <div class="btl-prog-text">{runPhase}</div>
+    <!-- Системный монитор прогона: что движок делает ПРЯМО сейчас, лентой со
+         временем (тот же зелёный монохром, что на стенде робота). -->
+    <div class="btl-mon">
+      <div class="btl-mon-head">
+        <span class="btl-mon-title">Системный монитор прогона</span>
+        {#if running}<span class="btl-mon-live">● идёт расчёт</span>{/if}
+        <button class="btl-mon-hb" onclick={crtCopy} title="скопировать лог в буфер">копировать</button>
+        <button class="btl-mon-hb" onclick={() => crt = []} title="очистить ленту">очистить</button>
       </div>
-    {/if}
+      {#if running || runPhase}
+        <div class="btl-prog-bar"><div class="btl-prog-fill" style="width:{progPct}%"></div></div>
+      {/if}
+      <div class="crt">
+        <div class="crt-scan"></div>
+        <div class="crt-body" bind:this={crtBox} onscroll={onCrtScroll}>
+          <div class="crt-line dim">SHECTORY TRADE &amp; LAB · BACKTEST ENGINE CONSOLE</div>
+          <div class="crt-line dim">READY · движок {engine === 'remote' ? 'i9' : engine === 'local' ? 'VDS' : 'АВТО'}
+            · сетка {comboCount()} комб. · период {dateFrom}…{dateTo}</div>
+          {#each crt as l (l.t + l.text)}
+            <div class="crt-line {l.kind}"><span class="crt-ts">[{crtTime(l.t)}]</span> {l.text}</div>
+          {/each}
+          <div class="crt-line prompt">
+            <span class="crt-ps">STL:lab&gt; {runPhase || 'жду команды'}</span>
+            <span class="crt-cur">█</span>
+          </div>
+        </div>
+      </div>
+    </div>
 
     {#if error}
       <div class="btl-error">{error}</div>
@@ -1291,11 +1452,43 @@
   .ht-pexp:hover { color: #cde; }
   .ht-pchev { color: #567; margin-right: 3px; }
   .ht-pfull { margin-top: 4px; color: #bcd; font-size: 11px; white-space: normal; word-break: break-word; max-width: 360px; line-height: 1.5; background: #0a1120; padding: 5px 7px; border-radius: 4px; }
-  .btl-progress { margin-bottom: 6px; }
-  .btl-prog-bar { height: 4px; background: #1a1a32; border-radius: 2px; overflow: hidden; margin-bottom: 6px; }
-  .btl-prog-fill { height: 100%; background: #4caf50; transition: width 0.5s; border-radius: 2px; }
-  .btl-prog-text { font-size: 13px; color: #4caf50; font-weight: 600; }
+  .btl-prog-bar { height: 4px; background: #1a1a32; overflow: hidden; }
+  .btl-prog-fill { height: 100%; background: #4caf50; transition: width 0.5s; }
   .btl-error { padding: 10px 14px; background: #1a0808; border: 1px solid #f4433644; color: #f44336; border-radius: 5px; font-size: 12px; }
+
+  /* ── «Системный монитор прогона»: зелёный монохром IBM ──────────────────────
+     Один в один со стендом робота (AgentRobotScreen): фосфор, скан-линии,
+     мигающий блочный курсор, системные консольные шрифты. 12 строк вывода,
+     остальное — в скролле с прилипанием к низу. */
+  .btl-mon { margin-bottom: 8px; border: 1px solid #16331f; border-radius: 4px; overflow: hidden; }
+  .btl-mon-head { display: flex; align-items: center; gap: 8px; padding: 3px 8px; background: #0a1410;
+    border-bottom: 1px solid #16331f; }
+  .btl-mon-title { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: #2f9c50; }
+  .btl-mon-live { font-size: 10px; color: #7fdba0; animation: btlblink 1.4s ease-in-out infinite; }
+  .btl-mon-hb { background: none; border: 1px solid #1c4a2a; color: #2f9c50; cursor: pointer;
+    font-size: 9px; text-transform: uppercase; letter-spacing: .06em; padding: 0 5px; border-radius: 2px; }
+  .btl-mon-hb:first-of-type { margin-left: auto; }
+  .btl-mon-hb:hover { color: #7fdba0; border-color: #2f9c50; }
+  .crt { position: relative; background: #030803; overflow: hidden; }
+  .crt-scan { position: absolute; inset: 0; pointer-events: none; z-index: 2;
+    background: repeating-linear-gradient(to bottom, rgba(0,0,0,.28) 0 1px, transparent 1px 3px); }
+  .crt-body { position: relative; z-index: 1; height: calc(12 * 18px + 8px); overflow-y: auto; padding: 5px 9px 3px;
+    font: 12px/1.5 Consolas, "Lucida Console", "Courier New", monospace;
+    color: #33ff66; text-shadow: 0 0 4px rgba(51,255,102,.45); letter-spacing: .02em; }
+  .crt-body::-webkit-scrollbar { width: 9px; }
+  .crt-body::-webkit-scrollbar-thumb { background: #1c4a2a; }
+  .crt-body::-webkit-scrollbar-track { background: #061206; }
+  .crt-line { white-space: pre-wrap; word-break: break-word; }
+  .crt-line.dim { color: #1f8a44; text-shadow: none; }
+  .crt-line.cmd { color: #9dffbe; }
+  .crt-line.err { color: #ff9a3c; text-shadow: 0 0 4px rgba(255,154,60,.45); }
+  .crt-line.sys { color: #66ffa6; }
+  .crt-ts { color: #1f8a44; text-shadow: none; }
+  .crt-line.prompt { display: flex; align-items: center; }
+  .crt-ps { color: #33ff66; }
+  .crt-cur { display: inline-block; margin-left: 2px; animation: btlblink 1.05s step-end infinite; }
+  @keyframes btlblink { 50% { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .crt-cur, .btl-mon-live { animation: none; } }
 
   /* Leaderboard table */
   .btl-leader-wrap { overflow-x: auto; max-height: 360px; overflow-y: auto; }
