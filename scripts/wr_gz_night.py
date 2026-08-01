@@ -240,6 +240,40 @@ def fmt(v, nd=0, dash="—"):
     return f"{v:,.{nd}f}".replace(",", " ")
 
 
+def _best_by_worst(src: dict, n: int) -> list[tuple]:
+    """Наборы, подошедшие ближе всех: сортировка по ХУДШЕМУ окну. Нулевой результат
+    без этой таблицы бесполезен — не видно, промахнулись на рубль или на сто тысяч."""
+    if not src:
+        return []
+    common = set.intersection(*(set(v) for v in src.values()))
+    good = [k for k in common
+            if all((src[w][k].get("trades") or 0) >= MIN_TRADES for w in src)]
+    return sorted(good, key=lambda k: min((src[w][k].get("net") or 0) for w in src),
+                  reverse=True)[:n]
+
+
+def _table(src: dict, keys: list[tuple], axes: dict | None = None) -> str:
+    L = ["| # | period | oversold | overbought | tp_atr | sl_pct | "
+         + " | ".join(f"{w}, ₽" for w, _, _ in WINDOWS)
+         + " | худшее окно | сделок (мин) |" + (" соседей в плюсе |" if axes else ""),
+         "|---:|---:|---:|---:|---:|---:|" + "---:|" * (len(WINDOWS) + 2)
+         + ("---:|" if axes else "")]
+    for i, k in enumerate(keys, 1):
+        nets = [(src[w][k].get("net") or 0) for w, _, _ in WINDOWS if k in src[w]]
+        tmin = min((src[w][k].get("trades") or 0) for w, _, _ in WINDOWS if k in src[w])
+        row = (f"| {i} | " + " | ".join(str(x) for x in k) + " | "
+               + " | ".join(fmt(x) for x in nets)
+               + f" | {fmt(min(nets))} | {fmt(tmin)} |")
+        if axes:
+            nb = neighbourhood(k, axes)
+            good = sum(1 for x in nb
+                       if all(x in src[w] and (src[w][x].get("net") or 0) > 0
+                              for w, _, _ in WINDOWS))
+            row += f" {good}/{len(nb)} |"
+        L.append(row)
+    return "\n".join(L) + "\n"
+
+
 def report(coarse: dict, fine: dict, live_rows: dict, final: list[tuple],
            axes_fine: dict) -> str:
     L = []
@@ -271,32 +305,20 @@ def report(coarse: dict, fine: dict, live_rows: dict, final: list[tuple],
         n_f = len(next(iter(fine.values())))
         L.append(f"## Уточнение: {n_f} комбинаций × {len(WINDOWS)} окна\n")
 
+    src = fine or coarse
     if not final:
         L.append("## Вывод\n")
         L.append("**Устойчивых параметров нет.** Ни один набор не удержался в плюсе "
-                 "на всех трёх окнах при достаточном числе сделок. Плюс живого "
-                 "робота за июнь-август — свойство ЭТОГО отрезка, а не параметров: "
-                 "на январе-мае та же логика теряет деньги. Ставить на реальные "
-                 "деньги нечего.\n")
+                 "на всех трёх окнах при достаточном числе сделок. Плюс живого робота "
+                 "за последний отрезок — свойство ЭТОГО периода, а не параметров.\n")
+        L.append("Ниже всё равно показаны 15 наборов, подошедших БЛИЖЕ всех (по худшему "
+                 "окну) — чтобы было видно, насколько именно не хватило и есть ли "
+                 "направление, куда двигаться.\n")
+        L.append(_table(src, _best_by_worst(src, 15)))
         return "\n".join(L)
 
-    src = fine or coarse
     L.append("## Кандидаты, выжившие на всех окнах\n")
-    L.append("| # | period | oversold | overbought | tp_atr | sl_pct | "
-             + " | ".join(f"{w}, ₽" for w, _, _ in WINDOWS)
-             + " | худшее окно | сделок (мин) | соседей в плюсе |")
-    L.append("|---:|---:|---:|---:|---:|---:|" + "---:|" * (len(WINDOWS) + 3))
-    for i, k in enumerate(final[:25], 1):
-        nets = [(src[w][k].get("net") or 0) for w, _, _ in WINDOWS]
-        tmin = min((src[w][k].get("trades") or 0) for w, _, _ in WINDOWS)
-        nb = neighbourhood(k, axes_fine)
-        good = sum(1 for n in nb
-                   if all(n in src[w] and (src[w][n].get("net") or 0) > 0
-                          for w, _, _ in WINDOWS))
-        L.append(f"| {i} | " + " | ".join(str(x) for x in k) + " | "
-                 + " | ".join(fmt(x) for x in nets)
-                 + f" | {fmt(min(nets))} | {fmt(tmin)} | {good}/{len(nb)} |")
-    L.append("")
+    L.append(_table(src, final[:25], axes_fine))
     L.append("**Как читать «соседей»:** это доля соседних по сетке наборов, которые "
              "тоже в плюсе на всех окнах. Мало соседей — точка стоит на игле, такой "
              "результат живёт до первой смены режима. Много — есть плато, "
