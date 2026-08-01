@@ -80,8 +80,18 @@
       <span id="pageurl"></span>
       <button onclick="cp(location.href,this)">копировать ссылку</button>
       <button onclick="cp('shaving_ri',this)">id: shaving_ri</button>
-      <a href="?src=shaving-ri-sweep.json">3 месяца</a>
-      <a href="?src=shaving-ri-sweep-jul.json">контроль: июль</a>
+      <select id="runsel" onchange="location.search='?src='+this.value">
+        <option value="shaving-ri-sweep.json">разведка: RIU6, 3 месяца, 100 комб.</option>
+        <option value="shaving-ri-sweep-jul.json">разведка: RIU6, только июль</option>
+        <option value="shaving-ri-refine-a.json">уточнение A: 9600 комб. вокруг лидера 3 мес</option>
+        <option value="shaving-ri-refine-b.json">уточнение B: 8000 комб. вокруг лидера июля</option>
+        <option value="shaving-ri-holdout-RIM6-a.json">холдаут RIM6 (мар-июн 26), топ-30 A</option>
+        <option value="shaving-ri-holdout-RIM6-b.json">холдаут RIM6 (мар-июн 26), топ-30 B</option>
+        <option value="shaving-ri-holdout-RIH6-a.json">холдаут RIH6 (дек 25-мар 26), топ-30 A</option>
+        <option value="shaving-ri-holdout-RIH6-b.json">холдаут RIH6 (дек 25-мар 26), топ-30 B</option>
+        <option value="shaving-ri-holdout-RIZ5-a.json">холдаут RIZ5 (сен-дек 25), топ-30 A</option>
+        <option value="shaving-ri-holdout-RIZ5-b.json">холдаут RIZ5 (сен-дек 25), топ-30 B</option>
+      </select>
     </div>
     <h1>Shaving RI 1</h1>
     <div class="muted small">Выкуп отклонения фьючерса RI от индексной корзины RTSI.
@@ -205,18 +215,7 @@ z_t     = sig_t / sd_t                      отклонение в сигмах
       </select>
       <span class="muted small">клик по строке разворачивает все метрики</span>
     </div>
-    <div class="tblwrap"><table id="rtbl"><thead><tr>
-      <th class="s" data-k="ema_slow">EMA2 ось</th>
-      <th class="s" data-k="ema_fast">EMA1 сглаж.</th>
-      <th class="s" data-k="entry_z">вход, σ</th>
-      <th class="s" data-k="exit_z">выход, σ</th>
-      <th class="s n" data-k="trades">сделок</th>
-      <th class="s n" data-k="win_rate">винрейт</th>
-      <th class="s n" data-k="net">итог, ₽</th>
-      <th class="s n" data-k="dd_mtm">просадка, ₽</th>
-      <th class="s n" data-k="rf_mtm">RF</th>
-      <th class="s n" data-k="ann_go">% годовых на ГО</th>
-    </tr></thead><tbody></tbody></table></div>
+    <div class="tblwrap"><table id="rtbl"><thead><tr></tr></thead><tbody></tbody></table></div>
     <p class="muted small" id="verdict"></p>
   </div>
 
@@ -310,7 +309,12 @@ function panel(id, series, opts) {
 
 function drawCharts() {
   const ch = D.chart || [];
-  if (!ch.length) { $('#chartnote').textContent = 'рядов графика в артефакте нет'; return; }
+  if (!ch.length || !D.best || D.best.ema_slow === undefined) {
+    $('#chartnote').textContent = D.partial
+      ? 'счёт ещё идёт: ряды графика появятся, когда сетка досчитается'
+      : 'рядов графика в артефакте нет';
+    return;
+  }
   const ez = (D.best.entry_z_x10 ?? 20) / 10;
   const ax = panel('#c1', [
     { pts: ch.map(r => [r[0], r[1] - r[3]]), color: '#8a90a8' },
@@ -345,12 +349,35 @@ function drawCharts() {
 }
 
 // ── таблица результатов ─────────────────────────────────────────────────────
-const key = r => ({
-  ema_slow: r.params.ema_slow, ema_fast: r.params.ema_fast,
-  entry_z: r.params.entry_z_x10 / 10, exit_z: r.params.exit_z_x10 / 10,
-  trades: r.trades, win_rate: r.win_rate, net: r.net,
-  dd_mtm: r.dd_mtm, rf_mtm: r.rf_mtm, ann_go: r.ann_go,
-});
+// Столбцы осей строятся из D.grid, а не зашиты: сетка уточнения имеет 6 осей
+// против 4 у разведки, и жёсткий заголовок показывал бы чужие числа под старыми
+// подписями. Ключ 'p:xxx' читается из params, остальные — из строки результата.
+const AXIS = {
+  ema_slow: 'EMA2 ось', ema_fast: 'EMA1 сглаж.', entry_z_x10: 'вход, σ',
+  exit_z_x10: 'выход, σ', sl_pts: 'стоп, пт', max_hold_min: 'держать, мин',
+  z_win: 'окно СКО', min_dev_pts: 'мин.откл., пт', min_vol: 'мин.объём',
+};
+const MET = [
+  ['trades', 'сделок'], ['win_rate', 'винрейт'], ['net', 'итог, ₽'],
+  ['plateau', 'плато, ₽'], ['nb_pos', 'соседей +'], ['net_oos', 'вне выборки, ₽'],
+  ['dd_mtm', 'просадка, ₽'], ['rf_mtm', 'RF'], ['ann_go', '% годовых на ГО'],
+];
+const axKeys = () => Object.keys(D.grid || {});
+const cols = () => axKeys().map(k => ['p:' + k, AXIS[k] || k])
+  .concat(MET.filter(([k]) => k !== 'plateau' && k !== 'nb_pos'
+    ? true : (D.results || []).some(r => r[k] !== undefined)));
+const val = (r, k) => k.startsWith('p:')
+  ? (k.endsWith('_x10') ? r.params[k.slice(2)] / 10 : r.params[k.slice(2)])
+  : r[k];
+const show = (r, k) => {
+  const v = val(r, k);
+  if (v === null || v === undefined) return '—';
+  if (k === 'win_rate' || k === 'ann_go') return pct(v);
+  if (k === 'rf_mtm') return v.toFixed(2);
+  if (k === 'nb_pos') return `${v}/${r.nb_n}`;
+  if (k.startsWith('p:')) return k.endsWith('_x10') ? v.toFixed(1) : v;
+  return fmt(v);
+};
 
 function rowsFiltered() {
   const f = $('#flt').value;
@@ -358,44 +385,50 @@ function rowsFiltered() {
   if (f === 'trades') rs = rs.filter(r => r.trades > 0);
   if (f === 'pos') rs = rs.filter(r => (r.net || 0) > 0);
   return rs.slice().sort((a, b) => {
-    const x = key(a)[sortK], y = key(b)[sortK];
+    const x = val(a, sortK), y = val(b, sortK);
     const xv = x === null || x === undefined ? -Infinity : x;
     const yv = y === null || y === undefined ? -Infinity : y;
     return (xv - yv) * sortDir;
   });
 }
 
+function drawHead() {
+  const tr = $('#rtbl thead tr'); tr.innerHTML = '';
+  cols().forEach(([k, t]) => {
+    const th = document.createElement('th');
+    th.className = 's n'; th.textContent = t; th.dataset.k = k;
+    th.onclick = () => { sortDir = sortK === k ? -sortDir : -1; sortK = k; draw(); };
+    tr.append(th);
+  });
+}
+
 function draw() {
-  const tb = $('#rtbl tbody'); tb.innerHTML = '';
+  const cs = cols(), tb = $('#rtbl tbody'); tb.innerHTML = '';
   rowsFiltered().forEach(r => {
-    const k = key(r), tr = document.createElement('tr'); tr.className = 'row';
-    tr.innerHTML = `<td class="n">${k.ema_slow}</td><td class="n">${k.ema_fast}</td>
-      <td class="n">${k.entry_z.toFixed(1)}</td><td class="n">${k.exit_z.toFixed(1)}</td>
-      <td class="n">${k.trades ?? 0}</td><td class="n">${pct(k.win_rate)}</td>
-      <td class="n ${cls(k.net)}">${fmt(k.net)}</td>
-      <td class="n">${fmt(k.dd_mtm)}</td>
-      <td class="n">${k.rf_mtm === null || k.rf_mtm === undefined ? '—' : k.rf_mtm.toFixed(2)}</td>
-      <td class="n ${cls(k.ann_go)}">${pct(k.ann_go)}</td>`;
+    const tr = document.createElement('tr'); tr.className = 'row';
+    tr.innerHTML = cs.map(([k]) =>
+      `<td class="n ${k === 'net' || k === 'plateau' || k === 'net_oos' || k === 'ann_go'
+        ? cls(val(r, k)) : ''}">${show(r, k)}</td>`).join('');
     const det = document.createElement('tr'); det.className = 'det'; det.style.display = 'none';
-    det.innerHTML = `<td colspan="10">
+    det.innerHTML = `<td colspan="${cs.length}">
       доход на ГО ${pct(r.ret)} · просадка по закрытым ${pct(r.dd)} · RF по закрытым
       ${r.rf === null || r.rf === undefined ? '—' : r.rf.toFixed(2)} ·
       Шарп ${r.sharpe === null || r.sharpe === undefined ? '—' : r.sharpe.toFixed(2)} ·
       пик контрактов ${r.peak} · ГО в работе ${fmt(r.margin)} ₽ ·
-      вне выборки ${fmt(r.net_oos)} ₽ · прибыльных окон ${r.wins_win ?? '—'}/${r.wins_tot ?? '—'} ·
+      прибыльных окон ${r.wins_win ?? '—'}/${r.wins_tot ?? '—'} ·
       деградация ${r.degrade === null || r.degrade === undefined ? '—' : r.degrade.toFixed(2)}</td>`;
     tr.onclick = () => det.style.display = det.style.display === 'none' ? '' : 'none';
     tb.append(tr, det);
   });
 }
-const csvResults = () => dl('shaving-ri-sweep.csv',
-  [['EMA2', 'EMA1', 'вход_сигм', 'выход_сигм', 'сделок', 'винрейт', 'итог_руб', 'просадка_руб',
-    'RF', 'проц_годовых_ГО', 'доход_на_ГО', 'Шарп', 'пик_контрактов', 'вне_выборки_руб',
-    'прибыльных_окон', 'всего_окон', 'деградация']].concat(
-    rowsFiltered().map(r => { const k = key(r); return [
-      k.ema_slow, k.ema_fast, k.entry_z, k.exit_z, k.trades, k.win_rate, k.net, k.dd_mtm,
-      k.rf_mtm, k.ann_go, r.ret, r.sharpe, r.peak, r.net_oos, r.wins_win, r.wins_tot, r.degrade];
-    })));
+const csvResults = () => {
+  const cs = cols();
+  dl((D.grid_name || 'shaving-ri') + '-sweep.csv',
+    [cs.map(c => c[1]).concat(['доход_на_ГО', 'Шарп', 'пик_контрактов', 'прибыльных_окон',
+                               'всего_окон', 'деградация'])].concat(
+      rowsFiltered().map(r => cs.map(([k]) => val(r, k))
+        .concat([r.ret, r.sharpe, r.peak, r.wins_win, r.wins_tot, r.degrade]))));
+};
 
 function drawKpis() {
   const rs = (D.results || []).filter(r => r.trades > 0);
@@ -403,14 +436,19 @@ function drawKpis() {
   const profitable = rs.filter(r => (r.net || 0) > 0).length;
   const med = rs.length ? rs.map(r => r.net || 0).sort((a, b) => a - b)[Math.floor(rs.length / 2)] : null;
   const kpi = (l, v, c) => `<div class="kpi"><div class="l">${l}</div><div class="v ${c || ''}">${v}</div></div>`;
+  const plat = rs.filter(r => r.plateau !== undefined);
+  const bestPl = plat.length ? plat.reduce((a, b) => b.plateau > a.plateau ? b : a) : null;
   $('#kpis').innerHTML =
     kpi('комбинаций / со сделками', `${(D.results || []).length} / ${rs.length}`) +
     kpi('прибыльных', `${profitable} (${rs.length ? Math.round(profitable / rs.length * 100) : 0}%)`,
         cls(profitable * 2 - rs.length)) +
     kpi('медиана итога, ₽', fmt(med), cls(med)) +
     kpi('лучший итог, ₽', best ? fmt(best.net) : '—', best ? cls(best.net) : '') +
-    kpi('сделок у лучшей', best ? fmt(best.trades) : '—') +
-    kpi('просадка лучшей, ₽', best ? fmt(best.dd_mtm) : '—');
+    (bestPl
+      ? kpi('лучшее плато, ₽', fmt(bestPl.plateau), cls(bestPl.plateau)) +
+        kpi('соседей в плюсе у него', `${bestPl.nb_pos}/${bestPl.nb_n}`)
+      : kpi('сделок у лучшей', best ? fmt(best.trades) : '—') +
+        kpi('просадка лучшей, ₽', best ? fmt(best.dd_mtm) : '—'));
 
   const share = rs.length ? profitable / rs.length : 0;
   $('#verdict').innerHTML = !rs.length
@@ -426,10 +464,6 @@ function drawKpis() {
 
 // ── загрузка ────────────────────────────────────────────────────────────────
 $('#pageurl').textContent = location.origin + location.pathname;
-document.querySelectorAll('th.s').forEach(th => th.onclick = () => {
-  const k = th.dataset.k;
-  sortDir = sortK === k ? -sortDir : -1; sortK = k; draw();
-});
 
 // ?src=<файл> открывает другой артефакт (контрольный прогон на другом окне).
 // Только имя файла: путь и схема отбрасываются, чтобы параметр из чужой ссылки
@@ -449,8 +483,12 @@ fetch('./' + SRC + '?v=' + Date.now()).then(r => {
     ['₽/пункт', d.point_value], ['ГО, ₽', fmt(d.initial_margin)],
     ['прогон от', (d.generated_at || '').replace('T', ' ').replace('+00:00', ' UTC')],
   ].concat(d.label ? [['метка', d.label]] : [])
+   .concat(d.partial ? [['ИДЁТ СЧЁТ', `${d.done}/${d.total}`]] : [])
    .map(([l, v]) => `<span class="chip">${l} <b>${v}</b></span>`).join('');
-  drawParams(); drawKpis(); draw(); drawCharts();
+  const sel = $('#runsel'); if (sel.querySelector) {
+    const o = sel.querySelector(`option[value="${SRC}"]`); if (o) o.selected = true;
+  }
+  drawParams(); drawHead(); drawKpis(); draw(); drawCharts();
 }).catch(e => {
   $('#kpis').innerHTML = `<div class="kpi"><div class="l">артефакт не загружен</div>
     <div class="v">${e.message}</div></div>`;
