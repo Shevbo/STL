@@ -60,6 +60,7 @@ class SmartOrderBody(BaseModel):
     oco_group: str = ""
     good_till_ms: int = 0
     sl_offset: float = 0.0         # защитный стоп в пунктах после входа (0 = без стопа)
+    tp_offset: float = 0.0         # тейк в пунктах доходного хода после входа (0 = без тейка)
     note: str = ""
 
 
@@ -72,6 +73,7 @@ async def create(body: SmartOrderBody, request: Request):
         side=body.side.lower(), qty=int(body.qty),
         trigger_price=float(body.trigger_price),
         trail_offset=float(body.trail_offset), sl_offset=float(body.sl_offset),
+        tp_offset=float(body.tp_offset),
         watch_client_id=body.watch_client_id, child_price=float(body.child_price),
         oco_group=body.oco_group, good_till_ms=int(body.good_till_ms),
         note=body.note, created_ms=so_mod.now_ms(),
@@ -264,6 +266,11 @@ def _track_fills(book: SmartOrderBook, ost: Any, store: Any, agent: str) -> bool
             so.fired_price, so.fired_qty = px, vol
             dirty = True
             log.info("smart_order.fill_price", so_id=so.so_id, price=px, qty=vol)
+            # Защитные заявки ставились по цене дочерней (маркетабельной) заявки;
+            # теперь известна ФАКТИЧЕСКАЯ цена входа — двигаем уровни на неё, пока
+            # заявки ещё взведены.
+            if so_mod.rebase_protective(book.orders, so, px):
+                log.info("smart_order.protective_rebased", parent=so.so_id, entry=px)
     return dirty
 
 
@@ -338,15 +345,16 @@ async def _watch_once(state: Any) -> None:
                 so.fired_client_id = client_id
                 log.info("smart_order.fired", so_id=so.so_id, kind=so.kind,
                          code=so.code, side=so.side, qty=so.qty, price=act.price)
-                # Защитный стоп после входа (если оператор его заказал): trail и
+                # Защитная пара после входа (если оператор её заказал): trail и
                 # on_fill только ВХОДЯТ и после срабатывания забывают про позицию —
-                # без стопа выходить нечем, когда цена пошла против.
-                child_sl = so_mod.protective_sl(so, act.price, now)
-                if child_sl is not None:
-                    book.orders.append(child_sl)
-                    log.info("smart_order.protective_sl", parent=so.so_id,
-                             so_id=child_sl.so_id, side=child_sl.side,
-                             trigger=child_sl.trigger_price, offset=so.sl_offset)
+                # без стопа выходить нечем, а без тейка некому забрать прибыль.
+                # Обе в одной связке OCO: сработала одна — вторая снимается, иначе
+                # она открыла бы позицию в обратную сторону.
+                for child in so_mod.protective_children(so, act.price, now):
+                    book.orders.append(child)
+                    log.info("smart_order.protective", parent=so.so_id, kind=child.kind,
+                             so_id=child.so_id, side=child.side,
+                             trigger=child.trigger_price, oco=child.oco_group)
             except LimitError as exc:
                 so.status = "error"
                 so.note = f"отклонено лимитами: {exc}"

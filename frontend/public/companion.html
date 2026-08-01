@@ -465,6 +465,7 @@ function renderOrders(o, d) {
     else if ((s.status === 'fired' || s.status === 'orphaned') && s.fired_ms > todayLo(d))
       sub = 'цена сделки уточняется';   // сегодняшнюю подтянем из таблицы сделок QUIK
     if (s.sl_offset) sub += ` · стоп ${s.sl_offset} п.`;
+    if (s.tp_offset) sub += ` · тейк ${s.tp_offset} п.`;
     if (s.kind === 'trail_tp' && s.status === 'armed') {
       sub = s.activated
         ? `● от пика ${num(s.peak)}, сделка при ${s.side === 'buy' ? '≥' : '≤'} ` +

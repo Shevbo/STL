@@ -80,7 +80,9 @@ export const KINDS: KindMeta[] = [
       { key: 'trigger_price', label: 'Активация', hint: '0 — следить сразу' },
       { key: 'trail_offset', label: 'Отступ, пункты', hint: 'откат от пика, на котором выходим' },
       { key: 'sl_offset', label: 'Стоп после входа, пункты',
-        hint: '0 — без стопа. Иначе сразу после сделки встанет защитный стоп на этом расстоянии от цены входа' },
+        hint: '0 — без стопа. Иначе сразу после сделки встанет защитный стоп на этом расстоянии ПРОТИВ цены входа' },
+      { key: 'tp_offset', label: 'Тейк после входа, пункты',
+        hint: '0 — без тейка. Иначе после сделки встанет тейк на этом расстоянии В ПОЛЬЗУ входа; со стопом они в одной связке — сработал один, второй снимется' },
     ],
     color: '#ffb300',
     lineStyle: 3,
@@ -291,7 +293,11 @@ export function conditionText(o: any): string {
     return `${act}откат ${fmtPts(o.trail_offset)}${peak}`;
   }
   if (k === 'on_fill') return `после исполнения ${String(o.watch_client_id || '—').slice(0, 18)}`;
-  if (o.parent_id) return `защитный стоп: ${o.side === 'sell' ? 'цена ≤' : 'цена ≥'} ${fmtNum(o.trigger_price)}`;
+  if (o.parent_id) {
+    const what = o.kind === 'tp' ? 'тейк после входа' : 'защитный стоп';
+    const down = (o.kind === 'sl' && o.side === 'sell') || (o.kind === 'tp' && o.side === 'buy');
+    return `${what}: ${down ? 'цена ≤' : 'цена ≥'} ${fmtNum(o.trigger_price)}`;
+  }
   const down = (k === 'sl' && o.side === 'sell') || (k === 'tp' && o.side === 'buy');
   return `${down ? 'цена ≤' : 'цена ≥'} ${fmtNum(o.trigger_price)}`;
 }

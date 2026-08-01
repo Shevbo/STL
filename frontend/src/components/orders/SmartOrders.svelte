@@ -23,6 +23,7 @@
   let trigger = $state('');
   let trailOffset = $state('');
   let slOffset = $state('');          // защитный стоп после входа, пункты (0 = без стопа)
+  let tpOffset = $state('');          // тейк после входа, пункты (0 = без тейка)
   let watchId = $state('');
   let childPrice = $state('');
   let ocoGroup = $state('');
@@ -96,6 +97,7 @@
       trigger_price: parseFloat(trigger) || 0,
       trail_offset: parseFloat(trailOffset) || 0,
       sl_offset: parseFloat(slOffset) || 0,
+      tp_offset: parseFloat(tpOffset) || 0,
       watch_client_id: watchId.trim(),
       child_price: parseFloat(childPrice) || 0,
       oco_group: ocoGroup.trim(),
@@ -110,7 +112,7 @@
       if (!res.ok) { msgKind = 'err'; msg = d?.detail || `HTTP ${res.status}`; return; }
       msgKind = 'ok';
       msg = `Заявка ${d.so_id} взведена. Сторож следит.`;
-      trigger = ''; trailOffset = ''; slOffset = ''; watchId = ''; childPrice = '';
+      trigger = ''; trailOffset = ''; slOffset = ''; tpOffset = ''; watchId = ''; childPrice = '';
       confirming = false;
       await smartOrdersStore.refresh();
     } catch (e: any) { msgKind = 'err'; msg = e?.message || 'ошибка'; }
@@ -131,6 +133,7 @@
     trigger = o.trigger_price ? String(o.trigger_price) : '';
     trailOffset = o.trail_offset ? String(o.trail_offset) : '';
     slOffset = o.sl_offset ? String(o.sl_offset) : '';
+    tpOffset = o.tp_offset ? String(o.tp_offset) : '';
     watchId = o.watch_client_id || '';
     childPrice = o.child_price ? String(o.child_price) : '';
     ocoGroup = o.oco_group || '';
@@ -212,6 +215,8 @@
               <input class="so-in" type="number" step="any" bind:value={trailOffset} placeholder="0" />
             {:else if f.key === 'sl_offset'}
               <input class="so-in" type="number" step="any" min="0" bind:value={slOffset} placeholder="0 — без стопа" />
+            {:else if f.key === 'tp_offset'}
+              <input class="so-in" type="number" step="any" min="0" bind:value={tpOffset} placeholder="0 — без тейка" />
             {:else if f.key === 'watch_client_id'}
               <input class="so-in text" bind:value={watchId} placeholder="client_id" spellcheck="false" />
             {:else}
@@ -311,9 +316,10 @@
               ○ ждёт пробоя уровня <b>{fmtPrice(o.trigger_price)}</b>,
               затем встанет в слежение и выкупит на откате {o.trail_offset} п.
             {/if}
-            {#if o.sl_offset}
-              <div class="so-c-sl">после входа автоматически встанет защитный стоп в
-                <b>{o.sl_offset}</b> п. от цены сделки</div>
+            {#if o.sl_offset || o.tp_offset}
+              <div class="so-c-sl">после входа автоматически встанут:
+                {#if o.sl_offset}<b>стоп {o.sl_offset} п.</b>{/if}{#if o.sl_offset && o.tp_offset} и {/if}{#if o.tp_offset}<b>тейк {o.tp_offset} п.</b>{/if}
+                от цены сделки{#if o.sl_offset && o.tp_offset}, в одной связке — сработает один, второй снимется{/if}</div>
             {/if}
           </div>
         {/if}

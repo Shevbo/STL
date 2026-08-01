@@ -301,3 +301,58 @@ def test_match_trades_ignores_far_and_oversized():
     big = {"quik": {"trades": [{"order_num": "A", "sec": "RIU6", "side": "sell", "qty": 9,
                                 "price": 90_000.0, "ts_ms": NOW + 500, "tag": ""}]}}
     assert _match_trades(big, o) == (0.0, 0)          # объём больше нашего — чужая
+
+
+# ---- защитная ПАРА (стоп + тейк) после входа ----
+
+def test_protective_tp_is_in_favour_of_entry():
+    from trader.quik.smart_orders import protective_tp
+    buy = so(kind="trail_tp", side="buy", trail_offset=350, qty=14, tp_offset=500)
+    tp = protective_tp(buy, entry_price=89_000, now=NOW)
+    assert tp.kind == "tp" and tp.side == "sell"
+    assert tp.trigger_price == 89_500          # прибыль лонга — ВЫШЕ входа
+    sell = so(kind="trail_tp", side="sell", trail_offset=350, qty=14, tp_offset=500)
+    tp2 = protective_tp(sell, entry_price=89_000, now=NOW)
+    assert tp2.side == "buy" and tp2.trigger_price == 88_500   # прибыль шорта — НИЖЕ
+
+
+def test_protective_pair_shares_one_oco_group():
+    """Стоп и тейк стерегут ОДНУ позицию: сработал один — второй обязан сняться,
+    иначе он откроет позицию в обратную сторону."""
+    from trader.quik.smart_orders import protective_children
+    p = so(kind="trail_tp", side="buy", trail_offset=350, qty=14,
+           sl_offset=300, tp_offset=500)
+    kids = protective_children(p, entry_price=89_000, now=NOW)
+    assert [k.kind for k in kids] == ["sl", "tp"]
+    assert kids[0].oco_group and kids[0].oco_group == kids[1].oco_group
+    assert kids[0].trigger_price == 88_700 and kids[1].trigger_price == 89_500
+    # и связка реально гасит вторую заявку
+    acts = run(kids, last=88_700)
+    fired = [a for a in acts if isinstance(a, Fire)]
+    cancelled = [a for a in acts if isinstance(a, Cancel)]
+    assert len(fired) == 1 and fired[0].so.kind == "sl"
+    assert len(cancelled) == 1 and cancelled[0].so.kind == "tp"
+
+
+def test_protective_pair_only_what_was_asked():
+    from trader.quik.smart_orders import protective_children
+    only_tp = so(kind="trail_tp", side="buy", trail_offset=350, tp_offset=500)
+    assert [k.kind for k in protective_children(only_tp, 89_000, NOW)] == ["tp"]
+    neither = so(kind="trail_tp", side="buy", trail_offset=350)
+    assert protective_children(neither, 89_000, NOW) == []
+
+
+def test_rebase_protective_moves_levels_to_real_entry():
+    """Уровни ставятся по цене дочерней (маркетабельной) заявки, а исполняется она
+    часто лучше лимита — как только известна фактическая цена, двигаем уровни."""
+    from trader.quik.smart_orders import protective_children, rebase_protective
+    p = so(kind="trail_tp", side="buy", trail_offset=350, qty=14,
+           sl_offset=300, tp_offset=500)
+    kids = protective_children(p, entry_price=89_000, now=NOW)
+    assert rebase_protective(kids, p, real_entry=88_940) is True
+    assert kids[0].trigger_price == 88_640 and kids[1].trigger_price == 89_440
+    # уже сработавшую заявку не трогаем
+    kids[0].status = "fired"
+    before = kids[0].trigger_price
+    rebase_protective(kids, p, real_entry=88_000)
+    assert kids[0].trigger_price == before

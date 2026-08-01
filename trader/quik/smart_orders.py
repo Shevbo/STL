@@ -68,6 +68,7 @@ class SmartOrder:
     status: str = "armed"        # armed | fired | cancelled | expired | error
     note: str = ""
     sl_offset: float = 0.0       # trail/on_fill: защитный стоп в ПУНКТАХ после входа (0 = без стопа)
+    tp_offset: float = 0.0       # trail/on_fill: тейк в ПУНКТАХ доходного хода после входа (0 = без тейка)
     parent_id: str = ""          # у защитного стопа — so_id заявки, которая его породила
     peak: float = 0.0            # trail bookkeeping (best price since activation)
     activated: bool = False      # trail: activation level crossed
@@ -93,10 +94,10 @@ class SmartOrder:
             return "trail_offset (пункты) обязателен для trail_tp"
         if self.kind == "on_fill" and not self.watch_client_id:
             return "watch_client_id обязателен для on_fill"
-        if self.sl_offset < 0:
-            return "sl_offset (пункты) не может быть отрицательным"
-        if self.sl_offset > 0 and self.kind not in ("trail_tp", "on_fill"):
-            return "защитный стоп задаётся только для trail_tp и on_fill"
+        if self.sl_offset < 0 or self.tp_offset < 0:
+            return "стоп и тейк в пунктах не могут быть отрицательными"
+        if (self.sl_offset > 0 or self.tp_offset > 0) and self.kind not in ("trail_tp", "on_fill"):
+            return "стоп и тейк после входа задаются только для trail_tp и on_fill"
         return None
 
 
@@ -238,34 +239,79 @@ def evaluate(orders: list[SmartOrder], code: str, *, last: float, bid: float,
     return actions
 
 
-def protective_sl(parent: SmartOrder, entry_price: float, now: int) -> SmartOrder | None:
-    """Защитный стоп ПОСЛЕ входа по родительской заявке (trail/on_fill).
+def _bracket_group(parent: SmartOrder) -> str:
+    """Связка OCO для защитной пары. Стоп и тейк стерегут ОДНУ позицию: сработал
+    один — второй обязан сняться, иначе он откроет позицию в обратную сторону.
+    Своя группа родителя уважается; если её нет, заводим по его id."""
+    return parent.oco_group or f"br:{parent.so_id}"
 
-    Родитель только ВХОДИТ в позицию и после срабатывания забывает про неё. Если
-    цена пойдёт против входа, выходить нечем. Этот стоп — противоположная сторона
-    на sl_offset пунктов от цены входа: купили по 89 000 со стопом 300 -> продажа
-    при цене <= 88 700.
 
-    Точка отсчёта — цена ДОЧЕРНЕЙ заявки родителя (она маркетабельная, реальное
-    исполнение отличается на проскальзывание в пределах тика-двух). Порог задан в
-    пунктах, поэтому такая точность достаточна; выдумывать среднюю цену исполнения,
-    которой у нас нет, было бы хуже.
+def _protective(parent: SmartOrder, entry_price: float, now: int, kind: str) -> SmartOrder | None:
+    """Защитная заявка ПОСЛЕ входа по родительской (trail/on_fill).
+
+    Родитель только ВХОДИТ в позицию и после срабатывания забывает про неё:
+    без этих заявок ни выйти по стопу, ни забрать прибыль нечем.
+      sl — противоположная сторона на sl_offset пунктов ПРОТИВ входа
+           (купили по 89 000, стоп 300 -> продажа при цене <= 88 700);
+      tp — противоположная сторона на tp_offset пунктов В ПОЛЬЗУ входа
+           (купили по 89 000, тейк 500 -> продажа при цене >= 89 500).
+
+    Точка отсчёта — цена дочерней заявки родителя в момент срабатывания. Как
+    только сторож узнает РЕАЛЬНУЮ среднюю цену исполнения, уровни пересчитываются
+    от неё (см. rebase_protective).
     """
-    if parent.sl_offset <= 0 or entry_price <= 0:
+    offset = parent.sl_offset if kind == "sl" else parent.tp_offset
+    if offset <= 0 or entry_price <= 0:
         return None
-    # Вход покупкой -> защищаемся продажей НИЖЕ входа, и наоборот.
-    if parent.side == "buy":
-        side, trigger = "sell", entry_price - parent.sl_offset
-    else:
-        side, trigger = "buy", entry_price + parent.sl_offset
+    exit_side = "sell" if parent.side == "buy" else "buy"
+    # Стоп — против входа, тейк — в сторону входа.
+    sign = -1 if kind == "sl" else 1
+    trigger = entry_price + sign * offset * (1 if parent.side == "buy" else -1)
     if trigger <= 0:
         return None
+    what = "защитный стоп" if kind == "sl" else "тейк"
     return SmartOrder(
-        so_id=new_id(), kind="sl", code=parent.code, side=side, qty=parent.qty,
-        trigger_price=trigger, oco_group=parent.oco_group,
+        so_id=new_id(), kind=kind, code=parent.code, side=exit_side, qty=parent.qty,
+        trigger_price=trigger, oco_group=_bracket_group(parent),
         good_till_ms=parent.good_till_ms, parent_id=parent.so_id,
         created_ms=now,
-        note=f"защитный стоп от {parent.so_id}: вход {entry_price:g}, порог {parent.sl_offset:g} п.")
+        note=f"{what} от {parent.so_id}: вход {entry_price:g}, {offset:g} п.")
+
+
+def protective_sl(parent: SmartOrder, entry_price: float, now: int) -> SmartOrder | None:
+    return _protective(parent, entry_price, now, "sl")
+
+
+def protective_tp(parent: SmartOrder, entry_price: float, now: int) -> SmartOrder | None:
+    return _protective(parent, entry_price, now, "tp")
+
+
+def protective_children(parent: SmartOrder, entry_price: float, now: int) -> list[SmartOrder]:
+    """Обе защитные заявки одной связкой (то, что оператор называет «после сделки»)."""
+    return [c for c in (protective_sl(parent, entry_price, now),
+                        protective_tp(parent, entry_price, now)) if c is not None]
+
+
+def rebase_protective(children: list[SmartOrder], parent: SmartOrder,
+                      real_entry: float) -> bool:
+    """Пересчитать уровни защитных заявок от РЕАЛЬНОЙ цены исполнения входа.
+
+    Создаются они по цене дочерней заявки (маркетабельной), а исполняется она
+    часто лучше лимита — на тик-два. Пока заявка ещё взведена, честнее подвинуть
+    её на фактический вход, чем оставлять уровень от предполагаемой цены."""
+    if real_entry <= 0:
+        return False
+    moved = False
+    for c in children:
+        if c.status != "armed" or c.parent_id != parent.so_id:
+            continue
+        fresh = _protective(parent, real_entry, c.created_ms, c.kind)
+        if fresh is None or abs(fresh.trigger_price - c.trigger_price) < 1e-9:
+            continue
+        c.trigger_price = fresh.trigger_price
+        c.note = fresh.note + " (уровень от фактической цены входа)"
+        moved = True
+    return moved
 
 
 # ---- book with JSON persistence (survives an STL restart) ----
