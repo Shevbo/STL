@@ -2215,32 +2215,11 @@ def create_app() -> FastAPI:
             "SELECT total_return, recovery_factor, net_profit, sharpe, max_drawdown, "
             "total_trades, strategy, symbol, params, created_at, date_from, date_to FROM optimization_leaderboard "
             "WHERE campaign_run=$1 LIMIT 80000", id)
-        # Consider ONLY configs whose position never exceeds 10 contracts (entry size
-        # qty<=10 AND averaging cap avg_max<=10). Applied campaign-wide so the heatmap,
-        # the best list and the stored top-3 all agree on the <=10-contract universe.
-        def _pos_le10(r):
-            p = r["params"]
-            if isinstance(p, str):
-                try:
-                    p = _json.loads(p)
-                except Exception:
-                    return True
-            if not isinstance(p, dict):
-                return True
-            try:
-                # float, НЕ int: параметры кое-где хранятся как "1.0"/"28.0" — int("1.0")
-                # бросал ValueError, фильтр молча пропускал ВСЁ и расходился с ::numeric
-                # у истории. float("1.0")=1.0 работает и совпадает с запросом истории.
-                return float(p.get("qty", 1) or 1) <= 10 and float(p.get("avg_max", 1) or 1) <= 10
-            except Exception:
-                return True
-        # Кампания, ЦЕЛИКОМ собранная из конфигов крупнее 10 контрактов (перебор вокруг
-        # живого робота: avg_max=34), обнулялась этим фильтром, и витрина печатала
-        # «кампания только стартовала» про ЗАКОНЧЕННЫЙ перебор — то есть врала. Пустой
-        # остаток = показываем кампанию как есть и помечаем, что она вне ≤10-универсума.
-        kept = [r for r in rows if _pos_le10(r)]
-        out["big_position"] = bool(rows) and not kept
-        rows = kept or rows
+        # ПОТОЛКА В 10 КОНТРАКТОВ ЗДЕСЬ БОЛЬШЕ НЕТ. Витрина показывала только конфиги
+        # qty<=10 И avg_max<=10 — и молча выбрасывала остальное: у перебора вокруг
+        # живого робота (avg_max до 34) из 10 000 комбинаций отображались 804, счётчик
+        # писал «804», а хит-парады не содержали ни одного настоящего лидера. Кампания
+        # показывает то, что в кампании есть; размер позиции виден в её параметрах.
         out["combos"] = len(rows)
         if not rows:
             return out
@@ -2297,11 +2276,7 @@ def create_app() -> FastAPI:
             "symbol, params, date_from, date_to, max_mae FROM optimization_leaderboard "
             "WHERE campaign_run=$1 AND net_profit IS NOT NULL {flt}"
             "ORDER BY net_profit DESC NULLS LAST LIMIT 6")
-        _le10 = ("AND COALESCE(NULLIF(params->>'qty','')::numeric, 1) <= 10 "
-                 "AND COALESCE(NULLIF(params->>'avg_max','')::numeric, 1) <= 10 ")
-        best_rows = await pool.fetch(_best_sql.format(flt=_le10), id)
-        if not best_rows:      # кампания целиком крупнее 10 контрактов — показываем её
-            best_rows = await pool.fetch(_best_sql.format(flt=""), id)
+        best_rows = await pool.fetch(_best_sql.format(flt=""), id)
         # Второй хит-парад — ПО УСТОЙЧИВОСТИ. Ранжирование по одному финрезу выносит
         # наверх комбо с огромной просадкой открытой позиции, а рядом в той же кампании
         # стоят наборы с втрое меньшим MAE и вдвое большим RF — и увидеть их было негде.
@@ -2311,9 +2286,7 @@ def create_app() -> FastAPI:
             "symbol, params, date_from, date_to, max_mae FROM optimization_leaderboard "
             "WHERE campaign_run=$1 AND net_profit>0 AND total_trades>=100 {flt}"
             "ORDER BY recovery_factor DESC NULLS LAST LIMIT 6")
-        rf_rows = await pool.fetch(_rf_sql.format(flt=_le10), id)
-        if not rf_rows:
-            rf_rows = await pool.fetch(_rf_sql.format(flt=""), id)
+        rf_rows = await pool.fetch(_rf_sql.format(flt=""), id)
         def _row(r):
             p = r["params"]
             if isinstance(p, str):
@@ -2364,8 +2337,9 @@ def create_app() -> FastAPI:
             ORDER BY max(created_at) DESC
             LIMIT 100
             """)
-        # Leader per campaign = best net_profit among <=10-contract configs (matches the
-        # campaign showcase's universe), with the fields the run-history table shows.
+        # Лидер кампании = лучший net_profit БЕЗ ограничения на размер позиции — ровно
+        # тот же порядок, что в витрине кампании, чтобы клик по строке истории вёл на
+        # показанного лидера.
         leaders = await pool.fetch(
             """
             SELECT DISTINCT ON (campaign_run) campaign_run, strategy, symbol, params,
@@ -2373,10 +2347,7 @@ def create_app() -> FastAPI:
                    date_from, date_to
             FROM optimization_leaderboard
             WHERE campaign_run IS NOT NULL AND net_profit IS NOT NULL
-            ORDER BY campaign_run,
-                     (COALESCE(NULLIF(params->>'qty','')::numeric, 1) <= 10
-                      AND COALESCE(NULLIF(params->>'avg_max','')::numeric, 1) <= 10) DESC,
-                     net_profit DESC NULLS LAST
+            ORDER BY campaign_run, net_profit DESC NULLS LAST
             """)
         lead = {r["campaign_run"]: r for r in leaders}
         # ГО (initial margin) per contract lives in instrument_meta, not the leaderboard.
@@ -3203,13 +3174,10 @@ def create_app() -> FastAPI:
             WITH ld AS (
               SELECT params FROM optimization_leaderboard
                WHERE campaign_run=$1 AND net_profit IS NOT NULL
-               -- Тот же порядок, что у списка «Лучшие по финрезу»: сначала конфиги
-               -- <=10 контрактов, и только если таких в кампании НЕТ — остальные.
-               -- Жёсткий фильтр давал у крупной кампании пустой ld -> null -> фронт
-               -- молча пересчитывал каждый клик заново.
-               ORDER BY (COALESCE(NULLIF(params->>'qty','')::numeric, 1) <= 10
-                         AND COALESCE(NULLIF(params->>'avg_max','')::numeric, 1) <= 10) DESC,
-                        net_profit DESC NULLS LAST OFFSET $2 LIMIT 1)
+               -- Тот же порядок, что у списка «Лучшие по финрезу» (потолка в 10
+               -- контрактов больше нет ни там, ни здесь), иначе ранг указал бы на
+               -- чужую строку.
+               ORDER BY net_profit DESC NULLS LAST OFFSET $2 LIMIT 1)
             SELECT r.run_id, r.params, r.trades, r.sharpe, r.max_drawdown, r.win_rate,
                    r.total_return, r.total_trades, r.net_profit, r.recovery_factor,
                    r.point_value, r.peak_contracts
