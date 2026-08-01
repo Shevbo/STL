@@ -73,6 +73,22 @@ def test_holiday_from_dailytable_overrides():
     assert (is_open, phase) == (False, "holiday")
 
 
+def test_holiday_check_uses_wall_clock_not_frozen_systime():
+    """РЕГРЕСС 2026-08-01: биржа не торговала с вечера пятницы, SYSTIME (now_ms) всех
+    инструментов синхронно застрял на пятнице 23:50:05 (момент клиринга) — а на дворе
+    суббота, MOEX-исключение из сессии выходного дня (dailytable holiday). Без wall_ms
+    holiday-чек сверяет ВЧЕРАШНЮЮ дату (не праздник) и молча проваливается в общий
+    'done' вместо 'holiday' — тот же open=False здесь совпадает случайно, но при ином
+    наборе окон next_open_ms посчитался бы неверно."""
+    sched = {"sessions": [_win("2026-08-03", "07:00:00", "10:00:00", "morning_session")],
+             "holidays": {"2026-08-01"}}
+    is_open, phase, _, _ = classify(
+        now_ms=_ms("2026-07-31", "23:50:05"),
+        wall_ms=_ms("2026-08-01", "09:51:00"),
+        schedule=sched)
+    assert (is_open, phase) == (False, "holiday")
+
+
 def test_unknown_without_schedule_or_time():
     assert classify(now_ms=0, schedule=_WEEKEND)[:2] == (None, "unknown")
     assert classify(now_ms=_ms("2026-07-26", "12:00:00"), schedule={"sessions": []})[:2] == (None, "unknown")

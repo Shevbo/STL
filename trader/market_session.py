@@ -140,17 +140,26 @@ def _short_type(typ: str) -> str:
             "evening_session": "evening", "weekend_session": "weekend"}.get(typ, "")
 
 
-def classify(*, now_ms: int, schedule: dict) -> tuple[bool | None, str, str, int]:
+def classify(*, now_ms: int, schedule: dict, wall_ms: int | None = None) -> tuple[bool | None, str, str, int]:
     """ЖЕЛЕЗОБЕТОН: (open, phase, session_type, next_open_ms) по официальным окнам.
 
-    now_ms — часы БИРЖИ (SYSTIME). Решение — ТОЛЬКО по попаданию в торговое окно из
-    session_schedule + праздники dailytable. Никаких дней недели и самодельных полей.
+    now_ms — часы БИРЖИ (SYSTIME). Решение об ОТКРЫТОСТИ (попадание в окно) —
+    ТОЛЬКО по нему, иммунитет к дрейфу часов хостера/VDS. Но SYSTIME берётся из
+    marketdata последней ОПРОШЕННОЙ сделки и НЕ тикает, пока биржа неактивна —
+    он застывает на моменте последнего клиринга (01.08.2026: SYSTIME всех
+    инструментов синхронно замер на «пятница 23:50:05», хотя на дворе уже
+    суббота). Поэтому ДЕНЬ для праздничного чека и фильтра «сегодняшних» окон
+    берём из wall_ms (реальные часы поллера) — иначе в затяжной паузе/выходной
+    holiday-чек сверяет ВЧЕРАШНЮЮ дату и молча проваливается в общий 'done'
+    (тот же итог open=False здесь СЛУЧАЙНО совпал, но при другом наборе окон
+    это давало бы неверный next_open_ms). Никаких дней недели и самодельных
+    полей — только session_schedule + dailytable.
     """
     sessions = (schedule or {}).get("sessions") or []
     holidays = (schedule or {}).get("holidays") or set()
     if now_ms <= 0 or not sessions:
         return None, "unknown", "", 0
-    day = datetime.datetime.fromtimestamp(now_ms / 1000, tz=_MSK).date().isoformat()
+    day = datetime.datetime.fromtimestamp((wall_ms or now_ms) / 1000, tz=_MSK).date().isoformat()
     if day in holidays:
         return False, "holiday", "", 0
     today = [s for s in sessions if _iso_ms(s[0]).startswith(day)]
@@ -211,7 +220,9 @@ async def probe(codes: list[str], now_ms: int, *, client: httpx.AsyncClient | No
             await cl.aclose()
 
     now_biz = best["systime_ms"]
-    is_open, phase, stype, next_ms = classify(now_ms=now_biz, schedule=schedule or {})
+    # now_ms (аргумент probe) — реальные часы поллера, не биржи; передаём как wall_ms,
+    # чтобы день праздничного чека не застревал вместе с SYSTIME (см. classify()).
+    is_open, phase, stype, next_ms = classify(now_ms=now_biz, schedule=schedule or {}, wall_ms=now_ms)
     lag = max(0, (now_biz - best["trade_ms"]) // 1000) if (now_biz and best["trade_ms"] > 0) else 0
     err = "" if now_biz else ("; ".join(errs) or "ISS не ответил")
     if not (schedule or {}).get("sessions"):
