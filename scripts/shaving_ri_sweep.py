@@ -19,7 +19,9 @@ import asyncio
 import itertools
 import json
 import os
+import statistics as st
 import sys
+import time
 from datetime import date, datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -30,12 +32,34 @@ from trader.lab.strategies.shaving_ri import STRATEGY_META  # noqa: E402
 
 SCRIPT_CODE = "from trader.lab.strategies.shaving_ri import on_bar, on_start, on_stop"
 
-# Сетка ровно на 100 комбинаций: 5 осей × 2 сглаживания × 5 порогов входа × 2 выхода.
-GRID = {
-    "ema_slow":    [60, 120, 300, 600, 900],   # EMA2 — «ось X»
-    "ema_fast":    [5, 30],                    # EMA1 — сглаживание отклонения
-    "entry_z_x10": [10, 15, 20, 25, 30],       # вход 1.0 / 1.5 / 2.0 / 2.5 / 3.0 сигмы
-    "exit_z_x10":  [0, 5],                     # 0 = ждать оси, 5 = полоса ±0.5 сигмы
+GRIDS = {
+    # Разведка: 100 комбинаций, широко и грубо.
+    "base": {
+        "ema_slow":    [60, 120, 300, 600, 900],   # EMA2 — «ось X»
+        "ema_fast":    [5, 30],                    # EMA1 — сглаживание отклонения
+        "entry_z_x10": [10, 15, 20, 25, 30],       # вход 1.0 / 1.5 / 2.0 / 2.5 / 3.0 сигмы
+        "exit_z_x10":  [0, 5],                     # 0 = ждать оси, 5 = полоса ±0.5 сигмы
+    },
+    # Уточнение вокруг лидера трёх месяцев (120/30/2.5σ/0). Освобождены две оси,
+    # которые бьют по главному риску одной ноги: денежный стоп и время удержания.
+    "refine-a": {
+        "ema_slow":     [60, 90, 120, 160, 210, 280],
+        "ema_fast":     [10, 15, 20, 30, 45],
+        "entry_z_x10":  [18, 20, 22, 25, 28],
+        "exit_z_x10":   [0, 3, 6, 10],
+        "sl_pts":       [0, 150, 300, 600],
+        "max_hold_min": [60, 120, 240, 480],
+    },
+    # Уточнение вокруг лидера июля (60/5/1.0σ/0) — другой режим: быстрая ось,
+    # низкий порог, много сделок.
+    "refine-b": {
+        "ema_slow":     [30, 45, 60, 90, 120],
+        "ema_fast":     [3, 5, 8, 12, 20],
+        "entry_z_x10":  [8, 10, 12, 14, 17],
+        "exit_z_x10":   [0, 3, 6, 10],
+        "sl_pts":       [0, 150, 300, 600],
+        "max_hold_min": [60, 120, 240, 480],
+    },
 }
 
 
@@ -88,7 +112,12 @@ async def main() -> None:
     ap.add_argument("--out", default="data/shaving_ri_sweep.json")
     ap.add_argument("--chart-step", type=int, default=5, help="прореживание рядов графика, минут")
     ap.add_argument("--label", default="", help="подпись прогона на стенде")
+    ap.add_argument("--grid", default="base", choices=sorted(GRIDS), help="какую сетку гнать")
+    ap.add_argument("--chunk", type=int, default=400,
+                    help="комбинаций на подпроцесс: артефакт пишется после каждого куска, "
+                         "поэтому падение на четвёртом часу не стирает всё сделанное")
     args = ap.parse_args()
+    GRID = GRIDS[args.grid]
 
     d0, d1 = date.fromisoformat(args.date_from), date.fromisoformat(args.date_to)
     base = {p["key"]: p["default"] for p in STRATEGY_META["params_schema"]}
@@ -109,25 +138,11 @@ async def main() -> None:
 
     keys = list(GRID)
     param_sets = [{**base, **dict(zip(keys, c))} for c in itertools.product(*GRID.values())]
-    print(f"[2/4] сетка: {len(param_sets)} комбинаций", flush=True)
+    print(f"[2/4] сетка «{args.grid}»: {len(param_sets)} комбинаций", flush=True)
 
-    # metrics_only: 100 комбинаций × ~40k точек эквити = сотни мегабайт, а на хостере
-    # earlyoom убивает по памяти. Сделки и эквити берём вторым проходом, только у
-    # победителя.
-    graded = await run_backtest_grid(
-        SCRIPT_CODE, ri, args.symbol, param_sets,
-        timeout=max(900, 60 * len(param_sets)),
-        point_value=point_value, initial_margin=initial_margin,
-        extra={args.basket: bk}, metrics_only=True,
-    )
-
-    rows = []
-    for e in graded:
-        if not e.get("ok"):
-            print("      combo failed:", e.get("error"), flush=True)
-            continue
+    def _row(e: dict) -> dict:
         r = e["result"]
-        rows.append({
+        return {
             "params": {k: e["params"][k] for k in keys},
             "trades": r.get("total_trades"), "net": r.get("net_profit"),
             "win_rate": r.get("win_rate"), "dd": r.get("max_drawdown"),
@@ -137,11 +152,82 @@ async def main() -> None:
             "peak": r.get("peak_contracts"), "margin": r.get("margin_used"),
             "net_oos": r.get("net_oos"), "wins_win": r.get("windows_profitable"),
             "wins_tot": r.get("windows_total"), "degrade": r.get("degrade"),
-        })
+        }
+
+    def _write(art: dict) -> None:
+        os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
+        tmp = args.out + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(art, f, ensure_ascii=False, separators=(",", ":"))
+        os.replace(tmp, args.out)          # атомарно: стенд не поймает полуфайл
+
+    meta = {
+        "label": args.label, "grid_name": args.grid,
+        "symbol": args.symbol, "basket": args.basket,
+        "date_from": str(d0), "date_to": str(d1),
+        "point_value": point_value, "initial_margin": initial_margin,
+        "bars_ri": len(ri), "bars_basket": len(bk), "bars_common": common,
+        "base_params": base, "grid": GRID, "params_schema": STRATEGY_META["params_schema"],
+    }
+
+    # Кусками: артефакт пишется после каждого, поэтому падение (earlyoom на общем
+    # хостере вполне реален) не стирает уже посчитанное. metrics_only — иначе
+    # тысячи комбинаций × ~40k точек эквити это гигабайты.
+    rows: list[dict] = []
+    t0 = time.monotonic()
+    for i in range(0, len(param_sets), args.chunk):
+        part = param_sets[i:i + args.chunk]
+        graded = await run_backtest_grid(
+            SCRIPT_CODE, ri, args.symbol, part,
+            timeout=max(900, 60 * len(part)),
+            point_value=point_value, initial_margin=initial_margin,
+            extra={args.basket: bk}, metrics_only=True,
+        )
+        for e in graded:
+            if e.get("ok"):
+                rows.append(_row(e))
+            else:
+                print("      combo failed:", e.get("error"), flush=True)
+        done = i + len(part)
+        el = time.monotonic() - t0
+        print(f"      {done}/{len(param_sets)}  прошло {el / 60:.1f} мин, "
+              f"осталось ~{el / done * (len(param_sets) - done) / 60:.1f} мин "
+              f"({done / el:.1f} комб/с)", flush=True)
+        _write({**meta, "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "partial": done < len(param_sets), "done": done, "total": len(param_sets),
+                "results": rows, "best": {}, "chart": [], "equity": [], "best_trades": []})
+
+    # Плато вместо пика: одиночный максимум в убыточной окрестности это подгонка.
+    # Для каждой точки берём её соседей на один шаг по каждой оси и считаем
+    # МЕДИАНУ по точке вместе с соседями — устойчивый счёт, который нельзя выиграть
+    # одной удачной комбинацией.
+    idx = {tuple(r["params"][k] for k in keys): r for r in rows}
+    posn = {k: {v: j for j, v in enumerate(GRID[k])} for k in keys}
+    for r in rows:
+        cur = tuple(r["params"][k] for k in keys)
+        nb = []
+        for ax, k in enumerate(keys):
+            j = posn[k][cur[ax]]
+            for jj in (j - 1, j + 1):
+                if 0 <= jj < len(GRID[k]):
+                    t = list(cur)
+                    t[ax] = GRID[k][jj]
+                    n = idx.get(tuple(t))
+                    if n is not None:
+                        nb.append(n["net"] or 0.0)
+        r["nb_n"] = len(nb)
+        r["nb_pos"] = sum(1 for x in nb if x > 0)
+        r["plateau"] = st.median(nb + [r["net"] or 0.0])
     rows.sort(key=lambda x: (x["net"] is None, -(x["net"] or 0)))
     print(f"[3/4] готово комбинаций: {len(rows)}", flush=True)
 
-    top = rows[0]["params"] if rows else {k: GRID[k][0] for k in keys}
+    # График рисуем по лучшему ПЛАТО, а не по пику: именно эту точку имеет смысл
+    # смотреть глазами. Пик остаётся в таблице.
+    traded = [r for r in rows if (r["trades"] or 0) > 0]
+    top = (max(traded, key=lambda r: r["plateau"])["params"] if traded
+           else (rows[0]["params"] if rows else {k: GRID[k][0] for k in keys}))
+    meta["top_by_net"] = rows[0]["params"] if rows else {}
+    meta["top_by_plateau"] = top
     best_res = (await run_backtest_grid(
         SCRIPT_CODE, ri, args.symbol, [{**base, **top}], timeout=900,
         point_value=point_value, initial_margin=initial_margin,
@@ -154,25 +240,20 @@ async def main() -> None:
                            base["z_win"], max(1, args.chart_step))
     print(f"[4/4] ряды графика: {len(chart)} точек, эквити {len(eq)//stride}", flush=True)
 
-    art = {
-        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "label": args.label, "symbol": args.symbol, "basket": args.basket,
-        "date_from": str(d0), "date_to": str(d1),
-        "point_value": point_value, "initial_margin": initial_margin,
-        "bars_ri": len(ri), "bars_basket": len(bk), "bars_common": common,
-        "base_params": base, "grid": GRID, "params_schema": STRATEGY_META["params_schema"],
-        "results": rows, "best": top,
-        "chart": chart,
-        "equity": [[p["time"], round(p["equity"], 1)] for p in eq[::stride]],
-        "best_trades": (best or {}).get("result", {}).get("trades") or [],
-    }
-    os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
-    with open(args.out, "w", encoding="utf-8") as f:
-        json.dump(art, f, ensure_ascii=False, separators=(",", ":"))
+    _write({**meta, "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "partial": False, "done": len(rows), "total": len(param_sets),
+            "results": rows, "best": top, "chart": chart,
+            "equity": [[p["time"], round(p["equity"], 1)] for p in eq[::stride]],
+            "best_trades": (best or {}).get("result", {}).get("trades") or []})
     print(f"записано {args.out} ({os.path.getsize(args.out) // 1024} КБ)", flush=True)
-    for r in rows[:5]:
+    print("\nпик по итогу:")
+    for r in rows[:3]:
         print(f"  {r['params']} net={r['net']:.0f}₽ сделок={r['trades']} "
-              f"RF={r['rf'] if r['rf'] is None else round(r['rf'], 2)}", flush=True)
+              f"плато={r['plateau']:.0f}₽ соседей+={r['nb_pos']}/{r['nb_n']}", flush=True)
+    print("лучшее плато:")
+    for r in sorted(traded, key=lambda x: -x["plateau"])[:3]:
+        print(f"  {r['params']} плато={r['plateau']:.0f}₽ net={r['net']:.0f}₽ "
+              f"сделок={r['trades']} соседей+={r['nb_pos']}/{r['nb_n']}", flush=True)
 
 
 if __name__ == "__main__":
