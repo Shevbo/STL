@@ -404,11 +404,13 @@
       },
     };
 
-    // Top chart is the ONLY interactive one. Its axis is hidden — the visible time
-    // axis lives on the equity chart below, which mirrors the candle range one-way.
+    // Top chart is the ONLY interactive one (перетаскивание/зум — здесь), но шкала
+    // времени у него СВОЯ. Раньше её прятали, оставляя одну ось внизу под кривой
+    // доходности: в реальном окне блок графика (68vh) не влезает целиком, оператор
+    // смотрит на свечи — а под ними ни одной даты. Свечи обязаны быть само-читаемы.
+    // Оси не разъезжаются: обеим шкалам цены задан один minimumWidth (см. chartOpts).
     tvCandle = createChart(candleEl, {
       ...chartOpts,
-      timeScale: { ...chartOpts.timeScale, visible: false },
       width: candleEl.clientWidth || 600, height: candleEl.clientHeight || 280,
     });
     // Candles dimmed further (~15% more, toward background) so triangles dominate.
