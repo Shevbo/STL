@@ -33,7 +33,7 @@ import sys
 import threading
 import time
 from concurrent.futures import ProcessPoolExecutor
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # Force UTF-8 console so status lines (→ × …) print on Windows cp1251 terminals.
@@ -424,6 +424,9 @@ class Agent:
         # heartbeat'ом в монитор стенда.
         self._progress_q = None
         self._progress: dict = {"done": 0, "top": []}
+        # Последняя выкачанная история (symbol, rows): сетку гонят десятками заданий
+        # по одному символу, качать склейку на каждое — впустую.
+        self._bars_cache: tuple | None = None
         self._started = time.time()
         if psutil is not None:
             try:
@@ -670,20 +673,63 @@ class Agent:
         combos = list(itertools.product(*values))
         return [{**base_params, **dict(zip(keys, c))} for c in combos]
 
-    async def process(self, client: httpx.AsyncClient, job: dict, pool: ProcessPoolExecutor):
-        from trader.lab.iss_loader import load_bars_iss
+    async def _bars_for(self, client: httpx.AsyncClient, symbol: str, d_from, d_to) -> list[dict]:
+        """Бары для задания: сперва ГОТОВАЯ история из STL, ISS — только запасной путь.
 
+        Перебор по БАЗОВОМУ коду ('GZ', 'RI') на многолетнем окне через ISS означает
+        перечисление ~120 серий с probe-запросами и постраничную выкачку прямо с i9 —
+        ровно тот случай, ради которого ручка /api/v1/agent/bars и была сделана
+        (и до сих пор никем не вызывалась). Склейку готовит хостер: у него до ISS
+        рукой подать (2 года GZ = 74 с), у агента этот путь висит.
+
+        Кэш держим в памяти: сетку гонят десятками заданий по одному символу, качать
+        30 МБ на каждое незачем. Любой сбой = молча уходим на ISS, ночь не встаёт.
+        """
+        # Границы окна — в UTC: метки баров это epoch UTC, а i9 живёт по МСК, и
+        # локальный timestamp() срезал бы по три часа с каждого края.
+        lo = int(datetime(d_from.year, d_from.month, d_from.day, tzinfo=timezone.utc).timestamp())
+        hi = int(datetime(d_to.year, d_to.month, d_to.day, tzinfo=timezone.utc).timestamp()) + 86399
+        rows = None
+        if self._bars_cache and self._bars_cache[0] == symbol:
+            rows = self._bars_cache[1]
+        else:
+            try:
+                r = await client.get(f"{self.api}/api/v1/agent/bars/{symbol}",
+                                     headers=self.h, timeout=300)
+                if r.status_code == 200:
+                    rows = (r.json() or {}).get("rows") or []
+                    self._bars_cache = (symbol, rows)
+                    _log(f"bars: {symbol} — {len(rows)} из кэша STL")
+            except Exception as exc:  # noqa: BLE001
+                _log(f"bars: кэш STL недоступен ({exc}) — иду в ISS")
+        if rows:
+            # Кэш годится ТОЛЬКО если покрывает НАЧАЛО запрошенного окна. Иначе прогон
+            # молча посчитается по укороченной истории — та же болезнь, что чинили в
+            # STL для agent_bars (запрос «с 01.04» при кэше с 11.05). Допуск 3 дня на
+            # выходные/праздники у границы.
+            if rows[0][0] <= lo + 3 * 86400:
+                out = [{"time": x[0], "open": x[1], "high": x[2], "low": x[3],
+                        "close": x[4], "volume": x[5]} for x in rows if lo <= x[0] <= hi]
+                if out:
+                    return out
+            else:
+                _log(f"bars: кэш {symbol} начинается позже запрошенного окна — беру ISS")
+        from trader.lab.iss_loader import load_bars_iss
+        bars = await load_bars_iss(symbol, d_from, d_to, interval=1)
+        return [{"time": b.time, "open": b.open, "high": b.high,
+                 "low": b.low, "close": b.close, "volume": b.volume} for b in bars]
+
+    async def process(self, client: httpx.AsyncClient, job: dict, pool: ProcessPoolExecutor):
         run_id = job["run_id"]
         symbol = job["symbol"]
         try:
             d_from = self._parse_date(job["date_from"])
             d_to = self._parse_date(job["date_to"])
-            bars = await load_bars_iss(symbol, d_from, d_to, interval=1)
-            if not bars:
+            bars_data = await self._bars_for(client, symbol, d_from, d_to)
+            if not bars_data:
                 await self.post_result(client, {"run_id": run_id, "error": f"no bars for {symbol}"})
                 return
-            bars_data = [{"time": b.time, "open": b.open, "high": b.high,
-                          "low": b.low, "close": b.close, "volume": b.volume} for b in bars]
+            bars = bars_data          # длина для лога ниже
 
             # Explicit combos (random explore / unioned refine grids) run as-is;
             # otherwise expand the product grid.
