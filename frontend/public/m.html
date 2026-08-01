@@ -52,6 +52,11 @@
   .sec::after { content: ""; flex: 1; height: 1px; background: var(--bd); }
   .sec a { color: var(--muted); text-decoration: none; border-bottom: 1px dotted var(--bd);
     text-transform: none; letter-spacing: 0; }
+  .sec .copy { cursor: pointer; color: var(--muted); border-bottom: 1px dotted var(--bd);
+    text-transform: none; letter-spacing: 0; }
+  .sec .copy.done { color: var(--up); border-color: transparent; }
+  .more { cursor: pointer; color: var(--muted); border-bottom: 1px dotted var(--bd);
+    text-transform: none; letter-spacing: 0; margin-left: 8px; }
 
   .row {
     display: flex; align-items: baseline; gap: 8px;
@@ -68,18 +73,36 @@
   .row.total { border-left-width: 4px; }
   .row.total .k { color: var(--ink); font-weight: 600; }
 
+  /* Биржа: как робот-карточка — статус сверху (переносится, если длинный:
+     «биржа закрыта. открытие торгов…»), «посл. сделка» мелкой строкой под ним.
+     Раньше жило в одну .row и длинный статус ломал вёрстку. */
+  .mkt { margin: 0 8px 6px; padding: 8px 12px;
+    border-left: 3px solid var(--rail); background: var(--panel); border-radius: 4px; }
+  .mkt.up { border-left-color: var(--up); }
+  .mkt .hd { display: flex; align-items: baseline; gap: 8px; }
+  .mkt .hd .k { color: var(--muted); }
+  .mkt .hd .v { font-weight: 700; font-size: 16px; margin-left: auto; }
+  .mkt .sub { margin-top: 3px; }
+
   .rob {
     margin: 0 8px 6px; padding: 8px 12px;
     border-left: 3px solid var(--rail); background: var(--panel); border-radius: 4px;
   }
   .rob.up { border-left-color: var(--up); } .rob.down { border-left-color: var(--down); }
-  .rob .hd { display: flex; align-items: baseline; gap: 8px; }
+  .rob .hd { display: flex; align-items: baseline; gap: 6px 8px; flex-wrap: wrap; }
   .rob .hd a { color: var(--ink); text-decoration: none; font-weight: 600; font-size: 15px; }
   .tag { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--faint); }
   .tag.real { color: var(--down); } .tag.paused { color: var(--down); font-weight: 700; }
+  .tag.off { color: var(--faint); }
+  .tag.exitonly { color: #d99a3c; font-weight: 600; }
+  .tag.mode.real { color: var(--down); font-weight: 700; }
+  .tag.mode.paper { color: var(--muted); }
   .rob .hd .v { margin-left: auto; font-weight: 700; font-size: 17px; }
+  .chg { font-size: 11px; font-weight: 600; margin-left: 4px; color: var(--faint); }
+  .chg.up { color: var(--up); } .chg.down { color: var(--down); }
   .rob .nums { display: flex; gap: 12px; flex-wrap: wrap; color: var(--muted); font-size: 13px; margin-top: 3px; }
   .rob .nums b { color: var(--ink); font-weight: 600; }
+  .rob .nums b.up { color: var(--up); } .rob .nums b.down { color: var(--down); }
 
   .chk { display: flex; gap: 8px; padding: 4px 14px 4px 12px; margin: 0 8px 2px;
     border-left: 3px solid var(--up); background: var(--panel); border-radius: 4px; font-size: 14px; }
@@ -154,24 +177,36 @@ function row(label, value, signValue, sub) {
 }
 
 const DOW = { }; // Intl даёт день недели сам
-function brand(d) {
+function brand(d, withMode) {
   const now = new Date(d && d.ts_ms ? d.ts_ms : Date.now());
   const p = new Intl.DateTimeFormat('ru-RU', { timeZone: 'Europe/Moscow',
     day: '2-digit', month: '2-digit', weekday: 'short', hour: '2-digit', minute: '2-digit',
   }).formatToParts(now).reduce((a, x) => (a[x.type] = x.value, a), {});
-  const mode = marketMode(d && d.market);
-  return `STL · ${p.day}.${p.month} ${p.weekday} ${p.hour}:${p.minute} · ${mode}`;
+  const head = `STL · ${p.day}.${p.month} ${p.weekday} ${p.hour}:${p.minute}`;
+  return withMode ? `${head} · ${marketMode(d && d.market)}` : head;
+}
+
+// next_session — полный ISO-datetime (дата+время+смещение), не голая дата;
+// резать его как 'YYYY-MM-DD' (slice/split/reverse) давало мусор на 'T'/'+03:00'.
+function fmtNextSession(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  const opt = { timeZone: 'Europe/Moscow' };
+  const dd = d.toLocaleDateString('ru-RU', { ...opt, day: '2-digit', month: '2-digit' });
+  const hm = d.toLocaleTimeString('ru-RU', { ...opt, hour: '2-digit', minute: '2-digit' });
+  return dd + ' ' + hm;
 }
 
 function marketMode(m) {
   if (!m) return 'биржа: н/д';
-  const nxt = m.next_session ? ' · след. ' + m.next_session.slice(5).split('-').reverse().join('.') : '';
+  const nxt = fmtNextSession(m.next_session);
   switch (m.phase) {
     case 'trading': return 'торги идут';
     case 'break': return 'клиринг/пауза';
     case 'pre_open': return 'до открытия';
-    case 'done': return 'сессия завершена' + nxt;
-    case 'holiday': return 'выходной (MOEX)' + nxt;
+    case 'done': return nxt ? `Биржа закрыта. Открытие торгов ${nxt}` : 'Биржа закрыта';
+    case 'holiday': return nxt ? `выходной (MOEX) · след. ${nxt}` : 'выходной (MOEX)';
     default: return m.open === true ? 'торги идут' : m.open === false ? 'биржа закрыта' : 'биржа: н/д';
   }
 }
@@ -181,9 +216,10 @@ function renderMarket(m) {
   const open = m.open;
   const lt = m.last_trade_ms ? new Date(m.last_trade_ms).toLocaleString('ru-RU',
     { timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
-  return `<div class="row ${open === true ? 'up' : ''}"><span class="k">Биржа MOEX</span>` +
-    `<span class="sub">${esc('посл. сделка ' + lt)}</span><span class="sp"></span>` +
-    `<span class="v ${open === true ? 'up' : open === false ? '' : 'nil'}">${esc(marketMode(m))}</span></div>`;
+  return `<div class="mkt ${open === true ? 'up' : ''}">` +
+    `<div class="hd"><span class="k">Биржа MOEX</span>` +
+    `<span class="v ${open === true ? 'up' : open === false ? '' : 'nil'}">${esc(marketMode(m))}</span></div>` +
+    `<div class="sub">посл. сделка ${esc(lt)}</div></div>`;
 }
 
 function renderAccount(a) {
@@ -210,15 +246,21 @@ function renderPositions(list) {
 
 function robotsTotal(list) {
   if (!list || !list.length) return '';
-  let net = 0, today = 0, hasN = false, hasT = false;
+  // ПРАВИЛО: итог = фикс + ВМ открытых позиций (не голый фикс — иначе живой
+  // минус по открытой позиции не виден).
+  let fix = 0, vm = 0, today = 0, hasN = false, hasT = false;
   for (const r of list) {
-    if (r.real_net != null) { net += r.real_net; hasN = true; }
+    if (r.real_net != null) { fix += r.real_net; hasN = true; }
+    if (r.varmargin != null) vm += r.varmargin;
     if (r.real_today != null) { today += r.real_today; hasT = true; }
   }
-  return `<div class="row total ${cls(hasN ? net : null)}">` +
+  const total = fix + vm;
+  const split = vm ? `фикс ${rub(fix, { signed: true })} · ВМ ${rub(vm, { signed: true })}`
+                   : `сегодня ${hasT ? rub(today, { signed: true }) : '—'}`;
+  return `<div class="row total ${cls(hasN ? total : null)}">` +
     `<span class="k">Итог реал (${list.length})</span><span class="sp"></span>` +
-    `<span class="sub">сегодня ${hasT ? rub(today, { signed: true }) : '—'}</span>` +
-    `${val(hasN ? rub(net, { signed: true }) : null, cls(net))}</div>`;
+    `<span class="sub">${split}</span>` +
+    `${val(hasN ? rub(total, { signed: true }) : null, cls(total))}</div>`;
 }
 
 function renderRobots(all) {
@@ -239,20 +281,38 @@ function renderRobots(all) {
 function renderActive(list) {
   if (!list.length) return '';
   return list.map((r) => {
-    const k = cls(r.real_net);
+    // ПРАВИЛО: фин.рез в заголовке = фикс + ВМ открытой позиции, не голый фикс
+    // (иначе живая позиция в минусе рисует карточку так, будто всё в порядке).
+    const net = r.real_total != null ? r.real_total : r.real_net;
+    const k = cls(net);
     const last = lastTradeFmt(r.last_trade_ms);
     const st = r.state;
-    const stCls = st === 'пауза' ? 'paused' : (st === 'реал' ? 'real' : '');
+    const stCls = st === 'пауза' ? 'paused' : (st === 'реал' ? 'real' : 'off');
+    // Режим отдельным тегом: «пауза» сама по себе не говорит, реал это или бумага.
+    const modeTag = r.mode
+      ? `<span class="tag mode ${r.mode}">${r.mode === 'real' ? 'реал' : 'бумага'}</span>` : '';
+    const exitTag = r.exit_only ? '<span class="tag exitonly">только на выход</span>' : '';
+    const ann = r.ann_pct == null ? null : (r.ann_pct > 0 ? '+' : '') + r.ann_pct.toFixed(1) + '%';
+    const tSum = r.today_total;
+    const today = r.vm_today == null
+      ? `<span>сегодня <b class="${cls(r.real_today)}">${r.real_today == null ? '—' : rub(r.real_today, { signed: true })}</b> фикс</span>`
+      : `<span>сегодня <b class="${cls(tSum)}">${rub(tSum, { signed: true })}</b></span>`;
+    const chg = r.chg_pct == null ? ''
+      : `<span class="chg ${cls(r.chg_pct)}">${r.chg_pct > 0 ? '+' : ''}${r.chg_pct.toFixed(1)}%</span>`;
     return `<div class="rob ${k}">
       <div class="hd">
         <a href="/?agent_robot=${encodeURIComponent(r.id)}">${esc(r.name)}</a>
+        ${modeTag}
         <span class="tag ${stCls}">${esc(st)}</span>
-        ${val(rub(r.real_net, { signed: true }), k)}
+        ${exitTag}
+        ${val(rub(net, { signed: true }), k)}
+        ${chg}
       </div>
       <div class="nums">
-        <span>сегодня <b class="${cls(r.real_today)}">${r.real_today == null ? '—' : rub(r.real_today, { signed: true })}</b></span>
-        ${r.position == null ? '' : `<span>поз <b>${r.position}</b></span>`}
-        ${r.varmargin == null ? '' : `<span>ВМ <b class="${cls(r.varmargin)}">${rub(r.varmargin, { signed: true })}</b></span>`}
+        <span>итого фикс <b class="${cls(r.real_net)}">${rub(r.real_net, { signed: true })}</b>${r.varmargin ? ` · ВМ <b class="${cls(r.varmargin)}">${rub(r.varmargin, { signed: true })}</b>` : ''}</span>
+        ${today}
+        ${r.position == null ? '' : `<span>поз <b>${r.position}</b>${r.max_position ? ` из <b>${r.max_position}</b>` : ''}</span>`}
+        ${ann == null ? '' : `<span>год <b class="${cls(r.ann_pct)}">${ann}</b></span>`}
         <span>сделок <b>${r.real_trades_today || 0}</b></span>
         <span>${last ? 'посл. ' + last : ''}</span>
       </div>
@@ -289,12 +349,87 @@ function renderWatch(w) {
     star;
 }
 
+// #6 ручные заявки: простые (таблица QUIK, без тега = ручной класс) и умные
+// (книга STL). Только статус чтения — действия в терминале STL.
+function todayLo(d) {
+  const now = new Date(d && d.ts_ms ? d.ts_ms : Date.now());
+  const msk = new Date(now.getTime() + (now.getTimezoneOffset() + 180) * 60000);
+  msk.setHours(0, 0, 0, 0);
+  return msk.getTime() - (now.getTimezoneOffset() + 180) * 60000;
+}
+
+function renderOrders(o, d) {
+  if (!o || (!(o.manual || []).length && !(o.smart || []).length))
+    return '<div class="empty">ручных заявок нет</div>';
+  const sideRu = (s) => s === 'buy' ? 'покупка' : 'продажа';
+  const num = (v) => v == null ? '—' : Number(v).toLocaleString('ru-RU');
+  let out = '';
+  for (const m of o.manual || []) {
+    out += `<div class="row"><span class="k">${esc(m.sec)} ${sideRu(m.side)} ${m.qty}</span>` +
+      `<span class="sub">@ ${num(m.price)}${m.active && m.balance < m.qty ? ` · осталось ${m.balance}` : ''}</span>` +
+      `<span class="sp"></span><span class="v ${m.active ? 'up' : 'nil'}">${esc(m.state)}</span></div>`;
+  }
+  const KIND = { sl: 'SL', tp: 'TP', trail_tp: 'TRAIL', on_fill: 'по сделке' };
+  const ST = { armed: 'взведена', fired: 'сработала', cancelled: 'снята',
+    expired: 'истекла', orphaned: 'осиротела', error: 'ошибка' };
+  for (const s of o.smart || []) {
+    let sub = s.trigger ? `уровень ${num(s.trigger)}` : '';
+    if (s.fired_price) sub = `сделка по ${num(s.fired_price)}${s.fired_qty ? ' × ' + s.fired_qty : ''}`;
+    else if ((s.status === 'fired' || s.status === 'orphaned') && s.fired_ms > todayLo(d))
+      sub = 'цена сделки уточняется';
+    if (s.sl_offset) sub += ` · стоп ${s.sl_offset} п.`;
+    if (s.kind === 'trail_tp' && s.status === 'armed') {
+      sub = s.activated
+        ? `от пика ${num(s.peak)}, сделка при ${s.side === 'buy' ? '≥' : '≤'} ` +
+          num(s.side === 'buy' ? s.peak + s.trail_offset : s.peak - s.trail_offset)
+        : `ждёт пробоя ${num(s.trigger)}`;
+    }
+    const live = s.status === 'armed';
+    out += `<div class="row"><span class="k">умная ${KIND[s.kind] || s.kind} · ${esc(s.code)} ${sideRu(s.side)} ${s.qty}</span>` +
+      `<span class="sub">${esc(sub)}</span><span class="sp"></span>` +
+      `<span class="v ${live ? (s.activated ? 'up' : '') : 'nil'}">${esc(ST[s.status] || s.status)}</span></div>`;
+  }
+  return out;
+}
+
+// Уведомления схлопнуты до ПОСЛЕДНЕГО — остальные раскрываются стрелкой.
+let alertsOpen = false;
 function renderAlerts(a) {
   if (!a) return '';
   const items = a.items || [];   // свежие сверху, ok = норма (зелёная)
   if (!items.length) return '<div class="empty">тихо, эскалаций нет</div>';
-  return items.map((it) => `<div class="alert ${it.ok ? 'ok' : ''}">` +
+  const shown = alertsOpen ? items : items.slice(0, 1);
+  return shown.map((it) => `<div class="alert ${it.ok ? 'ok' : ''}">` +
     `<span class="at">${esc(hhmmss(it.ts_ms) || '')}</span> ${esc(it.text)}</div>`).join('');
+}
+function alertsToggle(a) {
+  const n = ((a && a.items) || []).length;
+  if (n <= 1) return '';
+  return `<span class="more" id="moreAlerts">${alertsOpen ? '▴' : '▾'} ${alertsOpen ? 'свернуть' : 'ещё ' + (n - 1)}</span>`;
+}
+
+// Текст для буфера: контекст, не только сырые SMS.
+function alertsText(d) {
+  const L = [brand(d, true)];
+  const paused = (d.robots || []).filter((r) => r.state === 'пауза').map((r) => r.name);
+  if (paused.length) L.push('на паузе (реал): ' + paused.join(', '));
+  const exitOnly = (d.robots || []).filter((r) => r.exit_only).map((r) => r.name);
+  if (exitOnly.length) L.push('только на выход: ' + exitOnly.join(', '));
+  const w = d.watch || {};
+  for (const [name, blk] of [['раннер+lua', w.runner], ['бэктесты', w.backtests], ['платформа', w.platform]]) {
+    if (blk && blk.ok === false && (blk.issues || []).length) L.push(name + ': ' + blk.issues.join('; '));
+  }
+  const a = d.alerts || {};
+  (a.unresolved || []).forEach((t) => L.push('не решено: ' + t));
+  (a.sms_today || []).forEach((t) => L.push('SMS: ' + t));
+  if (L.length === 1) L.push('всё в норме, эскалаций нет');
+  return L.join('\n');
+}
+async function copyAlerts(btn, d) {
+  let ok = false;
+  try { await navigator.clipboard.writeText(alertsText(d)); ok = true; } catch { /**/ }
+  if (btn) { btn.textContent = ok ? 'скопировано' : 'не вышло'; btn.classList.toggle('done', ok); }
+  setTimeout(() => { if (btn) { btn.textContent = 'копировать'; btn.classList.remove('done'); } }, 1600);
 }
 
 // ── экраны ────────────────────────────────────────────────────────────────────
@@ -310,8 +445,11 @@ function paintPanel(d) {
     <div class="sec">позиции</div>${renderPositions(d.positions)}
     <div class="sec">роботы (реал) <a href="/?lab=live&equity=1">витрина ↗</a></div>
       ${robotsTotal(d.robots)}${renderRobots(d.robots)}
+    <div class="sec">заявки ручные <a href="/?orders=1">терминал ↗</a></div>${renderOrders(d.orders, d)}
     <div class="sec">вотчер</div>${renderWatch(d.watch)}
-    <div class="sec">уведомления <a href="/watchdog-log.html">детали ↗</a></div>${renderAlerts(d.alerts)}`;
+    <div class="sec">уведомления <a href="/watchdog-log.html">детали ↗</a>
+      <span class="sp" style="flex:1"></span><span class="copy" id="copyAlerts">копировать</span>
+      ${alertsToggle(d.alerts)}</div>${renderAlerts(d.alerts)}`;
   $('logout').onclick = () => {
     if (confirm('Отвязать телефон от STL? Понадобится новый код.')) {
       localStorage.removeItem(LS_TOKEN); location.reload();
@@ -357,6 +495,14 @@ function paintPairing(msg) {
   $('code').addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
 }
 
+// Клик по «копировать»/стрелке уведомлений — делегирован на весь документ,
+// т.к. #app перерисовывается целиком каждый тик.
+let lastData = null;
+document.addEventListener('click', (e) => {
+  if (e.target.closest('.copy')) { copyAlerts(e.target.closest('.copy'), lastData || {}); return; }
+  if (e.target.closest('.more')) { alertsOpen = !alertsOpen; if (lastData) paintPanel(lastData); }
+});
+
 let lastGood = 0;
 let timer = null;
 async function tick() {
@@ -375,6 +521,7 @@ async function tick() {
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const d = await r.json();
     lastGood = d.ts_ms || Date.now();
+    lastData = d;
     paintPanel(d);
     $('fresh').className = 'fresh';
     $('fresh').textContent = '● на связи';

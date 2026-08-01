@@ -116,6 +116,19 @@
   .row.total { border-left-width: 3px; margin-top: 2px; padding-top: 2px; }
   .row.total .k { color: var(--ink); }
 
+  /* Биржа: статус — не число, а иногда целая фраза («биржа закрыта. открытие
+     торгов…»). В одну строку с меткой и «посл. сделка» она не помещалась и
+     обрезалась (body has overflow:hidden) — было криво. Теперь карточка как у
+     робота: строка метка+статус (статус переносится, если не влез), и «посл.
+     сделка» отдельной мелкой строкой под ней. */
+  .mkt { padding: 1px 0 2px 6px; border-left: 2px solid var(--rail-flat); margin-top: 2px; }
+  .mkt.up { border-left-color: var(--up); }
+  .mkt .hd { display: flex; align-items: baseline; gap: 6px; }
+  .mkt .hd .k { color: var(--muted); white-space: nowrap; }
+  .mkt .hd .sp { flex: 1; }
+  .mkt .hd .v { font-weight: 600; font-size: 14px; }
+  .mkt .sub { display: block; margin-top: 1px; }
+
   /* Робот: две строки — имя со ссылкой, под ней цифры. */
   /* Робот: две строки БЕЗ воздуха между ними — оператор читает их как одну
      карточку. Межстрочный интервал одинарный (в body он 1.45 «для прозы»). */
@@ -525,31 +538,49 @@ function alertsToggle(a) {
     + `${alertsOpen ? '▴' : '▾'} ${alertsOpen ? 'свернуть' : 'ещё ' + (n - 1)}</span>`;
 }
 
+// next_session — полный ISO-datetime (дата+время+смещение), не голая дата.
+// Раньше формат резался как 'YYYY-MM-DD' (slice/split/reverse) и на реальном
+// ISO-времени с 'T' и '+03:00' давал мусор ('03T07:00:00+03:00.08') — та самая
+// обрезанная строка на панели.
+function fmtNextSession(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  const opt = { timeZone: 'Europe/Moscow' };
+  const dd = d.toLocaleDateString('ru-RU', { ...opt, day: '2-digit', month: '2-digit' });
+  const hm = d.toLocaleTimeString('ru-RU', { ...opt, hour: '2-digit', minute: '2-digit' });
+  return dd + ' ' + hm;
+}
+
 // Режим биржи ОФИЦИАЛЬНО (ISS: TRADE_SESSION_DATE + последняя сделка):
-// торги / клиринг-пауза / сессия завершена / выходной / до открытия.
+// торги / клиринг-пауза / биржа закрыта / выходной / до открытия.
 function marketMode(m) {
   if (!m) return 'биржа: н/д';
-  const nxt = m.next_session ? ' · след. ' + m.next_session.slice(5).split('-').reverse().join('.') : '';
+  const nxt = fmtNextSession(m.next_session);
   switch (m.phase) {
     case 'trading': return 'торги идут';
     case 'break': return 'клиринг/пауза';
     case 'pre_open': return 'до открытия';
-    case 'done': return 'сессия завершена' + nxt;
-    case 'holiday': return 'выходной (MOEX)' + nxt;
+    case 'done': return nxt ? `Биржа закрыта. Открытие торгов ${nxt}` : 'Биржа закрыта';
+    case 'holiday': return nxt ? `выходной (MOEX) · след. ${nxt}` : 'выходной (MOEX)';
     default: return m.open === true ? 'торги идут' : m.open === false ? 'биржа закрыта' : 'биржа: н/д';
   }
 }
 
+// Двухстрочная карточка: статус сверху (переносится, если длинный — «биржа
+// закрыта. открытие торгов…»), «посл. сделка» мелкой строкой под ним. Раньше
+// это была одна .row: метка + «посл. сделка» + статус боролись за 330px
+// панели, сминались и обрезались.
 function renderMarket(m) {
   if (!m) return '';
   const open = m.open;
   const kls = open === true ? 'up' : open === false ? '' : 'nil';
   const lt = m.last_trade_ms ? new Date(m.last_trade_ms).toLocaleString('ru-RU',
     { timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
-  const sub = 'посл. сделка ' + lt;
-  return `<div class="row ${kls === 'up' ? 'up' : ''}"><span class="k">Биржа MOEX</span>` +
-    `<span class="sub">${esc(sub)}</span><span class="sp"></span>` +
-    `<span class="v ${kls}">${esc(marketMode(m))}</span></div>`;
+  return `<div class="mkt ${kls === 'up' ? 'up' : ''}">` +
+    `<div class="hd"><span class="k">Биржа MOEX</span><span class="sp"></span>` +
+    `<span class="v ${kls}">${esc(marketMode(m))}</span></div>` +
+    `<div class="sub">посл. сделка ${esc(lt)}</div></div>`;
 }
 
 let lastGood = 0;
