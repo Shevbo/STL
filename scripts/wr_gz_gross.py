@@ -30,6 +30,16 @@ import asyncpg  # noqa: E402
 from trader.config import Settings  # noqa: E402
 from trader.lab.commission import commission_for  # noqa: E402
 
+def _params(v):
+    if isinstance(v, str):
+        import json
+        try:
+            return json.loads(v)
+        except Exception:  # noqa: BLE001
+            return {}
+    return v or {}
+
+
 CAMPAIGN_LIKE = os.environ.get("WRGZ_CAMPAIGN", "camp-20260802-wrgznight%")
 SYMBOL = "GZU6"          # для сбора важна ГРУППА инструмента, а не конкретная серия
 AVG_PRICE = 9600.0       # средняя цена газа за период, пунктов
@@ -51,8 +61,11 @@ async def main() -> int:
                 "SELECT params, net_profit, total_trades FROM backtest_results "
                 "WHERE run_id=$1 AND total_trades IS NOT NULL AND net_profit IS NOT NULL",
                 r["id"])
+            # params приходит СТРОКОЙ: json-кодек регистрируется на пуле приложения
+            # (trader.db._setup_json_codec), а этот пул свой.
             by_window.setdefault((r["df"], r["dt"]), []).extend(
-                [(x["params"], float(x["net_profit"]), int(x["total_trades"])) for x in rows])
+                [(_params(x["params"]), float(x["net_profit"]), int(x["total_trades"]))
+                 for x in rows])
 
         for (df, dt), rows in sorted(by_window.items()):
             if not rows:
