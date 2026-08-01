@@ -113,6 +113,11 @@ async def main() -> None:
     ap.add_argument("--chart-step", type=int, default=5, help="прореживание рядов графика, минут")
     ap.add_argument("--label", default="", help="подпись прогона на стенде")
     ap.add_argument("--grid", default="base", choices=sorted(GRIDS), help="какую сетку гнать")
+    ap.add_argument("--from-artifact", default="",
+                    help="взять готовые комбинации из артефакта вместо сетки — так конфиг, "
+                         "отобранный на одном контракте, проверяется на другом (холдаут)")
+    ap.add_argument("--top", type=int, default=30,
+                    help="сколько лучших по ПЛАТО взять из артефакта")
     ap.add_argument("--chunk", type=int, default=400,
                     help="комбинаций на подпроцесс: артефакт пишется после каждого куска, "
                          "поэтому падение на четвёртом часу не стирает всё сделанное")
@@ -136,9 +141,19 @@ async def main() -> None:
     initial_margin = spec.get("initial_margin") or 0.0
     print(f"      ₽/пункт={point_value} ГО={initial_margin}", flush=True)
 
-    keys = list(GRID)
-    param_sets = [{**base, **dict(zip(keys, c))} for c in itertools.product(*GRID.values())]
-    print(f"[2/4] сетка «{args.grid}»: {len(param_sets)} комбинаций", flush=True)
+    if args.from_artifact:
+        with open(args.from_artifact, encoding="utf-8") as f:
+            src = json.load(f)
+        GRID = src["grid"]
+        keys = list(GRID)
+        picked = sorted((r for r in src["results"] if (r["trades"] or 0) > 0),
+                        key=lambda r: -(r.get("plateau") or r["net"] or 0))[:args.top]
+        param_sets = [{**base, **p["params"]} for p in picked]
+        print(f"[2/4] холдаут: {len(param_sets)} комбинаций из {args.from_artifact}", flush=True)
+    else:
+        keys = list(GRID)
+        param_sets = [{**base, **dict(zip(keys, c))} for c in itertools.product(*GRID.values())]
+        print(f"[2/4] сетка «{args.grid}»: {len(param_sets)} комбинаций", flush=True)
 
     def _row(e: dict) -> dict:
         r = e["result"]
@@ -201,9 +216,11 @@ async def main() -> None:
     # Для каждой точки берём её соседей на один шаг по каждой оси и считаем
     # МЕДИАНУ по точке вместе с соседями — устойчивый счёт, который нельзя выиграть
     # одной удачной комбинацией.
+    # На разреженном наборе (холдаут) соседей нет по построению — плато не считаем,
+    # иначе оно было бы просто копией net и выдавало бы себя за подтверждение.
     idx = {tuple(r["params"][k] for k in keys): r for r in rows}
     posn = {k: {v: j for j, v in enumerate(GRID[k])} for k in keys}
-    for r in rows:
+    for r in rows if not args.from_artifact else []:
         cur = tuple(r["params"][k] for k in keys)
         nb = []
         for ax, k in enumerate(keys):
@@ -224,7 +241,7 @@ async def main() -> None:
     # График рисуем по лучшему ПЛАТО, а не по пику: именно эту точку имеет смысл
     # смотреть глазами. Пик остаётся в таблице.
     traded = [r for r in rows if (r["trades"] or 0) > 0]
-    top = (max(traded, key=lambda r: r["plateau"])["params"] if traded
+    top = (max(traded, key=lambda r: r.get("plateau", r["net"] or 0))["params"] if traded
            else (rows[0]["params"] if rows else {k: GRID[k][0] for k in keys}))
     meta["top_by_net"] = rows[0]["params"] if rows else {}
     meta["top_by_plateau"] = top
@@ -246,14 +263,20 @@ async def main() -> None:
             "equity": [[p["time"], round(p["equity"], 1)] for p in eq[::stride]],
             "best_trades": (best or {}).get("result", {}).get("trades") or []})
     print(f"записано {args.out} ({os.path.getsize(args.out) // 1024} КБ)", flush=True)
-    print("\nпик по итогу:")
+    pos = sum(1 for r in traded if (r["net"] or 0) > 0)
+    print(f"\nсо сделками {len(traded)}, прибыльных {pos} "
+          f"({100 * pos // max(1, len(traded))}%), медиана "
+          f"{st.median([r['net'] or 0 for r in traded]):.0f} ₽" if traded else "\nсделок нет")
+    print("пик по итогу:")
     for r in rows[:3]:
+        pl = f" плато={r['plateau']:.0f}₽ соседей+={r['nb_pos']}/{r['nb_n']}" if "plateau" in r else ""
         print(f"  {r['params']} net={r['net']:.0f}₽ сделок={r['trades']} "
-              f"плато={r['plateau']:.0f}₽ соседей+={r['nb_pos']}/{r['nb_n']}", flush=True)
-    print("лучшее плато:")
-    for r in sorted(traded, key=lambda x: -x["plateau"])[:3]:
-        print(f"  {r['params']} плато={r['plateau']:.0f}₽ net={r['net']:.0f}₽ "
-              f"сделок={r['trades']} соседей+={r['nb_pos']}/{r['nb_n']}", flush=True)
+              f"вне_выборки={r['net_oos'] or 0:.0f}₽{pl}", flush=True)
+    if traded and "plateau" in traded[0]:
+        print("лучшее плато:")
+        for r in sorted(traded, key=lambda x: -x["plateau"])[:3]:
+            print(f"  {r['params']} плато={r['plateau']:.0f}₽ net={r['net']:.0f}₽ "
+                  f"сделок={r['trades']} соседей+={r['nb_pos']}/{r['nb_n']}", flush=True)
 
 
 if __name__ == "__main__":
