@@ -76,7 +76,7 @@ async def _run_one(bars_by, mode, args, pvs) -> dict:
         bars_by, step_secs=args.step, window_secs=args.window_days * 86400,
         ofi_mode=mode, model_refresh_secs=args.refresh, model_window=args.model_window,
         llm_enabled=args.llm, blend_tick=args.blend,
-        point_values=pvs, taker=True,
+        point_values=pvs, taker=True, progress=True,
     )
     t0 = time.time()
     m = await bt.run()

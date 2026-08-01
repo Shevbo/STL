@@ -14,6 +14,7 @@ OFI=0 baseline; the gap measures how much of the strategy rides on flow.
 from __future__ import annotations
 
 import bisect
+import time
 
 from trader.lab.ai46 import llm as LLM
 from trader.lab.ai46.engine import FeatureEngine
@@ -92,7 +93,8 @@ class Ai46Backtester:
                  blend_tick: bool = False, ticks_by_symbol: dict | None = None,
                  point_values: dict | None = None, taker: bool = True,
                  clock_from: float | None = None, clock_to: float | None = None,
-                 params=None) -> None:
+                 params=None, progress: bool = False) -> None:
+        self.progress = progress
         self.bars = {s: sorted(b, key=lambda x: x.time) for s, b in bars_by_symbol.items() if b}
         self.symbols = list(self.bars)
         self.times = {s: [b.time for b in self.bars[s]] for s in self.symbols}
@@ -152,7 +154,20 @@ class Ai46Backtester:
             return self.metrics()
         t = self.clock_from if self.clock_from is not None else min(starts)
         t_end = self.clock_to if self.clock_to is not None else max(ends)
+        # Прогресс: трёхмесячный прогон по 20 инструментам идёт ЧАСАМИ и до сих пор не
+        # печатал ни строчки — «работает или повис» отличить было нечем.
+        total = max(1, int((t_end - t) / self.step) + 1)
+        every = max(1, total // 40)
+        t_start = time.monotonic()
+        step_n = 0
         while t <= t_end:
+            step_n += 1
+            if self.progress and step_n % every == 0:
+                el = time.monotonic() - t_start
+                frac = step_n / total
+                print(f"  … {frac * 100:4.1f}%  {step_n}/{total} шагов  "
+                      f"прошло {el / 60:.0f} мин  осталось ~{el * (1 - frac) / frac / 60:.0f} мин",
+                      flush=True)
             bars_by: dict = {}
             for s in self.symbols:
                 ts = self.times[s]
