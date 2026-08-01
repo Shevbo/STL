@@ -76,17 +76,33 @@ def _enqueue(tid: str, args: list) -> None:
     r.raise_for_status()
 
 
+def _fetch(tid: str) -> dict:
+    """Статус задачи. Пустой dict вместо исключения: через nginx прилетает то 502, то
+    обрыв, и поллер с голым .json() убивал ЧАСОВОЙ прогон на i9 — сама задача при этом
+    продолжала считаться, терялся только сборщик результата."""
+    try:
+        r = httpx.get(f"{API}/api/v1/agent/task/{tid}", headers=H, timeout=30)
+        r.raise_for_status()
+        return r.json()
+    except Exception as exc:  # noqa: BLE001
+        print(f"  опрос не удался ({type(exc).__name__}), продолжаю ждать")
+        return {}
+
+
 def _poll(tid: str, minutes: int) -> dict:
     last, t0 = None, time.time()
     g: dict = {}
     while time.time() - t0 < minutes * 60:
         time.sleep(15)
-        g = httpx.get(f"{API}/api/v1/agent/task/{tid}", headers=H, timeout=30).json()
-        if g["status"] != last:
-            print(f"  [{time.time() - t0:>5.0f}s] status={g['status']} "
+        got = _fetch(tid)
+        if not got:
+            continue
+        g = got
+        if g.get("status") != last:
+            print(f"  [{time.time() - t0:>5.0f}s] status={g.get('status')} "
                   f"agent={g.get('agent_id')} claimed={g.get('claimed_at')}")
-            last = g["status"]
-        if g["status"] in ("done", "failed"):
+            last = g.get("status")
+        if g.get("status") in ("done", "failed"):
             break
     return g
 
@@ -97,6 +113,8 @@ def main() -> None:
                    help="только базовая комбинация — замерить скорость i9 перед полным перебором")
     p.add_argument("--id", default="", help="id задачи (по умолчанию по дате)")
     p.add_argument("--minutes", type=int, default=90, help="сколько ждать результат")
+    p.add_argument("--collect", action="store_true",
+                   help="не ставить задачу заново, забрать результат уже посчитанной")
     args_cli = p.parse_args()
     if not TOKEN:
         raise SystemExit("set OPT_AGENT_TOKEN")
@@ -113,8 +131,11 @@ def main() -> None:
           f"окно {d_from}..{d_to}, комиссия {'тейкер' if CFG['taker'] else 'мейкер'}")
 
     t0 = time.time()
-    _enqueue(tid, units)
-    g = _poll(tid, args_cli.minutes)
+    if not args_cli.collect:
+        _enqueue(tid, units)
+    g = _fetch(tid) if args_cli.collect else {}
+    if g.get("status") not in ("done", "failed"):
+        g = _poll(tid, args_cli.minutes)
     wall = time.time() - t0
     if g.get("status") != "done":
         print("НЕ ЗАВЕРШЕНО:", g.get("error") or g.get("status"))
