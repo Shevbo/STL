@@ -161,7 +161,12 @@ def classify(*, now_ms: int, schedule: dict, wall_ms: int | None = None) -> tupl
         return None, "unknown", "", 0
     day = datetime.datetime.fromtimestamp((wall_ms or now_ms) / 1000, tz=_MSK).date().isoformat()
     if day in holidays:
-        return False, "holiday", "", 0
+        # next_open_ms — так же, как в ветке 'done' ниже: ближайшее окно в будущем.
+        # Раньше здесь стоял хардкод 0 — с этим ветка 'holiday' была недостижима
+        # (см. баг выше), и панель "открытие торгов ДД.ММ" ползла случайно из
+        # ветки 'done'; теперь 'holiday' достижима и обязана нести ту же дату.
+        nxt_all = [s[0] for s in sessions if s[0] > now_ms]
+        return False, "holiday", "", (min(nxt_all) if nxt_all else 0)
     today = [s for s in sessions if _iso_ms(s[0]).startswith(day)]
     # В торговом окне прямо сейчас?
     for f_ms, t_ms, typ in today:

@@ -82,11 +82,14 @@ def test_holiday_check_uses_wall_clock_not_frozen_systime():
     наборе окон next_open_ms посчитался бы неверно."""
     sched = {"sessions": [_win("2026-08-03", "07:00:00", "10:00:00", "morning_session")],
              "holidays": {"2026-08-01"}}
-    is_open, phase, _, _ = classify(
+    is_open, phase, _, nxt = classify(
         now_ms=_ms("2026-07-31", "23:50:05"),
         wall_ms=_ms("2026-08-01", "09:51:00"),
         schedule=sched)
     assert (is_open, phase) == (False, "holiday")
+    # next_open_ms не должен обнуляться в ветке 'holiday' — панель показывает
+    # "открытие торгов ДД.ММ" по этому полю.
+    assert nxt == _ms("2026-08-03", "07:00:00")
 
 
 def test_unknown_without_schedule_or_time():
