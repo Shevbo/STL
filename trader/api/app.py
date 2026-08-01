@@ -2123,6 +2123,18 @@ def create_app() -> FastAPI:
         # i9 host telemetry (what the CPU is actually doing) from the agent heartbeat.
         hb_raw = await pool.fetchval("SELECT value FROM agent_control WHERE key='i9_heartbeat'")
         out["i9"] = i9_hb_view(hb_raw, time.time())
+        # ЗАЯВЛЕНО оператором против того, что реально крутится. Агент пересобирает пул
+        # только МЕЖДУ заданиями, так что после «применить» расхождение живёт до конца
+        # текущего прогона. Без этой пары оператор ставит 6 воркеров, видит прежние 80%
+        # CPU и считает, что 6 воркеров так и грузят машину (01.08.2026).
+        try:
+            want = await pool.fetch(
+                "SELECT key, value FROM agent_control WHERE key IN ('i9_workers','i9_priority')")
+            kv = {r["key"]: r["value"] for r in want}
+            out["i9_wanted"] = {"workers": int(kv["i9_workers"]) if kv.get("i9_workers") else None,
+                                "priority": kv.get("i9_priority")}
+        except Exception:
+            out["i9_wanted"] = {"workers": None, "priority": None}
 
         rows = await pool.fetch(
             "SELECT id, status, agent_id, finished_at FROM backtest_runs "

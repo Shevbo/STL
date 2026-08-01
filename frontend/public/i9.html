@@ -71,7 +71,7 @@
       <div id="ramBig" class="big">—</div><div class="bar"><i id="ramBar" style="width:0"></i></div>
       <div id="ramSub" class="sub" style="margin-top:8px"></div>
     </div>
-    <div class="card wide"><div class="lbl">Ядра (<span id="coreN">—</span>) · воркеры <span id="wk" class="mono">—</span></div>
+    <div class="card wide"><div class="lbl">Ядра (<span id="coreN">—</span>) · воркеры <span id="wk" class="mono">—</span><span id="wkWant" class="sub"></span></div>
       <div class="cores" id="cores"></div>
     </div>
     <div class="card wide"><div class="lbl">Сейчас</div><div class="act" id="act">—</div></div>
@@ -114,6 +114,13 @@ function render(d){
       document.getElementById('ramSub').textContent=(i.ram_used_mb||0).toLocaleString()+' / '+(i.ram_total_mb||0).toLocaleString()+' МБ'; }
     document.getElementById('coreN').textContent=i.cpu_count||'?';
     document.getElementById('wk').textContent=(i.workers==null?'?':i.workers);
+    // Заявлено оператором vs реально крутится: пул пересобирается только МЕЖДУ
+    // заданиями. Молчать об этом нельзя — иначе прежняя нагрузка читается как новая.
+    var want=d.i9_wanted||{}, ww=document.getElementById('wkWant'), diff=[];
+    if(want.workers!=null && i.workers!=null && want.workers!==i.workers) diff.push('воркеров '+want.workers);
+    if(want.priority && i.priority && want.priority!==i.priority) diff.push('приоритет '+want.priority);
+    ww.textContent=diff.length?('  · заявлено '+diff.join(', ')+' — применится после текущего задания'):'';
+    ww.style.color=diff.length?'#ffb300':'';
     var wrap=document.getElementById('cores'), pc=i.per_core||[];
     if(pc.length!==wrap.children.length){ wrap.innerHTML=''; for(var k=0;k<pc.length;k++){var c=document.createElement('div');c.className='core';c.innerHTML='<i></i>';wrap.appendChild(c);} }
     for(var k=0;k<pc.length;k++){ var f=wrap.children[k].firstChild; f.style.height=Math.max(3,Math.min(100,pc[k]))+'%'; f.className=pc[k]>=90?'hot':''; wrap.children[k].title=Math.round(pc[k])+'%'; }
