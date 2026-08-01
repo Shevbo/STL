@@ -24,6 +24,8 @@ import sys
 import time
 from datetime import date, datetime, timezone
 
+import httpx
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from trader.lab.backtest import run_backtest_grid  # noqa: E402
@@ -31,6 +33,9 @@ from trader.lab.iss_loader import fetch_contract_spec, load_bars_iss  # noqa: E4
 from trader.lab.strategies.shaving_ri import STRATEGY_META  # noqa: E402
 
 SCRIPT_CODE = "from trader.lab.strategies.shaving_ri import on_bar, on_start, on_stop"
+ISS_HIST = "https://iss.moex.com/iss/history/engines/futures/markets/forts/securities"
+# ГО ближнего RI как доля номинала (31.07.2026: 22 361.73 / (88 140 × 1.597146)).
+MARGIN_FRAC = 0.159
 
 GRIDS = {
     # Разведка: 100 комбинаций, широко и грубо.
@@ -103,6 +108,47 @@ def _spread_series(ri, bk, ema_slow: int, ema_fast: int, z_win: int, step: int):
     return out
 
 
+async def _spec_for(symbol: str, d0: date, d1: date) -> tuple[float, float]:
+    """(₽/пункт, ГО) для контракта — включая ИСТЁКШИЙ.
+
+    fetch_contract_spec ходит в текущий листинг, а истёкший контракт из него
+    выпадает и возвращает пусто. Раньше это молча давало point_value=1.0: P&L
+    печатался в пунктах под видом рублей, а биржевой сбор (он берётся с номинала
+    price×point_value) занижался в 1.6 раза — то есть холдаут получал скидку на
+    комиссию ровно там, где проверяется, окупается ли стратегия. Поэтому для
+    истёкших выводим шаг из дневной истории самой биржи:
+
+        ₽/пункт = OPENPOSITIONVALUE / (OPENPOSITION × SETTLEPRICE)
+
+    (рублёвая стоимость открытых позиций, делённая на их же объём в пунктах).
+    ГО оценивается по той же доле от номинала, что у текущего ближнего контракта.
+    """
+    spec = await fetch_contract_spec(symbol) or {}
+    if spec.get("point_value"):
+        return float(spec["point_value"]), float(spec.get("initial_margin") or 0.0)
+
+    url = (f"{ISS_HIST}/{symbol}.json?iss.meta=off&iss.only=history"
+           f"&from={d0}&till={d1}")
+    async with httpx.AsyncClient(timeout=30, headers={"User-Agent": "STL/1.0"}) as c:
+        h = (await c.get(url)).json().get("history", {})
+    rows = [dict(zip(h.get("columns", []), r)) for r in h.get("data", [])]
+    pvs = [r["OPENPOSITIONVALUE"] / (r["OPENPOSITION"] * r["SETTLEPRICE"])
+           for r in rows
+           if (r.get("OPENPOSITIONVALUE") and r.get("OPENPOSITION") and r.get("SETTLEPRICE"))]
+    if not pvs:
+        raise SystemExit(
+            f"не удалось определить ₽/пункт для {symbol} за {d0}..{d1}. "
+            f"Прогон с point_value=1.0 занизил бы комиссию и выдал пункты за рубли — "
+            f"задайте --point-value явно.")
+    pv = st.median(pvs)
+    px = st.median([r["SETTLEPRICE"] for r in rows if r.get("SETTLEPRICE")])
+    margin = MARGIN_FRAC * px * pv
+    print(f"      спека истёкшего контракта выведена из истории: ₽/пункт={pv:.4f} "
+          f"(по {len(pvs)} дням), ГО≈{margin:.0f} (оценка {MARGIN_FRAC:.0%} от номинала)",
+          flush=True)
+    return pv, margin
+
+
 async def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--symbol", default="RIU6")
@@ -118,6 +164,8 @@ async def main() -> None:
                          "отобранный на одном контракте, проверяется на другом (холдаут)")
     ap.add_argument("--top", type=int, default=30,
                     help="сколько лучших по ПЛАТО взять из артефакта")
+    ap.add_argument("--point-value", type=float, default=0.0, help="перебить ₽/пункт вручную")
+    ap.add_argument("--initial-margin", type=float, default=0.0, help="перебить ГО вручную")
     ap.add_argument("--chunk", type=int, default=400,
                     help="комбинаций на подпроцесс: артефакт пишется после каждого куска, "
                          "поэтому падение на четвёртом часу не стирает всё сделанное")
@@ -136,10 +184,12 @@ async def main() -> None:
     common = len(set(b.time for b in ri) & set(b.time for b in bk))
     print(f"      RI={len(ri)} корзина={len(bk)} общих минут={common}", flush=True)
 
-    spec = await fetch_contract_spec(args.symbol) or {}
-    point_value = spec.get("point_value") or 1.0
-    initial_margin = spec.get("initial_margin") or 0.0
-    print(f"      ₽/пункт={point_value} ГО={initial_margin}", flush=True)
+    point_value, initial_margin = await _spec_for(args.symbol, d0, d1)
+    if args.point_value:
+        point_value = args.point_value
+    if args.initial_margin:
+        initial_margin = args.initial_margin
+    print(f"      ₽/пункт={point_value:.4f} ГО={initial_margin:.0f}", flush=True)
 
     if args.from_artifact:
         with open(args.from_artifact, encoding="utf-8") as f:
