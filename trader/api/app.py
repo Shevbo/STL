@@ -111,6 +111,22 @@ async def lifespan(app: FastAPI):
             # человек. Раньше приоритет ВЫВОДИЛСЯ из префикса run_id, и именованный
             # ручной перебор (camp-...) молча уезжал в хвост за фоновые кампании.
             "ALTER TABLE backtest_runs ADD COLUMN IF NOT EXISTS priority SMALLINT NOT NULL DEFAULT 0",
+            # Стратегия прогона отдельной колонкой. Раньше её можно было достать только
+            # разбором job_body->script_code, поэтому «покажи прогоны ЭТОГО робота» не
+            # выражалось запросом, и история в Лабе показывала лишь КАМПАНИИ — а прогон
+            # с кнопки «Пересчитать бэктест» это голый cuid, и оператор своих прогонов
+            # там не находил (02.08.2026).
+            "ALTER TABLE backtest_runs ADD COLUMN IF NOT EXISTS strategy TEXT",
+            # Разовый бэкфилл по уже накопленным прогонам: те же два вида scriptCode,
+            # что понимает _strat_id_from_code — реестровый make_on_bar('id') и импорт
+            # отдельного модуля strategies.<name>.
+            """UPDATE backtest_runs SET strategy = COALESCE(
+                 substring(job_body->>'script_code' from 'make_on_bar\\(\\s*[''"]([^''"]+)'),
+                 substring(job_body->>'scriptCode'  from 'make_on_bar\\(\\s*[''"]([^''"]+)'),
+                 substring(job_body->>'script_code' from 'strategies\\.([A-Za-z_][A-Za-z0-9_]*)\\s+import'),
+                 substring(job_body->>'scriptCode'  from 'strategies\\.([A-Za-z_][A-Za-z0-9_]*)\\s+import'))
+               WHERE strategy IS NULL AND job_body IS NOT NULL""",
+            "CREATE INDEX IF NOT EXISTS backtest_runs_strategy_idx ON backtest_runs(strategy, created_at DESC)",
             # Columns the agent/optimizer writes into backtest_results for sweeps
             "ALTER TABLE backtest_results ADD COLUMN IF NOT EXISTS net_profit DOUBLE PRECISION",
             "ALTER TABLE backtest_results ADD COLUMN IF NOT EXISTS recovery_factor DOUBLE PRECISION",
@@ -3065,12 +3081,14 @@ def create_app() -> FastAPI:
         priority = queue_priority(body.get("priority"))
         await pool.execute(
             """INSERT INTO backtest_runs
-                 (id, robot_id, params_grid, date_from, date_to, status, engine, symbol, job_body, priority)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)""",
+                 (id, robot_id, params_grid, date_from, date_to, status, engine, symbol,
+                  job_body, priority, strategy)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)""",
             run_id, robot_id, body.get("paramsGrid", {}),
             _parse_dt(body["dateFrom"]), _parse_dt(body["dateTo"]),
             ("queued" if engine == "remote" else "pending"),
             engine, symbol, json.dumps(body), priority,
+            _strat_id_from_code(body.get("scriptCode") or body.get("script_code") or ""),
         )
         if engine != "remote":
             _asyncio.create_task(
@@ -3184,6 +3202,47 @@ def create_app() -> FastAPI:
                 run_id,
             )
         return [dict(r) for r in rows]
+
+    @fastapi_app.get("/api/v1/lab/robot-runs")
+    async def lab_robot_runs(request: Request, strategy: str = "", symbol: str = "",
+                             limit: int = 60):
+        """ВСЕ прогоны одного робота: и кампании, и одиночные пересчёты с карточки.
+
+        История в Лабе показывает только кампании (она строится по
+        optimization_leaderboard, куда пишутся лишь camp-/opt- прогоны). Прогон с
+        кнопки «Пересчитать бэктест» — голый cuid, и оператор своих прогонов там не
+        находил. Здесь источник — сами backtest_runs, поэтому видно всё."""
+        _auth(request)
+        pool = request.app.state.db_pool
+        if pool is None or not strategy:
+            return []
+        rows = await pool.fetch(
+            """SELECT b.id, b.status, b.engine, b.symbol, b.created_at, b.finished_at,
+                      b.date_from::date df, b.date_to::date dt,
+                      left(coalesce(b.error_msg,''), 160) AS err,
+                      (SELECT count(*) FROM backtest_results r WHERE r.run_id=b.id) AS combos,
+                      (SELECT r.net_profit FROM backtest_results r WHERE r.run_id=b.id
+                        ORDER BY r.net_profit DESC NULLS LAST LIMIT 1) AS best_net,
+                      (SELECT r.recovery_factor FROM backtest_results r WHERE r.run_id=b.id
+                        ORDER BY r.net_profit DESC NULLS LAST LIMIT 1) AS best_rf,
+                      (SELECT r.total_trades FROM backtest_results r WHERE r.run_id=b.id
+                        ORDER BY r.net_profit DESC NULLS LAST LIMIT 1) AS best_trades,
+                      (SELECT r.params FROM backtest_results r WHERE r.run_id=b.id
+                        ORDER BY r.net_profit DESC NULLS LAST LIMIT 1) AS best_params
+                 FROM backtest_runs b
+                WHERE b.strategy = $1 AND ($2 = '' OR b.symbol = $2)
+                ORDER BY b.created_at DESC
+                LIMIT $3""",
+            strategy, symbol, max(1, min(limit, 200)))
+        out = []
+        for r in rows:
+            d = dict(r)
+            for k in ("created_at", "finished_at", "df", "dt"):
+                if d.get(k) is not None:
+                    d[k] = d[k].isoformat()
+            d["campaign"] = _sweep_campaign(d["id"]) if _is_sweep_run(d["id"]) else None
+            out.append(d)
+        return out
 
     # ── Архив разобранных роботов ────────────────────────────────────────────
     @fastapi_app.get("/api/v1/lab/archive")

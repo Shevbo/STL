@@ -991,14 +991,56 @@
   // ── Init ────────────────────────────────────────────────────────────────
   $effect(() => { loadCatalog(); loadInstruments(); loadFavorites(); });
 
-  // Дип-линк ?hist=<стратегия тикер> — с карточки графика («Прогоны робота»).
-  // Разворачиваем историю и подставляем фильтр, иначе оператор попадает в пустой
-  // Лаб и ищет свои же прогоны руками.
+  // ── Прогоны одного робота (дип-линк ?hist=<стратегия> <тикер>) ─────────────
+  // ВАЖНО: «История прогонов» ниже — это КАМПАНИИ (строится по
+  // optimization_leaderboard). Прогон с кнопки «Пересчитать бэктест» получает
+  // голый cuid и туда не попадает НИКОГДА — оператор своих прогонов не находил.
+  // Поэтому здесь отдельный список, источник которого сами backtest_runs.
+  let robotRuns = $state<any[]>([]);
+  let robotRunsFor = $state<{ strategy: string; symbol: string } | null>(null);
+  let robotRunsLoading = $state(false);
+
+  async function loadRobotRuns(strategy: string, symbol: string) {
+    robotRunsFor = { strategy, symbol };
+    robotRunsLoading = true;
+    try {
+      const r = await fetchWithAuth('/api/v1/lab/robot-runs?strategy='
+        + encodeURIComponent(strategy) + '&symbol=' + encodeURIComponent(symbol));
+      if (r.ok) robotRuns = await r.json();
+    } catch { /* список вспомогательный */ }
+    finally { robotRunsLoading = false; }
+  }
+
+  /** Открыть результат конкретного прогона на графике (без пересчёта). */
+  async function openRun(run: any) {
+    say(`открываю прогон ${run.id.slice(0, 24)} (${run.combos} комбинаций)…`, 'dim');
+    try {
+      const rr = await fetchWithAuth(`/api/v1/backtest/${run.id}/results?full=1`);
+      if (!rr.ok) throw new Error('HTTP ' + rr.status);
+      const rd = await rr.json();
+      const items = (Array.isArray(rd) ? rd : (rd.results ?? [])) as any[];
+      if (!items.length) { say('в этом прогоне нет сохранённых результатов', 'err'); return; }
+      const best = [...items].sort((a, b) => (b.net_profit ?? 0) - (a.net_profit ?? 0))[0];
+      leaderResult = { params: best.params ?? {}, result: best };
+      leaderId = JSON.stringify(best.params ?? {});
+      if (run.df) dateFrom = String(run.df).slice(0, 10);
+      if (run.dt) dateTo = String(run.dt).slice(0, 10);
+      await resolveLeaderPV({ result: best, params: best.params });
+      say(`прогон открыт: ${fmtRub(best.net_profit)} · сделок ${best.total_trades ?? '—'}`);
+    } catch (e) {
+      say('не удалось открыть прогон: ' + String(e).slice(0, 120), 'err');
+    }
+  }
+
   $effect(() => {
     const q = new URLSearchParams(window.location.search).get('hist');
-    if (q && !histFilter && !showLabHistory) {
-      histFilter = q;
-      toggleLabHistory();
+    if (q && !robotRunsFor) {
+      const [strat, sym = ''] = q.trim().split(/\s+/);
+      if (strat) loadRobotRuns(strat, sym);
+      if (!histFilter && !showLabHistory) {
+        histFilter = q;          // кампании этого же робота — списком ниже
+        toggleLabHistory();
+      }
     }
   });
 </script>
@@ -1190,6 +1232,53 @@
 
   <!-- ── RIGHT: Results ───────────────────────────────────────────────── -->
   <div class="btl-results">
+    <!-- Прогоны ОДНОГО робота: и кампании, и одиночные пересчёты с карточки.
+         Показывается по ссылке «Прогоны робота» с графика. -->
+    {#if robotRunsFor}
+      <div class="btl-section btl-runs">
+        <div class="btl-sec-title">
+          🧾 Прогоны робота <code class="btl-runs-id">{robotRunsFor.strategy}</code>
+          {#if robotRunsFor.symbol}<span class="btl-runs-sym">{robotRunsFor.symbol}</span>{/if}
+          <span class="btl-sec-sub">включая одиночные пересчёты с карточки · клик — открыть результат</span>
+          <button class="btl-csv" onclick={() => downloadCSV(robotRuns, 'robot-runs')}>Выгрузить в CSV</button>
+        </div>
+        {#if robotRunsLoading}
+          <div class="btl-hist-empty">Загрузка прогонов…</div>
+        {:else if !robotRuns.length}
+          <div class="btl-hist-empty">
+            Прогонов этого робота не найдено. Пересчёты, сделанные ДО 02.08.2026, могли
+            остаться без метки стратегии — тогда их видно только в общей истории ниже.
+          </div>
+        {:else}
+          <table class="btl-table">
+            <thead>
+              <tr>
+                <th>Когда</th><th>Инстр.</th><th>Период</th><th>Движок</th>
+                <th>Статус</th><th>Комбинаций</th><th>Лучший финрез</th><th>RF</th>
+                <th>Сделок</th><th>Кампания</th>
+              </tr>
+            </thead>
+            <tbody>
+              {#each robotRuns as r (r.id)}
+                <tr class="btl-row" onclick={() => openRun(r)} title={r.err || 'открыть результат этого прогона'}>
+                  <td class="mono">{r.created_at ? new Date(r.created_at).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'}</td>
+                  <td class="mono">{r.symbol ?? '—'}</td>
+                  <td class="mono">{fmtDay(r.df)}—{fmtDay(r.dt)}</td>
+                  <td class="mono">{r.engine === 'remote' ? 'i9' : r.engine}</td>
+                  <td class="mono" class:neg={r.status === 'failed'} class:pos={r.status === 'done'}>{r.status}</td>
+                  <td class="btl-num">{r.combos}</td>
+                  <td class="btl-num" class:pos={(r.best_net ?? 0) > 0} class:neg={(r.best_net ?? 0) < 0}>{fmtRub(r.best_net)}</td>
+                  <td class="btl-num">{fmtRf(r.best_rf)}</td>
+                  <td class="btl-num">{r.best_trades ?? '—'}</td>
+                  <td class="mono">{#if r.campaign}<a href={'/?campaign=' + encodeURIComponent(r.campaign)} target="_blank" rel="noopener" onclick={(e) => e.stopPropagation()}>{r.campaign}</a>{:else}—{/if}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        {/if}
+      </div>
+    {/if}
+
     <!-- История прогонов: все сохранённые кампании перебора (без повторного прогона) -->
     <div class="btl-history">
       <button class="btl-hist-btn" onclick={toggleLabHistory}
@@ -1672,6 +1761,10 @@
   /* Живой хит-парад строится ПОКА идёт счёт — рамка «в работе», чтобы его не
      спутали с итоговым (он ещё изменится). */
   .btl-live { border: 1px solid #2f9c5044; border-radius: 6px; padding: 8px 10px; background: #0a1410; }
+  .btl-runs { border: 1px solid #24406a; border-radius: 6px; padding: 8px 10px; background: #0c1424; }
+  .btl-runs-id { font-size: 11px; color: #9cf; background: #12203a; border: 1px solid #24406a;
+    border-radius: 3px; padding: 0 5px; }
+  .btl-runs-sym { font-size: 10px; color: #7ab8ff; margin-left: 4px; }
   /* «×256 · не влияют: sl_frac, min_gap_pts» — сколько комбинаций дали ОДИН и тот
      же результат. Без этого стена одинаковых строк читается как 256 находок. */
   .btl-tie { margin-left: 6px; font-size: 10px; color: #ffb300; background: #1a1400;
