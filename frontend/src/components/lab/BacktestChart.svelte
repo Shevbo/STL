@@ -1214,6 +1214,17 @@
               Пересчитать бэктест
             </button>
           {/if}
+          {#if strategy}
+            <!-- Пересчёт даёт ОДИН результат, а рядом почти всегда нужен вопрос
+                 «а что этот робот показывал раньше». История прогонов живёт в
+                 Backtest Lab, но найти её оттуда — отдельный поход; ссылка
+                 открывает её сразу отфильтрованной по этой стратегии и тикеру. -->
+            <a class="bc-runs" target="_blank" rel="noopener"
+               href={'/?lab=backtest&hist=' + encodeURIComponent(String(strategy) + ' ' + symbol)}
+               title="все сохранённые прогоны этого робота на этом инструменте: период, лидер, параметры">
+              Прогоны робота ↗
+            </a>
+          {/if}
           {#if onApplyParams}
             <button class="bc-apply live" class:dirty={paramsDirty} disabled={applyBusy}
                     title="записать эти значения в РАБОТАЮЩЕГО робота — применятся на следующем баре"
@@ -1484,6 +1495,12 @@
     font-size: 10px; border-radius: 3px; padding: 3px 6px; cursor: pointer; }
   .bc-apply:hover { background: #267346; }
   .bc-apply.dirty { background: #8a5a1f; border-color: #c8862f; }
+  /* Ссылка на историю прогонов стоит ПОД кнопкой пересчёта: это соседний вопрос
+     («что этот робот показывал раньше»), но не действие, поэтому не кнопка. */
+  .bc-runs { display: block; margin-top: 4px; text-align: center; font-size: 10px;
+    color: #7ab8ff; text-decoration: none; border: 1px solid #24406a; border-radius: 3px;
+    padding: 3px 6px; background: #12203a; }
+  .bc-runs:hover { border-color: #4dd0e1; color: #cff; }
   .bc-fav { display: flex; gap: 4px; margin-top: 6px; }
   .bc-fav .bc-pv { flex: 1; min-width: 0; }
   .bc-fav-btn { background: #1a1a2e; border: 1px solid #6a5a1f; color: #e0c36a;

@@ -153,13 +153,16 @@
     }
   };
   const histRows = $derived.by(() => {
-    const q = histFilter.trim().toLowerCase();
+    // Фильтр по СЛОВАМ, а не по строке целиком: «shectory_2ema MXU6» должно найти
+    // прогоны этой стратегии на этом тикере, а ни одно поле строки не содержит обе
+    // части сразу. Именно так приходит ссылка «Прогоны робота» с карточки графика.
+    const words = histFilter.trim().toLowerCase().split(/\s+/).filter(Boolean);
     let rows = labCampaigns.filter((c: any) => {
       if (histWinOnly && !((c.leader_net ?? 0) > 0)) return false;
-      if (!q) return true;
-      return (c.campaign || '').toLowerCase().includes(q)
-        || (c.strategy || '').toLowerCase().includes(q)
-        || ((c.symbols || []).join(' ') + ' ' + (c.leader_symbol || '')).toLowerCase().includes(q);
+      if (!words.length) return true;
+      const hay = [c.campaign, c.strategy, (c.symbols || []).join(' '), c.leader_symbol]
+        .map((x: any) => String(x ?? '').toLowerCase()).join(' ');
+      return words.every((w) => hay.includes(w));
     });
     const { key, dir } = histSort;
     return rows.sort((a: any, b: any) => {
@@ -987,6 +990,17 @@
 
   // ── Init ────────────────────────────────────────────────────────────────
   $effect(() => { loadCatalog(); loadInstruments(); loadFavorites(); });
+
+  // Дип-линк ?hist=<стратегия тикер> — с карточки графика («Прогоны робота»).
+  // Разворачиваем историю и подставляем фильтр, иначе оператор попадает в пустой
+  // Лаб и ищет свои же прогоны руками.
+  $effect(() => {
+    const q = new URLSearchParams(window.location.search).get('hist');
+    if (q && !histFilter && !showLabHistory) {
+      histFilter = q;
+      toggleLabHistory();
+    }
+  });
 </script>
 
 <div class="btl">
