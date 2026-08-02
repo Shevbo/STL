@@ -27,7 +27,9 @@ from trader.config import Settings  # noqa: E402
 from trader.lab.commission import commission_for  # noqa: E402
 from trader.lab.iss_loader import fetch_contract_spec  # noqa: E402
 
-EXECUTED = ("filled", "executed", "done", "partial")
+# Ровно тот набор статусов, что считает исполненными сам экран (LiveRobots.EXECUTED):
+# STL-роботы бумажные, их филлы лежат со статусом paper.
+EXECUTED = ("paper", "filled", "submitted", "executed")
 
 
 async def main() -> int:
