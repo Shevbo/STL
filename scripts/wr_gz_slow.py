@@ -41,13 +41,20 @@ _spec.loader.exec_module(wr)
 PERIODS = [40, 60, 90, 130, 200, 300, 450, 650, 900, 1300]
 OVERSOLD = [58, 62, 66]
 OVERBOUGHT = [34, 38, 42]
-FEE_ROUND = 2 * commission_for("GZU6", 9600.0, 1, 1.0, True)
+# Инструмент задаётся снаружи: тот же срез надо уметь прогнать на RI, где круг
+# стоит 0.2 медианной минутки против 0.7 на газе.
+SYMBOL = os.environ.get("SLOW_SYMBOL", "GZ")
+FEE_SYM = os.environ.get("SLOW_FEE_SYMBOL", "GZU6")   # для группы сбора нужна серия
+FEE_PRICE = float(os.environ.get("SLOW_PRICE", "9600"))
+FEE_PV = float(os.environ.get("SLOW_PV", "1.0"))
+FEE_ROUND = 2 * commission_for(FEE_SYM, FEE_PRICE, 1, FEE_PV, True)
 
 
 def main() -> int:
     grid = [{"period": p, "oversold": o, "overbought": ob, "tp_atr": 0, "sl_pct": 0}
             for p in PERIODS for o in OVERSOLD for ob in OVERBOUGHT]
-    wr.log(f"медленный срез: {len(grid)} комбинаций × {len(wr.WINDOWS)} окна, "
+    wr.SYMBOL = SYMBOL                      # окна и сетка те же, инструмент другой
+    wr.log(f"медленный срез {SYMBOL}: {len(grid)} комбинаций × {len(wr.WINDOWS)} окна, "
            f"порог безубытка {FEE_ROUND:.2f} ₽ за круг")
     client = httpx.Client(base_url=wr.API,
                           headers={"Authorization": f"Bearer {wr.token()}"})
