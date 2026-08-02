@@ -101,7 +101,12 @@ async def main() -> int:
                 px = median_price(key, a, b)
                 fee = 2 * commission_for(fee_sym, px, 1, pv, True) if px else 0.0
                 cost = fee + tick
-                gross = [(net + tr * cost, net, tr) for _, net, tr in rows]
+                # ВАЛОВЫЙ восстанавливаем прибавлением ТОЛЬКО сбора: его бэктест
+                # вычел, а спред — нет (он не моделируется вовсе). Прибавить сюда
+                # ещё и шаг значило бы вернуть издержку, которой не было, и раздуть
+                # эдж ровно на один шаг: у RI это +16 ₽ из ниоткуда, доля безубытка
+                # прыгала с 28% до 67%. Шаг участвует только в ПОРОГЕ (cost).
+                gross = [(net + tr * fee, net, tr) for _, net, tr in rows]
                 per = [g / t for g, _, t in gross if t]
                 share = statistics.median(per) / cost if cost else 0
                 table.append(
