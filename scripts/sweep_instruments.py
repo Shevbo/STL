@@ -98,12 +98,16 @@ def analyse(key: str, fee_sym: str, pv: float, byw: dict) -> dict:
         }
     common = set.intersection(*(set(v) for v in keyed.values())) if len(keyed) > 1 else set()
     stat["all_windows"] = len(common)
+    # Считаем ПОЛНОЕ число выживших и только потом режем список до топ-10: иначе
+    # отчёт сообщал «в плюсе 10» там, где в плюсе были все 2 592 (RI, 02.08.2026).
+    net_ok = [k for k in common if all(keyed[w][k][1] > 0 for w in keyed)]
+    gross_ok = [k for k in common if all(keyed[w][k][0] > 0 for w in keyed)]
+    stat["net_all_n"] = len(net_ok)
+    stat["gross_all_n"] = len(gross_ok)
     stat["net_all"] = sorted(
-        (k for k in common if all(keyed[w][k][1] > 0 for w in keyed)),
-        key=lambda k: min(keyed[w][k][1] for w in keyed), reverse=True)[:10]
+        net_ok, key=lambda k: min(keyed[w][k][1] for w in keyed), reverse=True)[:10]
     stat["gross_all"] = sorted(
-        (k for k in common if all(keyed[w][k][0] > 0 for w in keyed)),
-        key=lambda k: min(keyed[w][k][0] / max(keyed[w][k][2], 1) for w in keyed),
+        gross_ok, key=lambda k: min(keyed[w][k][0] / max(keyed[w][k][2], 1) for w in keyed),
         reverse=True)[:10]
     stat["detail"] = {
         "net_all": [{"params": dict(zip(wr.KEYS, k)),
@@ -133,9 +137,11 @@ def md_for(st: dict) -> str:
                  f"{d.get('net_win', 0)} | {'—' if nb is None else f'{nb:+,.0f}'.replace(',', ' ')} | "
                  f"{d.get('gross_win', 0)} | {d.get('per_trade_median')} | {d.get('trades_min')} |")
     L.append("")
+    n = max(st["all_windows"], 1)
     L.append(f"Комбинаций, общих для всех окон: {st['all_windows']}. "
-             f"**В плюсе по ЧИСТОМУ на всех окнах: {len(st['net_all'])}.** "
-             f"В плюсе по ВАЛОВОМУ на всех окнах: {len(st['gross_all'])}.\n")
+             f"**В плюсе по ЧИСТОМУ на всех окнах: {st.get('net_all_n', 0)}.** "
+             f"В плюсе по ВАЛОВОМУ на всех окнах: {st.get('gross_all_n', 0)} "
+             f"({100 * st.get('gross_all_n', 0) / n:.0f}%).\n")
     for title, kind in (("Лучшие по чистому (в плюсе везде)", "net_all"),
                         ("Лучшие по валовому на круг (в плюсе везде)", "gross_all")):
         items = st["detail"][kind]
