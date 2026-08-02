@@ -40,6 +40,14 @@ def _params(v):
     return v or {}
 
 
+SWEPT = ("period", "oversold", "overbought", "tp_atr", "sl_pct")
+
+
+def _key(p: dict) -> tuple:
+    """Ключ комбинации по ПЕРЕБИРАЕМЫМ осям — сравнивать окна можно только по ним."""
+    return tuple((k, p.get(k)) for k in SWEPT)
+
+
 CAMPAIGN_LIKE = os.environ.get("WRGZ_CAMPAIGN", "camp-20260802-wrgznight%")
 SYMBOL = "GZU6"          # для сбора важна ГРУППА инструмента, а не конкретная серия
 AVG_PRICE = 9600.0       # средняя цена газа за период, пунктов
@@ -97,6 +105,28 @@ async def main() -> int:
             print(f"   у него: чистый {best[1]:+,.0f} ₽, валовый {best[0]:+,.0f} ₽, "
                   f"сделок {best[2]}".replace(",", " "))
             print()
+
+        # Пересечение окон по ВАЛОВОМУ. Одно окно с положительным валовым — это
+        # выборка; повторяемость на всех окнах — уже кандидат в преимущество.
+        # Если пересечение пусто, спорить не о чем: сигнал не работает ни в один
+        # режим рынка, и вопрос комиссии даже не встаёт.
+        keyed = []
+        for rows in by_window.values():
+            keyed.append({_key(p): (net + tr * fee_round, net, tr)
+                          for p, net, tr in rows if tr >= 30})
+        full = [k for k in keyed[0] if all(len(w) > 100 and k in w for w in keyed)] \
+            if len(keyed) > 1 else []
+        both_gross = [k for k in full if all(w[k][0] > 0 for w in keyed)]
+        both_net = [k for k in full if all(w[k][1] > 0 for w in keyed)]
+        print(f"── пересечение {len(keyed)} окон ({len(full)} общих комбинаций)")
+        print(f"   валовый > 0 во ВСЕХ окнах: {len(both_gross)}")
+        print(f"   чистый  > 0 во ВСЕХ окнах: {len(both_net)}")
+        for k in both_gross[:5]:
+            print(f"     {dict(k)}")
+            for i, w in enumerate(keyed):
+                g, n, t = w[k]
+                print(f"       окно {i + 1}: валовый {g:+,.0f} ₽, чистый {n:+,.0f} ₽, "
+                      f"сделок {t}".replace(",", " "))
         return 0
     finally:
         await pool.close()
