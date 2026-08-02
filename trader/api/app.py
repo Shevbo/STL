@@ -117,6 +117,14 @@ async def lifespan(app: FastAPI):
             # с кнопки «Пересчитать бэктест» это голый cuid, и оператор своих прогонов
             # там не находил (02.08.2026).
             "ALTER TABLE backtest_runs ADD COLUMN IF NOT EXISTS strategy TEXT",
+            # Распаковка ДВОЙНОЙ кодировки job_body. Вставка делала json.dumps(body),
+            # а пул уже держит jsonb-кодек (db._setup_json_codec) и сериализует сам —
+            # в базу уезжал jsonb-СКАЛЯР со строкой JSON внутри. Агент это переживал
+            # (`if isinstance(job, str): json.loads`), поэтому баг жил незаметно, но
+            # любой SQL по job_body->>'...' возвращал NULL, и разметить прогоны
+            # стратегией было нечем.
+            """UPDATE backtest_runs SET job_body = (job_body #>> '{}')::jsonb
+                WHERE jsonb_typeof(job_body) = 'string'""",
             # Разовый бэкфилл по уже накопленным прогонам: те же два вида scriptCode,
             # что понимает _strat_id_from_code — реестровый make_on_bar('id') и импорт
             # отдельного модуля strategies.<name>.
@@ -2979,7 +2987,6 @@ def create_app() -> FastAPI:
     @fastapi_app.post("/api/v1/backtest/run", status_code=202)
     async def run_backtest(body: dict, request: Request):
         _require_any_auth(request)
-        import json
         import asyncio as _asyncio
         from datetime import datetime as _dt
         pool = request.app.state.db_pool
@@ -3087,7 +3094,11 @@ def create_app() -> FastAPI:
             run_id, robot_id, body.get("paramsGrid", {}),
             _parse_dt(body["dateFrom"]), _parse_dt(body["dateTo"]),
             ("queued" if engine == "remote" else "pending"),
-            engine, symbol, json.dumps(body), priority,
+            # body передаём ОБЪЕКТОМ: пул держит jsonb-кодек и сериализует сам.
+            # json.dumps здесь давал двойную кодировку — в базе оказывался
+            # jsonb-скаляр со строкой внутри, и весь SQL по job_body->>'...' молча
+            # возвращал NULL (02.08.2026).
+            engine, symbol, body, priority,
             _strat_id_from_code(body.get("scriptCode") or body.get("script_code") or ""),
         )
         if engine != "remote":
