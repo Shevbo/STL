@@ -109,7 +109,14 @@ def make_on_bar(rid: str):
         # mode a signal flip becomes EXIT-ONLY (close to flat, re-evaluate after the
         # pause) instead of reversing straight into the opposite side.
         cooldown_min = int(params.get("cooldown_min", 0) or 0)
-        cooldown_frac = float(params.get("cooldown_pct", 1.0) or 1.0) / 100.0
+        # `or 1.0` съедал НОЛЬ: cooldown_pct=0 (взводить паузу после ЛЮБОГО
+        # неубыточного выхода) молча превращался в 1.0, то есть в «только после хода
+        # на 1%». На минутках такой ход почти не случается — ret считается долей
+        # цены, а типичная сделка на RI это 0.05-0.2% — поэтому таймер не взводился
+        # НИКОГДА и остывание было мёртвым параметром. Обнаружено перебором
+        # 02.08.2026: cooldown_pct=0 и =1 дали совпадающий до рубля результат.
+        _cp = params.get("cooldown_pct")
+        cooldown_frac = float(1.0 if _cp is None else _cp) / 100.0
         # «Разножка» (min_gap_pts>0): не ДОЛИВАТЬ, пока цена не отошла от прошлого
         # входа минимум на N пунктов. В боковике робот иначе крутит добор за добором
         # по 20-50 пунктов, отдавая комиссию и спред (живой MACD·RIU6, 2026-07-22:
