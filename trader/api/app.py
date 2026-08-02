@@ -3205,6 +3205,23 @@ def create_app() -> FastAPI:
             out.append(d)
         return out
 
+    @fastapi_app.get("/api/v1/lab/archive/{entry_id}")
+    async def lab_archive_one(entry_id: str, request: Request):
+        """Одна запись — для страницы отчёта (report.html). Отдельная ручка, чтобы
+        лонгрид не тянул на себя ВСЕ отчёты архива ради одного."""
+        _auth(request)
+        pool = request.app.state.db_pool
+        if pool is None:
+            raise HTTPException(status_code=503, detail="DB unavailable")
+        row = await pool.fetchrow("SELECT * FROM robot_archive WHERE id=$1", entry_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="not found")
+        d = dict(row)
+        for k in ("archived_at", "bt_from", "bt_to", "real_from", "real_to"):
+            if d.get(k) is not None:
+                d[k] = d[k].isoformat()
+        return d
+
     @fastapi_app.post("/api/v1/lab/archive", status_code=201)
     async def lab_archive_add(body: dict, request: Request):
         """Списать робота в архив. Имя обязательно — без него запись нечитаема."""

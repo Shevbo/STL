@@ -89,8 +89,17 @@
     })), 'robot-archive');
   }
 
+  /** Лонгрид в ОТДЕЛЬНОМ окне (не вкладке): разбор читают рядом с терминалом.
+   *  Размер задаём явно — иначе часть браузеров открывает окно в четверть экрана. */
+  function openReport(row: any) {
+    const w = Math.min(1180, Math.round(window.screen.availWidth * 0.72));
+    const h = Math.round(window.screen.availHeight * 0.9);
+    window.open(`/report.html?id=${encodeURIComponent(row.id)}`, `stl-report-${row.id}`,
+      `width=${w},height=${h},left=${Math.round((window.screen.availWidth - w) / 2)},top=20`);
+  }
+
   async function copyLink(row: any) {
-    const url = `${location.origin}/?lab=archive#${row.id}`;
+    const url = `${location.origin}/report.html?id=${encodeURIComponent(row.id)}`;
     try { await navigator.clipboard.writeText(url); msg = 'Ссылка скопирована'; }
     catch { msg = url; }
   }
@@ -180,16 +189,19 @@
               <td class="verdict" title={r.verdict ?? ''}>{r.verdict ?? '—'}</td>
               <td class="mono">{period(r.real_from, r.real_to)}</td>
               <td class="mono num" class:pos={(r.real_net ?? 0) > 0} class:neg={(r.real_net ?? 0) < 0}>{fmtRub(r.real_net)}</td>
-              <td>
+              <td class="rep">
+                <!-- Лонгрид отдельным окном: разбор читают рядом с терминалом, а не
+                     вместо него. Тот же вид, что у docs.html. -->
+                <button class="arc-rep-btn" title="открыть отчёт лонгридом в отдельном окне"
+                        onclick={() => openReport(r)}>Смотреть отчёт ↗</button>
                 {#if r.report_md}
                   <button class="arc-link" onclick={() => expanded = expanded === r.id ? null : r.id}>
-                    {expanded === r.id ? '▴ свернуть' : '▾ открыть'}
+                    {expanded === r.id ? '▴ свернуть здесь' : '▾ бегло здесь'}
                   </button>
                 {/if}
                 {#if r.report_url}
                   <a class="arc-link" href={r.report_url} target="_blank" rel="noopener">внешний ↗</a>
                 {/if}
-                {#if !r.report_md && !r.report_url}—{/if}
               </td>
               <td class="tools">
                 <button class="arc-x" title="скопировать ссылку на запись" onclick={() => copyLink(r)}>🔗</button>
@@ -250,6 +262,10 @@
   .sym { margin-left: 6px; font-size: 10px; font-weight: 400; color: #7ab8ff;
     background: #12203a; border: 1px solid #24406a; border-radius: 3px; padding: 0 5px; }
   .verdict { max-width: 320px; color: #ffb300; }
+  .rep { white-space: nowrap; }
+  .arc-rep-btn { background: #12203a; border: 1px solid #24406a; color: #9cf;
+    font-size: 10px; border-radius: 3px; padding: 2px 8px; cursor: pointer; margin-right: 6px; }
+  .arc-rep-btn:hover { border-color: #4dd0e1; color: #cff; }
   .arc-link { background: none; border: none; color: #7ab8ff; cursor: pointer;
     font-size: 10px; padding: 0; text-decoration: none; }
   .arc-link:hover { text-decoration: underline; }

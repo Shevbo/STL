@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Отчёт разбора робота · STL</title>
+<!-- Отчёт из архива роботов в том же лонгрид-виде, что и docs.html: те же
+     переменные темы, боковое оглавление, полоса прочитанного, ссылка назад.
+     Открывается отдельным окном (?id=<запись архива>), чтобы разбор можно было
+     читать рядом с терминалом, а не вместо него. -->
+<style>
+  :root {
+    --bg: #0f0f1e; --panel: #14142a; --panel2: #1a1a2e; --border: #2d2d4a;
+    --text: #d7dbe8; --muted: #8a90a8; --accent: #4dd0e1; --accent2: #6aa8ff;
+    --ok: #4caf50; --warn: #e0a53c; --bad: #f44336; --code-bg: #10101f;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.6 -apple-system, "Segoe UI", Roboto, sans-serif; min-height: 100vh; }
+  a { color: var(--accent2); }
+  a:hover { color: var(--accent); }
+  code { font: 12px/1.5 Consolas, "SFMono-Regular", monospace; background: var(--code-bg);
+    border: 1px solid var(--border); border-radius: 3px; padding: 1px 5px; color: #b9d8ff; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px;
+    padding: 12px 14px; overflow-x: auto; font: 12px/1.55 Consolas, monospace; color: #b9d8ff; }
+  h1, h2, h3, h4 { font-weight: 600; color: #f0f2f8; line-height: 1.3; }
+  p { margin: 8px 0; }
+  ul { margin: 8px 0; padding-left: 22px; }
+  li { margin: 4px 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; margin: 10px 0; }
+  th, td { text-align: left; padding: 5px 9px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  td.n, th.n { text-align: right; font-family: Consolas, monospace; white-space: nowrap; }
+  .pos { color: var(--ok); } .neg { color: var(--bad); }
+
+  #progress { position: fixed; top: 0; left: 0; height: 3px; width: 0%;
+    background: linear-gradient(90deg, var(--accent2), var(--accent)); z-index: 500; transition: width .08s linear; }
+  .backlink { position: fixed; top: 8px; right: 14px; z-index: 300; background: var(--panel2);
+    border: 1px solid var(--border); border-radius: 4px; padding: 5px 12px; font-size: 12px;
+    text-decoration: none; color: var(--text); }
+  .backlink:hover { border-color: var(--accent2); color: #fff; }
+  #tocToggle { display: none; position: fixed; top: 8px; left: 10px; z-index: 300;
+    background: var(--panel2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 4px; font-size: 16px; padding: 4px 10px; cursor: pointer; }
+
+  .toc { position: fixed; top: 0; left: 0; bottom: 0; width: 268px; background: var(--panel);
+    border-right: 1px solid var(--border); overflow-y: auto; padding: 16px 0 40px; z-index: 200; }
+  .toc-brand { padding: 0 18px 14px; border-bottom: 1px solid var(--border); margin-bottom: 10px; }
+  .toc-brand b { color: #f0f2f8; font-size: 14px; display: block; }
+  .toc-brand div { color: var(--muted); font-size: 10px; margin-top: 2px; }
+  .toc nav { padding: 0 8px; }
+  .toc a { display: block; padding: 6px 10px; border-radius: 4px; text-decoration: none;
+    color: var(--text); font-size: 13px; border-left: 2px solid transparent; }
+  .toc a:hover { background: var(--panel2); color: #fff; }
+  .toc a.active { border-left-color: var(--accent); color: var(--accent); background: #17223a; }
+
+  main { margin-left: 268px; padding: 18px 34px 80px; max-width: 900px; }
+  .hero { padding: 18px 0 22px; border-bottom: 1px solid var(--border); margin-bottom: 26px; }
+  .hero h1 { font-size: 25px; margin: 0 0 6px; }
+  .hero .sub { color: var(--muted); font-size: 14px; margin-bottom: 16px; }
+  .facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px 16px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; }
+  .fact { display: flex; flex-direction: column; gap: 2px; }
+  .fact .k { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .fact .v { font-size: 14px; color: #f0f2f8; font-family: Consolas, monospace; }
+  .verdict { margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--border);
+    color: var(--warn); font-size: 13px; }
+  section { margin-bottom: 34px; }
+  section > h2 { font-size: 21px; padding-top: 6px; margin-bottom: 4px; scroll-margin-top: 14px; }
+  .msg { color: var(--muted); padding: 40px 0; }
+  .msg.err { color: var(--bad); }
+
+  @media (max-width: 900px) {
+    .toc { transform: translateX(-100%); transition: transform .18s; }
+    .toc.open { transform: none; }
+    #tocToggle { display: block; }
+    main { margin-left: 0; padding: 52px 16px 60px; }
+    .backlink { right: auto; left: 56px; }
+  }
+</style>
+</head>
+<body>
+<div id="progress"></div>
+<button id="tocToggle" aria-label="Оглавление">☰</button>
+<a class="backlink" href="/?lab=archive">&larr; в архив</a>
+
+<aside class="toc" id="toc">
+  <div class="toc-brand"><b>Разбор робота</b><div id="brandSub">архив STL</div></div>
+  <nav id="tocNav"></nav>
+</aside>
+
+<main>
+  <div id="body"><div class="msg">Загрузка отчёта…</div></div>
+</main>
+
+<script>
+(function () {
+  var esc = function (s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  };
+  // Инлайновая разметка: жирный и `код`. Больше в отчётах не встречается, и
+  // тащить сюда полноценный парсер markdown незачем.
+  var inline = function (s) {
+    return esc(s)
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
+  };
+  var cell = function (s) {
+    var t = s.trim();
+    var cls = /^[+\-−]?[\d\s  ]+(₽|%)?$/.test(t) && /\d/.test(t)
+      ? ' class="n' + (/^\+/.test(t) ? ' pos' : (/^[-−]/.test(t) ? ' neg' : '')) + '"' : '';
+    return { cls: cls, html: inline(t) };
+  };
+
+  /** Markdown -> HTML для того подмножества, которое пишут отчёты разбора:
+      заголовки, таблицы, списки, блоки кода, абзацы. */
+  function render(md) {
+    var lines = String(md || '').replace(/\r/g, '').split('\n');
+    var out = [], i = 0, heads = [];
+    var para = [];
+    function flushPara() {
+      if (para.length) { out.push('<p>' + inline(para.join(' ')) + '</p>'); para = []; }
+    }
+    while (i < lines.length) {
+      var ln = lines[i];
+      // блок кода в ``` ... ```
+      if (/^```/.test(ln)) {
+        flushPara();
+        var buf = [];
+        i++;
+        while (i < lines.length && !/^```/.test(lines[i])) { buf.push(lines[i]); i++; }
+        i++;
+        out.push('<pre>' + esc(buf.join('\n')) + '</pre>');
+        continue;
+      }
+      // выровненные пробелами блоки (ASCII-таблицы из логов) — как есть
+      if (/^ {2,}\S/.test(ln)) {
+        flushPara();
+        var pre = [];
+        while (i < lines.length && (/^ {2,}\S/.test(lines[i]) || (!lines[i].trim() && /^ {2,}\S/.test(lines[i + 1] || '')))) {
+          pre.push(lines[i]); i++;
+        }
+        out.push('<pre>' + esc(pre.join('\n')) + '</pre>');
+        continue;
+      }
+      var h = /^(#{1,4})\s+(.*)$/.exec(ln);
+      if (h) {
+        flushPara();
+        var lvl = h[1].length, txt = h[2].trim();
+        if (lvl === 1) { out.push('<h1>' + inline(txt) + '</h1>'); i++; continue; }
+        var id = 'sec' + heads.length;
+        if (lvl === 2) heads.push({ id: id, text: txt });
+        out.push('<h' + lvl + ' id="' + id + '">' + inline(txt) + '</h' + lvl + '>');
+        i++; continue;
+      }
+      // таблица: строка с | и следующая из дефисов
+      if (/^\s*\|/.test(ln) && /^\s*\|[\s:|-]+\|?\s*$/.test(lines[i + 1] || '')) {
+        flushPara();
+        var split = function (r) {
+          return r.trim().replace(/^\||\|$/g, '').split('|');
+        };
+        var head = split(ln), rows = [];
+        i += 2;
+        while (i < lines.length && /^\s*\|/.test(lines[i])) { rows.push(split(lines[i])); i++; }
+        var t = ['<table><thead><tr>'];
+        head.forEach(function (c) { t.push('<th>' + inline(c.trim()) + '</th>'); });
+        t.push('</tr></thead><tbody>');
+        rows.forEach(function (r) {
+          t.push('<tr>');
+          r.forEach(function (c) { var v = cell(c); t.push('<td' + v.cls + '>' + v.html + '</td>'); });
+          t.push('</tr>');
+        });
+        t.push('</tbody></table>');
+        out.push(t.join(''));
+        continue;
+      }
+      if (/^\s*[-*]\s+/.test(ln)) {
+        flushPara();
+        var items = [];
+        while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) {
+          items.push('<li>' + inline(lines[i].replace(/^\s*[-*]\s+/, '')) + '</li>');
+          i++;
+        }
+        out.push('<ul>' + items.join('') + '</ul>');
+        continue;
+      }
+      if (!ln.trim()) { flushPara(); i++; continue; }
+      para.push(ln.trim());
+      i++;
+    }
+    flushPara();
+    return { html: out.join('\n'), heads: heads };
+  }
+
+  var fmtDay = function (iso) {
+    return iso ? new Date(iso).toLocaleDateString('ru-RU',
+      { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—';
+  };
+  var fmtRub = function (v) {
+    return (v === null || v === undefined) ? '—'
+      : (v >= 0 ? '+' : '') + Math.round(v).toLocaleString('ru-RU') + ' ₽';
+  };
+  var money = function (v) {
+    return '<span class="' + ((v || 0) >= 0 ? 'pos' : 'neg') + '">' + fmtRub(v) + '</span>';
+  };
+
+  function fact(k, v) {
+    return '<div class="fact"><div class="k">' + k + '</div><div class="v">' + v + '</div></div>';
+  }
+
+  function show(r) {
+    document.title = r.robot_name + ' · разбор · STL';
+    document.getElementById('brandSub').textContent = r.robot_name;
+    var period = function (a, b) { return (a || b) ? fmtDay(a) + ' — ' + fmtDay(b) : '—'; };
+    var hero = '<div class="hero">'
+      + '<h1>' + esc(r.robot_name) + '</h1>'
+      + '<div class="sub">Разбор закрыт ' + fmtDay(r.archived_at)
+      + (r.symbol ? ' · инструмент ' + esc(r.symbol) : '')
+      + (r.robot_id ? ' · <code>' + esc(r.robot_id) + '</code>' : '') + '</div>'
+      + '<div class="facts">'
+      + fact('Бэктест: период', period(r.bt_from, r.bt_to))
+      + fact('Лучший финрез', money(r.bt_best_net))
+      + fact('Рассмотрено комбинаций', r.combos == null ? '—' : r.combos.toLocaleString('ru-RU'))
+      + fact('Реал: период', period(r.real_from, r.real_to))
+      + fact('Финрез на реале', money(r.real_net))
+      + '</div>'
+      + (r.verdict ? '<div class="verdict"><b>Вердикт.</b> ' + esc(r.verdict) + '</div>' : '')
+      + '</div>';
+
+    var doc = render(r.report_md || '_Подробного отчёта нет._');
+    document.getElementById('body').innerHTML = hero + '<section>' + doc.html + '</section>';
+
+    var nav = document.getElementById('tocNav');
+    nav.innerHTML = doc.heads.map(function (h) {
+      return '<a href="#' + h.id + '">' + esc(h.text) + '</a>';
+    }).join('');
+    wireScroll(doc.heads);
+    if (location.hash) {
+      var el = document.querySelector(location.hash);
+      if (el) el.scrollIntoView();
+    }
+  }
+
+  function wireScroll(heads) {
+    var bar = document.getElementById('progress');
+    var links = {};
+    Array.prototype.forEach.call(document.querySelectorAll('#tocNav a'), function (a) {
+      links[a.getAttribute('href').slice(1)] = a;
+    });
+    function onScroll() {
+      var h = document.documentElement;
+      var max = h.scrollHeight - h.clientHeight;
+      bar.style.width = (max > 0 ? (h.scrollTop / max) * 100 : 0) + '%';
+    }
+    window.addEventListener('scroll', onScroll, { passive: true });
+    onScroll();
+    if ('IntersectionObserver' in window && heads.length) {
+      var io = new IntersectionObserver(function (entries) {
+        var best = null, bestTop = -Infinity;
+        entries.forEach(function (en) {
+          if (en.isIntersecting && en.boundingClientRect.top <= 120 && en.boundingClientRect.top > bestTop) {
+            bestTop = en.boundingClientRect.top; best = en.target;
+          }
+        });
+        if (best) {
+          Object.keys(links).forEach(function (k) { links[k].classList.remove('active'); });
+          if (links[best.id]) links[best.id].classList.add('active');
+        }
+      }, { rootMargin: '0px 0px -60% 0px', threshold: [0, 1] });
+      heads.forEach(function (x) {
+        var el = document.getElementById(x.id);
+        if (el) io.observe(el);
+      });
+    }
+  }
+
+  document.getElementById('tocToggle').onclick = function () {
+    document.getElementById('toc').classList.toggle('open');
+  };
+
+  var id = new URLSearchParams(location.search).get('id');
+  var box = document.getElementById('body');
+  if (!id) {
+    box.innerHTML = '<div class="msg err">Не указана запись: нужен ?id=&lt;запись архива&gt;</div>';
+    return;
+  }
+  fetch('/api/v1/lab/archive/' + encodeURIComponent(id),
+        { cache: 'no-store', credentials: 'same-origin' })
+    .then(function (r) {
+      if (r.status === 401) throw new Error('нужно войти в STL');
+      if (r.status === 404) throw new Error('запись не найдена — возможно, её убрали из архива');
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    })
+    .then(show)
+    .catch(function (e) {
+      box.innerHTML = '<div class="msg err">Не удалось открыть отчёт: ' + esc(e.message) + '</div>';
+    });
+})();
+</script>
+</body>
+</html>
