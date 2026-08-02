@@ -43,9 +43,19 @@ _spec.loader.exec_module(wr)
 
 # (базовый код склейки, серия для группы сбора и ₽/пункт)
 INSTRUMENTS = [("RI", "RIU6"), ("GD", "GDU6"), ("Si", "SiU6")]
-OUT_MD = os.path.expanduser("~/sweep_instr_report.md")
-OUT_JSON = os.path.expanduser("~/sweep_instr.json")
-DEADLINE_SEC = 8 * 3600            # к вечеру отчёт обязан быть, чем бы ни кончилось
+# Инструменты и оси задаются снаружи: тот же драйвер должен уметь прогнать
+# отдельный вопрос (например «чем регулируется частота») без копии файла.
+#   SWEEP_INSTRUMENTS="RI:RIU6"          SWEEP_TAG=freq
+#   SWEEP_AXES='{"period":[40,70],...}'
+if os.environ.get("SWEEP_INSTRUMENTS"):
+    INSTRUMENTS = [tuple(x.split(":")) for x in os.environ["SWEEP_INSTRUMENTS"].split(",")]
+if os.environ.get("SWEEP_AXES"):
+    wr.AXES_COARSE = json.loads(os.environ["SWEEP_AXES"])
+    wr.KEYS = list(wr.AXES_COARSE)
+TAG = os.environ.get("SWEEP_TAG", "instr")
+OUT_MD = os.path.expanduser(f"~/sweep_{TAG}_report.md")
+OUT_JSON = os.path.expanduser(f"~/sweep_{TAG}.json")
+DEADLINE_SEC = int(os.environ.get("SWEEP_DEADLINE_SEC", 8 * 3600))
 
 
 def spec_of(sym: str) -> tuple[float, float]:
@@ -176,7 +186,7 @@ def main() -> int:
         pv, margin = spec_of(fee_sym)
         wr.log(f"══ {key} ({fee_sym}): {pv} ₽/пункт, ГО {margin:.0f} ₽")
         wr.SYMBOL = key
-        wr.CAMPAIGN = f"wr{key.lower()}sweep"
+        wr.CAMPAIGN = f"wr{key.lower()}{TAG}"
         byw = {}
         for w, a, b in wr.WINDOWS:
             wr.log(f"  {key}: окно {w} ({a}…{b})")
