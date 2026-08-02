@@ -35,10 +35,10 @@ async def main() -> int:
     pool = await asyncpg.create_pool(s.lab_db_url, min_size=1, max_size=2)
     try:
         rows = await pool.fetch(
-            """SELECT lt.robot_id, r.name, lt.symbol, lt.price, lt.quantity qty
+            """SELECT lt.robot_id, r.name, lt.symbol, lt.price, lt.qty
                  FROM live_trades lt LEFT JOIN robots r ON r.id = lt.robot_id
                 WHERE lower(lt.status) = ANY($1::text[])
-                  AND lt.price IS NOT NULL AND lt.quantity IS NOT NULL""",
+                  AND lt.price IS NOT NULL AND lt.qty IS NOT NULL""",
             list(EXECUTED))
         if not rows:
             print("исполненных филлов не найдено")
