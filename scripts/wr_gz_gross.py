@@ -110,12 +110,15 @@ async def main() -> int:
         # выборка; повторяемость на всех окнах — уже кандидат в преимущество.
         # Если пересечение пусто, спорить не о чем: сигнал не работает ни в один
         # режим рынка, и вопрос комиссии даже не встаёт.
+        # Крошечные окна (проба конвейера на десяток комбинаций) в пересечение не
+        # берём: раньше такое окно не выпадало, а ОБНУЛЯЛО пересечение целиком.
         keyed = []
         for rows in by_window.values():
-            keyed.append({_key(p): (net + tr * fee_round, net, tr)
-                          for p, net, tr in rows if tr >= 30})
-        full = [k for k in keyed[0] if all(len(w) > 100 and k in w for w in keyed)] \
-            if len(keyed) > 1 else []
+            w = {_key(p): (net + tr * fee_round, net, tr)
+                 for p, net, tr in rows if tr >= 30}
+            if len(w) > 100:
+                keyed.append(w)
+        full = [k for k in keyed[0] if all(k in w for w in keyed)] if len(keyed) > 1 else []
         both_gross = [k for k in full if all(w[k][0] > 0 for w in keyed)]
         both_net = [k for k in full if all(w[k][1] > 0 for w in keyed)]
         print(f"── пересечение {len(keyed)} окон ({len(full)} общих комбинаций)")
