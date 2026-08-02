@@ -2,13 +2,14 @@
   import LiveRobots from './lab/LiveRobots.svelte';
   import BacktestLab from './lab/BacktestLab.svelte';
   import Botstore from './lab/Botstore.svelte';
+  import Archive from './lab/Archive.svelte';
   import ChartFrame from './ChartFrame.svelte';
   import { instrumentStore } from '$lib/stores/instrument.svelte';
 
-  type Tab = 'live' | 'market' | 'backtest' | 'botstore';
+  type Tab = 'live' | 'market' | 'backtest' | 'botstore' | 'archive';
   let { initialTab = null }: { initialTab?: string | null } = $props();
   // Deep-link: ?campaign=... lands on Botstore; ?lab=<tab> lands on that tab.
-  const TABS: Tab[] = ['live', 'market', 'backtest', 'botstore'];
+  const TABS: Tab[] = ['live', 'market', 'backtest', 'botstore', 'archive'];
   let activeTab = $state<Tab>(
     new URLSearchParams(window.location.search).has('campaign') ? 'botstore'
       : (TABS.includes(initialTab as Tab) ? initialTab as Tab : 'live'));
@@ -41,6 +42,10 @@
     <button class:active={activeTab === 'botstore'} onclick={() => activeTab = 'botstore'}>
       Botstore
     </button>
+    <button class:active={activeTab === 'archive'} onclick={() => activeTab = 'archive'}
+            title="закрытые дела: роботы, по которым разбор закончен, со всеми материалами">
+      Архив
+    </button>
     <button
       class="fullscreen-btn"
       title={fullscreen ? 'Свернуть (Esc)' : 'Развернуть на весь экран'}
@@ -57,6 +62,8 @@
       <ChartFrame symbol={marketSymbol} />
     {:else if activeTab === 'botstore'}
       <Botstore />
+    {:else if activeTab === 'archive'}
+      <Archive />
     {:else}
       <BacktestLab preset={backtestPreset} />
     {/if}

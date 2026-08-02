@@ -26,6 +26,7 @@ export const LAB_TAB_TITLES: Record<string, string> = {
   market: 'Market Browser',
   backtest: 'Backtest Lab',
   botstore: 'Botstore',
+  archive: 'Архив роботов',
 };
 
 /**

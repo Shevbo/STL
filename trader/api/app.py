@@ -122,6 +122,27 @@ async def lifespan(app: FastAPI):
             "ALTER TABLE optimization_leaderboard ADD COLUMN IF NOT EXISTS windows_profitable INTEGER",
             "ALTER TABLE optimization_leaderboard ADD COLUMN IF NOT EXISTS windows_total INTEGER",
             "ALTER TABLE optimization_leaderboard ADD COLUMN IF NOT EXISTS degrade DOUBLE PRECISION",
+            # Архив разобранных роботов: закрытое дело со всеми материалами. Смысл —
+            # чтобы через полгода не начинать тот же разбор заново и не «переоткрывать»
+            # робота, которого уже признали безнадёжным. Отчёт лежит ЗДЕСЬ, а не файлом
+            # на хостере: файл переживёт не всякий деплой, а вывод должен пережить.
+            """CREATE TABLE IF NOT EXISTS robot_archive (
+                 id           TEXT PRIMARY KEY,
+                 robot_name   TEXT NOT NULL,
+                 robot_id     TEXT,
+                 symbol       TEXT,
+                 archived_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+                 bt_from      DATE,
+                 bt_to        DATE,
+                 bt_best_net  DOUBLE PRECISION,
+                 combos       INTEGER,
+                 verdict      TEXT,
+                 real_from    DATE,
+                 real_to      DATE,
+                 real_net     DOUBLE PRECISION,
+                 report_md    TEXT,
+                 report_url   TEXT
+               )""",
         ):
             try:
                 await db_pool.execute(_ddl)
@@ -3163,6 +3184,86 @@ def create_app() -> FastAPI:
                 run_id,
             )
         return [dict(r) for r in rows]
+
+    # ── Архив разобранных роботов ────────────────────────────────────────────
+    @fastapi_app.get("/api/v1/lab/archive")
+    async def lab_archive_list(request: Request):
+        """Все закрытые дела, свежие сверху. Отчёт отдаём целиком: он и есть материал,
+        ради которого архив заводили, а строк тут десятки, не тысячи."""
+        _auth(request)
+        pool = request.app.state.db_pool
+        if pool is None:
+            return []
+        rows = await pool.fetch(
+            "SELECT * FROM robot_archive ORDER BY archived_at DESC, robot_name")
+        out = []
+        for r in rows:
+            d = dict(r)
+            for k in ("archived_at", "bt_from", "bt_to", "real_from", "real_to"):
+                if d.get(k) is not None:
+                    d[k] = d[k].isoformat()
+            out.append(d)
+        return out
+
+    @fastapi_app.post("/api/v1/lab/archive", status_code=201)
+    async def lab_archive_add(body: dict, request: Request):
+        """Списать робота в архив. Имя обязательно — без него запись нечитаема."""
+        _auth(request)
+        pool = request.app.state.db_pool
+        if pool is None:
+            raise HTTPException(status_code=503, detail="DB unavailable")
+        name = str(body.get("robot_name") or "").strip()
+        if not name:
+            raise HTTPException(status_code=422, detail="robot_name required")
+
+        from datetime import date as _d
+
+        def _date(v):
+            if not v:
+                return None
+            try:
+                return _d.fromisoformat(str(v)[:10])
+            except ValueError:
+                return None
+
+        def _num(v):
+            if v in (None, ""):
+                return None
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return None
+
+        def _int(v):
+            n = _num(v)
+            return int(n) if n is not None else None
+
+        rid = cuid()
+        await pool.execute(
+            """INSERT INTO robot_archive
+                 (id, robot_name, robot_id, symbol, bt_from, bt_to, bt_best_net,
+                  combos, verdict, real_from, real_to, real_net, report_md, report_url)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)""",
+            rid, name, body.get("robot_id"), body.get("symbol"),
+            _date(body.get("bt_from")), _date(body.get("bt_to")), _num(body.get("bt_best_net")),
+            _int(body.get("combos")), body.get("verdict"),
+            _date(body.get("real_from")), _date(body.get("real_to")), _num(body.get("real_net")),
+            body.get("report_md"), body.get("report_url"),
+        )
+        log.info("lab.archive_add", id=rid, robot=name)
+        return {"id": rid}
+
+    @fastapi_app.delete("/api/v1/lab/archive/{entry_id}")
+    async def lab_archive_delete(entry_id: str, request: Request):
+        """Ошибочную запись надо уметь убрать, иначе архив зарастёт мусором."""
+        _auth(request)
+        pool = request.app.state.db_pool
+        if pool is None:
+            raise HTTPException(status_code=503, detail="DB unavailable")
+        res = await pool.execute("DELETE FROM robot_archive WHERE id=$1", entry_id)
+        if res == "DELETE 0":
+            raise HTTPException(status_code=404, detail="not found")
+        return {"ok": True}
 
     @fastapi_app.get("/api/v1/lab/campaign-result")
     async def lab_campaign_result(campaign_run: str, rank: int, request: Request):
