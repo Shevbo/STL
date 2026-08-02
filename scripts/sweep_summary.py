@@ -45,6 +45,27 @@ MIN_TRADES = 30
 OUT_MD = os.path.expanduser("~/sweep_summary.md")
 
 
+async def spec_or_die(sym: str, tries: int = 4) -> tuple[float, float]:
+    """(₽/пункт, шаг цены в ₽) или ИСКЛЮЧЕНИЕ.
+
+    ISS отдаёт спеку не всегда. Раньше на пустой ответ подставлялись заглушки
+    pv=1.0 и tick=0 — и таблица рисовалась дальше, с правдоподобными, но ложными
+    числами: у GD сбор выходил 1.78 ₽ вместо 71.54, у RI шаг обнулялся, а доли
+    безубытка менялись в разы (02.08.2026). Молча считать по заглушке в денежном
+    выводе нельзя: лучше не отдать цифру, чем отдать неверную.
+    """
+    for i in range(tries):
+        s = await fetch_contract_spec(sym) or {}
+        pv, tick = s.get("point_value"), s.get("step_price")
+        if pv and tick:
+            return float(pv), float(tick)
+        if i < tries - 1:
+            await asyncio.sleep(2)
+    raise RuntimeError(
+        f"{sym}: ISS не отдал спеку (₽/пункт и шаг цены) за {tries} попыток — "
+        f"считать издержки не по чему")
+
+
 def _params(v):
     if isinstance(v, str):
         try:
@@ -82,9 +103,7 @@ async def main() -> int:
                 "WHERE id LIKE $1 AND status='done' ORDER BY created_at", like)
             if not runs:
                 continue
-            spec = await fetch_contract_spec(fee_sym) or {}
-            pv = float(spec.get("point_value") or 1.0)
-            tick = float(spec.get("step_price") or 0.0)
+            pv, tick = await spec_or_die(fee_sym)
             byw: dict = {}
             for r in runs:
                 rows = await pool.fetch(

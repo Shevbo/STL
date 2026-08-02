@@ -59,12 +59,22 @@ DEADLINE_SEC = int(os.environ.get("SWEEP_DEADLINE_SEC", 8 * 3600))
 
 
 def spec_of(sym: str) -> tuple[float, float]:
-    """(₽/пункт, ГО) фронтового контракта — из ISS, один раз на инструмент."""
+    """(₽/пункт, ГО) фронтового контракта — из ISS, один раз на инструмент.
+
+    ISS отдаёт спеку не всегда, а на заглушке pv=1.0 весь денежный вывод по
+    инструменту становится ложным (у GD сбор выходил 1.78 ₽ вместо 71.54).
+    Поэтому пустая спека — исключение, а не «посчитаем по единице»."""
     import asyncio
+    import time as _t
 
     from trader.lab.iss_loader import fetch_contract_spec
-    s = asyncio.run(fetch_contract_spec(sym)) or {}
-    return float(s.get("point_value") or 1.0), float(s.get("initial_margin") or 0.0)
+    for i in range(4):
+        d = asyncio.run(fetch_contract_spec(sym)) or {}
+        if d.get("point_value"):
+            return float(d["point_value"]), float(d.get("initial_margin") or 0.0)
+        if i < 3:
+            _t.sleep(2)
+    raise RuntimeError(f"{sym}: ISS не отдал ₽/пункт — считать деньги не по чему")
 
 
 def window_price(key: str, a: str, b: str) -> float:
