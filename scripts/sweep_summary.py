@@ -40,6 +40,7 @@ CAMPAIGNS = {
     "camp-20260802-wrgdsweep%": ("GD", "GDU6"),
     "camp-20260802-wrsisweep%": ("Si", "SiU6"),
     "camp-20260802-wrrifreq%": ("RI", "RIU6"),
+    "camp-20260802-wrgdfreq%": ("GD", "GDU6"),
 }
 MIN_TRADES = 30
 OUT_MD = os.path.expanduser("~/sweep_summary.md")
