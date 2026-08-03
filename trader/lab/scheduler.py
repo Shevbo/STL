@@ -192,9 +192,13 @@ class RobotScheduler:
         params = robot.params_json if isinstance(robot.params_json, dict) else {}
         symbol = str(params.get("symbol") or "").strip()
         if not symbol:
-            # Портфельный робот (несколько инструментов) — одного символа у него
-            # нет, судить по нему нельзя. Пропускаем гейт, чтобы не заглушить
-            # робота, которого проверка не умеет оценить.
+            # Одного символа нет (портфельный робот) — судить по нему нельзя.
+            # Пропускаем гейт, чтобы не заглушить робота, которого проверка не
+            # умеет оценить, но ГРОМКО: такой робот остаётся без защиты от
+            # исполнения по устаревшему бару, и это должно быть видно в логе, а
+            # не выясняться сделкой в выходной.
+            log.warning("lab.scheduler.bar_gate_skipped", robot_id=robot.id,
+                        reason="в params_json нет symbol — проверка нового бара не применима")
             return int(datetime.now(timezone.utc).timestamp())
         try:
             bars = await _load_bars_shared(symbol, 3, interval=1)
