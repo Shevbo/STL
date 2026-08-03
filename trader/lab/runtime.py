@@ -233,7 +233,8 @@ class LiveRuntime:
     """
 
     def __init__(self, robot_id: str, pool, tx_client=None, pos_client=None,
-                 paper: bool = True, initial_state: dict[str, Any] | None = None) -> None:
+                 paper: bool = True, initial_state: dict[str, Any] | None = None,
+                 acted_bar: int | None = None) -> None:
         self._robot_id = robot_id
         self._pool = pool
         self._tx = tx_client
@@ -242,6 +243,11 @@ class LiveRuntime:
         self._state: dict[str, Any] = dict(initial_state or {})
         self._bars_cache: list[Bar] | None = None
         self._bars_symbol: str | None = None
+        # Бар, на котором робот УЖЕ торговал (передаёт планировщик), и самый свежий
+        # бар, который этот тик реально увидел. Из пары рождается запрет торговать
+        # по устаревшему бару — см. _bar_is_stale.
+        self._acted_bar = acted_bar
+        self.newest_bar: int | None = None
 
     async def get_bars(self, symbol: str, tf: int, n: int) -> list[Bar]:
         # Within one on_bar, reuse the instance slice; across robots/ticks, the
@@ -253,6 +259,8 @@ class LiveRuntime:
         bars = await _load_bars_shared(symbol, days, interval=1)
         self._bars_cache = bars
         self._bars_symbol = symbol
+        if bars:
+            self.newest_bar = int(bars[-1].time)
         return bars[-n:] if n else bars
 
     async def get_quote(self, symbol: str) -> Any:
@@ -274,8 +282,37 @@ class LiveRuntime:
         """
         return symbol if "@" in symbol else f"{symbol}@RTSX"
 
+    def _bar_is_stale(self) -> bool:
+        """Бар этого тика уже отработан (или ленты нет) — торговать нельзя.
+
+        Планировщик будит робота раз в минуту по НАСТЕННЫМ часам, а бары приходят
+        с биржи. Когда торгов нет, get_bars отдаёт последний доступный бар, и
+        стратегия пересчитывается на нём снова и снова: 02.08.2026 бумажный
+        «2EMA · MXU6» продал в воскресенье 19:23 МСК по бару сорокачасовой
+        давности — биржа в те выходные MXU6 не торговала вовсе.
+
+        Судим ПО ДАННЫМ, а не по календарю: FORTS торгует и в выходные (25-26.07
+        по MXU6 было 475 и 533 бара, те сделки законны), поэтому день недели ничего
+        не значит, а «бар не новее прошлого» значит всё. Заодно закрывает обрыв
+        котировок среди дня и повтор бара после рестарта.
+
+        Проверка живёт ЗДЕСЬ, а не в планировщике, чтобы не стоить ни одного
+        лишнего запроса: сравниваем ровно те бары, которые стратегия уже
+        загрузила. Отдельная выкачка ради проверки заводила второй ключ кэша
+        (symbol, days) и для базовых кодов дёргала медленную склейку по всем
+        контрактам — снапшот компаньона уезжал в минуту (03.08.2026).
+        """
+        if self.newest_bar is None:
+            return False          # робот баров не спрашивал — судить не о чем
+        return self._acted_bar is None or self.newest_bar <= self._acted_bar
+
     async def place_order(self, symbol: str, side: str, qty: int, price: float) -> Order:
         from uuid import uuid4
+        if self._bar_is_stale():
+            self.log(f"[SKIP] {side} {qty} {symbol}: бар не новее отработанного "
+                     f"({self.newest_bar} <= {self._acted_bar}) — торгов нет")
+            return Order(order_id="skipped-stale-bar", symbol=symbol, side=side,
+                         qty=qty, price=price, status="skipped")
         if self._paper:
             # Virtual fill — record, do NOT touch the broker.
             oid = "paper-" + uuid4().hex[:10]

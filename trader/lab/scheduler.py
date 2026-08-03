@@ -54,7 +54,7 @@ class RobotScheduler:
         self._last_bar: dict[str, int] = {}
 
     def _bar_gate(self, robot_id: str, newest: int | None) -> bool:
-        """Можно ли исполнять этот тик. Правило одно: только НОВЫЙ бар.
+        """Отработан ли уже этот бар. Правило одно: торгуем только на НОВОМ баре.
 
         Планировщик тикает по настенным часам раз в минуту, а бары приходят с
         биржи. Когда торгов нет, get_bars отдаёт последний доступный бар, и без
@@ -159,10 +159,6 @@ class RobotScheduler:
             await self._maybe_roll(robot)
         except Exception as exc:
             log.warning("lab.roll_failed", robot_id=robot.id, error=str(exc))
-        # Только на НОВОМ баре. Ролл идёт выше: после смены контракта бар берём уже
-        # у нового символа.
-        if not self._bar_gate(robot.id, await self._newest_bar(robot)):
-            return
         # Validate + compile once per script version, reuse the module across ticks.
         script_hash = hash(robot.script_code)
         cached = self._compiled.get(robot.id)
@@ -182,39 +178,17 @@ class RobotScheduler:
             robot_id=robot.id, pool=self._pool,
             tx_client=self._tx_client, pos_client=self._pos_client,
             paper=paper, initial_state=prev_state,
+            # Бар, на котором робот уже торговал: рантайм не даст выставить заявку,
+            # пока не придёт более свежий (см. LiveRuntime._bar_is_stale).
+            acted_bar=self._last_bar.get(robot.id),
         )
         if hasattr(mod, "on_bar"):
             await mod.on_bar(runtime, robot.params_json)
+        if runtime.newest_bar is not None:
+            self._last_bar[robot.id] = runtime.newest_bar
         await runtime.flush_state()
         # Update in-memory state so the next tick sees the fresh trend/position state.
         self._robot_states[robot.id] = runtime._state
-
-    async def _newest_bar(self, robot) -> int | None:
-        """Время самого свежего бара инструмента робота, или None если его нет.
-
-        Берём из ТОГО ЖЕ процессного кэша, что и сам робот (_load_bars_shared),
-        поэтому лишнего похода в ISS проверка не стоит. Символ живёт в
-        params_json — колонки под него нет.
-        """
-        from trader.lab.runtime import _load_bars_shared
-        params = robot.params_json if isinstance(robot.params_json, dict) else {}
-        symbol = str(params.get("symbol") or "").strip()
-        if not symbol:
-            # Одного символа нет (портфельный робот) — судить по нему нельзя.
-            # Пропускаем гейт, чтобы не заглушить робота, которого проверка не
-            # умеет оценить, но ГРОМКО: такой робот остаётся без защиты от
-            # исполнения по устаревшему бару, и это должно быть видно в логе, а
-            # не выясняться сделкой в выходной.
-            log.warning("lab.scheduler.bar_gate_skipped", robot_id=robot.id,
-                        reason="в params_json нет symbol — проверка нового бара не применима")
-            return int(datetime.now(timezone.utc).timestamp())
-        try:
-            bars = await _load_bars_shared(symbol, 3, interval=1)
-        except Exception as exc:  # noqa: BLE001 — нет данных = не торгуем
-            log.warning("lab.scheduler.bars_failed", robot_id=robot.id,
-                        symbol=symbol, error=str(exc))
-            return None
-        return int(bars[-1].time) if bars else None
 
     async def _maybe_roll(self, robot) -> None:
         """Roll a PAPER robot to the current front contract when its specific
