@@ -31,6 +31,10 @@ from trader.util import i9_hb_view
 
 router = APIRouter(prefix="/api/v1/quik/companion", tags=["quik-companion"])
 
+
+class _CachedStar(Exception):
+    """Внутренний сигнал «значение взято из кэша, запрос не нужен»."""
+
 _MSK = datetime.timezone(datetime.timedelta(hours=3))
 
 _CODE_PREFIX = "companion:code:"
@@ -735,8 +739,18 @@ async def snapshot(request: Request, agent_id: str | None = None):
     # RF — только ФИЛЬТР (сортировка по RF выносит наверх вырожденные конфиги
     # с нулевой просадкой: RF 3.7 млн при +6к ₽ — шум, было на бою). Порог
     # прибыли отсекает копеечных чемпионов; сделок >= 30 — анти-survivorship.
-    sweep_star = None
+    # КЭШ на минуту. Хит-парад — таблица на миллионы строк (3.5 млн / 1.6 ГБ на
+    # 03.08.2026), и этот запрос единственный в снапшоте, который её трогает. Панель
+    # опрашивает снапшот каждые несколько секунд: без кэша каждый опрос платил за
+    # обход таблицы, и после четырёх залитых за сутки кампаний снапшот стал отвечать
+    # за 23 с — компаньон показывал «нет связи». Индекс по created_at добавлен, но
+    # кэш остаётся: лампа «свежий кандидат» меняется раз в кампанию, а не раз в
+    # секунду, и панель не должна зависеть от того, насколько разрослась таблица.
+    _star_cache = getattr(request.app.state, "_sweep_star_cache", None)
+    sweep_star = _star_cache[1] if _star_cache else None
     try:
+        if _star_cache and time.time() - _star_cache[0] < 60:
+            raise _CachedStar          # свежий кэш — в базу не идём вовсе
         # fast >= slow — вырожденный MACD-класс конфиг (нулевая линия, сделки =
         # числовой шум): такие в кандидаты не берём, даже пока они ещё в базе.
         row = await pool.fetchrow(
@@ -756,6 +770,11 @@ async def snapshot(request: Request, agent_id: str | None = None):
                 "rf": round(float(row["recovery_factor"] or 0), 2),
                 "trades": int(row["total_trades"] or 0),
             }
+        else:
+            sweep_star = None          # свежих кандидатов нет — лампа гаснет
+        request.app.state._sweep_star_cache = (time.time(), sweep_star)
+    except _CachedStar:
+        pass
     except Exception:
         pass
     bt["star"] = sweep_star

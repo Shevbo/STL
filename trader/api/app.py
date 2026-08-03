@@ -154,6 +154,12 @@ async def lifespan(app: FastAPI):
                  substring(job_body->>'scriptCode'  from 'strategies\\.([A-Za-z_][A-Za-z0-9_]*)\\s+import'))
                WHERE strategy IS NULL AND job_body IS NOT NULL""",
             "CREATE INDEX IF NOT EXISTS backtest_runs_strategy_idx ON backtest_runs(strategy, created_at DESC)",
+            # Хит-парад разросся до 3.5 млн строк / 1.6 ГБ, а индекса по времени не
+            # было: снапшот компаньона (лампа «свежий кандидат за 24ч») обходил
+            # таблицу целиком на КАЖДЫЙ опрос панели и отвечал за 23 с — компаньон
+            # показывал «нет связи» (03.08.2026). На боевой базе индекс построен
+            # отдельно, CONCURRENTLY; здесь — чтобы новая установка не повторила.
+            "CREATE INDEX IF NOT EXISTS idx_lb_created_at ON optimization_leaderboard (created_at DESC)",
             # Columns the agent/optimizer writes into backtest_results for sweeps
             "ALTER TABLE backtest_results ADD COLUMN IF NOT EXISTS net_profit DOUBLE PRECISION",
             "ALTER TABLE backtest_results ADD COLUMN IF NOT EXISTS recovery_factor DOUBLE PRECISION",
