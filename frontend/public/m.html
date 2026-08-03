@@ -137,20 +137,26 @@
   /* Кассета вместо слова-дубля. Первый тег говорит, ЧЕМ робот рискует (реал или
      бумага), второй раньше повторял то же слово: «РЕАЛ РЕАЛ». Смысл второго —
      крутится или стоит, и это лучше показывать движением: катушки видно боковым
-     зрением, слово надо прочитать. */
-  .cass { display: inline-flex; align-items: center; vertical-align: -2px; color: var(--down); }
-  .cass svg { width: 17px; height: 11px; }
-  .cass .body { fill: none; stroke: currentColor; stroke-width: 1.1; }
-  .cass .win { fill: currentColor; opacity: .28; }
-  .cass .reel { transform-box: fill-box; transform-origin: center;
-    animation: cassreel 1.4s linear infinite; }
-  .cass .reel circle { fill: none; stroke: currentColor; stroke-width: 1.1; }
-  .cass .reel path { stroke: currentColor; stroke-width: 1.1; }
-  /* Стоп: катушки замерли и всё приглушено — пауза видна, но не кричит. */
-  .cass.stopped { color: var(--faint); }
-  .cass.stopped .reel { animation: none; }
+     зрением, слово надо прочитать. Рисунок по фотографии AGFA Fe I: чёрный корпус,
+     светлая этикетка с двумя полосами, окно ленты, пять отверстий снизу. */
+  .cass { display: inline-flex; align-items: center; vertical-align: -3px; }
+  .cass svg { width: 29px; height: 19px; }
+  .cass .shell { fill: #17181a; stroke: #454a52; stroke-width: .7; }
+  .cass .label { fill: #e6e2d6; }
+  .cass .stripe { fill: #c0392b; }
+  .cass .stripe2 { fill: #2a6ebb; }
+  .cass .win { fill: #0a0b0c; stroke: #3a3f47; stroke-width: .5; }
+  .cass .tape { fill: #3a2a1c; }
+  .cass .hole { fill: #0a0b0c; }
+  .cass .hub { transform-box: fill-box; transform-origin: center;
+    animation: cassreel 1.25s linear infinite; }
+  .cass .hub circle { fill: #d8d4c8; }
+  .cass .hub path { stroke: #17181a; stroke-width: 1.1; stroke-linecap: round; }
+  /* Стоп: катушки замерли, кассета глушится — пауза видна, но не кричит. */
+  .cass.stopped { opacity: .45; filter: grayscale(1); }
+  .cass.stopped .hub { animation: none; }
   @keyframes cassreel { to { transform: rotate(360deg); } }
-  @media (prefers-reduced-motion: reduce) { .cass .reel { animation: none; } }
+  @media (prefers-reduced-motion: reduce) { .cass .hub { animation: none; } }
 </style>
 </head>
 <body>
@@ -161,7 +167,7 @@
   // второе слово «РЕАЛ», дублировавшее тег режима слева от него.
   const cassette = (playing) => `<span class="cass ${playing ? '' : 'stopped'}" title="${
       playing ? 'робот работает: считает бары и выставляет заявки'
-              : 'на паузе: новые заявки не выставляются, позиция остаётся'}"><svg viewBox="0 0 22 14" aria-hidden="true"><rect class="body" x=".9" y=".9" width="20.2" height="12.2" rx="2.2"/><rect class="win" x="4.2" y="9" width="13.6" height="3" rx=".7"/><g class="reel"><circle cx="7.6" cy="5.6" r="2.9"/><path d="M7.6 3.1v5M5.1 5.6h5"/></g><g class="reel"><circle cx="14.4" cy="5.6" r="2.9"/><path d="M14.4 3.1v5M11.9 5.6h5"/></g></svg></span>`;
+              : 'на паузе: новые заявки не выставляются, позиция остаётся'}"><svg viewBox="0 0 30 20" aria-hidden="true"><rect class="shell" x=".5" y=".5" width="29" height="19" rx="1.8"/><rect class="label" x="2.6" y="2.2" width="24.8" height="7.2" rx=".7"/><rect class="stripe" x="2.6" y="2.2" width="24.8" height="1.1"/><rect class="stripe2" x="2.6" y="8.3" width="24.8" height="1.1"/><rect class="win" x="4.6" y="10.6" width="20.8" height="6.2" rx=".7"/><circle class="tape" cx="10.4" cy="13.7" r="2.9"/><circle class="tape" cx="19.6" cy="13.7" r="2.9"/><g class="hub"><circle cx="10.4" cy="13.7" r="1.5"/><path d="M10.4 12.2v3M8.9 13.7h3M9.3 12.6l2.2 2.2M11.5 12.6l-2.2 2.2"/></g><g class="hub"><circle cx="19.6" cy="13.7" r="1.5"/><path d="M19.6 12.2v3M18.1 13.7h3M18.5 12.6l2.2 2.2M20.7 12.6l-2.2 2.2"/></g><rect class="hole" x="7" y="18" width="1.5" height="1.2" rx=".3"/><rect class="hole" x="11.5" y="18" width="1.5" height="1.2" rx=".3"/><rect class="hole" x="16" y="18" width="1.5" height="1.2" rx=".3"/><rect class="hole" x="20.5" y="18" width="1.5" height="1.2" rx=".3"/></svg></span>`;
 
 'use strict';
 const API = '/api/v1/quik/companion';

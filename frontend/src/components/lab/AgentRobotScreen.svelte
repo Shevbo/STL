@@ -469,14 +469,27 @@
     const id = setInterval(() => void loadCoef(symbol), 15_000);
     return () => clearInterval(id);
   });
+  // Свод по журналу (фикс, пик контрактов, дата старта) — объявлен ДО pnlRub,
+  // который на него опирается.
+  let ledgerStat = $state<{ peak: number; first_ts: number; fix: number | null } | null>(null);
   const pnlPoints = $derived(Number(robot?.realized_pnl ?? 0));
-  const pnlRub = $derived(pointCoef ? pnlPoints * pointCoef : null);
+  // ФИНРЕЗ БЕРЁМ ИЗ ЖУРНАЛА, не из числа раннера. Два источника расходились, и на
+  // стенде с компаньоном стояли РАЗНЫЕ суммы (03.08.2026: 169 845 против 167 982).
+  // Журнал точнее по двум причинам, обе измерены:
+  //   • раннер зовёт taker_points БЕЗ point_value и потому не берёт брокерскую
+  //     часть 0.45 ₽/контракт вовсе — на этом роботе ровно 945.90 ₽;
+  //   • раннер считает филлами, журнал — строкой на каждую сделку QUIK, и при
+  //     частичном исполнении средняя расходится; за 1508 строк набежало ~2 000 ₽.
+  // Журнал при этом проверяемо целостен: позиция, восстановленная по нему, точно
+  // совпала с позицией раннера. Число раннера остаётся запасным — если журнал
+  // ещё пуст (робот только армирован), показывать что-то надо.
+  const pnlRunner = $derived(pointCoef ? pnlPoints * pointCoef : null);
+  const pnlRub = $derived(ledgerStat?.fix != null ? ledgerStat.fix : pnlRunner);
 
   // «Доходность в год»: (фикс + ВМ) к МАКСИМАЛЬНОМУ ГО, хоть раз задействованному,
   // линейно приведённая к году. Пик контрактов и дату старта берём из ЖУРНАЛА
   // (зеркало хранит только хвост филлов — по нему пик не восстановить), ГО/контракт
   // — из QLua-параметров агента.
-  let ledgerStat = $state<{ peak: number; first_ts: number } | null>(null);
   async function loadLedgerStat() {
     try {
       const res = await fetchWithAuth('/api/v1/quik/algo-robot-stats?mode=real',
@@ -484,7 +497,8 @@
       if (!res.ok) return;
       const d = await res.json();
       const s = d[robotId];
-      if (s) ledgerStat = { peak: Number(s.peak ?? 0), first_ts: Number(s.first_ts ?? 0) };
+      if (s) ledgerStat = { peak: Number(s.peak ?? 0), first_ts: Number(s.first_ts ?? 0),
+                           fix: s.fix == null ? null : Number(s.fix) };
     } catch { /* без журнала просто не покажем годовую */ }
   }
   $effect(() => { void robotId; void loadLedgerStat(); });
