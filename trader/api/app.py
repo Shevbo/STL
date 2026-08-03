@@ -125,6 +125,25 @@ async def lifespan(app: FastAPI):
             # стратегией было нечем.
             """UPDATE backtest_runs SET job_body = (job_body #>> '{}')::jsonb
                 WHERE jsonb_typeof(job_body) = 'string'""",
+            # Та же двойная кодировка у роботов, и там она копилась СЛОЯМИ: ролл
+            # бумажного робота перезаписывал params_json через json.dumps на пуле с
+            # jsonb-кодеком, добавляя слой на каждом ролле. После второго слоя
+            # стратегия получала СТРОКУ вместо параметров и падала каждую минуту, а
+            # роллиться робот больше не мог — восемь бумажных роботов молча встали
+            # на истёкших контрактах. Пишущая сторона починена; здесь разворачиваем
+            # накопленное, столько раз, сколько слоёв успело налипнуть.
+            """UPDATE robots SET params_json = (params_json #>> '{}')::jsonb
+                WHERE jsonb_typeof(params_json) = 'string'""",
+            """UPDATE robots SET params_json = (params_json #>> '{}')::jsonb
+                WHERE jsonb_typeof(params_json) = 'string'""",
+            """UPDATE robots SET params_json = (params_json #>> '{}')::jsonb
+                WHERE jsonb_typeof(params_json) = 'string'""",
+            """UPDATE robots SET state_json = (state_json #>> '{}')::jsonb
+                WHERE jsonb_typeof(state_json) = 'string'""",
+            """UPDATE robots SET state_json = (state_json #>> '{}')::jsonb
+                WHERE jsonb_typeof(state_json) = 'string'""",
+            """UPDATE robots SET state_json = (state_json #>> '{}')::jsonb
+                WHERE jsonb_typeof(state_json) = 'string'""",
             # Разовый бэкфилл по уже накопленным прогонам: те же два вида scriptCode,
             # что понимает _strat_id_from_code — реестровый make_on_bar('id') и импорт
             # отдельного модуля strategies.<name>.

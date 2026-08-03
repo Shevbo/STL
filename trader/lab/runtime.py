@@ -442,9 +442,10 @@ class LiveRuntime:
     async def flush_state(self) -> None:
         if self._pool is None:
             return
-        import json
         async with self._pool.acquire() as conn:
+            # Объект, не json.dumps: пул сам сериализует jsonb (тот же слой лишней
+            # кодировки, что копился при ролле).
             await conn.execute(
                 "UPDATE robots SET state_json = $1 WHERE id = $2",
-                json.dumps(self._state), self._robot_id,
+                self._state, self._robot_id,
             )

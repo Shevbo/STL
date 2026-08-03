@@ -49,6 +49,39 @@ class RobotScheduler:
         # compiling the script every minute tick is wasted work; the code never
         # changes between ticks. Re-compiles only when the script text changes.
         self._compiled: dict[str, tuple[int, types.ModuleType]] = {}
+        # Время последнего бара, на котором робот УЖЕ отработал. Пусто = робота
+        # ещё не видели в этой жизни процесса (см. _bar_gate).
+        self._last_bar: dict[str, int] = {}
+
+    def _bar_gate(self, robot_id: str, newest: int | None) -> bool:
+        """Можно ли исполнять этот тик. Правило одно: только НОВЫЙ бар.
+
+        Планировщик тикает по настенным часам раз в минуту, а бары приходят с
+        биржи. Когда торгов нет, get_bars отдаёт последний доступный бар, и без
+        этой проверки стратегия пересчитывалась на нём снова и снова и могла
+        выставить заявку: 02.08.2026 бумажный «2EMA · MXU6» продал в воскресенье
+        19:23 МСК по бару сорокачасовой давности — биржа в те выходные MXU6 не
+        торговала вовсе.
+
+        Судим ПО ДАННЫМ, а не по календарю: FORTS торгует и в выходные (25-26.07
+        по MXU6 было 475 и 533 бара, те сделки законны), поэтому «суббота» ничего
+        не значит, а «нового бара нет» значит всё. Заодно правило закрывает обрыв
+        котировок среди буднего дня и повтор бара после рестарта.
+
+        Нет бара (ISS молчит) — тоже не исполняем: без данных робот не торгует,
+        следующая минута попробует снова.
+
+        ПЕРВАЯ встреча робота бар только ЗАПОМИНАЕТ. Иначе рестарт STL в выходной
+        сразу отработал бы по пятничному бару — ровно тот случай, который чиним.
+        """
+        if newest is None:
+            return False
+        seen = self._last_bar.get(robot_id)
+        self._last_bar[robot_id] = newest
+        if seen is None:
+            log.info("lab.scheduler.bar_seeded", robot_id=robot_id, bar=newest)
+            return False
+        return newest > seen
 
     async def start(self) -> None:
         """Load deployed robots from DB and start them."""
@@ -118,6 +151,10 @@ class RobotScheduler:
             await self._maybe_roll(robot)
         except Exception as exc:
             log.warning("lab.roll_failed", robot_id=robot.id, error=str(exc))
+        # Только на НОВОМ баре. Ролл идёт выше: после смены контракта бар берём уже
+        # у нового символа.
+        if not self._bar_gate(robot.id, await self._newest_bar(robot)):
+            return
         # Validate + compile once per script version, reuse the module across ticks.
         script_hash = hash(robot.script_code)
         cached = self._compiled.get(robot.id)
@@ -144,6 +181,29 @@ class RobotScheduler:
         # Update in-memory state so the next tick sees the fresh trend/position state.
         self._robot_states[robot.id] = runtime._state
 
+    async def _newest_bar(self, robot) -> int | None:
+        """Время самого свежего бара инструмента робота, или None если его нет.
+
+        Берём из ТОГО ЖЕ процессного кэша, что и сам робот (_load_bars_shared),
+        поэтому лишнего похода в ISS проверка не стоит. Символ живёт в
+        params_json — колонки под него нет.
+        """
+        from trader.lab.runtime import _load_bars_shared
+        params = robot.params_json if isinstance(robot.params_json, dict) else {}
+        symbol = str(params.get("symbol") or "").strip()
+        if not symbol:
+            # Портфельный робот (несколько инструментов) — одного символа у него
+            # нет, судить по нему нельзя. Пропускаем гейт, чтобы не заглушить
+            # робота, которого проверка не умеет оценить.
+            return int(datetime.now(timezone.utc).timestamp())
+        try:
+            bars = await _load_bars_shared(symbol, 3, interval=1)
+        except Exception as exc:  # noqa: BLE001 — нет данных = не торгуем
+            log.warning("lab.scheduler.bars_failed", robot_id=robot.id,
+                        symbol=symbol, error=str(exc))
+            return None
+        return int(bars[-1].time) if bars else None
+
     async def _maybe_roll(self, robot) -> None:
         """Roll a PAPER robot to the current front contract when its specific
         contract is no longer the front (e.g. after expiry). Flat + fresh state.
@@ -166,17 +226,42 @@ class RobotScheduler:
         robot.state_json = new_state
         self._robot_states[robot.id] = dict(new_state)
         if self._pool is not None:
-            import json as _json
             async with self._pool.acquire() as conn:
+                # ОБЪЕКТЫ, не json.dumps: пул держит jsonb-кодек и сериализует сам.
+                # Каждый ролл с dumps добавлял ЛИШНИЙ слой кодировки, и после
+                # второго ролла _row_to_robot разворачивал только один — стратегия
+                # получала СТРОКУ вместо параметров и падала каждую минуту, а
+                # _maybe_roll видел {} и больше не роллил. Так восемь бумажных
+                # роботов молча встали на истёкших контрактах (02.08.2026).
                 await conn.execute(
                     "UPDATE robots SET params_json=$1, state_json=$2 WHERE id=$3",
-                    _json.dumps(new_params), _json.dumps(new_state), robot.id,
+                    new_params, new_state, robot.id,
                 )
         log.info("lab.roll", robot_id=robot.id, old=symbol, new=front)
 
     async def stop_all(self) -> None:
         for robot_id in list(self._tasks):
             await self.stop_robot(robot_id)
+
+
+def _unwrap_json(v, limit: int = 4) -> dict:
+    """Развернуть значение до dict, сколько бы слоёв кодировки на нём ни было.
+
+    Один json.loads не спасал: перезапись параметров через json.dumps на пуле с
+    jsonb-кодеком добавляла слой на КАЖДОМ ролле, и у роботов, роллившихся дважды,
+    после одного loads оставалась строка. Она уходила в стратегию вместо словаря
+    (params.get -> AttributeError каждую минуту). Записывающая сторона починена,
+    но старые строки надо уметь прочитать."""
+    for _ in range(limit):
+        if isinstance(v, dict):
+            return v
+        if not isinstance(v, str):
+            return {}
+        try:
+            v = json.loads(v)
+        except (TypeError, ValueError):
+            return {}
+    return v if isinstance(v, dict) else {}
 
 
 def _row_to_robot(row) -> Any:
@@ -187,10 +272,8 @@ def _row_to_robot(row) -> Any:
         stl_link_id=row["stl_link_id"],
         name=row["name"],
         script_code=row["script_code"],
-        params_json=row["params_json"] if isinstance(row["params_json"], dict)
-                    else json.loads(row["params_json"]),
-        state_json=row["state_json"] if isinstance(row["state_json"], dict)
-                   else json.loads(row["state_json"]),
+        params_json=_unwrap_json(row["params_json"]),
+        state_json=_unwrap_json(row["state_json"]),
         schedule=row["schedule"],
         deployed=row["deployed"],
     )
