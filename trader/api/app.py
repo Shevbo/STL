@@ -2571,7 +2571,6 @@ def create_app() -> FastAPI:
     @fastapi_app.post("/api/v1/robots/{robot_id}/deploy")
     async def deploy_robot(robot_id: str, request: Request):
         _auth(request)
-        import json
         pool = request.app.state.db_pool
         await pool.execute(
             "UPDATE robots SET deployed=true, deployed_at=now() WHERE id=$1", robot_id
@@ -2579,8 +2578,11 @@ def create_app() -> FastAPI:
         rows = await pool.fetch("SELECT * FROM robots WHERE id=$1", robot_id)
         if rows:
             from trader.lab.models import Robot
+            from trader.lab.scheduler import _unwrap_json
+            # Тот же разворот, что в _row_to_robot: слоёв кодировки могло налипнуть
+            # больше одного, и один json.loads оставлял СТРОКУ вместо параметров.
             robot = Robot(**{
-                k: (json.loads(v) if k in ("params_json", "state_json") and isinstance(v, str) else v)
+                k: (_unwrap_json(v) if k in ("params_json", "state_json") else v)
                 for k, v in dict(rows[0]).items()
             })
             await request.app.state.scheduler.deploy_robot(robot)
