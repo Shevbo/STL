@@ -81,7 +81,7 @@
 
 <script lang="ts">
   import { downloadCSV } from '$lib/csv';
-  import { fetchWithAuth } from '../../lib/fetch-auth';
+  import { fetchWithAuth, errText } from '../../lib/fetch-auth';
   import RobotIdentity from './RobotIdentity.svelte';
   import BacktestChart from './BacktestChart.svelte';
   import ScreenTag from './ScreenTag.svelte';
@@ -663,7 +663,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) throw new Error(await errText(res));
       const data = await res.json();
       if (data.campaign) lastCampaign = data.campaign;
       const actualEng = data.engine === 'remote' ? 'i9 (очередь)' : data.engine === 'local' ? 'VDS' : data.engine;
@@ -851,7 +851,7 @@
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) throw new Error(await errText(res));
       const { run_id } = await res.json();
       let attempts = 0;
       chartPoll = setInterval(async () => {
@@ -913,7 +913,7 @@
       const res = await fetchWithAuth('/api/v1/backtest/run', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
       });
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) throw new Error(await errText(res));
       const { run_id } = await res.json();
       say(`пересчёт принят: run_id ${run_id} · движок i9`, 'dim');
       let attempts = 0;

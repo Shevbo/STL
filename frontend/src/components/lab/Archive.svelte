@@ -5,7 +5,7 @@
      комбинаций просмотрено, что было на реале — и разворачиваемый отчёт целиком. -->
 <script lang="ts">
   import { downloadCSV } from '$lib/csv';
-  import { fetchWithAuth } from '$lib/fetch-auth';
+  import { fetchWithAuth, errText } from '$lib/fetch-auth';
   import ScreenTag from './ScreenTag.svelte';
 
   let rows = $state<any[]>([]);
@@ -59,7 +59,7 @@
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(form),
       });
-      if (!r.ok) throw new Error(await r.text());
+      if (!r.ok) throw new Error(await errText(r));
       form = { ...FORM_EMPTY };
       adding = false; msg = '';
       await load();

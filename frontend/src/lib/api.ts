@@ -1,5 +1,5 @@
 import type { OrderRequest, OrderResponse } from './types';
-import { fetchWithAuth } from './fetch-auth';
+import { fetchWithAuth, errText } from './fetch-auth';
 import { applyFeeConfig } from './lab-analytics';
 
 /** Fetch the backend's authoritative commission model and apply it. Call once at
@@ -19,6 +19,6 @@ export async function placeOrder(req: OrderRequest): Promise<OrderResponse> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(req),
   });
-  if (!resp.ok) throw new Error(await resp.text());
+  if (!resp.ok) throw new Error(await errText(resp));
   return resp.json() as Promise<OrderResponse>;
 }

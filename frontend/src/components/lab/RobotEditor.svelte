@@ -1,6 +1,6 @@
 <!-- Robot settings editor: create from template or edit existing robot -->
 <script lang="ts">
-  import { fetchWithAuth } from '../../lib/fetch-auth';
+  import { fetchWithAuth, errText } from '../../lib/fetch-auth';
 
   let {
     robot = null,        // existing robot to edit (null = create new)
@@ -122,7 +122,7 @@
           body: JSON.stringify(body),
         });
       }
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) throw new Error(await errText(res));
       const data = await res.json();
       onSaved?.({ ...body, id: robot?.id ?? data.id });
     } catch (e) {

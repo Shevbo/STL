@@ -9,7 +9,7 @@
 -->
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { fetchWithAuth } from '../../lib/fetch-auth';
+  import { fetchWithAuth, errText } from '../../lib/fetch-auth';
   import RobotIdentity from './RobotIdentity.svelte';
   import ScreenTag from './ScreenTag.svelte';
   import { fmtPrice, csvPrice } from '../../lib/format';
@@ -279,9 +279,10 @@
     if (!silent) error = '';
     try {
       const res = await fetchWithAuth(`/api/v1/robots/${robotId}/live`);
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) throw new Error(await errText(res));
       live = await res.json();          // reassign → chart + tables + stats re-derive
-    } catch (e) { if (!silent) error = String(e); }
+      error = '';
+    } catch (e) { if (!silent || !live) error = String(e); }
     if (!silent) loading = false;
   }
 
@@ -308,7 +309,7 @@
         body: JSON.stringify({ strategy_id: sid, params: { ...p, symbol: live.symbol }, symbol: live.symbol,
           schedule: live.robot?.schedule ?? '09:00-23:55', max_position: maxPos, paper: true }),
       });
-      if (!d.ok) throw new Error(await d.text());
+      if (!d.ok) throw new Error(await errText(d));
       cloneMsg = `Развёрнут на агенте в PAPER: «${newId}» (верхняя таблица). Реал — с консоли VDS.`;
     } catch (e) { cloneMsg = `Ошибка деплоя на агент: ${String(e).slice(0, 90)}`; }
     finally { cloneBusy = false; }
@@ -320,7 +321,10 @@
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   onMount(() => {
     load();
-    pollTimer = setInterval(() => { if (live?.robot?.deployed) load(true); }, 15000);
+    // !live = первая загрузка не удалась (бэкенд перезапускался): опрос должен
+    // ПРОДОЛЖАТЬСЯ, иначе 30-секундный рестарт навсегда оставлял открытый стенд
+    // с ошибкой, пока оператор не перезагрузит страницу вручную.
+    pollTimer = setInterval(() => { if (!live || live.robot?.deployed) load(true); }, 15000);
     return () => { if (pollTimer) clearInterval(pollTimer); };
   });
 </script>

@@ -9,7 +9,7 @@
 -->
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { fetchWithAuth } from '../../lib/fetch-auth';
+  import { fetchWithAuth, errText } from '../../lib/fetch-auth';
   import { fmtPrice } from '$lib/format';
   import { downloadCSV } from '$lib/csv';
   import {
@@ -712,7 +712,7 @@
     const res = await fetchWithAuth(
       `/api/v1/market/bars?symbol=${encodeURIComponent(sym)}&date_from=${encodeURIComponent(from)}&date_to=${encodeURIComponent(to)}&resample_min=${resampleMin}`
     );
-    if (!res.ok) throw new Error(await res.text());
+    if (!res.ok) throw new Error(await errText(res));
     return await res.json();
   }
 

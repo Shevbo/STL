@@ -45,7 +45,7 @@
 
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { fetchWithAuth } from '../../lib/fetch-auth';
+  import { fetchWithAuth, errText } from '../../lib/fetch-auth';
   import { toFills, commissionFor, tradeEvents, fromLastFlat, groupByOrder, sortLedger } from '../../lib/lab-analytics';
   import BacktestChart from './BacktestChart.svelte';
   import ScreenTag from './ScreenTag.svelte';
@@ -1098,7 +1098,7 @@
         priority: 100,
       }),
     });
-    if (!res.ok) throw new Error(await res.text());
+    if (!res.ok) throw new Error(await errText(res));
     return (await res.json()).run_id;
   }
 

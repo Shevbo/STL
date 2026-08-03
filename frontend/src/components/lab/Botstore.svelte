@@ -5,7 +5,7 @@
      best params). Installed robots have "удалить с платформы". -->
 <script lang="ts">
   import { downloadCSV } from '$lib/csv';
-  import { fetchWithAuth } from '../../lib/fetch-auth';
+  import { fetchWithAuth, errText } from '../../lib/fetch-auth';
   import RobotIdentity from './RobotIdentity.svelte';
   import BacktestChart from './BacktestChart.svelte';
   import ScreenTag from './ScreenTag.svelte';
@@ -103,7 +103,7 @@
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) throw new Error(await errText(res));
       notice = `Установлен на платформу: ${body.name}`;
       await load();
     } catch (e) {
@@ -117,7 +117,7 @@
     busy = true; notice = '';
     try {
       const res = await fetchWithAuth(`/api/v1/robots/${r.id}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) throw new Error(await errText(res));
       notice = `Удалён с платформы: ${r.name}`;
       await load();
     } catch (e) {
@@ -131,7 +131,7 @@
     const action = r.deployed ? 'undeploy' : 'deploy';
     try {
       const res = await fetchWithAuth(`/api/v1/robots/${r.id}/${action}`, { method: 'POST' });
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) throw new Error(await errText(res));
       notice = r.deployed ? `Остановлен: ${r.name}` : `Запущен: ${r.name}`;
       await load();
     } catch (e) {
@@ -285,7 +285,7 @@
       // фоновых кампаний оптимизатора (см. очередь в /api/v1/agent/claim).
       body: JSON.stringify({ scriptCode, baseParams: { ...params, symbol }, symbol, paramsGrid: {}, engine, dateFrom, dateTo, priority: 100 }),
     });
-    if (!res.ok) throw new Error(await res.text());
+    if (!res.ok) throw new Error(await errText(res));
     const { run_id } = await res.json();
     for (let i = 0; i < 180; i++) {           // up to 6 min
       await new Promise(r => setTimeout(r, 2000));
@@ -482,11 +482,11 @@
           name: launchName || `${nameFor(launchSid)} · ${launchSymbol}`,
           scriptCode: sc, paramsJson: params, schedule: '09:00-23:55' }),
       });
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) throw new Error(await errText(res));
       const { id } = await res.json();
       if (launchMode === 'paper') {
         const d = await fetchWithAuth(`/api/v1/robots/${id}/deploy`, { method: 'POST' });
-        if (!d.ok) throw new Error(await d.text());
+        if (!d.ok) throw new Error(await errText(d));
         launchMsg = `Запущен в PAPER: «${launchName}». Ищи его во вкладке «Live Robots» → подвкладка «Роботы» (в «LIVE» — только реальные деньги).`;
         await load();
       } else {
@@ -495,7 +495,7 @@
           body: JSON.stringify({ strategy_id: launchSid, params, symbol: launchSymbol,
             schedule: '09:00-23:55', max_position: maxPos, paper: true }),
         });
-        if (!d.ok) throw new Error(await d.text());
+        if (!d.ok) throw new Error(await errText(d));
         launchMsg = `Развёрнут на агенте в PAPER: «${launchName}». РЕАЛЬНЫЕ ДЕНЬГИ включаются ТОЛЬКО на консоли агента (робот FLAT + ввод его ID) — из GUI реал не армится, это правило безопасности.`;
       }
       launchOk = true;
