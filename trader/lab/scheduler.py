@@ -121,6 +121,14 @@ class RobotScheduler:
                 await task
             except asyncio.CancelledError:
                 pass
+        # Снятый робот забывается ЦЕЛИКОМ. Иначе повторный деплой поднимал робота
+        # с чужой памятью прошлой жизни: состояние стратегии не перечитывалось из
+        # базы (сброс робота «на старт» не срабатывал), а _last_bar считал его уже
+        # виденным — то есть защита «первый тик только запоминает бар» на редеплое
+        # не работала.
+        self._robot_states.pop(robot_id, None)
+        self._compiled.pop(robot_id, None)
+        self._last_bar.pop(robot_id, None)
         log.info("lab.scheduler.robot_stopped", robot_id=robot_id)
 
     async def _window_loop(self, robot) -> None:
