@@ -811,9 +811,30 @@ async def _agent_alive_db(pool) -> bool:
         return False
 
 
+async def _agent_heartbeat_fresh(pool, max_age: float = 60.0) -> bool:
+    """Самый прямой сигнал: агент пишет i9_heartbeat КАЖДЫЕ 4с отдельной задачей,
+    и делает это даже посреди длинной кампании. Двух других сигналов для такого
+    случая не хватает: опрос /claim молчит, пока джоб считается, а claimed_at
+    стареет за 5 минут — и агент, занятый одним заданием полтора часа, показывался
+    ОФЛАЙН при живом сердцебиении двухсекундной свежести (05.08.2026)."""
+    if pool is None:
+        return False
+    try:
+        v = await pool.fetchval("SELECT value FROM agent_control WHERE key='i9_heartbeat'")
+        if not v:
+            return False
+        import json as _j
+        ts = float(_j.loads(v).get("_recv_ts") or 0)
+        return (time.time() - ts) < max_age
+    except Exception:
+        return False
+
+
 async def _agent_alive_any(app_state, pool) -> bool:
-    """i9 alive if EITHER signal fires (idle poll heartbeat OR a recent job claim)."""
-    return _agent_alive(app_state) or await _agent_alive_db(pool)
+    """i9 alive if ANY signal fires: idle /claim poll, a recent job claim, or a fresh
+    heartbeat (the only one that survives a long-running job)."""
+    return (_agent_alive(app_state) or await _agent_heartbeat_fresh(pool)
+            or await _agent_alive_db(pool))
 
 
 async def _agent_is_paused(pool, engine: str) -> bool:
@@ -3468,16 +3489,23 @@ def create_app() -> FastAPI:
         #   1) priority DESC — ручной прогон с экрана LAB (100) идёт вперёд фона (0);
         #   2) кампании (opt-/camp-) после голых интерактивных прогонов старого образца;
         #   3) created_at — внутри группы честная FIFO.
+        # min_priority: агент, УЖЕ занятый кампанией, опрашивает этим фильтром свой
+        # резервный воркер и забирает только ручные прогоны. Без него приоритет лишь
+        # упорядочивал очередь: ручной запрос всё равно ждал конца текущей кампании
+        # (3072 комбинации = полтора часа на одном claim, жалоба оператора 05.08.2026).
+        min_prio = body.get("min_priority")
+        min_prio = int(min_prio) if min_prio is not None else None
         row = await pool.fetchrow(
             """UPDATE backtest_runs SET status='running', claimed_at=now(), agent_id=$1
                WHERE id = (
                  SELECT id FROM backtest_runs
                  WHERE engine='remote' AND status='queued'
+                   AND ($2::int IS NULL OR priority >= $2)
                  ORDER BY priority DESC, (id LIKE 'opt-%' OR id LIKE 'camp-%'), created_at
                  LIMIT 1
                  FOR UPDATE SKIP LOCKED)
                RETURNING id, robot_id, job_body, symbol""",
-            agent_id,
+            agent_id, min_prio,
         )
         if not row:
             return Response(status_code=204)

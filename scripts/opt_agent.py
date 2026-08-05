@@ -156,7 +156,11 @@ except Exception:  # noqa: BLE001
 
 # Bumped whenever the agent's wire behaviour changes; reported in the heartbeat so the
 # monitor shows whether the i9 is running the latest opt_agent.
-AGENT_VERSION = "2026-07-28-leader-strat"
+AGENT_VERSION = "2026-08-05-manual-preempt"
+# Порог «ручного» прогона: тот же, что ставит сервер экрану LAB
+# (trader/util.py QUEUE_PRIORITY_MANUAL). Держать в согласии — по нему резервный
+# воркер отличает запрос оператора от фоновой кампании.
+MANUAL_PRIORITY = 100
 
 # ── self-update ────────────────────────────────────────────────────────────────
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -318,7 +322,7 @@ def _run_chunk(args: tuple) -> list[dict]:
     # Workers inherit env; honor the insecure flag for the ISS fetch they do.
     if os.environ.get("OPT_AGENT_INSECURE"):
         _patch_httpx_insecure()
-    script_code, bars_data, symbol, param_sets, point_value, initial_margin = args
+    script_code, bars_data, symbol, param_sets, point_value, initial_margin, publish = args
     _demote_to_background()  # be a polite background citizen on the shared host too
     from trader.lab.script_guard import validate_script
     validate_script(script_code)
@@ -340,8 +344,12 @@ def _run_chunk(args: tuple) -> list[dict]:
 
     def _tick(payload) -> None:
         """Строка прогресса в монитор. Телеметрия НИКОГДА не роняет расчёт: мёртвый
-        Manager, полная очередь, что угодно — молча пропускаем комбо в отчёте."""
-        if _PROGRESS_Q is None:
+        Manager, полная очередь, что угодно — молча пропускаем комбо в отчёте.
+
+        publish=False у ручного прогона на резервном воркере: очередь прогресса ОДНА
+        на весь пул, и его комбинации иначе досчитывались бы в «сделано» чужой
+        кампании и лезли в её живой хит-парад со своими параметрами."""
+        if _PROGRESS_Q is None or not publish:
             return
         try:
             _PROGRESS_Q.put_nowait(payload)
@@ -411,6 +419,9 @@ class Agent:
         # What the CPU is doing right now, surfaced by the heartbeat. Mutated by the
         # claim loop (job/task/idle); read by the concurrent heartbeat task.
         self._activity: dict = {"state": "starting"}
+        # Ручной прогон, взятый ВПЕРЁД очереди на резервный воркер (см. _manual_loop).
+        # Один за раз: резервный воркер ровно один, второй ручной подождёт периода.
+        self._side_busy = False
         # Latest metrics snapshot + recent jobs for the LOCAL status page (127.0.0.1).
         # The heartbeat task refills _last_metrics; the http thread only reads it (no
         # psutil.cpu_percent() from two callers, which would split the sampling window).
@@ -508,9 +519,12 @@ class Agent:
             print(f"self-update FAILED (keeping current code): {exc}", flush=True)
             return False
 
-    async def claim(self, client: httpx.AsyncClient):
+    async def claim(self, client: httpx.AsyncClient, min_priority: int | None = None):
+        body = {"agent_id": self.agent_id}
+        if min_priority is not None:
+            body["min_priority"] = min_priority
         r = await client.post(f"{self.api}/api/v1/agent/claim",
-                              json={"agent_id": self.agent_id}, headers=self.h, timeout=30)
+                              json=body, headers=self.h, timeout=30)
         if r.status_code == 204:
             return None
         r.raise_for_status()
@@ -582,6 +596,36 @@ class Agent:
             except Exception:  # noqa: BLE001 — a missed heartbeat just ages out in the monitor
                 pass
             await asyncio.sleep(period)
+
+    async def _manual_loop(self, client: httpx.AsyncClient, pool: ProcessPoolExecutor,
+                           period: float = 3.0):
+        """РУЧНОЙ ПРОГОН ВПЕРЁД ВСЕГО — правило оператора. Пока кампания держит
+        основной пул, эта задача опрашивает очередь фильтром min_priority и кладёт
+        ручной прогон на РЕЗЕРВНЫЙ воркер. Приоритета в очереди мало: он выдаёт
+        задание первым, но только когда агент освободится, а кампания на 3072
+        комбинации не освобождает его полтора часа.
+
+        Работает ТОЛЬКО во время чужого джоба: на простое всё забирает обычный
+        claim_loop. Прогресс и хит-парад не трогает (side=True) — иначе монитор
+        кампании обнулился бы на каждом ручном запросе."""
+        while True:
+            await asyncio.sleep(period)
+            if self._activity.get("state") != "job" or self._side_busy:
+                continue
+            try:
+                job = await self.claim(client, min_priority=MANUAL_PRIORITY)
+            except Exception:  # noqa: BLE001 — сеть моргнула, попробуем через период
+                continue
+            if job is None:
+                continue
+            self._side_busy = True
+            _log(f"[{job['run_id']}] РУЧНОЙ прогон вперёд очереди — резервный воркер")
+            try:
+                await self.process(client, job, pool, side=True)
+            except Exception as exc:  # noqa: BLE001 — ручной прогон не валит кампанию
+                _log(f"manual job error (continuing): {exc}")
+            finally:
+                self._side_busy = False
 
     # ── local status page (127.0.0.1) ────────────────────────────────────────────
     def _status_payload(self) -> dict:
@@ -719,7 +763,12 @@ class Agent:
         return [{"time": b.time, "open": b.open, "high": b.high,
                  "low": b.low, "close": b.close, "volume": b.volume} for b in bars]
 
-    async def process(self, client: httpx.AsyncClient, job: dict, pool: ProcessPoolExecutor):
+    async def process(self, client: httpx.AsyncClient, job: dict, pool: ProcessPoolExecutor,
+                      side: bool = False):
+        """side=True — ручной прогон, взятый ВПЕРЁД очереди на резервный воркер, пока
+        основной пул занят кампанией. Тогда он не трогает ни прогресс, ни хит-парад,
+        ни ленту последних джобов: монитор кампании обнулился бы на каждом запросе
+        оператора. И режется в ОДИН кусок — резервный воркер ровно один."""
         run_id = job["run_id"]
         symbol = job["symbol"]
         try:
@@ -740,23 +789,25 @@ class Agent:
             else:
                 param_sets = self._expand(job["base_params"], job["params_grid"])
             _log(f"[{run_id}] {symbol} {len(bars)} bars × {len(param_sets)} combos "
-                 f"on {self.workers} workers")
-            # Прогресс считаем с нуля и выбрасываем хвост прошлого прогона: иначе
-            # монитор покажет «посчитано 2900 из 2816» и чужого лидера.
-            self._progress = {"done": 0, "top": []}
-            if self._progress_q is not None:
-                while True:
-                    try:
-                        self._progress_q.get_nowait()
-                    except Exception:  # noqa: BLE001
-                        break
-            self._activity = {"state": "job", "run_id": run_id, "symbol": symbol,
-                              "combos": len(param_sets), "since": time.time(),
-                              "done": 0, "top": []}
+                 f"on {1 if side else self.workers} worker(s){' [резерв]' if side else ''}")
+            if not side:
+                # Прогресс считаем с нуля и выбрасываем хвост прошлого прогона: иначе
+                # монитор покажет «посчитано 2900 из 2816» и чужого лидера.
+                self._progress = {"done": 0, "top": []}
+                if self._progress_q is not None:
+                    while True:
+                        try:
+                            self._progress_q.get_nowait()
+                        except Exception:  # noqa: BLE001
+                            break
+                self._activity = {"state": "job", "run_id": run_id, "symbol": symbol,
+                                  "combos": len(param_sets), "since": time.time(),
+                                  "done": 0, "top": []}
 
-            chunks = _chunked(param_sets, self.workers)
+            chunks = _chunked(param_sets, 1 if side else self.workers)
             im = job.get("initial_margin", 0) or 0
-            args = [(job["script_code"], bars_data, symbol, ch, job["point_value"], im) for ch in chunks]
+            args = [(job["script_code"], bars_data, symbol, ch, job["point_value"], im,
+                     not side) for ch in chunks]
             loop = asyncio.get_event_loop()
             t0 = time.time()
             futs = [loop.run_in_executor(pool, _run_chunk, a) for a in args]
@@ -766,10 +817,11 @@ class Agent:
             ok = sum(1 for r in results if r.get("ok"))
             _log(f"[{run_id}] done {ok}/{len(results)} in {dt:.1f}s "
                  f"({len(results)/dt:.0f} combos/s)")
-            self._recent.appendleft({"symbol": symbol, "combos": len(param_sets),
-                                     "secs": round(dt, 1), "ok": ok,
-                                     "cps": round(len(results) / dt, 1) if dt else 0,
-                                     "at": time.time()})
+            if not side:
+                self._recent.appendleft({"symbol": symbol, "combos": len(param_sets),
+                                         "secs": round(dt, 1), "ok": ok,
+                                         "cps": round(len(results) / dt, 1) if dt else 0,
+                                         "at": time.time()})
             # Forming hit-parade: top-3 combos of THIS job by net profit, with full
             # params so the monitor can re-run any into a chart (grabbed BEFORE the
             # trades/equity strip below — but we keep only metrics + params here).
@@ -788,11 +840,12 @@ class Agent:
                 strat = m.group(1) if m else ""
             oks = [e for e in results if e.get("ok") and isinstance(e.get("result"), dict)]
             top = sorted(oks, key=lambda e: (e["result"].get("net_profit") or -1e18), reverse=True)[:3]
-            self._leaders = [{"strategy": strat, "symbol": symbol, "run_id": run_id,
-                              "net": round(e["result"].get("net_profit") or 0),
-                              "rf": e["result"].get("recovery_factor"),
-                              "trades": e["result"].get("total_trades"),
-                              "params": e["params"]} for e in top]
+            if not side:
+                self._leaders = [{"strategy": strat, "symbol": symbol, "run_id": run_id,
+                                  "net": round(e["result"].get("net_profit") or 0),
+                                  "rf": e["result"].get("recovery_factor"),
+                                  "trades": e["result"].get("total_trades"),
+                                  "params": e["params"]} for e in top]
             # Multi-combo sweeps only need metrics for the leaderboard — strip the
             # bulky trades + equity_curve arrays so we don't flood the small VDS
             # Postgres AND don't hit nginx body-size limits (413 Entity Too Large).
@@ -827,16 +880,22 @@ class Agent:
             self._progress_q = None
             _log(f"progress channel disabled ({exc}) — sweep runs without live progress")
         try:
-            with ProcessPoolExecutor(max_workers=self.workers, initializer=_worker_init,
+            # +1 РЕЗЕРВНЫЙ воркер. Кампания режется ровно на self.workers кусков и
+            # занимает пул целиком на всю свою длину (3072 комбинации = полтора часа),
+            # поэтому без резерва ручной прогон с экрана LAB физически некуда положить
+            # — приоритет 100 лишь ставил его первым в очередь и всё равно ждал.
+            with ProcessPoolExecutor(max_workers=self.workers + 1, initializer=_worker_init,
                                      initargs=(self._progress_q,)) as pool:
                 async with self._client() as client:
                     # Independent heartbeat so CPU%/activity keep flowing WHILE a job blocks
                     # the claim loop below. Cancelled when this life ends.
                     hb = asyncio.create_task(self._heartbeat_loop(client))
+                    mn = asyncio.create_task(self._manual_loop(client, pool))
                     try:
                         return await self._claim_loop(client, pool)
                     finally:
                         hb.cancel()
+                        mn.cancel()
         finally:
             self._progress_q = None
             if mgr is not None:
