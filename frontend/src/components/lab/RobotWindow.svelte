@@ -17,6 +17,9 @@
   import BacktestChart from './BacktestChart.svelte';
   import LatencyPane from './LatencyPane.svelte';
   import Frame from './Frame.svelte';
+  import RobotConsole from './RobotConsole.svelte';
+  import EquityChart from './EquityChart.svelte';
+  import { parseLog, appendLog, type LogKind, type LogLine } from '../../lib/robot-console';
 
   let { robotId, onClose }: { robotId: string; onClose: () => void } = $props();
   // ID окна для дебага (правило: у каждого окна в левом верхнем углу копируемый
@@ -174,6 +177,57 @@
       if (e.close) { cum += e.close.pnl; pts.push({ time: e.rawTime, equity: cum }); }
     }
     return pts;
+  });
+
+  // ── Системный монитор ───────────────────────────────────────────────────────
+  // Та же лента, что на агентском стенде: что оператор отправил роботу и что у
+  // робота менялось. Логика ленты общая (lib/robot-console), разметка общая
+  // (RobotConsole) — иначе стенды снова разъедутся, как до 05.08.2026.
+  const logKey = () => `rw_mon_${robotId}`;
+  const LOG_MAX = 1000;
+  let logLines = $state<LogLine[]>(
+    (() => { try { return parseLog(localStorage.getItem(`rw_mon_${robotId}`), 1000); }
+             catch { return []; } })());
+  function pushLog(text: string, kind: LogKind = 'ok') {
+    logLines = appendLog(logLines, { t: Date.now(), kind, text }, LOG_MAX);
+    try { localStorage.setItem(logKey(), JSON.stringify(logLines)); } catch { /* приватный режим */ }
+  }
+  function clearLog() {
+    logLines = [];
+    try { localStorage.removeItem(logKey()); } catch { /* приватный режим */ }
+  }
+  async function copyLog() {
+    const t = logLines.map((l) => `${new Date(l.t).toLocaleTimeString('ru-RU')}  ${l.text}`).join('\n');
+    try { await navigator.clipboard.writeText(t); pushLog('Лог скопирован в буфер.', 'sys'); }
+    catch { pushLog('Буфер обмена недоступен (нужен https или разрешение).', 'err'); }
+  }
+
+  // Ссылка «История прогонов»: тот же дип-линк, что на агентском стенде.
+  let histHref = $derived(
+    `/?lab=backtest&hist=${encodeURIComponent(
+      [live?.strategy?.id ?? '', live?.symbol ?? ''].filter(Boolean).join(' '))}`);
+
+  // Отчёт для кривой доходности. Собираем ИЗ СДЕЛОК РОБОТА: журнал algo_trades
+  // знает только агентских роботов, у бумажного там нет ни строки.
+  let eqReport = $derived.by(() => {
+    const pts: { ts_ms: number; net: number; cum_net: number }[] = [];
+    let cum = 0;
+    for (const e of events) {
+      if (!e.close) continue;
+      cum += e.close.pnl;
+      pts.push({ ts_ms: e.rawTime * 1000, net: e.close.pnl, cum_net: Math.round(cum * 100) / 100 });
+    }
+    if (!pts.length) return null;
+    const byDay = new Map<string, number>();
+    for (const p of pts) {
+      const d = new Date(p.ts_ms).toISOString().slice(0, 10);
+      byDay.set(d, (byDay.get(d) || 0) + p.net);
+    }
+    return {
+      days: [...byDay.entries()].sort().map(([date, net]) => ({ date, net })),
+      series_fills: { [robotId]: pts },
+      robots: [{ robot_id: robotId, name: live?.robot?.name ?? robotId }],
+    };
   });
 
   // Synthetic "result" so BacktestChart renders candles + markers + connectors + equity.
@@ -433,7 +487,22 @@
             {cloneBusy ? '…' : '▶ На агент в торговлю (paper)'}</button>
           {#if cloneMsg}<span class="rw-launch-msg">{cloneMsg}</span>{/if}
         {/if}
+        <a class="rw-hist" href={histHref} target="_blank" rel="noopener"
+           title="все сохранённые прогоны перебора параметров этой стратегии">История прогонов</a>
             </div>
+          </Frame>
+
+          <Frame fid="rw-mon" title="Системный монитор" bind:maxId>
+            {#snippet head()}
+              <button class="mon-hb" onclick={copyLog} title="скопировать лог в буфер">копировать</button>
+              <button class="mon-hb" onclick={clearLog} title="очистить лог этого робота">очистить</button>
+            {/snippet}
+            <!-- Та же консоль, что на агентском стенде (RobotConsole). Строки ввода нет:
+                 LLM-напарник знает только агентских роботов, рисовать неработающий
+                 промпт нельзя. -->
+            <RobotConsole lines={logLines}
+                          headline="SHECTORY TRADE & LAB · PAPER ROBOT CONSOLE"
+                          subline={`ROBOT ${String(robotId).toUpperCase()} · PAPER · READY`} />
           </Frame>
         </div>
 
@@ -510,6 +579,13 @@
               {/if}
             </div>
             </div>
+          </Frame>
+          <Frame fid="rw-equity" title="Доходность (журнал)" bind:maxId>
+            <!-- Кривая строится из СДЕЛОК САМОГО РОБОТА, а не из журнала algo_trades:
+                 в журнал попадают только агентские роботы, у бумажного там нет ни
+                 строки, и график был бы пустым. -->
+            {#if eqReport}<EquityChart externalReport={eqReport} compact />
+            {:else}<div class="fpad empty">Закрытых сделок ещё нет — кривую строить не из чего.</div>{/if}
           </Frame>
           <Frame fid="rw-trades" title={`Сделки робота (${histAll.length})`} bind:maxId>
             <div class="panel-title hist-head">
@@ -603,6 +679,14 @@
     cursor: pointer; white-space: nowrap; }
   .rw-launch:hover { background: linear-gradient(180deg,#237e46,#186334); }
   .rw-launch:disabled { opacity: .6; cursor: default; }
+  /* Кнопки шапки монитора и ссылка истории — те же, что на агентском стенде. */
+  .mon-hb { background: none; border: 1px solid #1c4a2a; color: #2f9c50; cursor: pointer;
+    font-size: 9px; text-transform: uppercase; letter-spacing: .06em; padding: 0 5px;
+    border-radius: 2px; }
+  .mon-hb:hover { color: #7fdba0; border-color: #2f9c50; }
+  .rw-hist { display: inline-block; margin-left: 8px; font-size: 11px; color: #7aa2d0;
+    border: 1px solid #24406a; border-radius: 3px; padding: 3px 9px; text-decoration: none; }
+  .rw-hist:hover { color: #cfe2ff; border-color: #3a6aa8; }
   .rw-launch-msg { font-size: 11px; color: #9fd8b0; }
   .close {
     margin-left: auto; background: none; border: none; color: #888;

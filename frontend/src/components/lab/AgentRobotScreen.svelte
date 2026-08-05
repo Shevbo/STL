@@ -5,42 +5,11 @@
      orders, order history incl. rejected/skipped, latency pane. Polls the STL
      mirror every 5s; the agent's local state is the source of truth. -->
 <script module lang="ts">
-  // Чистая часть «Системного монитора» — тестируется без DOM (см. AgentRobotScreen.monitor.test.ts).
-  export type LogKind = 'cmd' | 'ok' | 'err' | 'sys' | 'me' | 'ai';
-  export type LogLine = { t: number; kind: LogKind; text: string };
-  /** Снимок состояния робота для ленты переходов. */
-  export type RobotSnap = { mode: string; run: string; eo: boolean };
-
-  /** Лог из localStorage: мусор и битый JSON дают пустую ленту, хвост обрезаем. */
-  export function parseLog(raw: string | null, max = 1000): LogLine[] {
-    try {
-      const v = JSON.parse(raw || '[]');
-      if (!Array.isArray(v)) return [];
-      return v.filter((l) => l && typeof l.text === 'string' && typeof l.t === 'number').slice(-max);
-    } catch { return []; }
-  }
-  /** Добавление строки с ограничением длины (лента живёт в localStorage). */
-  export function appendLog(lines: LogLine[], line: LogLine, max = 1000): LogLine[] {
-    return [...lines, line].slice(-max);
-  }
-  /** Прилипание к низу: пока оператор не отскроллил вверх, новая строка видна сама. */
-  export function stickToBottom(scrollHeight: number, scrollTop: number, clientHeight: number): boolean {
-    return scrollHeight - scrollTop - clientHeight < 24;
-  }
-  /**
-   * Строки о СМЕНЕ состояния робота — именно их оператор не мог прочитать по
-   * бейджам (РЕАЛ + ПАУЗА + «Развёрнут в PAPER» одновременно, 30.07.2026).
-   * Первый снимок молчит: это не переход.
-   */
-  export function stateTransitions(prev: RobotSnap | null, next: RobotSnap): string[] {
-    if (!prev) return [];
-    const out: string[] = [];
-    if (prev.mode !== next.mode) out.push(`Режим робота: ${prev.mode} → ${next.mode}.`);
-    if (prev.run !== next.run) out.push(`Состояние: ${prev.run} → ${next.run}.`);
-    if (prev.eo !== next.eo)
-      out.push(next.eo ? 'Робот перешёл в «только на выход».' : 'Робот вернулся в обычный режим.');
-    return out;
-  }
+  // Чистая часть «Системного монитора» переехала в lib/robot-console.ts: её делят
+  // агентский и бумажный стенды (у бумажного монитора не было вовсе). Реэкспорт
+  // оставлен, чтобы не переписывать AgentRobotScreen.monitor.test.ts.
+  export { parseLog, appendLog, stickToBottom, stateTransitions } from '../../lib/robot-console';
+  export type { LogKind, LogLine, RobotSnap } from '../../lib/robot-console';
 </script>
 
 <script lang="ts">
@@ -54,12 +23,15 @@
   import ParamEditor from './ParamEditor.svelte';
   import RobotIdentity from './RobotIdentity.svelte';
   import EquityChart from './EquityChart.svelte';
+  import RobotConsole from './RobotConsole.svelte';
   import Splitter from './Splitter.svelte';
   import Frame from './Frame.svelte';
   import NavMenu from '../NavMenu.svelte';
   import { fetchAgentLocalStatus, type AgentLocalStatus } from '../../lib/agent-robots';
   import { annualizedPct, equityPaths, type EqPt as Pt } from '../../lib/lab-analytics';
   import { setTitle } from '../../lib/page-title';
+  import { parseLog, appendLog, stateTransitions,
+           type LogKind, type LogLine, type RobotSnap } from '../../lib/robot-console';
 
   let { robotId, agentId = null }: { robotId: string; agentId?: string | null } = $props();
 
@@ -618,8 +590,6 @@
   const logKey = () => `ars_mon_${robotId}`;
   const LOG_MAX = 1000;
   let logLines = $state<LogLine[]>(loadLog());
-  let logBox = $state<HTMLDivElement | null>(null);
-  let logStick = $state(true);       // прилипание к низу, как в терминале
 
   function loadLog(): LogLine[] {
     try { return parseLog(localStorage.getItem(logKey()), LOG_MAX); }
@@ -643,15 +613,6 @@
     const txt = logLines.map((l) => `${logTime(l.t)}  ${l.text}`).join('\n');
     try { await navigator.clipboard.writeText(txt); pushLog('Лог скопирован в буфер.', 'sys'); }
     catch { pushLog('Буфер обмена недоступен (нужен https или разрешение).', 'err'); }
-  }
-  // Прилипание к низу: пока оператор не отскроллил вверх, новая строка видна сама.
-  $effect(() => {
-    logLines.length;                                   // зависимость: новая строка
-    if (logStick && logBox) logBox.scrollTop = logBox.scrollHeight;
-  });
-  function onLogScroll() {
-    if (!logBox) return;
-    logStick = stickToBottom(logBox.scrollHeight, logBox.scrollTop, logBox.clientHeight);
   }
   // ── Напарник робота: двусторонний чат в той же ленте ────────────────────────
   // Отвечает LLM через Lineman (единственный разрешённый путь к моделям). Знает
@@ -1391,28 +1352,10 @@
         <button class="mon-hb" onclick={copyLog} title="скопировать лог в буфер">копировать</button>
         <button class="mon-hb" onclick={clearLog} title="очистить лог этого робота">очистить</button>
       {/snippet}
-      <div class="crt">
-        <div class="crt-scan"></div>
-        <div class="crt-body" bind:this={logBox} onscroll={onLogScroll}>
-          <div class="crt-line dim">SHECTORY TRADE &amp; LAB · AGENT ROBOT CONSOLE</div>
-          <div class="crt-line dim">ROBOT {robotId.toUpperCase()} · {robot ? (robot.paper ? 'PAPER' : 'REAL') : 'OFFLINE'} · READY</div>
-          {#each logLines as l (l.t + l.text)}
-            <div class="crt-line {l.kind}">
-              <span class="crt-ts">[{new Date(l.t).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' })} {logTime(l.t)}]</span>
-              {l.text}
-            </div>
-          {/each}
-          {#if asking}<div class="crt-line dim">напарник думает…</div>{/if}
-          <div class="crt-line prompt">
-            <span class="crt-ps">STL: {displayName}&gt;</span>
-            <!-- Ввод живёт ПРЯМО в ленте, на строке промпта: консоль, а не форма. -->
-            <input class="crt-in" bind:value={ask} disabled={asking}
-                   placeholder="спросить напарника о торговле этого робота…"
-                   onkeydown={(e) => { if (e.key === 'Enter') sendAsk(); }} />
-            {#if !ask && !asking}<span class="crt-cur">█</span>{/if}
-          </div>
-        </div>
-      </div>
+      <RobotConsole lines={logLines} busy={asking} prompt={displayName}
+                    headline="SHECTORY TRADE & LAB · AGENT ROBOT CONSOLE"
+                    subline={`ROBOT ${robotId.toUpperCase()} · ${robot ? (robot.paper ? 'PAPER' : 'REAL') : 'OFFLINE'} · READY`}
+                    onAsk={(t) => { ask = t; sendAsk(); }} />
     </Frame>
   </div>
 

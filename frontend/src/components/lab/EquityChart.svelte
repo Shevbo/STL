@@ -9,7 +9,12 @@
   import { downloadCSV } from '../../lib/csv';
   import 'uplot/dist/uPlot.min.css';
 
-  let { robotId = null, compact = false }: { robotId?: string | null; compact?: boolean } = $props();
+  // externalReport: готовый отчёт вместо запроса к /algo-report. Нужен БУМАЖНОМУ
+  // стенду: в журнал algo_trades попадают только агентские роботы, у бумажного там
+  // нет ни строки, и кривая была бы пустой. Стенд собирает отчёт из сделок самого
+  // робота и отдаёт сюда — рисовалка при этом одна на оба стенда.
+  let { robotId = null, compact = false, externalReport = null }:
+    { robotId?: string | null; compact?: boolean; externalReport?: any } = $props();
 
   // Категориальная палитра под тёмный фон терминала (#0f0f1e).
   const ROBOT_COLORS = ['#35c9b0', '#e0a53c', '#a684e8', '#5aa2e8',
@@ -38,6 +43,12 @@
   function robotColor(i: number): string { return ROBOT_COLORS[i % ROBOT_COLORS.length]; }
 
   async function load() {
+    if (externalReport) {          // отчёт пришёл готовым — сеть не трогаем
+      report = externalReport;
+      error = null;
+      rebuild();
+      return;
+    }
     try {
       const params = new URLSearchParams({ days: String(periodDays) });
       if (modeFilter !== 'all') params.set('mode', modeFilter);
