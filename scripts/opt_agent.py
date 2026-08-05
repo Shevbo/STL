@@ -156,7 +156,7 @@ except Exception:  # noqa: BLE001
 
 # Bumped whenever the agent's wire behaviour changes; reported in the heartbeat so the
 # monitor shows whether the i9 is running the latest opt_agent.
-AGENT_VERSION = "2026-08-05-manual-preempt"
+AGENT_VERSION = "2026-08-05-manual-preempt2"
 # Порог «ручного» прогона: тот же, что ставит сервер экрану LAB
 # (trader/util.py QUEUE_PRIORITY_MANUAL). Держать в согласии — по нему резервный
 # воркер отличает запрос оператора от фоновой кампании.
@@ -610,7 +610,10 @@ class Agent:
         кампании обнулился бы на каждом ручном запросе."""
         while True:
             await asyncio.sleep(period)
-            if self._activity.get("state") != "job" or self._side_busy:
+            # Занят = кампания ИЛИ generic-задача (sweep AI46 идёт часами и держит
+            # claim_loop ровно так же). Гейт только на "job" оставлял оператора
+            # ждать конца задачи — та же дыра, другая ветка.
+            if self._activity.get("state") not in ("job", "task") or self._side_busy:
                 continue
             try:
                 job = await self.claim(client, min_priority=MANUAL_PRIORITY)
@@ -699,8 +702,16 @@ class Agent:
                           "units": len(args), "since": time.time()}
         loop = asyncio.get_event_loop()
         t0 = time.time()
-        futs = [loop.run_in_executor(pool, _run_task_unit, module, func, a) for a in args]
-        done = await asyncio.gather(*futs, return_exceptions=True)
+        # НЕ БОЛЬШЕ self.workers юнитов в полёте. Пул построен с +1 резервным воркером
+        # под ручные прогоны (см. _manual_loop); без этого ограничения задача на сотню
+        # юнитов забивала бы и резерв, и оператор снова ждал бы её конца.
+        sem = asyncio.Semaphore(self.workers)
+
+        async def _unit(a):
+            async with sem:
+                return await loop.run_in_executor(pool, _run_task_unit, module, func, a)
+
+        done = await asyncio.gather(*[_unit(a) for a in args], return_exceptions=True)
         results = [({"error": f"{type(r).__name__}: {r}"} if isinstance(r, Exception) else r)
                    for r in done]
         ok = sum(1 for r in results if not (isinstance(r, dict) and r.get("error")))
