@@ -408,8 +408,10 @@ async def robot_chat(robot_id: str, body: ChatBody, request: Request):
                 return {"text": data.get("text") or "", "model_used": data.get("model_used"),
                         "provider": data.get("provider"), "elapsed_ms": data.get("elapsed_ms")}
             last = (res.text or "")[:200]
+            # prompt_chars и здесь: «bad JSON» у Lineman это ЛИМИТ РАЗМЕРА, а не
+            # разбор, и без длины тела причину отказа не отличить от чужого 429.
             log.warning("robot_chat.lineman_error", robot_id=robot_id, hint=hint,
-                        status=res.status_code, body=last)
+                        status=res.status_code, body=last, prompt_chars=len(prompt))
 
     # Причину НЕ выдумываем: 429 у провайдера и «bad JSON» от прокси — разные
     # вещи, а раньше обе печатались как «все модели заняты» (30.07.2026, 20:19).
