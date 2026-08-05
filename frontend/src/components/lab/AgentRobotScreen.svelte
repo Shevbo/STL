@@ -1173,10 +1173,34 @@
   // «Параметры» на графике до этого показывала ОДИН «Период с/по»: схема схлопывалась
   // до единственного ключа symbol (увидено на живом стенде 05.08.2026).
   const editorFields = $derived({ ...(params || {}), ...draft });
-  const editorSchema = $derived(
-    paramSchema.length
+  // Схема стратегии ПЛЮС всё, что реально несёт робот. Инфраструктурные флаги в
+  // params_schema не входят по замыслу (exit_only, bar_offset_min) — и раньше их
+  // просто не было в редакторе. Невидимый параметр невозможно ни проверить, ни
+  // защитить: 05.08.2026 правка qty/avg_max у РЕАЛЬНОГО робота молча снесла
+  // exit_only=true, и он снова начал открывать позиции. Показываем всё.
+  const editorSchema = $derived.by(() => {
+    const known = paramSchema.length
       ? paramSchema.filter((f: any) => f.key in editorFields || f.key === 'symbol')
-      : Object.keys(editorFields).map((k) => ({ key: k, label: k, type: k === 'symbol' ? 'text' : 'number' })));
+      : [];
+    const seen = new Set(known.map((f: any) => f.key));
+    const extra = Object.keys(editorFields)
+      .filter((k) => !seen.has(k))
+      .map((k) => ({
+        key: k,
+        label: PARAM_LABELS[k] ?? k,
+        type: typeof editorFields[k] === 'boolean' ? 'bool'
+              : (k === 'symbol' ? 'text' : 'number'),
+        extra: true,                       // вне схемы: не ось перебора, а флаг
+      }));
+    return [...known, ...extra];
+  });
+  // Подписи для служебных полей: в схеме их нет, а `exit_only` в интерфейсе
+  // читать как ключ нельзя.
+  const PARAM_LABELS: Record<string, string> = {
+    exit_only: 'Только на выход (позиции не открывать)',
+    bar_offset_min: 'Сдвиг часов стратегии, минут',
+    live_real: 'Помечен как реальный',
+  };
   // Reactive: the mirror resolves strategy_id AFTER mount, so a one-shot onMount
   // call raced it and could pin the default ('fvg') description forever.
   $effect(() => { const sid = robot?.strategy_id; if (sid) void loadDesc(sid); });
@@ -1751,7 +1775,7 @@
         {#if saveMsg}<div class="pe-msg">{saveMsg}</div>{/if}
       {:else}
         <ParamEditor strategyId={robot?.strategy_id ?? 'fvg'}
-                     schema={editorSchema} bind:values={draft} ctx={paramCtx}
+                     schema={editorSchema} bind:values={draft} ctx={paramCtx} baseline={params}
                      disabledKeys={['symbol']} />
         <div class="pe-grid" style="margin-top:10px">
           <label class="pe-row spec">

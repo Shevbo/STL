@@ -17,11 +17,28 @@
   import { helpFor, type LiveCtx } from '$lib/strategy-help';
   import { BINARY, BOUNDING, groupFields, stepFor, type Field } from '$lib/param-groups';
 
-  let { strategyId, schema, values = $bindable({}), ctx, disabledKeys = [] }:
+  let { strategyId, schema, values = $bindable({}), ctx, disabledKeys = [], baseline = null }:
     { strategyId: string; schema: Field[]; values: Record<string, any>;
-      ctx: LiveCtx; disabledKeys?: string[] } = $props();
+      ctx: LiveCtx; disabledKeys?: string[];
+      /** Параметры, которые СЕЙЧАС стоят у робота — для строки «что изменится». */
+      baseline?: Record<string, any> | null } = $props();
 
   let groups = $derived(groupFields(schema));
+  const isBinary = (f: Field) => BINARY.has(f.key) || (f as any).type === 'bool';
+
+  /** Что уедет роботу при сохранении. Оператор меняет два поля, а уезжает весь
+      набор — 05.08.2026 вместе с qty и avg_max молча слетели exit_only и
+      allow_short, и заметили это только по открытым позициям. */
+  let pending = $derived.by(() => {
+    if (!baseline) return [] as { key: string; from: any; to: any }[];
+    const out: { key: string; from: any; to: any }[] = [];
+    for (const k of Object.keys(values)) {
+      const a = baseline[k], b = values[k];
+      if (String(a ?? '') !== String(b ?? '')) out.push({ key: k, from: a, to: b });
+    }
+    return out;
+  });
+  const shown = (v: any) => (v === true ? 'да' : v === false ? 'нет' : v === undefined ? '—' : String(v));
   let flash = $state<string | null>(null);      // ключ, чей перевод только что изменился
 
   const num = (v: any) => (Number.isFinite(Number(v)) ? Number(v) : 0);
@@ -62,7 +79,7 @@
     const h = helpFor(strategyId, f.key);
     const live = h?.live?.(num(values[f.key]), ctx);
     if (live) return live;
-    if (BINARY.has(f.key)) return isOn(f.key) ? 'включено' : 'выключено';
+    if (isBinary(f)) return isOn(f.key) ? 'включено' : 'выключено';
     if (f.min != null && f.max != null) return `допустимо ${f.min}…${f.max}`;
     return h?.short ?? '';
   }
@@ -73,6 +90,12 @@
 </script>
 
 <div class="pp">
+  {#if pending.length}
+    <div class="pp-diff" role="status">
+      <b>Уедет роботу:</b>
+      {#each pending as c (c.key)}<span class="pp-chg"><code>{c.key}</code> {shown(c.from)} → <b>{shown(c.to)}</b></span>{/each}
+    </div>
+  {/if}
   {#each groups as { group, fields } (group.id)}
     <section class="pp-g">
       <header class="pp-gh">
@@ -85,10 +108,11 @@
         <div class="pp-row" class:bound={BOUNDING.has(f.key)} class:off>
           <div class="pp-name">
             <span class="pp-label" title={tip(f)}>{f.label}</span>
-            <code class="pp-key">{f.key}</code>
+            <code class="pp-key">{f.key}</code>{#if (f as any).extra}<span class="pp-tag"
+              title="служебный флаг: в схему стратегии не входит и в перебор не идёт, но на робота влияет">служебный</span>{/if}
           </div>
 
-          {#if BINARY.has(f.key)}
+          {#if isBinary(f)}
             <button class="pp-sw" class:on={isOn(f.key)} disabled={off}
                     role="switch" aria-checked={isOn(f.key)} aria-label={f.label}
                     onclick={() => toggle(f)}>
@@ -124,6 +148,17 @@
   .pp { --ink: #0a1020; --rail: #1c2a46; --text: #dfe8f7; --mute: #7c8cab;
         --live: #46c46a; --bound: #f0a83c;
         background: var(--ink); padding: 2px 0 10px; }
+
+  /* Что уедет роботу. Показываем ДО сохранения и по всем ключам, а не только по
+     тем, что оператор трогал руками. */
+  .pp-diff { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px;
+    margin: 8px 10px; padding: 8px 11px; background: #1d1607; border: 1px solid #6b5220;
+    border-radius: 4px; font: 400 12px/1.5 system-ui, sans-serif; color: #f0d9a8; }
+  .pp-diff b { color: #ffe9bd; }
+  .pp-chg code { font: 400 12px/1 ui-monospace, Consolas, monospace; color: #d8b877; }
+  .pp-tag { margin-left: 6px; padding: 1px 5px; border: 1px solid #4a3a6a; border-radius: 3px;
+    font: 600 9px/1.5 system-ui, sans-serif; text-transform: uppercase; letter-spacing: .07em;
+    color: #a68fd0; cursor: help; }
 
   .pp-g { border-top: 1px solid var(--rail); }
   .pp-g:first-child { border-top: 0; }

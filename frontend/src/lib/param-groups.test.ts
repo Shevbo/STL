@@ -40,3 +40,17 @@ describe('группировка параметров', () => {
     expect(stepFor({ key: 'min_gap_pts', label: '', min: 0, max: 1000 })).toBe(25);
   });
 });
+
+describe('служебные поля вне схемы', () => {
+  it('exit_only попадает в «Разрешения», а не теряется в «Прочем»', () => {
+    // Именно этого поля не было в редакторе, поэтому правка qty его и снесла.
+    const withFlag = [...SCHEMA, { key: 'exit_only', label: 'Только на выход', type: 'bool' }];
+    const allow = groupFields(withFlag).find((g) => g.group.id === 'allow');
+    expect(allow?.fields.map((f) => f.key)).toContain('exit_only');
+  });
+
+  it('symbol не растворяется: он текстовый и должен быть виден', () => {
+    const shown = groupFields(SCHEMA).flatMap((g) => g.fields.map((f) => f.key));
+    expect(shown).toContain('symbol');
+  });
+});

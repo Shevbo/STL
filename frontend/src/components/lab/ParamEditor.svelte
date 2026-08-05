@@ -9,12 +9,14 @@
   import { helpFor, type LiveCtx } from '$lib/strategy-help';
   import { downloadCSV } from '$lib/csv';
 
-  let { strategyId, schema, values = $bindable({}), ctx, disabledKeys = [] }:
+  let { strategyId, schema, values = $bindable({}), ctx, disabledKeys = [], baseline = null }:
     { strategyId: string;
       schema: { key: string; label: string; type?: string; min?: number; max?: number }[];
       values: Record<string, any>;
       ctx: LiveCtx;
-      disabledKeys?: string[] } = $props();
+      disabledKeys?: string[];
+      /** Что стоит у робота СЕЙЧАС — панель показывает по нему «уедет роботу». */
+      baseline?: Record<string, any> | null } = $props();
 
   let open = $state<Record<string, boolean>>({});
   const toggle = (k: string) => (open[k] = !open[k]);
@@ -49,7 +51,7 @@
   </div>
 
   {#if view === 'panel'}
-    <ParamPanel {strategyId} {schema} bind:values {ctx} {disabledKeys} />
+    <ParamPanel {strategyId} {schema} bind:values {ctx} {disabledKeys} {baseline} />
   {:else}
   {#each schema as f (f.key)}
     {@const help = helpFor(strategyId, f.key)}
