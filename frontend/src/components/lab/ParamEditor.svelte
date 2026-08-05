@@ -4,6 +4,7 @@
   // by the robot card; BacktestLab reuses ParamHelp inline in its range rows.
   // The parent owns Save/Cancel; this component renders fields + help + CSV.
   import ParamHelp from './ParamHelp.svelte';
+  import ParamPanel from './ParamPanel.svelte';
   import MustDescription from './MustDescription.svelte';
   import { helpFor, type LiveCtx } from '$lib/strategy-help';
   import { downloadCSV } from '$lib/csv';
@@ -17,15 +18,39 @@
 
   let open = $state<Record<string, boolean>>({});
   const toggle = (k: string) => (open[k] = !open[k]);
+
+  // Вид параметров: плотный СПИСОК (влезает целиком) или развёрнутая ПАНЕЛЬ
+  // (крупные значения, группы по смыслу, переключатели, перевод в пункты).
+  // Выбор запоминается: оператор работает в одном и том же и не переключает
+  // его на каждом открытии стенда.
+  const VIEW_KEY = 'pe_view';
+  let view = $state<'list' | 'panel'>(
+    (() => { try { return localStorage.getItem(VIEW_KEY) === 'panel' ? 'panel' : 'list'; }
+             catch { return 'list'; } })());
+  function setView(v: 'list' | 'panel') {
+    view = v;
+    try { localStorage.setItem(VIEW_KEY, v); } catch { /* приватный режим */ }
+  }
 </script>
 
 <div class="pe2">
   <MustDescription {strategyId} />
   <div class="pe2-head">
-    <span class="pe2-hint">Нажми «?» у параметра — раскроется пояснение со схемой и примером в пунктах.</span>
+    <div class="pe2-view" role="group" aria-label="Вид параметров">
+      <button class:on={view === 'list'} onclick={() => setView('list')}
+              title="плотный список: все поля видно сразу">Список</button>
+      <button class:on={view === 'panel'} onclick={() => setView('panel')}
+              title="крупно, по группам, с переводом значения в пункты">Панель</button>
+    </div>
+    <span class="pe2-hint">{view === 'panel'
+      ? 'Наведи на название параметра — всплывёт пояснение. Стрелку можно держать.'
+      : 'Нажми «?» у параметра — раскроется пояснение со схемой и примером в пунктах.'}</span>
     <button class="pe2-csv" onclick={() => downloadCSV([values], 'params-' + strategyId)}>Выгрузить в CSV</button>
   </div>
 
+  {#if view === 'panel'}
+    <ParamPanel {strategyId} {schema} bind:values {ctx} {disabledKeys} />
+  {:else}
   {#each schema as f (f.key)}
     {@const help = helpFor(strategyId, f.key)}
     <div class="pe2-row">
@@ -46,11 +71,22 @@
       <ParamHelp {help} value={Number(values[f.key]) || 0} {ctx} />
     {/if}
   {/each}
+  {/if}
 </div>
 
 <style>
   .pe2 { display: flex; flex-direction: column; gap: 2px; }
   .pe2-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+  /* Переключатель вида: две вкладки, активная подсвечена рамкой, а не заливкой —
+     заливка спорила бы с зелёными кнопками действий над фреймом. */
+  .pe2-view { display: inline-flex; flex: none; border: 1px solid #24406a; border-radius: 4px;
+    overflow: hidden; }
+  .pe2-view button { background: #0d1526; border: 0; color: #7c8cab; cursor: pointer;
+    font: 600 11px/1 system-ui, sans-serif; padding: 6px 12px; }
+  .pe2-view button + button { border-left: 1px solid #24406a; }
+  .pe2-view button:hover { color: #cfe2ff; }
+  .pe2-view button.on { background: #16243c; color: #dfe8f7; }
+
   .pe2-hint { font-size: 12px; color: #8b93a7; }
   .pe2-csv { margin-left: auto; background: #16162c; border: 1px solid #2d2d4a; color: #cde;
     padding: 4px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; }
