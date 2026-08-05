@@ -241,6 +241,12 @@ def explain(strategy_id: str, bars, params: dict, position: int,
     if blk:
         d["entry_blocked"] = blk
         for o in d["planned_orders"]:
-            if o.get("entry"):
+            # ТОЛЬКО ДОБОРЫ. Разножка и остывание стоят в make_on_bar исключительно
+            # на ветке усреднения (gap_ok там и только там); вход по сигналу и
+            # разворот они не трогают с 31.07.2026. Помечая любой entry, карточка
+            # объявляла заблокированным разворот в шорт — и при разборе «почему
+            # робот не шортит» это уводило прямо в ложный след (05.08.2026).
+            # Доборы отличает level=true: у них есть ценовой уровень.
+            if o.get("entry") and o.get("level"):
                 o["blocked"] = blk
     return d
