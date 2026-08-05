@@ -485,4 +485,30 @@
   .so-c-note { color: #8a90a8; font-size: 11px; margin-top: 3px; }
   .so-hist { margin-top: 10px; }
   .so-hist summary { cursor: pointer; color: #8a90a8; font-size: 11px; margin-bottom: 6px; }
+
+  /* ══ ТЕЛЕФОН ═══════════════════════════════════════════════════════════════
+     Экран умных заявок — это деньги и стопы: читать его надо без прищура. На
+     телефоне всё в одну колонку, шрифт крупнее, поля и кнопки под палец (36 px —
+     минимум, ниже промахиваешься), карточки заявок разворачиваются вертикально.
+     Длинный скролл здесь лучше, чем плотная сетка: заявок редко больше десятка. */
+  @media (max-width: 820px) {
+    .so { padding: 12px 12px 24px; font-size: 15px; max-width: none; height: auto; }
+    .so-h { font-size: 12px; letter-spacing: .1em; }
+    .so-kinds { grid-template-columns: 1fr; gap: 10px; }
+    .so-kind { padding: 12px 14px; }
+    .so-kind-name { font-size: 17px; }
+    .so-kind-ess { font-size: 14px; }
+    .so-main { grid-template-columns: 1fr; gap: 16px; }
+    .so-facts { grid-template-columns: 1fr; gap: 1px 0; }
+    .so-facts dt { margin-top: 8px; }
+    .so-algo { font-size: 14px; line-height: 1.6; }
+    /* Поля ввода: 16px обязателен — на меньшем iOS сам зумит страницу при фокусе. */
+    input, button { font-size: 16px; }
+    input { min-height: 38px; }
+    .so-btn, .so-csv { min-height: 40px; padding: 0 14px; }
+    /* Карточка заявки: шапка в столбец, чтобы длинные условия не резались. */
+    .so-card { padding: 12px; }
+    .so-c-head { flex-wrap: wrap; gap: 6px; }
+    .so-c-cond, .so-c-facts { font-size: 14px; line-height: 1.5; }
+  }
 </style>

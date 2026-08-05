@@ -72,4 +72,18 @@
   .fbody::-webkit-scrollbar { width: 8px; height: 8px; }
   .fbody::-webkit-scrollbar-thumb { background: #2a2a52; border-radius: 4px; }
   .fbody::-webkit-scrollbar-track { background: transparent; }
+
+  /* ── Телефон ───────────────────────────────────────────────────────────────
+     На узком экране высоты фреймов не делят экран, а складываются в ленту: всё
+     видно целиком длинным скроллом, а не в шести окошках по десять строк.
+     `!important` нужен потому, что basis приходит ИНЛАЙНОВЫМ стилем от родителя
+     (см. flexStyle) — иначе медиа-правило его не перебьёт. Заголовок фрейма
+     крупнее: он же и разделитель разделов при скролле. */
+  @media (max-width: 820px) {
+    .frame { flex: 0 0 auto !important; border-radius: 8px; }
+    .frame.max { position: static; inset: auto; }
+    .fh { font-size: 12px; padding: 7px 10px; letter-spacing: .04em; }
+    .fb { font-size: 16px; padding: 0 6px; }
+    .fbody { overflow: visible; }
+  }
 </style>

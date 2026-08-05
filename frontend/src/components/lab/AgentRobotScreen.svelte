@@ -2113,4 +2113,53 @@
   .strat-longread { display: inline-block; margin: 6px 0 2px; font-size: 11px; color: #6aa8ff;
     text-decoration: none; border-bottom: 1px dotted #6aa8ff55; }
   .strat-longread:hover { color: #9cc6ff; border-bottom-color: #9cc6ff; }
+
+  /* ══ ТЕЛЕФОН ═══════════════════════════════════════════════════════════════
+     Правило одно: вся информация на экране КРУПНО, длинным скроллом. Десктопная
+     раскладка делит фиксированную высоту между шестью фреймами — на телефоне это
+     шесть окошек по десять строк, в каждом свой скролл. Здесь наоборот: страница
+     скроллится целиком, фреймы идут лентой и держат свою натуральную высоту.
+     Перетаскивание границ и выбор раскладки пальцем не нужны — скрыты. */
+  @media (max-width: 820px) {
+    .ars { height: auto; min-height: 100dvh; overflow-y: auto; overflow-x: hidden;
+           font-size: 14px; -webkit-text-size-adjust: 100%; }
+    .ars-head { padding: 10px 12px; gap: 6px; position: sticky; top: 0; z-index: 30;
+                background: #0a0a12; }
+    .ars-icon { font-size: 20px; }
+    .hd-mode, .hd-sym { font-size: 12px; padding: 2px 8px; }
+    /* Выбор раскладки — мышиная вещь: на телефоне раскладка всегда лента. */
+    .lay-switch { display: none; }
+    .hd-sp { flex-basis: 100%; }
+
+    .ars-strip { grid-template-columns: 1fr; gap: 8px; padding: 8px; }
+    .ars-strip > :global(.frame) { max-height: none; }
+
+    /* Колонки и ряды десктопа разворачиваются в один столбец. */
+    .work, .work.side, .work.side.reverse, .panels-col, .bottom-row,
+    .ars-diag-row, .ars-diag-row.col { flex-direction: column; height: auto; }
+    .panels-col.scroll { overflow: visible; }
+    .ars-diag-row { overflow: visible; }
+    .diag-box { overflow: visible; }
+
+    /* График и латентность получают явную высоту: без неё flex-раскладка на
+       auto-высоте схлопывает канвас в ноль. */
+    .ars-chart, .ars-chart-body { height: 62vh; min-height: 300px; }
+    .ars-lat { height: 200px; }
+
+    /* Читаемость: подписи и цифры на телефоне не должны быть 10-пиксельными. */
+    .dgk { font-size: 12px; }
+    .dgv { font-size: 15px; }
+    .diag-grid { grid-template-columns: 1fr 1fr; gap: 8px 14px; }
+    .st-grid { grid-template-columns: 1fr 1fr; }
+    .crt-body { height: auto; max-height: 46vh; font-size: 13px; }
+
+    /* Таблицы шире экрана не ломают страницу — они прокручиваются в себе. */
+    .hist-scroll { overflow-x: auto; max-height: none; }
+    .panel { overflow: visible; }
+    table { font-size: 13px; }
+
+    /* Кнопки действий — пальцем, а не мышью. */
+    .rc-btn, .pe-btn, .mon-hb { min-height: 34px; font-size: 12px; padding: 0 10px; }
+    .acts { gap: 8px; padding: 10px; }
+  }
 </style>

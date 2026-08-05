@@ -76,4 +76,7 @@
   .split.h { height: 6px; cursor: row-resize; }
   .split:hover, .split.dragging { background: #43c46333; }
   .split.dragging { user-select: none; }
+
+  /* Телефон: тянуть границы пальцем нечего — панели идут лентой сверху вниз. */
+  @media (max-width: 820px) { .split { display: none; } }
 </style>

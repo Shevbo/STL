@@ -91,4 +91,11 @@
   }
   .of-body { flex: 1; min-height: 0; overflow: hidden; display: flex; }
   .of-body > :global(*) { flex: 1; min-width: 0; }
+
+  /* Телефон: вкладки крупнее и на всю ширину — попасть пальцем, не целясь. */
+  @media (max-width: 820px) {
+    .of-tabs { gap: 2px; }
+    .of-tabs button { flex: 1 1 auto; min-height: 40px; font-size: 14px; }
+    .of-body { overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  }
 </style>
