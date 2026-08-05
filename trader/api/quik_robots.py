@@ -220,6 +220,29 @@ async def relay_robot_params(robot_id: str, body: ParamsRelayBody, request: Requ
                 if r.get("robot_id") == robot_id), None)
     cur_maxpos = int(cur.get("max_position", 0) or 0) if cur else None
     cur_sched = (cur or {}).get("schedule") or ""
+    # СЛИЯНИЕ, А НЕ ЗАМЕНА. Клиент присылает поля своей формы, а форма строится по
+    # params_schema стратегии — инфраструктурные флаги в схему не входят по замыслу
+    # (exit_only, bar_offset_min). Прямая запись присланного набора их СТИРАЛА:
+    # 05.08.2026 оператор поменял qty и avg_max у РЕАЛЬНОГО робота, и вместе с этим
+    # молча слетели exit_only=true и allow_short=0 — робот снова получил право
+    # открывать позиции и шортить. Накладываем присланное на текущее из зеркала:
+    # тогда неупомянутый ключ сохраняется, а не сбрасывается.
+    if cur is not None:
+        base = (cur.get("params_json") or "{}")
+        try:
+            base = json.loads(base) if isinstance(base, str) else dict(base or {})
+        except ValueError:
+            base = {}
+        try:
+            sent = json.loads(body.params_json or "{}")
+        except ValueError:
+            sent = {}
+        if isinstance(base, dict) and isinstance(sent, dict) and base:
+            dropped = sorted(set(base) - set(sent))
+            if dropped:
+                log.info("robot_params.merged_kept", robot_id=robot_id, kept=dropped)
+            body.params_json = json.dumps({**base, **sent}, ensure_ascii=False)
+
     want_maxpos = body.max_position if (body.max_position or 0) > 0 else None
     want_sched = body.schedule or None
     spec_change = ((want_maxpos is not None and want_maxpos != cur_maxpos)
