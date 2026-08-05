@@ -41,7 +41,11 @@ DEFAULT_SYMBOLS = [
 # keep combo counts manageable. Pinned at their off-defaults instead.
 AVG_PARAM_KEYS = {"avg_max", "avg_step_atr", "tp_atr", "sl_frac", "sl_pct", "avg_atr_n",
                   "nd_days", "gap_auto", "k_avg", "min_gap_pts",
-                  "cooldown_min", "cooldown_pct"}
+                  "cooldown_min", "cooldown_pct",
+                  # Стороны по умолчанию пришпилены к 1/1 (прежнее поведение). Свободные
+                  # они удваивают сетку дважды, а осмысленны лишь на выделенном прогоне
+                  # «нужен ли шорт» — тогда их освобождают явно через --pin.
+                  "allow_long", "allow_short"}
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
