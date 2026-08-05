@@ -8,6 +8,7 @@ metrics row (net/gross/fees/trades) for the leaderboard.
 from __future__ import annotations
 
 import asyncio
+import datetime
 import os
 import pickle
 import tempfile
@@ -76,6 +77,26 @@ def _cached_bars(key: str, date_from: str, date_to: str) -> list:
     return bars
 
 
+def _clip(bars: list, date_from: str, date_to: str) -> list:
+    """Оставляет бары внутри заявленного окна.
+
+    Раньше даты использовались ТОЛЬКО как ключ кэша, а в бэктест уходил весь файл
+    `agent_bars/<key>.json` целиком. Файл переписывается другими задачами (02.08 он
+    вырос с 95 дней до полугода), и один и тот же свип на разной неделе считал разные
+    периоды — прогоны становились несравнимыми молча.
+    """
+    try:
+        d0 = date.fromisoformat(date_from)
+        d1 = date.fromisoformat(date_to)
+    except (TypeError, ValueError):
+        return bars
+    t0 = int(datetime.datetime.combine(d0, datetime.time.min,
+                                       tzinfo=datetime.timezone.utc).timestamp())
+    t1 = int(datetime.datetime.combine(d1, datetime.time.min,
+                                       tzinfo=datetime.timezone.utc).timestamp()) + 86400
+    return [b for b in bars if t0 <= b.time < t1]
+
+
 def run_combo(arg: dict) -> dict:
     """arg = {key, fields, date_from, date_to, point_value, cfg}. Runs one combo on one
     symbol and returns its net/gross/fees/trades."""
@@ -83,7 +104,8 @@ def run_combo(arg: dict) -> dict:
     fields = arg["fields"]
     cfg = arg["cfg"]
     try:
-        bars = _cached_bars(key, arg["date_from"], arg["date_to"])
+        bars = _clip(_cached_bars(key, arg["date_from"], arg["date_to"]),
+                     arg["date_from"], arg["date_to"])
         if not bars:
             return {"key": key, "combo": fields, "error": "no bars"}
         bt = Ai46Backtester(

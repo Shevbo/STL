@@ -1,11 +1,11 @@
 """Перебор параметров team-46 на i9 через очередь задач агента.
 
-ЦЕЛЬ ПЕРЕБОРА (заказ оператора 01.08.2026): базовая конфигурация делает 217 сделок в
-день при валовом эдже +0.105% за 3 месяца и комиссии 6.8% — комиссия больше эджа в 65
-раз. Нужен режим НА ПОРЯДОК реже и НА ДВА ПОРЯДКА крупнее по эджу на сделку. Поэтому
-оси делятся на две группы:
-  * избирательность (реже входить): ofi_thr, shock_z, min_agreement, cooldown;
+ЦЕЛЬ ПЕРЕБОРА (заказ оператора 01.08.2026): стратегия торгует слишком часто и слишком
+мелко, комиссия съедает эдж. Нужен режим НА ПОРЯДОК реже и НА ДВА ПОРЯДКА крупнее по
+эджу на сделку. Оси делятся на две группы:
+  * избирательность (реже входить): ofi_thr, cooldown;
   * величина сделки (крупнее эдж): primary_hold, take_pct.
+Первый заход добился 3.3x по редкости и 4.8x по эджу, второй двигает границы дальше.
 
 Комиссия ТЕЙКЕРСКАЯ: стратегия входит по рынку, мейкерская модель здесь была бы
 самообманом (прошлые прогоны считали taker=False и потому выглядели «почти в нуле»).
@@ -23,7 +23,7 @@ import itertools
 import json
 import os
 import time
-from datetime import date, timedelta
+from datetime import date
 
 import httpx
 
@@ -38,18 +38,26 @@ H = {"X-Agent-Token": TOKEN, "Content-Type": "application/json"}
 # кэш баров обрывается 01.07.
 SYMBOLS = ["Si", "RI", "GD", "GZ"]
 
-# Первое значение каждой оси = текущий живой дефолт, поэтому комбинация №0 это БАЗА.
+# ВТОРОЙ ЗАХОД (01.08 -> 05.08). Первый нашёл направление, но ВСЕ выигравшие оси
+# упёрлись в потолок сетки, а `min_agreement=0.8` дал 0 сделок в 32 комбинациях из 64
+# (порог согласия таймфреймов туда не дотягивает) — эта ось и `shock_z`, ничего не
+# показавший, выброшены. Первое значение каждой оси = лидер первого захода, поэтому
+# комбинация №0 здесь ОПОРА, а не исторический дефолт.
+#
+# Главный вывод первого захода: эдж делает УДЕРЖАНИЕ, а не отбор — с высоким порогом,
+# но коротким удержанием валовый падает в ноль. Поэтому удержание идёт тремя уровнями
+# (2/6/12 часов), а тейк удвоен: при коротком удержании он вообще не срабатывал.
 GRID = {
-    "ofi_thr":       [0.7, 1.5],       # порог аномалии потока заявок
-    "shock_z":       [2.0, 3.5],       # порог ценового шока, сигм
-    "min_agreement": [0.5, 0.8],       # согласие таймфреймов
-    "cooldown":      [300.0, 3600.0],  # пауза между сигналами одного типа
-    "primary_hold":  [900.0, 7200.0],  # удержание основной ноги, с
-    "take_pct":      [0.025, 0.06],    # тейк
+    "ofi_thr":      [1.5, 2.5],                # порог аномалии потока заявок
+    "cooldown":     [3600.0, 14400.0],         # пауза между сигналами одного типа
+    "primary_hold": [7200.0, 21600.0, 43200.0],  # удержание основной ноги: 2 / 6 / 12 ч
+    "take_pct":     [0.06, 0.12],              # тейк
 }
 CFG = {"step": 900, "window_days": 2, "model_window": 240, "model_iter": 18,
        "refresh": 7200.0, "ofi_mode": "proxy", "taker": True}
-DAYS = 95                              # то же окно, на котором измерена база
+# Окно ПРИБИТО к периоду первого захода: иначе сдвиг «сегодня минус 95 дней» тихо меняет
+# период и таблицы двух заходов становятся несравнимыми.
+DATE_FROM, DATE_TO = "2026-04-28", "2026-08-01"
 
 
 def _point_values() -> dict:
@@ -120,13 +128,12 @@ def main() -> None:
         raise SystemExit("set OPT_AGENT_TOKEN")
 
     pvs = _point_values()
-    today = date.today()
-    d_from, d_to = str(today - timedelta(days=DAYS)), str(today)
+    d_from, d_to = DATE_FROM, DATE_TO
     combos = _combos(args_cli.probe)
     units = [{"key": s, "fields": c, "date_from": d_from, "date_to": d_to,
               "point_value": pvs.get(s, 1.0), "cfg": CFG}
              for c in combos for s in SYMBOLS]
-    tid = args_cli.id or f"ai46-{'probe' if args_cli.probe else 'sweep'}-{d_to.replace('-', '')}"
+    tid = args_cli.id or f"ai46-{'probe' if args_cli.probe else 'sweep'}-{date.today():%Y%m%d}"
     print(f"{tid}: {len(combos)} комбинаций × {len(SYMBOLS)} инстр. = {len(units)} юнитов, "
           f"окно {d_from}..{d_to}, комиссия {'тейкер' if CFG['taker'] else 'мейкер'}")
 
@@ -176,10 +183,10 @@ def main() -> None:
     path = os.path.join("data", "ai46_bt_3m", f"{tid}.json")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
-        json.dump({"grid": GRID, "symbols": SYMBOLS, "cfg": CFG, "days": DAYS,
+        json.dump({"grid": GRID, "symbols": SYMBOLS, "cfg": CFG, "window": [DATE_FROM, DATE_TO],
                    "wall_secs": round(wall, 1), "ranked": out}, f, ensure_ascii=False, indent=2)
 
-    print(f"\n=== ТАБЛИЦА по НЕТТО (тейкер, {len(SYMBOLS)} инстр., {DAYS} дней, {wall / 60:.0f} мин) ===")
+    print(f"\n=== ТАБЛИЦА по НЕТТО (тейкер, {len(SYMBOLS)} инстр., {DATE_FROM}..{DATE_TO}, {wall / 60:.0f} мин) ===")
     print(f"{'#':>3} {'НЕТТО':>9} {'валовый':>9} {'комис':>8} {'сделок':>7} {'×реже':>6} "
           f"{'эдж/сд':>8} {'ком/сд':>8} {'ком/эдж':>8}  параметры")
     for rank, i in enumerate(ranked):
@@ -188,11 +195,11 @@ def main() -> None:
         fee = a["fees"] / a["trades"] if a["trades"] else 0.0
         rarer = (base_tr / a["trades"]) if a["trades"] else 0.0
         ratio = f"{fee / edge:.0f}x" if edge > 0 else "—"
-        tag = " (БАЗА)" if i == base_i else ""
+        tag = " (ОПОРА: лидер прошлого захода)" if i == base_i else ""
         diff = {k: v for k, v in combos[i].items() if base_i is None or v != combos[base_i][k]}
         print(f"{rank + 1:>3} {a['net'] * 100:>+8.3f}% {a['gross'] * 100:>+8.3f}% "
               f"{a['fees'] * 100:>7.3f}% {a['trades']:>7} {rarer:>5.1f}x "
-              f"{edge * 1e6:>+7.3f} {fee * 1e6:>7.3f} {ratio:>8}  {diff or 'база'}{tag}")
+              f"{edge * 1e6:>+7.3f} {fee * 1e6:>7.3f} {ratio:>8}  {diff or 'опора'}{tag}")
     if base_edge:
         best = ranked[0]
         be = agg[best]["gross"] / agg[best]["trades"] if agg[best]["trades"] else 0.0
