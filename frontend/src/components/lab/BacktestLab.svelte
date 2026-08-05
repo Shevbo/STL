@@ -406,6 +406,16 @@
       }
       catalog = botCatalog;
       // Restore previous session: strategy, params, ranges, results
+      // ?from_robot=<id> — «перебрать параметры ЭТОГО робота» со стенда. Берём
+      // стратегию и ТЕКУЩИЕ параметры с сервера (/lab/robot-stand знает и агентского,
+      // и бумажного), чтобы оператор не переносил полтора десятка полей руками и не
+      // ошибся в одном из них. Восстановление прошлой сессии при этом не применяем:
+      // пришли по явной ссылке, она главнее.
+      const fromRobot = new URLSearchParams(window.location.search).get('from_robot');
+      if (fromRobot) {
+        const ok = await prefillFromRobot(fromRobot);
+        if (ok) return;
+      }
       const restored = restoreBtlState();
       if (restored && selectedStrategyId) {
         const s = catalog.find((c: any) => c.id === selectedStrategyId);
@@ -414,6 +424,28 @@
         selectStrategy(catalog[0]);
       }
     } catch { catalog = []; }
+  }
+
+  /** Предзаполнить лабораторию параметрами конкретного робота (ссылка со стенда). */
+  async function prefillFromRobot(robotId: string): Promise<boolean> {
+    try {
+      const r = await fetchWithAuth(`/api/v1/lab/robot-stand/${encodeURIComponent(robotId)}`);
+      if (!r.ok) { say(`> робот ${robotId}: не удалось получить параметры (HTTP ${r.status})`, 'err'); return false; }
+      const rob = (await r.json())?.robot ?? {};
+      const sid = rob.strategy_id;
+      const s = catalog.find((c: any) => c.id === sid);
+      if (!s) { say(`> стратегия ${sid ?? '?'} не найдена в каталоге`, 'err'); return false; }
+      await selectStrategy(s);
+      // ПОСЛЕ selectStrategy: он сбрасывает paramValues на дефолты схемы.
+      paramValues = { ...paramValues, ...(rob.params_json ?? {}) };
+      if (rob.symbol) paramValues.symbol = rob.symbol;
+      say(`> параметры робота «${rob.display_name ?? robotId}» перенесены: `
+          + `${sid} · ${rob.symbol ?? '?'}. Задай диапазоны и запускай перебор.`, 'ok');
+      return true;
+    } catch (e) {
+      say(`> робот ${robotId}: ${String(e).slice(0, 80)}`, 'err');
+      return false;
+    }
   }
 
   async function loadInstruments() {

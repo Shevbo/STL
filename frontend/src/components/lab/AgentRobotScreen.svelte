@@ -1793,7 +1793,12 @@
           </Frame>
           <Splitter dir="v" bind:size={stEq} min={140} def={300} storageKey="ars_st_eq" />
           <Frame fid="logic" title="Логика стратегии" bind:maxId>
-            {#snippet head()}<button class="pe-btn hist" onclick={toggleHistory} title="все сохранённые прогоны перебора параметров этой стратегии">История прогонов{#if strategyCampaigns.length} ({strategyCampaigns.length}){/if}</button>{/snippet}
+            {#snippet head()}
+              <a class="pe-btn sweep" href={`/?lab=backtest&from_robot=${encodeURIComponent(robotId)}`}
+                 target="_blank" rel="noopener"
+                 title="открыть Лабораторию с ТЕКУЩИМИ параметрами этого робота и перебрать их">⚙ Перебрать параметры</a>
+              <button class="pe-btn hist" onclick={toggleHistory} title="все сохранённые прогоны перебора параметров этой стратегии">История прогонов{#if strategyCampaigns.length} ({strategyCampaigns.length}){/if}</button>
+            {/snippet}
             {@render logicPanel()}
           </Frame>
         </div>
@@ -1869,6 +1874,10 @@
   /* Ровно 8 строк вывода (заказ оператора): 8 × межстрочный (13px × 1.5 = 19.5px)
      + вертикальные паддинги тела. Всё, что не влезло, живёт в скролле. Высоту
      задаём телу, а не фрейму: шапка фрейма меняется независимо от нас. */
+  .pe-btn.sweep { display: inline-block; text-decoration: none; color: #9ad5a0;
+    border-color: #2f6a3a; }
+  .pe-btn.sweep:hover { color: #d6ffe0; border-color: #46a05a; }
+
   .crt { position: relative; background: #030803; overflow: hidden; }
   .crt-scan { position: absolute; inset: 0; pointer-events: none; z-index: 2;
     background: repeating-linear-gradient(to bottom, rgba(0,0,0,.28) 0 1px, transparent 1px 3px); }

@@ -88,6 +88,14 @@ def persona(robot_id: str, name: str) -> str:
     )
 
 
+def _params_of(rob: dict) -> dict:
+    """params_json приходит СТРОКОЙ из зеркала агента и СЛОВАРЁМ из сборщика бумажного
+    робота (trader/lab/robot_stand). Напарник — общий потребитель, значит принимать
+    обязан оба вида: голый json.loads на словаре ронял чат бумажного в 500."""
+    from trader.lab.robot_stand import _params
+    return _params(rob.get("params_json"))
+
+
 def _num(v, default=0.0) -> float:
     try:
         return float(v)
@@ -166,7 +174,7 @@ def _facts(rob: dict, extra: dict) -> list[str]:
     paused = bool(rob.get("paused"))
     running = bool(rob.get("running"))
     try:
-        params = json.loads(rob.get("params_json") or "{}")
+        params = _params_of(rob)
     except ValueError:
         params = {}
     exit_only = bool(params.get("exit_only"))
@@ -336,7 +344,7 @@ async def _gather(request: Request, robot_id: str, agent_id: str | None) -> dict
         from trader.lab.strategies.library import PARAM_DESC, STRATEGY_DESC
         strategy_doc = (STRATEGY_DESC.get(sid) or "")[:2500]
         try:
-            keys = list(json.loads(rob.get("params_json") or "{}"))
+            keys = list(_params_of(rob))
         except ValueError:
             keys = []
         params_doc = "\n".join(f"{k}: {PARAM_DESC[k]}" for k in keys if k in PARAM_DESC)[:2500]
