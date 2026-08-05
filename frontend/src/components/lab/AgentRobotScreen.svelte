@@ -1168,10 +1168,15 @@
   });
   // Editor schema: the strategy's own params_schema when loaded, else synthesize
   // rows from the deployed params so the editor still renders before the fetch.
+  // Фильтруем по ПАРАМЕТРАМ РОБОТА, а не по draft. draft — буфер редактирования, он
+  // пуст, пока оператор не нажал «Изменить» в «Логике стратегии», и панель
+  // «Параметры» на графике до этого показывала ОДИН «Период с/по»: схема схлопывалась
+  // до единственного ключа symbol (увидено на живом стенде 05.08.2026).
+  const editorFields = $derived({ ...(params || {}), ...draft });
   const editorSchema = $derived(
     paramSchema.length
-      ? paramSchema.filter((f: any) => f.key in draft || f.key === 'symbol')
-      : Object.keys(draft).map((k) => ({ key: k, label: k, type: k === 'symbol' ? 'text' : 'number' })));
+      ? paramSchema.filter((f: any) => f.key in editorFields || f.key === 'symbol')
+      : Object.keys(editorFields).map((k) => ({ key: k, label: k, type: k === 'symbol' ? 'text' : 'number' })));
   // Reactive: the mirror resolves strategy_id AFTER mount, so a one-shot onMount
   // call raced it and could pin the default ('fvg') description forever.
   $effect(() => { const sid = robot?.strategy_id; if (sid) void loadDesc(sid); });

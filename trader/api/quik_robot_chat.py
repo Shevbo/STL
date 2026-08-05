@@ -236,42 +236,74 @@ def _trades_block(rows: list[dict]) -> str:
     return "\n".join(out)
 
 
+async def _paper_robot(request: Request, robot_id: str) -> dict | None:
+    """Бумажный робот STL в форме записи зеркала — или None, если такого нет.
+
+    Тянем через ту же ручку /robots/{id}/live, что и стенд: она уже умеет роллы,
+    ₽/пункт и портфельных роботов, а дублировать её запросами здесь значило бы
+    завести второй источник правды о позиции.
+    """
+    from trader.lab.robot_stand import paper_record
+    pool = getattr(request.app.state, "db_pool", None)
+    if pool is None:
+        return None
+    if not await pool.fetchval("SELECT 1 FROM robots WHERE id=$1", robot_id):
+        return None
+    for route in request.app.routes:
+        if getattr(route, "path", "") == "/api/v1/robots/{robot_id}/live":
+            live = await route.endpoint(robot_id, request)
+            return paper_record(robot_id, live)
+    return None
+
+
 async def _gather(request: Request, robot_id: str, agent_id: str | None) -> dict:
     """Всё, что STL знает про этого робота. Только чтение."""
+    # Зеркало нужно ТОЛЬКО агентскому роботу. Бумажный живёт в базе STL, и падать
+    # на отсутствии зеркала для него нельзя — стенд у них один.
     store = getattr(request.app.state, "quik_store", None)
-    if store is None:
-        raise HTTPException(status_code=503, detail="Зеркало агента недоступно")
-    # Тем же резолвером, что и остальные robots-ручки: store._pick(None) выбирает
-    # агента только когда он ЕДИНСТВЕННЫЙ живой, а в проде накапливаются старые
-    # записи сессий — стенд без &agent= получал «робот не найден».
-    if not agent_id:
-        from trader.quik.store import resolve_agent
-        agent_id = resolve_agent(store, None)
-    report = store.robot_report(agent_id) or {}
-    rob = next((r for r in report.get("robots", []) if r.get("robot_id") == robot_id), None)
+    rob = None
+    if store is not None:
+        # Тем же резолвером, что и остальные robots-ручки: store._pick(None) выбирает
+        # агента только когда он ЕДИНСТВЕННЫЙ живой, а в проде накапливаются старые
+        # записи сессий — стенд без &agent= получал «робот не найден».
+        if not agent_id:
+            from trader.quik.store import resolve_agent
+            agent_id = resolve_agent(store, None)
+        report = store.robot_report(agent_id) or {}
+        rob = next((r for r in report.get("robots", []) if r.get("robot_id") == robot_id), None)
+    if rob is None:
+        # БУМАЖНЫЙ робот STL зеркала не касается, но стенд у него ТОТ ЖЕ — значит и
+        # напарник должен быть. Собираем запись тем же кодом, что и ручка стенда
+        # (trader/lab/robot_stand): своя копия здесь означала бы, что напарник
+        # рассказывает про одну позицию, а экран показывает другую.
+        rob = await _paper_robot(request, robot_id)
     if rob is None:
         raise HTTPException(status_code=409, detail=(
-            "Робот не найден в зеркале агента — говорить о нём нечего."))
+            "Робот не найден ни в зеркале агента, ни среди бумажных — говорить о нём нечего."))
 
     settings = request.app.state.settings
     extra: dict = {"margin_mult": float(getattr(settings, "quik_margin_multiplier", 1.0) or 1.0)}
 
-    params_rows = (store.params(agent_id) or {}).get("rows") or []
-    row = next((p for p in params_rows if p.get("code") == rob.get("symbol")), None)
-    extra["coef"] = _num((row or {}).get("coef")) or None
+    # Обогащение из зеркала — только для агентского робота. У бумажного нет ни
+    # ₽/пункт от QLua, ни ГО, ни лимитов агента, ни сверки с QUIK: он живёт в базе
+    # STL. Описание стратегии и журнал сделок ниже собираются для обоих.
+    if store is not None:
+        params_rows = (store.params(agent_id) or {}).get("rows") or []
+        row = next((p for p in params_rows if p.get("code") == rob.get("symbol")), None)
+        extra["coef"] = _num((row or {}).get("coef")) or None
 
-    status = store.agent_status(agent_id) or {}
-    health = status.get("health") or {}
-    mrow = next((p for p in (health.get("params") or [])
-                 if p.get("code") == rob.get("symbol")), None)
-    if mrow:
-        extra["margin_per"] = _num(mrow.get("margin")) * extra["margin_mult"]
-    extra["limits"] = store.limits_state(agent_id)
-    extra["recon"] = next((c for c in ((status.get("recon") or {}).get("robot_checks") or [])
-                           if c.get("id") == robot_id), None)
+        status = store.agent_status(agent_id) or {}
+        health = status.get("health") or {}
+        mrow = next((p for p in (health.get("params") or [])
+                     if p.get("code") == rob.get("symbol")), None)
+        if mrow:
+            extra["margin_per"] = _num(mrow.get("margin")) * extra["margin_mult"]
+        extra["limits"] = store.limits_state(agent_id)
+        extra["recon"] = next((c for c in ((status.get("recon") or {}).get("robot_checks") or [])
+                               if c.get("id") == robot_id), None)
     try:
         extra["signal"] = json.loads(rob.get("signal_json") or "{}")
-    except ValueError:
+    except (ValueError, TypeError):
         extra["signal"] = {}
 
     trades: list[dict] = []
