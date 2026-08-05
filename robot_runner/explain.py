@@ -106,8 +106,17 @@ def _generic_explain(strategy_id: str, bars, params: dict, state: dict) -> dict:
     need = spec["warmup"](params)
     if len(bars) < need:
         return {"ready": False, "waiting_for": f"накопление баров: {len(bars)}/{need}"}
+    # ОКНО, А НЕ ВЕСЬ ХВОСТ. make_on_bar зовёт signal() ровно на `need` последних барах;
+    # если показать сигнал по всем 600, консоль покажет ПЕРЕВОРОТ там, где трейдер его
+    # не видит. Так и было у macd_cross fast=57/slow=48: монитор писал «СИГНАЛ ШОРТ», а
+    # робот в ту же секунду покупал (lxk22tsffsxiiotb8kmpsato, 6 суток, 0 шортов).
+    atr_n = int(params.get("avg_atr_n", 14) or 14)
+    if float(params.get("avg_step_atr", 0) or 0) > 0 or float(params.get("tp_atr", 0) or 0) > 0:
+        need = max(need, atr_n + 1)
+    if len(bars) < need:
+        return {"ready": False, "waiting_for": f"накопление баров: {len(bars)}/{need}"}
     try:
-        want = spec["signal"](bars, params)
+        want = spec["signal"](bars[-need:], params)
     except Exception as exc:  # noqa: BLE001 — introspection must never crash the host
         return {"ready": False, "waiting_for": f"ошибка сигнала: {exc}"}
     label = {1: "СИГНАЛ ЛОНГ", -1: "СИГНАЛ ШОРТ", 0: "сигнал: выйти в кэш"}.get(want)

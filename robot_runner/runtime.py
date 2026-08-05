@@ -11,6 +11,7 @@ Limits: max_position is enforced BEFORE sending (first line; the Go Guard is
 the second). An order that would exceed it returns status='skipped'.
 """
 
+import asyncio
 import os
 import time
 from datetime import datetime, timedelta, timezone
@@ -34,6 +35,13 @@ _QUOTE_FRESH_MS = 10_000   # a quote younger than this prices at the exchange to
 # price collar. The stuck-exit bug (2026-07-20) fell back to bars[-1].close = a resting
 # limit above the market that never filled while the robot sat long +11.
 _STALE_CROSS_FRAC = 0.003
+# Переворот сигнала уходит ДВУМЯ заявками подряд (library.py: сначала выход всей
+# позицией, следом вход в новую сторону). В бэктесте обе исполняются в одном баре,
+# вживую выход ещё висит на рынке, когда приходит вход, и QUIK бьёт по нему
+# «Обработка кросс-заявок блокирована»: вход теряется, робот остаётся в флэте
+# вместо разворота. Даём встречной заявке сойти с рынка. По истечении ждать
+# нечего — отправляем как раньше: пропустить вход значит потерять переворот целиком.
+_CROSS_WAIT_SEC = 5.0
 _STATE_TO_STATUS = {2: "active", 3: "partial", 4: "filled",
                     5: "cancelled", 6: "rejected"}
 
@@ -146,6 +154,7 @@ class AgentRuntime:
                              status="paper")
             return Order(order_id=client_id, symbol=symbol, side=side, qty=qty,
                          price=price, status="paper", fill_price=price)
+        await self._await_opposite_clear(side, symbol)
         # REAL orders go MARKETABLE: BUY at the ask, SELL at the bid (freshest
         # QUIK quote), so the fill matches the backtest's fill-at-close model.
         # A limit at bars[-1].close RESTS whenever the market moved during the
@@ -188,6 +197,23 @@ class AgentRuntime:
                       price=send_price, status="submitted")
         self._orders[client_id] = order
         return order
+
+    async def _await_opposite_clear(self, side: str, symbol: str) -> None:
+        """Ждём, пока встречная заявка по этому инструменту сойдёт с рынка (см.
+        _CROSS_WAIT_SEC). Цену считаем ПОСЛЕ ожидания — за эти секунды рынок уходит."""
+        def blocking() -> int:
+            return sum(o.qty for o in self._orders.values()
+                       if o.symbol == symbol and o.side != side
+                       and o.status in ("submitted", "active", "partial"))
+        if not blocking():
+            return
+        deadline = time.time() + _CROSS_WAIT_SEC
+        while time.time() < deadline:
+            await asyncio.sleep(0.2)
+            if not blocking():
+                return
+        self.event("WAIT", f"{side} {symbol}: встречная заявка на {blocking()} не сошла "
+                   f"за {_CROSS_WAIT_SEC:.0f} с, отправляю как есть", level="warning")
 
     async def cancel_order(self, order_id: str) -> None:
         self.event("CANCEL", order_id, console=False)

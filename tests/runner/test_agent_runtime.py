@@ -2,8 +2,16 @@ import time
 
 import pytest
 
+from robot_runner import runtime as rt_mod
 from robot_runner.bars import BarBuilder
 from robot_runner.runtime import AgentRuntime, _STALE_CROSS_FRAC
+
+
+@pytest.fixture(autouse=True)
+def _no_cross_wait(monkeypatch):
+    """Ожидание встречной заявки проверяется отдельно (test_cross_wait.py); в
+    остальных тестах оно только добавляло бы по 5 с на каждую пару заявок."""
+    monkeypatch.setattr(rt_mod, "_CROSS_WAIT_SEC", 0.0)
 
 
 class FakeBridge:
