@@ -33,7 +33,14 @@
   import { parseLog, appendLog, stateTransitions,
            type LogKind, type LogLine, type RobotSnap } from '../../lib/robot-console';
 
-  let { robotId, agentId = null }: { robotId: string; agentId?: string | null } = $props();
+  let { robotId, agentId = null, embedded = false }:
+    { robotId: string; agentId?: string | null; embedded?: boolean } = $props();
+  // Что доступно на ЭТОМ источнике. У бумажного робота STL нет ни связи с QUIK, ни
+  // LLM-напарника, ни команд агенту — соответствующие кадры не рисуем, а не рисуем
+  // пустыми: пустой кадр читается как «сломалось», а не «неприменимо».
+  let caps = $state({ quik: true, chat: true, commands: true, signal: true });
+  let standSource = $state<'agent' | 'paper'>('agent');
+  let paperLive = $state<any>(null);      // сырой ответ /live для графика бумажного
 
   const MSK_OFFSET = 3 * 3600;
   const EXECUTED = new Set(['paper', 'filled', 'submitted', 'executed']);
@@ -516,16 +523,25 @@
   // integer); switch to a price-step-derived precision if a 0.001-tick one (NG) lands.
   const fmtPrice = (p: number) => Number(p).toLocaleString('ru-RU', { maximumFractionDigits: 2 });
 
+  // ЕДИНЫЙ стенд: экран один на агентского и бумажного робота, источник выбирает
+  // СЕРВЕР (/lab/robot-stand отдаёт обоих в форме зеркала). Ветвление во фронтенде
+  // и было причиной, по которой стендов стало два и они разъехались.
   async function load() {
     try {
       const q = agentId ? `?agent_id=${encodeURIComponent(agentId)}` : '';
-      const res = await fetchWithAuth(`/api/v1/quik/robots-mirror${q}`,
-        { signal: AbortSignal.timeout(6000) } as any);  // mirror can queue behind heavy bar fetches
-      if (!res.ok) { error = `mirror: HTTP ${res.status}`; return; }
-      report = await res.json();
-      mirrorAge = report?.received_at_ms ? Math.round((Date.now() - Number(report.received_at_ms)) / 1000) : null;
+      const res = await fetchWithAuth(
+        `/api/v1/lab/robot-stand/${encodeURIComponent(robotId)}${q}`,
+        { signal: AbortSignal.timeout(8000) } as any);  // источник может ждать бары
+      if (!res.ok) { error = `стенд: HTTP ${res.status}`; return; }
+      const d = await res.json();
+      caps = d.caps ?? caps;
+      standSource = d.source ?? 'agent';
+      paperLive = d.live ?? null;
+      report = { robots: d.robot ? [d.robot] : [], received_at_ms: d.received_at_ms };
+      mirrorAge = d.received_at_ms
+        ? Math.round((Date.now() - Number(d.received_at_ms)) / 1000) : null;
       error = '';
-    } catch (e) { error = `mirror: ${String(e).slice(0, 60)}`; }
+    } catch (e) { error = `стенд: ${String(e).slice(0, 60)}`; }
   }
 
   async function pollTick() {
@@ -1182,9 +1198,11 @@
 </script>
 
 <div class="ars">
-  <ScreenTag id="AGENT-ROBOT" name="стенд робота на агенте" />
+  <ScreenTag id={embedded ? 'ROBOT-STAND' : 'AGENT-ROBOT'} name="стенд робота" />
   <div class="ars-head">
-    <NavMenu />
+    <!-- Встроенный режим: навигация принадлежит родительскому экрану, второе меню
+         внутри модалки только мешает. -->
+    {#if !embedded}<NavMenu />{/if}
     <span class="ars-icon">🤖</span>
     <RobotIdentity name={displayName} id={robotId} size="title" />
     <button class="ars-rename" title="Переименовать" onclick={renameRobot}>✏</button>
@@ -1355,7 +1373,7 @@
       <RobotConsole lines={logLines} busy={asking} prompt={displayName}
                     headline="SHECTORY TRADE & LAB · AGENT ROBOT CONSOLE"
                     subline={`ROBOT ${robotId.toUpperCase()} · ${robot ? (robot.paper ? 'PAPER' : 'REAL') : 'OFFLINE'} · READY`}
-                    onAsk={(t) => { ask = t; sendAsk(); }} />
+                    onAsk={caps.chat ? (t) => { ask = t; sendAsk(); } : null} />
     </Frame>
   </div>
 
@@ -1758,7 +1776,7 @@
       <div class="panels-col">
         <Frame fid="ping" title="Задержка до биржи" bind:maxId basis={stPing}>{@render pingPanel()}</Frame>
         <Splitter dir="h" bind:size={stPing} min={46} def={120} storageKey="ars_st_ping" />
-        <Frame fid="diag" title="Диагностика и сверка QUIK" bind:maxId basis={stDiag}>{@render diagPanel()}</Frame>
+        {#if caps.quik}<Frame fid="diag" title="Диагностика и сверка QUIK" bind:maxId basis={stDiag}>{@render diagPanel()}</Frame>{/if}
         <Splitter dir="h" bind:size={stDiag} min={60} def={175} storageKey="ars_st_diag" />
         <div class="bottom-row">
           <Frame fid="signal" title="Сигнал сейчас" bind:maxId basis={stSig}>{@render signalPanel()}</Frame>
@@ -1783,7 +1801,7 @@
       <div class="panels-col scroll">
         <Frame fid="ping" title="Задержка до биржи" bind:maxId basis={sdPing}>{@render pingPanel()}</Frame>
         <Splitter dir="h" bind:size={sdPing} min={46} def={110} storageKey="ars_sd_ping" />
-        <Frame fid="diag" title="Диагностика и сверка QUIK" bind:maxId basis={sdDiag}>{@render diagPanel()}</Frame>
+        {#if caps.quik}<Frame fid="diag" title="Диагностика и сверка QUIK" bind:maxId basis={sdDiag}>{@render diagPanel()}</Frame>{/if}
         <Splitter dir="h" bind:size={sdDiag} min={60} def={150} storageKey="ars_sd_diag" />
         <Frame fid="signal" title="Сигнал сейчас" bind:maxId basis={sdSig}>{@render signalPanel()}</Frame>
         <Splitter dir="h" bind:size={sdSig} min={80} def={190} storageKey="ars_sd_sig" />

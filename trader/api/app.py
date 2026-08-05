@@ -3040,6 +3040,92 @@ def create_app() -> FastAPI:
             "date_to": (today + _td(days=1)).isoformat(),
         }
 
+    @fastapi_app.get("/api/v1/lab/robot-stand/{robot_id}")
+    async def robot_stand(robot_id: str, request: Request, agent_id: str | None = None):
+        """ЕДИНЫЙ контракт стенда робота: одна форма записи для агентского робота и
+        для бумажного из STL. Стенд у них ОДИН экран (правило оператора 05.08.2026),
+        поэтому источник выбирается ЗДЕСЬ, а не ветвлением во фронтенде — иначе два
+        экрана снова разъезжаются, как разъехались AgentRobotScreen и RobotWindow.
+
+        Форма — та же, что отдаёт зеркало агента (`/quik/robots-mirror`), потому что
+        агентский стенд уже написан под неё: display_name, symbol, strategy_id,
+        params_json, position, avg_price, realized_pnl (в ПУНКТАХ, как у раннера),
+        recent_fills, working_orders, paper/running/paused, schedule, bars_count,
+        signal_json. Плюс `caps` — что на этом источнике вообще есть: у бумажного
+        робота нет ни связи с QUIK, ни LLM-напарника, и рисовать их кадры нельзя.
+        """
+        _auth(request)
+        # Агентский робот ищется в том же зеркале, что и раньше — через штатный
+        # обработчик, а не своей копией: у него есть наложение операторских имён.
+        try:
+            from trader.api.quik_robots import robots_mirror as _mirror
+            mirror = await _mirror(request, agent_id)
+        except Exception:  # noqa: BLE001 — зеркало пустое/агент не на связи
+            mirror = None
+        for r in ((mirror or {}).get("robots") or []):
+            if str(r.get("robot_id")) == robot_id:
+                return {"source": "agent", "robot": r,
+                        "received_at_ms": (mirror or {}).get("received_at_ms"),
+                        "caps": {"quik": True, "chat": True, "commands": True,
+                                 "signal": True}}
+        live = await robot_live(robot_id, request)          # тот же источник, что у /live
+        rb = live.get("robot") or {}
+        params = rb.get("params_json") or {}
+        if isinstance(params, str):
+            import json as _j
+            try:
+                params = _j.loads(params)
+            except ValueError:
+                params = {}
+        pv = float(live.get("point_value") or 1) or 1.0
+        # Позиция и средняя — по исполненным филлам, в знаковом пространстве (как в
+        # раннере). Реализованный P&L отдаём в ПУНКТАХ: агентский стенд умножает его
+        # на ₽/пункт сам, и рубли здесь сделали бы двойное умножение.
+        pos, avg, realized = 0, 0.0, 0.0
+        done = {"paper", "filled", "executed", "submitted"}
+        for t in (live.get("trades") or []):
+            if t.get("status") not in done:
+                continue
+            q = int(t.get("qty") or 0) * (1 if t.get("side") == "buy" else -1)
+            px = float(t.get("price") or 0)
+            if not q:
+                continue
+            if pos == 0 or (pos > 0) == (q > 0):
+                avg = (avg * abs(pos) + px * abs(q)) / (abs(pos) + abs(q))
+                pos += q
+            else:
+                take = min(abs(q), abs(pos))
+                realized += (px - avg) * take * (1 if pos > 0 else -1)
+                rest = abs(q) - take
+                pos += q
+                if rest:
+                    avg = px
+        robot = {
+            "robot_id": robot_id,
+            "display_name": rb.get("name") or robot_id,
+            "symbol": live.get("chart_symbol") or live.get("symbol"),
+            "strategy_id": (live.get("strategy") or {}).get("id"),
+            "params_json": params,
+            "paper": True,                     # робот STL — всегда бумажный
+            "running": bool(rb.get("deployed")),
+            "paused": not bool(rb.get("deployed")),
+            "position": pos,
+            "avg_price": round(avg, 6),
+            "realized_pnl": round(realized, 6),
+            "max_position": int(params.get("avg_max") or params.get("qty") or 0),
+            "schedule": rb.get("schedule"),
+            "recent_fills": (live.get("trades") or [])[-200:],
+            "working_orders": live.get("open_orders") or [],
+            "signal_json": None,               # интроспекции у STL-робота пока нет
+            "bars_count": None,
+            "heartbeat_unix_ms": None,
+            "last_close": None,
+        }
+        return {"source": "paper", "robot": robot, "live": live,
+                "point_value": pv, "received_at_ms": None,
+                "caps": {"quik": False, "chat": False, "commands": False,
+                         "signal": False}}
+
     # ── LAB: Backtest ────────────────────────────────────────────────
     @fastapi_app.post("/api/v1/backtest/run", status_code=202)
     async def run_backtest(body: dict, request: Request):
