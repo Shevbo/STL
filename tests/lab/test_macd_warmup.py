@@ -35,3 +35,38 @@ def test_macd_cross_signal_flips_within_its_own_window():
     # Ровно то, что делает make_on_bar: signal() на последних `need` барах.
     seen = {spec["signal"](bars[i - need:i], LIVE) for i in range(need, len(bars))}
     assert seen == {1, -1}, f"сигнал не переворачивается на своём окне: {seen}"
+
+
+def test_macd_fast_equals_slow_has_no_signal():
+    """EMA(n)−EMA(n) ≡ 0 и сигнальная линия тоже 0, а `m > s` (0>0=False) отдавал
+    ВЕЧНЫЙ ШОРТ. 8 бумажных роботов стояли на таком конфиге (05.08.2026)."""
+    spec = REGISTRY["macd_cross"]
+    p = {**LIVE, "fast": 20, "slow": 20}
+    need = spec["warmup"](p)
+    bars = _wave(need + 300)
+    assert {spec["signal"](bars[i - need:i], p) for i in range(need, len(bars))} == {None}
+
+
+def test_registry_warmup_covers_every_period():
+    """Окно прогрева обязано покрывать САМЫЙ ДЛИННЫЙ период стратегии на любых
+    допустимых схемой параметрах, иначе индикатор падает или знак залипает
+    (ema_atr: схема пускала fast=40 при slow=15, окно slow+2=17 → ValueError)."""
+    bad = []
+    for sid, spec in REGISTRY.items():
+        axes = {p["key"]: p for p in spec["params_schema"] if p.get("type") == "number"}
+        # avg_atr_n сюда не входит: это период слоя усреднения, и его добирает сам
+        # make_on_bar (`need = max(warmup(params), atr_n + 1)`), а не warmup стратегии.
+        periods = [k for k in ("fast", "slow", "mid", "period", "atr_period", "ema_period")
+                   if k in axes]
+        if len(periods) < 2:
+            continue
+        # Враждебный угол: КАЖДЫЙ период по очереди на максимуме, остальные на
+        # минимуме. Все-на-максимуме ничего не ловит — там перекос не возникает
+        # (у ema_atr fast=40 < slow=120, а бьёт как раз fast=40 при slow=15).
+        for long_key in periods:
+            worst = {**spec["default_params"],
+                     **{k: axes[k]["min"] for k in periods}, long_key: axes[long_key]["max"]}
+            need, longest = int(spec["warmup"](worst)), max(int(worst[k]) for k in periods)
+            if need < longest:
+                bad.append(f"{sid} ({long_key}={worst[long_key]}): окно {need} < периода {longest}")
+    assert not bad, "; ".join(bad)

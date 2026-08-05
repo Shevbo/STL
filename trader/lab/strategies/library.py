@@ -487,8 +487,17 @@ def _o(bars): return [b.open for b in bars]
 
 # 1. MACD crossover (long+short)
 def sig_macd(bars, p):
+    fast, slow = int(p["fast"]), int(p["slow"])
+    if fast == slow:
+        # EMA(n) − EMA(n) тождественно НОЛЬ, сигнальная линия от нулевого ряда тоже
+        # ноль, и `m > s` (0 > 0 = False) отдаёт ВЕЧНЫЙ ШОРТ. Осциллятора нет —
+        # значит нет и сигнала. Проверять обязательно: сетки перебора продуктом
+        # порождают fast==slow, такая комбинация выигрывала на трендовом инструменте
+        # как односторонняя поездка, попадала в лидерборд и оттуда в бумажных роботов
+        # (05.08.2026: 7 роботов стояли в вечном шорте, в т.ч. RIU6/GDU6/MXU6).
+        return None
     closes = _c(bars)
-    m, s = I.macd(closes, int(p["fast"]), int(p["slow"]), int(p["signal"]))
+    m, s = I.macd(closes, fast, slow, int(p["signal"]))
     return 1 if m > s else -1
 register("macd_cross", "MACD Crossover",
          "https://github.com/topics/macd",
@@ -652,7 +661,9 @@ register("triple_sma", "Triple SMA Alignment",
          "https://github.com/topics/moving-average",
          [SYM, P("fast", "Быстрая SMA", 5, 2, 30), P("mid", "Средняя SMA", 20, 10, 60),
           P("slow", "Медленная SMA", 50, 30, 200), P("qty", "Контрактов", 1, 1, 10)],
-         sig_triple_sma, lambda p: int(p["slow"]) + 2)
+         # По самому длинному: схема пускает mid до 60 при slow от 30, и прежнее
+         # slow+2 оставляло SMA(60) без данных (см. ema_atr — тот же корень).
+         sig_triple_sma, lambda p: max(int(p["fast"]), int(p["mid"]), int(p["slow"])) + 2)
 
 
 # 10. Keltner channel breakout
@@ -701,7 +712,10 @@ register("ema_atr", "EMA Trend + ATR Filter",
          [SYM, P("fast", "Быстрая EMA", 9, 3, 40), P("slow", "Медленная EMA", 30, 15, 120),
           P("atr_period", "ATR период", 14, 5, 40), P("mult", "ATR множ ×10", 5, 1, 30),
           P("qty", "Контрактов", 1, 1, 10)],
-         sig_ema_atr, lambda p: int(p["slow"]) + 2)
+         # Окно по САМОМУ ДЛИННОМУ периоду: схема пускает fast до 40, а slow от 15,
+         # то есть fast > slow достижимо, и прежнее slow+2 давало 17 баров под EMA(40)
+         # — indicators.ema поднимал ValueError, и комбинация молча выпадала из перебора.
+         sig_ema_atr, lambda p: max(int(p["fast"]), int(p["slow"]), int(p["atr_period"])) + 2)
 
 
 # ════════════════════════════════════════════════════════════════════════════
