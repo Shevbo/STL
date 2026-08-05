@@ -2124,11 +2124,15 @@ def create_app() -> FastAPI:
         # per-instrument tables (collapsed to 5 rows) — top-50 each covers them all.
         rows = await pool.fetch(
             """
+            -- date_from/date_to — ОКНО САМОЙ СТРОКИ. Без них фронт подставлял в клик
+            -- сводный период карточки (объединение всех кампаний стратегии), и график
+            -- считался на ДРУГОМ отрезке: лидер macd_shectory1 RIU6 +529k за 31.05-31.07
+            -- открывался прогоном за 01.05-05.08 и показывал +120k (05.08.2026).
             SELECT campaign_run, symbol, params, total_return, sharpe, max_drawdown,
                    win_rate, total_trades, net_profit, recovery_factor, score,
                    candidate, created_at, ann_return_go, ann_return_full,
                    max_mae, recovery_factor_mtm_oos, windows_profitable,
-                   windows_total, degrade
+                   windows_total, degrade, date_from, date_to
             FROM (
                 SELECT *, ROW_NUMBER() OVER (
                     PARTITION BY symbol

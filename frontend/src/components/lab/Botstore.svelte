@@ -263,6 +263,15 @@
 
   // ── Backtest window: fresh single run for one (instrument, params) ────────────
   let chart = $state<any | null>(null);   // {symbol, params, result, pointValue, dateFrom, dateTo}
+  // Строка лидерборда посчитана ПРЕЖНЕЙ сборкой стратегии и сегодня не повторяется.
+  // Молча показать другое число нельзя: нарисованная неправда выглядит как правда, а
+  // оператор спрашивает «чему верить» (05.08.2026: таблица +529k, график +120k — там
+  // ещё и окно было чужое). Порог 2% — округления ₽/пункт и границы баров.
+  const staleRow = $derived.by(() => {
+    const s = Number(chart?.opts?.storedNet), n = Number(chart?.result?.net_profit);
+    if (!chart?.result || !Number.isFinite(s) || !Number.isFinite(n) || s === 0) return false;
+    return Math.abs(n - s) / Math.abs(s) > 0.02;
+  });
   let chartLoading = $state(false);
   let chartErr = $state('');
   let chartJob = $state<any | null>(null);     // {symbol, params} shown during the run
@@ -993,7 +1002,10 @@
                   <tbody>
                     {#each (expanded.has(sym) ? rows : rows.slice(0, COLLAPSED_ROWS)) as r}
                       <tr class="dp-row" class:cand={r.candidate}
-                          onclick={() => openChart(sym, r.params)} title="Открыть бэктест">
+                          onclick={() => openChart(sym, r.params, { strategyId: detail.id,
+                                          dateFrom: r.date_from, dateTo: r.date_to,
+                                          storedNet: r.net_profit, storedCampaign: r.campaign_run })}
+                          title="Открыть бэктест">
                         {#each paramCols as col}
                           <td class="num">{fmtNum(r.params?.[col], 0)}</td>
                         {/each}
@@ -1077,6 +1089,15 @@
               <div class="cm-hint">Если это таймаут загрузки истории — инструмент просто не кэширован, попробуйте открыть ещё раз (данные уже подтянулись). VDS остаётся жив, перебор продолжается.</div>
             </div>
           {:else if chart}
+            {#if staleRow}
+              <div class="cm-stale">
+                ⚠ Строка таблицы посчитана другой сборкой стратегии и сегодня НЕ воспроизводится.
+                В таблице <b>{fmtNum(chart.opts.storedNet, 0)} ₽</b> (кампания {chart.opts.storedCampaign},
+                окно {chart.dateFrom.slice(0, 10)} — {chart.dateTo.slice(0, 10)}), на графике
+                <b>{fmtNum(chart.result?.net_profit, 0)} ₽</b> за ТО ЖЕ окно.
+                Верить графику: он посчитан текущим кодом. Табличное число — история.
+              </div>
+            {/if}
             <BacktestChart
               result={chart.result}
               symbol={chart.symbol}
@@ -1541,6 +1562,9 @@
   .cm-eta-unk { color: #ffb86b; }
   .cm-p { font-family: monospace; font-size: 11px; color: #789; }
   .cm-hint { font-size: 11px; color: #667; line-height: 1.5; margin-top: 4px; }
+  .cm-stale { font-size: 12px; line-height: 1.5; color: #ffd9a0; background: #3a2a12;
+              border: 1px solid #7a5a1e; border-radius: 4px; padding: 7px 10px; margin: 0 0 8px; }
+  .cm-stale b { color: #fff; }
 
   .mono { font-family: monospace; }
 
