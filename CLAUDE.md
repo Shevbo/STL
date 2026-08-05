@@ -635,3 +635,8 @@ Rules:
 - If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
 - Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
 - After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
+
+<!-- onboarding-marker BEGIN — do not edit; rewritten by /onboarding -->
+> **Federation onboarding** — канон: [.onboarding/CANONICAL.md](.onboarding/CANONICAL.md); карточка агента: [.onboarding/AGENT.md](.onboarding/AGENT.md).
+> При старте сессии Claude обязан запустить `bash ~/.claude/skills/onboarding/bin/check_freshness.sh`. Если `status=stale` или `status=absent` — предложить пользователю `/onboarding` (без долгих объяснений, одна строка).
+<!-- onboarding-marker END -->
