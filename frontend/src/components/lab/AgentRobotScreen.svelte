@@ -919,6 +919,13 @@
   let draft = $state<Record<string, any>>({});
   let draftMaxPos = $state<number>(1);
   let draftSchedule = $state('');
+  // Вне режима правки черновик СЛЕДУЕТ за параметрами робота: экран показывает
+  // то, что реально стоит, и обновляется с зеркалом. В правке — не трогаем, иначе
+  // приход зеркала затирал бы набранное оператором.
+  $effect(() => {
+    const p = params;
+    if (!editMode) draft = { ...(p || {}) };
+  });
   let saving = $state(false);
   let saveMsg = $state('');
 
@@ -1529,6 +1536,7 @@
           <div class="kv-grid">
             <div class="kv"><span>Разножка отсеяла</span><b>{fs.gap_skips ?? 0}</b></div>
             <div class="kv"><span>Остывание отсеяло</span><b>{fs.cooldown_skips ?? 0}</b></div>
+            {#if fs.dv_skips}<div class="kv"><span>Долина смерти отсеяла</span><b>{fs.dv_skips}</b></div>{/if}
             <div class="kv" title="ОЦЕНКА, а не факт. Каждый отсеянный вход считается несостоявшейся сделкой и держится до того же выхода, каким вышел бы робот: свой тейк (tp_atr x ATR) или разворот сигнала. Плюс = отсеянные входы были бы убыточными, фильтр сберёг деньги. Минус = недозаработали. Повторные отсевы в одном ценовом окне считаются ОДНОЙ несостоявшейся сделкой, иначе одно и то же намерение множилось бы каждый бар. Комиссия не учитывается; взаимное влияние на среднюю и потолок позиции — тоже.">
               <span>Эффект фильтров <span class="fs-est">оценка</span></span>
               <b class:yes={(fs.savedRub ?? 0) > 0} class:neg={(fs.savedRub ?? 0) < 0}>
@@ -1764,19 +1772,23 @@
           <button class="pe-btn" onclick={startEdit}>Изменить</button>
         {/if}
       </div>
+      <!-- ОДНО представление, два состояния. Раньше просмотр был плоским списком
+           пар «ключ: значение», а нормальный редактор (с группами, переводом в
+           пункты и переключателями) показывался ТОЛЬКО после нажатия «Изменить» —
+           оператор его просто не находил. Теперь читается и правится одно и то же,
+           кнопка лишь снимает блокировку полей. -->
+      <ParamEditor strategyId={robot?.strategy_id ?? 'fvg'}
+                   schema={editorSchema}
+                   bind:values={draft}
+                   ctx={paramCtx} baseline={editMode ? params : null}
+                   disabledKeys={editMode ? ['symbol'] : editorSchema.map((f) => f.key)} />
       {#if !editMode}
-        <div class="kv-grid">
-          {#each Object.entries(params) as [k, v]}
-            <div class="kv"><span>{k}</span><b class="mono">{v}</b></div>
-          {/each}
+        <div class="kv-grid" style="margin-top:8px">
           <div class="kv"><span>max позиция</span><b class="mono">{robot?.max_position ?? '—'}</b></div>
           <div class="kv"><span>окно</span><b class="mono">{robot?.schedule ?? '—'}</b></div>
         </div>
         {#if saveMsg}<div class="pe-msg">{saveMsg}</div>{/if}
       {:else}
-        <ParamEditor strategyId={robot?.strategy_id ?? 'fvg'}
-                     schema={editorSchema} bind:values={draft} ctx={paramCtx} baseline={params}
-                     disabledKeys={['symbol']} />
         <div class="pe-grid" style="margin-top:10px">
           <label class="pe-row spec">
             <span title="жёсткий потолок контрактов: заявка сверх него не отправляется вовсе (страховка перед лимитами агента). Изменение = редеплой спеки, позиция/P&L сохраняются.">max позиция (спека)</span>

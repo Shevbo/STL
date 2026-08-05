@@ -22,7 +22,8 @@ export const GROUPS: Group[] = [
   { id: 'exit', title: 'Выходы', note: 'чем робот закрывает позицию',
     keys: ['tp_atr', 'sl_frac', 'sl_pct'] },
   { id: 'rate', title: 'Частота', note: 'что тормозит вход и доборы',
-    keys: ['min_gap_pts', 'gap_auto', 'nd_days', 'cooldown_min', 'cooldown_pct'] },
+    keys: ['min_gap_pts', 'gap_auto', 'nd_days', 'cooldown_min', 'cooldown_pct',
+           'dv_bars', 'dv_range_pts'] },
   { id: 'allow', title: 'Разрешения', note: 'какие стороны роботу открыты',
     keys: ['allow_long', 'allow_short', 'exit_only'] },
 ];
@@ -35,7 +36,8 @@ export const BINARY = new Set(['allow_long', 'allow_short', 'exit_only', 'gap_au
  *  нужна не для красоты: в одном столбце соседствуют «добирай больше» и «стой
  *  дольше», и на глаз они неразличимы. */
 export const BOUNDING = new Set(['sl_frac', 'sl_pct', 'min_gap_pts',
-                                 'cooldown_min', 'cooldown_pct', 'exit_only']);
+                                 'cooldown_min', 'cooldown_pct', 'exit_only',
+                                 'dv_bars', 'dv_range_pts']);
 
 export type Field = { key: string; label: string; type?: string; min?: number; max?: number };
 
