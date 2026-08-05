@@ -1200,9 +1200,9 @@
 <div class="ars">
   <ScreenTag id={embedded ? 'ROBOT-STAND' : 'AGENT-ROBOT'} name="стенд робота" />
   <div class="ars-head">
-    <!-- Встроенный режим: навигация принадлежит родительскому экрану, второе меню
-         внутри модалки только мешает. -->
-    {#if !embedded}<NavMenu />{/if}
+    <!-- Меню НУЖНО и во встроенном режиме: модалка закрывает весь экран, родительской
+         навигации за ней не видно, и оператор оказывался в тупике (05.08.2026). -->
+    <NavMenu />
     <span class="ars-icon">🤖</span>
     <RobotIdentity name={displayName} id={robotId} size="title" />
     <button class="ars-rename" title="Переименовать" onclick={renameRobot}>✏</button>

@@ -3114,7 +3114,23 @@ def create_app() -> FastAPI:
             "realized_pnl": round(realized, 6),
             "max_position": int(params.get("avg_max") or params.get("qty") or 0),
             "schedule": rb.get("schedule"),
-            "recent_fills": (live.get("trades") or [])[-200:],
+            # Филлы В АГЕНТСКОМ ФОРМАТЕ, а не как их отдаёт /live. Стенд читает
+            # `ts_unix_ms` и сторону `SIDE_SELL`; отдай ему `time`+`sell` — время
+            # станет нулевой эпохой (01.01.1970 03:00 МСК), а КАЖДЫЙ филл прочитается
+            # как ПОКУПКА, потому что сравнение идёт со строкой 'SIDE_SELL'. Позиция
+            # тогда только растёт, все строки получают роль «усиление», ни одна сделка
+            # не закрывается, и P&L каждой строки вырождается в одну комиссию
+            # (увидено на живом стенде 05.08.2026).
+            "recent_fills": [
+                {"ts_unix_ms": int(t.get("time") or 0) * 1000,
+                 "symbol": t.get("symbol"),
+                 "side": "SIDE_SELL" if t.get("side") == "sell" else "SIDE_BUY",
+                 "qty": int(t.get("qty") or 0),
+                 "price": float(t.get("price") or 0),
+                 "order_id": t.get("order_id") or "",
+                 "status": t.get("status") or ""}
+                for t in (live.get("trades") or [])[-200:]
+            ],
             "working_orders": live.get("open_orders") or [],
             "signal_json": None,               # интроспекции у STL-робота пока нет
             "bars_count": None,
