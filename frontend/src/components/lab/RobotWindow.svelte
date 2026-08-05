@@ -16,6 +16,7 @@
   import { toFills, rolledPnl, annualizedPct } from '../../lib/lab-analytics';
   import BacktestChart from './BacktestChart.svelte';
   import LatencyPane from './LatencyPane.svelte';
+  import Frame from './Frame.svelte';
 
   let { robotId, onClose }: { robotId: string; onClose: () => void } = $props();
   // ID окна для дебага (правило: у каждого окна в левом верхнем углу копируемый
@@ -24,6 +25,10 @@
   // ВМ открытой позиции — приходит из графика (у него свежая цена); правило
   // оператора 26.07: фин.рез везде = фикс + варьмаржа.
   let vmOpen = $state(0);
+  // Один формат со стендом робота на агенте: те же фреймы, тот же порядок,
+  // то же разворачивание на весь экран. Раньше это были два разных экрана —
+  // у агентского фреймы, у бумажного свои панели с ручными сплиттерами.
+  let maxId = $state<string | null>(null);
 
   let loading = $state(true);
   let error = $state('');
@@ -37,31 +42,9 @@
   const MSK_OFFSET = 3 * 3600;
 
   // Resizable frames: chart vs bottom (vertical), left panel vs trades (horizontal).
-  let chartFrac = $state(0.62);          // chart height as fraction of the body
-  let leftW = $state(320);               // left panel width in px
-  let drag: { kind: 'chart' | 'left'; x: number; y: number; frac: number; w: number; body: HTMLElement | null } | null = null;
-  function startDrag(kind: 'chart' | 'left', e: PointerEvent) {
-    const body = (e.currentTarget as HTMLElement).closest('.win-body') as HTMLElement | null;
-    drag = { kind, x: e.clientX, y: e.clientY, frac: chartFrac, w: leftW, body };
-    window.addEventListener('pointermove', onDragMove);
-    window.addEventListener('pointerup', onDragUp);
-    e.preventDefault();
-  }
-  function onDragMove(e: PointerEvent) {
-    if (!drag) return;
-    if (drag.kind === 'chart' && drag.body) {
-      const h = drag.body.clientHeight || 1;
-      chartFrac = Math.min(0.85, Math.max(0.25, drag.frac + (e.clientY - drag.y) / h));
-    } else if (drag.kind === 'left') {
-      leftW = Math.min(560, Math.max(220, drag.w + (e.clientX - drag.x)));
-    }
-  }
-  function onDragUp() {
-    drag = null;
-    window.removeEventListener('pointermove', onDragMove);
-    window.removeEventListener('pointerup', onDragUp);
-  }
-
+  // Высота графика в пикселях: Frame принимает basis именно так. Тянуть
+  // границы больше не нужно — рамки складываются, как на агентском стенде.
+  let chartPx = $state(480);
   // ПОРТФЕЛЬНЫЙ робот (team-46/AI46): позиция это ДОЛЯ ПОРТФЕЛЯ в разных инструментах,
   // а не контракты. Бэкенд отдаёт готовую сводку в процентах (trader/lab/ai46/
   // portfolio.py) — рублёвая машинерия стенда (ГО, ₽/пункт, TP/SL, усреднения) для
@@ -341,21 +324,14 @@
       <span class="win-icon">🤖</span>
       <RobotIdentity name={live?.robot?.name ?? robotId} id={robotId} size="title" />
       {#if live}
-        <span class="badge" class:real={!live.paper}>{live.paper ? 'PAPER' : 'РЕАЛ'}</span>
+        <!-- Шапка ОДНОГО вида со стендом робота на агенте: опознание и режим здесь,
+             состояние и цифры — во фрейме «Информация и статус» ниже. Раньше тут
+             стояла своя россыпь бейджей, и два стенда выглядели разными экранами. -->
+        <span class="hd-mode" class:real={!live.paper}>{live.paper ? 'PAPER' : 'РЕАЛ'}</span>
         <!-- У портфельного робота одного инструмента нет: показывать live.symbol
              (первый тикер из params) значило врать про 30+ торгуемых. -->
-        <span class="badge sym" title={pf ? allSymbols.join(' ') : ''}>
+        <span class="hd-sym" title={pf ? allSymbols.join(' ') : ''}>
           {pf ? `портфель · ${pf.instruments} инстр.` : live.symbol}</span>
-        <span class="badge dim">{live.robot?.deployed ? 'LIVE' : 'остановлен'}</span>
-        <span class="badge dim">окно {live.robot?.schedule}</span>
-        <!-- Портфельную стратегию на агент не развернуть: раннер исполняет контрактные
-             on_bar-стратегии, а team-46 это доли портфеля в десятках инструментов. -->
-        {#if !pf}
-          <button class="rw-launch" disabled={cloneBusy} onclick={cloneToPaper}
-                  title="развернуть НА АГЕНТ в PAPER (верхняя таблица) — real-ready, армится с консоли VDS">
-            {cloneBusy ? '…' : '▶ На агент в торговлю (paper)'}</button>
-          {#if cloneMsg}<span class="rw-launch-msg">{cloneMsg}</span>{/if}
-        {/if}
       {/if}
       <button class="close" onclick={onClose} title="Закрыть (Esc)">✕</button>
     </div>
@@ -366,79 +342,11 @@
       <div class="state err">{error}</div>
     {:else if live}
       <div class="win-body">
-        <!-- chart: candles + order/trade markers + equity + result overlay -->
-        <div class="chart-wrap" style="flex: 0 0 {chartFrac * 100}%">
-          <BacktestChart
-            result={chartResult}
-            symbol={live.chart_symbol ?? live.symbol}
-            dateFrom={live.date_from}
-            dateTo={live.date_to}
-            pointValue={pv}
-            pointValues={live.point_values ?? null}
-            segments={segments}
-            defaultInterval={5}
-            taker={true}
-            openOrders={live.open_orders ?? []}
-            plannedOrders={live.planned_orders ?? []}
-            hideStats={!!pf}
-            onVm={(v) => (vmOpen = pf ? 0 : v)}
-          />
-        </div>
-
-        <!-- exchange-latency history, aligned under the price chart's time axis -->
-        <div class="lat-wrap">
-          <LatencyPane minutes={360} />
-        </div>
-
-        <!-- drag handle: resize chart vs tables -->
-        <div class="rw-hsplit" title="Потяните — высота графика" onpointerdown={(e) => startDrag('chart', e)}></div>
-
-        <!-- bottom: params + current result (left) | trade history (right) -->
-        <div class="win-bottom">
-          <div class="panel left" style="flex: 0 0 {leftW}px">
-            {#if live.strategy}
-              <div class="panel-title">О стратегии</div>
-              <div class="about-box">
-                <div class="about-name">{live.strategy.name}</div>
-                {#if live.strategy.description}<div class="about-desc">{live.strategy.description}</div>{/if}
-                {#if live.strategy.source}
-                  <a class="about-link" href={live.strategy.source} target="_blank" rel="noopener">Подробное описание робота ↗</a>
-                {/if}
-              </div>
-            {/if}
-
-            <div class="panel-title">Параметры</div>
-            <div class="kv-grid">
-              {#each Object.entries(live.robot?.params_json ?? {}) as [k, v]}
-                {@const sp = schemaByKey[k]}
-                <div class="kv">
-                  <span class="k">
-                    {sp?.label ?? k}
-                    {#if sp?.desc || sp?.hint}
-                      <span class="kv-i" role="button" tabindex="0" aria-label="Описание"
-                        onclick={() => openInfo = openInfo === k ? null : k}
-                        onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && (openInfo = openInfo === k ? null : k)}
-                        onmouseenter={() => hoverInfo = k} onmouseleave={() => hoverInfo = null}
-                      >ⓘ</span>
-                    {/if}
-                    {#if (sp?.desc || sp?.hint) && (openInfo === k || hoverInfo === k)}
-                      <div class="kv-popover">
-                        <div class="pp-title">{sp.label ?? k}</div>
-                        <div class="pp-body">{sp.desc || sp.hint}</div>
-                      </div>
-                    {/if}
-                  </span>
-                  <span class="v">{v}</span>
-                </div>
-              {/each}
-              {#if !pf}
-                <div class="kv"><span class="k">ГО / контракт</span>
-                  <span class="v">{live.initial_margin != null ? Math.round(live.initial_margin).toLocaleString('ru-RU') + ' ₽' : '—'}</span></div>
-                <div class="kv"><span class="k">пункт = ₽</span><span class="v">{pv}</span></div>
-                <div class="kv"><span class="k">комиссия</span><span class="v">4 ₽ / заявка (тейкер)</span></div>
-              {/if}
-            </div>
-
+        <!-- Порядок панелей ОДИН В ОДИН со стендом робота на агенте: полоса
+             «статус + действия», график, задержка, внизу логика и сделки. -->
+        <div class="ars-strip">
+          <Frame fid="rw-state" title="Информация и статус" bind:maxId>
+            <div class="fpad">
             {#if pf}
               <!-- Портфельная стратегия: считаем ДОХОДНОСТЬ, а не рубли. Капитала у
                    бумажного портфеля не задано, любая рублёвая цифра была бы вымыслом. -->
@@ -513,12 +421,97 @@
             </div>
             <div class="basis">P&L % — доход относительно макс. задействованного ГО (ГО/контракт × пик контрактов)</div>
             {/if}
+            </div>
+          </Frame>
+          <Frame fid="rw-acts" title="Доступные действия" bind:maxId>
+            <div class="fpad acts">
+        <!-- Портфельную стратегию на агент не развернуть: раннер исполняет контрактные
+             on_bar-стратегии, а team-46 это доли портфеля в десятках инструментов. -->
+        {#if !pf}
+          <button class="rw-launch" disabled={cloneBusy} onclick={cloneToPaper}
+                  title="развернуть НА АГЕНТ в PAPER (верхняя таблица) — real-ready, армится с консоли VDS">
+            {cloneBusy ? '…' : '▶ На агент в торговлю (paper)'}</button>
+          {#if cloneMsg}<span class="rw-launch-msg">{cloneMsg}</span>{/if}
+        {/if}
+            </div>
+          </Frame>
+        </div>
+
+        <Frame fid="rw-chart" title="График + доходность" bind:maxId basis={chartPx}>
+          <div class="rw-chart-body">
+          <BacktestChart
+            result={chartResult}
+            symbol={live.chart_symbol ?? live.symbol}
+            dateFrom={live.date_from}
+            dateTo={live.date_to}
+            pointValue={pv}
+            pointValues={live.point_values ?? null}
+            segments={segments}
+            defaultInterval={5}
+            taker={true}
+            openOrders={live.open_orders ?? []}
+            plannedOrders={live.planned_orders ?? []}
+            hideStats={!!pf}
+            onVm={(v) => (vmOpen = pf ? 0 : v)}
+          />
           </div>
+        </Frame>
 
-          <!-- drag handle: resize left panel vs trades -->
-          <div class="rw-vsplit" title="Потяните — ширина панели" onpointerdown={(e) => startDrag('left', e)}></div>
+        <Frame fid="rw-ping" title="Задержка до биржи" bind:maxId basis={140}>
+          <!-- История задержки до биржи, под осью времени графика. -->
+          <div class="lat-wrap">
+            <LatencyPane minutes={360} />
+          </div>
+        </Frame>
 
-          <div class="panel right">
+        <div class="bottom-row">
+          <Frame fid="rw-logic" title="Логика стратегии" bind:maxId>
+            <div class="fpad">
+            {#if live.strategy}
+              <div class="panel-title">О стратегии</div>
+              <div class="about-box">
+                <div class="about-name">{live.strategy.name}</div>
+                {#if live.strategy.description}<div class="about-desc">{live.strategy.description}</div>{/if}
+                {#if live.strategy.source}
+                  <a class="about-link" href={live.strategy.source} target="_blank" rel="noopener">Подробное описание робота ↗</a>
+                {/if}
+              </div>
+            {/if}
+
+            <div class="panel-title">Параметры</div>
+            <div class="kv-grid">
+              {#each Object.entries(live.robot?.params_json ?? {}) as [k, v]}
+                {@const sp = schemaByKey[k]}
+                <div class="kv">
+                  <span class="k">
+                    {sp?.label ?? k}
+                    {#if sp?.desc || sp?.hint}
+                      <span class="kv-i" role="button" tabindex="0" aria-label="Описание"
+                        onclick={() => openInfo = openInfo === k ? null : k}
+                        onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && (openInfo = openInfo === k ? null : k)}
+                        onmouseenter={() => hoverInfo = k} onmouseleave={() => hoverInfo = null}
+                      >ⓘ</span>
+                    {/if}
+                    {#if (sp?.desc || sp?.hint) && (openInfo === k || hoverInfo === k)}
+                      <div class="kv-popover">
+                        <div class="pp-title">{sp.label ?? k}</div>
+                        <div class="pp-body">{sp.desc || sp.hint}</div>
+                      </div>
+                    {/if}
+                  </span>
+                  <span class="v">{v}</span>
+                </div>
+              {/each}
+              {#if !pf}
+                <div class="kv"><span class="k">ГО / контракт</span>
+                  <span class="v">{live.initial_margin != null ? Math.round(live.initial_margin).toLocaleString('ru-RU') + ' ₽' : '—'}</span></div>
+                <div class="kv"><span class="k">пункт = ₽</span><span class="v">{pv}</span></div>
+                <div class="kv"><span class="k">комиссия</span><span class="v">4 ₽ / заявка (тейкер)</span></div>
+              {/if}
+            </div>
+            </div>
+          </Frame>
+          <Frame fid="rw-trades" title={`Сделки робота (${histAll.length})`} bind:maxId>
             <div class="panel-title hist-head">
               <span>История сделок ({histAll.length}{histSym ? ` · ${histSym}` : ''})</span>
               {#if multi}
@@ -572,7 +565,7 @@
                 {/if}
               {/if}
             </div>
-          </div>
+          </Frame>
         </div>
       </div>
     {/if}
@@ -627,10 +620,6 @@
   .win-bottom { flex: 1 1 0; display: flex; min-height: 0; }
 
   /* Resize handles */
-  .rw-hsplit { flex: 0 0 6px; cursor: row-resize; background: #1a1a2e; border-top: 1px solid #0a0a15; border-bottom: 1px solid #0a0a15; }
-  .rw-hsplit:hover { background: #2d4a2d; }
-  .rw-vsplit { flex: 0 0 6px; cursor: col-resize; background: #1a1a2e; align-self: stretch; }
-  .rw-vsplit:hover { background: #2d4a2d; }
   .panel { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
   .panel.left { flex: 0 0 320px; border-right: 1px solid #1a1a2e; padding: 10px 12px; overflow-y: auto; }
   .panel.right { flex: 1; min-width: 0; }
@@ -715,4 +704,25 @@
   .st-rejected, .st-skipped { background: #2a1414; color: #ff6b6b; }
   .st-submitted, .st-filled, .st-executed { background: #14222a; color: #6aa8ff; }
   .empty { padding: 24px; text-align: center; color: #555; font-size: 12px; }
+
+  /* Стенд одного формата с агентским: полоса статуса, фреймы, нижний ряд. */
+  .ars-strip { display: grid; grid-template-columns: 1.4fr 1fr; gap: 6px; padding: 6px 6px 0; flex: 0 0 auto; }
+  .ars-strip > :global(.frame) { max-height: 210px; }
+  .ars-strip > :global(.frame.max) { max-height: none; }
+  .win-body > :global(.frame) { margin: 6px; }
+  .bottom-row { display: flex; gap: 6px; padding: 0 6px 6px; flex: 1 1 auto; min-height: 260px; }
+  .bottom-row > :global(.frame) { flex: 1 1 0; min-width: 0; }
+  .fpad { padding: 8px 10px; }
+  .rw-chart-body { height: 100%; display: flex; flex-direction: column; }
+
+  /* Телефон: лента сверху вниз, как на агентском стенде. */
+  @media (max-width: 820px) {
+    .overlay { padding: 0; }
+    .window { width: 100vw; height: 100dvh; border-radius: 0; border: none; }
+    .win-body { overflow-y: auto; font-size: 14px; }
+    .ars-strip { grid-template-columns: 1fr; }
+    .ars-strip > :global(.frame) { max-height: none; }
+    .bottom-row { flex-direction: column; min-height: 0; }
+    .rw-chart-body { height: 62vh; min-height: 300px; }
+  }
 </style>
