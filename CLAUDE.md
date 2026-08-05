@@ -20,8 +20,15 @@ codebases in one repo, joined by two gRPC contracts:
   (same `STLRuntime` protocol) against local QUIK data via the agent's loopback gRPC
   bridge (127.0.0.1:50071). Persists robots/state next to the agent; auto-resumes.
 - **Frontend** (`frontend/`) — Svelte 5 SPA (lightweight-charts + uplot), static assets via
-  nginx; `/api` + `/ws` proxied to uvicorn. Per-robot showcase:
-  `/?agent_robot=<robot_id>` (AgentRobotScreen). Two-level burger nav (`NavMenu.svelte`)
+  nginx; `/api` + `/ws` proxied to uvicorn. ONE robot stand serves real, paper and
+  (next) backtest: `AgentRobotScreen` is the stand, `RobotWindow` is a 50-line modal
+  wrapper around it, and the SOURCE is chosen SERVER-side by
+  `GET /api/v1/lab/robot-stand/{id}` (agent robot from the mirror, STL paper robot
+  assembled by `trader/lab/robot_stand.py` into the SAME mirror-shaped record).
+  Branching in the frontend is what produced two screens that then drifted apart —
+  don't reintroduce it. The response carries `caps` (quik/chat/commands/signal): a
+  frame the source can't support is NOT RENDERED, never rendered empty. Per-robot
+  showcase: `/?agent_robot=<robot_id>`, modal `/?lab=live&robot_win=<id>`. Two-level burger nav (`NavMenu.svelte`)
   is mounted on EVERY screen; deep links `?orders=1`/`?tables=1`/`?equity=1` open frames.
   Panels are `Frame.svelte` (collapse + maximize via a shared `maxId`) split by
   `Splitter.svelte`, each size persisted per layout profile. The browser tab title is set
@@ -238,6 +245,30 @@ this layer; each carries its own exits (e.g. `us_open_fvg`: stop from the range 
 target at `rr_x10` × risk, so widening the stop widens the target — sweep the pair, never
 the stop alone).
 
+`allow_long` / `allow_short` (default 1/1 = previous behaviour, injected via AVG_PARAMS
+into EVERY registry strategy) are a SWEEP AXIS, not a safety switch: the ability to
+short is not free, and on a trending contract one-sided trading can beat two-sided.
+A forbidden side means GO FLAT (`want -> 0`), NOT "no signal" — ignoring the signal
+would leave a long-only robot sitting in a long against a reversed market with no exit
+at all. The gate runs AFTER the `__inv` negation (it filters the side the robot will
+actually take). `queue_campaign` pins both axes by default: free, they double the grid
+twice over.
+
+WARMUP IS A CORRECTNESS PROPERTY, not a formality. An indicator window barely longer
+than its own longest period never diverges, and the signal LOCKS to one sign forever:
+`macd_cross` with `slow + signal + 2` and fast=57/slow=48 gave a 60-bar window and the
+live robot made 778 long closes and ZERO shorts in six real days while the stand's
+console showed «СИГНАЛ ШОРТ» (the console read the full 600-bar tail, the trader read
+the 60-bar window). Rule: `4 * max(period…) + …`. `tests/lab/test_signal_both_sides.py`
+pins BOTH failure modes across the whole registry — «locked one way» (trades, but the
+sign is always the same) and «the window starves the signal» (silent on its own window,
+trades on a 4× one) — with a 25-signal sample floor so synthetic noise can't fail it.
+Two related traps it also cost us: `fast == slow` makes the MACD line identically zero
+and `m > s` then returns -1 FOREVER (8 deployed paper robots sat in a permanent short),
+and `rsi_trend`'s default 40/60 thresholds are anti-correlated with its own EMA filter —
+one signal in 5800 samples, which is a PARAMETER problem, not a warmup one, so the
+logic was left alone.
+
 COUNTER-strategies: any registry id
 plus suffix `__inv` (e.g. `macd_cross__inv`) is first-class — `make_on_bar` strips the
 suffix and NEGATES the base signal (on some contracts fading the signal is robustly
@@ -356,6 +387,12 @@ cd frontend && node ./node_modules/vite/bin/vite.js build
 node ./node_modules/vitest/vitest.mjs run           # tests
 node ./node_modules/vitest/vitest.mjs run src/lib/lab-analytics.flat.test.ts   # one file
 
+# Robot stand / params-frame invariants (run these when touching either):
+poetry run pytest tests/lab/test_signal_both_sides.py -q    # ни одна стратегия не заперта в одну сторону
+poetry run pytest tests/lab/test_macd_warmup.py -q          # окно прогрева покрывает свой период
+poetry run pytest tests/quik/test_params_merge.py -q        # правка параметров не стирает чужие ключи
+cd frontend && node ./node_modules/vitest/vitest.mjs run src/lib/param-groups.test.ts  # фрейм не теряет поле
+
 # Ad-hoc backtest of a live config (answering "what would X have done"): run it ON THE
 # HOSTER — MOEX ISS is unreachable from the dev box (httpx ConnectTimeout), and the i9
 # queue is for sweeps. load_bars_iss + run_single_backtest directly, one combo at a time,
@@ -413,6 +450,35 @@ ssh hoster 'cd ~/apps/shectory-trader && set -a; . ~/.shectory_trade.env; set +a
   (`if is_array then`, not `and n > 0`). Both bugs made a flat account's recon read STALE.
   And measure agent<->QUIK RTT on the AGENT clock alone (record the ping send time locally),
   never the Lua-echoed t0.
+- **A params edit MERGES, it never REPLACES** (`relay_robot_params`,
+  `trader/api/quik_robots.py`). The editor form is built from the strategy's
+  `params_schema`, and INFRASTRUCTURE flags are deliberately not in it (`exit_only`,
+  `bar_offset_min`) — so writing the posted set verbatim WIPED them. 05.08.2026 the
+  operator changed qty/avg_max on a REAL robot and silently lost `exit_only=true` and
+  `allow_short=0`: the robot left exit-only, regained both sides and opened a contract
+  before anyone noticed. Incoming keys win (a flag can still be set to 0), unmentioned
+  keys survive, broken JSON never blanks a robot. The stand shows every param the robot
+  ACTUALLY carries (schema ∪ params_json, extras badged «служебный») plus a
+  «Уедет роботу» diff over ALL keys — an invisible parameter cannot be reviewed.
+  Params UI work has its own project skill: `/params_UI <robot>`.
+- **Manual i9 runs PREEMPT, and priority alone does not do that.** `priority DESC`
+  only orders the QUEUE; a claimed campaign holds the pool for its whole length (3072
+  combos ≈ 90 min). The agent therefore builds its pool with `workers + 1` and a
+  separate `_manual_loop` claims with `min_priority=100` onto that RESERVED worker
+  while a campaign or a generic task runs (both block the claim loop). Side runs
+  publish no progress — the progress queue is shared and their combos would be counted
+  into the campaign's «сделано» and leak into its live top. Anything larger than
+  `MANUAL_SIDE_MAX_COMBOS` is handed back via `POST /api/v1/agent/release`: on one
+  worker a big sweep is slower than waiting for the full pool. Agent liveness is judged
+  by the `i9_heartbeat` freshness (4s) — `/claim` polling and `claimed_at` both go stale
+  during a long job and the UI showed «i9 ОФЛАЙН» on a perfectly healthy agent.
+- **A leaderboard row older than the last `library.py` change is history, not an
+  estimate.** `optimization_leaderboard` keeps 3.5M rows for years while strategy code
+  moves under them: `camp-20260731-shectory1w`'s leader re-runs today at +278k instead
+  of the recorded +529k (the 31.07 разножка change doubled its entries). `verified_at`
+  marks rows recomputed by current code; the Botstore chart warns in place when the
+  recomputed net differs by >2%. Rows with NO window (`date_from` NULL, ~15k of the
+  visible top-50) can never be verified — the period they were run on was not recorded.
 - **Protobuf 5.29 (has bitten prod twice):** the prod protobuf runtime is 5.29.6.
   Regenerate the PYTHON stubs (`trader/quik/pb/...`) ONLY with `grpcio-tools<1.71` — its
   header reads "Protobuf Python Version: 5.29.0". grpcio-tools ≥1.81 emits gencode 6.x,
