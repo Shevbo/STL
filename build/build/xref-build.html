@@ -194,15 +194,18 @@ imports:
  &#8226;   <a href="#trader.lab.ai46.models">trader.lab.ai46.models</a>
  &#8226;   <a href="#trader.lab.ai46.order_flow">trader.lab.ai46.order_flow</a>
  &#8226;   <a href="#trader.lab.ai46.params">trader.lab.ai46.params</a>
+ &#8226;   <a href="#trader.lab.ai46.portfolio">trader.lab.ai46.portfolio</a>
  &#8226;   <a href="#trader.lab.ai46.runner">trader.lab.ai46.runner</a>
  &#8226;   <a href="#trader.lab.ai46.service">trader.lab.ai46.service</a>
  &#8226;   <a href="#trader.lab.ai46.sweep_task">trader.lab.ai46.sweep_task</a>
  &#8226;   <a href="#trader.lab.backtest">trader.lab.backtest</a>
  &#8226;   <a href="#trader.lab.commission">trader.lab.commission</a>
+ &#8226;   <a href="#trader.lab.contract_roll">trader.lab.contract_roll</a>
  &#8226;   <a href="#trader.lab.indicators">trader.lab.indicators</a>
  &#8226;   <a href="#trader.lab.iss_loader">trader.lab.iss_loader</a>
  &#8226;   <a href="#trader.lab.market_store">trader.lab.market_store</a>
  &#8226;   <a href="#trader.lab.models">trader.lab.models</a>
+ &#8226;   <a href="#trader.lab.robot_stand">trader.lab.robot_stand</a>
  &#8226;   <a href="#trader.lab.runtime">trader.lab.runtime</a>
  &#8226;   <a href="#trader.lab.scheduler">trader.lab.scheduler</a>
  &#8226;   <a href="#trader.lab.script_guard">trader.lab.script_guard</a>
@@ -211,8 +214,10 @@ imports:
  &#8226;   <a href="#trader.lab.strategies.ema_crossover">trader.lab.strategies.ema_crossover</a>
  &#8226;   <a href="#trader.lab.strategies.library">trader.lab.strategies.library</a>
  &#8226;   <a href="#trader.lab.strategies.rsi_mean_reversion">trader.lab.strategies.rsi_mean_reversion</a>
+ &#8226;   <a href="#trader.lab.strategies.shaving_ri">trader.lab.strategies.shaving_ri</a>
  &#8226;   <a href="#trader.lab.strategies.supertrend">trader.lab.strategies.supertrend</a>
  &#8226;   <a href="#trader.lab.strategies.us_open_fvg">trader.lab.strategies.us_open_fvg</a>
+ &#8226;   <a href="#trader.lab.window_metrics">trader.lab.window_metrics</a>
  &#8226;   <a href="#trader.quik.pb">trader.quik.pb</a>
  &#8226;   <a href="#trader.quik.pb.shectory">trader.quik.pb.shectory</a>
  &#8226;   <a href="#trader.quik.pb.shectory.quik">trader.quik.pb.shectory.quik</a>
@@ -3459,6 +3464,15 @@ imported by:
  &#8226;   <a href="#asyncpg.protocol">asyncpg.protocol</a>
  &#8226;   <a href="#asyncpg.serverversion">asyncpg.serverversion</a>
  &#8226;   <a href="#asyncpg.types">asyncpg.types</a>
+ &#8226;   <a href="#charset_normalizer">charset_normalizer</a>
+ &#8226;   <a href="#charset_normalizer.api">charset_normalizer.api</a>
+ &#8226;   <a href="#charset_normalizer.cd">charset_normalizer.cd</a>
+ &#8226;   <a href="#charset_normalizer.constant">charset_normalizer.constant</a>
+ &#8226;   <a href="#charset_normalizer.legacy">charset_normalizer.legacy</a>
+ &#8226;   <a href="#charset_normalizer.md">charset_normalizer.md</a>
+ &#8226;   <a href="#charset_normalizer.models">charset_normalizer.models</a>
+ &#8226;   <a href="#charset_normalizer.utils">charset_normalizer.utils</a>
+ &#8226;   <a href="#charset_normalizer.version">charset_normalizer.version</a>
  &#8226;   <a href="#click">click</a>
  &#8226;   <a href="#click._compat">click._compat</a>
  &#8226;   <a href="#click._termui_impl">click._termui_impl</a>
@@ -3548,6 +3562,8 @@ imported by:
  &#8226;   <a href="#hyperframe.exceptions">hyperframe.exceptions</a>
  &#8226;   <a href="#hyperframe.flags">hyperframe.flags</a>
  &#8226;   <a href="#hyperframe.frame">hyperframe.frame</a>
+ &#8226;   <a href="#jaraco.context">jaraco.context</a>
+ &#8226;   <a href="#jaraco.functools">jaraco.functools</a>
  &#8226;   <a href="#packaging._elffile">packaging._elffile</a>
  &#8226;   <a href="#packaging._manylinux">packaging._manylinux</a>
  &#8226;   <a href="#packaging._musllinux">packaging._musllinux</a>
@@ -3658,8 +3674,6 @@ imported by:
  &#8226;   <a href="#setuptools._vendor.importlib_metadata">setuptools._vendor.importlib_metadata</a>
  &#8226;   <a href="#setuptools._vendor.importlib_metadata._meta">setuptools._vendor.importlib_metadata._meta</a>
  &#8226;   <a href="#setuptools._vendor.importlib_metadata.compat.py39">setuptools._vendor.importlib_metadata.compat.py39</a>
- &#8226;   <a href="#setuptools._vendor.jaraco.context">setuptools._vendor.jaraco.context</a>
- &#8226;   <a href="#setuptools._vendor.jaraco.functools">setuptools._vendor.jaraco.functools</a>
  &#8226;   <a href="#setuptools._vendor.packaging._elffile">setuptools._vendor.packaging._elffile</a>
  &#8226;   <a href="#setuptools._vendor.packaging._manylinux">setuptools._vendor.packaging._manylinux</a>
  &#8226;   <a href="#setuptools._vendor.packaging._musllinux">setuptools._vendor.packaging._musllinux</a>
@@ -3733,13 +3747,18 @@ imported by:
  &#8226;   <a href="#trader.lab.ai46.models">trader.lab.ai46.models</a>
  &#8226;   <a href="#trader.lab.ai46.order_flow">trader.lab.ai46.order_flow</a>
  &#8226;   <a href="#trader.lab.ai46.params">trader.lab.ai46.params</a>
+ &#8226;   <a href="#trader.lab.ai46.portfolio">trader.lab.ai46.portfolio</a>
  &#8226;   <a href="#trader.lab.ai46.runner">trader.lab.ai46.runner</a>
  &#8226;   <a href="#trader.lab.ai46.service">trader.lab.ai46.service</a>
  &#8226;   <a href="#trader.lab.ai46.sweep_task">trader.lab.ai46.sweep_task</a>
  &#8226;   <a href="#trader.lab.commission">trader.lab.commission</a>
+ &#8226;   <a href="#trader.lab.contract_roll">trader.lab.contract_roll</a>
  &#8226;   <a href="#trader.lab.iss_loader">trader.lab.iss_loader</a>
  &#8226;   <a href="#trader.lab.market_store">trader.lab.market_store</a>
+ &#8226;   <a href="#trader.lab.robot_stand">trader.lab.robot_stand</a>
  &#8226;   <a href="#trader.lab.strategies.library">trader.lab.strategies.library</a>
+ &#8226;   <a href="#trader.lab.window_metrics">trader.lab.window_metrics</a>
+ &#8226;   <a href="#trader.market_session">trader.market_session</a>
  &#8226;   <a href="#typing_inspection.introspection">typing_inspection.introspection</a>
 
   </div>
@@ -4825,6 +4844,7 @@ imported by:
  &#8226;   <a href="#anyio._core._tempfile">anyio._core._tempfile</a>
  &#8226;   <a href="#anyio.abc._eventloop">anyio.abc._eventloop</a>
  &#8226;   <a href="#httpx._transports.wsgi">httpx._transports.wsgi</a>
+ &#8226;   <a href="#jaraco.context">jaraco.context</a>
  &#8226;   <a href="#numpy.random.bit_generator">numpy.random.bit_generator</a>
  &#8226;   <a href="#pydantic._internal._dataclasses">pydantic._internal._dataclasses</a>
  &#8226;   <a href="#pydantic_core._pydantic_core">pydantic_core._pydantic_core</a>
@@ -5029,6 +5049,16 @@ imported by:
  &#8226;   <a href="#setuptools.config.setupcfg">setuptools.config.setupcfg</a>
  &#8226;   <a href="#typing">typing</a>
  &#8226;   <a href="#typing_extensions">typing_extensions</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="ada92cb5d92a588d1b93__mypyc"></a>
+  <tt>ada92cb5d92a588d1b93__mypyc</tt> <span class="moduletype"><tt>C:\Users\Boris\AppData\Local\Programs\Python\Python312\Lib\site-packages\ada92cb5d92a588d1b93__mypyc.cp312-win_amd64.pyd</tt></span>  <div class="import">
+imported by:
+    <a href="#charset_normalizer">charset_normalizer</a>
 
   </div>
 
@@ -6340,6 +6370,7 @@ imported by:
  &#8226;   <a href="#pydantic_settings.main">pydantic_settings.main</a>
  &#8226;   <a href="#robot_runner.bridge_client">robot_runner.bridge_client</a>
  &#8226;   <a href="#robot_runner.host">robot_runner.host</a>
+ &#8226;   <a href="#robot_runner.runtime">robot_runner.runtime</a>
  &#8226;   <a href="#structlog._native">structlog._native</a>
  &#8226;   <a href="#structlog.stdlib">structlog.stdlib</a>
  &#8226;   <a href="#trader.lab.ai46.__main__">trader.lab.ai46.__main__</a>
@@ -7855,17 +7886,35 @@ imported by:
 
 <div class="node">
   <a name="backports"></a>
-  <a target="code" href="" type="text/plain"><tt>backports</tt></a>
+  <a target="code" href="-" type="text/plain"><tt>backports</tt></a>
+<span class="moduletype">NamespacePackage</span>  <div class="import">
+imports:
+    <a href="#backports.tarfile">backports.tarfile</a>
+ &#8226;   <a href="#pkgutil">pkgutil</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#backports.tarfile">backports.tarfile</a>
+ &#8226;   <a href="#jaraco.context">jaraco.context</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="backports.tarfile"></a>
+  <a target="code" href="" type="text/plain"><tt>backports.tarfile</tt></a>
 <span class="moduletype">AliasNode</span>  <div class="import">
 imports:
-    <a href="#setuptools._vendor.backports">setuptools._vendor.backports</a>
+    <a href="#backports">backports</a>
  &#8226;   <a href="#setuptools._vendor.backports.tarfile">setuptools._vendor.backports.tarfile</a>
 
   </div>
   <div class="import">
 imported by:
-    <a href="#setuptools._vendor.backports.tarfile">setuptools._vendor.backports.tarfile</a>
- &#8226;   <a href="#setuptools._vendor.jaraco.context">setuptools._vendor.jaraco.context</a>
+    <a href="#backports">backports</a>
+ &#8226;   <a href="#jaraco.context">jaraco.context</a>
 
   </div>
 
@@ -7974,15 +8023,17 @@ imports:
   </div>
   <div class="import">
 imported by:
-    <a href="#idna.core">idna.core</a>
+    <a href="#charset_normalizer.utils">charset_normalizer.utils</a>
+ &#8226;   <a href="#idna.core">idna.core</a>
  &#8226;   <a href="#idna.intranges">idna.intranges</a>
+ &#8226;   <a href="#more_itertools.recipes">more_itertools.recipes</a>
  &#8226;   <a href="#multiprocessing.heap">multiprocessing.heap</a>
  &#8226;   <a href="#pygments.lexers.textedit">pygments.lexers.textedit</a>
  &#8226;   <a href="#random">random</a>
- &#8226;   <a href="#setuptools._vendor.more_itertools.recipes">setuptools._vendor.more_itertools.recipes</a>
  &#8226;   <a href="#sortedcontainers.sortedlist">sortedcontainers.sortedlist</a>
  &#8226;   <a href="#statistics">statistics</a>
  &#8226;   <a href="#trader.lab.ai46.backtest">trader.lab.ai46.backtest</a>
+ &#8226;   <a href="#trader.lab.runtime">trader.lab.runtime</a>
  &#8226;   <a href="#urllib.request">urllib.request</a>
  &#8226;   <a href="#zoneinfo._zoneinfo">zoneinfo._zoneinfo</a>
 
@@ -8038,6 +8089,7 @@ imported by:
  &#8226;   <a href="#gzip">gzip</a>
  &#8226;   <a href="#hypothesis.strategies._internal.types">hypothesis.strategies._internal.types</a>
  &#8226;   <a href="#inspect">inspect</a>
+ &#8226;   <a href="#jaraco.context">jaraco.context</a>
  &#8226;   <a href="#locale">locale</a>
  &#8226;   <a href="#lzma">lzma</a>
  &#8226;   <a href="#numpy._core.numeric">numpy._core.numeric</a>
@@ -8170,10 +8222,225 @@ imported by:
 
 <div class="node">
   <a name="charset_normalizer"></a>
-  <a target="code" href="" type="text/plain"><tt>charset_normalizer</tt></a>
-<span class="moduletype">MissingModule</span>  <div class="import">
+  <a target="code" href="///C:/Users/Boris/AppData/Local/Programs/Python/Python312/Lib/site-packages/charset_normalizer/__init__.py" type="text/plain"><tt>charset_normalizer</tt></a>
+<span class="moduletype">Package</span>  <div class="import">
+imports:
+    <a href="#__future__">__future__</a>
+ &#8226;   <a href="#ada92cb5d92a588d1b93__mypyc">ada92cb5d92a588d1b93__mypyc</a>
+ &#8226;   <a href="#charset_normalizer.api">charset_normalizer.api</a>
+ &#8226;   <a href="#charset_normalizer.legacy">charset_normalizer.legacy</a>
+ &#8226;   <a href="#charset_normalizer.models">charset_normalizer.models</a>
+ &#8226;   <a href="#charset_normalizer.utils">charset_normalizer.utils</a>
+ &#8226;   <a href="#charset_normalizer.version">charset_normalizer.version</a>
+ &#8226;   <a href="#logging">logging</a>
+
+  </div>
+  <div class="import">
 imported by:
-    <a href="#numpy.f2py.crackfortran">numpy.f2py.crackfortran</a>
+    <a href="#charset_normalizer.api">charset_normalizer.api</a>
+ &#8226;   <a href="#charset_normalizer.cd">charset_normalizer.cd</a>
+ &#8226;   <a href="#charset_normalizer.constant">charset_normalizer.constant</a>
+ &#8226;   <a href="#charset_normalizer.legacy">charset_normalizer.legacy</a>
+ &#8226;   <a href="#charset_normalizer.md">charset_normalizer.md</a>
+ &#8226;   <a href="#charset_normalizer.models">charset_normalizer.models</a>
+ &#8226;   <a href="#charset_normalizer.utils">charset_normalizer.utils</a>
+ &#8226;   <a href="#charset_normalizer.version">charset_normalizer.version</a>
+ &#8226;   <a href="#numpy.f2py.crackfortran">numpy.f2py.crackfortran</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="charset_normalizer.api"></a>
+  <a target="code" href="///C:/Users/Boris/AppData/Local/Programs/Python/Python312/Lib/site-packages/charset_normalizer/api.py" type="text/plain"><tt>charset_normalizer.api</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#__future__">__future__</a>
+ &#8226;   <a href="#charset_normalizer">charset_normalizer</a>
+ &#8226;   <a href="#charset_normalizer.cd">charset_normalizer.cd</a>
+ &#8226;   <a href="#charset_normalizer.constant">charset_normalizer.constant</a>
+ &#8226;   <a href="#charset_normalizer.md">charset_normalizer.md</a>
+ &#8226;   <a href="#charset_normalizer.models">charset_normalizer.models</a>
+ &#8226;   <a href="#charset_normalizer.utils">charset_normalizer.utils</a>
+ &#8226;   <a href="#functools">functools</a>
+ &#8226;   <a href="#logging">logging</a>
+ &#8226;   <a href="#os">os</a>
+ &#8226;   <a href="#typing">typing</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#charset_normalizer">charset_normalizer</a>
+ &#8226;   <a href="#charset_normalizer.legacy">charset_normalizer.legacy</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="charset_normalizer.cd"></a>
+  <tt>charset_normalizer.cd</tt> <span class="moduletype"><tt>C:\Users\Boris\AppData\Local\Programs\Python\Python312\Lib\site-packages\charset_normalizer\cd.cp312-win_amd64.pyd</tt></span>  <div class="import">
+imports:
+    <a href="#__future__">__future__</a>
+ &#8226;   <a href="#charset_normalizer">charset_normalizer</a>
+ &#8226;   <a href="#charset_normalizer.constant">charset_normalizer.constant</a>
+ &#8226;   <a href="#charset_normalizer.md">charset_normalizer.md</a>
+ &#8226;   <a href="#charset_normalizer.models">charset_normalizer.models</a>
+ &#8226;   <a href="#charset_normalizer.utils">charset_normalizer.utils</a>
+ &#8226;   <a href="#codecs">codecs</a>
+ &#8226;   <a href="#functools">functools</a>
+ &#8226;   <a href="#importlib">importlib</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#charset_normalizer.api">charset_normalizer.api</a>
+ &#8226;   <a href="#charset_normalizer.models">charset_normalizer.models</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="charset_normalizer.constant"></a>
+  <a target="code" href="///C:/Users/Boris/AppData/Local/Programs/Python/Python312/Lib/site-packages/charset_normalizer/constant.py" type="text/plain"><tt>charset_normalizer.constant</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#__future__">__future__</a>
+ &#8226;   <a href="#charset_normalizer">charset_normalizer</a>
+ &#8226;   <a href="#codecs">codecs</a>
+ &#8226;   <a href="#encodings.aliases">encodings.aliases</a>
+ &#8226;   <a href="#re">re</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#charset_normalizer.api">charset_normalizer.api</a>
+ &#8226;   <a href="#charset_normalizer.cd">charset_normalizer.cd</a>
+ &#8226;   <a href="#charset_normalizer.legacy">charset_normalizer.legacy</a>
+ &#8226;   <a href="#charset_normalizer.md">charset_normalizer.md</a>
+ &#8226;   <a href="#charset_normalizer.models">charset_normalizer.models</a>
+ &#8226;   <a href="#charset_normalizer.utils">charset_normalizer.utils</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="charset_normalizer.legacy"></a>
+  <a target="code" href="///C:/Users/Boris/AppData/Local/Programs/Python/Python312/Lib/site-packages/charset_normalizer/legacy.py" type="text/plain"><tt>charset_normalizer.legacy</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#__future__">__future__</a>
+ &#8226;   <a href="#charset_normalizer">charset_normalizer</a>
+ &#8226;   <a href="#charset_normalizer.api">charset_normalizer.api</a>
+ &#8226;   <a href="#charset_normalizer.constant">charset_normalizer.constant</a>
+ &#8226;   <a href="#typing">typing</a>
+ &#8226;   <a href="#warnings">warnings</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#charset_normalizer">charset_normalizer</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="charset_normalizer.md"></a>
+  <tt>charset_normalizer.md</tt> <span class="moduletype"><tt>C:\Users\Boris\AppData\Local\Programs\Python\Python312\Lib\site-packages\charset_normalizer\md.cp312-win_amd64.pyd</tt></span>  <div class="import">
+imports:
+    <a href="#__future__">__future__</a>
+ &#8226;   <a href="#charset_normalizer">charset_normalizer</a>
+ &#8226;   <a href="#charset_normalizer.constant">charset_normalizer.constant</a>
+ &#8226;   <a href="#charset_normalizer.utils">charset_normalizer.utils</a>
+ &#8226;   <a href="#functools">functools</a>
+ &#8226;   <a href="#logging">logging</a>
+ &#8226;   <a href="#sys">sys</a>
+ &#8226;   <a href="#typing">typing</a>
+ &#8226;   <a href="#typing_extensions">typing_extensions</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#charset_normalizer.api">charset_normalizer.api</a>
+ &#8226;   <a href="#charset_normalizer.cd">charset_normalizer.cd</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="charset_normalizer.models"></a>
+  <a target="code" href="///C:/Users/Boris/AppData/Local/Programs/Python/Python312/Lib/site-packages/charset_normalizer/models.py" type="text/plain"><tt>charset_normalizer.models</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#__future__">__future__</a>
+ &#8226;   <a href="#charset_normalizer">charset_normalizer</a>
+ &#8226;   <a href="#charset_normalizer.cd">charset_normalizer.cd</a>
+ &#8226;   <a href="#charset_normalizer.constant">charset_normalizer.constant</a>
+ &#8226;   <a href="#charset_normalizer.utils">charset_normalizer.utils</a>
+ &#8226;   <a href="#encodings.aliases">encodings.aliases</a>
+ &#8226;   <a href="#json">json</a>
+ &#8226;   <a href="#re">re</a>
+ &#8226;   <a href="#typing">typing</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#charset_normalizer">charset_normalizer</a>
+ &#8226;   <a href="#charset_normalizer.api">charset_normalizer.api</a>
+ &#8226;   <a href="#charset_normalizer.cd">charset_normalizer.cd</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="charset_normalizer.utils"></a>
+  <a target="code" href="///C:/Users/Boris/AppData/Local/Programs/Python/Python312/Lib/site-packages/charset_normalizer/utils.py" type="text/plain"><tt>charset_normalizer.utils</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#__future__">__future__</a>
+ &#8226;   <a href="#bisect">bisect</a>
+ &#8226;   <a href="#charset_normalizer">charset_normalizer</a>
+ &#8226;   <a href="#charset_normalizer.constant">charset_normalizer.constant</a>
+ &#8226;   <a href="#codecs">codecs</a>
+ &#8226;   <a href="#encodings.aliases">encodings.aliases</a>
+ &#8226;   <a href="#functools">functools</a>
+ &#8226;   <a href="#importlib">importlib</a>
+ &#8226;   <a href="#logging">logging</a>
+ &#8226;   <a href="#re">re</a>
+ &#8226;   <a href="#typing">typing</a>
+ &#8226;   <a href="#unicodedata">unicodedata</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#charset_normalizer">charset_normalizer</a>
+ &#8226;   <a href="#charset_normalizer.api">charset_normalizer.api</a>
+ &#8226;   <a href="#charset_normalizer.cd">charset_normalizer.cd</a>
+ &#8226;   <a href="#charset_normalizer.md">charset_normalizer.md</a>
+ &#8226;   <a href="#charset_normalizer.models">charset_normalizer.models</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="charset_normalizer.version"></a>
+  <a target="code" href="///C:/Users/Boris/AppData/Local/Programs/Python/Python312/Lib/site-packages/charset_normalizer/version.py" type="text/plain"><tt>charset_normalizer.version</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#__future__">__future__</a>
+ &#8226;   <a href="#charset_normalizer">charset_normalizer</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#charset_normalizer">charset_normalizer</a>
 
   </div>
 
@@ -8747,6 +9014,9 @@ imported by:
  &#8226;   <a href="#_pickle">_pickle</a>
  &#8226;   <a href="#asyncpg.pgproto.pgproto">asyncpg.pgproto.pgproto</a>
  &#8226;   <a href="#asyncpg.protocol.protocol">asyncpg.protocol.protocol</a>
+ &#8226;   <a href="#charset_normalizer.cd">charset_normalizer.cd</a>
+ &#8226;   <a href="#charset_normalizer.constant">charset_normalizer.constant</a>
+ &#8226;   <a href="#charset_normalizer.utils">charset_normalizer.utils</a>
  &#8226;   <a href="#click._compat">click._compat</a>
  &#8226;   <a href="#dotenv.parser">dotenv.parser</a>
  &#8226;   <a href="#encodings">encodings</a>
@@ -8993,6 +9263,8 @@ imported by:
  &#8226;   <a href="#importlib.resources.readers">importlib.resources.readers</a>
  &#8226;   <a href="#inspect">inspect</a>
  &#8226;   <a href="#main.py">main.py</a>
+ &#8226;   <a href="#more_itertools.more">more_itertools.more</a>
+ &#8226;   <a href="#more_itertools.recipes">more_itertools.recipes</a>
  &#8226;   <a href="#multiprocessing.heap">multiprocessing.heap</a>
  &#8226;   <a href="#multiprocessing.pool">multiprocessing.pool</a>
  &#8226;   <a href="#multiprocessing.queues">multiprocessing.queues</a>
@@ -9027,8 +9299,6 @@ imported by:
  &#8226;   <a href="#setuptools._vendor.importlib_metadata">setuptools._vendor.importlib_metadata</a>
  &#8226;   <a href="#setuptools._vendor.importlib_metadata._collections">setuptools._vendor.importlib_metadata._collections</a>
  &#8226;   <a href="#setuptools._vendor.importlib_metadata._itertools">setuptools._vendor.importlib_metadata._itertools</a>
- &#8226;   <a href="#setuptools._vendor.more_itertools.more">setuptools._vendor.more_itertools.more</a>
- &#8226;   <a href="#setuptools._vendor.more_itertools.recipes">setuptools._vendor.more_itertools.recipes</a>
  &#8226;   <a href="#setuptools._vendor.packaging._manylinux">setuptools._vendor.packaging._manylinux</a>
  &#8226;   <a href="#setuptools._vendor.zipp._functools">setuptools._vendor.zipp._functools</a>
  &#8226;   <a href="#setuptools.command._requirestxt">setuptools.command._requirestxt</a>
@@ -9045,6 +9315,7 @@ imported by:
  &#8226;   <a href="#structlog._native">structlog._native</a>
  &#8226;   <a href="#threading">threading</a>
  &#8226;   <a href="#tokenize">tokenize</a>
+ &#8226;   <a href="#trader.lab.strategies.library">trader.lab.strategies.library</a>
  &#8226;   <a href="#typing">typing</a>
  &#8226;   <a href="#typing_extensions">typing_extensions</a>
  &#8226;   <a href="#unittest._log">unittest._log</a>
@@ -9288,8 +9559,11 @@ imported by:
  &#8226;   <a href="#hypothesis.utils.threading">hypothesis.utils.threading</a>
  &#8226;   <a href="#hypothesis.vendor.pretty">hypothesis.vendor.pretty</a>
  &#8226;   <a href="#inspect">inspect</a>
+ &#8226;   <a href="#jaraco.context">jaraco.context</a>
+ &#8226;   <a href="#jaraco.functools">jaraco.functools</a>
  &#8226;   <a href="#logging">logging</a>
  &#8226;   <a href="#main.py">main.py</a>
+ &#8226;   <a href="#more_itertools.more">more_itertools.more</a>
  &#8226;   <a href="#numpy._typing._array_like">numpy._typing._array_like</a>
  &#8226;   <a href="#numpy._typing._dtype_like">numpy._typing._dtype_like</a>
  &#8226;   <a href="#numpy._typing._nested_sequence">numpy._typing._nested_sequence</a>
@@ -9366,9 +9640,6 @@ imported by:
  &#8226;   <a href="#setuptools._reqs">setuptools._reqs</a>
  &#8226;   <a href="#setuptools._vendor.importlib_metadata">setuptools._vendor.importlib_metadata</a>
  &#8226;   <a href="#setuptools._vendor.importlib_metadata._meta">setuptools._vendor.importlib_metadata._meta</a>
- &#8226;   <a href="#setuptools._vendor.jaraco.context">setuptools._vendor.jaraco.context</a>
- &#8226;   <a href="#setuptools._vendor.jaraco.functools">setuptools._vendor.jaraco.functools</a>
- &#8226;   <a href="#setuptools._vendor.more_itertools.more">setuptools._vendor.more_itertools.more</a>
  &#8226;   <a href="#setuptools._vendor.tomli._parser">setuptools._vendor.tomli._parser</a>
  &#8226;   <a href="#setuptools.command._requirestxt">setuptools.command._requirestxt</a>
  &#8226;   <a href="#setuptools.command.bdist_egg">setuptools.command.bdist_egg</a>
@@ -9756,6 +10027,9 @@ imported by:
  &#8226;   <a href="#importlib.metadata">importlib.metadata</a>
  &#8226;   <a href="#importlib.resources._adapters">importlib.resources._adapters</a>
  &#8226;   <a href="#importlib.resources._common">importlib.resources._common</a>
+ &#8226;   <a href="#jaraco.context">jaraco.context</a>
+ &#8226;   <a href="#more_itertools.more">more_itertools.more</a>
+ &#8226;   <a href="#more_itertools.recipes">more_itertools.recipes</a>
  &#8226;   <a href="#numpy._core._methods">numpy._core._methods</a>
  &#8226;   <a href="#numpy._core.arrayprint">numpy._core.arrayprint</a>
  &#8226;   <a href="#numpy._core.memmap">numpy._core.memmap</a>
@@ -9779,9 +10053,6 @@ imported by:
  &#8226;   <a href="#setuptools._distutils.version">setuptools._distutils.version</a>
  &#8226;   <a href="#setuptools._path">setuptools._path</a>
  &#8226;   <a href="#setuptools._vendor.importlib_metadata">setuptools._vendor.importlib_metadata</a>
- &#8226;   <a href="#setuptools._vendor.jaraco.context">setuptools._vendor.jaraco.context</a>
- &#8226;   <a href="#setuptools._vendor.more_itertools.more">setuptools._vendor.more_itertools.more</a>
- &#8226;   <a href="#setuptools._vendor.more_itertools.recipes">setuptools._vendor.more_itertools.recipes</a>
  &#8226;   <a href="#setuptools._vendor.packaging._manylinux">setuptools._vendor.packaging._manylinux</a>
  &#8226;   <a href="#setuptools._vendor.packaging._tokenizer">setuptools._vendor.packaging._tokenizer</a>
  &#8226;   <a href="#setuptools.archive_util">setuptools.archive_util</a>
@@ -10089,6 +10360,7 @@ imported by:
  &#8226;   <a href="#hypothesis.strategies._internal.random">hypothesis.strategies._internal.random</a>
  &#8226;   <a href="#hypothesis.strategies._internal.regex">hypothesis.strategies._internal.regex</a>
  &#8226;   <a href="#hypothesis.strategies._internal.utils">hypothesis.strategies._internal.utils</a>
+ &#8226;   <a href="#more_itertools.recipes">more_itertools.recipes</a>
  &#8226;   <a href="#packaging._tokenizer">packaging._tokenizer</a>
  &#8226;   <a href="#pprint">pprint</a>
  &#8226;   <a href="#pydantic._internal._dataclasses">pydantic._internal._dataclasses</a>
@@ -10127,6 +10399,7 @@ imported by:
  &#8226;   <a href="#trader.lab.ai46.models">trader.lab.ai46.models</a>
  &#8226;   <a href="#trader.lab.ai46.params">trader.lab.ai46.params</a>
  &#8226;   <a href="#trader.lab.runtime">trader.lab.runtime</a>
+ &#8226;   <a href="#trader.market_session">trader.market_session</a>
  &#8226;   <a href="#trader.md.models">trader.md.models</a>
  &#8226;   <a href="#typing_inspection.introspection">typing_inspection.introspection</a>
 
@@ -10191,7 +10464,9 @@ imported by:
  &#8226;   <a href="#tomllib._re">tomllib._re</a>
  &#8226;   <a href="#trader.auth.client">trader.auth.client</a>
  &#8226;   <a href="#trader.auth.models">trader.auth.models</a>
+ &#8226;   <a href="#trader.lab.ai46.service">trader.lab.ai46.service</a>
  &#8226;   <a href="#trader.lab.ai46.sweep_task">trader.lab.ai46.sweep_task</a>
+ &#8226;   <a href="#trader.lab.contract_roll">trader.lab.contract_roll</a>
  &#8226;   <a href="#trader.lab.iss_loader">trader.lab.iss_loader</a>
  &#8226;   <a href="#trader.lab.market_store">trader.lab.market_store</a>
  &#8226;   <a href="#trader.lab.models">trader.lab.models</a>
@@ -10199,6 +10474,7 @@ imported by:
  &#8226;   <a href="#trader.lab.scheduler">trader.lab.scheduler</a>
  &#8226;   <a href="#trader.lab.strategies.library">trader.lab.strategies.library</a>
  &#8226;   <a href="#trader.lab.strategies.us_open_fvg">trader.lab.strategies.us_open_fvg</a>
+ &#8226;   <a href="#trader.market_session">trader.market_session</a>
  &#8226;   <a href="#trader.md.grpc_client">trader.md.grpc_client</a>
  &#8226;   <a href="#trader.md.models">trader.md.models</a>
  &#8226;   <a href="#xmlrpc.client">xmlrpc.client</a>
@@ -10241,6 +10517,7 @@ imported by:
  &#8226;   <a href="#setuptools.config._validate_pyproject.fastjsonschema_validations">setuptools.config._validate_pyproject.fastjsonschema_validations</a>
  &#8226;   <a href="#statistics">statistics</a>
  &#8226;   <a href="#trader.lab.ai46.service">trader.lab.ai46.service</a>
+ &#8226;   <a href="#trader.lab.contract_roll">trader.lab.contract_roll</a>
  &#8226;   <a href="#trader.lab.runtime">trader.lab.runtime</a>
  &#8226;   <a href="#trader.md.models">trader.md.models</a>
  &#8226;   <a href="#trader.pos.models">trader.pos.models</a>
@@ -11290,7 +11567,10 @@ imports:
   </div>
   <div class="import">
 imported by:
-    <a href="#encodings">encodings</a>
+    <a href="#charset_normalizer.constant">charset_normalizer.constant</a>
+ &#8226;   <a href="#charset_normalizer.models">charset_normalizer.models</a>
+ &#8226;   <a href="#charset_normalizer.utils">charset_normalizer.utils</a>
+ &#8226;   <a href="#encodings">encodings</a>
  &#8226;   <a href="#locale">locale</a>
  &#8226;   <a href="#main.py">main.py</a>
 
@@ -13639,6 +13919,7 @@ imported by:
  &#8226;   <a href="#gzip">gzip</a>
  &#8226;   <a href="#http.client">http.client</a>
  &#8226;   <a href="#hypothesis.database">hypothesis.database</a>
+ &#8226;   <a href="#jaraco.context">jaraco.context</a>
  &#8226;   <a href="#multiprocessing.connection">multiprocessing.connection</a>
  &#8226;   <a href="#multiprocessing.forkserver">multiprocessing.forkserver</a>
  &#8226;   <a href="#multiprocessing.queues">multiprocessing.queues</a>
@@ -13646,7 +13927,6 @@ imported by:
  &#8226;   <a href="#numpy.f2py._backends._meson">numpy.f2py._backends._meson</a>
  &#8226;   <a href="#pathlib">pathlib</a>
  &#8226;   <a href="#setuptools._distutils.file_util">setuptools._distutils.file_util</a>
- &#8226;   <a href="#setuptools._vendor.jaraco.context">setuptools._vendor.jaraco.context</a>
  &#8226;   <a href="#shutil">shutil</a>
  &#8226;   <a href="#socket">socket</a>
  &#8226;   <a href="#ssl">ssl</a>
@@ -13839,6 +14119,10 @@ imported by:
  &#8226;   <a href="#asyncpg.connection">asyncpg.connection</a>
  &#8226;   <a href="#asyncpg.connresource">asyncpg.connresource</a>
  &#8226;   <a href="#asyncpg.pool">asyncpg.pool</a>
+ &#8226;   <a href="#charset_normalizer.api">charset_normalizer.api</a>
+ &#8226;   <a href="#charset_normalizer.cd">charset_normalizer.cd</a>
+ &#8226;   <a href="#charset_normalizer.md">charset_normalizer.md</a>
+ &#8226;   <a href="#charset_normalizer.utils">charset_normalizer.utils</a>
  &#8226;   <a href="#click.core">click.core</a>
  &#8226;   <a href="#click.decorators">click.decorators</a>
  &#8226;   <a href="#click.utils">click.utils</a>
@@ -13892,9 +14176,13 @@ imported by:
  &#8226;   <a href="#importlib.resources._legacy">importlib.resources._legacy</a>
  &#8226;   <a href="#inspect">inspect</a>
  &#8226;   <a href="#ipaddress">ipaddress</a>
+ &#8226;   <a href="#jaraco.context">jaraco.context</a>
+ &#8226;   <a href="#jaraco.functools">jaraco.functools</a>
  &#8226;   <a href="#linecache">linecache</a>
  &#8226;   <a href="#locale">locale</a>
  &#8226;   <a href="#main.py">main.py</a>
+ &#8226;   <a href="#more_itertools.more">more_itertools.more</a>
+ &#8226;   <a href="#more_itertools.recipes">more_itertools.recipes</a>
  &#8226;   <a href="#multiprocessing.reduction">multiprocessing.reduction</a>
  &#8226;   <a href="#multiprocessing.shared_memory">multiprocessing.shared_memory</a>
  &#8226;   <a href="#numpy._core._ufunc_config">numpy._core._ufunc_config</a>
@@ -13990,11 +14278,7 @@ imported by:
  &#8226;   <a href="#setuptools._vendor.importlib_metadata">setuptools._vendor.importlib_metadata</a>
  &#8226;   <a href="#setuptools._vendor.importlib_metadata._functools">setuptools._vendor.importlib_metadata._functools</a>
  &#8226;   <a href="#setuptools._vendor.importlib_metadata._typing">setuptools._vendor.importlib_metadata._typing</a>
- &#8226;   <a href="#setuptools._vendor.jaraco.context">setuptools._vendor.jaraco.context</a>
- &#8226;   <a href="#setuptools._vendor.jaraco.functools">setuptools._vendor.jaraco.functools</a>
  &#8226;   <a href="#setuptools._vendor.jaraco.text">setuptools._vendor.jaraco.text</a>
- &#8226;   <a href="#setuptools._vendor.more_itertools.more">setuptools._vendor.more_itertools.more</a>
- &#8226;   <a href="#setuptools._vendor.more_itertools.recipes">setuptools._vendor.more_itertools.recipes</a>
  &#8226;   <a href="#setuptools._vendor.packaging._manylinux">setuptools._vendor.packaging._manylinux</a>
  &#8226;   <a href="#setuptools._vendor.packaging._musllinux">setuptools._vendor.packaging._musllinux</a>
  &#8226;   <a href="#setuptools._vendor.packaging.version">setuptools._vendor.packaging.version</a>
@@ -16611,9 +16895,9 @@ imported by:
  &#8226;   <a href="#difflib">difflib</a>
  &#8226;   <a href="#hypothesis.internal.conjecture.utils">hypothesis.internal.conjecture.utils</a>
  &#8226;   <a href="#main.py">main.py</a>
+ &#8226;   <a href="#more_itertools.more">more_itertools.more</a>
+ &#8226;   <a href="#more_itertools.recipes">more_itertools.recipes</a>
  &#8226;   <a href="#queue">queue</a>
- &#8226;   <a href="#setuptools._vendor.more_itertools.more">setuptools._vendor.more_itertools.more</a>
- &#8226;   <a href="#setuptools._vendor.more_itertools.recipes">setuptools._vendor.more_itertools.recipes</a>
 
   </div>
 
@@ -17938,8 +18222,11 @@ imported by:
  &#8226;   <a href="#httpx._utils">httpx._utils</a>
  &#8226;   <a href="#trader.auth.client">trader.auth.client</a>
  &#8226;   <a href="#trader.lab.ai46.llm">trader.lab.ai46.llm</a>
+ &#8226;   <a href="#trader.lab.ai46.service">trader.lab.ai46.service</a>
  &#8226;   <a href="#trader.lab.ai46.sweep_task">trader.lab.ai46.sweep_task</a>
+ &#8226;   <a href="#trader.lab.contract_roll">trader.lab.contract_roll</a>
  &#8226;   <a href="#trader.lab.iss_loader">trader.lab.iss_loader</a>
+ &#8226;   <a href="#trader.market_session">trader.market_session</a>
 
   </div>
 
@@ -21718,6 +22005,8 @@ imported by:
     <a href="#_distutils_hack">_distutils_hack</a>
  &#8226;   <a href="#_hypothesis_ftz_detector">_hypothesis_ftz_detector</a>
  &#8226;   <a href="#anyio._core._eventloop">anyio._core._eventloop</a>
+ &#8226;   <a href="#charset_normalizer.cd">charset_normalizer.cd</a>
+ &#8226;   <a href="#charset_normalizer.utils">charset_normalizer.utils</a>
  &#8226;   <a href="#google.protobuf.internal.api_implementation">google.protobuf.internal.api_implementation</a>
  &#8226;   <a href="#grpc_tools.protoc">grpc_tools.protoc</a>
  &#8226;   <a href="#hypothesis.extra.numpy">hypothesis.extra.numpy</a>
@@ -22367,6 +22656,7 @@ imported by:
  &#8226;   <a href="#hypothesis.strategies._internal.types">hypothesis.strategies._internal.types</a>
  &#8226;   <a href="#importlib.metadata">importlib.metadata</a>
  &#8226;   <a href="#importlib.resources._common">importlib.resources._common</a>
+ &#8226;   <a href="#jaraco.functools">jaraco.functools</a>
  &#8226;   <a href="#numpy._core._internal">numpy._core._internal</a>
  &#8226;   <a href="#numpy._core.function_base">numpy._core.function_base</a>
  &#8226;   <a href="#numpy._core.overrides">numpy._core.overrides</a>
@@ -22400,7 +22690,6 @@ imported by:
  &#8226;   <a href="#pyi_rth_inspect.py">pyi_rth_inspect.py</a>
  &#8226;   <a href="#rlcompleter">rlcompleter</a>
  &#8226;   <a href="#setuptools._vendor.importlib_metadata">setuptools._vendor.importlib_metadata</a>
- &#8226;   <a href="#setuptools._vendor.jaraco.functools">setuptools._vendor.jaraco.functools</a>
  &#8226;   <a href="#setuptools.config._apply_pyprojecttoml">setuptools.config._apply_pyprojecttoml</a>
  &#8226;   <a href="#setuptools.config._validate_pyproject.extra_validations">setuptools.config._validate_pyproject.extra_validations</a>
  &#8226;   <a href="#setuptools.discovery">setuptools.discovery</a>
@@ -22621,6 +22910,9 @@ imported by:
  &#8226;   <a href="#importlib.resources.abc">importlib.resources.abc</a>
  &#8226;   <a href="#importlib.resources.readers">importlib.resources.readers</a>
  &#8226;   <a href="#inspect">inspect</a>
+ &#8226;   <a href="#jaraco.functools">jaraco.functools</a>
+ &#8226;   <a href="#more_itertools.more">more_itertools.more</a>
+ &#8226;   <a href="#more_itertools.recipes">more_itertools.recipes</a>
  &#8226;   <a href="#multiprocessing.connection">multiprocessing.connection</a>
  &#8226;   <a href="#multiprocessing.pool">multiprocessing.pool</a>
  &#8226;   <a href="#multiprocessing.process">multiprocessing.process</a>
@@ -22655,10 +22947,7 @@ imported by:
  &#8226;   <a href="#setuptools._entry_points">setuptools._entry_points</a>
  &#8226;   <a href="#setuptools._vendor.importlib_metadata">setuptools._vendor.importlib_metadata</a>
  &#8226;   <a href="#setuptools._vendor.importlib_metadata._itertools">setuptools._vendor.importlib_metadata._itertools</a>
- &#8226;   <a href="#setuptools._vendor.jaraco.functools">setuptools._vendor.jaraco.functools</a>
  &#8226;   <a href="#setuptools._vendor.jaraco.text">setuptools._vendor.jaraco.text</a>
- &#8226;   <a href="#setuptools._vendor.more_itertools.more">setuptools._vendor.more_itertools.more</a>
- &#8226;   <a href="#setuptools._vendor.more_itertools.recipes">setuptools._vendor.more_itertools.recipes</a>
  &#8226;   <a href="#setuptools._vendor.packaging.specifiers">setuptools._vendor.packaging.specifiers</a>
  &#8226;   <a href="#setuptools._vendor.zipp">setuptools._vendor.zipp</a>
  &#8226;   <a href="#setuptools.command._requirestxt">setuptools.command._requirestxt</a>
@@ -22688,17 +22977,100 @@ imported by:
 
 <div class="node">
   <a name="jaraco"></a>
-  <a target="code" href="" type="text/plain"><tt>jaraco</tt></a>
-<span class="moduletype">AliasNode</span>  <div class="import">
+  <a target="code" href="-" type="text/plain"><tt>jaraco</tt></a>
+<span class="moduletype">NamespacePackage</span>  <div class="import">
+imported by:
+    <a href="#jaraco.context">jaraco.context</a>
+ &#8226;   <a href="#jaraco.functools">jaraco.functools</a>
+ &#8226;   <a href="#jaraco.text">jaraco.text</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="jaraco.context"></a>
+  <a target="code" href="///C:/Users/Boris/AppData/Local/Programs/Python/Python312/Lib/site-packages/jaraco/context/__init__.py" type="text/plain"><tt>jaraco.context</tt></a>
+<span class="moduletype">Package</span>  <div class="import">
 imports:
-    <a href="#setuptools._vendor.jaraco">setuptools._vendor.jaraco</a>
+    <a href="#__future__">__future__</a>
+ &#8226;   <a href="#_typeshed">_typeshed</a>
+ &#8226;   <a href="#backports">backports</a>
+ &#8226;   <a href="#backports.tarfile">backports.tarfile</a>
+ &#8226;   <a href="#builtins">builtins</a>
+ &#8226;   <a href="#collections.abc">collections.abc</a>
+ &#8226;   <a href="#contextlib">contextlib</a>
+ &#8226;   <a href="#errno">errno</a>
+ &#8226;   <a href="#functools">functools</a>
+ &#8226;   <a href="#jaraco">jaraco</a>
+ &#8226;   <a href="#operator">operator</a>
+ &#8226;   <a href="#os">os</a>
+ &#8226;   <a href="#platform">platform</a>
+ &#8226;   <a href="#shutil">shutil</a>
+ &#8226;   <a href="#stat">stat</a>
+ &#8226;   <a href="#subprocess">subprocess</a>
+ &#8226;   <a href="#sys">sys</a>
+ &#8226;   <a href="#tarfile">tarfile</a>
+ &#8226;   <a href="#tempfile">tempfile</a>
+ &#8226;   <a href="#types">types</a>
+ &#8226;   <a href="#typing">typing</a>
+ &#8226;   <a href="#typing_extensions">typing_extensions</a>
+ &#8226;   <a href="#urllib.request">urllib.request</a>
 
   </div>
   <div class="import">
 imported by:
-    <a href="#setuptools._vendor.jaraco.context">setuptools._vendor.jaraco.context</a>
- &#8226;   <a href="#setuptools._vendor.jaraco.functools">setuptools._vendor.jaraco.functools</a>
+    <a href="#setuptools._vendor.jaraco.text">setuptools._vendor.jaraco.text</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="jaraco.functools"></a>
+  <a target="code" href="///C:/Users/Boris/AppData/Local/Programs/Python/Python312/Lib/site-packages/jaraco/functools/__init__.py" type="text/plain"><tt>jaraco.functools</tt></a>
+<span class="moduletype">Package</span>  <div class="import">
+imports:
+    <a href="#__future__">__future__</a>
+ &#8226;   <a href="#collections.abc">collections.abc</a>
+ &#8226;   <a href="#functools">functools</a>
+ &#8226;   <a href="#inspect">inspect</a>
+ &#8226;   <a href="#itertools">itertools</a>
+ &#8226;   <a href="#jaraco">jaraco</a>
+ &#8226;   <a href="#more_itertools">more_itertools</a>
+ &#8226;   <a href="#operator">operator</a>
+ &#8226;   <a href="#time">time</a>
+ &#8226;   <a href="#types">types</a>
+ &#8226;   <a href="#typing">typing</a>
+ &#8226;   <a href="#warnings">warnings</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#setuptools._distutils._modified">setuptools._distutils._modified</a>
+ &#8226;   <a href="#setuptools._distutils.sysconfig">setuptools._distutils.sysconfig</a>
+ &#8226;   <a href="#setuptools._distutils.util">setuptools._distutils.util</a>
+ &#8226;   <a href="#setuptools._entry_points">setuptools._entry_points</a>
  &#8226;   <a href="#setuptools._vendor.jaraco.text">setuptools._vendor.jaraco.text</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="jaraco.text"></a>
+  <a target="code" href="" type="text/plain"><tt>jaraco.text</tt></a>
+<span class="moduletype">AliasNode</span>  <div class="import">
+imports:
+    <a href="#jaraco">jaraco</a>
+ &#8226;   <a href="#setuptools._vendor.jaraco.text">setuptools._vendor.jaraco.text</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#setuptools._entry_points">setuptools._entry_points</a>
+ &#8226;   <a href="#setuptools._reqs">setuptools._reqs</a>
+ &#8226;   <a href="#setuptools.command._requirestxt">setuptools.command._requirestxt</a>
 
   </div>
 
@@ -22729,6 +23101,7 @@ imports:
   <div class="import">
 imported by:
     <a href="#asyncpg.prepared_stmt">asyncpg.prepared_stmt</a>
+ &#8226;   <a href="#charset_normalizer.models">charset_normalizer.models</a>
  &#8226;   <a href="#httpx._content">httpx._content</a>
  &#8226;   <a href="#httpx._main">httpx._main</a>
  &#8226;   <a href="#httpx._models">httpx._models</a>
@@ -22762,8 +23135,9 @@ imported by:
  &#8226;   <a href="#structlog.twisted">structlog.twisted</a>
  &#8226;   <a href="#trader.db">trader.db</a>
  &#8226;   <a href="#trader.lab.ai46.llm">trader.lab.ai46.llm</a>
- &#8226;   <a href="#trader.lab.runtime">trader.lab.runtime</a>
+ &#8226;   <a href="#trader.lab.robot_stand">trader.lab.robot_stand</a>
  &#8226;   <a href="#trader.lab.scheduler">trader.lab.scheduler</a>
+ &#8226;   <a href="#trader.util">trader.util</a>
 
   </div>
 
@@ -22941,6 +23315,10 @@ imported by:
  &#8226;   <a href="#asyncio.futures">asyncio.futures</a>
  &#8226;   <a href="#asyncio.log">asyncio.log</a>
  &#8226;   <a href="#asyncpg.pool">asyncpg.pool</a>
+ &#8226;   <a href="#charset_normalizer">charset_normalizer</a>
+ &#8226;   <a href="#charset_normalizer.api">charset_normalizer.api</a>
+ &#8226;   <a href="#charset_normalizer.md">charset_normalizer.md</a>
+ &#8226;   <a href="#charset_normalizer.utils">charset_normalizer.utils</a>
  &#8226;   <a href="#concurrent.futures._base">concurrent.futures._base</a>
  &#8226;   <a href="#dotenv.main">dotenv.main</a>
  &#8226;   <a href="#grpc">grpc</a>
@@ -23082,6 +23460,8 @@ imported by:
  &#8226;   <a href="#hypothesis.strategies._internal.numbers">hypothesis.strategies._internal.numbers</a>
  &#8226;   <a href="#hypothesis.strategies._internal.random">hypothesis.strategies._internal.random</a>
  &#8226;   <a href="#hypothesis.vendor.pretty">hypothesis.vendor.pretty</a>
+ &#8226;   <a href="#more_itertools.more">more_itertools.more</a>
+ &#8226;   <a href="#more_itertools.recipes">more_itertools.recipes</a>
  &#8226;   <a href="#numpy._core._internal">numpy._core._internal</a>
  &#8226;   <a href="#numpy._core.fromnumeric">numpy._core.fromnumeric</a>
  &#8226;   <a href="#numpy._core.getlimits">numpy._core.getlimits</a>
@@ -23099,8 +23479,6 @@ imported by:
  &#8226;   <a href="#pygments.formatters.groff">pygments.formatters.groff</a>
  &#8226;   <a href="#random">random</a>
  &#8226;   <a href="#selectors">selectors</a>
- &#8226;   <a href="#setuptools._vendor.more_itertools.more">setuptools._vendor.more_itertools.more</a>
- &#8226;   <a href="#setuptools._vendor.more_itertools.recipes">setuptools._vendor.more_itertools.recipes</a>
  &#8226;   <a href="#sortedcontainers.sortedlist">sortedcontainers.sortedlist</a>
  &#8226;   <a href="#statistics">statistics</a>
  &#8226;   <a href="#trader.lab.ai46.models">trader.lab.ai46.models</a>
@@ -23153,23 +23531,85 @@ imported by:
 
 <div class="node">
   <a name="more_itertools"></a>
-  <a target="code" href="" type="text/plain"><tt>more_itertools</tt></a>
-<span class="moduletype">AliasNode</span>  <div class="import">
+  <a target="code" href="///C:/Users/Boris/AppData/Local/Programs/Python/Python312/Lib/site-packages/more_itertools/__init__.py" type="text/plain"><tt>more_itertools</tt></a>
+<span class="moduletype">Package</span>  <div class="import">
 imports:
-    <a href="#setuptools._vendor.more_itertools">setuptools._vendor.more_itertools</a>
+    <a href="#more_itertools.more">more_itertools.more</a>
+ &#8226;   <a href="#more_itertools.recipes">more_itertools.recipes</a>
 
   </div>
   <div class="import">
 imported by:
-    <a href="#setuptools._distutils.compilers.C.base">setuptools._distutils.compilers.C.base</a>
+    <a href="#jaraco.functools">jaraco.functools</a>
+ &#8226;   <a href="#more_itertools.more">more_itertools.more</a>
+ &#8226;   <a href="#more_itertools.recipes">more_itertools.recipes</a>
+ &#8226;   <a href="#setuptools._distutils.compilers.C.base">setuptools._distutils.compilers.C.base</a>
  &#8226;   <a href="#setuptools._entry_points">setuptools._entry_points</a>
  &#8226;   <a href="#setuptools._itertools">setuptools._itertools</a>
  &#8226;   <a href="#setuptools._path">setuptools._path</a>
- &#8226;   <a href="#setuptools._vendor.jaraco.functools">setuptools._vendor.jaraco.functools</a>
  &#8226;   <a href="#setuptools.config.expand">setuptools.config.expand</a>
  &#8226;   <a href="#setuptools.config.pyprojecttoml">setuptools.config.pyprojecttoml</a>
  &#8226;   <a href="#setuptools.dist">setuptools.dist</a>
  &#8226;   <a href="#setuptools.msvc">setuptools.msvc</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="more_itertools.more"></a>
+  <a target="code" href="///C:/Users/Boris/AppData/Local/Programs/Python/Python312/Lib/site-packages/more_itertools/more.py" type="text/plain"><tt>more_itertools.more</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#collections">collections</a>
+ &#8226;   <a href="#collections.abc">collections.abc</a>
+ &#8226;   <a href="#contextlib">contextlib</a>
+ &#8226;   <a href="#functools">functools</a>
+ &#8226;   <a href="#heapq">heapq</a>
+ &#8226;   <a href="#itertools">itertools</a>
+ &#8226;   <a href="#math">math</a>
+ &#8226;   <a href="#more_itertools">more_itertools</a>
+ &#8226;   <a href="#more_itertools.recipes">more_itertools.recipes</a>
+ &#8226;   <a href="#operator">operator</a>
+ &#8226;   <a href="#queue">queue</a>
+ &#8226;   <a href="#random">random</a>
+ &#8226;   <a href="#sys">sys</a>
+ &#8226;   <a href="#threading">threading</a>
+ &#8226;   <a href="#time">time</a>
+ &#8226;   <a href="#types">types</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#more_itertools">more_itertools</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="more_itertools.recipes"></a>
+  <a target="code" href="///C:/Users/Boris/AppData/Local/Programs/Python/Python312/Lib/site-packages/more_itertools/recipes.py" type="text/plain"><tt>more_itertools.recipes</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#bisect">bisect</a>
+ &#8226;   <a href="#collections">collections</a>
+ &#8226;   <a href="#contextlib">contextlib</a>
+ &#8226;   <a href="#dataclasses">dataclasses</a>
+ &#8226;   <a href="#functools">functools</a>
+ &#8226;   <a href="#heapq">heapq</a>
+ &#8226;   <a href="#itertools">itertools</a>
+ &#8226;   <a href="#math">math</a>
+ &#8226;   <a href="#more_itertools">more_itertools</a>
+ &#8226;   <a href="#operator">operator</a>
+ &#8226;   <a href="#random">random</a>
+ &#8226;   <a href="#sys">sys</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#more_itertools">more_itertools</a>
+ &#8226;   <a href="#more_itertools.more">more_itertools.more</a>
 
   </div>
 
@@ -30827,7 +31267,11 @@ imported by:
  &#8226;   <a href="#importlib.metadata">importlib.metadata</a>
  &#8226;   <a href="#importlib.resources.readers">importlib.resources.readers</a>
  &#8226;   <a href="#inspect">inspect</a>
+ &#8226;   <a href="#jaraco.context">jaraco.context</a>
+ &#8226;   <a href="#jaraco.functools">jaraco.functools</a>
  &#8226;   <a href="#main.py">main.py</a>
+ &#8226;   <a href="#more_itertools.more">more_itertools.more</a>
+ &#8226;   <a href="#more_itertools.recipes">more_itertools.recipes</a>
  &#8226;   <a href="#numpy._core.arrayprint">numpy._core.arrayprint</a>
  &#8226;   <a href="#numpy._core.einsumfunc">numpy._core.einsumfunc</a>
  &#8226;   <a href="#numpy._core.function_base">numpy._core.function_base</a>
@@ -30858,10 +31302,6 @@ imported by:
  &#8226;   <a href="#setuptools._distutils.versionpredicate">setuptools._distutils.versionpredicate</a>
  &#8226;   <a href="#setuptools._entry_points">setuptools._entry_points</a>
  &#8226;   <a href="#setuptools._vendor.importlib_metadata">setuptools._vendor.importlib_metadata</a>
- &#8226;   <a href="#setuptools._vendor.jaraco.context">setuptools._vendor.jaraco.context</a>
- &#8226;   <a href="#setuptools._vendor.jaraco.functools">setuptools._vendor.jaraco.functools</a>
- &#8226;   <a href="#setuptools._vendor.more_itertools.more">setuptools._vendor.more_itertools.more</a>
- &#8226;   <a href="#setuptools._vendor.more_itertools.recipes">setuptools._vendor.more_itertools.recipes</a>
  &#8226;   <a href="#setuptools._vendor.packaging.markers">setuptools._vendor.packaging.markers</a>
  &#8226;   <a href="#sortedcontainers.sortedlist">sortedcontainers.sortedlist</a>
  &#8226;   <a href="#sortedcontainers.sortedset">sortedcontainers.sortedset</a>
@@ -30946,6 +31386,7 @@ imported by:
  &#8226;   <a href="#asyncpg.connection">asyncpg.connection</a>
  &#8226;   <a href="#bdb">bdb</a>
  &#8226;   <a href="#bz2">bz2</a>
+ &#8226;   <a href="#charset_normalizer.api">charset_normalizer.api</a>
  &#8226;   <a href="#click._compat">click._compat</a>
  &#8226;   <a href="#click._termui_impl">click._termui_impl</a>
  &#8226;   <a href="#click.core">click.core</a>
@@ -30998,6 +31439,7 @@ imported by:
  &#8226;   <a href="#importlib.resources._legacy">importlib.resources._legacy</a>
  &#8226;   <a href="#importlib.resources.abc">importlib.resources.abc</a>
  &#8226;   <a href="#inspect">inspect</a>
+ &#8226;   <a href="#jaraco.context">jaraco.context</a>
  &#8226;   <a href="#linecache">linecache</a>
  &#8226;   <a href="#locale">locale</a>
  &#8226;   <a href="#logging">logging</a>
@@ -31104,7 +31546,6 @@ imported by:
  &#8226;   <a href="#setuptools._vendor.importlib_metadata">setuptools._vendor.importlib_metadata</a>
  &#8226;   <a href="#setuptools._vendor.importlib_metadata._meta">setuptools._vendor.importlib_metadata._meta</a>
  &#8226;   <a href="#setuptools._vendor.importlib_metadata.compat.py311">setuptools._vendor.importlib_metadata.compat.py311</a>
- &#8226;   <a href="#setuptools._vendor.jaraco.context">setuptools._vendor.jaraco.context</a>
  &#8226;   <a href="#setuptools._vendor.packaging._elffile">setuptools._vendor.packaging._elffile</a>
  &#8226;   <a href="#setuptools._vendor.packaging._manylinux">setuptools._vendor.packaging._manylinux</a>
  &#8226;   <a href="#setuptools._vendor.packaging.markers">setuptools._vendor.packaging.markers</a>
@@ -31792,7 +32233,8 @@ imports:
   </div>
   <div class="import">
 imported by:
-    <a href="#pydoc">pydoc</a>
+    <a href="#backports">backports</a>
+ &#8226;   <a href="#pydoc">pydoc</a>
  &#8226;   <a href="#pyi_rth_pkgutil.py">pyi_rth_pkgutil.py</a>
  &#8226;   <a href="#runpy">runpy</a>
  &#8226;   <a href="#unittest.mock">unittest.mock</a>
@@ -31828,6 +32270,7 @@ imported by:
     <a href="#asyncpg.compat">asyncpg.compat</a>
  &#8226;   <a href="#asyncpg.connect_utils">asyncpg.connect_utils</a>
  &#8226;   <a href="#hypothesis.internal.compat">hypothesis.internal.compat</a>
+ &#8226;   <a href="#jaraco.context">jaraco.context</a>
  &#8226;   <a href="#numpy.f2py.crackfortran">numpy.f2py.crackfortran</a>
  &#8226;   <a href="#numpy.lib._utils_impl">numpy.lib._utils_impl</a>
  &#8226;   <a href="#numpy.testing._private.utils">numpy.testing._private.utils</a>
@@ -31839,7 +32282,6 @@ imported by:
  &#8226;   <a href="#setuptools._distutils.compat.py39">setuptools._distutils.compat.py39</a>
  &#8226;   <a href="#setuptools._distutils.spawn">setuptools._distutils.spawn</a>
  &#8226;   <a href="#setuptools._vendor.importlib_metadata._compat">setuptools._vendor.importlib_metadata._compat</a>
- &#8226;   <a href="#setuptools._vendor.jaraco.context">setuptools._vendor.jaraco.context</a>
  &#8226;   <a href="#setuptools._vendor.packaging.markers">setuptools._vendor.packaging.markers</a>
  &#8226;   <a href="#setuptools._vendor.packaging.tags">setuptools._vendor.packaging.tags</a>
  &#8226;   <a href="#setuptools.monkey">setuptools.monkey</a>
@@ -44469,12 +44911,12 @@ imported by:
  &#8226;   <a href="#concurrent.futures.process">concurrent.futures.process</a>
  &#8226;   <a href="#concurrent.futures.thread">concurrent.futures.thread</a>
  &#8226;   <a href="#hypothesis.database">hypothesis.database</a>
+ &#8226;   <a href="#more_itertools.more">more_itertools.more</a>
  &#8226;   <a href="#multiprocessing.dummy">multiprocessing.dummy</a>
  &#8226;   <a href="#multiprocessing.dummy.connection">multiprocessing.dummy.connection</a>
  &#8226;   <a href="#multiprocessing.managers">multiprocessing.managers</a>
  &#8226;   <a href="#multiprocessing.pool">multiprocessing.pool</a>
  &#8226;   <a href="#multiprocessing.queues">multiprocessing.queues</a>
- &#8226;   <a href="#setuptools._vendor.more_itertools.more">setuptools._vendor.more_itertools.more</a>
 
   </div>
 
@@ -44542,9 +44984,9 @@ imported by:
  &#8226;   <a href="#hypothesis.strategies._internal.random">hypothesis.strategies._internal.random</a>
  &#8226;   <a href="#hypothesis.strategies._internal.strategies">hypothesis.strategies._internal.strategies</a>
  &#8226;   <a href="#hypothesis.strategies._internal.types">hypothesis.strategies._internal.types</a>
+ &#8226;   <a href="#more_itertools.more">more_itertools.more</a>
+ &#8226;   <a href="#more_itertools.recipes">more_itertools.recipes</a>
  &#8226;   <a href="#secrets">secrets</a>
- &#8226;   <a href="#setuptools._vendor.more_itertools.more">setuptools._vendor.more_itertools.more</a>
- &#8226;   <a href="#setuptools._vendor.more_itertools.recipes">setuptools._vendor.more_itertools.recipes</a>
  &#8226;   <a href="#statistics">statistics</a>
  &#8226;   <a href="#tempfile">tempfile</a>
  &#8226;   <a href="#trader.md.grpc_client">trader.md.grpc_client</a>
@@ -44594,6 +45036,9 @@ imported by:
  &#8226;   <a href="#asyncpg.serverversion">asyncpg.serverversion</a>
  &#8226;   <a href="#asyncpg.utils">asyncpg.utils</a>
  &#8226;   <a href="#base64">base64</a>
+ &#8226;   <a href="#charset_normalizer.constant">charset_normalizer.constant</a>
+ &#8226;   <a href="#charset_normalizer.models">charset_normalizer.models</a>
+ &#8226;   <a href="#charset_normalizer.utils">charset_normalizer.utils</a>
  &#8226;   <a href="#click._compat">click._compat</a>
  &#8226;   <a href="#click.shell_completion">click.shell_completion</a>
  &#8226;   <a href="#click.termui">click.termui</a>
@@ -45164,6 +45609,7 @@ imports:
  &#8226;   <a href="#robot_runner.runtime">robot_runner.runtime</a>
  &#8226;   <a href="#structlog">structlog</a>
  &#8226;   <a href="#time">time</a>
+ &#8226;   <a href="#trader.lab.commission">trader.lab.commission</a>
  &#8226;   <a href="#trader.lab.scheduler">trader.lab.scheduler</a>
  &#8226;   <a href="#trader.lab.strategies.library">trader.lab.strategies.library</a>
  &#8226;   <a href="#trader.quik.pb.shectory.quik.v1">trader.quik.pb.shectory.quik.v1</a>
@@ -45183,12 +45629,14 @@ imported by:
   <a target="code" href="///C:/Dev/Shectory%20Trade%20%26%20Lab/robot_runner/runtime.py" type="text/plain"><tt>robot_runner.runtime</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
-    <a href="#datetime">datetime</a>
+    <a href="#asyncio">asyncio</a>
+ &#8226;   <a href="#datetime">datetime</a>
  &#8226;   <a href="#decimal">decimal</a>
  &#8226;   <a href="#os">os</a>
  &#8226;   <a href="#robot_runner">robot_runner</a>
  &#8226;   <a href="#structlog">structlog</a>
  &#8226;   <a href="#time">time</a>
+ &#8226;   <a href="#trader.lab.commission">trader.lab.commission</a>
  &#8226;   <a href="#trader.lab.runtime">trader.lab.runtime</a>
  &#8226;   <a href="#trader.pos.models">trader.pos.models</a>
  &#8226;   <a href="#typing">typing</a>
@@ -45509,11 +45957,11 @@ imports:
  &#8226;   <a href="#collections.abc">collections.abc</a>
  &#8226;   <a href="#distutils">distutils</a>
  &#8226;   <a href="#functools">functools</a>
+ &#8226;   <a href="#jaraco.functools">jaraco.functools</a>
  &#8226;   <a href="#os.path">os.path</a>
  &#8226;   <a href="#setuptools._distutils">setuptools._distutils</a>
  &#8226;   <a href="#setuptools._distutils.compat.py39">setuptools._distutils.compat.py39</a>
  &#8226;   <a href="#setuptools._distutils.errors">setuptools._distutils.errors</a>
- &#8226;   <a href="#setuptools._vendor.jaraco.functools">setuptools._vendor.jaraco.functools</a>
  &#8226;   <a href="#typing">typing</a>
 
   </div>
@@ -46351,6 +46799,7 @@ imports:
     <a href="#__future__">__future__</a>
  &#8226;   <a href="#distutils">distutils</a>
  &#8226;   <a href="#functools">functools</a>
+ &#8226;   <a href="#jaraco.functools">jaraco.functools</a>
  &#8226;   <a href="#os">os</a>
  &#8226;   <a href="#pathlib">pathlib</a>
  &#8226;   <a href="#re">re</a>
@@ -46361,7 +46810,6 @@ imports:
  &#8226;   <a href="#setuptools._distutils.errors">setuptools._distutils.errors</a>
  &#8226;   <a href="#setuptools._distutils.text_file">setuptools._distutils.text_file</a>
  &#8226;   <a href="#setuptools._distutils.util">setuptools._distutils.util</a>
- &#8226;   <a href="#setuptools._vendor.jaraco.functools">setuptools._vendor.jaraco.functools</a>
  &#8226;   <a href="#sys">sys</a>
  &#8226;   <a href="#sysconfig">sysconfig</a>
  &#8226;   <a href="#typing">typing</a>
@@ -46410,6 +46858,7 @@ imports:
  &#8226;   <a href="#distutils">distutils</a>
  &#8226;   <a href="#functools">functools</a>
  &#8226;   <a href="#importlib.util">importlib.util</a>
+ &#8226;   <a href="#jaraco.functools">jaraco.functools</a>
  &#8226;   <a href="#os">os</a>
  &#8226;   <a href="#pathlib">pathlib</a>
  &#8226;   <a href="#pwd">pwd</a>
@@ -46421,7 +46870,6 @@ imports:
  &#8226;   <a href="#setuptools._distutils.errors">setuptools._distutils.errors</a>
  &#8226;   <a href="#setuptools._distutils.spawn">setuptools._distutils.spawn</a>
  &#8226;   <a href="#setuptools._distutils.sysconfig">setuptools._distutils.sysconfig</a>
- &#8226;   <a href="#setuptools._vendor.jaraco.functools">setuptools._vendor.jaraco.functools</a>
  &#8226;   <a href="#string">string</a>
  &#8226;   <a href="#subprocess">subprocess</a>
  &#8226;   <a href="#sys">sys</a>
@@ -46505,13 +46953,13 @@ imported by:
 imports:
     <a href="#functools">functools</a>
  &#8226;   <a href="#itertools">itertools</a>
+ &#8226;   <a href="#jaraco.functools">jaraco.functools</a>
+ &#8226;   <a href="#jaraco.text">jaraco.text</a>
  &#8226;   <a href="#more_itertools">more_itertools</a>
  &#8226;   <a href="#operator">operator</a>
  &#8226;   <a href="#setuptools">setuptools</a>
  &#8226;   <a href="#setuptools._importlib">setuptools._importlib</a>
  &#8226;   <a href="#setuptools._itertools">setuptools._itertools</a>
- &#8226;   <a href="#setuptools._vendor.jaraco.functools">setuptools._vendor.jaraco.functools</a>
- &#8226;   <a href="#setuptools._vendor.jaraco.text">setuptools._vendor.jaraco.text</a>
  &#8226;   <a href="#setuptools.errors">setuptools.errors</a>
 
   </div>
@@ -46654,9 +47102,9 @@ imports:
     <a href="#__future__">__future__</a>
  &#8226;   <a href="#collections.abc">collections.abc</a>
  &#8226;   <a href="#functools">functools</a>
+ &#8226;   <a href="#jaraco.text">jaraco.text</a>
  &#8226;   <a href="#packaging.requirements">packaging.requirements</a>
  &#8226;   <a href="#setuptools">setuptools</a>
- &#8226;   <a href="#setuptools._vendor.jaraco.text">setuptools._vendor.jaraco.text</a>
  &#8226;   <a href="#typing">typing</a>
  &#8226;   <a href="#typing_extensions">typing_extensions</a>
 
@@ -46734,7 +47182,6 @@ imported by:
     <a href="#setuptools._vendor.backports">setuptools._vendor.backports</a>
  &#8226;   <a href="#setuptools._vendor.importlib_metadata">setuptools._vendor.importlib_metadata</a>
  &#8226;   <a href="#setuptools._vendor.jaraco">setuptools._vendor.jaraco</a>
- &#8226;   <a href="#setuptools._vendor.more_itertools">setuptools._vendor.more_itertools</a>
  &#8226;   <a href="#setuptools._vendor.packaging">setuptools._vendor.packaging</a>
  &#8226;   <a href="#setuptools._vendor.tomli">setuptools._vendor.tomli</a>
  &#8226;   <a href="#setuptools._vendor.wheel">setuptools._vendor.wheel</a>
@@ -46754,7 +47201,7 @@ imports:
   </div>
   <div class="import">
 imported by:
-    <a href="#backports">backports</a>
+    <a href="#setuptools._vendor.backports.tarfile">setuptools._vendor.backports.tarfile</a>
 
   </div>
 
@@ -46766,7 +47213,6 @@ imported by:
 <span class="moduletype">Package</span>  <div class="import">
 imports:
     <a href="#argparse">argparse</a>
- &#8226;   <a href="#backports">backports</a>
  &#8226;   <a href="#builtins">builtins</a>
  &#8226;   <a href="#bz2">bz2</a>
  &#8226;   <a href="#copy">copy</a>
@@ -46777,6 +47223,7 @@ imports:
  &#8226;   <a href="#os">os</a>
  &#8226;   <a href="#pwd">pwd</a>
  &#8226;   <a href="#re">re</a>
+ &#8226;   <a href="#setuptools._vendor.backports">setuptools._vendor.backports</a>
  &#8226;   <a href="#setuptools._vendor.backports.tarfile.compat.py38">setuptools._vendor.backports.tarfile.compat.py38</a>
  &#8226;   <a href="#shutil">shutil</a>
  &#8226;   <a href="#stat">stat</a>
@@ -46789,9 +47236,8 @@ imports:
   </div>
   <div class="import">
 imported by:
-    <a href="#backports">backports</a>
+    <a href="#backports.tarfile">backports.tarfile</a>
  &#8226;   <a href="#setuptools._vendor.backports.tarfile.compat">setuptools._vendor.backports.tarfile.compat</a>
- &#8226;   <a href="#setuptools._vendor.jaraco.context">setuptools._vendor.jaraco.context</a>
 
   </div>
 
@@ -47117,72 +47563,7 @@ imports:
   </div>
   <div class="import">
 imported by:
-    <a href="#jaraco">jaraco</a>
- &#8226;   <a href="#setuptools._vendor.jaraco.text">setuptools._vendor.jaraco.text</a>
-
-  </div>
-
-</div>
-
-<div class="node">
-  <a name="setuptools._vendor.jaraco.context"></a>
-  <a target="code" href="///C:/Users/Boris/AppData/Local/Programs/Python/Python312/Lib/site-packages/setuptools/_vendor/jaraco/context/__init__.py" type="text/plain"><tt>setuptools._vendor.jaraco.context</tt></a>
-<span class="moduletype">Package</span>  <div class="import">
-imports:
-    <a href="#__future__">__future__</a>
- &#8226;   <a href="#backports">backports</a>
- &#8226;   <a href="#collections.abc">collections.abc</a>
- &#8226;   <a href="#contextlib">contextlib</a>
- &#8226;   <a href="#errno">errno</a>
- &#8226;   <a href="#functools">functools</a>
- &#8226;   <a href="#jaraco">jaraco</a>
- &#8226;   <a href="#operator">operator</a>
- &#8226;   <a href="#os">os</a>
- &#8226;   <a href="#platform">platform</a>
- &#8226;   <a href="#setuptools._vendor.backports.tarfile">setuptools._vendor.backports.tarfile</a>
- &#8226;   <a href="#shutil">shutil</a>
- &#8226;   <a href="#stat">stat</a>
- &#8226;   <a href="#subprocess">subprocess</a>
- &#8226;   <a href="#sys">sys</a>
- &#8226;   <a href="#tarfile">tarfile</a>
- &#8226;   <a href="#tempfile">tempfile</a>
- &#8226;   <a href="#urllib.request">urllib.request</a>
-
-  </div>
-  <div class="import">
-imported by:
     <a href="#setuptools._vendor.jaraco.text">setuptools._vendor.jaraco.text</a>
-
-  </div>
-
-</div>
-
-<div class="node">
-  <a name="setuptools._vendor.jaraco.functools"></a>
-  <a target="code" href="///C:/Users/Boris/AppData/Local/Programs/Python/Python312/Lib/site-packages/setuptools/_vendor/jaraco/functools/__init__.py" type="text/plain"><tt>setuptools._vendor.jaraco.functools</tt></a>
-<span class="moduletype">Package</span>  <div class="import">
-imports:
-    <a href="#__future__">__future__</a>
- &#8226;   <a href="#collections.abc">collections.abc</a>
- &#8226;   <a href="#functools">functools</a>
- &#8226;   <a href="#inspect">inspect</a>
- &#8226;   <a href="#itertools">itertools</a>
- &#8226;   <a href="#jaraco">jaraco</a>
- &#8226;   <a href="#more_itertools">more_itertools</a>
- &#8226;   <a href="#operator">operator</a>
- &#8226;   <a href="#time">time</a>
- &#8226;   <a href="#types">types</a>
- &#8226;   <a href="#typing">typing</a>
- &#8226;   <a href="#warnings">warnings</a>
-
-  </div>
-  <div class="import">
-imported by:
-    <a href="#setuptools._distutils._modified">setuptools._distutils._modified</a>
- &#8226;   <a href="#setuptools._distutils.sysconfig">setuptools._distutils.sysconfig</a>
- &#8226;   <a href="#setuptools._distutils.util">setuptools._distutils.util</a>
- &#8226;   <a href="#setuptools._entry_points">setuptools._entry_points</a>
- &#8226;   <a href="#setuptools._vendor.jaraco.text">setuptools._vendor.jaraco.text</a>
 
   </div>
 
@@ -47197,11 +47578,10 @@ imports:
  &#8226;   <a href="#importlib.resources">importlib.resources</a>
  &#8226;   <a href="#importlib_resources">importlib_resources</a>
  &#8226;   <a href="#itertools">itertools</a>
- &#8226;   <a href="#jaraco">jaraco</a>
+ &#8226;   <a href="#jaraco.context">jaraco.context</a>
+ &#8226;   <a href="#jaraco.functools">jaraco.functools</a>
  &#8226;   <a href="#re">re</a>
  &#8226;   <a href="#setuptools._vendor.jaraco">setuptools._vendor.jaraco</a>
- &#8226;   <a href="#setuptools._vendor.jaraco.context">setuptools._vendor.jaraco.context</a>
- &#8226;   <a href="#setuptools._vendor.jaraco.functools">setuptools._vendor.jaraco.functools</a>
  &#8226;   <a href="#textwrap">textwrap</a>
  &#8226;   <a href="#typing">typing</a>
 
@@ -47209,86 +47589,6 @@ imports:
   <div class="import">
 imported by:
     <a href="#jaraco.text">jaraco.text</a>
- &#8226;   <a href="#setuptools._entry_points">setuptools._entry_points</a>
- &#8226;   <a href="#setuptools._reqs">setuptools._reqs</a>
- &#8226;   <a href="#setuptools.command._requirestxt">setuptools.command._requirestxt</a>
-
-  </div>
-
-</div>
-
-<div class="node">
-  <a name="setuptools._vendor.more_itertools"></a>
-  <a target="code" href="///C:/Users/Boris/AppData/Local/Programs/Python/Python312/Lib/site-packages/setuptools/_vendor/more_itertools/__init__.py" type="text/plain"><tt>setuptools._vendor.more_itertools</tt></a>
-<span class="moduletype">Package</span>  <div class="import">
-imports:
-    <a href="#setuptools._vendor">setuptools._vendor</a>
- &#8226;   <a href="#setuptools._vendor.more_itertools.more">setuptools._vendor.more_itertools.more</a>
- &#8226;   <a href="#setuptools._vendor.more_itertools.recipes">setuptools._vendor.more_itertools.recipes</a>
-
-  </div>
-  <div class="import">
-imported by:
-    <a href="#more_itertools">more_itertools</a>
- &#8226;   <a href="#setuptools._vendor.more_itertools.more">setuptools._vendor.more_itertools.more</a>
- &#8226;   <a href="#setuptools._vendor.more_itertools.recipes">setuptools._vendor.more_itertools.recipes</a>
-
-  </div>
-
-</div>
-
-<div class="node">
-  <a name="setuptools._vendor.more_itertools.more"></a>
-  <a target="code" href="///C:/Users/Boris/AppData/Local/Programs/Python/Python312/Lib/site-packages/setuptools/_vendor/more_itertools/more.py" type="text/plain"><tt>setuptools._vendor.more_itertools.more</tt></a>
-<span class="moduletype">SourceModule</span>  <div class="import">
-imports:
-    <a href="#collections">collections</a>
- &#8226;   <a href="#collections.abc">collections.abc</a>
- &#8226;   <a href="#contextlib">contextlib</a>
- &#8226;   <a href="#functools">functools</a>
- &#8226;   <a href="#heapq">heapq</a>
- &#8226;   <a href="#itertools">itertools</a>
- &#8226;   <a href="#math">math</a>
- &#8226;   <a href="#operator">operator</a>
- &#8226;   <a href="#queue">queue</a>
- &#8226;   <a href="#random">random</a>
- &#8226;   <a href="#setuptools._vendor.more_itertools">setuptools._vendor.more_itertools</a>
- &#8226;   <a href="#setuptools._vendor.more_itertools.recipes">setuptools._vendor.more_itertools.recipes</a>
- &#8226;   <a href="#sys">sys</a>
- &#8226;   <a href="#time">time</a>
- &#8226;   <a href="#warnings">warnings</a>
-
-  </div>
-  <div class="import">
-imported by:
-    <a href="#setuptools._vendor.more_itertools">setuptools._vendor.more_itertools</a>
-
-  </div>
-
-</div>
-
-<div class="node">
-  <a name="setuptools._vendor.more_itertools.recipes"></a>
-  <a target="code" href="///C:/Users/Boris/AppData/Local/Programs/Python/Python312/Lib/site-packages/setuptools/_vendor/more_itertools/recipes.py" type="text/plain"><tt>setuptools._vendor.more_itertools.recipes</tt></a>
-<span class="moduletype">SourceModule</span>  <div class="import">
-imports:
-    <a href="#bisect">bisect</a>
- &#8226;   <a href="#collections">collections</a>
- &#8226;   <a href="#contextlib">contextlib</a>
- &#8226;   <a href="#functools">functools</a>
- &#8226;   <a href="#heapq">heapq</a>
- &#8226;   <a href="#itertools">itertools</a>
- &#8226;   <a href="#math">math</a>
- &#8226;   <a href="#operator">operator</a>
- &#8226;   <a href="#random">random</a>
- &#8226;   <a href="#setuptools._vendor.more_itertools">setuptools._vendor.more_itertools</a>
- &#8226;   <a href="#sys">sys</a>
-
-  </div>
-  <div class="import">
-imported by:
-    <a href="#setuptools._vendor.more_itertools">setuptools._vendor.more_itertools</a>
- &#8226;   <a href="#setuptools._vendor.more_itertools.more">setuptools._vendor.more_itertools.more</a>
 
   </div>
 
@@ -47975,10 +48275,10 @@ imports:
  &#8226;   <a href="#collections.abc">collections.abc</a>
  &#8226;   <a href="#io">io</a>
  &#8226;   <a href="#itertools">itertools</a>
+ &#8226;   <a href="#jaraco.text">jaraco.text</a>
  &#8226;   <a href="#packaging.requirements">packaging.requirements</a>
  &#8226;   <a href="#setuptools">setuptools</a>
  &#8226;   <a href="#setuptools._reqs">setuptools._reqs</a>
- &#8226;   <a href="#setuptools._vendor.jaraco.text">setuptools._vendor.jaraco.text</a>
  &#8226;   <a href="#setuptools.command">setuptools.command</a>
  &#8226;   <a href="#typing">typing</a>
 
@@ -49121,6 +49421,7 @@ imported by:
  &#8226;   <a href="#click.formatting">click.formatting</a>
  &#8226;   <a href="#click.shell_completion">click.shell_completion</a>
  &#8226;   <a href="#http.server">http.server</a>
+ &#8226;   <a href="#jaraco.context">jaraco.context</a>
  &#8226;   <a href="#multiprocessing.util">multiprocessing.util</a>
  &#8226;   <a href="#numpy.f2py._backends._distutils">numpy.f2py._backends._distutils</a>
  &#8226;   <a href="#numpy.f2py._backends._meson">numpy.f2py._backends._meson</a>
@@ -49129,7 +49430,6 @@ imported by:
  &#8226;   <a href="#pygments.lexers._php_builtins">pygments.lexers._php_builtins</a>
  &#8226;   <a href="#setuptools._distutils.spawn">setuptools._distutils.spawn</a>
  &#8226;   <a href="#setuptools._vendor.backports.tarfile">setuptools._vendor.backports.tarfile</a>
- &#8226;   <a href="#setuptools._vendor.jaraco.context">setuptools._vendor.jaraco.context</a>
  &#8226;   <a href="#setuptools.archive_util">setuptools.archive_util</a>
  &#8226;   <a href="#setuptools.command.bdist_wheel">setuptools.command.bdist_wheel</a>
  &#8226;   <a href="#setuptools.compat.py311">setuptools.compat.py311</a>
@@ -49573,6 +49873,7 @@ imported by:
  &#8226;   <a href="#dotenv.main">dotenv.main</a>
  &#8226;   <a href="#genericpath">genericpath</a>
  &#8226;   <a href="#glob">glob</a>
+ &#8226;   <a href="#jaraco.context">jaraco.context</a>
  &#8226;   <a href="#main.py">main.py</a>
  &#8226;   <a href="#netrc">netrc</a>
  &#8226;   <a href="#ntpath">ntpath</a>
@@ -49583,7 +49884,6 @@ imported by:
  &#8226;   <a href="#setuptools._distutils.file_util">setuptools._distutils.file_util</a>
  &#8226;   <a href="#setuptools._shutil">setuptools._shutil</a>
  &#8226;   <a href="#setuptools._vendor.backports.tarfile">setuptools._vendor.backports.tarfile</a>
- &#8226;   <a href="#setuptools._vendor.jaraco.context">setuptools._vendor.jaraco.context</a>
  &#8226;   <a href="#setuptools._vendor.wheel.wheelfile">setuptools._vendor.wheel.wheelfile</a>
  &#8226;   <a href="#setuptools._vendor.zipp">setuptools._vendor.zipp</a>
  &#8226;   <a href="#shutil">shutil</a>
@@ -50373,6 +50673,7 @@ imported by:
  &#8226;   <a href="#click.shell_completion">click.shell_completion</a>
  &#8226;   <a href="#http.server">http.server</a>
  &#8226;   <a href="#hypothesis.internal.scrutineer">hypothesis.internal.scrutineer</a>
+ &#8226;   <a href="#jaraco.context">jaraco.context</a>
  &#8226;   <a href="#multiprocessing.util">multiprocessing.util</a>
  &#8226;   <a href="#numpy.f2py">numpy.f2py</a>
  &#8226;   <a href="#numpy.f2py._backends._meson">numpy.f2py._backends._meson</a>
@@ -50390,7 +50691,6 @@ imported by:
  &#8226;   <a href="#setuptools._distutils.compilers.C.msvc">setuptools._distutils.compilers.C.msvc</a>
  &#8226;   <a href="#setuptools._distutils.spawn">setuptools._distutils.spawn</a>
  &#8226;   <a href="#setuptools._distutils.util">setuptools._distutils.util</a>
- &#8226;   <a href="#setuptools._vendor.jaraco.context">setuptools._vendor.jaraco.context</a>
  &#8226;   <a href="#setuptools._vendor.packaging._musllinux">setuptools._vendor.packaging._musllinux</a>
  &#8226;   <a href="#setuptools._vendor.packaging.tags">setuptools._vendor.packaging.tags</a>
  &#8226;   <a href="#setuptools.installer">setuptools.installer</a>
@@ -50463,6 +50763,7 @@ imported by:
  &#8226;   <a href="#bdb">bdb</a>
  &#8226;   <a href="#calendar">calendar</a>
  &#8226;   <a href="#certifi.core">certifi.core</a>
+ &#8226;   <a href="#charset_normalizer.md">charset_normalizer.md</a>
  &#8226;   <a href="#click._compat">click._compat</a>
  &#8226;   <a href="#click._termui_impl">click._termui_impl</a>
  &#8226;   <a href="#click._winconsole">click._winconsole</a>
@@ -50553,11 +50854,14 @@ imported by:
  &#8226;   <a href="#importlib.metadata">importlib.metadata</a>
  &#8226;   <a href="#importlib.util">importlib.util</a>
  &#8226;   <a href="#inspect">inspect</a>
+ &#8226;   <a href="#jaraco.context">jaraco.context</a>
  &#8226;   <a href="#linecache">linecache</a>
  &#8226;   <a href="#locale">locale</a>
  &#8226;   <a href="#logging">logging</a>
  &#8226;   <a href="#main.py">main.py</a>
  &#8226;   <a href="#mimetypes">mimetypes</a>
+ &#8226;   <a href="#more_itertools.more">more_itertools.more</a>
+ &#8226;   <a href="#more_itertools.recipes">more_itertools.recipes</a>
  &#8226;   <a href="#multiprocessing">multiprocessing</a>
  &#8226;   <a href="#multiprocessing.connection">multiprocessing.connection</a>
  &#8226;   <a href="#multiprocessing.context">multiprocessing.context</a>
@@ -50679,9 +50983,6 @@ imported by:
  &#8226;   <a href="#setuptools._vendor.importlib_metadata">setuptools._vendor.importlib_metadata</a>
  &#8226;   <a href="#setuptools._vendor.importlib_metadata._compat">setuptools._vendor.importlib_metadata._compat</a>
  &#8226;   <a href="#setuptools._vendor.importlib_metadata.compat.py311">setuptools._vendor.importlib_metadata.compat.py311</a>
- &#8226;   <a href="#setuptools._vendor.jaraco.context">setuptools._vendor.jaraco.context</a>
- &#8226;   <a href="#setuptools._vendor.more_itertools.more">setuptools._vendor.more_itertools.more</a>
- &#8226;   <a href="#setuptools._vendor.more_itertools.recipes">setuptools._vendor.more_itertools.recipes</a>
  &#8226;   <a href="#setuptools._vendor.packaging._manylinux">setuptools._vendor.packaging._manylinux</a>
  &#8226;   <a href="#setuptools._vendor.packaging._musllinux">setuptools._vendor.packaging._musllinux</a>
  &#8226;   <a href="#setuptools._vendor.packaging.markers">setuptools._vendor.packaging.markers</a>
@@ -50835,9 +51136,9 @@ imports:
   </div>
   <div class="import">
 imported by:
-    <a href="#pygments.lexers._php_builtins">pygments.lexers._php_builtins</a>
+    <a href="#jaraco.context">jaraco.context</a>
+ &#8226;   <a href="#pygments.lexers._php_builtins">pygments.lexers._php_builtins</a>
  &#8226;   <a href="#setuptools._distutils.archive_util">setuptools._distutils.archive_util</a>
- &#8226;   <a href="#setuptools._vendor.jaraco.context">setuptools._vendor.jaraco.context</a>
  &#8226;   <a href="#setuptools.archive_util">setuptools.archive_util</a>
  &#8226;   <a href="#shutil">shutil</a>
 
@@ -50875,6 +51176,7 @@ imported by:
  &#8226;   <a href="#hypothesis.database">hypothesis.database</a>
  &#8226;   <a href="#hypothesis.internal.charmap">hypothesis.internal.charmap</a>
  &#8226;   <a href="#importlib.resources._common">importlib.resources._common</a>
+ &#8226;   <a href="#jaraco.context">jaraco.context</a>
  &#8226;   <a href="#multiprocessing.connection">multiprocessing.connection</a>
  &#8226;   <a href="#multiprocessing.heap">multiprocessing.heap</a>
  &#8226;   <a href="#multiprocessing.synchronize">multiprocessing.synchronize</a>
@@ -50887,7 +51189,6 @@ imported by:
  &#8226;   <a href="#setuptools._core_metadata">setuptools._core_metadata</a>
  &#8226;   <a href="#setuptools._distutils.compilers.C.base">setuptools._distutils.compilers.C.base</a>
  &#8226;   <a href="#setuptools._distutils.util">setuptools._distutils.util</a>
- &#8226;   <a href="#setuptools._vendor.jaraco.context">setuptools._vendor.jaraco.context</a>
  &#8226;   <a href="#setuptools.installer">setuptools.installer</a>
  &#8226;   <a href="#trader.lab.ai46.sweep_task">trader.lab.ai46.sweep_task</a>
  &#8226;   <a href="#urllib.request">urllib.request</a>
@@ -51024,6 +51325,7 @@ imported by:
  &#8226;   <a href="#hypothesis.utils.threading">hypothesis.utils.threading</a>
  &#8226;   <a href="#importlib.util">importlib.util</a>
  &#8226;   <a href="#logging">logging</a>
+ &#8226;   <a href="#more_itertools.more">more_itertools.more</a>
  &#8226;   <a href="#multiprocessing.context">multiprocessing.context</a>
  &#8226;   <a href="#multiprocessing.dummy">multiprocessing.dummy</a>
  &#8226;   <a href="#multiprocessing.forkserver">multiprocessing.forkserver</a>
@@ -51113,7 +51415,9 @@ imported by:
  &#8226;   <a href="#hypothesis.internal.conjecture.junkdrawer">hypothesis.internal.conjecture.junkdrawer</a>
  &#8226;   <a href="#hypothesis.internal.observability">hypothesis.internal.observability</a>
  &#8226;   <a href="#hypothesis.stateful">hypothesis.stateful</a>
+ &#8226;   <a href="#jaraco.functools">jaraco.functools</a>
  &#8226;   <a href="#logging">logging</a>
+ &#8226;   <a href="#more_itertools.more">more_itertools.more</a>
  &#8226;   <a href="#multiprocessing.connection">multiprocessing.connection</a>
  &#8226;   <a href="#multiprocessing.managers">multiprocessing.managers</a>
  &#8226;   <a href="#multiprocessing.pool">multiprocessing.pool</a>
@@ -51128,8 +51432,6 @@ imported by:
  &#8226;   <a href="#robot_runner.host">robot_runner.host</a>
  &#8226;   <a href="#robot_runner.runtime">robot_runner.runtime</a>
  &#8226;   <a href="#setuptools._vendor.backports.tarfile">setuptools._vendor.backports.tarfile</a>
- &#8226;   <a href="#setuptools._vendor.jaraco.functools">setuptools._vendor.jaraco.functools</a>
- &#8226;   <a href="#setuptools._vendor.more_itertools.more">setuptools._vendor.more_itertools.more</a>
  &#8226;   <a href="#setuptools._vendor.wheel.wheelfile">setuptools._vendor.wheel.wheelfile</a>
  &#8226;   <a href="#setuptools.command.egg_info">setuptools.command.egg_info</a>
  &#8226;   <a href="#socketserver">socketserver</a>
@@ -51138,7 +51440,9 @@ imported by:
  &#8226;   <a href="#subprocess">subprocess</a>
  &#8226;   <a href="#tarfile">tarfile</a>
  &#8226;   <a href="#threading">threading</a>
+ &#8226;   <a href="#trader.lab.ai46.backtest">trader.lab.ai46.backtest</a>
  &#8226;   <a href="#trader.lab.ai46.service">trader.lab.ai46.service</a>
+ &#8226;   <a href="#trader.lab.contract_roll">trader.lab.contract_roll</a>
  &#8226;   <a href="#trader.lab.runtime">trader.lab.runtime</a>
  &#8226;   <a href="#unittest.case">unittest.case</a>
  &#8226;   <a href="#unittest.runner">unittest.runner</a>
@@ -51401,6 +51705,7 @@ imported by:
  &#8226;   <a href="#trader.config">trader.config</a>
  &#8226;   <a href="#trader.db">trader.db</a>
  &#8226;   <a href="#trader.lab">trader.lab</a>
+ &#8226;   <a href="#trader.market_session">trader.market_session</a>
  &#8226;   <a href="#trader.md">trader.md</a>
  &#8226;   <a href="#trader.pos">trader.pos</a>
  &#8226;   <a href="#trader.quik">trader.quik</a>
@@ -51523,15 +51828,18 @@ imported by:
  &#8226;   <a href="#trader.lab.ai46">trader.lab.ai46</a>
  &#8226;   <a href="#trader.lab.backtest">trader.lab.backtest</a>
  &#8226;   <a href="#trader.lab.commission">trader.lab.commission</a>
+ &#8226;   <a href="#trader.lab.contract_roll">trader.lab.contract_roll</a>
  &#8226;   <a href="#trader.lab.indicators">trader.lab.indicators</a>
  &#8226;   <a href="#trader.lab.iss_loader">trader.lab.iss_loader</a>
  &#8226;   <a href="#trader.lab.market_store">trader.lab.market_store</a>
  &#8226;   <a href="#trader.lab.models">trader.lab.models</a>
+ &#8226;   <a href="#trader.lab.robot_stand">trader.lab.robot_stand</a>
  &#8226;   <a href="#trader.lab.runtime">trader.lab.runtime</a>
  &#8226;   <a href="#trader.lab.scheduler">trader.lab.scheduler</a>
  &#8226;   <a href="#trader.lab.script_guard">trader.lab.script_guard</a>
  &#8226;   <a href="#trader.lab.strategies">trader.lab.strategies</a>
  &#8226;   <a href="#trader.lab.strategies.library">trader.lab.strategies.library</a>
+ &#8226;   <a href="#trader.lab.window_metrics">trader.lab.window_metrics</a>
 
   </div>
 
@@ -51564,6 +51872,7 @@ imported by:
  &#8226;   <a href="#trader.lab.ai46.models">trader.lab.ai46.models</a>
  &#8226;   <a href="#trader.lab.ai46.order_flow">trader.lab.ai46.order_flow</a>
  &#8226;   <a href="#trader.lab.ai46.params">trader.lab.ai46.params</a>
+ &#8226;   <a href="#trader.lab.ai46.portfolio">trader.lab.ai46.portfolio</a>
  &#8226;   <a href="#trader.lab.ai46.runner">trader.lab.ai46.runner</a>
  &#8226;   <a href="#trader.lab.ai46.service">trader.lab.ai46.service</a>
  &#8226;   <a href="#trader.lab.ai46.sweep_task">trader.lab.ai46.sweep_task</a>
@@ -51604,6 +51913,7 @@ imported by:
 imports:
     <a href="#__future__">__future__</a>
  &#8226;   <a href="#bisect">bisect</a>
+ &#8226;   <a href="#time">time</a>
  &#8226;   <a href="#trader.lab.ai46">trader.lab.ai46</a>
  &#8226;   <a href="#trader.lab.ai46.engine">trader.lab.ai46.engine</a>
  &#8226;   <a href="#trader.lab.ai46.llm">trader.lab.ai46.llm</a>
@@ -51828,6 +52138,23 @@ imported by:
 </div>
 
 <div class="node">
+  <a name="trader.lab.ai46.portfolio"></a>
+  <a target="code" href="///C:/Dev/Shectory%20Trade%20%26%20Lab/trader/lab/ai46/portfolio.py" type="text/plain"><tt>trader.lab.ai46.portfolio</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#__future__">__future__</a>
+ &#8226;   <a href="#trader.lab.ai46">trader.lab.ai46</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#main.py">main.py</a>
+
+  </div>
+
+</div>
+
+<div class="node">
   <a name="trader.lab.ai46.runner"></a>
   <a target="code" href="///C:/Dev/Shectory%20Trade%20%26%20Lab/trader/lab/ai46/runner.py" type="text/plain"><tt>trader.lab.ai46.runner</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
@@ -51861,7 +52188,9 @@ imported by:
 imports:
     <a href="#__future__">__future__</a>
  &#8226;   <a href="#asyncio">asyncio</a>
+ &#8226;   <a href="#datetime">datetime</a>
  &#8226;   <a href="#decimal">decimal</a>
+ &#8226;   <a href="#httpx">httpx</a>
  &#8226;   <a href="#structlog">structlog</a>
  &#8226;   <a href="#time">time</a>
  &#8226;   <a href="#trader.lab.ai46">trader.lab.ai46</a>
@@ -51869,6 +52198,7 @@ imports:
  &#8226;   <a href="#trader.lab.ai46.order_flow">trader.lab.ai46.order_flow</a>
  &#8226;   <a href="#trader.lab.ai46.runner">trader.lab.ai46.runner</a>
  &#8226;   <a href="#trader.lab.runtime">trader.lab.runtime</a>
+ &#8226;   <a href="#trader.market_session">trader.market_session</a>
  &#8226;   <a href="#uuid">uuid</a>
 
   </div>
@@ -51922,6 +52252,7 @@ imports:
  &#8226;   <a href="#trader.lab.commission">trader.lab.commission</a>
  &#8226;   <a href="#trader.lab.runtime">trader.lab.runtime</a>
  &#8226;   <a href="#trader.lab.script_guard">trader.lab.script_guard</a>
+ &#8226;   <a href="#trader.lab.window_metrics">trader.lab.window_metrics</a>
  &#8226;   <a href="#types">types</a>
  &#8226;   <a href="#typing">typing</a>
 
@@ -51946,9 +52277,35 @@ imports:
   <div class="import">
 imported by:
     <a href="#main.py">main.py</a>
+ &#8226;   <a href="#robot_runner.host">robot_runner.host</a>
+ &#8226;   <a href="#robot_runner.runtime">robot_runner.runtime</a>
  &#8226;   <a href="#trader.lab.ai46.backtest">trader.lab.ai46.backtest</a>
  &#8226;   <a href="#trader.lab.backtest">trader.lab.backtest</a>
  &#8226;   <a href="#trader.lab.runtime">trader.lab.runtime</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="trader.lab.contract_roll"></a>
+  <a target="code" href="///C:/Dev/Shectory%20Trade%20%26%20Lab/trader/lab/contract_roll.py" type="text/plain"><tt>trader.lab.contract_roll</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#__future__">__future__</a>
+ &#8226;   <a href="#datetime">datetime</a>
+ &#8226;   <a href="#decimal">decimal</a>
+ &#8226;   <a href="#httpx">httpx</a>
+ &#8226;   <a href="#time">time</a>
+ &#8226;   <a href="#trader.lab">trader.lab</a>
+ &#8226;   <a href="#trader.lab.iss_loader">trader.lab.iss_loader</a>
+ &#8226;   <a href="#uuid">uuid</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#main.py">main.py</a>
+ &#8226;   <a href="#trader.lab.scheduler">trader.lab.scheduler</a>
 
   </div>
 
@@ -51995,6 +52352,7 @@ imported by:
     <a href="#main.py">main.py</a>
  &#8226;   <a href="#trader.lab.ai46.__main__">trader.lab.ai46.__main__</a>
  &#8226;   <a href="#trader.lab.ai46.sweep_task">trader.lab.ai46.sweep_task</a>
+ &#8226;   <a href="#trader.lab.contract_roll">trader.lab.contract_roll</a>
  &#8226;   <a href="#trader.lab.market_store">trader.lab.market_store</a>
  &#8226;   <a href="#trader.lab.runtime">trader.lab.runtime</a>
 
@@ -52046,15 +52404,34 @@ imported by:
 </div>
 
 <div class="node">
+  <a name="trader.lab.robot_stand"></a>
+  <a target="code" href="///C:/Dev/Shectory%20Trade%20%26%20Lab/trader/lab/robot_stand.py" type="text/plain"><tt>trader.lab.robot_stand</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#__future__">__future__</a>
+ &#8226;   <a href="#json">json</a>
+ &#8226;   <a href="#trader.lab">trader.lab</a>
+ &#8226;   <a href="#typing">typing</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#main.py">main.py</a>
+
+  </div>
+
+</div>
+
+<div class="node">
   <a name="trader.lab.runtime"></a>
   <a target="code" href="///C:/Dev/Shectory%20Trade%20%26%20Lab/trader/lab/runtime.py" type="text/plain"><tt>trader.lab.runtime</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#asyncio">asyncio</a>
+ &#8226;   <a href="#bisect">bisect</a>
  &#8226;   <a href="#dataclasses">dataclasses</a>
  &#8226;   <a href="#datetime">datetime</a>
  &#8226;   <a href="#decimal">decimal</a>
- &#8226;   <a href="#json">json</a>
  &#8226;   <a href="#structlog">structlog</a>
  &#8226;   <a href="#time">time</a>
  &#8226;   <a href="#trader.lab">trader.lab</a>
@@ -52081,6 +52458,7 @@ imported by:
  &#8226;   <a href="#trader.lab.strategies.ema_crossover">trader.lab.strategies.ema_crossover</a>
  &#8226;   <a href="#trader.lab.strategies.library">trader.lab.strategies.library</a>
  &#8226;   <a href="#trader.lab.strategies.rsi_mean_reversion">trader.lab.strategies.rsi_mean_reversion</a>
+ &#8226;   <a href="#trader.lab.strategies.shaving_ri">trader.lab.strategies.shaving_ri</a>
  &#8226;   <a href="#trader.lab.strategies.supertrend">trader.lab.strategies.supertrend</a>
  &#8226;   <a href="#trader.lab.strategies.us_open_fvg">trader.lab.strategies.us_open_fvg</a>
 
@@ -52099,6 +52477,7 @@ imports:
  &#8226;   <a href="#os">os</a>
  &#8226;   <a href="#structlog">structlog</a>
  &#8226;   <a href="#trader.lab">trader.lab</a>
+ &#8226;   <a href="#trader.lab.contract_roll">trader.lab.contract_roll</a>
  &#8226;   <a href="#trader.lab.models">trader.lab.models</a>
  &#8226;   <a href="#trader.lab.runtime">trader.lab.runtime</a>
  &#8226;   <a href="#trader.lab.script_guard">trader.lab.script_guard</a>
@@ -52149,6 +52528,7 @@ imported by:
  &#8226;   <a href="#trader.lab.strategies.ema_crossover">trader.lab.strategies.ema_crossover</a>
  &#8226;   <a href="#trader.lab.strategies.library">trader.lab.strategies.library</a>
  &#8226;   <a href="#trader.lab.strategies.rsi_mean_reversion">trader.lab.strategies.rsi_mean_reversion</a>
+ &#8226;   <a href="#trader.lab.strategies.shaving_ri">trader.lab.strategies.shaving_ri</a>
  &#8226;   <a href="#trader.lab.strategies.supertrend">trader.lab.strategies.supertrend</a>
  &#8226;   <a href="#trader.lab.strategies.us_open_fvg">trader.lab.strategies.us_open_fvg</a>
 
@@ -52197,6 +52577,7 @@ imported by:
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#__future__">__future__</a>
+ &#8226;   <a href="#collections">collections</a>
  &#8226;   <a href="#datetime">datetime</a>
  &#8226;   <a href="#functools">functools</a>
  &#8226;   <a href="#trader.lab">trader.lab</a>
@@ -52222,6 +52603,23 @@ imported by:
 imports:
     <a href="#trader.lab.indicators">trader.lab.indicators</a>
  &#8226;   <a href="#trader.lab.runtime">trader.lab.runtime</a>
+ &#8226;   <a href="#trader.lab.strategies">trader.lab.strategies</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#main.py">main.py</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="trader.lab.strategies.shaving_ri"></a>
+  <a target="code" href="///C:/Dev/Shectory%20Trade%20%26%20Lab/trader/lab/strategies/shaving_ri.py" type="text/plain"><tt>trader.lab.strategies.shaving_ri</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#trader.lab.runtime">trader.lab.runtime</a>
  &#8226;   <a href="#trader.lab.strategies">trader.lab.strategies</a>
 
   </div>
@@ -52264,6 +52662,44 @@ imports:
   <div class="import">
 imported by:
     <a href="#main.py">main.py</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="trader.lab.window_metrics"></a>
+  <a target="code" href="///C:/Dev/Shectory%20Trade%20%26%20Lab/trader/lab/window_metrics.py" type="text/plain"><tt>trader.lab.window_metrics</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#__future__">__future__</a>
+ &#8226;   <a href="#trader.lab">trader.lab</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#main.py">main.py</a>
+ &#8226;   <a href="#trader.lab.backtest">trader.lab.backtest</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="trader.market_session"></a>
+  <a target="code" href="///C:/Dev/Shectory%20Trade%20%26%20Lab/trader/market_session.py" type="text/plain"><tt>trader.market_session</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#__future__">__future__</a>
+ &#8226;   <a href="#dataclasses">dataclasses</a>
+ &#8226;   <a href="#datetime">datetime</a>
+ &#8226;   <a href="#httpx">httpx</a>
+ &#8226;   <a href="#trader">trader</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#trader.lab.ai46.service">trader.lab.ai46.service</a>
 
   </div>
 
@@ -52623,6 +53059,7 @@ imported by:
 <span class="moduletype">SourceModule</span>  <div class="import">
 imports:
     <a href="#decimal">decimal</a>
+ &#8226;   <a href="#json">json</a>
  &#8226;   <a href="#trader">trader</a>
 
   </div>
@@ -52650,8 +53087,13 @@ imported by:
 
 <div class="node">
   <a name="trove_classifiers"></a>
-  <a target="code" href="" type="text/plain"><tt>trove_classifiers</tt></a>
-<span class="moduletype">MissingModule</span>  <div class="import">
+  <a target="code" href="///C:/Users/Boris/AppData/Local/Programs/Python/Python312/Lib/site-packages/trove_classifiers/__init__.py" type="text/plain"><tt>trove_classifiers</tt></a>
+<span class="moduletype">Package</span>  <div class="import">
+imports:
+    <a href="#typing">typing</a>
+
+  </div>
+  <div class="import">
 imported by:
     <a href="#setuptools.config._validate_pyproject.formats">setuptools.config._validate_pyproject.formats</a>
 
@@ -52780,8 +53222,11 @@ imported by:
  &#8226;   <a href="#importlib.resources._legacy">importlib.resources._legacy</a>
  &#8226;   <a href="#importlib.util">importlib.util</a>
  &#8226;   <a href="#inspect">inspect</a>
+ &#8226;   <a href="#jaraco.context">jaraco.context</a>
+ &#8226;   <a href="#jaraco.functools">jaraco.functools</a>
  &#8226;   <a href="#logging">logging</a>
  &#8226;   <a href="#main.py">main.py</a>
+ &#8226;   <a href="#more_itertools.more">more_itertools.more</a>
  &#8226;   <a href="#multiprocessing.managers">multiprocessing.managers</a>
  &#8226;   <a href="#multiprocessing.pool">multiprocessing.pool</a>
  &#8226;   <a href="#multiprocessing.queues">multiprocessing.queues</a>
@@ -52829,7 +53274,6 @@ imported by:
  &#8226;   <a href="#setuptools._vendor.importlib_metadata">setuptools._vendor.importlib_metadata</a>
  &#8226;   <a href="#setuptools._vendor.importlib_metadata._functools">setuptools._vendor.importlib_metadata._functools</a>
  &#8226;   <a href="#setuptools._vendor.importlib_metadata.compat.py311">setuptools._vendor.importlib_metadata.compat.py311</a>
- &#8226;   <a href="#setuptools._vendor.jaraco.functools">setuptools._vendor.jaraco.functools</a>
  &#8226;   <a href="#setuptools._vendor.tomli._parser">setuptools._vendor.tomli._parser</a>
  &#8226;   <a href="#setuptools._vendor.zipp.compat.overlay">setuptools._vendor.zipp.compat.overlay</a>
  &#8226;   <a href="#setuptools.command.bdist_egg">setuptools.command.bdist_egg</a>
@@ -53002,6 +53446,11 @@ imported by:
  &#8226;   <a href="#asyncpg.protocol.record">asyncpg.protocol.record</a>
  &#8226;   <a href="#asyncpg.serverversion">asyncpg.serverversion</a>
  &#8226;   <a href="#asyncpg.types">asyncpg.types</a>
+ &#8226;   <a href="#charset_normalizer.api">charset_normalizer.api</a>
+ &#8226;   <a href="#charset_normalizer.legacy">charset_normalizer.legacy</a>
+ &#8226;   <a href="#charset_normalizer.md">charset_normalizer.md</a>
+ &#8226;   <a href="#charset_normalizer.models">charset_normalizer.models</a>
+ &#8226;   <a href="#charset_normalizer.utils">charset_normalizer.utils</a>
  &#8226;   <a href="#click._compat">click._compat</a>
  &#8226;   <a href="#click._termui_impl">click._termui_impl</a>
  &#8226;   <a href="#click._utils">click._utils</a>
@@ -53168,6 +53617,8 @@ imported by:
  &#8226;   <a href="#importlib.resources._common">importlib.resources._common</a>
  &#8226;   <a href="#importlib.resources._legacy">importlib.resources._legacy</a>
  &#8226;   <a href="#importlib.resources.abc">importlib.resources.abc</a>
+ &#8226;   <a href="#jaraco.context">jaraco.context</a>
+ &#8226;   <a href="#jaraco.functools">jaraco.functools</a>
  &#8226;   <a href="#numpy._typing">numpy._typing</a>
  &#8226;   <a href="#numpy._typing._array_like">numpy._typing._array_like</a>
  &#8226;   <a href="#numpy._typing._char_codes">numpy._typing._char_codes</a>
@@ -53333,7 +53784,6 @@ imported by:
  &#8226;   <a href="#setuptools._vendor.importlib_metadata._meta">setuptools._vendor.importlib_metadata._meta</a>
  &#8226;   <a href="#setuptools._vendor.importlib_metadata._typing">setuptools._vendor.importlib_metadata._typing</a>
  &#8226;   <a href="#setuptools._vendor.importlib_metadata.compat.py39">setuptools._vendor.importlib_metadata.compat.py39</a>
- &#8226;   <a href="#setuptools._vendor.jaraco.functools">setuptools._vendor.jaraco.functools</a>
  &#8226;   <a href="#setuptools._vendor.jaraco.text">setuptools._vendor.jaraco.text</a>
  &#8226;   <a href="#setuptools._vendor.packaging._elffile">setuptools._vendor.packaging._elffile</a>
  &#8226;   <a href="#setuptools._vendor.packaging._manylinux">setuptools._vendor.packaging._manylinux</a>
@@ -53400,10 +53850,12 @@ imported by:
  &#8226;   <a href="#trader.lab.iss_loader">trader.lab.iss_loader</a>
  &#8226;   <a href="#trader.lab.market_store">trader.lab.market_store</a>
  &#8226;   <a href="#trader.lab.models">trader.lab.models</a>
+ &#8226;   <a href="#trader.lab.robot_stand">trader.lab.robot_stand</a>
  &#8226;   <a href="#trader.lab.runtime">trader.lab.runtime</a>
  &#8226;   <a href="#trader.lab.scheduler">trader.lab.scheduler</a>
  &#8226;   <a href="#trader.pos.models">trader.pos.models</a>
  &#8226;   <a href="#trader.tx.models">trader.tx.models</a>
+ &#8226;   <a href="#trove_classifiers">trove_classifiers</a>
  &#8226;   <a href="#typing_extensions">typing_extensions</a>
  &#8226;   <a href="#typing_inspection.introspection">typing_inspection.introspection</a>
  &#8226;   <a href="#typing_inspection.typing_objects">typing_inspection.typing_objects</a>
@@ -53452,6 +53904,7 @@ imported by:
  &#8226;   <a href="#asyncpg.pgproto.types">asyncpg.pgproto.types</a>
  &#8226;   <a href="#asyncpg.protocol.protocol">asyncpg.protocol.protocol</a>
  &#8226;   <a href="#asyncpg.types">asyncpg.types</a>
+ &#8226;   <a href="#charset_normalizer.md">charset_normalizer.md</a>
  &#8226;   <a href="#click._winconsole">click._winconsole</a>
  &#8226;   <a href="#click.decorators">click.decorators</a>
  &#8226;   <a href="#click.types">click.types</a>
@@ -53466,6 +53919,7 @@ imported by:
  &#8226;   <a href="#hypothesis.internal.scrutineer">hypothesis.internal.scrutineer</a>
  &#8226;   <a href="#hypothesis.strategies._internal.misc">hypothesis.strategies._internal.misc</a>
  &#8226;   <a href="#hypothesis.strategies._internal.types">hypothesis.strategies._internal.types</a>
+ &#8226;   <a href="#jaraco.context">jaraco.context</a>
  &#8226;   <a href="#numpy._typing._nested_sequence">numpy._typing._nested_sequence</a>
  &#8226;   <a href="#numpy.random.bit_generator">numpy.random.bit_generator</a>
  &#8226;   <a href="#packaging.specifiers">packaging.specifiers</a>
@@ -54054,7 +54508,8 @@ imported by:
   <a name="unicodedata"></a>
   <tt>unicodedata</tt> <span class="moduletype"><tt>C:\Users\Boris\AppData\Local\Programs\Python\Python312\DLLs\unicodedata.pyd</tt></span>  <div class="import">
 imported by:
-    <a href="#encodings.idna">encodings.idna</a>
+    <a href="#charset_normalizer.utils">charset_normalizer.utils</a>
+ &#8226;   <a href="#encodings.idna">encodings.idna</a>
  &#8226;   <a href="#hypothesis.internal.charmap">hypothesis.internal.charmap</a>
  &#8226;   <a href="#hypothesis.internal.conjecture.shrinker">hypothesis.internal.conjecture.shrinker</a>
  &#8226;   <a href="#idna.core">idna.core</a>
@@ -54499,13 +54954,13 @@ imported by:
  &#8226;   <a href="#httpx._models">httpx._models</a>
  &#8226;   <a href="#httpx._utils">httpx._utils</a>
  &#8226;   <a href="#hypothesis.database">hypothesis.database</a>
+ &#8226;   <a href="#jaraco.context">jaraco.context</a>
  &#8226;   <a href="#numpy.lib._datasource">numpy.lib._datasource</a>
  &#8226;   <a href="#pygments.lexers._lua_builtins">pygments.lexers._lua_builtins</a>
  &#8226;   <a href="#pygments.lexers._mysql_builtins">pygments.lexers._mysql_builtins</a>
  &#8226;   <a href="#pygments.lexers._php_builtins">pygments.lexers._php_builtins</a>
  &#8226;   <a href="#pygments.lexers._postgres_builtins">pygments.lexers._postgres_builtins</a>
  &#8226;   <a href="#pygments.lexers._sourcemod_builtins">pygments.lexers._sourcemod_builtins</a>
- &#8226;   <a href="#setuptools._vendor.jaraco.context">setuptools._vendor.jaraco.context</a>
  &#8226;   <a href="#setuptools.config._validate_pyproject.formats">setuptools.config._validate_pyproject.formats</a>
  &#8226;   <a href="#xml.sax.saxutils">xml.sax.saxutils</a>
 
@@ -54578,6 +55033,7 @@ imported by:
  &#8226;   <a href="#robot_runner.runtime">robot_runner.runtime</a>
  &#8226;   <a href="#structlog.threadlocal">structlog.threadlocal</a>
  &#8226;   <a href="#trader.lab.ai46.service">trader.lab.ai46.service</a>
+ &#8226;   <a href="#trader.lab.contract_roll">trader.lab.contract_roll</a>
  &#8226;   <a href="#trader.lab.runtime">trader.lab.runtime</a>
  &#8226;   <a href="#trader.tx.models">trader.tx.models</a>
 
@@ -54658,6 +55114,7 @@ imported by:
  &#8226;   <a href="#asyncpg.connection">asyncpg.connection</a>
  &#8226;   <a href="#asyncpg.pool">asyncpg.pool</a>
  &#8226;   <a href="#calendar">calendar</a>
+ &#8226;   <a href="#charset_normalizer.legacy">charset_normalizer.legacy</a>
  &#8226;   <a href="#click">click</a>
  &#8226;   <a href="#click.core">click.core</a>
  &#8226;   <a href="#click.parser">click.parser</a>
@@ -54713,6 +55170,7 @@ imported by:
  &#8226;   <a href="#importlib.metadata._adapters">importlib.metadata._adapters</a>
  &#8226;   <a href="#importlib.resources._common">importlib.resources._common</a>
  &#8226;   <a href="#importlib.resources._legacy">importlib.resources._legacy</a>
+ &#8226;   <a href="#jaraco.functools">jaraco.functools</a>
  &#8226;   <a href="#locale">locale</a>
  &#8226;   <a href="#logging">logging</a>
  &#8226;   <a href="#main.py">main.py</a>
@@ -54813,8 +55271,6 @@ imported by:
  &#8226;   <a href="#setuptools._distutils.util">setuptools._distutils.util</a>
  &#8226;   <a href="#setuptools._distutils.version">setuptools._distutils.version</a>
  &#8226;   <a href="#setuptools._vendor.backports.tarfile">setuptools._vendor.backports.tarfile</a>
- &#8226;   <a href="#setuptools._vendor.jaraco.functools">setuptools._vendor.jaraco.functools</a>
- &#8226;   <a href="#setuptools._vendor.more_itertools.more">setuptools._vendor.more_itertools.more</a>
  &#8226;   <a href="#setuptools._vendor.packaging._manylinux">setuptools._vendor.packaging._manylinux</a>
  &#8226;   <a href="#setuptools._vendor.packaging.version">setuptools._vendor.packaging.version</a>
  &#8226;   <a href="#setuptools._vendor.tomli._parser">setuptools._vendor.tomli._parser</a>

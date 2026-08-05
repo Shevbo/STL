@@ -422,3 +422,93 @@ async def test_no_reentry_on_the_same_signal_after_a_stop():
     assert rt.get_state("sl_skips") == 1
     await _run(rt, -1, 420, 101.0, **p)           # сигнал сменился -> блок снят
     assert rt.signed == -1
+
+
+# ── «Долина смерти»: боковик в узком коридоре (dv_bars + dv_range_pts) ─────────
+from trader.lab.strategies.library import dv_flags as _dvf
+
+
+def test_dv_flags_detector():
+    """Флаг = размах ЗАКРЫТИЙ за окно меньше порога. Первые window-1 баров не
+    флагуются (окно не набралось); пробойный close гасит долину сам."""
+    closes = [87000, 87010, 87020, 87015, 87500, 87490]
+    f = _dvf(closes, 3, 100)
+    assert f == [False, False, True, True, False, False]
+    # выключенный фильтр / короткая серия -> все False
+    assert _dvf(closes, 0, 100) == [False] * 6
+    assert _dvf(closes, 3, 0) == [False] * 6
+    assert _dvf([1, 2], 3, 100) == [False, False]
+
+
+def test_dv_flags_wick_immune_by_construction():
+    """Детектор считается по close: манипуляционный фитиль (high/low) в серию
+    вообще не попадает — долину гасит только устойчивый уход закрытий."""
+    closes = [87000, 87010, 87005, 87008]
+    assert _dvf(closes, 3, 100)[-1] is True
+
+
+@pytest.mark.asyncio
+async def test_dv_blocks_entry_in_valley_and_allows_after_breakout():
+    rt = _FakeRT()
+    dv = dict(dv_bars=3, dv_range_pts=100)
+    for i, p in enumerate([87000.0, 87010.0, 87020.0]):   # коридор 20 пт
+        await _run(rt, None, 60 + i * 60, p, **dv)
+    await _run(rt, 1, 240, 87015.0, **dv)      # сигнал в долине -> отсев
+    assert rt.signed == 0
+    assert rt.get_state("dv_skips") == 1
+    assert rt.get_state("skip_phantoms")[0]["d"] == 1
+    await _run(rt, 1, 300, 87400.0, **dv)      # пробой закрытием -> вход разрешён
+    assert rt.signed == 1
+
+
+@pytest.mark.asyncio
+async def test_dv_never_blocks_exit_reversal_leg_is_blocked():
+    """Выход в долине работает всегда; обратная нога разворота — это новый вход,
+    в боковике её нет. Фантом несёт сторону WANT, не старой позиции."""
+    rt = _FakeRT()
+    dv = dict(dv_bars=3, dv_range_pts=100)
+    await _run(rt, 1, 60, 87000.0, **dv)       # вход до долины
+    assert rt.signed == 1
+    await _run(rt, None, 120, 87010.0, **dv)
+    await _run(rt, None, 180, 87020.0, **dv)   # долина сформировалась
+    await _run(rt, -1, 240, 87015.0, **dv)     # разворот: закрытие да, шорт нет
+    assert rt.orders[-1] == ("sell", 1, 87015.0)
+    assert rt.signed == 0
+    assert rt.get_state("dv_skips") == 1
+    assert rt.get_state("skip_phantoms")[0]["d"] == -1
+
+
+@pytest.mark.asyncio
+async def test_dv_blocks_averaging_add_in_valley():
+    rt = _FakeRT()
+    dv = dict(dv_bars=3, dv_range_pts=100, avg_max=3, avg_step_atr=1, avg_atr_n=2)
+    for i, p in enumerate([87000.0, 86900.0, 87000.0]):   # прогрев + ненулевой ATR
+        await _run(rt, None, 60 + i * 60, p, **dv)
+    await _run(rt, 1, 300, 87000.0, **dv)      # вход (размах прогрева 100 -> не долина)
+    assert rt.signed == 1
+    n = len(rt.orders)
+    await _run(rt, None, 360, 86990.0, **dv)   # против позиции, но коридор 10 пт
+    await _run(rt, None, 420, 86985.0, **dv)   # -> добор отсеян долиной
+    assert len(rt.orders) == n
+    assert rt.get_state("dv_skips", 0) >= 1
+
+
+@pytest.mark.asyncio
+async def test_dv_excludes_valley_bars_from_signal_series():
+    """Коррекция расчёта: сигнал видит серию БЕЗ долинных баров — последний бар
+    для него ДО-долинный, EMA не сходятся за время боковика."""
+    seen = {"last": None}
+
+    def _rec(bars, p):
+        seen["last"] = bars[-1].close
+        return None
+
+    if "_dvsig" not in _REG:
+        _register("_dvsig", "t", "t", [], _rec, lambda p: 1)
+    rt = _FakeRT()
+    p = {"symbol": "SIM6", "qty": 1, "avg_max": 1, "dv_bars": 3, "dv_range_pts": 100}
+    for i, price in enumerate([87000.0, 87001.0, 87002.0, 87003.0]):
+        rt.push(60 + i * 60, price)
+        await _mob("_dvsig")(rt, p)
+    # сырые бары кончаются на 87003, но 87002/87003 — долина: сигналу их не видно
+    assert seen["last"] == 87001.0

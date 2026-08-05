@@ -11,8 +11,43 @@
       "avg_max": 1,
       "avg_step_atr": 0,
       "tp_atr": 0,
+      "sl_frac": 0,
+      "sl_pct": 0,
       "avg_atr_n": 14,
-      "min_gap_pts": 0
+      "min_gap_pts": 0,
+      "cooldown_min": 0,
+      "cooldown_pct": 1,
+      "dv_bars": 0,
+      "dv_range_pts": 0,
+      "allow_long": 1,
+      "allow_short": 1
+    }
+  },
+  "macd_shectory1": {
+    "title": "MACD trend Shectory1",
+    "doc": "MACD trend Shectory1 — модернизация живого робота MACD trend A.\n\nСИГНАЛ — тот же, что у MACD Crossover: MACD выше сигнальной → лонг,\nниже → шорт, переворот на каждом пересечении.\n\nЧТО ДОБАВЛЕНО (три параметра, по умолчанию выключены):\n1. ND (nd_days) — окно в торговых днях для амплитуды инструмента.\n   Амплитуда = max(high) − min(low) по ND ЗАВЕРШЁННЫМ дням.\n2. Разножка «Авто» (gap_auto=1) — размер разножки не задаётся вручную,\n   а равен [амплитуда за ND дней] / [потолок доборов avg_max]. Лестница\n   усреднения растягивается на реальный размах инструмента и сама\n   подстраивается под волатильность. gap_auto=0 → min_gap_pts как раньше.\n3. k_avg (×10) — рост объёма доборов: каждый следующий добор =\n   round(предыдущий × k_avg). 10 = 1.0 = все доборы равны (как было).\n   При qty=2 и k_avg=15: 2 → 3 → 5 → 8 → 12, до потолка avg_max.\n\nДЛЯ ЧЕГО: развести доборы по всему дневному размаху вместо фиксированных\nпунктов и быстрее выравнивать среднюю цену в глубокой просадке. Обратная\nсторона — позиция растёт быстрее: сверяйся с ГО и лимитами агента.",
+    "params": {
+      "symbol": "RIM6",
+      "fast": 12,
+      "slow": 26,
+      "signal": 9,
+      "qty": 1,
+      "avg_max": 1,
+      "avg_step_atr": 0,
+      "tp_atr": 0,
+      "sl_frac": 0,
+      "sl_pct": 0,
+      "avg_atr_n": 14,
+      "min_gap_pts": 0,
+      "cooldown_min": 0,
+      "cooldown_pct": 1,
+      "dv_bars": 0,
+      "dv_range_pts": 0,
+      "allow_long": 1,
+      "allow_short": 1,
+      "nd_days": 5,
+      "gap_auto": 0,
+      "k_avg": 10
     }
   },
   "bollinger_mr": {
@@ -26,8 +61,16 @@
       "avg_max": 1,
       "avg_step_atr": 0,
       "tp_atr": 0,
+      "sl_frac": 0,
+      "sl_pct": 0,
       "avg_atr_n": 14,
-      "min_gap_pts": 0
+      "min_gap_pts": 0,
+      "cooldown_min": 0,
+      "cooldown_pct": 1,
+      "dv_bars": 0,
+      "dv_range_pts": 0,
+      "allow_long": 1,
+      "allow_short": 1
     }
   },
   "bollinger_bo": {
@@ -41,8 +84,16 @@
       "avg_max": 1,
       "avg_step_atr": 0,
       "tp_atr": 0,
+      "sl_frac": 0,
+      "sl_pct": 0,
       "avg_atr_n": 14,
-      "min_gap_pts": 0
+      "min_gap_pts": 0,
+      "cooldown_min": 0,
+      "cooldown_pct": 1,
+      "dv_bars": 0,
+      "dv_range_pts": 0,
+      "allow_long": 1,
+      "allow_short": 1
     }
   },
   "bollinger_bo_m1": {
@@ -56,8 +107,16 @@
       "avg_max": 5,
       "avg_step_atr": 10,
       "tp_atr": 0,
+      "sl_frac": 0,
+      "sl_pct": 0,
       "avg_atr_n": 14,
-      "min_gap_pts": 0
+      "min_gap_pts": 0,
+      "cooldown_min": 0,
+      "cooldown_pct": 1,
+      "dv_bars": 0,
+      "dv_range_pts": 0,
+      "allow_long": 1,
+      "allow_short": 1
     }
   },
   "shectory_2ema": {
@@ -73,8 +132,16 @@
       "avg_max": 1,
       "avg_step_atr": 0,
       "tp_atr": 0,
+      "sl_frac": 0,
+      "sl_pct": 0,
       "avg_atr_n": 14,
-      "min_gap_pts": 0
+      "min_gap_pts": 0,
+      "cooldown_min": 0,
+      "cooldown_pct": 1,
+      "dv_bars": 0,
+      "dv_range_pts": 0,
+      "allow_long": 1,
+      "allow_short": 1
     }
   },
   "stochastic": {
@@ -89,8 +156,16 @@
       "avg_max": 1,
       "avg_step_atr": 0,
       "tp_atr": 0,
+      "sl_frac": 0,
+      "sl_pct": 0,
       "avg_atr_n": 14,
-      "min_gap_pts": 0
+      "min_gap_pts": 0,
+      "cooldown_min": 0,
+      "cooldown_pct": 1,
+      "dv_bars": 0,
+      "dv_range_pts": 0,
+      "allow_long": 1,
+      "allow_short": 1
     }
   },
   "cci": {
@@ -104,8 +179,16 @@
       "avg_max": 1,
       "avg_step_atr": 0,
       "tp_atr": 0,
+      "sl_frac": 0,
+      "sl_pct": 0,
       "avg_atr_n": 14,
-      "min_gap_pts": 0
+      "min_gap_pts": 0,
+      "cooldown_min": 0,
+      "cooldown_pct": 1,
+      "dv_bars": 0,
+      "dv_range_pts": 0,
+      "allow_long": 1,
+      "allow_short": 1
     }
   },
   "williams_r": {
@@ -120,8 +203,16 @@
       "avg_max": 1,
       "avg_step_atr": 0,
       "tp_atr": 0,
+      "sl_frac": 0,
+      "sl_pct": 0,
       "avg_atr_n": 14,
-      "min_gap_pts": 0
+      "min_gap_pts": 0,
+      "cooldown_min": 0,
+      "cooldown_pct": 1,
+      "dv_bars": 0,
+      "dv_range_pts": 0,
+      "allow_long": 1,
+      "allow_short": 1
     }
   },
   "momentum": {
@@ -134,8 +225,16 @@
       "avg_max": 1,
       "avg_step_atr": 0,
       "tp_atr": 0,
+      "sl_frac": 0,
+      "sl_pct": 0,
       "avg_atr_n": 14,
-      "min_gap_pts": 0
+      "min_gap_pts": 0,
+      "cooldown_min": 0,
+      "cooldown_pct": 1,
+      "dv_bars": 0,
+      "dv_range_pts": 0,
+      "allow_long": 1,
+      "allow_short": 1
     }
   },
   "roc": {
@@ -149,8 +248,16 @@
       "avg_max": 1,
       "avg_step_atr": 0,
       "tp_atr": 0,
+      "sl_frac": 0,
+      "sl_pct": 0,
       "avg_atr_n": 14,
-      "min_gap_pts": 0
+      "min_gap_pts": 0,
+      "cooldown_min": 0,
+      "cooldown_pct": 1,
+      "dv_bars": 0,
+      "dv_range_pts": 0,
+      "allow_long": 1,
+      "allow_short": 1
     }
   },
   "triple_sma": {
@@ -165,8 +272,16 @@
       "avg_max": 1,
       "avg_step_atr": 0,
       "tp_atr": 0,
+      "sl_frac": 0,
+      "sl_pct": 0,
       "avg_atr_n": 14,
-      "min_gap_pts": 0
+      "min_gap_pts": 0,
+      "cooldown_min": 0,
+      "cooldown_pct": 1,
+      "dv_bars": 0,
+      "dv_range_pts": 0,
+      "allow_long": 1,
+      "allow_short": 1
     }
   },
   "keltner_bo": {
@@ -181,8 +296,16 @@
       "avg_max": 1,
       "avg_step_atr": 0,
       "tp_atr": 0,
+      "sl_frac": 0,
+      "sl_pct": 0,
       "avg_atr_n": 14,
-      "min_gap_pts": 0
+      "min_gap_pts": 0,
+      "cooldown_min": 0,
+      "cooldown_pct": 1,
+      "dv_bars": 0,
+      "dv_range_pts": 0,
+      "allow_long": 1,
+      "allow_short": 1
     }
   },
   "rsi_trend": {
@@ -198,8 +321,16 @@
       "avg_max": 1,
       "avg_step_atr": 0,
       "tp_atr": 0,
+      "sl_frac": 0,
+      "sl_pct": 0,
       "avg_atr_n": 14,
-      "min_gap_pts": 0
+      "min_gap_pts": 0,
+      "cooldown_min": 0,
+      "cooldown_pct": 1,
+      "dv_bars": 0,
+      "dv_range_pts": 0,
+      "allow_long": 1,
+      "allow_short": 1
     }
   },
   "ema_atr": {
@@ -215,8 +346,16 @@
       "avg_max": 1,
       "avg_step_atr": 0,
       "tp_atr": 0,
+      "sl_frac": 0,
+      "sl_pct": 0,
       "avg_atr_n": 14,
-      "min_gap_pts": 0
+      "min_gap_pts": 0,
+      "cooldown_min": 0,
+      "cooldown_pct": 1,
+      "dv_bars": 0,
+      "dv_range_pts": 0,
+      "allow_long": 1,
+      "allow_short": 1
     }
   },
   "fvg": {
@@ -229,8 +368,16 @@
       "avg_max": 1,
       "avg_step_atr": 0,
       "tp_atr": 0,
+      "sl_frac": 0,
+      "sl_pct": 0,
       "avg_atr_n": 14,
-      "min_gap_pts": 0
+      "min_gap_pts": 0,
+      "cooldown_min": 0,
+      "cooldown_pct": 1,
+      "dv_bars": 0,
+      "dv_range_pts": 0,
+      "allow_long": 1,
+      "allow_short": 1
     }
   },
   "order_block": {
@@ -244,8 +391,16 @@
       "avg_max": 1,
       "avg_step_atr": 0,
       "tp_atr": 0,
+      "sl_frac": 0,
+      "sl_pct": 0,
       "avg_atr_n": 14,
-      "min_gap_pts": 0
+      "min_gap_pts": 0,
+      "cooldown_min": 0,
+      "cooldown_pct": 1,
+      "dv_bars": 0,
+      "dv_range_pts": 0,
+      "allow_long": 1,
+      "allow_short": 1
     }
   },
   "pivot_reversal": {
@@ -258,8 +413,16 @@
       "avg_max": 1,
       "avg_step_atr": 0,
       "tp_atr": 0,
+      "sl_frac": 0,
+      "sl_pct": 0,
       "avg_atr_n": 14,
-      "min_gap_pts": 0
+      "min_gap_pts": 0,
+      "cooldown_min": 0,
+      "cooldown_pct": 1,
+      "dv_bars": 0,
+      "dv_range_pts": 0,
+      "allow_long": 1,
+      "allow_short": 1
     }
   }
 }

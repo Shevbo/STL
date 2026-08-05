@@ -372,11 +372,12 @@ class RobotHost:
             try:
                 gs = int(r.runtime.get_state("gap_skips", 0) or 0)
                 cs = int(r.runtime.get_state("cooldown_skips", 0) or 0)
-                if gs or cs:
+                ds = int(r.runtime.get_state("dv_skips", 0) or 0)
+                if gs or cs or ds:
                     _d = json.loads(sig)
                     if isinstance(_d, dict):
                         _d["filter_stats"] = {
-                            "gap_skips": gs, "cooldown_skips": cs,
+                            "gap_skips": gs, "cooldown_skips": cs, "dv_skips": ds,
                             "saved_pts": round(float(
                                 r.runtime.get_state("filter_saved_pts", 0) or 0), 2),
                             "pending": len(r.runtime.get_state("skip_phantoms", None) or []),

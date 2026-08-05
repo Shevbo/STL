@@ -8,7 +8,7 @@ it explains the real code, it does not approximate it.
 """
 
 from trader.lab import indicators as I
-from trader.lab.strategies.library import REGISTRY
+from trader.lab.strategies.library import REGISTRY, dv_flags
 
 
 def _fvg_explain(bars, params: dict) -> dict:
@@ -115,8 +115,23 @@ def _generic_explain(strategy_id: str, bars, params: dict, state: dict) -> dict:
         need = max(need, atr_n + 1)
     if len(bars) < need:
         return {"ready": False, "waiting_for": f"накопление баров: {len(bars)}/{need}"}
+    # «Долина смерти»: зеркало make_on_bar — долинные бары вырезаются из серии
+    # перед signal(). Без этого консоль показывала бы сигнал по сырым барам, а
+    # робот торговал бы по вырезанным — ровно класс бага, чиненный 05.08.2026
+    # (монитор «СИГНАЛ ШОРТ», робот в ту же секунду покупает).
+    sig_bars = bars[-need:]
+    dv_win = int(params.get("dv_bars", 0) or 0)
+    dv_pts = float(params.get("dv_range_pts", 0) or 0)
+    if dv_win > 0 and dv_pts > 0:
+        flags = dv_flags([b.close for b in bars], dv_win, dv_pts)
+        if any(flags):
+            sig_bars = [b for b, f in zip(bars, flags) if not f][-need:]
+            if len(sig_bars) < need:
+                return {"ready": True, "want": None,
+                        "waiting_for": ("долина смерти глубже прогрева: сигнал заморожен, "
+                                        "жду выхода цены из коридора")}
     try:
-        want = spec["signal"](bars[-need:], params)
+        want = spec["signal"](sig_bars, params)
     except Exception as exc:  # noqa: BLE001 — introspection must never crash the host
         return {"ready": False, "waiting_for": f"ошибка сигнала: {exc}"}
     label = {1: "СИГНАЛ ЛОНГ", -1: "СИГНАЛ ШОРТ", 0: "сигнал: выйти в кэш"}.get(want)
@@ -159,6 +174,23 @@ def entry_block(price: float, params: dict, state: dict, bar_time: int) -> str:
     until = int(state.get("cooldown_until", 0) or 0)
     if cd_min > 0 and bar_time and bar_time < until:
         return f"остывание держит: ещё {(until - bar_time) // 60 + 1} мин"
+    return ""
+
+
+def dv_block(params: dict, bars) -> str:
+    """«Долина смерти» держит вход прямо сейчас? Зеркало гейта in_dv make_on_bar.
+    В отличие от разножки/остывания долина гейтит и вход с нуля, и обратную ногу
+    разворота, и доборы — поэтому карточка помечает ВСЕ entry-заявки, не только
+    уровни доборов."""
+    dv_win = int(params.get("dv_bars", 0) or 0)
+    dv_pts = float(params.get("dv_range_pts", 0) or 0)
+    if dv_win <= 0 or dv_pts <= 0 or not bars or len(bars) < dv_win:
+        return ""
+    closes = [b.close for b in bars[-dv_win:]]
+    rng = max(closes) - min(closes)
+    if rng < dv_pts:
+        return (f"долина смерти: коридор закрытий {rng:.0f} пт за {dv_win} баров "
+                f"(< {dv_pts:.0f}) — новые входы закрыты до пробоя")
     return ""
 
 
@@ -246,8 +278,17 @@ def explain(strategy_id: str, bars, params: dict, position: int,
         bars, params, position, avg)
     # Гейты входа: план, который фильтр прямо сейчас не пустит, помечаем — иначе
     # карточка обещает заявку, которой не будет.
+    dvb = dv_block(params, bars)
+    if dvb:
+        d["entry_blocked"] = dvb
+        for o in d["planned_orders"]:
+            # Долина гейтит ЛЮБОЙ вход (с нуля, разворот, добор) — метим все entry.
+            if o.get("entry"):
+                o["blocked"] = dvb
+        for o in d.get("armed", []):
+            o["reason"] += " (долина смерти держит)"
     blk = entry_block(price, params, state, int(bars[-1].time) if bars else 0)
-    if blk:
+    if blk and not dvb:
         d["entry_blocked"] = blk
         for o in d["planned_orders"]:
             # ТОЛЬКО ДОБОРЫ. Разножка и остывание стоят в make_on_bar исключительно
