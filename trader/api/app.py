@@ -3778,6 +3778,22 @@ def create_app() -> FastAPI:
         with open(path, encoding="utf-8") as f:
             return _json.load(f)
 
+    @fastapi_app.post("/api/v1/agent/release")
+    async def agent_release(body: dict, request: Request):
+        """Вернуть взятое задание в очередь. Нужен резервному воркеру i9: он берёт
+        ручные прогоны вперёд очереди, но считает их в ОДИН поток, и крупный перебор
+        на нём вышел бы дольше, чем ожидание полного пула. Возвращаем — приоритет всё
+        равно поставит его первым, как только основной цикл освободится."""
+        _agent_auth(request)
+        pool = request.app.state.db_pool
+        if pool is None:
+            raise HTTPException(status_code=503, detail="DB unavailable")
+        run_id = str(body.get("run_id") or "")
+        n = await pool.execute(
+            "UPDATE backtest_runs SET status='queued', claimed_at=NULL, agent_id=NULL"
+            " WHERE id=$1 AND status='running'", run_id)
+        return {"released": n.endswith("1")}
+
     @fastapi_app.post("/api/v1/agent/result")
     async def agent_result(body: dict, request: Request):
         """Agent posts computed results for a run. Bulk-inserts backtest_results and

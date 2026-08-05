@@ -156,11 +156,16 @@ except Exception:  # noqa: BLE001
 
 # Bumped whenever the agent's wire behaviour changes; reported in the heartbeat so the
 # monitor shows whether the i9 is running the latest opt_agent.
-AGENT_VERSION = "2026-08-05-manual-preempt2"
+AGENT_VERSION = "2026-08-05-manual-preempt3"
 # Порог «ручного» прогона: тот же, что ставит сервер экрану LAB
 # (trader/util.py QUEUE_PRIORITY_MANUAL). Держать в согласии — по нему резервный
 # воркер отличает запрос оператора от фоновой кампании.
 MANUAL_PRIORITY = 100
+# Резервный воркер ОДИН. Прогон одного графика он выдаёт за секунды, а крупный ручной
+# перебор на нём считался бы вшестеро дольше, чем на полном пуле (864 комбинации:
+# ~2.5 часа против ~25 минут, 05.08.2026). Такие отдаём основному циклу — приоритет
+# всё равно поставит их первыми, как только он освободится.
+MANUAL_SIDE_MAX_COMBOS = 32
 
 # ── self-update ────────────────────────────────────────────────────────────────
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -422,6 +427,9 @@ class Agent:
         # Ручной прогон, взятый ВПЕРЁД очереди на резервный воркер (см. _manual_loop).
         # Один за раз: резервный воркер ровно один, второй ручной подождёт периода.
         self._side_busy = False
+        # Крупные ручные прогоны, отданные обратно основному пулу: чтобы не
+        # писать в лог одну и ту же строку каждые 30 секунд.
+        self._side_skip: set = set()
         # Latest metrics snapshot + recent jobs for the LOCAL status page (127.0.0.1).
         # The heartbeat task refills _last_metrics; the http thread only reads it (no
         # psutil.cpu_percent() from two callers, which would split the sampling window).
@@ -530,6 +538,21 @@ class Agent:
         r.raise_for_status()
         return r.json()
 
+    @staticmethod
+    def _combo_count(grid: dict) -> int:
+        n = 1
+        for v in (grid or {}).values():
+            n *= len(v) if isinstance(v, list) else 1
+        return n
+
+    async def release(self, client: httpx.AsyncClient, run_id: str) -> None:
+        """Вернуть задание в очередь (см. MANUAL_SIDE_MAX_COMBOS)."""
+        try:
+            await client.post(f"{self.api}/api/v1/agent/release",
+                              json={"run_id": run_id}, headers=self.h, timeout=30)
+        except Exception as exc:  # noqa: BLE001 — не вернули, значит доработает резерв
+            _log(f"release failed for {run_id}: {exc}")
+
     async def post_result(self, client: httpx.AsyncClient, payload: dict):
         r = await client.post(f"{self.api}/api/v1/agent/result",
                               json=payload, headers=self.h, timeout=120)
@@ -620,6 +643,17 @@ class Agent:
             except Exception:  # noqa: BLE001 — сеть моргнула, попробуем через период
                 continue
             if job is None:
+                continue
+            ps = job.get("param_sets")
+            n = len(ps) if ps else self._combo_count(job.get("params_grid") or {})
+            if n > MANUAL_SIDE_MAX_COMBOS:
+                # Возвращаем в очередь: на одном воркере это дольше, чем дождаться пула.
+                await self.release(client, job["run_id"])
+                if job["run_id"] not in self._side_skip:
+                    self._side_skip.add(job["run_id"])
+                    _log(f"[{job['run_id']}] ручной прогон на {n} комбинаций — не на резерв, "
+                         f"вернул в очередь под полный пул")
+                await asyncio.sleep(30)   # не молотить claim/release по кругу
                 continue
             self._side_busy = True
             _log(f"[{job['run_id']}] РУЧНОЙ прогон вперёд очереди — резервный воркер")
