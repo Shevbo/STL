@@ -171,6 +171,11 @@ async def lifespan(app: FastAPI):
             "ALTER TABLE optimization_leaderboard ADD COLUMN IF NOT EXISTS windows_profitable INTEGER",
             "ALTER TABLE optimization_leaderboard ADD COLUMN IF NOT EXISTS windows_total INTEGER",
             "ALTER TABLE optimization_leaderboard ADD COLUMN IF NOT EXISTS degrade DOUBLE PRECISION",
+            # Когда строку в последний раз ПЕРЕСЧИТАЛИ текущим кодом стратегии. Метрики
+            # кампании живут годами, а library.py меняется — строка, посчитанная прежней
+            # сборкой, воспроизводится другим числом (05.08.2026: лидер macd_shectory1
+            # +529k на своём окне дал +278k). NULL = не проверялась, верить нельзя.
+            "ALTER TABLE optimization_leaderboard ADD COLUMN IF NOT EXISTS verified_at TIMESTAMPTZ",
             # Архив разобранных роботов: закрытое дело со всеми материалами. Смысл —
             # чтобы через полгода не начинать тот же разбор заново и не «переоткрывать»
             # робота, которого уже признали безнадёжным. Отчёт лежит ЗДЕСЬ, а не файлом
