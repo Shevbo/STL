@@ -28,7 +28,7 @@ from trader.pos.client import PositionsClient
 from trader.pos.models import Position
 from trader.tx.client import TxClient
 from trader.tx.models import OrderRequest, OrderResponse
-from trader.util import i9_hb_view
+from trader.util import account_margin, i9_hb_view
 
 log = structlog.get_logger()
 
@@ -642,7 +642,10 @@ async def _run_backtest_task(run_id: str, body: dict, pool, app_state) -> None:
             from trader.lab.market_store import refresh_instrument_spec
             spec = await refresh_instrument_spec(pool, symbol)
             point_value = (spec or {}).get("point_value") or 1.0
-            initial_margin = (spec or {}).get("initial_margin") or 0.0
+            # ГО СЧЁТА, а не биржевое: брокер берёт кратно, и на биржевом значении
+            # доходность прогона завышена ровно во столько же раз (trader/util).
+            initial_margin = account_margin(getattr(app_state, "settings", None),
+                                            (spec or {}).get("initial_margin"))
         except Exception as exc:
             log.warning("backtest.point_value_failed", symbol=symbol, error=str(exc))
 
@@ -931,7 +934,8 @@ async def _run_remote_job_on_vds(row, app_state) -> None:
                 from trader.lab.market_store import refresh_instrument_spec
                 spec = await refresh_instrument_spec(pool, symbol)
                 point_value = (spec or {}).get("point_value") or 1.0
-                initial_margin = (spec or {}).get("initial_margin") or 0.0
+                initial_margin = account_margin(getattr(app_state, "settings", None),
+                                                (spec or {}).get("initial_margin"))
             except Exception:
                 pass
 
@@ -3577,7 +3581,10 @@ def create_app() -> FastAPI:
             from trader.lab.market_store import refresh_instrument_spec
             spec = await refresh_instrument_spec(pool, row["symbol"] or base_params.get("symbol", ""))
             point_value = (spec or {}).get("point_value") or 1.0
-            initial_margin = (spec or {}).get("initial_margin") or 0.0
+            # ГО СЧЁТА, а не биржевое: брокер берёт кратно, и на биржевом значении
+            # доходность прогона завышена ровно во столько же раз (trader/util).
+            initial_margin = account_margin(request.app.state.settings,
+                                            (spec or {}).get("initial_margin"))
         except Exception:
             pass
         return {
