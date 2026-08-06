@@ -369,6 +369,19 @@
   // достаёт дальше). Не null → кривая стартует не с нуля, и подпись это объясняет.
   let equityCarry = $state<{ rub: number; fromTs: number } | null>(null);
   // Живой робот без журнала: кривую не рисуем и говорим об этом прямо.
+  // Кривая по закрытым сделкам ПРЯЧЕТ открытый минус: робот может стоять в
+  // позиции, которая тянет счёт на дно, а «фикс» этого не покажет. Ровно так
+  // односторонний MACD рисовал ноль просадки, сидя на −1.94 млн (05.08.2026).
+  // Режим ВМ добавляет переоценку открытой позиции на КАЖДОМ баре: фикс + ВМ.
+  const EQ_MODE_KEY = 'bt_eq_mode';
+  let eqMode = $state<'fix' | 'vm'>(
+    (() => { try { return localStorage.getItem(EQ_MODE_KEY) === 'vm' ? 'vm' : 'fix'; }
+             catch { return 'fix'; } })());
+  function setEqMode(m: 'fix' | 'vm') {
+    eqMode = m;
+    try { localStorage.setItem(EQ_MODE_KEY, m); } catch { /* приватный режим */ }
+    void loadData();          // перестроить кривую в новом режиме
+  }
   let equityBlind = $state(false);
   // Сделок в результате НЕТ вовсе. У свипа на много комбинаций так и есть: массивы
   // сделок и equity вырезаются при записи (иначе Postgres на VDS и nginx не тянут),
@@ -1047,8 +1060,22 @@
       const curveBars = bars.slice(startIdx);
       if (curveBars.length && !equityBlind) {
         let k = 0, cum = 0, peak = 0;
+        // Переоценка открытой позиции на каждом баре. Позицию и среднюю знает
+        // только пофилловый пересчёт (events): в журнале закрытий их нет, поэтому
+        // ВМ доступен лишь когда кривая строится по филлам.
+        const evByTime = [...events].sort((a: any, b: any) => a.time - b.time);
+        let ei = 0, pos = 0, avg = 0;
+        const vmAdd: number[] = [];
         const raw = curveBars.map(b => {
           while (k < closes.length && closes[k].time <= b.time) { cum += closes[k].close.pnl; k++; }
+          if (eqMode === 'vm') {
+            while (ei < evByTime.length && evByTime[ei].time <= b.time) {
+              pos = Number(evByTime[ei].posAfter ?? 0);
+              avg = Number(evByTime[ei].avgAfter ?? 0);
+              ei++;
+            }
+            vmAdd.push(pos && avg ? pos * ((b.close as number) - avg) * (pointValue || 1) : 0);
+          } else vmAdd.push(0);
           return { time: b.time as number, value: cum };
         });
         // Сделки ПОСЛЕ последнего загруженного бара (бар-источник графика короче теста —
@@ -1080,11 +1107,18 @@
         // сойтись с бейджем, но кривая перестаёт врать (никаких ±2.5М из воздуха).
         const _ratio = (engineNet != null && rawEnd !== 0) ? engineNet / rawEnd : 1;
         const _scaleOk = engineNet != null && rawEnd !== 0 && _ratio >= 0.4 && _ratio <= 2.5;
-        const adj = _scaleOk
+        const _base = _scaleOk
           ? (v: number) => v * _ratio
           : (netOverride != null && Number.isFinite(netOverride))
             ? (v: number) => v + offset
             : (v: number) => v;
+        // ВМ прибавляется ПОСЛЕ привязки: якорь считается по ЗАКРЫТЫМ сделкам
+        // (с ними сверяется бейдж), а переоценка открытой позиции ложится сверху.
+        // Иначе масштабирование растянуло бы и плавающую часть.
+        let _vi = 0;
+        const adj = eqMode === 'vm'
+          ? (v: number) => _base(v) + (vmAdd[_vi++] ?? 0)
+          : _base;
         // Подписываем РОВНО ТО, ЧТО ВИДНО: уровень, с которого начинается
         // нарисованная кривая. Он не ноль, когда часть сделок случилась раньше
         // первого загруженного бара (график грузит окно в несколько дней, а
@@ -1606,7 +1640,16 @@
        onpointerdown={startEqResize} onpointermove={moveEqResize} onpointerup={endEqResize}></div>
   <!-- Без известного ₽/пункт кривая идёт в ПУНКТАХ — подпись обязана это говорить,
        иначе пункты читаются как рубли (у BR пункт = 785 ₽, у RTS = 1.57 ₽). -->
-  <div class="bt-equity-label">P&L робота, {unitLabel} (нарастающим по закрытым сделкам)
+  <div class="bt-equity-label">
+    <span class="bt-eq-mode" role="group" aria-label="Режим кривой доходности">
+      <button class:on={eqMode === 'fix'} onclick={() => setEqMode('fix')}
+              title="только ЗАКРЫТЫЕ сделки — как считает бейджем «Результат»">Фикс</button>
+      <button class:on={eqMode === 'vm'} onclick={() => setEqMode('vm')}
+              title="фикс ПЛЮС переоценка открытой позиции на каждом баре: видно, куда уводит незакрытый минус">Фикс+ВМ</button>
+    </span>
+    P&L робота, {unitLabel} ({eqMode === 'vm'
+      ? 'фикс + ВМ открытой позиции, по барам'
+      : 'нарастающим по закрытым сделкам'})
     {#if equityBlind}<span class="bt-equity-blind"
       >· журнал сделок не загрузился — кривая не строится, чтобы не показать неверную</span
       >{:else if equityEmpty}<span class="bt-equity-blind"
@@ -1870,6 +1913,14 @@
   .tp-table th.num, .tp-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
   .tp-table td { padding: 4px 10px; color: #aaa; border-bottom: 1px solid #14142a; white-space: nowrap; }
   .tp-table tr:hover td { background: #12122a; }
+
+  .bt-eq-mode { display: inline-flex; margin-right: 8px; border: 1px solid #24406a;
+    border-radius: 3px; overflow: hidden; vertical-align: middle; }
+  .bt-eq-mode button { background: #0d1526; border: 0; color: #7c8cab; cursor: pointer;
+    font: 600 10px/1 system-ui, sans-serif; padding: 4px 8px; }
+  .bt-eq-mode button + button { border-left: 1px solid #24406a; }
+  .bt-eq-mode button:hover { color: #cfe2ff; }
+  .bt-eq-mode button.on { background: #16243c; color: #dfe8f7; }
 
   .bt-equity-label {
     padding: 3px 10px; font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.5px;
