@@ -320,8 +320,12 @@ def test_match_trades_ignores_far_and_oversized():
     o = so(kind="trail_tp", side="sell", qty=2, trail_offset=100)
     o.fired_ms = NOW
     far = {"quik": {"trades": [{"order_num": "A", "sec": "RIU6", "side": "sell", "qty": 2,
-                                "price": 90_000.0, "ts_ms": NOW + 10 * 60_000, "tag": ""}]}}
+                                "price": 90_000.0, "ts_ms": NOW + 20 * 60_000, "tag": ""}]}}
     assert _match_trades(far, o) == (0.0, 0)          # слишком далеко по времени
+    # Окно 15 минут: заявка ждала встречный объём на открытии (06.08.2026).
+    late = {"quik": {"trades": [{"order_num": "A", "sec": "RIU6", "side": "sell", "qty": 2,
+                                 "price": 90_000.0, "ts_ms": NOW + 5 * 60_000, "tag": ""}]}}
+    assert _match_trades(late, o) == (90_000.0, 2)
     big = {"quik": {"trades": [{"order_num": "A", "sec": "RIU6", "side": "sell", "qty": 9,
                                 "price": 90_000.0, "ts_ms": NOW + 500, "tag": ""}]}}
     assert _match_trades(big, o) == (0.0, 0)          # объём больше нашего — чужая
