@@ -1539,6 +1539,18 @@
            его первым. Ради этого же после захода «из робота» сразу считается один
            прогон — центр не пустует с колбой «выбери стратегию». -->
       <div class="btl-section btl-leader">
+        <!-- ЧЕЙ ЭТО ГРАФИК. На экране одновременно каталог из тридцати стратегий,
+             история чужих прогонов и кривая — без крупной подписи над графиком
+             оператор не видит, к кому она относится (просьба 06.08.2026). -->
+        <header class="btl-who">
+          <h2>{fromRobotName || selectedStrategy?.name || 'Прогон'}</h2>
+          <span class="btl-who-sub">
+            {#if selectedStrategyId}<code>{selectedStrategyId}</code>{/if}
+            {#if leaderResult?.params?.symbol || paramValues.symbol}
+              · {leaderResult?.params?.symbol || paramValues.symbol}{/if}
+            · {dateFrom}…{dateTo}
+          </span>
+        </header>
         <div class="btl-sec-title">
           📈 Лидер: прибыль×RF
           {#if chartLoading}<span class="btl-sec-sub">загрузка сделок для графика…</span>{/if}
@@ -1712,6 +1724,15 @@
   .btl-clear { padding: 5px 10px; background: transparent; border: 1px solid #2a2a3a; color: #778; border-radius: 4px; cursor: pointer; font-size: 11px; }
 
   /* ── Results panel ──────────────────────────────────────────────────── */
+  /* Заголовок «чей график»: крупнее всего в колонке результатов — он отвечает на
+     первый вопрос, который задаёт человек, увидев кривую. */
+  .btl-who { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+    margin: 0 0 8px; padding-bottom: 8px; border-bottom: 1px solid #24406a; }
+  .btl-who h2 { margin: 0; font: 600 22px/1.2 system-ui, sans-serif; color: #eaf1ff;
+    letter-spacing: -.01em; }
+  .btl-who-sub { font: 400 13px/1.4 system-ui, sans-serif; color: #7c8cab; }
+  .btl-who-sub code { font: 500 13px/1 ui-monospace, Consolas, monospace; color: #9fb4d6; }
+
   /* Кривая лидера — первой в колонке результатов; подготовка (btl-prep) выше неё. */
   .btl-leader { order: -1; }
   .btl-prep { order: -2; flex: none; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
