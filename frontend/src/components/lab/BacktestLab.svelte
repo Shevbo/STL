@@ -88,6 +88,7 @@
   import ParamHelp from './ParamHelp.svelte';
   import MustDescription from './MustDescription.svelte';
   import ParamPanel from './ParamPanel.svelte';
+  import { asObject } from '../../lib/json-field';
   import { helpFor } from '$lib/strategy-help';
   import { toFills, commissionBreakdown } from '../../lib/lab-analytics';
 
@@ -456,10 +457,7 @@
       await selectStrategy(s);
       // ПОСЛЕ selectStrategy: он сбрасывает paramValues на дефолты схемы.
       // Строку не спредим: спред строки рассыпает её на ключи "0","1","2"…
-      const pj = typeof rob.params_json === 'string'
-        ? (() => { try { return JSON.parse(rob.params_json); } catch { return {}; } })()
-        : (rob.params_json ?? {});
-      paramValues = { ...paramValues, ...pj };
+      paramValues = { ...paramValues, ...asObject(rob.params_json, {}) };
       // ВСЕ ОСИ ВЫКЛЮЧЕНЫ (от = до = текущее значение). Пришли перенести параметры
       // робота, а не перебирать всё подряд: сеятель раскрывает диапазон каждой из
       // девятнадцати осей, и произведение давало «сетка 121 899 810 816 000 комб.».

@@ -30,6 +30,7 @@
   import { fetchAgentLocalStatus, type AgentLocalStatus } from '../../lib/agent-robots';
   import { annualizedPct, equityPaths, type EqPt as Pt } from '../../lib/lab-analytics';
   import { setTitle } from '../../lib/page-title';
+  import { asObject } from '../../lib/json-field';
   import { parseLog, appendLog, stateTransitions,
            type LogKind, type LogLine, type RobotSnap } from '../../lib/robot-console';
 
@@ -115,7 +116,7 @@
 
   const robot = $derived((report?.robots ?? []).find((r: any) => r.robot_id === robotId) ?? null);
   const signal = $derived.by(() => {
-    try { return robot?.signal_json ? JSON.parse(robot.signal_json) : null; } catch { return null; }
+    return asObject(robot?.signal_json, null as any);
   });
   // Статистика фильтров входа приезжает ВНУТРИ signal_json (раннер кладёт её туда,
   // чтобы не менять proto). saved_pts в ПУНКТАХ — в рубли переводим тем же ₽/пункт,
@@ -126,7 +127,7 @@
     return { ...fs, savedRub: pointCoef != null ? Number(fs.saved_pts) * pointCoef : null };
   });
   const params = $derived.by(() => {
-    try { return robot?.params_json ? JSON.parse(robot.params_json) : {}; } catch { return {}; }
+    return asObject(robot?.params_json, {});
   });
   const symbol = $derived(robot?.symbol || 'RIU6');
   const position = $derived(Number(robot?.position ?? 0));
@@ -728,7 +729,7 @@
   // (кросс-заявки) и перед выводом в бумагу. Снимается «Пуском».
   let exitBusy = $state(false);
   const exitOnly = $derived.by(() => {
-    try { return !!JSON.parse(robot?.params_json || '{}').exit_only; } catch { return false; }
+    return !!asObject(robot?.params_json, {} as any).exit_only;
   });
   async function setExitOnly(on: boolean) {
     exitBusy = true;
