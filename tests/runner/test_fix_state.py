@@ -98,3 +98,32 @@ async def test_fix_state_unknown_robot_is_noop(tmp_path):
     before = host.robots["r1"].runtime.signed_position()
     await host.handle_control(_fix_rc(robot_id="ghost"))
     assert host.robots["r1"].runtime.signed_position() == before
+
+
+@pytest.mark.asyncio
+async def test_fix_state_pnl_correction(tmp_path):
+    """set_pnl перезаписывает реализованное и комиссию (пункты) — счётчики
+    раннера тоже бывают испорчены (2026-08-06: авто-хил влил вчерашние филлы).
+    Без set_pnl нулевые поля P&L НЕ трогают (обычный align так и шлёт)."""
+    host = RobotHost(FakeBridge(), str(tmp_path))
+    await host.handle_control(_deploy_rc())
+    r = host.robots["r1"]
+    r.runtime._realized = 999.0
+    r.runtime._commission = 111.0
+
+    # Обычный align (set_pnl=False) — P&L нетронут.
+    await host.handle_control(_fix_rc(position=1, avg=88000.0))
+    assert r.runtime.realized_gross() == 999.0
+    assert r.runtime.commission_points() == 111.0
+
+    # Явная правка.
+    rc = rb.RunnerControl(fix_state=rb.FixRobotState(
+        robot_id="r1", set_position=7, set_avg_price=88964.0,
+        clear_working=True, note="pnl fix",
+        set_pnl=True, set_realized_gross_pts=146986.3,
+        set_commission_pts=19246.7))
+    await host.handle_control(rc)
+    assert r.runtime.signed_position() == 7
+    assert r.runtime.realized_gross() == pytest.approx(146986.3)
+    assert r.runtime.commission_points() == pytest.approx(19246.7)
+    assert r.runtime.realized_pnl() == pytest.approx(146986.3 - 19246.7)

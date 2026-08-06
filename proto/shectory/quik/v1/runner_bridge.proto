@@ -63,4 +63,12 @@ message FixRobotState {
   double set_avg_price = 3;
   bool clear_working = 4;
   string note = 5;      // shown in the robot's journal
+  // Точная правка P&L (2026-08-06: авто-хил влил вчерашние вечерние филлы и
+  // испортил «реализовано» реального робота; позицию align чинит, P&L было
+  // нечем). set_pnl гейтит запись — иначе нули стирали бы P&L на каждом
+  // обычном align. Значения в ПУНКТАХ, как их ведёт раннер: gross до
+  // комиссии + накопленная комиссия отдельно (net = gross - commission).
+  bool set_pnl = 6;
+  double set_realized_gross_pts = 7;
+  double set_commission_pts = 8;
 }

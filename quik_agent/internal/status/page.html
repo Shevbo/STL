@@ -556,6 +556,12 @@ function setPosBlock(r) {
     + '<div class="edit-field"><span>средняя цена</span><input class="mono setpos-avg" type="number" value="' + esc(r.avg_price ?? 0) + '"></div>'
     + '<div class="edit-field"><span>ID для подтверждения</span><input class="mono setpos-confirm" placeholder="' + esc(r.id) + '"></div>'
     + '</div>'
+    + '<div class="kv" style="margin-top:8px">Правка P&L (опционально, ОБА поля; пункты). Пусто = не трогать. '
+    + 'Истина — реплей журнала algo_trades.</div>'
+    + '<div class="kv-grid">'
+    + '<div class="edit-field"><span>реализовано gross, п.</span><input class="mono setpos-gross" type="number" step="0.1" placeholder="не менять"></div>'
+    + '<div class="edit-field"><span>комиссия, п.</span><input class="mono setpos-comm" type="number" step="0.1" placeholder="не менять"></div>'
+    + '</div>'
     + '<div style="margin-top:10px"><button class="danger setpos-btn" disabled>Записать позицию в руннер</button><span class="setpos-msg"></span></div>'
     + '</div>';
 }
@@ -573,12 +579,25 @@ function wireSetPos(body) {
       const pos = Number(panel.querySelector('.setpos-pos').value);
       const avg = Number(panel.querySelector('.setpos-avg').value);
       if (!Number.isInteger(pos)) { setMsg(msgEl, 'позиция должна быть целым числом', false); return; }
-      if (!confirm('Записать роботу ' + id + ' позицию ' + pos + ' @ ' + avg + '?')) return;
+      // Правка P&L: оба поля или ни одного (сервер это тоже проверяет).
+      const grossRaw = panel.querySelector('.setpos-gross').value.trim();
+      const commRaw = panel.querySelector('.setpos-comm').value.trim();
+      if ((grossRaw === '') !== (commRaw === '')) {
+        setMsg(msgEl, 'правка P&L: заполните ОБА поля (gross и комиссия) или ни одного', false); return;
+      }
+      const body = { position: pos, avg_price: avg, confirm_id: confirmInp.value };
+      let what = 'позицию ' + pos + ' @ ' + avg;
+      if (grossRaw !== '') {
+        body.realized_gross_pts = Number(grossRaw);
+        body.commission_pts = Number(commRaw);
+        what += ' и P&L gross=' + grossRaw + ' п., комиссия=' + commRaw + ' п.';
+      }
+      if (!confirm('Записать роботу ' + id + ' ' + what + '?')) return;
       btn.disabled = true;
       try {
         const resp = await fetch('/api/robot/' + encodeURIComponent(id) + '/set-position', {
           method: 'POST', headers: {'content-type': 'application/json'},
-          body: JSON.stringify({ position: pos, avg_price: avg, confirm_id: confirmInp.value }),
+          body: JSON.stringify(body),
         });
         const text = await resp.text();
         if (!resp.ok) { setMsg(msgEl, text || ('HTTP ' + resp.status), false); btn.disabled = false; return; }

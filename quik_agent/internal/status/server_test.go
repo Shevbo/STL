@@ -875,7 +875,7 @@ func TestServer_SetPositionRouteCallsDep(t *testing.T) {
 	var gotPos int64
 	var gotAvg float64
 	d := baseDeps()
-	d.SetPosition = func(id string, pos int64, avg float64, confirmID string) error {
+	d.SetPosition = func(id string, pos int64, avg float64, confirmID string, pnl *PnlFix) error {
 		gotID, gotPos, gotAvg, gotConfirm = id, pos, avg, confirmID
 		return nil
 	}
@@ -902,7 +902,7 @@ func TestServer_SetPositionRouteCallsDep(t *testing.T) {
 func TestServer_SetPositionMissingFieldsReturn400(t *testing.T) {
 	called := false
 	d := baseDeps()
-	d.SetPosition = func(id string, pos int64, avg float64, confirmID string) error {
+	d.SetPosition = func(id string, pos int64, avg float64, confirmID string, pnl *PnlFix) error {
 		called = true
 		return nil
 	}
@@ -934,7 +934,7 @@ func TestServer_SetPositionMissingFieldsReturn400(t *testing.T) {
 // valid without avg_price — a flat book has no meaningful average.
 func TestServer_SetPositionZeroNeedsNoAvg(t *testing.T) {
 	d := baseDeps()
-	d.SetPosition = func(id string, pos int64, avg float64, confirmID string) error { return nil }
+	d.SetPosition = func(id string, pos int64, avg float64, confirmID string, pnl *PnlFix) error { return nil }
 	ts := httptest.NewServer(newMux(d))
 	defer ts.Close()
 
@@ -951,7 +951,7 @@ func TestServer_SetPositionZeroNeedsNoAvg(t *testing.T) {
 
 func TestServer_SetPositionErrorMapping(t *testing.T) {
 	d := baseDeps()
-	d.SetPosition = func(id string, pos int64, avg float64, confirmID string) error {
+	d.SetPosition = func(id string, pos int64, avg float64, confirmID string, pnl *PnlFix) error {
 		if id == "ghost" {
 			return ErrUnknownRobot
 		}
@@ -997,5 +997,45 @@ func TestServer_SetPositionNotWiredReturns503(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Errorf("status = %d, want 503", resp.StatusCode)
+	}
+}
+
+// P&L correction rides set-position: both fields -> PnlFix passed; one field
+// alone -> 400 without calling the dep (a half-correction would corrupt).
+func TestServer_SetPositionPnlFields(t *testing.T) {
+	var gotPnl *PnlFix
+	called := 0
+	d := baseDeps()
+	d.SetPosition = func(id string, pos int64, avg float64, confirmID string, pnl *PnlFix) error {
+		called++
+		gotPnl = pnl
+		return nil
+	}
+	ts := httptest.NewServer(newMux(d))
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/api/robot/r1/set-position", "application/json",
+		bytes.NewReader([]byte(`{"position":7,"avg_price":88964,"confirm_id":"r1",`+
+			`"realized_gross_pts":146986.3,"commission_pts":19246.7}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || called != 1 {
+		t.Fatalf("status=%d called=%d", resp.StatusCode, called)
+	}
+	if gotPnl == nil || gotPnl.RealizedGrossPts != 146986.3 || gotPnl.CommissionPts != 19246.7 {
+		t.Fatalf("pnl = %+v", gotPnl)
+	}
+
+	resp2, err := http.Post(ts.URL+"/api/robot/r1/set-position", "application/json",
+		bytes.NewReader([]byte(`{"position":7,"avg_price":88964,"confirm_id":"r1",`+
+			`"realized_gross_pts":100}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusBadRequest || called != 1 {
+		t.Fatalf("half pnl: status=%d called=%d, want 400 and no dep call", resp2.StatusCode, called)
 	}
 }

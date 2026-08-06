@@ -122,6 +122,14 @@ type ParamsUpdate struct {
 // only if non-nil (nil-safe defaults below); the five interface fields
 // (Accounts/Robots/Runner/Manager/Provider) have no such guard and MUST be
 // set — BuildStatus reads them unconditionally.
+// PnlFix — точная правка P&L при ручной коррекции позиции (SetPosition).
+// Значения в ПУНКТАХ, как их ведёт раннер: gross до комиссии + накопленная
+// комиссия раздельно (net = gross - commission).
+type PnlFix struct {
+	RealizedGrossPts float64
+	CommissionPts    float64
+}
+
 type Deps struct {
 	Accounts accountsSnapshotter
 	Robots   robotsStore
@@ -165,7 +173,9 @@ type Deps struct {
 	// /api/robot/{id}/set-position) — operator manual correction after a
 	// desync. Local-only, like ModeSet. ErrUnknownRobot for an unknown id; any
 	// other error is a precondition/confirm failure shown to the operator.
-	SetPosition func(id string, pos int64, avg float64, confirmID string) error
+	// pnl != nil — заодно точная правка P&L (пункты, gross и комиссия
+	// раздельно): счётчики раннера тоже бывают испорчены (2026-08-06).
+	SetPosition func(id string, pos int64, avg float64, confirmID string, pnl *PnlFix) error
 
 	// Pause pauses (paused=true) or resumes (paused=false) a robot from the local
 	// page (POST /api/robot/{id}/pause) — blocks/allows new entries; the open

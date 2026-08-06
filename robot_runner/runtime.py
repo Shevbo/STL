@@ -408,23 +408,37 @@ class AgentRuntime:
         return self._commission
 
     def apply_fix(self, *, position: int, avg: float, clear_working: bool,
-                  note: str, symbol: str = "") -> None:
+                  note: str, symbol: str = "",
+                  realized: float | None = None,
+                  commission: float | None = None) -> None:
         """Recon align (fix_state): overwrite the believed book to the QUIK fact.
 
-        Realized P&L is never touched — a fix corrects belief, it is not a trade.
-        clear_working drops in-flight/resting order beliefs (QUIK has no such
-        orders). The note lands in the fill journal (the persistent audit trail)
-        as a "fix_state" entry carrying the forced position/avg.
+        Realized P&L is untouched by a plain fix — belief-correction is not a
+        trade. But belief CAN be corrupted (2026-08-06: journal auto-heal
+        replayed yesterday's evening fills, inflating realized by ~10k pts), so
+        an EXPLICIT correction is allowed: realized/commission (both in POINTS,
+        gross + fee kept apart, exactly as the runner tracks them) overwrite
+        the counters when given. clear_working drops in-flight/resting order
+        beliefs. Everything lands in the fill journal as a "fix_state" entry.
         """
         self._signed = int(position)
         self._avg = float(avg)
+        if realized is not None:
+            self._realized = float(realized)
+        if commission is not None:
+            self._commission = float(commission)
         if clear_working:
             self._orders = {cid: o for cid, o in self._orders.items()
                             if o.status not in ("submitted", "active", "partial")}
         status = f"fix_state: {note}" if note else "fix_state"
         self._record("recon", symbol, "fix", int(position), float(avg), status)
+        pnl = ""
+        if realized is not None or commission is not None:
+            pnl = (f" реализовано←{self._realized:.1f} п. "
+                   f"комиссия←{self._commission:.1f} п. "
+                   f"(чистыми {self._realized - self._commission:.1f} п.)")
         self.event("FIX", f"позиция←{position} avg←{avg:.0f} "
-                   f"clear_working={clear_working} note={note!r}", level="warning")
+                   f"clear_working={clear_working}{pnl} note={note!r}", level="warning")
 
     def restore(self, *, position: int, avg: float, realized: float,
                 commission: float = 0.0, fills: list | None = None) -> None:

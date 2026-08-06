@@ -264,15 +264,21 @@ class RobotHost:
                 return
             # Recon align: force the believed book to the QUIK fact. Journal +
             # persist immediately so the fix survives a runner restart even if
-            # no bar ever closes again today.
+            # no bar ever closes again today. set_pnl: explicit P&L correction
+            # (points, gross+commission apart) — the counters can be corrupted
+            # too (journal auto-heal replayed old fills, 2026-08-06).
+            set_pnl = bool(getattr(fx, "set_pnl", False))
             r.runtime.apply_fix(position=int(fx.set_position),
                                 avg=float(fx.set_avg_price),
                                 clear_working=bool(fx.clear_working),
-                                note=fx.note, symbol=r.spec.get("symbol", ""))
+                                note=fx.note, symbol=r.spec.get("symbol", ""),
+                                realized=float(fx.set_realized_gross_pts) if set_pnl else None,
+                                commission=float(fx.set_commission_pts) if set_pnl else None)
             log.warning("host.fix_state", robot_id=fx.robot_id,
                         position=int(fx.set_position),
                         avg=float(fx.set_avg_price),
-                        clear_working=bool(fx.clear_working), note=fx.note)
+                        clear_working=bool(fx.clear_working), note=fx.note,
+                        set_pnl=set_pnl)
             self.persist()
 
     # ---- scheduling ----

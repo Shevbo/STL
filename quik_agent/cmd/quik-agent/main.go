@@ -817,7 +817,7 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 			// Lua bridge was dead). Rides the SAME fix_state control the recon
 			// aligner uses; runner persists immediately. Gated: exact typed
 			// confirm + robot must be PAUSED (never rewrite a trading book live).
-			SetPosition: func(id string, pos int64, avg float64, confirmID string) error {
+			SetPosition: func(id string, pos int64, avg float64, confirmID string, pnl *status.PnlFix) error {
 				spec := robotStore.Get(id)
 				if spec == nil {
 					return status.ErrUnknownRobot
@@ -828,13 +828,21 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 				if !robotStore.Paused(id) {
 					return fmt.Errorf("робот должен быть на ПАУЗЕ: останови его перед ручной установкой позиции")
 				}
-				return runnerSrv.SendFixState(&quikv1.FixRobotState{
+				fix := &quikv1.FixRobotState{
 					RobotId:      id,
 					SetPosition:  pos,
 					SetAvgPrice:  avg,
 					ClearWorking: true,
 					Note:         fmt.Sprintf("оператор: ручная установка позиции=%d avg=%.2f", pos, avg),
-				})
+				}
+				if pnl != nil {
+					fix.SetPnl = true
+					fix.SetRealizedGrossPts = pnl.RealizedGrossPts
+					fix.SetCommissionPts = pnl.CommissionPts
+					fix.Note += fmt.Sprintf(" pnl: gross=%.1f п. комиссия=%.1f п.",
+						pnl.RealizedGrossPts, pnl.CommissionPts)
+				}
+				return runnerSrv.SendFixState(fix)
 			},
 
 			// Pause/resume from the local page: persist the flag (so a reconnect

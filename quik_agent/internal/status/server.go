@@ -307,6 +307,10 @@ type setPositionRequest struct {
 	Position  *int64   `json:"position"`
 	AvgPrice  *float64 `json:"avg_price"`
 	ConfirmID string   `json:"confirm_id"`
+	// Опциональная точная правка P&L (оба поля вместе, в пунктах): счётчики
+	// раннера тоже бывают испорчены (2026-08-06, реплей вчерашних филлов).
+	RealizedGrossPts *float64 `json:"realized_gross_pts"`
+	CommissionPts    *float64 `json:"commission_pts"`
 }
 
 // handleSetPosition force-writes a robot's believed position/avg. nil
@@ -338,7 +342,18 @@ func handleSetPosition(d Deps, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := d.SetPosition(id, *req.Position, avg, req.ConfirmID); err != nil {
+	var pnl *PnlFix
+	if req.RealizedGrossPts != nil || req.CommissionPts != nil {
+		if req.RealizedGrossPts == nil || req.CommissionPts == nil {
+			http.Error(w, "правка P&L требует ОБА поля: realized_gross_pts и commission_pts",
+				http.StatusBadRequest)
+			return
+		}
+		pnl = &PnlFix{RealizedGrossPts: *req.RealizedGrossPts,
+			CommissionPts: *req.CommissionPts}
+	}
+
+	if err := d.SetPosition(id, *req.Position, avg, req.ConfirmID, pnl); err != nil {
 		if errors.Is(err, ErrUnknownRobot) {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
