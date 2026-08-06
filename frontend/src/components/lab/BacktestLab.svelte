@@ -337,9 +337,15 @@
     for (const p of schema) {
       if (p.type !== 'number' || p.key === 'symbol') continue;
       const r = sweepRanges[p.key];
-      if (r && r.from !== r.to && r.step > 0) {
-        n *= Math.floor((r.to - r.from) / r.step) + 1;
-      }
+      if (!r) continue;
+      // ОСЬ НИКОГДА НЕ ДАЁТ МЕНЬШЕ ОДНОГО значения. Сеятель диапазонов умеет
+      // выставить «до» меньше «от» (у avg_max было «от 16 до 10»), и без этого
+      // зажима отрицательные множители перемножались по всем осям: монитор
+      // показывал «сетка -609 499 054 080 000 комб.» (06.08.2026).
+      const from = Number(r.from), to = Number(r.to);
+      const step = Math.max(1, Number(r.step) || 1);
+      if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) continue;
+      n *= Math.max(1, Math.floor((to - from) / step) + 1);
     }
     return n;
   }
@@ -449,7 +455,11 @@
       prefillStage = `Готовлю стратегию ${sid}…`;
       await selectStrategy(s);
       // ПОСЛЕ selectStrategy: он сбрасывает paramValues на дефолты схемы.
-      paramValues = { ...paramValues, ...(rob.params_json ?? {}) };
+      // Строку не спредим: спред строки рассыпает её на ключи "0","1","2"…
+      const pj = typeof rob.params_json === 'string'
+        ? (() => { try { return JSON.parse(rob.params_json); } catch { return {}; } })()
+        : (rob.params_json ?? {});
+      paramValues = { ...paramValues, ...pj };
       if (rob.symbol) paramValues.symbol = rob.symbol;
       say(`> параметры «${fromRobotName}» перенесены: ${sid} · ${rob.symbol ?? '?'}`, 'ok');
       // Сразу считаем ОДИН прогон на текущих параметрах: центр экрана показывает

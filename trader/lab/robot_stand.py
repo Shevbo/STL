@@ -22,7 +22,7 @@ EXECUTED = {"paper", "filled", "executed", "submitted"}
 
 
 def _params(raw: Any) -> dict:
-    """params_json приходит то объектом, то строкой (jsonb-кодек + исторические слои)."""
+    """ПУБЛИЧНЫЙ (зовут и из ручки стенда). params_json приходит то объектом, то строкой (jsonb-кодек + исторические слои)."""
     for _ in range(3):
         if isinstance(raw, str):
             try:

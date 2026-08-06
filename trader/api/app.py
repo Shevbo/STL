@@ -3068,7 +3068,11 @@ def create_app() -> FastAPI:
             mirror = None
         for r in ((mirror or {}).get("robots") or []):
             if str(r.get("robot_id")) == robot_id:
-                from trader.lab.robot_stand import CAPS_AGENT
+                from trader.lab.robot_stand import CAPS_AGENT, _params
+                # params_json из зеркала приходит СТРОКОЙ. Потребители обязаны
+                # получать словарь: спред строки рассыпает её на ключи "0","1","2"…
+                # и параметры робота уезжают мусором (Лаборатория, 06.08.2026).
+                r = {**r, "params_json": _params(r.get("params_json"))}
                 return {"source": "agent", "robot": r,
                         "received_at_ms": (mirror or {}).get("received_at_ms"),
                         "caps": CAPS_AGENT}

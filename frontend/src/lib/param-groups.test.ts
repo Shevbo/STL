@@ -54,3 +54,42 @@ describe('служебные поля вне схемы', () => {
     expect(shown).toContain('symbol');
   });
 });
+
+describe('счёт комбинаций сетки', () => {
+  /** Та же формула, что в BacktestLab.comboCount после зажима. */
+  function comboCount(schema: any[], ranges: Record<string, any>): number {
+    let n = 1;
+    for (const p of schema) {
+      if (p.type !== 'number' || p.key === 'symbol') continue;
+      const r = ranges[p.key];
+      if (!r) continue;
+      const from = Number(r.from), to = Number(r.to);
+      const step = Math.max(1, Number(r.step) || 1);
+      if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) continue;
+      n *= Math.max(1, Math.floor((to - from) / step) + 1);
+    }
+    return n;
+  }
+  const S = [{ key: 'fast', type: 'number' }, { key: 'avg_max', type: 'number' }];
+
+  it('перевёрнутая ось (до < от) НЕ даёт отрицательный множитель', () => {
+    // Сеятель выставил avg_max «от 16 до 10» — монитор показывал −609 499 054 080 000.
+    const n = comboCount(S, { fast: { from: 3, to: 9, step: 3 },
+                              avg_max: { from: 16, to: 10, step: 1 } });
+    expect(n).toBe(3);
+    expect(n).toBeGreaterThan(0);
+  });
+
+  it('нулевой шаг не делит на ноль', () => {
+    expect(comboCount(S, { fast: { from: 1, to: 5, step: 0 } })).toBe(5);
+  });
+
+  it('обычная сетка считается как раньше', () => {
+    expect(comboCount(S, { fast: { from: 10, to: 20, step: 5 },
+                           avg_max: { from: 1, to: 4, step: 1 } })).toBe(3 * 4);
+  });
+
+  it('мусор в диапазоне ось просто выключает', () => {
+    expect(comboCount(S, { fast: { from: NaN, to: 9, step: 1 } })).toBe(1);
+  });
+});
