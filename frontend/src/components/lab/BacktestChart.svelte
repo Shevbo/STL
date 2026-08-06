@@ -1676,7 +1676,13 @@
      обязаны быть :global. Локальные Svelte вырезал как неиспользуемые, и лист
      оказался обычным блоком в конце документа: position:static, top 1049px, то есть
      «в подвале» под страницей (06.08.2026). */
-  :global(.ps-back) { position: fixed; inset: 0; z-index: 200; background: rgba(4,6,14,.72);
+  :global(.ps-back) { position: fixed; inset: 0;
+    /* ВЫШЕ ВСЕХ ОБОЛОЧЕК. Лист вынесен в <body>, но соревнуется по слою со всем
+       приложением: LabPanel рендерит Лабораторию на 1000, витрина Showcase на 3000.
+       На 200 он честно открывался и был НЕВИДИМ под ними — кнопка писала «открыт»,
+       а оператор не находил окна (06.08.2026). Выше только плашка об устаревшей
+       вкладке (9000): она должна перекрывать вообще всё. */
+    z-index: 8000; background: rgba(4,6,14,.72);
     display: flex; align-items: center; justify-content: center; padding: 16px; }
   :global(.ps) { position: relative; display: flex; flex-direction: column;
     width: min(1160px, 100%); max-height: calc(100vh - 32px);
