@@ -370,6 +370,11 @@
   let equityCarry = $state<{ rub: number; fromTs: number } | null>(null);
   // Живой робот без журнала: кривую не рисуем и говорим об этом прямо.
   let equityBlind = $state(false);
+  // Сделок в результате НЕТ вовсе. У свипа на много комбинаций так и есть: массивы
+  // сделок и equity вырезаются при записи (иначе Postgres на VDS и nginx не тянут),
+  // и панель рисовала пустую ось от −6 до 7 — будто данные есть, просто их не видно.
+  // Пустая ось это нарисованная неправда; лучше сказать словами.
+  const equityEmpty = $derived(!(result?.trades?.length));
   // Сколько закрытых сделок легло ЗА пределами загруженных баров (источник баров графика
   // короче теста) — их P&L сжат в последнюю точку; предупреждаем оператора.
   let equityTailBeyond = $state(0);
@@ -1604,7 +1609,9 @@
   <div class="bt-equity-label">P&L робота, {unitLabel} (нарастающим по закрытым сделкам)
     {#if equityBlind}<span class="bt-equity-blind"
       >· журнал сделок не загрузился — кривая не строится, чтобы не показать неверную</span
-      >{/if}
+      >{:else if equityEmpty}<span class="bt-equity-blind"
+      >· в этом прогоне сохранены только метрики (свип не хранит сделки) — кривой нет,
+      откройте лидера кнопкой пересчёта</span>{/if}
     {#if equityCarry}<span class="bt-equity-carry"
       >· кривая с {fmtDay(equityCarry.fromTs)}: к этому моменту робот уже
       реализовал {fmtMoney(equityCarry.rub)} {unitLabel}, более ранние сделки вне окна графика</span>{/if}

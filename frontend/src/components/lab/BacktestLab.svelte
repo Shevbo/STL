@@ -1085,6 +1085,17 @@
       if (run.dt) dateTo = String(run.dt).slice(0, 10);
       await resolveLeaderPV({ result: best, params: best.params });
       say(`прогон открыт: ${fmtRub(best.net_profit)} · сделок ${best.total_trades ?? '—'}`);
+      // КРИВОЙ ДОХОДНОСТИ В СВИПЕ НЕТ. Многокомбинационный прогон хранит только
+      // метрики: массивы сделок и equity вырезаются на записи, иначе Postgres на
+      // VDS не выдержит (и nginx отбивает тело). Поэтому график оставался пустым,
+      // а в шапке стояла «комиссия 0 ₽» — признак отсутствующих сделок
+      // (06.08.2026). Рисовать нечего, значит пересчитываем ОДНУ комбинацию
+      // лидера на том же окне — это секунды, и кривая становится настоящей.
+      const hasTrades = Array.isArray(best.trades) && best.trades.length > 0;
+      if (!hasTrades) {
+        say('в свипе сохранены только метрики — пересчитываю лидера ради кривой…', 'dim');
+        await rerunFromChart({ ...(best.params ?? {}) });
+      }
     } catch (e) {
       say('не удалось открыть прогон: ' + String(e).slice(0, 120), 'err');
     }
