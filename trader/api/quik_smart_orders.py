@@ -111,6 +111,8 @@ async def cancel_order(so_id: str, request: Request):
     so.status = "cancelled"
     so.note = (so.note + " " if so.note else "") + "отменена оператором"
     book.save()
+    log.info("smart_order.cancelled", so_id=so_id, kind=so.kind, code=so.code,
+             side=so.side, qty=so.qty)
     return {"ok": True, "so_id": so_id}
 
 

@@ -6,6 +6,7 @@ package runner
 import (
 	"context"
 	"errors"
+	"math"
 	"net"
 	"strings"
 	"sync"
@@ -38,6 +39,10 @@ type ServerCfg struct {
 	Orders OrderSink
 	Status StatusSink
 	Logf   func(string, ...any)
+	// Steps returns the instrument price step (0 = unknown). The runner does NOT
+	// know the step — only the agent's QLua params feed does — so runner order
+	// prices are snapped onto the exchange grid HERE (see PlaceRunnerOrder).
+	Steps func(code string) float64
 }
 
 const (
@@ -88,8 +93,38 @@ func (s *Server) PlaceRunnerOrder(_ context.Context, p *quikv1.PlaceOrder) (*qui
 	if !strings.HasPrefix(p.GetClientId(), runnerPrefix) {
 		return &quikv1.BridgeAck{Ok: false, Error: "client_id must be prefixed rr:"}, nil
 	}
+	// Snap the price onto the exchange step grid. The runner cannot do this (it
+	// does not know the step); its stale-quote fallback crosses by a FRACTION of
+	// price and lands off-grid, and QUIK rejects such an order ("Неправильно
+	// указана цена ... не кратно шагу") on EVERY re-emit — a robot's EXIT can
+	// hang for hours (the human path hit exactly this live 2026-07-21).
+	if s.cfg.Steps != nil {
+		if step := s.cfg.Steps(p.GetCode()); step > 0 {
+			snapped := snapToStep(p.GetPrice(), step, p.GetSide() == quikv1.Side_SIDE_BUY)
+			if snapped > 0 && snapped != p.GetPrice() {
+				s.cfg.Logf("runner order %s: price %.6g snapped to %.6g (step %.6g)",
+					p.GetClientId(), p.GetPrice(), snapped, step)
+				p.Price = snapped
+			}
+		}
+	}
 	s.cfg.Orders.PlaceOrder(p)
 	return &quikv1.BridgeAck{Ok: true}, nil
+}
+
+// snapToStep quantizes price onto the step grid in the CONSERVATIVE marketable
+// direction — BUY rounds UP, SELL rounds DOWN — so a crossing order stays
+// crossing. The epsilon keeps an already-on-grid price unchanged (float dust:
+// 90150/10 can read 9014.999999...).
+func snapToStep(price, step float64, buy bool) float64 {
+	n := price / step
+	var snapped float64
+	if buy {
+		snapped = math.Ceil(n-1e-9) * step
+	} else {
+		snapped = math.Floor(n+1e-9) * step
+	}
+	return math.Round(snapped*1e6) / 1e6
 }
 
 func (s *Server) CancelRunnerOrder(_ context.Context, c *quikv1.CancelOrder) (*quikv1.BridgeAck, error) {

@@ -323,3 +323,66 @@ func TestRunnerHealthyLifecycle(t *testing.T) {
 		t.Fatal("attached + reported -> must be healthy")
 	}
 }
+
+// ---- price snap onto the exchange step grid ----
+
+func TestSnapToStep(t *testing.T) {
+	cases := []struct {
+		price, step float64
+		buy         bool
+		want        float64
+	}{
+		{90420.45, 10, true, 90430},   // stale-cross BUY: up
+		{89218.6, 10, false, 89210},   // stale-cross SELL: down
+		{90150, 10, true, 90150},      // on-grid stays (float dust guard)
+		{90150, 10, false, 90150},
+		{79.5537, 0.01, false, 79.55}, // BR-style fractional step
+		{79.5537, 0.01, true, 79.56},
+	}
+	for _, c := range cases {
+		if got := snapToStep(c.price, c.step, c.buy); got != c.want {
+			t.Fatalf("snap(%v, %v, buy=%v) = %v, want %v", c.price, c.step, c.buy, got, c.want)
+		}
+	}
+}
+
+func TestPlaceRunnerOrderSnapsPriceToStep(t *testing.T) {
+	st, _ := robots.NewStore(t.TempDir())
+	fo := &fakeOrders{}
+	srv := NewServer(ServerCfg{Store: st, Ticks: fakeTicks{}, Orders: fo,
+		Status: &fakeStatus{}, Logf: func(string, ...any) {},
+		Steps: func(code string) float64 {
+			if code == "RIU6" {
+				return 10
+			}
+			return 0 // unknown instrument -> price passes through untouched
+		}})
+	ctx := context.Background()
+	// off-grid SELL (the runner's stale-quote cushion) -> snapped DOWN on-grid
+	if _, err := srv.PlaceRunnerOrder(ctx, &quikv1.PlaceOrder{
+		ClientId: "rr:r1:1:abc", Code: "RIU6", Side: quikv1.Side_SIDE_SELL,
+		Price: 89218.6, Quantity: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if got := fo.placed[0].GetPrice(); got != 89210 {
+		t.Fatalf("sell snapped = %v, want 89210", got)
+	}
+	// off-grid BUY -> snapped UP (stays marketable)
+	if _, err := srv.PlaceRunnerOrder(ctx, &quikv1.PlaceOrder{
+		ClientId: "rr:r1:2:abc", Code: "RIU6", Side: quikv1.Side_SIDE_BUY,
+		Price: 90420.45, Quantity: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if got := fo.placed[1].GetPrice(); got != 90430 {
+		t.Fatalf("buy snapped = %v, want 90430", got)
+	}
+	// unknown step -> untouched (QUIK stays the judge, as before)
+	if _, err := srv.PlaceRunnerOrder(ctx, &quikv1.PlaceOrder{
+		ClientId: "rr:r1:3:abc", Code: "GZU6", Side: quikv1.Side_SIDE_BUY,
+		Price: 9754.3, Quantity: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if got := fo.placed[2].GetPrice(); got != 9754.3 {
+		t.Fatalf("no-step price = %v, want passthrough 9754.3", got)
+	}
+}

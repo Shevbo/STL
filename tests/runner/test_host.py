@@ -475,3 +475,36 @@ async def test_redeploy_preserves_paused_state(tmp_path):
     host2 = RobotHost(FakeBridge(), str(tmp_path))
     await host2.handle_control(_deploy_rc())
     assert host2.robots["r1"].paused is False
+
+
+@pytest.mark.asyncio
+async def test_bad_control_message_does_not_kill_the_stream(tmp_path):
+    """Агент реплеит persisted-спеки на каждом коннекте: одна битая команда
+    (кривой JSON, неизвестная стратегия) в незащищённой петле = вечный краш-луп
+    ВСЕГО раннера. consume_control обязан пережить её и обработать следующую."""
+    class OneShotBridge(FakeBridge):
+        def __init__(self, rcs):
+            super().__init__()
+            self._rcs = rcs
+
+        def control(self, _version):
+            async def gen():
+                for rc in self._rcs:
+                    yield rc
+            return gen()
+
+    bad = _deploy_rc(robot_id="bad")
+    bad.deploy.spec.params_json = "{broken json"          # ValueError в handle_control
+    unknown = _deploy_rc(robot_id="ghost", strategy="no_such_strategy_anywhere")
+    good = _deploy_rc(robot_id="ok")
+    host = RobotHost(OneShotBridge([bad, unknown, good]), str(tmp_path))
+
+    # тот же код, что в RobotHost.run().consume_control
+    async for rc in host._bridge.control("robot-runner/1"):
+        try:
+            await host.handle_control(rc)
+        except Exception:  # noqa: BLE001
+            pass
+
+    assert "ok" in host.robots            # здоровый робот задеплоился
+    assert "bad" not in host.robots and "ghost" not in host.robots

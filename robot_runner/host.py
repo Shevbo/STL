@@ -409,8 +409,17 @@ class RobotHost:
 
     async def run(self) -> None:
         async def consume_control():
+            # Одна битая команда (кривой params_json в persisted-спеке, неизвестная
+            # strategy_id после даунгрейда) НЕ должна убивать поток управления:
+            # агент реплеит спеки на каждом коннекте, и невыловленная ошибка здесь
+            # превращается в вечный краш-луп ВСЕГО раннера — падают и здоровые
+            # реальные роботы. Битая команда логируется и пропускается.
             async for rc in self._bridge.control("robot-runner/1"):
-                await self.handle_control(rc)
+                try:
+                    await self.handle_control(rc)
+                except Exception as exc:  # noqa: BLE001
+                    log.error("host.control_failed", error=str(exc),
+                              kind=rc.WhichOneof("payload") if hasattr(rc, "WhichOneof") else "?")
 
         async def consume_tape():
             # Exact bars: every exchange trade (price/qty) from the anonymized
@@ -448,14 +457,28 @@ class RobotHost:
                     log.error("host.order_event_failed", error=str(exc))
 
         async def schedule():
+            # tick_robot ловит ошибки СТРАТЕГИИ, но не свои собственные: persist()
+            # на Windows падает PermissionError, когда антивирус держит файл на
+            # os.replace — и незащищённая петля умирала, унося ТОРГОВЛЮ всех
+            # роботов при живом остальном процессе. Петля обязана пережить всё.
             while True:
                 for r in list(self.robots.values()):
-                    await self.tick_robot(r)
+                    try:
+                        await self.tick_robot(r)
+                    except Exception as exc:  # noqa: BLE001
+                        log.error("host.tick_failed",
+                                  robot_id=r.spec.get("robot_id", "?"), error=str(exc))
                 await asyncio.sleep(1.0)   # cheap check; on_bar gated by new-closed-bar
 
         async def report():
+            # report_status глотает сетевые ошибки, но сборка отчёта — нет: одно
+            # кривое поле в fills убивало бы репортер навсегда, STL-зеркало
+            # застывало, а робот продолжал торговать «невидимым».
             while True:
-                await self._bridge.report_status(self.status_report())
+                try:
+                    await self._bridge.report_status(self.status_report())
+                except Exception as exc:  # noqa: BLE001
+                    log.error("host.report_failed", error=str(exc))
                 await asyncio.sleep(STATUS_INTERVAL_S)
 
         await asyncio.gather(consume_control(), consume_ticks(), consume_tape(),

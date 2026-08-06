@@ -129,6 +129,9 @@ async def deploy_agent(robot_id: str, body: DeployAgentBody, request: Request):
     )
     srv.enqueue_order(agent, pb.OrchestratorMessage(
         deploy_robot=pb.DeployRobot(spec=spec)))
+    log.info("quik.robot_deploy", robot_id=robot_id, agent_id=agent,
+             strategy=body.strategy_id, symbol=body.symbol, paper=bool(body.paper),
+             max_position=int(body.max_position), schedule=body.schedule)
     return {"ok": True, "agent_id": agent, "robot_id": robot_id, "paper": body.paper}
 
 
@@ -139,6 +142,7 @@ async def undeploy_agent(robot_id: str, body: AgentIdBody, request: Request):
     agent = _resolve_agent(request, body.agent_id)
     srv.enqueue_order(agent, pb.OrchestratorMessage(
         undeploy_robot=pb.UndeployRobot(robot_id=robot_id)))
+    log.info("quik.robot_undeploy", robot_id=robot_id, agent_id=agent)
     return {"ok": True, "agent_id": agent, "robot_id": robot_id}
 
 
@@ -149,6 +153,7 @@ async def pause_agent(robot_id: str, body: AgentIdBody, request: Request):
     agent = _resolve_agent(request, body.agent_id)
     srv.enqueue_order(agent, pb.OrchestratorMessage(
         pause_robot=pb.PauseRobot(robot_id=robot_id)))
+    log.info("quik.robot_pause", robot_id=robot_id, agent_id=agent)
     return {"ok": True, "agent_id": agent, "robot_id": robot_id}
 
 
@@ -159,6 +164,7 @@ async def start_agent(robot_id: str, body: AgentIdBody, request: Request):
     agent = _resolve_agent(request, body.agent_id)
     srv.enqueue_order(agent, pb.OrchestratorMessage(
         start_robot=pb.StartRobot(robot_id=robot_id)))
+    log.info("quik.robot_start", robot_id=robot_id, agent_id=agent)
     return {"ok": True, "agent_id": agent, "robot_id": robot_id}
 
 
@@ -173,6 +179,7 @@ async def flatten_agent(robot_id: str, body: AgentIdBody, request: Request):
     agent = _resolve_agent(request, body.agent_id)
     srv.enqueue_order(agent, pb.OrchestratorMessage(
         flatten_robot=pb.FlattenRobot(robot_id=robot_id)))
+    log.warning("quik.robot_flatten", robot_id=robot_id, agent_id=agent)
     return {"ok": True, "agent_id": agent, "robot_id": robot_id, "flattened": True}
 
 
@@ -186,6 +193,8 @@ async def set_params_agent(robot_id: str, body: DeployAgentBody, request: Reques
         set_robot_params=pb.SetRobotParams(
             robot_id=robot_id,
             params_json=json.dumps(body.params, ensure_ascii=False))))
+    log.info("quik.robot_set_params", robot_id=robot_id, agent_id=agent,
+             keys=sorted(body.params.keys()))
     return {"ok": True, "agent_id": agent, "robot_id": robot_id}
 
 

@@ -548,6 +548,16 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 			Ticks:  runner.ProviderTicks{P: quikdde.Default},
 			Orders: mgr, Status: lk,
 			Logf: func(f string, a ...any) { fmt.Printf("runner-bridge: "+f+"\n", a...) },
+			// Шаг цены из QLua-фида параметров: PlaceRunnerOrder снапит цену
+			// заявки раннера на биржевую сетку (раннер шага не знает).
+			Steps: func(code string) float64 {
+				for _, pr := range quikdde.Default.Params() {
+					if pr.Code == code && pr.PriceStep > 0 {
+						return pr.PriceStep
+					}
+				}
+				return 0
+			},
 		})
 		mgr.SetRunnerFan(runnerSrv.FanOrderEvent)
 		runnerSrvTape = func(trades []*quikv1.TapeTrade, code string) {
