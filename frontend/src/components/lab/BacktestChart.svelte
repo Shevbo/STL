@@ -179,6 +179,19 @@
     window.addEventListener('pointerup', up);
   }
   function psReset() { psW = null; psH = null; savePsSize(); }
+  /** Перенос узла в <body>. Лист параметров лежал внутри контейнера графика и был
+      обрезан его рамкой — растянуть по высоте было нельзя. position:fixed тут не
+      спасает: любой предок с transform/filter создаёт новый содержащий блок, и
+      «фиксированный» элемент снова оказывается в чужих границах. Перенос — приём
+      без этой оговорки. */
+  function portal(node: HTMLElement) {
+    document.body.appendChild(node);
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') sheetOpen = false; };
+    window.addEventListener('keydown', esc);
+    return {
+      destroy() { window.removeEventListener('keydown', esc); node.remove(); },
+    };
+  }
   /** Клавиатурой: стрелки двигают границу на 24px, Shift — на 8px для точной
       подгонки. Тянущаяся граница обязана работать без мыши. */
   function psKey(e: KeyboardEvent, axis: 'x' | 'y' | 'xy') {
@@ -1342,7 +1355,7 @@
          заголовков без единого управляемого поля (06.08.2026). Лист перекрывает
          график, потому что в момент правки параметров смотрят на параметры. -->
     {#if sheetOpen && pview === 'panel'}
-      <div class="ps-back" role="presentation"
+      <div class="ps-back" role="presentation" use:portal
            onclick={(e) => { if (e.target === e.currentTarget) sheetOpen = false; }}>
         <div class="ps" role="dialog" aria-label="Параметры робота"
              style={`${psW ? `width:${psW}px;` : ''}${psH ? `height:${psH}px;` : ''}`}>
@@ -1651,10 +1664,12 @@
 
   /* Editable params frame (top-left, collapsible). */
   /* ── Широкий лист параметров ───────────────────────────────────────────── */
-  .ps-back { position: absolute; inset: 0; z-index: 30; background: rgba(4,6,14,.72);
+  /* Лист живёт в <body> (см. portal) и меряется ЭКРАНОМ, а не фреймом графика. */
+  :global(body) > .ps-back,
+  .ps-back { position: fixed; inset: 0; z-index: 200; background: rgba(4,6,14,.72);
     display: flex; align-items: center; justify-content: center; padding: 16px; }
   .ps { position: relative; display: flex; flex-direction: column;
-    width: min(1160px, 100%); max-height: 100%;
+    width: min(1160px, 100%); max-height: calc(100vh - 32px);
     background: #0a1020; border: 1px solid #1c2a46; border-radius: 6px;
     box-shadow: 0 18px 60px rgba(0,0,0,.6); overflow: hidden; }
   .ps-h { display: flex; align-items: center; gap: 14px; padding: 12px 16px;
