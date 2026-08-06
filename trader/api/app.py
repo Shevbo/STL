@@ -2473,7 +2473,11 @@ def create_app() -> FastAPI:
         lead = {r["campaign_run"]: r for r in leaders}
         # ГО (initial margin) per contract lives in instrument_meta, not the leaderboard.
         metas = await pool.fetch("SELECT symbol, initial_margin FROM instrument_meta WHERE initial_margin IS NOT NULL")
-        margin_of = {m["symbol"]: float(m["initial_margin"]) for m in metas}
+        # ГО СЧЁТА, а не биржевое: столбец «Макс. ГО» в истории прогонов считался
+        # прямо здесь из сырого справочника, минуя множитель брокера — оператор
+        # увидел заниженные цифры и спросил «забыл про коэффициент?» (06.08.2026).
+        margin_of = {m["symbol"]: account_margin(request.app.state.settings, m["initial_margin"])
+                     for m in metas}
         out = []
         for r in rows:
             cr = r["campaign_run"]
