@@ -29,6 +29,7 @@
   import { placeOrder, loadFeeConfig } from '$lib/api';
   import { fetchWithAuth } from '$lib/fetch-auth';
   import { setTitle, titleFromQuery } from '$lib/page-title';
+  import { startVersionWatch } from '$lib/version-watch';
   import type { OrderRequest } from '$lib/types';
 
   let authed = $state(false);
@@ -211,6 +212,12 @@
     ws?.send({ type: 'subscribe', symbol: sym, timeframe });
   }
 
+  // Вкладка на устаревшей сборке молчать не должна: index.html отдаётся без
+  // Cache-Control, и браузер держит старую страницу со старым бандлом. Оператор
+  // полдня смотрел на вчерашний код и считал правки несделанными (06.08.2026).
+  let staleBundle = $state<string | null>(null);
+  onMount(() => startVersionWatch((fresh) => { staleBundle = fresh; }));
+
   onMount(async () => {
     // Resolve the session before deciding login vs app. A network error / transient
     // server stall during reload must NOT drop the operator to the login screen with a
@@ -334,7 +341,13 @@
     <!-- CENTER COLUMN -->
     <div class="center-col">
       <div class="chart-book-row" style="flex:1">
-        <main class="content" style="flex:1">
+        {#if staleBundle}
+  <div class="stale-banner" role="status">
+    Вышла новая версия платформы. Эта вкладка работает на старой сборке — часть правок в ней не видна.
+    <button onclick={() => location.reload()}>Обновить</button>
+  </div>
+{/if}
+<main class="content" style="flex:1">
           {#if effectiveSymbol}
             <ChartFrame
               symbol={effectiveSymbol}
@@ -443,6 +456,15 @@
 {/if}
 
 <style>
+  /* Поверх всего и без анимации: сообщение о протухшей вкладке важнее любой панели. */
+  .stale-banner { position: fixed; z-index: 9000; left: 50%; transform: translateX(-50%);
+    bottom: 14px; display: flex; align-items: center; gap: 12px; padding: 10px 16px;
+    background: #2a1f06; border: 1px solid #8a6a1e; border-radius: 6px; color: #ffe0a3;
+    font: 400 13px/1.4 system-ui, sans-serif; box-shadow: 0 8px 28px rgba(0,0,0,.5); }
+  .stale-banner button { background: #16243c; border: 1px solid #3a6aa8; border-radius: 4px;
+    color: #cfe2ff; cursor: pointer; font: 600 13px/1 system-ui, sans-serif; padding: 7px 14px; }
+  .stale-banner button:hover { background: #1d3050; color: #eaf3ff; }
+
   .session-splash {
     position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
     background: #0f0f1e; color: #ccc; z-index: 2000;

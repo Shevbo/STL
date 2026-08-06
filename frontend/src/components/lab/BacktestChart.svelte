@@ -1276,7 +1276,8 @@
          "Пересчитать" re-runs the backtest with the new params. -->
     <div class="bc-params" class:open={paramsOpen}
          onpointerdown={(e) => e.stopPropagation()} onwheel={(e) => e.stopPropagation()}>
-      <button class="bc-params-h" onclick={() => paramsOpen = !paramsOpen}
+      <button class="bc-params-h"
+              onclick={() => { paramsOpen = !paramsOpen; if (paramsOpen && pview === 'panel') sheetOpen = true; }}
               title="Параметры прогона — клик чтобы развернуть/свернуть">
         ⚙ Параметры {paramsOpen ? '▾' : '▸'}
       </button>
@@ -1285,11 +1286,18 @@
           <div class="bc-view" role="group" aria-label="Вид параметров">
             <button class:on={pview === 'list'} onclick={() => setPview('list')}
                     title="плотный список прямо здесь">Список</button>
-            <button class:on={pview === 'panel'} onclick={() => setPview('panel')}
+            <button class:on={pview === 'panel'}
+                    onclick={() => { setPview('panel'); sheetOpen = true; }}
                     title="развёрнутый лист: группы в колонках, крупные значения, перевод в пункты">Панель</button>
           </div>
           {#if pview === 'panel'}
-            <button class="bc-open-sheet" onclick={() => sheetOpen = true}>Открыть параметры ▸</button>
+            <!-- Лист открывается САМИМ переключателем: отдельная кнопка «Открыть
+                 параметры» была лишним шагом, и когда лист по любой причине не
+                 показывался, это читалось как «кнопка не работает». Здесь остаётся
+                 только путь назад, если оператор лист закрыл. -->
+            <button class="bc-open-sheet" onclick={() => sheetOpen = true}>
+              {sheetOpen ? 'Лист параметров открыт' : 'Открыть лист параметров ▸'}
+            </button>
           {:else}
           {#each editKeys as k}
             <label class="bc-prow" title={labelFor(k)}>
