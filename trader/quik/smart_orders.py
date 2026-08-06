@@ -191,16 +191,27 @@ def catch_up_trail(so: SmartOrder, wmin: float, wmax: float) -> bool:
 
 def evaluate(orders: list[SmartOrder], code: str, *, last: float, bid: float,
              ask: float, tick_ms: int, now_ms: int,
-             filled_client_ids: set[str], step: float) -> list[Fire | Cancel]:
+             filled_client_ids: set[str], step: float,
+             session_open: bool | None) -> list[Fire | Cancel]:
     """One watcher pass for one instrument. Mutates trailing bookkeeping on the
     orders; returns the actions to execute. Deterministic, no I/O.
 
-    Price basis: LAST trade (QUIK stop-orders trigger on last), falling back to
-    the book mid when the tape is silent. A stale quote never fires anything.
+    Price basis: LAST trade ONLY (QUIK stop-orders trigger on last). Никакого
+    mid: середина НЕСПАРЕННОГО предторгового стакана — не цена, по которой
+    что-то торгуется, а сторож принимал её за рынок.
+
+    ТОРГУЕТ ЛИ БИРЖА — обязательное условие (`session_open`, оракул
+    trader/market_session.py; аукцион открытия у него НЕ торги). Свежесть кадра
+    (`tick_ms`) — это время ПРИХОДА, а не время сделки: вне сессии и сразу после
+    перезапуска агента QUIK переиздаёт нерыночные значения, и они приезжают
+    «свежими». 06.08.2026 на этом trail_tp buy 19 RIU6 активировался по 89 120
+    (такой цены за всю жизнь заявки на рынке не было), сработал в 06:55 —
+    в аукционе открытия, до 07:00 — и купил 19 контрактов по 90 150.
     """
     actions: list[Fire | Cancel] = []
-    price = last if last > 0 else ((bid + ask) / 2 if bid > 0 and ask > 0 else 0.0)
+    price = last
     fresh = tick_ms > 0 and (now_ms - tick_ms) <= _STALE_TICK_MS
+    trading = session_open is True
 
     armed = [o for o in orders if o.status == "armed" and o.code == code]
     fired_groups: set[str] = set()
@@ -209,6 +220,9 @@ def evaluate(orders: list[SmartOrder], code: str, *, last: float, bid: float,
         if so.good_till_ms and now_ms > so.good_till_ms:
             so.status = "expired"
             continue
+
+        if not trading:
+            continue  # аукцион/клиринг/ночь: ни следить, ни стрелять
 
         if so.kind == "on_fill":
             if so.watch_client_id in filled_client_ids:

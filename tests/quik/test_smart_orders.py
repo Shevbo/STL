@@ -25,10 +25,34 @@ def so(**kw):
 
 
 def run(orders, *, last, bid=0.0, ask=0.0, filled=None, tick_ms=NOW, now=NOW,
-        step=STEP):
+        step=STEP, session_open=True):
     return evaluate(orders, "RIU6", last=last, bid=bid or last - STEP,
                     ask=ask or last + STEP, tick_ms=tick_ms, now_ms=now,
-                    filled_client_ids=filled or set(), step=step)
+                    filled_client_ids=filled or set(), step=step,
+                    session_open=session_open)
+
+
+# ---- биржа не торгует: ни следить, ни стрелять (инцидент 06.08.2026) ----
+
+def test_closed_market_neither_activates_nor_fires():
+    """Кадр приходит свежим и вне сессии (QUIK переиздаёт нерыночные значения,
+    агент штампует время ПРИХОДА). Пока оракул не сказал «торгуем», заявка не
+    имеет права ни активироваться, ни сработать."""
+    o = so(kind="trail_tp", side="buy", trigger_price=89260, trail_offset=430)
+    assert run([o], last=89120, session_open=False) == []
+    assert not o.activated and o.peak == 0        # фантомный пик не записан
+    assert run([o], last=90130, session_open=False) == []
+    assert o.status == "armed"
+    assert run([o], last=89120, session_open=None) == []   # оракул молчит — не торгуем
+    assert not o.activated
+
+
+def test_mid_of_preopen_book_never_fires():
+    """last=0 (сделок в сессии ещё нет) — середина неспаренного стакана ценой
+    не является: раньше по ней активировался и стрелял трейл."""
+    o = so(kind="trail_tp", side="buy", trigger_price=89260, trail_offset=430)
+    assert run([o], last=0.0, bid=78140, ask=90100) == []
+    assert not o.activated
 
 
 # ---- SL / TP triggers ----

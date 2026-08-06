@@ -92,7 +92,11 @@ async def list_orders(request: Request):
     _auth(request)
     book = _book(request)
     from dataclasses import asdict
-    return {"orders": [asdict(o) for o in book.orders]}
+    sess = getattr(request.app.state, "market_session", None) or {}
+    # Вне торгов сторож намеренно не срабатывает — интерфейс обязан это сказать,
+    # иначе взведённая заявка выглядит сломанной.
+    return {"orders": [asdict(o) for o in book.orders],
+            "session": {"open": sess.get("open"), "phase": sess.get("phase", "")}}
 
 
 @router.delete("/{so_id}")
@@ -169,6 +173,11 @@ _DEAD_STATES = ("cancelled", "rejected")
 # процесса заявка отсутствует в сторе не потому, что умерла — судить о ней нельзя
 # (26.07 ложный orphaned звал оператора перевзвести УЖЕ исполненный выкуп 14 конт.).
 _PROC_START_MS = so_mod.now_ms()
+# Исполнение дописываем, ПОКА заявка не набрана целиком: раньше первое же
+# наблюдение замораживало цифру навсегда, и книга показывала «куплен 1 контракт»
+# там, где QUIK налил все 19 (06.08.2026). Дальше суток смотреть незачем —
+# неисполненный остаток снимает граница сессии, это ловит _mark_orphans.
+_FILL_TRACK_MS = 24 * 3600 * 1000
 
 
 def _mark_orphans(book: SmartOrderBook, ost: Any, agent: str, now: int) -> bool:
@@ -249,8 +258,10 @@ def _track_fills(book: SmartOrderBook, ost: Any, store: Any, agent: str) -> bool
     88 340»), а не уровень срабатывания — по уровню нельзя понять, во что обошёлся
     вход. Цена берётся из таблицы сделок QUIK по номеру заявки; если сделок ещё
     нет (заявка только ушла), пробуем на следующем проходе."""
+    now = so_mod.now_ms()
     want = [o for o in book.orders
-            if o.status in ("fired", "orphaned") and o.fired_client_id and not o.fired_price]
+            if o.status in ("fired", "orphaned") and o.fired_client_id
+            and o.fired_qty < o.qty and now - o.fired_ms < _FILL_TRACK_MS]
     if not want:
         return False
     by_cid = {d["client_id"]: d for d in ost.working_orders(agent)}
@@ -262,7 +273,7 @@ def _track_fills(book: SmartOrderBook, ost: Any, store: Any, agent: str) -> bool
         px, vol = _fill_price(status, oid) if oid else (0.0, 0)
         if px <= 0:
             px, vol = _match_trades(status, so)
-        if px > 0:
+        if px > 0 and (px, vol) != (so.fired_price, so.fired_qty):
             so.fired_price, so.fired_qty = px, vol
             dirty = True
             log.info("smart_order.fill_price", so_id=so.so_id, price=px, qty=vol)
@@ -304,16 +315,24 @@ async def _watch_once(state: Any) -> None:
     now = so_mod.now_ms()
     dirty = False
 
+    # Торгует ли биржа ПРЯМО СЕЙЧАС — по оракулу расписания, не по свежести кадра.
+    session_open = (getattr(state, "market_session", None) or {}).get("open")
+
     for code in book.codes():
         t = store.tick(code, agent) or {}
+        trail_before = [(o.so_id, o.activated, o.peak) for o in book.orders]
         actions = so_mod.evaluate(
             book.orders, code,
             last=float(t.get("last") or 0), bid=float(t.get("bid") or 0),
             ask=float(t.get("ask") or 0),
             tick_ms=int(t.get("received_at_unix_ms") or (now if t else 0)),
             now_ms=now, filled_client_ids=filled,
-            step=steps.get(code, 0.0),
+            step=steps.get(code, 0.0), session_open=session_open,
         )
+        # Пик трейла держался только в памяти: рестарт STL терял его и заявка
+        # начинала вести откат от новой, случайной точки. Сохраняем сдвиг.
+        if trail_before != [(o.so_id, o.activated, o.peak) for o in book.orders]:
+            dirty = True
         for act in actions:
             dirty = True
             if isinstance(act, Cancel):
