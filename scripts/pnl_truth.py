@@ -25,6 +25,9 @@ _FALLBACK_PV = 1.618586  # RIU6 на 06.08.2026; используется тол
 async def main() -> None:
     prefix = (sys.argv[1] + "%") if len(sys.argv) > 1 else "%"
     conn = await asyncpg.connect(os.environ["LAB_DB_URL"])
+    print("ВНИМАНИЕ: реплей по mode='real' за ВСЮ историю. Правь только робота,")
+    print("который РЕАЛЕН СЕЙЧАС: у нынешнего бумажного тут его старая real-эра,")
+    print("а арминг paper->real сам обнуляет статистику — писать её не надо.\n")
     ids = [r["robot_id"] for r in await conn.fetch(
         "SELECT DISTINCT robot_id FROM algo_trades WHERE mode='real' AND robot_id LIKE $1",
         prefix)]
