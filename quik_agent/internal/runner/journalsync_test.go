@@ -208,3 +208,30 @@ func TestMissingFillsAmbiguousPrefixHealsNeither(t *testing.T) {
 		t.Fatalf("ambiguous prefix must heal neither, got %d", len(ups))
 	}
 }
+
+// The 2026-08-06 incident shape: QUIK dates EVENING-session trades with the
+// NEXT trading day. A trade EXECUTED yesterday 19:25 carries TsMs = today
+// 19:25; once today's clock passes that time it looked like a fresh lost fill
+// and yesterday's evening replayed into the book. The exchange time (ExchTsMs)
+// is honest — the floor must judge by it.
+func TestMissingFillsSkipsForwardDatedEveningTrade(t *testing.T) {
+	// now = today 19:27 MSK; the trade "happened" (TsMs) today 19:25 but its
+	// exchange time is YESTERDAY 19:25.
+	now := nowMs                       // 20:00 MSK
+	tsQuik := now - 35*60_000          // stamped today 19:25
+	tsExch := tsQuik - 24*3600_000     // executed yesterday 19:25
+	st := map[string]*quikv1.RobotStatus{
+		"r1": status(false, now-5000, []*quikv1.RobotFill{fill("100", 1, now-3600_000)}, nil),
+	}
+	tr := trade("r1", "900", "S", 2, 90200, tsQuik)
+	tr.ExchTsMs = tsExch
+	if ups := MissingFills(st, []accounts.Trade{tr}, now); len(ups) != 0 {
+		t.Fatalf("yesterday-evening trade must NOT heal, got %+v", ups)
+	}
+	// Control: the SAME trade genuinely executed today (exch ts today) heals.
+	tr.ExchTsMs = tsQuik
+	ups := MissingFills(st, []accounts.Trade{tr}, now)
+	if len(ups) != 1 || ups[0].GetOrderId() != "900" {
+		t.Fatalf("genuine today evening trade must heal, got %+v", ups)
+	}
+}

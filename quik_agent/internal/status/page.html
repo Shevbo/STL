@@ -709,6 +709,13 @@ async function setPause(id, paused, btn, msgEl) {
     const text = await resp.text();
     if (!resp.ok) { setMsg(msgEl, text || ('HTTP ' + resp.status), false); btn.disabled = false; return; }
     setMsg(msgEl, paused ? 'на паузе' : 'снято с паузы', true);
+    // Панель управления раскрытой карточки НЕ перерисовывается (freeze — чтобы
+    // не стирать вводимые формы), поэтому кнопку переключаем НА МЕСТЕ: иначе
+    // после «Пауза» она так и оставалась «Пауза», а «Снять паузу» не появлялась
+    // до F5 — оператор не мог запустить робота (06.08.2026, lxk22 после align).
+    btn.dataset.paused = paused ? '1' : '0';
+    btn.textContent = paused ? '▶ Снять паузу' : '⏸ Пауза';
+    btn.disabled = false;
     await fetchAndRender();
   } catch (e) { setMsg(msgEl, 'ошибка сети', false); btn.disabled = false; }
 }

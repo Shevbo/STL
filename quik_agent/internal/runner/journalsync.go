@@ -131,7 +131,20 @@ func MissingFills(statuses map[string]*quikv1.RobotStatus, trades []accounts.Tra
 		if !ok {
 			continue // not a (healable) robot
 		}
-		if tr.TsMs < floor || nowMs-tr.TsMs < syncMinTradeAgeMs {
+		// Floor/age judged by the EXCHANGE time when the Lua ships it, else the
+		// QUIK stamp. QUIK dates EVENING-session trades (19:05+) with the NEXT
+		// trading day: yesterday-evening trades read "today 19:2x" in TsMs, sit
+		// "in the future" all day, and after today's clock passes that time the
+		// old guards saw fresh-but-unaccounted trades and REPLAYED yesterday's
+		// evening into the book, minute by minute (lxk22, 2026-08-06 19:23-19:33:
+		// dozens of phantom fills, position drifted +3 vs QUIK +10, realized
+		// corrupted). ExchTsMs carries the TRUE execution time and kills the
+		// whole class: yesterday's trade fails the midnight floor.
+		effTs := tr.ExchTsMs
+		if effTs <= 0 {
+			effTs = tr.TsMs
+		}
+		if effTs < floor || nowMs-effTs < syncMinTradeAgeMs {
 			continue
 		}
 		if tr.Side != "B" && tr.Side != "S" {
