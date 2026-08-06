@@ -460,6 +460,17 @@
         ? (() => { try { return JSON.parse(rob.params_json); } catch { return {}; } })()
         : (rob.params_json ?? {});
       paramValues = { ...paramValues, ...pj };
+      // ВСЕ ОСИ ВЫКЛЮЧЕНЫ (от = до = текущее значение). Пришли перенести параметры
+      // робота, а не перебирать всё подряд: сеятель раскрывает диапазон каждой из
+      // девятнадцати осей, и произведение давало «сетка 121 899 810 816 000 комб.».
+      // Оператор открывает нужные оси сам — тогда число в сетке имеет смысл.
+      const off: Record<string, { from: number; to: number; step: number }> = {};
+      for (const f of (s.params_schema ?? [])) {
+        if (f.type !== 'number' || f.key === 'symbol') continue;
+        const v = Number(paramValues[f.key] ?? f.default ?? 0) || 0;
+        off[f.key] = { from: v, to: v, step: 1 };
+      }
+      sweepRanges = off;
       if (rob.symbol) paramValues.symbol = rob.symbol;
       say(`> параметры «${fromRobotName}» перенесены: ${sid} · ${rob.symbol ?? '?'}`, 'ok');
       // Сразу считаем ОДИН прогон на текущих параметрах: центр экрана показывает

@@ -87,6 +87,12 @@
     const live = h?.live?.(num(values[f.key]), ctx);
     if (live) return live;
     if (isBinary(f)) return isOn(f.key) ? 'включено' : 'выключено';
+    // Значение ВНЕ схемы — не молчим. Живой робот вполне может нести avg_max=17
+    // при схеме 1…10 (оператор выставил руками), и подпись «допустимо 1…10» рядом
+    // с числом 17 читается как «всё в порядке», хотя перебор такую ось не тронет.
+    const v = num(values[f.key]);
+    if (f.min != null && f.max != null && (v < f.min || v > f.max))
+      return `${v} — ВНЕ схемы (${f.min}…${f.max}); робот работает, перебор эту ось не тронет`;
     if (f.min != null && f.max != null) return `допустимо ${f.min}…${f.max}`;
     return h?.short ?? '';
   }
@@ -99,6 +105,13 @@
     if (!Number.isFinite(a) || !Number.isFinite(b) || b < a) return 'ось выключена';
     const n = Math.floor((b - a) / s) + 1;
     return n <= 1 ? 'одно значение' : `${n} значений`;
+  }
+  /** Значение робота вне диапазона схемы — законное состояние (оператор выставил
+      руками), но молчать о нём нельзя: перебор такую ось не тронет. */
+  function outside(f: Field): boolean {
+    if (isBinary(f) || f.min == null || f.max == null) return false;
+    const v = num(values[f.key]);
+    return v < (f.min as number) || v > (f.max as number);
   }
   const tip = (f: Field) => {
     const h = helpFor(strategyId, f.key);
@@ -152,7 +165,8 @@
             </div>
           {/if}
 
-          <p class="pp-tr" class:flash={flash === f.key}>{translate(f)}</p>
+          <p class="pp-tr" class:flash={flash === f.key}
+             class:outside={outside(f)}>{translate(f)}</p>
 
           {#if ranges?.[f.key] && !off && !isBinary(f)}
             <!-- Диапазон перебора той же строки. Пустой = ось не перебирается,
@@ -255,6 +269,7 @@
   .pp-tr { grid-column: 1 / -1; margin: 0; font: 400 12px/1.4 system-ui, sans-serif;
     color: var(--mute); }
   .pp-row.bound .pp-tr { color: #c79b5e; }
+  .pp-tr.outside { color: #f0a83c; }
   .pp-tr.flash { color: var(--text); }
 
   /* Диапазон перебора: подчинён значению, но читаем. Поля узкие — числа тут
