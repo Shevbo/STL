@@ -17,6 +17,7 @@
     positionRects, exitStats, tpSlByLevel, commissionBreakdown, commissionFor,
   } from '../../lib/lab-analytics';
   import ScreenTag from './ScreenTag.svelte';
+  import ParamPanel from './ParamPanel.svelte';
 
   let {
     result, symbol, strategy = null, dateFrom, dateTo, pointValue = 1, defaultInterval = 60,
@@ -134,6 +135,34 @@
   const labelFor = (k: string) =>
     paramSchema.find((s) => s.key === k)?.label || RU_LABELS[k] || k;
   const editKeys = $derived(Object.keys(editParams).filter((k) => k !== 'symbol'));
+  // ЕДИНЫЙ ФРЕЙМ ПАРАМЕТРОВ. Панель на графике — самое используемое место, где
+  // оператор видит и правит параметры, и до 06.08.2026 она была отдельной
+  // реализацией: обрезанные подписи, 10px, `true` текстом. Фрейм обязан быть
+  // узнаваемым ВЕЗДЕ (реал / paper / бэктест), поэтому здесь тот же ParamPanel и
+  // тот же ключ памяти вида, что в редакторе стенда: выбрал «Панель» — она
+  // «Панель» на всех экранах.
+  const VIEW_KEY = 'pe_view';
+  let pview = $state<'list' | 'panel'>(
+    (() => { try { return localStorage.getItem(VIEW_KEY) === 'panel' ? 'panel' : 'list'; }
+             catch { return 'list'; } })());
+  function setPview(v: 'list' | 'panel') {
+    pview = v;
+    try { localStorage.setItem(VIEW_KEY, v); } catch { /* приватный режим */ }
+  }
+  // Схема для фрейма: поля стратегии ПЛЮС всё, что реально несёт прогон/робот.
+  // Ключ вне схемы (exit_only и прочие служебные) обязан быть виден — невидимый
+  // параметр нельзя проверить, и именно так 05.08.2026 слетел exit_only.
+  const panelSchema = $derived.by(() => {
+    const known = (paramSchema || []).filter((s: any) => s.key in editParams || s.key === 'symbol');
+    const seen = new Set(known.map((s: any) => s.key));
+    const extra = Object.keys(editParams).filter((k) => !seen.has(k)).map((k) => ({
+      key: k, label: k,
+      type: typeof editParams[k] === 'boolean' ? 'bool' : (k === 'symbol' ? 'text' : 'number'),
+      extra: true,
+    }));
+    return [...known.map((s: any) => ({ ...s, label: s.label || s.key })), ...extra];
+  });
+
   function applyParams() {
     if (!onRerun) return;
     const out: Record<string, any> = { ...editParams };
@@ -1186,7 +1215,19 @@
         ⚙ Параметры {paramsOpen ? '▾' : '▸'}
       </button>
       {#if paramsOpen}
-        <div class="bc-params-body">
+        <div class="bc-params-body" class:wide={pview === 'panel'}>
+          <div class="bc-view" role="group" aria-label="Вид параметров">
+            <button class:on={pview === 'list'} onclick={() => setPview('list')}
+                    title="плотный список">Список</button>
+            <button class:on={pview === 'panel'} onclick={() => setPview('panel')}
+                    title="крупно, по группам, с переводом значения в пункты">Панель</button>
+          </div>
+          {#if pview === 'panel'}
+            <ParamPanel strategyId={String(strategy || '')} schema={panelSchema}
+                        bind:values={editParams} baseline={params}
+                        ctx={{ atr: 0, price: Number(params?.last_close) || 0 }}
+                        disabledKeys={['symbol']} />
+          {:else}
           {#each editKeys as k}
             <label class="bc-prow" title={labelFor(k)}>
               <span class="bc-pk">{labelFor(k)}</span>
@@ -1201,6 +1242,7 @@
               {/if}
             </label>
           {/each}
+          {/if}
           <label class="bc-prow bc-prow-date" title="Начало окна исторических данных">
             <span class="bc-pk">Период с</span>
             <input class="bc-pv bc-pv-date" type="date" bind:value={editFrom} />
@@ -1481,6 +1523,16 @@
     color: #cde; font-size: 11px; padding: 4px 8px; cursor: pointer; }
   .bc-params-h:hover { background: #1a2b48; }
   .bc-params-body { display: flex; flex-direction: column; gap: 3px; padding: 6px; max-height: 60vh; overflow-y: auto; }
+  /* Развёрнутому фрейму нужна ширина: крупные значения и перевод в пункты не
+     живут в 200px поповера. Список остаётся узким, как был. */
+  .bc-params-body.wide { width: min(560px, 92vw); padding: 6px 0 8px; }
+  .bc-view { display: inline-flex; align-self: flex-start; margin: 2px 0 6px 6px;
+    border: 1px solid #24406a; border-radius: 4px; overflow: hidden; }
+  .bc-view button { background: #0d1526; border: 0; color: #7c8cab; cursor: pointer;
+    font: 600 11px/1 system-ui, sans-serif; padding: 6px 12px; }
+  .bc-view button + button { border-left: 1px solid #24406a; }
+  .bc-view button:hover { color: #cfe2ff; }
+  .bc-view button.on { background: #16243c; color: #dfe8f7; }
   .bc-prow { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
   .bc-pk { font-size: 10px; color: #9ab; line-height: 1.1; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .bc-pv { width: 52px; flex-shrink: 0; background: #0a1120; border: 1px solid #24406a; color: #cfe;

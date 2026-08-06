@@ -289,6 +289,10 @@
       <button class="so-csv" onclick={() => downloadCSV(orders, 'smart_orders.csv')}
               title="выгрузить книгу в CSV">CSV</button>
       {#if smartOrdersStore.error}<span class="so-stale">книга не обновилась: {smartOrdersStore.error}</span>{/if}
+      {#if armed.length && smartOrdersStore.paused}
+        <span class="so-stale">биржа не торгует ({smartOrdersStore.session.phase || 'нет данных'})
+          — сторож ждёт открытия и ничего не отправит</span>
+      {/if}
     </div>
     {#if !armed.length}
       <p class="so-empty">Взведённых заявок нет. Сторож ничего не ждёт.</p>

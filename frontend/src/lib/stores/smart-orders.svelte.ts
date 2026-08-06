@@ -31,6 +31,7 @@ export interface SmartOrder {
 }
 
 let _orders = $state<SmartOrder[]>([]);
+let _session = $state<{ open: boolean | null; phase: string }>({ open: null, phase: '' });
 let _loaded = $state(false);
 let _error = $state('');
 let timer: ReturnType<typeof setInterval> | null = null;
@@ -40,7 +41,9 @@ async function load(): Promise<void> {
   try {
     const res = await fetchWithAuth('/api/v1/quik/smart-orders');
     if (!res.ok) { _error = `HTTP ${res.status}`; return; }
-    _orders = (await res.json()).orders || [];
+    const body = await res.json();
+    _orders = body.orders || [];
+    _session = body.session || { open: null, phase: '' };
     _loaded = true;
     _error = '';
   } catch (e: any) {
@@ -55,6 +58,9 @@ export const smartOrdersStore = {
   get armed(): SmartOrder[] { return _orders.filter((o) => o.status === 'armed'); },
   get loaded(): boolean { return _loaded; },
   get error(): string { return _error; },
+  /** Вне торгов сторож намеренно не срабатывает — взведённая заявка не сломана. */
+  get session() { return _session; },
+  get paused(): boolean { return _session.open !== true; },
   forCode(code: string): SmartOrder[] {
     return _orders.filter((o) => o.code === code);
   },
