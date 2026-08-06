@@ -17,9 +17,12 @@
   import { helpFor, type LiveCtx } from '$lib/strategy-help';
   import { BINARY, BOUNDING, groupFields, stepFor, type Field } from '$lib/param-groups';
 
-  let { strategyId, schema, values = $bindable({}), ctx, disabledKeys = [], baseline = null }:
+  let { strategyId, schema, values = $bindable({}), ctx, disabledKeys = [], baseline = null,
+        wide = false }:
     { strategyId: string; schema: Field[]; values: Record<string, any>;
       ctx: LiveCtx; disabledKeys?: string[];
+      /** Широкий лист: группы встают в несколько колонок, а не в одну кишку. */
+      wide?: boolean;
       /** Параметры, которые СЕЙЧАС стоят у робота — для строки «что изменится». */
       baseline?: Record<string, any> | null } = $props();
 
@@ -89,7 +92,7 @@
   };
 </script>
 
-<div class="pp">
+<div class="pp" class:wide>
   {#if pending.length}
     <div class="pp-diff" role="status">
       <b>Уедет роботу:</b>
@@ -162,6 +165,13 @@
 
   .pp-g { border-top: 1px solid var(--rail); }
   .pp-g:first-child { border-top: 0; }
+  /* Широкий лист: группы — колонки. Одна вертикальная кишка на 19 параметров
+     нечитаема, а группы независимы и прекрасно встают рядом. */
+  .pp.wide { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+    gap: 0 18px; align-items: start; padding: 0 0 4px; }
+  .pp.wide .pp-diff { grid-column: 1 / -1; }
+  .pp.wide .pp-g { border-top: 0; border-bottom: 1px solid var(--rail); }
+  .pp.wide .pp-row { padding-left: 4px; padding-right: 4px; }
   .pp-gh { display: flex; align-items: baseline; gap: 10px; padding: 12px 14px 6px; }
   .pp-gh h4 { margin: 0; font: 600 12px/1 system-ui, sans-serif; letter-spacing: .14em;
     text-transform: uppercase; color: var(--text); }

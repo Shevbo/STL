@@ -22,7 +22,7 @@
   let {
     result, symbol, strategy = null, dateFrom, dateTo, pointValue = 1, defaultInterval = 60,
     openOrders = [], plannedOrders = [], taker = true, runParams = {}, paramSchema = [], onRerun = null,
-    onApplyParams = null, applyBusy = false, applyMsg = '',
+    onApplyParams = null, applyBusy = false, applyMsg = '', sweepHref = null,
     segments = null, pointValues = null, live = 0, liveTick = null, onNet = null, onVm = null, floatRub = null,
     netOverride = null, livePosition = null, journalSuspect = false,
     pointValueKnown = true, closeSeries = null, screenId = '', hideStats = false,
@@ -58,6 +58,8 @@
     // роботу», иначе оператор правит поля, а сохранить нечем (жалоба 29.07).
     // Бэктест передаёт onRerun, живой стенд — onApplyParams. Оба сразу не нужны.
     onApplyParams?: ((p: Record<string, any>) => void) | null;
+    /** Ссылка «перебрать параметры этого робота» — стенд знает его id. */
+    sweepHref?: string | null;
     applyBusy?: boolean;
     applyMsg?: string;
     // live > 0: refresh the candle TAIL every `live` seconds via series.update()
@@ -141,6 +143,7 @@
   // узнаваемым ВЕЗДЕ (реал / paper / бэктест), поэтому здесь тот же ParamPanel и
   // тот же ключ памяти вида, что в редакторе стенда: выбрал «Панель» — она
   // «Панель» на всех экранах.
+  let sheetOpen = $state(false);           // широкий лист параметров поверх графика
   const VIEW_KEY = 'pe_view';
   let pview = $state<'list' | 'panel'>(
     (() => { try { return localStorage.getItem(VIEW_KEY) === 'panel' ? 'panel' : 'list'; }
@@ -1215,18 +1218,15 @@
         ⚙ Параметры {paramsOpen ? '▾' : '▸'}
       </button>
       {#if paramsOpen}
-        <div class="bc-params-body" class:wide={pview === 'panel'}>
+        <div class="bc-params-body">
           <div class="bc-view" role="group" aria-label="Вид параметров">
             <button class:on={pview === 'list'} onclick={() => setPview('list')}
-                    title="плотный список">Список</button>
+                    title="плотный список прямо здесь">Список</button>
             <button class:on={pview === 'panel'} onclick={() => setPview('panel')}
-                    title="крупно, по группам, с переводом значения в пункты">Панель</button>
+                    title="развёрнутый лист: группы в колонках, крупные значения, перевод в пункты">Панель</button>
           </div>
           {#if pview === 'panel'}
-            <ParamPanel strategyId={String(strategy || '')} schema={panelSchema}
-                        bind:values={editParams} baseline={params}
-                        ctx={{ atr: 0, price: Number(params?.last_close) || 0 }}
-                        disabledKeys={['symbol']} />
+            <button class="bc-open-sheet" onclick={() => sheetOpen = true}>Открыть параметры ▸</button>
           {:else}
           {#each editKeys as k}
             <label class="bc-prow" title={labelFor(k)}>
@@ -1286,6 +1286,74 @@
         </div>
       {/if}
     </div>
+
+    <!-- ШИРОКИЙ ЛИСТ ПАРАМЕТРОВ. Развёрнутому фрейму нужна ширина: в поповере 156px
+         подписи обрезались, а поля ввода уезжали за край — оператор видел кишку из
+         заголовков без единого управляемого поля (06.08.2026). Лист перекрывает
+         график, потому что в момент правки параметров смотрят на параметры. -->
+    {#if sheetOpen && pview === 'panel'}
+      <div class="ps-back" role="presentation"
+           onclick={(e) => { if (e.target === e.currentTarget) sheetOpen = false; }}>
+        <div class="ps" role="dialog" aria-label="Параметры робота">
+          <header class="ps-h">
+            <div>
+              <h3>Параметры</h3>
+              <span>{strategy || 'стратегия'} · {symbol}</span>
+            </div>
+            <div class="ps-view" role="group" aria-label="Вид">
+              <button onclick={() => { setPview('list'); sheetOpen = false; }}
+                      title="вернуться к плотному списку в углу графика">Список</button>
+              <button class="on">Панель</button>
+            </div>
+            <button class="ps-x" onclick={() => sheetOpen = false} aria-label="Закрыть">✕</button>
+          </header>
+
+          <div class="ps-body">
+            <ParamPanel wide strategyId={String(strategy || '')} schema={panelSchema}
+                        bind:values={editParams} baseline={params}
+                        ctx={{ atr: 0, price: Number(params?.last_close) || 0 }}
+                        disabledKeys={['symbol']} />
+            <div class="ps-period">
+              <label><span>Период с</span>
+                <input type="date" bind:value={editFrom} /></label>
+              <label><span>по</span>
+                <input type="date" bind:value={editTo} /></label>
+              <span class="ps-note">окно исторических данных для пересчёта</span>
+            </div>
+          </div>
+
+          <!-- Действия внизу и всегда на виду: правка параметров кончается одним из
+               трёх решений — записать роботу, пересчитать здесь, перебрать в Лаборатории. -->
+          <footer class="ps-f">
+            {#if onApplyParams}
+              <button class="ps-btn primary" class:dirty={paramsDirty} disabled={applyBusy}
+                      title="записать эти значения в РАБОТАЮЩЕГО робота — применятся на следующем баре"
+                      onclick={() => onApplyParams({ ...editParams })}>
+                {applyBusy ? 'Сохраняю…' : '✔ Сохранить в робота'}</button>
+            {/if}
+            {#if onRerun}
+              <button class="ps-btn" class:dirty={paramsDirty} onclick={applyParams}
+                      title="пересчитать бэктест с этими значениями за выбранный период">
+                ↻ Пересчитать бэктест</button>
+            {/if}
+            {#if sweepHref}
+              <a class="ps-btn" href={sweepHref} target="_blank" rel="noopener"
+                 title="открыть Лабораторию с этими параметрами и задать диапазоны перебора">
+                ⚙ Перебрать параметры ↗</a>
+            {/if}
+            {#if strategy}
+              <a class="ps-btn ghost" target="_blank" rel="noopener"
+                 href={'/?lab=backtest&hist=' + encodeURIComponent(String(strategy) + ' ' + symbol)}
+                 title="все сохранённые прогоны этого робота на этом инструменте">
+                История прогонов ↗</a>
+            {/if}
+            <span class="ps-spacer"></span>
+            {#if applyMsg}<span class="ps-msg">{applyMsg}</span>{/if}
+            <button class="ps-btn ghost" onclick={() => sheetOpen = false}>Закрыть</button>
+          </footer>
+        </div>
+      </div>
+    {/if}
 
     <!-- On-chart crosshair date/time, like TradingView/QUIK (shifted right to clear
          the params frame). -->
@@ -1516,6 +1584,57 @@
   }
 
   /* Editable params frame (top-left, collapsible). */
+  /* ── Широкий лист параметров ───────────────────────────────────────────── */
+  .ps-back { position: absolute; inset: 0; z-index: 30; background: rgba(4,6,14,.72);
+    display: flex; align-items: center; justify-content: center; padding: 16px; }
+  .ps { display: flex; flex-direction: column; width: min(1160px, 100%); max-height: 100%;
+    background: #0a1020; border: 1px solid #1c2a46; border-radius: 6px;
+    box-shadow: 0 18px 60px rgba(0,0,0,.6); overflow: hidden; }
+  .ps-h { display: flex; align-items: center; gap: 14px; padding: 12px 16px;
+    border-bottom: 1px solid #1c2a46; flex: none; }
+  .ps-h h3 { margin: 0; font: 600 15px/1.2 system-ui, sans-serif; color: #dfe8f7; }
+  .ps-h > div > span { font: 400 12px/1.4 ui-monospace, Consolas, monospace; color: #7c8cab; }
+  .ps-view { display: inline-flex; margin-left: auto; border: 1px solid #24406a;
+    border-radius: 4px; overflow: hidden; }
+  .ps-view button { background: #0d1526; border: 0; color: #7c8cab; cursor: pointer;
+    font: 600 11px/1 system-ui, sans-serif; padding: 7px 13px; }
+  .ps-view button + button { border-left: 1px solid #24406a; }
+  .ps-view button.on { background: #16243c; color: #dfe8f7; }
+  .ps-x { background: none; border: 1px solid #2d2d4a; color: #99a; cursor: pointer;
+    font-size: 13px; line-height: 1; padding: 5px 9px; border-radius: 3px; }
+  .ps-x:hover { color: #e6e6f0; border-color: #4a4a70; }
+  .ps-body { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 14px 10px; }
+
+  .ps-period { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    margin-top: 12px; padding-top: 12px; border-top: 1px solid #1c2a46; }
+  .ps-period label { display: flex; align-items: center; gap: 8px; }
+  .ps-period span { font: 600 13px/1 system-ui, sans-serif; color: #dfe8f7; }
+  .ps-period input { height: 32px; background: #060b16; border: 1px solid #1c2a46;
+    color: #fff; font: 500 14px/1 ui-monospace, Consolas, monospace; padding: 0 8px;
+    border-radius: 4px; }
+  .ps-note { font: 400 12px/1 system-ui, sans-serif; color: #7c8cab; }
+
+  .ps-f { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; flex: none;
+    padding: 11px 14px; border-top: 1px solid #1c2a46; background: #0b1424; }
+  .ps-spacer { flex: 1; }
+  .ps-btn { display: inline-flex; align-items: center; height: 34px; padding: 0 15px;
+    background: #16243c; border: 1px solid #2c4570; border-radius: 4px; color: #cfe2ff;
+    font: 600 13px/1 system-ui, sans-serif; cursor: pointer; text-decoration: none; }
+  .ps-btn:hover { background: #1d3050; border-color: #3a6aa8; color: #eaf3ff; }
+  .ps-btn.primary { background: #14361f; border-color: #2f7a45; color: #9be5b0; }
+  .ps-btn.primary:hover { background: #1a4628; color: #d6ffe0; }
+  .ps-btn.primary:disabled { opacity: .55; cursor: default; }
+  .ps-btn.ghost { background: none; color: #8b93a7; }
+  .ps-btn.ghost:hover { color: #cfe2ff; }
+  /* Несохранённая правка видна на самой кнопке — она и есть следующий шаг. */
+  .ps-btn.dirty { box-shadow: 0 0 0 1px #f0a83c inset; }
+  .ps-msg { font: 400 12px/1.4 system-ui, sans-serif; color: #f0d9a8; }
+
+  .bc-open-sheet { align-self: stretch; margin: 2px 6px 4px; height: 30px;
+    background: #16243c; border: 1px solid #2c4570; border-radius: 4px; color: #cfe2ff;
+    font: 600 11px/1 system-ui, sans-serif; cursor: pointer; }
+  .bc-open-sheet:hover { background: #1d3050; color: #eaf3ff; }
+
   .bc-params { position: absolute; top: 6px; left: 8px; z-index: 8; width: 156px;
     background: #0c0c18ee; border: 1px solid #2d2d4a; border-radius: 4px; overflow: hidden; }
   .bc-params.open { box-shadow: 0 6px 22px rgba(0,0,0,0.5); }

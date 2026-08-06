@@ -1449,6 +1449,7 @@
       runParams={params}
       paramSchema={editorSchema}
       onApplyParams={applyParamsFromChart}
+      sweepHref={`/?lab=backtest&from_robot=${encodeURIComponent(robotId)}`}
       applyBusy={chartApplyBusy}
       applyMsg={chartApplyMsg}
     />
