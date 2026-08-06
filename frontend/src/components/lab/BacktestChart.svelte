@@ -18,6 +18,7 @@
   } from '../../lib/lab-analytics';
   import ScreenTag from './ScreenTag.svelte';
   import ParamPanel from './ParamPanel.svelte';
+  import { helpFor } from '$lib/strategy-help';
 
   let {
     result, symbol, strategy = null, dateFrom, dateTo, pointValue = 1, defaultInterval = 60,
@@ -134,8 +135,13 @@
     atr_period: 'ATR период', ema_period: 'EMA период',
     ema1: 'EMA1 (быстрая)', ema2: 'EMA2 (медленная)',
   };
+  // Имя параметра: схема прогона -> справочник стратегии (helpFor, тот же источник,
+  // что у подсказок фрейма) -> локальный словарь -> голый ключ последним. Без
+  // справочника в листе стояли `fast`, `slow`, `qty` вместо человеческих названий.
   const labelFor = (k: string) =>
-    paramSchema.find((s) => s.key === k)?.label || RU_LABELS[k] || k;
+    paramSchema.find((s) => s.key === k)?.label
+    || helpFor(String(strategy || ''), k)?.title
+    || RU_LABELS[k] || k;
   const editKeys = $derived(Object.keys(editParams).filter((k) => k !== 'symbol'));
   // ЕДИНЫЙ ФРЕЙМ ПАРАМЕТРОВ. Панель на графике — самое используемое место, где
   // оператор видит и правит параметры, и до 06.08.2026 она была отдельной
@@ -221,12 +227,18 @@
   const panelSchema = $derived.by(() => {
     const known = (paramSchema || []).filter((s: any) => s.key in editParams || s.key === 'symbol');
     const seen = new Set(known.map((s: any) => s.key));
+    // Метка «служебный» значит ОДНО: параметра нет в схеме стратегии, перебор его
+    // не тронет (exit_only и подобные). Она осмысленна ТОЛЬКО когда схема известна.
+    // В окне Ботстора схема не передаётся, и пометка легла на все поля подряд —
+    // метка, стоящая на всём, не значит ничего (06.08.2026).
+    const schemaKnown = (paramSchema || []).length > 0;
     const extra = Object.keys(editParams).filter((k) => !seen.has(k)).map((k) => ({
-      key: k, label: k,
+      key: k,
+      label: labelFor(k),                 // человеческое имя, а не голый ключ
       type: typeof editParams[k] === 'boolean' ? 'bool' : (k === 'symbol' ? 'text' : 'number'),
-      extra: true,
+      extra: schemaKnown,
     }));
-    return [...known.map((s: any) => ({ ...s, label: s.label || s.key })), ...extra];
+    return [...known.map((s: any) => ({ ...s, label: s.label || labelFor(s.key) })), ...extra];
   });
 
   function applyParams() {
