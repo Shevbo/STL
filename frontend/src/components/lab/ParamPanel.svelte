@@ -18,11 +18,15 @@
   import { BINARY, BOUNDING, groupFields, stepFor, type Field } from '$lib/param-groups';
 
   let { strategyId, schema, values = $bindable({}), ctx, disabledKeys = [], baseline = null,
-        wide = false }:
+        wide = false, ranges = $bindable(null) }:
     { strategyId: string; schema: Field[]; values: Record<string, any>;
       ctx: LiveCtx; disabledKeys?: string[];
       /** Широкий лист: группы встают в несколько колонок, а не в одну кишку. */
       wide?: boolean;
+      /** Диапазоны перебора {key:{from,to,step}}. Переданы — под каждым числовым
+       *  значением появляется строка «от / до / шаг»: Лаборатория перебирает, а не
+       *  ставит одно число, и ей нужен ТОТ ЖЕ фрейм, а не своя таблица полей. */
+      ranges?: Record<string, { from: number; to: number; step: number }> | null;
       /** Параметры, которые СЕЙЧАС стоят у робота — для строки «что изменится». */
       baseline?: Record<string, any> | null } = $props();
 
@@ -86,6 +90,16 @@
     if (f.min != null && f.max != null) return `допустимо ${f.min}…${f.max}`;
     return h?.short ?? '';
   }
+  /** Сколько значений даст ось. Оператор задаёт от/до/шаг, а в голове держит
+      «во сколько раз вырастет сетка» — показываем прямо здесь. */
+  function rangeCount(f: Field): string {
+    const r = ranges?.[f.key];
+    if (!r) return '';
+    const a = Number(r.from), b = Number(r.to), s = Math.max(1, Number(r.step) || 1);
+    if (!Number.isFinite(a) || !Number.isFinite(b) || b < a) return 'ось выключена';
+    const n = Math.floor((b - a) / s) + 1;
+    return n <= 1 ? 'одно значение' : `${n} значений`;
+  }
   const tip = (f: Field) => {
     const h = helpFor(strategyId, f.key);
     return [h?.title, h?.what || h?.short].filter(Boolean).join(' — ') || f.label;
@@ -139,6 +153,20 @@
           {/if}
 
           <p class="pp-tr" class:flash={flash === f.key}>{translate(f)}</p>
+
+          {#if ranges?.[f.key] && !off && !isBinary(f)}
+            <!-- Диапазон перебора той же строки. Пустой = ось не перебирается,
+                 значение берётся сверху: так видно, ЧТО именно уйдёт в сетку. -->
+            <div class="pp-rng">
+              <label><span>от</span><input type="number" min={f.min} max={f.max}
+                     bind:value={ranges[f.key].from} /></label>
+              <label><span>до</span><input type="number" min={f.min} max={f.max}
+                     bind:value={ranges[f.key].to} /></label>
+              <label><span>шаг</span><input type="number" min="1"
+                     bind:value={ranges[f.key].step} /></label>
+              <span class="pp-rng-n">{rangeCount(f)}</span>
+            </div>
+          {/if}
         </div>
       {/each}
     </section>
@@ -228,6 +256,18 @@
     color: var(--mute); }
   .pp-row.bound .pp-tr { color: #c79b5e; }
   .pp-tr.flash { color: var(--text); }
+
+  /* Диапазон перебора: подчинён значению, но читаем. Поля узкие — числа тут
+     двух-трёхзначные, а широкие поля создают ложное ощущение главного. */
+  .pp-rng { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    margin-top: 4px; padding-top: 6px; border-top: 1px dashed #16233c; }
+  .pp-rng label { display: flex; align-items: center; gap: 5px; }
+  .pp-rng span { font: 600 11px/1 system-ui, sans-serif; color: var(--mute); }
+  .pp-rng input { width: 66px; height: 26px; text-align: center; background: #060b16;
+    border: 1px solid var(--rail); border-radius: 3px; color: #cfe2ff;
+    font: 500 13px/1 ui-monospace, Consolas, monospace; font-variant-numeric: tabular-nums; }
+  .pp-rng input:focus { outline: 2px solid #3d6ea8; outline-offset: -2px; }
+  .pp-rng-n { margin-left: auto; font: 600 11px/1 system-ui, sans-serif; color: #7aa2d0; }
 
   @media (prefers-reduced-motion: reduce) {
     .pp-knob, .pp-knob::after { transition: none; }

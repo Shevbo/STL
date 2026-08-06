@@ -87,6 +87,7 @@
   import ScreenTag from './ScreenTag.svelte';
   import ParamHelp from './ParamHelp.svelte';
   import MustDescription from './MustDescription.svelte';
+  import ParamPanel from './ParamPanel.svelte';
   import { helpFor } from '$lib/strategy-help';
   import { toFills, commissionBreakdown } from '../../lib/lab-analytics';
 
@@ -99,6 +100,12 @@
   // «История прогонов»: every saved sweep campaign, viewable right here in the Lab
   // (operator couldn't find where the run history lived). Lazy-loaded on first open.
   let labCampaigns = $state<any[]>([]);
+  // Заход по ссылке «Перебрать параметры» со стенда: каталог сжимается до ЭТОГО
+  // робота (иначе оператор ищет свою стратегию в списке из тридцати), а экран
+  // говорит, что делает — раньше он молчал больше минуты и было непонятно, жив ли.
+  let fromRobotId = $state<string | null>(null);
+  let fromRobotName = $state('');
+  let prefillStage = $state('');            // '' = ничего не делаем
   let showLabHistory = $state(false);
   let histLoading = $state(false);   // отличаем «грузим» от «пусто» (запрос ~10с)
   let histLoaded = $state(false);
@@ -428,24 +435,33 @@
 
   /** Предзаполнить лабораторию параметрами конкретного робота (ссылка со стенда). */
   async function prefillFromRobot(robotId: string): Promise<boolean> {
+    fromRobotId = robotId;
     try {
+      prefillStage = 'Читаю параметры робота…';
+      say(`> открываю Лабораторию под робота ${robotId}`, 'cmd');
       const r = await fetchWithAuth(`/api/v1/lab/robot-stand/${encodeURIComponent(robotId)}`);
       if (!r.ok) { say(`> робот ${robotId}: не удалось получить параметры (HTTP ${r.status})`, 'err'); return false; }
       const rob = (await r.json())?.robot ?? {};
       const sid = rob.strategy_id;
+      fromRobotName = rob.display_name ?? robotId;
       const s = catalog.find((c: any) => c.id === sid);
       if (!s) { say(`> стратегия ${sid ?? '?'} не найдена в каталоге`, 'err'); return false; }
+      prefillStage = `Готовлю стратегию ${sid}…`;
       await selectStrategy(s);
       // ПОСЛЕ selectStrategy: он сбрасывает paramValues на дефолты схемы.
       paramValues = { ...paramValues, ...(rob.params_json ?? {}) };
       if (rob.symbol) paramValues.symbol = rob.symbol;
-      say(`> параметры робота «${rob.display_name ?? robotId}» перенесены: `
-          + `${sid} · ${rob.symbol ?? '?'}. Задай диапазоны и запускай перебор.`, 'ok');
+      say(`> параметры «${fromRobotName}» перенесены: ${sid} · ${rob.symbol ?? '?'}`, 'ok');
+      // Сразу считаем ОДИН прогон на текущих параметрах: центр экрана показывает
+      // кривую доходности этого робота, а не пустую колбу с вопросом «куда жать».
+      prefillStage = 'Считаю прогон на текущих параметрах…';
+      await rerunFromChart({ ...paramValues });
+      prefillStage = '';
       return true;
     } catch (e) {
       say(`> робот ${robotId}: ${String(e).slice(0, 80)}`, 'err');
       return false;
-    }
+    } finally { prefillStage = ''; }
   }
 
   async function loadInstruments() {
@@ -1083,8 +1099,15 @@
   <div class="btl-config" style="width: {configW}px">
     <div class="btl-section">
       <div class="btl-sec-title">Стратегия</div>
+      {#if fromRobotId}
+        <div class="btl-only">
+          Только робот <b>{fromRobotName || fromRobotId}</b>
+          <button onclick={() => { fromRobotId = null; }}
+                  title="показать весь каталог стратегий">показать все</button>
+        </div>
+      {/if}
       <div class="btl-cat-list" style="max-height: {listH}px">
-        {#each catalog as s}
+        {#each (fromRobotId ? catalog.filter((c) => c.id === selectedStrategyId) : catalog) as s}
           {@const active = selectedStrategyId === s.id}
           <button class="btl-cat-card" class:active
                   onclick={() => selectStrategy(s)}>
@@ -1150,59 +1173,23 @@
           {/if}
         </div>
         <MustDescription strategyId={selectedStrategyId} params={paramValues} symbol={paramValues.symbol} />
-        {#each (selectedStrategy.params_schema ?? []) as p}
-          {@const isSymbol = p.key === 'symbol'}
-          {@const help = helpFor(selectedStrategyId, p.key)}
-          <div class="btl-pf">
-            <div class="btl-pf-head">
-              {#if help}
-                <button class="btl-pf-q" class:on={helpOpen[p.key]}
-                        title="пояснение со схемой" onclick={() => helpOpen[p.key] = !helpOpen[p.key]}>?</button>
-              {/if}
-              <span class="btl-pf-label"><code class="btl-pf-key">{p.key}</code>{#if help?.title} · {help.title}{/if}</span>
-              {#if !help && (p.desc || p.hint)}
-                <span class="btl-pf-i" title={p.desc || p.hint}>ⓘ</span>
-              {/if}
-            </div>
-            {#if help && helpOpen[p.key]}
-              <ParamHelp {help} value={Number(paramValues[p.key] ?? p.default) || 0} ctx={helpCtx} />
-            {:else if !help && (p.desc || p.hint)}
-              <div class="btl-pf-desc">{p.desc || p.hint}</div>
-            {/if}
-            {#if isSymbol}
-              <select bind:value={paramValues[p.key]} class="btl-inp btl-sel">
-                {#each instruments as inst}
-                  <option value={inst.symbol}>{inst.symbol} — {inst.name}</option>
-                {/each}
-              </select>
-            {:else if p.type === 'number'}
-              {@const r = sweepRanges[p.key] ?? {}}
-              <div class="btl-range">
-                <input type="number" class="btl-inp btl-rng" min={p.min} max={p.max}
-                       value={paramValues[p.key] ?? p.default}
-                       onchange={(e) => paramValues[p.key] = Number(e.currentTarget.value)}
-                       title="Значение (если не перебирается)" />
-                <span class="btl-rng-lbl">от</span>
-                <input type="number" class="btl-inp btl-rng" min={p.min} max={p.max}
-                       value={r.from ?? paramValues[p.key] ?? p.default}
-                       onchange={(e) => {sweepRanges[p.key] = {...sweepRanges[p.key], from: Number(e.currentTarget.value)}; sweepRanges = sweepRanges;}}
-                       title="Начало диапазона перебора" />
-                <span class="btl-rng-lbl">до</span>
-                <input type="number" class="btl-inp btl-rng" min={p.min} max={p.max}
-                       value={r.to ?? paramValues[p.key] ?? p.default}
-                       onchange={(e) => {sweepRanges[p.key] = {...sweepRanges[p.key], to: Number(e.currentTarget.value)}; sweepRanges = sweepRanges;}}
-                       title="Конец диапазона перебора" />
-                <span class="btl-rng-lbl">шаг</span>
-                <input type="number" class="btl-inp btl-rng btl-step" min="1"
-                       value={r.step ?? 1}
-                       onchange={(e) => {sweepRanges[p.key] = {...sweepRanges[p.key], step: Math.max(1, Number(e.currentTarget.value))}; sweepRanges = sweepRanges;}}
-                       title="Шаг перебора" />
-              </div>
-            {:else}
-              <input type="text" class="btl-inp" bind:value={paramValues[p.key]} placeholder={String(p.default)} />
-            {/if}
-          </div>
-        {/each}
+        <!-- ТОТ ЖЕ фрейм параметров, что на стенде робота (ParamPanel): группы по
+             смыслу, крупные значения, переключатели, перевод в пункты. Плюс строка
+             «от / до / шаг» под каждой числовой осью — Лаборатория перебирает, а не
+             ставит одно число. Своя таблица полей здесь означала бы третий вид
+             параметров в продукте. -->
+        <ParamPanel strategyId={selectedStrategyId}
+                    schema={selectedStrategy.params_schema ?? []}
+                    bind:values={paramValues} bind:ranges={sweepRanges}
+                    ctx={helpCtx} disabledKeys={['symbol']} />
+        <label class="btl-symrow">
+          <span>Инструмент</span>
+          <select bind:value={paramValues.symbol} class="btl-inp btl-sel">
+            {#each instruments as inst}
+              <option value={inst.symbol}>{inst.symbol} — {inst.name}</option>
+            {/each}
+          </select>
+        </label>
       </div>
 
       <div class="btl-section">
@@ -1264,6 +1251,17 @@
 
   <!-- ── RIGHT: Results ───────────────────────────────────────────────── -->
   <div class="btl-results">
+    <!-- Признак жизни. Подготовка занимает под минуту (каталог + схема + первый
+         прогон, некэшированный инструмент тянет историю с ISS), и без этой строки
+         экран выглядел мёртвым, а куда жать — непонятно. -->
+    {#if prefillStage}
+      <div class="btl-prep" role="status">
+        <span class="btl-prep-dot"></span>
+        <b>{prefillStage}</b>
+        <span class="btl-prep-sub">робот «{fromRobotName || fromRobotId}» · первый прогон по некэшированному
+          инструменту тянет историю с ISS, это до ~2 минут</span>
+      </div>
+    {/if}
     <!-- Прогоны ОДНОГО робота: и кампании, и одиночные пересчёты с карточки.
          Показывается по ссылке «Прогоны робота» с графика. -->
     {#if robotRunsFor}
@@ -1510,34 +1508,16 @@
       </div>
     {/if}
 
-    <!-- ⭐ Избранное: именованные наборы (стратегия+параметры+период+результат),
-         сохранённые из карточки прогона. Открытие поднимает ГОТОВЫЙ результат из
-         БД (run_id в backtest_results) — без пересчёта. -->
-    {#if favorites.length}
-      <div class="btl-section">
-        <div class="btl-sec-title">⭐ Избранное
-          <span class="btl-sec-sub">{favorites.length} наборов · клик — открыть без пересчёта</span>
-        </div>
-        <div class="btl-fav-list">
-          {#each favorites as f (f.name)}
-            <div class="btl-fav">
-              <button class="btl-fav-open" onclick={() => openFavorite(f)}
-                      title={`${f.strategy_id || '?'} · ${f.symbol} · ${f.date_from || '?'}—${f.date_to || '?'}`}>
-                <b>{f.name}</b>
-                <span class="btl-fav-meta">{f.strategy_id || '?'} · {f.symbol}
-                  {#if f.net_profit != null}· {Math.round(f.net_profit).toLocaleString('ru-RU')} ₽{/if}</span>
-              </button>
-              <button class="btl-fav-del" title="Удалить из избранного"
-                      onclick={() => deleteFavorite(f.name)}>✕</button>
-            </div>
-          {/each}
-        </div>
-        {#if favMsg}<div class="btl-fav-msg">{favMsg}</div>{/if}
-      </div>
-    {/if}
+    <!-- «Избранное» убрано из низа экрана: под графиком доходности ему не место,
+         оператор смотрит туда на результат, а не на список наборов. Сами наборы
+         никуда не делись — сохранение и открытие живут в панели параметров графика. -->
 
     {#if leaderResult?.result}
-      <div class="btl-section">
+      <!-- Центр экрана — кривая доходности лидера. Порядок задаём флексом, а не
+           переносом разметки: блок остаётся там, где его логика, а видит оператор
+           его первым. Ради этого же после захода «из робота» сразу считается один
+           прогон — центр не пустует с колбой «выбери стратегию». -->
+      <div class="btl-section btl-leader">
         <div class="btl-sec-title">
           📈 Лидер: прибыль×RF
           {#if chartLoading}<span class="btl-sec-sub">загрузка сделок для графика…</span>{/if}
@@ -1711,8 +1691,33 @@
   .btl-clear { padding: 5px 10px; background: transparent; border: 1px solid #2a2a3a; color: #778; border-radius: 4px; cursor: pointer; font-size: 11px; }
 
   /* ── Results panel ──────────────────────────────────────────────────── */
+  /* Кривая лидера — первой в колонке результатов; подготовка (btl-prep) выше неё. */
+  .btl-leader { order: -1; }
+  .btl-prep { order: -2; flex: none; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+    padding: 10px 14px; border: 1px solid #2c4570; border-radius: 6px; background: #101a2e; }
+  .btl-prep b { font: 600 14px/1.3 system-ui, sans-serif; color: #dfe8f7; }
+  .btl-prep-sub { font: 400 12px/1.4 system-ui, sans-serif; color: #7c8cab; }
+  .btl-prep-dot { width: 9px; height: 9px; border-radius: 50%; background: #46c46a;
+    animation: btlblink 1.2s ease-in-out infinite; flex: none; align-self: center; }
+  @media (prefers-reduced-motion: reduce) { .btl-prep-dot { animation: none; } }
+
+  .btl-only { display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
+    padding: 6px 9px; border: 1px solid #2c4570; border-radius: 4px; background: #101a2e;
+    font: 400 12px/1.3 system-ui, sans-serif; color: #9fb4d6; }
+  .btl-only b { color: #dfe8f7; }
+  .btl-only button { margin-left: auto; background: none; border: 1px solid #24406a;
+    border-radius: 3px; color: #7aa2d0; cursor: pointer; font-size: 11px; padding: 3px 8px; }
+  .btl-only button:hover { color: #cfe2ff; border-color: #3a6aa8; }
+
+  .btl-symrow { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+  .btl-symrow > span { font: 600 13px/1 system-ui, sans-serif; color: #dfe8f7; }
+
   .btl-results { flex: 1; overflow-y: auto; min-width: 0; padding: 14px; display: flex; flex-direction: column; gap: 14px; }
-  .btl-history { border: 1px solid #24406a; border-radius: 8px; background: #0c1424; padding: 8px 12px; }
+  /* flex: none у обоих. .btl-results — флекс-колонка, и без этого раскрытая
+     история сжимала монитор ниже его содержимого: у .crt стоит overflow:hidden,
+     и нижняя рамка уезжала поверх последней строки (замечено 06.08.2026). */
+  .btl-history { flex: none; border: 1px solid #24406a; border-radius: 8px;
+    background: #0c1424; padding: 8px 12px; }
   .btl-hist-btn { background: transparent; border: none; color: #7ab8ff; cursor: pointer;
     font-size: 13px; font-weight: 600; padding: 2px 0; display: flex; align-items: center; gap: 6px; }
   .btl-hist-chev { color: #567; }
@@ -1764,7 +1769,8 @@
      Один в один со стендом робота (AgentRobotScreen): фосфор, скан-линии,
      мигающий блочный курсор, системные консольные шрифты. 12 строк вывода,
      остальное — в скролле с прилипанием к низу. */
-  .btl-mon { margin-bottom: 8px; border: 1px solid #16331f; border-radius: 4px; overflow: hidden; }
+  .btl-mon { flex: none; margin-bottom: 8px; border: 1px solid #16331f;
+    border-radius: 4px; overflow: hidden; }
   .btl-mon-head { display: flex; align-items: center; gap: 8px; padding: 3px 8px; background: #0a1410;
     border-bottom: 1px solid #16331f; }
   .btl-mon-title { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: #2f9c50; }
