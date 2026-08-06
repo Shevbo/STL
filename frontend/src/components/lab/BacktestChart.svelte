@@ -144,6 +144,56 @@
   // тот же ключ памяти вида, что в редакторе стенда: выбрал «Панель» — она
   // «Панель» на всех экранах.
   let sheetOpen = $state(false);           // широкий лист параметров поверх графика
+  // Размер листа тянется мышкой за границы и ЗАПОМИНАЕТСЯ: у каждого свой монитор и
+  // своя привычка, а подбирать размер на каждом открытии — работа впустую.
+  const PS_SIZE_KEY = 'ps_size';
+  let psW = $state<number | null>(null);
+  let psH = $state<number | null>(null);
+  try {
+    const s = JSON.parse(localStorage.getItem(PS_SIZE_KEY) || 'null');
+    if (s && s.w > 0) { psW = s.w; psH = s.h || null; }
+  } catch { /* приватный режим */ }
+  function savePsSize() {
+    try { localStorage.setItem(PS_SIZE_KEY, JSON.stringify({ w: psW, h: psH })); }
+    catch { /* приватный режим */ }
+  }
+  /** Тяга за границу. Лист отцентрован, поэтому обе стороны растут одновременно —
+      сдвиг указателя удваивается, иначе край «убегает» от курсора вдвое медленнее. */
+  function psDrag(e: PointerEvent, axis: 'x' | 'y' | 'xy') {
+    e.preventDefault();
+    const el = (e.currentTarget as HTMLElement).parentElement as HTMLElement;
+    const x0 = e.clientX, y0 = e.clientY;
+    const w0 = el.offsetWidth, h0 = el.offsetHeight;
+    const maxW = Math.max(320, window.innerWidth - 24);
+    const maxH = Math.max(240, window.innerHeight - 24);
+    const move = (m: PointerEvent) => {
+      if (axis !== 'y') psW = Math.min(maxW, Math.max(360, w0 + (m.clientX - x0) * 2));
+      if (axis !== 'x') psH = Math.min(maxH, Math.max(220, h0 + (m.clientY - y0) * 2));
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      savePsSize();
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  }
+  function psReset() { psW = null; psH = null; savePsSize(); }
+  /** Клавиатурой: стрелки двигают границу на 24px, Shift — на 8px для точной
+      подгонки. Тянущаяся граница обязана работать без мыши. */
+  function psKey(e: KeyboardEvent, axis: 'x' | 'y' | 'xy') {
+    const d = e.shiftKey ? 8 : 24;
+    const cur = (e.currentTarget as HTMLElement).parentElement as HTMLElement;
+    const w = psW ?? cur.offsetWidth, h = psH ?? cur.offsetHeight;
+    if (axis !== 'y' && (e.key === 'ArrowRight' || e.key === 'ArrowLeft'))
+      psW = Math.max(360, w + (e.key === 'ArrowRight' ? d : -d));
+    else if (axis !== 'x' && (e.key === 'ArrowDown' || e.key === 'ArrowUp'))
+      psH = Math.max(220, h + (e.key === 'ArrowDown' ? d : -d));
+    else if (e.key === 'Home') psReset();
+    else return;
+    e.preventDefault();
+    savePsSize();
+  }
   const VIEW_KEY = 'pe_view';
   let pview = $state<'list' | 'panel'>(
     (() => { try { return localStorage.getItem(VIEW_KEY) === 'panel' ? 'panel' : 'list'; }
@@ -1294,7 +1344,8 @@
     {#if sheetOpen && pview === 'panel'}
       <div class="ps-back" role="presentation"
            onclick={(e) => { if (e.target === e.currentTarget) sheetOpen = false; }}>
-        <div class="ps" role="dialog" aria-label="Параметры робота">
+        <div class="ps" role="dialog" aria-label="Параметры робота"
+             style={`${psW ? `width:${psW}px;` : ''}${psH ? `height:${psH}px;` : ''}`}>
           <header class="ps-h">
             <div>
               <h3>Параметры</h3>
@@ -1351,6 +1402,21 @@
             {#if applyMsg}<span class="ps-msg">{applyMsg}</span>{/if}
             <button class="ps-btn ghost" onclick={() => sheetOpen = false}>Закрыть</button>
           </footer>
+
+          <!-- Границы тянутся мышкой; двойной клик по любой — вернуть размер по
+               умолчанию. Ручки узкие, но с запасом попадания в 6px. -->
+          <button class="ps-rz e" type="button" aria-label="Ширина листа"
+                  title="Потяните — размер; стрелки — с клавиатуры; двойной клик — сброс"
+                  onpointerdown={(e) => psDrag(e, 'x')} ondblclick={psReset}
+                  onkeydown={(e) => psKey(e, 'x')}></button>
+          <button class="ps-rz s" type="button" aria-label="Высота листа"
+                  title="Потяните — размер; стрелки — с клавиатуры; двойной клик — сброс"
+                  onpointerdown={(e) => psDrag(e, 'y')} ondblclick={psReset}
+                  onkeydown={(e) => psKey(e, 'y')}></button>
+          <button class="ps-rz se" type="button" aria-label="Размер листа"
+                  title="Потяните — размер; стрелки — с клавиатуры; двойной клик — сброс"
+                  onpointerdown={(e) => psDrag(e, 'xy')} ondblclick={psReset}
+                  onkeydown={(e) => psKey(e, 'xy')}></button>
         </div>
       </div>
     {/if}
@@ -1587,7 +1653,8 @@
   /* ── Широкий лист параметров ───────────────────────────────────────────── */
   .ps-back { position: absolute; inset: 0; z-index: 30; background: rgba(4,6,14,.72);
     display: flex; align-items: center; justify-content: center; padding: 16px; }
-  .ps { display: flex; flex-direction: column; width: min(1160px, 100%); max-height: 100%;
+  .ps { position: relative; display: flex; flex-direction: column;
+    width: min(1160px, 100%); max-height: 100%;
     background: #0a1020; border: 1px solid #1c2a46; border-radius: 6px;
     box-shadow: 0 18px 60px rgba(0,0,0,.6); overflow: hidden; }
   .ps-h { display: flex; align-items: center; gap: 14px; padding: 12px 16px;
@@ -1629,6 +1696,20 @@
   /* Несохранённая правка видна на самой кнопке — она и есть следующий шаг. */
   .ps-btn.dirty { box-shadow: 0 0 0 1px #f0a83c inset; }
   .ps-msg { font: 400 12px/1.4 system-ui, sans-serif; color: #f0d9a8; }
+
+  /* Тянущиеся границы. Полоска подсвечивается под курсором — иначе непонятно, что
+     край вообще живой. */
+  /* Ручки — НАСТОЯЩИЕ кнопки: фокус и клавиатура достаются даром, а не борьбой
+     с ролью separator, которую Svelte считает неинтерактивной. */
+  .ps-rz { position: absolute; z-index: 2; padding: 0; border: 0; font: inherit;
+    background: transparent; touch-action: none; }
+  .ps-rz:focus-visible { outline: 2px solid #3d6ea8; outline-offset: -2px; }
+  .ps-rz:hover, .ps-rz:active { background: #2c4570; }
+  .ps-rz.e { top: 0; right: 0; width: 6px; height: 100%; cursor: ew-resize; }
+  .ps-rz.s { left: 0; bottom: 0; height: 6px; width: 100%; cursor: ns-resize; }
+  .ps-rz.se { right: 0; bottom: 0; width: 14px; height: 14px; cursor: nwse-resize;
+    background: linear-gradient(135deg, transparent 50%, #2c4570 50%); }
+  .ps-rz.se:hover { background: linear-gradient(135deg, transparent 50%, #3a6aa8 50%); }
 
   .bc-open-sheet { align-self: stretch; margin: 2px 6px 4px; height: 30px;
     background: #16243c; border: 1px solid #2c4570; border-radius: 4px; color: #cfe2ff;
