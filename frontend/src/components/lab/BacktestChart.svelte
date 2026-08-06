@@ -1672,67 +1672,69 @@
 
   /* Editable params frame (top-left, collapsible). */
   /* ── Широкий лист параметров ───────────────────────────────────────────── */
-  /* Лист живёт в <body> (см. portal) и меряется ЭКРАНОМ, а не фреймом графика. */
-  :global(body) > .ps-back,
-  .ps-back { position: fixed; inset: 0; z-index: 200; background: rgba(4,6,14,.72);
+  /* Лист живёт в <body> (см. portal), ВНЕ поддерева компонента — поэтому его стили
+     обязаны быть :global. Локальные Svelte вырезал как неиспользуемые, и лист
+     оказался обычным блоком в конце документа: position:static, top 1049px, то есть
+     «в подвале» под страницей (06.08.2026). */
+  :global(.ps-back) { position: fixed; inset: 0; z-index: 200; background: rgba(4,6,14,.72);
     display: flex; align-items: center; justify-content: center; padding: 16px; }
-  .ps { position: relative; display: flex; flex-direction: column;
+  :global(.ps) { position: relative; display: flex; flex-direction: column;
     width: min(1160px, 100%); max-height: calc(100vh - 32px);
     background: #0a1020; border: 1px solid #1c2a46; border-radius: 6px;
     box-shadow: 0 18px 60px rgba(0,0,0,.6); overflow: hidden; }
-  .ps-h { display: flex; align-items: center; gap: 14px; padding: 12px 16px;
+  :global(.ps-h) { display: flex; align-items: center; gap: 14px; padding: 12px 16px;
     border-bottom: 1px solid #1c2a46; flex: none; }
-  .ps-h h3 { margin: 0; font: 600 15px/1.2 system-ui, sans-serif; color: #dfe8f7; }
-  .ps-h > div > span { font: 400 12px/1.4 ui-monospace, Consolas, monospace; color: #7c8cab; }
-  .ps-view { display: inline-flex; margin-left: auto; border: 1px solid #24406a;
+  :global(.ps-h h3) { margin: 0; font: 600 15px/1.2 system-ui, sans-serif; color: #dfe8f7; }
+  :global(.ps-h > div > span) { font: 400 12px/1.4 ui-monospace, Consolas, monospace; color: #7c8cab; }
+  :global(.ps-view) { display: inline-flex; margin-left: auto; border: 1px solid #24406a;
     border-radius: 4px; overflow: hidden; }
-  .ps-view button { background: #0d1526; border: 0; color: #7c8cab; cursor: pointer;
+  :global(.ps-view button) { background: #0d1526; border: 0; color: #7c8cab; cursor: pointer;
     font: 600 11px/1 system-ui, sans-serif; padding: 7px 13px; }
-  .ps-view button + button { border-left: 1px solid #24406a; }
-  .ps-view button.on { background: #16243c; color: #dfe8f7; }
-  .ps-x { background: none; border: 1px solid #2d2d4a; color: #99a; cursor: pointer;
+  :global(.ps-view button + button) { border-left: 1px solid #24406a; }
+  :global(.ps-view button.on) { background: #16243c; color: #dfe8f7; }
+  :global(.ps-x) { background: none; border: 1px solid #2d2d4a; color: #99a; cursor: pointer;
     font-size: 13px; line-height: 1; padding: 5px 9px; border-radius: 3px; }
-  .ps-x:hover { color: #e6e6f0; border-color: #4a4a70; }
-  .ps-body { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 14px 10px; }
+  :global(.ps-x:hover) { color: #e6e6f0; border-color: #4a4a70; }
+  :global(.ps-body) { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 14px 10px; }
 
-  .ps-period { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  :global(.ps-period) { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
     margin-top: 12px; padding-top: 12px; border-top: 1px solid #1c2a46; }
-  .ps-period label { display: flex; align-items: center; gap: 8px; }
-  .ps-period span { font: 600 13px/1 system-ui, sans-serif; color: #dfe8f7; }
-  .ps-period input { height: 32px; background: #060b16; border: 1px solid #1c2a46;
+  :global(.ps-period label) { display: flex; align-items: center; gap: 8px; }
+  :global(.ps-period span) { font: 600 13px/1 system-ui, sans-serif; color: #dfe8f7; }
+  :global(.ps-period input) { height: 32px; background: #060b16; border: 1px solid #1c2a46;
     color: #fff; font: 500 14px/1 ui-monospace, Consolas, monospace; padding: 0 8px;
     border-radius: 4px; }
-  .ps-note { font: 400 12px/1 system-ui, sans-serif; color: #7c8cab; }
+  :global(.ps-note) { font: 400 12px/1 system-ui, sans-serif; color: #7c8cab; }
 
-  .ps-f { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; flex: none;
+  :global(.ps-f) { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; flex: none;
     padding: 11px 14px; border-top: 1px solid #1c2a46; background: #0b1424; }
-  .ps-spacer { flex: 1; }
-  .ps-btn { display: inline-flex; align-items: center; height: 34px; padding: 0 15px;
+  :global(.ps-spacer) { flex: 1; }
+  :global(.ps-btn) { display: inline-flex; align-items: center; height: 34px; padding: 0 15px;
     background: #16243c; border: 1px solid #2c4570; border-radius: 4px; color: #cfe2ff;
     font: 600 13px/1 system-ui, sans-serif; cursor: pointer; text-decoration: none; }
-  .ps-btn:hover { background: #1d3050; border-color: #3a6aa8; color: #eaf3ff; }
-  .ps-btn.primary { background: #14361f; border-color: #2f7a45; color: #9be5b0; }
-  .ps-btn.primary:hover { background: #1a4628; color: #d6ffe0; }
-  .ps-btn.primary:disabled { opacity: .55; cursor: default; }
-  .ps-btn.ghost { background: none; color: #8b93a7; }
-  .ps-btn.ghost:hover { color: #cfe2ff; }
+  :global(.ps-btn:hover) { background: #1d3050; border-color: #3a6aa8; color: #eaf3ff; }
+  :global(.ps-btn.primary) { background: #14361f; border-color: #2f7a45; color: #9be5b0; }
+  :global(.ps-btn.primary:hover) { background: #1a4628; color: #d6ffe0; }
+  :global(.ps-btn.primary:disabled) { opacity: .55; cursor: default; }
+  :global(.ps-btn.ghost) { background: none; color: #8b93a7; }
+  :global(.ps-btn.ghost:hover) { color: #cfe2ff; }
   /* Несохранённая правка видна на самой кнопке — она и есть следующий шаг. */
-  .ps-btn.dirty { box-shadow: 0 0 0 1px #f0a83c inset; }
-  .ps-msg { font: 400 12px/1.4 system-ui, sans-serif; color: #f0d9a8; }
+  :global(.ps-btn.dirty) { box-shadow: 0 0 0 1px #f0a83c inset; }
+  :global(.ps-msg) { font: 400 12px/1.4 system-ui, sans-serif; color: #f0d9a8; }
 
   /* Тянущиеся границы. Полоска подсвечивается под курсором — иначе непонятно, что
      край вообще живой. */
   /* Ручки — НАСТОЯЩИЕ кнопки: фокус и клавиатура достаются даром, а не борьбой
      с ролью separator, которую Svelte считает неинтерактивной. */
-  .ps-rz { position: absolute; z-index: 2; padding: 0; border: 0; font: inherit;
+  :global(.ps-rz) { position: absolute; z-index: 2; padding: 0; border: 0; font: inherit;
     background: transparent; touch-action: none; }
-  .ps-rz:focus-visible { outline: 2px solid #3d6ea8; outline-offset: -2px; }
-  .ps-rz:hover, .ps-rz:active { background: #2c4570; }
-  .ps-rz.e { top: 0; right: 0; width: 6px; height: 100%; cursor: ew-resize; }
-  .ps-rz.s { left: 0; bottom: 0; height: 6px; width: 100%; cursor: ns-resize; }
-  .ps-rz.se { right: 0; bottom: 0; width: 14px; height: 14px; cursor: nwse-resize;
+  :global(.ps-rz:focus-visible) { outline: 2px solid #3d6ea8; outline-offset: -2px; }
+  :global(.ps-rz:hover), :global(.ps-rz:active) { background: #2c4570; }
+  :global(.ps-rz.e) { top: 0; right: 0; width: 6px; height: 100%; cursor: ew-resize; }
+  :global(.ps-rz.s) { left: 0; bottom: 0; height: 6px; width: 100%; cursor: ns-resize; }
+  :global(.ps-rz.se) { right: 0; bottom: 0; width: 14px; height: 14px; cursor: nwse-resize;
     background: linear-gradient(135deg, transparent 50%, #2c4570 50%); }
-  .ps-rz.se:hover { background: linear-gradient(135deg, transparent 50%, #3a6aa8 50%); }
+  :global(.ps-rz.se:hover) { background: linear-gradient(135deg, transparent 50%, #3a6aa8 50%); }
 
   .bc-open-sheet { align-self: stretch; margin: 2px 6px 4px; height: 30px;
     background: #16243c; border: 1px solid #2c4570; border-radius: 4px; color: #cfe2ff;

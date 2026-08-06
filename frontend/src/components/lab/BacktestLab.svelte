@@ -91,6 +91,7 @@
   import { asObject } from '../../lib/json-field';
   import { helpFor } from '$lib/strategy-help';
   import { toFills, commissionBreakdown } from '../../lib/lab-analytics';
+  import { AXIS_MAX, axisValues, gridSize, pickCombos } from '$lib/grid-sample';
 
   // «?» help panels per param in the sweep form. Lab has no live robot, so the
   // points-conversion context is zero (formula + illustrative schematic shown);
@@ -327,10 +328,6 @@
   const fmtD = (v: number | null | undefined) => v != null ? v.toFixed(2) : '—';
   const fmtN = (v: number | null | undefined) => v != null ? Math.round(v) : 0;
 
-  function cartesian(arrays: number[][]): number[][] {
-    if (!arrays.length) return [[]];
-    return arrays.reduce((acc, cur) => acc.flatMap(a => cur.map(c => [...a, c])), [[]] as number[][]);
-  }
 
   function comboCount(): number {
     let n = 1;
@@ -660,38 +657,32 @@
         dims[p.key] = [paramValues[p.key]];
         continue;
       }
+      // Ось строится ровно по тем же правилам, что и счётчик в шапке (comboCount):
+      // «до» меньше «от» — это ОДНО значение, а не пустая ось. Раньше здесь
+      // выходил пустой массив, он обнулял всё произведение, и монитор обещал N
+      // комбинаций, а на движок уезжал ноль.
       const r = sweepRanges[p.key];
-      if (r && r.from !== r.to && r.step > 0) {
-        const vals: number[] = [];
-        for (let x = r.from; x <= r.to; x += r.step) vals.push(x);
-        dims[p.key] = vals;
-      } else {
-        dims[p.key] = [paramValues[p.key] ?? p.default];
+      const { vals, clamped } = axisValues(r?.from, r?.to, r?.step, paramValues[p.key] ?? p.default);
+      if (clamped) {
+        say(`ось ${p.key}: обрезал до ${AXIS_MAX} значений (${vals[0]}…${vals[vals.length - 1]}`
+          + ` вместо ${r?.to}) — шаг слишком мелкий для диапазона`, 'sys');
       }
+      dims[p.key] = vals;
     }
     const keys = Object.keys(dims);
-    let combos = cartesian(keys.map(k => dims[k]));
+    const dimVals = keys.map(k => dims[k]);
     const engLabel = engine === 'auto' ? 'авто' : engine === 'remote' ? 'i9' : 'VDS';
     const swept = keys.filter((k) => dims[k].length > 1)
       .map((k) => `${k} ${dims[k][0]}…${dims[k][dims[k].length - 1]} (${dims[k].length})`);
+    const gridTotal = gridSize(dimVals);
     say(`> ${ROUNDS[ri].label} · ${selectedStrategy?.id ?? '?'} · ${sym} · ${dateFrom}…${dateTo}`, 'cmd');
     say(swept.length
-      ? `сетка: ${combos.length} комбинаций · перебираю ${swept.join(', ')}`
+      ? `сетка: ${gridTotal.toLocaleString('ru')} комбинаций · перебираю ${swept.join(', ')}`
       : `сетка: 1 комбинация · перебора нет, считаю текущие параметры как есть`, 'dim');
-    const gridTotal = combos.length;
     // VDS runs serially in one subprocess → small cap; i9 has 16 workers → large.
     const maxC = engine === 'local' ? ROUNDS[ri].maxLocal : ROUNDS[ri].maxRemote;
-    // R0: random shuffle + cap; R1/R2: take all (already refined)
-    if (ri === 0 && combos.length > maxC) {
-      // Fisher-Yates shuffle then slice
-      for (let i = combos.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [combos[i], combos[j]] = [combos[j], combos[i]];
-      }
-      combos = combos.slice(0, maxC);
-    } else if (combos.length > maxC) {
-      combos = combos.slice(0, maxC);
-    }
+    // R0 — случайная выборка по сетке; R1/R2 берут подряд (сетка уже сужена).
+    const combos = pickCombos(dimVals, maxC, ri === 0);
     const paramSets = combos.map(c => {
       const p: Record<string, any> = {};
       keys.forEach((k, i) => p[k] = c[i]);
