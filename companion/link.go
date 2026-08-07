@@ -36,6 +36,11 @@ type config struct {
 	// and monitor, and no fixed value is right on every desk.
 	BGAlpha int `json:"bg_alpha"`
 	Width   int `json:"width"`
+	// Куда оператор перетащил панель. Placed=false — панель живёт в правом
+	// нижнем углу, как раньше, и следует за сменой разрешения и панели задач.
+	Placed bool `json:"placed"`
+	PosX   int  `json:"pos_x"`
+	PosY   int  `json:"pos_y"`
 }
 
 func configDir() string {
@@ -110,11 +115,13 @@ type link struct {
 	client  *http.Client
 	account string
 
-	onHide   func()
-	onQuit   func()
-	onHeight func(int)
-	onWidth  func(int)
-	onClip   func(string) error
+	onHide     func()
+	onQuit     func()
+	onHeight   func(int)
+	onWidth    func(int)
+	onClip     func(string) error
+	onMove     func(dx, dy int)
+	onMoveDone func()
 }
 
 func newLink(cfg config) *link {
@@ -162,6 +169,30 @@ func (l *link) serve() (string, error) {
 	mux.HandleFunc("/width", func(w http.ResponseWriter, r *http.Request) {
 		if px, err := strconv.Atoi(r.URL.Query().Get("w")); err == nil && l.onWidth != nil {
 			l.onWidth(px)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	// Перетаскивание панели. Страница шлёт ИНКРЕМЕНТНЫЕ дельты в физических
+	// пикселях, save=1 на отпускании кнопки закрепляет позицию в config.json.
+	// Рамки у окна нет, поэтому системный drag за заголовок недоступен, а
+	// WM_NCHITTEST до нас не доходит: мышь принадлежит окну WebView2.
+	mux.HandleFunc("/move", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if q.Get("save") != "" {
+			if l.onMoveDone != nil {
+				l.onMoveDone()
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		dx, errX := strconv.Atoi(q.Get("dx"))
+		dy, errY := strconv.Atoi(q.Get("dy"))
+		if errX != nil || errY != nil {
+			http.Error(w, "нужны dx и dy", http.StatusBadRequest)
+			return
+		}
+		if l.onMove != nil {
+			l.onMove(dx, dy)
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})

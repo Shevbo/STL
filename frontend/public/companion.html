@@ -14,6 +14,10 @@
      Страницу можно открыть и в обычном браузере (тогда работает сессия STL):
      https://stl.shectory.ru/companion.html — удобно править вёрстку.
 
+     СОДЕРЖИМОЕ ОБЯЗАНО СОВПАДАТЬ С frontend/public/m.html (мобильный компаньон):
+     это одна панель на двух экранах, любое расхождение цифр оператор читает как
+     расхождение данных. Правишь снапшот или карточку робота — правь ОБА файла.
+
      Шрифты только системные: Bahnschrift (узкий DIN, подписи) и Consolas
      (табличные цифры). Никаких веб-шрифтов — страница грузится через прокси
      на 127.0.0.1 и внешние запросы туда не ходят. -->
@@ -54,6 +58,11 @@
 
   /* Шапка: имя, свежесть, спрятать, выход. */
   .top { display: flex; align-items: baseline; gap: 7px; margin-bottom: 6px; }
+  /* Панель таскается за любое свободное место — но только внутри компаньона:
+     в браузере двигать нечего, и курсор «переместить» там был бы враньём. */
+  body.draggable { cursor: move; }
+  body.draggable .btn, body.draggable .copy, body.draggable .more,
+  body.draggable a { cursor: pointer; }
   /* Заголовок теперь несёт дату/день/время/режим биржи — читаемая строка, не
      разрядка капсом. */
   .brand {
@@ -273,7 +282,6 @@ function lastTradeFmt(ms) {
 }
 
 // Заголовок: STL, дата, день недели, время (МСК), режим работы биржи.
-const DOW = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
 function renderBrand(d, withMode) {
   const now = new Date(d && d.ts_ms ? d.ts_ms : Date.now());
   const p = new Intl.DateTimeFormat('ru-RU', {
@@ -511,13 +519,6 @@ function renderOrders(o, d) {
   return out;
 }
 
-function check(name, block) {
-  const bad = block && block.ok === false;
-  const txt = bad ? (block.issues || []).join('; ') : 'ОК';
-  return `<div class="chk ${bad ? 'bad' : ''}"><span class="n">${esc(name)}</span>` +
-    `<span class="s">${esc(txt)}</span></div>`;
-}
-
 // Вотчер компактно, В ОДНУ СТРОКУ на проверку: имя + ОК/текст проблемы.
 // Плюс лампа перебора: свежий отличный кандидат (прибыльный, RF>=3, сделок>=30
 // за 24ч) — жёлтая пульсация со ссылкой на его кампанию в Ботсторе.
@@ -673,6 +674,9 @@ async function copyAlerts(btn) {
 // Внешние ссылки открывает системный браузер: внутри WebView2 новое окно
 // либо не откроется, либо утащит панель на чужую страницу.
 document.addEventListener('click', (e) => {
+  // Клик, которым закончилось перетаскивание, — не клик. Окно по ВРЕМЕНИ, а не
+  // флагом: флаг, за которым клик так и не пришёл, съел бы следующий настоящий.
+  if (Date.now() - dragEndedAt < 300) { e.preventDefault(); return; }
   const copyBtn = e.target.closest('.copy');
   if (copyBtn) { copyAlerts(copyBtn); return; }
   if (e.target.closest('.more')) { alertsOpen = !alertsOpen; if (lastData) paint(lastData); return; }
@@ -684,6 +688,67 @@ document.addEventListener('click', (e) => {
 $('hide').onclick = () => shell('/hide');
 $('quit').onclick = () => shell('/quit');
 if (!LOCAL) { $('hide').style.display = $('quit').style.display = 'none'; }
+
+// ── Перетаскивание панели за шапку ───────────────────────────────────────────
+// У окна нет ни рамки, ни заголовка, а мышь принадлежит окну WebView2 — системный
+// drag за заголовок недоступен в принципе. Поэтому позицию двигает Go, а страница
+// шлёт ему смещения мыши: /move?dx=&dy=, на отпускании /move?save=1.
+// screenX страница считает в CSS-пикселях, окно живёт в физических — отсюда
+// множитель devicePixelRatio, без него при масштабе 125% панель уезжала бы
+// быстрее курсора.
+// Тащить можно за ЛЮБОЕ свободное место панели, а не за какую-то одну полосу:
+// содержимое здесь меняется от снапшота к снапшоту, и ручка, привязанная к
+// конкретной строке, однажды просто исчезнет вместе с ней.
+//
+// Перетаскивание начинается только ПОСЛЕ порога в 3 пикселя. До него не
+// вызывается ни preventDefault, ни setPointerCapture, поэтому обычный клик по
+// ссылке или кнопке остаётся ровно тем, чем был, и разбирать его руками не надо.
+const DRAG_SLOP = 3;
+let dragEndedAt = 0;   // чтобы клик, завершающий перетаскивание, никуда не ушёл
+(function enableDrag() {
+  if (!LOCAL) return;
+  document.body.classList.add('draggable');
+  let st = null, pend = null, frame = 0;
+  function flush() {
+    frame = 0;
+    if (!pend) return;
+    // Целые пиксели уезжают, дробный остаток копится — иначе медленное
+    // перетаскивание округлялось бы в ноль и панель стояла бы на месте.
+    const dx = Math.round(pend.x), dy = Math.round(pend.y);
+    pend.x -= dx; pend.y -= dy;
+    if (dx || dy) shell('/move?dx=' + dx + '&dy=' + dy);
+  }
+  document.addEventListener('pointerdown', (e) => {
+    // Кнопки, ссылки и раскрывашки живут своей жизнью: за них не таскают.
+    if (e.button !== 0 || e.target.closest('.btn, .copy, .more, a')) return;
+    st = { x: e.screenX, y: e.screenY, x0: e.screenX, y0: e.screenY, id: e.pointerId, on: false };
+    pend = { x: 0, y: 0 };
+  });
+  document.addEventListener('pointermove', (e) => {
+    if (!st) return;
+    if (!st.on) {
+      if (Math.abs(e.screenX - st.x0) + Math.abs(e.screenY - st.y0) <= DRAG_SLOP) return;
+      st.on = true;
+      document.body.setPointerCapture(st.id);
+    }
+    const k = window.devicePixelRatio || 1;   // screenX в CSS-пикселях, окно в физических
+    pend.x += (e.screenX - st.x) * k;
+    pend.y += (e.screenY - st.y) * k;
+    st.x = e.screenX; st.y = e.screenY;
+    if (!frame) frame = requestAnimationFrame(flush);
+  });
+  function end() {
+    if (!st) return;
+    const dragged = st.on;
+    st = null;
+    if (!dragged) return;      // просто клик мимо кнопок — ничего не двигали
+    flush();
+    shell('/move?save=1');
+    dragEndedAt = Date.now();
+  }
+  document.addEventListener('pointerup', end);
+  document.addEventListener('pointercancel', end);
+})();
 
 // Окно ровно по содержимому: высоту считает страница, размер ставит Go.
 // Ширину задаём один раз при старте — так «размер» не зависит от config.json

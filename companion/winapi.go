@@ -41,6 +41,7 @@ var (
 	pTrackPopupMenu   = user32.NewProc("TrackPopupMenu")
 	pDestroyMenu      = user32.NewProc("DestroyMenu")
 	pGetCursorPos     = user32.NewProc("GetCursorPos")
+	pGetSystemMetrics = user32.NewProc("GetSystemMetrics")
 
 	pOpenClipboard    = user32.NewProc("OpenClipboard")
 	pEmptyClipboard   = user32.NewProc("EmptyClipboard")
@@ -80,10 +81,20 @@ const (
 	wmQuitApp   = wmApp + 3
 	wmToggle    = wmApp + 4
 	wmSetWidth  = wmApp + 5
+	wmMoveBy    = wmApp + 6
+	wmMoveSave  = wmApp + 7
+	wmMoveReset = wmApp + 8
 	wmLButtonUp = 0x0202
 	wmRButtonUp = 0x0205
 
 	spiGetWorkArea = 0x0030
+
+	// Виртуальный экран — прямоугольник ВСЕХ мониторов. Рабочая область
+	// (SPI_GETWORKAREA) знает только главный, а панель разрешено таскать на любой.
+	smXVirtualScreen  = 76
+	smYVirtualScreen  = 77
+	smCXVirtualScreen = 78
+	smCYVirtualScreen = 79
 
 	hwndTopMost   = ^uintptr(0) // (HWND)-1
 	swpNoActivate = 0x0010
@@ -106,8 +117,9 @@ const (
 	tpmRight  = 0x0002
 	tpmBottom = 0x0020
 
-	idShow = 1001
-	idQuit = 1002
+	idShow  = 1001
+	idQuit  = 1002
+	idReset = 1003
 )
 
 type rectT struct{ Left, Top, Right, Bottom int32 }
@@ -188,6 +200,24 @@ func windowSize(hwnd uintptr) (int, int) {
 	var r rectT
 	_, _, _ = pGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&r)))
 	return int(r.Right - r.Left), int(r.Bottom - r.Top)
+}
+
+func windowOrigin(hwnd uintptr) (int, int) {
+	var r rectT
+	_, _, _ = pGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&r)))
+	return int(r.Left), int(r.Top)
+}
+
+// virtualScreen — общий прямоугольник всех мониторов, в координатах рабочего
+// стола (левый верхний угол может быть отрицательным, если монитор слева).
+func virtualScreen() rectT {
+	m := func(i uintptr) int32 { v, _, _ := pGetSystemMetrics.Call(i); return int32(v) }
+	x, y := m(smXVirtualScreen), m(smYVirtualScreen)
+	w, h := m(smCXVirtualScreen), m(smCYVirtualScreen)
+	if w <= 0 || h <= 0 {
+		return workArea() // метрики недоступны — довольствуемся главным монитором
+	}
+	return rectT{Left: x, Top: y, Right: x + w, Bottom: y + h}
 }
 
 func shellOpen(target string) {

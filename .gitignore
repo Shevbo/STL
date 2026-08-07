@@ -46,8 +46,11 @@ poetry.lock
 *.tar.gz
 *.jpeg
 
-# Собирается из companion/*.go, не версионируется
+# Собирается из companion/*.go, не версионируется. Второй шаблон — про то, что
+# `go build ./...` в этой папке кладёт рядом companion.exe по имени модуля:
+# консольная сборка без -H=windowsgui, запускать её вместо панели незачем.
 companion/STLCompanion.exe
+companion/companion.exe
 
 # Сессионные артефакты браузера и кэш graphify — не версионируются
 .playwright-mcp/

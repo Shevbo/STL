@@ -28,8 +28,12 @@ var trayIcon []byte
 const (
 	className  = "STLCompanionWindow"
 	windowName = "STL Companion"
-	marginPx   = 8   // отступ от края рабочей области
+	marginPx   = 8 // отступ от края рабочей области
 	minHeight  = 120
+	// Сколько пикселей панели обязано остаться на экране при перетаскивании:
+	// утащить её целиком за край нельзя, иначе вернуть можно было бы только
+	// правкой config.json руками.
+	dragKeepVisible = 48
 )
 
 type app struct {
@@ -64,6 +68,8 @@ func main() {
 	a.lnk.onHeight = func(h int) { post(wmSetSize, uintptr(h)) }
 	a.lnk.onWidth = func(w int) { post(wmSetWidth, uintptr(w)) }
 	a.lnk.onClip = func(s string) error { return setClipboard(a.hwnd, s) }
+	a.lnk.onMove = func(dx, dy int) { post2(wmMoveBy, packInt(dx), packInt(dy)) }
+	a.lnk.onMoveDone = func() { post(wmMoveSave, 0) }
 
 	a.width = a.cfg.Width
 	a.height = 320
@@ -88,6 +94,17 @@ func main() {
 func post(msg uint32, wparam uintptr) {
 	_, _, _ = pPostMessageW.Call(a.hwnd, uintptr(msg), wparam, 0)
 }
+
+func post2(msg uint32, wparam, lparam uintptr) {
+	_, _, _ = pPostMessageW.Call(a.hwnd, uintptr(msg), wparam, lparam)
+}
+
+// packInt/unpackInt проносят ЗНАКОВОЕ смещение через беззнаковые параметры
+// сообщения: сдвиг влево и вверх отрицателен, а uintptr на 64 битах превратил бы
+// -1 в четыре миллиарда.
+func packInt(v int) uintptr { return uintptr(uint32(int32(v))) }
+
+func unpackInt(v uintptr) int { return int(int32(uint32(v))) }
 
 func fatal(text string) {
 	_, _, _ = user32.NewProc("MessageBoxW").Call(0,
@@ -116,7 +133,7 @@ func createWindow() {
 		os.Exit(1)
 	}
 
-	x, y := panelOrigin(a.cfg.Width, a.height)
+	x, y := origin()
 	// Без WS_EX_LAYERED: WebView2 не создаёт контроллер в layered-окне.
 	// WS_EX_TOOLWINDOW убирает кнопку с панели задач и Alt+Tab.
 	hw, _, err := pCreateWindowExW.Call(
@@ -137,6 +154,61 @@ func createWindow() {
 func panelOrigin(w, h int) (int, int) {
 	wa := workArea()
 	return int(wa.Right) - w - marginPx, int(wa.Bottom) - h - marginPx
+}
+
+// origin — где панель стоит сейчас: в углу по умолчанию либо там, куда её
+// перетащил оператор. Сохранённая позиция всегда проходит через зажим: монитор
+// могли отключить, а разрешение сменить, и панель оказалась бы вне экрана.
+func origin() (int, int) {
+	if !a.cfg.Placed {
+		return panelOrigin(a.width, a.height)
+	}
+	return clampOrigin(a.cfg.PosX, a.cfg.PosY, a.width, a.height)
+}
+
+// clampOrigin не пускает панель за пределы всех мониторов. По горизонтали
+// достаточно оставить видимой полоску, по вертикали ВЕРХ обязан быть на экране:
+// тащат за верхнюю строку, и уехавшую вверх панель было бы не ухватить.
+func clampOrigin(x, y, w, h int) (int, int) {
+	return clampIn(virtualScreen(), x, y, w, h)
+}
+
+func clampIn(vs rectT, x, y, w, h int) (int, int) {
+	x = clampInt(x, int(vs.Left)-w+dragKeepVisible, int(vs.Right)-dragKeepVisible)
+	y = clampInt(y, int(vs.Top), int(vs.Bottom)-dragKeepVisible)
+	return x, y
+}
+
+func clampInt(v, lo, hi int) int {
+	if hi < lo {
+		return lo
+	}
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
+// moveBy сдвигает окно на дельту, присланную страницей во время перетаскивания.
+// Дельты ИНКРЕМЕНТНЫЕ: авторитет положения — само окно, поэтому пропущенное
+// сообщение не копит ошибку.
+func moveBy(dx, dy int) {
+	x, y := windowOrigin(a.hwnd)
+	a.cfg.PosX, a.cfg.PosY = clampOrigin(x+dx, y+dy, a.width, a.height)
+	a.cfg.Placed = true
+	_, _, _ = pSetWindowPos.Call(a.hwnd, hwndTopMost,
+		uintptr(a.cfg.PosX), uintptr(a.cfg.PosY), 0, 0, swpNoActivate|swpNoSize)
+}
+
+// resetPos возвращает панель в правый нижний угол. Страховка на случай, когда
+// оператор утащил её на монитор, которого больше нет.
+func resetPos() {
+	a.cfg.Placed = false
+	applyBounds()
+	_ = a.cfg.save()
 }
 
 func resizePanel(h int) {
@@ -173,7 +245,7 @@ func resizeWidth(w int) {
 }
 
 func applyBounds() {
-	x, y := panelOrigin(a.width, a.height)
+	x, y := origin()
 	_, _, _ = pSetWindowPos.Call(a.hwnd, hwndTopMost, uintptr(x), uintptr(y),
 		uintptr(a.width), uintptr(a.height), swpNoActivate)
 }
@@ -185,7 +257,7 @@ func panelVisible() bool {
 
 func showPanel() {
 	// Пересчитываем позицию: панель задач могла переехать, разрешение измениться.
-	x, y := panelOrigin(a.width, a.height)
+	x, y := origin()
 	_, _, _ = pSetWindowPos.Call(a.hwnd, hwndTopMost, uintptr(x), uintptr(y),
 		uintptr(a.width), uintptr(a.height), swpShowWindow|swpNoActivate)
 	_, _, _ = pSetForegroundWin.Call(a.hwnd)
@@ -211,6 +283,12 @@ func wndProc(hwnd uintptr, msg uint32, wparam, lparam uintptr) uintptr {
 		resizePanel(int(wparam))
 	case wmSetWidth:
 		resizeWidth(int(wparam))
+	case wmMoveBy:
+		moveBy(unpackInt(wparam), unpackInt(lparam))
+	case wmMoveSave:
+		_ = a.cfg.save()
+	case wmMoveReset:
+		resetPos()
 	case wmToggle:
 		togglePanel()
 	case wmQuitApp:
@@ -227,6 +305,9 @@ func wndProc(hwnd uintptr, msg uint32, wparam, lparam uintptr) uintptr {
 	case wmCommand:
 		switch wparam & 0xFFFF {
 		case idShow:
+			showPanel()
+		case idReset:
+			resetPos()
 			showPanel()
 		case idQuit:
 			quit()
@@ -310,6 +391,8 @@ func trayMenu() {
 	defer func() { _, _, _ = pDestroyMenu.Call(menu) }()
 	_, _, _ = pAppendMenuW.Call(menu, mfString, idShow,
 		uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("Показать панель"))))
+	_, _, _ = pAppendMenuW.Call(menu, mfString, idReset,
+		uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("Вернуть в правый нижний угол"))))
 	_, _, _ = pAppendMenuW.Call(menu, mfString, idQuit,
 		uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("Выход"))))
 	var pt pointT

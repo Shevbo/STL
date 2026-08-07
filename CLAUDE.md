@@ -41,7 +41,18 @@ codebases in one repo, joined by two gRPC contracts:
   from STL — visual changes deploy with the frontend, no exe rebuild. Auth: one-time
   pairing code (issued on /watchdog-log.html) -> long token, DPAPI-encrypted per Windows
   account; the token opens EXACTLY ONE endpoint (`GET /api/v1/quik/companion/snapshot`,
-  read-only) — pinned by tests in `tests/quik/test_companion.py`.
+  read-only) — pinned by tests in `tests/quik/test_companion.py`. The panel is DRAGGABLE
+  by any free spot (NOT by a header strip — the panel's content is rebuilt from each
+  snapshot, so a handle bound to one row eventually disappears with it; a 3px slop
+  threshold keeps plain clicks native). That one feature spans both halves: the page
+  sends incremental mouse deltas to loopback `/move`, the exe moves the window and
+  remembers the spot in
+  `config.json` (`placed`/`pos_x`/`pos_y`, tray item «Вернуть в правый нижний угол»
+  resets it). A frameless WebView2 window CANNOT use the system title-bar drag — the
+  mouse belongs to the WebView2 child window, so WM_NCHITTEST never reaches us. Deltas
+  are scaled by `devicePixelRatio` (the page measures CSS px, the window lives in
+  physical px) and the saved origin is always re-clamped to the VIRTUAL screen (all
+  monitors) so an unplugged monitor cannot hide the panel.
 
 Product docs live at `frontend/public/docs.html` («Справка → Документация платформы STL»,
 5 разделов). Versioning: one date-based system release (e.g. `STL 2026.07.25`) shared by
