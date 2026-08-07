@@ -512,3 +512,43 @@ async def test_dv_excludes_valley_bars_from_signal_series():
         await _mob("_dvsig")(rt, p)
     # сырые бары кончаются на 87003, но 87002/87003 — долина: сигналу их не видно
     assert seen["last"] == 87001.0
+
+
+@pytest.mark.asyncio
+async def test_dv_recovers_instantly_after_breakout_even_with_long_valley_history():
+    """Живой баг 07.08.2026 (lxk22): ночная долина съела запас чистых баров, и
+    после пробоя на 600 пт робот молчал ещё часы — вырезались ВСЕ долинные бары
+    истории. Теперь вырезается только ХВОСТОВАЯ долина: первый небудничный бар
+    возвращает сырую серию, вход идёт сразу."""
+    if "_dvmute" not in _REG:
+        _register("_dvmute", "t", "t", [], lambda bars, p: _WANT["v"], lambda p: 5)
+    rt = _FakeRT()
+    p = {"symbol": "SIM6", "qty": 1, "avg_max": 1, "dv_bars": 3, "dv_range_pts": 100}
+
+    async def step(want, t, price):
+        _WANT["v"] = want
+        rt.push(t, price)
+        await _mob("_dvmute")(rt, p)
+
+    for i in range(10):                                # долина глубже прогрева (need=5)
+        await step(1, 60 + i * 60, 87000.0 + i)        # сигнал есть — робот нем/держит
+        assert rt.signed == 0
+    # чистых баров в истории всего 2 (кромка долины) — старый код после пробоя
+    # не набирал need и молчал ещё часы; хвостовое вырезание отдаёт сырую серию
+    await step(1, 700, 87900.0)                        # пробой закрытием
+    assert rt.signed == 1, "после пробоя вход обязан пройти НЕМЕДЛЕННО"
+
+
+def test_dv_sig_window_trailing_only():
+    """Вырезается только хвостовая долина; завершённая долина истории остаётся."""
+    from trader.lab.strategies.library import dv_sig_window
+    def mk(c, t):
+        return _Bar(time=t, open=c, high=c, low=c, close=c, volume=1)
+    # долина (3 бара) -> пробой -> ещё бар: хвост НЕ в долине -> серия сырая
+    bars = [mk(87000, 0), mk(87001, 60), mk(87002, 120), mk(87500, 180), mk(87490, 240)]
+    sig, in_dv = dv_sig_window(bars, 4, 3, 100)
+    assert not in_dv and [b.close for b in sig] == [87001, 87002, 87500, 87490]
+    # хвостовая долина: серия обрезана ДО её начала
+    bars2 = [mk(87200, 0), mk(87000, 60), mk(87001, 120), mk(87002, 180)]
+    sig2, in_dv2 = dv_sig_window(bars2, 2, 3, 100)
+    assert in_dv2 and [b.close for b in sig2] == [87000, 87001]
