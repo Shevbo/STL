@@ -15,7 +15,23 @@
      открывает РОВНО ОДИН endpoint — snapshot, торговых действий у него нет,
      поэтому хранение в браузере телефона допустимо.
 
-     Открытая с десктопа под STL-сессией, страница работает и без токена. -->
+     Открытая с десктопа под STL-сессией, страница работает и без токена.
+
+     ДВА ПРАВИЛА, которые здесь легко нарушить:
+
+     1. СОДЕРЖИМОЕ ОДИН В ОДИН С companion.html. Панель на Windows и эта
+        страница считают одни и те же деньги; любое расхождение оператор читает
+        как расхождение ДАННЫХ. Правишь снапшот или карточку робота — правь ОБА
+        файла (мобильный молча отставал: пропали живая котировка позиции,
+        разбивка «сегодня = фикс + ВМ», горизонт годовой, тейк умной заявки).
+        То, что на Windows живёт в title-подсказке, здесь выведено текстом:
+        на телефоне наведения курсора нет.
+
+     2. ССЫЛКИ ВЕДУТ ТОЛЬКО НА СВОИ ЭКРАННЫЕ ФОРМЫ (#/robot/… , #/orders,
+        #/watch). Телефон, привязанный кодом, имеет токен РОВНО НА snapshot —
+        любая ссылка в SPA STL для него кончается экраном логина, а сами экраны
+        SPA свёрстаны под десктоп. Поэтому все подробности собраны здесь же, из
+        того же снапшота. -->
 <style>
   :root {
     --bg: #0f0f1e; --panel: #14142a; --bd: #2d2d4a;
@@ -34,12 +50,15 @@
 
   .top {
     position: sticky; top: 0; z-index: 10;
-    display: flex; align-items: baseline; gap: 8px;
+    display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
     padding: calc(env(safe-area-inset-top, 0px) + 10px) 14px 8px;
     background: rgba(15, 15, 30, .92); backdrop-filter: blur(8px);
     border-bottom: 1px solid var(--bd);
   }
-  .brand { font-weight: 600; letter-spacing: .04em; font-size: 14px; }
+  /* Дата/день/время как на Windows-панели, целиком. В одну строку с индикатором
+     связи на телефоне не влезает — отдаём заголовку всю первую строку. */
+  .brand { flex: 1 0 100%; font-weight: 600; letter-spacing: .04em; font-size: 14px;
+    color: inherit; text-decoration: none; }
   .fresh { flex: 1; color: var(--faint); font-size: 12px; }
   .fresh.stale { color: var(--down); }
   .logout { color: var(--faint); font-size: 12px; background: none; border: none; padding: 4px; }
@@ -72,6 +91,9 @@
   .sub { color: var(--faint); font-size: 12px; }
   .row.total { border-left-width: 4px; }
   .row.total .k { color: var(--ink); font-weight: 600; }
+  /* Живая котировка рядом с кодом инструмента (как на Windows-панели). */
+  .q { color: var(--ink); font-size: 13px; font-weight: 600; }
+  .q-stale { color: var(--faint); font-weight: 400; text-decoration: line-through; }
 
   /* Биржа: как робот-карточка — статус сверху (переносится, если длинный:
      «биржа закрыта. открытие торгов…»), «посл. сделка» мелкой строкой под ним.
@@ -90,7 +112,8 @@
   }
   .rob.up { border-left-color: var(--up); } .rob.down { border-left-color: var(--down); }
   .rob .hd { display: flex; align-items: baseline; gap: 6px 8px; flex-wrap: wrap; }
-  .rob .hd a { color: var(--ink); text-decoration: none; font-weight: 600; font-size: 15px; }
+  .rob .hd a { color: var(--ink); text-decoration: none; font-weight: 600; font-size: 15px;
+    border-bottom: 1px solid var(--bd); }
   .tag { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--faint); }
   .tag.real { color: var(--down); } .tag.paused { color: var(--down); font-weight: 700; }
   .tag.off { color: var(--faint); }
@@ -103,6 +126,7 @@
   .rob .nums { display: flex; gap: 12px; flex-wrap: wrap; color: var(--muted); font-size: 13px; margin-top: 3px; }
   .rob .nums b { color: var(--ink); font-weight: 600; }
   .rob .nums b.up { color: var(--up); } .rob .nums b.down { color: var(--down); }
+  .rob .nums .dim { opacity: .75; }
 
   .chk { display: flex; gap: 8px; padding: 4px 14px 4px 12px; margin: 0 8px 2px;
     border-left: 3px solid var(--up); background: var(--panel); border-radius: 4px; font-size: 14px; }
@@ -117,6 +141,22 @@
     background: #e0a53c; margin-right: 5px; animation: sp 2s infinite; }
   @keyframes sp { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
   .empty { color: var(--faint); padding: 4px 22px; font-size: 14px; }
+
+  /* Экранные формы: «назад», заголовок, копируемый идентификатор (левый верх). */
+  .nav { display: flex; align-items: baseline; gap: 10px; padding: 10px 14px 0; }
+  .nav a { color: var(--accent); text-decoration: none; font-size: 14px; }
+  .nav .id { margin-left: auto; color: var(--faint); font-size: 11px;
+    font-family: ui-monospace, monospace; cursor: pointer; }
+  .nav .id.done { color: var(--up); }
+  .h1 { margin: 8px 14px 8px; font-size: 18px; font-weight: 600;
+    display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .big { margin: 0 8px 6px; padding: 10px 12px; background: var(--panel);
+    border-radius: 4px; border-left: 3px solid var(--rail); }
+  .big.up { border-left-color: var(--up); } .big.down { border-left-color: var(--down); }
+  .big .n { font-size: 27px; font-weight: 700; line-height: 1.2; }
+  .big .n.up { color: var(--up); } .big .n.down { color: var(--down); }
+  /* Пояснения, которые на Windows живут в title: на телефоне наведения нет. */
+  .hint { color: var(--faint); font-size: 12px; line-height: 1.45; margin: 4px 22px 12px; }
 
   /* Экран привязки */
   .pair { max-width: 420px; margin: 12vh auto 0; padding: 0 20px; }
@@ -171,7 +211,6 @@
 
 'use strict';
 const API = '/api/v1/quik/companion';
-const STL = '';                       // страница живёт на том же домене
 const LS_TOKEN = 'stl_companion_token';
 const LS_ACCT = 'stl_companion_account';
 const $ = (id) => document.getElementById(id);
@@ -183,6 +222,12 @@ function rub(v, opts) {
   const n = Math.round(v);
   const sign = (opts && opts.signed && n > 0) ? '+' : (n < 0 ? '-' : '');
   return sign + Math.abs(n).toLocaleString('ru-RU') + ' ₽';
+}
+// Цена инструмента: НИКОГДА не округляем до целого (у BR шаг 0.01) — только
+// гасим float-пыль. Правило поймано дважды, см. lib/format.ts.
+function px(v) {
+  return v == null || !isFinite(v) ? null
+    : Number(v).toLocaleString('ru-RU', { maximumFractionDigits: 6 });
 }
 function cls(v) { return v == null ? '' : (v > 0 ? 'up' : (v < 0 ? 'down' : '')); }
 function val(txt, k) { return txt == null ? '<span class="v nil">—</span>'
@@ -199,19 +244,26 @@ function lastTradeFmt(ms) {
   const hm = new Date(ms).toLocaleTimeString('ru-RU', { ...opt, hour: '2-digit', minute: '2-digit' });
   return dd === nd ? hm : (dd + ' ' + hm);
 }
+function dmy(ms) {
+  return ms ? new Date(ms).toLocaleDateString('ru-RU', { timeZone: 'Europe/Moscow',
+    day: '2-digit', month: '2-digit', year: 'numeric' }) : '—';
+}
+// sub здесь — ГОТОВАЯ разметка (котировка, подпись), а не текст: экранируют его
+// вызывающие. Отличие от companion.html, где sub всегда текст.
 function row(label, value, signValue, sub) {
   const k = cls(signValue);
   return `<div class="row ${k}"><span class="k">${esc(label)}</span>` +
-    `<span class="sp"></span>${sub ? `<span class="sub">${esc(sub)}</span>` : ''}${val(value, k)}</div>`;
+    `<span class="sp"></span>${sub ? `<span class="sub">${sub}</span>` : ''}${val(value, k)}</div>`;
 }
 
-const DOW = { }; // Intl даёт день недели сам
+// Заголовок: STL, дата, день недели, время (МСК) — один в один с companion.html.
 function brand(d, withMode) {
   const now = new Date(d && d.ts_ms ? d.ts_ms : Date.now());
   const p = new Intl.DateTimeFormat('ru-RU', { timeZone: 'Europe/Moscow',
-    day: '2-digit', month: '2-digit', weekday: 'short', hour: '2-digit', minute: '2-digit',
+    day: '2-digit', month: '2-digit', year: 'numeric', weekday: 'short',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
   }).formatToParts(now).reduce((a, x) => (a[x.type] = x.value, a), {});
-  const head = `STL · ${p.day}.${p.month} ${p.weekday} ${p.hour}:${p.minute}`;
+  const head = `STL · ${p.day}.${p.month}.${p.year} ${p.weekday} ${p.hour}:${p.minute}:${p.second}`;
   return withMode ? `${head} · ${marketMode(d && d.market)}` : head;
 }
 
@@ -253,6 +305,9 @@ function renderMarket(m) {
 
 function renderAccount(a) {
   if (!a || !a.has_data) return '<div class="empty">счёт: агент ещё не прислал деньги</div>';
+  // «Тек. чист. поз.» это колонка cbplused из QUIK. Её отдаёт только новая Lua
+  // (v2026.07.24-posvm). Пока скрипт не перезагружён в терминале — данных нет,
+  // и это честно подписываем, а не рисуем прочерк как будто сломалось.
   const used = a.used == null ? '<span class="v nil">нужна перезагрузка Lua</span>' : val(rub(a.used));
   return row('Лимит откр. поз.', rub(a.limit)) +
     `<div class="row"><span class="k">Тек. чист. поз.</span><span class="sp"></span>${used}</div>` +
@@ -261,14 +316,28 @@ function renderAccount(a) {
     row('Биржевые сборы', rub(a.ts_comission), a.ts_comission ? -1 : 0);
 }
 
+// Живая котировка инструмента: та же разметка, что на Windows-панели (гашение
+// зачёркиванием, если котировка не обновлялась больше 2 минут).
+function quoteHtml(p) {
+  const q = px(p && p.last);
+  if (q == null) return '';
+  const stale = p.quote_age_ms != null && p.quote_age_ms > 120000;
+  return `<span class="q${stale ? ' q-stale' : ''}">${q}</span>`;
+}
+
 function renderPositions(list) {
   if (!list || !list.length) return '<div class="empty">позиций нет</div>';
   const sg = (v) => v == null ? '—' : (v > 0 ? '+' : '') + v;
   return list.map((p) => {
+    // Разбивка: Роботы (сумма позиций роботов) + Ручные (остаток мимо STL).
     const bd = (p.robot_net != null || p.manual_net != null)
       ? `Роботы <b>${sg(p.robot_net)}</b> · Ручные <b>${sg(p.manual_net)}</b>` : sg(p.net);
+    // ВМ здесь — ЧИСЛО QUIK: вариационная маржа ЗА СЕССИЮ (с последнего клиринга),
+    // включая закрытые за сессию сделки. У робота ниже — ВМ ОТ ВХОДА. Это разные
+    // величины, поэтому подписаны по-разному (иначе выглядит как расхождение).
     return `<div class="row ${cls(p.varmargin)}"><span class="k">${esc(p.sec)}</span>` +
-      `<span class="sub">${bd}</span><span class="sp"></span>` +
+      quoteHtml(p) + `<span class="sub">${bd}</span><span class="sp"></span>` +
+      `<span class="sub">ВМ сессии</span>` +
       `${val(rub(p.varmargin, { signed: true }), cls(p.varmargin))}</div>`;
   }).join('');
 }
@@ -288,7 +357,7 @@ function robotsTotal(list) {
                    : `сегодня ${hasT ? rub(today, { signed: true }) : '—'}`;
   return `<div class="row total ${cls(hasN ? total : null)}">` +
     `<span class="k">Итог реал (${list.length})</span><span class="sp"></span>` +
-    `<span class="sub">${split}</span>` +
+    `<span class="sub">${esc(split)}</span>` +
     `${val(hasN ? rub(total, { signed: true }) : null, cls(total))}</div>`;
 }
 
@@ -301,10 +370,38 @@ function renderRobots(all) {
     let net = 0, hasN = false;
     for (const r of retired) if (r.real_net != null) { net += r.real_net; hasN = true; }
     out += `<div class="row ${cls(hasN ? net : null)}">` +
-      `<span class="k">Выведены из реала (${retired.length})</span><span class="sp"></span>` +
+      `<span class="k">Выведены из реала (${retired.length})</span>` +
+      `<span class="sub">итог их реальной торговли</span><span class="sp"></span>` +
       `${val(hasN ? rub(net, { signed: true }) : null, cls(net))}</div>`;
   }
   return out;
+}
+
+// Вторую составляющую дня НЕЛЬЗЯ звать просто «ВМ»: у робота БЕЗ позиции это
+// читается как бред («откуда ВМ, если позиции час нет?»). А величина честная —
+// это изменение НЕреализованной части за день: у робота с позицией её переоценка,
+// у закрывшегося — снятие вчерашнего переноса.
+function vmLabel(r) { return r.position ? 'ВМ откр. поз.' : 'снятие вчерашней ВМ'; }
+function vmHint(r) {
+  return r.position
+    ? 'Изменение нереализованного результата открытой позиции ЗА СЕГОДНЯ (не вся её ВМ от входа, а только сегодняшняя часть).'
+    : 'Робот сейчас без позиции. Это ВМ, перенесённая со вчера: вчера он ушёл в ночь с открытой позицией, её нереализованный результат сегодня снялся. Без этой части день был бы посчитан неверно: вчерашний бумажный минус попал бы в сегодняшний фикс второй раз.';
+}
+// Строка «сегодня» с разбивкой — один в один с Windows-панелью.
+function todayCell(r) {
+  const tSum = r.today_total;
+  if (r.vm_today == null) {
+    return `<span>сегодня <b class="${cls(r.real_today)}">${r.real_today == null ? '—' : rub(r.real_today, { signed: true })}</b>`
+      + `<span class="dim"> фикс · ${vmLabel(r)} н/д</span></span>`;
+  }
+  return `<span>сегодня <b class="${cls(tSum)}">${rub(tSum, { signed: true })}</b>`
+    + `<span class="dim"> = фикс ${rub(r.real_today, { signed: true })}`
+    + ` · ${vmLabel(r)} ${rub(r.vm_today, { signed: true })}</span></span>`;
+}
+// Горизонт рядом с годовой: на 7 днях истории ×52 даёт ±1800%, и без подписи
+// это читается как баг, а не как экстраполяция.
+function annDays(r) {
+  return r.started_ms ? Math.max(1, Math.round((Date.now() - r.started_ms) / 86400000)) : null;
 }
 
 function renderActive(list) {
@@ -322,15 +419,12 @@ function renderActive(list) {
       ? `<span class="tag mode ${r.mode}">${r.mode === 'real' ? 'реал' : 'бумага'}</span>` : '';
     const exitTag = r.exit_only ? '<span class="tag exitonly">только на выход</span>' : '';
     const ann = r.ann_pct == null ? null : (r.ann_pct > 0 ? '+' : '') + r.ann_pct.toFixed(1) + '%';
-    const tSum = r.today_total;
-    const today = r.vm_today == null
-      ? `<span>сегодня <b class="${cls(r.real_today)}">${r.real_today == null ? '—' : rub(r.real_today, { signed: true })}</b> фикс</span>`
-      : `<span>сегодня <b class="${cls(tSum)}">${rub(tSum, { signed: true })}</b></span>`;
+    const days = annDays(r);
     const chg = r.chg_pct == null ? ''
       : `<span class="chg ${cls(r.chg_pct)}">${r.chg_pct > 0 ? '+' : ''}${r.chg_pct.toFixed(1)}%</span>`;
     return `<div class="rob ${k}">
       <div class="hd">
-        <a href="/?agent_robot=${encodeURIComponent(r.id)}">${esc(r.name)}</a>
+        <a href="#/robot/${encodeURIComponent(r.id)}">${esc(r.name)}</a>
         ${modeTag}
         ${st === 'реал' || st === 'пауза'
           ? cassette(st === 'реал')
@@ -341,20 +435,14 @@ function renderActive(list) {
       </div>
       <div class="nums">
         <span>итого фикс <b class="${cls(r.real_net)}">${rub(r.real_net, { signed: true })}</b>${r.varmargin ? ` · ВМ <b class="${cls(r.varmargin)}">${rub(r.varmargin, { signed: true })}</b>` : ''}</span>
-        ${today}
-        ${r.position == null ? '' : `<span>поз <b>${r.position}</b>${r.max_position ? ` из <b>${r.max_position}</b>` : ''}</span>`}
-        ${ann == null ? '' : `<span>год <b class="${cls(r.ann_pct)}">${ann}</b></span>`}
-        <span>сделок <b>${r.real_trades_today || 0}</b></span>
-        <span>${last ? 'посл. ' + last : ''}</span>
+        ${todayCell(r)}
+        ${r.position == null ? '' : `<span>поз <b class="${cls(r.position)}">${r.position}</b>${r.max_position ? ` из <b>${r.max_position}</b>` : ''}</span>`}
+        ${ann == null ? '' : `<span>год <b class="${cls(r.ann_pct)}">${ann}</b>${days ? ` <span class="dim">за ${days} дн</span>` : ''}</span>`}
+        <span>сделок сегодня <b>${r.real_trades_today || 0}</b></span>
+        <span>${last ? 'посл. ' + last : 'реальных сделок нет'}</span>
       </div>
     </div>`;
   }).join('');
-}
-
-function check(name, blk) {
-  const bad = blk && blk.ok === false;
-  return `<div class="chk ${bad ? 'bad' : ''}"><span class="n">${esc(name)}</span>` +
-    `<span class="s">${bad ? esc((blk.issues || []).join('; ')) : 'ОК'}</span></div>`;
 }
 
 function renderWatch(w) {
@@ -366,12 +454,16 @@ function renderWatch(w) {
     return `<div class="chk ${bad ? 'bad' : ''}"><span class="n">${esc(name)}</span>` +
       `<span class="s">${esc(txt)}</span></div>`;
   };
+  // Кандидат перебора: ссылку на кампанию в Ботсторе не даём — Ботстор свёрстан
+  // под десктоп, а телефон с токеном компаньона туда всё равно не пустят. Все
+  // цифры кандидата уже в самой строке.
   let star = '';
   if (bt.star) {
     const s2 = bt.star;
     star = `<div class="chk"><span class="n"><span class="star"></span>кандидат</span>` +
-      `<span class="s"><a href="/?campaign=${encodeURIComponent(s2.campaign)}" style="color:inherit">` +
-      `${esc(s2.strategy)} · ${esc(s2.symbol)}: +${Number(s2.net).toLocaleString('ru-RU')} ₽, RF ${s2.rf}, ${s2.trades} сд. ↗</a></span></div>`;
+      `<span class="s">${esc(s2.strategy)} · ${esc(s2.symbol)}: ` +
+      `+${Number(s2.net).toLocaleString('ru-RU')} ₽, RF ${esc(s2.rf)}, ${esc(s2.trades)} сд. ` +
+      `<span class="sub">(кампания ${esc(s2.campaign)})</span></span></div>`;
   }
   return one('раннер + lua', w.runner) +
     one('бэктесты', bt, `в работе ${bt.running || 0} · ждут ${bt.queued || 0}`) +
@@ -382,6 +474,8 @@ function renderWatch(w) {
 
 // #6 ручные заявки: простые (таблица QUIK, без тега = ручной класс) и умные
 // (книга STL). Только статус чтения — действия в терминале STL.
+// Полночь по Москве: таблица сделок QUIK держит только текущую сессию, поэтому
+// вчерашним заявкам цену уже не найти — им честнее оставить уровень.
 function todayLo(d) {
   const now = new Date(d && d.ts_ms ? d.ts_ms : Date.now());
   const msk = new Date(now.getTime() + (now.getTimezoneOffset() + 180) * 60000);
@@ -404,14 +498,17 @@ function renderOrders(o, d) {
   const ST = { armed: 'взведена', fired: 'сработала', cancelled: 'снята',
     expired: 'истекла', orphaned: 'осиротела', error: 'ошибка' };
   for (const s of o.smart || []) {
+    // У СРАБОТАВШЕЙ заявки показываем ЦЕНУ СДЕЛКИ, а не уровень срабатывания:
+    // уровень уже история, а оператору нужен факт — по чём вошёл.
     let sub = s.trigger ? `уровень ${num(s.trigger)}` : '';
-    if (s.fired_price) sub = `сделка по ${num(s.fired_price)}${s.fired_qty ? ' × ' + s.fired_qty : ''}`;
+    if (s.fired_price) sub = `сделка по ${px(s.fired_price)}${s.fired_qty ? ' × ' + s.fired_qty : ''}`;
     else if ((s.status === 'fired' || s.status === 'orphaned') && s.fired_ms > todayLo(d))
-      sub = 'цена сделки уточняется';
+      sub = 'цена сделки уточняется';   // сегодняшнюю подтянем из таблицы сделок QUIK
     if (s.sl_offset) sub += ` · стоп ${s.sl_offset} п.`;
+    if (s.tp_offset) sub += ` · тейк ${s.tp_offset} п.`;
     if (s.kind === 'trail_tp' && s.status === 'armed') {
       sub = s.activated
-        ? `от пика ${num(s.peak)}, сделка при ${s.side === 'buy' ? '≥' : '≤'} ` +
+        ? `● от пика ${num(s.peak)}, сделка при ${s.side === 'buy' ? '≥' : '≤'} ` +
           num(s.side === 'buy' ? s.peak + s.trail_offset : s.peak - s.trail_offset)
         : `ждёт пробоя ${num(s.trigger)}`;
     }
@@ -425,11 +522,11 @@ function renderOrders(o, d) {
 
 // Уведомления схлопнуты до ПОСЛЕДНЕГО — остальные раскрываются стрелкой.
 let alertsOpen = false;
-function renderAlerts(a) {
+function renderAlerts(a, all) {
   if (!a) return '';
   const items = a.items || [];   // свежие сверху, ok = норма (зелёная)
   if (!items.length) return '<div class="empty">тихо, эскалаций нет</div>';
-  const shown = alertsOpen ? items : items.slice(0, 1);
+  const shown = (all || alertsOpen) ? items : items.slice(0, 1);
   return shown.map((it) => `<div class="alert ${it.ok ? 'ok' : ''}">` +
     `<span class="at">${esc(hhmmss(it.ts_ms) || '')}</span> ${esc(it.text)}</div>`).join('');
 }
@@ -456,36 +553,121 @@ function alertsText(d) {
   if (L.length === 1) L.push('всё в норме, эскалаций нет');
   return L.join('\n');
 }
-async function copyAlerts(btn, d) {
+async function copyText(btn, text, done) {
   let ok = false;
-  try { await navigator.clipboard.writeText(alertsText(d)); ok = true; } catch { /**/ }
-  if (btn) { btn.textContent = ok ? 'скопировано' : 'не вышло'; btn.classList.toggle('done', ok); }
-  setTimeout(() => { if (btn) { btn.textContent = 'копировать'; btn.classList.remove('done'); } }, 1600);
+  try { await navigator.clipboard.writeText(text); ok = true; } catch { /**/ }
+  const was = btn.textContent;
+  if (btn) { btn.textContent = ok ? (done || 'скопировано') : 'не вышло'; btn.classList.toggle('done', ok); }
+  setTimeout(() => { if (btn) { btn.textContent = was; btn.classList.remove('done'); } }, 1600);
 }
 
 // ── экраны ────────────────────────────────────────────────────────────────────
-function paintPanel(d) {
-  $('app').innerHTML = `
-    <div class="top">
-      <a class="brand" id="brand" href="/" style="color:inherit;text-decoration:none">${esc(brand(d))}</a>
+// Шапка одна на все экраны: индикатор связи tick() ищет по id, поэтому она
+// обязана быть в разметке КАЖДОГО экрана.
+function head(d) {
+  return `<div class="top">
+      <a class="brand" id="brand" href="#/">${esc(brand(d))}</a>
       <span class="fresh" id="fresh">●</span>
-      <button class="logout" id="logout" title="Отвязать телефон">отвязать</button>
-    </div>
+      <button class="logout" title="Отвязать телефон">отвязать</button>
+    </div>`;
+}
+// «Назад» + копируемый идентификатор экрана в левом/правом верху.
+function nav(id) {
+  return `<div class="nav"><a href="#/">‹ панель</a>` +
+    (id ? `<span class="id" data-copy="${esc(id)}">${esc(id)}</span>` : '') + `</div>`;
+}
+
+function paintPanel(d) {
+  $('app').innerHTML = head(d) + `
     <div class="sec">биржа</div>${renderMarket(d.market)}
     <div class="sec">счёт</div>${renderAccount(d.account)}
     <div class="sec">позиции</div>${renderPositions(d.positions)}
-    <div class="sec">роботы (реал) <a href="/?lab=live&equity=1">витрина ↗</a></div>
+    <div class="sec">роботы (реал)</div>
       ${robotsTotal(d.robots)}${renderRobots(d.robots)}
-    <div class="sec">заявки ручные <a href="/?orders=1">терминал ↗</a></div>${renderOrders(d.orders, d)}
-    <div class="sec">вотчер</div>${renderWatch(d.watch)}
-    <div class="sec">уведомления <a href="/watchdog-log.html">детали ↗</a>
+    <div class="sec">заявки ручные <a href="#/orders">подробно ↗</a></div>${renderOrders(d.orders, d)}
+    <div class="sec">вотчер <a href="#/watch">подробно ↗</a></div>${renderWatch(d.watch)}
+    <div class="sec">уведомления <a href="#/watch">детали ↗</a>
       <span class="sp" style="flex:1"></span><span class="copy" id="copyAlerts">копировать</span>
       ${alertsToggle(d.alerts)}</div>${renderAlerts(d.alerts)}`;
-  $('logout').onclick = () => {
-    if (confirm('Отвязать телефон от STL? Понадобится новый код.')) {
-      localStorage.removeItem(LS_TOKEN); location.reload();
-    }
-  };
+}
+
+// Карточка робота — мобильная экранная форма вместо десктопного стенда STL:
+// те же числа, что на панели, плюс расшифровки, которые на Windows живут в
+// подсказках. Управления здесь нет и быть не может: токен компаньона умеет
+// только читать снапшот.
+function paintRobot(d, id) {
+  const r = (d.robots || []).find((x) => x.id === id);
+  if (!r) {
+    $('app').innerHTML = head(d) + nav(id) +
+      '<div class="empty">робот не найден в снапшоте (снят с агента или переименован)</div>';
+    return;
+  }
+  const net = r.real_total != null ? r.real_total : r.real_net;
+  const k = cls(net);
+  const pos = (d.positions || []).find((p) => p.sec === r.symbol);
+  const ann = r.ann_pct == null ? null : (r.ann_pct > 0 ? '+' : '') + r.ann_pct.toFixed(1) + '%';
+  const days = annDays(r);
+  const chg = r.chg_pct == null ? ''
+    : `<span class="chg ${cls(r.chg_pct)}">${r.chg_pct > 0 ? '+' : ''}${r.chg_pct.toFixed(1)}% к вчера</span>`;
+  const modeTag = r.mode
+    ? `<span class="tag mode ${r.mode}">${r.mode === 'real' ? 'реал' : 'бумага'}</span>` : '';
+  const exitTag = r.exit_only ? '<span class="tag exitonly">только на выход</span>' : '';
+  const stTag = (r.state === 'реал' || r.state === 'пауза')
+    ? cassette(r.state === 'реал')
+    : `<span class="tag off">${esc(r.state)}</span>`;
+  const todayVal = r.vm_today == null ? r.real_today : r.today_total;
+  const todaySub = r.vm_today == null
+    ? `фикс · ${vmLabel(r)} н/д`
+    : `фикс ${rub(r.real_today, { signed: true })} · ${vmLabel(r)} ${rub(r.vm_today, { signed: true })}`;
+  $('app').innerHTML = head(d) + nav(r.id) + `
+    <div class="h1">${esc(r.name)} ${modeTag} ${stTag} ${exitTag}</div>
+    <div class="big ${k}">
+      <div class="sub">фин. результат = фикс по закрытым + ВМ открытой позиции</div>
+      <div class="n ${k}">${esc(rub(net, { signed: true }) || '—')} ${chg}</div>
+    </div>
+    ${row('Итого фикс', rub(r.real_net, { signed: true }), r.real_net)}
+    ${row('ВМ откр. позиции', rub(r.varmargin, { signed: true }), r.varmargin)}
+    ${row('Сегодня', rub(todayVal, { signed: true }), todayVal, esc(todaySub))}
+    <div class="hint">Результат за сегодня = закрытые сделки за сегодня + изменение
+      нереализованной части за сегодня. ${esc(vmHint(r))}</div>
+    ${row('Позиция', r.position == null ? null
+        : String(r.position) + (r.max_position ? ' из ' + r.max_position : ''), r.position)}
+    ${row('Инструмент', r.symbol || '—', null,
+        pos ? quoteHtml(pos) + (pos.varmargin != null
+          ? ` <span class="sub">ВМ сессии ${esc(rub(pos.varmargin, { signed: true }))}</span>` : '') : '')}
+    ${row('Сделок сегодня', String(r.real_trades_today || 0))}
+    ${row('Последняя сделка', lastTradeFmt(r.last_trade_ms) || 'реальных сделок нет')}
+    ${row('Доходность в год', ann, r.ann_pct, days ? esc('за ' + days + ' дн') : '')}
+    <div class="hint">Годовая линейно экстраполирована с ${days || '—'} дн к максимальному
+      задействованному ГО${r.max_go ? ' ' + Math.round(r.max_go).toLocaleString('ru-RU') + ' ₽' : ''}
+      (биржевое ГО × брокерский множитель). На коротком горизонте число мало о чём говорит.</div>
+    ${row('Реалом торгует с', dmy(r.started_ms))}`;
+}
+
+function paintOrders(d) {
+  $('app').innerHTML = head(d) + nav(null) + `
+    <div class="h1">Ручные заявки</div>
+    <div class="hint">Только чтение: заявки оператора (без тега робота) из таблицы QUIK
+      и умные заявки из книги STL. Пока STL лежит, умные заявки не срабатывают.</div>
+    <div class="sec">заявки</div>${renderOrders(d.orders, d)}
+    <div class="sec">позиции</div>${renderPositions(d.positions)}
+    <div class="sec">счёт</div>${renderAccount(d.account)}`;
+}
+
+function paintWatch(d) {
+  const a = d.alerts || {};
+  const list = (arr, empty) => (arr && arr.length)
+    ? arr.map((t) => `<div class="alert">${esc(t)}</div>`).join('')
+    : `<div class="empty">${empty}</div>`;
+  $('app').innerHTML = head(d) + nav(null) + `
+    <div class="h1">Вотчер и уведомления</div>
+    <div class="sec">проверки</div>${renderWatch(d.watch)}
+    <div class="sec">эскалации сегодня
+      <span class="sp" style="flex:1"></span><span class="copy">копировать</span></div>
+      ${renderAlerts(a, true)}
+    <div class="sec">не решено</div>${list(a.unresolved, 'всё закрыто')}
+    <div class="sec">SMS сегодня (${a.sms_count || 0})</div>${list(a.sms_today, 'SMS не было')}
+    <div class="hint">Последний прогон вотчера: ${esc(hhmmss(a.last_run_ms) || 'н/д')} МСК.</div>`;
 }
 
 function paintPairing(msg) {
@@ -526,12 +708,33 @@ function paintPairing(msg) {
   $('code').addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
 }
 
-// Клик по «копировать»/стрелке уведомлений — делегирован на весь документ,
-// т.к. #app перерисовывается целиком каждый тик.
+// Маршрут в хэше: экран переживает перерисовку каждые 5 секунд и уезжает в
+// историю телефона, поэтому системное «назад» работает само.
+function paint(d) {
+  const h = (location.hash || '#/').slice(1);
+  if (h.startsWith('/robot/')) paintRobot(d, decodeURIComponent(h.slice(7)));
+  else if (h === '/orders') paintOrders(d);
+  else if (h === '/watch') paintWatch(d);
+  else paintPanel(d);
+}
+
+// Клики делегированы на документ: #app перерисовывается целиком каждый тик.
 let lastData = null;
 document.addEventListener('click', (e) => {
-  if (e.target.closest('.copy')) { copyAlerts(e.target.closest('.copy'), lastData || {}); return; }
-  if (e.target.closest('.more')) { alertsOpen = !alertsOpen; if (lastData) paintPanel(lastData); }
+  const copy = e.target.closest('.copy');
+  if (copy) { copyText(copy, alertsText(lastData || {})); return; }
+  const idEl = e.target.closest('.id[data-copy]');
+  if (idEl) { copyText(idEl, idEl.dataset.copy); return; }
+  if (e.target.closest('.logout')) {
+    if (confirm('Отвязать телефон от STL? Понадобится новый код.')) {
+      localStorage.removeItem(LS_TOKEN); location.reload();
+    }
+    return;
+  }
+  if (e.target.closest('.more')) { alertsOpen = !alertsOpen; if (lastData) paint(lastData); }
+});
+window.addEventListener('hashchange', () => {
+  if (lastData) { paint(lastData); window.scrollTo(0, 0); }
 });
 
 let lastGood = 0;
@@ -553,9 +756,10 @@ async function tick() {
     const d = await r.json();
     lastGood = d.ts_ms || Date.now();
     lastData = d;
-    paintPanel(d);
+    paint(d);
+    // Время уже в заголовке; здесь индикатор связи + пинг агент<->QUIK.
     $('fresh').className = 'fresh';
-    $('fresh').textContent = '● на связи';
+    $('fresh').textContent = '● на связи' + (d.ping_ms != null ? ' (' + d.ping_ms + ' мс)' : '');
   } catch (e) {
     const f = $('fresh');
     if (f) { f.className = 'fresh stale';
