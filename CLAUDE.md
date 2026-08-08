@@ -469,7 +469,21 @@ to its owner, not made:**
 |---|---|---|
 | real trade | `proto/`, `quik_agent/`, `robot_runner/`, `~/quik_build`, the QUIK VDS | agent/runner releases |
 | backtests | `trader/lab/`, `scripts/`, the i9, campaigns | nothing |
-| UI & UX | `frontend/`, `trader/api/` | frontend dist |
+| UI & UX | `frontend/`, `companion/`, `trader/api/`, and EVERY STL screen | frontend dist, `STLCompanion.exe` to the operator's share |
+
+**UI & UX owns how STL LOOKS, everywhere it has a screen** (agreed 08.08.2026): the
+SPA, every standalone page in `frontend/public/` (companion.html, m.html, docs.html,
+agent-status.html, watchdog-log.html), and the companion tray shell `companion/`.
+The companion is ONE thing split across two languages — the Go window and the page it
+renders — and splitting it between windows would reproduce exactly the drift that let
+`m.html` fall silently behind `companion.html`. There is no trading logic in it: its
+token opens a single read-only endpoint.
+
+The one screen that straddles a border is the agent's own local page
+`quik_agent/internal/status/page.html`. Its LAYOUT is UI & UX like any other screen;
+the status JSON behind it is built in Go by real trade, who also ships the file inside
+the agent release. Change the markup, hand the delivery over — never scp into
+`~/quik_build` from this window.
 
 **Rules above zones:** arming, agent-release publication, and `shectory-trader`
 restarts happen ONLY from the real trade window, no matter who wrote the code.
