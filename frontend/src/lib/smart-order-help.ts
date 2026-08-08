@@ -301,3 +301,15 @@ export function conditionText(o: any): string {
   const down = (k === 'sl' && o.side === 'sell') || (k === 'tp' && o.side === 'buy');
   return `${down ? 'цена ≤' : 'цена ≥'} ${fmtNum(o.trigger_price)}`;
 }
+
+/** Подсказки инструмента для формы: сначала по ЧАСТОТЕ использования в книге
+ *  умных заявок (вся книга, включая отработавшие), затем — остальные коды из
+ *  фида по алфавиту. Ручной ввод список не отменяет (datalist, не select). */
+export function codeSuggestions(orders: Array<{ code?: string }>, feedCodes: string[]): string[] {
+  const freq = new Map<string, number>();
+  for (const o of orders) {
+    if (o.code) freq.set(o.code, (freq.get(o.code) || 0) + 1);
+  }
+  const frequent = [...freq.entries()].sort((a, b) => b[1] - a[1]).map(([c]) => c);
+  return [...frequent, ...feedCodes.filter((c) => c && !freq.has(c)).sort()];
+}

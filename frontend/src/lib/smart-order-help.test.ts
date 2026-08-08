@@ -111,3 +111,21 @@ describe('строка условия в списке', () => {
     expect(s).toContain('пик 89 500');
   });
 });
+
+describe('codeSuggestions', () => {
+  it('sorts by usage frequency, then feed codes alphabetically', async () => {
+    const { codeSuggestions } = await import('./smart-order-help');
+    const orders = [
+      { code: 'RIU6' }, { code: 'RIU6' }, { code: 'RIU6' },
+      { code: 'BRU6' },
+      { code: 'GZU6' }, { code: 'GZU6' },
+    ];
+    expect(codeSuggestions(orders, ['SiU6', 'BRU6', 'GDU6'])).toEqual(
+      ['RIU6', 'GZU6', 'BRU6', 'GDU6', 'SiU6'],   // частые -> хвост фида по алфавиту, без дублей
+    );
+  });
+  it('empty book falls back to feed codes', async () => {
+    const { codeSuggestions } = await import('./smart-order-help');
+    expect(codeSuggestions([], ['RIU6', 'BRU6'])).toEqual(['BRU6', 'RIU6']);
+  });
+});

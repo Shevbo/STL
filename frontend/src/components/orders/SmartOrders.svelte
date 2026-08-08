@@ -10,8 +10,8 @@
   import { smartOrdersStore, type SmartOrder } from '$lib/stores/smart-orders.svelte';
   import SmartOrderSchematic from './SmartOrderSchematic.svelte';
   import {
-    KINDS, KIND_BY_ID, COMMON_FACTS, STATUS_RU, conditionText, fmtWhen, fmtPts,
-    fmtRub, ocoFact, preview, tillFact, type Kind, type Side,
+    KINDS, KIND_BY_ID, COMMON_FACTS, STATUS_RU, codeSuggestions, conditionText,
+    fmtWhen, fmtPts, fmtRub, ocoFact, preview, tillFact, type Kind, type Side,
   } from '$lib/smart-order-help';
 
   let { symbol = '' }: { symbol?: string } = $props();
@@ -34,6 +34,7 @@
 
   let tick = $state<{ last: number; bid: number; ask: number } | null>(null);
   let pointValue = $state(0);
+  let feedCodes = $state<string[]>([]);   // все коды из QLua-фида (хвост подсказок)
   let timers: Array<ReturnType<typeof setInterval>> = [];
   let unsub: (() => void) | null = null;
 
@@ -83,12 +84,17 @@
       const r = await fetchWithAuth('/api/v1/quik/params');
       if (!r.ok) return;
       const d = await r.json();
-      const row = (d?.rows || []).find((x: any) => x.code === code);
+      const rows = d?.rows || [];
+      feedCodes = rows.map((x: any) => String(x.code || '')).filter(Boolean);
+      const row = rows.find((x: any) => x.code === code);
       const step = Number(row?.price_step || 0), cost = Number(row?.step_cost || 0);
       // ₽ за пункт. Без него считаем в пунктах и рублями НЕ врём.
       pointValue = step > 0 && cost > 0 ? cost / step : 0;
     } catch { pointValue = 0; }
   }
+
+  // Подсказки инструмента: частые из книги, затем остальные коды фида.
+  const codeOptions = $derived(codeSuggestions(orders, feedCodes));
 
   async function arm() {
     msg = '';
@@ -118,12 +124,13 @@
     } catch (e: any) { msgKind = 'err'; msg = e?.message || 'ошибка'; }
   }
 
-  async function cancel(soId: string) {
+  async function cancel(soId: string): Promise<boolean> {
     try {
       const res = await fetchWithAuth(`/api/v1/quik/smart-orders/${soId}`, { method: 'DELETE' });
       if (!res.ok) { msgKind = 'err'; msg = (await res.json().catch(() => ({})))?.detail || `HTTP ${res.status}`; }
       await smartOrdersStore.refresh();
-    } catch { /* список обновится опросом */ }
+      return res.ok;
+    } catch { return false; /* список обновится опросом */ }
   }
 
   // Перевзвести: та же заявка ещё раз. Нужно, когда дочерняя простая заявка не
@@ -137,10 +144,23 @@
     watchId = o.watch_client_id || '';
     childPrice = o.child_price ? String(o.child_price) : '';
     ocoGroup = o.oco_group || '';
+    // Срок тоже восстанавливаем: «до конца сессии» — часть смысла заявки.
+    tillLocal = o.good_till_ms
+      ? new Date(o.good_till_ms - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)
+      : '';
     confirming = false;
     msgKind = 'ok';
     msg = 'Параметры подставлены — проверьте и взведите заново.';
     document.querySelector('.so-form')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
+  // «Изменить» = снять + подставить в форму + взвести заново РУКАМИ. Никакого
+  // редактирования взведённой заявки на месте: пока оператор думает, сторож
+  // ничего не сторожит, и это видно по статусу (заявка ушла в «снятые»).
+  async function edit(o: SmartOrder) {
+    if (!(await cancel(o.so_id))) return;   // не снялась — форму не трогаем
+    rearm(o);
+    msg = `Заявка ${o.so_id} СНЯТА, сторож её больше не ждёт. Поправьте параметры и взведите заново.`;
   }
 
   $effect(() => { if (code) { loadTick(); loadPointValue(); } });
@@ -151,6 +171,7 @@
     code = (symbol || '').split('@')[0];
     unsub = smartOrdersStore.subscribe(2000);
     timers = [setInterval(loadTick, 2000)];
+    loadPointValue();   // и без выбранного кода: наполняет подсказки инструментов
   });
   onDestroy(() => { unsub?.(); for (const t of timers) clearInterval(t); });
 </script>
@@ -200,7 +221,12 @@
       <div class="so-fields">
         <label class="so-f">
           <span>Инструмент</span>
-          <input class="so-in" bind:value={code} placeholder="RIU6" spellcheck="false" />
+          <input class="so-in" bind:value={code} placeholder="RIU6" spellcheck="false"
+                 list="so-code-list" autocomplete="off" />
+          <!-- datalist: подсказки по частоте использования, ручной ввод не отменяет -->
+          <datalist id="so-code-list">
+            {#each codeOptions as c (c)}<option value={c}></option>{/each}
+          </datalist>
         </label>
         <label class="so-f">
           <span>Контрактов</span>
@@ -306,6 +332,8 @@
           <span class="so-c-cond">{conditionText(o)}</span>
           <span class="so-c-sp"></span>
           <span class="so-c-status">{STATUS_RU[o.status] ?? o.status}</span>
+          <button class="so-btn sm" title="снять заявку, подставить её параметры в форму и взвести заново"
+                  onclick={() => edit(o)}>Изменить</button>
           <button class="so-btn sm" onclick={() => cancel(o.so_id)}>Снять</button>
         </div>
         {#if o.kind === 'trail_tp'}
