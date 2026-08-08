@@ -639,10 +639,18 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
                     sig = json.loads(rob.get("signal_json") or "{}") or {}
                 except (TypeError, ValueError):
                     sig = {}
+                # Что держит вход прямо сейчас: раннер присылает целую фразу
+                # («долина смерти: коридор закрытий 34 пт за 20 баров …»). В
+                # статусную строку шириной в панель она не влезает, поэтому
+                # рядом кладём короткий ярлык — часть до двоеточия без «держит».
+                # Полная фраза остаётся: панель вешает её подсказкой.
+                blocked = str(sig.get("entry_blocked") or "")
                 chart = {
                     "bars": tail,
                     "want": sig.get("want") if sig.get("ready") else None,
                     "signal_known": bool(sig.get("ready")),
+                    "blocked": blocked,
+                    "blocked_tag": blocked.split(":")[0].replace("держит", "").strip(),
                     # висящие заявки: то, чего робот ждёт прямо сейчас
                     "orders": [{"side": w.get("side"), "price": w.get("price"),
                                 "qty": w.get("qty"), "state": w.get("state")}
@@ -746,6 +754,20 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
     # Состояние сессии MOEX (открыта/закрыта по ISS) — нужно и вотчеру раннера
     # (гейт лага ленты), и панели (отдельная строка «биржа»).
     market = getattr(request.app.state, "market_session", None)
+    # ВРЕМЯ ПОСЛЕДНЕЙ СДЕЛКИ БЕРЁМ У АГЕНТА, А НЕ У ISS. Оракул сессии читает
+    # ISS, а тот отдаёт рынок с задержкой около 15 минут: панель показывала
+    # «торговали 14:21», когда в «Таблице всех сделок» оператора уже шло 14:37.
+    # Для вопроса «открыт ли рынок» задержка безвредна (SYSTIME и сделка едут с
+    # одинаковым сдвигом, лаг между ними не врёт), но как ЧАСЫ это ложь.
+    # У агента та же лента в реальном времени: exchange_lag_ms — насколько
+    # последняя сделка ленты отстала от момента снимка.
+    market_out = market.to_dict() if hasattr(market, "to_dict") else dict(market or {})
+    _lag = health.get("exchange_lag_ms")
+    if received_ms and _lag is not None:
+        try:
+            market_out["tape_last_ms"] = int(received_ms) - int(_lag)
+        except (TypeError, ValueError):
+            pass
 
     # 4.1 runner + Lua
     watch_runner = _watch_runner(health, received_ms, now_ms, market)
@@ -896,5 +918,5 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
         "account": account, "positions": positions, "robots": robots,
         "orders": orders_block,
         "watch": {"runner": watch_runner, "backtests": bt, "platform": platform},
-        "alerts": alerts, "market": market,
+        "alerts": alerts, "market": market_out,
     }

@@ -136,10 +136,16 @@
      она шире 320, и растянуть свечи честнее, чем оставить колонку слева. */
   .rob[data-rid] { cursor: pointer; }
   .rob .chev { color: var(--faint); font-size: 12px; }
-  /* Рамка едва заметная: отделяет график от цифр, но не спорит с ними. */
-  .mchart { display: block; margin: 5px 0 1px; width: 100%; height: 64px;
-    border: 1px solid var(--rule); }
-  .mchart .nosig { font: 400 8px/1 ui-monospace, Menlo, Consolas, monospace; fill: var(--faint); }
+  /* Рамка на ОБЁРТКЕ: статусная строка входит внутрь виджета. */
+  .mwrap { border: 1px solid var(--rule); margin: 5px 0 1px; border-radius: 3px; }
+  .mchart { display: block; width: 100%; height: 64px; }
+  .mstat { display: flex; gap: 8px; align-items: baseline;
+    border-top: 1px solid var(--rule); padding: 2px 6px;
+    font-size: 12px; color: var(--faint); }
+  .mstat .s { font-weight: 600; color: var(--ink); }
+  .mstat .s.up { color: var(--up); } .mstat .s.down { color: var(--down); }
+  .mstat .s.nil { color: var(--faint); font-weight: 400; }
+  .mstat .blk { color: #d99a3c; border-bottom: 1px dotted currentColor; }
   .dens { display: inline-flex; gap: 8px; text-transform: none; letter-spacing: 0; }
   .dens b { font-weight: 400; color: var(--faint); font-size: 12px; padding: 2px 0; }
   .dens b.on { color: var(--ink); border-bottom: 1px solid var(--ink); }
@@ -342,8 +348,15 @@ function marketMode(m) {
 function renderMarket(m) {
   if (!m) return '';
   const open = m.open;
-  const lt = m.last_trade_ms ? new Date(m.last_trade_ms).toLocaleString('ru-RU',
-    { timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+  // Часы берём у АГЕНТА (лента QUIK, реальное время), а не у ISS: ISS отдаёт
+  // рынок с задержкой ~15 минут, и панель писала 14:21, когда в «Таблице всех
+  // сделок» оператора шло 14:37. Для вопроса «открыт ли рынок» задержка
+  // безвредна, но как ЧАСЫ это ложь. ISS остаётся запасным источником.
+  const tapeMs = m.tape_last_ms || 0;
+  const srcMs = tapeMs || m.last_trade_ms;
+  const lt = srcMs ? new Date(srcMs).toLocaleString('ru-RU',
+    { timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', hour: '2-digit',
+      minute: '2-digit', ...(tapeMs ? { second: '2-digit' } : {}) }) : '—';
   return `<div class="mkt ${open === true ? 'up' : ''}">` +
     `<div class="hd"><span class="k">Биржа MOEX</span>` +
     `<span class="v ${open === true ? 'up' : open === false ? '' : 'nil'}">${esc(marketMode(m))}</span></div>` +
@@ -511,19 +524,30 @@ function miniChart(ch) {
     + ` width="33" height="11" rx="1.5"/>`
     + `<text class="chiptx" x="${CH.w - 2}" y="${r1(Math.min(CH.h - 2.5, Math.max(8.5, ly + 3)))}">`
     + `${esc(px(lastB.c))}</text>`;
-  // Голый график молчит о причине: робот стоит потому, что сигнала нет, или
-  // потому, что его нечем посчитать. Подпись появляется РОВНО тогда, когда
-  // рисовать больше нечего — ни заявок, ни сделок в окне.
-  if (!(ch.orders || []).length && !(ch.fills || []).length) {
-    const txt = !ch.signal_known ? 'сигнал не рассчитан'
-      : ch.want === 1 ? 'сигнал: лонг'
-      : ch.want === -1 ? 'сигнал: шорт'
-      : ch.want === 0 ? 'сигнал: выйти в кэш'
-      : 'сигнала нет';
-    s += `<text class="nosig" x="2" y="${CH.h - 2.5}">${esc(txt)}</text>`;
+  // Статус ОТДЕЛЬНОЙ строкой под холстом, а не подписью внутри: свечи налезали
+  // на текст и он терялся ровно тогда, когда был нужнее всего.
+  return `<div class="mwrap">`
+    + `<svg class="mchart" viewBox="0 0 ${CH.w} ${CH.h}" width="${CH.w}" height="${CH.h}"`
+    + ` preserveAspectRatio="none" aria-hidden="true">${s}</svg>`
+    + chartStatus(ch) + `</div>`;
+}
+
+// Нижняя статусная строка: что робот думает и что ему мешает. Сигнал слева,
+// справа — фильтр, который ПРЯМО СЕЙЧАС не пускает вход (долина смерти,
+// разножка, остывание). Полная фраза раннера уходит в подсказку: в ширину
+// панели она не влезает, а терять её нельзя.
+function chartStatus(ch) {
+  const sig = !ch.signal_known
+    ? ['сигнал не рассчитан', 'nil']
+    : ch.want === 1 ? ['лонг', 'up']
+    : ch.want === -1 ? ['шорт', 'down']
+    : ch.want === 0 ? ['выйти в кэш', '']
+    : ['сигнала нет', 'nil'];
+  let out = `<span class="s ${sig[1]}">${esc(sig[0])}</span>`;
+  if (ch.blocked_tag) {
+    out += `<span class="blk" title="${esc(ch.blocked)}">${esc(ch.blocked_tag)}</span>`;
   }
-  return `<svg class="mchart" viewBox="0 0 ${CH.w} ${CH.h}" width="${CH.w}" height="${CH.h}"`
-    + ` preserveAspectRatio="none" aria-hidden="true">${s}</svg>`;
+  return `<div class="mstat">${out}</div>`;
 }
 
 function renderRobots(all) {

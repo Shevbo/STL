@@ -29,7 +29,7 @@ function loadMiniChart(page = 'public/companion.html') {
     setItem: (k: string, v: string) => { store[k] = v; },
   } };
   vm.createContext(ctx);
-  vm.runInContext(consts + pick('miniChart')
+  vm.runInContext(consts + pick('chartStatus') + pick('miniChart')
     + ';this.miniChart=miniChart;this.CH=CH;this.setN=(n)=>localStorage.setItem("stl.chartN",String(n))', ctx);
   return ctx;
 }
@@ -152,25 +152,38 @@ describe('мини-график робота', () => {
     expect(Math.max(...widths)).toBeLessThanOrEqual(CH_W / 200);
   });
 
-  it('пустой график объясняет себя сигналом, а не молчит', () => {
+  it('статусная строка называет сигнал, и она ВНЕ холста', () => {
     const bs = bars(30);
-    const t = (ch: any) => (miniChart({ bars: bs, ...ch }).match(/class="nosig"[^>]*>([^<]*)</) || [])[1];
+    const t = (ch: any) => (miniChart({ bars: bs, ...ch }).match(/class="s [^"]*">([^<]*)</) || [])[1];
     expect(t({ signal_known: true, want: null })).toBe('сигнала нет');
-    expect(t({ signal_known: true, want: 1 })).toBe('сигнал: лонг');
-    expect(t({ signal_known: true, want: -1 })).toBe('сигнал: шорт');
-    expect(t({ signal_known: true, want: 0 })).toBe('сигнал: выйти в кэш');
+    expect(t({ signal_known: true, want: 1 })).toBe('лонг');
+    expect(t({ signal_known: true, want: -1 })).toBe('шорт');
+    expect(t({ signal_known: true, want: 0 })).toBe('выйти в кэш');
     // сигнал не посчитан (напр. стратегия-модуль вне реестра) — не врём «нет»
     expect(t({ signal_known: false })).toBe('сигнал не рассчитан');
+    // строка живёт ПОСЛЕ </svg>: свечи на неё налезать не могут
+    const svg = miniChart({ bars: bs, signal_known: true, want: 1 });
+    expect(svg.indexOf('mstat')).toBeGreaterThan(svg.indexOf('</svg>'));
   });
 
-  it('подпись сигнала не лезет туда, где график и так не пуст', () => {
+  it('статус показывается ВСЕГДА, даже когда на графике есть заявки и сделки', () => {
     const bs = bars(30);
-    const withOrder = miniChart({ bars: bs, signal_known: true, want: null,
-      orders: [{ side: 'buy', price: bs[5].c, qty: 1 }] });
-    const withFill = miniChart({ bars: bs, signal_known: true, want: null,
+    const svg = miniChart({ bars: bs, signal_known: true, want: -1,
+      orders: [{ side: 'buy', price: bs[5].c, qty: 1 }],
       fills: [{ ts: bs[5].t * 1000, side: 'buy', price: bs[5].c, qty: 1 }] });
-    expect(withOrder).not.toContain('nosig');
-    expect(withFill).not.toContain('nosig');
+    expect(svg).toContain('mstat');
+    expect(svg).toContain('шорт');
+  });
+
+  it('фильтр, держащий вход, назван коротко, а полная фраза — в подсказке', () => {
+    const bs = bars(30);
+    const full = 'долина смерти: коридор закрытий 34 пт за 20 баров (< 50)';
+    const svg = miniChart({ bars: bs, signal_known: true, want: 1,
+      blocked: full, blocked_tag: 'долина смерти' });
+    expect(svg).toContain('>долина смерти<');
+    expect(svg).toContain('title="' + full + '"');
+    // без фильтра лишнего значка нет
+    expect(miniChart({ bars: bs, signal_known: true, want: 1 })).not.toContain('class="blk"');
   });
 
   // Две панели считают одни и те же деньги, и мобильная УЖЕ молча отставала от
