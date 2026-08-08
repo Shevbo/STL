@@ -16,6 +16,9 @@ import (
 	_ "embed"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
 	"unsafe"
 
 	"github.com/jchv/go-webview2/pkg/edge"
@@ -43,7 +46,8 @@ type app struct {
 	browser *edge.Chromium
 	nid     notifyIconData
 	height  int
-	width   int // текущая ширина окна; страница может её менять (см. /width)
+	width   int    // текущая ширина окна; страница может её менять (см. /width)
+	base    string // адрес локального прокси: нужен, чтобы перечитать страницу
 }
 
 var a app
@@ -71,6 +75,7 @@ func main() {
 	a.lnk.onMove = func(dx, dy int) { post2(wmMoveBy, packInt(dx), packInt(dy)) }
 	a.lnk.onMoveDone = func() { post(wmMoveSave, 0) }
 
+	a.base = base
 	a.width = a.cfg.Width
 	a.height = 320
 	createWindow()
@@ -203,6 +208,21 @@ func moveBy(dx, dy int) {
 		uintptr(a.cfg.PosX), uintptr(a.cfg.PosY), 0, 0, swpNoActivate|swpNoSize)
 }
 
+// reloadPage перечитывает вёрстку панели. Страница приезжает из STL и берётся
+// прокси ТОЛЬКО при навигации, поэтому раньше каждая правка вёрстки требовала
+// перезапуска exe — за один день это случилось трижды. К адресу цепляем метку
+// времени: перезагрузка по тому же URL может отдаться из кэша WebView2.
+func reloadPage() {
+	if a.browser == nil || a.base == "" {
+		return
+	}
+	sep := "?"
+	if strings.Contains(a.base, "?") {
+		sep = "&"
+	}
+	a.browser.Navigate(a.base + sep + "r=" + strconv.FormatInt(time.Now().UnixMilli(), 10))
+}
+
 // resetPos возвращает панель в правый нижний угол. Страховка на случай, когда
 // оператор утащил её на монитор, которого больше нет.
 func resetPos() {
@@ -289,6 +309,8 @@ func wndProc(hwnd uintptr, msg uint32, wparam, lparam uintptr) uintptr {
 		_ = a.cfg.save()
 	case wmMoveReset:
 		resetPos()
+	case wmReload:
+		reloadPage()
 	case wmToggle:
 		togglePanel()
 	case wmQuitApp:
@@ -305,6 +327,9 @@ func wndProc(hwnd uintptr, msg uint32, wparam, lparam uintptr) uintptr {
 	case wmCommand:
 		switch wparam & 0xFFFF {
 		case idShow:
+			showPanel()
+		case idReload:
+			reloadPage()
 			showPanel()
 		case idReset:
 			resetPos()
@@ -391,6 +416,8 @@ func trayMenu() {
 	defer func() { _, _, _ = pDestroyMenu.Call(menu) }()
 	_, _, _ = pAppendMenuW.Call(menu, mfString, idShow,
 		uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("Показать панель"))))
+	_, _, _ = pAppendMenuW.Call(menu, mfString, idReload,
+		uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("Обновить панель"))))
 	_, _, _ = pAppendMenuW.Call(menu, mfString, idReset,
 		uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("Вернуть в правый нижний угол"))))
 	_, _, _ = pAppendMenuW.Call(menu, mfString, idQuit,

@@ -84,6 +84,7 @@ const (
 	wmMoveBy    = wmApp + 6
 	wmMoveSave  = wmApp + 7
 	wmMoveReset = wmApp + 8
+	wmReload    = wmApp + 9
 	wmLButtonUp = 0x0202
 	wmRButtonUp = 0x0205
 
@@ -117,9 +118,10 @@ const (
 	tpmRight  = 0x0002
 	tpmBottom = 0x0020
 
-	idShow  = 1001
-	idQuit  = 1002
-	idReset = 1003
+	idShow   = 1001
+	idQuit   = 1002
+	idReset  = 1003
+	idReload = 1004
 )
 
 type rectT struct{ Left, Top, Right, Bottom int32 }

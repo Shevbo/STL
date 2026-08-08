@@ -257,6 +257,7 @@
   <a class="brand" id="brand" href="https://stl.shectory.ru/" data-ext
      title="Открыть STL в браузере">STL</a>
   <span class="fresh" id="fresh">…</span>
+  <span class="btn" id="reload" title="Перечитать панель с сервера (после обновления вёрстки)">⟳</span>
   <span class="btn" id="hide" title="Свернуть в трей">✕</span>
   <span class="btn quit" id="quit" title="Закрыть приложение">⏻</span>
 </div>
@@ -831,7 +832,13 @@ document.addEventListener('click', (e) => {
 });
 $('hide').onclick = () => shell('/hide');
 $('quit').onclick = () => shell('/quit');
-if (!LOCAL) { $('hide').style.display = $('quit').style.display = 'none'; }
+// Вёрстка приезжает из STL и берётся прокси только при навигации, поэтому раньше
+// каждая правка панели требовала перезапуска exe. Метка времени в адресе — чтобы
+// WebView2 не отдал страницу из своего кэша по тому же URL.
+$('reload').onclick = () => { location.href = '/?r=' + Date.now(); };
+if (!LOCAL) {
+  $('hide').style.display = $('quit').style.display = $('reload').style.display = 'none';
+}
 
 // ── Перетаскивание панели за шапку ───────────────────────────────────────────
 // У окна нет ни рамки, ни заголовка, а мышь принадлежит окну WebView2 — системный
