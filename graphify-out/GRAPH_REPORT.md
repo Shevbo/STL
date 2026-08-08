@@ -1,16 +1,16 @@
 # Graph Report - Shectory Trade & Lab  (2026-08-08)
 
 ## Corpus Check
-- 728 files · ~897,628 words
+- 728 files · ~900,948 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 11047 nodes · 19515 edges · 630 communities (523 shown, 107 thin omitted)
+- 11055 nodes · 19525 edges · 648 communities (532 shown, 116 thin omitted)
 - Extraction: 91% EXTRACTED · 9% INFERRED · 0% AMBIGUOUS · INFERRED: 1684 edges (avg confidence: 0.68)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `3b739372`
+- Built from commit: `d691e982`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -296,7 +296,6 @@
 - [[_COMMUNITY_Community 321|Community 321]]
 - [[_COMMUNITY_Community 322|Community 322]]
 - [[_COMMUNITY_Community 323|Community 323]]
-- [[_COMMUNITY_Community 324|Community 324]]
 - [[_COMMUNITY_Community 325|Community 325]]
 - [[_COMMUNITY_Community 326|Community 326]]
 - [[_COMMUNITY_Community 327|Community 327]]
@@ -579,6 +578,24 @@
 - [[_COMMUNITY_Community 627|Community 627]]
 - [[_COMMUNITY_Community 628|Community 628]]
 - [[_COMMUNITY_Community 629|Community 629]]
+- [[_COMMUNITY_Community 630|Community 630]]
+- [[_COMMUNITY_Community 631|Community 631]]
+- [[_COMMUNITY_Community 632|Community 632]]
+- [[_COMMUNITY_Community 633|Community 633]]
+- [[_COMMUNITY_Community 634|Community 634]]
+- [[_COMMUNITY_Community 635|Community 635]]
+- [[_COMMUNITY_Community 636|Community 636]]
+- [[_COMMUNITY_Community 637|Community 637]]
+- [[_COMMUNITY_Community 638|Community 638]]
+- [[_COMMUNITY_Community 639|Community 639]]
+- [[_COMMUNITY_Community 640|Community 640]]
+- [[_COMMUNITY_Community 641|Community 641]]
+- [[_COMMUNITY_Community 642|Community 642]]
+- [[_COMMUNITY_Community 643|Community 643]]
+- [[_COMMUNITY_Community 644|Community 644]]
+- [[_COMMUNITY_Community 645|Community 645]]
+- [[_COMMUNITY_Community 646|Community 646]]
+- [[_COMMUNITY_Community 647|Community 647]]
 
 ## God Nodes (most connected - your core abstractions)
 1. `Pointer` - 538 edges
@@ -586,7 +603,7 @@
 3. `./AgentRobotScreen.svelte` - 81 edges
 4. `BrokerInterface` - 70 edges
 5. `Bar` - 70 edges
-6. `fetchWithAuth()` - 67 edges
+6. `fetchWithAuth()` - 66 edges
 7. `Manager` - 60 edges
 8. `AgentRuntime` - 58 edges
 9. `Service` - 57 edges
@@ -597,12 +614,12 @@
   .remember/recent.md → docs/lab-integration-test.md
 - `date` --uses--> `Settings`  [INFERRED]
   scripts/sweep_summary.py → trader/config.py
-- `date` --uses--> `Settings`  [INFERRED]
-  scripts/warm_robot_bars.py → trader/config.py
 - `TestClient` --uses--> `QuikAgentStore`  [INFERRED]
   tests/quik/test_robot_params_relay.py → trader/quik/store.py
 - `STL Order Comment` --semantically_similar_to--> `STL Links API (/api/v1/stl-links)`  [INFERRED] [semantically similar]
   SPRINT_02_VERIFICATION_REPORT.md → docs/lab-integration-test.md
+- `runAgent()` --calls--> `hostname()`  [INFERRED]
+  quik_agent/cmd/quik-agent/main.go → companion/link.go
 
 ## Import Cycles
 - 1-file cycle: `trader/lab/scheduler.py -> trader/lab/scheduler.py`
@@ -618,11 +635,11 @@
 - **LAB runtime + strategy + backtest flow** — plans_2026_05_28_lab_mvp_v1_stlruntime, plans_2026_05_28_lab_mvp_v1_backtestruntime, plans_2026_05_28_lab_mvp_v1_strategies, plans_2026_05_28_lab_mvp_v1_backtest_engine, plans_2026_05_28_lab_mvp_v1_indicators [EXTRACTED 1.00]
 - **Unified auth bridge pattern across apps** — plans_2026_05_18_unified_auth_portal_auth, plans_2026_05_18_unified_auth_bridge_endpoint, plans_2026_05_18_unified_auth_portal_users, plans_2026_05_18_unified_auth_middleware [EXTRACTED 1.00]
 
-## Communities (630 total, 107 thin omitted)
+## Communities (648 total, 116 thin omitted)
 
 ### Community 0 - "Indicator Library"
-Cohesion: 0.11
-Nodes (26): atr(), bollinger(), cci(), ema_last(), keltner(), macd(), momentum(), Indicator library for LAB strategies. Pure numeric, no Bar import. (+18 more)
+Cohesion: 0.12
+Nodes (23): atr(), bollinger(), cci(), ema_last(), keltner(), macd(), momentum(), Indicator library for LAB strategies. Pure numeric, no Bar import. (+15 more)
 
 ### Community 1 - "gRPC MarketData Service"
 Cohesion: 0.07
@@ -678,7 +695,7 @@ Nodes (8): file_grpc_tradeapi_v1_marketdata_marketdata_service_proto_rawDescGZIP
 
 ### Community 14 - "OpenAPI Operation Schema"
 Cohesion: 0.10
-Nodes (24): _bracket_group(), evaluate(), marketable_price(), _protective(), protective_tp(), quantize(), Smart orders for the OPERATOR's manual QUIK trading (STL-side watcher, v1).  Kin, Snap price onto the exchange grid: DOWN for sell, UP for buy — the     conservat (+16 more)
+Nodes (14): BridgeAck, CancelOrder, Context, ControlHello, EventsFilter, Listener, PlaceOrder, RobotStatusReport (+6 more)
 
 ### Community 15 - "OrderBook & Quote Proto"
 Cohesion: 0.06
@@ -694,7 +711,7 @@ Nodes (15): isDateTime_TimeOffset, TimeZone, Duration, Message, MessageState, Si
 
 ### Community 18 - "OpenAPI Enum Schema"
 Cohesion: 0.06
-Nodes (41): ../../lib/robot-console, ./AgentRobotScreen.svelte, bad, cloneToPaper(), copyLog(), flattenNow(), inferStep(), load() (+33 more)
+Nodes (47): ./AgentBookPane.svelte, bestAsk, bestBid, err, load(), maxQty, norm(), spread (+39 more)
 
 ### Community 19 - "Account Trade Proto"
 Cohesion: 0.06
@@ -702,23 +719,23 @@ Nodes (18): EnumDescriptor, EnumNumber, EnumType, Decimal, Message, MessageState
 
 ### Community 20 - "GAPIC Language Settings"
 Cohesion: 0.08
-Nodes (10): CommonLanguageSettings, CppSettings, NodeSettings, PhpSettings, RubySettings, SelectiveGapicGeneration, SelectiveGapicGeneration, MessageState (+2 more)
+Nodes (10): CommonLanguageSettings, CppSettings, GoSettings, NodeSettings, PhpSettings, SelectiveGapicGeneration, SelectiveGapicGeneration, MessageState (+2 more)
 
 ### Community 21 - "Monitored Resource Proto"
 Cohesion: 0.07
 Nodes (13): file_google_api_monitored_resource_proto_init(), file_google_api_monitored_resource_proto_rawDescGZIP(), init(), MonitoredResource, MonitoredResourceDescriptor, MonitoredResourceMetadata, Struct, LabelDescriptor (+5 more)
 
 ### Community 22 - "FastAPI App Core"
-Cohesion: 0.04
-Nodes (83): _agent_alive(), _agent_alive_any(), _agent_alive_db(), _agent_bars_rows(), _agent_heartbeat_fresh(), _agent_is_paused(), _agent_set_pause(), _agent_task_fallback() (+75 more)
+Cohesion: 0.03
+Nodes (95): main(), Standalone AI46 (team-46) runner: `python -m trader.lab.ai46`.  Runs the paper s, _agent_alive(), _agent_alive_any(), _agent_alive_db(), _agent_bars_rows(), _agent_heartbeat_fresh(), _agent_is_paused() (+87 more)
 
 ### Community 23 - "Config Change Advice Proto"
 Cohesion: 0.08
 Nodes (14): Advice, Advice, ChangeType, file_google_api_config_change_proto_init(), file_google_api_config_change_proto_rawDescGZIP(), init(), ConfigChange, EnumDescriptor (+6 more)
 
 ### Community 24 - "Data Models & Scheduler"
-Cohesion: 0.06
-Nodes (38): Robot, _parse_window(), Tick once per minute. Run the robot's on_bar only when the current         Mosc, Execute one robot tick (one bar)., Parse 'HH:MM-HH:MM' trading window. Defaults to 09:00-23:55., Развернуть значение до dict, сколько бы слоёв кодировки на нём ни было.      О, Отработан ли уже этот бар. Правило одно: торгуем только на НОВОМ баре., Load deployed robots from DB and start them. (+30 more)
+Cohesion: 0.07
+Nodes (30): Tick once per minute. Run the robot's on_bar only when the current         Mosc, Execute one robot tick (one bar)., Развернуть значение до dict, сколько бы слоёв кодировки на нём ни было.      О, Отработан ли уже этот бар. Правило одно: торгуем только на НОВОМ баре., Load deployed robots from DB and start them., RobotScheduler, _unwrap_json(), Бумажный робот исполняется ТОЛЬКО на новом баре.  Баг: планировщик Лаборатории т (+22 more)
 
 ### Community 25 - "Asset Option Enums Proto"
 Cohesion: 0.08
@@ -742,7 +759,7 @@ Nodes (4): GetAssetResponse, Option, Date, Decimal
 
 ### Community 30 - "Community 30"
 Cohesion: 0.06
-Nodes (48): _base_ticker(), commission_for(), fee_group(), FORTS commission model — broker (Finam) + MOEX exchange fee.  Two execution mode, The full fee model as plain data, so the frontend can render commission with, RIM6 -> RI, Si-6.26 / SiM6 -> SI, GZM6 -> GZ. Returns upper 2-letter prefix., Total commission (rubles) for ONE fill of `qty` contracts of `symbol`.      take, fetch_contract_spec() (+40 more)
+Nodes (45): _base_ticker(), commission_for(), fee_config(), fee_group(), FORTS commission model — broker (Finam) + MOEX exchange fee.  Two execution mode, The full fee model as plain data, so the frontend can render commission with, RIM6 -> RI, Si-6.26 / SiM6 -> SI, GZM6 -> GZ. Returns upper 2-letter prefix., Total commission (rubles) for ONE fill of `qty` contracts of `symbol`.      take (+37 more)
 
 ### Community 31 - "Community 31"
 Cohesion: 0.11
@@ -766,7 +783,7 @@ Nodes (44): loadFeeConfig(), applyFeeConfig(), whitelist, AccountSummary, Instru
 
 ### Community 36 - "Community 36"
 Cohesion: 0.07
-Nodes (38): ProcessPoolExecutor, Agent, _chunked(), _log(), main(), _patch_httpx_insecure(), _profit_rf(), AsyncClient (+30 more)
+Nodes (36): ProcessPoolExecutor, Agent, _chunked(), _log(), main(), _patch_httpx_insecure(), _profit_rf(), AsyncClient (+28 more)
 
 ### Community 37 - "Community 37"
 Cohesion: 0.07
@@ -793,15 +810,15 @@ Cohesion: 0.10
 Nodes (18): Build-PrimaryPlanByDay(), Convert-CandleRowToFinamLine(), ConvertFrom-JsonCompat(), Escape-CsvField(), Get-CandlesAll(), Get-ContractWindowForYear(), Get-FortsSecurityMeta(), Get-IssLastCandleCalendarDateInRange() (+10 more)
 
 ### Community 43 - "Community 43"
-Cohesion: 0.09
-Nodes (31): _iss_tail_cached(), ISS tail fetch with a short TTL + in-flight collapse: N tabs polling the     sa, is_specific_contract(), IssLoader, load_bars_iss(), _month_last(), _quarter_start(), MOEX ISS async loader for FORTS futures minute bars.  Mirrors the core logic of (+23 more)
+Cohesion: 0.10
+Nodes (24): _iss_tail_cached(), ISS tail fetch with a short TTL + in-flight collapse: N tabs polling the     sa, is_specific_contract(), IssLoader, load_bars_iss(), _month_last(), _quarter_start(), MOEX ISS async loader for FORTS futures minute bars.  Mirrors the core logic of (+16 more)
 
 ### Community 44 - "Community 44"
 Cohesion: 0.01
-Nodes (32): Ack, AgentStatusSnapshot, CancelOrder, Command, DeployRobot, FlattenRobot, Heartbeat, KillSwitch (+24 more)
+Nodes (27): Ack, AgentStatusSnapshot, CancelOrder, FlattenRobot, Heartbeat, KillSwitch, MarketDataTick, ParamRow (+19 more)
 
 ### Community 46 - "Community 46"
-Cohesion: 0.06
+Cohesion: 0.05
 Nodes (42): best(), daysAgo(), descOf(), doLaunch(), drawHeatmap(), heatColor(), install(), labelOf() (+34 more)
 
 ### Community 47 - "Community 47"
@@ -821,20 +838,20 @@ Cohesion: 0.10
 Nodes (12): file_google_api_label_proto_init(), file_google_api_label_proto_rawDescGZIP(), init(), LabelDescriptor, LabelDescriptor_ValueType, EnumDescriptor, EnumNumber, EnumType (+4 more)
 
 ### Community 51 - "Community 51"
-Cohesion: 0.12
-Nodes (19): mock_tx(), OrderResponse, OrderRequest, TxClient, OrderRequest, OrderResponse, client(), test_place_limit_order_success() (+11 more)
+Cohesion: 0.14
+Nodes (17): mock_tx(), TxClient, OrderRequest, OrderResponse, client(), test_place_limit_order_success(), test_place_market_order_rejected(), test_place_order_client_order_id_generated() (+9 more)
 
 ### Community 52 - "Community 52"
 Cohesion: 0.10
 Nodes (10): Usage, file_google_api_usage_proto_init(), file_google_api_usage_proto_rawDescGZIP(), init(), UsageRule, Message, MessageState, SizeCache (+2 more)
 
 ### Community 53 - "Community 53"
-Cohesion: 0.05
-Nodes (28): LiveRuntime, _load_bars_shared(), Order, STL runtime for live trading — wraps existing trader clients.      Market data, ISS uses bare ticker (RIM6); Finam Trade API expects symbol@MIC         (RIM6@R, Бар этого тика уже отработан (или ленты нет) — торговать нельзя.          План, Query Finam /params for the account: is this instrument shortable?         Reus, Позиция бумажного робота из его же записанных филлов — С НАСТОЯЩЕЙ         СРЕД (+20 more)
+Cohesion: 0.11
+Nodes (4): Order, STLRuntime, Protocol, Any
 
 ### Community 54 - "Community 54"
 Cohesion: 0.05
-Nodes (56): $lib/smart-order-help, fmtPrice(), COMMON_FACTS, conditionText(), fmtNum(), fmtPts(), fmtRub(), fmtWhen() (+48 more)
+Nodes (57): $lib/smart-order-help, fmtPrice(), codeSuggestions(), COMMON_FACTS, conditionText(), fmtNum(), fmtPts(), fmtRub() (+49 more)
 
 ### Community 55 - "Community 55"
 Cohesion: 0.02
@@ -857,8 +874,8 @@ Cohesion: 0.10
 Nodes (12): InstrumentDetail, InstrumentRegistry, Instrument, InstrumentDetail, TradingParams, registry(), test_instrument_detail_fields(), test_instrument_fields() (+4 more)
 
 ### Community 60 - "Community 60"
-Cohesion: 0.07
-Nodes (21): BookSource, execution, BookLevel, Context, Duration, ExecutionUpdate, Guard, LimitsState (+13 more)
+Cohesion: 0.06
+Nodes (26): BookSource, execution, BookLevel, CancelOrder, Context, Duration, ExecutionUpdate, LimitsState (+18 more)
 
 ### Community 61 - "Community 61"
 Cohesion: 0.09
@@ -881,24 +898,24 @@ Cohesion: 0.11
 Nodes (10): Visibility, file_google_api_visibility_proto_init(), file_google_api_visibility_proto_rawDescGZIP(), init(), VisibilityRule, Message, MessageState, SizeCache (+2 more)
 
 ### Community 66 - "Community 66"
-Cohesion: 0.19
-Nodes (19): entry_block(), management_levels(), Почему вход НЕ пройдёт прямо сейчас: разножка или остывание. Зеркало     гейтов, PRICE-LEVEL orders the position-management layer is watching — the exact     mir, Разножка помечает ТОЛЬКО доборы, а не вход по сигналу и не разворот.  Гейты gap_, test_filter_off_never_blocks(), test_gap_message_when_close_to_last_entry(), test_no_message_when_far_enough() (+11 more)
+Cohesion: 0.13
+Nodes (8): LiveRuntime, STL runtime for live trading — wraps existing trader clients.      Market data, ISS uses bare ticker (RIM6); Finam Trade API expects symbol@MIC         (RIM6@R, Бар этого тика уже отработан (или ленты нет) — торговать нельзя.          План, Query Finam /params for the account: is this instrument shortable?         Reus, Позиция бумажного робота из его же записанных филлов — С НАСТОЯЩЕЙ         СРЕД, AccountSummary, Position
 
 ### Community 67 - "Community 67"
-Cohesion: 0.06
-Nodes (24): $lib/csv, $lib/grid-sample, ../../lib/json-field, $lib/strategy-help, ./BacktestChart.svelte, applyMarkers(), barIdxByTime(), clusterThreshold() (+16 more)
+Cohesion: 0.09
+Nodes (16): ./BacktestChart.svelte, applyMarkers(), barIdxByTime(), clusterThreshold(), drawOrderLines(), fitAll(), hitTestTooltip(), loadData() (+8 more)
 
 ### Community 68 - "Community 68"
 Cohesion: 0.12
 Nodes (29): _client(), FakePool, _LedgerPool, _mint_code(), _operator_headers(), _pair(), STL Companion: pairing, token scope, and the snapshot's watch verdicts.  The sec, The whole safety story: the token authenticates the snapshot and NOTHING     els (+21 more)
 
 ### Community 69 - "Community 69"
-Cohesion: 0.22
+Cohesion: 0.20
 Nodes (3): _dec_field(), AsyncClient, Queue
 
 ### Community 70 - "Community 70"
 Cohesion: 0.04
-Nodes (38): $lib/api, $lib/chart-time, $lib/page-title, ./lib/quik_md, $lib/stores/account.svelte, $lib/stores/candles.svelte, $lib/stores/instrument.svelte, $lib/stores/orderbook.svelte (+30 more)
+Nodes (40): $lib/api, $lib/chart-time, $lib/page-title, ./lib/quik_md, $lib/stores/account.svelte, $lib/stores/candles.svelte, $lib/stores/instrument.svelte, $lib/stores/orderbook.svelte (+32 more)
 
 ### Community 71 - "Community 71"
 Cohesion: 0.07
@@ -909,8 +926,8 @@ Cohesion: 0.09
 Nodes (31): Capability, Broker abstraction layer — robots trade through ONE strict contract.  Public sur, BrokerNotRegistered, BrokerNotTradeReady, get_broker(), _load_builtin_adapters(), Broker registry + factory — the ONLY place that knows concrete adapters.  Adapte, Pick + construct the broker adapter for ``settings.exchange_interface``.      HA (+23 more)
 
 ### Community 73 - "Community 73"
-Cohesion: 0.06
-Nodes (33): commissionBreakdown, commissionFor(), ContractPnl, EqPt, equityPaths(), ev(), exitLabel(), exitStats (+25 more)
+Cohesion: 0.07
+Nodes (34): commissionBreakdown, commissionFor(), ContractPnl, EqPt, equityPaths(), ev(), exitLabel(), exitStats (+26 more)
 
 ### Community 74 - "Community 74"
 Cohesion: 0.13
@@ -921,24 +938,24 @@ Cohesion: 0.13
 Nodes (33): _auth(), ExchangeInterface, get_exchange_interface(), market_session(), quik_order_book(), quik_params(), quik_securities(), quik_status() (+25 more)
 
 ### Community 76 - "Community 76"
-Cohesion: 0.08
-Nodes (31): quote_from_proto(), QuoteStream, Convert a proto Quote to the dict format expected by Quote.from_payload()., gRPC streaming client for Finam market data. Same interface as WsSession., _make_error_response(), _make_pb_quote(), _make_stub(), _make_subscribe_response() (+23 more)
+Cohesion: 0.18
+Nodes (20): quote_from_proto(), Convert a proto Quote to the dict format expected by Quote.from_payload()., _make_error_response(), _make_pb_quote(), _make_stub(), _make_subscribe_response(), Build a SubscribeQuoteResponse proto with Quote list., Return a fake stub whose SubscribeQuote is an async generator. (+12 more)
 
 ### Community 77 - "Community 77"
-Cohesion: 0.04
-Nodes (24): AccountReportInfo, DateRange, AccountReportInfo, CreateAccountReportRequest, CreateAccountReportResponse, DateRange, GetAccountReportInfoRequest, GetAccountReportInfoResponse (+16 more)
+Cohesion: 0.13
+Nodes (5): ReportCreationStatus, ReportForm, EnumDescriptor, EnumNumber, EnumType
 
 ### Community 78 - "Community 78"
-Cohesion: 0.07
-Nodes (9): ExternalDocumentation, Info, Operation, Swagger, Parameters, SecurityDefinitions, SecurityRequirement, Tag (+1 more)
+Cohesion: 0.04
+Nodes (13): Contact, ExternalDocumentation, Info, License, Info, Operation, Swagger, Parameters (+5 more)
 
 ### Community 79 - "Community 79"
 Cohesion: 0.09
 Nodes (10): _CachedStar, Внутренний сигнал «значение взято из кэша, запрос не нужен»., client(), test_get_instrument_params_502_on_finam_error(), test_get_portfolio_pos_error_propagates(), test_get_portfolio_returns_positions(), test_list_instruments_degrades_to_empty_on_total_source_failure(), test_place_order_tx_error_propagates() (+2 more)
 
 ### Community 80 - "Community 80"
-Cohesion: 0.08
-Nodes (52): _fill_price(), _match_trades(), Средняя цена и объём РЕАЛЬНОГО исполнения заявки по таблице сделок QUIK.     Лим, Запасной путь, когда номера заявки нет: стор заявок живёт В ПАМЯТИ и     обнуляе, catch_up_trail(), new_id(), protective_children(), protective_sl() (+44 more)
+Cohesion: 0.07
+Nodes (68): _match_trades(), Запасной путь, когда номера заявки нет: стор заявок живёт В ПАМЯТИ и     обнуляе, _bracket_group(), catch_up_trail(), evaluate(), marketable_price(), new_id(), _protective() (+60 more)
 
 ### Community 81 - "Community 81"
 Cohesion: 0.06
@@ -974,7 +991,7 @@ Nodes (12): API Endpoints Used, Architecture, Config, Data Models, find_instrume
 
 ### Community 89 - "Community 89"
 Cohesion: 0.02
-Nodes (33): Contact, HeaderParameter, JSONSchema, License, file_grpc_gateway_protoc_gen_openapiv2_options_annotations_proto_init(), init(), Contact, EnumSchema (+25 more)
+Nodes (31): HeaderParameter, JSONSchema, file_grpc_gateway_protoc_gen_openapiv2_options_annotations_proto_init(), init(), Contact, EnumSchema, ExternalDocumentation, Header (+23 more)
 
 ### Community 90 - "Community 90"
 Cohesion: 0.14
@@ -993,16 +1010,16 @@ Cohesion: 0.10
 Nodes (38): _companion_or_operator(), devices(), _kv_get(), _kv_put(), _msk_midnight_ms(), _norm_account(), _operator(), pair() (+30 more)
 
 ### Community 94 - "Community 94"
-Cohesion: 0.15
-Nodes (15): config, httpError, link, configDir(), Client, Request, ResponseWriter, hostname() (+7 more)
+Cohesion: 0.14
+Nodes (16): config, httpError, link, configDir(), Client, Request, ResponseWriter, hostname() (+8 more)
 
 ### Community 95 - "Community 95"
 Cohesion: 0.14
 Nodes (6): AuthResponse, SubscribeJwtRenewalRequest, SubscribeJwtRenewalResponse, MessageState, SizeCache, UnknownFields
 
 ### Community 96 - "Community 96"
-Cohesion: 0.11
-Nodes (18): devDependencies, jsdom, svelte, svelte-check, @sveltejs/vite-plugin-svelte, typescript, vite, vitest (+10 more)
+Cohesion: 0.08
+Nodes (22): dependencies, lightweight-charts, @monaco-editor/loader, uplot, devDependencies, jsdom, svelte, svelte-check (+14 more)
 
 ### Community 97 - "Community 97"
 Cohesion: 0.17
@@ -1013,12 +1030,12 @@ Cohesion: 0.08
 Nodes (20): MarketDataServiceServicer, Получение текущего стакана по инструменту         Пример HTTP запроса:, Получение списка последних сделок по инструменту         Пример HTTP запроса:, Подписка на котировки по инструменту. Стрим метод, Подписка на стакан по инструменту. Стрим метод, Подписка на сделки по инструменту. Стрим метод, Подписка на агрегированные свечи. Стрим метод, Сервис рыночных данных (+12 more)
 
 ### Community 99 - "Community 99"
-Cohesion: 0.15
-Nodes (27): activate_order(), _auth(), _book(), cancel_order(), _catch_up_trails(), create(), list_orders(), _price_steps() (+19 more)
+Cohesion: 0.12
+Nodes (32): activate_order(), _auth(), _book(), cancel_order(), _catch_up_trails(), create(), _fill_price(), list_orders() (+24 more)
 
 ### Community 100 - "Community 100"
-Cohesion: 0.05
-Nodes (29): Order-flow collector for team-46 — live trades + order book → OFI family.  This, (unix_seconds, price, size, side_enum) from a proto Trade., _trade_to_tuple(), _auth(), LoginRequest, Shorthand for the per-endpoint auth plumbing (returns the caller's email)., ГО отчёта = биржевое × множитель брокера. На биржевом значении доходность врёт., Множитель не задан — платформа работает как раньше, без сюрпризов. (+21 more)
+Cohesion: 0.08
+Nodes (15): Order-flow collector for team-46 — live trades + order book → OFI family.  This, (unix_seconds, price, size, side_enum) from a proto Trade., _trade_to_tuple(), _auth(), Shorthand for the per-endpoint auth plumbing (returns the caller's email)., _backoff(), bar_from_proto(), BarsStream (+7 more)
 
 ### Community 101 - "Community 101"
 Cohesion: 0.10
@@ -1065,8 +1082,8 @@ Cohesion: 0.16
 Nodes (23): _best_by_worst(), combos(), fmt(), full(), key_of(), log(), main(), neighbourhood() (+15 more)
 
 ### Community 112 - "Community 112"
-Cohesion: 0.15
-Nodes (9): file_google_api_source_info_proto_init(), file_google_api_source_info_proto_rawDescGZIP(), init(), SourceInfo, Any, Message, MessageState, SizeCache (+1 more)
+Cohesion: 0.11
+Nodes (12): file_google_api_service_proto_init(), file_google_api_service_proto_rawDescGZIP(), init(), file_google_api_source_info_proto_init(), file_google_api_source_info_proto_rawDescGZIP(), init(), SourceInfo, Any (+4 more)
 
 ### Community 113 - "Community 113"
 Cohesion: 0.14
@@ -1085,28 +1102,28 @@ Cohesion: 0.48
 Nodes (6): _make_bars(), Lock _prev_day_hlc output: the perf rewrite must not change pivot results., _reference_prev_day_hlc(), test_prev_day_hlc_matches_reference_at_every_cursor(), test_prev_day_hlc_none_when_single_day(), _ts()
 
 ### Community 118 - "Community 118"
-Cohesion: 0.12
-Nodes (12): Taker commission expressed in PRICE POINTS — for a consumer that tracks P&L in, taker_points(), AgentRuntime — the STLRuntime protocol backed by the local agent bridge.  Strate, Ждём, пока встречная заявка по этому инструменту сойдёт с рынка (см.         _CR, Record a SIGNIFICANT event to the per-robot detailed log (the stand's         «Д, Feed an OrderUpdate from the agent. Fill states mutate the position., Resting/in-flight orders for the showcase (submitted/active/partial)., Recon align (fix_state): overwrite the believed book to the QUIK fact. (+4 more)
+Cohesion: 0.10
+Nodes (13): AccountSummary, Order, Position, AgentRuntime — the STLRuntime protocol backed by the local agent bridge.  Strate, Ждём, пока встречная заявка по этому инструменту сойдёт с рынка (см.         _CR, Locally terminate an order the agent cannot cancel (unknown to it —         e.g., Record a SIGNIFICANT event to the per-robot detailed log (the stand's         «Д, Feed an OrderUpdate from the agent. Fill states mutate the position. (+5 more)
 
 ### Community 119 - "Community 119"
-Cohesion: 0.28
-Nodes (9): PaperFill, Запись филлов team-46 в live_trades: уникальный order_id, роль, вес, время филла, Биржа закрылась — позиции закрываются, а не висят через ночь.      Раньше сессио, Счётчик _persisted обнуляется рестартом — order_id всё равно не должен совпасть., _StubPool, _svc(), test_flush_closes_paper_positions_when_the_session_ends(), test_persist_encodes_role_weight_and_fill_time() (+1 more)
+Cohesion: 0.14
+Nodes (13): PaperFill, Ai46Service, Идут ли торги FORTS ПРЯМО СЕЙЧАС — по официальному расписанию ISS и часам, Биржа закрылась — закрываем бумажные позиции по последней известной цене., Флаг «робот работает» в витрине. Раньше bootstrap ставил его только при, Запись филлов team-46 в live_trades: уникальный order_id, роль, вес, время филла, Биржа закрылась — позиции закрываются, а не висят через ночь.      Раньше сессио, Счётчик _persisted обнуляется рестартом — order_id всё равно не должен совпасть. (+5 more)
 
 ### Community 120 - "Community 120"
 Cohesion: 0.17
 Nodes (12): 10. pyproject.toml changes, 11. HFT Extensibility Constraints, 12. Finam API Paths (to verify during implementation), 1. Goal, 2. Architecture, 3.1 MarketDataSource Protocol, 3.2 feed.py changes, 3.3 Token signature (+4 more)
 
 ### Community 121 - "Community 121"
-Cohesion: 0.08
-Nodes (26): BarBuilder, pick_price(), Bar, 1-minute bar aggregation from local QUIK DDE ticks.  Strategies consume CLOSED b, Bar price from a tick: trade price when the feed carries it, else the     mid, e, Snapshot price (bid/ask mid or last param). Fallback source: muted         while, Exact exchange trade from the anonymized tape (OnAllTrade)., Last n CLOSED bars as [t, o, h, l, c, v] rows (the forming minute is         not (+18 more)
+Cohesion: 0.23
+Nodes (9): FakeBridge, Вторая нога переворота не должна уходить, пока висит встречная заявка.  Переворо, Пропустить вход хуже, чем рискнуть отказом: так теряется весь переворот., Усреднение в ту же сторону кросс-заявкой не бьётся — ждать нечего., _rt(), test_entry_waits_for_the_exit_to_clear(), test_same_side_order_never_waits(), test_wait_gives_up_and_sends_anyway() (+1 more)
 
 ### Community 122 - "Community 122"
-Cohesion: 0.21
-Nodes (45): Account, Account, BookLevel, ConnState, Instrument, LinkState, Order, OrderBook (+37 more)
+Cohesion: 0.23
+Nodes (38): Account, Account, BookLevel, ConnState, Instrument, LinkState, OrderBook, OrderRef (+30 more)
 
 ### Community 123 - "Community 123"
-Cohesion: 0.11
-Nodes (29): dv_block(), explain(), _fvg_explain(), _generic_explain(), _module_explain(), planned_orders(), Strategy introspection for the showcase UI.  Produces a JSON-able dict describin, Orders the robot WOULD place right now given want vs current position —     mirr (+21 more)
+Cohesion: 0.08
+Nodes (47): dv_block(), entry_block(), explain(), _fvg_explain(), _generic_explain(), management_levels(), _module_explain(), planned_orders() (+39 more)
 
 ### Community 124 - "Community 124"
 Cohesion: 0.16
@@ -1145,8 +1162,8 @@ Cohesion: 0.09
 Nodes (22): 00:12 | main, 00:14-00:21 | main, 00:17 | main, 07:30 | main, 08:12 | main, 09:00-13:49 | main, 09:28 | main, 09:30 | feat/algo-ledger (+14 more)
 
 ### Community 133 - "Community 133"
-Cohesion: 0.16
-Nodes (36): agent_local_status(), agent_robots(), AgentIdBody, _auth(), deploy_agent(), DeployAgentBody, flatten_agent(), _name_overrides() (+28 more)
+Cohesion: 0.13
+Nodes (45): agent_local_status(), agent_robots(), AgentIdBody, _auth(), deploy_agent(), DeployAgentBody, ExitOnlyBody, flatten_agent() (+37 more)
 
 ### Community 134 - "Community 134"
 Cohesion: 0.10
@@ -1161,8 +1178,8 @@ Cohesion: 0.14
 Nodes (13): compilerOptions, isolatedModules, module, moduleResolution, noEmit, paths, resolveJsonModule, strict (+5 more)
 
 ### Community 137 - "Community 137"
-Cohesion: 0.06
-Nodes (52): BacktestRuntime, compute_metrics(), _demote_to_background(), Make THIS process a background CPU/IO citizen so a heavy param sweep never, Run MANY param combos in ONE subprocess — bars pickled once, not per combo., Run a whole parameter grid in ONE subprocess (bars serialized once).     Return, Round-trip metrics. PnL per pair is multiplied by point_value so all money, run_backtest_grid() (+44 more)
+Cohesion: 0.04
+Nodes (68): cuid(), _fetch_bars_for_backtest(), _fetch_extra_for_backtest(), Returns minute bars for backtest, ALWAYS fresh through the requested end date., Reference series the strategy READS but never trades -> BacktestRuntime.extra., _run_backtest_task(), compute_metrics(), _demote_to_background() (+60 more)
 
 ### Community 138 - "Community 138"
 Cohesion: 0.14
@@ -1181,12 +1198,12 @@ Cohesion: 0.19
 Nodes (7): EnumDescriptor, EnumNumber, EnumType, Month, file_google_type_month_proto_init(), file_google_type_month_proto_rawDescGZIP(), init()
 
 ### Community 142 - "Community 142"
-Cohesion: 0.10
-Nodes (25): accentPolicy, dataBlob, addTrayIcon(), main(), post(), post2(), msgT, notifyIconData (+17 more)
+Cohesion: 0.12
+Nodes (21): accentPolicy, dataBlob, addTrayIcon(), msgT, notifyIconData, pointT, rectT, dpapiCall() (+13 more)
 
 ### Community 143 - "Community 143"
 Cohesion: 0.03
-Nodes (32): isRunnerControl_Payload, BridgeAck, ControlHello, EventsFilter, FixRobotState, isRunnerControl_Payload, file_shectory_quik_v1_runner_bridge_proto_init(), file_shectory_quik_v1_runner_bridge_proto_rawDescGZIP() (+24 more)
+Nodes (33): isRunnerControl_Payload, BridgeAck, ControlHello, EventsFilter, FixRobotState, isRunnerControl_Payload, file_shectory_quik_v1_runner_bridge_proto_init(), file_shectory_quik_v1_runner_bridge_proto_rawDescGZIP() (+25 more)
 
 ### Community 144 - "Community 144"
 Cohesion: 0.09
@@ -1202,7 +1219,7 @@ Nodes (17): algo_report(), algo_robot_stats(), algo_trades(), _auth(), _date_bou
 
 ### Community 147 - "Community 147"
 Cohesion: 0.17
-Nodes (4): Metric, Message, MessageState, UnknownFields
+Nodes (4): Metric, Message, MessageState, SizeCache
 
 ### Community 148 - "Community 148"
 Cohesion: 0.20
@@ -1237,8 +1254,8 @@ Cohesion: 0.17
 Nodes (15): collect_fills(), ingest_once(), point_values(), price_row(), Algo-trade ledger: the authoritative per-fill accounting journal for robots., symbol -> ₽/point from the QLua params feed ({rows:[{code, price_step,     step, Normalize both sources into RawFills, oldest first. Mirror int64s arrive as, Apply one fill to (pos, avg) and price its P&L. Returns the DB row dict     plu (+7 more)
 
 ### Community 156 - "Community 156"
-Cohesion: 0.19
-Nodes (17): MarketDataTick, RobotStatusReport, Server, T, fakeStatus, fakeTicks, startTestServer(), TestControlRelayReplayAndOrderEventFan() (+9 more)
+Cohesion: 0.25
+Nodes (15): RobotStatusReport, Server, T, fakeStatus, startTestServer(), TestControlRelayReplayAndOrderEventFan(), TestLastStatusesNewestWinsPerRobotAndOmittedRobotKeepsPrevious(), TestPlaceOrderReachesSinkAndStatusForwards() (+7 more)
 
 ### Community 157 - "Community 157"
 Cohesion: 0.18
@@ -1253,8 +1270,8 @@ Cohesion: 0.12
 Nodes (15): 02:08 | main, 07:40 | main, 08:57 | main, 12:04 | main, 12:41 | main, 15:40 | main, 15:57 | main, 17:23 | main (+7 more)
 
 ### Community 160 - "Community 160"
-Cohesion: 0.12
-Nodes (20): $lib/param-groups, bump(), clamp(), groups, hold(), isBinary(), isOn(), num() (+12 more)
+Cohesion: 0.07
+Nodes (28): $lib/csv, $lib/grid-sample, ../../lib/json-field, $lib/param-groups, $lib/strategy-help, collapseTies(), deadAxes(), ./MustDescription.svelte (+20 more)
 
 ### Community 161 - "Community 161"
 Cohesion: 0.15
@@ -1267,6 +1284,10 @@ Nodes (16): Conn, Context, Listener, Mutex, Bridge, AccEvent, BridgeHandler, can
 ### Community 163 - "Community 163"
 Cohesion: 0.15
 Nodes (8): Message, MessageState, SizeCache, UnknownFields, Decimal, file_google_type_decimal_proto_init(), file_google_type_decimal_proto_rawDescGZIP(), init()
+
+### Community 164 - "Community 164"
+Cohesion: 0.22
+Nodes (3): file_google_api_client_proto_init(), init(), PythonSettings_ExperimentalFeatures
 
 ### Community 165 - "Community 165"
 Cohesion: 0.25
@@ -1281,8 +1302,8 @@ Cohesion: 0.20
 Nodes (10): Backtest engine (subprocess), BacktestRuntime, asyncpg pool (trader/db.py), Indicators ema/rsi, LiveRuntime, Prisma schema (Robot, BacktestRun, etc), RobotScheduler (cron asyncio), STLRuntime Protocol (+2 more)
 
 ### Community 168 - "Community 168"
-Cohesion: 0.27
-Nodes (10): Archive Session Log, Session Log (now), Recent Session Log, BacktestLab UI (catalog/param sweep/leaderboard), gRPC Bearer Auth Fix, 27 Paper Robots Deployment, Prisma Schema (net_profit/recovery_factor cols), Showcase Endpoints (/robots/showcase, /live-feed) (+2 more)
+Cohesion: 0.47
+Nodes (6): Archive Session Log, Session Log (now), Recent Session Log, gRPC Bearer Auth Fix, 27 Paper Robots Deployment, Showcase Endpoints (/robots/showcase, /live-feed)
 
 ### Community 169 - "Community 169"
 Cohesion: 0.22
@@ -1301,8 +1322,8 @@ Cohesion: 0.19
 Nodes (11): _FakeConn, _FakePool, _fill(), _pos(), Средняя цена бумажной позиции — она же выход из шорта.  Инцидент 2026-07-27: `_p, Минимальный async-context пул: отдаёт заранее заданные филлы., Тот самый живой случай: 10 продаж вокруг 103 800 — средняя НЕ ноль., test_no_pool_is_flat_not_crash() (+3 more)
 
 ### Community 173 - "Community 173"
-Cohesion: 0.18
-Nodes (24): check_collar(), check_daily_cap(), check_master_flag(), check_quantity(), check_replace_price_collar(), check_whitelist(), check_working(), LimitError (+16 more)
+Cohesion: 0.11
+Nodes (40): check_collar(), check_daily_cap(), check_master_flag(), check_quantity(), check_replace_price_collar(), check_whitelist(), check_working(), LimitError (+32 more)
 
 ### Community 174 - "Community 174"
 Cohesion: 0.24
@@ -1318,11 +1339,11 @@ Nodes (23): ABC, BrokerInterface, News, [8] A broker/exchange news item., [10] A
 
 ### Community 178 - "Community 178"
 Cohesion: 0.04
-Nodes (10): Alert, AlertSeverity, ChannelState, CommandType, Diagnostics, ExecutionUpdate, OrderState, EnumDescriptor (+2 more)
+Nodes (10): Alert, AlertSeverity, ChannelState, Command, CommandType, Diagnostics, OrderState, EnumDescriptor (+2 more)
 
 ### Community 179 - "Community 179"
 Cohesion: 0.04
-Nodes (5): OrderUpdate, PlaceOrder, RobotFill, Side, StartExecution
+Nodes (5): OrderUpdate, PlaceOrder, RobotWorkingOrder, Side, StartExecution
 
 ### Community 180 - "Community 180"
 Cohesion: 0.17
@@ -1330,7 +1351,7 @@ Nodes (11): 00:04 | main, 01:06 | main, 01:25–03:12 | main, 04:08-08:49 | main
 
 ### Community 181 - "Community 181"
 Cohesion: 0.04
-Nodes (4): RobotBar, RobotStatus, RobotStatusReport, RobotWorkingOrder
+Nodes (4): RobotBar, RobotFill, RobotStatus, RobotStatusReport
 
 ### Community 182 - "Community 182"
 Cohesion: 0.22
@@ -1353,16 +1374,16 @@ Cohesion: 0.18
 Nodes (10): 1. Собрать факты о роботе, 2. Проверить покрытие групп, 3. Написать пояснение и перевод, 4. Проверить, params_UI — единый фрейм параметров робота, Правила фрейма (нарушать нельзя), Скрипт работы, Типографика и цвет (эталон) (+2 more)
 
 ### Community 187 - "Community 187"
-Cohesion: 0.21
-Nodes (16): _limits(), _ok_place(), Tests for the STL-side QUIK orders (sprint02 Phase 2). HUMAN-INITIATED only.  Co, test_collar_over_max_rejects(), test_daily_cap_rejects(), test_master_flag_off_rejects(), test_quantity_over_per_order_cap_rejects(), test_replace_collar_on_new_price_rejects_buy() (+8 more)
+Cohesion: 0.14
+Nodes (8): AsyncAuthClient, auth_client(), force_refresh=True must re-fetch even if token is not expired., test_account_id_empty_when_not_in_details(), test_expired_token_triggers_refresh(), test_fetch_token_extracts_account_id_from_account_ids(), test_get_token_force_refresh_bypasses_cache(), TokenResponse
 
 ### Community 188 - "Community 188"
 Cohesion: 0.15
 Nodes (12): 10:35-10:37 | main, 12:01 | main, 12:15-13:03 | main, 13:44-14:06 | main, 14:12 | main, 14:14 | main, 14:20 | main, 14:30 | main (+4 more)
 
 ### Community 189 - "Community 189"
-Cohesion: 0.24
-Nodes (16): TestForwardRobotStatusDropsWithoutSession(), TestHandleRobotCommandsPersistAndRelay(), TestHandleRobotMsgNilStoreIsNoop(), TestSetPositionAndRecordFillGatedOnPaused(), T, T, NewStore(), TestSetPaperFlipsAndPersistsWithoutMutatingCallersPointer() (+8 more)
+Cohesion: 0.41
+Nodes (11): T, NewStore(), TestSetPaperFlipsAndPersistsWithoutMutatingCallersPointer(), TestSetPaperUnknownIDReturnsErrNotFound(), TestStoreCorruptFileDoesNotBlockStartup(), TestStoreDeployedAndParamsTimestamps(), TestStorePutGetPersistReload(), TestUpdateParamsAppliesOnlyPresentFieldsAndPersists() (+3 more)
 
 ### Community 190 - "Community 190"
 Cohesion: 0.38
@@ -1393,20 +1414,16 @@ Cohesion: 0.25
 Nodes (3): CustomHttpPattern, MessageState, UnknownFields
 
 ### Community 198 - "Community 198"
-Cohesion: 0.60
-Nodes (3): fakeRunner, OrderUpdate, RunnerControl
-
-### Community 199 - "Community 199"
-Cohesion: 0.07
-Nodes (14): MarketDataService, Сервис рыночных данных, object, QuikAgentLink, QuikAgentLinkServicer, QuikAgentLinkStub, ---- Session: single bidi stream, agent -> STL = AgentMessage, STL -> agent = Or, Constructor.          Args:             channel: A grpc.Channel. (+6 more)
+Cohesion: 0.27
+Nodes (8): fakeRunner, TestForwardRobotStatusDropsWithoutSession(), TestHandleRobotCommandsPersistAndRelay(), TestHandleRobotMsgNilStoreIsNoop(), TestSetPositionAndRecordFillGatedOnPaused(), OrderUpdate, RunnerControl, T
 
 ### Community 200 - "Community 200"
 Cohesion: 0.29
 Nodes (3): Http, HttpRule, SizeCache
 
 ### Community 202 - "Community 202"
-Cohesion: 0.06
-Nodes (32): RegisterRunnerBridgeServer(), RunnerBridgeServer, ServiceRegistrar, BridgeAck, CancelOrder, Context, ControlHello, EventsFilter (+24 more)
+Cohesion: 0.10
+Nodes (15): FixRobotState, Mutex, OrderUpdate, RobotSpec, RobotStatus, TickSource, RunnerControl, Store (+7 more)
 
 ### Community 203 - "Community 203"
 Cohesion: 0.27
@@ -1429,8 +1446,8 @@ Cohesion: 0.11
 Nodes (3): Leg, Order, OrderType
 
 ### Community 208 - "Community 208"
-Cohesion: 0.18
-Nodes (9): Approach, Architecture (the parts that span files), Commands, Core Rules, Critical gotchas, Deploy, Formatting, graphify (+1 more)
+Cohesion: 0.17
+Nodes (10): Approach, Architecture (the parts that span files), Commands, Core Rules, Critical gotchas, Deploy, Formatting, graphify (+2 more)
 
 ### Community 209 - "Community 209"
 Cohesion: 0.24
@@ -1445,12 +1462,8 @@ Cohesion: 0.22
 Nodes (8): 08:44 | main, 12:10 | main, 12:57 | main, 14:11 | main, 17:53 | main, 17:59 | main, 21:06 | main, 22:49-22:52 | main
 
 ### Community 212 - "Community 212"
-Cohesion: 0.29
-Nodes (5): AgentRuntime, BarBuilder, HostedRobot, Run on_bar once if there is a NEW closed bar, inside the window, not         pau, Emit a SIGNAL event to the robot's detailed log only when the strategy's
-
-### Community 213 - "Community 213"
-Cohesion: 0.25
-Nodes (8): ./AgentBookPane.svelte, bestAsk, bestBid, err, load(), maxQty, norm(), spread
+Cohesion: 0.12
+Nodes (15): _parse_window(), Parse 'HH:MM-HH:MM' trading window. Defaults to 09:00-23:55., _within_window(), pick_price(), 1-minute bar aggregation from local QUIK DDE ticks.  Strategies consume CLOSED b, Bar price from a tick: trade price when the feed carries it, else the     mid, e, HostedRobot, RobotHost — schedules deployed robots, relays control, reports status.  One on_b (+7 more)
 
 ### Community 214 - "Community 214"
 Cohesion: 0.46
@@ -1460,21 +1473,25 @@ Nodes (6): T, FilterStaleTapeRows(), TestFilterStaleTapeRows_BoundaryAndDisabled
 Cohesion: 0.16
 Nodes (27): Кэш прошлого дня не должен подсовывать одному инструменту уровни другого., test_pivot_hlc_cache_is_keyed_by_symbol(), _c(), _date_of(), _h(), _l(), _o(), _prev_day_hlc() (+19 more)
 
+### Community 216 - "Community 216"
+Cohesion: 0.23
+Nodes (7): Context, Bridge, T, toUTF8(), TestIsTransReject(), TestToUTF8DecodesWindows1251(), isTransReject()
+
 ### Community 217 - "Community 217"
 Cohesion: 0.18
 Nodes (7): file_grpc_tradeapi_v1_auth_auth_service_proto_init(), init(), isMDPermission_Condition, MDPermission_Continent, MDPermission_Country, MDPermission_Mic, MDPermission_Worldwide
 
 ### Community 218 - "Community 218"
-Cohesion: 0.08
-Nodes (33): main(), Standalone AI46 (team-46) runner: `python -m trader.lab.ai46`.  Runs the paper s, Connection, base_of(), fills_to_rows(), front_contract(), Front-contract resolver + roll helper for paper Lab robots.  A paper robot's p, Series base of a specific contract: RIM6->RI, BRN6->BR, SiU6->Si.     None if ` (+25 more)
+Cohesion: 0.09
+Nodes (26): TokenResponse, test_token_expired_when_past_expiry(), test_token_expired_with_buffer(), test_token_not_expired_when_far_future(), datetime, base_of(), fills_to_rows(), front_contract() (+18 more)
 
 ### Community 220 - "Community 220"
-Cohesion: 0.27
-Nodes (15): _mark_orphans(), _book(), FakeOrderStore, _fired(), Сработавшая умная заявка, чей ребёнок умер не исполнившись.  QUIK снимает неиспо, Частично исполненная и снятая заявка защиту всё же дала — это не сирота., Рестарт STL стирает OrderStore: про сработавшую ДО старта процесса заявку     ни, test_armed_and_cancelled_orders_are_untouched() (+7 more)
+Cohesion: 0.14
+Nodes (19): LoginRequest, _mark_orphans(), All smart orders + save/load. The watcher task is the single mutator at     runt, SmartOrderBook, _book(), FakeOrderStore, _fired(), Сработавшая умная заявка, чей ребёнок умер не исполнившись.  QUIK снимает неиспо (+11 more)
 
 ### Community 221 - "Community 221"
-Cohesion: 0.10
-Nodes (23): RunnerBridge_StreamControlClient, RunnerBridge_StreamControlServer, RunnerBridge_StreamOrderEventsClient, RunnerBridge_StreamOrderEventsServer, RunnerBridge_StreamTapeClient, RunnerBridge_StreamTapeServer, RunnerBridge_StreamTicksClient, RunnerBridge_StreamTicksServer (+15 more)
+Cohesion: 0.23
+Nodes (13): RegisterRunnerBridgeServer(), RunnerBridge_StreamControlClient, RunnerBridge_StreamOrderEventsClient, RunnerBridge_StreamTapeClient, RunnerBridge_StreamTicksClient, RunnerBridgeServer, runnerBridgeStreamControlClient, runnerBridgeStreamOrderEventsClient (+5 more)
 
 ### Community 222 - "Community 222"
 Cohesion: 0.22
@@ -1497,8 +1514,8 @@ Cohesion: 0.14
 Nodes (8): _build_finam(), _f(), FinamBroker, _now_ms(), Registry factory: build a FinamBroker from settings (config by NAME). The Finam, Best-effort float from a proto Decimal-ish (.value) or a scalar., Finam Trade API adapter. CORE it can today: instruments, order_book, quote,, Build from settings. Dependencies may be injected (tests pass fakes);         ot
 
 ### Community 227 - "Community 227"
-Cohesion: 0.20
-Nodes (22): auth_ok(), _dev_bypass(), _get_email(), Explicit local-dev opt-in. Without it, an empty bridge_secret fails closed., require_auth(), ws_auth_ok(), _req(), test_auth_ok_invalid_cookie() (+14 more)
+Cohesion: 0.14
+Nodes (33): auth_ok(), _dev_bypass(), _get_email(), Explicit local-dev opt-in. Without it, an empty bridge_secret fails closed., require_auth(), ws_auth_ok(), _check_local(), make_session_token() (+25 more)
 
 ### Community 228 - "Community 228"
 Cohesion: 0.06
@@ -1509,8 +1526,8 @@ Cohesion: 0.04
 Nodes (44): 12a: Add Bridge Library, 12b: Wire Bridge into auth.ts, 12c: Update Login API Route, 12d: Replace Login Page, verify-portal-credentials bridge, Distributed identical auth (Approach B), File Map, Next.js auth middleware (+36 more)
 
 ### Community 230 - "Community 230"
-Cohesion: 0.17
-Nodes (26): applyBounds(), clampIn(), clampInt(), clampOrigin(), createWindow(), fatal(), hidePanel(), loadTrayIcon() (+18 more)
+Cohesion: 0.14
+Nodes (30): applyBounds(), clampIn(), clampInt(), clampOrigin(), createWindow(), fatal(), hidePanel(), loadTrayIcon() (+22 more)
 
 ### Community 231 - "Community 231"
 Cohesion: 0.18
@@ -1537,16 +1554,16 @@ Cohesion: 0.29
 Nodes (6): FORTS MOEX Market, MVP Instrument, Trading Parameters, Why This Symbol, Hoster VPS 83.69.248.175, M4 Instrument Registry Module
 
 ### Community 237 - "Community 237"
-Cohesion: 0.23
-Nodes (12): _bearer_from_metadata(), _diag_to_dict(), _limits_state_to_dict(), _order_book_to_dict(), _params_to_dict(), Async gRPC server: STL side of the QUIK agent link (sprint02 Phase 1).  READ-O, Return the verified subject (email/agent) or None.      Two accepted shapes, m, _security_to_dict() (+4 more)
+Cohesion: 0.31
+Nodes (9): _bearer_from_metadata(), _diag_to_dict(), _limits_state_to_dict(), _order_book_to_dict(), _params_to_dict(), Async gRPC server: STL side of the QUIK agent link (sprint02 Phase 1).  READ-O, _security_to_dict(), _tick_to_dict() (+1 more)
 
 ### Community 241 - "Community 241"
 Cohesion: 0.18
 Nodes (7): Distribution_BucketOptions_ExplicitBuckets, Distribution_BucketOptions_ExponentialBuckets, file_google_api_distribution_proto_init(), init(), isDistribution_BucketOptions_Options, Distribution_BucketOptions_Explicit, Distribution_BucketOptions_Exponential
 
 ### Community 242 - "Community 242"
-Cohesion: 0.15
-Nodes (15): BotParams, Tunable parameters for team-46, defaults equal to the hardcoded live constants., _cached_bars(), _clip(), _hoster_bars(), team-46 sweep unit, executed on the i9 via the generic agent task queue.  One un, arg = {key, fields, date_from, date_to, point_value, cfg}. Runs one combo on one, Pre-fetched bars served by the hoster (fast). The agent's own continuous-roll (+7 more)
+Cohesion: 0.11
+Nodes (22): Ai46Backtester, Per-side commission as a fraction of notional (= rate + broker/notional)., Replay historical 1m bars through the real team-46 pipeline on a virtual     clo, BotParams, _cached_bars(), _clip(), _hoster_bars(), team-46 sweep unit, executed on the i9 via the generic agent task queue.  One un (+14 more)
 
 ### Community 243 - "Community 243"
 Cohesion: 0.08
@@ -1565,8 +1582,8 @@ Cohesion: 0.67
 Nodes (4): Industrial Gear Background Motif, Shectory Brand Identity, Shevelev's Factory Logo, Shevelev's Factory Wordmark
 
 ### Community 253 - "Community 253"
-Cohesion: 0.29
-Nodes (9): Приоритет задания в очереди движка (POST /api/v1/backtest/run -> backtest_runs.p, Резервный воркер i9 отличает ручной прогон от кампании по своей константе.     Р, test_agent_manual_threshold_matches_server(), test_garbage_never_raises(), test_manual_screen_run_jumps_the_queue(), test_no_field_means_background(), test_out_of_range_is_clamped_not_trusted(), queue_priority() (+1 more)
+Cohesion: 0.15
+Nodes (11): QuoteStream, gRPC streaming client for Finam market data. Same interface as WsSession., close() must unblock an in-progress iter_quotes() call., test_close_drains_sentinel_so_iter_quotes_exits(), feed(), Integration tests — require real Finam credentials + live market hours.  Setup, test_feed_state_is_live_after_first_quote(), test_second_subscribe_reuses_slot() (+3 more)
 
 ### Community 258 - "Community 258"
 Cohesion: 0.05
@@ -1577,8 +1594,8 @@ Cohesion: 0.10
 Nodes (20): NewQuikAgentLinkClient(), _QuikAgentLink_Session_Handler(), RegisterQuikAgentLinkServer(), QuikAgentLink_SessionClient, QuikAgentLink_SessionServer, QuikAgentLinkClient, QuikAgentLinkServer, quikAgentLinkSessionClient (+12 more)
 
 ### Community 301 - "Community 301"
-Cohesion: 0.08
-Nodes (26): failed, loadHistory(), loading, quote, ready, string, ACTIVE, anyActive (+18 more)
+Cohesion: 0.11
+Nodes (17): ACTIVE, anyActive, asksShown, bidsShown, chartReady, fmt(), focusOrders, maxQty (+9 more)
 
 ### Community 304 - "Community 304"
 Cohesion: 0.19
@@ -1594,7 +1611,7 @@ Nodes (39): 0. Ядро-контракт vs JIT-модули, 10.1 Кратко�
 
 ### Community 307 - "Community 307"
 Cohesion: 0.06
-Nodes (38): AgentRuntime, AccountSummary, Any, Order, Position, Locally terminate an order the agent cannot cancel (unknown to it —         e.g., Read-only copy of the strategy's own state — the showcase explainer         read, Realized P&L reported to STL — NET of taker commission (points). (+30 more)
+Nodes (44): AgentRuntime, BarBuilder, Taker commission expressed in PRICE POINTS — for a consumer that tracks P&L in, taker_points(), BarBuilder, RobotStatusReport, AgentRuntime, Any (+36 more)
 
 ### Community 308 - "Community 308"
 Cohesion: 0.20
@@ -1637,8 +1654,8 @@ Cohesion: 0.15
 Nodes (18): AlertForwarder, _format_alert(), _is_recovery(), STL-side alert forwarder for the QUIK agent link (sprint02 Phase 1).  When the Q, A recovery alert (channel came back). Always bypasses the cooldown so a     'bac, Async Telegram forwarder with per-(agent, code, severity) cooldown.      Constru, Forward one Alert. Non-blocking-safe: never raises., _alert() (+10 more)
 
 ### Community 318 - "Community 318"
-Cohesion: 0.18
-Nodes (30): Limits, T, T, T, T, TestPendingTransViewsHungPastReconcileWindow(), TestPendingTransViewsLastTextTracksOnTransReply(), TestPendingTransViewsNoneWhenClean() (+22 more)
+Cohesion: 0.15
+Nodes (33): Limits, T, T, T, Guard, T, TestPendingTransViewsHungPastReconcileWindow(), TestPendingTransViewsLastTextTracksOnTransReply() (+25 more)
 
 ### Community 319 - "Community 319"
 Cohesion: 0.40
@@ -1669,12 +1686,12 @@ Cohesion: 0.14
 Nodes (30): FillKey, Step, Plan, Step, AccView, FillKey, Inputs, ManualOrder (+22 more)
 
 ### Community 328 - "Community 328"
-Cohesion: 0.13
-Nodes (9): PlaceOrder, ReplaceOrder, Side, RejectReason, formatPrice(), isBuy(), opFromSide(), PendingTransView (+1 more)
+Cohesion: 0.14
+Nodes (6): CreateAccountReportResponse, GetAccountReportInfoRequest, SubscribeAccountReportInfoRequest, MessageState, SizeCache, UnknownFields
 
 ### Community 329 - "Community 329"
-Cohesion: 0.17
-Nodes (17): Detector, Event detector for team-46 — port of go-bot/internal/event/detector.go.  Pure de, detector.go::trendFlipDirection — decisive 1h reversal confirmed by 10m., Subset of features.TickerFeatures the detector reads., detector.go::classify — panic→black_swan; ≥2 extremes→uncertain; else normal., Run all market triggers; return the signals that pass the cooldown., _Roll, Signal (+9 more)
+Cohesion: 0.15
+Nodes (18): Detector, Event detector for team-46 — port of go-bot/internal/event/detector.go.  Pure de, detector.go::trendFlipDirection — decisive 1h reversal confirmed by 10m., Subset of features.TickerFeatures the detector reads., detector.go::classify — panic→black_swan; ≥2 extremes→uncertain; else normal., Run all market triggers; return the signals that pass the cooldown., _Roll, Signal (+10 more)
 
 ### Community 330 - "Community 330"
 Cohesion: 0.13
@@ -1685,8 +1702,8 @@ Cohesion: 0.08
 Nodes (25): 1. Codegen (run first; required before build), 1b maker-working loop (`StartExecution`), 2. Build, 3. Configure the token (never hardcoded), 4. Run on the target machine, Account / secrets, Config knobs (additive — old `agent_config.json` files still load), Environment variables (+17 more)
 
 ### Community 332 - "Community 332"
-Cohesion: 0.16
-Nodes (8): _build_quik(), _now_ms(), QuikBroker, The pinned agent, else the single green agent, else the single known one., Registry factory: build a QuikBroker. The app passes the shared stores/server, QUIK agent adapter. Reads market/order state from the shared stores and     enqu, KeyError, OrderRef
+Cohesion: 0.13
+Nodes (18): Order, OrderState, [6] Order state as reported by the broker., Side, _build_quik(), _now_ms(), QuikBroker, QuikUnavailable (+10 more)
 
 ### Community 333 - "Community 333"
 Cohesion: 0.10
@@ -1713,8 +1730,8 @@ Cohesion: 0.08
 Nodes (23): 1. Объём Phase 2 Slice 1, 2.1 Жёсткие лимиты (агент и STL, одинаковые значения), 2.2 Kill-switch и подтверждение, 2.3 Пред-флайт чек-лист (перед первой боевой заявкой), 2. Предусловия безопасности, 3. Пошаговая приёмка, 4. Проверка комиссии (maker), 5. Откат и аварийная остановка (+15 more)
 
 ### Community 339 - "Community 339"
-Cohesion: 0.16
-Nodes (15): NewRunnerBridgeClient(), _RunnerBridge_CancelRunnerOrder_Handler(), _RunnerBridge_PlaceRunnerOrder_Handler(), _RunnerBridge_ReportStatus_Handler(), RunnerBridgeClient, BridgeAck, CancelOrder, ClientConnInterface (+7 more)
+Cohesion: 0.26
+Nodes (9): _RunnerBridge_CancelRunnerOrder_Handler(), _RunnerBridge_PlaceRunnerOrder_Handler(), _RunnerBridge_ReportStatus_Handler(), BridgeAck, CancelOrder, Context, PlaceOrder, RobotStatusReport (+1 more)
 
 ### Community 340 - "Community 340"
 Cohesion: 0.43
@@ -1725,16 +1742,16 @@ Cohesion: 0.14
 Nodes (27): T, TestEvaluateDeterministicOrderingShuffledInputs(), TestEvaluateHeterogeneousPlanStepOrder(), TestEvaluateManualNeverAligned(), TestEvaluateMissingOrderFixState(), TestEvaluateOrders_TruncatedTagAttributesToRobot(), TestEvaluatePaperRobotNeverContributes(), TestEvaluatePlanIDStableAcrossAgeDriftUsesAbsoluteStamps() (+19 more)
 
 ### Community 342 - "Community 342"
-Cohesion: 0.20
-Nodes (3): file_google_api_client_proto_init(), init(), GoSettings
+Cohesion: 0.15
+Nodes (3): AccountReportInfo, GetAccountReportInfoResponse, SubscribeAccountReportInfoResponse
 
 ### Community 343 - "Community 343"
 Cohesion: 0.12
 Nodes (14): DialOption, bearerCreds, TradeManager, Monitor, AgentMessage, Context, Deps, Inputs (+6 more)
 
 ### Community 344 - "Community 344"
-Cohesion: 0.29
-Nodes (12): _agent_auth(), agent_release_rev(), agent_release_zip(), _arch(), QUIK agent self-update: release endpoints + on-demand update trigger.  The agent, Authenticate the agent's Bearer token (same secret as the gRPC link)., Enqueue a SELF_UPDATE command on the agent's live session (operator only)., _release_dir() (+4 more)
+Cohesion: 0.23
+Nodes (15): _agent_auth(), agent_release_rev(), agent_release_zip(), _arch(), QUIK agent self-update: release endpoints + on-demand update trigger.  The agent, Authenticate the agent's Bearer token (same secret as the gRPC link)., Enqueue a SELF_UPDATE command on the agent's live session (operator only)., _release_dir() (+7 more)
 
 ### Community 345 - "Community 345"
 Cohesion: 0.20
@@ -1745,8 +1762,8 @@ Cohesion: 0.08
 Nodes (26): ContrarianSession, decide_primary_direction(), _default_gate(), _DefaultExecutor, _DefaultRisk, is_panic(), _Leg, Smart Contrarian session — port of go-bot/internal/event/contrarian.go.  Faithfu (+18 more)
 
 ### Community 347 - "Community 347"
-Cohesion: 0.15
-Nodes (15): Position, PositionDiff, [5] Net position at the exchange. qty signed (long > 0, short < 0)., [5] Reconciliation of an exchange position against the robot's expectation., [5] Free helper: compare an exchange position to the robot's expected qty., reconcile_position(), _OnlyBook, _Positioned (+7 more)
+Cohesion: 0.14
+Nodes (13): PositionDiff, [5] Reconciliation of an exchange position against the robot's expectation., [5] Free helper: compare an exchange position to the robot's expected qty., reconcile_position(), _OnlyBook, _Positioned, Contract-level behaviour: capability enforcement + reconcile() math.  No network, test_reconcile_helper_flat_and_matched() (+5 more)
 
 ### Community 348 - "Community 348"
 Cohesion: 0.16
@@ -1785,20 +1802,20 @@ Cohesion: 0.17
 Nodes (29): RawMessage, T, BuildStatus(), computeReport(), EvaluateRecon(), decodeTop(), TestBuildReconInputs_DropsPreSessionQuikTrades(), TestBuildReconInputs_DropsResyncedYesterdayTrades() (+21 more)
 
 ### Community 358 - "Community 358"
-Cohesion: 0.22
-Nodes (10): Mutex, RWMutex, Time, Guard, Limits, CheckCollar(), dailyCapOf(), sameWhitelist() (+2 more)
+Cohesion: 0.21
+Nodes (11): Mutex, RWMutex, Time, Guard, Limits, CheckArmable(), CheckCollar(), dailyCapOf() (+3 more)
 
 ### Community 359 - "Community 359"
-Cohesion: 0.14
-Nodes (17): CUSUMDetector, garch11_forecast(), _garch_nll(), GARCHResult, _gauss_pdf(), hmm_regime(), HMMResult, _mean() (+9 more)
+Cohesion: 0.09
+Nodes (21): CUSUMDetector, garch11_forecast(), _garch_nll(), GARCHResult, _gauss_pdf(), hmm_regime(), HMMResult, _mean() (+13 more)
 
 ### Community 360 - "Community 360"
 Cohesion: 0.11
 Nodes (18): 1. Объём Phase 1, 2.1 Unit, 2.2 Integration, 2.3 System / manual, 2. План тестирования по слоям, 3. Пошаговая приёмка (чек-лист), 4. Матрица валидации потоков данных, 5. Definition of Done — Phase 1 (+10 more)
 
 ### Community 361 - "Community 361"
-Cohesion: 0.05
-Nodes (50): evaluate_proposal(), KlodClient, _parse_json(), ProposalVerdict, LLM decision agents for team-46 — strictly via the Klod/Lineman gateway.  Boris, Thin async client for the Klod gateway. `available` is False when the bot     is, Extract the first JSON object from an LLM reply (tolerates code fences/prose)., PM risk gate. Returns APPROVE/REJECT/DOWNSIZE + size_factor. On any failure (+42 more)
+Cohesion: 0.10
+Nodes (34): Ai46Service — backend task that runs the team-46 strategy in PAPER mode.  Env-ga, _ms(), Оракул сессии MOEX FORTS — по ОФИЦИАЛЬНЫМ окнам ISS session_schedule.  Единый ис, РЕГРЕСС дня 2026-07-26 (вс): официально weekend_session 10:00-19:00, полдень =>, РЕГРЕСС субботы: доп. сессия выходного закрывается 19:00 — в 19:23 уже ЗАКРЫТО, РЕГРЕСС 2026-08-01: биржа не торговала с вечера пятницы, SYSTIME (now_ms) всех, test_codes_follow_the_agent_feed(), test_holiday_check_uses_wall_clock_not_frozen_systime() (+26 more)
 
 ### Community 362 - "Community 362"
 Cohesion: 0.11
@@ -1806,7 +1823,7 @@ Nodes (17): Components & interfaces, Control commands (STL → agent → runner)
 
 ### Community 364 - "Community 364"
 Cohesion: 0.05
-Nodes (54): ../../lib/agent-robots, $lib/fetch-auth, $lib/format, ../../lib/lab-analytics, ../../lib/latency, draw(), lastRtt, poll() (+46 more)
+Nodes (52): ../../lib/agent-robots, $lib/fetch-auth, $lib/format, ../../lib/lab-analytics, ../../lib/latency, draw(), lastRtt, poll() (+44 more)
 
 ### Community 365 - "Community 365"
 Cohesion: 0.14
@@ -1881,16 +1898,16 @@ Cohesion: 0.27
 Nodes (11): _client_with_store(), Tests for the generic RawTable passthrough (sprint02, additive, read-only).  Cov, _run_session(), _start_server(), test_routes_tables_list_and_get(), test_session_raw_table_updates_store(), test_store_get_raw_table_picks_single_agent(), test_store_ignores_unnamed_table() (+3 more)
 
 ### Community 385 - "Community 385"
-Cohesion: 0.15
-Nodes (13): Ai46Backtester, Per-side commission as a fraction of notional (= rate + broker/notional)., Replay historical 1m bars through the real team-46 pipeline on a virtual     clo, _load_bars(), _load_ticks(), main(), One-day team-46 backtest with FORTS commission, comparing OFI modes:   zero  (OF, _run() (+5 more)
+Cohesion: 0.47
+Nodes (5): _all_keys(), _load(), main(), Parallel team-46 container backtest: one process per (symbol, ofi_mode).  Each j, _worker()
 
 ### Community 386 - "Community 386"
 Cohesion: 0.11
 Nodes (3): SubscribeLatestTradesResponse, Trade, Side
 
 ### Community 387 - "Community 387"
-Cohesion: 0.09
-Nodes (40): _FakeRT, make_runtime(), Контр-стратегия <id>__inv: та же логика, но сигнал инвертирован. Раньше     жила, Сигнал 0/None инвертировать нечего — контра тоже стоит вне рынка., Разножка относится ТОЛЬКО к ненулевой позиции (правило оператора 31.07.2026)., Отсчёт разножки двигает только ИСПОЛНИВШИЙСЯ добор, не выставленная заявка., Разножка и остывание копят счётчик отсева, не меняя порядок заявок., Отсеянный вход живёт до СВОЕГО выхода (разворот/тейк), а не ровно час.      До 2 (+32 more)
+Cohesion: 0.10
+Nodes (37): _FakeRT, Контр-стратегия <id>__inv: та же логика, но сигнал инвертирован. Раньше     жила, Сигнал 0/None инвертировать нечего — контра тоже стоит вне рынка., Разножка относится ТОЛЬКО к ненулевой позиции (правило оператора 31.07.2026)., Отсчёт разножки двигает только ИСПОЛНИВШИЙСЯ добор, не выставленная заявка., Разножка и остывание копят счётчик отсева, не меняя порядок заявок., Отсеянный вход живёт до СВОЕГО выхода (разворот/тейк), а не ровно час.      До 2, Если отсеянный добор был бы прибыльным — эффект отрицательный (недозаработали). (+29 more)
 
 ### Community 388 - "Community 388"
 Cohesion: 0.15
@@ -1953,8 +1970,8 @@ Cohesion: 0.16
 Nodes (16): ema(), rsi(), ATR по хвосту == ATR по всему окну (Уайлдер забывает старое): защищает     оптим, test_atr_tail_equals_full_window(), test_ema_basic(), test_ema_requires_enough_data(), test_rsi_overbought(), test_rsi_oversold() (+8 more)
 
 ### Community 406 - "Community 406"
-Cohesion: 0.06
-Nodes (39): AsyncAuthClient, TokenResponse, auth_client(), force_refresh=True must re-fetch even if token is not expired., test_account_id_empty_when_not_in_details(), test_expired_token_triggers_refresh(), test_fetch_token_extracts_account_id_from_account_ids(), test_get_token_force_refresh_bypasses_cache() (+31 more)
+Cohesion: 0.09
+Nodes (29): test_real_auth_returns_jwt(), test_second_call_uses_cache(), BaseSettings, Integration tests — requires real Finam credentials and network.  Run:   HTTPS_P, Verify /v1/assets/all is accessible and returns parseable instruments.      Full, registry(), test_assets_api_returns_nonempty(), test_get_detail_mvp_symbol() (+21 more)
 
 ### Community 407 - "Community 407"
 Cohesion: 0.17
@@ -2013,8 +2030,8 @@ Cohesion: 0.22
 Nodes (8): Concerns, Files touched, How the test was adapted, Real runtime API found (differs from the brief's placeholders), Status: DONE, Task 2 report: MAE + mark-to-market drawdown in the backtest loop, Test commands + full output, What was implemented
 
 ### Community 421 - "Community 421"
-Cohesion: 0.07
-Nodes (13): BridgeClient, MarketDataTick, OrderUpdate, RobotStatusReport, RunnerControl, TapeBatch, Async gRPC client for the agent's loopback RunnerBridge.  Every stream reconnect, main() (+5 more)
+Cohesion: 0.06
+Nodes (16): BridgeClient, MarketDataTick, OrderUpdate, RobotStatusReport, RunnerControl, TapeBatch, Async gRPC client for the agent's loopback RunnerBridge.  Every stream reconnect, main() (+8 more)
 
 ### Community 423 - "Community 423"
 Cohesion: 0.25
@@ -2069,8 +2086,8 @@ Cohesion: 0.43
 Nodes (5): Coef(), CoefOrZero(), TestCoef(), TestCoefOrZero(), T
 
 ### Community 438 - "Community 438"
-Cohesion: 0.40
-Nodes (10): _raw(), test_activity_defaults_when_missing(), test_fresh_passthrough(), test_leaders_default_empty_when_absent(), test_none_on_bad_json(), test_none_when_never_reported(), test_stale_when_no_recv_ts(), test_stale_when_old() (+2 more)
+Cohesion: 0.10
+Nodes (29): _raw(), test_activity_defaults_when_missing(), test_fresh_passthrough(), test_leaders_default_empty_when_absent(), test_none_on_bad_json(), test_none_when_never_reported(), test_stale_when_no_recv_ts(), test_stale_when_old() (+21 more)
 
 ### Community 439 - "Community 439"
 Cohesion: 0.25
@@ -2085,8 +2102,8 @@ Cohesion: 0.29
 Nodes (6): 09:41 | main, 11:06 | main, 17:51 | main, 20:00 | main, 20:02 | main, 21:11 | main
 
 ### Community 442 - "Community 442"
-Cohesion: 0.47
-Nodes (6): trader/lab/indicators.py, scripts/opt_agent.py, trader/lab/strategies/library.py, Agent Update Manifest, 413 Payload Trade-Stripping Fix, i9 Agent Self-Update Infra
+Cohesion: 0.27
+Nodes (10): trader/lab/indicators.py, scripts/opt_agent.py, trader/lab/strategies/library.py, Agent Update Manifest, 413 Payload Trade-Stripping Fix, BacktestLab UI (catalog/param sweep/leaderboard), i9 Agent Self-Update Infra, Prisma Schema (net_profit/recovery_factor cols) (+2 more)
 
 ### Community 443 - "Community 443"
 Cohesion: 0.18
@@ -2178,7 +2195,7 @@ Nodes (4): Deploy README (Shectory Trader), deploy/deploy.sh, deploy/nginx.conf,
 
 ### Community 499 - "Community 499"
 Cohesion: 0.24
-Nodes (4): MetricDescriptor_MetricDescriptorMetadata, Duration, LaunchStage, SizeCache
+Nodes (4): MetricDescriptor_MetricDescriptorMetadata, Duration, LaunchStage, UnknownFields
 
 ### Community 517 - "Community 517"
 Cohesion: 0.14
@@ -2189,7 +2206,7 @@ Cohesion: 0.22
 Nodes (8): Concerns, Files changed, Implemented, Report path, Self-review, Task 8 Report: STL param relay endpoint, TDD evidence, Wire path confirmation (read before writing code)
 
 ### Community 519 - "Community 519"
-Cohesion: 0.23
+Cohesion: 0.24
 Nodes (5): Mutex, RawMessage, RobotSpec, entry, Store
 
 ### Community 520 - "Community 520"
@@ -2221,8 +2238,8 @@ Cohesion: 0.11
 Nodes (22): buy_fraction(), clv(), feed_proxy_trades(), Container backtest support for team-46.  The live robot consumes a real trade st, Close Location Value in [-1, 1]. +1 = closed at the high (buy pressure),     -1, Estimated fraction of bar volume that was aggressive buying, in [0, 1]., Synthesise two trades (buy + sell) for one bar and feed OrderFlow.      With ble, OrderFlow (+14 more)
 
 ### Community 527 - "Community 527"
-Cohesion: 0.17
-Nodes (19): _check_local(), make_session_token(), PortalUser, Returns email if valid, None otherwise., _sign(), verify_portal_credentials(), verify_session_token(), test_make_and_verify_token() (+11 more)
+Cohesion: 0.36
+Nodes (8): collect(), main(), P(), Stage 3: queue the cooldown+superaverage HYBRID sweep on the WINNERS.  A winner, {(strategy,symbol,rank): {"base": params, "tops": [...], "base_rf": float}}, requeue_failed(), script_code(), strip_mods()
 
 ### Community 528 - "Community 528"
 Cohesion: 0.36
@@ -2233,8 +2250,8 @@ Cohesion: 0.22
 Nodes (8): Concerns, Files changed, Implemented, Review fix (Critical): RecursionError in set_agent_status, Self-review, Task 11 report: STL mirror — status_snapshot frame, store, endpoint, TDD evidence, Test summary
 
 ### Community 532 - "Community 532"
-Cohesion: 0.12
-Nodes (17): uplot, [], dateIdx, dayNets, exportCSV(), fillIds, hasGO, load() (+9 more)
+Cohesion: 0.13
+Nodes (16): [], dateIdx, dayNets, exportCSV(), fillIds, hasGO, load(), periodDays (+8 more)
 
 ### Community 534 - "Community 534"
 Cohesion: 0.20
@@ -2261,12 +2278,12 @@ Cohesion: 0.40
 Nodes (4): Order, Position, Snapshot, clockAccounts
 
 ### Community 543 - "Community 543"
-Cohesion: 0.50
-Nodes (3): file_google_api_service_proto_init(), file_google_api_service_proto_rawDescGZIP(), init()
+Cohesion: 0.16
+Nodes (9): object, QuikAgentLink, QuikAgentLinkServicer, QuikAgentLinkStub, ---- Session: single bidi stream, agent -> STL = AgentMessage, STL -> agent = Or, Constructor.          Args:             channel: A grpc.Channel., ---- Session: single bidi stream, agent -> STL = AgentMessage, STL -> agent = Or, Missing associated documentation comment in .proto file. (+1 more)
 
 ### Community 544 - "Community 544"
 Cohesion: 0.12
-Nodes (4): file_grpc_tradeapi_v1_assets_assets_service_proto_init(), init(), GetAssetParamsRequest, ScheduleRequest
+Nodes (4): file_grpc_tradeapi_v1_assets_assets_service_proto_init(), init(), GetAssetRequest, ScheduleRequest
 
 ### Community 545 - "Community 545"
 Cohesion: 0.29
@@ -2283,6 +2300,10 @@ Nodes (8): parse_runner_log(), REAL-money fills from a per-robot runner log (doc
 ### Community 548 - "Community 548"
 Cohesion: 0.39
 Nodes (8): closes(), corr(), _get(), main(), Текущий состав индекса РТС с весами, % капитализации.      Эндпоинт страничный, Дневные закрытия по торговой истории (LEGALCLOSEPRICE, иначе CLOSE)., rets(), weights()
+
+### Community 550 - "Community 550"
+Cohesion: 0.21
+Nodes (8): FakeClient, RaisingClient, Tests for the team-46 LLM agents (mocked gateway, no network)., Stand-in for KlodClient. `reply` is returned by ask(); available toggles., test_proposal_approve_parsed(), test_proposal_degraded_on_error(), test_proposal_degraded_when_unavailable(), test_proposal_downsize_applies_factor()
 
 ### Community 554 - "Community 554"
 Cohesion: 0.40
@@ -2353,8 +2374,8 @@ Cohesion: 0.29
 Nodes (13): _merge_fills(), Филлы одного ордера — один маркер на графике.      Зеркало хранит строку на КА, _fill(), Мини-график робота в панели компаньона: склейка филлов в маркеры сделок.  Зеркал, Хвост длиннее окна: филл вне окна в среднюю попасть не должен., Пустой order_id встречается у синтезированных авто-хилом сделок., test_empty_input_is_empty_output(), test_fill_without_order_id_is_not_merged_with_a_stranger() (+5 more)
 
 ### Community 582 - "Community 582"
-Cohesion: 0.11
-Nodes (11): OrderEvent, T, CancelOrder, KillSwitch, OrderState, toUTF8(), TestIsTransReject(), TestToUTF8DecodesWindows1251() (+3 more)
+Cohesion: 0.20
+Nodes (6): OrderEvent, KillSwitch, OrderState, mapOrderState(), workingOrder, TransReplyEvent
 
 ### Community 583 - "Community 583"
 Cohesion: 0.15
@@ -2362,27 +2383,27 @@ Nodes (9): isOrderBook_Row_Side, isQuote_Additions, isStreamOrderBook_Row_Side, 
 
 ### Community 586 - "Community 586"
 Cohesion: 0.17
-Nodes (9): _RunnerBridge_StreamOrderEvents_Handler(), _RunnerBridge_StreamTape_Handler(), _RunnerBridge_StreamTicks_Handler(), UnimplementedRunnerBridgeServer, RunnerBridge_StreamOrderEventsServer, RunnerBridge_StreamTapeServer, RunnerBridge_StreamTicksServer, TickFilter (+1 more)
-
-### Community 587 - "Community 587"
-Cohesion: 0.27
-Nodes (4): Ai46Service, Идут ли торги FORTS ПРЯМО СЕЙЧАС — по официальному расписанию ISS и часам, Биржа закрылась — закрываем бумажные позиции по последней известной цене., Флаг «робот работает» в витрине. Раньше bootstrap ставил его только при
+Nodes (9): _RunnerBridge_StreamTicks_Handler(), RunnerBridge_StreamControlServer, RunnerBridge_StreamOrderEventsServer, RunnerBridge_StreamTapeServer, RunnerBridge_StreamTicksServer, runnerBridgeStreamControlServer, RunnerBridge_StreamTicksServer, RunnerControl (+1 more)
 
 ### Community 590 - "Community 590"
 Cohesion: 0.18
 Nodes (9): frontend/index.html, File Map, Phase B — Lab Manager, Self-Review Checklist, Shectory Trader Frontend Implementation Plan, Task 11: LabBar Component, Task 12: CodeEditor Component (Monaco), Task 13: Offline Player (+1 more)
 
 ### Community 591 - "Community 591"
-Cohesion: 0.24
-Nodes (4): _garch_series(), Tests for the team-46 statistical models (pure Python)., test_garch_forecast_sane_and_stationary(), test_garch_higher_vol_series_higher_forecast()
+Cohesion: 0.23
+Nodes (8): evaluate_proposal(), KlodClient, _parse_json(), ProposalVerdict, LLM decision agents for team-46 — strictly via the Klod/Lineman gateway.  Boris, Thin async client for the Klod gateway. `available` is False when the bot     is, Extract the first JSON object from an LLM reply (tolerates code fences/prose)., PM risk gate. Returns APPROVE/REJECT/DOWNSIZE + size_factor. On any failure
 
 ### Community 592 - "Community 592"
-Cohesion: 0.22
-Nodes (9): ExitOnlyBody, ParamsRelayBody, Set (or clear, when name is empty) the operator display name for an agent robot., RecordFillBody, rename_robot(), RenameBody, SetPositionBody, ToPaperBody (+1 more)
+Cohesion: 0.31
+Nodes (10): Заявка по УСТАРЕВШЕМУ бару не выставляется.  Планировщик будит робота раз в мину, _rt(), test_first_tick_never_trades(), test_new_bar_is_fresh(), test_older_bar_is_stale(), test_order_on_fresh_bar_goes_through_paper_path(), test_order_on_stale_bar_is_skipped_not_recorded(), test_same_bar_is_stale() (+2 more)
 
 ### Community 600 - "Community 600"
 Cohesion: 0.22
 Nodes (8): Unit tests for the QUIK agent in-memory store (link lamp + apply logic)., The agent's echoed effective limits are stored and surfaced in status so the UI, A stale (red) leftover agent must not block resolving the single live one., test_limits_state_store_and_status(), test_link_lamp_green_yellow_red(), test_pick_prefers_single_green_when_others_stale(), test_pick_single_agent_when_unambiguous(), test_securities_full_replace_vs_delta()
+
+### Community 604 - "Community 604"
+Cohesion: 0.18
+Nodes (5): Bar, Snapshot price (bid/ask mid or last param). Fallback source: muted         while, Exact exchange trade from the anonymized tape (OnAllTrade)., Last n CLOSED bars as [t, o, h, l, c, v] rows (the forming minute is         not, Restore persisted rows into an EMPTY builder (fresh deploy after a         resta
 
 ### Community 609 - "Community 609"
 Cohesion: 0.67
@@ -2401,8 +2422,8 @@ Cohesion: 0.29
 Nodes (5): Finam AssetsService endpoints, find_instrument.py CLI, Instrument model, InstrumentRegistry, TradingParams (ГО, is_tradable)
 
 ### Community 615 - "Community 615"
-Cohesion: 0.33
-Nodes (4): _RunnerBridge_StreamControl_Handler(), ControlHello, RunnerBridge_StreamControlServer, RunnerBridge_StreamControlClient
+Cohesion: 0.20
+Nodes (7): _RunnerBridge_StreamControl_Handler(), _RunnerBridge_StreamTape_Handler(), UnimplementedRunnerBridgeServer, ControlHello, RunnerBridge_StreamControlServer, RunnerBridge_StreamTapeServer, RunnerBridge_StreamControlClient
 
 ### Community 616 - "Community 616"
 Cohesion: 0.33
@@ -2433,8 +2454,8 @@ Cohesion: 0.50
 Nodes (3): 08:25 | main, 08:43-08:51 | main, 09:35 | main
 
 ### Community 625 - "Community 625"
-Cohesion: 0.50
-Nodes (3): 09:02 | main, 09:13-09:20 | main, 12:22 | main
+Cohesion: 0.25
+Nodes (7): 09:02 | main, 09:13-09:20 | main, 12:22 | main, 12:25-14:21 | main, 14:36-14:50 | main, 14:58-15:41 | main, 19:08 | main
 
 ### Community 627 - "Community 627"
 Cohesion: 0.50
@@ -2448,20 +2469,48 @@ Nodes (4): 7.1 PositionsClient, 7.2 Position model, 7.3 Paths to verify, 7. M5 P
 Cohesion: 0.50
 Nodes (4): 9. Testing Strategy, Integration tests (need FINAM_SECRET_TOKEN, @pytest.mark.integration), No automated frontend tests for MVP — manual verification in browser., Unit tests (no credentials, --timeout=30)
 
+### Community 632 - "Community 632"
+Cohesion: 0.29
+Nodes (5): ../../lib/robot-console, ask, stamp(), stick, time()
+
+### Community 633 - "Community 633"
+Cohesion: 0.32
+Nodes (6): NewRunnerBridgeClient(), RunnerBridgeClient, ClientConnInterface, TickFilter, RunnerBridge_StreamTapeClient, RunnerBridge_StreamTicksClient
+
+### Community 636 - "Community 636"
+Cohesion: 0.33
+Nodes (4): _RunnerBridge_StreamOrderEvents_Handler(), EventsFilter, RunnerBridge_StreamOrderEventsServer, RunnerBridge_StreamOrderEventsClient
+
+### Community 639 - "Community 639"
+Cohesion: 0.47
+Nodes (5): on_bar(), on_start(), on_stop(), Donchian Channel Breakout (Turtle Trading rules, long-only variant).  Source/ref, STLRuntime
+
+### Community 640 - "Community 640"
+Cohesion: 0.47
+Nodes (5): on_bar(), on_start(), on_stop(), SuperTrend (ATR trend-following), long + short.  Source/reference:   https://git, STLRuntime
+
+### Community 641 - "Community 641"
+Cohesion: 0.50
+Nodes (4): ./ExchangeInterface.svelte, load(), loadStatus(), quikEnabled
+
+### Community 642 - "Community 642"
+Cohesion: 0.50
+Nodes (4): BacktestRuntime, make_runtime(), test_ema_crossover_buys_on_uptrend(), test_rsi_buys_on_oversold()
+
 ## Knowledge Gaps
-- **1750 isolated node(s):** `Client`, `config`, `link`, `Chromium`, `notifyIconData` (+1745 more)
+- **1755 isolated node(s):** `Client`, `config`, `link`, `Chromium`, `notifyIconData` (+1750 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **107 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **116 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `Pointer` connect `Community 44` to `Google API Service Config`, `Protobuf Bar/Quote Messages`, `Google API Backend Proto`, `Order Status Enums`, `OpenAPI Schema Types`, `Google API Resource Proto`, `Google API Control Proto`, `Quota & Metric Rules Proto`, `MarketData Proto Descriptors`, `Community 524`, `Google API Documentation Proto`, `DateTime & Duration Proto`, `Account Trade Proto`, `GAPIC Language Settings`, `Monitored Resource Proto`, `Community 533`, `Config Change Advice Proto`, `Community 539`, `Consumer Project Proto`, `Asset Params Proto`, `Orders Request Proto`, `Community 32`, `Community 33`, `Community 544`, `Community 546`, `Community 34`, `Community 38`, `Community 39`, `Community 45`, `Community 558`, `Community 48`, `Community 49`, `Community 560`, `Community 50`, `Community 52`, `Community 561`, `Community 566`, `Community 564`, `Community 55`, `Community 57`, `Community 570`, `Community 58`, `Community 563`, `Community 61`, `Community 62`, `Community 63`, `Community 64`, `Community 65`, `Community 579`, `Community 581`, `Community 584`, `Community 588`, `Community 589`, `Community 78`, `Community 77`, `Community 593`, `Community 594`, `Community 595`, `Community 84`, `Community 85`, `Community 86`, `Community 596`, `Community 82`, `Community 601`, `Community 90`, `Community 91`, `Community 92`, `Community 602`, `Community 604`, `Community 605`, `Community 606`, `Community 95`, `Community 607`, `Community 608`, `Community 610`, `Community 613`, `Community 102`, `Community 103`, `Community 104`, `Community 107`, `Community 108`, `Community 109`, `Community 112`, `Community 113`, `Community 114`, `Community 115`, `Community 117`, `Community 124`, `Community 125`, `Community 130`, `Community 142`, `Community 143`, `Community 147`, `Community 150`, `Community 163`, `Community 164`, `Community 170`, `Community 171`, `Community 175`, `Community 178`, `Community 179`, `Community 181`, `Community 194`, `Community 195`, `Community 197`, `Community 200`, `Community 207`, `Community 219`, `Community 225`, `Community 230`, `Community 233`, `Community 235`, `Community 240`, `Community 244`, `Community 248`, `Community 321`, `Community 322`, `Community 342`, `Community 345`, `Community 363`, `Community 373`, `Community 381`, `Community 384`, `Community 386`, `Community 392`, `Community 393`, `Community 400`, `Community 422`, `Community 425`, `Community 87`, `Community 597`, `Community 448`, `Community 598`, `Community 89`, `Community 599`, `Community 458`, `Community 603`, `Community 499`?**
-  _High betweenness centrality (0.417) - this node is a cross-community bridge._
-- **Why does `Service` connect `Google API Service Config` to `Community 105`, `Community 543`?**
-  _High betweenness centrality (0.261) - this node is a cross-community bridge._
+- **Why does `Pointer` connect `Community 89` to `Google API Service Config`, `Protobuf Bar/Quote Messages`, `Google API Backend Proto`, `Order Status Enums`, `OpenAPI Schema Types`, `Google API Resource Proto`, `Google API Control Proto`, `Quota & Metric Rules Proto`, `MarketData Proto Descriptors`, `Community 524`, `Google API Documentation Proto`, `DateTime & Duration Proto`, `Account Trade Proto`, `GAPIC Language Settings`, `Monitored Resource Proto`, `Community 533`, `Config Change Advice Proto`, `Community 539`, `Consumer Project Proto`, `Asset Params Proto`, `Orders Request Proto`, `Community 32`, `Community 33`, `Community 546`, `Community 544`, `Community 34`, `Community 38`, `Community 39`, `Community 44`, `Community 45`, `Community 558`, `Community 48`, `Community 49`, `Community 560`, `Community 50`, `Community 52`, `Community 561`, `Community 566`, `Community 567`, `Community 564`, `Community 57`, `Community 570`, `Community 58`, `Community 55`, `Community 61`, `Community 62`, `Community 63`, `Community 64`, `Community 65`, `Community 579`, `Community 581`, `Community 584`, `Community 587`, `Community 588`, `Community 589`, `Community 78`, `Community 593`, `Community 594`, `Community 595`, `Community 84`, `Community 85`, `Community 86`, `Community 596`, `Community 82`, `Community 601`, `Community 90`, `Community 91`, `Community 92`, `Community 602`, `Community 605`, `Community 606`, `Community 95`, `Community 607`, `Community 608`, `Community 610`, `Community 603`, `Community 613`, `Community 102`, `Community 103`, `Community 104`, `Community 107`, `Community 108`, `Community 109`, `Community 112`, `Community 113`, `Community 114`, `Community 115`, `Community 117`, `Community 630`, `Community 631`, `Community 634`, `Community 635`, `Community 124`, `Community 125`, `Community 638`, `Community 130`, `Community 142`, `Community 143`, `Community 147`, `Community 150`, `Community 163`, `Community 164`, `Community 170`, `Community 171`, `Community 175`, `Community 178`, `Community 179`, `Community 181`, `Community 194`, `Community 195`, `Community 197`, `Community 200`, `Community 207`, `Community 213`, `Community 219`, `Community 225`, `Community 230`, `Community 233`, `Community 235`, `Community 240`, `Community 244`, `Community 248`, `Community 563`, `Community 321`, `Community 322`, `Community 328`, `Community 342`, `Community 345`, `Community 363`, `Community 373`, `Community 381`, `Community 384`, `Community 386`, `Community 392`, `Community 393`, `Community 400`, `Community 422`, `Community 425`, `Community 87`, `Community 597`, `Community 448`, `Community 598`, `Community 599`, `Community 458`, `Community 499`?**
+  _High betweenness centrality (0.405) - this node is a cross-community bridge._
+- **Why does `Service` connect `Google API Service Config` to `Community 112`, `Community 105`?**
+  _High betweenness centrality (0.254) - this node is a cross-community bridge._
 - **Why does `Enum` connect `Community 105` to `Google API Service Config`, `Community 122`?**
-  _High betweenness centrality (0.259) - this node is a cross-community bridge._
+  _High betweenness centrality (0.252) - this node is a cross-community bridge._
 - **Are the 529 inferred relationships involving `Pointer` (e.g. with `.ProtoReflect()` and `.Reset()`) actually correct?**
   _`Pointer` has 529 INFERRED edges - model-reasoned connections that need verification._
 - **Are the 27 inferred relationships involving `QuikAgentStore` (e.g. with `LoginRequest` and `OrderStore`) actually correct?**
