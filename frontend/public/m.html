@@ -136,7 +136,13 @@
      она шире 320, и растянуть свечи честнее, чем оставить колонку слева. */
   .rob[data-rid] { cursor: pointer; }
   .rob .chev { color: var(--faint); font-size: 12px; }
-  .mchart { display: block; margin: 5px 0 1px; width: 100%; height: 64px; }
+  /* Рамка едва заметная: отделяет график от цифр, но не спорит с ними. */
+  .mchart { display: block; margin: 5px 0 1px; width: 100%; height: 64px;
+    border: 1px solid var(--rule); }
+  .mchart .nosig { font: 400 8px/1 ui-monospace, Menlo, Consolas, monospace; fill: var(--faint); }
+  .dens { display: inline-flex; gap: 8px; text-transform: none; letter-spacing: 0; }
+  .dens b { font-weight: 400; color: var(--faint); font-size: 12px; padding: 2px 0; }
+  .dens b.on { color: var(--ink); border-bottom: 1px solid var(--ink); }
   .mchart .cndl.up, .mchart .wick.up { fill: var(--up); stroke: var(--up); }
   .mchart .cndl.down, .mchart .wick.down { fill: var(--down); stroke: var(--down); }
   .mchart .wick { stroke-width: 1; }
@@ -341,7 +347,11 @@ function renderMarket(m) {
   return `<div class="mkt ${open === true ? 'up' : ''}">` +
     `<div class="hd"><span class="k">Биржа MOEX</span>` +
     `<span class="v ${open === true ? 'up' : open === false ? '' : 'nil'}">${esc(marketMode(m))}</span></div>` +
-    `<div class="sub">посл. сделка ${esc(lt)}</div></div>`;
+    // Это сделка НА БИРЖЕ по опорному инструменту оракула, а не наша: раньше
+    // строка звалась так же, как «посл.» в карточке робота, где это сделка
+    // самого робота.
+    `<div class="sub">на бирже торговали ${esc(lt)}`
+    + `${m.source_code ? ' · ' + esc(m.source_code) : ''}</div></div>`;
 }
 
 function renderAccount(a) {
@@ -407,8 +417,19 @@ function robotsTotal(list) {
 // всех сделок: это ровно те бары, по которым робот принимал решение, поэтому его
 // сделки лежат на своей свече. Бары ISS сюда подмешивать нельзя — там московское
 // время штамповано как UTC, и филлы уехали бы на три часа.
-const CH = { w: 320, h: 64, n: 30, body: 7, pad: 3 };
-CH.pitch = CH.w / CH.n;
+// Плотность выбирает оператор: 30 баров это получас крупными свечами, 200 —
+// три с половиной часа, где свеча вырождается в штрих шириной в пиксель. Обе
+// картинки нужны: по первой видно вход, по второй — куда идёт день.
+const DENSITY = [30, 60, 120, 200];
+const CH = { w: 320, h: 64, body: 7, pad: 3 };
+function density() {
+  const v = +(localStorage.getItem('stl.chartN') || 30);
+  return DENSITY.includes(v) ? v : 30;
+}
+function setDensity(n) {
+  localStorage.setItem('stl.chartN', String(n));
+  tick();   // за плотностью идём на сервер: хвост режет он, не клиент
+}
 
 // Раскрытые графики живут ВНЕ DOM: paint() перерисовывает панель целиком каждые
 // 5 секунд, и состояние, хранимое в разметке, схлопывалось бы само собой.
@@ -434,16 +455,21 @@ function miniChart(ch) {
   if (!ch || !ch.bars || !ch.bars.length) {
     return '<div class="chart-empty">баров нет: раннер ещё не собрал ленту</div>';
   }
-  const bars = ch.bars.slice(-CH.n);
+  const bars = ch.bars.slice(-density());
   let hi = -Infinity, lo = Infinity;
   for (const b of bars) { if (b.h > hi) hi = b.h; if (b.l < lo) lo = b.l; }
   if (!(hi > lo)) { hi += 1; lo -= 1; }     // плоская минута: иначе делим на ноль
   const inner = CH.h - 2 * CH.pad;
   const y = (p) => r1(CH.pad + (hi - p) / (hi - lo) * inner);
   const yc = (p) => Math.min(CH.h - 0.5, Math.max(0.5, y(p)));   // прижатый к краю
-  // Свечи прижаты ВПРАВО: свежая минута всегда у правого края, сколько бы баров
-  // ни успел собрать раннер после перезапуска.
-  const xOf = (i) => CH.w - (bars.length - i) * CH.pitch + CH.pitch / 2;
+  // Шаг и тело считаем от ФАКТИЧЕСКОГО числа баров, а не от выбранной плотности:
+  // после перезапуска раннера их бывает меньше, и делить ширину на 200, показывая
+  // 40, значит рисовать четверть графика. На плотных сетках тело схлопывается в
+  // штрих: 200 баров на 320 px это 1.6 px на бар, зазору взяться неоткуда.
+  const pitch = CH.w / Math.max(bars.length, 1);
+  const body = Math.max(1, Math.min(CH.body, pitch - 3));
+  // Свечи прижаты ВПРАВО: свежая минута всегда у правого края.
+  const xOf = (i) => CH.w - (bars.length - i) * pitch + pitch / 2;
   let s = '';
   for (let i = 0; i < bars.length; i++) {
     const b = bars[i], cx = xOf(i);
@@ -451,8 +477,8 @@ function miniChart(ch) {
     const yo = y(b.o), ycl = y(b.c);
     const top = Math.min(yo, ycl), hgt = Math.max(0.8, Math.abs(ycl - yo));
     s += `<line class="wick ${k}" x1="${r1(cx)}" y1="${y(b.h)}" x2="${r1(cx)}" y2="${y(b.l)}"/>`
-      + `<rect class="cndl ${k}" x="${r1(cx - CH.body / 2)}" y="${r1(top)}"`
-      + ` width="${CH.body}" height="${r1(hgt)}"/>`;
+      + `<rect class="cndl ${k}" x="${r1(cx - body / 2)}" y="${r1(top)}"`
+      + ` width="${r1(body)}" height="${r1(hgt)}"/>`;
   }
   // Средняя цена позиции — сплошная тонкая линия.
   if (ch.avg) s += `<line class="avg" x1="0" y1="${yc(ch.avg)}" x2="${CH.w}" y2="${yc(ch.avg)}"/>`;
@@ -485,6 +511,17 @@ function miniChart(ch) {
     + ` width="33" height="11" rx="1.5"/>`
     + `<text class="chiptx" x="${CH.w - 2}" y="${r1(Math.min(CH.h - 2.5, Math.max(8.5, ly + 3)))}">`
     + `${esc(px(lastB.c))}</text>`;
+  // Голый график молчит о причине: робот стоит потому, что сигнала нет, или
+  // потому, что его нечем посчитать. Подпись появляется РОВНО тогда, когда
+  // рисовать больше нечего — ни заявок, ни сделок в окне.
+  if (!(ch.orders || []).length && !(ch.fills || []).length) {
+    const txt = !ch.signal_known ? 'сигнал не рассчитан'
+      : ch.want === 1 ? 'сигнал: лонг'
+      : ch.want === -1 ? 'сигнал: шорт'
+      : ch.want === 0 ? 'сигнал: выйти в кэш'
+      : 'сигнала нет';
+    s += `<text class="nosig" x="2" y="${CH.h - 2.5}">${esc(txt)}</text>`;
+  }
   return `<svg class="mchart" viewBox="0 0 ${CH.w} ${CH.h}" width="${CH.w}" height="${CH.h}"`
     + ` preserveAspectRatio="none" aria-hidden="true">${s}</svg>`;
 }
@@ -714,7 +751,9 @@ function paintPanel(d) {
     <div class="sec">биржа</div>${renderMarket(d.market)}
     <div class="sec">счёт</div>${renderAccount(d.account)}
     <div class="sec">позиции</div>${renderPositions(d.positions)}
-    <div class="sec">роботы (реал)</div>
+    <div class="sec">роботы (реал)<span class="dens">` +
+      DENSITY.map((n) => `<b class="${n === density() ? 'on' : ''}" data-dens="${n}">${n}</b>`).join('') +
+      `</span></div>
       ${robotsTotal(d.robots)}${renderRobots(d.robots)}
     <div class="sec">заявки ручные <a href="#/orders">подробно ↗</a></div>${renderOrders(d.orders, d)}
     <div class="sec">вотчер <a href="#/watch">подробно ↗</a></div>${renderWatch(d.watch)}
@@ -864,6 +903,8 @@ document.addEventListener('click', (e) => {
     return;
   }
   if (e.target.closest('.more')) { alertsOpen = !alertsOpen; if (lastData) paint(lastData); return; }
+  const dens = e.target.closest('[data-dens]');
+  if (dens) { setDensity(+dens.dataset.dens); return; }
   // Тап по карточке робота раскрывает его график. Имя робота — ссылка на свой
   // экран, она обрабатывается браузером и сюда не попадает.
   const rob = e.target.closest('.rob[data-rid]');
@@ -879,7 +920,7 @@ async function tick() {
   const token = localStorage.getItem(LS_TOKEN);
   const headers = token ? { 'Authorization': 'Bearer ' + token } : {};
   try {
-    const r = await fetch(API + '/snapshot', { headers, cache: 'no-store',
+    const r = await fetch(API + '/snapshot?bars=' + density(), { headers, cache: 'no-store',
       credentials: token ? 'omit' : 'same-origin' });
     if (r.status === 401) {
       // токен отозван (или сессии нет) — обратно на привязку

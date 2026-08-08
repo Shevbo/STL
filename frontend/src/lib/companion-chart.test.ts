@@ -16,15 +16,27 @@ function loadMiniChart(page = 'public/companion.html') {
     if (!m) throw new Error('не нашёл ' + n);
     return m[0];
   };
-  const consts = src.match(/const CH = \{[\s\S]*?\nCH\.pitch = [^\n]*\n/)![0]
+  const consts = src.match(/const DENSITY = [^\n]*\n/)![0]
+    + src.match(/const CH = \{[^\n]*\n/)![0]
+    + pick('density')
     + src.match(/const r1 = [^\n]*\n/)![0]
-    + src.match(/function px\(v\)[\s\S]*?\n\}\n/)![0]
+    + pick('px')
     + 'const esc = (s) => String(s == null ? "" : s);\n';
-  const ctx: any = { console };
+  // density() читает localStorage; в vm его нет, подсовываем управляемую заглушку.
+  const store: Record<string, string> = {};
+  const ctx: any = { console, localStorage: {
+    getItem: (k: string) => (k in store ? store[k] : null),
+    setItem: (k: string, v: string) => { store[k] = v; },
+  } };
   vm.createContext(ctx);
-  vm.runInContext(consts + pick('miniChart') + ';this.miniChart=miniChart;this.CH=CH', ctx);
+  vm.runInContext(consts + pick('miniChart')
+    + ';this.miniChart=miniChart;this.CH=CH;this.setN=(n)=>localStorage.setItem("stl.chartN",String(n))', ctx);
   return ctx;
 }
+
+/** Шаг бара считается от ФАКТИЧЕСКОГО их числа, а не от выбранной плотности. */
+const pitchFor = (n: number) => CH_W / n;
+const CH_W = 320;
 
 const { miniChart, CH } = loadMiniChart();
 
@@ -48,16 +60,15 @@ describe('мини-график робота', () => {
     const xs = rects(svg);
     expect(xs).toHaveLength(30);
     // центр последней свечи на половине шага от правого края
-    expect(xs[xs.length - 1] + CH.body / 2).toBeCloseTo(CH.w - CH.pitch / 2, 1);
+    expect(xs[xs.length - 1] + CH.body / 2).toBeCloseTo(CH_W - pitchFor(30) / 2, 1);
     expect(xs[0]).toBeGreaterThanOrEqual(-1);
   });
 
   it('неполный хвост тоже прижат вправо, а не растянут', () => {
     const xs = rects(miniChart({ bars: bars(7) }));
     expect(xs).toHaveLength(7);
-    expect(xs[xs.length - 1] + CH.body / 2).toBeCloseTo(CH.w - CH.pitch / 2, 1);
-    // семь баров занимают семь шагов, а не всю ширину
-    expect(xs[0]).toBeCloseTo(CH.w - 7 * CH.pitch + CH.pitch / 2 - CH.body / 2, 1);
+    // семь баров растягиваются на всю ширину: шаг считается от их числа
+    expect(xs[xs.length - 1] + CH.body / 2).toBeCloseTo(CH_W - pitchFor(7) / 2, 1);
   });
 
   it('плоская минута не даёт NaN', () => {
@@ -76,7 +87,7 @@ describe('мини-график робота', () => {
     const poly = svg.match(/<polygon class="fill up" points="([-\d., ]+)"/);
     expect(poly, 'маркер покупки нарисован').toBeTruthy();
     const cx = +poly![1].split(',')[0];
-    expect(cx).toBeCloseTo(CH.w - CH.pitch / 2, 1);
+    expect(cx).toBeCloseTo(CH_W - pitchFor(30) / 2, 1);
   });
 
   it('сделка вне окна графика не рисуется', () => {
@@ -119,6 +130,47 @@ describe('мини-график робота', () => {
       expect(+m[1]).toBeGreaterThanOrEqual(-5);
       expect(+m[1]).toBeLessThanOrEqual(CH.h + 5);
     }
+  });
+
+  it('плотность режет хвост и всегда занимает всю ширину', () => {
+    const ctx = loadMiniChart();
+    for (const n of [30, 60, 120, 200]) {
+      ctx.setN(n);
+      const xs = rects(ctx.miniChart({ bars: bars(200) }));
+      expect(xs, `плотность ${n}`).toHaveLength(n);
+      expect(xs[xs.length - 1]).toBeLessThan(CH_W);
+      expect(xs[0]).toBeGreaterThanOrEqual(-1);
+    }
+  });
+
+  it('на плотной сетке свеча вырождается в штрих, а не в отрицательную ширину', () => {
+    const ctx = loadMiniChart();
+    ctx.setN(200);
+    const svg = ctx.miniChart({ bars: bars(200) });
+    const widths = [...svg.matchAll(/<rect class="cndl[^"]*"[^>]*width="([-\d.]+)"/g)].map((m) => +m[1]);
+    expect(Math.min(...widths)).toBeGreaterThanOrEqual(1);
+    expect(Math.max(...widths)).toBeLessThanOrEqual(CH_W / 200);
+  });
+
+  it('пустой график объясняет себя сигналом, а не молчит', () => {
+    const bs = bars(30);
+    const t = (ch: any) => (miniChart({ bars: bs, ...ch }).match(/class="nosig"[^>]*>([^<]*)</) || [])[1];
+    expect(t({ signal_known: true, want: null })).toBe('сигнала нет');
+    expect(t({ signal_known: true, want: 1 })).toBe('сигнал: лонг');
+    expect(t({ signal_known: true, want: -1 })).toBe('сигнал: шорт');
+    expect(t({ signal_known: true, want: 0 })).toBe('сигнал: выйти в кэш');
+    // сигнал не посчитан (напр. стратегия-модуль вне реестра) — не врём «нет»
+    expect(t({ signal_known: false })).toBe('сигнал не рассчитан');
+  });
+
+  it('подпись сигнала не лезет туда, где график и так не пуст', () => {
+    const bs = bars(30);
+    const withOrder = miniChart({ bars: bs, signal_known: true, want: null,
+      orders: [{ side: 'buy', price: bs[5].c, qty: 1 }] });
+    const withFill = miniChart({ bars: bs, signal_known: true, want: null,
+      fills: [{ ts: bs[5].t * 1000, side: 'buy', price: bs[5].c, qty: 1 }] });
+    expect(withOrder).not.toContain('nosig');
+    expect(withFill).not.toContain('nosig');
   });
 
   // Две панели считают одни и те же деньги, и мобильная УЖЕ молча отставала от

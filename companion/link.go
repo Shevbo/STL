@@ -226,8 +226,18 @@ func (l *link) handleRoot(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write(body)
 }
 
-func (l *link) handleSnapshot(w http.ResponseWriter, _ *http.Request) {
-	body, err := l.fetch("/api/v1/quik/companion/snapshot", l.token)
+func (l *link) handleSnapshot(w http.ResponseWriter, r *http.Request) {
+	// Плотность мини-графика выбирает страница, а режет сервер. Пробрасываем
+	// РОВНО ОДИН параметр по белому списку: прокси не должен превращаться в
+	// сквозную дыру в STL, у его токена и так есть доступ только сюда.
+	path := "/api/v1/quik/companion/snapshot"
+	if n, err := strconv.Atoi(r.URL.Query().Get("bars")); err == nil && n > 0 {
+		if n > 200 {
+			n = 200
+		}
+		path += "?bars=" + strconv.Itoa(n)
+	}
+	body, err := l.fetch(path, l.token)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	if err != nil {

@@ -413,7 +413,7 @@ def _watch_runner(health: dict, received_ms: int | None, now_ms: int,
 
 
 @router.get("/snapshot")
-async def snapshot(request: Request, agent_id: str | None = None):
+async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30):
     """Everything the tray panel shows, in one read. Companion token or session.
 
     Read-only aggregation over mirrors STL already holds: no agent command is
@@ -422,6 +422,10 @@ async def snapshot(request: Request, agent_id: str | None = None):
     await _companion_or_operator(request)
     pool = _pool(request)
     now_ms = int(time.time() * 1000)
+    # Плотность мини-графика выбирает панель. Режем ЗДЕСЬ, а не на клиенте:
+    # телефон опрашивает снапшот раз в 5 секунд по мобильному интернету, и
+    # возить 200 баров на робота, когда показывают 30, значит жечь его трафик.
+    bars_n = max(30, min(200, int(bars or 30)))
 
     store = getattr(request.app.state, "quik_store", None)
     # agent_status() returns the agent's own status JSON (agent/health/robots/
@@ -623,12 +627,22 @@ async def snapshot(request: Request, agent_id: str | None = None):
         # них — просто график инструмента, который в панели уже есть.
         chart = None
         if cur_mode == "real":
-            bars = [b for b in (rob.get("bars_tail") or [])
-                    if b.get("t") and b.get("c")]
-            if bars:
-                lo_ms = int(bars[0]["t"]) * 1000
+            tail = [b for b in (rob.get("bars_tail") or [])
+                    if b.get("t") and b.get("c")][-bars_n:]
+            if tail:
+                lo_ms = int(tail[0]["t"]) * 1000
+                # Сигнал стратегии ПРЯМО СЕЙЧАС: want 1/-1/0. Нужен, чтобы пустой
+                # график (ни заявок, ни сделок) не молчал о причине — робот может
+                # стоять и потому, что сигнала нет, и потому, что его не посчитать.
+                sig = {}
+                try:
+                    sig = json.loads(rob.get("signal_json") or "{}") or {}
+                except (TypeError, ValueError):
+                    sig = {}
                 chart = {
-                    "bars": bars,
+                    "bars": tail,
+                    "want": sig.get("want") if sig.get("ready") else None,
+                    "signal_known": bool(sig.get("ready")),
                     # висящие заявки: то, чего робот ждёт прямо сейчас
                     "orders": [{"side": w.get("side"), "price": w.get("price"),
                                 "qty": w.get("qty"), "state": w.get("state")}
