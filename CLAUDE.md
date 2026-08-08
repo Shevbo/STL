@@ -435,7 +435,9 @@ ssh hoster 'cd ~/apps/shectory-trader && set -a; . ~/.shectory_trade.env; set +a
   UNcommented in `/etc/nginx/nginx.conf` — with it off nginx gzips only `text/html`, shipping
   the JS/CSS raw (~727KB vs ~218KB gzipped over the thin VDS uplink; this bit prod once).
 - **QUIK agent + runner:** scp changed Go files + protos into hoster `~/quik_build`, then
-  `bash ~/quik_build/publish_quik_agent.sh [agent_id]` — builds the agent exe, packs
+  `bash ~/quik_build/publish_quik_agent.sh --runner-sha <sha256> [agent_id]` (the
+  sha of YOUR local runner build; required whenever a runner is staged — three-window
+  lock, see above) — builds the agent exe, packs
   `robot-runner.exe` into the SAME zip when staged in `~/quik_build/quik_agent/dist/`
   (build it on Windows first, scp it up); the agent self-updates on start/03:00/command
   and its apply-.bat installs companion exes too. `build_rev` must be a NUMERIC epoch.
@@ -449,6 +451,37 @@ ssh hoster 'cd ~/apps/shectory-trader && set -a; . ~/.shectory_trade.env; set +a
 - **AI46:** `deploy/shectory-ai46.service`; runs `python -m trader.lab.ai46`.
 - ssh aliases: `hoster` (prod), `smain` (federation/keymaster). No SSH to the QUIK VDS —
   anything there (QUIK settings, Lua script file, agent_config.json) is operator-only.
+
+## Three parallel Claude windows (STRICT, agreed 08.08.2026)
+
+Three Claude sessions work this repo and the hoster IN PARALLEL. On 08.08.2026 they
+collided four times in one day — including publishing a FOREIGN binary to the live
+trading VDS (staged `~/quik_build/quik_agent/dist/robot-runner.exe` was silently
+overwritten between staging and publish), a deploy that shipped someone else's
+uncommitted `m.html`, an alien commit moving HEAD mid-work, and Go stubs regenerated
+under a foreign build. None of the collisions were visible at the moment they
+happened — hence mechanisms, not promises.
+
+**Zone ownership — edit only your zone; a change needed in a foreign zone is HANDED
+to its owner, not made:**
+
+| Window | Owns | Deploys |
+|---|---|---|
+| real trade | `proto/`, `quik_agent/`, `robot_runner/`, `~/quik_build`, the QUIK VDS | agent/runner releases |
+| backtests | `trader/lab/`, `scripts/`, the i9, campaigns | nothing |
+| UI & UX | `frontend/`, `trader/api/` | frontend dist |
+
+**Rules above zones:** arming, agent-release publication, and `shectory-trader`
+restarts happen ONLY from the real trade window, no matter who wrote the code.
+Before touching a staged trading binary: check robot state and verify sha256
+IMMEDIATELY before publish, not in advance.
+
+**Locks in scripts (do not bypass):** `publish_quik_agent.sh` refuses to run when a
+runner is staged unless `--runner-sha <sha256-of-YOUR-build>` matches the staged
+file (prints staged mtime/owner so an overwrite is visible). `deploy_dist.sh`
+refuses to deploy while `frontend/` has uncommitted changes — prod carries exactly
+what git carries. A lock firing means the OTHER window interfered: stop, re-check,
+re-stage your own artifact; never "fix" the lock.
 
 ## Critical gotchas
 

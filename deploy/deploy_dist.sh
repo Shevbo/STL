@@ -12,6 +12,17 @@ DIST=frontend/dist
 HOST=hoster
 RDIR="~/apps/shectory-trader/frontend/dist"
 
+# ── Замок 2 (регламент трёх окон, 08.08.2026): на прод — только то, что в git ──
+# vite build запекает в dist ЛЮБОЕ состояние frontend/, включая чужие
+# незакоммиченные правки (08.08 деплой увёз чужой m.html). Грязно — не деплоим.
+DIRTY="$(git status --porcelain -- frontend/ || true)"
+if [ -n "$DIRTY" ]; then
+  echo "СТОП: под frontend/ незакоммиченные правки — деплой увёз бы на прод то, чего нет в git:" >&2
+  echo "$DIRTY" | sed 's/^/  /' >&2
+  echo "Закоммить (своё) или передать владельцу зоны (чужое), пересобрать и повторить." >&2
+  exit 1
+fi
+
 [ -f "$DIST/index.html" ] || { echo "нет $DIST/index.html — сначала vite build"; exit 1; }
 
 ASSETS=$(grep -o 'assets/[^"]*' "$DIST/index.html" | sort -u)

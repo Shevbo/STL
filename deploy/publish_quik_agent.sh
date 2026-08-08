@@ -6,7 +6,12 @@
 # synced with the repo). Publishes <arch>.rev + <arch>.zip into the STL release dir.
 # Pass an agent_id to also trigger an immediate self-update on that live agent.
 #
-#   bash deploy/publish_quik_agent.sh [AGENT_ID]
+#   bash deploy/publish_quik_agent.sh --runner-sha <sha256> [AGENT_ID]
+#
+# ЗАМОК (регламент трёх окон, 08.08.2026): если в dist/ staged robot-runner.exe,
+# публикация требует --runner-sha с sha256 ТВОЕЙ локальной сборки и сверяет его
+# со staged-файлом. Три окна Claude пишут в ~/quik_build параллельно; 08.08 чужая
+# перезаливка staged-бинарника уехала на боевой VDS. Не совпало — не стартуем.
 set -euo pipefail
 
 export PATH="$HOME/go-sdk/go/bin:$HOME/go/bin:$HOME/protoc/bin:$PATH"
@@ -14,7 +19,41 @@ SRC="$HOME/quik_build/quik_agent"
 REL="$HOME/apps/shectory-trader/agent_release"
 ENVF="$HOME/.shectory_trade.env"
 REV="$(date +%s)"
-AGENT_ID="${1:-}"
+
+AGENT_ID=""
+RUNNER_SHA=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --runner-sha)   RUNNER_SHA="${2:-}"; shift 2 ;;
+    --runner-sha=*) RUNNER_SHA="${1#*=}"; shift ;;
+    *)              AGENT_ID="$1"; shift ;;
+  esac
+done
+
+# ── Замок 1: staged runner обязан совпасть с тем, что публикующий собрал сам ──
+RUNNER="$SRC/dist/robot-runner.exe"
+if [ -f "$RUNNER" ]; then
+  STAGED_SHA="$(sha256sum "$RUNNER" | cut -d' ' -f1)"
+  echo "[publish] staged runner: sha256=$STAGED_SHA"
+  echo "[publish] staged: $(stat -c 'mtime %y, %s bytes, owner %U' "$RUNNER")"
+  if [ -z "$RUNNER_SHA" ]; then
+    echo "[publish] СТОП: в dist/ лежит robot-runner.exe, а --runner-sha не передан." >&2
+    echo "[publish] Подтверди, ЧЕЙ бинарник уезжает на боевой VDS:" >&2
+    echo "[publish]   bash publish_quik_agent.sh --runner-sha <sha256 локальной сборки> [AGENT_ID]" >&2
+    exit 2
+  fi
+  if [ "$STAGED_SHA" != "$RUNNER_SHA" ]; then
+    echo "[publish] СТОП: staged runner НЕ ТОТ. Ожидали  $RUNNER_SHA" >&2
+    echo "[publish]                            в dist/  $STAGED_SHA" >&2
+    echo "[publish] Кто-то перезаписал staged-файл после твоей заливки (см. mtime выше)." >&2
+    echo "[publish] Перезалей свою сборку и повтори." >&2
+    exit 3
+  fi
+  echo "[publish] runner sha OK"
+elif [ -n "$RUNNER_SHA" ]; then
+  echo "[publish] СТОП: --runner-sha передан, а dist/robot-runner.exe не staged." >&2
+  exit 2
+fi
 
 cd "$SRC"
 echo "[publish] build_rev=$REV"
