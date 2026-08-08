@@ -1,10 +1,9 @@
-"""«Долина смерти» в explain — зеркало make_on_bar, двумя частями:
+"""«Долина смерти» в explain — зеркало make_on_bar:
 
 1. dv_block: карточка честно говорит «входы закрыты до пробоя», и метит ВСЕ
    entry-заявки (в отличие от разножки долина гейтит и вход с нуля).
-2. _generic_explain режет долинные бары из серии перед signal() — иначе консоль
-   показывала бы сигнал по сырым барам, а робот торговал бы по вырезанным
-   (класс бага «монитор ШОРТ, робот покупает», чинен 05.08.2026).
+2. Сигнальную серию долина НЕ трогает (семантика v3 08.08.2026): сигнал всегда
+   по сырым барам — как и в движке, где заморозка лишала робота выхода.
 """
 from trader.lab.runtime import Bar
 from trader.lab.strategies.library import REGISTRY, register
@@ -37,14 +36,13 @@ def test_dv_block_silent_when_off_or_wide():
     assert dv_block({"dv_bars": 3, "dv_range_pts": 100}, tight[:2]) == ""
 
 
-def test_explain_marks_all_entries_and_filters_signal_series():
+def test_explain_marks_all_entries_and_signal_sees_raw_series():
     p = {"symbol": "SIM6", "qty": 1, "dv_bars": 3, "dv_range_pts": 100}
     bars = _bars([87200, 87000, 87002, 87004])   # хвост 87000..87004 — долина
     d = explain("_dvexp", bars, p, position=0)
     assert "долина" in d.get("entry_blocked", "")
-    # сигнал не видел долинные бары: последний для него — 87002 (кромка окна),
-    # а не сырой 87004
-    assert _SEEN["last"] == 87002
+    # сигнал считается по СЫРОЙ серии (долина гейтит только входы)
+    assert _SEEN["last"] == 87004
     for o in d["planned_orders"]:
         if o.get("entry"):
             assert o.get("blocked")

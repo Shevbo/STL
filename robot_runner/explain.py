@@ -8,7 +8,7 @@ it explains the real code, it does not approximate it.
 """
 
 from trader.lab import indicators as I
-from trader.lab.strategies.library import DV_FETCH_EXTRA, REGISTRY, dv_sig_window
+from trader.lab.strategies.library import REGISTRY
 
 
 def _fvg_explain(bars, params: dict) -> dict:
@@ -115,22 +115,11 @@ def _generic_explain(strategy_id: str, bars, params: dict, state: dict) -> dict:
         need = max(need, atr_n + 1)
     if len(bars) < need:
         return {"ready": False, "waiting_for": f"накопление баров: {len(bars)}/{need}"}
-    # «Долина смерти»: зеркало make_on_bar — ОДИН helper (dv_sig_window) и ТО ЖЕ
-    # окно баров, что fetch движка. Первая версия фильтровала по всему хвосту и
-    # показывала «СИГНАЛ ЛОНГ» там, где движку не хватало чистых баров и он молчал
-    # (жив. lxk22, 07.08.2026) — ровно класс бага, чиненный 05.08.2026.
-    sig_bars = bars[-need:]
-    dv_win = int(params.get("dv_bars", 0) or 0)
-    dv_pts = float(params.get("dv_range_pts", 0) or 0)
-    if dv_win > 0 and dv_pts > 0:
-        sig_bars, in_dv = dv_sig_window(bars[-(need + DV_FETCH_EXTRA):],
-                                        need, dv_win, dv_pts)
-        if in_dv and len(sig_bars) < need:
-            return {"ready": True, "want": None,
-                    "waiting_for": ("долина смерти глубже прогрева: сигнал заморожен, "
-                                    "жду выхода цены из коридора")}
+    # «Долина смерти» серию НЕ трогает: сигнал всегда по сырому окну (долина
+    # гейтит только входы — dv_block ниже; замороженный сигнал в долине лишал
+    # робота сигнального ВЫХОДА, жив. lxk22 08.08.2026: шорт −290 пт при want=None).
     try:
-        want = spec["signal"](sig_bars, params)
+        want = spec["signal"](bars[-need:], params)
     except Exception as exc:  # noqa: BLE001 — introspection must never crash the host
         return {"ready": False, "waiting_for": f"ошибка сигнала: {exc}"}
     label = {1: "СИГНАЛ ЛОНГ", -1: "СИГНАЛ ШОРТ", 0: "сигнал: выйти в кэш"}.get(want)

@@ -425,26 +425,19 @@ async def test_no_reentry_on_the_same_signal_after_a_stop():
 
 
 # ── «Долина смерти»: боковик в узком коридоре (dv_bars + dv_range_pts) ─────────
-from trader.lab.strategies.library import dv_flags as _dvf
+# Семантика v3 (после двух живых инцидентов, см. комментарий у in_death_valley):
+# долина гейтит ТОЛЬКО входы/доборы, сигнал всегда по сырой серии, выходы живут.
+from trader.lab.strategies.library import in_death_valley as _idv
 
 
-def test_dv_flags_detector():
-    """Флаг = размах ЗАКРЫТИЙ за окно меньше порога. Первые window-1 баров не
-    флагуются (окно не набралось); пробойный close гасит долину сам."""
-    closes = [87000, 87010, 87020, 87015, 87500, 87490]
-    f = _dvf(closes, 3, 100)
-    assert f == [False, False, True, True, False, False]
-    # выключенный фильтр / короткая серия -> все False
-    assert _dvf(closes, 0, 100) == [False] * 6
-    assert _dvf(closes, 3, 0) == [False] * 6
-    assert _dvf([1, 2], 3, 100) == [False, False]
-
-
-def test_dv_flags_wick_immune_by_construction():
-    """Детектор считается по close: манипуляционный фитиль (high/low) в серию
-    вообще не попадает — долину гасит только устойчивый уход закрытий."""
-    closes = [87000, 87010, 87005, 87008]
-    assert _dvf(closes, 3, 100)[-1] is True
+def test_in_death_valley_detector():
+    """Долина = размах последних window ЗАКРЫТИЙ меньше порога. По close, не по
+    high/low: манипуляционный фитиль в серию вообще не попадает."""
+    assert _idv([87000, 87010, 87020], 3, 100) is True
+    assert _idv([87010, 87020, 87400], 3, 100) is False   # пробой закрытием гасит
+    assert _idv([87000, 87010], 3, 100) is False          # окно не набралось
+    assert _idv([87000, 87010, 87020], 0, 100) is False   # выключен
+    assert _idv([87000, 87010, 87020], 3, 0) is False
 
 
 @pytest.mark.asyncio
@@ -479,6 +472,24 @@ async def test_dv_never_blocks_exit_reversal_leg_is_blocked():
 
 
 @pytest.mark.asyncio
+async def test_dv_signal_exit_lives_in_deep_valley():
+    """Живой дефект 08.08.2026 (lxk22): замороженный вырезанием сигнал лишал
+    робота сигнального ВЫХОДА — шорт висел −290 пт против без стопа. Теперь
+    сигнал в долине считается по сырой серии: флип закрывает позицию сразу,
+    сколько бы долина ни длилась."""
+    rt = _FakeRT()
+    dv = dict(dv_bars=3, dv_range_pts=100)
+    await _run(rt, -1, 60, 87200.0, **dv)      # шорт до долины
+    assert rt.signed == -1
+    for i in range(10):                        # долина много длиннее прогрева
+        await _run(rt, None, 120 + i * 60, 87000.0 + i, **dv)
+    assert rt.signed == -1                     # держит (сигнала выхода не было)
+    await _run(rt, 1, 800, 87009.0, **dv)      # флип в долине -> ВЫХОД обязан пройти
+    assert rt.signed == 0
+    assert rt.orders[-1][0] == "buy"
+
+
+@pytest.mark.asyncio
 async def test_dv_blocks_averaging_add_in_valley():
     rt = _FakeRT()
     dv = dict(dv_bars=3, dv_range_pts=100, avg_max=3, avg_step_atr=1, avg_atr_n=2)
@@ -494,32 +505,10 @@ async def test_dv_blocks_averaging_add_in_valley():
 
 
 @pytest.mark.asyncio
-async def test_dv_excludes_valley_bars_from_signal_series():
-    """Коррекция расчёта: сигнал видит серию БЕЗ долинных баров — последний бар
-    для него ДО-долинный, EMA не сходятся за время боковика."""
-    seen = {"last": None}
-
-    def _rec(bars, p):
-        seen["last"] = bars[-1].close
-        return None
-
-    if "_dvsig" not in _REG:
-        _register("_dvsig", "t", "t", [], _rec, lambda p: 1)
-    rt = _FakeRT()
-    p = {"symbol": "SIM6", "qty": 1, "avg_max": 1, "dv_bars": 3, "dv_range_pts": 100}
-    for i, price in enumerate([87000.0, 87001.0, 87002.0, 87003.0]):
-        rt.push(60 + i * 60, price)
-        await _mob("_dvsig")(rt, p)
-    # сырые бары кончаются на 87003, но 87002/87003 — долина: сигналу их не видно
-    assert seen["last"] == 87001.0
-
-
-@pytest.mark.asyncio
 async def test_dv_recovers_instantly_after_breakout_even_with_long_valley_history():
-    """Живой баг 07.08.2026 (lxk22): ночная долина съела запас чистых баров, и
-    после пробоя на 600 пт робот молчал ещё часы — вырезались ВСЕ долинные бары
-    истории. Теперь вырезается только ХВОСТОВАЯ долина: первый небудничный бар
-    возвращает сырую серию, вход идёт сразу."""
+    """Живой баг 07.08.2026 (lxk22): вырезание долинных баров съедало прогрев, и
+    после пробоя на 600 пт робот молчал ещё часы. Сигнал по сырой серии этого
+    класса отказов не имеет: первый небудничный бар — и вход проходит."""
     if "_dvmute" not in _REG:
         _register("_dvmute", "t", "t", [], lambda bars, p: _WANT["v"], lambda p: 5)
     rt = _FakeRT()
@@ -530,25 +519,8 @@ async def test_dv_recovers_instantly_after_breakout_even_with_long_valley_histor
         rt.push(t, price)
         await _mob("_dvmute")(rt, p)
 
-    for i in range(10):                                # долина глубже прогрева (need=5)
-        await step(1, 60 + i * 60, 87000.0 + i)        # сигнал есть — робот нем/держит
+    for i in range(10):                                # долина много глубже прогрева
+        await step(1, 60 + i * 60, 87000.0 + i)        # сигнал есть — долина держит
         assert rt.signed == 0
-    # чистых баров в истории всего 2 (кромка долины) — старый код после пробоя
-    # не набирал need и молчал ещё часы; хвостовое вырезание отдаёт сырую серию
     await step(1, 700, 87900.0)                        # пробой закрытием
     assert rt.signed == 1, "после пробоя вход обязан пройти НЕМЕДЛЕННО"
-
-
-def test_dv_sig_window_trailing_only():
-    """Вырезается только хвостовая долина; завершённая долина истории остаётся."""
-    from trader.lab.strategies.library import dv_sig_window
-    def mk(c, t):
-        return _Bar(time=t, open=c, high=c, low=c, close=c, volume=1)
-    # долина (3 бара) -> пробой -> ещё бар: хвост НЕ в долине -> серия сырая
-    bars = [mk(87000, 0), mk(87001, 60), mk(87002, 120), mk(87500, 180), mk(87490, 240)]
-    sig, in_dv = dv_sig_window(bars, 4, 3, 100)
-    assert not in_dv and [b.close for b in sig] == [87001, 87002, 87500, 87490]
-    # хвостовая долина: серия обрезана ДО её начала
-    bars2 = [mk(87200, 0), mk(87000, 60), mk(87001, 120), mk(87002, 180)]
-    sig2, in_dv2 = dv_sig_window(bars2, 2, 3, 100)
-    assert in_dv2 and [b.close for b in sig2] == [87000, 87001]
