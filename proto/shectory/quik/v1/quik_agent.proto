@@ -299,6 +299,18 @@ message RobotWorkingOrder {
   int64 ts_unix_ms = 7;
 }
 
+// One CLOSED minute bar as the ROBOT built it from the all-trades tape. The
+// panel's mini-chart must draw these and never ISS bars: ISS stamps MSK wall
+// clock as UTC while fills and runner bars are true UTC, so mixing them puts a
+// robot's trades three hours away from the candle they happened on.
+message RobotBar {
+  int64 t_unix = 1;   // bar OPEN time, true UTC seconds
+  double o = 2;
+  double h = 3;
+  double l = 4;
+  double c = 5;
+}
+
 message RobotStatus {
   string robot_id = 1;
   bool running = 2;                 // scheduled and inside window loop
@@ -323,6 +335,11 @@ message RobotStatus {
   string schedule = 17;
   string params_json = 18;
   int64 max_position = 19;
+  // Tail of closed bars for the panel's mini-chart (30 = half an hour of M1).
+  // Sent on every status report: the runner reports once per 15s, so a 30-bar
+  // tail costs ~1 KB per robot per report — no change-gate needed at that
+  // cadence (tick/book frames are the ones that must stay gated).
+  repeated RobotBar bars_tail = 20;
 }
 
 message RobotStatusReport {

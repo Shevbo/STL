@@ -279,13 +279,27 @@ function fmtNextSession(iso) {
   return dd + ' ' + hm;
 }
 
+// «Скоро» — одно время, дата только если это не сегодня. Зеркало companion.html.
+function fmtSoon(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  const opt = { timeZone: 'Europe/Moscow' };
+  const day = (x) => x.toLocaleDateString('ru-RU', { ...opt, day: '2-digit', month: '2-digit' });
+  const hm = d.toLocaleTimeString('ru-RU', { ...opt, hour: '2-digit', minute: '2-digit' });
+  return day(d) === day(new Date()) ? hm : day(d) + ' ' + hm;
+}
+
+// Время открытия пишем ВСЕГДА, когда оракул его знает: «до открытия» без часа
+// гонит оператора искать расписание, а next_session лежит в том же ответе.
 function marketMode(m) {
   if (!m) return 'биржа: н/д';
   const nxt = fmtNextSession(m.next_session);
+  const soon = fmtSoon(m.next_session);
   switch (m.phase) {
     case 'trading': return 'торги идут';
-    case 'break': return 'клиринг/пауза';
-    case 'pre_open': return 'до открытия';
+    case 'break': return soon ? `клиринг/пауза до ${soon}` : 'клиринг/пауза';
+    case 'pre_open': return soon ? `до открытия в ${soon}` : 'до открытия';
     case 'done': return nxt ? `Биржа закрыта. Открытие торгов ${nxt}` : 'Биржа закрыта';
     case 'holiday': return nxt ? `выходной (MOEX) · след. ${nxt}` : 'выходной (MOEX)';
     default: return m.open === true ? 'торги идут' : m.open === false ? 'биржа закрыта' : 'биржа: н/д';

@@ -522,6 +522,16 @@ type workingOrderJSON struct {
 	TsMs     int64   `json:"ts_unix_ms"`
 }
 
+// One closed minute bar, true UTC. Short keys: 30 of these per robot ride in
+// every status JSON, and the field names would otherwise outweigh the numbers.
+type barJSON struct {
+	T int64   `json:"t"`
+	O float64 `json:"o"`
+	H float64 `json:"h"`
+	L float64 `json:"l"`
+	C float64 `json:"c"`
+}
+
 type robotJSON struct {
 	ID                string             `json:"id"`
 	Symbol            string             `json:"symbol"`
@@ -548,6 +558,10 @@ type robotJSON struct {
 	SignalJSON        string             `json:"signal_json"`
 	RecentFills       []fillJSON         `json:"recent_fills"`
 	WorkingOrders     []workingOrderJSON `json:"working_orders"`
+	// Tail of closed minute bars AS THE ROBOT BUILT THEM (all-trades tape), for
+	// the companion's mini-chart. Omitted when the runner sends none, so an old
+	// runner build simply yields no chart instead of an empty one.
+	BarsTail []barJSON `json:"bars_tail,omitempty"`
 	DeployedAtMs      int64              `json:"deployed_at_ms"`
 	ParamsUpdatedAtMs int64              `json:"params_updated_at_ms"`
 	HasStatus         bool               `json:"has_status"`
@@ -952,6 +966,10 @@ func buildRobotsJSON(d Deps) []robotJSON {
 			DeployedAtMs:      deployedMs,
 			ParamsUpdatedAtMs: paramsMs,
 			HasStatus:         hasStatus,
+		}
+		for _, b := range st.GetBarsTail() {
+			rj.BarsTail = append(rj.BarsTail, barJSON{
+				T: b.GetTUnix(), O: b.GetO(), H: b.GetH(), L: b.GetL(), C: b.GetC()})
 		}
 
 		// Rubles are emitted only when BOTH params are genuinely known (> 0):

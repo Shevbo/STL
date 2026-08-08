@@ -27,6 +27,9 @@ from robot_runner.runtime import AgentRuntime
 log = structlog.get_logger()
 
 STATUS_INTERVAL_S = 15.0
+# Сколько закрытых минуток уезжает в отчёт на мини-график панели. 30 = полчаса,
+# ровно столько влезает в ширину компаньона по 10 px на бар.
+BARS_TAIL_N = 30
 
 
 def resolve_on_bar(strategy_id: str):
@@ -395,8 +398,17 @@ class RobotHost:
                         sig = json.dumps(_d, ensure_ascii=False)
             except Exception:  # noqa: BLE001 — статистика никогда не ломает отчёт
                 pass
+            # Хвост закрытых баров для мини-графика панели: полчаса M1. Это ТЕ ЖЕ
+            # бары, по которым робот принимал решение (лента всех сделок), поэтому
+            # его заявки и сделки ложатся на свою свечу. Рисовать вместо них бары
+            # ISS нельзя: там московское время штамповано как UTC, и филлы уехали
+            # бы на три часа. Отчёт уходит раз в 15 с, 30 баров это ~1 КБ.
+            bars_tail = [pb.RobotBar(t_unix=b.time, o=b.open, h=b.high,
+                                     l=b.low, c=b.close)
+                         for b in r.bars.bars(BARS_TAIL_N)]
             robots.append(pb.RobotStatus(
                 robot_id=rid, running=not (self.killed or r.paused), paused=r.paused,
+                bars_tail=bars_tail,
                 position=r.runtime.signed_position(), avg_price=r.runtime.avg_price(),
                 realized_pnl=r.runtime.realized_pnl(),
                 last_bar_unix=r.bars.last_bar_time,

@@ -267,6 +267,46 @@ async def _prev_close(symbol: str) -> float | None:
     return val
 
 
+def _merge_fills(fills: list[dict], lo_ms: int) -> list[dict]:
+    """Филлы одного ордера — один маркер на графике.
+
+    Зеркало хранит строку на КАЖДУЮ сделку QUIK, а тонкая вечерняя книга наливает
+    один ордер по частям. Без склейки ордер на 5 контрактов рисуется входом и
+    четырьмя фантомными «усреднениями» — ровно та же ошибка, что однажды уже
+    развела маркеры графика и таблицу сделок на стенде.
+
+    Цена склеенного маркера — СРЕДНЕВЗВЕШЕННАЯ по количеству, время — последнего
+    филла: именно тогда ордер закончил исполняться.
+    """
+    by_order: dict[str, dict] = {}
+    for f in fills:
+        if f.get("status") != "filled":
+            continue
+        ts = int(f.get("ts_unix_ms") or 0)
+        if ts < lo_ms:
+            continue
+        try:
+            qty, price = abs(int(f.get("qty") or 0)), float(f.get("price") or 0)
+        except (TypeError, ValueError):
+            continue
+        if qty <= 0 or price <= 0:
+            continue
+        key = f.get("order_id") or f"{ts}:{price}"
+        cur = by_order.get(key)
+        if cur is None:
+            by_order[key] = {"ts": ts, "side": f.get("side"), "price": price,
+                             "qty": qty, "_pq": price * qty}
+            continue
+        cur["qty"] += qty
+        cur["_pq"] += price * qty
+        cur["ts"] = max(cur["ts"], ts)
+    out = []
+    for m in by_order.values():
+        m["price"] = m.pop("_pq") / m["qty"]
+        out.append(m)
+    return sorted(out, key=lambda m: m["ts"])
+
+
 def _msk_midnight_ms() -> int:
     today = datetime.datetime.now(tz=_MSK).date()
     return int(datetime.datetime.combine(today, datetime.time.min, tzinfo=_MSK).timestamp() * 1000)
@@ -573,9 +613,38 @@ async def snapshot(request: Request, agent_id: str | None = None):
                 exit_only = bool(json.loads(rob.get("params_json") or "{}").get("exit_only"))
             except (TypeError, ValueError):
                 exit_only = False
+        # Мини-график робота: свечи, его висящие заявки, его сделки. Всё из
+        # ЗЕРКАЛА одного и того же отчёта, поэтому три слоя заведомо согласованы
+        # между собой. Бары строит раннер из ленты всех сделок — это ровно те
+        # свечи, по которым робот принимал решение; подмешивать сюда бары ISS
+        # нельзя, там московское время штамповано как UTC и сделки уехали бы
+        # на три часа от своей свечи.
+        # Отдаём только активному реалу: у снятого робота заявок нет, а свечи без
+        # них — просто график инструмента, который в панели уже есть.
+        chart = None
+        if cur_mode == "real":
+            bars = [b for b in (rob.get("bars_tail") or [])
+                    if b.get("t") and b.get("c")]
+            if bars:
+                lo_ms = int(bars[0]["t"]) * 1000
+                chart = {
+                    "bars": bars,
+                    # висящие заявки: то, чего робот ждёт прямо сейчас
+                    "orders": [{"side": w.get("side"), "price": w.get("price"),
+                                "qty": w.get("qty"), "state": w.get("state")}
+                               for w in (rob.get("working_orders") or [])
+                               if w.get("price")],
+                    # Сделки, попадающие в окно графика. Хвост в зеркале длиннее
+                    # окна, и филлы ОДНОГО ордера схлопываем в один маркер: журнал
+                    # хранит строку на каждую сделку QUIK, и ордер, налившийся
+                    # 1+1+1+2, нарисовался бы входом и тремя лишними «усреднениями».
+                    "fills": _merge_fills(rob.get("recent_fills") or [], lo_ms),
+                    "avg": rob.get("avg_price") or None,
+                }
         robots.append({
             "id": rid, "name": names.get(rid) or rid,
             "symbol": rob.get("symbol"),
+            "chart": chart,
             "state": state,
             "mode": cur_mode,                     # real | paper | None(снят с агента)
             "paused": bool(rob.get("paused")) if cur_mode else None,
