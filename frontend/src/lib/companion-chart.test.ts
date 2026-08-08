@@ -7,8 +7,8 @@ import { resolve } from 'node:path';
 import vm from 'node:vm';
 import { describe, expect, it } from 'vitest';
 
-function loadMiniChart() {
-  const file = resolve(process.cwd(), 'public/companion.html');
+function loadMiniChart(page = 'public/companion.html') {
+  const file = resolve(process.cwd(), page);
   const html = readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
   const src = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)][0][1];
   const pick = (n: string) => {
@@ -119,5 +119,19 @@ describe('мини-график робота', () => {
       expect(+m[1]).toBeGreaterThanOrEqual(-5);
       expect(+m[1]).toBeLessThanOrEqual(CH.h + 5);
     }
+  });
+
+  // Две панели считают одни и те же деньги, и мобильная УЖЕ молча отставала от
+  // Windows-панели. Сверяем не глазами, а побайтово на одних данных.
+  it('мобильная панель рисует то же самое, что и Windows-панель', () => {
+    const mobile = loadMiniChart('public/m.html').miniChart;
+    const bs = bars(30);
+    const data = {
+      bars: bs, avg: bs[9].c,
+      orders: [{ side: 'buy', price: bs[3].l, qty: 5 }, { side: 'sell', price: 99_000, qty: 2 }],
+      fills: [{ ts: bs[20].t * 1000, side: 'buy', price: bs[20].c, qty: 3 }],
+    };
+    expect(mobile(data)).toBe(miniChart(data));
+    expect(mobile({ bars: [] })).toBe(miniChart({ bars: [] }));
   });
 });

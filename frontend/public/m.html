@@ -38,6 +38,10 @@
     --ink: #e2e6f0; --muted: #8a90a8; --faint: #6f7590;
     --up: #2ecc71; --down: #ff6b5a; --rail: #3a3a5c;
     --accent: #4dd0e1;
+    /* Мини-график берёт эти два имени из общего с companion.html блока стилей.
+       Здесь тема тёмная, поэтому подложка чипа цены — цвет карточки, а не
+       «тёплая бумага» Windows-панели. */
+    --rule: #2d2d4a; --chip-bg: rgba(20, 20, 42, .9);
   }
   * { box-sizing: border-box; }
   html, body {
@@ -127,6 +131,29 @@
   .rob .nums b { color: var(--ink); font-weight: 600; }
   .rob .nums b.up { color: var(--up); } .rob .nums b.down { color: var(--down); }
   .rob .nums .dim { opacity: .75; }
+  /* Мини-график робота — один в один с companion.html, раскрывается тапом по
+     карточке. Высота та же (64), ширина тянется на всю карточку: на телефоне
+     она шире 320, и растянуть свечи честнее, чем оставить колонку слева. */
+  .rob[data-rid] { cursor: pointer; }
+  .rob .chev { color: var(--faint); font-size: 12px; }
+  .mchart { display: block; margin: 5px 0 1px; width: 100%; height: 64px; }
+  .mchart .cndl.up, .mchart .wick.up { fill: var(--up); stroke: var(--up); }
+  .mchart .cndl.down, .mchart .wick.down { fill: var(--down); stroke: var(--down); }
+  .mchart .wick { stroke-width: 1; }
+  .mchart .cndl { stroke: none; }
+  .mchart .ord { stroke-width: 1; stroke-dasharray: 3 3; opacity: .85; }
+  .mchart .ord.up { stroke: var(--up); }
+  .mchart .ord.down { stroke: var(--down); }
+  .mchart .avg { stroke: var(--muted); stroke-width: 1; opacity: .7; }
+  .mchart .olbl { font: 400 8px/1 ui-monospace, Menlo, Consolas, monospace; }
+  .mchart .olbl.up { fill: var(--up); }
+  .mchart .olbl.down { fill: var(--down); }
+  .mchart .fill.up { fill: var(--up); }
+  .mchart .fill.down { fill: var(--down); }
+  .mchart .chip { fill: var(--chip-bg); stroke: var(--rule); stroke-width: .5; }
+  .mchart .chiptx { font: 400 8px/1 ui-monospace, Menlo, Consolas, monospace;
+    fill: var(--ink); text-anchor: end; }
+  .chart-empty { color: var(--faint); font-size: 12px; padding: 4px 0 2px; }
 
   .chk { display: flex; gap: 8px; padding: 4px 14px 4px 12px; margin: 0 8px 2px;
     border-left: 3px solid var(--up); background: var(--panel); border-radius: 4px; font-size: 14px; }
@@ -375,6 +402,93 @@ function robotsTotal(list) {
     `${val(hasN ? rub(total, { signed: true }) : null, cls(total))}</div>`;
 }
 
+// ── Мини-график робота ───────────────────────────────────────────────────────
+// Полчаса минуток, его висящие заявки и его сделки. Свечи строит РАННЕР из ленты
+// всех сделок: это ровно те бары, по которым робот принимал решение, поэтому его
+// сделки лежат на своей свече. Бары ISS сюда подмешивать нельзя — там московское
+// время штамповано как UTC, и филлы уехали бы на три часа.
+const CH = { w: 320, h: 64, n: 30, body: 7, pad: 3 };
+CH.pitch = CH.w / CH.n;
+
+// Раскрытые графики живут ВНЕ DOM: paint() перерисовывает панель целиком каждые
+// 5 секунд, и состояние, хранимое в разметке, схлопывалось бы само собой.
+const chartOpen = new Map(JSON.parse(localStorage.getItem('stl.chartOpen') || '[]'));
+function chartShown(r) {
+  const v = chartOpen.get(r.id);
+  if (v !== undefined) return v;            // оператор решил явно — его слово
+  const ch = r.chart;                       // иначе: открыт у того, кому есть что показать
+  return !!ch && (!!r.position || (ch.orders && ch.orders.length > 0));
+}
+function toggleChart(id) {
+  const r = (lastData && lastData.robots || []).find((x) => x.id === id);
+  if (!r) return;
+  chartOpen.set(id, !chartShown(r));
+  localStorage.setItem('stl.chartOpen', JSON.stringify([...chartOpen]));
+  if (lastData) paint(lastData);
+}
+
+// Округление КООРДИНАТЫ до десятой пикселя (не цены — цену форматирует px()).
+const r1 = (v) => Math.round(v * 10) / 10;
+
+function miniChart(ch) {
+  if (!ch || !ch.bars || !ch.bars.length) {
+    return '<div class="chart-empty">баров нет: раннер ещё не собрал ленту</div>';
+  }
+  const bars = ch.bars.slice(-CH.n);
+  let hi = -Infinity, lo = Infinity;
+  for (const b of bars) { if (b.h > hi) hi = b.h; if (b.l < lo) lo = b.l; }
+  if (!(hi > lo)) { hi += 1; lo -= 1; }     // плоская минута: иначе делим на ноль
+  const inner = CH.h - 2 * CH.pad;
+  const y = (p) => r1(CH.pad + (hi - p) / (hi - lo) * inner);
+  const yc = (p) => Math.min(CH.h - 0.5, Math.max(0.5, y(p)));   // прижатый к краю
+  // Свечи прижаты ВПРАВО: свежая минута всегда у правого края, сколько бы баров
+  // ни успел собрать раннер после перезапуска.
+  const xOf = (i) => CH.w - (bars.length - i) * CH.pitch + CH.pitch / 2;
+  let s = '';
+  for (let i = 0; i < bars.length; i++) {
+    const b = bars[i], cx = xOf(i);
+    const k = b.c >= b.o ? 'up' : 'down';
+    const yo = y(b.o), ycl = y(b.c);
+    const top = Math.min(yo, ycl), hgt = Math.max(0.8, Math.abs(ycl - yo));
+    s += `<line class="wick ${k}" x1="${r1(cx)}" y1="${y(b.h)}" x2="${r1(cx)}" y2="${y(b.l)}"/>`
+      + `<rect class="cndl ${k}" x="${r1(cx - CH.body / 2)}" y="${r1(top)}"`
+      + ` width="${CH.body}" height="${r1(hgt)}"/>`;
+  }
+  // Средняя цена позиции — сплошная тонкая линия.
+  if (ch.avg) s += `<line class="avg" x1="0" y1="${yc(ch.avg)}" x2="${CH.w}" y2="${yc(ch.avg)}"/>`;
+  // Висящие заявки. Заявка ВНЕ диапазона свечей прижимается к краю со стрелкой:
+  // растягивать шкалу под заявку, ждущую пробоя за 3000 пунктов, нельзя —
+  // свечи схлопнутся в нитку, а они здесь главные.
+  for (const o of (ch.orders || [])) {
+    const k = o.side === 'buy' ? 'up' : 'down';
+    const oy = yc(o.price), off = y(o.price) !== oy;
+    s += `<line class="ord ${k}" x1="0" y1="${oy}" x2="${CH.w}" y2="${oy}"/>`
+      + `<text class="olbl ${k}" x="2" y="${r1(Math.min(CH.h - 2, Math.max(8, oy - 1.5)))}">`
+      + `${o.side === 'buy' ? 'B' : 'S'}${o.qty ? ' ' + o.qty : ''}`
+      + `${off ? ' ' + (oy <= 1 ? '▲' : '▼') + ' ' + esc(px(o.price)) : ''}</text>`;
+  }
+  // Сделки: треугольник на своей минуте. Покупка вверх, продажа вниз.
+  const t0 = bars[0].t;
+  for (const f of (ch.fills || [])) {
+    const i = Math.round((f.ts / 1000 - t0) / 60);
+    if (i < 0 || i >= bars.length) continue;
+    const cx = xOf(i), fy = yc(f.price), up = f.side === 'buy';
+    const d = up ? `${r1(cx)},${r1(fy - 4)} ${r1(cx - 3.2)},${r1(fy + 1.6)} ${r1(cx + 3.2)},${r1(fy + 1.6)}`
+                 : `${r1(cx)},${r1(fy + 4)} ${r1(cx - 3.2)},${r1(fy - 1.6)} ${r1(cx + 3.2)},${r1(fy - 1.6)}`;
+    s += `<polygon class="fill ${up ? 'up' : 'down'}" points="${d}"><title>`
+      + `${up ? 'покупка' : 'продажа'} ${f.qty} по ${esc(px(f.price))}</title></polygon>`;
+  }
+  // Последняя цена — чипом у правого края, поверх свечей: отдельный жёлоб съел бы
+  // ширину, которой не хватает даже на пять цифр.
+  const lastB = bars[bars.length - 1], ly = yc(lastB.c);
+  s += `<rect class="chip" x="${CH.w - 34}" y="${r1(Math.min(CH.h - 11, Math.max(0, ly - 5.5)))}"`
+    + ` width="33" height="11" rx="1.5"/>`
+    + `<text class="chiptx" x="${CH.w - 2}" y="${r1(Math.min(CH.h - 2.5, Math.max(8.5, ly + 3)))}">`
+    + `${esc(px(lastB.c))}</text>`;
+  return `<svg class="mchart" viewBox="0 0 ${CH.w} ${CH.h}" width="${CH.w}" height="${CH.h}"`
+    + ` preserveAspectRatio="none" aria-hidden="true">${s}</svg>`;
+}
+
 function renderRobots(all) {
   if (!all || !all.length) return '<div class="empty">реальных роботов нет</div>';
   const active = all.filter((r) => r.state === 'реал' || r.state === 'пауза');
@@ -436,9 +550,12 @@ function renderActive(list) {
     const days = annDays(r);
     const chg = r.chg_pct == null ? ''
       : `<span class="chg ${cls(r.chg_pct)}">${r.chg_pct > 0 ? '+' : ''}${r.chg_pct.toFixed(1)}%</span>`;
-    return `<div class="rob ${k}">
+    const open = chartShown(r);
+    const chevron = r.chart ? `<span class="chev">${open ? '▴' : '▾'}</span>` : '';
+    return `<div class="rob ${k}" data-rid="${esc(r.id)}">
       <div class="hd">
         <a href="#/robot/${encodeURIComponent(r.id)}">${esc(r.name)}</a>
+        ${chevron}
         ${modeTag}
         ${st === 'реал' || st === 'пауза'
           ? cassette(st === 'реал')
@@ -455,6 +572,7 @@ function renderActive(list) {
         <span>сделок сегодня <b>${r.real_trades_today || 0}</b></span>
         <span>${last ? 'посл. ' + last : 'реальных сделок нет'}</span>
       </div>
+      ${open && r.chart ? miniChart(r.chart) : ''}
     </div>`;
   }).join('');
 }
@@ -745,7 +863,11 @@ document.addEventListener('click', (e) => {
     }
     return;
   }
-  if (e.target.closest('.more')) { alertsOpen = !alertsOpen; if (lastData) paint(lastData); }
+  if (e.target.closest('.more')) { alertsOpen = !alertsOpen; if (lastData) paint(lastData); return; }
+  // Тап по карточке робота раскрывает его график. Имя робота — ссылка на свой
+  // экран, она обрабатывается браузером и сюда не попадает.
+  const rob = e.target.closest('.rob[data-rid]');
+  if (rob && !e.target.closest('a')) { toggleChart(rob.dataset.rid); }
 });
 window.addEventListener('hashchange', () => {
   if (lastData) { paint(lastData); window.scrollTo(0, 0); }
