@@ -246,26 +246,56 @@
   /* Кассета вместо слова-дубля. Первый тег говорит, ЧЕМ робот рискует (реал или
      бумага), второй раньше повторял то же слово: «РЕАЛ РЕАЛ». Смысл второго —
      крутится или стоит, и это лучше показывать движением: катушки видно боковым
-     зрением, слово надо прочитать. Рисунок по фотографии AGFA Fe I: чёрный корпус,
-     светлая этикетка с двумя полосами, окно ленты, пять отверстий снизу. */
+     зрением, слово надо прочитать.
+
+     ШТРИХОВОЙ ЭСКИЗ, БЕЗ ЗАЛИВОК. Прежний рисунок был «фотографией» кассеты:
+     чёрный корпус, светлая этикетка, цветные полосы. На полупрозрачной тёплой
+     панели он читался чёрной наклейкой и спорил с фоном. Теперь только контур
+     цветом текста (currentColor), фон панели виден насквозь — и та же иконка без
+     единой правки живёт на светлой Windows-панели и на тёмной мобильной.
+
+     Не GIF: растр принесёт с собой ЗАПЕЧЁННЫЙ фон — ровно то, что просили
+     сохранить, — не подстроится под две темы и потребует отдельного запроса.
+     SVG плюс CSS даёт то же движение вектором и в те же байты. */
   .cass { display: inline-flex; align-items: center; vertical-align: -3px; }
-  .cass svg { width: 29px; height: 19px; }
-  .cass .shell { fill: #17181a; stroke: #454a52; stroke-width: .7; }
-  .cass .label { fill: #e6e2d6; }
-  .cass .stripe { fill: #c0392b; }
-  .cass .stripe2 { fill: #2a6ebb; }
-  .cass .win { fill: #0a0b0c; stroke: #3a3f47; stroke-width: .5; }
-  .cass .tape { fill: #3a2a1c; }
-  .cass .hole { fill: #0a0b0c; }
+  .cass svg { width: 40px; height: 20px; }
+  .cass rect, .cass circle, .cass path { fill: none; stroke: currentColor; }
+  .cass .shell { stroke-width: .9; }
+  .cass .label, .cass .win { stroke-width: .6; opacity: .5; }
+  .cass .reel { stroke-width: .6; opacity: .45; }
+  .cass .notch { stroke-width: .8; opacity: .45; }
+  .cass .hub path { stroke-width: .9; stroke-linecap: round; }
   .cass .hub { transform-box: fill-box; transform-origin: center;
     animation: cassreel 1.25s linear infinite; }
-  .cass .hub circle { fill: #d8d4c8; }
-  .cass .hub path { stroke: #17181a; stroke-width: 1.1; stroke-linecap: round; }
-  /* Стоп: катушки замерли, кассета глушится — пауза видна, но не кричит. */
-  .cass.stopped { opacity: .45; filter: grayscale(1); }
-  .cass.stopped .hub { animation: none; }
+  /* Ноты и «zzz» — текстом: глиф из системного шрифта честнее восьми кривых
+     Безье и остаётся читаемым на семи пикселях. */
+  .cass .note, .cass .zzz { stroke: none; fill: currentColor; opacity: 0;
+    font: 400 7px/1 "Segoe UI Symbol", "Segoe UI Emoji", "Segoe UI", sans-serif;
+    transform-box: fill-box; transform-origin: center; }
+  .cass .note { animation: cassnote 1.8s ease-out infinite; }
+  .cass .n2 { animation-delay: .9s; }
+  /* Пауза: катушки замерли, ноты смолкли, всё спит. Корпус глушим, но не прячем —
+     робот на паузе остаётся роботом. */
+  .cass.stopped .body { opacity: .5; }
+  .cass.stopped .hub, .cass.stopped .note { animation: none; opacity: 0; }
+  .cass.stopped .zzz { animation: casszzz 2.4s ease-out infinite; }
+  .cass.stopped .z2 { animation-delay: .8s; }
+  .cass.stopped .z3 { animation-delay: 1.6s; }
   @keyframes cassreel { to { transform: rotate(360deg); } }
-  @media (prefers-reduced-motion: reduce) { .cass .hub { animation: none; } }
+  @keyframes cassnote {
+    0% { opacity: 0; transform: translate(0, 2px); }
+    22% { opacity: .95; }
+    100% { opacity: 0; transform: translate(1px, -8px); }
+  }
+  @keyframes casszzz {
+    0% { opacity: 0; transform: translate(0, 2px) scale(.75); }
+    25% { opacity: .9; }
+    100% { opacity: 0; transform: translate(1px, -7px) scale(1.2); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .cass .hub, .cass .note, .cass.stopped .zzz { animation: none; }
+    .cass .note, .cass.stopped .zzz { opacity: .8; }
+  }
 </style>
 </head>
 <body>
@@ -281,10 +311,11 @@
 
 <script>
   // Кассета: катушки крутятся, пока робот работает, и замирают на паузе. Заменяет
-  // второе слово «РЕАЛ», дублировавшее тег режима слева от него.
-  const cassette = (playing) => `<span class="cass ${playing ? '' : 'stopped'}" title="${
+  // Кассета: штриховой эскиз, катушки крутятся пока робот работает, и замирают
+  // на паузе. Играет — над корпусом всплывают ноты; стоит — «zzz», всё спит.
+  const cassette = (playing) => `<span class="cass${playing ? '' : ' stopped'}" title="${
       playing ? 'робот работает: считает бары и выставляет заявки'
-              : 'на паузе: новые заявки не выставляются, позиция остаётся'}"><svg viewBox="0 0 30 20" aria-hidden="true"><rect class="shell" x=".5" y=".5" width="29" height="19" rx="1.8"/><rect class="label" x="2.6" y="2.2" width="24.8" height="7.2" rx=".7"/><rect class="stripe" x="2.6" y="2.2" width="24.8" height="1.1"/><rect class="stripe2" x="2.6" y="8.3" width="24.8" height="1.1"/><rect class="win" x="4.6" y="10.6" width="20.8" height="6.2" rx=".7"/><circle class="tape" cx="10.4" cy="13.7" r="2.9"/><circle class="tape" cx="19.6" cy="13.7" r="2.9"/><g class="hub"><circle cx="10.4" cy="13.7" r="1.5"/><path d="M10.4 12.2v3M8.9 13.7h3M9.3 12.6l2.2 2.2M11.5 12.6l-2.2 2.2"/></g><g class="hub"><circle cx="19.6" cy="13.7" r="1.5"/><path d="M19.6 12.2v3M18.1 13.7h3M18.5 12.6l2.2 2.2M20.7 12.6l-2.2 2.2"/></g><rect class="hole" x="7" y="18" width="1.5" height="1.2" rx=".3"/><rect class="hole" x="11.5" y="18" width="1.5" height="1.2" rx=".3"/><rect class="hole" x="16" y="18" width="1.5" height="1.2" rx=".3"/><rect class="hole" x="20.5" y="18" width="1.5" height="1.2" rx=".3"/></svg></span>`;
+              : 'на паузе: новые заявки не выставляются, позиция остаётся'}"><svg viewBox="0 0 40 20" aria-hidden="true"><g class="body"><rect class="shell" x=".6" y="1.6" width="28.8" height="16.4" rx="2"/><rect class="label" x="3.2" y="3.6" width="23.6" height="5.8" rx=".8"/><rect class="win" x="4.6" y="10.8" width="20.8" height="5.6" rx=".8"/><circle class="reel" cx="10.2" cy="13.6" r="2.5"/><circle class="reel" cx="19.8" cy="13.6" r="2.5"/><g class="hub"><path d="M10.2 11.5v4.2M8.1 13.6h4.2M8.7 12.1l3 3M11.7 12.1l-3 3"/></g><g class="hub"><path d="M19.8 11.5v4.2M17.7 13.6h4.2M18.3 12.1l3 3M21.3 12.1l-3 3"/></g><path class="notch" d="M7.4 16.8v.9M12.4 16.8v.9M17.6 16.8v.9M22.6 16.8v.9"/></g><text class="note n1" x="30.4" y="13">♪</text><text class="note n2" x="33.6" y="10.8">♫</text><text class="zzz z1" x="30.4" y="13">z</text><text class="zzz z2" x="32.2" y="10.6">z</text><text class="zzz z3" x="33.6" y="8.2">z</text></svg></span>`;
 
 'use strict';
 const STL = 'https://stl.shectory.ru';

@@ -34,6 +34,18 @@ function loadMiniChart(page = 'public/companion.html') {
   return ctx;
 }
 
+/** Иконка кассеты — тоже общий для двух панелей кусок, тоже сверяем. */
+function loadCassette(page = 'public/companion.html') {
+  const file = resolve(process.cwd(), page);
+  const src = readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
+  const m = src.match(/const cassette = \(playing\)[\s\S]*?;\n/);
+  if (!m) throw new Error('не нашёл cassette в ' + page);
+  const ctx: any = { console };
+  vm.createContext(ctx);
+  vm.runInContext(m[0] + ';this.cassette=cassette', ctx);
+  return ctx.cassette as (p: boolean) => string;
+}
+
 /** Шаг бара считается от ФАКТИЧЕСКОГО их числа, а не от выбранной плотности. */
 const pitchFor = (n: number) => CH_W / n;
 const CH_W = 320;
@@ -198,5 +210,50 @@ describe('мини-график робота', () => {
     };
     expect(mobile(data)).toBe(miniChart(data));
     expect(mobile({ bars: [] })).toBe(miniChart({ bars: [] }));
+  });
+});
+
+describe('иконка кассеты', () => {
+  const cassette = loadCassette();
+
+  it('это штриховой эскиз: ни одной заливки, фон панели виден насквозь', () => {
+    const svg = cassette(true);
+    // Прежняя иконка была «фотографией» — чёрный корпус fill:#17181a на светлой
+    // полупрозрачной панели читался наклейкой. Заливки в разметке быть не должно.
+    expect(svg).not.toMatch(/fill="(?!none)/);
+    expect(svg).not.toMatch(/#[0-9a-fA-F]{3,6}/);
+  });
+
+  it('играет: катушки крутятся, ноты есть, zzz молчит', () => {
+    const svg = cassette(true);
+    expect(svg).not.toContain('stopped');
+    expect(svg).toContain('class="hub"');
+    expect(svg).toMatch(/♪|♫/);
+    expect(svg).toContain('робот работает');
+  });
+
+  it('пауза: тот же рисунок, но с классом stopped — спят по CSS, не по разметке', () => {
+    const svg = cassette(false);
+    expect(svg).toContain('cass stopped');
+    expect(svg).toContain('class="zzz z1"');
+    expect(svg).toContain('на паузе');
+    // разметка одна и та же: разное состояние — это класс, а не второй рисунок
+    expect(svg.replace(' stopped', '')).toBe(cassette(true).replace(
+      'робот работает: считает бары и выставляет заявки',
+      'на паузе: новые заявки не выставляются, позиция остаётся'));
+  });
+
+  it('SVG разбирается парсером без ошибок', () => {
+    const doc = new DOMParser().parseFromString(cassette(true), 'text/html');
+    expect(doc.querySelector('parsererror')).toBeNull();
+    expect(doc.querySelectorAll('.hub').length).toBe(2);
+    expect(doc.querySelectorAll('.note').length).toBe(2);
+    expect(doc.querySelectorAll('.zzz').length).toBe(3);
+  });
+
+  it('обе панели рисуют одну и ту же кассету', () => {
+    const mobile = loadCassette('public/m.html');
+    expect(mobile(true)).toBe(cassette(true));
+    expect(mobile(false)).toBe(cassette(false));
   });
 });
