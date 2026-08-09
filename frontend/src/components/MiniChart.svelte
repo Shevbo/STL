@@ -8,7 +8,7 @@
   import { fetchWithAuth } from '$lib/fetch-auth';
   import { quotesStore } from '$lib/stores/quotes.svelte';
   import { smartOrdersStore } from '$lib/stores/smart-orders.svelte';
-  import { KIND_BY_ID, lineColor, smartLevels } from '$lib/smart-order-help';
+  import { KIND_BY_ID, LABEL_TEXT_COLOR, smartLevels, softColor } from '$lib/smart-order-help';
   import { mskTickFormatter, mskCrosshairFormatter } from '$lib/chart-time';
 
   let {
@@ -136,11 +136,12 @@
         // Полупрозрачны ТРИ вещи, а не одна: сама линия, ПЛАШКА бирки на шкале
         // и ТЕКСТ в ней. Прозрачной линии мало — глухая бирка закрывала колонку
         // цен и время под ней (оператор, 09.08.2026).
-        price: lv.price, color: lineColor(lv.color, lv.dim ? 0.45 : 0.65),
-        lineWidth: lv.dim ? 1 : 2,
+        price: lv.price,
+        color: softColor(lv.color, lv.dim ? 0.62 : 0.45, lv.dim ? 0.7 : 0.85),
+        lineWidth: 1,
         lineStyle: lv.dim ? 1 : lv.style, axisLabelVisible: true, title: lv.title,
-        axisLabelColor: lineColor(lv.color, lv.dim ? 0.32 : 0.45),
-        axisLabelTextColor: 'rgba(232, 232, 240, 0.85)',
+        axisLabelColor: softColor(lv.color, lv.dim ? 0.78 : 0.68, 0.8),
+        axisLabelTextColor: LABEL_TEXT_COLOR,
       };
       const existing = smartLines.get(key);
       if (existing) existing.applyOptions(opts);

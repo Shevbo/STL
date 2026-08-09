@@ -10,7 +10,7 @@
   import { orderbookStore } from '$lib/stores/orderbook.svelte';
   import { mskTickFormatter, mskCrosshairFormatter } from '$lib/chart-time';
   import { smartOrdersStore } from '$lib/stores/smart-orders.svelte';
-  import { KIND_BY_ID, lineColor, smartLevels } from '$lib/smart-order-help';
+  import { KIND_BY_ID, LABEL_TEXT_COLOR, smartLevels, softColor } from '$lib/smart-order-help';
 
   let {
     symbol,
@@ -349,11 +349,12 @@
       const opts = {
         // Полупрозрачно: сплошная плашка поверх свечей прячет то, ради чего
         // график открыт. Вспомогательные (активация, пик) ещё бледнее.
-        price: lv.price, color: lineColor(lv.color, lv.dim ? 0.45 : 0.65),
-        lineWidth: lv.dim ? 1 : 2,
+        price: lv.price,
+        color: softColor(lv.color, lv.dim ? 0.62 : 0.45, lv.dim ? 0.7 : 0.85),
+        lineWidth: 1,
         lineStyle: lv.dim ? 1 : lv.style, axisLabelVisible: true, title: lv.title,
-        axisLabelColor: lineColor(lv.color, lv.dim ? 0.32 : 0.45),
-        axisLabelTextColor: 'rgba(232, 232, 240, 0.85)',
+        axisLabelColor: softColor(lv.color, lv.dim ? 0.78 : 0.68, 0.8),
+        axisLabelTextColor: LABEL_TEXT_COLOR,
       };
       const existing = smartLines.get(key);
       if (existing) existing.applyOptions(opts);

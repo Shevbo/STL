@@ -208,11 +208,20 @@ describe('smartLevels — уровни на графике', () => {
     expect(buy[0].title).toBe('▲ 12 к');
   });
 
-  it('lineColor даёт прозрачность линиям и не трогает чистый цвет легенды', async () => {
-    const { lineColor, KIND_BY_ID } = await import('./smart-order-help');
-    expect(lineColor('#ff6b5a', 0.65)).toBe('rgba(255, 107, 90, 0.65)');
-    expect(lineColor('#2ecc71')).toBe('rgba(46, 204, 113, 0.6)');
-    expect(lineColor('не цвет')).toBe('не цвет');          // мусор не ломает график
+  it('softColor тушит тон к фону графика и не трогает чистый цвет легенды', async () => {
+    const { softColor, KIND_BY_ID } = await import('./smart-order-help');
+    // mix=0 — чистый цвет, только прозрачность
+    expect(softColor('#ff6b5a', 0, 0.65)).toBe('rgba(255, 107, 90, 0.65)');
+    // mix=1 — полностью фон: ярких плашек не остаётся вовсе
+    expect(softColor('#ff6b5a', 1, 0.8)).toBe('rgba(15, 15, 30, 0.8)');
+    // рабочая доля: тон заметно темнее исходного по всем каналам
+    const soft = softColor('#ff6b5a', 0.45, 0.85);
+    const [r, g, b] = soft.match(/\d+/g)!.slice(0, 3).map(Number);
+    expect(r).toBeLessThan(0xff);
+    expect(g).toBeLessThan(0x6b);
+    expect(b).toBeGreaterThan(0);
+    expect(soft).toContain('0.85');
+    expect(softColor('не цвет')).toBe('не цвет');          // мусор не ломает график
     expect(KIND_BY_ID.sl.color).toBe('#ff6b5a');           // легенда берёт чистый
   });
 
