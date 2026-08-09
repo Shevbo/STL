@@ -1,6 +1,8 @@
 // Фраза «что произойдёт» — последнее, что оператор читает перед взводом заявки
 // на реальные деньги. Перепутанная сторона сравнения здесь означает обещание
 // не того, что случится, поэтому направления закреплены тестом.
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { conditionText, preview, type Kind, type Side } from './smart-order-help';
 
@@ -241,5 +243,30 @@ describe('smartLevels — уровни на графике', () => {
     expect(smartLevels({ ...base, kind: 'on_fill' })).toEqual([]);
     const [lv] = smartLevels({ ...base, kind: 'on_fill', child_price: 88000 });
     expect(lv.price).toBe(88000);
+  });
+});
+
+// ── Плашки заявок не должны лежать поверх свечей ─────────────────────────────
+// lightweight-charts рисует title ценовой линии плашкой ЦВЕТА ЛИНИИ прямо на
+// холсте у правого края. Семь взведённых заявок закрывали собой четверть
+// графика (жалоба оператора дважды, 08 и 09.08.2026), а ни фон, ни положение
+// плашки библиотека настраивать не даёт. Единственный способ — не передавать
+// title вовсе. Правка живёт в разметке, юнит-тестом её не поймать, поэтому
+// сторожим сам исходник.
+describe('умные заявки не перекрывают график', () => {
+  const charts = ['src/components/ChartFrame.svelte', 'src/components/MiniChart.svelte'];
+
+  it('ни один график не отдаёт подпись уровня на холст', () => {
+    for (const f of charts) {
+      const src = readFileSync(resolve(process.cwd(), f), 'utf8');
+      expect(src, f).not.toMatch(/title:\s*lv\.title/);
+    }
+  });
+
+  it('ценник в шкале только у боевых уровней, не у вспомогательных', () => {
+    for (const f of charts) {
+      const src = readFileSync(resolve(process.cwd(), f), 'utf8');
+      expect(src, f).toContain('axisLabelVisible: !lv.dim');
+    }
   });
 });
