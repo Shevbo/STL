@@ -279,6 +279,20 @@ and `m > s` then returns -1 FOREVER (8 deployed paper robots sat in a permanent 
 and `rsi_trend`'s default 40/60 thresholds are anti-correlated with its own EMA filter —
 one signal in 5800 samples, which is a PARAMETER problem, not a warmup one, so the
 logic was left alone.
+BOTH TRAPS REPEAT PER AXIS NAME, and the 05.08 sweep missed `shectory_2ema` on both
+counts (fixed 09.08): `ema1 == ema2` is the same degeneracy as `fast == slow`, but
+`valid_macd_config` only ever read the fast/slow keys, so every MXU6 leader in the
+leaderboard is an ema1==ema2 row with `max_mae` EXACTLY 0 and RF ~50 000, and five
+paper robots (SVU6/RIU6/NGQ6/MXU6/GDU6) sat in a permanent short. Its warmup was
+still `ema2 + 2`: on the SAME bars the GDU6 leader prints +160 688 with a 281-bar
+window and −125 288 with the honest 1116-bar one — the sign flips on warmup alone.
+The registry test only exercised DEFAULT params, and degeneracy lives at the grid
+EDGES, so it now runs the equal-period case for every fast/slow and ema1/ema2 pair.
+When adding a crossover strategy, add its period pair to `_EQUAL_PERIOD_AXES` and to
+`valid_macd_config`, or the next campaign re-queues the same mirage. A THIRD trap of
+the same family: the i9 ran a stale copy on 05.08, so leaderboard rows with
+`allow_long`/`allow_short` are byte-identical across 0/1, 1/0 and 1/1 — a pull of the
+same three configs gives 154k/105k/259k. Verify a row before trusting it.
 
 COUNTER-strategies: any registry id
 plus suffix `__inv` (e.g. `macd_cross__inv`) is first-class — `make_on_bar` strips the
