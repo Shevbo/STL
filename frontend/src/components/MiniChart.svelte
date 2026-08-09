@@ -133,11 +133,14 @@
     }
     for (const [key, lv] of want) {
       const opts = {
-        // Полупрозрачно: сплошная плашка поверх свечей прячет то, ради чего
-        // график открыт. Вспомогательные (активация, пик) ещё бледнее.
+        // Полупрозрачны ТРИ вещи, а не одна: сама линия, ПЛАШКА бирки на шкале
+        // и ТЕКСТ в ней. Прозрачной линии мало — глухая бирка закрывала колонку
+        // цен и время под ней (оператор, 09.08.2026).
         price: lv.price, color: lineColor(lv.color, lv.dim ? 0.45 : 0.65),
         lineWidth: lv.dim ? 1 : 2,
         lineStyle: lv.dim ? 1 : lv.style, axisLabelVisible: true, title: lv.title,
+        axisLabelColor: lineColor(lv.color, lv.dim ? 0.32 : 0.45),
+        axisLabelTextColor: 'rgba(232, 232, 240, 0.85)',
       };
       const existing = smartLines.get(key);
       if (existing) existing.applyOptions(opts);
@@ -151,10 +154,9 @@
     chart = createChart(el, {
       width: el.clientWidth || 260,
       height: el.clientHeight || 150,
-      // fontSize 8 вместо дефолтных 12 (−30%): подписи ценовых линий рисует сам
-      // график, и при семи заявках они закрывали свечи. Касается только текста
-      // ВНУТРИ канвы — интерфейсный минимум 10px не затрагивает.
-      layout: { background: { color: '#0f0f1e' }, textColor: '#778', fontSize: 8 },
+      // fontSize НЕ трогаем: библиотека держит ОДИН размер на всю канву, и
+      // уменьшение ради подписей заявок заодно ужимало цены и шкалу времени.
+      layout: { background: { color: '#0f0f1e' }, textColor: '#778' },
       grid: { vertLines: { color: '#1a1a2e' }, horzLines: { color: '#1a1a2e' } },
       localization: { timeFormatter: mskCrosshairFormatter },
       timeScale: { borderColor: '#2d2d4a', timeVisible: true, rightOffset: 4, tickMarkFormatter: mskTickFormatter },
@@ -208,24 +210,24 @@
     {:else if failed}
       <button class="mc-ov mc-retry" onclick={() => loadHistory()}>нет данных · повторить</button>
     {/if}
-    {#if legend.length}
-      <!-- Легенда ПОВЕРХ графика, а не полосой под ним: полоса отъедала бы
-           высоту у свечей. Полупрозрачная подложка — график читается насквозь.
-           Здесь названы типы (цвет + штрих), поэтому на самих линиях остались
-           только сторона и объём. -->
-      <div class="mc-legend">
-        {#each legend as l}
-          <span class="mc-l">
-            <svg viewBox="0 0 18 8" aria-hidden="true">
-              <line x1="1" y1="4" x2="17" y2="4" stroke={l.color} stroke-width="2"
-                    stroke-dasharray={l.style === 3 ? '2 3' : l.style === 2 ? '5 3' : '0'} />
-            </svg>{l.text}
-          </span>
-        {/each}
-        <span class="mc-l muted">▲ покупка · ▼ продажа · «к» — контракты; тонкая линия — вспомогательный уровень</span>
-      </div>
-    {/if}
   </div>
+  {#if legend.length}
+    <!-- Легенда ПОД графиком отдельной строкой. Накладкой поверх канвы её не
+         было видно вовсе: lightweight-charts добавляет свой canvas в контейнер
+         ПОСЛЕ svelte-детей и закрывал её собой. Здесь названы типы (цвет +
+         штрих), поэтому на самих линиях остались только сторона и объём. -->
+    <div class="mc-legend">
+      {#each legend as l}
+        <span class="mc-l">
+          <svg viewBox="0 0 18 8" aria-hidden="true">
+            <line x1="1" y1="4" x2="17" y2="4" stroke={l.color} stroke-width="2"
+                  stroke-dasharray={l.style === 3 ? '2 3' : l.style === 2 ? '5 3' : '0'} />
+          </svg>{l.text}
+        </span>
+      {/each}
+      <span class="mc-l muted">▲ покупка · ▼ продажа · «к» — контракты; тонкая линия — вспомогательный уровень</span>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -253,12 +255,12 @@
   }
   .mc-retry { cursor: pointer; color: #9ab; }
   .mc-retry:hover { color: #cde; }
-  /* Легенда: накладка у нижнего края, свечи под ней просвечивают. Шрифт держим
-     на 10px — это интерфейсный минимум оператора, ниже читать нечем. */
+  /* Легенда: строка ПОД графиком. Шрифт держим на 10px — это интерфейсный
+     минимум оператора, ниже читать нечем. */
   .mc-legend {
-    position: absolute; left: 0; right: 0; bottom: 0; z-index: 1; pointer-events: none;
-    display: flex; flex-wrap: wrap; gap: 2px 10px; padding: 2px 6px;
-    background: #0f0f1ea6; font-size: 10px; color: #8a90a8; line-height: 1.3;
+    flex-shrink: 0; display: flex; flex-wrap: wrap; gap: 2px 10px;
+    padding: 3px 6px; background: #0f0f1e; border-top: 1px solid #1a1a2e;
+    font-size: 10px; color: #8a90a8; line-height: 1.3;
   }
   .mc-l { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
   .mc-l svg { width: 18px; height: 8px; flex-shrink: 0; }

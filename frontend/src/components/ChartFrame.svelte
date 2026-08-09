@@ -352,6 +352,8 @@
         price: lv.price, color: lineColor(lv.color, lv.dim ? 0.45 : 0.65),
         lineWidth: lv.dim ? 1 : 2,
         lineStyle: lv.dim ? 1 : lv.style, axisLabelVisible: true, title: lv.title,
+        axisLabelColor: lineColor(lv.color, lv.dim ? 0.32 : 0.45),
+        axisLabelTextColor: 'rgba(232, 232, 240, 0.85)',
       };
       const existing = smartLines.get(key);
       if (existing) existing.applyOptions(opts);
