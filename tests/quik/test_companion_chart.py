@@ -76,7 +76,7 @@ def test_empty_input_is_empty_output():
 # больше окна графика, и виджет показывает ровную нитку вместо последней живой
 # сессии — график «идёт», хотя биржа стоит.
 
-from trader.api.quik_companion import _live_bars
+from trader.api.quik_companion import _live_bars, _tape_last_ms
 
 
 def _bars(times):
@@ -127,3 +127,31 @@ def test_whole_night_of_synthetic_bars_collapses_to_the_live_session():
     got = _live_bars(_bars(session + night), close * 1000)
     assert len(got) == 30, "остаётся ровно последняя живая сессия"
     assert got[-1]["t"] <= close
+
+
+# ── «Сделок не видели вовсе» — это не сделка секунду назад ────────────────────
+
+def test_minus_one_lag_means_unknown_not_fresh():
+    """exchange_lag_ms == -1 у агента значит «ни одной сделки не видели».
+
+    Вычитание его как числа давало «последняя сделка = сейчас»: молчащая лента
+    объявлялась самой свежей, часы биржи показывали текущее время, а обрезка
+    ночных баров не срабатывала никогда. Поймано вживую 09.08 на закрытой бирже.
+    """
+    now = 1_786_000_000_000
+    assert _tape_last_ms(now, -1) is None
+    assert _tape_last_ms(now, None) is None
+    assert _tape_last_ms(None, 5_000) is None
+    assert _tape_last_ms(now, "мусор") is None
+
+
+def test_real_lag_gives_the_trade_moment():
+    now = 1_786_000_000_000
+    assert _tape_last_ms(now, 0) == now
+    assert _tape_last_ms(now, 13_288) == now - 13_288
+
+
+def test_unknown_tape_does_not_silently_empty_the_chart():
+    """Не знаем времени сделки — рисуем что есть, а не пустоту."""
+    bars = [{"t": t, "o": 1, "h": 1, "l": 1, "c": 1} for t in (1, 2, 3)]
+    assert _live_bars(bars, _tape_last_ms(1_786_000_000_000, -1)) == bars

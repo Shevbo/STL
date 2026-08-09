@@ -267,6 +267,24 @@ async def _prev_close(symbol: str) -> float | None:
     return val
 
 
+def _tape_last_ms(received_ms: int | None, lag_ms) -> int | None:
+    """Когда на бирже прошла последняя сделка, по ленте самого агента.
+
+    `exchange_lag_ms == -1` это СИГНАЛЬНОЕ значение «сделок не видели вовсе» (у
+    Lua `last_trade_ts_ms` ноль), а не лаг в минус миллисекунду. Вычитание такого
+    «числа» давало «последняя сделка = сейчас»: молчащая лента объявлялась самой
+    свежей, часы биржи показывали текущее время, а обрезка ночных баров не
+    срабатывала никогда. Видно это только при мёртвой ленте, поэтому проверка на
+    торгующем рынке ничего и не показала.
+    """
+    try:
+        if received_ms and lag_ms is not None and int(lag_ms) >= 0:
+            return int(received_ms) - int(lag_ms)
+    except (TypeError, ValueError):
+        pass
+    return None
+
+
 def _live_bars(bars: list[dict], tape_last_ms: int | None) -> list[dict]:
     """Только те минутки, в которые биржа ДЕЙСТВИТЕЛЬНО торговала.
 
@@ -465,13 +483,12 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
     # Момент ПОСЛЕДНЕЙ РЕАЛЬНОЙ СДЕЛКИ на бирже, по ленте самого агента.
     # Нужен и часам биржи, и мини-графику: раннер продолжает лепить минутки из
     # замерших котировок и после закрытия, а рисовать их нельзя (см. _live_bars).
-    tape_last_ms = None
-    _lag = health.get("exchange_lag_ms")
-    if received_ms and _lag is not None:
-        try:
-            tape_last_ms = int(received_ms) - int(_lag)
-        except (TypeError, ValueError):
-            tape_last_ms = None
+    # exchange_lag_ms == -1 это «сделок не видели вовсе» (у Lua last_trade_ts_ms
+    # ноль), а НЕ лаг в минус миллисекунду. Вычитание такого «числа» давало
+    # «последняя сделка = сейчас» — ровно наоборот: молчащая лента объявлялась
+    # самой свежей. Ловится только на закрытой бирже, поэтому и прошло мимо
+    # вчерашней проверки: тогда рынок торговал и лаг был настоящим.
+    tape_last_ms = _tape_last_ms(received_ms, health.get("exchange_lag_ms"))
 
     # 1. Account state, straight from the QUIK money row.
     account = {
