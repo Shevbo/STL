@@ -456,6 +456,39 @@ export function smartLegend(
   return out;
 }
 
+/** По одному чипу на КАЖДУЮ линию, что сейчас на графике: цвет и штрих как у
+ *  линии, сторона, объём, роль уровня и его цена.
+ *
+ *  Легенда по ТИПАМ отвечала на вопрос «что значит оранжевый пунктир», но не на
+ *  вопрос «а это которая из пяти следящих и на сколько контрактов». Подписать
+ *  прямо на холсте нельзя: lightweight-charts кладёт их плашкой поверх свечей и
+ *  закрывает график (жалоба дважды). Поэтому расшифровка живёт ПОД графиком, а
+ *  связывает её с линией цена — она же напечатана в чипе.
+ *
+ *  Порядок сверху вниз по цене: так же, как линии лежат на графике. */
+export function smartChips(
+  orders: any[],
+): Array<{ color: string; style: number; dim: boolean; text: string; price: string }> {
+  const out: Array<{ color: string; style: number; dim: boolean; text: string; price: string; raw: number }> = [];
+  for (const o of orders) {
+    const m = KIND_BY_ID[o.kind];
+    if (!m) continue;
+    for (const lv of smartLevels(o)) {
+      if (!(lv.price > 0)) continue;
+      out.push({
+        color: lv.color ?? m.color,
+        style: lv.dim ? 3 : m.lineStyle,
+        dim: !!lv.dim,
+        text: `${m.short} ${lv.title}`,
+        price: fmtNum(lv.price),
+        raw: lv.price,
+      });
+    }
+  }
+  out.sort((a, b) => b.raw - a.raw);
+  return out.map(({ raw, ...c }) => c);
+}
+
 /** Приглушённый тон для отметок ЗАЯВКИ НА ГРАФИКЕ: цвет типа подмешивается к
  *  фону графика (`mix` — доля фона) и получает прозрачность.
  *

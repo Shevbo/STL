@@ -10,7 +10,7 @@
   import { orderbookStore } from '$lib/stores/orderbook.svelte';
   import { mskTickFormatter, mskCrosshairFormatter } from '$lib/chart-time';
   import { smartOrdersStore } from '$lib/stores/smart-orders.svelte';
-  import { KIND_BY_ID, LABEL_TEXT_COLOR, smartLegend, smartLevels, softColor } from '$lib/smart-order-help';
+  import { KIND_BY_ID, LABEL_TEXT_COLOR, smartChips, smartLegend, smartLevels, softColor } from '$lib/smart-order-help';
 
   let {
     symbol,
@@ -147,6 +147,7 @@
   const smartOnChart = $derived(
     smartOrdersStore.armed.filter((o) => o.code === chartCode));
   const legend = $derived(smartLegend(smartOnChart));
+  const chips = $derived(smartChips(smartOnChart));
 
   // Load REST history whenever the EFFECTIVE symbol or timeframe changes — including a
   // change driven by the `symbol` PROP (robot select / activeSymbol on the main screen),
@@ -571,6 +572,20 @@
         </span>
         <span class="so-l muted">▲ покупка · ▼ продажа · «к» — контракты</span>
       </div>
+      <!-- Расшифровка КАЖДОЙ линии. Легенда по типам говорит, что значит
+           оранжевый пунктир, но не говорит, которая из пяти следящих перед
+           тобой. Подписать на холсте нельзя — плашка закрывает свечи; связывает
+           чип с линией ЦЕНА, она напечатана в чипе. -->
+      <div class="so-chips">
+        {#each chips as c}
+          <span class="so-c" class:dim={c.dim}>
+            <svg viewBox="0 0 18 8" aria-hidden="true">
+              <line x1="1" y1="4" x2="17" y2="4" stroke={c.color} stroke-width={c.dim ? 1 : 2}
+                    stroke-dasharray={c.style === 3 ? '2 3' : c.style === 2 ? '5 3' : '0'} />
+            </svg>{c.text}<b>{c.price}</b>
+          </span>
+        {/each}
+      </div>
     {/if}
     <div class="scrollbar-container">
       <input
@@ -632,6 +647,16 @@
     padding: 3px 8px; background: #0f0f1e; border-top: 1px solid #1a1a2e;
     font-size: 12px; color: #9aa0b4;
   }
+  .so-chips {
+    flex-shrink: 0; display: flex; flex-wrap: wrap; gap: 3px 12px;
+    padding: 2px 8px 4px; background: #0f0f1e;
+    font-size: 12px; color: #9aa0b4;
+  }
+  .so-c { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+  .so-c svg { width: 18px; height: 8px; flex-shrink: 0; }
+  .so-c b { color: #e2e6f0; font-weight: 600; }
+  /* Вспомогательные уровни и в расшифровке тише: они предположение, не факт. */
+  .so-c.dim { opacity: .72; }
   .so-l { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
   .so-l svg { width: 22px; height: 8px; flex-shrink: 0; }
   .so-l.muted { color: #6f7590; }

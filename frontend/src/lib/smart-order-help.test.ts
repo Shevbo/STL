@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { KIND_BY_ID, conditionText, preview, smartLegend, smartLevels,
+import { KIND_BY_ID, conditionText, preview, smartChips, smartLegend, smartLevels,
          type Kind, type Side } from './smart-order-help';
 
 const base = {
@@ -326,5 +326,52 @@ describe('защитные уровни после входа', () => {
     const o = { ...base, kind: 'sl', side: 'buy', trigger_price: 89_000, sl_offset: 300 };
     const leg = smartLegend([o, { ...o, so_id: 'y' }, { ...o, so_id: 'z' }]);
     expect(leg.filter((l) => l.text.includes('после входа'))).toHaveLength(1);
+  });
+});
+
+// ── Расшифровка каждой линии под графиком ────────────────────────────────────
+// Легенда по ТИПАМ отвечала «что значит оранжевый пунктир», но не «которая это
+// из пяти следящих и на сколько контрактов». Подписать на холсте нельзя —
+// плашка закрывает свечи, поэтому расшифровка живёт под графиком, а связывает
+// её с линией напечатанная цена.
+describe('чипы линий под графиком', () => {
+  const trail = (id: string, qty: number, trigger: number) => ({
+    so_id: id, kind: 'trail_tp', code: 'RIU6', side: 'sell', qty,
+    trigger_price: trigger, trail_offset: 200, peak: 0, activated: false,
+    sl_offset: 0, tp_offset: 0, child_price: 0,
+  });
+
+  it('на каждую нарисованную линию ровно один чип', () => {
+    const lines = [trail('a', 5, 90_590), trail('b', 4, 90_970)]
+      .flatMap((o) => smartLevels(o)).length;
+    expect(smartChips([trail('a', 5, 90_590), trail('b', 4, 90_970)])).toHaveLength(lines);
+  });
+
+  it('пять одинаковых следящих различимы объёмом и ценой', () => {
+    const chips = smartChips([trail('a', 5, 90_590), trail('b', 4, 90_970), trail('c', 7, 86_610)]);
+    // toLocaleString('ru-RU') разделяет разряды УЗКИМ неразрывным пробелом
+    const texts = chips.map((c) => (c.text + ' ' + c.price).replace(/[\s  ]/g, ' '));
+    expect(new Set(texts).size).toBe(3);
+    expect(texts.some((t) => t.includes('5 к') && t.includes('90 590'))).toBe(true);
+  });
+
+  it('порядок сверху вниз по цене — как линии лежат на графике', () => {
+    const chips = smartChips([trail('a', 5, 86_610), trail('b', 4, 90_970), trail('c', 7, 88_400)]);
+    const prices = chips.map((c) => Number(c.price.replace(/[^\d.]/g, '')));
+    expect(prices).toEqual([...prices].sort((x, y) => y - x));
+  });
+
+  it('чип называет тип, а не только цвет: цветом пять оттенков не различить', () => {
+    expect(smartChips([trail('a', 5, 90_590)])[0].text).toContain('СЛЕД');
+  });
+
+  it('вспомогательные уровни помечены как таковые', () => {
+    const chips = smartChips([{ ...trail('a', 5, 90_590), sl_offset: 100 }]);
+    expect(chips.filter((c) => c.dim).length).toBeGreaterThan(0);
+    expect(chips.every((c) => c.price.length > 0)).toBe(true);
+  });
+
+  it('заявок нет — чипов нет', () => {
+    expect(smartChips([])).toEqual([]);
   });
 });
