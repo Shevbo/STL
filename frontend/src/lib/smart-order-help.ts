@@ -357,21 +357,26 @@ export function smartLevels(
   o: any,
 ): Array<{ key: string; price: number; title: string; dim?: boolean; color?: string }> {
   const m = KIND_BY_ID[o.kind as Kind];
-  const who = `${o.side === 'buy' ? 'ПОКУПКА' : 'ПРОДАЖА'} ${o.qty}`;
+  // «5 к» = пять КОНТРАКТОВ: голое число на ценовой линии читается как цена.
+  const who = `${o.side === 'buy' ? 'ПОКУПКА' : 'ПРОДАЖА'} ${o.qty} к`;
   if (o.kind === 'sl' || o.kind === 'tp') {
     return [{ key: o.so_id, price: o.trigger_price, title: `${m.short} ${who}` }];
   }
   if (o.kind === 'trail_tp') {
     const out: Array<{ key: string; price: number; title: string; dim?: boolean; color?: string }> = [];
+    // Объём НА КАЖДОЙ линии, включая вспомогательные. Без него шесть спящих
+    // следящих подписаны одинаково («СЛЕД активация») и на графике не отличить,
+    // какая из них какая и на сколько контрактов (оператор, 09.08.2026).
     if (!o.activated && o.trigger_price > 0) {
       out.push({ key: o.so_id + ':act', price: o.trigger_price,
-                 title: `${m.short} активация`, dim: true });
+                 title: `${m.short} ${who} · активация`, dim: true });
     }
     if (o.activated && o.peak > 0) {
       const stop = o.side === 'sell' ? o.peak - o.trail_offset : o.peak + o.trail_offset;
       out.push({ key: o.so_id + ':stop', price: stop, color: TRAIL_ACTIVE_COLOR,
                  title: `${m.short} ${who} · слежение · откат ${fmtPts(o.trail_offset)}` });
-      out.push({ key: o.so_id + ':peak', price: o.peak, title: `${m.short} пик`, dim: true });
+      out.push({ key: o.so_id + ':peak', price: o.peak,
+                 title: `${m.short} ${who} · пик`, dim: true });
     }
     return out;
   }

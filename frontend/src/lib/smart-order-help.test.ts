@@ -185,6 +185,24 @@ describe('smartLevels — уровни на графике', () => {
     expect(lines).toHaveLength(1);
     expect(lines[0].price).toBe(90590);
     expect(lines[0].dim).toBe(true);        // вспомогательная, не рабочая
+    expect(lines[0].title).toContain('активация');
+  });
+
+  it('every line carries side and CONTRACT volume', async () => {
+    // Шесть спящих следящих подписывались одинаково («СЛЕД активация») — на
+    // графике не отличить, какая из них какая и на сколько контрактов.
+    const { smartLevels } = await import('./smart-order-help');
+    const all = [
+      ...smartLevels({ ...base, kind: 'sl' }),
+      ...smartLevels({ ...base, kind: 'tp' }),
+      ...smartLevels({ ...base, kind: 'trail_tp' }),
+      ...smartLevels({ ...base, kind: 'trail_tp', activated: true, peak: 91000 }),
+      ...smartLevels({ ...base, kind: 'on_fill', child_price: 88000 }),
+    ];
+    expect(all.length).toBeGreaterThan(5);
+    for (const lv of all) expect(lv.title, lv.key).toContain('ПРОДАЖА 5 к');
+    const buy = smartLevels({ ...base, kind: 'sl', side: 'buy', qty: 12 });
+    expect(buy[0].title).toContain('ПОКУПКА 12 к');
   });
 
   it('trailing shows the live exit level and the peak once active', async () => {
