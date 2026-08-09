@@ -654,9 +654,18 @@ register("bollinger_bo_m1", "Bollinger Breakout M1",
 def sig_2ema(bars, p):
     # Two-EMA crossover: EMA1 above EMA2 → long, below → short. Always in market;
     # the flip logic opens/closes on the cross. (Reverse of the public DeskBot 2EMA.)
+    ema1, ema2 = int(p["ema1"]), int(p["ema2"])
+    if ema1 == ema2:
+        # EMA(n) против EMA(n): ряды тождественно равны, `f > s` = False ВСЕГДА,
+        # то есть вечный шорт — ровно то же вырождение, что у sig_macd при
+        # fast==slow. Сетки перебора продуктом его порождают (схема пускает ema1
+        # до 60 и ema2 от 20), а `valid_macd_config` смотрит только на ключи
+        # fast/slow и эту пару не видит. Все шесть лидеров MXU6 в лидерборде —
+        # ema1==ema2 с просадкой РОВНО ноль и RF в десятки тысяч (08.08.2026).
+        return None
     closes = _c(bars)
-    f = I.ema_last(closes, int(p["ema1"]))
-    s = I.ema_last(closes, int(p["ema2"]))
+    f = I.ema_last(closes, ema1)
+    s = I.ema_last(closes, ema2)
     return 1 if f > s else -1
 register("shectory_2ema", "Shectory-2EMA",
          "https://github.com/topics/moving-average-crossover",
@@ -664,7 +673,11 @@ register("shectory_2ema", "Shectory-2EMA",
           P("qty", "Базовый объём", 1, 1, 20),
           P("bet_step", "Система ставок +N после убытка (0=выкл)", 1, 0, 5),
           P("bet_max", "Макс добавка по ставкам", 10, 1, 30)],
-         sig_2ema, lambda p: int(p["ema2"]) + 2)
+         # ПРОГРЕВ: 4 × самого длинного периода (правило macd_cross/ema_atr). Прежнее
+         # ema2+2 давало окно ЕДВА длиннее собственной EMA — она не успевала разойтись
+         # с быстрой, и знак залипал. Схема к тому же пускает ema1 (до 60) выше ema2
+         # (от 20), то есть «медленная» бывает короче быстрой, как fast>slow у MACD.
+         sig_2ema, lambda p: 4 * max(int(p["ema1"]), int(p["ema2"])))
 
 
 # 4. Stochastic oscillator

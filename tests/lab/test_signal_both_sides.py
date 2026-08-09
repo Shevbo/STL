@@ -106,3 +106,32 @@ def test_strategy_can_go_both_ways(sid):
     assert wide_n < MIN_SIGNALS, (
         f"{sid}: на своём окне {need} сигналов {n}, а на {wide} — {wide_n}: "
         f"окно душит сигнал, индикатор не успевает прогреться")
+
+
+# Пары «быстрый/медленный период», которые сетка перебора продуктом сводит к РАВНЫМ
+# значениям. Две одинаковые скользящие никогда не пересекаются: разность тождественно
+# ноль, сравнение `>` False всегда, и стратегия отдаёт один и тот же знак вечно.
+# Проверять по дефолтным параметрам бесполезно — там периоды разные; вырождение живёт
+# на КРАЯХ сетки, откуда оно и попало в лидерборд (macd fast==slow: 7 бумажных роботов
+# в вечном шорте; shectory_2ema ema1==ema2: все шесть лидеров MXU6).
+_EQUAL_PERIOD_AXES = [("fast", "slow"), ("ema1", "ema2")]
+
+
+@pytest.mark.parametrize("sid", sorted(REGISTRY))
+def test_equal_periods_are_not_a_signal(sid):
+    spec = REGISTRY[sid]
+    p = dict(spec["default_params"])
+    p.setdefault("symbol", "RIU6")
+    names = {k for k, _ in _EQUAL_PERIOD_AXES if k in p} | {v for _, v in _EQUAL_PERIOD_AXES if v in p}
+    for a, b in _EQUAL_PERIOD_AXES:
+        if a not in p or b not in p or not names:
+            continue
+        q = dict(p)
+        q[a] = q[b] = int(p[b])
+        need = int(spec["warmup"](q))
+        if need >= _N - 500:
+            pytest.skip(f"окно {need} длиннее тестового ряда")
+        cnt = _dirs(spec, q, need)
+        assert not cnt, (
+            f"{sid}: при {a}=={b}=={q[b]} осциллятора нет, а сигнал есть ({cnt}) — "
+            f"это залипший знак, а не решение; верни None")

@@ -134,11 +134,19 @@ def _combo_count(grid: dict[str, list]) -> int:
 
 def valid_macd_config(cfg: dict) -> bool:
     """A macd config with fast>=slow is degenerate (fast==slow -> zero MACD line;
-    fast>slow -> inverted). Non-macd configs (no fast/slow) always pass."""
+    fast>slow -> inverted). Non-macd configs (no fast/slow) always pass.
+
+    ema1==ema2 (shectory_2ema) is the SAME degeneracy: EMA(n) vs EMA(n) never
+    crosses, `f > s` is False forever = eternal short. It got here because this
+    filter only ever looked at fast/slow, so every MXU6 leader in the leaderboard
+    is an ema1==ema2 row with zero drawdown and RF in the tens of thousands.
+    Only EQUALITY is dropped for the ema pair: ema1>ema2 is a plain inversion,
+    and fading a signal is a legitimate (sometimes the only profitable) mode."""
     f, s = cfg.get("fast"), cfg.get("slow")
-    if f is None or s is None:
-        return True
-    return f < s
+    if f is not None and s is not None and f >= s:
+        return False
+    a, b = cfg.get("ema1"), cfg.get("ema2")
+    return not (a is not None and b is not None and a == b)
 
 
 # ── main ─────────────────────────────────────────────────────────────────────
@@ -247,14 +255,14 @@ def main() -> None:
         # strategy, so remote workers never see them; every other strategy keeps
         # the compact paramsGrid form (server-side product) unchanged.
         param_sets = None
-        if "fast" in grid and "slow" in grid:
+        if ("fast" in grid and "slow" in grid) or ("ema1" in grid and "ema2" in grid):
             keys = list(grid.keys())
             all_sets = [dict(zip(keys, combo))
                        for combo in itertools.product(*(grid[k] for k in keys))]
             param_sets = [c for c in all_sets if valid_macd_config(c)]
             dropped = len(all_sets) - len(param_sets)
             if dropped:
-                print(f"[campaign] {sid}: dropped {dropped} degenerate fast>=slow configs")
+                print(f"[campaign] {sid}: dropped {dropped} degenerate configs")
 
         combos_per_sym = len(param_sets) if param_sets is not None else _combo_count(grid)
 

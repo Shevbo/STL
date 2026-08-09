@@ -46,10 +46,12 @@ def test_planned_orders_flip_closes_first():
 
 
 def test_generic_explainer_runs_registered_signal():
-    bars = [_bar(i * 60, 100 + i, 101 + i, 99 + i, 100 + i) for i in range(150)]
+    # 600 баров, а не 150: прогрев shectory_2ema = 4 × самого длинного периода
+    # (дефолт ema2=140 → 560). На 150 барах explain честно отвечает «не готов».
+    bars = [_bar(i * 60, 100 + i, 101 + i, 99 + i, 100 + i) for i in range(600)]
     d = explain("shectory_2ema", bars, {"fast": 3, "slow": 5, "qty": 1}, position=0)
     assert d["ready"] is True
-    assert "strategy_id" in d and d["bars_count"] == 150
+    assert "strategy_id" in d and d["bars_count"] == 600
 
 
 # 2026-07-24, operator: «стратегия us_open_fvg не найдена» in the signal box was
