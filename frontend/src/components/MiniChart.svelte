@@ -83,8 +83,11 @@
 
   // nudge the last candle's close from the live quote (same as the main chart)
   $effect(() => {
-    if (!series || !quote || !bars.length) return;
-    const price = quote.last || quote.bid || 0;
+    // Котировку читаем ДО выхода: с `!series` первым эффект на старте уходил
+    // без зависимостей и последняя свеча никогда не двигалась вживую.
+    const q = quote;
+    if (!series || !q || !bars.length) return;
+    const price = q.last || q.bid || 0;
     if (!price) return;
     const last = bars[bars.length - 1];
     series.update({
@@ -98,9 +101,15 @@
   // пересоздаём: у следящей уровень ползёт за пиком каждую секунду, и
   // пересоздание давало бы мигание.
   $effect(() => {
-    if (!series) return;
+    // Книгу читаем ДО любого выхода. $effect подписывается только на то, что
+    // РЕАЛЬНО прочитал за прогон: с `if (!series) return` первым, на старте
+    // (series ещё null, график создаётся после await) эффект выходил, не
+    // коснувшись smartHere, оставался без зависимостей и не запускался больше
+    // никогда — заявки на графике не появлялись вовсе (09.08.2026).
+    const orders = smartHere;
+    if (!ready || !series) return;
     const want = new Map<string, { price: number; title: string; color: string; style: number; dim?: boolean }>();
-    for (const o of smartHere) {
+    for (const o of orders) {
       const m = KIND_BY_ID[o.kind];
       for (const lv of smartLevels(o)) {
         if (lv.price > 0) want.set(lv.key, { ...lv, color: lv.color ?? m.color, style: m.lineStyle });

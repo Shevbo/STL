@@ -294,8 +294,11 @@
 
   // Task 6: order price lines
   $effect(() => {
+    // Реактивное — ДО выхода по !tvCandle (серия рождается после await в
+    // onMount): иначе первый прогон уходит без зависимостей и эффект мёртв.
+    const live = orders;
     if (!tvCandle) return;
-    const currentIds = new Set(orders.map(o => o.order_id));
+    const currentIds = new Set(live.map(o => o.order_id));
     for (const [id, line] of orderLines) {
       if (!currentIds.has(id)) {
         tvCandle.removePriceLine(line);
@@ -327,9 +330,13 @@
   // мини-графики фрейма «Позиции и заявки»).
 
   $effect(() => {
+    // Книгу читаем ДО выхода по !tvCandle: $effect подписывается только на
+    // прочитанное за прогон, а серия создаётся после await в onMount. Иначе
+    // первый прогон уходит без зависимостей и линии не появляются никогда.
+    const smartArmed = smartOnChart;
     if (!tvCandle) return;
     const want = new Map<string, { price: number; title: string; color: string; style: number; dim?: boolean }>();
-    for (const o of smartOnChart) {
+    for (const o of smartArmed) {
       const m = KIND_BY_ID[o.kind];
       for (const lv of smartLevels(o)) {
         if (lv.price > 0) want.set(lv.key, { ...lv, color: lv.color ?? m.color, style: m.lineStyle });
@@ -351,8 +358,9 @@
 
   // Task 6: trade markers merged with any lab markers
   $effect(() => {
+    const live = trades;                 // реактивное ДО выхода, см. выше
     if (!tvCandle) return;
-    const tradeMarkers = trades.map(t => ({
+    const tradeMarkers = live.map(t => ({
       time: t.time as number,
       position: (t.side === 'buy' ? 'belowBar' : 'aboveBar') as 'belowBar' | 'aboveBar',
       color: t.side === 'buy' ? '#4caf50' : '#f44336',
