@@ -10,7 +10,7 @@
   import { orderbookStore } from '$lib/stores/orderbook.svelte';
   import { mskTickFormatter, mskCrosshairFormatter } from '$lib/chart-time';
   import { smartOrdersStore } from '$lib/stores/smart-orders.svelte';
-  import { KIND_BY_ID, smartLevels } from '$lib/smart-order-help';
+  import { KIND_BY_ID, lineColor, smartLevels } from '$lib/smart-order-help';
 
   let {
     symbol,
@@ -347,7 +347,10 @@
     }
     for (const [key, lv] of want) {
       const opts = {
-        price: lv.price, color: lv.color, lineWidth: lv.dim ? 1 : 2,
+        // Полупрозрачно: сплошная плашка поверх свечей прячет то, ради чего
+        // график открыт. Вспомогательные (активация, пик) ещё бледнее.
+        price: lv.price, color: lineColor(lv.color, lv.dim ? 0.45 : 0.65),
+        lineWidth: lv.dim ? 1 : 2,
         lineStyle: lv.dim ? 1 : lv.style, axisLabelVisible: true, title: lv.title,
       };
       const existing = smartLines.get(key);
@@ -559,6 +562,7 @@
             <line x1="1" y1="4" x2="21" y2="4" stroke="#8a90a8" stroke-width="1" stroke-dasharray="1 2" />
           </svg>тонкая линия — вспомогательный уровень (активация, пик)
         </span>
+        <span class="so-l muted">▲ покупка · ▼ продажа · «к» — контракты</span>
       </div>
     {/if}
     <div class="scrollbar-container">

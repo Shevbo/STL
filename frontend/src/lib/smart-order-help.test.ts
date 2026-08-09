@@ -175,8 +175,7 @@ describe('smartLevels — уровни на графике', () => {
     const { smartLevels } = await import('./smart-order-help');
     const [lv] = smartLevels({ ...base, kind: 'sl' });
     expect(lv.price).toBe(90590);
-    expect(lv.title).toContain('УСЛ');
-    expect(lv.title).toContain('ПРОДАЖА 5');
+    expect(lv.title).toBe('▼ 5 к');
   });
 
   it('trailing shows the activation level while asleep', async () => {
@@ -188,10 +187,11 @@ describe('smartLevels — уровни на графике', () => {
     expect(lines[0].title).toContain('активация');
   });
 
-  it('every line carries side and CONTRACT volume', async () => {
+  it('every line carries side and CONTRACT volume, and никогда — тип', async () => {
     // Шесть спящих следящих подписывались одинаково («СЛЕД активация») — на
-    // графике не отличить, какая из них какая и на сколько контрактов.
-    const { smartLevels } = await import('./smart-order-help');
+    // графике не отличить, какая из них какая и на сколько контрактов. Тип же
+    // называет ЛЕГЕНДА: дублировать его в каждой линии = закрывать свечи.
+    const { smartLevels, KINDS } = await import('./smart-order-help');
     const all = [
       ...smartLevels({ ...base, kind: 'sl' }),
       ...smartLevels({ ...base, kind: 'tp' }),
@@ -200,9 +200,20 @@ describe('smartLevels — уровни на графике', () => {
       ...smartLevels({ ...base, kind: 'on_fill', child_price: 88000 }),
     ];
     expect(all.length).toBeGreaterThan(5);
-    for (const lv of all) expect(lv.title, lv.key).toContain('ПРОДАЖА 5 к');
+    for (const lv of all) {
+      expect(lv.title, lv.key).toContain('▼ 5 к');
+      for (const k of KINDS) expect(lv.title, lv.key).not.toContain(k.short);
+    }
     const buy = smartLevels({ ...base, kind: 'sl', side: 'buy', qty: 12 });
-    expect(buy[0].title).toContain('ПОКУПКА 12 к');
+    expect(buy[0].title).toBe('▲ 12 к');
+  });
+
+  it('lineColor даёт прозрачность линиям и не трогает чистый цвет легенды', async () => {
+    const { lineColor, KIND_BY_ID } = await import('./smart-order-help');
+    expect(lineColor('#ff6b5a', 0.65)).toBe('rgba(255, 107, 90, 0.65)');
+    expect(lineColor('#2ecc71')).toBe('rgba(46, 204, 113, 0.6)');
+    expect(lineColor('не цвет')).toBe('не цвет');          // мусор не ломает график
+    expect(KIND_BY_ID.sl.color).toBe('#ff6b5a');           // легенда берёт чистый
   });
 
   it('trailing shows the live exit level and the peak once active', async () => {

@@ -356,11 +356,13 @@ export function codeSuggestions(orders: Array<{ code?: string }>, feedCodes: str
 export function smartLevels(
   o: any,
 ): Array<{ key: string; price: number; title: string; dim?: boolean; color?: string }> {
-  const m = KIND_BY_ID[o.kind as Kind];
-  // «5 к» = пять КОНТРАКТОВ: голое число на ценовой линии читается как цена.
-  const who = `${o.side === 'buy' ? 'ПОКУПКА' : 'ПРОДАЖА'} ${o.qty} к`;
+  // Подпись КОРОТКАЯ: тип заявки называет легенда под графиком (цвет + штрих),
+  // дублировать его в каждой линии значит закрывать свечи текстом. На линии
+  // остаётся то, чего в легенде нет: сторона и объём. «5 к» = пять КОНТРАКТОВ —
+  // голое число рядом с ценовой линией читается как цена.
+  const who = `${o.side === 'buy' ? '▲' : '▼'} ${o.qty} к`;
   if (o.kind === 'sl' || o.kind === 'tp') {
-    return [{ key: o.so_id, price: o.trigger_price, title: `${m.short} ${who}` }];
+    return [{ key: o.so_id, price: o.trigger_price, title: who }];
   }
   if (o.kind === 'trail_tp') {
     const out: Array<{ key: string; price: number; title: string; dim?: boolean; color?: string }> = [];
@@ -369,17 +371,26 @@ export function smartLevels(
     // какая из них какая и на сколько контрактов (оператор, 09.08.2026).
     if (!o.activated && o.trigger_price > 0) {
       out.push({ key: o.so_id + ':act', price: o.trigger_price,
-                 title: `${m.short} ${who} · активация`, dim: true });
+                 title: `${who} · активация`, dim: true });
     }
     if (o.activated && o.peak > 0) {
       const stop = o.side === 'sell' ? o.peak - o.trail_offset : o.peak + o.trail_offset;
       out.push({ key: o.so_id + ':stop', price: stop, color: TRAIL_ACTIVE_COLOR,
-                 title: `${m.short} ${who} · слежение · откат ${fmtPts(o.trail_offset)}` });
-      out.push({ key: o.so_id + ':peak', price: o.peak,
-                 title: `${m.short} ${who} · пик`, dim: true });
+                 title: `${who} · откат ${fmtPts(o.trail_offset)}` });
+      out.push({ key: o.so_id + ':peak', price: o.peak, title: `${who} · пик`, dim: true });
     }
     return out;
   }
   return o.child_price > 0
-    ? [{ key: o.so_id, price: o.child_price, title: `${m.short} ${who}` }] : [];
+    ? [{ key: o.so_id, price: o.child_price, title: who }] : [];
+}
+
+/** Цвет линии на графике с прозрачностью: сплошная плашка поверх свечей прячет
+ *  то, ради чего график открыт. Легенда и чипы берут ЧИСТЫЙ цвет — там перекрывать
+ *  нечего, а бледная легенда просто плохо читается. */
+export function lineColor(hex: string, alpha = 0.6): string {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex.trim());
+  if (!m) return hex;
+  const [r, g, b] = m.slice(1).map((h) => parseInt(h, 16));
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }

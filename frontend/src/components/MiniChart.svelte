@@ -8,7 +8,7 @@
   import { fetchWithAuth } from '$lib/fetch-auth';
   import { quotesStore } from '$lib/stores/quotes.svelte';
   import { smartOrdersStore } from '$lib/stores/smart-orders.svelte';
-  import { KIND_BY_ID, smartLevels } from '$lib/smart-order-help';
+  import { KIND_BY_ID, lineColor, smartLevels } from '$lib/smart-order-help';
   import { mskTickFormatter, mskCrosshairFormatter } from '$lib/chart-time';
 
   let {
@@ -52,6 +52,19 @@
   const smartHere = $derived(smartOrdersStore.armed.filter((o) => o.code === code));
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const smartLines = new Map<string, any>();
+  // Легенда показывает ТОЛЬКО нарисованные сейчас типы: постоянный список
+  // стилей превращается в шум, который перестают читать.
+  const legend = $derived.by(() => {
+    const seen = new Set<string>();
+    const out: Array<{ color: string; style: number; text: string }> = [];
+    for (const o of smartHere) {
+      if (seen.has(o.kind)) continue;
+      seen.add(o.kind);
+      const m = KIND_BY_ID[o.kind];
+      out.push({ color: m.color, style: m.lineStyle, text: m.legend });
+    }
+    return out;
+  });
 
   async function loadHistory(attempt = 0) {
     loading = true; failed = false;
@@ -120,7 +133,10 @@
     }
     for (const [key, lv] of want) {
       const opts = {
-        price: lv.price, color: lv.color, lineWidth: lv.dim ? 1 : 2,
+        // Полупрозрачно: сплошная плашка поверх свечей прячет то, ради чего
+        // график открыт. Вспомогательные (активация, пик) ещё бледнее.
+        price: lv.price, color: lineColor(lv.color, lv.dim ? 0.45 : 0.65),
+        lineWidth: lv.dim ? 1 : 2,
         lineStyle: lv.dim ? 1 : lv.style, axisLabelVisible: true, title: lv.title,
       };
       const existing = smartLines.get(key);
@@ -135,7 +151,10 @@
     chart = createChart(el, {
       width: el.clientWidth || 260,
       height: el.clientHeight || 150,
-      layout: { background: { color: '#0f0f1e' }, textColor: '#778' },
+      // fontSize 8 вместо дефолтных 12 (−30%): подписи ценовых линий рисует сам
+      // график, и при семи заявках они закрывали свечи. Касается только текста
+      // ВНУТРИ канвы — интерфейсный минимум 10px не затрагивает.
+      layout: { background: { color: '#0f0f1e' }, textColor: '#778', fontSize: 8 },
       grid: { vertLines: { color: '#1a1a2e' }, horzLines: { color: '#1a1a2e' } },
       localization: { timeFormatter: mskCrosshairFormatter },
       timeScale: { borderColor: '#2d2d4a', timeVisible: true, rightOffset: 4, tickMarkFormatter: mskTickFormatter },
@@ -189,6 +208,23 @@
     {:else if failed}
       <button class="mc-ov mc-retry" onclick={() => loadHistory()}>нет данных · повторить</button>
     {/if}
+    {#if legend.length}
+      <!-- Легенда ПОВЕРХ графика, а не полосой под ним: полоса отъедала бы
+           высоту у свечей. Полупрозрачная подложка — график читается насквозь.
+           Здесь названы типы (цвет + штрих), поэтому на самих линиях остались
+           только сторона и объём. -->
+      <div class="mc-legend">
+        {#each legend as l}
+          <span class="mc-l">
+            <svg viewBox="0 0 18 8" aria-hidden="true">
+              <line x1="1" y1="4" x2="17" y2="4" stroke={l.color} stroke-width="2"
+                    stroke-dasharray={l.style === 3 ? '2 3' : l.style === 2 ? '5 3' : '0'} />
+            </svg>{l.text}
+          </span>
+        {/each}
+        <span class="mc-l muted">▲ покупка · ▼ продажа · «к» — контракты; тонкая линия — вспомогательный уровень</span>
+      </div>
+    {/if}
   </div>
 </div>
 
@@ -217,6 +253,16 @@
   }
   .mc-retry { cursor: pointer; color: #9ab; }
   .mc-retry:hover { color: #cde; }
+  /* Легенда: накладка у нижнего края, свечи под ней просвечивают. Шрифт держим
+     на 10px — это интерфейсный минимум оператора, ниже читать нечем. */
+  .mc-legend {
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 1; pointer-events: none;
+    display: flex; flex-wrap: wrap; gap: 2px 10px; padding: 2px 6px;
+    background: #0f0f1ea6; font-size: 10px; color: #8a90a8; line-height: 1.3;
+  }
+  .mc-l { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+  .mc-l svg { width: 18px; height: 8px; flex-shrink: 0; }
+  .mc-l.muted { color: #6f7590; }
   .mc-spin {
     width: 12px; height: 12px; border-radius: 50%;
     border: 2px solid #2d2d4a; border-top-color: #6aa8ff; animation: mcspin 0.8s linear infinite;
