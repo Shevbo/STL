@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { KIND_BY_ID, conditionText, preview, smartLegend, smartLevels,
+import { KIND_BY_ID, conditionText, preview, shortCodes, smartLegend, smartLevels,
          type Kind, type Side } from './smart-order-help';
 
 const base = {
@@ -335,5 +335,75 @@ describe('подписи уровней видны и полупрозрачны
       expect(Math.max(...alpha(plaque)), 'плашка ' + f).toBeLessThan(0.7);
       expect(Math.max(...alpha(line)), 'линия ' + f).toBeGreaterThanOrEqual(0.8);
     }
+  });
+});
+
+// ── Направление защитных заявок и номера связок ──────────────────────────────
+describe('стрелка защитной линии — сторона ВЫХОДА', () => {
+  const base = { so_id: 'p1', code: 'RIU6', qty: 5, kind: 'sl', trigger_price: 89_000,
+                 child_price: 0, trail_offset: 0, peak: 0, activated: false,
+                 sl_offset: 300, tp_offset: 500 };
+  const pick = (o: any, suf: string) => smartLevels(o).find((l) => l.key.endsWith(suf))!;
+
+  it('родитель ПОКУПАЕТ — стоп и тейк ПРОДАЮТ', () => {
+    // Движок: exit_side = "sell" if parent.side == "buy". Подписать защитную
+    // линию стрелкой родителя значит нарисовать покупку там, где уйдёт продажа.
+    const o = { ...base, side: 'buy' };
+    expect(pick(o, ':sl').title).toContain('▼');
+    expect(pick(o, ':tp').title).toContain('▼');
+    // а сам УРОВЕНЬ по-прежнему считается от стороны родителя
+    expect(pick(o, ':sl').price).toBe(88_700);
+    expect(pick(o, ':tp').price).toBe(89_500);
+  });
+
+  it('родитель ПРОДАЁТ — стоп и тейк ПОКУПАЮТ', () => {
+    const o = { ...base, side: 'sell' };
+    expect(pick(o, ':sl').title).toContain('▲');
+    expect(pick(o, ':tp').title).toContain('▲');
+    expect(pick(o, ':sl').price).toBe(89_300);
+    expect(pick(o, ':tp').price).toBe(88_500);
+  });
+
+  it('у САМОЙ заявки стрелка своя, не перевёрнутая', () => {
+    const own = smartLevels({ ...base, side: 'buy' }).find((l) => l.key === 'p1')!;
+    expect(own.title).toContain('▲');
+  });
+});
+
+describe('двузначные номера связок', () => {
+  const o = (id: string, extra: any = {}) => ({
+    so_id: id, code: 'RIU6', kind: 'sl', side: 'buy', qty: 1, trigger_price: 100,
+    sl_offset: 0, tp_offset: 0, child_price: 0, trail_offset: 0, peak: 0,
+    activated: false, ...extra,
+  });
+
+  it('номер всегда двузначный', () => {
+    for (const id of ['a', 'zzzz', 'so-2026-08-09-abcdef', '']) {
+      const n = Number(shortCodes([o(id)])[id]);
+      expect(n, id).toBeGreaterThanOrEqual(10);
+      expect(n, id).toBeLessThanOrEqual(99);
+    }
+  });
+
+  it('один и тот же so_id даёт один и тот же номер — он не «плавает»', () => {
+    const a = shortCodes([o('x'), o('y')])['x'];
+    const b = shortCodes([o('x'), o('y')])['x'];
+    expect(a).toBe(b);
+  });
+
+  it('номера в книге не повторяются', () => {
+    const many = Array.from({ length: 40 }, (_, i) => o('order-' + i));
+    const codes = Object.values(shortCodes(many));
+    expect(new Set(codes).size).toBe(40);
+  });
+
+  it('защитный ребёнок носит номер РОДИТЕЛЯ: одна связка — один номер', () => {
+    const parent = o('p'), child = o('c', { parent_id: 'p', kind: 'tp' });
+    const codes = shortCodes([parent, child]);
+    expect(codes['c']).toBe(codes['p']);
+  });
+
+  it('заявок нет — карта пуста', () => {
+    expect(shortCodes([])).toEqual({});
   });
 });

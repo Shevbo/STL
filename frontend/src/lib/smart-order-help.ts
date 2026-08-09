@@ -363,7 +363,7 @@ export function smartLevels(
   // уровня — для легенды, подсказок и тестов. «5 к» = пять КОНТРАКТОВ: голое
   // число рядом с ценой читается как цена.
   const who = `${o.side === 'buy' ? '▲' : '▼'} ${o.qty} к`;
-  const out0 = protectiveLevels(o, who);
+  const out0 = protectiveLevels(o);
   if (o.kind === 'sl' || o.kind === 'tp') {
     return [{ key: o.so_id, price: o.trigger_price, title: who }, ...out0];
   }
@@ -386,6 +386,42 @@ export function smartLevels(
   }
   return o.child_price > 0
     ? [{ key: o.so_id, price: o.child_price, title: who }, ...out0] : [];
+}
+
+/** Двузначный код заявки для меток на графике и карточек в списке.
+ *
+ *  so_id — длинный идентификатор, в подпись на линии он не влезает, а без него
+ *  семь взведённых заявок на графике неразличимы. Код выводится ИЗ so_id, а не
+ *  раздаётся счётчиком: он не хранится нигде, одинаков во всех местах экрана и
+ *  переживает перезагрузку страницы.
+ *
+ *  Защитные дети получают код РОДИТЕЛЯ: «47» на линии входа и «47» на её стопе
+ *  говорят, что это одна связка — ровно то, зачем код и заводится.
+ *
+ *  Столкновения возможны: 90 кодов на всю книгу. Разводим их детерминированно —
+ *  по возрастанию so_id, занятый код сдвигается на следующий свободный. Значит
+ *  код меняется только у ПОЗЖЕ добавленной заявки и только при совпадении. */
+export function shortCode(id: string): number {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return 10 + (h % 90);
+}
+
+export function shortCodes(orders: any[]): Record<string, string> {
+  const roots = new Map<string, string>();      // so_id -> корень связки
+  for (const o of orders) roots.set(o.so_id, o.parent_id || o.so_id);
+  const uniqueRoots = [...new Set(roots.values())].sort();
+  const taken = new Set<number>();
+  const byRoot = new Map<string, string>();
+  for (const r of uniqueRoots) {
+    let c = shortCode(r);
+    for (let i = 0; i < 90 && taken.has(c); i++) c = c === 99 ? 10 : c + 1;
+    taken.add(c);
+    byRoot.set(r, String(c));
+  }
+  const out: Record<string, string> = {};
+  for (const [id, root] of roots) out[id] = byRoot.get(root) ?? '';
+  return out;
 }
 
 /** Цена, от которой движок будет считать защитные заявки, когда родитель
@@ -413,12 +449,19 @@ function entryEstimate(o: any): number {
  *  обязаны выглядеть одинаково, иначе одно и то же читается как два разных.
  *  Линия вспомогательная: цена ещё не факт. */
 export function protectiveLevels(
-  o: any, who: string,
+  o: any,
 ): Array<{ key: string; price: number; title: string; dim?: boolean; color?: string }> {
   const entry = entryEstimate(o);
   if (entry <= 0) return [];
   const out: Array<{ key: string; price: number; title: string; dim?: boolean; color?: string }> = [];
   const dir = o.side === 'buy' ? 1 : -1;      // сторона ВХОДА родителя
+  // СТРЕЛКА У ЗАЩИТНОЙ ЛИНИИ — ПРОТИВОПОЛОЖНАЯ. Родитель ВХОДИТ в позицию, а
+  // стоп и тейк из неё ВЫХОДЯТ: движок так и создаёт их, `exit_side = "sell" if
+  // parent.side == "buy" else "buy"`. Подписать их стрелкой родителя значило бы
+  // нарисовать покупку там, где уйдёт продажа. Уровень при этом считается от
+  // стороны РОДИТЕЛЯ — это две разные вещи, и путать их нельзя.
+  const exitArrow = o.side === 'buy' ? '▼' : '▲';
+  const who = `${exitArrow} ${o.qty} к`;
   const add = (kind: 'sl' | 'tp', offset: number, word: string) => {
     if (!(offset > 0)) return;
     // Стоп против входа, тейк в сторону входа — знак ровно как в движке.

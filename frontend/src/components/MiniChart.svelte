@@ -8,7 +8,7 @@
   import { fetchWithAuth } from '$lib/fetch-auth';
   import { quotesStore } from '$lib/stores/quotes.svelte';
   import { smartOrdersStore } from '$lib/stores/smart-orders.svelte';
-  import { KIND_BY_ID, LABEL_TEXT_COLOR, smartLegend, smartLevels, softColor } from '$lib/smart-order-help';
+  import { KIND_BY_ID, LABEL_TEXT_COLOR, shortCodes, smartLegend, smartLevels, softColor } from '$lib/smart-order-help';
   import { mskTickFormatter, mskCrosshairFormatter } from '$lib/chart-time';
 
   let {
@@ -112,10 +112,18 @@
     const orders = smartHere;
     if (!ready || !series) return;
     const want = new Map<string, { price: number; title: string; color: string; style: number; dim?: boolean }>();
+    // Двузначный код связки в начале подписи: so_id в метку не влезает, а без
+    // него заявки на графике неразличимы. У защитных детей код РОДИТЕЛЯ —
+    // «47» на входе и «47» на его стопе читаются как одна связка.
+    const codes = shortCodes(orders);
     for (const o of orders) {
       const m = KIND_BY_ID[o.kind];
+      const tag = codes[o.so_id] ? codes[o.so_id] + ' ' : '';
       for (const lv of smartLevels(o)) {
-        if (lv.price > 0) want.set(lv.key, { ...lv, color: lv.color ?? m.color, style: m.lineStyle });
+        if (lv.price > 0) {
+          want.set(lv.key, { ...lv, title: tag + lv.title,
+                             color: lv.color ?? m.color, style: m.lineStyle });
+        }
       }
     }
     for (const [key, line] of smartLines) {
@@ -127,20 +135,11 @@
         // и ТЕКСТ в ней. Прозрачной линии мало — глухая бирка закрывала колонку
         // цен и время под ней (оператор, 09.08.2026).
         price: lv.price,
-        // Толще: на 1 px линия терялась среди свечей — оператор просил заметнее.
-        // Вспомогательные (активация, пик, расчётные стоп и тейк) остаются тоньше
-        // и точками, но уже читаются, а не угадываются.
         // Линия НАСЫЩЕННАЯ: прятать её незачем, плашка теперь прозрачна сама
         // по себе. Вспомогательные чуть тише и тоньше, но видимы.
         color: softColor(lv.color, lv.dim ? 0.3 : 0.08, lv.dim ? 0.8 : 1),
         lineWidth: lv.dim ? 1 : 2,
         lineStyle: lv.dim ? 1 : lv.style,
-        // Подписи НА ХОЛСТЕ нет. lightweight-charts рисует title плашкой
-        // ЦВЕТА ЛИНИИ прямо поверх свечей, у правого края, и семь взведённых
-        // заявок закрывают собой четверть графика — то, ради чего его и
-        // открывают. Ни фон, ни положение плашки библиотека настраивать не
-        // даёт, поэтому подписи здесь нет вовсе: сторона и объём есть в
-        // таблице заявок рядом, тип называет легенда под графиком.
         title: lv.title,
         // axisLabelVisible ОБЯЗАН быть true. В lightweight-charts подпись на
         // линии и ценник в шкале живут в одной ветке: `if (!labelVisible)

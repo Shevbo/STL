@@ -11,7 +11,8 @@
   import SmartOrderSchematic from './SmartOrderSchematic.svelte';
   import {
     KINDS, KIND_BY_ID, COMMON_FACTS, STATUS_RU, codeSuggestions, conditionText,
-    fmtWhen, fmtPts, fmtRub, ocoFact, preview, tillFact, type Kind, type Side,
+    fmtWhen, fmtPts, fmtRub, ocoFact, preview, shortCodes, tillFact,
+    type Kind, type Side,
   } from '$lib/smart-order-help';
 
   let { symbol = '' }: { symbol?: string } = $props();
@@ -42,6 +43,10 @@
   const price = $derived(tick?.last || 0);
   const orders = $derived(smartOrdersStore.all);
   const armed = $derived(orders.filter((o) => o.status === 'armed'));
+  // Двузначный код связки — тот же, что стоит в метке на графике. Он и связывает
+  // карточку с линией: so_id в подпись на линии не влезает, а по цвету семь
+  // заявок не различить. У защитных детей код РОДИТЕЛЯ: одна связка — один номер.
+  const codes = $derived(shortCodes(armed));
   const history = $derived(orders.filter((o) => o.status !== 'armed').slice(-30).reverse());
   const goodTillMs = $derived(tillLocal ? new Date(tillLocal).getTime() : 0);
 
@@ -327,6 +332,7 @@
     {#each armed as o (o.so_id)}
       <article class="so-card" style="--accent:{KIND_BY_ID[o.kind].color}">
         <div class="so-c-head">
+          <span class="so-c-num" title="номер связки: этим же номером заявка подписана на графике">{codes[o.so_id]}</span>
           <span class="so-c-tag">{KIND_BY_ID[o.kind].short}</span>
           <b class="so-c-code">{o.code}</b>
           <span class="so-c-side" class:buy={o.side === 'buy'}>{o.side === 'buy' ? 'ПОКУПКА' : 'ПРОДАЖА'} {o.qty}</span>
@@ -502,6 +508,12 @@
   }
   .so-card.done { opacity: .72; }
   .so-c-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  /* Номер связки: моноширинный, чтобы двузначные не плясали по ширине. */
+  .so-c-num {
+    font: 600 12px/1 ui-monospace, Menlo, Consolas, monospace;
+    color: #0f0f1e; background: var(--accent); border-radius: 3px;
+    padding: 2px 4px; flex-shrink: 0;
+  }
   .so-c-tag { font: 600 10px/1 Consolas, monospace; letter-spacing: .1em; color: var(--accent); }
   .so-c-code { font-size: 14px; color: #e8e8f0; }
   .so-c-side { color: #ff9d90; font-size: 11px; letter-spacing: .06em; }
