@@ -10,8 +10,8 @@
     "semantic_hash": ""
   },
   ".remember/tmp/last-save.json": {
-    "mtime": 1786262367.6457644,
-    "ast_hash": "444ca188863e405647c799302f976433",
+    "mtime": 1786263853.725799,
+    "ast_hash": "62b8d8ca67adfaa7273adc32fa98819e",
     "semantic_hash": ""
   },
   ".vscode/setting.json": {
@@ -65,8 +65,8 @@
     "semantic_hash": "f51680fc0a831341efe804b962b212a3"
   },
   "frontend/src/components/ChartFrame.svelte": {
-    "mtime": 1786262324.4249256,
-    "ast_hash": "f7a9562379f6855c86dc858c3309440a",
+    "mtime": 1786264233.2011,
+    "ast_hash": "2227a6f98a29e4af8489d314980669b6",
     "semantic_hash": ""
   },
   "frontend/src/components/InstrumentPanel.svelte": {
@@ -1170,8 +1170,8 @@
     "semantic_hash": ""
   },
   ".remember/now.md": {
-    "mtime": 1786262367.4527364,
-    "ast_hash": "2327a9aab039c25fb8bcad83f917945c",
+    "mtime": 1786263852.915614,
+    "ast_hash": "a9c844ed1f207715d6b2afff9276309c",
     "semantic_hash": ""
   },
   ".remember/recent.md": {
@@ -1555,8 +1555,8 @@
     "semantic_hash": ""
   },
   "frontend/src/components/MiniChart.svelte": {
-    "mtime": 1786262353.0961695,
-    "ast_hash": "65ef74fa7ae853cc77a190160ea55859",
+    "mtime": 1786264214.8628683,
+    "ast_hash": "bc9508e144fbcb4ccf02f12efd0e1c00",
     "semantic_hash": ""
   },
   "frontend/src/components/OrderViz.svelte": {
@@ -3185,13 +3185,13 @@
     "semantic_hash": ""
   },
   "frontend/src/lib/smart-order-help.test.ts": {
-    "mtime": 1786262417.3146799,
-    "ast_hash": "7676396eb4c48a562ee17702c0d554cc",
+    "mtime": 1786264280.0589097,
+    "ast_hash": "b902783253b0691b364f227a5076788a",
     "semantic_hash": ""
   },
   "frontend/src/lib/smart-order-help.ts": {
-    "mtime": 1786262289.976653,
-    "ast_hash": "437db0dcee3a892f6abf0179a497f4ce",
+    "mtime": 1786264163.383627,
+    "ast_hash": "f5f6a418eb05f6f47ff1047d67f87a7c",
     "semantic_hash": ""
   },
   "frontend/src/lib/stores/smart-orders.svelte.ts": {
