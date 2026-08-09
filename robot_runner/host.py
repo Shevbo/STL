@@ -405,9 +405,14 @@ class RobotHost:
             # его заявки и сделки ложатся на свою свечу. Рисовать вместо них бары
             # ISS нельзя: там московское время штамповано как UTC, и филлы уехали
             # бы на три часа. Отчёт уходит раз в 15 с, 30 баров это ~1 КБ.
+            # ТОЛЬКО бары с реальными сделками (traded_bars, не bars): когда
+            # лента молчит дольше TAPE_PRIORITY_MS, билдер строит минуты из
+            # замершей котировки, и панель всю ночь рисовала свечи на стоящей
+            # бирже. Фильтруем ХВОСТ, а не билдер: стратегия читает те же
+            # bars() и её вход не меняется — иначе это была бы правка торговли.
             bars_tail = [pb.RobotBar(t_unix=b.time, o=b.open, h=b.high,
                                      l=b.low, c=b.close)
-                         for b in r.bars.bars(BARS_TAIL_N)]
+                         for b in r.bars.traded_bars(BARS_TAIL_N)]
             robots.append(pb.RobotStatus(
                 robot_id=rid, running=not (self.killed or r.paused), paused=r.paused,
                 bars_tail=bars_tail,

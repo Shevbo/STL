@@ -33,7 +33,7 @@ class BarBuilder:
         self._cur: Bar | None = None   # forming minute
         self._last_trade_ms = 0        # newest tape trade seen (priority window)
 
-    def _merge(self, ts_ms: int, price: float, volume: int) -> None:
+    def _merge(self, ts_ms: int, price: float, volume: int, traded: bool) -> None:
         minute = int(ts_ms // 60_000) * 60  # unix seconds
         if self._bars and minute <= self._bars[-1].time:
             return  # at/behind the newest CLOSED bar (incl. a restored tail) — ignore
@@ -42,7 +42,7 @@ class BarBuilder:
             if cur is not None:
                 self._bars.append(cur)   # close the previous minute
             self._cur = Bar(time=minute, open=price, high=price, low=price,
-                            close=price, volume=volume)
+                            close=price, volume=volume, traded=traded)
             return
         if minute < cur.time:
             return  # late data from a closed minute — ignore
@@ -50,6 +50,10 @@ class BarBuilder:
         cur.low = min(cur.low, price)
         cur.close = price
         cur.volume += volume
+        # Метка «в баре была реальная сделка» ТОЛЬКО взводится: минута, начатая
+        # котировкой и продолженная сделкой, — настоящая; обратно снимать её
+        # нельзя, иначе поздний тик стёр бы факт сделки.
+        cur.traded = cur.traded or traded
 
     def on_tick(self, ts_ms: int, last: float) -> None:
         """Snapshot price (bid/ask mid or last param). Fallback source: muted
@@ -58,17 +62,27 @@ class BarBuilder:
             return
         if self._last_trade_ms and ts_ms - self._last_trade_ms < self.TAPE_PRIORITY_MS:
             return
-        self._merge(ts_ms, last, 0)
+        self._merge(ts_ms, last, 0, traded=False)
 
     def on_trade(self, ts_ms: int, price: float, qty: int) -> None:
         """Exact exchange trade from the anonymized tape (OnAllTrade)."""
         if price <= 0:
             return
         self._last_trade_ms = max(self._last_trade_ms, ts_ms)
-        self._merge(ts_ms, price, max(0, qty))
+        self._merge(ts_ms, price, max(0, qty), traded=True)
 
     def bars(self, n: int = 0) -> list[Bar]:
         out = list(self._bars)
+        return out[-n:] if n else out
+
+    def traded_bars(self, n: int = 0) -> list[Bar]:
+        """Только бары с РЕАЛЬНЫМИ сделками — для показа человеку.
+
+        Стратегия читает `bars()` и синтетические минуты видит как раньше:
+        менять её вход значило бы менять торговлю. А нарисованная свеча на
+        стоящей бирже — это ложь на экране (панель всю ночь рисовала минутки
+        по замершей котировке), поэтому наружу отдаём только факт биржи."""
+        out = [b for b in self._bars if b.traded]
         return out[-n:] if n else out
 
     # ---- persistence (restart immunity) ----
@@ -78,9 +92,12 @@ class BarBuilder:
     # through runner_state.json as compact rows.
 
     def to_rows(self, n: int = 600) -> list[list]:
-        """Last n CLOSED bars as [t, o, h, l, c, v] rows (the forming minute is
-        not persisted — it rebuilds from the live tape in under a minute)."""
-        return [[b.time, b.open, b.high, b.low, b.close, b.volume]
+        """Last n CLOSED bars as [t, o, h, l, c, v, traded] rows (the forming
+        minute is not persisted — it rebuilds from the live tape in under a
+        minute). Седьмая колонка ДОПИСАНА к историческому формату: старый
+        раннер читает строку по индексам 0..5 и лишнюю просто не видит, так что
+        откат версии безопасен."""
+        return [[b.time, b.open, b.high, b.low, b.close, b.volume, int(b.traded)]
                 for b in self.bars(n)]
 
     def seed(self, rows: list) -> None:
@@ -97,7 +114,13 @@ class BarBuilder:
                 continue
             if self._bars and t <= self._bars[-1].time:
                 continue  # keep strictly ascending
-            self._bars.append(Bar(time=t, open=o, high=h, low=lo, close=c, volume=v))
+            # Строка ДО этой версии (6 колонок) — считаем бар настоящим: иначе
+            # первый же рестарт на старом state спрятал бы у панели всю историю
+            # разом, а промах в эту сторону всего лишь оставит на сутки
+            # несколько ночных минут (их дорисовку страхует и сама панель).
+            traded = bool(r[6]) if len(r) > 6 else True
+            self._bars.append(Bar(time=t, open=o, high=h, low=lo, close=c, volume=v,
+                                  traded=traded))
 
     @property
     def last_bar_time(self) -> int:
