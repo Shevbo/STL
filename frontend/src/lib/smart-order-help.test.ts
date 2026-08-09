@@ -304,27 +304,36 @@ describe('защитные уровни после входа', () => {
   });
 });
 
-// ── Подпись на линии обязана быть ПОЛУПРОЗРАЧНОЙ ─────────────────────────────
-// lightweight-charts рисует title плашкой цвета линии; отдельного цвета для
-// плашки нет. Сплошная закрывала свечи (жалоба дважды), поэтому тон идёт через
-// softColor с низкой альфой. Правка живёт в разметке — сторожим исходник.
-describe('подписи уровней не глухие', () => {
+// ── Подпись на линии: видна и не глухая ──────────────────────────────────────
+// В lightweight-charts подпись на линии и ценник в шкале живут в ОДНОЙ ветке:
+// `if (!labelVisible) return` стоит до отрисовки подписи. Выключив ценник у
+// вспомогательных уровней, мы погасили и их подписи — на графике остались
+// волосяные линии без единого слова (жалоба оператора 09.08.2026).
+// Фон плашки при этом берётся из axisLabelColor и лишь потом из color, поэтому
+// линию можно держать насыщенной, а плашку — прозрачной.
+describe('подписи уровней видны и полупрозрачны', () => {
   const charts = ['src/components/ChartFrame.svelte', 'src/components/MiniChart.svelte'];
+  const read = (f: string) => readFileSync(resolve(process.cwd(), f), 'utf8');
 
-  it('подпись на линии есть', () => {
+  it('подпись на линии передаётся', () => {
+    for (const f of charts) expect(read(f), f).toMatch(/title:\s*lv\.title/);
+  });
+
+  it('ценник в шкале НЕ выключается: вместе с ним гаснет и подпись', () => {
     for (const f of charts) {
-      const src = readFileSync(resolve(process.cwd(), f), 'utf8');
-      expect(src, f).toMatch(/title:\s*lv\.title/);
+      expect(read(f), f).toMatch(/axisLabelVisible:\s*true/);
+      expect(read(f), f).not.toMatch(/axisLabelVisible:\s*!/);
     }
   });
 
-  it('цвет линии и плашки идёт через softColor, альфа ниже 0.7', () => {
+  it('плашка полупрозрачна, а линия — нет', () => {
     for (const f of charts) {
-      const src = readFileSync(resolve(process.cwd(), f), 'utf8');
-      const m = src.match(/color:\s*softColor\(lv\.color,[^)]*\)/);
-      expect(m, f).toBeTruthy();
-      const alphas = [...m![0].matchAll(/0\.\d+/g)].map((x) => Number(x[0]));
-      expect(Math.max(...alphas), f).toBeLessThan(0.7);
+      const src = read(f);
+      const plaque = src.match(/axisLabelColor:\s*softColor\([^)]*\)/)![0];
+      const line = src.match(/[\n\r]\s*color:\s*softColor\(lv\.color,[^)]*\)/)![0];
+      const alpha = (t: string) => [...t.matchAll(/0?\.\d+|1/g)].map((x) => Number(x[0]));
+      expect(Math.max(...alpha(plaque)), 'плашка ' + f).toBeLessThan(0.7);
+      expect(Math.max(...alpha(line)), 'линия ' + f).toBeGreaterThanOrEqual(0.8);
     }
   });
 });
