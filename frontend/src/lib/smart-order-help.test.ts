@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { KIND_BY_ID, conditionText, preview, smartChips, smartLegend, smartLevels,
+import { KIND_BY_ID, conditionText, preview, smartLegend, smartLevels,
          type Kind, type Side } from './smart-order-help';
 
 const base = {
@@ -187,7 +187,7 @@ describe('smartLevels — уровни на графике', () => {
     expect(lines).toHaveLength(1);
     expect(lines[0].price).toBe(90590);
     expect(lines[0].dim).toBe(true);        // вспомогательная, не рабочая
-    expect(lines[0].title).toContain('активация');
+    expect(lines[0].title).toContain('акт.');   // подпись на линии короткая
   });
 
   it('every line carries side and CONTRACT volume, and никогда — тип', async () => {
@@ -244,31 +244,6 @@ describe('smartLevels — уровни на графике', () => {
     expect(smartLevels({ ...base, kind: 'on_fill' })).toEqual([]);
     const [lv] = smartLevels({ ...base, kind: 'on_fill', child_price: 88000 });
     expect(lv.price).toBe(88000);
-  });
-});
-
-// ── Плашки заявок не должны лежать поверх свечей ─────────────────────────────
-// lightweight-charts рисует title ценовой линии плашкой ЦВЕТА ЛИНИИ прямо на
-// холсте у правого края. Семь взведённых заявок закрывали собой четверть
-// графика (жалоба оператора дважды, 08 и 09.08.2026), а ни фон, ни положение
-// плашки библиотека настраивать не даёт. Единственный способ — не передавать
-// title вовсе. Правка живёт в разметке, юнит-тестом её не поймать, поэтому
-// сторожим сам исходник.
-describe('умные заявки не перекрывают график', () => {
-  const charts = ['src/components/ChartFrame.svelte', 'src/components/MiniChart.svelte'];
-
-  it('ни один график не отдаёт подпись уровня на холст', () => {
-    for (const f of charts) {
-      const src = readFileSync(resolve(process.cwd(), f), 'utf8');
-      expect(src, f).not.toMatch(/title:\s*lv\.title/);
-    }
-  });
-
-  it('ценник в шкале только у боевых уровней, не у вспомогательных', () => {
-    for (const f of charts) {
-      const src = readFileSync(resolve(process.cwd(), f), 'utf8');
-      expect(src, f).toContain('axisLabelVisible: !lv.dim');
-    }
   });
 });
 
@@ -329,49 +304,27 @@ describe('защитные уровни после входа', () => {
   });
 });
 
-// ── Расшифровка каждой линии под графиком ────────────────────────────────────
-// Легенда по ТИПАМ отвечала «что значит оранжевый пунктир», но не «которая это
-// из пяти следящих и на сколько контрактов». Подписать на холсте нельзя —
-// плашка закрывает свечи, поэтому расшифровка живёт под графиком, а связывает
-// её с линией напечатанная цена.
-describe('чипы линий под графиком', () => {
-  const trail = (id: string, qty: number, trigger: number) => ({
-    so_id: id, kind: 'trail_tp', code: 'RIU6', side: 'sell', qty,
-    trigger_price: trigger, trail_offset: 200, peak: 0, activated: false,
-    sl_offset: 0, tp_offset: 0, child_price: 0,
+// ── Подпись на линии обязана быть ПОЛУПРОЗРАЧНОЙ ─────────────────────────────
+// lightweight-charts рисует title плашкой цвета линии; отдельного цвета для
+// плашки нет. Сплошная закрывала свечи (жалоба дважды), поэтому тон идёт через
+// softColor с низкой альфой. Правка живёт в разметке — сторожим исходник.
+describe('подписи уровней не глухие', () => {
+  const charts = ['src/components/ChartFrame.svelte', 'src/components/MiniChart.svelte'];
+
+  it('подпись на линии есть', () => {
+    for (const f of charts) {
+      const src = readFileSync(resolve(process.cwd(), f), 'utf8');
+      expect(src, f).toMatch(/title:\s*lv\.title/);
+    }
   });
 
-  it('на каждую нарисованную линию ровно один чип', () => {
-    const lines = [trail('a', 5, 90_590), trail('b', 4, 90_970)]
-      .flatMap((o) => smartLevels(o)).length;
-    expect(smartChips([trail('a', 5, 90_590), trail('b', 4, 90_970)])).toHaveLength(lines);
-  });
-
-  it('пять одинаковых следящих различимы объёмом и ценой', () => {
-    const chips = smartChips([trail('a', 5, 90_590), trail('b', 4, 90_970), trail('c', 7, 86_610)]);
-    // toLocaleString('ru-RU') разделяет разряды УЗКИМ неразрывным пробелом
-    const texts = chips.map((c) => (c.text + ' ' + c.price).replace(/[\s  ]/g, ' '));
-    expect(new Set(texts).size).toBe(3);
-    expect(texts.some((t) => t.includes('5 к') && t.includes('90 590'))).toBe(true);
-  });
-
-  it('порядок сверху вниз по цене — как линии лежат на графике', () => {
-    const chips = smartChips([trail('a', 5, 86_610), trail('b', 4, 90_970), trail('c', 7, 88_400)]);
-    const prices = chips.map((c) => Number(c.price.replace(/[^\d.]/g, '')));
-    expect(prices).toEqual([...prices].sort((x, y) => y - x));
-  });
-
-  it('чип называет тип, а не только цвет: цветом пять оттенков не различить', () => {
-    expect(smartChips([trail('a', 5, 90_590)])[0].text).toContain('СЛЕД');
-  });
-
-  it('вспомогательные уровни помечены как таковые', () => {
-    const chips = smartChips([{ ...trail('a', 5, 90_590), sl_offset: 100 }]);
-    expect(chips.filter((c) => c.dim).length).toBeGreaterThan(0);
-    expect(chips.every((c) => c.price.length > 0)).toBe(true);
-  });
-
-  it('заявок нет — чипов нет', () => {
-    expect(smartChips([])).toEqual([]);
+  it('цвет линии и плашки идёт через softColor, альфа ниже 0.7', () => {
+    for (const f of charts) {
+      const src = readFileSync(resolve(process.cwd(), f), 'utf8');
+      const m = src.match(/color:\s*softColor\(lv\.color,[^)]*\)/);
+      expect(m, f).toBeTruthy();
+      const alphas = [...m![0].matchAll(/0\.\d+/g)].map((x) => Number(x[0]));
+      expect(Math.max(...alphas), f).toBeLessThan(0.7);
+    }
   });
 });

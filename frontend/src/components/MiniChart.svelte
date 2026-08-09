@@ -8,7 +8,7 @@
   import { fetchWithAuth } from '$lib/fetch-auth';
   import { quotesStore } from '$lib/stores/quotes.svelte';
   import { smartOrdersStore } from '$lib/stores/smart-orders.svelte';
-  import { KIND_BY_ID, LABEL_TEXT_COLOR, smartChips, smartLegend, smartLevels, softColor } from '$lib/smart-order-help';
+  import { KIND_BY_ID, LABEL_TEXT_COLOR, smartLegend, smartLevels, softColor } from '$lib/smart-order-help';
   import { mskTickFormatter, mskCrosshairFormatter } from '$lib/chart-time';
 
   let {
@@ -55,9 +55,6 @@
   // Легенда показывает ТОЛЬКО нарисованные сейчас типы: постоянный список
   // стилей превращается в шум, который перестают читать.
   const legend = $derived(smartLegend(smartHere));
-  // Мини-график узкий: больше восьми расшифровок превращают его в список.
-  const CHIPS_MAX = 8;
-  const chips = $derived(smartChips(smartHere));
 
   async function loadHistory(attempt = 0) {
     loading = true; failed = false;
@@ -133,7 +130,7 @@
         // Толще: на 1 px линия терялась среди свечей — оператор просил заметнее.
         // Вспомогательные (активация, пик, расчётные стоп и тейк) остаются тоньше
         // и точками, но уже читаются, а не угадываются.
-        color: softColor(lv.color, lv.dim ? 0.5 : 0.35, lv.dim ? 0.85 : 0.95),
+        color: softColor(lv.color, lv.dim ? 0.58 : 0.42, lv.dim ? 0.42 : 0.55),
         lineWidth: lv.dim ? 1 : 2,
         lineStyle: lv.dim ? 1 : lv.style,
         // Подписи НА ХОЛСТЕ нет. lightweight-charts рисует title плашкой
@@ -142,10 +139,15 @@
         // открывают. Ни фон, ни положение плашки библиотека настраивать не
         // даёт, поэтому подписи здесь нет вовсе: сторона и объём есть в
         // таблице заявок рядом, тип называет легенда под графиком.
-        title: '',
-        // Ценник в ШКАЛЕ (не поверх графика) — только у боевых уровней.
-        // Вспомогательные (активация, пик) множатся по три на заявку и
-        // залепляют шкалу так, что не прочитать ни один.
+        // Подпись НА ЛИНИИ, справа, ПОЛУПРОЗРАЧНАЯ. lightweight-charts рисует
+        // её плашкой цвета линии, и сплошная плашка закрывала свечи. Отдельного
+        // цвета для плашки у библиотеки нет — он общий с линией, поэтому тон
+        // приглушён к фону и взят с низкой альфой: сквозь подпись видно график,
+        // а текст остаётся светлым (яркость плашки библиотека читает сама и на
+        // насыщенном тоне ставит ТЁМНЫЙ текст — отсюда подмешивание фона).
+        title: lv.title,
+        // Ценник в ШКАЛЕ — только у боевых уровней. Вспомогательные множатся по
+        // три на заявку и залепляют шкалу так, что не прочитать ни один.
         axisLabelVisible: !lv.dim,
         axisLabelColor: softColor(lv.color, lv.dim ? 0.78 : 0.68, 0.8),
         axisLabelTextColor: LABEL_TEXT_COLOR,
@@ -235,22 +237,6 @@
       {/each}
       <span class="mc-l muted">▲ покупка · ▼ продажа · «к» — контракты; тонкая линия — вспомогательный уровень</span>
     </div>
-    <!-- По чипу на КАЖДУЮ линию: которая из пяти следящих и по какой цене.
-         Связывает чип с линией напечатанная цена. Мини-график узкий, поэтому
-         показываем ближайшие к рынку и честно считаем остаток. -->
-    <div class="mc-chips">
-      {#each chips.slice(0, CHIPS_MAX) as c}
-        <span class="mc-c" class:dim={c.dim}>
-          <svg viewBox="0 0 18 8" aria-hidden="true">
-            <line x1="1" y1="4" x2="17" y2="4" stroke={c.color} stroke-width={c.dim ? 1 : 2}
-                  stroke-dasharray={c.style === 3 ? '2 3' : c.style === 2 ? '5 3' : '0'} />
-          </svg>{c.text}<b>{c.price}</b>
-        </span>
-      {/each}
-      {#if chips.length > CHIPS_MAX}
-        <span class="mc-c muted">и ещё {chips.length - CHIPS_MAX} — на большом графике</span>
-      {/if}
-    </div>
   {/if}
 </div>
 
@@ -286,16 +272,6 @@
     padding: 3px 6px; background: #0f0f1e; border-top: 1px solid #1a1a2e;
     font-size: 12px; color: #9aa0b4; line-height: 1.3;
   }
-  .mc-chips {
-    flex-shrink: 0; display: flex; flex-wrap: wrap; gap: 2px 10px;
-    padding: 1px 6px 3px; background: #0f0f1e;
-    font-size: 12px; color: #9aa0b4; line-height: 1.35;
-  }
-  .mc-c { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
-  .mc-c svg { width: 18px; height: 8px; flex-shrink: 0; }
-  .mc-c b { color: #e2e6f0; font-weight: 600; }
-  /* Вспомогательные уровни и в расшифровке тише: они предположение, не факт. */
-  .mc-c.dim { opacity: .72; }
   .mc-l { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
   .mc-l svg { width: 18px; height: 8px; flex-shrink: 0; }
   .mc-l.muted { color: #6f7590; }

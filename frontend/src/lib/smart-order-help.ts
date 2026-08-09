@@ -374,12 +374,12 @@ export function smartLevels(
     // какая из них какая и на сколько контрактов (оператор, 09.08.2026).
     if (!o.activated && o.trigger_price > 0) {
       out.push({ key: o.so_id + ':act', price: o.trigger_price,
-                 title: `${who} · активация`, dim: true });
+                 title: `${who} · акт.`, dim: true });
     }
     if (o.activated && o.peak > 0) {
       const stop = o.side === 'sell' ? o.peak - o.trail_offset : o.peak + o.trail_offset;
       out.push({ key: o.so_id + ':stop', price: stop, color: TRAIL_ACTIVE_COLOR,
-                 title: `${who} · откат ${fmtPts(o.trail_offset)}` });
+                 title: `${who} · откат` });
       out.push({ key: o.so_id + ':peak', price: o.peak, title: `${who} · пик`, dim: true });
     }
     return [...out, ...out0];
@@ -425,7 +425,7 @@ export function protectiveLevels(
     const price = entry + (kind === 'sl' ? -1 : 1) * offset * dir;
     if (price > 0) {
       out.push({ key: `${o.so_id}:${kind}`, price, dim: true,
-                 color: KIND_BY_ID[kind].color, title: `${who} · ${word} после входа` });
+                 color: KIND_BY_ID[kind].color, title: `${who} · ${word}` });
     }
   };
   add('sl', Number(o.sl_offset || 0), 'стоп');
@@ -454,39 +454,6 @@ export function smartLegend(
     }
   }
   return out;
-}
-
-/** По одному чипу на КАЖДУЮ линию, что сейчас на графике: цвет и штрих как у
- *  линии, сторона, объём, роль уровня и его цена.
- *
- *  Легенда по ТИПАМ отвечала на вопрос «что значит оранжевый пунктир», но не на
- *  вопрос «а это которая из пяти следящих и на сколько контрактов». Подписать
- *  прямо на холсте нельзя: lightweight-charts кладёт их плашкой поверх свечей и
- *  закрывает график (жалоба дважды). Поэтому расшифровка живёт ПОД графиком, а
- *  связывает её с линией цена — она же напечатана в чипе.
- *
- *  Порядок сверху вниз по цене: так же, как линии лежат на графике. */
-export function smartChips(
-  orders: any[],
-): Array<{ color: string; style: number; dim: boolean; text: string; price: string }> {
-  const out: Array<{ color: string; style: number; dim: boolean; text: string; price: string; raw: number }> = [];
-  for (const o of orders) {
-    const m = KIND_BY_ID[o.kind];
-    if (!m) continue;
-    for (const lv of smartLevels(o)) {
-      if (!(lv.price > 0)) continue;
-      out.push({
-        color: lv.color ?? m.color,
-        style: lv.dim ? 3 : m.lineStyle,
-        dim: !!lv.dim,
-        text: `${m.short} ${lv.title}`,
-        price: fmtNum(lv.price),
-        raw: lv.price,
-      });
-    }
-  }
-  out.sort((a, b) => b.raw - a.raw);
-  return out.map(({ raw, ...c }) => c);
 }
 
 /** Приглушённый тон для отметок ЗАЯВКИ НА ГРАФИКЕ: цвет типа подмешивается к
