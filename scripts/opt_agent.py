@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import collections
+import hashlib
 import itertools
 import json
 import multiprocessing
@@ -291,6 +292,15 @@ def _write_token(tok: str) -> None:
             f.write(tok or "")
     except Exception:
         pass
+
+
+def _file_sha(path: str) -> str:
+    """Короткий отпечаток файла для heartbeat: чем именно считает этот агент."""
+    try:
+        with open(path, "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()[:12]
+    except Exception:
+        return ""
 
 
 def _patch_httpx_insecure() -> None:
@@ -594,7 +604,15 @@ class Agent:
         m = {"agent_id": self.agent_id, "version": AGENT_VERSION, "workers": self.workers,
              "priority": self._priority, "cpu_count": os.cpu_count() or 0,
              "psutil": psutil is not None, "activity": self._activity,
-             "leaders": self._leaders}
+             "leaders": self._leaders,
+             # КАКОЙ КОД тут реально исполняется. AGENT_VERSION — константа в ЭТОМ
+             # файле, и она не меняется, когда self-update привозит новую стратегию:
+             # 05.08 i9 месяц гонял устаревшую library.py, а heartbeat всё это время
+             # рапортовал ту же версию, и в лидерборд легли строки, где allow_long
+             # /allow_short не влияли ни на что. Отпечаток файла делает подмену
+             # видимой без гадания.
+             "lib_sha": _file_sha(os.path.join(REPO_ROOT, "trader", "lab", "strategies", "library.py")),
+             "applied_token": self.applied_token}
         if psutil is not None:
             try:
                 m["cpu_pct"] = round(psutil.cpu_percent(interval=None), 1)      # since last call (~hb period)
