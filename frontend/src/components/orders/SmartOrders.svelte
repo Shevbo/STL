@@ -51,6 +51,7 @@
       trigger: parseFloat(trigger) || 0,
       trailOffset: parseFloat(trailOffset) || 0,
       watchId: watchId.trim(), childPrice: parseFloat(childPrice) || 0,
+      slOffset: parseFloat(slOffset) || 0, tpOffset: parseFloat(tpOffset) || 0,
       price, pointValue,
     });
     if (!p.error && goodTillMs && goodTillMs <= Date.now()) {
@@ -348,12 +349,16 @@
               ○ ждёт пробоя уровня <b>{fmtPrice(o.trigger_price)}</b>,
               затем встанет в слежение и выкупит на откате {o.trail_offset} п.
             {/if}
-            {#if o.sl_offset || o.tp_offset}
-              <div class="so-c-sl">после входа автоматически встанут:
-                {#if o.sl_offset}<b>стоп {o.sl_offset} п.</b>{/if}{#if o.sl_offset && o.tp_offset} и {/if}{#if o.tp_offset}<b>тейк {o.tp_offset} п.</b>{/if}
-                от цены сделки{#if o.sl_offset && o.tp_offset}, в одной связке — сработает один, второй снимется{/if}</div>
-            {/if}
           </div>
+        {/if}
+        <!-- Защитная пара — у ЛЮБОГО типа (09.08.2026): любая умная заявка только
+             входит и после срабатывания забывает про позицию. Блок вынесен из
+             ветки следящей, иначе у остальных типов заказанные стоп и тейк
+             оставались бы невидимыми на карточке. -->
+        {#if o.sl_offset || o.tp_offset}
+          <div class="so-c-sl">после сделки автоматически встанут:
+            {#if o.sl_offset}<b>стоп {o.sl_offset} п.</b>{/if}{#if o.sl_offset && o.tp_offset} и {/if}{#if o.tp_offset}<b>тейк {o.tp_offset} п.</b>{/if}
+            от её цены{#if o.sl_offset && o.tp_offset}, в одной связке — сработает один, второй снимется{/if}</div>
         {/if}
         <div class="so-c-facts">
           <span>id {o.so_id}</span>

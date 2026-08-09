@@ -67,8 +67,8 @@ class SmartOrder:
     good_till_ms: int = 0        # 0 = no expiry
     status: str = "armed"        # armed | fired | cancelled | expired | error
     note: str = ""
-    sl_offset: float = 0.0       # trail/on_fill: защитный стоп в ПУНКТАХ после входа (0 = без стопа)
-    tp_offset: float = 0.0       # trail/on_fill: тейк в ПУНКТАХ доходного хода после входа (0 = без тейка)
+    sl_offset: float = 0.0       # ЛЮБОЙ тип: защитный стоп в ПУНКТАХ после входа (0 = без стопа)
+    tp_offset: float = 0.0       # ЛЮБОЙ тип: тейк в ПУНКТАХ доходного хода после входа (0 = без тейка)
     parent_id: str = ""          # у защитного стопа — so_id заявки, которая его породила
     peak: float = 0.0            # trail bookkeeping (best price since activation)
     activated: bool = False      # trail: activation level crossed
@@ -96,8 +96,11 @@ class SmartOrder:
             return "watch_client_id обязателен для on_fill"
         if self.sl_offset < 0 or self.tp_offset < 0:
             return "стоп и тейк в пунктах не могут быть отрицательными"
-        if (self.sl_offset > 0 or self.tp_offset > 0) and self.kind not in ("trail_tp", "on_fill"):
-            return "стоп и тейк после входа задаются только для trail_tp и on_fill"
+        # Защитная пара разрешена ЛЮБОМУ типу (09.08.2026): любая умная заявка
+        # только ВХОДИТ и после срабатывания забывает про позицию, поэтому «блоки
+        # SL и TP после сделки» нужны везде, а не только у следящей и зависимой.
+        # Рекурсии здесь нет по построению: сами защитные заявки создаёт
+        # `_protective`, offset'ов он им не ставит — значит внуков не будет.
         return None
 
 

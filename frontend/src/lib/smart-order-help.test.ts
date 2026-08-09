@@ -129,3 +129,38 @@ describe('codeSuggestions', () => {
     expect(codeSuggestions([], ['RIU6', 'BRU6'])).toEqual(['BRU6', 'RIU6']);
   });
 });
+
+describe('блоки «после сделки»', () => {
+  it('every kind offers the SL/TP-after-fill pair', async () => {
+    const { KINDS } = await import('./smart-order-help');
+    for (const k of KINDS) {
+      const keys = k.fields.map((f) => f.key);
+      expect(keys, k.id).toContain('sl_offset');
+      expect(keys, k.id).toContain('tp_offset');
+    }
+  });
+
+  it('preview names the extra orders that will be placed', async () => {
+    const { preview } = await import('./smart-order-help');
+    const p = {
+      kind: 'sl' as Kind, side: 'sell' as Side, qty: 1, code: 'RIU6',
+      trigger: 88000, trailOffset: 0, watchId: '', childPrice: 0, price: 88500,
+    };
+    expect(preview(p).sentence).not.toContain('после сделки');
+    const both = preview({ ...p, slOffset: 300, tpOffset: 500 }).sentence;
+    expect(both).toContain('стоп 300');
+    expect(both).toContain('тейк 500');
+    expect(both).toContain('связке');
+    const only = preview({ ...p, slOffset: 300 }).sentence;
+    expect(only).toContain('стоп 300');
+    expect(only).not.toContain('тейк');
+  });
+
+  it('kinds carry the new names', async () => {
+    const { KIND_BY_ID } = await import('./smart-order-help');
+    expect(KIND_BY_ID.sl.name).toBe('Условная');
+    expect(KIND_BY_ID.tp.name).toBe('Лимитная');
+    expect(KIND_BY_ID.trail_tp.name).toBe('Следящая');
+    expect(KIND_BY_ID.on_fill.name).toBe('Зависимая');
+  });
+});

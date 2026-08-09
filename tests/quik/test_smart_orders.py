@@ -268,8 +268,30 @@ def test_protective_sl_fires_like_a_normal_stop():
     assert len(acts) == 1 and isinstance(acts[0], Fire)
 
 
-def test_sl_offset_rejected_on_plain_stop():
-    assert so(kind="sl", side="sell", trigger_price=88000, sl_offset=100).validate()
+def test_after_fill_pair_allowed_on_every_kind():
+    """Раньше защитная пара разрешалась только следящей и зависимой. Любая умная
+    заявка только ВХОДИТ и после срабатывания забывает про позицию, поэтому
+    блоки «после сделки» нужны везде (09.08.2026)."""
+    assert so(kind="sl", side="sell", trigger_price=88000,
+              sl_offset=100, tp_offset=200).validate() is None
+    assert so(kind="tp", side="buy", trigger_price=88000,
+              sl_offset=100, tp_offset=200).validate() is None
+    # отрицательные по-прежнему запрещены
+    assert so(kind="sl", side="sell", trigger_price=88000, sl_offset=-1).validate()
+
+
+def test_conditional_kind_spawns_the_after_fill_pair():
+    """Условная (kind=sl) отработала -> из её цены рождаются стоп и тейк, как у
+    следящей: механика _protective от типа родителя не зависит."""
+    from trader.quik.smart_orders import protective_children
+    parent = so(kind="sl", side="buy", trigger_price=88000, qty=3,
+                sl_offset=300, tp_offset=500)
+    kids = protective_children(parent, entry_price=89000, now=NOW)
+    assert [(k.kind, k.side, k.trigger_price) for k in kids] == [
+        ("sl", "sell", 88700), ("tp", "sell", 89500)]
+    assert kids[0].oco_group == kids[1].oco_group != ""       # одна связка
+    # ВНУКОВ НЕТ: сами защитные заявки offset'ов не несут, рекурсия невозможна
+    assert all(protective_children(k, entry_price=89000, now=NOW) == [] for k in kids)
 
 
 # ---- цена сделки у сработавшей заявки ----
