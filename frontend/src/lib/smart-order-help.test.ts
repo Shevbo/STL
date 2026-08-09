@@ -4,7 +4,8 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { conditionText, preview, type Kind, type Side } from './smart-order-help';
+import { KIND_BY_ID, conditionText, preview, smartLegend, smartLevels,
+         type Kind, type Side } from './smart-order-help';
 
 const base = {
   qty: 1, code: 'RIU6', trigger: 0, trailOffset: 0, watchId: '',
@@ -268,5 +269,62 @@ describe('умные заявки не перекрывают график', () 
       const src = readFileSync(resolve(process.cwd(), f), 'utf8');
       expect(src, f).toContain('axisLabelVisible: !lv.dim');
     }
+  });
+});
+
+// ── Стоп и тейк «после сделки» на графике ────────────────────────────────────
+// Оператор выставляет их в форме и рискует по ним деньгами, а на графике их не
+// было вовсе. Уровни считаются однозначно, знаки сверены с движком
+// (trader/quik/smart_orders.py, _protective): стоп ПРОТИВ входа, тейк В ПОЛЬЗУ.
+describe('защитные уровни после входа', () => {
+  const base = { so_id: 'x', code: 'RIU6', qty: 5, sl_offset: 0, tp_offset: 0,
+                 trigger_price: 0, child_price: 0, trail_offset: 0, peak: 0, activated: false };
+  const at = (lv: any[], suffix: string) => lv.find((l) => l.key.endsWith(suffix));
+
+  it('покупка: стоп ниже входа, тейк выше', () => {
+    const lv = smartLevels({ ...base, kind: 'sl', side: 'buy',
+                             trigger_price: 89_000, sl_offset: 300, tp_offset: 500 });
+    expect(at(lv, ':sl')!.price).toBe(88_700);
+    expect(at(lv, ':tp')!.price).toBe(89_500);
+  });
+
+  it('продажа: зеркально — стоп выше входа, тейк ниже', () => {
+    const lv = smartLevels({ ...base, kind: 'sl', side: 'sell',
+                             trigger_price: 89_000, sl_offset: 300, tp_offset: 500 });
+    expect(at(lv, ':sl')!.price).toBe(89_300);
+    expect(at(lv, ':tp')!.price).toBe(88_500);
+  });
+
+  it('нулевой отступ уровня не даёт', () => {
+    const lv = smartLevels({ ...base, kind: 'tp', side: 'buy', trigger_price: 89_000 });
+    expect(lv.filter((l) => l.key.includes(':sl') || l.key.includes(':tp'))).toHaveLength(0);
+  });
+
+  it('следящая: до активации считаем от уровня активации, после — от уровня отката', () => {
+    const sleeping = smartLevels({ ...base, kind: 'trail_tp', side: 'sell',
+                                   trigger_price: 90_000, trail_offset: 200, sl_offset: 100 });
+    expect(at(sleeping, ':sl')!.price).toBe(90_100);
+    const awake = smartLevels({ ...base, kind: 'trail_tp', side: 'sell', activated: true,
+                                peak: 91_000, trail_offset: 200, sl_offset: 100 });
+    expect(at(awake, ':sl')!.price).toBe(90_800 + 100);   // откат 90 800, стоп над ним
+  });
+
+  it('это ВСПОМОГАТЕЛЬНЫЕ линии: цена ещё не факт, пока родитель не сработал', () => {
+    const lv = smartLevels({ ...base, kind: 'sl', side: 'buy',
+                             trigger_price: 89_000, sl_offset: 300 });
+    expect(at(lv, ':sl')!.dim).toBe(true);
+  });
+
+  it('цвет проекции равен цвету заявки, которой она станет', () => {
+    const lv = smartLevels({ ...base, kind: 'on_fill', side: 'buy',
+                             child_price: 89_000, sl_offset: 300, tp_offset: 500 });
+    expect(at(lv, ':sl')!.color).toBe(KIND_BY_ID.sl.color);
+    expect(at(lv, ':tp')!.color).toBe(KIND_BY_ID.tp.color);
+  });
+
+  it('легенда называет их один раз, а не по разу на заявку', () => {
+    const o = { ...base, kind: 'sl', side: 'buy', trigger_price: 89_000, sl_offset: 300 };
+    const leg = smartLegend([o, { ...o, so_id: 'y' }, { ...o, so_id: 'z' }]);
+    expect(leg.filter((l) => l.text.includes('после входа'))).toHaveLength(1);
   });
 });

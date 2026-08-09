@@ -363,8 +363,9 @@ export function smartLevels(
   // уровня — для легенды, подсказок и тестов. «5 к» = пять КОНТРАКТОВ: голое
   // число рядом с ценой читается как цена.
   const who = `${o.side === 'buy' ? '▲' : '▼'} ${o.qty} к`;
+  const out0 = protectiveLevels(o, who);
   if (o.kind === 'sl' || o.kind === 'tp') {
-    return [{ key: o.so_id, price: o.trigger_price, title: who }];
+    return [{ key: o.so_id, price: o.trigger_price, title: who }, ...out0];
   }
   if (o.kind === 'trail_tp') {
     const out: Array<{ key: string; price: number; title: string; dim?: boolean; color?: string }> = [];
@@ -381,10 +382,78 @@ export function smartLevels(
                  title: `${who} · откат ${fmtPts(o.trail_offset)}` });
       out.push({ key: o.so_id + ':peak', price: o.peak, title: `${who} · пик`, dim: true });
     }
-    return out;
+    return [...out, ...out0];
   }
   return o.child_price > 0
-    ? [{ key: o.so_id, price: o.child_price, title: who }] : [];
+    ? [{ key: o.so_id, price: o.child_price, title: who }, ...out0] : [];
+}
+
+/** Цена, от которой движок будет считать защитные заявки, когда родитель
+ *  сработает. Это ЕГО ЖЕ оценка: `_protective` в trader/quik/smart_orders.py
+ *  берёт цену дочерней заявки в момент срабатывания, а потом пересчитывает
+ *  уровни от РЕАЛЬНОЙ средней (`rebase_protective`). Значит нарисованный уровень
+ *  верен с точностью до проскальзывания — поэтому он и вспомогательный. */
+function entryEstimate(o: any): number {
+  if (o.kind === 'on_fill') return o.child_price || 0;
+  if (o.kind === 'trail_tp') {
+    if (o.activated && o.peak > 0) {
+      return o.side === 'sell' ? o.peak - o.trail_offset : o.peak + o.trail_offset;
+    }
+    return o.trigger_price || 0;
+  }
+  return o.trigger_price || 0;
+}
+
+/** Стоп и тейк, которые появятся ПОСЛЕ срабатывания заявки (блоки «после
+ *  сделки»). Оператор их выставил, деньгами рискует по ним же — а на графике их
+ *  не было вовсе, хотя уровни считаются однозначно.
+ *
+ *  Цвет берём у того типа, которым заявка СТАНЕТ (стоп — красный, тейк —
+ *  зелёный): нарисованная сейчас проекция и реальная заявка после срабатывания
+ *  обязаны выглядеть одинаково, иначе одно и то же читается как два разных.
+ *  Линия вспомогательная: цена ещё не факт. */
+export function protectiveLevels(
+  o: any, who: string,
+): Array<{ key: string; price: number; title: string; dim?: boolean; color?: string }> {
+  const entry = entryEstimate(o);
+  if (entry <= 0) return [];
+  const out: Array<{ key: string; price: number; title: string; dim?: boolean; color?: string }> = [];
+  const dir = o.side === 'buy' ? 1 : -1;      // сторона ВХОДА родителя
+  const add = (kind: 'sl' | 'tp', offset: number, word: string) => {
+    if (!(offset > 0)) return;
+    // Стоп против входа, тейк в сторону входа — знак ровно как в движке.
+    const price = entry + (kind === 'sl' ? -1 : 1) * offset * dir;
+    if (price > 0) {
+      out.push({ key: `${o.so_id}:${kind}`, price, dim: true,
+                 color: KIND_BY_ID[kind].color, title: `${who} · ${word} после входа` });
+    }
+  };
+  add('sl', Number(o.sl_offset || 0), 'стоп');
+  add('tp', Number(o.tp_offset || 0), 'тейк');
+  return out;
+}
+
+/** Легенда: что за линии сейчас на графике. ОДНА на оба графика — копия в
+ *  каждом компоненте означала бы две правды об одних и тех же уровнях. */
+export function smartLegend(
+  orders: any[],
+): Array<{ color: string; style: number; text: string }> {
+  const out: Array<{ color: string; style: number; text: string }> = [];
+  const seen = new Set<string>();
+  for (const o of orders) {
+    const m = KIND_BY_ID[o.kind];
+    if (m && !seen.has(o.kind)) { seen.add(o.kind); out.push({ color: m.color, style: m.lineStyle, text: m.legend }); }
+    for (const k of ['sl', 'tp'] as const) {
+      const off = Number((k === 'sl' ? o.sl_offset : o.tp_offset) || 0);
+      const tag = `after:${k}`;
+      if (off > 0 && !seen.has(tag)) {
+        seen.add(tag);
+        out.push({ color: KIND_BY_ID[k].color, style: 3,
+                   text: k === 'sl' ? 'стоп после входа (расчётный)' : 'тейк после входа (расчётный)' });
+      }
+    }
+  }
+  return out;
 }
 
 /** Приглушённый тон для отметок ЗАЯВКИ НА ГРАФИКЕ: цвет типа подмешивается к

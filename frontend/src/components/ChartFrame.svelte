@@ -10,7 +10,7 @@
   import { orderbookStore } from '$lib/stores/orderbook.svelte';
   import { mskTickFormatter, mskCrosshairFormatter } from '$lib/chart-time';
   import { smartOrdersStore } from '$lib/stores/smart-orders.svelte';
-  import { KIND_BY_ID, LABEL_TEXT_COLOR, smartLevels, softColor } from '$lib/smart-order-help';
+  import { KIND_BY_ID, LABEL_TEXT_COLOR, smartLegend, smartLevels, softColor } from '$lib/smart-order-help';
 
   let {
     symbol,
@@ -146,17 +146,7 @@
   // список стилей превращается в шум, который перестают читать.
   const smartOnChart = $derived(
     smartOrdersStore.armed.filter((o) => o.code === chartCode));
-  const legend = $derived.by(() => {
-    const seen = new Set<string>();
-    const out: Array<{ color: string; style: number; text: string }> = [];
-    for (const o of smartOnChart) {
-      if (seen.has(o.kind)) continue;
-      seen.add(o.kind);
-      const m = KIND_BY_ID[o.kind];
-      out.push({ color: m.color, style: m.lineStyle, text: m.legend });
-    }
-    return out;
-  });
+  const legend = $derived(smartLegend(smartOnChart));
 
   // Load REST history whenever the EFFECTIVE symbol or timeframe changes — including a
   // change driven by the `symbol` PROP (robot select / activeSymbol on the main screen),
@@ -350,8 +340,11 @@
         // Полупрозрачно: сплошная плашка поверх свечей прячет то, ради чего
         // график открыт. Вспомогательные (активация, пик) ещё бледнее.
         price: lv.price,
-        color: softColor(lv.color, lv.dim ? 0.62 : 0.45, lv.dim ? 0.7 : 0.85),
-        lineWidth: 1,
+        // Толще: на 1 px линия терялась среди свечей — оператор просил заметнее.
+        // Вспомогательные (активация, пик, расчётные стоп и тейк) остаются тоньше
+        // и точками, но уже читаются, а не угадываются.
+        color: softColor(lv.color, lv.dim ? 0.5 : 0.35, lv.dim ? 0.85 : 0.95),
+        lineWidth: lv.dim ? 1 : 2,
         lineStyle: lv.dim ? 1 : lv.style,
         // Подписи НА ХОЛСТЕ нет. lightweight-charts рисует title плашкой
         // ЦВЕТА ЛИНИИ прямо поверх свечей, у правого края, и семь взведённых
@@ -637,7 +630,7 @@
   .so-legend {
     flex-shrink: 0; display: flex; flex-wrap: wrap; gap: 4px 14px;
     padding: 3px 8px; background: #0f0f1e; border-top: 1px solid #1a1a2e;
-    font-size: 10px; color: #8a90a8;
+    font-size: 12px; color: #9aa0b4;
   }
   .so-l { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
   .so-l svg { width: 22px; height: 8px; flex-shrink: 0; }
