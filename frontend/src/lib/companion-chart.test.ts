@@ -198,6 +198,17 @@ describe('мини-график робота', () => {
     expect(miniChart({ bars: bs, signal_known: true, want: 1 })).not.toContain('class="blk"');
   });
 
+  it('замерший график подписан, живой — нет', () => {
+    const nowS = Math.floor(Date.now() / 1000);
+    // свежая минута: подписи «замер» быть не должно
+    const live = miniChart({ bars: bars(30, 87000, nowS - 29 * 60), signal_known: true, want: 1 });
+    expect(live).not.toContain('frozen');
+    // хвост вчерашней сессии: замерший график неотличим от живого без подписи
+    const old = miniChart({ bars: bars(30, 87000, nowS - 8 * 3600), signal_known: true, want: 1 });
+    expect(old).toContain('class="frozen"');
+    expect(old).toMatch(/замер \d{2}:\d{2}/);
+  });
+
   // Две панели считают одни и те же деньги, и мобильная УЖЕ молча отставала от
   // Windows-панели. Сверяем не глазами, а побайтово на одних данных.
   it('мобильная панель рисует то же самое, что и Windows-панель', () => {

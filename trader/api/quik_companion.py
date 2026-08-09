@@ -267,6 +267,32 @@ async def _prev_close(symbol: str) -> float | None:
     return val
 
 
+def _live_bars(bars: list[dict], tape_last_ms: int | None) -> list[dict]:
+    """Только те минутки, в которые биржа ДЕЙСТВИТЕЛЬНО торговала.
+
+    Раннер строит бары из ленты, но когда лента молчит, он подхватывает
+    котировки-снимки и продолжает штамповать плоские минуты замершей ценой. За
+    ночь их набегает больше, чем окно графика, и виджет показывает ровную нитку
+    вместо последней живой сессии: график «идёт», хотя биржа стоит.
+
+    Правило: бар, который ОТКРЫЛСЯ позже последней реальной сделки, не рисуем.
+    Минута, внутри которой сделка была, остаётся.
+
+    Допуска здесь нет намеренно. Соблазн дать минуту «на дребезг» есть, но хвост
+    состоит только из ЗАКРЫТЫХ баров: если закрытая минута позже последней
+    сделки, значит сделок в ней не было вовсе — неважно, ночь это или тишина в
+    неликвиде посреди сессии. Такой бар нарисован не по рынку, а по замершей
+    котировке, и рисовать его нельзя ни в каком случае.
+
+    Момент последней сделки берём у агента (лента QUIK), а не у ISS: у ISS
+    задержка ~15 минут, и она срезала бы четверть часа живых баров.
+    """
+    if not tape_last_ms:
+        return bars           # нечем судить — отдаём как есть, молча не режем
+    cutoff = int(tape_last_ms) // 1000
+    return [b for b in bars if int(b.get("t") or 0) <= cutoff]
+
+
 def _merge_fills(fills: list[dict], lo_ms: int) -> list[dict]:
     """Филлы одного ордера — один маркер на графике.
 
@@ -436,6 +462,16 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
     health = status.get("health") or {}
     money = health.get("money") or {}
     received_ms = status.get("_received_at_ms")
+    # Момент ПОСЛЕДНЕЙ РЕАЛЬНОЙ СДЕЛКИ на бирже, по ленте самого агента.
+    # Нужен и часам биржи, и мини-графику: раннер продолжает лепить минутки из
+    # замерших котировок и после закрытия, а рисовать их нельзя (см. _live_bars).
+    tape_last_ms = None
+    _lag = health.get("exchange_lag_ms")
+    if received_ms and _lag is not None:
+        try:
+            tape_last_ms = int(received_ms) - int(_lag)
+        except (TypeError, ValueError):
+            tape_last_ms = None
 
     # 1. Account state, straight from the QUIK money row.
     account = {
@@ -627,8 +663,22 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
         # них — просто график инструмента, который в панели уже есть.
         chart = None
         if cur_mode == "real":
-            tail = [b for b in (rob.get("bars_tail") or [])
-                    if b.get("t") and b.get("c")][-bars_n:]
+            # Режем НЕторговые минуты ДО обрезки по плотности: иначе ночная
+            # нитка съест окно и до живых баров дело не дойдёт.
+            tail = _live_bars([b for b in (rob.get("bars_tail") or [])
+                               if b.get("t") and b.get("c")], tape_last_ms)[-bars_n:]
+            # ЗАМЕРЕТЬ, А НЕ ИСЧЕЗНУТЬ. Раннер шлёт последние 200 баров, и за
+            # три с половиной часа закрытой биржи живые минуты вытесняются
+            # синтетикой полностью — после обрезки не остаётся ничего, и виджет
+            # пропал бы вместо того, чтобы стоять на последней сессии. Держим
+            # последнюю живую картинку в памяти процесса и показываем её.
+            frozen = getattr(request.app.state, "companion_bars", None)
+            if frozen is None:
+                frozen = request.app.state.companion_bars = {}
+            if tail:
+                frozen[rid] = tail
+            else:
+                tail = (frozen.get(rid) or [])[-bars_n:]
             if tail:
                 lo_ms = int(tail[0]["t"]) * 1000
                 # Сигнал стратегии ПРЯМО СЕЙЧАС: want 1/-1/0. Нужен, чтобы пустой
@@ -762,12 +812,8 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
     # У агента та же лента в реальном времени: exchange_lag_ms — насколько
     # последняя сделка ленты отстала от момента снимка.
     market_out = market.to_dict() if hasattr(market, "to_dict") else dict(market or {})
-    _lag = health.get("exchange_lag_ms")
-    if received_ms and _lag is not None:
-        try:
-            market_out["tape_last_ms"] = int(received_ms) - int(_lag)
-        except (TypeError, ValueError):
-            pass
+    if tape_last_ms:
+        market_out["tape_last_ms"] = tape_last_ms
 
     # 4.1 runner + Lua
     watch_runner = _watch_runner(health, received_ms, now_ms, market)

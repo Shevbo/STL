@@ -193,6 +193,7 @@
   .mstat .s.nil { color: var(--faint); font-weight: 400; }
   /* Фильтр, который держит вход, — не ошибка и не норма: отдельный цвет. */
   .mstat .blk { color: #a4681c; border-bottom: 1px dotted currentColor; }
+  .mstat .frozen { color: var(--faint); margin-left: auto; }
   /* Плотность: 30 баров — получас крупно, 200 — три с половиной часа штрихами. */
   .dens { display: inline-flex; gap: 4px; text-transform: none; letter-spacing: 0; }
   .dens b { font-weight: 400; color: var(--faint); cursor: pointer; font-size: 10px; }
@@ -508,7 +509,7 @@ const r1 = (v) => Math.round(v * 10) / 10;
 
 function miniChart(ch) {
   if (!ch || !ch.bars || !ch.bars.length) {
-    return '<div class="chart-empty">баров нет: раннер ещё не собрал ленту</div>';
+    return '<div class="chart-empty">живых баров нет: биржа стоит либо раннер ещё не собрал ленту</div>';
   }
   const bars = ch.bars.slice(-density());
   let hi = -Infinity, lo = Infinity;
@@ -586,6 +587,15 @@ function chartStatus(ch) {
     : ch.want === 0 ? ['выйти в кэш', '']
     : ['сигнала нет', 'nil'];
   let out = `<span class="s ${sig[1]}">${esc(sig[0])}</span>`;
+  // Замерший график неотличим от живого — а это ровно тот случай, когда
+  // нарисованное выглядит правдой. Свежую минуту не подписываем, старую —
+  // обязательно, вместе со временем последней торговавшей минуты.
+  const lastT = ch.bars && ch.bars.length ? ch.bars[ch.bars.length - 1].t : 0;
+  if (lastT && Date.now() / 1000 - lastT > 150) {
+    const hm = new Date(lastT * 1000).toLocaleTimeString('ru-RU',
+      { timeZone: 'Europe/Moscow', hour: '2-digit', minute: '2-digit' });
+    out += `<span class="frozen" title="биржа не торгует: график стоит на последней минуте, в которой были сделки">замер ${esc(hm)}</span>`;
+  }
   if (ch.blocked_tag) {
     out += `<span class="blk" title="${esc(ch.blocked)}">${esc(ch.blocked_tag)}</span>`;
   }

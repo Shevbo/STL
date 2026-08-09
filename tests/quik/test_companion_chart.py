@@ -68,3 +68,62 @@ def test_fill_without_order_id_is_not_merged_with_a_stranger():
 
 def test_empty_input_is_empty_output():
     assert _merge_fills([], lo_ms=0) == []
+
+
+# ── Мини-график замирает вместе с биржей ─────────────────────────────────────
+# Раннер строит бары из ленты, но когда лента молчит, подхватывает
+# котировки-снимки и штампует плоские минуты замершей ценой. За ночь их набегает
+# больше окна графика, и виджет показывает ровную нитку вместо последней живой
+# сессии — график «идёт», хотя биржа стоит.
+
+from trader.api.quik_companion import _live_bars
+
+
+def _bars(times):
+    return [{"t": t, "o": 1, "h": 1, "l": 1, "c": 1} for t in times]
+
+
+MIN = 60
+
+
+def test_bars_after_the_last_trade_are_not_drawn():
+    # последняя сделка в 10:00:30, дальше биржа стоит
+    last = 10 * 3600 + 30
+    got = _live_bars(_bars([9 * 3600, 9 * 3600 + MIN, 10 * 3600,
+                            10 * 3600 + MIN, 10 * 3600 + 2 * MIN]), last * 1000)
+    assert [b["t"] for b in got] == [9 * 3600, 9 * 3600 + MIN, 10 * 3600], \
+        "минута со сделкой остаётся, ночные — нет"
+
+
+def test_during_trading_nothing_is_cut():
+    """Сделка секунду назад: свежий бар обязан остаться, иначе график мигает."""
+    now = 12 * 3600
+    got = _live_bars(_bars([now - 2 * MIN, now - MIN, now]), (now + 1) * 1000)
+    assert len(got) == 3
+
+
+def test_a_silent_minute_mid_session_is_synthetic_too():
+    """Закрытая минута без единой сделки нарисована по замершей котировке.
+
+    Соблазн дать допуск «на дребезг» есть, но хвост состоит только из ЗАКРЫТЫХ
+    баров: раз минута закрылась позже последней сделки, сделок в ней не было —
+    неважно, ночь это или тишина в неликвиде.
+    """
+    now = 12 * 3600
+    got = _live_bars(_bars([now - MIN, now]), (now - 30) * 1000)
+    assert [b["t"] for b in got] == [now - MIN]
+
+
+def test_without_a_known_last_trade_we_do_not_cut_silently():
+    bars = _bars([1, 2, 3])
+    assert _live_bars(bars, None) == bars
+    assert _live_bars(bars, 0) == bars
+
+
+def test_whole_night_of_synthetic_bars_collapses_to_the_live_session():
+    close = 23 * 3600 + 49 * MIN + 55          # последняя сделка вчера
+    session = [close - i * MIN for i in range(29, -1, -1)]
+    night = [close + i * MIN for i in range(1, 500)]   # 8 часов пустых минут
+    got = _live_bars(_bars(session + night), close * 1000)
+    assert len(got) == 30, "остаётся ровно последняя живая сессия"
+    assert got[-1]["t"] <= close
