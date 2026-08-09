@@ -10,8 +10,8 @@
     "semantic_hash": ""
   },
   ".remember/tmp/last-save.json": {
-    "mtime": 1786261238.3132424,
-    "ast_hash": "58eea62184d6031700c1167128e63247",
+    "mtime": 1786262367.6457644,
+    "ast_hash": "444ca188863e405647c799302f976433",
     "semantic_hash": ""
   },
   ".vscode/setting.json": {
@@ -65,8 +65,8 @@
     "semantic_hash": "f51680fc0a831341efe804b962b212a3"
   },
   "frontend/src/components/ChartFrame.svelte": {
-    "mtime": 1785078684.6711657,
-    "ast_hash": "9d1f9eae389c0e5f9064b5b2755cb070",
+    "mtime": 1786262324.4249256,
+    "ast_hash": "f7a9562379f6855c86dc858c3309440a",
     "semantic_hash": ""
   },
   "frontend/src/components/InstrumentPanel.svelte": {
@@ -1170,8 +1170,8 @@
     "semantic_hash": ""
   },
   ".remember/now.md": {
-    "mtime": 1786261281.2148023,
-    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "mtime": 1786262367.4527364,
+    "ast_hash": "2327a9aab039c25fb8bcad83f917945c",
     "semantic_hash": ""
   },
   ".remember/recent.md": {
@@ -1545,8 +1545,8 @@
     "semantic_hash": ""
   },
   "frontend/src/components/ChartsGrid.svelte": {
-    "mtime": 1782825927.9812062,
-    "ast_hash": "2f7227dde0c9ae12287024196f787822",
+    "mtime": 1786262398.6545424,
+    "ast_hash": "f481c5e54d574d6ed02151c0b77670d3",
     "semantic_hash": ""
   },
   "frontend/src/components/ExchangeInterface.svelte": {
@@ -1555,8 +1555,8 @@
     "semantic_hash": ""
   },
   "frontend/src/components/MiniChart.svelte": {
-    "mtime": 1782998292.2438374,
-    "ast_hash": "252c58ba9b6d845947c24466645d20c5",
+    "mtime": 1786262353.0961695,
+    "ast_hash": "65ef74fa7ae853cc77a190160ea55859",
     "semantic_hash": ""
   },
   "frontend/src/components/OrderViz.svelte": {
@@ -3185,13 +3185,13 @@
     "semantic_hash": ""
   },
   "frontend/src/lib/smart-order-help.test.ts": {
-    "mtime": 1786261299.2068405,
-    "ast_hash": "291cb15c648631f4f591ebfd7ba91a0f",
+    "mtime": 1786262417.3146799,
+    "ast_hash": "7676396eb4c48a562ee17702c0d554cc",
     "semantic_hash": ""
   },
   "frontend/src/lib/smart-order-help.ts": {
-    "mtime": 1786261224.1231003,
-    "ast_hash": "d9a32b76771a4ed33f22c57c020501e9",
+    "mtime": 1786262289.976653,
+    "ast_hash": "437db0dcee3a892f6abf0179a497f4ce",
     "semantic_hash": ""
   },
   "frontend/src/lib/stores/smart-orders.svelte.ts": {
