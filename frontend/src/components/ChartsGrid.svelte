@@ -3,9 +3,11 @@
   currently IN A POSITION or has WORKING ORDERS (Finam open orders + QUIK orders). The
   set updates live as positions/orders change; an empty set shows a hint. -->
 <script lang="ts">
+  import { onDestroy } from 'svelte';
   import { positionsStore } from '$lib/stores/positions.svelte';
   import { ordersStore } from '$lib/stores/orders.svelte';
   import { instrumentStore } from '$lib/stores/instrument.svelte';
+  import { smartOrdersStore } from '$lib/stores/smart-orders.svelte';
   import MiniChart from './MiniChart.svelte';
 
   type Entry = {
@@ -31,6 +33,12 @@
     const t = setInterval(loadQuik, 4000);
     return () => clearInterval(t);
   });
+
+  // Книгу умных заявок опрашиваем ЗДЕСЬ, один раз на всю сетку (у стора общий
+  // таймер со счётчиком подписчиков). Подписка в каждом MiniChart дала бы N
+  // подписок на один и тот же опрос.
+  const unsubSmart = smartOrdersStore.subscribe(2000);
+  onDestroy(unsubSmart);
 
   function tickerOf(symbol: string): string {
     const found = instrumentStore.list.find((i) => i.symbol === symbol);
@@ -70,6 +78,23 @@
       else map.set(symbol, { symbol, label: tickerOf(symbol), badge: 'QUIK заяв.', badgeKind: 'neutral' });
     }
 
+    // Умные заявки — ЧЕТВЁРТЫЙ источник. Взведённая умная заявка не создаёт
+    // работающего ордера на бирже, пока не сработает, поэтому по трём источникам
+    // выше её инструмент не попадал сюда вовсе: при семи взведённых заявках экран
+    // писал «нет открытых позиций и активных заявок» (09.08.2026). Уровни рисует
+    // сам MiniChart.
+    const smartCount = new Map<string, number>();
+    for (const o of smartOrdersStore.armed) {
+      if (!o.code) continue;
+      const symbol = o.code.includes('@') ? o.code : `${o.code}@RTSX`;
+      smartCount.set(symbol, (smartCount.get(symbol) ?? 0) + 1);
+    }
+    for (const [symbol, n] of smartCount) {
+      const e = map.get(symbol);
+      if (e) e.badge += ` · ${n} умных`;
+      else map.set(symbol, { symbol, label: tickerOf(symbol), badge: `${n} умных`, badgeKind: 'neutral' });
+    }
+
     return [...map.values()];
   });
 </script>
@@ -80,7 +105,7 @@
     <span class="gf-count">{entries.length}</span>
   </div>
   {#if !entries.length}
-    <div class="gf-empty">Нет открытых позиций и активных заявок.</div>
+    <div class="gf-empty">Нет открытых позиций, активных и умных заявок.</div>
   {:else}
     <div class="gf-grid">
       {#each entries as e (e.symbol)}

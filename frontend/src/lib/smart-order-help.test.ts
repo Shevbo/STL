@@ -164,3 +164,44 @@ describe('блоки «после сделки»', () => {
     expect(KIND_BY_ID.on_fill.name).toBe('Зависимая');
   });
 });
+
+describe('smartLevels — уровни на графике', () => {
+  const base = {
+    so_id: 'x1', code: 'RIU6', side: 'sell' as Side, qty: 5, trigger_price: 90590,
+    trail_offset: 90, peak: 0, activated: false, child_price: 0,
+  };
+
+  it('condition/limit kinds draw one level at the trigger', async () => {
+    const { smartLevels } = await import('./smart-order-help');
+    const [lv] = smartLevels({ ...base, kind: 'sl' });
+    expect(lv.price).toBe(90590);
+    expect(lv.title).toContain('УСЛ');
+    expect(lv.title).toContain('ПРОДАЖА 5');
+  });
+
+  it('trailing shows the activation level while asleep', async () => {
+    const { smartLevels } = await import('./smart-order-help');
+    const lines = smartLevels({ ...base, kind: 'trail_tp' });
+    expect(lines).toHaveLength(1);
+    expect(lines[0].price).toBe(90590);
+    expect(lines[0].dim).toBe(true);        // вспомогательная, не рабочая
+  });
+
+  it('trailing shows the live exit level and the peak once active', async () => {
+    const { smartLevels, TRAIL_ACTIVE_COLOR } = await import('./smart-order-help');
+    const lines = smartLevels({ ...base, kind: 'trail_tp', activated: true, peak: 91000 });
+    const stop = lines.find((l) => l.key.endsWith(':stop'));
+    const peak = lines.find((l) => l.key.endsWith(':peak'));
+    expect(stop?.price).toBe(90910);        // продажа: пик 91000 − откат 90
+    expect(stop?.color).toBe(TRAIL_ACTIVE_COLOR);
+    expect(peak?.price).toBe(91000);
+    expect(peak?.dim).toBe(true);
+  });
+
+  it('dependent kind draws nothing without an explicit child price', async () => {
+    const { smartLevels } = await import('./smart-order-help');
+    expect(smartLevels({ ...base, kind: 'on_fill' })).toEqual([]);
+    const [lv] = smartLevels({ ...base, kind: 'on_fill', child_price: 88000 });
+    expect(lv.price).toBe(88000);
+  });
+});

@@ -7,6 +7,8 @@
   import { onMount, onDestroy } from 'svelte';
   import { fetchWithAuth } from '$lib/fetch-auth';
   import { quotesStore } from '$lib/stores/quotes.svelte';
+  import { smartOrdersStore } from '$lib/stores/smart-orders.svelte';
+  import { KIND_BY_ID, smartLevels } from '$lib/smart-order-help';
   import { mskTickFormatter, mskCrosshairFormatter } from '$lib/chart-time';
 
   let {
@@ -41,6 +43,15 @@
   let lastClose = $state<number | null>(null);
 
   let quote = $derived(quotesStore.get(symbol));
+
+  // Умные заявки этого инструмента. Мини-график их не знал вовсе, и фрейм
+  // «Позиции и заявки» показывал пустоту при семи взведённых заявках
+  // (09.08.2026). Уровни и подписи считает ОБЩАЯ smartLevels — та же, что у
+  // большого графика: две копии означали бы две правды об одних деньгах.
+  const code = $derived((symbol || '').split('@')[0]);
+  const smartHere = $derived(smartOrdersStore.armed.filter((o) => o.code === code));
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const smartLines = new Map<string, any>();
 
   async function loadHistory(attempt = 0) {
     loading = true; failed = false;
@@ -81,6 +92,32 @@
       high: Math.max(last.high, price), low: Math.min(last.low, price), close: price,
     });
     lastClose = price;
+  });
+
+  // Линии умных заявок. Двигаем существующую через applyOptions, а не
+  // пересоздаём: у следящей уровень ползёт за пиком каждую секунду, и
+  // пересоздание давало бы мигание.
+  $effect(() => {
+    if (!series) return;
+    const want = new Map<string, { price: number; title: string; color: string; style: number; dim?: boolean }>();
+    for (const o of smartHere) {
+      const m = KIND_BY_ID[o.kind];
+      for (const lv of smartLevels(o)) {
+        if (lv.price > 0) want.set(lv.key, { ...lv, color: lv.color ?? m.color, style: m.lineStyle });
+      }
+    }
+    for (const [key, line] of smartLines) {
+      if (!want.has(key)) { series.removePriceLine(line); smartLines.delete(key); }
+    }
+    for (const [key, lv] of want) {
+      const opts = {
+        price: lv.price, color: lv.color, lineWidth: lv.dim ? 1 : 2,
+        lineStyle: lv.dim ? 1 : lv.style, axisLabelVisible: true, title: lv.title,
+      };
+      const existing = smartLines.get(key);
+      if (existing) existing.applyOptions(opts);
+      else smartLines.set(key, series.createPriceLine(opts));
+    }
   });
 
   onMount(async () => {

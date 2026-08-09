@@ -126,6 +126,10 @@ export const KIND_BY_ID: Record<Kind, KindMeta> =
 /** Цвет сработавшей заявки: тот же тон, но линия сплошная и приглушённая. */
 export const FIRED_COLOR = '#9aa0b4';
 
+/** Следящая в АКТИВНОЙ фазе: рабочий уровень выхода ведут отдельным тоном,
+ *  чтобы он не сливался с дремлющим уровнем активации того же цвета. */
+export const TRAIL_ACTIVE_COLOR = '#b98cff';
+
 export const STATUS_RU: Record<string, string> = {
   armed: 'взведена',
   fired: 'сработала',
@@ -338,4 +342,39 @@ export function codeSuggestions(orders: Array<{ code?: string }>, feedCodes: str
   }
   const frequent = [...freq.entries()].sort((a, b) => b[1] - a[1]).map(([c]) => c);
   return [...frequent, ...feedCodes.filter((c) => c && !freq.has(c)).sort()];
+}
+
+/** Ценовые линии умной заявки на графике: что рисуем и как подписываем.
+ *
+ *  Жила внутри ChartFrame, но линии нужны И большому графику, И мини-графикам
+ *  фрейма «Позиции и заявки» (09.08.2026: там умных заявок не было видно вовсе).
+ *  Копия означала бы две разные правды об одних и тех же деньгах, поэтому
+ *  функция переехала сюда — туда же, где цвета, стили и легенда.
+ *
+ *  Цвет по умолчанию берётся из KIND_BY_ID[kind].color; `dim` — вспомогательная
+ *  линия (пик, уровень активации), она тоньше и не спорит с рабочей. */
+export function smartLevels(
+  o: any,
+): Array<{ key: string; price: number; title: string; dim?: boolean; color?: string }> {
+  const m = KIND_BY_ID[o.kind as Kind];
+  const who = `${o.side === 'buy' ? 'ПОКУПКА' : 'ПРОДАЖА'} ${o.qty}`;
+  if (o.kind === 'sl' || o.kind === 'tp') {
+    return [{ key: o.so_id, price: o.trigger_price, title: `${m.short} ${who}` }];
+  }
+  if (o.kind === 'trail_tp') {
+    const out: Array<{ key: string; price: number; title: string; dim?: boolean; color?: string }> = [];
+    if (!o.activated && o.trigger_price > 0) {
+      out.push({ key: o.so_id + ':act', price: o.trigger_price,
+                 title: `${m.short} активация`, dim: true });
+    }
+    if (o.activated && o.peak > 0) {
+      const stop = o.side === 'sell' ? o.peak - o.trail_offset : o.peak + o.trail_offset;
+      out.push({ key: o.so_id + ':stop', price: stop, color: TRAIL_ACTIVE_COLOR,
+                 title: `${m.short} ${who} · слежение · откат ${fmtPts(o.trail_offset)}` });
+      out.push({ key: o.so_id + ':peak', price: o.peak, title: `${m.short} пик`, dim: true });
+    }
+    return out;
+  }
+  return o.child_price > 0
+    ? [{ key: o.so_id, price: o.child_price, title: `${m.short} ${who}` }] : [];
 }

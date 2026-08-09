@@ -9,8 +9,8 @@
   import { instrumentStore } from '$lib/stores/instrument.svelte';
   import { orderbookStore } from '$lib/stores/orderbook.svelte';
   import { mskTickFormatter, mskCrosshairFormatter } from '$lib/chart-time';
-  import { smartOrdersStore, type SmartOrder } from '$lib/stores/smart-orders.svelte';
-  import { KIND_BY_ID, fmtPts } from '$lib/smart-order-help';
+  import { smartOrdersStore } from '$lib/stores/smart-orders.svelte';
+  import { KIND_BY_ID, smartLevels } from '$lib/smart-order-help';
 
   let {
     symbol,
@@ -323,29 +323,8 @@
   // пика, который сторож подтягивает за ценой, поэтому линия ползёт сама — это и
   // есть анимация. Пересоздавать линию нельзя, иначе она будет мигать: двигаем
   // существующую через applyOptions.
-  function smartLevels(o: SmartOrder): Array<{ key: string; price: number; title: string; dim?: boolean; color?: string }> {
-    const m = KIND_BY_ID[o.kind];
-    const who = `${o.side === 'buy' ? 'ПОКУПКА' : 'ПРОДАЖА'} ${o.qty}`;
-    if (o.kind === 'sl' || o.kind === 'tp') {
-      return [{ key: o.so_id, price: o.trigger_price, title: `${m.short} ${who}` }];
-    }
-    if (o.kind === 'trail_tp') {
-      const out = [];
-      if (!o.activated && o.trigger_price > 0) {
-        out.push({ key: o.so_id + ':act', price: o.trigger_price,
-                   title: `${m.short} активация`, dim: true });
-      }
-      if (o.activated && o.peak > 0) {
-        const stop = o.side === 'sell' ? o.peak - o.trail_offset : o.peak + o.trail_offset;
-        out.push({ key: o.so_id + ':stop', price: stop, color: '#b98cff',
-                   title: `${m.short} ${who} · слежение · откат ${fmtPts(o.trail_offset)}` });
-        out.push({ key: o.so_id + ':peak', price: o.peak, title: `${m.short} пик`, dim: true });
-      }
-      return out;
-    }
-    return o.child_price > 0
-      ? [{ key: o.so_id, price: o.child_price, title: `${m.short} ${who}` }] : [];
-  }
+  // smartLevels переехала в $lib/smart-order-help (её делят большой график и
+  // мини-графики фрейма «Позиции и заявки»).
 
   $effect(() => {
     if (!tvCandle) return;
