@@ -79,6 +79,9 @@
   let saved = loadSizes();
   let leftW = $state(saved.leftW || 200);
   let rightW = $state(saved.rightW || 190);
+  // Потолок высоты нижних фреймов. 700 упирались мгновенно на большом экране,
+  // а страница и так прокручивается.
+  const LAB_MAX = 1600;
   let labH = $state(saved.labH || 340);
   let posH = $state(saved.posH || 180);
   let bookW = $state(saved.bookW || 220);
@@ -110,7 +113,11 @@
       case 'right': rightW = clamp(dragStart.val - dx, 130, 420); break;
       case 'book': bookW = clamp(dragStart.val - dx, 140, 500); break;
       case 'pos': posH = clamp(dragStart.val - dy, 80, 400); break;
-      case 'lab': labH = clamp(dragStart.val - dy, 120, 700); break;
+      case 'lab': labH = clamp(dragStart.val - dy, 120, LAB_MAX); break;
+      // Нижний край: тянешь ВНИЗ — фрейм растёт. Именно так оператор и описал
+      // жест («встаёшь на линию под легендой, тянешь вниз»), а у фреймов QUIK
+      // верхней ручки не было вовсе — их высоту нельзя было менять никак.
+      case 'labBottom': labH = clamp(dragStart.val + dy, 120, LAB_MAX); break;
       case 'leftSplit': {
         const el = document.querySelector('.left-col') as HTMLElement | null;
         if (!el) break;
@@ -413,15 +420,29 @@
     <div class="quik-tables-wrap" style="height:{labH}px">
       <QuikTables />
     </div>
+    <div class="dh dh-h" title="Высота фрейма: потяните вниз — выше"
+         onpointerdown={(e) => onPointerDown('labBottom', e, labH)}>
+      <div class="dh-dot"></div>
+    </div>
   {/if}
   {#if showQuikOrders}
     <div class="quik-tables-wrap" style="height:{labH}px">
       <OrdersFrame symbol={effectiveSymbol} />
     </div>
+    <!-- Ручка ПОД фреймом: у фреймов QUIK её не было совсем, высота была
+         намертво общей с панелью LAB и менялась только оттуда. -->
+    <div class="dh dh-h" title="Высота фрейма: потяните вниз — выше"
+         onpointerdown={(e) => onPointerDown('labBottom', e, labH)}>
+      <div class="dh-dot"></div>
+    </div>
   {/if}
   {#if showEquity}
     <div class="quik-tables-wrap" style="height:{labH}px">
       <EquityChart />
+    </div>
+    <div class="dh dh-h" title="Высота фрейма: потяните вниз — выше"
+         onpointerdown={(e) => onPointerDown('labBottom', e, labH)}>
+      <div class="dh-dot"></div>
     </div>
   {/if}
   <!-- OrderViz: slim auto-frame (~1/8 height). Self-shows when there is >=1 active
