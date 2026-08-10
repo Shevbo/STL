@@ -51,11 +51,23 @@
     font-variant-numeric: tabular-nums;
     letter-spacing: .01em;
     -webkit-font-smoothing: antialiased;
-    overflow: hidden;
     cursor: default;
     user-select: none;
   }
-  body { padding: 8px var(--pad) 10px; }
+  /* На большом масштабе содержимое перестаёт влезать в рабочую область экрана:
+     Go зажимает высоту окна по ней, и всё, что ниже, раньше просто ОБРЕЗАЛОСЬ.
+     Теперь прокрутка — ничего не теряется. По горизонтали прокрутки нет: ширину
+     задаёт сама панель. */
+  html { overflow: hidden; }
+  body { overflow-x: hidden; overflow-y: auto; }
+  /* Паддинг на обёртке, а не на body: высота меряется по обёртке, и отступы
+     обязаны попасть в тот же рект. */
+  #panel { padding: 8px var(--pad) 10px; }
+  /* Полоса прокрутки узкая и в тон панели: широкая системная съедала бы ширину,
+     ради которой масштаб и включают. */
+  body::-webkit-scrollbar { width: 6px; }
+  body::-webkit-scrollbar-thumb { background: var(--rule); border-radius: 3px; }
+  body::-webkit-scrollbar-track { background: transparent; }
 
   /* Шапка: имя, свежесть, спрятать, выход. */
   .top { display: flex; align-items: baseline; gap: 7px; margin-bottom: 6px; }
@@ -307,6 +319,11 @@
 </style>
 </head>
 <body>
+<!-- Всё содержимое в обёртке: по ней меряется высота окна. Мерить body нельзя —
+     когда содержимое перестаёт влезать в экран, body становится прокруткой и
+     его рект возвращает ВИДИМУЮ часть, а не полную: панель замирала бы на
+     обрезанной высоте и больше не росла. -->
+<div id="panel">
 <div class="top">
   <a class="brand" id="brand" href="https://stl.shectory.ru/" data-ext
      title="Открыть STL в браузере">STL</a>
@@ -318,6 +335,7 @@
   <span class="btn quit" id="quit" title="Закрыть приложение">⏻</span>
 </div>
 <div id="body"></div>
+</div>
 
 <script>
   // Кассета: катушки крутятся, пока робот работает, и замирают на паузе. Заменяет
@@ -1079,8 +1097,12 @@ function stepSize(d) {
 }
 
 function fitWindow() {
-  const h = Math.ceil(document.body.getBoundingClientRect().height) + 10;
-  if (h === lastH) return;
+  // Высота ОБЁРТКИ, а не body: body при нехватке места становится прокруткой и
+  // отдаёт видимую часть. Рект уже с учётом zoom — Chromium масштабирует
+  // getBoundingClientRect, поэтому отдельный множитель не нужен.
+  const el = $('panel');
+  const h = Math.ceil((el ? el.getBoundingClientRect().height : 0)) + 4;
+  if (!h || h === lastH) return;
   lastH = h;
   shell('/height?h=' + h);
 }

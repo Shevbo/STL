@@ -306,3 +306,28 @@ describe('шаги масштаба компаньона', () => {
     expect(src).toMatch(/shell\('\/width\?w=' \+ w\)/);
   });
 });
+
+// ── Высота панели: ничего не обрезается ──────────────────────────────────────
+// На большом масштабе содержимое перестаёт влезать в рабочую область экрана, Go
+// зажимает высоту окна по ней, и всё ниже обрезалось наглухо (жалоба оператора
+// 10.08.2026). Плюс мерить body в этот момент нельзя: он становится прокруткой
+// и отдаёт ВИДИМУЮ часть, из-за чего панель замирает на обрезанной высоте.
+describe('высота компаньона', () => {
+  const src = readFileSync(resolve(process.cwd(), 'public/companion.html'), 'utf8');
+
+  it('высота меряется по обёртке содержимого, а не по body', () => {
+    expect(src).toMatch(/const el = \$\('panel'\)/);
+    expect(src).not.toMatch(/document\.body\.getBoundingClientRect\(\)\.height/);
+  });
+
+  it('обёртка есть в разметке и несёт отступы панели', () => {
+    expect(src).toMatch(/<div id="panel">/);
+    expect(src).toMatch(/#panel \{ padding:/);
+  });
+
+  it('не влезло — прокрутка, а не обрезка', () => {
+    expect(src).toMatch(/body \{ overflow-x: hidden; overflow-y: auto; \}/);
+    // горизонтальной прокрутки быть не должно: ширину задаёт сама панель
+    expect(src).not.toMatch(/body[^{]*\{[^}]*overflow-x: auto/);
+  });
+});
