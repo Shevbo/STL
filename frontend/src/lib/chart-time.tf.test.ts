@@ -40,3 +40,26 @@ describe('таймфреймы графиков', () => {
     expect(src).toMatch(/tfName\(tf\)/);
   });
 });
+
+// ── Ручка «тянуть высоту» обязана быть ВИДНА ────────────────────────────────
+// Штатный Splitter прозрачен до наведения (6 px), и оператор её просто не нашёл:
+// «как менять мышкой высоту графика?» — при том что функция уже работала.
+describe('ручка изменения высоты графиков', () => {
+  const src = readFileSync(resolve(process.cwd(), 'src/components/ChartsGrid.svelte'), 'utf8');
+
+  it('высота графиков задаётся переменной, а не константой в CSS', () => {
+    expect(src).toMatch(/--mini-h:\s*\{chartH\}px/);
+    expect(src).toMatch(/height: var\(--mini-h/);
+  });
+
+  it('ручка обёрнута в видимую полосу с подсказкой', () => {
+    expect(src).toMatch(/class="gf-resize"/);
+    expect(src).toMatch(/title="Потяните/);
+    // у полосы есть собственный фон: прозрачной, как сам Splitter, ей быть нельзя
+    expect(src).toMatch(/\.gf-resize \{[^}]*background:/);
+  });
+
+  it('текущее значение подписано — иначе непонятно, что тянешь', () => {
+    expect(src).toMatch(/\{chartH\} px/);
+  });
+});
