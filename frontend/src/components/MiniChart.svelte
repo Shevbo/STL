@@ -9,7 +9,7 @@
   import { quotesStore } from '$lib/stores/quotes.svelte';
   import { smartOrdersStore } from '$lib/stores/smart-orders.svelte';
   import { KIND_BY_ID, LABEL_TEXT_COLOR, shortCodes, smartLegend, smartLevels, softColor } from '$lib/smart-order-help';
-  import { mskTickFormatter, mskCrosshairFormatter } from '$lib/chart-time';
+  import { mskTickFormatter, mskCrosshairFormatter, tfName } from '$lib/chart-time';
 
   let {
     symbol,
@@ -25,10 +25,9 @@
     tf?: number;
   } = $props();
 
-  const TF_NAMES: Record<number, string> = {
-    1: 'TIME_FRAME_M1', 5: 'TIME_FRAME_M5', 15: 'TIME_FRAME_M15',
-    11: 'TIME_FRAME_M15', 12: 'TIME_FRAME_M15', 19: 'TIME_FRAME_D',
-  };
+  // Карта таймфреймов ОБЩАЯ с большим графиком ($lib/chart-time): здешняя копия
+  // была урезанной — не хватало M15/H1/H4, а 30м и 1ч сваливались в M15, и по
+  // одной и той же кнопке два экрана показывали разные свечи.
 
   let el: HTMLDivElement;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -59,9 +58,9 @@
   async function loadHistory(attempt = 0) {
     loading = true; failed = false;
     try {
-      const tfName = TF_NAMES[tf] ?? 'TIME_FRAME_M5';
+      const tfLabel = tfName(tf);
       const r = await fetchWithAuth(
-        `/api/v1/chart/bars?symbol=${encodeURIComponent(symbol)}&tf=${tfName}`,
+        `/api/v1/chart/bars?symbol=${encodeURIComponent(symbol)}&tf=${tfLabel}`,
       );
       const data = r.ok ? await r.json() : null;
       if (!Array.isArray(data) || !data.length) {

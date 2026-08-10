@@ -37,3 +37,39 @@ export function mskCrosshairFormatter(time: LwcTime): string {
   const d = toMskDate(time);
   return `${p2(d.getUTCDate())}.${p2(d.getUTCMonth() + 1)} ${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}`;
 }
+
+// ── Таймфреймы: ОДНА карта на все графики ───────────────────────────────────
+// Раньше их было две: полная в ChartFrame и урезанная копия в MiniChart, где не
+// хватало M15/H1/H4, а 30м и 1ч молча сваливались в M15. Экраны показывали
+// РАЗНЫЕ свечи по одной и той же кнопке.
+//
+// Проверено вживую: Finam REST отдаёт M1/M5/M15/H1/H2/H4/D, но НЕ M30 (пустой
+// ответ), поэтому 30м честно резолвится в ближайший младший M15.
+export const TF_NAMES: Record<number, string> = {
+  1: 'TIME_FRAME_M1',
+  5: 'TIME_FRAME_M5',
+  9: 'TIME_FRAME_M15',
+  11: 'TIME_FRAME_M15',   // 30м: своего кадра у Finam REST нет
+  12: 'TIME_FRAME_H1',
+  13: 'TIME_FRAME_H2',
+  15: 'TIME_FRAME_H4',
+  17: 'TIME_FRAME_D',
+  19: 'TIME_FRAME_D',
+  20: 'TIME_FRAME_W',
+  21: 'TIME_FRAME_MN',
+};
+
+/** Набор кнопок для компактных графиков (фрейм «Позиции и заявки»). */
+export const TF_BUTTONS: { label: string; value: number }[] = [
+  { label: '1м', value: 1 },
+  { label: '5м', value: 5 },
+  { label: '15м', value: 9 },
+  { label: '30м', value: 11 },
+  { label: '1ч', value: 12 },
+  { label: '4ч', value: 15 },
+  { label: '1д', value: 19 },
+];
+
+export function tfName(tf: number): string {
+  return TF_NAMES[tf] ?? 'TIME_FRAME_M5';
+}

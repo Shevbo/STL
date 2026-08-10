@@ -9,6 +9,8 @@
   import { instrumentStore } from '$lib/stores/instrument.svelte';
   import { smartOrdersStore } from '$lib/stores/smart-orders.svelte';
   import MiniChart from './MiniChart.svelte';
+  import Splitter from './lab/Splitter.svelte';
+  import { TF_BUTTONS } from '$lib/chart-time';
 
   type Entry = {
     symbol: string;
@@ -97,21 +99,54 @@
 
     return [...map.values()];
   });
+
+  // Высота графиков тянется мышкой за полосу под сеткой и запоминается.
+  // Границы: ниже 120 свечей не разобрать, выше 900 сетка перестаёт быть сеткой.
+  const CHART_MIN = 120, CHART_MAX = 900, CHART_DEF = 200;
+  let chartH = $state(CHART_DEF);
+
+  // Таймфрейм сетки. Запоминаем: оператор возвращается к тем же графикам, и
+  // сбрасывать его на 5 минут при каждом открытии фрейма незачем.
+  const TF_KEY = 'stl.ordersChartTf';
+  let tf = $state(read(TF_KEY, 5));
+  function setTf(v: number) {
+    tf = v;
+    try { localStorage.setItem(TF_KEY, String(v)); } catch { /* приватный режим */ }
+  }
+  function read(key: string, def: number): number {
+    try {
+      const v = Number(localStorage.getItem(key));
+      return TF_BUTTONS.some((b) => b.value === v) ? v : def;
+    } catch { return def; }
+  }
 </script>
 
 <div class="grid-frame">
   <div class="gf-head">
     <span class="gf-title">Графики: позиции и заявки</span>
     <span class="gf-count">{entries.length}</span>
+    <span class="gf-sp"></span>
+    <!-- Таймфрейм ОДИН на всю сетку: инструменты в ней сравнивают между собой,
+         и разные кадры у соседних графиков сравнение ломают. -->
+    <span class="gf-tf">
+      {#each TF_BUTTONS as b}
+        <button class:on={tf === b.value} onclick={() => setTf(b.value)}>{b.label}</button>
+      {/each}
+    </span>
   </div>
   {#if !entries.length}
     <div class="gf-empty">Нет открытых позиций, активных и умных заявок.</div>
   {:else}
-    <div class="gf-grid">
+    <div class="gf-grid" style="--mini-h: {chartH}px">
       {#each entries as e (e.symbol)}
-        <MiniChart symbol={e.symbol} label={e.label} badge={e.badge} badgeKind={e.badgeKind} />
+        <MiniChart symbol={e.symbol} label={e.label} badge={e.badge} badgeKind={e.badgeKind} {tf} />
       {/each}
     </div>
+    <!-- Тянущаяся высота графиков. Раньше 200 px были прибиты гвоздями: на
+         большом экране график оставался маркой, на маленьком занимал всё.
+         Двойной клик по полосе возвращает исходные 200. -->
+    <Splitter dir="h" bind:size={chartH} min={CHART_MIN} max={CHART_MAX} def={CHART_DEF}
+              storageKey="stl.ordersChartH" />
   {/if}
 </div>
 
@@ -127,10 +162,19 @@
     padding: 0 8px; font-size: 11px;
   }
   .gf-empty { padding: 16px; color: #667; font-size: 12px; }
+  .gf-sp { flex: 1; }
+  .gf-tf { display: flex; gap: 2px; }
+  .gf-tf button {
+    background: #1a1a2e; color: #9ab; border: 1px solid #2d2d4a; border-radius: 3px;
+    padding: 1px 7px; font-size: 11px; cursor: pointer; line-height: 1.6;
+  }
+  .gf-tf button:hover { color: #cde; }
+  .gf-tf button.on { background: #2d2d4a; color: #fff; border-color: #43c463; }
   .gf-grid {
     flex: 1; min-height: 0; overflow: auto;
     display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
     gap: 8px; padding: 8px;
   }
-  .gf-grid :global(.mini) { height: 200px; }
+  /* Высоту задаёт переменная: её крутит сплиттер под сеткой. */
+  .gf-grid :global(.mini) { height: var(--mini-h, 200px); }
 </style>
