@@ -9,7 +9,6 @@
   import { instrumentStore } from '$lib/stores/instrument.svelte';
   import { smartOrdersStore } from '$lib/stores/smart-orders.svelte';
   import MiniChart from './MiniChart.svelte';
-  import Splitter from './lab/Splitter.svelte';
   import { TF_BUTTONS } from '$lib/chart-time';
 
   type Entry = {
@@ -100,11 +99,6 @@
     return [...map.values()];
   });
 
-  // Высота графиков тянется мышкой за полосу под сеткой и запоминается.
-  // Границы: ниже 120 свечей не разобрать, выше 900 сетка перестаёт быть сеткой.
-  const CHART_MIN = 120, CHART_MAX = 900, CHART_DEF = 200;
-  let chartH = $state(CHART_DEF);
-
   // Таймфрейм сетки. Запоминаем: оператор возвращается к тем же графикам, и
   // сбрасывать его на 5 минут при каждом открытии фрейма незачем.
   const TF_KEY = 'stl.ordersChartTf';
@@ -137,19 +131,10 @@
   {#if !entries.length}
     <div class="gf-empty">Нет открытых позиций, активных и умных заявок.</div>
   {:else}
-    <div class="gf-grid" style="--mini-h: {chartH}px">
+    <div class="gf-grid">
       {#each entries as e (e.symbol)}
         <MiniChart symbol={e.symbol} label={e.label} badge={e.badge} badgeKind={e.badgeKind} {tf} />
       {/each}
-    </div>
-    <!-- Тянущаяся высота графиков. Ручку делаем ВИДИМОЙ: штатный Splitter
-         прозрачен до наведения, и оператор её просто не нашёл. Полоса с
-         засечками и подписью — единственное место фрейма, которое выглядит как
-         «за это тянут». Двойной клик возвращает исходные 200. -->
-    <div class="gf-resize" title="Потяните вверх или вниз — высота графиков; двойной клик — сброс">
-      <Splitter dir="h" bind:size={chartH} min={CHART_MIN} max={CHART_MAX} def={CHART_DEF}
-                storageKey="stl.ordersChartH" />
-      <span class="gf-resize-hint">высота графиков · {chartH} px</span>
     </div>
   {/if}
 </div>
@@ -167,30 +152,6 @@
   }
   .gf-empty { padding: 16px; color: #667; font-size: 12px; }
   .gf-sp { flex: 1; }
-  /* Полоса «тянуть высоту». Штатный сплиттер прозрачен до наведения — здесь он
-     обязан быть заметен сам по себе, иначе функции как будто нет. */
-  .gf-resize {
-    flex-shrink: 0; position: relative; height: 14px; cursor: row-resize;
-    background: #1a1a2e; border-top: 1px solid #2d2d4a;
-    display: flex; align-items: center; justify-content: center;
-  }
-  .gf-resize:hover { background: #21213a; }
-  .gf-resize :global(.split.h) {
-    position: absolute; inset: 0; height: auto; background: transparent;
-  }
-  .gf-resize :global(.split.h):hover, .gf-resize :global(.split.h.dragging) {
-    background: #43c46322;
-  }
-  /* Засечки: три полоски по центру — общепринятый знак «меня можно тянуть». */
-  .gf-resize::before {
-    content: ''; width: 26px; height: 4px; border-radius: 2px;
-    background: repeating-linear-gradient(#4a4a6a 0 1px, transparent 1px 2px);
-    pointer-events: none;
-  }
-  .gf-resize-hint {
-    position: absolute; right: 8px; color: #667; font-size: 10px;
-    pointer-events: none; white-space: nowrap;
-  }
   .gf-tf { display: flex; gap: 2px; }
   .gf-tf button {
     background: #1a1a2e; color: #9ab; border: 1px solid #2d2d4a; border-radius: 3px;
@@ -201,8 +162,14 @@
   .gf-grid {
     flex: 1; min-height: 0; overflow: auto;
     display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    grid-auto-rows: minmax(160px, 1fr);
     gap: 8px; padding: 8px;
   }
-  /* Высоту задаёт переменная: её крутит сплиттер под сеткой. */
-  .gf-grid :global(.mini) { height: var(--mini-h, 200px); }
+  /* График ТЯНЕТСЯ ВМЕСТЕ С ФРЕЙМОМ. Раньше высота была фиксированной (200 px
+     и потом переменная от своего сплиттера): фрейм растягивали за нижний край,
+     а график оставался маркой в углу, и под ним зияла пустота.
+     grid-auto-rows: minmax(160px, 1fr) даёт оба поведения одной строкой —
+     один-два инструмента разъезжаются на всю высоту, а десяток упирается в 160
+     и сетка начинает прокручиваться. */
+  .gf-grid :global(.mini) { height: 100%; min-height: 0; }
 </style>
