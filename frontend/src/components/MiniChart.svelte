@@ -9,6 +9,8 @@
   import { quotesStore } from '$lib/stores/quotes.svelte';
   import { smartOrdersStore } from '$lib/stores/smart-orders.svelte';
   import { KIND_BY_ID, LABEL_TEXT_COLOR, shortCodes, smartLegend, smartLevels, softColor } from '$lib/smart-order-help';
+  import { KINDS, preview } from '$lib/smart-order-help';
+  import { draftBody, kindFromEvent, levelAt, priceSteps, quantize, sideFor } from '$lib/chart-orders';
   import { mskTickFormatter, mskCrosshairFormatter, tfName } from '$lib/chart-time';
 
   let {
@@ -54,6 +56,160 @@
   // Легенда показывает ТОЛЬКО нарисованные сейчас типы: постоянный список
   // стилей превращается в шум, который перестают читать.
   const legend = $derived(smartLegend(smartHere));
+
+  // ── Заявки мышкой прямо на графике ──────────────────────────────────────
+  // Ни один жест сам по себе заявку НЕ ставит: всё кончается подтверждением с
+  // готовой фразой «что произойдёт». Правый клик — меню со всеми типами,
+  // Shift/Ctrl/Alt + клик — сразу нужный тип, перетаскивание уровня — перенос.
+  let step = $state(0);
+  let menu = $state<{ x: number; y: number; price: number } | null>(null);
+  let ask = $state<any>(null);        // подтверждение: черновик или перенос
+  let busy = $state(false);
+  let err = $state('');
+  let lastQty = 1;
+
+  // Цену НИКОГДА не округляем до целого: у BR шаг 0.01. Только гасим
+  // float-пыль — то же правило, что в панели компаньона.
+  const px = (v: number) => Number(v).toLocaleString('ru-RU', { maximumFractionDigits: 6 });
+
+  // Фраза «что произойдёт» — из того же движка, что и форма заявок: два разных
+  // текста об одном действии однажды разойдутся.
+  const what = (a2: any) => preview({
+    kind: a2.kind, side: a2.side, qty: a2.qty, code: a2.code,
+    trigger: a2.kind === 'on_fill' ? 0 : a2.price,
+    childPrice: a2.kind === 'on_fill' ? a2.price : 0,
+    trailOffset: 0, watchId: '', slOffset: 0, tpOffset: 0,
+    price: marketPrice(),
+  });
+
+  // Шаг цены инструмента: эффектом, а не разово — код инструмента у графика
+  // может смениться, и шаг обязан поехать за ним.
+  $effect(() => {
+    const c = code;
+    priceSteps(fetchWithAuth).then((m) => { step = m[c] ?? 0; });
+  });
+
+  const priceAt = (y: number): number => {
+    const p = series ? Number(series.coordinateToPrice(y)) : 0;
+    return p > 0 ? quantize(p, step) : 0;
+  };
+  const marketPrice = () => lastClose || quote?.last || quote?.bid || 0;
+
+  /** Уровни С КООРДИНАТАМИ — для захвата мышкой. Пересчитываем на каждый
+   *  pointerdown: график живой, пиксели уезжают каждую секунду. */
+  function levelsNow(): Array<{ y: number; o: any; lv: any }> {
+    if (!series) return [];
+    const out: Array<{ y: number; o: any; lv: any }> = [];
+    for (const o of smartHere) {
+      for (const lv of smartLevels(o)) {
+        // Тянуть можно только СВОЙ уровень заявки, не расчётные производные:
+        // у пика и защитных детей своей цены в книге нет, двигать нечего.
+        if (lv.dim || !(lv.price > 0)) continue;
+        const y = Number(series.priceToCoordinate(lv.price));
+        if (Number.isFinite(y)) out.push({ y, o, lv });
+      }
+    }
+    return out;
+  }
+
+  function openMenu(e: MouseEvent) {
+    e.preventDefault();
+    const price = priceAt(e.offsetY);
+    if (!(price > 0)) return;
+    menu = { x: e.offsetX, y: e.offsetY, price };
+  }
+
+  function draftFor(kind: any, price: number) {
+    const side = sideFor(kind, price, marketPrice());
+    return { mode: 'new', kind, code, price, qty: lastQty, side: side ?? 'sell', sideKnown: !!side };
+  }
+
+  function onChartPointerDown(e: PointerEvent) {
+    if (e.button !== 0) return;
+    menu = null;
+    // 1) взялись за существующий уровень -> перенос
+    const hit = levelAt(e.offsetY, levelsNow());
+    if (hit >= 0) {
+      const { o, lv } = levelsNow()[hit];
+      drag = { o, from: lv.price, y0: e.offsetY, moved: false };
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      return;
+    }
+    // 2) модификатор -> новая заявка
+    const kind = kindFromEvent(e);
+    if (!kind) return;
+    const price = priceAt(e.offsetY);
+    if (price > 0) ask = draftFor(kind, price);
+  }
+
+  let drag: { o: any; from: number; y0: number; moved: boolean } | null = null;
+
+  function onChartPointerMove(e: PointerEvent) {
+    if (!drag) return;
+    if (Math.abs(e.offsetY - drag.y0) > 3) drag.moved = true;
+  }
+
+  function onChartPointerUp(e: PointerEvent) {
+    if (!drag) return;
+    const d = drag;
+    drag = null;
+    if (!d.moved) return;                       // клик, а не перенос
+    const to = priceAt(e.offsetY);
+    if (!(to > 0) || to === d.from) return;
+    ask = { mode: 'move', o: d.o, from: d.from, price: to, kind: d.o.kind,
+            code: d.o.code, side: d.o.side, qty: d.o.qty, sideKnown: true };
+  }
+
+  async function confirm() {
+    if (!ask || busy) return;
+    busy = true; err = '';
+    try {
+      // ПЕРЕНОС = снять и взвести заново: атомарного «подвинуть» у движка нет.
+      // Порядок именно такой (сначала снять), иначе на бирже на мгновение
+      // окажутся ДВА уровня и оба могут сработать. Если второй шаг не удался,
+      // говорим об этом громко: заявки больше нет, и молчать тут нельзя.
+      if (ask.mode === 'move') {
+        const del = await fetchWithAuth(`/api/v1/quik/smart-orders/${ask.o.so_id}`, { method: 'DELETE' });
+        if (!del.ok) { err = 'не удалось снять прежнюю заявку — ничего не менял'; return; }
+      }
+      // При ПЕРЕНОСЕ пересобираем тело по полям, а не шлём объект заявки
+      // целиком: в нём есть so_id и статус, которым в запросе не место. И
+      // главное — СОБСТВЕННЫЕ настройки заявки обязаны уехать вместе с ней:
+      // отступ следящей и блоки «после сделки». Потеряй их здесь, и перенос
+      // молча превратил бы следящую в обычную, а защитную пару стёр.
+      const o = ask.o;
+      const body = ask.mode === 'move'
+        ? {
+            kind: o.kind, code: o.code, side: o.side, qty: o.qty,
+            trigger_price: o.kind === 'on_fill' ? 0 : ask.price,
+            child_price: o.kind === 'on_fill' ? ask.price : 0,
+            trail_offset: Number(o.trail_offset || 0),
+            sl_offset: Number(o.sl_offset || 0),
+            tp_offset: Number(o.tp_offset || 0),
+            watch_client_id: String(o.watch_client_id || ''),
+            oco_group: String(o.oco_group || ''),
+            good_till_ms: Number(o.good_till_ms || 0),
+          }
+        : draftBody({ kind: ask.kind, code: ask.code, side: ask.side, qty: ask.qty, price: ask.price });
+      const res = await fetchWithAuth('/api/v1/quik/smart-orders', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        err = (ask.mode === 'move' ? 'ЗАЯВКА СНЯТА, но не взведена заново: ' : '')
+          + (d?.detail || `HTTP ${res.status}`);
+        return;
+      }
+      if (ask.mode === 'new') lastQty = ask.qty;
+      ask = null;
+      await smartOrdersStore.refresh();
+    } catch (e2) {
+      err = String(e2);
+    } finally {
+      busy = false;
+    }
+  }
 
   async function loadHistory(attempt = 0) {
     loading = true; failed = false;
@@ -205,6 +361,15 @@
     loadHistory();
   });
 
+  // Меню закрывается кликом куда угодно: висящее поверх графика меню, которое
+  // не уходит, читается как зависший интерфейс.
+  $effect(() => {
+    if (!menu) return;
+    const off = () => { menu = null; };
+    window.addEventListener('pointerdown', off, { capture: true });
+    return () => window.removeEventListener('pointerdown', off, { capture: true });
+  });
+
   let roRef: ResizeObserver | null = null;
   onDestroy(() => { roRef?.disconnect(); chart?.remove(); });
 </script>
@@ -217,13 +382,73 @@
     {/if}
     {#if lastClose !== null}<span class="mc-px">{lastClose.toLocaleString('ru-RU')}</span>{/if}
   </div>
-  <div class="mc-chart" bind:this={el}>
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="mc-chart" bind:this={el}
+       oncontextmenu={openMenu}
+       onpointerdown={onChartPointerDown}
+       onpointermove={onChartPointerMove}
+       onpointerup={onChartPointerUp}>
     {#if loading}
       <div class="mc-ov"><span class="mc-spin"></span> загрузка…</div>
     {:else if failed}
       <button class="mc-ov mc-retry" onclick={() => loadHistory()}>нет данных · повторить</button>
     {/if}
+
+    {#if menu}
+      <!-- Меню по правой кнопке: все четыре типа с уже подставленной ценой и
+           стороной. Сторона выводится из того, ВЫШЕ или НИЖЕ рынка кликнули —
+           правило взято из движка, а не придумано. -->
+      <div class="mc-menu" style="left:{menu.x}px; top:{menu.y}px">
+        <div class="mc-menu-h">{px(menu.price)}</div>
+        {#each KINDS as k}
+          {@const sd = sideFor(k.id, menu.price, marketPrice())}
+          <button onclick={() => { ask = draftFor(k.id, menu.price); menu = null; }}>
+            {k.name}
+            <i class:buy={sd === 'buy'}>{sd ? (sd === 'buy' ? '▲ покупка' : '▼ продажа') : 'сторону выбрать'}</i>
+          </button>
+        {/each}
+        <div class="mc-menu-f">Shift условная · Ctrl лимитная · Alt следящая</div>
+      </div>
+    {/if}
   </div>
+
+  {#if ask}
+    <!-- Подтверждение. Ни один жест не ставит заявку сам: здесь видно тип,
+         сторону, цену, объём и фразу «что произойдёт» из того же движка. -->
+    <div class="mc-ask">
+      <div class="mc-ask-h">
+        {ask.mode === 'move' ? 'Перенести заявку' : 'Новая ' + KIND_BY_ID[ask.kind].name.toLowerCase()}
+        <span class="mc-ask-code">{ask.code}</span>
+      </div>
+      {#if ask.mode === 'move'}
+        <div class="mc-ask-row">с <b>{px(ask.from)}</b> на <b>{px(ask.price)}</b></div>
+        <div class="mc-ask-warn">
+          Атомарного «подвинуть» у сторожа нет: заявка будет СНЯТА и взведена заново.
+        </div>
+      {:else}
+        <div class="mc-ask-row">
+          <label>сторона
+            <select bind:value={ask.side}>
+              <option value="sell">▼ продажа</option>
+              <option value="buy">▲ покупка</option>
+            </select>
+          </label>
+          <label>объём <input type="number" min="1" step="1" bind:value={ask.qty} /></label>
+          <span>по <b>{px(ask.price)}</b></span>
+        </div>
+        {@const pv = what(ask)}
+        <div class="mc-ask-what">{pv.sentence}{pv.distance ? ' · ' + pv.distance : ''}</div>
+        {#if pv.error}<div class="mc-ask-err">{pv.error}</div>{/if}
+      {/if}
+      {#if err}<div class="mc-ask-err">{err}</div>{/if}
+      <div class="mc-ask-btns">
+        <button onclick={() => { ask = null; err = ''; }}>Отмена</button>
+        <button class="ok" disabled={busy} onclick={confirm}>
+          {busy ? 'отправляю…' : (ask.mode === 'move' ? 'Перенести' : 'Взвести')}
+        </button>
+      </div>
+    </div>
+  {/if}
   {#if legend.length}
     <!-- Легенда ПОД графиком отдельной строкой. Накладкой поверх канвы её не
          было видно вовсе: lightweight-charts добавляет свой canvas в контейнер
@@ -244,6 +469,52 @@
 </div>
 
 <style>
+  /* ── Заявки мышкой: меню и подтверждение ─────────────────────────────── */
+  .mc-chart { position: relative; }
+  .mc-menu {
+    position: absolute; z-index: 30; min-width: 190px;
+    background: #14142a; border: 1px solid #3a3a5c; border-radius: 4px;
+    box-shadow: 0 6px 20px #0008; padding: 3px; font-size: 12px;
+  }
+  .mc-menu-h { padding: 2px 8px 4px; color: #cde; font-weight: 600;
+    border-bottom: 1px solid #2d2d4a; margin-bottom: 3px; }
+  .mc-menu button {
+    display: flex; width: 100%; gap: 8px; align-items: baseline;
+    background: none; border: 0; color: #cde; text-align: left;
+    padding: 4px 8px; border-radius: 3px; cursor: pointer; font-size: 12px;
+  }
+  .mc-menu button:hover { background: #2d2d4a; }
+  .mc-menu i { margin-left: auto; font-style: normal; color: #ff6b5a; font-size: 11px; }
+  .mc-menu i.buy { color: #2ecc71; }
+  .mc-menu-f { padding: 4px 8px 2px; color: #667; font-size: 10px;
+    border-top: 1px solid #2d2d4a; margin-top: 3px; }
+
+  .mc-ask {
+    position: absolute; z-index: 40; left: 8px; right: 8px; bottom: 8px;
+    background: #14142a; border: 1px solid #43c463; border-radius: 4px;
+    padding: 8px 10px; font-size: 12px; color: #cde;
+    box-shadow: 0 8px 24px #000a;
+  }
+  .mc-ask-h { font-weight: 600; margin-bottom: 5px; }
+  .mc-ask-code { color: #9ab; font-weight: 400; margin-left: 6px; }
+  .mc-ask-row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .mc-ask-row label { display: inline-flex; gap: 5px; align-items: center; color: #9ab; }
+  .mc-ask-row input, .mc-ask-row select {
+    background: #0f0f1e; color: #cde; border: 1px solid #2d2d4a; border-radius: 3px;
+    padding: 2px 5px; font-size: 12px; width: 84px;
+  }
+  .mc-ask-what { margin-top: 6px; color: #9ab; line-height: 1.4; }
+  /* Перенос не атомарен — предупреждение обязано быть видно ДО нажатия. */
+  .mc-ask-warn { margin-top: 6px; color: #d99a3c; line-height: 1.4; }
+  .mc-ask-err { margin-top: 6px; color: #ff6b5a; line-height: 1.4; }
+  .mc-ask-btns { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; }
+  .mc-ask-btns button {
+    background: #1a1a2e; color: #cde; border: 1px solid #2d2d4a; border-radius: 3px;
+    padding: 3px 12px; font-size: 12px; cursor: pointer;
+  }
+  .mc-ask-btns .ok { border-color: #43c463; color: #fff; }
+  .mc-ask-btns button:disabled { opacity: .5; cursor: default; }
+
   .mini {
     display: flex; flex-direction: column; min-width: 0; min-height: 0;
     background: #0f0f1e; border: 1px solid #2d2d4a; border-radius: 4px; overflow: hidden;
