@@ -1522,6 +1522,11 @@ def create_app() -> FastAPI:
     from trader.api.lab_favorites import router as lab_favorites_router
     fastapi_app.include_router(lab_favorites_router)
 
+    # Почта между окнами разработки (real-trade / backtests / ui-ux): передача
+    # работы владельцу зоны вместо ручного переноса текста оператором.
+    from trader.api.dev_msg import router as dev_msg_router
+    fastapi_app.include_router(dev_msg_router)
+
     @fastapi_app.post("/api/auth/login")
     async def login(body: LoginRequest, request: Request, response: Response):
         settings: Settings = request.app.state.settings

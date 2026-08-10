@@ -524,3 +524,61 @@ async def test_dv_recovers_instantly_after_breakout_even_with_long_valley_histor
         assert rt.signed == 0
     await step(1, 700, 87900.0)                        # пробой закрытием
     assert rt.signed == 1, "после пробоя вход обязан пройти НЕМЕДЛЕННО"
+
+
+# ── Разножка в долях ATR (min_gap_atr) ─────────────────────────────────────────
+# Шаг усреднения считается от СРЕДНЕЙ, и каждый добор тянет её к цене — поэтому
+# лестница схлопывается (lxk22 10.08.2026: 11 контрактов из 17 на одной цене).
+# Разножка меряет от прошлого ИСПОЛНИВШЕГОСЯ добора, а в долях ATR ещё и сама
+# подстраивается под рынок.
+
+@pytest.mark.asyncio
+async def test_min_gap_atr_blocks_a_second_add_at_the_same_price():
+    rt = _FakeRT()
+    g = dict(min_gap_atr=10, avg_max=5, avg_step_atr=1, avg_atr_n=2)   # 1.0×ATR
+    for i, p in enumerate([87000.0, 86900.0, 87000.0]):               # прогрев, ATR>0
+        await _run(rt, None, 60 + i * 60, p, **g)
+    await _run(rt, 1, 300, 87000.0, **g)          # вход long @87000
+    assert rt.signed == 1
+    await _run(rt, None, 360, 86800.0, **g)       # ход против -> первый добор
+    assert rt.signed > 1, "добор на ходе против позиции обязан пройти"
+    n = len(rt.orders)
+    await _run(rt, None, 420, 86800.0, **g)       # та же цена -> разножка держит
+    assert len(rt.orders) == n
+    assert rt.get_state("gap_skips") == 1
+
+
+@pytest.mark.asyncio
+async def test_min_gap_atr_scales_with_volatility():
+    """ОДИН И ТОТ ЖЕ параметр на одном и том же ходе против позиции ведёт себя
+    по-разному: в тихом рынке добор проходит, в ралли разножка его держит. В
+    этом весь смысл — лестница растягивается ровно на столько, на сколько
+    инструмент реально ходит."""
+    async def add_passes(bar_range: float) -> bool:
+        rt = _FakeRT()
+        g = dict(min_gap_atr=10, avg_max=5, avg_step_atr=1, avg_atr_n=5)   # 1.0xATR
+        base = 87000.0
+        for i in range(12):                       # прогрев барами нужного размаха
+            await _run(rt, None, 60 + i * 60, base + (bar_range if i % 2 else 0), **g)
+        await _run(rt, 1, 900, base, **g)         # вход long
+        assert rt.signed == 1
+        before = len(rt.orders)
+        await _run(rt, None, 960, base - 50.0, **g)   # ход против ровно на 50 пт
+        return len(rt.orders) > before
+
+    assert await add_passes(10.0) is True,  "в тихом рынке добор обязан пройти"
+    assert await add_passes(200.0) is False, "в ралли разножка обязана держать"
+
+
+@pytest.mark.asyncio
+async def test_min_gap_atr_off_by_default_and_never_blocks_exit():
+    rt = _FakeRT()
+    g = dict(avg_max=5, avg_step_atr=1, avg_atr_n=2)      # min_gap_atr не задан
+    for i, p in enumerate([87000.0, 86900.0, 87000.0]):
+        await _run(rt, None, 60 + i * 60, p, **g)
+    await _run(rt, 1, 300, 87000.0, **g)
+    await _run(rt, None, 360, 86800.0, **g)
+    await _run(rt, None, 420, 86800.0, **g)               # без параметра — доборы подряд
+    assert rt.signed > 2
+    await _run(rt, -1, 480, 86800.0, **g)                 # выход разножка не трогает
+    assert rt.signed <= 0

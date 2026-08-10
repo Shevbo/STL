@@ -499,6 +499,22 @@ the status JSON behind it is built in Go by real trade, who also ships the file 
 the agent release. Change the markup, hand the delivery over — never scp into
 `~/quik_build` from this window.
 
+**Почта между окнами (`/api/v1/dev`, добавлена 10.08.2026).** Передавать работу
+владельцу зоны больше не нужно через оператора — есть ящик:
+
+```bash
+ssh hoster 'bash ~/apps/shectory-trader/scripts/devmsg.sh inbox real-trade'          # мои входящие
+ssh hoster 'bash ~/apps/shectory-trader/scripts/devmsg.sh send ui-ux "тема" "текст" real-trade'
+ssh hoster 'bash ~/apps/shectory-trader/scripts/devmsg.sh ack <id>'                   # прочитано
+```
+
+Окна: `real-trade`, `backtests`, `ui-ux`, `operator`, плюс `all` — всем сразу.
+ОБЯЗАННОСТЬ каждой сессии: проверить свой ящик в начале работы и перед тем как
+сказать «готово». Ответ инбокса несёт инструкцию внутри себя (поле `prompt`) —
+читать документацию для этого не требуется. Письмо без `ack` остаётся
+непрочитанным и достанется следующей сессии: подтверждай только сделанное.
+Хранилище — `agent_control` (key/value), последние 200 писем.
+
 **Rules above zones:** arming, agent-release publication, and `shectory-trader`
 restarts happen ONLY from the real trade window, no matter who wrote the code.
 Before touching a staged trading binary: check robot state and verify sha256
