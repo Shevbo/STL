@@ -263,6 +263,14 @@
     background: #b58900; margin-right: 4px; animation: starpulse 2s infinite; }
   @keyframes starpulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
   .empty { color: var(--faint); padding-left: 8px; }
+  /* Фрейм ручных заявок ФИКСИРОВАН по высоте: пять строк и прокрутка. Раньше
+     он рос вместе с числом заявок и отжимал роботов вниз — при восьми
+     взведённых панель приходилось листать, чтобы увидеть деньги. */
+  .ord-box { max-height: 96px; overflow-y: auto; overscroll-behavior: contain; }
+  .ord-box::-webkit-scrollbar { width: 5px; }
+  .ord-box::-webkit-scrollbar-thumb { background: var(--rule); border-radius: 3px; }
+  .ord-box::-webkit-scrollbar-track { background: transparent; }
+
   /* Кассета вместо слова-дубля. Первый тег говорит, ЧЕМ робот рискует (реал или
      бумага), второй раньше повторял то же слово: «РЕАЛ РЕАЛ». Смысл второго —
      крутится или стоит, и это лучше показывать движением: катушки видно боковым
@@ -727,16 +735,25 @@ function todayLo(d) {
   return msk.getTime() - (now.getTimezoneOffset() + 180) * 60000;
 }
 
+// Сколько ручных заявок держим в кадре. Пять — это ровно та высота, при
+// которой блок не отжимает роботов вниз; остальное доступно прокруткой и
+// счётчиком «и ещё N».
+const ORDERS_SHOWN = 5;
+
 function renderOrders(o, d) {
   if (!o || (!(o.manual || []).length && !(o.smart || []).length))
     return '<div class="empty">ручных заявок нет</div>';
   const sideRu = (s) => s === 'buy' ? 'покупка' : 'продажа';
   const num = (v) => v == null ? '—' : Number(v).toLocaleString('ru-RU');
-  let out = '';
+  // Собираем ОБА вида в один список со временем ВЗВЕДЕНИЯ: у простой это время
+  // заявки в QUIK, у умной — created_ms. Без общего ключа порядок был бы «как
+  // отдал сервер», то есть случайным для глаза.
+  const rows = [];
   for (const m of o.manual || []) {
-    out += `<div class="row"><span class="k">${esc(m.sec)} ${sideRu(m.side)} ${m.qty}</span>` +
+    rows.push({ ts: Number(m.ts_ms || 0), html:
+      `<div class="row"><span class="k">${esc(m.sec)} ${sideRu(m.side)} ${m.qty}</span>` +
       `<span class="sub">@ ${num(m.price)}${m.active && m.balance < m.qty ? ` · осталось ${m.balance}` : ''}</span>` +
-      `<span class="sp"></span><span class="v ${m.active ? 'up' : 'nil'}">${esc(m.state)}</span></div>`;
+      `<span class="sp"></span><span class="v ${m.active ? 'up' : 'nil'}">${esc(m.state)}</span></div>` });
   }
   const KIND = { sl: 'SL', tp: 'TP', trail_tp: 'TRAIL', on_fill: 'по сделке' };
   const ST = { armed: 'взведена', fired: 'сработала', cancelled: 'снята',
@@ -757,11 +774,19 @@ function renderOrders(o, d) {
         : `ждёт пробоя ${num(s.trigger)}`;
     }
     const live = s.status === 'armed';
-    out += `<div class="row"><span class="k">умная ${KIND[s.kind] || s.kind} · ${esc(s.code)} ${sideRu(s.side)} ${s.qty}</span>` +
+    rows.push({ ts: Number(s.created_ms || s.fired_ms || 0), html:
+      `<div class="row"><span class="k">умная ${KIND[s.kind] || s.kind} · ${esc(s.code)} ${sideRu(s.side)} ${s.qty}</span>` +
       `<span class="sub">${esc(sub)}</span><span class="sp"></span>` +
-      `<span class="v ${live ? (s.activated ? 'up' : '') : 'nil'}">${esc(ST[s.status] || s.status)}</span></div>`;
+      `<span class="v ${live ? (s.activated ? 'up' : '') : 'nil'}">${esc(ST[s.status] || s.status)}</span></div>` });
   }
-  return out;
+  // Свежие сверху, показываем пять. Остаток НЕ прячем молча: список из пяти,
+  // выглядящий как полный, однажды заставит принять решение по неполной картине.
+  rows.sort((a, b) => b.ts - a.ts);
+  const shown = rows.slice(0, ORDERS_SHOWN);
+  const rest = rows.length - shown.length;
+  return `<div class="ord-box">${shown.map((r) => r.html).join('')}` +
+    (rest > 0 ? `<div class="row"><span class="sub">и ещё ${rest} — в терминале</span></div>` : '') +
+    `</div>`;
 }
 
 // Вотчер компактно, В ОДНУ СТРОКУ на проверку: имя + ОК/текст проблемы.

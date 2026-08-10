@@ -353,3 +353,39 @@ describe('масштаб экрана в размерах окна', () => {
     expect(fn).toContain('|| 1');
   });
 });
+
+// ── Фрейм ручных заявок: фикс, прокрутка, пять свежих ───────────────────────
+// Блок рос вместе с числом заявок и отжимал роботов вниз: при восьми взведённых
+// панель приходилось листать, чтобы увидеть деньги.
+describe('ручные заявки в панели', () => {
+  const pages = ['public/companion.html', 'public/m.html'];
+  const read = (f: string) => readFileSync(resolve(process.cwd(), f), 'utf8');
+
+  it('высота ограничена и есть прокрутка', () => {
+    for (const f of pages) {
+      expect(read(f), f).toMatch(/\.ord-box \{ max-height: \d+px; overflow-y: auto/);
+      expect(read(f), f).toMatch(/class="ord-box"/);
+    }
+  });
+
+  it('в кадре пять, порядок по времени ВЗВЕДЕНИЯ, свежие сверху', () => {
+    for (const f of pages) {
+      const src = read(f);
+      expect(src, f).toMatch(/const ORDERS_SHOWN = 5;/);
+      expect(src, f).toMatch(/rows\.sort\(\(a, b\) => b\.ts - a\.ts\)/);
+      // у умной это created_ms, у простой — время заявки в QUIK
+      expect(src, f).toMatch(/Number\(s\.created_ms/);
+      expect(src, f).toMatch(/Number\(m\.ts_ms/);
+    }
+  });
+
+  it('остаток не прячется молча', () => {
+    for (const f of pages) expect(read(f), f).toMatch(/и ещё \$\{rest\}/);
+  });
+
+  it('обе панели считают одинаково', () => {
+    const fn = (f: string) => read(f).replace(/\r\n/g, '\n')
+      .match(/function renderOrders[\s\S]*?\n\}\n/)![0];
+    expect(fn(pages[1])).toBe(fn(pages[0]));
+  });
+});

@@ -807,6 +807,10 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
         if so.status != "armed" and max(so.created_ms, so.fired_ms) < today_lo:
             continue  # старую историю в панель не тянем
         smart_list.append({
+            # created_ms — время ВЗВЕДЕНИЯ. По нему панель сортирует список и
+            # оставляет пять свежих: без него порядок был бы «как отдал движок»,
+            # то есть случайным для глаза.
+            "created_ms": so.created_ms,
             "so_id": so.so_id, "kind": so.kind, "code": so.code, "side": so.side,
             "qty": so.qty, "trigger": so.trigger_price,
             "trail_offset": so.trail_offset, "activated": so.activated,
