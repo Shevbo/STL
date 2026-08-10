@@ -17,31 +17,33 @@ var (
 	kernel32 = windows.NewLazySystemDLL("kernel32.dll")
 	crypt32  = windows.NewLazySystemDLL("crypt32.dll")
 
-	pRegisterClassExW = user32.NewProc("RegisterClassExW")
-	pCreateWindowExW  = user32.NewProc("CreateWindowExW")
-	pDefWindowProcW   = user32.NewProc("DefWindowProcW")
-	pShowWindow       = user32.NewProc("ShowWindow")
-	pSetWindowPos     = user32.NewProc("SetWindowPos")
-	pGetMessageW      = user32.NewProc("GetMessageW")
-	pTranslateMessage = user32.NewProc("TranslateMessage")
-	pDispatchMessageW = user32.NewProc("DispatchMessageW")
-	pPostQuitMessage  = user32.NewProc("PostQuitMessage")
-	pPostMessageW     = user32.NewProc("PostMessageW")
-	pLoadCursorW      = user32.NewProc("LoadCursorW")
-	pLoadIconW        = user32.NewProc("LoadIconW")
-	pLoadImageW       = user32.NewProc("LoadImageW")
-	pSysParamsInfoW   = user32.NewProc("SystemParametersInfoW")
-	pSetWinCompAttr   = user32.NewProc("SetWindowCompositionAttribute")
-	pIsWindowVisible  = user32.NewProc("IsWindowVisible")
-	pSetProcessDPI    = user32.NewProc("SetProcessDPIAware")
-	pGetWindowRect    = user32.NewProc("GetWindowRect")
-	pSetForegroundWin = user32.NewProc("SetForegroundWindow")
-	pCreatePopupMenu  = user32.NewProc("CreatePopupMenu")
-	pAppendMenuW      = user32.NewProc("AppendMenuW")
-	pTrackPopupMenu   = user32.NewProc("TrackPopupMenu")
-	pDestroyMenu      = user32.NewProc("DestroyMenu")
-	pGetCursorPos     = user32.NewProc("GetCursorPos")
-	pGetSystemMetrics = user32.NewProc("GetSystemMetrics")
+	pRegisterClassExW  = user32.NewProc("RegisterClassExW")
+	pCreateWindowExW   = user32.NewProc("CreateWindowExW")
+	pDefWindowProcW    = user32.NewProc("DefWindowProcW")
+	pShowWindow        = user32.NewProc("ShowWindow")
+	pSetWindowPos      = user32.NewProc("SetWindowPos")
+	pGetMessageW       = user32.NewProc("GetMessageW")
+	pTranslateMessage  = user32.NewProc("TranslateMessage")
+	pDispatchMessageW  = user32.NewProc("DispatchMessageW")
+	pPostQuitMessage   = user32.NewProc("PostQuitMessage")
+	pPostMessageW      = user32.NewProc("PostMessageW")
+	pLoadCursorW       = user32.NewProc("LoadCursorW")
+	pLoadIconW         = user32.NewProc("LoadIconW")
+	pLoadImageW        = user32.NewProc("LoadImageW")
+	pSysParamsInfoW    = user32.NewProc("SystemParametersInfoW")
+	pSetWinCompAttr    = user32.NewProc("SetWindowCompositionAttribute")
+	pIsWindowVisible   = user32.NewProc("IsWindowVisible")
+	pSetProcessDPI     = user32.NewProc("SetProcessDPIAware")
+	pGetWindowRect     = user32.NewProc("GetWindowRect")
+	pSetForegroundWin  = user32.NewProc("SetForegroundWindow")
+	pCreatePopupMenu   = user32.NewProc("CreatePopupMenu")
+	pAppendMenuW       = user32.NewProc("AppendMenuW")
+	pTrackPopupMenu    = user32.NewProc("TrackPopupMenu")
+	pDestroyMenu       = user32.NewProc("DestroyMenu")
+	pGetCursorPos      = user32.NewProc("GetCursorPos")
+	pGetSystemMetrics  = user32.NewProc("GetSystemMetrics")
+	pMonitorFromWindow = user32.NewProc("MonitorFromWindow")
+	pGetMonitorInfoW   = user32.NewProc("GetMonitorInfoW")
 
 	pOpenClipboard    = user32.NewProc("OpenClipboard")
 	pEmptyClipboard   = user32.NewProc("EmptyClipboard")
@@ -196,6 +198,34 @@ func workArea() rectT {
 	var wa rectT
 	_, _, _ = pSysParamsInfoW.Call(spiGetWorkArea, 0, uintptr(unsafe.Pointer(&wa)), 0)
 	return wa
+}
+
+type monitorInfo struct {
+	Size    uint32
+	Monitor rectT
+	Work    rectT
+	Flags   uint32
+}
+
+// workAreaOf — рабочая область ТОГО монитора, на котором сейчас окно.
+// SPI_GETWORKAREA знает только ГЛАВНЫЙ экран, а панель разрешено таскать на
+// любой: на 4К-портрете рядом с обычным монитором зажим по главному обрезал
+// высоту втрое (оператор, 10.08.2026). Монитор не определился — падаем на
+// главный, это по-прежнему лучше, чем ничего.
+func workAreaOf(hwnd uintptr) rectT {
+	const monitorDefaultToNearest = 2
+	h, _, _ := pMonitorFromWindow.Call(hwnd, monitorDefaultToNearest)
+	if h == 0 {
+		return workArea()
+	}
+	mi := monitorInfo{Size: uint32(unsafe.Sizeof(monitorInfo{}))}
+	if r, _, _ := pGetMonitorInfoW.Call(h, uintptr(unsafe.Pointer(&mi))); r == 0 {
+		return workArea()
+	}
+	if mi.Work.Right <= mi.Work.Left || mi.Work.Bottom <= mi.Work.Top {
+		return workArea()
+	}
+	return mi.Work
 }
 
 func windowSize(hwnd uintptr) (int, int) {

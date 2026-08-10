@@ -303,7 +303,8 @@ describe('шаги масштаба компаньона', () => {
 
   it('ширина уходит в Go на КАЖДОЙ смене шага, а не однажды при старте', () => {
     expect(src).not.toMatch(/widthSet/);
-    expect(src).toMatch(/shell\('\/width\?w=' \+ w\)/);
+    // ширина уходит из applySize при каждой смене шага (в физических пикселях)
+    expect(src).toMatch(/lastW = w; shell\('\/width\?w='/);
   });
 });
 
@@ -329,5 +330,26 @@ describe('высота компаньона', () => {
     expect(src).toMatch(/body \{ overflow-x: hidden; overflow-y: auto; \}/);
     // горизонтальной прокрутки быть не должно: ширину задаёт сама панель
     expect(src).not.toMatch(/body[^{]*\{[^}]*overflow-x: auto/);
+  });
+});
+
+// ── Размеры окна уходят в ФИЗИЧЕСКИХ пикселях ───────────────────────────────
+// Окно Go ставит в физических, а страница считает в CSS. На экране со 100%
+// они совпадают, и ошибка пряталась; на 4К-портрете с системным масштабом окно
+// выходило во столько же раз ниже, во сколько включено масштабирование Windows,
+// и панель обрезалась. Перетаскивание уже умножало дельты на devicePixelRatio —
+// оно и было единственным местом, где DPI учитывался.
+describe('масштаб экрана в размерах окна', () => {
+  const src = readFileSync(resolve(process.cwd(), 'public/companion.html'), 'utf8');
+
+  it('и высота, и ширина проходят через пересчёт в физические', () => {
+    expect(src).toMatch(/shell\('\/height\?h=' \+ phys\(h\)\)/);
+    expect(src).toMatch(/shell\('\/width\?w=' \+ phys\(w\)\)/);
+  });
+
+  it('пересчёт берёт devicePixelRatio и не падает без него', () => {
+    const fn = src.match(/const phys = [^\n]*\n/)![0];
+    expect(fn).toContain('devicePixelRatio');
+    expect(fn).toContain('|| 1');
   });
 });

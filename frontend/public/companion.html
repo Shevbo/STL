@@ -1070,6 +1070,14 @@ const PANEL_WIDTH = SIZES[0];
 let lastW = 0;
 let lastH = 0;
 
+// CSS-пиксели -> ФИЗИЧЕСКИЕ. Окно Go ставит в физических, а страница считает в
+// CSS: на экране со 100% они совпадают, и это скрывало ошибку. На 4К-портрете с
+// системным масштабом окно выходило во столько же раз ниже, во сколько включено
+// масштабирование Windows, и панель обрезалась (оператор, 10.08.2026).
+// Перетаскивание умножает дельты на тот же множитель — оно и было единственным
+// местом, где DPI уже учитывался.
+const phys = (v) => Math.round(v * (window.devicePixelRatio || 1));
+
 function sizeIdx() {
   const i = parseInt(localStorage.getItem('stl.size') || '0', 10);
   return Math.min(SIZES.length - 1, Math.max(0, isNaN(i) ? 0 : i));
@@ -1086,7 +1094,7 @@ function applySize() {
     minus.title = 'Мельче — ' + hint;
     plus.title = 'Крупнее — ' + hint;
   }
-  if (w !== lastW) { lastW = w; shell('/width?w=' + w); }
+  if (w !== lastW) { lastW = w; shell('/width?w=' + phys(w)); }
   lastH = 0;             // при смене масштаба высота другая, пересчитать заново
   fitWindow();
 }
@@ -1104,7 +1112,7 @@ function fitWindow() {
   const h = Math.ceil((el ? el.getBoundingClientRect().height : 0)) + 4;
   if (!h || h === lastH) return;
   lastH = h;
-  shell('/height?h=' + h);
+  shell('/height?h=' + phys(h));
 }
 
 async function tick() {

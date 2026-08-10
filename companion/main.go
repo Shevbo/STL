@@ -235,7 +235,10 @@ func resizePanel(h int) {
 	if h < minHeight {
 		h = minHeight
 	}
-	wa := workArea()
+	// Зажим по ТОМУ монитору, где окно сейчас, а не по главному: панель таскают
+	// между экранами, и на 4К-портрете рядом с обычным монитором зажим по
+	// главному резал высоту втрое.
+	wa := workAreaOf(a.hwnd)
 	if max := int(wa.Bottom-wa.Top) - 2*marginPx; h > max {
 		h = max
 	}
@@ -253,7 +256,7 @@ func resizeWidth(w int) {
 	if w < 260 {
 		w = 260
 	}
-	wa := workArea()
+	wa := workAreaOf(a.hwnd)
 	if max := int(wa.Right-wa.Left) - 2*marginPx; w > max {
 		w = max
 	}
