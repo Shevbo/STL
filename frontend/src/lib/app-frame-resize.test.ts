@@ -20,12 +20,19 @@ describe('высота нижних фреймов', () => {
     expect(src).toMatch(/case 'lab': labH = clamp\(dragStart\.val - dy/);
   });
 
-  it('потолок общий и не 700: на большом экране в него упирались сразу', () => {
-    expect(src).toMatch(/const LAB_MAX = \d{4}/);
-    const max = Number(src.match(/const LAB_MAX = (\d+)/)![1]);
-    expect(max).toBeGreaterThanOrEqual(1200);
-    // оба обработчика берут ОДИН потолок: разные привели бы к скачку размера
-    expect(src.match(/clamp\(dragStart\.val [-+] dy, 120, LAB_MAX\)/g)).toHaveLength(2);
+  it('потолок считается ОТ ОКНА: фрейм не должен перерастать экран', () => {
+    // Сначала было 700 (упиралось сразу), потом 1600 — и фрейм перерос окно,
+    // его нижний край с ручкой уехал за границу, высоту стало нельзя менять
+    // ничем. Число в потолке — это та же ошибка на новом значении.
+    expect(src).not.toMatch(/const LAB_MAX = \d+/);
+    expect(src).toMatch(/window\.innerHeight - LAB_RESERVE/);
+    // оба обработчика берут ОДИН потолок: разные дали бы скачок размера
+    expect(src.match(/clamp\(dragStart\.val [-+] dy, 120, labMax\(\)\)/g)).toHaveLength(2);
+  });
+
+  it('уменьшили окно — фрейм ужимается сам', () => {
+    expect(src).toMatch(/window\.addEventListener\('resize', fit\)/);
+    expect(src).toMatch(/labH = Math\.min\(labH, labMax\(\)\)/);
   });
 
   it('размер сохраняется — иначе фрейм схлопнется при следующем открытии', () => {

@@ -79,9 +79,13 @@
   let saved = loadSizes();
   let leftW = $state(saved.leftW || 200);
   let rightW = $state(saved.rightW || 190);
-  // Потолок высоты нижних фреймов. 700 упирались мгновенно на большом экране,
-  // а страница и так прокручивается.
-  const LAB_MAX = 1600;
+  // ПОТОЛОК ВЫСОТЫ НИЖНИХ ФРЕЙМОВ СЧИТАЕТСЯ ОТ ОКНА, а не задан числом.
+  // Сначала было 700 (упиралось мгновенно), потом 1600 — и фрейм перерос окно:
+  // его нижний край с ручкой уехал за границу экрана, и высоту стало нельзя
+  // изменить вообще ничем (оператор, 10.08.2026). Ручка обязана оставаться
+  // видимой, поэтому оставляем под ней запас на шапку и полосу прокрутки.
+  const LAB_RESERVE = 150;
+  const labMax = () => Math.max(200, Math.round(window.innerHeight - LAB_RESERVE));
   let labH = $state(saved.labH || 340);
   let posH = $state(saved.posH || 180);
   let bookW = $state(saved.bookW || 220);
@@ -113,11 +117,11 @@
       case 'right': rightW = clamp(dragStart.val - dx, 130, 420); break;
       case 'book': bookW = clamp(dragStart.val - dx, 140, 500); break;
       case 'pos': posH = clamp(dragStart.val - dy, 80, 400); break;
-      case 'lab': labH = clamp(dragStart.val - dy, 120, LAB_MAX); break;
+      case 'lab': labH = clamp(dragStart.val - dy, 120, labMax()); break;
       // Нижний край: тянешь ВНИЗ — фрейм растёт. Именно так оператор и описал
       // жест («встаёшь на линию под легендой, тянешь вниз»), а у фреймов QUIK
       // верхней ручки не было вовсе — их высоту нельзя было менять никак.
-      case 'labBottom': labH = clamp(dragStart.val + dy, 120, LAB_MAX); break;
+      case 'labBottom': labH = clamp(dragStart.val + dy, 120, labMax()); break;
       case 'leftSplit': {
         const el = document.querySelector('.left-col') as HTMLElement | null;
         if (!el) break;
@@ -224,6 +228,16 @@
   // полдня смотрел на вчерашний код и считал правки несделанными (06.08.2026).
   let staleBundle = $state<string | null>(null);
   onMount(() => startVersionWatch((fresh) => { staleBundle = fresh; }));
+
+  // Окно уменьшили (или сохранённая высота осталась с большого экрана) — фрейм
+  // обязан ужаться, иначе его нижний край с ручкой окажется за границей экрана
+  // и высоту нельзя будет изменить ничем.
+  onMount(() => {
+    const fit = () => { labH = Math.min(labH, labMax()); };
+    fit();
+    window.addEventListener('resize', fit);
+    return () => window.removeEventListener('resize', fit);
+  });
 
   onMount(async () => {
     // Resolve the session before deciding login vs app. A network error / transient
