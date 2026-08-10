@@ -83,7 +83,14 @@ the anonymized all-trades tape (OnAllTrade, 300ms batches — the QUIK "Табл
 window must stay open), instrument params (price step/step cost/margin, 60s). The Go
 bridge routes md/book/tape/param events into a `quikdde.Provider` overlay (the package
 name is historical — Provider is the market-data hub); the runner builds EXACT OHLCV bars
-from the tape (`robot_runner/bars.py`, snapshot ticks muted while the tape flows). The
+from the tape (`robot_runner/bars.py`, snapshot ticks muted while the tape flows). That
+muting EXPIRES after `TAPE_PRIORITY_MS` (30s), so a silent tape falls back to quote
+snapshots and builds FLAT minutes out of a frozen price — overnight that is hundreds of
+invented candles. `Bar.traded` marks a minute that carried a real tape trade (default
+True: backtest/ISS bars are exchange fact; it round-trips through `to_rows`/`seed` as a
+7th column, and a legacy 6-column row counts as real). Anything shown to a HUMAN takes
+`traded_bars()`; the STRATEGY keeps reading `bars()` unchanged — filter the TAIL, never
+the builder, or you are editing trading, not the display. The
 legacy DDE reader starts ONLY with `SHECTORY_ENABLE_DDE=1`; health/heartbeat judge the
 FEED freshness, not the DDE server (a hard `Alive()` check with DDE off would raise a
 false CRITICAL DDE_DOWN on every start). Books are forwarded to STL by walking
@@ -256,6 +263,27 @@ this layer; each carries its own exits (e.g. `us_open_fvg`: stop from the range 
 target at `rr_x10` × risk, so widening the stop widens the target — sweep the pair, never
 the stop alone).
 
+Two more entry gates live in that same layer, both default-OFF and both gating ONLY
+entries/adds — never an exit:
+- **«Долина смерти»** (`dv_bars` + `dv_range_pts`, both > 0): the range of the last
+  `dv_bars` CLOSES is narrower than `dv_range_pts` points = a sideways corridor, where a
+  trend signal saws crossovers and pays it out in commission. By CLOSE, not high/low: a
+  market-maker wick must not cancel the valley. In the valley the robot opens nothing,
+  reverses into nothing and adds nothing — but the signal is still computed on the RAW
+  series. Freezing the series was tried twice and BOTH ways bit: cutting all valley bars
+  starved the warmup and left the robot mute for hours AFTER a 600-point breakout
+  (07.08.2026); cutting only the trailing valley froze the signal inside it and thereby
+  took away the robot's signal EXIT — a short sat 290 points offside with no stop
+  (08.08.2026). The filter gates orders, never the maths.
+- **Разножка in ATR units** (`min_gap_atr`, ×10; the fixed-point `min_gap_pts` and the
+  amplitude-based `gap_auto` still work — the EFFECTIVE gap is the MAXIMUM of whatever is
+  enabled, since a weaker limiter must not cancel a stronger one). Why it exists: the
+  averaging STEP is measured from the AVERAGE, and every add drags the average toward
+  price, so each next add needs less real movement and the ladder collapses — live lxk22
+  on 10.08.2026 walked 120, 40, 80 and 30 points and bought 11 of its 17 contracts at ONE
+  price. Разножка measures from the last FILLED add, and in ATR units it also scales
+  itself: wide in a rally, tight in a quiet market, never zero.
+
 `allow_long` / `allow_short` (default 1/1 = previous behaviour, injected via AVG_PARAMS
 into EVERY registry strategy) are a SWEEP AXIS, not a safety switch: the ability to
 short is not free, and on a trending contract one-sided trading can beat two-sided.
@@ -314,6 +342,12 @@ unreachable) is treated protectively (keep alarming).
 
 **Manual smart orders** (`trader/quik/smart_orders.py` = pure engine,
 `api/quik_smart_orders.py` = 1s in-process watcher): operator SL/TP/Trail/on-fill/OCO.
+Kind ids on the wire stay `sl`/`tp`/`trail_tp`/`on_fill`, but the OPERATOR-FACING names
+were changed 09.08.2026 to «Условная» / «Лимитная» / «Следящая» / «Зависимая» — rename
+texts in `lib/smart-order-help.ts`, never the ids. `sl_offset`/`tp_offset` («блоки после
+сделки») are allowed on EVERY kind since the same day: a smart order only ENTERS and
+forgets the position afterwards, so without that pair there is nothing to exit with. No
+recursion is possible by construction — `_protective` gives its children no offsets.
 Book persists in `data/smart_orders.json`; fired children go through the SAME validated
 human place path, client_id `so:<id>` = MANUAL class (robots/recon never touch them).
 While STL is down smart orders DO NOT fire — the UI says so explicitly. QUIK expires
@@ -335,7 +369,12 @@ where the truth was −8.9k). LLM access is Lineman-only (federation policy 18.0
 `POST {LINEMAN_URL}/api/klod/ask`, hoster is inside WireGuard so it dials the proxy
 directly, and NO provider key ever lives in this service. Two operational traps: the
 `normal` hint routinely 502s over a shared-quota upstream 429, so the code walks a hint
-chain (`lineman_model_hint` + `lineman_model_fallbacks`) to the first live one; and Lineman
+chain (`lineman_model_hint` + `lineman_model_fallbacks`) to the first live one — but that
+chain is only as long as the ENV makes it: `LINEMAN_MODEL_FALLBACKS` was simply unset on
+the hoster, so the "chain" was the single hint that 429s, and the robot chat stayed dead
+while the proxy itself was healthy (10.08.2026; a 401 there means expired federation
+OAuth, a 429 means shared quota — different diagnoses). Judge the channel by walking the
+hints by hand, not by the first one; and Lineman
 answers `{"error": "bad JSON"}` to any body over ~32 000 chars — that is a SIZE limit, not
 a parse error, so `build_prompt` trims to `PROMPT_BUDGET` by priority (history first, then
 docs, then the trade tail) and never touches the persona at the head or the question at the
@@ -358,7 +397,17 @@ November and back in March.
 land in `backtest_runs` (engine=remote); the pull agent on the i9 box "Win10-HyperV"
 (repo copy at `C:\Users\admin\Documents\@FIN\Shectory Trade & Lab`, NO git — sync
 `trader/` by hand or via the agent self-update manifest) claims via
-`/api/v1/agent/claim`. GOTCHAS: `agent_control.pause_remote='1'` makes claim return 204
+`/api/v1/agent/claim`. **A NEW PARAM AXIS MUST BE PROBED BEFORE IT IS SWEPT**: the i9
+holds its OWN copy of `library.py` and refreshes it only on `agent_control.update_token`,
+so an unknown key is silently ignored and EVERY combo returns the same number — which
+reads as "the parameter does not matter", not as "the parameter did not run". Queue 2
+combos (axis off / axis on hard) at priority 100: ≤ `MANUAL_SIDE_MAX_COMBOS` (32) they go
+to the RESERVED worker and do not evict a running campaign. Identical `net` AND
+`total_trades` = dead axis → set `update_token`, wait for `lib_sha` in `i9_heartbeat` to
+match `sha256sum trader/lab/strategies/library.py | cut -c1-12` on the hoster, re-probe.
+Never judge the i9's code by the heartbeat's `version` — that string is a constant in the
+agent, independent of the library. Both outcomes happened on 10.08.2026 within one hour
+(`dv_bars` alive, `min_gap_atr` dead). GOTCHAS: `agent_control.pause_remote='1'` makes claim return 204
 forever (agent idles "waiting for jobs"); `shectory-optimizer.service` on the hoster
 enqueues its own rounds and competes for the i9 — stop it for a focused sweep; results
 from `camp-`/`opt-` prefixed run_ids mirror into `optimization_leaderboard`
