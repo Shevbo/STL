@@ -266,6 +266,13 @@
   /* Фрейм ручных заявок ФИКСИРОВАН по высоте: пять строк и прокрутка. Раньше
      он рос вместе с числом заявок и отжимал роботов вниз — при восьми
      взведённых панель приходилось листать, чтобы увидеть деньги. */
+  /* Группы ручных заявок: постоянный порядок, счётчик справа, раскрытие кликом.
+     Пустые группы не показываем вовсе — строка с нулём это шум. */
+  .ord-g { display: flex; align-items: baseline; gap: 5px; cursor: pointer;
+    padding: 1px 0 1px 6px; border-left: 2px solid var(--rule); }
+  .ord-g:hover { border-left-color: var(--ink); }
+  .ord-g .ord-chev { color: var(--faint); font-size: 9px; }
+  .ord-g .ord-n { color: var(--ink); font-weight: 600; }
   .ord-box { max-height: 96px; overflow-y: auto; overscroll-behavior: contain; }
   .ord-box::-webkit-scrollbar { width: 5px; }
   .ord-box::-webkit-scrollbar-thumb { background: var(--rule); border-radius: 3px; }
@@ -735,27 +742,42 @@ function todayLo(d) {
   return msk.getTime() - (now.getTimezoneOffset() + 180) * 60000;
 }
 
-// Сколько ручных заявок держим в кадре. Пять — это ровно та высота, при
-// которой блок не отжимает роботов вниз; остальное доступно прокруткой и
-// счётчиком «и ещё N».
+// Сколько строк держим в кадре у СВЁРНУТОГО списка. Пять — это ровно та
+// высота, при которой блок не отжимает роботов вниз.
 const ORDERS_SHOWN = 5;
 
+// Пять групп: заявки терминала QUIK и четыре типа умных. Порядок постоянный —
+// оператор запоминает МЕСТО, а не читает заголовки заново каждый раз.
+const ORD_GROUPS = [
+  { id: 'quik', name: 'QUIK · терминал' },
+  { id: 'sl', name: 'Условные' },
+  { id: 'tp', name: 'Лимитные' },
+  { id: 'trail_tp', name: 'Следящие' },
+  { id: 'on_fill', name: 'Зависимые' },
+];
+
+// Раскрытые группы живут ВНЕ разметки: панель перерисовывается каждые 5 секунд,
+// и состояние, хранимое в DOM, схлопывалось бы само собой.
+const ordOpen = new Set(JSON.parse(localStorage.getItem('stl.ordOpen') || '[]'));
+function toggleOrdGroup(id) {
+  if (ordOpen.has(id)) ordOpen.delete(id); else ordOpen.add(id);
+  localStorage.setItem('stl.ordOpen', JSON.stringify([...ordOpen]));
+  if (lastData) paint(lastData);
+}
+
 function renderOrders(o, d) {
-  if (!o || (!(o.manual || []).length && !(o.smart || []).length))
-    return '<div class="empty">ручных заявок нет</div>';
+  if (!o) return '<div class="empty">ручных заявок нет</div>';
   const sideRu = (s) => s === 'buy' ? 'покупка' : 'продажа';
   const num = (v) => v == null ? '—' : Number(v).toLocaleString('ru-RU');
-  // Собираем ОБА вида в один список со временем ВЗВЕДЕНИЯ: у простой это время
-  // заявки в QUIK, у умной — created_ms. Без общего ключа порядок был бы «как
-  // отдал сервер», то есть случайным для глаза.
-  const rows = [];
+  const rowsBy = { quik: [], sl: [], tp: [], trail_tp: [], on_fill: [] };
+
+  // Время ВЗВЕДЕНИЯ: у простой заявки это время в QUIK, у умной created_ms.
   for (const m of o.manual || []) {
-    rows.push({ ts: Number(m.ts_ms || 0), html:
+    rowsBy.quik.push({ ts: Number(m.ts_ms || 0), html:
       `<div class="row"><span class="k">${esc(m.sec)} ${sideRu(m.side)} ${m.qty}</span>` +
       `<span class="sub">@ ${num(m.price)}${m.active && m.balance < m.qty ? ` · осталось ${m.balance}` : ''}</span>` +
       `<span class="sp"></span><span class="v ${m.active ? 'up' : 'nil'}">${esc(m.state)}</span></div>` });
   }
-  const KIND = { sl: 'SL', tp: 'TP', trail_tp: 'TRAIL', on_fill: 'по сделке' };
   const ST = { armed: 'взведена', fired: 'сработала', cancelled: 'снята',
     expired: 'истекла', orphaned: 'осиротела', error: 'ошибка' };
   for (const s of o.smart || []) {
@@ -774,19 +796,35 @@ function renderOrders(o, d) {
         : `ждёт пробоя ${num(s.trigger)}`;
     }
     const live = s.status === 'armed';
-    rows.push({ ts: Number(s.created_ms || s.fired_ms || 0), html:
-      `<div class="row"><span class="k">умная ${KIND[s.kind] || s.kind} · ${esc(s.code)} ${sideRu(s.side)} ${s.qty}</span>` +
+    (rowsBy[s.kind] || rowsBy.sl).push({ ts: Number(s.created_ms || s.fired_ms || 0), html:
+      `<div class="row"><span class="k">${esc(s.code)} ${sideRu(s.side)} ${s.qty}</span>` +
       `<span class="sub">${esc(sub)}</span><span class="sp"></span>` +
       `<span class="v ${live ? (s.activated ? 'up' : '') : 'nil'}">${esc(ST[s.status] || s.status)}</span></div>` });
   }
-  // Свежие сверху, показываем пять. Остаток НЕ прячем молча: список из пяти,
-  // выглядящий как полный, однажды заставит принять решение по неполной картине.
-  rows.sort((a, b) => b.ts - a.ts);
-  const shown = rows.slice(0, ORDERS_SHOWN);
-  const rest = rows.length - shown.length;
-  return `<div class="ord-box">${shown.map((r) => r.html).join('')}` +
-    (rest > 0 ? `<div class="row"><span class="sub">и ещё ${rest} — в терминале</span></div>` : '') +
-    `</div>`;
+
+  // Счётчик берём У СЕРВЕРА: он считает ДО обрезки списка, а длина массива
+  // здесь — это уже обрезанное. Нет счётчика (старый сервер) — считаем по тому,
+  // что пришло, и не притворяемся, что знаем больше.
+  const counts = o.counts || {};
+  let out = '';
+  for (const g of ORD_GROUPS) {
+    const rows = rowsBy[g.id] || [];
+    const n = counts[g.id] != null ? counts[g.id] : rows.length;
+    if (!n) continue;                       // пустую группу не показываем вовсе
+    const open = ordOpen.has(g.id);
+    out += `<div class="ord-g" data-ord="${g.id}">` +
+      `<span class="ord-chev">${open ? '▴' : '▾'}</span>` +
+      `<span class="k">${esc(g.name)}</span><span class="sp"></span>` +
+      `<span class="ord-n">${n}</span></div>`;
+    if (!open) continue;
+    rows.sort((a, b) => b.ts - a.ts);       // свежие сверху
+    out += rows.map((r) => r.html).join('');
+    if (n > rows.length) {
+      out += `<div class="row"><span class="sub">и ещё ${n - rows.length} — в терминале</span></div>`;
+    }
+  }
+  if (!out) return '<div class="empty">ручных заявок нет</div>';
+  return `<div class="ord-box">${out}</div>`;
 }
 
 // Вотчер компактно, В ОДНУ СТРОКУ на проверку: имя + ОК/текст проблемы.
@@ -984,6 +1022,8 @@ document.addEventListener('click', (e) => {
   const copyBtn = e.target.closest('.copy');
   if (copyBtn) { copyAlerts(copyBtn); return; }
   if (e.target.closest('.more')) { alertsOpen = !alertsOpen; if (lastData) paint(lastData); return; }
+  const og = e.target.closest('[data-ord]');
+  if (og) { toggleOrdGroup(og.dataset.ord); return; }
   const dens = e.target.closest('[data-dens]');
   if (dens) { setDensity(+dens.dataset.dens); return; }
   // Клик по карточке робота раскрывает его график. Ссылка на витрину внутри

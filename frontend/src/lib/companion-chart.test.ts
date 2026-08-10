@@ -354,38 +354,54 @@ describe('масштаб экрана в размерах окна', () => {
   });
 });
 
-// ── Фрейм ручных заявок: фикс, прокрутка, пять свежих ───────────────────────
-// Блок рос вместе с числом заявок и отжимал роботов вниз: при восьми взведённых
-// панель приходилось листать, чтобы увидеть деньги.
-describe('ручные заявки в панели', () => {
+// ── Ручные заявки: пять групп со счётчиками ─────────────────────────────────
+// Плоский список рос вместе с числом заявок и отжимал роботов вниз. Теперь
+// группы с количеством, раскрываются кликом, коробка фиксирована и прокручивается.
+describe('группы ручных заявок в панели', () => {
   const pages = ['public/companion.html', 'public/m.html'];
   const read = (f: string) => readFileSync(resolve(process.cwd(), f), 'utf8');
 
-  it('высота ограничена и есть прокрутка', () => {
+  it('ровно пять групп в постоянном порядке: QUIK и четыре типа умных', () => {
     for (const f of pages) {
-      expect(read(f), f).toMatch(/\.ord-box \{ max-height: \d+px; overflow-y: auto/);
-      expect(read(f), f).toMatch(/class="ord-box"/);
+      const g = read(f).match(/const ORD_GROUPS = \[([\s\S]*?)\];/)![1];
+      expect([...g.matchAll(/id: '(\w+)'/g)].map((m) => m[1]), f)
+        .toEqual(['quik', 'sl', 'tp', 'trail_tp', 'on_fill']);
     }
   });
 
-  it('в кадре пять, порядок по времени ВЗВЕДЕНИЯ, свежие сверху', () => {
+  it('счётчик берётся У СЕРВЕРА: он считает до обрезки списка', () => {
     for (const f of pages) {
       const src = read(f);
-      expect(src, f).toMatch(/const ORDERS_SHOWN = 5;/);
-      expect(src, f).toMatch(/rows\.sort\(\(a, b\) => b\.ts - a\.ts\)/);
-      // у умной это created_ms, у простой — время заявки в QUIK
-      expect(src, f).toMatch(/Number\(s\.created_ms/);
-      expect(src, f).toMatch(/Number\(m\.ts_ms/);
+      expect(src, f).toMatch(/const counts = o\.counts \|\| \{\}/);
+      expect(src, f).toMatch(/counts\[g\.id\] != null \? counts\[g\.id\] : rows\.length/);
     }
   });
 
-  it('остаток не прячется молча', () => {
-    for (const f of pages) expect(read(f), f).toMatch(/и ещё \$\{rest\}/);
+  it('пустая группа не показывается вовсе', () => {
+    for (const f of pages) expect(read(f), f).toMatch(/if \(!n\) continue;/);
+  });
+
+  it('раскрытие живёт вне разметки: панель перерисовывается каждые 5 секунд', () => {
+    for (const f of pages) {
+      expect(read(f), f).toMatch(/const ordOpen = new Set\(JSON\.parse\(localStorage/);
+      expect(read(f), f).toMatch(/data-ord=/);
+    }
+  });
+
+  it('коробка фиксирована и прокручивается', () => {
+    for (const f of pages) expect(read(f), f).toMatch(/\.ord-box \{ max-height: \d+px; overflow-y: auto/);
   });
 
   it('обе панели считают одинаково', () => {
-    const fn = (f: string) => read(f).replace(/\r\n/g, '\n')
-      .match(/function renderOrders[\s\S]*?\n\}\n/)![0];
-    expect(fn(pages[1])).toBe(fn(pages[0]));
+    // Мобильная панель уже однажды молча отстала от оконной. Сверяем тело
+    // renderOrders побайтово, без регулярок: концы строк в файлах разные.
+    const LF = String.fromCharCode(10), CR = String.fromCharCode(13);
+    const body = (f: string) => {
+      const src = read(f).split(CR + LF).join(LF);
+      const i = src.indexOf('function renderOrders(o, d) {');
+      const j = src.indexOf(LF + '}' + LF, i);
+      return src.slice(i, j);
+    };
+    expect(body(pages[1])).toBe(body(pages[0]));
   });
 });

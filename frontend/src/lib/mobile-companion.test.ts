@@ -92,10 +92,25 @@ describe('мобильный компаньон: паритет с панель�
     expect(h).toContain('сделок сегодня');
   });
 
-  it('умная заявка показывает и стоп, и тейк', () => {
+  it('заявки сгруппированы по типам, счётчик виден без раскрытия', () => {
     const h = screen('#/orders');
+    expect(h).toContain('QUIK · терминал');      // простая заявка из фикстуры
+    expect(h).toContain('Лимитные');             // умная заявка из фикстуры — kind tp
+    expect(h).toContain('data-ord="tp"');
+    // свёрнутая группа показывает количество, но не строки
+    expect(h).not.toContain('стоп 40 п.');
+  });
+
+  it('раскрытая группа показывает и стоп, и тейк', () => {
+    localStorage.setItem('stl.ordOpen', JSON.stringify(['trail_tp', 'sl', 'tp', 'on_fill', 'quik']));
+    // ordOpen читается один раз при загрузке страницы — перечитываем её целиком
+    const p2 = new Function(body(M) + '\nreturn paint;')() as typeof paint;
+    window.location.hash = '#/orders';
+    p2(SNAP);
+    const h = document.getElementById('app')!.innerHTML;
     expect(h).toContain('стоп 40 п.');
     expect(h).toContain('тейк 120 п.');
+    localStorage.removeItem('stl.ordOpen');
   });
 
   // Дрейф ловим по полям снапшота: если панель Windows начала показывать поле,

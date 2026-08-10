@@ -820,7 +820,16 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
             "fired_price": so.fired_price, "fired_qty": so.fired_qty,
             "sl_offset": so.sl_offset, "tp_offset": so.tp_offset,
             "parent_id": so.parent_id})
-    orders_block = {"manual": manual_orders[:8], "smart": smart_list[:8]}
+    # СЧЁТЧИКИ СЧИТАЕМ ДО ОБРЕЗКИ. Панель группирует заявки по типам и пишет
+    # рядом количество; посчитай его по урезанному списку — и число совпадёт с
+    # длиной списка, то есть будет врать ровно тогда, когда заявок много.
+    counts = {"quik": len(manual_orders)}
+    for kind in ("sl", "tp", "trail_tp", "on_fill"):
+        counts[kind] = sum(1 for x in smart_list if x.get("kind") == kind)
+    # Потолок поднят с 8 до 20: списки теперь раскрываются, и обрезать их на
+    # восьми значило бы прятать половину раскрытой группы.
+    orders_block = {"manual": manual_orders[:20], "smart": smart_list[:20],
+                    "counts": counts}
 
     # Состояние сессии MOEX (открыта/закрыта по ISS) — нужно и вотчеру раннера
     # (гейт лага ленты), и панели (отдельная строка «биржа»).
