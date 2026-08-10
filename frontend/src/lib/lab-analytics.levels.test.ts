@@ -5,7 +5,7 @@ import { tpSlByLevel, type TradeEvent } from './lab-analytics';
 function close(maxContracts: number, pnl: number): TradeEvent {
   return {
     time: 0, rawTime: 0, side: 'sell', qty: 1, price: 0, kind: 'full', posAfter: 0, label: '',
-    close: { holdSecs: 0, maxContracts, pnl, exit: pnl >= 0 ? 'TP' : 'SL', partial: false, exitLabel: '' },
+    close: { holdSecs: 0, maxContracts, pnl, exit: pnl >= 0 ? 'plus' : 'minus', partial: false, exitLabel: '' },
   };
 }
 

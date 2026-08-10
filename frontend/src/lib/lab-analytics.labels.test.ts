@@ -110,7 +110,7 @@ describe('роль сделки берётся из журнала, а не из
     expect(evs[0].kind).toBe('open');
     expect(evs[0].posAfter).toBeLessThan(0);          // «шорт», которого не было
     // И покупка-добор превращается в закрытие с ярлыком стопа.
-    expect(evs[1].close?.exit).toBe('SL');
+    expect(evs[1].close?.exit).toBe('minus');
   });
 
   it('fromLastFlat отрезает историю до первого доказуемого нуля позиции', () => {

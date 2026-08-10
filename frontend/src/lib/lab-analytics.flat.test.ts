@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, it, expect } from 'vitest';
 import { fromLastFlat, tradeEvents, groupByOrder } from './lab-analytics';
 
@@ -27,17 +29,17 @@ describe('журнал: кусок с доказуемого нуля', () => {
   });
 });
 
-describe('ярлыки TP/SL', () => {
+describe('ярлыки закрытия: знак результата, а не причина', () => {
   // Живой случай 30.07.2026 16:11: позиция 34 по средней 89562.94 закрыта
   // частями по 89580..89610 — ВЫШЕ средней, то есть прибыль. График, стартовав с
   // середины позиции, красил это в SL.
   const F = (side: string, qty: number, price: number, time: number) => ({ side, qty, price, time } as any);
 
-  it('замер с НУЛЯ: закрытие выше средней = TP', () => {
+  it('замер с НУЛЯ: закрытие выше средней = в плюс', () => {
     const fills = [F('buy', 34, 89562.94, 1000), F('sell', 34, 89590, 2000)];
     const evs = tradeEvents(fills, 60, 1.58714, 'RIU6', true);
     const close = evs[1];
-    expect(close.close?.exit).toBe('TP');
+    expect(close.close?.exit).toBe('plus');
     expect(close.close!.pnl).toBeGreaterThan(0);
   });
 
@@ -103,5 +105,44 @@ describe('частичные исполнения одного ордера', ()
       { ts_ms: 1001, side: 'buy', qty: 1, price: 101, pos_after: 2, seq: 2 } as any,
     ]);
     expect(got).toHaveLength(2);
+  });
+});
+
+// ── Подпись закрытия не называет причину ─────────────────────────────────────
+// Ярлык зависел ТОЛЬКО от знака результата, но писал «Stop-Loss». У робота
+// lxk22 стоп выключен (sl_frac=0, sl_pct=0), позиция 10.08 закрылась по сигналу
+// MACD с результатом −36 руб — карточка объявила Stop-Loss, и оператор пошёл
+// искать несуществующую стоп-заявку (письмо real-trade, 10.08.2026).
+// Классификатор видит одни филлы и причину закрытия не знает в принципе.
+describe('ярлык закрытия говорит про знак, а не про причину', () => {
+  const closeEvents = (pnlSign: 'plus' | 'minus') => {
+    const px = pnlSign === 'plus' ? 110 : 90;
+    const fills = [
+      { ts: 1, side: 'buy', qty: 1, price: 100, order_id: 'a' },
+      { ts: 2, side: 'sell', qty: 1, price: px, order_id: 'b' },
+    ];
+    return tradeEvents(fills as never, { point: 1, feePerContract: 0 } as never);
+  };
+
+  it('закрытие в минус НЕ подписывается стопом', () => {
+    const ev = closeEvents('minus').find((e) => e.close)!;
+    expect(ev.close!.exit).toBe('minus');
+    expect(ev.close!.exitLabel).toBe('Полное закрытие в минус');
+    expect(ev.close!.exitLabel).not.toMatch(/Stop-Loss|SL/);
+  });
+
+  it('закрытие в плюс НЕ подписывается тейком', () => {
+    const ev = closeEvents('plus').find((e) => e.close)!;
+    expect(ev.close!.exit).toBe('plus');
+    expect(ev.close!.exitLabel).toBe('Полное закрытие в плюс');
+    expect(ev.close!.exitLabel).not.toMatch(/Take-Profit|TP/);
+  });
+
+  it('слов о причине закрытия нет в исходнике классификатора', () => {
+    // Ловим возврат формулировки при любой будущей правке: причина закрытия по
+    // филлам не восстанавливается, и называть её нельзя ни в каком виде.
+    const src = readFileSync(resolve(process.cwd(), 'src/lib/lab-analytics.ts'), 'utf8');
+    const fn = src.match(/function exitLabel\([\s\S]*?\n\}/)![0];
+    expect(fn).not.toMatch(/Stop-Loss|Take-Profit/);
   });
 });

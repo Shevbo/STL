@@ -15,7 +15,8 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { fetchWithAuth, errText } from '../../lib/fetch-auth';
-  import { toFills, commissionFor, tradeEvents, fromLastFlat, groupByOrder, sortLedger } from '../../lib/lab-analytics';
+  import { toFills, commissionFor, tradeEvents, fromLastFlat, groupByOrder, sortLedger,
+           exitShort } from '../../lib/lab-analytics';
   import BacktestChart from './BacktestChart.svelte';
   import ScreenTag from './ScreenTag.svelte';
   import LatencyPane from './LatencyPane.svelte';
@@ -252,14 +253,18 @@
   // draws the chart markers — so table and chart never disagree. Joined to the raw
   // fills by INDEX over the executed subset (filled/paper), which tradeEvents keeps
   // in chronological order. Rejected/skipped fills change no position -> no action.
+  const sign = (e: any) => (e.close ? exitShort(e.close.exit) : '');
+  const cls = (e: any) => (e.close?.exit === 'plus' ? 'a-tp' : 'a-sl');
   function mapAction(e: any): { action: string; cls: string; pnl: number | null } {
     switch (e.kind) {
       case 'open':    return { action: 'OPEN', cls: 'a-open', pnl: null };
       case 'average': return { action: 'AVG',  cls: 'a-avg',  pnl: null };
       case 'enforce': return { action: 'ENF',  cls: 'a-enf',  pnl: null };
-      case 'partial': return { action: (e.close?.exit ?? '') + ' ч.', cls: e.close?.exit === 'TP' ? 'a-tp' : 'a-sl', pnl: e.close?.pnl ?? null };
-      case 'full':    return { action: e.close?.exit ?? '',           cls: e.close?.exit === 'TP' ? 'a-tp' : 'a-sl', pnl: e.close?.pnl ?? null };
-      case 'reverse': return { action: (e.close?.exit ?? '') + '→OPEN', cls: e.close?.exit === 'TP' ? 'a-tp' : 'a-sl', pnl: e.close?.pnl ?? null };
+      // «в плюс» / «в минус» — это ЗНАК, а не причина. Прежние TP/SL врали:
+      // закрытие по сигналу у робота с выключенным стопом подписывалось SL.
+      case 'partial': return { action: sign(e) + ' ч.', cls: cls(e), pnl: e.close?.pnl ?? null };
+      case 'full':    return { action: sign(e),         cls: cls(e), pnl: e.close?.pnl ?? null };
+      case 'reverse': return { action: sign(e) + '→OPEN', cls: cls(e), pnl: e.close?.pnl ?? null };
       default:        return { action: '', cls: '', pnl: null };
     }
   }

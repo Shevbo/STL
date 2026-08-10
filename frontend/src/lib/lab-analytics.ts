@@ -32,20 +32,31 @@ export interface TradeEvent {
   close?: {               // present on partial/full/reverse (a closing fill)
     holdSecs: number;     // time in position from episode open to this close
     maxContracts: number; // max abs position reached during the episode
-    pnl: number;          // realized result of the closed portion (rubles)
-    exit: 'TP' | 'SL';    // profit → take-profit, loss → stop-loss
-    partial: boolean;     // true = part of the position closed, rest still open
-    exitLabel: string;    // RU: "TP (частичный)" / "SL (полный)" etc.
+    pnl: number;              // realized result of the closed portion (rubles)
+    // ЗНАК РЕЗУЛЬТАТА, А НЕ ПРИЧИНА ЗАКРЫТИЯ. Раньше здесь стояло 'TP' | 'SL', и
+    // любое закрытие в минус подписывалось «Stop-Loss» — включая закрытие по
+    // сигналу у робота с ВЫКЛЮЧЕННЫМ стопом (lxk22, 10.08.2026: −36 руб по
+    // сигналу MACD, карточка написала Stop-Loss, оператор пошёл искать
+    // несуществующую стоп-заявку). Классификатор видит только филлы и причину
+    // закрытия не знает в принципе, поэтому называть её нельзя.
+    exit: 'plus' | 'minus';
+    partial: boolean;         // true = part of the position closed, rest still open
+    exitLabel: string;        // RU: «Полное закрытие в минус»
   };
 }
 
-// Outcome label for a closing fill: TP = closed in profit, SL = closed in loss.
-// exitLabel is the human headline, e.g. "Частичный TP" / "Полный SL".
-function exitLabel(pnl: number, partial: boolean): { exit: 'TP' | 'SL'; partial: boolean; exitLabel: string } {
-  const exit: 'TP' | 'SL' = pnl >= 0 ? 'TP' : 'SL';
-  const kind = partial ? 'Частичный' : 'Полный';
-  const full = exit === 'TP' ? 'Take-Profit' : 'Stop-Loss';
-  return { exit, partial, exitLabel: `${kind} ${exit} · ${partial ? 'част. ' : ''}${full}` };
+// Подпись закрытия. Говорим ровно то, что знаем: закрылись в плюс или в минус.
+// ЧЕМ закрылись — стопом, тейком, сигналом, руками — по филлам не видно, и
+// прежние слова Take-Profit / Stop-Loss были догадкой, выданной за факт.
+function exitLabel(pnl: number, partial: boolean): { exit: 'plus' | 'minus'; partial: boolean; exitLabel: string } {
+  const exit: 'plus' | 'minus' = pnl >= 0 ? 'plus' : 'minus';
+  const kind = partial ? 'Частичное' : 'Полное';
+  return { exit, partial, exitLabel: `${kind} закрытие ${exit === 'plus' ? 'в плюс' : 'в минус'}` };
+}
+
+/** Короткая подпись знака для таблиц и маркеров. */
+export function exitShort(exit: 'plus' | 'minus'): string {
+  return exit === 'plus' ? 'в плюс' : 'в минус';
 }
 
 const KIND_LABEL: Record<TradeEvent['kind'], string> = {
@@ -236,7 +247,7 @@ export function exitStats(events: TradeEvent[]): ExitStats {
   const s: ExitStats = { tp: 0, sl: 0, tpPartial: 0, slPartial: 0, tpFull: 0, slFull: 0, tpPnl: 0, slPnl: 0, winRateByExit: 0 };
   for (const e of events) {
     if (!e.close) continue;
-    if (e.close.exit === 'TP') {
+    if (e.close.exit === 'plus') {
       s.tp++; s.tpPnl += e.close.pnl; e.close.partial ? s.tpPartial++ : s.tpFull++;
     } else {
       s.sl++; s.slPnl += e.close.pnl; e.close.partial ? s.slPartial++ : s.slFull++;
@@ -266,7 +277,7 @@ export function tpSlByLevel(events: TradeEvent[]): LevelStat[] {
     if (!e.close) continue;
     const level = Math.max(1, Math.round(e.close.maxContracts || 1));
     const s = m.get(level) ?? { level, tp: 0, sl: 0, tpPnl: 0, slPnl: 0 };
-    if (e.close.exit === 'TP') { s.tp++; s.tpPnl += e.close.pnl; }
+    if (e.close.exit === 'plus') { s.tp++; s.tpPnl += e.close.pnl; }
     else { s.sl++; s.slPnl += e.close.pnl; }
     m.set(level, s);
   }
@@ -301,7 +312,7 @@ export function priceMarkers(
     // AVG (add against us) = dim+small. ENF (add into a winner) = full colour but small.
     const base = e.side === 'buy' ? colors.buy : colors.sell;
     const isAdd = e.kind === 'average' || e.kind === 'enforce';
-    const color = e.close ? (e.close.exit === 'TP' ? colors.tp : colors.sl)
+    const color = e.close ? (e.close.exit === 'plus' ? colors.tp : colors.sl)
       : (e.kind === 'average' ? dim(base) : base);
     const size = e.close ? 1 : (isAdd ? 1 : 2);   // fresh entry larger; adds smaller
     // TEXT tag so every fill is unambiguous on the chart (operator: «где OPEN, TP,

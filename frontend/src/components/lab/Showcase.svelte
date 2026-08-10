@@ -6,7 +6,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { fetchWithAuth } from '../../lib/fetch-auth';
   import RobotIdentity from './RobotIdentity.svelte';
-  import { toFills, rolledPnl, openVm, annualizedPct } from '../../lib/lab-analytics';
+  import { toFills, rolledPnl, openVm, annualizedPct, exitShort } from '../../lib/lab-analytics';
   import { fetchAgentRobots, openAgentRobot, type AgentRobotRow } from '../../lib/agent-robots';
   import RobotWindow from './RobotWindow.svelte';
 
@@ -96,7 +96,8 @@
   });
 
   function tradeTypeLabel(row: any): { text: string; cls: string } {
-    if (row.close) return { text: row.close.exit, cls: row.close.exit === 'TP' ? 'tt-tp' : 'tt-sl' };
+    // знак результата, а не причина закрытия: чем закрылись, по филлам не видно
+    if (row.close) return { text: exitShort(row.close.exit), cls: row.close.exit === 'plus' ? 'tt-tp' : 'tt-sl' };
     if (row.kind === 'average') return { text: 'AVG', cls: 'tt-avg' };
     if (row.kind === 'enforce') return { text: 'ENF', cls: 'tt-enf' };
     if (row.kind === 'reverse') return { text: 'реверс', cls: 'tt-rev' };
