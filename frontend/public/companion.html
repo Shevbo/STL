@@ -85,6 +85,13 @@
   }
   .btn:hover { color: var(--ink); }
   .btn.quit:hover { color: var(--down); }
+  /* Масштаб: те же кнопки шапки, но уже и с моноширинными знаками — «+» и «−»
+     разной ширины прыгали бы при наведении. */
+  .btn.zoom { font: 400 14px/1 Consolas, monospace; padding: 0 2px; }
+  /* Край диапазона: кнопка на месте, но гаснет — исчезнувшая кнопка заставляет
+     гадать, сломалось или упёрлось. */
+  .btn.zoom.off { opacity: .3; cursor: default; }
+  .btn.zoom.off:hover { color: var(--faint); }
 
   /* Заголовок секции: подпись, дальше волосяная линия до края. */
   .sec {
@@ -304,6 +311,8 @@
   <a class="brand" id="brand" href="https://stl.shectory.ru/" data-ext
      title="Открыть STL в браузере">STL</a>
   <span class="fresh" id="fresh">…</span>
+  <span class="btn zoom" id="zoomout" title="Мельче">−</span>
+  <span class="btn zoom" id="zoomin" title="Крупнее">+</span>
   <span class="btn" id="reload" title="Перечитать панель с сервера (после обновления вёрстки)">⟳</span>
   <span class="btn" id="hide" title="Свернуть в трей">✕</span>
   <span class="btn quit" id="quit" title="Закрыть приложение">⏻</span>
@@ -949,8 +958,19 @@ $('quit').onclick = () => shell('/quit');
 // каждая правка панели требовала перезапуска exe. Метка времени в адресе — чтобы
 // WebView2 не отдал страницу из своего кэша по тому же URL.
 $('reload').onclick = () => { location.href = '/?r=' + Date.now(); };
+$('zoomout').onclick = () => stepSize(-1);
+$('zoomin').onclick = () => stepSize(1);
+// Привычная комбинация из редакторов: Ctrl +/− меняет шаг, Ctrl 0 возвращает
+// исходный. Оператор так и просил — «как в VS Code».
+document.addEventListener('keydown', (e) => {
+  if (!e.ctrlKey || e.altKey) return;
+  if (e.key === '+' || e.key === '=') { stepSize(1); e.preventDefault(); }
+  else if (e.key === '-' || e.key === '_') { stepSize(-1); e.preventDefault(); }
+  else if (e.key === '0') { localStorage.setItem('stl.size', '0'); applySize(); e.preventDefault(); }
+});
 if (!LOCAL) {
   $('hide').style.display = $('quit').style.display = $('reload').style.display = 'none';
+  $('zoomout').style.display = $('zoomin').style.display = 'none';
 }
 
 // ── Перетаскивание панели за шапку ───────────────────────────────────────────
@@ -1015,13 +1035,50 @@ let dragEndedAt = 0;   // чтобы клик, завершающий перет
 })();
 
 // Окно ровно по содержимому: высоту считает страница, размер ставит Go.
-// Ширину задаём один раз при старте — так «размер» не зависит от config.json
-// на машине оператора (страница — авторитет размера).
-const PANEL_WIDTH = 350;   // -30% ширины: сжатый шрифт Bahnschrift позволяет
-let widthSet = false;
+// Ширину тоже задаёт страница — так «размер» не зависит от config.json на
+// машине оператора.
+//
+// МАСШТАБ КАК Ctrl +/− В РЕДАКТОРЕ: пять шагов от 350 до 1000 px. Растёт не
+// только ширина — растёт ВСЁ, потому что вёрстка остаётся 350-пиксельной, а
+// увеличивает её `zoom`. Пересчитывать десятки размеров в CSS не нужно, и
+// мини-график со шкалой тянутся вместе с текстом.
+//
+// zoom, а не transform: transform не меняет layout-бокс, и высота, которую
+// страница сообщает Go, осталась бы от немасштабированной вёрстки — окно
+// разъехалось бы с содержимым. Chromium (а WebView2 это он) считает
+// getBoundingClientRect УЖЕ с учётом zoom, поэтому fitWindow работает как был.
+const SIZES = [350, 515, 675, 840, 1000];
+const PANEL_WIDTH = SIZES[0];
+let lastW = 0;
 let lastH = 0;
+
+function sizeIdx() {
+  const i = parseInt(localStorage.getItem('stl.size') || '0', 10);
+  return Math.min(SIZES.length - 1, Math.max(0, isNaN(i) ? 0 : i));
+}
+
+function applySize() {
+  const i = sizeIdx(), w = SIZES[i];
+  document.body.style.zoom = String(w / SIZES[0]);
+  const minus = $('zoomout'), plus = $('zoomin');
+  if (minus) {
+    minus.classList.toggle('off', i === 0);
+    plus.classList.toggle('off', i === SIZES.length - 1);
+    const hint = `масштаб ${i + 1} из ${SIZES.length} · ширина ${w} px`;
+    minus.title = 'Мельче — ' + hint;
+    plus.title = 'Крупнее — ' + hint;
+  }
+  if (w !== lastW) { lastW = w; shell('/width?w=' + w); }
+  lastH = 0;             // при смене масштаба высота другая, пересчитать заново
+  fitWindow();
+}
+
+function stepSize(d) {
+  localStorage.setItem('stl.size', String(Math.min(SIZES.length - 1, Math.max(0, sizeIdx() + d))));
+  applySize();
+}
+
 function fitWindow() {
-  if (!widthSet) { widthSet = true; shell('/width?w=' + PANEL_WIDTH); }
   const h = Math.ceil(document.body.getBoundingClientRect().height) + 10;
   if (h === lastH) return;
   lastH = h;
@@ -1045,6 +1102,9 @@ async function tick() {
       + (lastGood ? 'нет связи, данные от ' + esc(hhmmss(lastGood)) : 'нет связи с STL');
   }
 }
+// Масштаб восстанавливаем ДО первого запроса: иначе панель успевает мигнуть
+// исходным размером, а Go получает ширину дважды.
+if (LOCAL) applySize();
 tick();
 setInterval(tick, 5000);
 </script>

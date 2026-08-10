@@ -268,3 +268,41 @@ describe('иконка кассеты', () => {
     expect(mobile(false)).toBe(cassette(false));
   });
 });
+
+// ── Масштаб панели: пять шагов, как Ctrl +/− в редакторе ─────────────────────
+// Растёт не только ширина: вёрстка остаётся 350-пиксельной, а увеличивает её
+// zoom. Поэтому шаги обязаны начинаться ровно с исходных 350 и доходить до
+// 1000, а множитель — выводиться из них, а не жить отдельной константой.
+describe('шаги масштаба компаньона', () => {
+  const src = readFileSync(resolve(process.cwd(), 'public/companion.html'), 'utf8');
+  const sizes = JSON.parse(src.match(/const SIZES = (\[[^\]]*\])/)![1]);
+
+  it('пять шагов от текущей ширины до 1000', () => {
+    expect(sizes).toHaveLength(5);
+    expect(sizes[0]).toBe(350);
+    expect(sizes[4]).toBe(1000);
+  });
+
+  it('шаги строго растут и ложатся ровно', () => {
+    for (let i = 1; i < sizes.length; i++) expect(sizes[i]).toBeGreaterThan(sizes[i - 1]);
+    const gaps = sizes.slice(1).map((w: number, i: number) => w - sizes[i]);
+    // ровный шаг: разброс между интервалами не больше 10 px
+    expect(Math.max(...gaps) - Math.min(...gaps)).toBeLessThanOrEqual(10);
+  });
+
+  it('масштабируется ВСЯ панель через zoom, а не через transform', () => {
+    // transform не меняет layout-бокс: высота, которую страница сообщает Go,
+    // осталась бы от немасштабированной вёрстки и окно разъехалось бы.
+    expect(src).toMatch(/document\.body\.style\.zoom/);
+    expect(src).not.toMatch(/style\.transform\s*=\s*.scale/);
+  });
+
+  it('множитель считается от первого шага, а не задан отдельно', () => {
+    expect(src).toMatch(/zoom\s*=\s*String\(w \/ SIZES\[0\]\)/);
+  });
+
+  it('ширина уходит в Go на КАЖДОЙ смене шага, а не однажды при старте', () => {
+    expect(src).not.toMatch(/widthSet/);
+    expect(src).toMatch(/shell\('\/width\?w=' \+ w\)/);
+  });
+});
