@@ -503,9 +503,15 @@ the agent release. Change the markup, hand the delivery over — never scp into
 владельцу зоны больше не нужно через оператора — есть ящик:
 
 ```bash
-ssh hoster 'bash ~/apps/shectory-trader/scripts/devmsg.sh inbox real-trade'          # мои входящие
-ssh hoster 'bash ~/apps/shectory-trader/scripts/devmsg.sh send ui-ux "тема" "текст" real-trade'
-ssh hoster 'bash ~/apps/shectory-trader/scripts/devmsg.sh ack <id>'                   # прочитано
+# Свой ящик (подставь СВОЁ окно):
+ssh hoster 'bash ~/apps/shectory-trader/scripts/devmsg.sh inbox real-trade'
+
+# Отправка. ПОРЯДОК: адресат ПЕРВЫМ, отправитель ПОСЛЕДНИМ. Перепутав их,
+# отправляешь письмо САМОМУ СЕБЕ от имени соседа — наступили 10.08.2026.
+# Ниже: окно ui-ux пишет окну real-trade.
+ssh hoster 'bash ~/apps/shectory-trader/scripts/devmsg.sh send real-trade "тема" "текст" ui-ux'
+
+ssh hoster 'bash ~/apps/shectory-trader/scripts/devmsg.sh ack <id>'   # прочитано
 ```
 
 Окна: `real-trade`, `backtests`, `ui-ux`, `operator`, плюс `all` — всем сразу.
