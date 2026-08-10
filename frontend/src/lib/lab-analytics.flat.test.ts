@@ -39,7 +39,7 @@ describe('ярлыки закрытия: знак результата, а не 
     const fills = [F('buy', 34, 89562.94, 1000), F('sell', 34, 89590, 2000)];
     const evs = tradeEvents(fills, 60, 1.58714, 'RIU6', true);
     const close = evs[1];
-    expect(close.close?.exit).toBe('plus');
+    expect(close.close?.exit).toBe('TP');
     expect(close.close!.pnl).toBeGreaterThan(0);
   });
 
@@ -108,41 +108,49 @@ describe('частичные исполнения одного ордера', ()
   });
 });
 
-// ── Подпись закрытия не называет причину ─────────────────────────────────────
-// Ярлык зависел ТОЛЬКО от знака результата, но писал «Stop-Loss». У робота
-// lxk22 стоп выключен (sl_frac=0, sl_pct=0), позиция 10.08 закрылась по сигналу
-// MACD с результатом −36 руб — карточка объявила Stop-Loss, и оператор пошёл
-// искать несуществующую стоп-заявку (письмо real-trade, 10.08.2026).
-// Классификатор видит одни филлы и причину закрытия не знает в принципе.
-describe('ярлык закрытия говорит про знак, а не про причину', () => {
-  const closeEvents = (pnlSign: 'plus' | 'minus') => {
-    const px = pnlSign === 'plus' ? 110 : 90;
+// ── Минус без стопа — это CLOSE, а не SL ─────────────────────────────────────
+// Тейк у стратегий реестра есть всегда (tp_atr), поэтому плюс называем TP. Стоп
+// по умолчанию ВЫКЛЮЧЕН, и вот тут врать нельзя: у робота lxk22 стоп выключен,
+// закрытие по сигналу MACD на −36 руб подписали Stop-Loss, и оператор пошёл
+// искать заявку, которой нет (письмо real-trade, 10.08.2026).
+describe('ярлык закрытия: TP / SL / CLOSE', () => {
+  const close = (px: number, hasStop: boolean) => {
     const fills = [
-      { ts: 1, side: 'buy', qty: 1, price: 100, order_id: 'a' },
-      { ts: 2, side: 'sell', qty: 1, price: px, order_id: 'b' },
+      { time: 1, side: 'buy', qty: 1, price: 100, order_id: 'a' },
+      { time: 2, side: 'sell', qty: 1, price: px, order_id: 'b' },
     ];
-    return tradeEvents(fills as never, { point: 1, feePerContract: 0 } as never);
+    return tradeEvents(fills as never, 60, 1, '', true, hasStop).find((e) => e.close)!.close!;
   };
 
-  it('закрытие в минус НЕ подписывается стопом', () => {
-    const ev = closeEvents('minus').find((e) => e.close)!;
-    expect(ev.close!.exit).toBe('minus');
-    expect(ev.close!.exitLabel).toBe('Полное закрытие в минус');
-    expect(ev.close!.exitLabel).not.toMatch(/Stop-Loss|SL/);
+  it('плюс — это TP: тейк у стратегии есть всегда', () => {
+    expect(close(110, false).exit).toBe('TP');
+    expect(close(110, false).exitLabel).toBe('Полный TP');
   });
 
-  it('закрытие в плюс НЕ подписывается тейком', () => {
-    const ev = closeEvents('plus').find((e) => e.close)!;
-    expect(ev.close!.exit).toBe('plus');
-    expect(ev.close!.exitLabel).toBe('Полное закрытие в плюс');
-    expect(ev.close!.exitLabel).not.toMatch(/Take-Profit|TP/);
+  it('минус со ВКЛЮЧЁННЫМ стопом — SL', () => {
+    expect(close(90, true).exit).toBe('SL');
+    expect(close(90, true).exitLabel).toBe('Полный SL');
   });
 
-  it('слов о причине закрытия нет в исходнике классификатора', () => {
-    // Ловим возврат формулировки при любой будущей правке: причина закрытия по
-    // филлам не восстанавливается, и называть её нельзя ни в каком виде.
+  it('минус без стопа — CLOSE, стопом не называем', () => {
+    const c = close(90, false);
+    expect(c.exit).toBe('CLOSE');
+    expect(c.exitLabel).toBe('Полное закрытие');
+    expect(c.exitLabel).not.toMatch(/SL|Stop/);
+  });
+
+  it('умолчание безопасное: не знаем про стоп — не утверждаем, что он сработал', () => {
+    const fills = [
+      { time: 1, side: 'buy', qty: 1, price: 100, order_id: 'a' },
+      { time: 2, side: 'sell', qty: 1, price: 90, order_id: 'b' },
+    ];
+    const c = tradeEvents(fills as never, 60).find((e) => e.close)!.close!;
+    expect(c.exit).toBe('CLOSE');
+  });
+
+  it('в исходнике классификатора нет слов Stop-Loss / Take-Profit', () => {
     const src = readFileSync(resolve(process.cwd(), 'src/lib/lab-analytics.ts'), 'utf8');
-    const fn = src.match(/function exitLabel\([\s\S]*?\n\}/)![0];
+    const fn = src.match(/function exitLabel\([\s\S]*?[\n\r]\}/)![0];
     expect(fn).not.toMatch(/Stop-Loss|Take-Profit/);
   });
 });

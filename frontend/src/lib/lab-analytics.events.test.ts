@@ -41,7 +41,7 @@ describe('unique order_id mapping (fixes the reverse-collision P&L distortion)',
     ]);
     expect(events.map(e => e.id)).toEqual(['A', 'B', 'C']);
     expect(events[1].close).toBeTruthy();          // B is the SL close
-    expect(events[1].close!.exit).toBe('minus');
+    expect(events[1].close!.exit).toBe('CLOSE');
     expect(events[2].kind).toBe('open');           // C is a fresh entry
     expect(events[2].close).toBeUndefined();
     // distinct ids ⇒ a Map keyed by id keeps BOTH; keyed by (time,side,qty,price) keeps one

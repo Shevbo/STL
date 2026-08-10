@@ -713,7 +713,7 @@
         if (best.close) {
           // Exit fills: make the TP/SL type the headline so it's unmistakable.
           head = best.close.exitLabel;                 // "Частичный TP · ..." etc.
-          headKind = best.close.exit === 'plus' ? 'tp' : 'sl';
+          headKind = best.close.exit === 'TP' ? 'tp' : 'sl';
           lines.push(best.label);                      // "Полн. закрытие N (всего в поз. V)"
           lines.push(`${best.side === 'buy' ? 'Покупка' : 'Продажа'} @ ${fmtPrice(best.price)}`);
           lines.push(fmtTs(best.rawTime));

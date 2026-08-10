@@ -16,7 +16,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { fetchWithAuth, errText } from '../../lib/fetch-auth';
   import { toFills, commissionFor, tradeEvents, fromLastFlat, groupByOrder, sortLedger,
-           exitShort } from '../../lib/lab-analytics';
+           exitShort, exitIsProfit } from '../../lib/lab-analytics';
   import BacktestChart from './BacktestChart.svelte';
   import ScreenTag from './ScreenTag.svelte';
   import LatencyPane from './LatencyPane.svelte';
@@ -253,8 +253,12 @@
   // draws the chart markers — so table and chart never disagree. Joined to the raw
   // fills by INDEX over the executed subset (filled/paper), which tradeEvents keeps
   // in chronological order. Rejected/skipped fills change no position -> no action.
+  // Стоп ВКЛЮЧЁН? Тейк у стратегий реестра есть всегда, а стоп по умолчанию
+  // выключен — и закрытие в минус у робота без стопа это CLOSE, не SL.
+  const hasStop = $derived(
+    Number((params as any).sl_frac || 0) > 0 || Number((params as any).sl_pct || 0) > 0);
   const sign = (e: any) => (e.close ? exitShort(e.close.exit) : '');
-  const cls = (e: any) => (e.close?.exit === 'plus' ? 'a-tp' : 'a-sl');
+  const cls = (e: any) => (e.close ? (exitIsProfit(e.close.exit) ? 'a-tp' : 'a-sl') : '');
   function mapAction(e: any): { action: string; cls: string; pnl: number | null } {
     switch (e.kind) {
       case 'open':    return { action: 'OPEN', cls: 'a-open', pnl: null };
@@ -287,7 +291,7 @@
     // сделки берём из НЕГО — тем же потоком событий, что рисует график.
     if (ledgerFromFlat) {
       const byOrder = new Map<string, any>();
-      for (const e of tradeEvents(groupByOrder(ledgerTail as any[]), 60, pointCoef ?? 1, symbol, true))
+      for (const e of tradeEvents(groupByOrder(ledgerTail as any[]), 60, pointCoef ?? 1, symbol, true, hasStop))
         byOrder.set(String((e as any).id ?? ''), e);
       const m = new Map<number, { action: string; cls: string; pnl: number | null; comm: number | null }>();
       const seen = new Set<string>();
@@ -312,7 +316,7 @@
     // зеркала по индексу. Agent robots trade MARKETABLE (cross the spread) in BOTH paper
     // and real, so the per-trade P&L is netted with the TAKER model — matching the
     // runner's realized and the backtest.
-    const evs = tradeEvents(fills, 60, pointCoef ?? 1, symbol, true);
+    const evs = tradeEvents(fills, 60, pointCoef ?? 1, symbol, true, hasStop);
     const m = new Map<number, { action: string; cls: string; pnl: number | null; comm: number | null }>();
     evs.forEach((e: any, k: number) => {
       // Commission (₽) of THIS fill — every fill pays it; shown per row + summed below.

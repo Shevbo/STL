@@ -15,6 +15,10 @@ export function toFills(raw: any): Fill[] {
 }
 
 // A trade enriched with its position-lifecycle role, for markers + hover tooltip.
+/** Чем закончилось закрытие. CLOSE — «просто закрылись»: результат в минус, а
+ *  стопа у робота нет, значит назвать это стопом нельзя. */
+export type Exit = 'TP' | 'SL' | 'CLOSE';
+
 export interface TradeEvent {
   time: number;           // bucketed (chart) time
   rawTime: number;        // original fill time
@@ -39,24 +43,39 @@ export interface TradeEvent {
     // сигналу MACD, карточка написала Stop-Loss, оператор пошёл искать
     // несуществующую стоп-заявку). Классификатор видит только филлы и причину
     // закрытия не знает в принципе, поэтому называть её нельзя.
-    exit: 'plus' | 'minus';
+    exit: Exit;
     partial: boolean;         // true = part of the position closed, rest still open
     exitLabel: string;        // RU: «Полное закрытие в минус»
   };
 }
 
-// Подпись закрытия. Говорим ровно то, что знаем: закрылись в плюс или в минус.
-// ЧЕМ закрылись — стопом, тейком, сигналом, руками — по филлам не видно, и
-// прежние слова Take-Profit / Stop-Loss были догадкой, выданной за факт.
-function exitLabel(pnl: number, partial: boolean): { exit: 'plus' | 'minus'; partial: boolean; exitLabel: string } {
-  const exit: 'plus' | 'minus' = pnl >= 0 ? 'plus' : 'minus';
-  const kind = partial ? 'Частичное' : 'Полное';
-  return { exit, partial, exitLabel: `${kind} закрытие ${exit === 'plus' ? 'в плюс' : 'в минус'}` };
+// Подпись закрытия. Тейк у стратегий реестра есть ВСЕГДА (tp_atr), поэтому
+// закрытие в плюс называем TP. А вот СТОП по умолчанию выключен (sl_frac=0), и
+// вот здесь врать нельзя: раньше любое закрытие в минус подписывалось «SL», и у
+// робота lxk22 с выключенным стопом закрытие по сигналу MACD на −36 руб
+// объявили Stop-Loss — оператор пошёл искать заявку, которой нет.
+//
+// Правило: минус — это SL, только если стоп у робота ВКЛЮЧЁН. Иначе CLOSE.
+// hasStop приходит снаружи: по филлам параметры робота не видны, а умолчание
+// false — единственное безопасное (не знаем про стоп → не называем стопом).
+function exitLabel(
+  pnl: number, partial: boolean, hasStop: boolean,
+): { exit: Exit; partial: boolean; exitLabel: string } {
+  const exit: Exit = pnl >= 0 ? 'TP' : (hasStop ? 'SL' : 'CLOSE');
+  if (exit === 'CLOSE') {
+    return { exit, partial, exitLabel: `${partial ? 'Частичное' : 'Полное'} закрытие` };
+  }
+  return { exit, partial, exitLabel: `${partial ? 'Частичный' : 'Полный'} ${exit}` };
 }
 
-/** Короткая подпись знака для таблиц и маркеров. */
-export function exitShort(exit: 'plus' | 'minus'): string {
-  return exit === 'plus' ? 'в плюс' : 'в минус';
+/** Короткая подпись для таблиц и маркеров. */
+export function exitShort(exit: Exit): string {
+  return exit;
+}
+
+/** Закрылись в плюс? Цвет и знак берут отсюда, а не сравнением с 'TP'. */
+export function exitIsProfit(exit: Exit): boolean {
+  return exit === 'TP';
 }
 
 const KIND_LABEL: Record<TradeEvent['kind'], string> = {
@@ -162,7 +181,11 @@ export function commissionBreakdown(
 // commission uses the taker/maker model above (backtest=taker, live=maker); the
 // entry/averaging fees are carried and charged to the round-trip on its close
 // (same accounting as backend compute_metrics).
-export function tradeEvents(trades: Fill[], bucketSecs: number, pointValue = 1, symbol = '', taker = true): TradeEvent[] {
+// hasStop: включён ли у робота стоп (sl_frac/sl_pct > 0). Нужен, чтобы не
+// называть стопом закрытие робота, у которого стопа нет. Умолчание false —
+// безопасное: не знаем про стоп, значит не утверждаем, что он сработал.
+export function tradeEvents(trades: Fill[], bucketSecs: number, pointValue = 1, symbol = '',
+                            taker = true, hasStop = false): TradeEvent[] {
   let pos = 0, avg = 0, epStart = 0, epMaxAbs = 0, carriedFee = 0;
   const out: TradeEvent[] = [];
   const sorted = [...trades].sort((a, b) => a.time - b.time);
@@ -211,7 +234,7 @@ export function tradeEvents(trades: Fill[], bucketSecs: number, pointValue = 1, 
       const isPartial = q < Math.abs(pos);
       const feeShare = isPartial ? carriedFee * (closeQty / Math.abs(pos)) : carriedFee;
       const pnl = pnlPts * pointValue - c - feeShare;
-      close = { holdSecs: t.time - epStart, maxContracts: epMaxAbs, pnl, ...exitLabel(pnl, isPartial) };
+      close = { holdSecs: t.time - epStart, maxContracts: epMaxAbs, pnl, ...exitLabel(pnl, isPartial, hasStop) };
       if (isPartial) { kind = 'partial'; carriedFee -= feeShare; pos += signed; }
       else if (q === Math.abs(pos)) { kind = 'full'; pos = 0; avg = 0; carriedFee = 0; }
       else {
@@ -247,7 +270,7 @@ export function exitStats(events: TradeEvent[]): ExitStats {
   const s: ExitStats = { tp: 0, sl: 0, tpPartial: 0, slPartial: 0, tpFull: 0, slFull: 0, tpPnl: 0, slPnl: 0, winRateByExit: 0 };
   for (const e of events) {
     if (!e.close) continue;
-    if (e.close.exit === 'plus') {
+    if (exitIsProfit(e.close.exit)) {
       s.tp++; s.tpPnl += e.close.pnl; e.close.partial ? s.tpPartial++ : s.tpFull++;
     } else {
       s.sl++; s.slPnl += e.close.pnl; e.close.partial ? s.slPartial++ : s.slFull++;
@@ -277,7 +300,7 @@ export function tpSlByLevel(events: TradeEvent[]): LevelStat[] {
     if (!e.close) continue;
     const level = Math.max(1, Math.round(e.close.maxContracts || 1));
     const s = m.get(level) ?? { level, tp: 0, sl: 0, tpPnl: 0, slPnl: 0 };
-    if (e.close.exit === 'plus') { s.tp++; s.tpPnl += e.close.pnl; }
+    if (exitIsProfit(e.close.exit)) { s.tp++; s.tpPnl += e.close.pnl; }
     else { s.sl++; s.slPnl += e.close.pnl; }
     m.set(level, s);
   }
@@ -312,7 +335,7 @@ export function priceMarkers(
     // AVG (add against us) = dim+small. ENF (add into a winner) = full colour but small.
     const base = e.side === 'buy' ? colors.buy : colors.sell;
     const isAdd = e.kind === 'average' || e.kind === 'enforce';
-    const color = e.close ? (e.close.exit === 'plus' ? colors.tp : colors.sl)
+    const color = e.close ? (exitIsProfit(e.close.exit) ? colors.tp : colors.sl)
       : (e.kind === 'average' ? dim(base) : base);
     const size = e.close ? 1 : (isAdd ? 1 : 2);   // fresh entry larger; adds smaller
     // TEXT tag so every fill is unambiguous on the chart (operator: «где OPEN, TP,
@@ -422,9 +445,9 @@ export function rolledPnl(
   fills: RawFill[],
   pointValue: number | Record<string, number> = 1,
   taker = true,
-  opts: { settleCarried?: boolean; bucketSecs?: number } = {},
+  opts: { settleCarried?: boolean; bucketSecs?: number; hasStop?: boolean } = {},
 ): RolledPnl {
-  const { settleCarried = true, bucketSecs = 60 } = opts;
+  const { settleCarried = true, bucketSecs = 60, hasStop = false } = opts;
   const pvFor = (s: string): number =>
     typeof pointValue === 'number' ? pointValue : (pointValue[s] ?? pointValue[''] ?? 1);
 
@@ -456,7 +479,7 @@ export function rolledPnl(
                       qty: Math.abs(pos), side: pos > 0 ? 'sell' : 'buy',
                       order_id: `synthetic:${s}:${last.time + 1}`, synthetic: true } as any];
     }
-    const evs = tradeEvents(seq, bucketSecs, pvFor(s), s, taker);
+    const evs = tradeEvents(seq, bucketSecs, pvFor(s), s, taker, hasStop);
     let cNet = 0, cCloses = 0;
     for (const e of evs) if (e.close) { cNet += e.close.pnl; cCloses++; }
     const endPos = (settleCarried && s !== currentSymbol) ? 0 : pos;
