@@ -400,3 +400,25 @@ def test_margin_multiplier_defaults_to_exchange_margin(monkeypatch):
     body = TestClient(app).get("/api/v1/quik/companion/snapshot",
                                headers=_operator_headers()).json()
     assert {r["id"]: r for r in body["robots"]}["r1"]["max_go"] == pytest.approx(22_375.0 * 4)
+
+
+def test_lamp_rejects_candidates_whose_warmup_outlives_the_runner_tail():
+    """Лампа «кандидат» не предлагает строку, которую нельзя запустить роботом.
+
+    Раннер персистит 600 закрытых баров: конфиг с прогревом 1600 после каждого
+    рестарта агента слеп ~17 часов. В бэктесте цифра честная, в бою недостижима.
+    Формула прогрева берётся у самой стратегии — бланкетный «4×max периодов»
+    завышал бы её SMA-семейству и вовсе не видел pivot (2200 при любых полях).
+    """
+    from trader.api.quik_companion import _warmup_fits
+
+    assert _warmup_fits("shectory_2ema", {"ema1": 60, "ema2": 20}) is True   # 240
+    assert _warmup_fits("shectory_2ema", {"ema1": 60, "ema2": 400}) is False  # 1600
+    # контр-стратегия судится по своей базе
+    assert _warmup_fits("shectory_2ema__inv", json.dumps({"ema1": 3, "ema2": 400})) is False
+    assert _warmup_fits("macd_cross", {"fast": 12, "slow": 26, "signal": 9}) is True
+    assert _warmup_fits("pivot_reversal", {}) is False        # 2200 всегда
+    # судим только то, о чём знаем: модуль вне реестра и битые params пропускаем
+    assert _warmup_fits("us_open_fvg", {"open_hour": 16}) is True
+    assert _warmup_fits("shectory_2ema", "не json") is True
+    assert _warmup_fits(None, {}) is True

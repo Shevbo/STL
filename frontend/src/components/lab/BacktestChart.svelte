@@ -391,6 +391,10 @@
   // Сколько закрытых сделок легло ЗА пределами загруженных баров (источник баров графика
   // короче теста) — их P&L сжат в последнюю точку; предупреждаем оператора.
   let equityTailBeyond = $state(0);
+  // Самая глубокая точка нарисованной кривой: в режиме «Фикс+ВМ» это и есть
+  // просадка по открытой позиции, сопоставимая с max_mae. По правому краю её не
+  // увидеть — там позиция обычно уже закрыта.
+  let eqLow = $state<{ v: number; t: number } | null>(null);
   let statsExpanded = $state(false);    // report collapsed to 2 lines by default
   let showTrades = $state(false);       // trades-table overlay
   let tradeRows = $state<any[]>([]);    // per-trade rows for the table
@@ -1129,12 +1133,15 @@
         const material = Math.abs(startValue) > Math.max(1000, Math.abs(netOverride ?? 0) * 0.02);
         equityCarry = (engineNet == null && material)
           ? { rub: startValue, fromTs: raw.length ? raw[0].time : 0 } : null;
+        let low: { v: number; t: number } | null = null;
         const curve = raw.map(p => {
           const v = adj(p.value);
           if (v > peak) peak = v;
           if (peak - v > maxDD) maxDD = peak - v;
+          if (!low || v < low.v) low = { v, t: p.time };
           return { time: p.time, value: v };
         });
+        eqLow = low;
         // Выравниваем шкалу времени equity со свечами: перед кривой добавляем
         // WHITESPACE-точки на КАЖДЫЙ бар до первой сделки. Тогда число точек у обеих
         // серий одинаково, и односторонний logical-range sync мапит индекс-в-индекс
@@ -1149,6 +1156,7 @@
       } else {
         equitySeries.setData([]);
         lastEquityValue = 0;
+        eqLow = null;          // нет кривой — нет и её минимума
       }
 
       // All round-trip / money stats from the roll-aware result — single source of
@@ -1530,6 +1538,16 @@
             </div>
           {/if}
         </button>
+        <!-- Переключатель кривой стоит ЗДЕСЬ, у бейджа, а не под графиком: там его
+             не находили вовсе («функции нет»), потому что взгляд держит «Результат»,
+             а смысл у них общий — фикс против фикс+ВМ. -->
+        <div class="st-mode" role="group" aria-label="Режим кривой доходности">
+          <span>кривая</span>
+          <button class:on={eqMode === 'fix'} onclick={() => setEqMode('fix')}
+                  title="только ЗАКРЫТЫЕ сделки — как считает бейдж «Результат»">Фикс</button>
+          <button class:on={eqMode === 'vm'} onclick={() => setEqMode('vm')}
+                  title="фикс ПЛЮС переоценка открытой позиции на каждом баре: видно, куда уводит незакрытый минус">Фикс+ВМ</button>
+        </div>
 
         {#if statsExpanded}
           <div class="st-body">
@@ -1641,15 +1659,15 @@
   <!-- Без известного ₽/пункт кривая идёт в ПУНКТАХ — подпись обязана это говорить,
        иначе пункты читаются как рубли (у BR пункт = 785 ₽, у RTS = 1.57 ₽). -->
   <div class="bt-equity-label">
-    <span class="bt-eq-mode" role="group" aria-label="Режим кривой доходности">
-      <button class:on={eqMode === 'fix'} onclick={() => setEqMode('fix')}
-              title="только ЗАКРЫТЫЕ сделки — как считает бейджем «Результат»">Фикс</button>
-      <button class:on={eqMode === 'vm'} onclick={() => setEqMode('vm')}
-              title="фикс ПЛЮС переоценка открытой позиции на каждом баре: видно, куда уводит незакрытый минус">Фикс+ВМ</button>
-    </span>
     P&L робота, {unitLabel} ({eqMode === 'vm'
       ? 'фикс + ВМ открытой позиции, по барам'
       : 'нарастающим по закрытым сделкам'})
+    <!-- Разница между режимами живёт в СЕРЕДИНЕ кривой, а не на правом краю: на
+         конце открытая позиция обычно пуста, и оператор, сравнивая последнюю
+         точку, видит ноль. Самая глубокая точка — это и есть то, ради чего режим
+         сделан, и она сопоставима с max_mae. -->
+    {#if eqMode === 'vm' && eqLow && eqLow.v < 0}<span class="bt-equity-low"
+      >· глубже всего {fmtMoney(eqLow.v)} {unitLabel} ({fmtDay(eqLow.t)})</span>{/if}
     {#if equityBlind}<span class="bt-equity-blind"
       >· журнал сделок не загрузился — кривая не строится, чтобы не показать неверную</span
       >{:else if equityEmpty}<span class="bt-equity-blind"
@@ -1914,19 +1932,20 @@
   .tp-table td { padding: 4px 10px; color: #aaa; border-bottom: 1px solid #14142a; white-space: nowrap; }
   .tp-table tr:hover td { background: #12122a; }
 
-  .bt-eq-mode { display: inline-flex; margin-right: 8px; border: 1px solid #24406a;
-    border-radius: 3px; overflow: hidden; vertical-align: middle; }
-  .bt-eq-mode button { background: #0d1526; border: 0; color: #7c8cab; cursor: pointer;
-    font: 600 10px/1 system-ui, sans-serif; padding: 4px 8px; }
-  .bt-eq-mode button + button { border-left: 1px solid #24406a; }
-  .bt-eq-mode button:hover { color: #cfe2ff; }
-  .bt-eq-mode button.on { background: #16243c; color: #dfe8f7; }
+  /* Переключатель кривой — прямо под бейджем «Результат». */
+  .st-mode { display: flex; align-items: center; gap: 4px; padding: 3px 8px 5px;
+    font: 400 10px/1 system-ui, sans-serif; color: #7c8cab; }
+  .st-mode button { background: #0d1526; border: 1px solid #24406a; color: #7c8cab;
+    cursor: pointer; font: 600 10px/1 system-ui, sans-serif; padding: 4px 8px; border-radius: 3px; }
+  .st-mode button:hover { color: #cfe2ff; }
+  .st-mode button.on { background: #16243c; color: #dfe8f7; border-color: #3a6ba8; }
 
   .bt-equity-label {
     padding: 3px 10px; font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.5px;
     background: #0f0f1e; border-top: 1px solid #1a1a2e; border-bottom: 1px solid #1a1a2e; flex-shrink: 0;
   }
   .bt-equity-carry { color: #9aa0b4; text-transform: none; letter-spacing: 0; }
+  .bt-equity-low { color: #e07a7a; text-transform: none; letter-spacing: 0; }
   .bt-equity-blind { color: #e0a53c; text-transform: none; letter-spacing: 0; }
   .equity { flex: 0 0 auto; min-height: 0; }
   .bt-resizer { flex: 0 0 8px; cursor: ns-resize; background: #12203a;

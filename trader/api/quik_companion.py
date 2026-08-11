@@ -311,6 +311,35 @@ def _live_bars(bars: list[dict], tape_last_ms: int | None) -> list[dict]:
     return [b for b in bars if int(b.get("t") or 0) <= cutoff]
 
 
+# Раннер персистит РОВНО столько закрытых баров (robot_runner/bars.py, to_rows).
+RUNNER_BARS_KEPT = 600
+
+
+def _warmup_fits(strategy: str | None, params) -> bool:
+    """Влезает ли прогрев кандидата в те бары, что переживают рестарт агента.
+
+    В бэктесте окно берётся с истории и цифра честная, в бою робот копит бары
+    живьём: при прогреве 1600 минут он слеп ~17 часов после каждого рестарта, и
+    предлагать такую строку оператору нельзя. Формулу берём У САМОЙ СТРАТЕГИИ
+    (REGISTRY[...]['warmup']), а не переписываем в SQL: у macd и 2ema это
+    4×max(периодов), у SMA-семейства честно max+2, а у pivot вообще 2200
+    независимо от параметров — один бланкетный «4×max» врал бы в обе стороны.
+
+    Судим только то, о чём знаем: стратегия-модуль вне реестра или битые params —
+    пропускаем, а не режем.
+    """
+    from trader.lab.strategies.library import REGISTRY   # локально: тянет lab
+    rid = str(strategy or "")
+    spec = REGISTRY.get(rid[:-5] if rid.endswith("__inv") else rid)
+    if not spec:
+        return True
+    try:
+        p = params if isinstance(params, dict) else json.loads(params or "{}")
+        return int(spec["warmup"](p)) <= RUNNER_BARS_KEPT
+    except Exception:
+        return True
+
+
 def _merge_fills(fills: list[dict], lo_ms: int) -> list[dict]:
     """Филлы одного ордера — один маркер на графике.
 
@@ -945,15 +974,26 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
             raise _CachedStar          # свежий кэш — в базу не идём вовсе
         # fast >= slow — вырожденный MACD-класс конфиг (нулевая линия, сделки =
         # числовой шум): такие в кандидаты не берём, даже пока они ещё в базе.
-        row = await pool.fetchrow(
+        # ema1 == ema2 — та же вырожденность по своей паре периодов: EMA(n)
+        # против EMA(n) не пересекается никогда, сравнение всегда ложно, робот
+        # уходит в вечный шорт. Только РАВЕНСТВО: ema1 > ema2 это законная
+        # инверсия. Строки такого класса выглядят в хитпараде как net в сотни
+        # тысяч при max_mae РОВНО ноль.
+        # Берём ГОРСТЬ строк, а не одну: годность по прогреву считается в питоне
+        # по формуле самой стратегии, и первая по прибыли может её не пройти.
+        rows = await pool.fetch(
             "SELECT campaign_run, strategy, symbol, net_profit, recovery_factor, "
-            "total_trades FROM optimization_leaderboard "
+            "total_trades, params FROM optimization_leaderboard "
             "WHERE created_at > now() - interval '24 hours' "
             "AND net_profit >= 50000 AND recovery_factor BETWEEN 3 AND 1000 "
             "AND total_trades >= 30 "
             "AND NOT (params ? 'fast' AND params ? 'slow' "
             "         AND (params->>'fast')::numeric >= (params->>'slow')::numeric) "
-            "ORDER BY net_profit DESC LIMIT 1")
+            "AND NOT (params ? 'ema1' AND params ? 'ema2' "
+            "         AND (params->>'ema1')::numeric = (params->>'ema2')::numeric) "
+            "ORDER BY net_profit DESC LIMIT 20")
+        row = next((r for r in rows
+                    if _warmup_fits(r["strategy"], r["params"])), None)
         if row:
             sweep_star = {
                 "campaign": row["campaign_run"], "strategy": row["strategy"],
