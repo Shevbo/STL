@@ -26,6 +26,7 @@ import trader.quik  # noqa: F401 — sets up the pb import path (see trader/quik
 from shectory.quik.v1 import quik_agent_pb2 as pb
 from shectory.quik.v1 import quik_agent_pb2_grpc as pb_grpc
 from trader.auth.portal import verify_session_token
+from trader.quik.recorder import MarketRecorder
 from trader.quik.store import QuikAgentStore
 
 log = structlog.get_logger()
@@ -133,10 +134,15 @@ class QuikAgentLinkServicer(pb_grpc.QuikAgentLinkServicer):
         alert_forwarder=None,
         order_store=None,
         set_limits_provider=None,
+        recorder=None,
     ) -> None:
         self.store = store
         self.agent_secret = agent_secret
         self.portal_secret = portal_secret
+        # Архив сырого рынка. По умолчанию ВЫКЛЮЧЕН (пустой QUIK_RECORD_DIR): объект
+        # существует всегда, чтобы в торговом пути не появилась проверка на None, но
+        # без каталога record_frame выходит первой же строкой.
+        self.recorder = recorder if recorder is not None else MarketRecorder()
         # Optional callable () -> pb.OrchestratorMessage: STL's hard limits/whitelist
         # pushed to the agent on connect (after Register) so the two never diverge.
         # None disables the push (the agent keeps its own agent_config.json limits).
@@ -187,6 +193,13 @@ class QuikAgentLinkServicer(pb_grpc.QuikAgentLinkServicer):
             async for msg in request_iterator:
                 # Identify a more specific agent id once Register arrives.
                 field = msg.WhichOneof("payload")
+                # ЕДИНСТВЕННАЯ врезка сбора сырого рынка в торговый путь. Никогда не
+                # бросает, никогда не блокирует (кладёт в ограниченную очередь и
+                # выходит), по умолчанию выключена. Стоит ДО диспетчера, чтобы кадр
+                # записался независимо от того, есть ли для него обработчик: например
+                # order_update обрабатывается только при живом order_store, а в архиве
+                # он нужен всегда — по нему считается реальное проскальзывание.
+                self.recorder.record_frame(field, msg)
                 if field == "register":
                     reg = msg.register
                     new_id = reg.host_name or agent_id
