@@ -72,6 +72,16 @@ def test_stale_note_escalates_to_the_operator_and_forbids_doing_it_yourself():
     assert "молча" in note                     # запрет тихо сделать чужую работу
 
 
+def test_stale_letter_is_not_hidden_by_a_fresher_one():
+    """Ящик судится по САМОМУ СТАРОМУ письму, а не по последнему. Иначе окно,
+    которому только что написали, выглядит здоровым, хотя внизу лежит блокер."""
+    now = 100 * _STALE_MS
+    rows = [_m("ui-ux", "real-trade", now - _STALE_MS * 8),
+            _m("backtests", "real-trade", now - 60_000)]
+    s = box_state(rows, "real-trade", now)
+    assert s["unread"] == 2 and s["stale"] is True
+
+
 @pytest.mark.parametrize("agent", sorted(AGENTS))
 def test_prompt_names_the_zone_and_the_ack_step(agent):
     """Микропромпт едет внутри ответа: свежая сессия узнаёт протокол из него,

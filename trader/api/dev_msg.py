@@ -175,11 +175,20 @@ async def send_msg(body: MsgBody, request: Request):
         "INSERT INTO agent_control(key, value) VALUES($1, $2) "
         "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
         key, json.dumps(payload, ensure_ascii=False))
-    # Подрезаем хвост: ящик — не архив, старое читать некому.
+    # Подрезаем хвост: ящик — не архив, ПРОЧИТАННОЕ старое читать некому.
+    # НЕПРОЧИТАННОЕ не режем никогда, сколько бы его ни было: подрезка шла по
+    # порядку ключа и молча удаляла бы письмо, которое адресат ещё не забрал —
+    # то есть теряла бы ровно ту работу, ради передачи которой почта и заведена.
+    # Пропажа выглядела бы как «мне никто не писал», и найти её было бы нечем.
     old = await pool.fetch(
-        "SELECT key FROM agent_control WHERE key LIKE $1 ORDER BY key DESC OFFSET $2",
+        "SELECT key, value FROM agent_control WHERE key LIKE $1 ORDER BY key DESC OFFSET $2",
         _PREFIX + "%", _KEEP)
     for r in old:
+        try:
+            if not json.loads(r["value"]).get("read_ms"):
+                continue                      # непрочитанное переживает подрезку
+        except (TypeError, ValueError):
+            pass                              # битое — удаляем, читать его нечем
         await pool.execute("DELETE FROM agent_control WHERE key = $1", r["key"])
     # ОБРАТНАЯ СВЯЗЬ ОТПРАВИТЕЛЮ. Раньше ответом было {ok, id} — и отправитель
     # уходил считать задачу переданной, не имея НИ ОДНОГО способа узнать, что

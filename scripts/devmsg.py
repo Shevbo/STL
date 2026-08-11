@@ -12,8 +12,11 @@
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
+import time
+import urllib.request
 
 import httpx
 
@@ -88,6 +91,66 @@ def cmd_ack(msg_id: str) -> int:
     return 0 if r.status_code == 200 else 1
 
 
+LINEMAN = os.environ.get("LINEMAN_URL", "http://10.66.0.1:9090")
+BORIS_TG = "36910539"
+_ALERT_MARK = os.path.expanduser("~/.stl-devmsg-alert")
+_RENOTIFY_S = 6 * 3600           # не долбить чаще раза в 6 часов, как infra-guard
+
+
+def cmd_alert() -> int:
+    """Эскалация ПРОСРОЧКИ НАРУЖУ контура, кроном на хостере.
+
+    Почему не в окна. 11.08.2026 письма лежали 7 и 30 часов, и печатать тревогу
+    внутрь окон было бы бесполезно: не читали ВСЕ ТРИ сразу. Эскалация обязана
+    уходить из застрявшего контура, а не в него — иначе она застревает вместе с
+    ним. Единственный, кто может расшевелить окна, снаружи: оператор.
+
+    Почему не хук на каждый ввод (обсуждалось и отвергнуто): цена там не в
+    секундах, а в ТОКЕНАХ на каждый выстрел — ящик, печатаемый в контекст при
+    каждом сообщении, за длинную сессию вытесняет ровно то правило, ради
+    которого его вешали. Живая сессия получает доску один раз на SessionStart,
+    а сторожем работает этот крон.
+    """
+    with _client() as c:
+        r = c.get("/api/v1/dev/board")
+    if r.status_code != 200:
+        print("board", r.status_code, r.text[:200])
+        return 1
+    stuck = (r.json() or {}).get("stale") or []
+    if not stuck:
+        if os.path.exists(_ALERT_MARK):
+            os.remove(_ALERT_MARK)   # разгребли — забываем, следующий раз алертим сразу
+        return 0
+    try:
+        last = float(open(_ALERT_MARK).read().strip() or 0)
+    except (OSError, ValueError):
+        last = 0.0
+    if time.time() - last < _RENOTIFY_S:
+        return 0
+    lines = [f"[{m['to']}] от {m['from']}: {m['topic'] or 'без темы'} — {m['age_h']} ч"
+             for m in stuck[:8]]
+    text = ("STL: почта между окнами стоит\n"
+            + "\n".join(lines)
+            + f"\n\nВсего просроченных: {len(stuck)}. Окно не забирает письма — "
+              "открой его и скажи прочитать ящик:\n"
+              "ssh hoster 'bash ~/apps/shectory-trader/scripts/devmsg.sh inbox <окно>'")
+    body = json.dumps({"account": "default", "chat_id": BORIS_TG,
+                       "text": text[:3900]}).encode()
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        req = urllib.request.Request(f"{LINEMAN}/api/tg/send", data=body,
+                                     headers={"Content-Type": "application/json"},
+                                     method="POST")
+        ok = json.loads(opener.open(req, timeout=15).read()).get("ok")
+    except Exception as e:                       # noqa: BLE001 — сторож не падает
+        print("tg fail:", e)
+        return 1
+    if ok:
+        open(_ALERT_MARK, "w").write(str(time.time()))
+        print(f"алерт отправлен, просроченных {len(stuck)}")
+    return 0 if ok else 1
+
+
 def cmd_board_brief() -> int:
     """Одна строка для будильника на КАЖДОЕ сообщение оператора.
 
@@ -152,6 +215,8 @@ def main(argv: list[str]) -> int:
         return cmd_ack(argv[2])
     if cmd == "board":
         return cmd_board_brief() if "--brief" in argv else cmd_board()
+    if cmd == "alert":
+        return cmd_alert()
     print(__doc__)
     return 2
 
