@@ -18,6 +18,7 @@ function loadMiniChart(page = 'public/companion.html') {
   };
   const consts = src.match(/const DENSITY = [^\n]*\n/)![0]
     + src.match(/const CH = \{[^\n]*\n/)![0]
+    + src.match(/const hmMsk = [\s\S]*?\n[^\n]*hour: '2-digit'[^\n]*\n/)![0]
     + pick('density')
     + src.match(/const r1 = [^\n]*\n/)![0]
     + pick('px')
@@ -46,11 +47,14 @@ function loadCassette(page = 'public/companion.html') {
   return ctx.cassette as (p: boolean) => string;
 }
 
+const { miniChart, CH } = loadMiniChart();
+
+/** Ширина ПОЛЯ свечей: холст минус фиксированная шкала цены. */
+const CH_W = CH.w - CH.ax;
+/** Низ поля: под ним полоса времени. */
+const CH_PH = CH.h - CH.tax;
 /** Шаг бара считается от ФАКТИЧЕСКОГО их числа, а не от выбранной плотности. */
 const pitchFor = (n: number) => CH_W / n;
-const CH_W = 320;
-
-const { miniChart, CH } = loadMiniChart();
 
 /** Ровные бары по минуте, close = open + step. */
 function bars(n: number, base = 87000, t0 = 1_786_000_000) {
@@ -59,6 +63,12 @@ function bars(n: number, base = 87000, t0 = 1_786_000_000) {
   }));
 }
 const rects = (svg: string) => [...svg.matchAll(/<rect class="cndl[^"]*" x="([-\d.]+)"/g)].map((m) => +m[1]);
+/** Центр последней свечи: тело сужается вместе с шагом, поэтому берём его из разметки. */
+const lastCx = (svg: string) => {
+  const all = [...svg.matchAll(/<rect class="cndl[^"]*" x="([-\d.]+)"[^>]*width="([-\d.]+)"/g)];
+  const m = all[all.length - 1];
+  return +m[1] + +m[2] / 2;
+};
 
 describe('мини-график робота', () => {
   it('без баров рисует не пустой график, а причину', () => {
@@ -72,15 +82,15 @@ describe('мини-график робота', () => {
     const xs = rects(svg);
     expect(xs).toHaveLength(30);
     // центр последней свечи на половине шага от правого края
-    expect(xs[xs.length - 1] + CH.body / 2).toBeCloseTo(CH_W - pitchFor(30) / 2, 1);
+    expect(lastCx(svg)).toBeCloseTo(CH_W - pitchFor(30) / 2, 1);
     expect(xs[0]).toBeGreaterThanOrEqual(-1);
   });
 
   it('неполный хвост тоже прижат вправо, а не растянут', () => {
-    const xs = rects(miniChart({ bars: bars(7) }));
-    expect(xs).toHaveLength(7);
+    const svg = miniChart({ bars: bars(7) });
+    expect(rects(svg)).toHaveLength(7);
     // семь баров растягиваются на всю ширину: шаг считается от их числа
-    expect(xs[xs.length - 1] + CH.body / 2).toBeCloseTo(CH_W - pitchFor(7) / 2, 1);
+    expect(lastCx(svg)).toBeCloseTo(CH_W - pitchFor(7) / 2, 1);
   });
 
   it('плоская минута не даёт NaN', () => {
@@ -169,6 +179,41 @@ describe('мини-график робота', () => {
     for (const m of svg.matchAll(/y1?="([-\d.]+)"/g)) {
       expect(+m[1]).toBeGreaterThanOrEqual(-5);
       expect(+m[1]).toBeLessThanOrEqual(CH.h + 5);
+    }
+  });
+
+  // Шкала цены — своя полоса справа. Поле, залезающее на неё, было ровно тем, из-за
+  // чего цену пришлось вешать чипом поверх свечей.
+  it('свечи и заявки не заходят на шкалу цены, текущая цена жирная', () => {
+    const bs = bars(30);
+    const svg = miniChart({ bars: bs, orders: [{ side: 'buy', price: bs[3].l, qty: 1 }] });
+    const right = CH.w - CH.ax;
+    for (const m of svg.matchAll(/<rect class="cndl[^"]*" x="([-\d.]+)"[^>]*width="([-\d.]+)"/g)) {
+      expect(+m[1] + +m[2]).toBeLessThanOrEqual(right + 0.1);
+    }
+    for (const m of svg.matchAll(/<line class="(?:ord|avg)[^"]*"[^>]*x2="([-\d.]+)"/g)) {
+      expect(+m[1]).toBeLessThanOrEqual(right);
+    }
+    // цена деления — тонким серым, текущая — жирным чёрным и ровно одна
+    expect([...svg.matchAll(/class="axp"/g)].length).toBeGreaterThanOrEqual(2);
+    expect([...svg.matchAll(/class="axp now"/g)]).toHaveLength(1);
+    expect(svg).toContain(`x="${right + 2}"`);
+  });
+
+  it('шкала времени: 4-6 отметок по всей длине, часы московские', () => {
+    // 10:00 МСК = 07:00 UTC
+    const t0 = Math.floor(Date.UTC(2026, 7, 10, 7, 0) / 1000);
+    const svg = miniChart({ bars: bars(30, 87_000, t0) });
+    const marks = [...svg.matchAll(/<text class="axt" x="([-\d.]+)" y="[\d.]+">([^<]+)</g)];
+    expect(marks.length).toBeGreaterThanOrEqual(4);
+    expect(marks.length).toBeLessThanOrEqual(6);
+    expect(marks[0][2]).toBe('10:00');
+    // подписи растянуты по всей длине поля и не вылезают за него
+    expect(+marks[marks.length - 1][1]).toBeGreaterThan(+marks[0][1] + CH_W / 2);
+    for (const m of marks) expect(+m[1]).toBeLessThanOrEqual(CH_W);
+    // полоса времени НИЖЕ поля: свечи на неё не наезжают
+    for (const m of svg.matchAll(/<rect class="cndl[^"]*"[^>]*y="([-\d.]+)" width="[-\d.]+" height="([-\d.]+)"/g)) {
+      expect(+m[1] + +m[2]).toBeLessThanOrEqual(CH_PH);
     }
   });
 

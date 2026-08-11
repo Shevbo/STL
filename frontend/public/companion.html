@@ -203,7 +203,7 @@
   /* Рамка едва заметная: она отделяет виджет от цифр, но не спорит с ними.
      Рамка на ОБЁРТКЕ, а не на холсте: статусная строка входит внутрь виджета. */
   .mwrap { border: 1px solid var(--rule); margin: 3px 0 1px; }
-  .mchart { display: block; width: 100%; height: 64px; }
+  .mchart { display: block; width: 100%; height: 80px; }
   .mstat { display: flex; gap: 6px; align-items: baseline;
     border-top: 1px solid var(--rule); padding: 1px 3px;
     font-size: 10px; color: var(--faint); line-height: 1.4; }
@@ -226,6 +226,15 @@
   .mchart .wick, .mchart .cndl { stroke: #000080; stroke-width: 1; }
   .mchart .cndl { fill: #ece5d1; }            /* растущая свеча полая */
   .mchart .cndl.down { fill: #000080; }       /* падающая залита */
+  /* Свечи БЛЕДНЕЕ: они фон, по которому читают заявки, сделки и цену. Синь в
+     полную силу перебивала всё, что нанесено поверх неё. */
+  .mchart .wick, .mchart .cndl { opacity: .6; }
+  /* Шкалы: цена справа тонким серым, текущая — жирным чёрным; время снизу мелким
+     серым. Обе полосы свои, поле свечей на них не заходит. */
+  .mchart .axl { stroke: #b9ae90; stroke-width: 1; }
+  .mchart .axp { font: 300 7.5px/1 Consolas, monospace; fill: #6b6250; }
+  .mchart .axp.now { font-weight: 700; fill: #000; }
+  .mchart .axt { font: 300 7px/1 Consolas, monospace; fill: #6b6250; text-anchor: middle; }
   /* Заявка — пунктир, средняя — сплошная: висящее и уже случившееся не должны
      читаться одинаково. План робота — точки: его в QUIK ещё нет. */
   .mchart .ord { stroke-width: 1; stroke-dasharray: 3 3; opacity: .9; }
@@ -242,9 +251,6 @@
   .mchart .fill { stroke: #202020; stroke-width: .7; }
   .mchart .fill.up { fill: #00a000; }
   .mchart .fill.down { fill: #e00000; }
-  /* Чип последней цены — квиковский: синяя плашка, белые цифры. */
-  .mchart .chip { fill: #000080; stroke: none; }
-  .mchart .chiptx { font: 400 8px/1 Consolas, monospace; fill: #fff; text-anchor: end; }
   .chart-empty { color: var(--faint); font-size: 10px; padding: 3px 0 2px; }
   /* % к вчерашнему закрытию — рядом с итоговой суммой, мельче её. */
   .chg { font-size: 10px; font-weight: 600; margin-left: 5px; color: var(--faint); }
@@ -530,7 +536,13 @@ function renderRobots(all) {
 // три с половиной часа, где свеча вырождается в штрих шириной в пиксель. Обе
 // картинки нужны: по первой видно вход, по второй — куда идёт день.
 const DENSITY = [30, 60, 120, 200];
-const CH = { w: 320, h: 64, body: 7, pad: 3 };
+// Холст поделён: слева ПОЛЕ свечей, справа ФИКСИРОВАННАЯ шкала цены (ax), снизу
+// полоса времени (tax). Поле на шкалу не заходит — раньше цена висела чипом
+// поверх свечей и спорила с ними ровно в самом свежем месте графика.
+const CH = { w: 320, h: 80, body: 7, pad: 3, ax: 34, tax: 9 };
+// Часы МОСКОВСКИЕ: оператор сверяет их с терминалом, а не с UTC.
+const hmMsk = (sec) => new Date(sec * 1000).toLocaleTimeString('ru-RU',
+  { timeZone: 'Europe/Moscow', hour: '2-digit', minute: '2-digit' });
 function density() {
   const v = +(localStorage.getItem('stl.chartN') || 30);
   return DENSITY.includes(v) ? v : 30;
@@ -568,17 +580,19 @@ function miniChart(ch) {
   let hi = -Infinity, lo = Infinity;
   for (const b of bars) { if (b.h > hi) hi = b.h; if (b.l < lo) lo = b.l; }
   if (!(hi > lo)) { hi += 1; lo -= 1; }     // плоская минута: иначе делим на ноль
-  const inner = CH.h - 2 * CH.pad;
+  const PW = CH.w - CH.ax;                  // ширина ПОЛЯ: шкала цены неприкосновенна
+  const PH = CH.h - CH.tax;                 // низ поля: под ним полоса времени
+  const inner = PH - 2 * CH.pad;
   const y = (p) => r1(CH.pad + (hi - p) / (hi - lo) * inner);
-  const yc = (p) => Math.min(CH.h - 0.5, Math.max(0.5, y(p)));   // прижатый к краю
+  const yc = (p) => Math.min(PH - 0.5, Math.max(0.5, y(p)));     // прижатый к краю
   // Шаг и тело считаем от ФАКТИЧЕСКОГО числа баров, а не от выбранной плотности:
   // после перезапуска раннера их бывает меньше, и делить ширину на 200, показывая
   // 40, значит рисовать четверть графика. На плотных сетках тело схлопывается в
   // штрих: 200 баров на 320 px это 1.6 px на бар, зазору взяться неоткуда.
-  const pitch = CH.w / Math.max(bars.length, 1);
+  const pitch = PW / Math.max(bars.length, 1);
   const body = Math.max(1, Math.min(CH.body, pitch - 3));
-  // Свечи прижаты ВПРАВО: свежая минута всегда у правого края.
-  const xOf = (i) => CH.w - (bars.length - i) * pitch + pitch / 2;
+  // Свечи прижаты ВПРАВО: свежая минута всегда у правого края поля.
+  const xOf = (i) => PW - (bars.length - i) * pitch + pitch / 2;
   let s = '';
   for (let i = 0; i < bars.length; i++) {
     const b = bars[i], cx = xOf(i);
@@ -590,15 +604,15 @@ function miniChart(ch) {
       + ` width="${r1(body)}" height="${r1(hgt)}"/>`;
   }
   // Средняя цена позиции — сплошная тонкая линия.
-  if (ch.avg) s += `<line class="avg" x1="0" y1="${yc(ch.avg)}" x2="${CH.w}" y2="${yc(ch.avg)}"/>`;
+  if (ch.avg) s += `<line class="avg" x1="0" y1="${yc(ch.avg)}" x2="${PW}" y2="${yc(ch.avg)}"/>`;
   // Висящие заявки. Заявка ВНЕ диапазона свечей прижимается к краю со стрелкой:
   // растягивать шкалу под заявку, ждущую пробоя за 3000 пунктов, нельзя —
   // свечи схлопнутся в нитку, а они здесь главные.
   for (const o of (ch.orders || [])) {
     const k = o.side === 'buy' ? 'up' : 'down';
     const oy = yc(o.price), off = y(o.price) !== oy;
-    s += `<line class="ord ${k}" x1="0" y1="${oy}" x2="${CH.w}" y2="${oy}"/>`
-      + `<text class="olbl ${k}" x="2" y="${r1(Math.min(CH.h - 2, Math.max(8, oy - 1.5)))}">`
+    s += `<line class="ord ${k}" x1="0" y1="${oy}" x2="${PW}" y2="${oy}"/>`
+      + `<text class="olbl ${k}" x="2" y="${r1(Math.min(PH - 2, Math.max(8, oy - 1.5)))}">`
       + `${o.side === 'buy' ? 'B' : 'S'}${o.qty ? ' ' + o.qty : ''}`
       + `${off ? ' ' + (oy <= 1 ? '▲' : '▼') + ' ' + esc(px(o.price)) : ''}</text>`;
   }
@@ -611,9 +625,9 @@ function miniChart(ch) {
     const k = p.side === 'buy' ? 'up' : 'down';
     const py = yc(p.price), off = y(p.price) !== py;
     const dim = p.blocked ? ' blkd' : '';
-    s += `<line class="ord plan ${k}${dim}" x1="0" y1="${py}" x2="${CH.w}" y2="${py}">`
+    s += `<line class="ord plan ${k}${dim}" x1="0" y1="${py}" x2="${PW}" y2="${py}">`
       + `<title>${esc(p.reason || 'план робота')}</title></line>`
-      + `<text class="olbl plan ${k}${dim}" x="2" y="${r1(Math.min(CH.h - 2, Math.max(8, py - 1.5)))}">`
+      + `<text class="olbl plan ${k}${dim}" x="2" y="${r1(Math.min(PH - 2, Math.max(8, py - 1.5)))}">`
       + `${p.side === 'buy' ? 'B' : 'S'}${p.qty ? ' ' + p.qty : ''} план`
       + `${off ? ' ' + (py <= 1 ? '▲' : '▼') + ' ' + esc(px(p.price)) : ''}</text>`;
   }
@@ -636,13 +650,29 @@ function miniChart(ch) {
     s += `<polygon class="fill ${up ? 'up' : 'down'}" points="${d}"><title>`
       + `${up ? 'покупка' : 'продажа'} ${f.qty} по ${esc(px(f.price))}</title></polygon>`;
   }
-  // Последняя цена — чипом у правого края, поверх свечей: отдельный жёлоб съел бы
-  // ширину, которой не хватает даже на пять цифр.
+  // ШКАЛА ЦЕНЫ: своя полоса справа, поле на неё не заходит. Деления тонким серым,
+  // ТЕКУЩАЯ цена жирным чёрным — её глаз находит первой. Деление, попавшее под
+  // текущую цену, не рисуем: два числа в одной строке не читаются никак.
   const lastB = bars[bars.length - 1], ly = yc(lastB.c);
-  s += `<rect class="chip" x="${CH.w - 34}" y="${r1(Math.min(CH.h - 11, Math.max(0, ly - 5.5)))}"`
-    + ` width="33" height="11" rx="1.5"/>`
-    + `<text class="chiptx" x="${CH.w - 2}" y="${r1(Math.min(CH.h - 2.5, Math.max(8.5, ly + 3)))}">`
-    + `${esc(px(lastB.c))}</text>`;
+  const ty = (v) => r1(Math.min(PH - 1, Math.max(6, v + 2.5)));
+  const step = (hi - lo) / 3;
+  const rnd = (v) => step >= 10 ? Math.round(v) : Math.round(v * 100) / 100;
+  s += `<line class="axl" x1="${PW}" y1="0" x2="${PW}" y2="${PH}"/>`;
+  for (let k = 0; k <= 3; k++) {
+    const p = hi - step * k, py = yc(p);
+    if (Math.abs(py - ly) < 7) continue;
+    s += `<text class="axp" x="${PW + 2}" y="${ty(py)}">${esc(px(rnd(p)))}</text>`;
+  }
+  s += `<text class="axp now" x="${PW + 2}" y="${ty(ly)}">${esc(px(lastB.c))}</text>`;
+  // ШКАЛА ВРЕМЕНИ: пять отметок по всей длине. Без неё «замер 08:09» в статусной
+  // строке был единственным временем на графике, и понять, где кончилась вчерашняя
+  // сессия, было нельзя.
+  const nT = Math.min(5, bars.length);
+  for (let k = 0; k < nT; k++) {
+    const i = Math.round(k * (bars.length - 1) / Math.max(nT - 1, 1));
+    const tx = Math.min(PW - 11, Math.max(11, xOf(i)));
+    s += `<text class="axt" x="${r1(tx)}" y="${CH.h - 1.5}">${esc(hmMsk(bars[i].t))}</text>`;
+  }
   // Статус ОТДЕЛЬНОЙ строкой под холстом, а не подписью внутри: свечи налезали
   // на текст и он терялся ровно тогда, когда был нужнее всего.
   return `<div class="mwrap">`
