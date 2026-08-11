@@ -723,6 +723,17 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
                                 "qty": w.get("qty"), "state": w.get("state")}
                                for w in (rob.get("working_orders") or [])
                                if w.get("price")],
+                    # ПЛАН робота: заявки, которых в QUIK ещё нет. Берём только
+                    # те, у которых есть ЦЕНОВОЙ УРОВЕНЬ (level=true — тейк и
+                    # следующее усреднение): вход по сигналу раннер шлёт по
+                    # рынку от последнего закрытия, и линия на нём — это линия
+                    # текущей цены, то есть шум. blocked — вход, который прямо
+                    # сейчас держит фильтр: рисуем бледнее, а не молчим.
+                    "planned": [{"side": o.get("side"), "price": o.get("price"),
+                                 "qty": o.get("qty"), "reason": o.get("reason"),
+                                 "blocked": bool(o.get("blocked"))}
+                                for o in (sig.get("planned_orders") or [])
+                                if o.get("level") and o.get("price")],
                     # Сделки, попадающие в окно графика. Хвост в зеркале длиннее
                     # окна, и филлы ОДНОГО ордера схлопываем в один маркер: журнал
                     # хранит строку на каждую сделку QUIK, и ордер, налившийся

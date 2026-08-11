@@ -113,6 +113,35 @@ describe('мобильный компаньон: паритет с панель�
     localStorage.removeItem('stl.ordOpen');
   });
 
+  // Фильтр истории: снятая простая и сработавшая умная уходят из кадра, живые
+  // остаются, а счётчик группы перестаёт считать скрытое.
+  it('фильтр прячет исполненные и снятые, живые остаются', () => {
+    const SNAP2 = { ...SNAP, orders: {
+      manual: [SNAP.orders.manual[0],
+               { sec: 'RIU6', side: 'sell', price: 84000, qty: 1, balance: 1, state: 'снята', active: false }],
+      smart: [SNAP.orders.smart[0],
+              { so_id: 'so2', kind: 'tp', code: 'BRU6', side: 'buy', qty: 3, trigger: 6800, status: 'fired' }],
+      counts: { quik: 2, tp: 2 },
+    } };
+    const open = JSON.stringify(['quik', 'tp']);
+    localStorage.setItem('stl.ordOpen', open);
+    const all = new Function(body(M) + '\nreturn paint;')() as typeof paint;
+    window.location.hash = '#/orders';
+    all(SNAP2);
+    expect(document.getElementById('app')!.innerHTML).toContain('BRU6');
+
+    localStorage.setItem('stl.ordDone', '0');   // фильтр читается при загрузке
+    const only = new Function(body(M) + '\nreturn paint;')() as typeof paint;
+    only(SNAP2);
+    const h = document.getElementById('app')!.innerHTML;
+    expect(h).not.toContain('BRU6');            // сработавшая умная скрыта
+    expect(h).not.toContain('84&nbsp;000');     // снятая простая скрыта
+    expect(h).toContain('83&nbsp;500');         // активная на месте
+    expect(h).toMatch(/QUIK · терминал[\s\S]*?ord-n">1</);   // счётчик по видимому
+    localStorage.removeItem('stl.ordDone');
+    localStorage.removeItem('stl.ordOpen');
+  });
+
   // Дрейф ловим по полям снапшота: если панель Windows начала показывать поле,
   // а мобильная — нет (или наоборот), тест падает раньше оператора.
   it('оба файла читают одни и те же поля снапшота', () => {

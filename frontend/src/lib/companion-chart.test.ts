@@ -123,6 +123,34 @@ describe('мини-график робота', () => {
     expect(svg.replace(/[\s  ]/g, ' ')).toContain('90 590');
   });
 
+  // Хвост раннера СОСТОИТ ИЗ ТОРГОВАВШИХ МИНУТ: клиринг, вечерний перерыв и ночь
+  // оставляют дыры. Индекс по арифметике садил сделку на чужую свечу.
+  it('сделка садится на свою свечу, даже когда в хвосте дыры', () => {
+    const bs = bars(10);                     // минуты 0..9
+    const gap = bs.slice(0, 5).concat(bs.slice(5).map((b, i) => ({ ...b, t: b.t + 3600 * i + 3600 })));
+    const target = gap[7];
+    const svg = miniChart({ bars: gap, fills: [{ ts: target.t * 1000 + 30_000, side: 'buy', price: target.c, qty: 1 }] });
+    const poly = svg.match(/<polygon class="fill up" points="([-\d., ]+)"/);
+    expect(poly, 'маркер нарисован').toBeTruthy();
+    const cx = +poly![1].split(',')[0];
+    // центр восьмой из десяти свечей, а не «сколько минут прошло от первой»
+    expect(cx).toBeCloseTo(CH_W - (10 - 7) * pitchFor(10) + pitchFor(10) / 2, 1);
+  });
+
+  // План робота: тейк и следующее усреднение. В QUIK их ещё нет, но робот их ждёт.
+  it('планируемые заявки рисуются точечной линией и подписаны «план»', () => {
+    const bs = bars(30);
+    const svg = miniChart({ bars: bs, planned: [
+      { side: 'sell', price: bs[20].c, qty: 2, reason: 'тейк-профит' },
+      { side: 'buy', price: bs[3].c, qty: 1, reason: 'усреднение', blocked: true },
+    ] });
+    expect(svg).toContain('<line class="ord plan down"');
+    expect(svg).toContain('тейк-профит');
+    expect(svg).toContain('план');
+    // вход, который держит фильтр, — бледнее, а не спрятан
+    expect(svg).toContain('class="ord plan up blkd"');
+  });
+
   it('заявка внутри диапазона рисуется без стрелки', () => {
     const bs = bars(30);
     const svg = miniChart({ bars: bs, orders: [{ side: 'sell', price: bs[15].c, qty: 3 }] });
@@ -221,6 +249,19 @@ describe('мини-график робота', () => {
     };
     expect(mobile(data)).toBe(miniChart(data));
     expect(mobile({ bars: [] })).toBe(miniChart({ bars: [] }));
+  });
+
+  // Гамма фиксирована и НЕ ходит за темой панели: график узнаётся по квиковской
+  // бумаге и синим свечам, а маркер сделки обязан спорить со свечой.
+  it('гамма графика квиковская и одинакова на обеих панелях', () => {
+    for (const f of ['public/companion.html', 'public/m.html']) {
+      const src = readFileSync(resolve(process.cwd(), f), 'utf8');
+      expect(src, f).toMatch(/\.mchart \{ background: #ece5d1/);
+      expect(src, f).toMatch(/\.mchart \.cndl \{ fill: #ece5d1/);      // растущая полая
+      expect(src, f).toMatch(/\.mchart \.cndl\.down \{ fill: #000080/); // падающая залита
+      expect(src, f).toMatch(/\.mchart \.fill \{ stroke: #202020/);     // обводка маркера
+      expect(src, f).not.toMatch(/\.mchart \.fill\.up \{ fill: var\(/); // не цвет темы
+    }
   });
 });
 
@@ -373,7 +414,8 @@ describe('группы ручных заявок в панели', () => {
     for (const f of pages) {
       const src = read(f);
       expect(src, f).toMatch(/const counts = o\.counts \|\| \{\}/);
-      expect(src, f).toMatch(/counts\[g\.id\] != null \? counts\[g\.id\] : rows\.length/);
+      // с фильтром истории счётчик считает видимое: серверный про фильтр не знает
+      expect(src, f).toMatch(/counts\[g\.id\] != null \? counts\[g\.id\] : all\.length/);
     }
   });
 
