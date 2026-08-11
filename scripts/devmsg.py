@@ -88,6 +88,27 @@ def cmd_ack(msg_id: str) -> int:
     return 0 if r.status_code == 200 else 1
 
 
+def cmd_board_brief() -> int:
+    """Одна строка для будильника на КАЖДОЕ сообщение оператора.
+
+    Длинную доску туда слать нельзя: она поедет в контекст при каждом вводе.
+    Здесь только «кому сколько и насколько старое» — увидевшее окно само
+    поймёт, его это ящик или соседа."""
+    with _client() as c:
+        r = c.get("/api/v1/dev/board")
+    if r.status_code != 200:
+        return 1
+    d = r.json()
+    busy = [s for s in d["board"] if s["unread"]]
+    if not busy:
+        return 0                     # тишина: пустая почта не занимает контекст
+    parts = [f"{s['agent']} {s['unread']}" + (f" ({s['oldest_age_h']}ч!)" if s["stale"]
+             else f" ({s['oldest_age_h']}ч)") for s in busy]
+    print("ПОЧТА ОКОН: " + " · ".join(parts)
+          + " — свой ящик: devmsg.sh inbox <окно>; «!» = просрочка, скажи оператору")
+    return 0
+
+
 def cmd_board() -> int:
     """Вся доска разом: непрочитанное по каждому окну И его возраст. Нужна
     будильнику — хук сессии не знает, КАКОЕ из трёх окон стартует, и печатает
@@ -130,7 +151,7 @@ def main(argv: list[str]) -> int:
     if cmd == "ack":
         return cmd_ack(argv[2])
     if cmd == "board":
-        return cmd_board()
+        return cmd_board_brief() if "--brief" in argv else cmd_board()
     print(__doc__)
     return 2
 

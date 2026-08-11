@@ -5,5 +5,14 @@
 set -euo pipefail
 cd "$HOME/apps/shectory-trader"
 set -a; . "$HOME/.shectory_trade.env"; set +a
-PY="$(/home/ubuntu/.local/bin/poetry env info --path)/bin/python"
+# Путь к venv КЭШИРУЕМ: `poetry env info --path` стоит ~900 мс, а почту теперь
+# дёргает хук на каждое сообщение оператора — почти секунда на ровном месте.
+# Кэш самолечится: пропал интерпретатор — спрашиваем poetry заново.
+CACHE="$HOME/.stl-devmsg-venv"
+PY=""
+[ -s "$CACHE" ] && PY="$(cat "$CACHE")"
+if [ -z "$PY" ] || [ ! -x "$PY" ]; then
+  PY="$(/home/ubuntu/.local/bin/poetry env info --path)/bin/python"
+  printf '%s' "$PY" > "$CACHE"
+fi
 PYTHONPATH="$HOME/apps/shectory-trader" exec "$PY" scripts/devmsg.py "$@"
