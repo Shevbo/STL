@@ -7,15 +7,21 @@
 никто это не сохранял, и каждый день данные умирали в памяти.
 
 ИЗОЛЯЦИЯ (главное требование). Сбор не имеет права сломать торговлю:
-  • в торговом пути ровно один вызов record(), он никогда не бросает;
-  • запись идёт в фоновом таске через очередь, приём кадров её не ждёт;
+  • в торговом пути ровно один вызов record_frame(), он никогда не бросает;
+  • В ПРИЁМНОМ ЦИКЛЕ НЕТ КОНВЕРТАЦИИ: в очередь кладётся ссылка на protobuf, а
+    MessageToDict и гейт делает писательский таск. На ленте (батчи по сотни
+    сделок) синхронная конвертация украла бы миллисекунды у цикла, по которому
+    идут order_update и trans_reply реальной торговли;
   • очередь ОГРАНИЧЕНА: при переполнении кадры молча теряются, а не копятся;
   • любая ошибка файловой системы гасит запись до конца дня, торговля продолжается;
   • по умолчанию ВЫКЛЮЧЕНО, включается QUIK_RECORD_DIR.
 
-ФОРМАТ. JSONL + gzip, файл на (дату, тип). Не бинарь и не БД намеренно: pandas
-читает напрямую, gzip даёт ~10x на однородных строках, а таблица на миллионы
-строк в сутки уже роняла нам снапшот компаньона (21.6 с на запрос).
+ФОРМАТ. Простой JSONL, файл на (дату, тип); сжимается ОДИН раз при смене суток.
+Первая версия писала сразу в gzip в режиме дозаписи, и файлы оказались нечитаемы:
+поток не завершён пока файл открыт, zcat падал на середине («invalid compressed
+data»). Архив, который нельзя прочитать до конца дня и который рвётся при падении
+процесса, архивом не является. Не бинарь и не БД намеренно: pandas читает
+напрямую, а таблица на миллионы строк в сутки уже роняла снапшот компаньона.
 
 ГЕЙТ ПО СОДЕРЖИМОМУ обязателен. Lua переставляет метку времени стакана каждую
 секунду, даже когда сам стакан не менялся: гейт по времени пропустит всё, гейт по
@@ -32,8 +38,17 @@ from datetime import datetime, timezone
 from typing import Any
 
 import structlog
+from google.protobuf.json_format import MessageToDict
 
 log = structlog.get_logger()
+
+
+def _to_dict(msg) -> dict | None:
+    """protobuf -> dict. Зовётся ТОЛЬКО из писательского таска, не из приёмного цикла."""
+    try:
+        return MessageToDict(msg, preserving_proto_field_name=True)
+    except Exception:  # noqa: BLE001
+        return None
 
 # Очередь ограничена: сбор данных НИКОГДА не должен создавать давление на приём
 # кадров. Полная очередь = теряем кадры и считаем их в dropped, а не тормозим
@@ -70,7 +85,16 @@ class MarketRecorder:
     }
 
     def record_frame(self, field: str | None, msg) -> None:
-        """Единственная точка входа из торгового пути. Конвертирует protobuf сам."""
+        """Единственная точка входа из торгового пути.
+
+        Здесь НЕ конвертируем: в очередь кладётся ссылка на protobuf, а
+        MessageToDict и гейт по содержимому делает писательский таск. Разница
+        станет решающей на ленте: она идёт батчами по 300 мс, в активной сессии
+        по RI это сотни сделок в батче, и синхронная конвертация украла бы
+        миллисекунды у ПРИЁМНОГО цикла — того самого, по которому приходят
+        order_update и trans_reply реальной торговли (замечание real-trade
+        12.08.2026). Задержка подтверждения заявки это цена исполнения.
+        """
         if not self.enabled:
             return
         kind = self.KINDS.get(field or "")
@@ -84,32 +108,39 @@ class MarketRecorder:
             if self._q is None:
                 return
         try:
-            from google.protobuf.json_format import MessageToDict
-            payload = MessageToDict(getattr(msg, field), preserving_proto_field_name=True)
+            self._q.put_nowait((kind, getattr(msg, field)))
+        except asyncio.QueueFull:
+            self.stats["dropped"] += 1
         except Exception:  # noqa: BLE001 — кадр архива не стоит сбоя приёма
             self.stats["errors"] += 1
-            return
-        self.record(kind, payload)
 
     def record(self, kind: str, payload: dict) -> None:
-        """Положить кадр в очередь. НИКОГДА не бросает и никогда не блокирует."""
+        """Положить готовый dict в очередь (используется тестами и вызовами,
+        у которых protobuf нет). НИКОГДА не бросает и не блокирует."""
         if not self.enabled or self._q is None:
             return
         try:
-            # Гейт по содержимому для стакана и тиков: писать только изменения.
-            if kind in ("book", "tick"):
-                key = f"{kind}:{payload.get('code', '')}"
-                sig = self._signature(kind, payload)
-                if sig is not None and self._last.get(key) == sig:
-                    self.stats["skipped_same"] += 1
-                    return
-                if sig is not None:
-                    self._last[key] = sig
             self._q.put_nowait((kind, payload))
         except asyncio.QueueFull:
             self.stats["dropped"] += 1
         except Exception:  # noqa: BLE001 — запись данных не стоит ни одного сбоя торговли
             self.stats["errors"] += 1
+
+    def _same_as_last(self, kind: str, payload: dict) -> bool:
+        """Гейт по СОДЕРЖИМОМУ для стакана и тиков: писать только изменения."""
+        if kind not in ("book", "tick"):
+            return False
+        try:
+            key = f"{kind}:{payload.get('code', '')}"
+            sig = self._signature(kind, payload)
+            if sig is None:
+                return False
+            if self._last.get(key) == sig:
+                return True
+            self._last[key] = sig
+            return False
+        except Exception:  # noqa: BLE001
+            return False
 
     @staticmethod
     def _signature(kind: str, p: dict) -> str | None:
@@ -155,7 +186,16 @@ class MarketRecorder:
         assert self._q is not None
         while True:
             try:
-                kind, payload = await self._q.get()
+                kind, item = await self._q.get()
+                # Конвертация и гейт живут ЗДЕСЬ, а не в приёмном цикле: кадр,
+                # который гейт выбросит, не должен стоить ничего.
+                payload = item if isinstance(item, dict) else _to_dict(item)
+                if payload is None:
+                    self.stats["errors"] += 1
+                    continue
+                if self._same_as_last(kind, payload):
+                    self.stats["skipped_same"] += 1
+                    continue
                 self._write(kind, payload)
             except asyncio.CancelledError:
                 self._close_files()
@@ -176,15 +216,35 @@ class MarketRecorder:
 
     def _handle(self, kind: str) -> Any:
         day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        if day != self._day:                 # сутки сменились — закрыть вчерашние
-            self._close_files()
+        if day != self._day:                 # сутки сменились — закрыть и сжать
+            self._rotate()
             self._day = day
         f = self._files.get(kind)
         if f is None:
-            path = os.path.join(self.root, f"{kind}-{day}.jsonl.gz")
-            f = gzip.open(path, "at", encoding="utf-8", compresslevel=6)
+            # ПРОСТОЙ текст, не gzip. Первая версия писала gzip в режиме дозаписи, и
+            # файлы оказались нечитаемы: поток не завершён, пока файл открыт, и zcat
+            # падал на середине («invalid compressed data»). Архив, который нельзя
+            # прочитать до конца дня и который рвётся при падении процесса, не архив.
+            # Сжимаем ОДИН раз при ротации суток — там файл уже закрыт и целостен.
+            path = os.path.join(self.root, f"{kind}-{day}.jsonl")
+            f = open(path, "a", encoding="utf-8")  # noqa: SIM115 — живёт до ротации
             self._files[kind] = f
         return f
+
+    def _rotate(self) -> None:
+        """Закрыть вчерашние файлы и сжать их. Сжатие закрытого файла целостно."""
+        paths = [getattr(f, "name", None) for f in self._files.values()]
+        self._close_files()
+        for path in paths:
+            if not path or not os.path.exists(path) or path.endswith(".gz"):
+                continue
+            try:
+                with open(path, "rb") as src, gzip.open(path + ".gz", "wb", 6) as dst:
+                    while chunk := src.read(1 << 20):
+                        dst.write(chunk)
+                os.remove(path)
+            except Exception as exc:  # noqa: BLE001 — не сжалось, останется как есть
+                log.warning("recorder.compress_failed", path=path, error=str(exc))
 
     def _write(self, kind: str, payload: dict) -> None:
         f = self._handle(kind)
