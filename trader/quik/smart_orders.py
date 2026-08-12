@@ -9,6 +9,14 @@ Kinds (the classic community set — QUIK «стоп-заявки» / broker bra
                           once), then tracks the best price and fires when it
                           retraces trail_offset POINTS from the peak (sell) /
                           trough (buy).
+  trail_sl  ПОДТЯГИВАЮЩАЯ: то же ведение по экстремуму, но стережёт УЖЕ ОТКРЫТУЮ
+                          ручную позицию. Уровень задаётся в пунктах ХУЖЕ текущей
+                          цены и двигается ТОЛЬКО в сторону уменьшения убытка;
+                          дошла цена до уровня — позиция закрывается. Отличий от
+                          trail_tp два, и оба смысловые: уровня активации нет
+                          (стережём с момента постановки, позиция уже в рынке), и
+                          «блоки после сделки» запрещены — эта заявка ВЫХОДИТ, а
+                          защитная пара после выхода открыла бы новую позицию.
   on_fill   conditional (order-sends-order): fires the child order the moment the
                           watched client_id reports FILLED — lets the operator
                           chain "entry -> attach SL+TP bracket".
@@ -42,7 +50,10 @@ import time
 import uuid
 from dataclasses import asdict, dataclass
 
-KINDS = ("sl", "tp", "trail_tp", "on_fill")
+KINDS = ("sl", "tp", "trail_tp", "on_fill", "trail_sl")
+# Типы, которые ведут уровень за экстремумом (храповик). Список общий, чтобы
+# новый вид не пришлось дописывать в трёх местах и один из них не забыть.
+_TRAILING = ("trail_tp", "trail_sl")
 
 # Cross cushion for a fired (marketable) child: enough to actually cross after
 # exchange lag, but safely under the 0.2% hard price collar.
@@ -69,6 +80,7 @@ class SmartOrder:
     note: str = ""
     sl_offset: float = 0.0       # ЛЮБОЙ тип: защитный стоп в ПУНКТАХ после входа (0 = без стопа)
     tp_offset: float = 0.0       # ЛЮБОЙ тип: тейк в ПУНКТАХ доходного хода после входа (0 = без тейка)
+    trail_after: float = 0.0     # ЛЮБОЙ тип: ПОДТЯГИВАЮЩАЯ в пунктах после входа (0 = без неё)
     parent_id: str = ""          # у защитного стопа — so_id заявки, которая его породила
     peak: float = 0.0            # trail bookkeeping (best price since activation)
     activated: bool = False      # trail: activation level crossed
@@ -90,12 +102,27 @@ class SmartOrder:
             return "code обязателен"
         if self.kind in ("sl", "tp") and self.trigger_price <= 0:
             return "trigger_price обязателен для sl/tp"
-        if self.kind == "trail_tp" and self.trail_offset <= 0:
-            return "trail_offset (пункты) обязателен для trail_tp"
+        if self.kind in _TRAILING and self.trail_offset <= 0:
+            return f"trail_offset (пункты) обязателен для {self.kind}"
+        if self.kind == "trail_sl":
+            # Уровня активации у подтягивающей нет: позиция УЖЕ в рынке, стеречь
+            # её надо с первого тика. Непустой trigger_price означал бы, что
+            # оператор перепутал её со следящей, и позиция осталась бы без стопа
+            # до пробоя уровня — молча.
+            if self.trigger_price:
+                return "у подтягивающей нет уровня активации: она стережёт позицию сразу"
+            # Она ВЫХОДИТ из позиции, а «блоки после сделки» ВХОДЯТ. Разрешить их
+            # здесь значит после закрытия открыть новую позицию в обратную сторону.
+            if self.sl_offset or self.tp_offset or self.trail_after:
+                return "подтягивающая закрывает позицию: блоки после сделки ей не ставятся"
         if self.kind == "on_fill" and not self.watch_client_id:
             return "watch_client_id обязателен для on_fill"
-        if self.sl_offset < 0 or self.tp_offset < 0:
-            return "стоп и тейк в пунктах не могут быть отрицательными"
+        if self.sl_offset < 0 or self.tp_offset < 0 or self.trail_after < 0:
+            return "блоки после сделки в пунктах не могут быть отрицательными"
+        if self.sl_offset and self.trail_after:
+            # Два стопа на одну позицию: сработает ближний, дальний останется
+            # висеть и на следующем ходу ОТКРОЕТ позицию в обратную сторону.
+            return "после сделки нельзя ставить сразу обычный стоп и подтягивающую"
         # Защитная пара разрешена ЛЮБОМУ типу (09.08.2026): любая умная заявка
         # только ВХОДИТ и после срабатывания забывает про позицию, поэтому «блоки
         # SL и TP после сделки» нужны везде, а не только у следящей и зависимой.
@@ -239,7 +266,7 @@ def evaluate(orders: list[SmartOrder], code: str, *, last: float, bid: float,
         if not fresh or price <= 0:
             continue  # never act on a dead/stale feed
 
-        hit = _trail_step(so, price) if so.kind == "trail_tp" else _trigger_hit(so, price)
+        hit = _trail_step(so, price) if so.kind in _TRAILING else _trigger_hit(so, price)
         if hit:
             px = marketable_price(so.side, bid, ask, price, step)
             if px > 0:
@@ -277,10 +304,19 @@ def _protective(parent: SmartOrder, entry_price: float, now: int, kind: str) -> 
     только сторож узнает РЕАЛЬНУЮ среднюю цену исполнения, уровни пересчитываются
     от неё (см. rebase_protective).
     """
-    offset = parent.sl_offset if kind == "sl" else parent.tp_offset
+    offset = {"sl": parent.sl_offset, "tp": parent.tp_offset,
+              "trail_sl": parent.trail_after}.get(kind, 0.0)
     if offset <= 0 or entry_price <= 0:
         return None
     exit_side = "sell" if parent.side == "buy" else "buy"
+    # Подтягивающая уровня не имеет: она ведёт его сама от цены. Поэтому
+    # trigger_price остаётся нулём, а шаг едет в trail_offset.
+    if kind == "trail_sl":
+        return SmartOrder(
+            so_id=new_id(), kind="trail_sl", code=parent.code, side=exit_side,
+            qty=parent.qty, trail_offset=offset, oco_group=_bracket_group(parent),
+            good_till_ms=parent.good_till_ms, parent_id=parent.so_id, created_ms=now,
+            note=f"подтягивающая от {parent.so_id}: вход {entry_price:g}, {offset:g} п.")
     # Стоп — против входа, тейк — в сторону входа.
     sign = -1 if kind == "sl" else 1
     trigger = entry_price + sign * offset * (1 if parent.side == "buy" else -1)
@@ -303,10 +339,35 @@ def protective_tp(parent: SmartOrder, entry_price: float, now: int) -> SmartOrde
     return _protective(parent, entry_price, now, "tp")
 
 
+def protective_trail(parent: SmartOrder, entry_price: float, now: int) -> SmartOrder | None:
+    return _protective(parent, entry_price, now, "trail_sl")
+
+
 def protective_children(parent: SmartOrder, entry_price: float, now: int) -> list[SmartOrder]:
-    """Обе защитные заявки одной связкой (то, что оператор называет «после сделки»)."""
+    """Все заявки «после сделки» одной связкой. Стоп и подтягивающая взаимно
+    исключены валидацией, поэтому здесь их можно собирать не разбираясь."""
     return [c for c in (protective_sl(parent, entry_price, now),
-                        protective_tp(parent, entry_price, now)) if c is not None]
+                        protective_tp(parent, entry_price, now),
+                        protective_trail(parent, entry_price, now)) if c is not None]
+
+
+def superseded_stops(book: list[SmartOrder], fresh: SmartOrder) -> list[SmartOrder]:
+    """Чужие стопы на ТУ ЖЕ позицию, которые новая подтягивающая отменяет.
+
+    Оператор ставит подтягивающую на уже открытую позицию, и если на ней висел
+    прежний стоп — их станет два. Сработает ближний, а дальний останется взведён
+    и следующим ходом ОТКРОЕТ позицию в обратную сторону: это не защита, а вход
+    в рынок без ведома оператора. Позиция определяется парой (инструмент,
+    сторона закрытия): всё, что закрывает ту же позицию тем же направлением.
+
+    Чистая функция: решение принимает движок, снимает заявки сторож.
+    """
+    if fresh.kind != "trail_sl":
+        return []
+    return [o for o in book
+            if o.status == "armed" and o.so_id != fresh.so_id
+            and o.kind in ("sl", "trail_sl")
+            and o.code == fresh.code and o.side == fresh.side]
 
 
 def rebase_protective(children: list[SmartOrder], parent: SmartOrder,

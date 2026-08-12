@@ -61,6 +61,7 @@ class SmartOrderBody(BaseModel):
     good_till_ms: int = 0
     sl_offset: float = 0.0         # защитный стоп в пунктах после входа (0 = без стопа)
     tp_offset: float = 0.0         # тейк в пунктах доходного хода после входа (0 = без тейка)
+    trail_after: float = 0.0       # подтягивающая в пунктах после входа (0 = без неё)
     note: str = ""
 
 
@@ -73,7 +74,7 @@ async def create(body: SmartOrderBody, request: Request):
         side=body.side.lower(), qty=int(body.qty),
         trigger_price=float(body.trigger_price),
         trail_offset=float(body.trail_offset), sl_offset=float(body.sl_offset),
-        tp_offset=float(body.tp_offset),
+        tp_offset=float(body.tp_offset), trail_after=float(body.trail_after),
         watch_client_id=body.watch_client_id, child_price=float(body.child_price),
         oco_group=body.oco_group, good_till_ms=int(body.good_till_ms),
         note=body.note, created_ms=so_mod.now_ms(),
@@ -81,10 +82,23 @@ async def create(body: SmartOrderBody, request: Request):
     err = so.validate()
     if err:
         raise HTTPException(status_code=422, detail=err)
+    # Подтягивающая ставится на УЖЕ ОТКРЫТУЮ позицию, и прежний стоп на ней
+    # оставлять нельзя: сработает ближний, а дальний останется взведён и
+    # следующим ходом ОТКРОЕТ позицию в обратную сторону. Снимаем до того, как
+    # взвести новую — чтобы между двумя действиями не было тика с двумя стопами.
+    superseded = so_mod.superseded_stops(book.active(), so)
+    for old in superseded:
+        old.status = "cancelled"
+        old.note = ((old.note + " ") if old.note else "") + \
+            f"снят подтягивающей {so.so_id}: два стопа на одной позиции"
+        log.info("smart_order.superseded", so_id=old.so_id, by=so.so_id, kind=old.kind)
     book.add(so)
+    if superseded:
+        book.save()
     log.info("smart_order.created", so_id=so.so_id, kind=so.kind, code=so.code,
              side=so.side, qty=so.qty, trigger=so.trigger_price)
-    return {"ok": True, "so_id": so.so_id}
+    return {"ok": True, "so_id": so.so_id,
+            "superseded": [o.so_id for o in superseded]}
 
 
 @router.get("")

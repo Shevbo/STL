@@ -11,6 +11,8 @@ from trader.quik.smart_orders import (
     marketable_price,
     new_id,
     quantize,
+    protective_children,
+    superseded_stops,
 )
 
 NOW = 1_784_700_000_000
@@ -406,3 +408,74 @@ def test_rebase_protective_moves_levels_to_real_entry():
     before = kids[0].trigger_price
     rebase_protective(kids, p, real_entry=88_000)
     assert kids[0].trigger_price == before
+
+# ---- подтягивающая (trail_sl): храповик на уже открытой позиции ----
+
+def _tsl(side="sell", offset=100.0, **kw):
+    kw.setdefault("so_id", "ts1")
+    return so(kind="trail_sl", side=side, trail_offset=offset, **kw)
+
+
+def _tick(order, price):
+    """Один тик по живому рынку; True = заявка сработала."""
+    return bool(run([order], last=price))
+
+
+def test_trail_sl_ratchets_only_toward_less_loss():
+    """Уровень идёт ЗА ценой в прибыль и НИКОГДА не откатывается: иначе это не
+    подтягивающая, а обычный стоп, который оператор двигает руками."""
+    o = _tsl()                              # лонг стережём продажей
+    _tick(o, 100_000.0)                     # активация с первого тика
+    assert o.activated and o.peak == 100_000.0
+    _tick(o, 100_500.0)
+    assert o.peak == 100_500.0              # цена в плюс — уровень подтянулся
+    _tick(o, 100_300.0)
+    assert o.peak == 100_500.0              # откат НЕ опускает уровень назад
+    assert not _tick(o, 100_450.0)          # 50 пунктов отката из 100 — рано
+    assert _tick(o, 100_400.0)              # ровно 100 от пика — закрытие
+
+
+def test_trail_sl_rejects_activation_level_and_after_trade_blocks():
+    """Оба запрета смысловые: уровень активации оставил бы позицию без стопа до
+    пробоя, а блоки после сделки открыли бы НОВУЮ позицию после выхода."""
+    assert "уровня активации" in (_tsl(trigger_price=99_000.0).validate() or "")
+    assert "блоки после сделки" in (_tsl(sl_offset=50.0).validate() or "")
+    assert "блоки после сделки" in (_tsl(tp_offset=50.0).validate() or "")
+    assert _tsl(offset=0.0).validate()      # шаг обязателен
+    assert _tsl().validate() is None
+
+
+def test_trail_sl_on_short_mirrors():
+    o = _tsl(side="buy")                    # шорт стережём покупкой
+    _tick(o, 100_000.0)
+    _tick(o, 99_400.0)
+    assert o.peak == 99_400.0               # вниз = прибыль по шорту
+    _tick(o, 99_450.0)
+    assert o.peak == 99_400.0
+    assert _tick(o, 99_500.0)               # +100 от минимума — закрытие
+
+
+def test_new_trailing_supersedes_other_stops_on_the_same_position():
+    """Два стопа на одной позиции: сработает ближний, дальний останется взведён
+    и следующим ходом ОТКРОЕТ позицию в обратную сторону. Поэтому новая
+    подтягивающая снимает прежние стопы того же направления."""
+    old_sl = so(so_id="old", kind="sl", side="sell", trigger_price=99_000.0)
+    old_tp = so(so_id="tp", kind="tp", side="sell", trigger_price=101_000.0)
+    other_side = so(so_id="oth", kind="sl", side="buy", trigger_price=99_000.0)
+    fresh = _tsl(so_id="new")
+    ids = {o.so_id for o in superseded_stops([old_sl, old_tp, other_side, fresh], fresh)}
+    assert ids == {"old"}          # тейк живёт, чужая сторона живёт, стоп снят
+
+
+def test_trailing_after_trade_is_offered_to_any_kind():
+    """«После сделки» теперь три блока, и подтягивающая доступна любому типу."""
+    parent = so(kind="on_fill", side="buy", watch_client_id="c1", trail_after=300.0)
+    kids = protective_children(parent, 89_000.0, NOW)
+    assert [k.kind for k in kids] == ["trail_sl"]
+    assert kids[0].side == "sell" and kids[0].trail_offset == 300.0
+    assert kids[0].trigger_price == 0.0        # уровня у неё нет по определению
+    # Обычный стоп и подтягивающая вместе запрещены: сработает ближний, дальний
+    # останется и откроет позицию обратно.
+    assert "сразу обычный стоп и подтягивающую" in (
+        so(kind="on_fill", watch_client_id="c1", sl_offset=100.0,
+           trail_after=300.0).validate() or "")
