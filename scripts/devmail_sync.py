@@ -43,8 +43,13 @@ def fetch(window: str, timeout: int = 25) -> dict:
     # русская Windows с cp1251: первое же письмо с тире или стрелкой роняло синк
     # UnicodeDecodeError, слепок не появлялся, и почта окна не доставлялась вовсе
     # (12.08.2026). Тот же класс ошибки, что убивал раннер на каждом филле.
+    # ОКНО ДОЧЕРНЕГО ПРОЦЕССА. Задание планировщика запускает pythonw.exe — у него
+    # консоли нет, и поэтому Windows заводит НОВУЮ для ssh.exe: мигающее окно раз
+    # в минуту весь день (оператор заметил через час). CREATE_NO_WINDOW есть
+    # только в subprocess на Windows, на Linux getattr вернёт 0 = без изменений.
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
-                       encoding="utf-8", errors="replace")
+                       encoding="utf-8", errors="replace",
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     if r.returncode != 0:
         raise RuntimeError(f"rc={r.returncode} {(r.stderr or '')[:200]}")
     return json.loads(r.stdout)
