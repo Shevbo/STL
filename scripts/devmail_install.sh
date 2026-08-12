@@ -46,7 +46,14 @@ if [ "$OS" = windows ]; then
   # Пути планировщику нужны абсолютные и в windows-форме. Интерпретатор тоже:
   # у задания свой PATH, и «python3» там может не разрешиться вовсе — задание
   # молча падало бы каждую минуту, а окно считало бы, что почта настроена.
+  # pythonw.exe, а НЕ python.exe: консольный интерпретатор поднимает видимое
+  # окно на КАЖДЫЙ прогон, то есть раз в минуту весь день. Оператор это заметил
+  # в первый же час. pythonw делает то же самое без окна; если его нет рядом с
+  # python.exe — откатываемся на консольный, лучше мигающее окно, чем нерабочая
+  # почта.
   PYEXE="$("$PY" -c "import sys; print(sys.executable)")"
+  PYW="${PYEXE%python.exe}pythonw.exe"
+  [ -x "$PYW" ] && PYEXE="$PYW"
   WPY="$(cygpath -w "$PYEXE" 2>/dev/null || echo "$PYEXE")"
   WPATH="$(cygpath -w "$REPO/scripts/devmail_sync.py" 2>/dev/null || echo "$REPO/scripts/devmail_sync.py")"
   TASK="STL-DevMail-$WIN"
