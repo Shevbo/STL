@@ -240,6 +240,29 @@ async def ack(msg_id: str, request: Request):
     return {"ok": True, "id": msg_id}
 
 
+@router.get("/feed")
+async def feed(request: Request, limit: int = 200):
+    """ВСЯ переписка окон одной лентой — для экрана «Чат разработчиков».
+
+    Отличается от /inbox тем, что не фильтрует по адресату и не прячет
+    прочитанное: оператору нужен ход разговора целиком, а не чей-то ящик.
+    Читается страницей напрямую, без участия модели — никаких токенов.
+    """
+    _auth(request)
+    msgs = await _all_msgs(_pool(request))
+    now = int(time.time() * 1000)
+    out = []
+    for m in sorted(msgs, key=lambda x: x.get("created_ms") or 0, reverse=True)[:max(1, limit)]:
+        created = int(m.get("created_ms") or 0)
+        out.append({**m, "age_h": round((now - created) / 3600000, 1) if created else 0.0,
+                    "read": bool(m.get("read_ms")),
+                    "stale": bool(not m.get("read_ms") and created
+                                  and now - created >= _STALE_MS)})
+    return {"messages": out, "agents": AGENTS, "broadcast": _BROADCAST,
+            "stale_after_h": _STALE_MS / 3600000,
+            "post": "POST /api/v1/dev/msg {to, topic, body, sender:'operator'}"}
+
+
 @router.get("/board")
 async def board(request: Request):
     """Вся доска разом: по каждому окну сколько непрочитанного и насколько
