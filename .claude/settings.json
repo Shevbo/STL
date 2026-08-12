@@ -51,6 +51,11 @@
             "type": "command",
             "command": "python3 \"${CLAUDE_PROJECT_DIR:-.}/scripts/devmail_hook.py\"",
             "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "ssh -o ConnectTimeout=5 -o BatchMode=yes hoster 'bash ~/apps/shectory-trader/scripts/devmsg.sh board' 2>/dev/null || true",
+            "timeout": 15
           }
         ]
       }
@@ -62,13 +67,7 @@
             "type": "command",
             "command": "python3 \"${CLAUDE_PROJECT_DIR:-.}/scripts/devmail_hook.py\"",
             "timeout": 5
-          }
-        ]
-      }
-    ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
+          },
           {
             "type": "command",
             "command": "bash .claude/devmsg-poke.sh 2>/dev/null || true",
