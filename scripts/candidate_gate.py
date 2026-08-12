@@ -41,6 +41,76 @@ RUNNER_BAR_TAIL = 600
 TRADABLE = {"RIU6", "RIM6", "BRU6", "BRQ6", "SiU6", "GZU6", "SVU6", "NGQ6", "MMU6"}
 
 
+def max_position(params: dict) -> int:
+    """Абсолютный потолок позиции, а не только лестницы усреднения.
+
+    avg_max — потолок ДОБОРОВ; абсолютный максимум задаёт ещё и ставочная
+    система (qty + bet_max). Берём худшее из двух, потому что закрываться робот
+    будет из фактической позиции, а не из той, что мы имели в виду.
+    """
+    def num(k, d=0):
+        try:
+            return int(float(params.get(k, d) or d))
+        except (TypeError, ValueError):
+            return d
+    qty = max(1, num("qty", 1))
+    return max(num("avg_max", 1), qty + num("bet_max", 0))
+
+
+def caps_ok(params: dict, per_order: int, working: int) -> str | None:
+    """Сможет ли робот ЗАКРЫТЬСЯ. Проверка фида и белого списка этого не ловит.
+
+    Выход всей книгой — ОДНА заявка, а разворот держит в воздухе выход и новый
+    вход. Поэтому max_position <= кап на заявку И max_position + qty <= кап
+    рабочих контрактов. Нарушение означает робота, который открывается
+    усреднением и не закрывается никогда: било вживую 21.07.2026.
+    """
+    pos = max_position(params)
+    try:
+        qty = max(1, int(float(params.get("qty", 1) or 1)))
+    except (TypeError, ValueError):
+        qty = 1
+    if pos > per_order:
+        return f"позиция {pos} > капа на заявку {per_order}: не закроется одной заявкой"
+    if pos + qty > working:
+        return f"позиция {pos} + вход {qty} > капа рабочих {working}: разворот не поместится"
+    return None
+
+
+def margin_ok(params: dict, margin_per_contract: float, free_margin: float,
+              multiplier: float, share: float) -> str | None:
+    """Влезает ли ПОЛНЫЙ набор в деньги счёта.
+
+    Половина свободного ГО, а не всё: остаток обязан покрыть просадку открытой
+    позиции, иначе принудительное закрытие в худшей точке. Считать по ГО СЧЁТА,
+    а не биржевому — брокер берёт кратно (множитель 2.4), и на биржевом значении
+    ёмкость счёта завышена ровно во столько же.
+    """
+    if not margin_per_contract or not free_margin:
+        return None                      # экономика инструмента неизвестна — не судим
+    need = max_position(params) * margin_per_contract * multiplier
+    if need > free_margin * share:
+        return (f"лестница требует {need:,.0f} ГО счёта > {share:.0%} свободного "
+                f"({free_margin * share:,.0f})")
+    return None
+
+
+def spread_cost(params: dict, trades: int, step_value: float) -> float:
+    """Во сколько обойдётся ПЕРЕХОД СПРЕДА, которого в бэктесте нет вовсе.
+
+    Комиссия в бэктесте есть (тейкерская), а спред — нет: заявки робота
+    маркетабельны по построению, значит на каждой стороне теряется минимум шаг
+    цены. Чем чаще конфиг торгует, тем сильнее это его режет, и это правильно.
+    """
+    if not step_value or not trades:
+        return 0.0
+    try:
+        qty = max(1, int(float(params.get("qty", 1) or 1)))
+    except (TypeError, ValueError):
+        qty = 1
+    return trades * 2 * qty * step_value
+
+
 def warmup_bars(strategy: str, params: dict) -> int | None:
     """Прогрев ПО САМОЙ СТРАТЕГИИ, а не по формуле над ключами params.
 
@@ -109,10 +179,30 @@ def on_grid_edge(params: dict, axes: dict[str, list[float]]) -> list[str]:
 async def main() -> int:
     ap = argparse.ArgumentParser(description="Гейт кандидата уровня 1")
     ap.add_argument("--campaign", required=True, help="LIKE-шаблон campaign_run")
-    ap.add_argument("--min-trades", type=int, default=150)
+    ap.add_argument("--min-trades", type=int, default=150, help="на ВЕСЬ прогон")
+    # Порог на окно, а не только на прогон: 150 суммарно может быть одним взрывным
+    # окном и тремя пустыми. Но per-window порог НЕЛЬЗЯ ставить высоким — 150 на
+    # каждом окне отклоняет нашего единственного кандидата, прошедшего и второй
+    # контракт, и зеркальный тест (291 сделка = 73 на окно). Ловим 44-сделочные
+    # миражи (11 на окно), а не нормальную частоту. Считается приближённо:
+    # в лидерборде нет сделок по окнам, есть только total_trades и windows_total.
+    ap.add_argument("--min-trades-window", type=int, default=20)
     ap.add_argument("--min-nm", type=float, default=3.0, help="порог net/max_mae")
     ap.add_argument("--min-windows", type=int, default=3)
     ap.add_argument("--max-edges", type=int, default=1, help="сколько осей на краю терпим")
+    # Капы агента и деньги счёта: строка, которую нельзя ни закрыть, ни оплатить,
+    # не кандидат, сколько бы она ни показывала.
+    ap.add_argument("--cap-per-order", type=int,
+                    default=int(os.environ.get("QUIK_MAX_CONTRACTS_PER_ORDER", 34)))
+    ap.add_argument("--cap-working", type=int,
+                    default=int(os.environ.get("QUIK_MAX_WORKING_CONTRACTS", 70)))
+    ap.add_argument("--free-margin", type=float, default=1_529_640.0,
+                    help="ХУДШЕЕ наблюдавшееся свободное ГО: оператор торгует руками "
+                         "на том же счёте, и оно плавает в разы за вечер")
+    ap.add_argument("--margin-share", type=float, default=0.5,
+                    help="какую долю свободного ГО разрешено занять полным набором")
+    ap.add_argument("--margin-multiplier", type=float,
+                    default=float(os.environ.get("QUIK_MARGIN_MULTIPLIER", 2.4)))
     ap.add_argument("--limit", type=int, default=40)
     ap.add_argument("--json", action="store_true", help="выдать прошедших в JSON для уровня 2")
     args = ap.parse_args()
@@ -126,6 +216,10 @@ async def main() -> int:
                 WHERE campaign_run LIKE $1""",
             args.campaign,
         )
+        # Экономика инструмента: ГО контракта для проверки ёмкости счёта и
+        # РУБЛЁВАЯ стоимость шага цены для перехода спреда.
+        meta = {r["symbol"]: dict(r) for r in await c.fetch(
+            "SELECT symbol, initial_margin, price_step_value FROM instrument_meta")}
     await pool.close()
     if not rows:
         print(f"нет строк по шаблону {args.campaign!r}")
@@ -174,8 +268,26 @@ async def main() -> int:
         w = warmup_bars(rec["strategy"], p)
         if w is not None and w > RUNNER_BAR_TAIL:
             why.append(("прогрев не влезает в персист раннера", f"{w} > {RUNNER_BAR_TAIL}"))
-        if (rec["total_trades"] or 0) < args.min_trades:
-            why.append((f"сделок меньше {args.min_trades}", str(rec["total_trades"])))
+        trades = rec["total_trades"] or 0
+        if trades < args.min_trades:
+            why.append((f"сделок меньше {args.min_trades}", str(trades)))
+        wt = rec["windows_total"] or 4
+        if wt and trades / wt < args.min_trades_window:
+            why.append((f"сделок на окно меньше {args.min_trades_window}",
+                        f"{trades / wt:.0f}"))
+        cap = caps_ok(p, args.cap_per_order, args.cap_working)
+        if cap:
+            why.append(("не закроется: капы агента", cap))
+        m = meta.get(rec["symbol"]) or {}
+        mg = margin_ok(p, float(m.get("initial_margin") or 0), args.free_margin,
+                       args.margin_multiplier, args.margin_share)
+        if mg:
+            why.append(("лестница не влезает в свободное ГО", mg))
+        # Спред: в бэктесте его нет вовсе, а робот кроссит его на каждой стороне.
+        sp = spread_cost(p, trades, float(m.get("price_step_value") or 0))
+        if sp and (rec["net_profit"] or 0) - sp <= 0:
+            why.append(("net не выживает после перехода спреда",
+                        f"{rec['net_profit']:,.0f} − {sp:,.0f} <= 0"))
         if (rec["net_profit"] or 0) <= 0:
             why.append(("net <= 0", ""))
         mae = rec["max_mae"] or 0

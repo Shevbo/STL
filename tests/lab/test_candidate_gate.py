@@ -57,3 +57,37 @@ def test_instruments_the_agent_cannot_trade_are_out():
     они ни показывали в бэктесте, запустить их нельзя."""
     assert "GDU6" not in gate.TRADABLE and "MXU6" not in gate.TRADABLE
     assert "BRU6" in gate.TRADABLE and "RIU6" in gate.TRADABLE
+
+
+# ── пункты, добавленные окном real-trade 12.08.2026 ──────────────────────────
+
+def test_robot_that_cannot_close_is_rejected():
+    """Выход всей книгой — ОДНА заявка. Потолок лестницы больше капа на заявку
+    означает робота, который открывается усреднением и не закрывается никогда
+    (било вживую 21.07.2026)."""
+    assert gate.caps_ok({"qty": 1, "avg_max": 40}, per_order=34, working=70) is not None
+    assert gate.caps_ok({"qty": 1, "avg_max": 17}, per_order=34, working=70) is None
+    # разворот держит в воздухе выход И новый вход
+    assert gate.caps_ok({"qty": 5, "avg_max": 34}, per_order=34, working=35) is not None
+    # ставочная система поднимает АБСОЛЮТНЫЙ потолок выше avg_max
+    assert gate.max_position({"qty": 1, "avg_max": 4, "bet_max": 30}) == 31
+
+
+def test_ladder_that_does_not_fit_the_account_is_rejected():
+    """Считать по ГО СЧЁТА (×2.4), а не биржевому, и оставлять половину
+    свободного на просадку: иначе принудительное закрытие в худшей точке."""
+    # RIU6: биржевое ГО 22 416 -> счёт 53 798 за контракт
+    fits = gate.margin_ok({"qty": 1, "avg_max": 10}, 22_416, 1_529_640, 2.4, 0.5)
+    over = gate.margin_ok({"qty": 1, "avg_max": 34}, 22_416, 1_529_640, 2.4, 0.5)
+    assert fits is None and over is not None
+    # без известной экономики инструмента не судим
+    assert gate.margin_ok({"qty": 1, "avg_max": 99}, 0, 1_529_640, 2.4, 0.5) is None
+
+
+def test_spread_is_charged_because_the_backtester_ignores_it():
+    """Комиссия в бэктесте есть, перехода спреда нет, а заявки робота
+    маркетабельны. На BR шаг стоит 8.22 ₽ на контракт на сторону."""
+    cost = gate.spread_cost({"qty": 1}, trades=291, step_value=8.21665)
+    assert round(cost) == round(291 * 2 * 8.21665)      # обе стороны
+    assert gate.spread_cost({"qty": 4}, 100, 8.21665) == 4 * gate.spread_cost({"qty": 1}, 100, 8.21665)
+    assert gate.spread_cost({"qty": 1}, 291, 0) == 0.0  # шаг неизвестен — не штрафуем
