@@ -53,10 +53,10 @@ def test_grid_edge_flags_only_real_edges():
 
 
 def test_instruments_the_agent_cannot_trade_are_out():
-    """GDU6 и MXU6 нет ни в фиде агента, ни в белом списке лимитов: сколько бы
-    они ни показывали в бэктесте, запустить их нельзя."""
-    assert "GDU6" not in gate.TRADABLE and "MXU6" not in gate.TRADABLE
-    assert "BRU6" in gate.TRADABLE and "RIU6" in gate.TRADABLE
+    """MXU6 нет в фиде QUIK (bars=0), запустить его нельзя сколько бы он ни
+    показывал в бэктесте. GDU6 внесён в белый список 12.08 решением оператора."""
+    assert "MXU6" not in gate.TRADABLE
+    assert {"BRU6", "RIU6", "GDU6"} <= gate.TRADABLE
 
 
 # ── пункты, добавленные окном real-trade 12.08.2026 ──────────────────────────

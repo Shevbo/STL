@@ -36,9 +36,12 @@ from trader.lab.strategies.library import REGISTRY  # noqa: E402
 # число честное, в бою недостижимое.
 RUNNER_BAR_TAIL = 600
 
-# Инструменты, которые агент реально может торговать. GDU6/MXU6 не в фиде и не в
-# белом списке лимитов — их незачем и отбирать (замечание real-trade 11.08).
-TRADABLE = {"RIU6", "RIM6", "BRU6", "BRQ6", "SiU6", "GZU6", "SVU6", "NGQ6", "MMU6"}
+# Инструменты, которые агент реально может торговать: QUIK_INSTRUMENT_WHITELIST на
+# хостере плюс истёкшие контракты тех же активов (нужны для OOS на втором
+# контракте). MXU6 остаётся вне списка: его нет в фиде QUIK, bars=0 (real-trade
+# 11.08). GDU6 добавлен 12.08 решением оператора.
+TRADABLE = {"RIU6", "RIM6", "BRU6", "BRQ6", "SiU6", "GZU6", "SRU6", "GDU6",
+            "SVU6", "NGQ6", "MMU6"}
 
 
 def max_position(params: dict) -> int:
