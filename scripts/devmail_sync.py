@@ -39,7 +39,12 @@ def fetch(window: str, timeout: int = 25) -> dict:
     tail = f"{REMOTE_CMD} {window}"
     cmd = (["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", SSH_HOST, tail]
            if SSH_HOST else ["bash", "-lc", tail])
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    # КОДИРОВКУ ЗАДАЁМ ЯВНО. text=True декодирует выводом ЛОКАЛИ, а машина окон —
+    # русская Windows с cp1251: первое же письмо с тире или стрелкой роняло синк
+    # UnicodeDecodeError, слепок не появлялся, и почта окна не доставлялась вовсе
+    # (12.08.2026). Тот же класс ошибки, что убивал раннер на каждом филле.
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                       encoding="utf-8", errors="replace")
     if r.returncode != 0:
         raise RuntimeError(f"rc={r.returncode} {(r.stderr or '')[:200]}")
     return json.loads(r.stdout)
