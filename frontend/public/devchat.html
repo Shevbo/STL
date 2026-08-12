@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>STL — чат разработчиков</title>
+<style>
+  /* Экран для ОПЕРАТОРА: он ведёт три окна и не видит, о чём они переписываются.
+     Здесь вся переписка одной лентой плюс форма, чтобы написать всем сразу.
+     Ни одного обращения к модели: только чтение API (оговорено отдельно). */
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #0a0a12; color: #ccc;
+    font: 13px/1.55 -apple-system, Segoe UI, Arial, sans-serif; }
+  .mono { font-family: "SF Mono", Consolas, Menlo, monospace; font-variant-numeric: tabular-nums; }
+  a { color: #7fb3ff; }
+
+  header { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+    padding: 12px 16px; border-bottom: 1px solid #22224a; position: sticky; top: 0;
+    background: #0a0a12; z-index: 5; }
+  header h1 { font-size: 15px; margin: 0; color: #eee; font-weight: 700; letter-spacing: .2px; }
+  header .sub { font-size: 11px; color: #667; }
+  header .sp { flex: 1; }
+  .btn { background: #12122a; border: 1px solid #2d2d4a; color: #bcd; border-radius: 5px;
+    padding: 5px 11px; font-size: 12px; cursor: pointer; }
+  .btn:hover { border-color: #3a6ba8; color: #eaf1ff; }
+  .btn.on { background: #16243c; border-color: #3a6ba8; color: #eaf1ff; }
+  .btn.primary { background: #16243c; border-color: #3a6ba8; color: #eaf1ff; font-weight: 600; }
+  .btn:disabled { opacity: .45; cursor: default; }
+
+  /* ── Доска окон: просрочка обязана быть видна С ОДНОГО ВЗГЛЯДА ────────────
+     Просроченное письмо это не фон, а сбой доставки: окно не забирает работу.
+     Поэтому карточка окна краснеет целиком, а не прячет число в строке. */
+  .board { display: flex; gap: 10px; flex-wrap: wrap; padding: 12px 16px;
+    border-bottom: 1px solid #16162c; }
+  .win { flex: 1 1 190px; background: #12122a; border: 1px solid #22224a;
+    border-left: 3px solid var(--c, #2d2d4a); border-radius: 7px; padding: 9px 12px; }
+  .win .n { font-weight: 700; color: #eee; font-size: 13px; }
+  .win .z { font-size: 10px; color: #667; margin-top: 2px; line-height: 1.35;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .win .st { margin-top: 6px; font-size: 11px; color: #8a93a8; }
+  .win .st b { color: #dde; }
+  .win.clean .st { color: #4caf7d; }
+  .win.late { background: #1d0f12; border-color: #5c2230; }
+  .win.late .st { color: #ff6b7a; font-weight: 600; }
+
+  .filters { display: flex; gap: 6px; flex-wrap: wrap; align-items: center;
+    padding: 9px 16px; border-bottom: 1px solid #16162c; font-size: 11px; color: #667; }
+  .chip { background: #12122a; border: 1px solid #22224a; color: #99a; border-radius: 12px;
+    padding: 3px 10px; font-size: 11px; cursor: pointer; }
+  .chip:hover { color: #dde; }
+  .chip.on { background: #16243c; border-color: #3a6ba8; color: #eaf1ff; }
+
+  .feed { padding: 10px 16px 40px; max-width: 1180px; }
+  .day { font-size: 10px; color: #556; text-transform: uppercase; letter-spacing: .6px;
+    margin: 16px 0 8px; border-bottom: 1px solid #16162c; padding-bottom: 4px; }
+  .msg { background: #101024; border: 1px solid #1e1e3c; border-left: 3px solid var(--c, #2d2d4a);
+    border-radius: 7px; margin-bottom: 8px; }
+  .msg.late { border-color: #5c2230; background: #170e18; }
+  .msg .head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+    padding: 8px 12px; cursor: pointer; }
+  .msg .head:hover { background: #14142c; }
+  .who { font-weight: 700; color: var(--c, #dde); font-size: 12px; }
+  .arrow { color: #556; }
+  .to { color: #99a; font-size: 12px; }
+  .topic { color: #eaeaf5; font-weight: 600; flex: 1 1 260px; min-width: 0; }
+  .when { font-size: 11px; color: #667; white-space: nowrap; }
+  .tag { font-size: 10px; padding: 2px 7px; border-radius: 3px; border: 1px solid;
+    white-space: nowrap; }
+  .tag.new { color: #ffb300; border-color: #ffb30055; background: #1e1704; }
+  .tag.late { color: #ff6b7a; border-color: #ff6b7a66; background: #250d12; font-weight: 700; }
+  .tag.read { color: #4caf7d; border-color: #4caf7d44; background: #0c1a13; }
+  .msg .body { display: none; padding: 2px 12px 12px 12px; }
+  .msg.open .body { display: block; }
+  .msg .peek { padding: 0 12px 9px; color: #7d849b; font-size: 12px;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .msg.open .peek { display: none; }
+  .body pre { margin: 0; white-space: pre-wrap; word-break: break-word; color: #c8ccdb;
+    font: 12px/1.6 "SF Mono", Consolas, Menlo, monospace; }
+  .body .foot { margin-top: 8px; display: flex; gap: 10px; align-items: center;
+    font-size: 10px; color: #556; }
+  .copy { cursor: pointer; border-bottom: 1px dotted #445; }
+  .copy:hover { color: #9ab; }
+
+  /* ── Форма: оператор пишет окнам ───────────────────────────────────────── */
+  .compose { padding: 12px 16px; border-bottom: 1px solid #16162c; background: #0d0d1c; }
+  .compose.hidden { display: none; }
+  .compose .row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+  .compose select, .compose input, .compose textarea {
+    background: #0a0a12; border: 1px solid #2d2d4a; color: #eee; border-radius: 5px;
+    padding: 7px 9px; font: 13px/1.4 inherit; }
+  .compose input { flex: 1 1 320px; }
+  .compose textarea { width: 100%; min-height: 90px; resize: vertical;
+    font-family: "SF Mono", Consolas, Menlo, monospace; font-size: 12px; }
+  .sent { font-size: 12px; margin-top: 6px; color: #4caf7d; }
+  .sent.warn { color: #ff9a3c; }
+  .sent.bad { color: #ff6b7a; }
+  .empty { color: #556; padding: 24px 0; text-align: center; }
+  .err { margin: 16px; padding: 10px 14px; border: 1px solid #5c2230; background: #1d0f12;
+    color: #ff9aa6; border-radius: 6px; font-size: 13px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Чат разработчиков</h1>
+  <span class="sub" id="hcount">загрузка…</span>
+  <span class="sp"></span>
+  <button class="btn" id="btnCompose">Написать</button>
+  <button class="btn" id="btnCsv" title="выгрузить видимую ленту в CSV">CSV</button>
+  <button class="btn on" id="btnAuto" title="перечитывать ленту каждые 20 секунд">Авто</button>
+  <button class="btn" id="btnReload">Обновить</button>
+</header>
+
+<div class="board" id="board"></div>
+
+<form class="compose hidden" id="compose">
+  <div class="row">
+    <select id="cTo"></select>
+    <input id="cTopic" placeholder="Тема" maxlength="200" required>
+  </div>
+  <textarea id="cBody" placeholder="Текст письма" required></textarea>
+  <div class="row" style="margin-top:8px; align-items:center">
+    <button class="btn primary" type="submit" id="cSend">Отправить</button>
+    <span class="sub" style="font-size:11px; color:#667">от имени оператора</span>
+    <span class="sent" id="cSent"></span>
+  </div>
+</form>
+
+<div class="filters" id="filters"></div>
+<div class="feed" id="feed"></div>
+
+<script>
+// Никакой модели здесь нет и не должно быть: страница только читает /dev/feed
+// и постит письмо оператора. Оговорено отдельно — «без токенов ИИ».
+const FEED = '/api/v1/dev/feed?limit=200';
+// Цвет ЗА ОТПРАВИТЕЛЕМ, а не за строкой: направление в ленте читается боковым
+// зрением, иначе три окна сливаются в одну простыню.
+const COLOR = { 'real-trade': '#ff7a7a', 'backtests': '#c48dff',
+                'ui-ux': '#4fc3f7', 'operator': '#ffd166' };
+const MSK = { timeZone: 'Europe/Moscow' };
+const esc = (s) => String(s == null ? '' : s)
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+let data = null;                       // последний ответ ленты
+let auto = true, timer = null;
+const open = new Set();                // развёрнутые письма живут вне разметки
+let fFrom = '', fOnly = '';            // фильтры: отправитель, «только непрочитанные»
+
+const dayOf = (ms) => new Date(ms).toLocaleDateString('ru-RU',
+  { ...MSK, day: '2-digit', month: 'long', weekday: 'short' });
+const timeOf = (ms) => new Date(ms).toLocaleTimeString('ru-RU',
+  { ...MSK, hour: '2-digit', minute: '2-digit' });
+// Возраст словами: «14 ч» читается с одного взгляда, «0.23 ч» — нет.
+function ageOf(h) {
+  const m = Math.round((h || 0) * 60);
+  if (m < 1) return 'только что';
+  if (m < 60) return m + ' мин';
+  if (h < 48) return Math.round(h) + ' ч';
+  return Math.round(h / 24) + ' сут';
+}
+
+function renderBoard() {
+  const agents = data.agents || {};
+  const late = [];
+  document.getElementById('board').innerHTML = Object.keys(agents).map((w) => {
+    // Считаем по ЛЕНТЕ: непрочитанное у окна — это письма, адресованные ему
+    // (или всем) и не подтверждённые. Ровно то, что окно не забрало.
+    const mine = (data.messages || []).filter(
+      (m) => (m.to === w || m.to === data.broadcast) && m.from !== w && !m.read);
+    const oldest = mine.reduce((a, m) => Math.max(a, m.age_h || 0), 0);
+    const isLate = mine.some((m) => m.stale);
+    if (isLate) late.push(w);
+    const st = !mine.length
+      ? 'всё прочитано'
+      : `<b>${mine.length}</b> непрочитан${mine.length === 1 ? 'о' : 'о'}, старшему ${ageOf(oldest)}`;
+    return `<div class="win ${isLate ? 'late' : (mine.length ? '' : 'clean')}"
+      style="--c:${COLOR[w] || '#2d2d4a'}">
+      <div class="n">${esc(w)}</div>
+      <div class="z">${esc(agents[w])}</div>
+      <div class="st">${st}</div></div>`;
+  }).join('');
+  const unread = (data.messages || []).filter((m) => !m.read).length;
+  document.getElementById('hcount').textContent =
+    `${(data.messages || []).length} писем · ${unread} непрочитано`
+    + (late.length ? ` · ПРОСРОЧКА у ${late.join(', ')}` : '');
+}
+
+function renderFilters() {
+  const wins = Object.keys(data.agents || {});
+  const chip = (id, label, active) =>
+    `<span class="chip ${active ? 'on' : ''}" data-f="${id}">${esc(label)}</span>`;
+  document.getElementById('filters').innerHTML =
+    'от кого: ' + chip('', 'все', !fFrom) + wins.map((w) => chip(w, w, fFrom === w)).join('')
+    + '<span style="width:14px"></span>'
+    + `<span class="chip ${fOnly === 'unread' ? 'on' : ''}" data-o="unread">только непрочитанные</span>`
+    + `<span class="chip ${fOnly === 'stale' ? 'on' : ''}" data-o="stale">только просроченные</span>`;
+}
+
+function visible() {
+  return (data.messages || []).filter((m) =>
+    (!fFrom || m.from === fFrom)
+    && (fOnly !== 'unread' || !m.read)
+    && (fOnly !== 'stale' || m.stale));
+}
+
+function renderFeed() {
+  const list = visible();
+  if (!list.length) {
+    document.getElementById('feed').innerHTML = '<div class="empty">писем нет</div>';
+    return;
+  }
+  let out = '', day = '';
+  for (const m of list) {
+    const d = dayOf(m.created_ms);
+    if (d !== day) { day = d; out += `<div class="day">${esc(d)}</div>`; }
+    const tag = m.stale ? '<span class="tag late">ПРОСРОЧЕНО</span>'
+      : m.read ? '<span class="tag read">прочитано</span>'
+      : '<span class="tag new">непрочитано</span>';
+    out += `<div class="msg ${m.stale ? 'late' : ''} ${open.has(m.id) ? 'open' : ''}"
+        data-id="${esc(m.id)}" style="--c:${COLOR[m.from] || '#2d2d4a'}">
+      <div class="head">
+        <span class="who">${esc(m.from)}</span><span class="arrow">→</span>
+        <span class="to">${esc(m.to === data.broadcast ? 'всем' : m.to)}</span>
+        <span class="topic">${esc(m.topic)}</span>
+        ${tag}
+        <span class="when mono">${esc(timeOf(m.created_ms))} · ${esc(ageOf(m.age_h))}</span>
+      </div>
+      <div class="peek">${esc(m.body).slice(0, 400)}</div>
+      <div class="body"><pre>${esc(m.body)}</pre>
+        <div class="foot"><span class="copy mono" data-copy="${esc(m.id)}">id ${esc(m.id)}</span>
+        <span>${esc(new Date(m.created_ms).toLocaleString('ru-RU', MSK))} МСК</span>
+        ${m.read_ms ? '<span>прочитано ' + esc(new Date(m.read_ms).toLocaleString('ru-RU', MSK)) + '</span>' : ''}
+        </div></div>
+    </div>`;
+  }
+  document.getElementById('feed').innerHTML = out;
+}
+
+function render() {
+  renderBoard(); renderFilters(); renderFeed();
+}
+
+async function load() {
+  try {
+    const r = await fetch(FEED, { cache: 'no-store' });
+    if (!r.ok) {
+      document.getElementById('feed').innerHTML = `<div class="err">HTTP ${r.status}` +
+        (r.status === 401 ? ' — войдите в STL в этом браузере' : '') + '</div>';
+      return;
+    }
+    data = await r.json();
+    // Ленту отдают новыми сверху; полагаться на это не будем — порядок наш.
+    (data.messages || []).sort((a, b) => (b.created_ms || 0) - (a.created_ms || 0));
+    render();
+    fillTo();
+  } catch (e) {
+    document.getElementById('feed').innerHTML =
+      `<div class="err">лента недоступна: ${esc(e.message || e)}</div>`;
+  }
+}
+
+function fillTo() {
+  const sel = document.getElementById('cTo');
+  if (sel.options.length) return;                 // не сбрасываем выбор оператора
+  const wins = Object.keys(data.agents || {}).filter((w) => w !== 'operator');
+  sel.innerHTML = `<option value="${esc(data.broadcast || 'all')}">всем окнам</option>`
+    + wins.map((w) => `<option value="${esc(w)}">${esc(w)}</option>`).join('');
+}
+
+// ── события ──────────────────────────────────────────────────────────────────
+document.addEventListener('click', (e) => {
+  const head = e.target.closest('.msg .head');
+  if (head) {
+    const el = head.closest('.msg'), id = el.dataset.id;
+    if (open.has(id)) open.delete(id); else open.add(id);
+    el.classList.toggle('open');
+    return;
+  }
+  const cp = e.target.closest('[data-copy]');
+  if (cp) {
+    navigator.clipboard.writeText(cp.dataset.copy).then(() => {
+      const t = cp.textContent; cp.textContent = 'скопировано';
+      setTimeout(() => { cp.textContent = t; }, 1200);
+    });
+    return;
+  }
+  const f = e.target.closest('[data-f]');
+  if (f) { fFrom = f.dataset.f; render(); return; }
+  const o = e.target.closest('[data-o]');
+  if (o) { fOnly = fOnly === o.dataset.o ? '' : o.dataset.o; render(); return; }
+});
+
+document.getElementById('btnReload').onclick = load;
+document.getElementById('btnCompose').onclick = () => {
+  const c = document.getElementById('compose');
+  c.classList.toggle('hidden');
+  if (!c.classList.contains('hidden')) document.getElementById('cTopic').focus();
+};
+document.getElementById('btnAuto').onclick = (e) => {
+  auto = !auto; e.target.classList.toggle('on', auto);
+  clearInterval(timer); if (auto) timer = setInterval(load, 20000);
+};
+document.getElementById('btnCsv').onclick = () => {
+  const rows = [['дата_мск', 'от', 'кому', 'тема', 'возраст_ч', 'прочитано', 'просрочено', 'тело']];
+  for (const m of visible()) {
+    rows.push([new Date(m.created_ms).toLocaleString('ru-RU', MSK), m.from, m.to, m.topic,
+      (m.age_h || 0).toFixed(1), m.read ? 'да' : 'нет', m.stale ? 'да' : 'нет',
+      (m.body || '').replace(/\s+/g, ' ')]);
+  }
+  const csv = '﻿' + rows.map((r) => r.map(
+    (v) => '"' + String(v).replace(/"/g, '""') + '"').join(';')).join('\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+  a.download = 'stl-devchat.csv'; a.click(); URL.revokeObjectURL(a.href);
+};
+
+document.getElementById('compose').onsubmit = async (e) => {
+  e.preventDefault();
+  const btn = document.getElementById('cSend'), out = document.getElementById('cSent');
+  const body = {
+    to: document.getElementById('cTo').value,
+    topic: document.getElementById('cTopic').value.trim(),
+    body: document.getElementById('cBody').value.trim(),
+    sender: 'operator',
+  };
+  btn.disabled = true; out.className = 'sent'; out.textContent = 'отправляю…';
+  try {
+    const r = await fetch('/api/v1/dev/msg', { method: 'POST',
+      headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.detail || ('HTTP ' + r.status));
+    // СОСТОЯНИЕ ЯЩИКА АДРЕСАТА показываем прямо в форме: отправитель обязан
+    // видеть, что окно не забирает почту, а не считать работу переданной.
+    const rc = j.recipient || {};
+    out.className = 'sent' + (j.warning ? ' warn' : '');
+    out.textContent = (j.warning ? j.warning : 'отправлено')
+      + (rc.unread != null ? ` · у «${rc.agent}» непрочитанных ${rc.unread}` : '')
+      + (rc.oldest_age_h ? `, старшему ${ageOf(rc.oldest_age_h)}` : '');
+    document.getElementById('cTopic').value = '';
+    document.getElementById('cBody').value = '';
+    load();
+  } catch (err) {
+    out.className = 'sent bad'; out.textContent = 'не ушло: ' + (err.message || err);
+  } finally {
+    btn.disabled = false;
+  }
+};
+
+load();
+timer = setInterval(load, 20000);
+</script>
+</body>
+</html>

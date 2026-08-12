@@ -41,6 +41,7 @@
         { href: '/i9.html', label: 'i9: ресурсы переборщика', ext: true },
         { href: '/companion.html', label: 'Компаньон (веб-версия панели)', ext: true },
         { href: '/m.html', label: 'Компаньон на телефоне', ext: true },
+        { href: '/devchat.html', label: 'Чат разработчиков', ext: true },
       ],
     },
     {
