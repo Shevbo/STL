@@ -64,6 +64,22 @@ def cmd_inbox(agent: str, show_all: bool = False) -> int:
     return 0
 
 
+def cmd_inbox_json(agent: str) -> int:
+    """Тот же ящик, но машинно-читаемо: сырой ответ API одной строкой.
+
+    Нужен фоновому синку (scripts/devmail_sync.py), который раз в 45 с кладёт
+    слепок ящика на машину окон. Человеческий cmd_inbox для этого не годится:
+    парсить печатный вывод — значит ломаться от любой правки формата.
+    """
+    with _client() as c:
+        r = c.get(f"/api/v1/dev/inbox/{agent}")
+    if r.status_code != 200:
+        print(json.dumps({"error": r.status_code, "detail": r.text[:300]}, ensure_ascii=False))
+        return 1
+    print(json.dumps(r.json(), ensure_ascii=False))
+    return 0
+
+
 def cmd_send(to: str, topic: str, body: str, sender: str) -> int:
     with _client() as c:
         r = c.post("/api/v1/dev/msg",
@@ -206,6 +222,8 @@ def main(argv: list[str]) -> int:
     cmd = argv[1]
     if cmd == "inbox":
         return cmd_inbox(argv[2], show_all="--all" in argv)
+    if cmd == "inbox-json":
+        return cmd_inbox_json(argv[2])
     if cmd == "send":
         if len(argv) < 5:
             print("send <кому> <тема> <текст> [от кого]")
