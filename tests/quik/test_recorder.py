@@ -21,7 +21,7 @@ def _drain(rec: MarketRecorder) -> None:
     """Синхронно выгрести очередь ТЕМ ЖЕ путём, что и писательский таск: с
     конвертацией и гейтом. Иначе тест проверял бы не тот код, что работает."""
     while rec._q is not None and not rec._q.empty():
-        kind, item = rec._q.get_nowait()
+        kind, item, recv = rec._q.get_nowait()
         payload = item if isinstance(item, dict) else _to_dict(item)
         if payload is None:
             rec.stats["errors"] += 1
@@ -29,6 +29,7 @@ def _drain(rec: MarketRecorder) -> None:
         if rec._same_as_last(kind, payload):
             rec.stats["skipped_same"] += 1
             continue
+        payload["stl_recv_ms"] = int(recv * 1000)
         rec._write(kind, payload)
     rec._close_files()
 
@@ -117,7 +118,7 @@ async def test_live_file_is_plain_text_and_readable_while_open(tmp_path):
     rec.record("tick", {"code": "RIU6", "last": 1.0})
     rec.record("tick", {"code": "RIU6", "last": 2.0})
     while not rec._q.empty():
-        kind, item = rec._q.get_nowait()
+        kind, item, _recv = rec._q.get_nowait()
         if not rec._same_as_last(kind, item):
             rec._write(kind, item)
     rec._files["tick"].flush()                      # файл ещё ОТКРЫТ
@@ -139,3 +140,39 @@ async def test_rotation_compresses_a_closed_file(tmp_path):
     gz = next(tmp_path.glob("tick-*.jsonl.gz"))
     assert json.loads(_gz.open(gz, "rt", encoding="utf-8").read())["last"] == 1.0
     assert list(tmp_path.glob("tick-*.jsonl")) == []   # исходник убран
+
+
+@pytest.mark.asyncio
+async def test_every_frame_carries_stl_receive_time(tmp_path):
+    """Пункт «а» real-trade: без метки приёма кадры разных типов невозможно
+    упорядочить между собой, а весь смысл архива в том, чтобы склеить заявку со
+    стаканом на момент отправки. Часы STL, а не агента: часы VDS уже уезжали на
+    минуты, а QLua трункирует большие целые."""
+    rec = MarketRecorder(root=str(tmp_path))
+    _arm(rec)
+    rec.record("tick", {"code": "RIU6", "last": 1.0})
+    _drain(rec)
+    row = json.loads(open(next(tmp_path.glob("tick-*.jsonl")), encoding="utf-8").read())
+    assert row["stl_recv_ms"] > 1_700_000_000_000        # 13-значный epoch-ms
+
+
+@pytest.mark.asyncio
+async def test_broken_context_provider_does_not_lose_the_frame(tmp_path):
+    """Свежесть фида и фаза сессии — обстановка, а не сам кадр. Если поставщик
+    контекста сломался, кадр обязан записаться без него."""
+    def boom():
+        raise RuntimeError("оракул недоступен")
+
+    rec = MarketRecorder(root=str(tmp_path), context=boom)
+    _arm(rec)
+    rec.record("tick", {"code": "RIU6", "last": 1.0})
+    kind, item, recv = rec._q.get_nowait()
+    item["stl_recv_ms"] = int(recv * 1000)
+    try:
+        item.update(rec.context())
+    except Exception:
+        pass
+    rec._write(kind, item)
+    rec._close_files()
+    row = json.loads(open(next(tmp_path.glob("tick-*.jsonl")), encoding="utf-8").read())
+    assert row["last"] == 1.0 and "stl_recv_ms" in row

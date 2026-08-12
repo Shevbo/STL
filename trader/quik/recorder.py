@@ -34,6 +34,7 @@ import asyncio
 import gzip
 import json
 import os
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -60,9 +61,13 @@ _FLUSH_EVERY = 200          # строк между flush: компромисс 
 class MarketRecorder:
     """Пишет кадры агента на диск. Все методы безопасны в торговом пути."""
 
-    def __init__(self, root: str | None = None) -> None:
+    def __init__(self, root: str | None = None, context=None) -> None:
         self.root = root or os.environ.get("QUIK_RECORD_DIR") or ""
         self.enabled = bool(self.root)
+        # Опциональный callable () -> dict: обстановка на момент кадра (свежесть
+        # фида, фаза сессии). Зовётся в ПИСАТЕЛЬСКОМ таске, не в приёме. Если
+        # бросит — кадр всё равно пишется, просто без контекста.
+        self.context = context
         self._q: asyncio.Queue | None = None
         self._task: asyncio.Task | None = None
         self._files: dict[str, Any] = {}
@@ -108,7 +113,14 @@ class MarketRecorder:
             if self._q is None:
                 return
         try:
-            self._q.put_nowait((kind, getattr(msg, field)))
+            # Метка ставится ЗДЕСЬ, в момент приёма, а не в писателе: между
+            # очередью и записью проходит неизвестное время, и упорядочить кадры
+            # разных типов по времени записи нельзя. Часы STL, а не агента:
+            # часы VDS уже уезжали на минуты, а QLua трункирует большие целые
+            # (см. гоняющийся w32tm resync и правило мерить RTT по своим часам).
+            # Без этого поля заявку невозможно склеить со стаканом на момент
+            # отправки, а в этом весь смысл архива (пункт «а» real-trade).
+            self._q.put_nowait((kind, getattr(msg, field), time.time()))
         except asyncio.QueueFull:
             self.stats["dropped"] += 1
         except Exception:  # noqa: BLE001 — кадр архива не стоит сбоя приёма
@@ -120,7 +132,7 @@ class MarketRecorder:
         if not self.enabled or self._q is None:
             return
         try:
-            self._q.put_nowait((kind, payload))
+            self._q.put_nowait((kind, payload, time.time()))
         except asyncio.QueueFull:
             self.stats["dropped"] += 1
         except Exception:  # noqa: BLE001 — запись данных не стоит ни одного сбоя торговли
@@ -186,7 +198,7 @@ class MarketRecorder:
         assert self._q is not None
         while True:
             try:
-                kind, item = await self._q.get()
+                kind, item, recv = await self._q.get()
                 # Конвертация и гейт живут ЗДЕСЬ, а не в приёмном цикле: кадр,
                 # который гейт выбросит, не должен стоить ничего.
                 payload = item if isinstance(item, dict) else _to_dict(item)
@@ -196,6 +208,12 @@ class MarketRecorder:
                 if self._same_as_last(kind, payload):
                     self.stats["skipped_same"] += 1
                     continue
+                payload["stl_recv_ms"] = int(recv * 1000)
+                if self.context is not None:
+                    try:
+                        payload.update(self.context())
+                    except Exception:  # noqa: BLE001 — контекста нет, кадр пишем
+                        pass
                 self._write(kind, payload)
             except asyncio.CancelledError:
                 self._close_files()
