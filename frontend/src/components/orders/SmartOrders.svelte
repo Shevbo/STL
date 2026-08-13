@@ -11,8 +11,8 @@
   import SmartOrderSchematic from './SmartOrderSchematic.svelte';
   import {
     KINDS, KIND_BY_ID, COMMON_FACTS, STATUS_RU, codeSuggestions, conditionText,
-    fmtWhen, fmtPts, fmtRub, ocoFact, preview, shortCodes, tillFact,
-    type Kind, type Side,
+    closingSide, fmtWhen, fmtPts, fmtRub, manualPositions, ocoFact, preview,
+    shortCodes, tillFact, type Kind, type OpenPos, type Side,
   } from '$lib/smart-order-help';
 
   let { symbol = '' }: { symbol?: string } = $props();
@@ -41,6 +41,10 @@
   let tick = $state<{ last: number; bid: number; ask: number } | null>(null);
   let pointValue = $state(0);
   let feedCodes = $state<string[]>([]);   // все коды из QLua-фида (хвост подсказок)
+  // Открытые позиции счёта с выделенной РУЧНОЙ частью. Без них форма спрашивала
+  // инструмент, сторону и объём отдельно, и на вопрос «а где выбрать свою
+  // позицию, к которой подтянуть стоп» ответить было нечем (оператор, 12.08).
+  let positions = $state<OpenPos[]>([]);
   let timers: Array<ReturnType<typeof setInterval>> = [];
   let unsub: (() => void) | null = null;
 
@@ -90,6 +94,25 @@
       const r = await fetchWithAuth(`/api/v1/quik/tick/${encodeURIComponent(code)}`);
       tick = r.ok ? await r.json() : null;
     } catch { /* следующий тик перезапросит */ }
+  }
+
+  async function loadPositions() {
+    try {
+      const [st, mir] = await Promise.all([
+        fetchWithAuth('/api/v1/quik/agent-local-status'),
+        fetchWithAuth('/api/v1/quik/robots-mirror'),
+      ]);
+      if (!st.ok || !mir.ok) return;          // молчим: следующий опрос повторит
+      positions = manualPositions(await st.json(), await mir.json());
+    } catch { /* позиции не обязательны для формы */ }
+  }
+
+  /** Подставить закрытие ЭТОЙ позиции: инструмент, сторона закрытия и объём. */
+  function pickPosition(p: OpenPos) {
+    code = p.code;
+    side = closingSide(p.manual);
+    qty = Math.abs(p.manual);
+    loadTick();
   }
 
   async function loadPointValue() {
@@ -194,13 +217,39 @@
   onMount(() => {
     code = (symbol || '').split('@')[0];
     unsub = smartOrdersStore.subscribe(2000);
-    timers = [setInterval(loadTick, 2000)];
+    timers = [setInterval(loadTick, 2000), setInterval(loadPositions, 5000)];
     loadPointValue();   // и без выбранного кода: наполняет подсказки инструментов
+    loadPositions();
   });
   onDestroy(() => { unsub?.(); for (const t of timers) clearInterval(t); });
 </script>
 
 <div class="so">
+  <!-- 0. ОТКРЫТЫЕ ПОЗИЦИИ. Умная заявка закрывает РУЧНУЮ часть позиции: она
+       манульного класса, роботы её не видят, и подставлять нетто счёта нельзя —
+       в нём сидят контракты роботов, а их закрытие увело бы робота в минус за
+       его спиной. Поэтому рядом с каждой строкой видно, сколько держат роботы. -->
+  {#if positions.length}
+    <div class="so-pos">
+      <span class="so-pos-t">Открытые позиции</span>
+      {#each positions as p}
+        <button class="so-pos-b" class:flat={!p.manual} disabled={!p.manual}
+                onclick={() => pickPosition(p)}
+                title={p.manual
+                  ? `подставить закрытие: ${p.manual > 0 ? 'продать' : 'купить'} ${Math.abs(p.manual)}`
+                  : 'вся позиция принадлежит роботам — умной заявкой её не трогаем'}>
+          <b>{p.code}</b>
+          <span class="n" class:pos={p.manual > 0} class:neg={p.manual < 0}>
+            {p.manual > 0 ? '+' : ''}{p.manual}</span>
+          <span class="sub">
+            {#if p.robots}роботы {p.robots > 0 ? '+' : ''}{p.robots} из {p.net > 0 ? '+' : ''}{p.net}{:else}руками{/if}
+            {#if p.avg} · средняя {fmtPrice(p.avg)}{/if}
+          </span>
+        </button>
+      {/each}
+    </div>
+  {/if}
+
   <!-- 1. Тип заявки -->
   <div class="so-kinds">
     {#each KINDS as k}
@@ -486,6 +535,20 @@
   .so-side.on.buy { background: #123a22; border-color: #2ecc71; color: #7ef0a6; }
   .so-side.on.sell { background: #3a1616; border-color: #ff6b5a; color: #ff9d90; }
   .so-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  /* Позиции: строка кнопок над формой. Ручной остаток — крупно, доля роботов —
+     мелко рядом: закрывать чужие контракты оператор не должен даже случайно. */
+  .so-pos { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+  .so-pos-t { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: #8a90a8; }
+  .so-pos-b { display: inline-flex; align-items: baseline; gap: 8px; cursor: pointer;
+    background: #12122a; border: 1px solid #2d2d4a; border-radius: 6px; padding: 6px 12px;
+    color: #cfd4e6; font: 12px/1.2 system-ui, sans-serif; }
+  .so-pos-b:hover { border-color: #4c6fa8; }
+  .so-pos-b.flat { opacity: .45; cursor: default; }
+  .so-pos-b b { font-family: Consolas, monospace; font-size: 13px; color: #e8e8f0; }
+  .so-pos-b .n { font: 700 15px/1 Consolas, monospace; }
+  .so-pos-b .n.pos { color: #2ecc71; } .so-pos-b .n.neg { color: #ff6b5a; }
+  .so-pos-b .sub { font-size: 10px; color: #7f86a0; }
+
   .so-f { display: grid; gap: 2px; }
   .so-f.wide { grid-column: 1 / -1; }
   .so-f > span { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: #8a90a8; }

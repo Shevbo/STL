@@ -595,3 +595,46 @@ export function softColor(hex: string, mix = 0.55, alpha = 0.8,
 /** Цвет текста в плашках заявок: всегда мягкий светлый, независимо от типа.
  *  Автоподбор библиотеки на светлом фоне даёт чёрный — резкий контраст. */
 export const LABEL_TEXT_COLOR = 'rgba(214, 219, 232, 0.9)';
+
+export interface OpenPos {
+  code: string;
+  /** Нетто всего счёта по инструменту (роботы включены). */
+  net: number;
+  /** Сколько из него держат РЕАЛЬНЫЕ роботы. */
+  robots: number;
+  /** Остаток — торговля оператора руками. Именно её закрывает умная заявка. */
+  manual: number;
+  avg: number;
+}
+
+/** Открытые позиции для формы умной заявки: что из нетто счёта РУЧНОЕ.
+ *
+ *  Умная заявка — МАНУАЛЬНЫЙ класс: роботы её не видят и сверка её не трогает.
+ *  Поэтому подставлять в форму нетто счёта нельзя: в нём сидят позиции роботов,
+ *  и закрытие «всей позиции» увело бы робота в минус контрактов у него за
+ *  спиной. Ручное = нетто минус позиции РЕАЛЬНЫХ роботов (бумажные на бирже
+ *  ничего не держат).
+ */
+export function manualPositions(status: any, mirror: any): OpenPos[] {
+  const byRobot = new Map<string, number>();
+  for (const r of (mirror?.robots || [])) {
+    if (r?.paper === true || !r?.symbol) continue;      // бумажный ничего не держит
+    const p = Number(r.position ?? 0);
+    if (!Number.isFinite(p) || !p) continue;
+    byRobot.set(r.symbol, (byRobot.get(r.symbol) || 0) + p);
+  }
+  const out: OpenPos[] = [];
+  for (const p of (status?.health?.positions || [])) {
+    const code = String(p?.sec || '');
+    const net = Number(p?.net ?? 0);
+    if (!code || !Number.isFinite(net) || !net) continue;
+    const robots = byRobot.get(code) || 0;
+    out.push({ code, net, robots, manual: net - robots, avg: Number(p?.avg ?? 0) || 0 });
+  }
+  return out.sort((a, b) => Math.abs(b.manual) - Math.abs(a.manual));
+}
+
+/** Сторона ЗАКРЫТИЯ позиции: лонг закрывают продажей, шорт — покупкой. */
+export function closingSide(pos: number): Side {
+  return pos > 0 ? 'sell' : 'buy';
+}

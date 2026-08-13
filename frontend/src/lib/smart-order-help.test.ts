@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { KIND_BY_ID, conditionText, preview, shortCodes, smartLegend, smartLevels,
+import { KIND_BY_ID, closingSide, conditionText, manualPositions, preview, shortCodes, smartLegend, smartLevels,
          type Kind, type Side } from './smart-order-help';
 
 const base = {
@@ -456,5 +456,40 @@ describe('подтягивающая', () => {
     expect(t).toContain('стережёт позицию');
     expect(t.replace(/[\s  ]/g, ' ')).toContain('88 200');
     expect(t).not.toContain('активация');
+  });
+});
+
+// Умная заявка — МАНУАЛЬНЫЙ класс: закрывать ею контракты роботов нельзя.
+describe('открытые позиции для формы', () => {
+  const status = { health: { positions: [
+    { sec: 'RIU6', net: 24, avg: 85615 },
+    { sec: 'GZU6', net: -3, avg: 21000 },
+    { sec: 'BRU6', net: 0, avg: 0 },
+  ] } };
+  const mirror = { robots: [
+    { symbol: 'RIU6', position: '-5', paper: false },
+    { symbol: 'RIU6', position: '30', paper: false },
+    { symbol: 'RIU6', position: '-7', paper: true },     // бумажный на бирже ничего не держит
+    { symbol: 'GZU6', position: null, paper: false },
+  ] };
+
+  it('ручное = нетто счёта минус позиции РЕАЛЬНЫХ роботов', () => {
+    const rows = manualPositions(status, mirror);
+    const ri = rows.find((r) => r.code === 'RIU6')!;
+    expect([ri.net, ri.robots, ri.manual]).toEqual([24, 25, -1]);
+    const gz = rows.find((r) => r.code === 'GZU6')!;
+    expect([gz.net, gz.robots, gz.manual]).toEqual([-3, 0, -3]);
+    expect(rows.find((r) => r.code === 'BRU6')).toBeUndefined();  // нулевую не показываем
+    expect(rows[0].code).toBe('GZU6');                            // крупнейшее ручное сверху
+  });
+
+  it('сторона ЗАКРЫТИЯ обратна знаку позиции', () => {
+    expect(closingSide(5)).toBe('sell');
+    expect(closingSide(-5)).toBe('buy');
+  });
+
+  it('пустые данные не роняют форму', () => {
+    expect(manualPositions(null, null)).toEqual([]);
+    expect(manualPositions({}, { robots: [{ symbol: 'X' }] })).toEqual([]);
   });
 });
