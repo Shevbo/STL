@@ -225,31 +225,6 @@
 </script>
 
 <div class="so">
-  <!-- 0. ОТКРЫТЫЕ ПОЗИЦИИ. Умная заявка закрывает РУЧНУЮ часть позиции: она
-       манульного класса, роботы её не видят, и подставлять нетто счёта нельзя —
-       в нём сидят контракты роботов, а их закрытие увело бы робота в минус за
-       его спиной. Поэтому рядом с каждой строкой видно, сколько держат роботы. -->
-  {#if positions.length}
-    <div class="so-pos">
-      <span class="so-pos-t">Открытые позиции</span>
-      {#each positions as p}
-        <button class="so-pos-b" class:flat={!p.manual} disabled={!p.manual}
-                onclick={() => pickPosition(p)}
-                title={p.manual
-                  ? `подставить закрытие: ${p.manual > 0 ? 'продать' : 'купить'} ${Math.abs(p.manual)}`
-                  : 'вся позиция принадлежит роботам — умной заявкой её не трогаем'}>
-          <b>{p.code}</b>
-          <span class="n" class:pos={p.manual > 0} class:neg={p.manual < 0}>
-            {p.manual > 0 ? '+' : ''}{p.manual}</span>
-          <span class="sub">
-            {#if p.robots}роботы {p.robots > 0 ? '+' : ''}{p.robots} из {p.net > 0 ? '+' : ''}{p.net}{:else}руками{/if}
-            {#if p.avg} · средняя {fmtPrice(p.avg)}{/if}
-          </span>
-        </button>
-      {/each}
-    </div>
-  {/if}
-
   <!-- 1. Тип заявки -->
   <div class="so-kinds">
     {#each KINDS as k}
@@ -285,6 +260,31 @@
     <!-- 3. Параметры -->
     <section class="so-form">
       <div class="so-h">Параметры</div>
+
+      <!-- ВЫБОР ПОЗИЦИИ СТОИТ ЗДЕСЬ, а не отдельной полосой наверху: он не
+           «информация о счёте», а первое действие при закрытии — заполняет
+           сторону, инструмент и объём, то есть три поля прямо под собой.
+           Наверху его не находили («ГДЕ???», оператор 12.08). -->
+      {#if positions.length}
+        <div class="so-pick">
+          <span class="so-pick-t">Закрыть свою позицию</span>
+          {#each positions as p}
+            <button class="so-pick-b" class:flat={!p.manual} disabled={!p.manual}
+                    onclick={() => pickPosition(p)}
+                    title={p.manual
+                      ? `подставит ${p.manual > 0 ? 'продажу' : 'покупку'} ${Math.abs(p.manual)} по ${p.code}`
+                      : 'вся позиция принадлежит роботам — умной заявкой её не трогаем'}>
+              <span class="act">{p.manual > 0 ? 'Продать' : p.manual < 0 ? 'Купить' : '—'}
+                {Math.abs(p.manual) || ''}</span>
+              <b>{p.code}</b>
+              <span class="sub">
+                {#if p.robots}у вас {p.manual > 0 ? '+' : ''}{p.manual}, у роботов {p.robots > 0 ? '+' : ''}{p.robots}{:else}вся позиция ваша{/if}
+                {#if p.avg} · средняя {fmtPrice(p.avg)}{/if}
+              </span>
+            </button>
+          {/each}
+        </div>
+      {/if}
 
       <div class="so-sides">
         <button class="so-side buy" class:on={side === 'buy'} onclick={() => side = 'buy'}>Купить</button>
@@ -535,19 +535,19 @@
   .so-side.on.buy { background: #123a22; border-color: #2ecc71; color: #7ef0a6; }
   .so-side.on.sell { background: #3a1616; border-color: #ff6b5a; color: #ff9d90; }
   .so-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-  /* Позиции: строка кнопок над формой. Ручной остаток — крупно, доля роботов —
-     мелко рядом: закрывать чужие контракты оператор не должен даже случайно. */
-  .so-pos { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
-  .so-pos-t { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: #8a90a8; }
-  .so-pos-b { display: inline-flex; align-items: baseline; gap: 8px; cursor: pointer;
-    background: #12122a; border: 1px solid #2d2d4a; border-radius: 6px; padding: 6px 12px;
-    color: #cfd4e6; font: 12px/1.2 system-ui, sans-serif; }
-  .so-pos-b:hover { border-color: #4c6fa8; }
-  .so-pos-b.flat { opacity: .45; cursor: default; }
-  .so-pos-b b { font-family: Consolas, monospace; font-size: 13px; color: #e8e8f0; }
-  .so-pos-b .n { font: 700 15px/1 Consolas, monospace; }
-  .so-pos-b .n.pos { color: #2ecc71; } .so-pos-b .n.neg { color: #ff6b5a; }
-  .so-pos-b .sub { font-size: 10px; color: #7f86a0; }
+  /* Выбор позиции внутри формы: кнопка называет ДЕЙСТВИЕ («Продать 13»), а не
+     просто число — иначе она читается как справка о счёте и её не нажимают.
+     Доля роботов подписана рядом: закрывать чужие контракты нельзя даже случайно. */
+  .so-pick { display: grid; gap: 6px; margin-bottom: 12px; }
+  .so-pick-t { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: #8a90a8; }
+  .so-pick-b { display: flex; align-items: baseline; gap: 8px; cursor: pointer; text-align: left;
+    background: #16243c; border: 1px solid #3a6ba8; border-radius: 6px; padding: 9px 12px;
+    color: #dfe6ff; font: 13px/1.2 system-ui, sans-serif; width: 100%; }
+  .so-pick-b:hover { background: #1c2f4e; border-color: #5b8fd6; }
+  .so-pick-b.flat { background: #12122a; border-color: #2d2d4a; opacity: .5; cursor: default; }
+  .so-pick-b .act { font-weight: 700; }
+  .so-pick-b b { font-family: Consolas, monospace; font-size: 13px; }
+  .so-pick-b .sub { margin-left: auto; font-size: 10px; color: #93a2c4; }
 
   .so-f { display: grid; gap: 2px; }
   .so-f.wide { grid-column: 1 / -1; }
