@@ -517,6 +517,13 @@ ssh hoster 'cd ~/apps/shectory-trader && set -a; . ~/.shectory_trade.env; set +a
 
 ## Three parallel Claude windows (STRICT, agreed 08.08.2026)
 
+**СНАЧАЛА УЗНАЙ, КАКОЕ ТЫ ОКНО.** Этот файл общий для всех, и сам по себе он не
+говорит, кто ты. Порядок опознания: (1) переменная `STL_WINDOW`, с ней окна и
+запускаются; (2) файл `CLAUDE.local.md` рядом с этим — он лежит только в тех
+клонах, где окно одно на весь каталог. Не опознал себя — НЕ ПРАВЬ КОД, спроси
+оператора. 13.08.2026 сессия из клона на smain решила, что она «real trade», и
+закоммитила правку в `quik_agent/` — чужую зону; маркера тогда не существовало.
+
 Three Claude sessions work this repo and the hoster IN PARALLEL. On 08.08.2026 they
 collided four times in one day — including publishing a FOREIGN binary to the live
 trading VDS (staged `~/quik_build/quik_agent/dist/robot-runner.exe` was silently

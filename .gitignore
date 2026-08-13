@@ -56,3 +56,6 @@ companion/companion.exe
 .playwright-mcp/
 graphify-out/cache/
 graphify-out/20*/
+
+# Личность окна: своя в каждом клоне, в git не едет
+CLAUDE.local.md
