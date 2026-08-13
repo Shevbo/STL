@@ -36,8 +36,16 @@ CLAUDE_HOME="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 # же и создаём. Переопределяется STL_MEMORY_DIR для нестандартных установок.
 memory_dir() {
   if [ -n "${STL_MEMORY_DIR:-}" ]; then echo "$STL_MEMORY_DIR"; return; fi
-  local key
-  key="$(printf '%s' "$REPO" | sed 's/[^A-Za-z0-9]/-/g')"
+  local path="$REPO" key
+  # Git Bash отдаёт путь как /c/Dev/..., а Claude на Windows считает ключ от
+  # РОДНОГО пути c:\Dev\... — ключи расходятся, и скрипт честно не находил
+  # каталог (поймало окно ui-ux). Возвращаем windows-форму, если она доступна.
+  if command -v cygpath >/dev/null 2>&1; then
+    path="$(cygpath -w "$REPO" 2>/dev/null || echo "$REPO")"
+    # Claude пишет букву диска в НИЖНЕМ регистре: «c:\Dev\...» -> «c--Dev-...»
+    path="$(printf '%s' "$path" | awk '{print tolower(substr($0,1,1)) substr($0,2)}')"
+  fi
+  key="$(printf '%s' "$path" | sed 's/[^A-Za-z0-9]/-/g')"
   echo "$CLAUDE_HOME/projects/$key/memory"
 }
 
