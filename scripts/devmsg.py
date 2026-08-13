@@ -167,6 +167,15 @@ def cmd_alert() -> int:
     return 0 if ok else 1
 
 
+def cmd_feed_json() -> int:
+    """Лента машинно-читаемо: автопилоту нужна, чтобы отличить живое окно от
+    мёртвого по свежести ack."""
+    with _client() as c:
+        r = c.get("/api/v1/dev/feed", params={"limit": 200})
+    print(r.text if r.status_code == 200 else json.dumps({"error": r.status_code}))
+    return 0 if r.status_code == 200 else 1
+
+
 def cmd_board_json() -> int:
     """Доска машинно-читаемо: нужна автопилоту, парсить печатный вывод нельзя."""
     with _client() as c:
@@ -241,6 +250,8 @@ def main(argv: list[str]) -> int:
         return cmd_ack(argv[2])
     if cmd == "board":
         return cmd_board_brief() if "--brief" in argv else cmd_board()
+    if cmd == "feed-json":
+        return cmd_feed_json()
     if cmd == "board-json":
         return cmd_board_json()
     if cmd == "alert":
