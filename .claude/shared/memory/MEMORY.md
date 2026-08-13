@@ -1,0 +1,78 @@
+- [SSH Hoster 83.69.248.175](reference_ssh_hoster.md) — Production server for Shectory Trader deployment
+- [Equity Curve Lies](reference_equity_curve_lies.md) — график P&L врал ±млн: привязка к net при чужих барах/символе; символ+окно+итог от РЕЗУЛЬТАТА, множитель sanity-гейтить
+- [MOEX Schedule Truth](feedback_moex_schedule_truth.md) — STRICT: единый источник расписания = moex.com/s1167; НИКОГДА не заявлять «закрыто» из поля/дня/эвристики, только офиц. расписание + факт сделок
+- [STL Docs & Release](project_stl_docs_release.md) — /docs.html лонгрид, сквозной датовый релиз STL 2026.07.25, FEDBACKUP-протокол и инвентарь бэкапа
+- [i9 Uncommitted Code Trap](reference_i9_uncommitted_code.md) — код только на i9 затирается ресинком (__inv, невоспроизводимые контр-числа); штатное снятие пауз = stl-morning-resume.sh
+- [Churn Filters](project_churn_filters.md) — разножка min_gap_pts + остывание cooldown_min против пилы; на обоих MACD RIU6; раннер rev 1784754626 (применится 03:00); ловушка оборванного scp
+- [Agent Chart Truth](reference_agent_chart_truth.md) — график робота: форма из журнала, конец кривой=пожизненный realized раннера через СМЕЩЕНИЕ не масштаб; журнал «с флэта»≠полная история; после деплоя сверять hash бандла в браузере
+- [Point Coef Trap](reference_point_coef_trap.md) — карточка робота умножала пункты на ₽/пункт ЧУЖОГО инструмента (BR: -11 ₽ вместо -5585 ₽); пункт != рубль, coef ?? 1 в денежном пути запрещён
+- [Honest Campaigns](project_gd_honest_campaign.md) — gdhonest(GD)+honest(19 симв, ~406k комбо, ~3-4 сут) на i9; автономный ночной режим, монитор перевзводить; optimizer СТОИТ + pause_local=1, вернуть после
+- [Robot Per-Order Cap Trap](reference_robot_perorder_cap_trap.md) — robot can't close when max_position > per-order cap; effective=min(both sides), raise order + arming guard fix
+- [Daily Order Cap Trap](reference_daily_order_cap_trap.md) — daily_order_cap=50 silently froze ALL robot orders incl. exits; raised to 500 both sides, counter in status, 10-min watchdog SMS deployed
+- [QUIK Restart Tape Replay](reference_quik_restart_tape_replay.md) — CRITICAL: after QUIK restart the tape REPLAYS the day, bars go stale-while-quotes-live, averaging robots pile real longs 1/min; pause all real robots until exchange_lag_ms<5s
+- [Hoster OOM kills STL](reference_hoster_oom_kills_stl.md) — earlyoom SIGTERM-kills uvicorn=STL under memory pressure (komissionka build churn); Restart=on-failure leaves it dead; live robot on agent unaffected
+- [Morning SMS Status](project_morning_sms_status.md) — два утренних SMS + ответ на входящее «Статус» (GET /inbox шлюза, опрос */2 на smain); три цифры счёта по --money
+- [Algo Ledger](project_algo_ledger.md) — algo_trades журнал (пофилловый gross/net учёт алготорговли), инжест из зеркал, API+CSV, SMS «Итог вчера» method ledger; ветка feat/algo-ledger
+- [Чинить любой найденный баг](feedback_fix_any_bug_found.md) — STRICT: найденный по дороге баг разбирать до корня и чинить сразу, разрешения не ждать
+- [RTK Usage Rule](feedback_rtk_usage.md) — STRICT: always use `rtk <cmd>` prefix for all shell commands
+- [Commit = Full Cycle](feedback_commit_full_cycle.md) — STRICT: "коммить" means deploy+push+накати+federation-docs+/init+graphify, batched, no molecule-level confirmations
+- [No Server Admin](feedback_no_server_admin.md) — STRICT: don't fix servers (swap/disk/kill procs/other services); diagnose and REPORT, operator decides
+- [Language Russian](feedback_language_russian.md) — STRICT: communicate with the user in Russian
+- [Versioned Script Names](feedback_versioned_script_names.md) — STRICT: operator-loaded files carry version in filename; agent delivers, operator only loads
+- [No External Publications](feedback_no_external_publications.md) — STRICT: no artifacts/uploads outside operator's own resources (STL, hoster) without explicit approval
+- [UI Standards](feedback_ui_standards.md) — STRICT: min font 10px, collapsed expandable rows, CSV-export button over every list
+- [Фин.рез с открытой позицией](feedback_finres_with_open_position.md) — STRICT: везде фикс+ВМ открытой позиции с разбивкой; каждое окно — копируемый ID/URL в левом верхнем углу
+- [Семантика ВМ в QUIK](reference_quik_vm_semantics.md) — ВМ позиций QUIK = за сессию с клиринга (с закрытыми), ВМ робота = от входа; не путать и подписывать по-разному
+- [Бумажный шорт не выходил](reference_paper_short_stuck.md) — avg_price=0 у бумажной позиции: шорт висит вечно, лонг закрывается сразу; замолчал бумажный робот — смотри знак позиции
+- [SMS-шлюз через WireGuard](reference_sms_gateway_wg.md) — молчащие утренние SMS = телефон-шлюз отвалился от WG; http=000 в stl-morning-sms.log, падение никем не алертится
+- [LAB MVP v1 State](project_lab_mvp_state.md) — Shectory LAB module build, deploy, open chart issue
+- [Shared Browser](reference_shared_browser.md) — Playwright MCP wired to user's Chrome via CDP 9222
+- [Optimization Campaign](project_optimization_campaign.md) — 5h unattended param sweep, leaderboard, how to monitor
+- [Campaign Backfill](reference_campaign_backfill.md) — make campaign top-N viewable in Botstore; FK/type traps
+- [FORTS Weekend Trading](reference_forts_weekend_trading.md) — FORTS TRADES on weekends; never claim market closed Sat/Sun
+- [VDS Load / Backtest Offload](reference_vds_load.md) — small shared VDS dies under sweeps; mitigations + planned Windows agent
+- [Secrets Protocol](feedback_secrets_protocol.md) — STRICT: never output/store secret VALUES; env-name + path only
+- [Federation Access](reference_federation_access.md) — keymaster + inbox via ssh smain; agent ID klod-stl; inbox-read endpoint
+- [Commission Model](reference_commission_model.md) — FORTS fees: taker (backtest) vs maker (live); rates by group; RI in every campaign
+- [FORTS Contract Roll](reference_forts_contract_roll.md) — roll Live robots to next contract (M6->U6): DB update + state reset + restart
+- [Robot Limit Env](reference_robot_limit_env.md) — LAB_MAX_ROBOTS cap (default 50); systemd manager-env can silently override
+- [LLM via Lineman](feedback_llm_via_lineman.md) — STRICT: all LLM access through Lineman proxy, never a raw provider key
+- [Debug UI Live First](feedback_debug_ui_live_first.md) — STRICT: inspect the running DOM via CDP browser before blind-fixing UI bugs
+- [AI46 Live (team-46)](project_ai46_live.md) — team-46 AI strategy LIVE in paper on hoster; env gates, top-20 turnover, price-source caveat
+- [Roll-aware P&L](project_roll_aware_pnl.md) — phantom-profit fix (per-contract); deferred live auto-roll before Dec 2026
+- [QUIK Agent Phase 1](project_quik_agent_phase1.md) — LIVE QUIK<->STL gRPC link; build/deploy/run, DDE server SHECTORY_QUIK, token, caveats
+- [LIVE FVG Robot](project_live_fvg_robot.md) — real-money FVG on RIU6, 1 contract max; deploy/stop/monitor
+- [Deploy VDS Safety](feedback_deploy_vds_safety.md) — remote npm build thrashes prod+robot; build local, scp dist
+- [Эффект фильтров: методика](reference_filter_effect_metric.md) — фантом отсеянного входа живёт до выхода робота, повторы схлопываются; v1 (час + счёт каждого повтора) врал
+- [Режим «только на выход»](project_exit_only_mode.md) — робот закрывает позицию по своему сигналу и не открывает новых; флаг exit_only в params_json, rev 1785256114
+- [Robot on QUIK Agent](project_robot_on_quik_agent.md) — planned: run LIVE robots on the QUIK-side agent, STL = monitor
+- [Agent Local Showcase](project_agent_local_showcase.md) — local status page 127.0.0.1:8071 + recon/align + STL mirror; shipped 2026-07-06, VDS operator steps pending
+- [Agent Zombie Traps](reference_agent_zombie_traps.md) — runner `'symbol'` KeyError + DDE watchdog spam: root causes, fixes, log signatures; staged not deployed 2026-07-13
+- [Agent-Robot P&L](reference_agent_robot_pnl.md) — screen P&L must use runner realized_pnl×coef not chart tail-replay; recon MISMATCH can be manual/phantom-stale-ring not divergence; integer fill prices = Math.round display bug; empty plan.steps = no real divergence
+- [Runner Fill Crash cp1251](reference_runner_fill_crash.md) — 2026-07-13: FILL-log «→» убивал раннер на каждом real-fill; книга замерзла, робот дублировал ордера; фикс b7fefe1 / rev 1783974444
+- [Journal Auto-Heal](project_journal_autoheal.md) — агент сам восстанавливает потерянные fill'ы из таблиц QUIK (rev 1783978820+); partial-reduce avg-баг починен в обоих рантаймах
+- [US-Open Agent Robot](project_usopen_agent_robot.md) — agent-usopen-RIU6-v1 paper на 9618, qty=2; арминг в реал 15.07 ~15:00 МСК с консоли VDS
+- [Restart Immunity](project_restart_immunity.md) — бары персистятся (600/робот), .bat убивает раннера-сироту; rev 1784101365; VDS-автостарт агента = зона оператора
+- [VDS Guard](project_vdsguard.md) — QUIK-вотчдог (pong>300с → рестарт info.exe) + RAM-алерты; rev 1784102947; перед ручными работами с Lua выключать гард
+- [Ledger Backfill Dup](reference_ledger_backfill_dup.md) — два бэкфилла записали одну сделку дважды (lg:/bf:), реплей ломал роли OPEN→AVR; drop_already_ledgered + сверка реплея с раннером
+- [Стоп-лосс sl_frac](project_sl_frac_stop.md) — стоп долей дистанции тейка в make_on_bar; раньше усреднения, блок повторного входа; rev 1785338563
+- [OB BRU6: преимущества нет](reference_ob_bru6_no_edge.md) — лидер кампании убыточен вне окна подгонки (6/6 соседей тоже); стоп режет хвост, но плюса не делает
+- [Капы агента = бэкстоп на VDS](reference_agent_caps_backstop.md) — пуш из STL только ужесточает; шире — только agent_config.json при старте; безопасный max_position = min(per_order, working−qty)
+- [MACD Warmup Frozen Signal](reference_macd_warmup_frozen_signal.md) — прогрев по slow при fast>slow морозил сигнал: 6 суток реала = 778 лонгов и НОЛЬ шортов; починено 05.08, но параметры подбирались под залипший сигнал
+- [Мираж нулевого риска](reference_frozen_signal_risk_mirage.md) — замороженный сигнал: net вшестеро выше, win 92%, просадка РОВНО ноль, а под ней открытый минус 1.94 млн; риск такой стратегии виден только в max_mae
+- [Кросс-заявки на перевороте](reference_cross_order_block.md) — вход бьётся об висящий выход, робот остаётся в флэте вместо шорта; ожидание встречной заявки лечится в раннере, не в стратегии
+- [MACD trend Shectory1](project_macd_shectory1.md) — ND-амплитуда + авто-разножка + мартингейл k_avg; прогон camp-20260731-shectory1w, база живого конфига в минусе
+- [team-46 = портфель, не контракты](project_team46_portfolio_stand.md) — стенд считает проценты; order_id несёт роль+вес филла; ₽/ГО/AVG для портфельного робота запрещены
+- [Разножка только в позиции](reference_gap_only_in_position.md) — разножка не гейтит вход с нуля; дыры в algo_trades переворачивают знак позиции в карточке, спасает pos_after + sortLedger
+- [Shaving RI 1](project_shaving_ri.md) — арбитраж RI против корзины RTSI: механизм опорных серий в бэктесте, RTSI долларовый (доказано по уровням), прогон 100 комбо — преимущества нет
+- [Companion Market Bug](reference_companion_market_bug.md) — next_session ISO резался как голая дата (мусор в статусе биржи); m.html молча отстаёт от companion.html, сверять при правках снапшота
+- [team-46: эджа нет](reference_team46_no_edge.md) — 3 мес: gross +0.1% против комиссии 6.8%, 65x; 20 из 20 инструментов в минусе, размером не лечится
+- [team-46: остановлен + поиск параметров](project_team46_param_search.md) — два захода перебора: лидер не воспроизводится, 44 лишних бара из 56000 переворачивают знак; эдж в 7 раз меньше своей же стандартной ошибки
+- [Синтетические бары в хвосте](reference_synthetic_bars_tail.md) — лента молчит >30с → бары из замершей котировки, панель рисовала свечи на стоящей бирже; метка Bar.traded, фильтруется ХВОСТ, не билдер (вход стратегии = торговля)
+- [Пробник живости оси на i9](reference_i9_axis_alive_probe.md) — новая ось может молча игнорироваться старой library.py; совпавшие net И число сделок = ось мертва, сверять lib_sha в i9_heartbeat
+- [Почта между окнами](project_dev_msg_middleware.md) — /api/v1/dev + scripts/devmsg.sh: передача работы владельцу зоны письмом, микропромпт внутри ответа, будильник в SessionStart
+- [Фильтр «долина смерти»](project_dv_death_valley_filter.md) — dv_bars/dv_range_pts в make_on_bar: запрет входов в боковике + вырезание долинных баров из сигнала; по close (фитиль не гасит); релиз STL 2026.08.05
+- [Стена комиссии](reference_commission_wall.md) — M1-реестр упирается не в параметры, а в издержки; «цена оборота» GZ 0.7x против RI 0.2x, эдж есть но меньше порога
+- [Фантомное срабатывание умной заявки](reference_smart_order_phantom_fire.md) — trail_tp купил 19 RIU6 в аукционе открытия по цене, которой не было; свежесть кадра != рынок торгует
+- [Journal-sync реплей вчерашнего вечера](reference_journalsync_evening_replay.md) — дата сделки QUIK = торговый день: вечер датирован завтра, авто-хил влил вчерашние филлы, робот уехал на −7
+- [Кратко в ответах](feedback_brief_output.md) — STRICT: −65% объёма, только главное и то, что требует включения оператора
