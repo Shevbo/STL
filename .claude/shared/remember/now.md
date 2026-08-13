@@ -1,11 +1,5 @@
 
-## 20:48 | main
-Implemented SMS retry/queue fix (3x30s intervals, 2m polling/2h window) in send-sms.sh; escalated TG relay 503 errors to federation via Klod-Access API (msg 24913, pending response); mail confirmed working.
-## 20:57 | main
-Fixed UTF-8 encoding in devmail_sync.py (commit 17d734f); implemented dev chat screen (devchat.html, test.ts, NavMenu integration), tests passing, pending push.
-## 21:02 | main
-Mail confirmed working; added stl_recv_ms timestamp to recorder.py (commit 1ae561f) for ordering archive frames + tests; started adding GDU6 to instr whitelist.
-## 21:15 | main
-Dev chat backend ready (endpoints, specs sent UI-UX, awaiting impl); added Подтягивающая order type to engine (210 tests pass); started guard to remove old stops.
-## 21:24 | main
-Deployed trailing-stop backend to prod (trail_sl, auto old-stop removal, trail_after block, stop/trail toggle); specs sent UI-UX (awaiting impl); fixed Windows scheduled task window spam (pythonw.exe, CREATE_NO_WINDOW flag); GD whitelist & STL restart pending.
+## 18:15 | main
+Fixed devmail_hook.py to handle missing STL_WINDOW (was silent, now prints board), extended sync to all 3 windows (real-trade/backtests/ui-ux), live-verified—blocked on manual restart of backtests/ui-ux windows to load new config.
+## 18:17 | main
+Deployed devchat.html to prod (stl.shectory.ru/devchat.html, commit baa0d18, 280 tests, live-verified); began smart-order-help.ts type-ref fixes (trail_tp/on_fill) on 14h task.
