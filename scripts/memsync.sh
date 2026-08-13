@@ -25,22 +25,23 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SHARED="$REPO/.claude/shared"
 CLAUDE_HOME="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 
-# Каталог авто-памяти именуется по ПУТИ репозитория, а на smain путь другой —
-# угадывать алгоритм нельзя. Ищем каталог, в котором лежит MEMORY.md; если их
-# несколько, берём самый свежий. Переопределяется STL_MEMORY_DIR.
-find_memory_dir() {
+# Каталог авто-памяти именуется по ПУТИ репозитория: Claude Code заменяет любой
+# не буквенно-цифровой символ на дефис. «c:\Dev\Shectory Trade & Lab» даёт
+# «c--Dev-Shectory-Trade---Lab», «/home/shectory/stl» даёт «-home-shectory-stl».
+#
+# ВЫЧИСЛЯЕМ, А НЕ ИЩЕМ. Первая версия искала любой каталог с MEMORY.md и брала
+# самый свежий — на smain это оказалась память ЧУЖОГО агента (lineman, Клод), и
+# синхронизация свалила туда 79 файлов STL поверх его индекса. Чужая память —
+# не наше место: каталог только вычисляем из своего пути, и если его нет, сами
+# же и создаём. Переопределяется STL_MEMORY_DIR для нестандартных установок.
+memory_dir() {
   if [ -n "${STL_MEMORY_DIR:-}" ]; then echo "$STL_MEMORY_DIR"; return; fi
-  local best="" newest=0 f d
-  for f in "$CLAUDE_HOME"/projects/*/memory/MEMORY.md; do
-    [ -f "$f" ] || continue
-    d="$(dirname "$f")"
-    local t; t=$(date -r "$f" +%s 2>/dev/null || echo 0)
-    [ "$t" -ge "$newest" ] && { newest=$t; best="$d"; }
-  done
-  echo "$best"
+  local key
+  key="$(printf '%s' "$REPO" | sed 's/[^A-Za-z0-9]/-/g')"
+  echo "$CLAUDE_HOME/projects/$key/memory"
 }
 
-MEM="$(find_memory_dir)"
+MEM="$(memory_dir)"
 
 copy_tree() {  # src dst  — только markdown, без логов и временного
   local src="$1" dst="$2"
@@ -52,7 +53,7 @@ copy_tree() {  # src dst  — только markdown, без логов и вре
 
 case "${1:-}" in
   pull)
-    [ -n "$MEM" ] || MEM="$CLAUDE_HOME/projects/stl/memory"
+    mkdir -p "$MEM"
     copy_tree "$SHARED/memory"   "$MEM"
     copy_tree "$SHARED/remember" "$REPO/.remember"
     for g in CLAUDE.md RTK.md; do
@@ -61,7 +62,7 @@ case "${1:-}" in
     echo "память подтянута в $MEM"
     ;;
   push)
-    [ -n "$MEM" ] || { echo "не нашёл каталог памяти; задай STL_MEMORY_DIR"; exit 1; }
+    [ -d "$MEM" ] || { echo "нет каталога памяти $MEM — нечего выгружать"; exit 1; }
     copy_tree "$MEM"             "$SHARED/memory"
     copy_tree "$REPO/.remember"  "$SHARED/remember"
     mkdir -p "$SHARED/global"
