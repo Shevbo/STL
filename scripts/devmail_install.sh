@@ -17,7 +17,7 @@ set -euo pipefail
 
 WIN="${STL_WINDOW:-}"
 [ -n "$WIN" ] || { echo "Задай окно: STL_WINDOW=real-trade bash $0"; exit 2; }
-case "$WIN" in real-trade|backtests|ui-ux) ;; *) echo "Неизвестное окно: $WIN"; exit 2;; esac
+case "$WIN" in real-trade|backtests|ui-ux|stl-dev-smain) ;; *) echo "Неизвестное окно: $WIN"; exit 2;; esac
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIR="${STL_DEVMAIL_ROOT:-$HOME/.stl-devmail}"
