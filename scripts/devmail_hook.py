@@ -106,6 +106,37 @@ def build_output(window: str, state, event: str) -> str:
     return "\n".join(parts)
 
 
+def _board_line() -> str:
+    """Одна строка по ВСЕМ ящикам из любого слепка, что есть на машине.
+
+    Нужна, когда сессия запущена без STL_WINDOW: доска лежит внутри каждого
+    слепка (поле board), поэтому чьего окна файл — неважно.
+    """
+    import glob
+    best = None
+    for f in glob.glob(str(spool.ROOT / "*.json")):
+        if f.endswith(".shown.json"):
+            continue
+        try:
+            st = json.loads(open(f, encoding="utf-8").read())
+        except Exception:
+            continue
+        if (st.get("inbox") or {}).get("board"):
+            if best is None or st.get("updated_ms", 0) > best.get("updated_ms", 0):
+                best = st
+    if not best:
+        return ""
+    busy = [b for b in best["inbox"]["board"] if b.get("unread")]
+    if not busy:
+        return ""
+    parts = [f"{b['agent']} {b['unread']}"
+             + (f" ({b['oldest_age_h']}ч!)" if b.get("stale") else f" ({b['oldest_age_h']}ч)")
+             for b in busy]
+    return ("ПОЧТА ОКОН: " + " · ".join(parts)
+            + " — прочитай свой ящик: ssh hoster 'bash ~/apps/shectory-trader/"
+              "scripts/devmsg.sh inbox <окно>'; «!» = просрочка")
+
+
 def main() -> int:
     try:
         raw = sys.stdin.read()
@@ -118,7 +149,17 @@ def main() -> int:
 
     window = os.environ.get("STL_WINDOW", "").strip()
     if not window:
-        return 0                      # окно не объявлено — хук молчит, не мешает
+        # ОКНО НЕ ОБЪЯВЛЕНО — раньше здесь был тихий выход, и это оказалось
+        # главной причиной, по которой почта «не работала»: сессии запускаются
+        # без переменной, хук молчал, письма лежали сутками. Молчание неотличимо
+        # от исправности — худшее поведение из возможных. Теперь показываем ДОСКУ
+        # по всем ящикам: она не знает, чьё окно читает, зато не молчит никогда.
+        board = _board_line()
+        if board:
+            print(json.dumps({"hookSpecificOutput": {
+                "hookEventName": event, "additionalContext": board}},
+                ensure_ascii=False))
+        return 0
     out = build_output(window, spool.load_state(window), event)
     if not out:
         return 0
