@@ -25,6 +25,11 @@
   let trailOffset = $state('');
   let slOffset = $state('');          // защитный стоп после входа, пункты (0 = без стопа)
   let tpOffset = $state('');          // тейк после входа, пункты (0 = без тейка)
+  // Подтягивающая после сделки. Со стопом НЕСОВМЕСТИМА (движок вернёт 422),
+  // поэтому в форме это переключатель, а не третье независимое поле: сработает
+  // ближний из двух, дальний останется взведён и откроет обратную позицию.
+  let trailAfter = $state('');
+  let afterMode = $state<'sl' | 'trail'>('sl');
   let watchId = $state('');
   let childPrice = $state('');
   let ocoGroup = $state('');
@@ -56,7 +61,9 @@
       trigger: parseFloat(trigger) || 0,
       trailOffset: parseFloat(trailOffset) || 0,
       watchId: watchId.trim(), childPrice: parseFloat(childPrice) || 0,
-      slOffset: parseFloat(slOffset) || 0, tpOffset: parseFloat(tpOffset) || 0,
+      slOffset: afterMode === 'sl' ? parseFloat(slOffset) || 0 : 0,
+      tpOffset: parseFloat(tpOffset) || 0,
+      trailAfter: afterMode === 'trail' ? parseFloat(trailAfter) || 0 : 0,
       price, pointValue,
     });
     if (!p.error && goodTillMs && goodTillMs <= Date.now()) {
@@ -106,10 +113,14 @@
     msg = '';
     const body = {
       kind, code, side, qty: Math.floor(qty),
-      trigger_price: parseFloat(trigger) || 0,
+      // У подтягивающей уровня активации НЕТ: движок вернёт 422, если его
+      // прислать. Поля в форме тоже нет, но страховка нужна на случай
+      // перевзвода из истории, где trigger_price мог остаться от другого типа.
+      trigger_price: kind === 'trail_sl' ? 0 : parseFloat(trigger) || 0,
       trail_offset: parseFloat(trailOffset) || 0,
-      sl_offset: parseFloat(slOffset) || 0,
+      sl_offset: afterMode === 'sl' ? parseFloat(slOffset) || 0 : 0,
       tp_offset: parseFloat(tpOffset) || 0,
+      trail_after: afterMode === 'trail' ? parseFloat(trailAfter) || 0 : 0,
       watch_client_id: watchId.trim(),
       child_price: parseFloat(childPrice) || 0,
       oco_group: ocoGroup.trim(),
@@ -123,8 +134,13 @@
       const d = await res.json().catch(() => ({}));
       if (!res.ok) { msgKind = 'err'; msg = d?.detail || `HTTP ${res.status}`; return; }
       msgKind = 'ok';
-      msg = `Заявка ${d.so_id} взведена. Сторож следит.`;
-      trigger = ''; trailOffset = ''; slOffset = ''; tpOffset = ''; watchId = ''; childPrice = '';
+      // Снятые чужие стопы называем ПОИМЁННО: молча снять защиту с позиции
+      // оператора нельзя, он должен видеть, что именно исчезло.
+      const gone = (d.superseded || []).length;
+      msg = `Заявка ${d.so_id} взведена. Сторож следит.`
+        + (gone ? ` Сняты прежние стопы этой позиции: ${d.superseded.join(', ')}.` : '');
+      trigger = ''; trailOffset = ''; slOffset = ''; tpOffset = ''; trailAfter = '';
+      watchId = ''; childPrice = '';
       confirming = false;
       await smartOrdersStore.refresh();
     } catch (e: any) { msgKind = 'err'; msg = e?.message || 'ошибка'; }
@@ -147,6 +163,8 @@
     trailOffset = o.trail_offset ? String(o.trail_offset) : '';
     slOffset = o.sl_offset ? String(o.sl_offset) : '';
     tpOffset = o.tp_offset ? String(o.tp_offset) : '';
+    trailAfter = (o as any).trail_after ? String((o as any).trail_after) : '';
+    afterMode = (o as any).trail_after ? 'trail' : 'sl';
     watchId = o.watch_client_id || '';
     childPrice = o.child_price ? String(o.child_price) : '';
     ocoGroup = o.oco_group || '';
@@ -238,6 +256,19 @@
           <span>Контрактов</span>
           <input class="so-in" type="number" min="1" step="1" bind:value={qty} />
         </label>
+        <!-- Блок «после сделки»: ОДИН из двух защитников, не оба. Два стопа на
+             одной позиции — не двойная защита: сработает ближний, дальний
+             останется взведён и следующим ходом откроет обратную позицию. -->
+        <div class="so-f so-after">
+          <span>Защита после сделки</span>
+          <div class="so-seg" role="group" aria-label="Защита после сделки">
+            <button type="button" class:on={afterMode === 'sl'}
+                    onclick={() => afterMode = 'sl'}>Стоп</button>
+            <button type="button" class:on={afterMode === 'trail'}
+                    onclick={() => afterMode = 'trail'}>Подтягивающая</button>
+          </div>
+          <em>вместе они запрещены: сработает ближний, дальний откроет обратную позицию. Тейк сочетается с любым</em>
+        </div>
         {#each meta.fields as f}
           <label class="so-f">
             <span>{f.label}</span>
@@ -246,7 +277,11 @@
             {:else if f.key === 'trail_offset'}
               <input class="so-in" type="number" step="any" bind:value={trailOffset} placeholder="0" />
             {:else if f.key === 'sl_offset'}
-              <input class="so-in" type="number" step="any" min="0" bind:value={slOffset} placeholder="0 — без стопа" />
+              <input class="so-in" type="number" step="any" min="0" bind:value={slOffset}
+                     disabled={afterMode !== 'sl'} placeholder="0 — без стопа" />
+            {:else if f.key === 'trail_after'}
+              <input class="so-in" type="number" step="any" min="0" bind:value={trailAfter}
+                     disabled={afterMode !== 'trail'} placeholder="0 — выключена" />
             {:else if f.key === 'tp_offset'}
               <input class="so-in" type="number" step="any" min="0" bind:value={tpOffset} placeholder="0 — без тейка" />
             {:else if f.key === 'watch_client_id'}
@@ -455,6 +490,15 @@
   .so-f.wide { grid-column: 1 / -1; }
   .so-f > span { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: #8a90a8; }
   .so-f > em { font-size: 10px; color: #6f7590; font-style: normal; }
+  /* Переключатель «стоп / подтягивающая»: одно из двух, физически не даёт
+     заполнить оба поля сразу. */
+  .so-after { grid-column: 1 / -1; }
+  .so-seg { display: inline-flex; border: 1px solid #2d2d4a; border-radius: 6px; overflow: hidden; }
+  .so-seg button { background: #0e0e1e; border: 0; color: #8a90a8; cursor: pointer;
+    font: 600 12px/1 system-ui, sans-serif; padding: 8px 14px; }
+  .so-seg button + button { border-left: 1px solid #2d2d4a; }
+  .so-seg button:hover { color: #dfe6ff; }
+  .so-seg button.on { background: #1b1b34; color: #e8e8f0; }
   .so-in {
     background: #0e0e1e; border: 1px solid #2d2d4a; color: #e8e8f0;
     font: 20px/1.2 Consolas, 'Cascadia Mono', monospace; font-variant-numeric: tabular-nums;

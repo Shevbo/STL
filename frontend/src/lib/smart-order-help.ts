@@ -7,7 +7,7 @@
 // Все формулировки сверены с движком (trader/quik/smart_orders.py). Меняется
 // движок — правится и текст, иначе интерфейс начнёт обещать не то, что будет.
 
-export type Kind = 'sl' | 'tp' | 'trail_tp' | 'on_fill';
+export type Kind = 'sl' | 'tp' | 'trail_tp' | 'on_fill' | 'trail_sl';
 export type Side = 'buy' | 'sell';
 
 export interface KindMeta {
@@ -36,6 +36,12 @@ const AFTER_FILL_FIELDS = [
     hint: '0 — без стопа. Иначе сразу после сделки встанет защитный стоп на этом расстоянии ПРОТИВ цены входа' },
   { key: 'tp_offset', label: 'Тейк после сделки, пункты',
     hint: '0 — без тейка. Иначе после сделки встанет тейк на этом расстоянии В ПОЛЬЗУ входа; со стопом они в одной связке — сработал один, второй снимется' },
+  // Третий блок «после сделки» (12.08.2026). Со стопом он НЕСОВМЕСТИМ, и это не
+  // вкусовщина: сработает ближний, дальний останется взведён и следующим ходом
+  // откроет позицию в обратную сторону. Поэтому в форме это переключатель
+  // «стоп / подтягивающая», а не два независимых поля.
+  { key: 'trail_after', label: 'Подтягивающая после сделки, пункты',
+    hint: '0 — выключена. Иначе после сделки встанет подтягивающая с этим отступом; вместе с обычным стопом запрещена — движок вернёт 422' },
 ];
 
 export const KINDS: KindMeta[] = [
@@ -97,6 +103,31 @@ export const KINDS: KindMeta[] = [
     color: '#ffb300',
     lineStyle: 3,
     legend: 'следящая: пик и уровень отката',
+  },
+  {
+    // ТИП, КОТОРЫЙ ЛЕГЧЕ ВСЕГО СПУТАТЬ СО «СЛЕДЯЩЕЙ», и путать его нельзя:
+    // следящая ВХОДИТ в позицию и спит до уровня активации, подтягивающая
+    // ВЫХОДИТ из уже открытой и стережёт с первого тика — уровня активации у
+    // неё нет вовсе (движок вернёт 422, поэтому поля в форме тоже нет).
+    id: 'trail_sl',
+    name: 'Подтягивающая',
+    short: 'ПОДТ',
+    essence: 'Стеречь УЖЕ ОТКРЫТУЮ позицию: уровень едет за ценой только в сторону уменьшения убытка.',
+    algorithm: [
+      'Уровня активации нет: позиция уже в рынке, поэтому сторож работает с первого тика.',
+      'Сторож запоминает лучшую достигнутую цену и держит уровень на заданном отступе от неё.',
+      'Уровень едет ТОЛЬКО в сторону уменьшения убытка и никогда не откатывается назад.',
+      'Цена дошла до уровня — ставится лимитная заявка, пробивающая рынок, и позиция закрывается.',
+      'Прежние стопы этой же позиции (тот же инструмент и та же сторона закрытия) снимаются автоматически.',
+    ],
+    fields: [
+      { key: 'trail_offset', label: 'Отступ, пункты',
+        hint: 'насколько ХУЖЕ текущей цены держать уровень выхода' },
+      ...AFTER_FILL_FIELDS,
+    ],
+    color: '#ff8fb1',
+    lineStyle: 3,
+    legend: 'подтягивающая: уровень выхода',
   },
   {
     id: 'on_fill',
@@ -217,6 +248,8 @@ export interface PreviewInput {
   /** Защитная пара после сделки, пункты (0 — блок выключен). */
   slOffset?: number;
   tpOffset?: number;
+  /** Подтягивающая после сделки, пункты. Со `slOffset` несовместима. */
+  trailAfter?: number;
   /** Текущая цена инструмента, 0 если неизвестна. */
   price: number;
   /** ₽ за пункт цены, 0/undefined — считать в пунктах. */
@@ -279,6 +312,19 @@ export function preview(p: PreviewInput): Preview {
       distance = `Отступ ${fmtPts(p.trailOffset)} это ${fmtRub(p.trailOffset * p.pointValue * qty)} ` +
         `по ${qty} ${plural(qty, 'контракту', 'контрактам', 'контрактам')}.`;
     }
+  } else if (p.kind === 'trail_sl') {
+    if (!error && !(p.trailOffset > 0)) error = 'Укажите отступ в пунктах.';
+    const best = p.side === 'sell' ? 'максимумом' : 'минимумом';
+    const worse = p.side === 'sell' ? 'ниже' : 'выше';
+    sentence = `Сторож стережёт открытую позицию с первого тика: держит уровень на ` +
+      `${fmtPts(p.trailOffset)} ${worse} лучшей цены, идёт за ${best} и никогда не отступает ` +
+      `назад. Цена дошла до уровня — ${what} по рынку, позиция закрыта.`;
+    if (p.price > 0 && p.trailOffset > 0) {
+      const lvl = p.side === 'sell' ? p.price - p.trailOffset : p.price + p.trailOffset;
+      distance = `От текущей ${fmtNum(p.price)} уровень выхода ${fmtNum(lvl)}` +
+        (p.pointValue ? ` = ${fmtRub(p.trailOffset * p.pointValue * qty)} по ${qty} ` +
+          plural(qty, 'контракту', 'контрактам', 'контрактам') : '') + '.';
+    }
   } else {
     if (!error && !p.watchId) error = 'Укажите заявку, за исполнением которой следим.';
     const px = p.childPrice > 0 ? `по цене ${fmtNum(p.childPrice)}` : 'по рынку';
@@ -291,11 +337,16 @@ export function preview(p: PreviewInput): Preview {
   // не то, что произойдёт.
   const sl = Math.max(0, p.slOffset || 0);
   const tp = Math.max(0, p.tpOffset || 0);
-  if (sl || tp) {
-    const parts = [sl ? `стоп ${fmtPts(sl)}` : '', tp ? `тейк ${fmtPts(tp)}` : '']
-      .filter(Boolean).join(' и ');
+  const tra = Math.max(0, p.trailAfter || 0);
+  // Стоп и подтягивающая на одной позиции — не двойная защита, а вход в рынок:
+  // сработает ближний, дальний останется взведён и откроет обратную сторону.
+  // Движок это запрещает (422), поэтому форма не даёт даже дойти до кнопки.
+  if (sl && tra) error = error || 'Стоп и подтягивающая вместе нельзя: оставьте что-то одно.';
+  if (sl || tp || tra) {
+    const parts = [sl ? `стоп ${fmtPts(sl)}` : '', tra ? `подтягивающая ${fmtPts(tra)}` : '',
+      tp ? `тейк ${fmtPts(tp)}` : ''].filter(Boolean).join(' и ');
     sentence += ` Сразу после сделки встанут ${parts} от её цены` +
-      (sl && tp ? ', в одной связке — сработает один, второй снимется.' : '.');
+      ((sl || tra) && tp ? ', в одной связке — сработает один, второй снимется.' : '.');
   }
 
   return { sentence, distance, error };
@@ -321,6 +372,13 @@ export function conditionText(o: any): string {
     const act = o.trigger_price > 0 ? `активация ${fmtNum(o.trigger_price)}, ` : 'следит сразу, ';
     const peak = o.activated && o.peak ? `, пик ${fmtNum(o.peak)}` : '';
     return `${act}откат ${fmtPts(o.trail_offset)}${peak}`;
+  }
+  if (k === 'trail_sl') {
+    // Уровня активации нет — писать «следит сразу» нечего: она всегда сразу.
+    const lvl = o.peak > 0
+      ? `, выход ${fmtNum(o.side === 'sell' ? o.peak - o.trail_offset : o.peak + o.trail_offset)}`
+      : '';
+    return `стережёт позицию, отступ ${fmtPts(o.trail_offset)}${lvl}`;
   }
   if (k === 'on_fill') return `после исполнения ${String(o.watch_client_id || '—').slice(0, 18)}`;
   if (o.parent_id) {
@@ -366,6 +424,17 @@ export function smartLevels(
   const out0 = protectiveLevels(o);
   if (o.kind === 'sl' || o.kind === 'tp') {
     return [{ key: o.so_id, price: o.trigger_price, title: who }, ...out0];
+  }
+  if (o.kind === 'trail_sl') {
+    // Уровня активации нет по устройству типа, поэтому рисуем только рабочий
+    // уровень выхода и лучшую достигнутую цену, от которой он отсчитан.
+    if (!(o.peak > 0)) return out0;
+    const stop = o.side === 'sell' ? o.peak - o.trail_offset : o.peak + o.trail_offset;
+    return [
+      { key: o.so_id + ':stop', price: stop, color: TRAIL_ACTIVE_COLOR, title: `${who} · выход` },
+      { key: o.so_id + ':peak', price: o.peak, title: `${who} · лучшая`, dim: true },
+      ...out0,
+    ];
   }
   if (o.kind === 'trail_tp') {
     const out: Array<{ key: string; price: number; title: string; dim?: boolean; color?: string }> = [];

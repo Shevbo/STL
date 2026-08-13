@@ -407,3 +407,54 @@ describe('двузначные номера связок', () => {
     expect(shortCodes([])).toEqual({});
   });
 });
+
+// «Подтягивающая» (trail_sl, 12.08.2026): выходит из УЖЕ ОТКРЫТОЙ позиции.
+// Путать её со «следящей» нельзя — та ВХОДИТ и спит до активации.
+describe('подтягивающая', () => {
+  const base = { kind: 'trail_sl' as const, side: 'sell' as const, qty: 2, code: 'RIU6',
+    trigger: 0, trailOffset: 300, watchId: '', childPrice: 0, price: 88000, pointValue: 1.5 };
+
+  it('у неё нет поля активации: движок такую заявку не примет', () => {
+    const keys = KIND_BY_ID.trail_sl.fields.map((f) => f.key);
+    expect(keys).not.toContain('trigger_price');
+    expect(keys[0]).toBe('trail_offset');
+  });
+
+  it('фраза говорит про уже открытую позицию и уровень выхода', () => {
+    const p = preview(base);
+    expect(p.error).toBe('');
+    expect(p.sentence).toContain('с первого тика');
+    expect(p.sentence).toContain('ПРОДАЖУ 2');
+    expect(p.distance.replace(/[\s  ]/g, ' ')).toContain('87 700');  // 88000-300
+  });
+
+  it('без отступа взводить нельзя', () => {
+    expect(preview({ ...base, trailOffset: 0 }).error).toContain('отступ');
+  });
+
+  it('стоп и подтягивающая после сделки вместе запрещены', () => {
+    const both = preview({ ...base, slOffset: 100, trailAfter: 200 });
+    expect(both.error).toContain('вместе нельзя');
+    // по отдельности — можно, и обе названы во фразе
+    expect(preview({ ...base, trailAfter: 200 }).error).toBe('');
+    expect(preview({ ...base, trailAfter: 200 }).sentence).toContain('подтягивающая 200');
+    expect(preview({ ...base, slOffset: 100, tpOffset: 300 }).error).toBe('');
+  });
+
+  it('на графике только уровень выхода и лучшая цена, без активации', () => {
+    const armed = smartLevels({ so_id: 'x', kind: 'trail_sl', side: 'sell', qty: 2,
+      trail_offset: 300, peak: 88500, trigger_price: 0 });
+    expect(armed.map((l) => l.key)).toEqual(['x:stop', 'x:peak']);
+    expect(armed[0].price).toBe(88200);
+    // пика ещё нет — рисовать нечего, выдуманный уровень хуже пустого места
+    expect(smartLevels({ so_id: 'x', kind: 'trail_sl', side: 'sell', qty: 2,
+      trail_offset: 300, peak: 0 })).toHaveLength(0);
+  });
+
+  it('в списке видно, что она стережёт позицию, а не ждёт активации', () => {
+    const t = conditionText({ kind: 'trail_sl', side: 'sell', trail_offset: 300, peak: 88500 });
+    expect(t).toContain('стережёт позицию');
+    expect(t.replace(/[\s  ]/g, ' ')).toContain('88 200');
+    expect(t).not.toContain('активация');
+  });
+});

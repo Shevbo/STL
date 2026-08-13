@@ -8,7 +8,7 @@ import { fetchWithAuth } from '$lib/fetch-auth';
 
 export interface SmartOrder {
   so_id: string;
-  kind: 'sl' | 'tp' | 'trail_tp' | 'on_fill';
+  kind: 'sl' | 'tp' | 'trail_tp' | 'on_fill' | 'trail_sl';
   code: string;
   side: 'buy' | 'sell';
   qty: number;
