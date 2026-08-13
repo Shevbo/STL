@@ -64,7 +64,11 @@ def remote(cmd: str, timeout: int = 60) -> str:
     return r.stdout
 
 
-MIN_AGE_H = float(os.environ.get("STL_AUTOPILOT_MIN_AGE_H", "4"))
+# Порог в ЧАСАХ. По умолчанию 3 минуты, а не 4 часа: у klod-access диспетчер
+# опрашивает ящик раз в 20 секунд и отвечает сразу, и оператор справедливо
+# требует того же. Небольшая пауза всё же нужна — она даёт ЖИВОМУ окну забрать
+# своё письмо первым, чтобы автопилот не дублировал работающую сессию.
+MIN_AGE_H = float(os.environ.get("STL_AUTOPILOT_MIN_AGE_H", "0.05"))
 # Кого автопилот НЕ обслуживает: оператор — человек, подхват сам себя не чинит.
 SKIP = ("operator", "stl-dev-spare")
 
@@ -197,5 +201,21 @@ def main() -> int:
             pass
 
 
+def loop(period_s: int) -> int:
+    """Цикл опроса. Крон не годится: его минимальный шаг — минута, а ответ
+    нужен за секунды. Живучесть даёт не демон-стражник, а перезапуск из крона
+    (@reboot плюс проверка раз в 5 минут) — тот же приём, что у robot_watch."""
+    log(f"цикл запущен, опрос раз в {period_s} с, порог {MIN_AGE_H} ч")
+    while True:
+        try:
+            main()
+        except Exception as e:                    # noqa: BLE001 — цикл не падает
+            log(f"ошибка прогона: {e}")
+        time.sleep(period_s)
+
+
 if __name__ == "__main__":
+    if "--loop" in sys.argv:
+        i = sys.argv.index("--loop")
+        sys.exit(loop(int(sys.argv[i + 1]) if len(sys.argv) > i + 1 else 20))
     sys.exit(main())
