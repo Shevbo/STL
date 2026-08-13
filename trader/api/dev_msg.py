@@ -40,6 +40,13 @@ _KEEP = 200                      # сколько сообщений храни�
 # объявляется просроченным, и это видно и отправителю, и любому, кто сейчас
 # активен, чтобы он позвал оператора (единственного, кто окно откроет).
 _STALE_MS = 4 * 3600 * 1000
+# Ящики, для которых ПРОСРОЧКА не является сбоем. `operator` — человек, он читает
+# экран «Чат разработчиков» и получает Telegram; `stl-dev-smain` — подхват,
+# который по замыслу тёмный, пока в квартире есть свет. Считать их залипшими
+# значит держать на доске вечную красную строку, а вечная тревога — это тревога,
+# которую перестают читать. Непрочитанное у них по-прежнему видно, просто оно не
+# объявляется сбоем службы.
+_NO_SLA = ("operator", "stl-dev-smain")
 
 # Окна и их зоны. Список ЗАКРЫТ: опечатка в адресате означала бы письмо,
 # которое никто никогда не прочитает, а отправитель считал бы задачу переданной.
@@ -110,7 +117,7 @@ def box_state(rows: list[dict], agent: str, now_ms: int) -> dict:
     age_ms = (now_ms - oldest) if oldest else 0
     return {"agent": agent, "unread": len(unread),
             "oldest_age_h": round(age_ms / 3600000, 1) if oldest else 0.0,
-            "stale": bool(oldest and age_ms >= _STALE_MS)}
+            "stale": bool(oldest and age_ms >= _STALE_MS and agent not in _NO_SLA)}
 
 
 def stale_note(state: dict) -> str:
@@ -291,7 +298,7 @@ async def board(request: Request):
     for a in AGENTS:
         for m in filter_inbox(msgs, a, unread_only=True):
             age = now - int(m.get("created_ms") or now)
-            if age >= _STALE_MS:
+            if age >= _STALE_MS and a not in _NO_SLA:
                 stuck.append({"to": a, "id": m.get("id"), "from": m.get("from"),
                               "topic": m.get("topic") or "", "age_h": round(age / 3600000, 1)})
     return {"board": states, "stale": sorted(stuck, key=lambda s: -s["age_h"]),
