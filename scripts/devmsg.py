@@ -167,6 +167,14 @@ def cmd_alert() -> int:
     return 0 if ok else 1
 
 
+def cmd_board_json() -> int:
+    """Доска машинно-читаемо: нужна автопилоту, парсить печатный вывод нельзя."""
+    with _client() as c:
+        r = c.get("/api/v1/dev/board")
+    print(r.text if r.status_code == 200 else json.dumps({"error": r.status_code}))
+    return 0 if r.status_code == 200 else 1
+
+
 def cmd_board_brief() -> int:
     """Одна строка для будильника на КАЖДОЕ сообщение оператора.
 
@@ -233,6 +241,8 @@ def main(argv: list[str]) -> int:
         return cmd_ack(argv[2])
     if cmd == "board":
         return cmd_board_brief() if "--brief" in argv else cmd_board()
+    if cmd == "board-json":
+        return cmd_board_json()
     if cmd == "alert":
         return cmd_alert()
     print(__doc__)
