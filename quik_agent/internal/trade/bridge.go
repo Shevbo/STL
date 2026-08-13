@@ -81,18 +81,38 @@ func RobotIDFromClientID(clientID string) (string, bool) {
 	return rest[:i], true
 }
 
+// smartOrderTagPrefix labels a STL smart-order child in the QUIK order COMMENT so the
+// operator can tell WHICH smart order produced a trade. The whole tag must fit QUIK's
+// 20-char brokerref (recon.maxBrokerrefLen) or the id itself gets cut and becomes
+// unsearchable: "stl-so-" (7) + a 10-hex so_id (trader/quik/smart_orders.new_id) = 17.
+const smartOrderTagPrefix = "stl-so-"
+
+// maxTagLen is QUIK's brokerref width — the same 20 as recon.maxBrokerrefLen. Tags are
+// capped here so the comment the agent SENDS equals the one QUIK stores.
+const maxTagLen = 20
+
 // ownerTag maps a client_id to the tag written into the QUIK order COMMENT so recon can
 // attribute the order: a robot's ID for "rr:<robotID>:<seq>", "recon" for an align order
-// ("recon:<planID>:<n>"). Everything else is INTENTIONALLY UNTAGGED (""): a manual or
-// otherwise non-robot/non-recon order must NEVER carry a robot ID as its tag, or recon
-// would misclassify it as a ROBOT_ORPHAN and an align could cancel it. An empty tag makes
-// recon treat the order as MANUAL, which is never reconciled or cancelled.
+// ("recon:<planID>:<n>"), "stl-so-<so_id>" for a smart-order child ("so:<so_id>").
+// Everything else is INTENTIONALLY UNTAGGED (""): a manual or otherwise non-robot/non-recon
+// order must NEVER carry a robot ID as its tag, or recon would misclassify it as a
+// ROBOT_ORPHAN and an align could cancel it. An empty tag makes recon treat the order as
+// MANUAL, which is never reconciled or cancelled. The smart-order tag matches no robot
+// either, so recon's unknown-tag branch also files it as MANUAL — which is exactly right:
+// a smart order is the operator's own trading, not a robot's.
 func ownerTag(clientID string) string {
 	if rid, ok := RobotIDFromClientID(clientID); ok {
 		return rid
 	}
 	if strings.HasPrefix(clientID, "recon:") {
 		return "recon"
+	}
+	if soID, ok := strings.CutPrefix(clientID, "so:"); ok && soID != "" {
+		tag := smartOrderTagPrefix + soID
+		if len(tag) > maxTagLen {
+			tag = tag[:maxTagLen]
+		}
+		return tag
 	}
 	return ""
 }

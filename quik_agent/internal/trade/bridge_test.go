@@ -4,19 +4,22 @@ import (
 	"bufio"
 	"encoding/json"
 	"net"
+	"strings"
 	"testing"
 )
 
 // TestOwnerTag drives the client_id -> QUIK-order-COMMENT tag mapping used by
 // manager.go's place-cmd build: a robot's ID for "rr:<robotID>:<seq>", "recon" for
-// an align order ("recon:<planID>:<n>"), and INTENTIONALLY "" for everything else — a
-// manual/non-robot order must stay untagged so recon treats it as MANUAL and never
-// cancels it (a raw client_id colliding with a robot ID would otherwise be misattributed
-// as a ROBOT_ORPHAN and aligned away).
+// an align order ("recon:<planID>:<n>"), "stl-so-<so_id>" for a smart-order child, and
+// INTENTIONALLY "" for everything else — a manual/non-robot order must stay untagged so
+// recon treats it as MANUAL and never cancels it (a raw client_id colliding with a robot
+// ID would otherwise be misattributed as a ROBOT_ORPHAN and aligned away).
 func TestOwnerTag(t *testing.T) {
 	cases := map[string]string{
 		"rr:agent-fvg-RIU6-v2:1:a1b2c3": "agent-fvg-RIU6-v2", // REAL 4-segment runner format
 		"recon:ab8fffa61d4a:0":          "recon",
+		"so:1a2b3c4d5e":                 "stl-so-1a2b3c4d5e", // REAL smart-order child
+		"so:":                           "",                  // no id -> untagged, never a bare prefix
 		"human-7":                       "",
 		"":                              "",
 	}
@@ -24,6 +27,21 @@ func TestOwnerTag(t *testing.T) {
 		if got := ownerTag(in); got != want {
 			t.Fatalf("ownerTag(%q)=%q want %q", in, got, want)
 		}
+	}
+}
+
+// TestOwnerTagFitsBrokerref pins the reason the tag is "stl-so-" and not the operator's
+// literal "stl-smartorders-": QUIK stores only the first 20 chars of the COMMENT
+// (recon.maxBrokerrefLen), so a longer prefix would eat the field and CUT the so_id —
+// the trade would carry a comment nobody can look the smart order up by.
+func TestOwnerTagFitsBrokerref(t *testing.T) {
+	// trader/quik/smart_orders.new_id() is uuid4().hex[:10].
+	tag := ownerTag("so:0123456789")
+	if len(tag) > maxTagLen {
+		t.Fatalf("ownerTag(so:<10 hex>)=%q is %d chars, QUIK keeps %d", tag, len(tag), maxTagLen)
+	}
+	if !strings.HasSuffix(tag, "0123456789") {
+		t.Fatalf("so_id truncated in %q — the id must survive whole", tag)
 	}
 }
 
