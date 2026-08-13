@@ -106,7 +106,11 @@ def cmd_show(win: str) -> int:
 
 def main(argv: list[str]) -> int:
     cmd = argv[1] if len(argv) > 1 else "show"
-    win = window_id()
+    # Имя окна принимаем аргументом: оно попадает в командную строку процесса,
+    # и только по ней снаружи можно отличить цикл одного окна от цикла другого.
+    # Без этого проверка «цикл уже работает» ловила ЧУЖОЙ цикл, и второе с
+    # третьим окном молча оставались без почты.
+    win = argv[2] if len(argv) > 2 else window_id()
     if not win:
         return 0                       # окно не опознано — не мешаем
     return cmd_loop(win) if cmd == "loop" else cmd_show(win)

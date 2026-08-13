@@ -1,51 +1,39 @@
 #!/usr/bin/env bash
-# Запуск почты окна: туннель до Lineman плюс цикл опроса. Одна команда на окно.
+# Почта окна. Запускается в ОТДЕЛЬНОМ терминале того окна и работает там.
 #
-#   bash scripts/fedwindow.sh          поднять (идемпотентно)
-#   bash scripts/fedwindow.sh stop     остановить
+#   bash scripts/fedwindow.sh
 #
-# ПОЧЕМУ ТУННЕЛЬ. Машина окон НЕ в WireGuard, и 10.66.0.1 оттуда недоступен —
-# первый же прогон цикла упёрся в timeout. Канон федерации (§1.1) описывает для
-# Windows ровно этот маршрут: ssh-jump через shevbo-pi, который сам в WG.
-# Держим локальный port-forward, дальше клиент ходит на 127.0.0.1 и не знает
-# ничего про WG.
+# ПОЧЕМУ НЕ ФОНОМ. Первая версия уводила цикл в nohup и nohup же её и подвёл:
+# фоновый процесс в Git Bash держит канал вызывающей оболочки, и запуск выглядел
+# как зависание. Отвязать надёжно на Windows не вышло, а невидимый демон, который
+# «вроде работает», — ровно та болезнь, от которой мы весь день лечились.
+# Терминал на переднем плане честнее: видно, живой цикл или упал.
 #
-# Pi — единая точка отказа (канон предупреждает прямым текстом). Поэтому:
-# упал туннель — цикл не молотит в петле, он спит и пробует снова, а окно видит
-# тишину, а не выдуманную пустоту почты.
+# ПОЧЕМУ ТУННЕЛЬ. Машина окон НЕ в WireGuard, 10.66.0.1 оттуда недоступен.
+# Канон федерации §1.1 предписывает для Windows ssh-jump через shevbo-pi.
+# Проверяем туннель ФАКТОМ ответа, а не наличием процесса: живой ssh с мёртвым
+# каналом дал бы «почты нет» вместо ошибки, а это хуже отказа.
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PORT="${STL_FED_PORT:-9090}"
 JUMP="${STL_FED_JUMP:-shevbo-pi}"
+PING="http://127.0.0.1:${PORT}/api/agent/ping/inbox?since=0"
 
-if [ "${1:-start}" = "stop" ]; then
-  pkill -f "ssh.*-L ${PORT}:10.66.0.1:9090" 2>/dev/null
-  pkill -f "fedwindow[.]py loop" 2>/dev/null
-  echo "остановлено"
-  exit 0
-fi
+alive() { curl -s -m 4 -o /dev/null "$PING"; }
 
-# 1) Туннель. Проверяем не по процессу, а по ФАКТУ ответа: живой процесс с
-#    мёртвым каналом — обычное дело, и именно он даёт «почты нет» вместо ошибки.
-if ! curl -s -m 5 -o /dev/null "http://127.0.0.1:${PORT}/api/agent/ping/inbox?since=0"; then
+if ! alive; then
+  echo "поднимаю туннель через $JUMP…"
   ssh -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 \
-      -N -L "${PORT}:10.66.0.1:9090" "$JUMP" &
-  for _ in 1 2 3 4 5 6 7 8 9 10; do
-    sleep 1
-    curl -s -m 3 -o /dev/null "http://127.0.0.1:${PORT}/api/agent/ping/inbox?since=0" && break
-  done
+      -N -L "${PORT}:10.66.0.1:9090" "$JUMP" >/dev/null 2>&1 &
+  for _ in $(seq 1 12); do sleep 1; alive && break; done
 fi
-if ! curl -s -m 5 -o /dev/null "http://127.0.0.1:${PORT}/api/agent/ping/inbox?since=0"; then
-  echo "туннель не поднялся: проверь ssh $JUMP"; exit 1
-fi
+alive || { echo "туннель не поднялся: проверь 'ssh $JUMP true'"; exit 1; }
 
-# 2) Цикл. Один на окно; повторный запуск не плодит второй.
-if pgrep -f "fedwindow[.]py loop" >/dev/null 2>&1; then
-  echo "цикл уже работает"
-else
-  ( cd "$REPO" && LINEMAN_URL="http://127.0.0.1:${PORT}" \
-      nohup python scripts/fedwindow.py loop >> "$HOME/.stl-fedmail.out" 2>&1 & )
-  sleep 2
-fi
-echo "готово: туннель через $JUMP, цикл опроса поднят"
+cd "$REPO" || exit 1
+WIN="$(STL_FED_ID="${STL_FED_ID:-${STL_WINDOW:-}}" python -c \
+  "import sys; sys.path.insert(0,'scripts'); import fedwindow; print(fedwindow.window_id())" 2>/dev/null)"
+[ -n "$WIN" ] || { echo "не опознал окно: нужен STL_WINDOW или CLAUDE.local.md"; exit 2; }
+
+echo "окно $WIN · туннель через $JUMP · опрос пошёл (Ctrl+C чтобы остановить)"
+LINEMAN_URL="http://127.0.0.1:${PORT}" exec python scripts/fedwindow.py loop "$WIN"
