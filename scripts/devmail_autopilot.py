@@ -64,10 +64,21 @@ def remote(cmd: str, timeout: int = 60) -> str:
     return r.stdout
 
 
+MIN_AGE_H = float(os.environ.get("STL_AUTOPILOT_MIN_AGE_H", "4"))
+# Кого автопилот НЕ обслуживает: оператор — человек, подхват сам себя не чинит.
+SKIP = ("operator", "stl-dev-spare")
+
+
 def stuck_window() -> tuple[str, dict] | None:
-    """Самое старое ПРОСРОЧЕННОЕ окно и его ящик. None — всё в порядке."""
+    """Самое старое застрявшее окно и его ящик. None — всё в порядке.
+
+    Порог берём из окружения, а не из флага stale сервера: сервер судит по
+    своим 4 часам, а автопилоту иногда нужно быстрее (и на проверке — сразу).
+    """
     board = json.loads(remote(f"{DEVMSG} board-json"))
-    stale = [b for b in board.get("board", []) if b.get("stale")]
+    stale = [b for b in board.get("board", [])
+             if b.get("unread") and b["agent"] not in SKIP
+             and (b.get("oldest_age_h") or 0) >= MIN_AGE_H]
     if not stale:
         return None
     worst = max(stale, key=lambda b: b.get("oldest_age_h") or 0)
