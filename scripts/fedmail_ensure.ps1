@@ -52,8 +52,17 @@ foreach ($dir in @('real-trade','backtests','ui-ux')) {
     if (-not (Test-Path (Join-Path $repo 'scripts\fedwindow.py'))) { continue }
     $win = & python -c "import sys; sys.path.insert(0,'$($repo -replace '\\','/')/scripts'); import fedwindow; print(fedwindow.window_id())" 2>$null
     if (-not $win) { $win = "stl-$dir" }
-    if ($running -match [regex]::Escape("fedwindow.py loop $win")) { continue }
     $env:LINEMAN_URL = "http://127.0.0.1:$port"
+    if (-not ($running -match [regex]::Escape("fedwindow.py loop $win"))) {
+        Start-Process -FilePath $pyw -WindowStyle Hidden -WorkingDirectory $repo `
+            -ArgumentList @('scripts\fedwindow.py','loop',$win)
+    }
+    # --- 3. Автоответчик. Цикл выше кладёт письмо в файл, но печатает его хук, а
+    # хук ждёт, пока в окне напечатает ЧЕЛОВЕК. Замер 13.08: доставка 1.5-2 с,
+    # ответ не пришёл ни от одного окна за 2.5 минуты и за ночь тоже. Отвечает
+    # поэтому процесс: claude -p из папки окна, инструменты только на чтение.
+    if (-not (Test-Path (Join-Path $repo 'scripts\fedbot.py'))) { continue }
+    if ($running -match [regex]::Escape("fedbot.py $win")) { continue }
     Start-Process -FilePath $pyw -WindowStyle Hidden -WorkingDirectory $repo `
-        -ArgumentList @('scripts\fedwindow.py','loop',$win)
+        -ArgumentList @('scripts\fedbot.py',$win)
 }
