@@ -129,6 +129,62 @@ def serve_once(win: str) -> int:
     return done
 
 
+LEGACY_EVERY = 12                     # циклов по IDLE_S между заходами в старый ящик
+
+
+def serve_legacy(win: str) -> int:
+    """Старый ящик на хостере (`scripts/devmsg.sh`) — он ЖИВ и им пользуются.
+
+    14.08 два письма от stl-dev-spare пролежали 11.9 и 6.7 часа: они пришли в
+    devmsg, а окно смотрело только в Lineman. Две почты без моста — это не две
+    почты, а одна работающая и одна невидимая.
+
+    Письмо ПЕРЕКЛАДЫВАЕТСЯ в ящик Lineman (дальше его увидят и хук, и
+    автоответчик — путь один) и подтверждается отправителю. `ack` НЕ ставим
+    намеренно: он означает «сделано», а сделать работу автоответчик не может.
+    Пусть висит непрочитанным, пока за него не возьмётся живое окно."""
+    short = win[4:] if win.startswith("stl-") else win
+    seen_f = STATE / f"{win}.legacy-seen"
+    seen = set(seen_f.read_text().split()) if seen_f.exists() else set()
+    try:
+        raw = subprocess.run(
+            ["ssh", "hoster",
+             f"bash ~/apps/shectory-trader/scripts/devmsg.sh inbox-json {short}"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=60)
+        box = json.loads(raw.stdout or "{}")
+    except (OSError, ValueError, subprocess.TimeoutExpired) as e:
+        print(f"[fedbot] старый ящик недоступен: {e}", file=sys.stderr, flush=True)
+        return 0
+    moved = 0
+    for m in box.get("messages") or []:
+        mid = str(m.get("id") or "")
+        if not mid or mid in seen or m.get("read_ms"):
+            continue
+        seen.add(mid)
+        text = (f"[из старого ящика devmsg, id {mid}, лежит {m.get('age_h')} ч]\n"
+                f"тема: {m.get('topic') or 'без темы'}\n\n{m.get('body') or ''}")
+        try:
+            fedmail.send(win, json.dumps({"topic": "legacy.forward",
+                                          "payload": text}, ensure_ascii=False),
+                         str(m.get("from") or "legacy"))
+            subprocess.run(
+                ["ssh", "hoster",
+                 "bash ~/apps/shectory-trader/scripts/devmsg.sh send "
+                 f"{m.get('from')} 'получено автоответчиком' "
+                 f"'Письмо {mid} принято автоответчиком окна {short}: доставлено в ящик "
+                 f"окна, ack не ставлю — работу делает живая сессия. Пиши в Lineman "
+                 f"({win}), там ответ приходит за секунды.' {short}"],
+                capture_output=True, timeout=60)
+        except (OSError, ValueError, subprocess.TimeoutExpired) as e:
+            print(f"[fedbot] мост не сработал на {mid}: {e}", file=sys.stderr, flush=True)
+            seen.discard(mid)
+            continue
+        moved += 1
+    seen_f.write_text("\n".join(sorted(seen)))
+    return moved
+
+
 def main(argv: list[str]) -> int:
     args = [a for a in argv[1:] if a != "loop"]
     once = "--once" in args
@@ -141,8 +197,12 @@ def main(argv: list[str]) -> int:
     if once:
         return 0 if serve_once(win) >= 0 else 1
     print(f"[fedbot] {win}: автоответчик запущен", flush=True)
+    tick = 0
     while True:
         serve_once(win)
+        if tick % LEGACY_EVERY == 0:      # старый ящик ходит по ssh, ему хватит минуты
+            serve_legacy(win)
+        tick += 1
         time.sleep(IDLE_S)
 
 
