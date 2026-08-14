@@ -57,6 +57,11 @@ def _to_dict(msg) -> dict | None:
 _QUEUE_MAX = 20_000
 _FLUSH_EVERY = 200          # строк между flush: компромисс потери и сисколлов
 
+# Редкие и самые ценные типы: заявка, отказ QUIK, частичная заливка. Их пишут
+# единицы строк в день, поэтому пакетный flush до них не доходит вовсе — сбрасываем
+# сразу. Стакан и тик идут тысячами строк и остаются пакетными.
+_FLUSH_AT_ONCE = frozenset({"order", "reply", "exec"})
+
 
 class MarketRecorder:
     """Пишет кадры агента на диск. Все методы безопасны в торговом пути."""
@@ -72,7 +77,12 @@ class MarketRecorder:
         self._task: asyncio.Task | None = None
         self._files: dict[str, Any] = {}
         self._day: str = ""
-        self._since_flush = 0
+        # Счётчик flush СВОЙ на каждый тип. Общий счётчик сбрасывал хэндл того типа,
+        # который записал 200-ю строку — практически всегда стакан или тик, а файлы
+        # заявок и отказов часами лежали нулевыми, со строками в буфере процесса.
+        # earlyoom на этом хостере убивает uvicorn по SIGKILL: буфер такого не
+        # переживает, и терялось ровно то, ради чего архив заводили.
+        self._since_flush: dict[str, int] = {}
         # Гейт по содержимому: последний ЗАПИСАННЫЙ снимок на инструмент.
         self._last: dict[str, str] = {}
         self.stats = {"written": 0, "dropped": 0, "skipped_same": 0, "errors": 0}
@@ -138,12 +148,21 @@ class MarketRecorder:
         except Exception:  # noqa: BLE001 — запись данных не стоит ни одного сбоя торговли
             self.stats["errors"] += 1
 
+    @staticmethod
+    def _utc_day() -> str:
+        return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
     def _same_as_last(self, kind: str, payload: dict) -> bool:
         """Гейт по СОДЕРЖИМОМУ для стакана и тиков: писать только изменения."""
         if kind not in ("book", "tick"):
             return False
         try:
-            key = f"{kind}:{payload.get('code', '')}"
+            # Ключ ВКЛЮЧАЕТ сутки: файл суток читают отдельно от предыдущих, и если
+            # гейт помнит вчерашний снимок, первый кадр инструмента уйдёт как «такой
+            # же» — день начнётся БЕЗ исходного состояния, восстановить его будет
+            # неоткуда. Сутками в ключе это решается без сброса на границе, то есть
+            # без гонки с ротацией, которая случается уже внутри записи кадра.
+            key = f"{self._utc_day()}:{kind}:{payload.get('code', '')}"
             sig = self._signature(kind, payload)
             if sig is None:
                 return False
@@ -233,9 +252,13 @@ class MarketRecorder:
     # ---- файлы ----
 
     def _handle(self, kind: str) -> Any:
-        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        day = self._utc_day()
         if day != self._day:                 # сутки сменились — закрыть и сжать
             self._rotate()
+            # Вчерашние снимки гейта больше не понадобятся; сегодняшние (гейт мог
+            # уже записать их до ротации) обязаны выжить.
+            self._last = {k: v for k, v in self._last.items()
+                          if k.startswith(day + ":")}
             self._day = day
         f = self._files.get(kind)
         if f is None:
@@ -253,6 +276,7 @@ class MarketRecorder:
         """Закрыть вчерашние файлы и сжать их. Сжатие закрытого файла целостно."""
         paths = [getattr(f, "name", None) for f in self._files.values()]
         self._close_files()
+        self._since_flush.clear()
         for path in paths:
             if not path or not os.path.exists(path) or path.endswith(".gz"):
                 continue
@@ -264,14 +288,53 @@ class MarketRecorder:
             except Exception as exc:  # noqa: BLE001 — не сжалось, останется как есть
                 log.warning("recorder.compress_failed", path=path, error=str(exc))
 
+    @staticmethod
+    def _quality(kind: str, p: dict) -> str | None:
+        """Метка невозможной котировки. None = кадр непротиворечив.
+
+        Бид выше аска физически невозможен, но в архиве такие кадры есть: 14.08.2026
+        за утро 25 перекрещенных тиков и 6 «замков» на 4319. Доля мала, а цена ошибки
+        нет: архив заводили ради моделирования СПРЕДА, и перекрещенный кадр даёт
+        спред отрицательный. Кадр не выбрасываем (потеря данных необратима) —
+        помечаем, чтобы потребитель решал сам. Ключ короткий и появляется ТОЛЬКО у
+        дефектных кадров: у здоровых он не стоит ни байта.
+        """
+        try:
+            if kind == "tick":
+                b, a = p.get("bid") or 0, p.get("ask") or 0
+                if b and a and b > a:
+                    return "cross"
+                if b and a and b == a:
+                    return "lock"
+                # last=0 приходит как отсутствие поля (protobuf опускает нули). Ноль
+                # не цена: по такому кадру нельзя ни сверить сделку, ни построить бар.
+                if not p.get("last"):
+                    return "nolast"
+                return None
+            if kind == "book":
+                bids, asks = p.get("bids") or [], p.get("asks") or []
+                if not bids or not asks:
+                    return "oneside"
+                if float(bids[0]["price"]) >= float(asks[0]["price"]):
+                    return "cross"
+            return None
+        except Exception:  # noqa: BLE001 — метка не стоит потери кадра
+            return None
+
     def _write(self, kind: str, payload: dict) -> None:
         f = self._handle(kind)
+        q = self._quality(kind, payload)
+        if q:
+            payload["q"] = q
         f.write(json.dumps(payload, separators=(",", ":"), ensure_ascii=False) + "\n")
         self.stats["written"] += 1
-        self._since_flush += 1
-        if self._since_flush >= _FLUSH_EVERY:
+        if q:
+            self.stats["impossible"] = self.stats.get("impossible", 0) + 1
+        n = self._since_flush.get(kind, 0) + 1
+        if kind in _FLUSH_AT_ONCE or n >= _FLUSH_EVERY:
             f.flush()
-            self._since_flush = 0
+            n = 0
+        self._since_flush[kind] = n
 
     def _close_files(self) -> None:
         for f in self._files.values():
