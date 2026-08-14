@@ -39,6 +39,11 @@ ANSWER_TIMEOUT_S = int(os.environ.get("STL_FEDBOT_TIMEOUT", "600"))
 IDLE_S = 5
 CLAUDE = os.environ.get("STL_CLAUDE_BIN", "claude")
 READ_ONLY_TOOLS = "Read,Grep,Glob"
+# Автоответчик живёт под pythonw, у которого консоли НЕТ, поэтому каждый
+# запущенный им консольный процесс (ssh, claude) заводил СВОЮ и мигал окном
+# поверх работы оператора — раз в минуту, по окну на каждое окно. Флаг гасит
+# это в корне; без него автоответчик неюзабелен, каким бы правильным ни был.
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def _payload(m: dict) -> tuple[str, str, bool]:
@@ -80,7 +85,7 @@ def answer(win: str, sender: str, topic: str, body: str) -> str:
     r = subprocess.run(
         [CLAUDE, "-p", prompt, "--allowedTools", READ_ONLY_TOOLS],
         cwd=str(REPO), capture_output=True, text=True, encoding="utf-8",
-        errors="replace", timeout=ANSWER_TIMEOUT_S)
+        errors="replace", timeout=ANSWER_TIMEOUT_S, creationflags=NO_WINDOW)
     out = (r.stdout or "").strip()
     if not out:
         out = f"[автоответчик {win}] claude вернул пусто, код {r.returncode}: " \
@@ -129,7 +134,7 @@ def serve_once(win: str) -> int:
     return done
 
 
-LEGACY_EVERY = 12                     # циклов по IDLE_S между заходами в старый ящик
+LEGACY_EVERY = 60                     # циклов по IDLE_S: старый ящик хватает раз в 5 минут
 
 
 def serve_legacy(win: str) -> int:
@@ -151,7 +156,7 @@ def serve_legacy(win: str) -> int:
             ["ssh", "hoster",
              f"bash ~/apps/shectory-trader/scripts/devmsg.sh inbox-json {short}"],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=60)
+            timeout=60, creationflags=NO_WINDOW)
         box = json.loads(raw.stdout or "{}")
     except (OSError, ValueError, subprocess.TimeoutExpired) as e:
         print(f"[fedbot] старый ящик недоступен: {e}", file=sys.stderr, flush=True)
@@ -175,7 +180,7 @@ def serve_legacy(win: str) -> int:
                  f"'Письмо {mid} принято автоответчиком окна {short}: доставлено в ящик "
                  f"окна, ack не ставлю — работу делает живая сессия. Пиши в Lineman "
                  f"({win}), там ответ приходит за секунды.' {short}"],
-                capture_output=True, timeout=60)
+                capture_output=True, timeout=60, creationflags=NO_WINDOW)
         except (OSError, ValueError, subprocess.TimeoutExpired) as e:
             print(f"[fedbot] мост не сработал на {mid}: {e}", file=sys.stderr, flush=True)
             seen.discard(mid)
