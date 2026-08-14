@@ -7,6 +7,8 @@ mirrors sig_fvg in trader/lab/strategies/library.py EXACTLY (same formulas) —
 it explains the real code, it does not approximate it.
 """
 
+from datetime import datetime, timezone
+
 from trader.lab import indicators as I
 from trader.lab.strategies.library import REGISTRY
 
@@ -125,6 +127,44 @@ def _generic_explain(strategy_id: str, bars, params: dict, state: dict) -> dict:
     label = {1: "СИГНАЛ ЛОНГ", -1: "СИГНАЛ ШОРТ", 0: "сигнал: выйти в кэш"}.get(want)
     return {"ready": True, "want": want,
             "waiting_for": label or "сигнала нет — держу текущее состояние"}
+
+
+def side_block(want, params: dict, bar_time: int) -> str:
+    """Почему сторона, в которую смотрит сигнал, запрещена ПРЯМО СЕЙЧАС.
+
+    Консоль обязана знать про запрет сторон, иначе она обещает заявку, которой
+    не будет: 14.08.2026 шортовый робот показывал «СИГНАЛ ЛОНГ» и план купить
+    один контракт, а купить он не может по построению — оператор решил, что
+    робот сломался. Ровно тот же ложный след, что комментарий ниже описывает
+    про разножку.
+
+    Возвращает пустую строку, когда сторона разрешена.
+    """
+    if want not in (1, -1):
+        return ""
+    a_long = int(params.get("allow_long", 1) or 0)
+    a_short = int(params.get("allow_short", 1) or 0)
+    if want > 0 and not a_long:
+        return "робот только шортит (allow_long=0)"
+    if want < 0 and not a_short:
+        return "робот только лонгует (allow_short=0)"
+    m1 = int(params.get("tod_m1", 0) or 0)
+    m2 = int(params.get("tod_m2", 0) or 0)
+    if not (0 < m1 < m2) or not bar_time:
+        return ""
+    # Часы считаем ровно как make_on_bar: через bar_offset_min, потому что бары
+    # раннера истинно UTC, а расписание задано МСК-стенным временем.
+    off = int(params.get("bar_offset_min", 0) or 0)
+    d = datetime.fromtimestamp(bar_time + off * 60, tz=timezone.utc)
+    mins = d.hour * 60 + d.minute
+    mask = int(params.get("tod_s1", 3) if mins < m1
+               else params.get("tod_s2", 3) if mins < m2 else params.get("tod_s3", 3))
+    win = 1 if mins < m1 else 2 if mins < m2 else 3
+    if want > 0 and not mask & 1:
+        return f"расписание: в {win}-м окне лонг запрещён"
+    if want < 0 and not mask & 2:
+        return f"расписание: в {win}-м окне шорт запрещён"
+    return ""
 
 
 def planned_orders(want, position: int, price: float, params: dict) -> list[dict]:
@@ -266,8 +306,18 @@ def explain(strategy_id: str, bars, params: dict, position: int,
         bars, params, position, avg)
     # Гейты входа: план, который фильтр прямо сейчас не пустит, помечаем — иначе
     # карточка обещает заявку, которой не будет.
+    # Запрет стороны проверяем ПЕРВЫМ: он сильнее всех прочих гейтов и объясняет
+    # ситуацию точнее. Робот, которому нельзя в эту сторону, не войдёт ни в
+    # долине, ни вне её, и обещать ему вход нельзя ни при каких фильтрах.
+    sb = side_block(d.get("want"), params, int(bars[-1].time) if bars else 0)
+    if sb:
+        d["entry_blocked"] = sb
+        d["waiting_for"] = f"{d.get('waiting_for', '')} — не мой ход: {sb}".strip(" —")
+        for o in d["planned_orders"]:
+            if o.get("entry"):
+                o["blocked"] = sb
     dvb = dv_block(params, bars)
-    if dvb:
+    if dvb and not sb:
         d["entry_blocked"] = dvb
         for o in d["planned_orders"]:
             # Долина гейтит ЛЮБОЙ вход (с нуля, разворот, добор) — метим все entry.
