@@ -56,9 +56,17 @@ def _payload(m: dict) -> tuple[str, str, bool]:
         return "", raw, False
     if not isinstance(d, dict):
         return "", raw, False
-    body = d.get("payload")
-    if not isinstance(body, str):
-        body = json.dumps(body, ensure_ascii=False)
+    # Спека фиксирует только строку message; ЧТО внутри — договорённость
+    # отправителя. stl-dev-spare прислал текст в "body", и письмо молча уехало
+    # в пропуск как пустое. Берём первое непустое из известных имён, а незнакомую
+    # форму отдаём целиком: непонятное письмо лучше показать, чем потерять.
+    known = [d[k] for k in ("payload", "body", "text", "message") if k in d]
+    if not known:
+        body = json.dumps(d, ensure_ascii=False)   # незнакомая форма — показать целиком
+    else:
+        body = next((v for v in known if isinstance(v, str) and v.strip()), "")
+        if not body and not isinstance(known[0], str):
+            body = json.dumps(known[0], ensure_ascii=False)
     return str(d.get("topic") or ""), body, bool(d.get("auto"))
 
 
