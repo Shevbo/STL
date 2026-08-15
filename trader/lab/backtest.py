@@ -7,6 +7,7 @@ from typing import Any
 
 from trader.lab.commission import commission_for
 from trader.lab.runtime import BacktestRuntime, Bar
+from trader.lab.splice import seam_plan
 from trader.lab.script_guard import validate_script
 from trader.lab.window_metrics import window_metrics
 
@@ -206,6 +207,32 @@ async def run_single_backtest(
                               initial_equity=initial_equity, point_value=point_value,
                               extra=extra)
 
+    # ШВЫ СКЛЕЙКИ. Непрерывный контракт сшит из разных серий без выравнивания
+    # базиса: позиция, пережившая смену контракта, получает фантомный результат
+    # (RI, 01.07.2026: 13 690 пунктов = 550 705 ₽ на полной позиции — больше
+    # итога девятимесячного прогона). Поэтому перед швом закрываемся, а первые
+    # `warmup` баров новой серии не торгуем: индикаторы ещё считают по хвосту с
+    # барами чужого контракта. Включается ТОЛЬКО на склейке (`splice_rolls`), у
+    # прогонов по конкретному контракту швов нет и поведение не меняется.
+    close_at: set[int] = set()
+    mute: set[int] = set()
+    if params.get("splice_rolls"):
+        warm = int(params.get("splice_warmup", 0) or 0)
+        if warm <= 0:
+            spec = getattr(strategy_module, "STRATEGY_WARMUP", None)
+            warm = int(spec(params)) if callable(spec) else 240
+        close_at, mute = seam_plan(bars, warm)
+
+    async def _flatten() -> None:
+        """Закрыть позицию по текущему бару — рыночным выходом, как это делает
+        оператор за день до экспирации."""
+        pos = runtime._positions.get(symbol) or {}
+        q = int(pos.get("qty") or 0)
+        if q <= 0:
+            return
+        await runtime.place_order(symbol, "sell" if pos.get("side") == "long" else "buy",
+                                  q, bars[runtime._cursor].close)
+
     if hasattr(strategy_module, "on_start"):
         await strategy_module.on_start(runtime, params)
 
@@ -214,7 +241,13 @@ async def run_single_backtest(
     max_dd_mtm = 0.0                    # deepest peak->trough on the mtm curve
     max_mae = 0.0                       # worst open-position adverse excursion (RUB)
     while True:
-        await strategy_module.on_bar(runtime, params)
+        i = runtime._cursor
+        if i in mute:
+            pass                        # первые бары новой серии: сигнал ещё грязный
+        elif i in close_at:
+            await _flatten()            # последний бар старого контракта
+        else:
+            await strategy_module.on_bar(runtime, params)
         bar = bars[runtime._cursor]
         pos = runtime._positions.get(symbol, {"side": "flat", "qty": 0, "avg": 0.0})
         signed = pos["qty"] * (1 if pos["side"] == "long"
