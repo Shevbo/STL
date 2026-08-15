@@ -935,7 +935,11 @@ function renderWatch(w) {
     // годовые — единственная величина, сравнимая между строками разного размера.
     const per = (s.date_from && s.date_to) ? `${s.date_from} → ${s.date_to}` : 'период не записан';
     const go = s.margin_rub ? `ГО ${Number(s.margin_rub).toLocaleString('ru-RU')} ₽` : 'ГО н/д';
-    const ann = (s.ann_go != null) ? `${s.ann_go}% годовых` : '% годовых н/д';
+    // Годовые приходят УЖЕ в процентах (в базе лежит доля: 4.179 = 418%).
+    const ann = (s.ann_go_pct != null)
+      ? `${Number(s.ann_go_pct).toLocaleString('ru-RU')}% годовых`
+        + (s.period_return_pct != null ? ` (${s.period_return_pct}% за период)` : '')
+      : '% годовых н/д';
     const lots = (s.max_position > 1 || s.qty > 1) ? ` · до ${s.max_position} контр.` : '';
     star = `<div class="chk"><span class="n"><span class="star"></span>кандидат</span>` +
       `<span class="s"><a href="${STL}/?campaign=${encodeURIComponent(s.campaign)}" data-ext` +

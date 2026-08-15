@@ -1045,7 +1045,8 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
         # по формуле самой стратегии, и первая по прибыли может её не пройти.
         rows = await pool.fetch(
             "SELECT campaign_run, strategy, symbol, net_profit, recovery_factor, "
-            "total_trades, params, date_from, date_to, ann_return_go, initial_margin "
+            "total_trades, params, date_from, date_to, ann_return_go, total_return, "
+            "initial_margin "
             "FROM optimization_leaderboard "
             "WHERE created_at > now() - interval '24 hours' "
             "AND net_profit >= 50000 AND recovery_factor BETWEEN 3 AND 1000 "
@@ -1103,8 +1104,14 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
                 "max_position": _max_position(p),
                 "date_from": str(row["date_from"] or "")[:10] or None,
                 "date_to": str(row["date_to"] or "")[:10] or None,
-                "ann_go": (round(float(row["ann_return_go"]), 1)
-                           if row["ann_return_go"] is not None else None),
+                # ДОЛЯ, а не проценты: 4.179 в базе означает 418% годовых.
+                # 15.08.2026 это поле вынесли на панель как есть и прочитали
+                # «4.2% годовых» — ошибка в сто раз, ровно в том числе, ради
+                # которого строку и показывают.
+                "ann_go_pct": (round(float(row["ann_return_go"]) * 100)
+                               if row["ann_return_go"] is not None else None),
+                "period_return_pct": (round(float(row["total_return"]) * 100)
+                                      if row["total_return"] is not None else None),
                 "margin_rub": _account_margin(p, _row_margin(row)),
             }
         else:
