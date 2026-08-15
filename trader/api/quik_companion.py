@@ -1063,11 +1063,25 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
         # лестница не влезает в деньги счёта, в кандидаты не берём вовсе, а на
         # панель выносим период, ГО и доходность годовых — по ним видно, чем
         # куплена прибыль.
+        # Справочник ГО инструментов: последняя опора, когда в строке хитпарада
+        # ГО не записано, а живого фида нет (выходные, терминал не подключён —
+        # QLua публикует параметры только на связи). Без него проверка размера
+        # именно в выходные и молчит, а лампа как раз в это время и висит.
+        meta_margin: dict = {}
+        try:
+            for m in await pool.fetch(
+                    "SELECT symbol, initial_margin FROM instrument_meta "
+                    "WHERE initial_margin > 0"):
+                meta_margin[m["symbol"]] = float(m["initial_margin"])
+        except Exception:  # noqa: BLE001 — нет таблицы/связи: судим по остальному
+            pass
+
         def _row_margin(r):
-            """ГО контракта: из строки хитпарада, иначе живое биржевое из фида.
+            """ГО контракта: из строки хитпарада, иначе живой фид, иначе справочник.
             У строк, посчитанных без экономики инструмента, поле пустое — и без
             подпорки проверка размера пропускала их насквозь."""
-            return r["initial_margin"] or _exch_margin_by.get(r["symbol"])
+            return (r["initial_margin"] or _exch_margin_by.get(r["symbol"])
+                    or meta_margin.get(r["symbol"]))
 
         row = next((r for r in rows
                     if _warmup_fits(r["strategy"], r["params"])
