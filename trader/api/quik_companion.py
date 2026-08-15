@@ -669,6 +669,12 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
     _margin_by = {r.get("code"): float(r.get("margin") or 0) * _mult
                   for r in ((health.get("params") or []) if isinstance(health.get("params"), list) else [])
                   if r.get("code")}
+    # СЫРОЕ биржевое ГО, без множителя: им подпирается лампа кандидата, когда в
+    # строке хитпарада ГО не записано вовсе. Без этого проверка размера молча
+    # пропускала строку (15.08.2026 так пролезла triple_sma с qty=19).
+    _exch_margin_by = {r.get("code"): float(r.get("margin") or 0)
+                       for r in ((health.get("params") or []) if isinstance(health.get("params"), list) else [])
+                       if r.get("code")}
     def _robot_vm(sym, pos, avg):
         try:
             pos, avg = float(pos), float(avg)
@@ -1057,9 +1063,15 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
         # лестница не влезает в деньги счёта, в кандидаты не берём вовсе, а на
         # панель выносим период, ГО и доходность годовых — по ним видно, чем
         # куплена прибыль.
+        def _row_margin(r):
+            """ГО контракта: из строки хитпарада, иначе живое биржевое из фида.
+            У строк, посчитанных без экономики инструмента, поле пустое — и без
+            подпорки проверка размера пропускала их насквозь."""
+            return r["initial_margin"] or _exch_margin_by.get(r["symbol"])
+
         row = next((r for r in rows
                     if _warmup_fits(r["strategy"], r["params"])
-                    and _margin_fits(r["params"], r["initial_margin"])), None)
+                    and _margin_fits(r["params"], _row_margin(r))), None)
         if row:
             p = row["params"]
             if isinstance(p, str):
@@ -1079,7 +1091,7 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
                 "date_to": str(row["date_to"] or "")[:10] or None,
                 "ann_go": (round(float(row["ann_return_go"]), 1)
                            if row["ann_return_go"] is not None else None),
-                "margin_rub": _account_margin(p, row["initial_margin"]),
+                "margin_rub": _account_margin(p, _row_margin(row)),
             }
         else:
             sweep_star = None          # свежих кандидатов нет — лампа гаснет
