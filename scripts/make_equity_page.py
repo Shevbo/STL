@@ -103,7 +103,10 @@ function draw(){
   ctx.clearRect(0,0,W,H);
   if(!CURVE.length){ctx.fillStyle='#7386a8';ctx.font='14px sans-serif';
     ctx.fillText('кривая пуста',P,H/2);return;}
-  const xs=CURVE.map(p=>p[0]), ys=CURVE.map(p=>p[1]);
+  // Кривая приходит списком ОБЪЕКТОВ {time, equity}, а не пар: движок кладёт её
+  // именно так (backtest.py), и чтение как массива давало NaN и пустой холст.
+  // Время в СЕКУНДАХ — для Date нужны миллисекунды.
+  const xs=CURVE.map(p=>p.time*1000), ys=CURVE.map(p=>p.equity-CURVE[0].equity);
   const x0=Math.min(...xs),x1=Math.max(...xs);
   let y0=Math.min(...ys),y1=Math.max(...ys); if(y0===y1){y0-=1;y1+=1;}
   const X=t=>P+(t-x0)/(x1-x0||1)*(W-P*1.5), Y=v=>H-P-(v-y0)/(y1-y0||1)*(H-P*1.8);
@@ -119,7 +122,8 @@ function draw(){
   ctx.setLineDash([]);
   // кривая
   ctx.strokeStyle=ys[ys.length-1]>=0?'#43c463':'#ff5c5c';ctx.lineWidth=1.6;
-  ctx.beginPath();CURVE.forEach((p,i)=>{const x=X(p[0]),y=Y(p[1]);i?ctx.lineTo(x,y):ctx.moveTo(x,y);});
+  ctx.beginPath();CURVE.forEach((p,i)=>{const x=X(p.time*1000),y=Y(p.equity-CURVE[0].equity);
+    i?ctx.lineTo(x,y):ctx.moveTo(x,y);});
   ctx.stroke();
   // подписи оси
   ctx.fillStyle='#7386a8';ctx.font='11px sans-serif';
@@ -130,6 +134,15 @@ function draw(){
 }
 draw();
 </script></body></html>"""
+
+
+def _dd_rub(d: dict) -> str:
+    """Просадка по закрытым сделкам в рублях: net / recovery factor."""
+    net = float(d.get("net_profit") or 0)
+    rf = float(d.get("recovery_factor") or 0)
+    if rf <= 0 or net == 0:
+        return "н/д"
+    return f"{abs(net / rf):,.0f} ₽".replace(",", " ")
 
 
 def card(lbl: str, val: str, cls: str = "") -> str:
@@ -157,7 +170,12 @@ async def main() -> None:
         card("Сделок", f"{d.get('total_trades') or 0}"),
         card("Пик позиции", f"{d.get('peak_contracts') or 0} к."),
         card("Recovery factor", f"{float(d.get('recovery_factor') or 0):.2f}"),
-        card("Просадка по закрытым", f"{float(d.get('max_drawdown') or 0) * 100:.1f}%"),
+        # Просадку показываем В РУБЛЯХ, а не долей от ГО: у прогона по СКЛЕЙКЕ
+        # экономика инструмента неизвестна (у кода «RI» нет своего ГО), и доля
+        # считается от подставного знаменателя — на этой же странице она выдала
+        # «146%», число без смысла. Рубли берём из самой связки net и recovery
+        # factor: RF = net / просадка, значит просадка = net / RF.
+        card("Просадка (по закрытым)", _dd_rub(d)),
         card("Швов склейки", f"{len(seams)}", "neg" if seams else ""),
     ])
     seamblock = ""
