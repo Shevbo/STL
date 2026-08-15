@@ -3650,7 +3650,10 @@ def create_app() -> FastAPI:
                 b = body if isinstance(body, dict) else json.loads(body or "{}")
             except Exception:  # noqa: BLE001
                 return 0
-            ps = b.get("paramSets")
+            # В БД тело задания хранится в snake_case (param_sets), а приходит от
+            # клиента в camelCase (paramSets) — читаем оба, иначе счётчик комбинаций
+            # молча показывает ноль на всех заданиях.
+            ps = b.get("param_sets") or b.get("paramSets")
             if isinstance(ps, list):
                 return len(ps)
             grid = b.get("params_grid") or b.get("paramsGrid") or {}
