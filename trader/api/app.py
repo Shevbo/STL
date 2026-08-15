@@ -21,6 +21,7 @@ from trader.auth.guard import require_auth, ws_auth_ok
 from trader.auth.portal import (SESSION_COOKIE as _SESSION_COOKIE,
                                 SESSION_TTL as _COOKIE_MAX_AGE,
                                 make_session_token, verify_portal_credentials)
+from trader import margin_stats
 from trader.config import Settings
 from trader.md.feed import MarketDataFeed
 from trader.md.grpc_client import BarsStream, OrderBookStream, QuoteStream
@@ -433,9 +434,15 @@ async def lifespan(app: FastAPI):
     # замершей ленте — чтобы закрытый рынок не читался как авария QUIK.
     app.state.market_session = None
     market_session_task = asyncio.create_task(_market_session_poller(app.state))
+    # Множитель брокера над биржевым ГО. Он сидит КОНСТАНТОЙ в отборе кандидатов,
+    # в отчёте компаньона и в карточке робота, а оператор (15.08.2026) заметил,
+    # что он, похоже, гуляет по времени дня и на ралли. Пока не измерен — все три
+    # места врут ровно на величину ошибки.
+    margin_stats_task = asyncio.create_task(_margin_multiplier_sampler(app.state))
 
     yield
 
+    margin_stats_task.cancel()
     market_session_task.cancel()
 
     if fallback_task is not None:
@@ -1152,6 +1159,68 @@ async def _agent_task_fallback(app_state) -> None:
             raise
         except Exception as exc:  # noqa: BLE001
             log.warning("agent_task_fallback.loop_error", error=str(exc))
+
+
+async def _margin_multiplier_sampler(app_state) -> None:
+    """Раз в минуту записывает ФАКТИЧЕСКИЙ множитель брокера над биржевым ГО.
+
+    Считает по снимку агента: занятое ГО счёта (`cbplused`) делим на биржевое
+    требование под открытые позиции. Замер пишется, только когда сошлось всё —
+    связь, деньги и биржевое ГО КАЖДОЙ бумаги с ненулевой позицией (см.
+    trader/margin_stats.compute). Нет позиций — нет замера, и это нормально:
+    множителю неоткуда взяться на пустом счёте.
+
+    Справочник ГО из instrument_meta подпирает живой фид: QLua публикует
+    параметры только пока терминал на связи, а без ГО замер негоден.
+    """
+    from trader import margin_stats as mstat
+    await asyncio.sleep(20)                    # дать линку агента подняться
+    created = False
+    meta: dict[str, float] = {}
+    meta_at = 0.0
+    while True:
+        try:
+            pool = getattr(app_state, "db_pool", None)
+            store = getattr(app_state, "quik_store", None)
+            if pool is None or store is None:
+                await asyncio.sleep(60)
+                continue
+            if not created:
+                await pool.execute(mstat.CREATE_SQL)
+                created = True
+            if time.time() - meta_at > 3600:
+                try:
+                    meta = {r["symbol"]: float(r["initial_margin"]) for r in await pool.fetch(
+                        "SELECT symbol, initial_margin FROM instrument_meta "
+                        "WHERE initial_margin > 0")}
+                except Exception:  # noqa: BLE001
+                    meta = meta or {}
+                meta_at = time.time()
+            snap = store.agent_status(None) or {}
+            health = snap.get("health") or {}
+            money = health.get("money") or {}
+            margins = dict(meta)
+            for p in (health.get("params") or []):
+                try:
+                    if p.get("code") and float(p.get("margin") or 0) > 0:
+                        margins[p["code"]] = float(p["margin"])
+                except (TypeError, ValueError):
+                    continue
+            net = (((snap.get("recon") or {}).get("manual") or {}).get("account_net") or [])
+            positions = {r.get("sec"): r.get("net") for r in net if r.get("sec")}
+            s = mstat.compute(int(time.time() * 1000), money.get("used"), positions, margins)
+            if s is not None:
+                await pool.execute(
+                    "INSERT INTO margin_multiplier_samples"
+                    "(ts_ms,used_rub,exchange_rub,multiplier,positions) "
+                    "VALUES($1,$2,$3,$4,$5::jsonb) ON CONFLICT (ts_ms) DO NOTHING",
+                    s.ts_ms, s.used_rub, s.exchange_rub, s.multiplier,
+                    json.dumps(s.positions))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — статистика не стоит падения цикла
+            log.warning("margin_stats.sample_failed", error=str(exc))
+        await asyncio.sleep(60)
 
 
 async def _market_session_poller(app_state) -> None:
@@ -3625,6 +3694,36 @@ def create_app() -> FastAPI:
             "SELECT DISTINCT strategy, symbol FROM optimization_leaderboard"
         )
         return [{"strategy": r["strategy"], "symbol": r["symbol"]} for r in rows]
+
+    @fastapi_app.get("/api/v1/quik/margin-multiplier")
+    async def margin_multiplier(request: Request, days: int = 30, limit: int = 200):
+        """Замеренный множитель брокера над биржевым ГО: сводка и последние точки.
+
+        Отвечает на вопрос «сколько на самом деле стоит контракт счёту» — не по
+        константе из env, а по факту: занятое ГО счёта, делённое на биржевое
+        требование под открытые позиции. Медиана по часам МСК показывает, гуляет
+        ли он в течение дня."""
+        _require_any_auth(request)
+        pool = request.app.state.db_pool
+        if pool is None:
+            raise HTTPException(status_code=503, detail="DB unavailable")
+        since = int(time.time() * 1000) - max(1, int(days)) * 86_400_000
+        rows = await pool.fetch(
+            "SELECT ts_ms, used_rub, exchange_rub, multiplier, positions "
+            "  FROM margin_multiplier_samples WHERE ts_ms >= $1 "
+            " ORDER BY ts_ms DESC LIMIT $2", since, max(1, min(int(limit), 2000)))
+        samples = [dict(r) for r in rows]
+        for s in samples:
+            if isinstance(s.get("positions"), str):
+                try:
+                    s["positions"] = json.loads(s["positions"])
+                except Exception:  # noqa: BLE001
+                    pass
+        return {
+            "env_multiplier": float(os.environ.get("QUIK_MARGIN_MULTIPLIER", "1.0") or 1.0),
+            "summary": margin_stats.summarize(samples),
+            "samples": samples[:50],
+        }
 
     @fastapi_app.get("/api/v1/agent/queue")
     async def agent_queue(request: Request, limit: int = 20):
