@@ -52,6 +52,12 @@ async def find_seams(symbol: str, d_from: date, d_to: date) -> list[dict]:
     что видел бэктест, а не по календарю экспираций: склейка выбирает передний
     контракт своим правилом, и фактический шов бывает не в день экспирации."""
     from trader.lab.iss_loader import load_bars_iss
+    # date_from/date_to в backtest_runs это timestamptz, а загрузчик сравнивает их
+    # с date окон контрактов — без приведения падает на сравнении типов.
+    if isinstance(d_from, datetime):
+        d_from = d_from.date()
+    if isinstance(d_to, datetime):
+        d_to = d_to.date()
     bars = await load_bars_iss(symbol, d_from, d_to, 1)
     out = []
     for i in range(1, len(bars)):
