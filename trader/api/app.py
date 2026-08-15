@@ -3626,6 +3626,86 @@ def create_app() -> FastAPI:
         )
         return [{"strategy": r["strategy"], "symbol": r["symbol"]} for r in rows]
 
+    @fastapi_app.get("/api/v1/agent/queue")
+    async def agent_queue(request: Request, limit: int = 20):
+        """Очередь и недавно посчитанное — для страницы агента на i9 (:8099).
+
+        Агент живёт на чужой машине и о своей очереди не знает ничего: он только
+        дёргает /claim и получает либо задание, либо 204. Оператор при этом видел
+        «простаивает» и не мог отличить пустую очередь от застрявшей — так и
+        случилось 14.08.2026, когда 24 задания висели queued, а агент был мёртв.
+        Поэтому здесь ОДИН read-only снимок: что ждёт, что считается сейчас, что
+        досчитано и с каким результатом.
+
+        Порядок очереди — тот же ключ, что в /claim (priority DESC, кампании
+        после голых прогонов, дальше FIFO), иначе номер в очереди врал бы."""
+        _agent_auth(request)
+        pool = request.app.state.db_pool
+        if pool is None:
+            raise HTTPException(status_code=503, detail="DB unavailable")
+
+        def _combos(body) -> int:
+            """Сколько комбинаций в задании: явный список или произведение осей."""
+            try:
+                b = body if isinstance(body, dict) else json.loads(body or "{}")
+            except Exception:  # noqa: BLE001
+                return 0
+            ps = b.get("paramSets")
+            if isinstance(ps, list):
+                return len(ps)
+            grid = b.get("params_grid") or b.get("paramsGrid") or {}
+            n = 1
+            for v in (grid.values() if isinstance(grid, dict) else []):
+                n *= len(v) if isinstance(v, list) else 1
+            return n if grid else 0
+
+        pending = await pool.fetch(
+            """SELECT id, strategy, symbol, status, priority, job_body, created_at,
+                      claimed_at, agent_id, date_from, date_to
+                 FROM backtest_runs
+                WHERE engine='remote' AND status IN ('queued','running')
+                ORDER BY (status='running') DESC, priority DESC,
+                         (id LIKE 'opt-%' OR id LIKE 'camp-%'), created_at
+                LIMIT 200""")
+        done = await pool.fetch(
+            """SELECT r.id, r.strategy, r.symbol, r.status, r.created_at, r.finished_at,
+                      r.error_msg, count(b.id) AS rows_n,
+                      max(b.net_profit) AS best_net,
+                      (array_agg(b.total_trades ORDER BY b.net_profit DESC NULLS LAST))[1] AS best_trades,
+                      (array_agg(b.recovery_factor ORDER BY b.net_profit DESC NULLS LAST))[1] AS best_rf,
+                      (array_agg(b.params ORDER BY b.net_profit DESC NULLS LAST))[1] AS best_params
+                 FROM backtest_runs r LEFT JOIN backtest_results b ON b.run_id = r.id
+                WHERE r.status IN ('done','failed') AND r.finished_at IS NOT NULL
+                GROUP BY r.id ORDER BY r.finished_at DESC LIMIT $1""", int(limit))
+
+        def _iso(v):
+            return v.isoformat() if v is not None else None
+
+        return {
+            "queued": sum(1 for r in pending if r["status"] == "queued"),
+            "running": sum(1 for r in pending if r["status"] == "running"),
+            "pending": [{
+                "id": r["id"], "strategy": r["strategy"], "symbol": r["symbol"],
+                "status": r["status"], "priority": r["priority"],
+                "combos": _combos(r["job_body"]), "created_at": _iso(r["created_at"]),
+                "claimed_at": _iso(r["claimed_at"]), "agent_id": r["agent_id"],
+                "date_from": _iso(r["date_from"]), "date_to": _iso(r["date_to"]),
+                "pos": i + 1,
+            } for i, r in enumerate(pending)],
+            "done": [{
+                "id": r["id"], "strategy": r["strategy"], "symbol": r["symbol"],
+                "status": r["status"], "rows": int(r["rows_n"] or 0),
+                "finished_at": _iso(r["finished_at"]),
+                "secs": (round((r["finished_at"] - r["created_at"]).total_seconds())
+                         if r["finished_at"] and r["created_at"] else None),
+                "best_net": float(r["best_net"]) if r["best_net"] is not None else None,
+                "best_trades": r["best_trades"], "best_rf": r["best_rf"],
+                "best_params": (json.loads(r["best_params"])
+                                if isinstance(r["best_params"], str) else r["best_params"]),
+                "error": (r["error_msg"] or "")[:200] or None,
+            } for r in done],
+        }
+
     @fastapi_app.get("/api/v1/agent/control")
     async def agent_control(request: Request):
         """Self-update channel: the agent polls this; when `update_token` differs from

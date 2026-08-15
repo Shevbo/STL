@@ -231,6 +231,19 @@ _STATUS_HTML = r"""<!doctype html><html lang="ru"><head><meta charset="utf-8">
       <table><thead><tr><th>Инстр.</th><th class="num">Комбо</th><th class="num">Сек</th><th class="num">Комбо/с</th><th class="num">OK</th></tr></thead>
       <tbody id="recent"><tr><td colspan="5" style="color:var(--dim)">—</td></tr></tbody></table>
     </div>
+    <div class="card wide"><div class="lbl">Очередь заданий · <span id="qn" class="mono">—</span></div>
+      <div id="qerr" class="warn"></div>
+      <table><thead><tr><th>№</th><th>Задание</th><th>Стратегия</th><th>Инстр.</th>
+        <th class="num">Комбо</th><th class="num">Приор.</th><th>Период</th><th>Ждёт</th></tr></thead>
+      <tbody id="queue"><tr><td colspan="8" style="color:var(--dim)">—</td></tr></tbody></table>
+    </div>
+    <div class="card wide"><div class="lbl">Досчитано · лучший результат задания</div>
+      <table><thead><tr><th>Задание</th><th>Стратегия</th><th>Инстр.</th><th class="num">Строк</th>
+        <th class="num">Лучший net</th><th class="num">Сделок</th><th class="num">RF</th>
+        <th class="num">Сек</th><th>Готово</th></tr></thead>
+      <tbody id="donetab"><tr><td colspan="9" style="color:var(--dim)">—</td></tr></tbody></table>
+      <div class="sub" id="doneparams" style="margin-top:8px"></div>
+    </div>
   </div>
 <script>
 function fmtDur(s){s=Math.round(s||0);var h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;return (h?h+'ч ':'')+(h||m?m+'м ':'')+x+'с';}
@@ -268,9 +281,52 @@ function render(d){
     +'</td><td class="num">'+esc(r.secs)+'</td><td class="num">'+esc(r.cps)+'</td><td class="num">'+esc(r.ok)+'</td></tr>';}).join('');
   document.getElementById('recent').innerHTML=rows||'<tr><td colspan="5" style="color:var(--dim)">пока нет</td></tr>';
 }
+function ago(iso){ if(!iso) return '—'; var s=(Date.now()-Date.parse(iso))/1000;
+  if(s<0) s=0; return fmtDur(s)+' назад'; }
+function shortId(id){ var p=(''+id).split('-'); return p.length>3? p.slice(2).join('-') : id; }
+function money(v){ return v==null? '—' : Math.round(v).toLocaleString('ru-RU'); }
+function renderQueue(d){
+  document.getElementById('qerr').textContent = d.error ? ('хостер недоступен: '+esc(d.error)) : '';
+  var p=d.pending||[];
+  document.getElementById('qn').textContent = (d.running||0)+' считается · '+(d.queued||0)+' ждёт';
+  // Ограничиваем показ, но ЧЕСТНО говорим, сколько скрыто: молча обрезанный
+  // список читается как «очередь короткая».
+  var head=p.slice(0,25);
+  var rows=head.map(function(r){
+    var per = r.status==='running' ? '<span class="dot run"></span>считается' : ago(r.created_at);
+    var win = (r.date_from||'').slice(0,10)+' → '+(r.date_to||'').slice(0,10);
+    return '<tr><td class="num">'+(r.status==='running'?'•':r.pos)+'</td>'
+      +'<td class="mono" title="'+esc(r.id)+'">'+esc(shortId(r.id))+'</td>'
+      +'<td>'+esc(r.strategy||'—')+'</td><td class="mono">'+esc(r.symbol||'—')+'</td>'
+      +'<td class="num">'+esc(r.combos||0)+'</td><td class="num">'+esc(r.priority||0)+'</td>'
+      +'<td class="mono">'+esc(win)+'</td><td>'+per+'</td></tr>';}).join('');
+  if(p.length>head.length) rows += '<tr><td colspan="8" style="color:var(--dim)">…и ещё '
+    +(p.length-head.length)+' заданий в очереди</td></tr>';
+  document.getElementById('queue').innerHTML = rows
+    || '<tr><td colspan="8" style="color:var(--dim)">очередь пуста</td></tr>';
+  var dn=(d.done||[]);
+  document.getElementById('donetab').innerHTML = dn.map(function(r){
+    var cls = r.status==='failed' ? ' style="color:var(--red)"' : '';
+    return '<tr'+cls+'><td class="mono" title="'+esc(r.id)+'">'+esc(shortId(r.id))+'</td>'
+      +'<td>'+esc(r.strategy||'—')+'</td><td class="mono">'+esc(r.symbol||'—')+'</td>'
+      +'<td class="num">'+esc(r.rows)+'</td><td class="num">'+money(r.best_net)+'</td>'
+      +'<td class="num">'+esc(r.best_trades==null?'—':r.best_trades)+'</td>'
+      +'<td class="num">'+(r.best_rf==null?'—':r.best_rf.toFixed(2))+'</td>'
+      +'<td class="num">'+esc(r.secs==null?'—':r.secs)+'</td>'
+      +'<td>'+(r.error? '<span style="color:var(--red)">'+esc(r.error.slice(0,60))+'</span>' : ago(r.finished_at))+'</td></tr>';
+  }).join('') || '<tr><td colspan="9" style="color:var(--dim)">пока нет</td></tr>';
+  // Параметры лучшей строки верхнего задания: без них «лучший net» ничего не
+  // говорит о том, ЧТО именно сработало.
+  var top=dn.find(function(r){return r.best_params;});
+  document.getElementById('doneparams').textContent = top
+    ? 'лучшая строка ('+shortId(top.id)+'): '+JSON.stringify(top.best_params) : '';
+}
 async function tick(){ try{ var r=await fetch('/metrics',{cache:'no-store'}); render(await r.json()); }
   catch(e){ document.getElementById('conn').textContent='нет связи с агентом (перезапущен?)'; } }
+async function tickQueue(){ try{ var r=await fetch('/queue',{cache:'no-store'}); renderQueue(await r.json()); }
+  catch(e){ document.getElementById('qerr').textContent='очередь не отвечает'; } }
 setInterval(tick,1500); tick();
+setInterval(tickQueue,4000); tickQueue();
 </script></body></html>"""
 
 
@@ -434,6 +490,10 @@ class Agent:
         # What the CPU is doing right now, surfaced by the heartbeat. Mutated by the
         # claim loop (job/task/idle); read by the concurrent heartbeat task.
         self._activity: dict = {"state": "starting"}
+        # Снимок очереди с хостера для страницы :8099. Кэш на 3 с, чтобы открытая
+        # вкладка не била по API чаще, чем человек успевает читать.
+        self._queue_cache: dict = {}
+        self._queue_cache_ts: float = 0.0
         # Ручной прогон, взятый ВПЕРЁД очереди на резервный воркер (см. _manual_loop).
         # Один за раз: резервный воркер ровно один, второй ручной подождёт периода.
         self._side_busy = False
@@ -694,6 +754,26 @@ class Agent:
         m["poll"] = self.poll
         return m
 
+    def _queue_snapshot(self) -> dict:
+        """Очередь заданий с хостера, с коротким кэшем.
+
+        Синхронный запрос намеренно: страницу открывает человек раз в несколько
+        секунд, а плодить ещё один асинхронный цикл ради неё — лишняя деталь,
+        которая может сломать сам агент. Ошибка сети возвращается в поле error и
+        рисуется на странице: пустая таблица без объяснения хуже, чем надпись.
+        """
+        now = time.time()
+        if self._queue_cache and now - self._queue_cache_ts < 3.0:
+            return self._queue_cache
+        try:
+            r = httpx.get(f"{self.api}/api/v1/agent/queue", headers=self.h, timeout=15)
+            r.raise_for_status()
+            data = r.json()
+        except Exception as exc:  # noqa: BLE001 — страница не стоит падения агента
+            data = {"error": f"{type(exc).__name__}: {exc}", "pending": [], "done": []}
+        self._queue_cache, self._queue_cache_ts = data, now
+        return data
+
     def _start_status_server(self) -> None:
         """Serve a live resource page on 127.0.0.1:<status_port> (like the QUIK agent's
         :8071). Loopback only, no auth. Best-effort — a bind failure never stops the
@@ -718,6 +798,10 @@ class Agent:
             def do_GET(self):
                 if self.path.startswith("/metrics"):
                     self._send(json.dumps(agent._status_payload()).encode(), "application/json")
+                elif self.path.startswith("/queue"):
+                    # Проксируем, а не ходим из браузера: токен агента живёт в
+                    # процессе и в страницу его класть нельзя.
+                    self._send(json.dumps(agent._queue_snapshot()).encode(), "application/json")
                 else:
                     self._send(_STATUS_HTML.encode("utf-8"), "text/html; charset=utf-8")
 
