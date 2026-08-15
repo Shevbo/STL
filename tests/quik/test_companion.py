@@ -422,3 +422,45 @@ def test_lamp_rejects_candidates_whose_warmup_outlives_the_runner_tail():
     assert _warmup_fits("us_open_fvg", {"open_hour": 16}) is True
     assert _warmup_fits("shectory_2ema", "не json") is True
     assert _warmup_fits(None, {}) is True
+
+
+# ── лампа кандидата: размер позиции не должен выглядеть как заслуга ──────────
+
+def test_star_rejects_a_row_the_account_cannot_carry():
+    """15.08.2026 наверх лампы вышла triple_sma RIU6 с 1 013 943 ₽ — и это был
+    qty=19 при пике 35 контрактов. При честном одном контракте тот же конфиг
+    даёт 274k на своём контракте и МИНУС 27k на соседнем в том же окне.
+
+    Лампа сортирует по net, а net растёт линейно с числом контрактов, поэтому
+    отбор обязан проверять деньги: полный набор строки должен влезать в половину
+    свободного ГО счёта, считая по ГО СЧЁТА (биржевое × множитель брокера).
+    """
+    from trader.api.quik_companion import _account_margin, _margin_fits, _max_position
+
+    ri_margin = 22187.11                      # биржевое ГО RIU6 на 15.08.2026
+    fat = {"qty": 19, "avg_max": 20, "bet_max": 10}
+    assert _max_position(fat) == 29           # qty+bet_max хуже, чем avg_max
+    assert not _margin_fits(fat, ri_margin)
+
+    lean = {"qty": 1, "avg_max": 4}
+    assert _max_position(lean) == 4
+    assert _margin_fits(lean, ri_margin)
+    assert _account_margin(lean, ri_margin) == round(4 * ri_margin * 2.4)
+
+
+def test_star_does_not_judge_what_it_cannot_measure():
+    """Экономика инструмента неизвестна — строку не режем: молча выбросить её
+    из-за отсутствующего числа хуже, чем показать оператору как есть."""
+    from trader.api.quik_companion import _account_margin, _margin_fits
+
+    assert _account_margin({"qty": 99}, None) is None
+    assert _margin_fits({"qty": 99}, None) is True
+    assert _margin_fits({"qty": 99}, 0) is True
+
+
+def test_max_position_survives_broken_params():
+    from trader.api.quik_companion import _max_position
+
+    assert _max_position({}) == 1
+    assert _max_position({"qty": "x", "avg_max": None}) == 1
+    assert _max_position('{"qty": 2, "avg_max": 7}') == 7      # params строкой из БД

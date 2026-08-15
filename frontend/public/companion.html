@@ -929,10 +929,20 @@ function renderWatch(w) {
   let star = '';
   if (bt.star) {
     const s = bt.star;
+    // Прибыль без ТРЁХ вещей — не оценка, а число. Период показывает, на каком
+    // куске рынка это получено; ГО — сколько денег строка занимает (net растёт
+    // линейно с контрактами, и 15.08.2026 наверх лампы вышла строка с qty=19);
+    // годовые — единственная величина, сравнимая между строками разного размера.
+    const per = (s.date_from && s.date_to) ? `${s.date_from} → ${s.date_to}` : 'период не записан';
+    const go = s.margin_rub ? `ГО ${Number(s.margin_rub).toLocaleString('ru-RU')} ₽` : 'ГО н/д';
+    const ann = (s.ann_go != null) ? `${s.ann_go}% годовых` : '% годовых н/д';
+    const lots = (s.max_position > 1 || s.qty > 1) ? ` · до ${s.max_position} контр.` : '';
     star = `<div class="chk"><span class="n"><span class="star"></span>кандидат</span>` +
       `<span class="s"><a href="${STL}/?campaign=${encodeURIComponent(s.campaign)}" data-ext` +
       ` style="color:inherit">${esc(s.strategy)} · ${esc(s.symbol)}: +${Number(s.net).toLocaleString('ru-RU')} ₽,` +
-      ` RF ${s.rf}, ${s.trades} сд. ↗</a></span></div>`;
+      ` RF ${s.rf}, ${s.trades} сд.${lots} ↗</a></span></div>` +
+      `<div class="chk"><span class="n"></span><span class="s" style="opacity:.75">` +
+      `${esc(per)} · ${esc(go)} · ${esc(ann)}</span></div>`;
   }
   return oneLine('раннер + lua', w.runner) +
     oneLine('бэктесты', bt, btExtra) +

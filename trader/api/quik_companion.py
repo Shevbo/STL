@@ -315,6 +315,62 @@ def _live_bars(bars: list[dict], tape_last_ms: int | None) -> list[dict]:
 RUNNER_BARS_KEPT = 600
 
 
+# Худшее наблюдавшееся свободное ГО счёта и доля, которую кандидату позволено
+# занять полным набором. Половина, а не всё: остаток обязан покрыть просадку
+# открытой позиции, иначе принудительное закрытие в худшей точке. Те же числа,
+# что в scripts/candidate_gate.py — держать их врозь нельзя, разойдутся.
+FREE_MARGIN_RUB = 1_529_640.0
+MARGIN_SHARE = 0.5
+
+
+def _params_dict(params) -> dict:
+    try:
+        return params if isinstance(params, dict) else json.loads(params or "{}")
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _max_position(params) -> int:
+    """Абсолютный потолок позиции: потолок доборов ИЛИ вход со ставочной системой.
+
+    avg_max — потолок ДОБОРОВ, а ставочная система растит сам вход (qty+bet_max).
+    Берём худшее из двух: закрываться робот будет из фактической позиции.
+    """
+    p = _params_dict(params)
+
+    def num(k, d=0):
+        try:
+            return int(float(p.get(k, d) or d))
+        except (TypeError, ValueError):
+            return d
+    qty = max(1, num("qty", 1))
+    return max(num("avg_max", 1), qty + num("bet_max", 0))
+
+
+def _account_margin(params, exchange_margin) -> int | None:
+    """ГО СЧЁТА под полный набор, в рублях.
+
+    Биржевое ГО — не то, что платит счёт: брокер берёт кратно (множитель 2.4 на
+    30.07.2026), и отчёт по биржевому значению занижает занятый капитал ровно во
+    столько же раз.
+    """
+    try:
+        m = float(exchange_margin or 0)
+    except (TypeError, ValueError):
+        return None
+    if m <= 0:
+        return None
+    mult = float(os.environ.get("QUIK_MARGIN_MULTIPLIER", "2.4") or 2.4)
+    return round(_max_position(params) * m * mult)
+
+
+def _margin_fits(params, exchange_margin) -> bool:
+    """Влезает ли полный набор кандидата в деньги счёта. Экономика неизвестна —
+    не судим: молча резать строку из-за отсутствующего числа хуже, чем показать."""
+    need = _account_margin(params, exchange_margin)
+    return need is None or need <= FREE_MARGIN_RUB * MARGIN_SHARE
+
+
 def _warmup_fits(strategy: str | None, params) -> bool:
     """Влезает ли прогрев кандидата в те бары, что переживают рестарт агента.
 
@@ -983,7 +1039,8 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
         # по формуле самой стратегии, и первая по прибыли может её не пройти.
         rows = await pool.fetch(
             "SELECT campaign_run, strategy, symbol, net_profit, recovery_factor, "
-            "total_trades, params FROM optimization_leaderboard "
+            "total_trades, params, date_from, date_to, ann_return_go, initial_margin "
+            "FROM optimization_leaderboard "
             "WHERE created_at > now() - interval '24 hours' "
             "AND net_profit >= 50000 AND recovery_factor BETWEEN 3 AND 1000 "
             "AND total_trades >= 30 "
@@ -992,15 +1049,37 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
             "AND NOT (params ? 'ema1' AND params ? 'ema2' "
             "         AND (params->>'ema1')::numeric = (params->>'ema2')::numeric) "
             "ORDER BY net_profit DESC LIMIT 20")
+        # РАЗМЕР ПОЗИЦИИ — НЕ ЗАСЛУГА. Лампа сортировала по net, а net линейно
+        # растёт с числом контрактов: 15.08.2026 наверх вышла строка triple_sma
+        # RIU6 с 1 013 943 ₽ — и это был qty=19 при пике 35 контрактов. При
+        # честном одном контракте тот же конфиг даёт 274k на своём контракте и
+        # МИНУС 27k на соседнем в том же окне. Поэтому строку, чья полная
+        # лестница не влезает в деньги счёта, в кандидаты не берём вовсе, а на
+        # панель выносим период, ГО и доходность годовых — по ним видно, чем
+        # куплена прибыль.
         row = next((r for r in rows
-                    if _warmup_fits(r["strategy"], r["params"])), None)
+                    if _warmup_fits(r["strategy"], r["params"])
+                    and _margin_fits(r["params"], r["initial_margin"])), None)
         if row:
+            p = row["params"]
+            if isinstance(p, str):
+                try:
+                    p = json.loads(p)
+                except Exception:  # noqa: BLE001
+                    p = {}
             sweep_star = {
                 "campaign": row["campaign_run"], "strategy": row["strategy"],
                 "symbol": row["symbol"],
                 "net": round(float(row["net_profit"] or 0)),
                 "rf": round(float(row["recovery_factor"] or 0), 2),
                 "trades": int(row["total_trades"] or 0),
+                "qty": int(float(p.get("qty", 1) or 1)),
+                "max_position": _max_position(p),
+                "date_from": str(row["date_from"] or "")[:10] or None,
+                "date_to": str(row["date_to"] or "")[:10] or None,
+                "ann_go": (round(float(row["ann_return_go"]), 1)
+                           if row["ann_return_go"] is not None else None),
+                "margin_rub": _account_margin(p, row["initial_margin"]),
             }
         else:
             sweep_star = None          # свежих кандидатов нет — лампа гаснет
