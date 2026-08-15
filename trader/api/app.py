@@ -3667,16 +3667,26 @@ def create_app() -> FastAPI:
                 ORDER BY (status='running') DESC, priority DESC,
                          (id LIKE 'opt-%' OR id LIKE 'camp-%'), created_at
                 LIMIT 200""")
+        # СНАЧАЛА отбираем последние N прогонов, и только ПОТОМ подтягиваем их
+        # строки. Наоборот нельзя: backtest_results это 3.1 млн строк, и группировка
+        # по всем 16 тысячам прогонов до LIMIT вешает запрос намертво — проверено
+        # на этом же эндпоинте 15.08.2026, первый вариант не ответил вовсе.
         done = await pool.fetch(
-            """SELECT r.id, r.strategy, r.symbol, r.status, r.created_at, r.finished_at,
-                      r.error_msg, count(b.id) AS rows_n,
+            """WITH last AS (
+                 SELECT id, strategy, symbol, status, created_at, finished_at, error_msg
+                   FROM backtest_runs
+                  WHERE status IN ('done','failed') AND finished_at IS NOT NULL
+                  ORDER BY finished_at DESC LIMIT $1)
+               SELECT l.id, l.strategy, l.symbol, l.status, l.created_at, l.finished_at,
+                      l.error_msg, count(b.id) AS rows_n,
                       max(b.net_profit) AS best_net,
                       (array_agg(b.total_trades ORDER BY b.net_profit DESC NULLS LAST))[1] AS best_trades,
                       (array_agg(b.recovery_factor ORDER BY b.net_profit DESC NULLS LAST))[1] AS best_rf,
                       (array_agg(b.params ORDER BY b.net_profit DESC NULLS LAST))[1] AS best_params
-                 FROM backtest_runs r LEFT JOIN backtest_results b ON b.run_id = r.id
-                WHERE r.status IN ('done','failed') AND r.finished_at IS NOT NULL
-                GROUP BY r.id ORDER BY r.finished_at DESC LIMIT $1""", int(limit))
+                 FROM last l LEFT JOIN backtest_results b ON b.run_id = l.id
+                GROUP BY l.id, l.strategy, l.symbol, l.status, l.created_at,
+                         l.finished_at, l.error_msg
+                ORDER BY l.finished_at DESC""", int(limit))
 
         def _iso(v):
             return v.isoformat() if v is not None else None
