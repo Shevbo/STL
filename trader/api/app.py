@@ -3708,10 +3708,15 @@ def create_app() -> FastAPI:
         if pool is None:
             raise HTTPException(status_code=503, detail="DB unavailable")
         since = int(time.time() * 1000) - max(1, int(days)) * 86_400_000
-        rows = await pool.fetch(
-            "SELECT ts_ms, used_rub, exchange_rub, multiplier, positions "
-            "  FROM margin_multiplier_samples WHERE ts_ms >= $1 "
-            " ORDER BY ts_ms DESC LIMIT $2", since, max(1, min(int(limit), 2000)))
+        try:
+            rows = await pool.fetch(
+                "SELECT ts_ms, used_rub, exchange_rub, multiplier, positions "
+                "  FROM margin_multiplier_samples WHERE ts_ms >= $1 "
+                " ORDER BY ts_ms DESC LIMIT $2", since, max(1, min(int(limit), 2000)))
+        except Exception:  # noqa: BLE001 — таблицу создаёт сборщик при первом замере
+            # «Ещё не мерили» — это пустая сводка, а не ошибка сервера: замеры
+            # появляются только при открытой позиции, и до первой их нет вовсе.
+            rows = []
         samples = [dict(r) for r in rows]
         for s in samples:
             if isinstance(s.get("positions"), str):
