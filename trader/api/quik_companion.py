@@ -1046,11 +1046,15 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
         rows = await pool.fetch(
             "SELECT campaign_run, strategy, symbol, net_profit, recovery_factor, "
             "total_trades, params, date_from, date_to, ann_return_go, total_return, "
-            "initial_margin "
+            "initial_margin, max_mae, max_drawdown "
             "FROM optimization_leaderboard "
             "WHERE created_at > now() - interval '24 hours' "
             "AND net_profit >= 50000 AND recovery_factor BETWEEN 3 AND 1000 "
             "AND total_trades >= 30 "
+            # Просадка по ВМ РОВНО ноль — не безрисковая строка, а неизмеренный
+            # риск: так выглядел замороженный сигнал, который держал открытый
+            # минус 1.94 млн и показывал нулевую просадку по закрытым сделкам.
+            "AND max_mae > 0 "
             "AND NOT (params ? 'fast' AND params ? 'slow' "
             "         AND (params->>'fast')::numeric >= (params->>'slow')::numeric) "
             "AND NOT (params ? 'ema1' AND params ? 'ema2' "
@@ -1112,6 +1116,16 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
                                if row["ann_return_go"] is not None else None),
                 "period_return_pct": (round(float(row["total_return"]) * 100)
                                       if row["total_return"] is not None else None),
+                # ПРОСАДКА ПО ВМ (max adverse excursion) — насколько глубоко уходила
+                # в минус ОТКРЫТАЯ позиция. Это не то же, что max_drawdown: тот
+                # считается по кривой ЗАКРЫТЫХ сделок и у стратегии, которая держит
+                # убыток открытым, бывает РОВНО ноль. Так и выглядел мираж
+                # замороженного сигнала: просадка ноль, а под ней открытый минус
+                # 1.94 млн. Риск такой строки виден только здесь.
+                "mae_rub": (round(float(row["max_mae"]))
+                            if row["max_mae"] is not None else None),
+                "dd_closed_pct": (round(float(row["max_drawdown"]) * 100, 1)
+                                  if row["max_drawdown"] is not None else None),
                 "margin_rub": _account_margin(p, _row_margin(row)),
             }
         else:

@@ -941,12 +941,21 @@ function renderWatch(w) {
         + (s.period_return_pct != null ? ` (${s.period_return_pct}% за период)` : '')
       : '% годовых н/д';
     const lots = (s.max_position > 1 || s.qty > 1) ? ` · до ${s.max_position} контр.` : '';
+    // Просадка по ВМ (MAE) — насколько глубоко уходила в минус ОТКРЫТАЯ позиция.
+    // Не путать с просадкой по закрытым сделкам: у строки, которая держит убыток
+    // открытым, вторая бывает ровно нулём, и весь риск виден только в первой.
+    const mae = (s.mae_rub != null)
+      ? `просадка по ВМ ${Number(s.mae_rub).toLocaleString('ru-RU')} ₽`
+      : 'просадка по ВМ н/д';
+    const ddc = (s.dd_closed_pct != null) ? ` · по закрытым ${s.dd_closed_pct}%` : '';
     star = `<div class="chk"><span class="n"><span class="star"></span>кандидат</span>` +
       `<span class="s"><a href="${STL}/?campaign=${encodeURIComponent(s.campaign)}" data-ext` +
       ` style="color:inherit">${esc(s.strategy)} · ${esc(s.symbol)}: +${Number(s.net).toLocaleString('ru-RU')} ₽,` +
       ` RF ${s.rf}, ${s.trades} сд.${lots} ↗</a></span></div>` +
       `<div class="chk"><span class="n"></span><span class="s" style="opacity:.75">` +
-      `${esc(per)} · ${esc(go)} · ${esc(ann)}</span></div>`;
+      `${esc(per)} · ${esc(go)} · ${esc(ann)}</span></div>` +
+      `<div class="chk"><span class="n"></span><span class="s" style="opacity:.75">` +
+      `${esc(mae)}${esc(ddc)}</span></div>`;
   }
   return oneLine('раннер + lua', w.runner) +
     oneLine('бэктесты', bt, btExtra) +
