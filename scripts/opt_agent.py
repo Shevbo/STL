@@ -686,6 +686,30 @@ class Agent:
         self._last_metrics = m          # freshest snapshot for the local status page
         return m
 
+    async def _heartbeat_forever(self, period: float = 4.0):
+        """Хартбит, переживающий пересборку пула и перезапуск жизни цикла.
+
+        Держит СВОЙ клиент: клиент жизни закрывается вместе с ней, а телеметрия
+        нужна именно в этот момент — оператор смотрит на монитор ровно тогда,
+        когда что-то меняет. Никогда не бросает: пропущенный удар просто стареет
+        в мониторе, а упавшая задача оставила бы его мёртвым навсегда.
+        """
+        while True:
+            try:
+                async with self._client() as client:
+                    while True:
+                        try:
+                            await client.post(f"{self.api}/api/v1/agent/heartbeat",
+                                              json=self._metrics(), headers=self.h,
+                                              timeout=10)
+                        except Exception:  # noqa: BLE001 — сеть моргнула, не повод падать
+                            pass
+                        await asyncio.sleep(period)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 — клиент не поднялся: пробуем снова
+                await asyncio.sleep(period)
+
     async def _heartbeat_loop(self, client: httpx.AsyncClient, period: float = 4.0):
         """Independent task: report CPU/RAM/activity every `period`s even WHILE a job is
         crunching (the claim loop is blocked awaiting the pool then, so it can't). Runs
@@ -1036,12 +1060,12 @@ class Agent:
                 async with self._client() as client:
                     # Independent heartbeat so CPU%/activity keep flowing WHILE a job blocks
                     # the claim loop below. Cancelled when this life ends.
-                    hb = asyncio.create_task(self._heartbeat_loop(client))
+                    # Хартбит здесь НЕ запускаем: он живёт над жизнями цикла
+                    # (см. run) и обязан пережить пересборку пула.
                     mn = asyncio.create_task(self._manual_loop(client, pool))
                     try:
                         return await self._claim_loop(client, pool)
                     finally:
-                        hb.cancel()
                         mn.cancel()
         finally:
             self._progress_q = None
@@ -1100,16 +1124,26 @@ class Agent:
         loop life (pool crash, client teardown) is caught and the loop restarts
         after a short backoff. Stop only via Ctrl+C / process kill."""
         self._start_status_server()      # local resource page, survives loop restarts
+        # ХАРТБИТ ЖИВЁТ НАД ЖИЗНЯМИ ЦИКЛА, а не внутри каждой. Внутри он умирал на
+        # каждой пересборке пула: смена числа воркеров возвращает REBUILD, хартбит
+        # гасится в finally, и только ПОТОМ ProcessPoolExecutor ждёт текущее задание
+        # — а ждать он может минуты. Всё это время монитор показывал «нет пинга
+        # 900 с» на совершенно здоровом агенте (жалоба оператора 16.08.2026, после
+        # того как он поднял воркеров с 14 до 16). Свой клиент, свой цикл, ничего
+        # не знает ни про пул, ни про очередь.
+        hb_top = asyncio.create_task(self._heartbeat_forever())
         backoff = 5
         while True:
             try:
                 res = await self._loop_once()
                 if res == "RESTART":
+                    hb_top.cancel()
                     self._reexec()   # never returns
                 elif res == "REBUILD":
                     _log("rebuilding pool (worker/priority change)…")
                     continue         # new _loop_once builds a fresh pool with new settings
             except KeyboardInterrupt:
+                hb_top.cancel()
                 print("stopped (KeyboardInterrupt)", flush=True)
                 return
             except Exception as exc:  # noqa: BLE001
