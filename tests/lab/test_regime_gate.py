@@ -75,3 +75,26 @@ def test_gate_needs_a_period_and_enough_bars():
     for reg_n, bars_n, expect_on in ((0, 500, False), (1, 500, False),
                                      (200, 100, False), (200, 500, True)):
         assert (reg_n > 1 and bars_n >= reg_n) is expect_on
+
+
+def test_gate_window_is_included_in_the_bar_fetch():
+    """Гейту нужно СВОЁ окно баров, иначе он молчит навсегда.
+
+    Стратегия берёт ровно столько баров, сколько нужно её сигналу (у
+    macd_shectory1 это ~238), а средняя гейта бывает длиннее. Тогда условие
+    len(bars) >= reg_n не выполняется НИКОГДА: пробник 16.08.2026 при reg_n=240
+    вернул то же число и то же количество сделок, что без гейта — ось выглядела
+    мёртвой, хотя код был на месте.
+    """
+    from trader.lab.strategies.library import REGISTRY
+
+    spec = REGISTRY["macd_shectory1"]
+    p = dict(spec["default_params"])
+    need = int(spec["warmup"](p))
+    for reg_n in (0, 1, 60, 240, 960):
+        fetch_n = need
+        if reg_n > 1:
+            fetch_n = max(fetch_n, reg_n)
+        assert fetch_n >= max(need, reg_n if reg_n > 1 else 0), reg_n
+    # Сама причина бага: окно сигнала КОРОЧЕ длинной средней гейта.
+    assert need < 960, "иначе тест не проверяет тот случай, ради которого написан"

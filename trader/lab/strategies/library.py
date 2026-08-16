@@ -240,6 +240,14 @@ def make_on_bar(rid: str):
         atr_active = (k_step > 0) or (tp > 0)        # ATR only needed for averaging/TP
         need = max(warmup(params), atr_n + 1) if atr_active else warmup(params)
         fetch_n = max(need, dv_win) if dv_on else need   # детектору нужно своё окно
+        # ГЕЙТУ РЕЖИМА ТОЖЕ НУЖНО СВОЁ ОКНО, и это не мелочь. Стратегия берёт ровно
+        # столько баров, сколько нужно её сигналу (у macd_shectory1 это ~238), а
+        # средняя гейта бывает длиннее. Тогда условие len(bars) >= reg_n не
+        # выполняется НИКОГДА, гейт молча не срабатывает, и перебор возвращает то
+        # же число, что без него: пробник 16.08.2026 дал совпадение до рубля и до
+        # сделки при reg_n=240 — ось выглядела мёртвой, хотя код был на месте.
+        if reg_n > 1:
+            fetch_n = max(fetch_n, reg_n)
         bars = await stl.get_bars(symbol, tf=1, n=fetch_n)
         if len(bars) < need:
             return
