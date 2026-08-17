@@ -72,17 +72,30 @@ class AlertForwarder:
         tg_chat_id: str,
         cooldown_sec: int = 60,
         send: "callable | None" = None,
+        lineman_url: str = "",
+        lineman_account: str = "default",
     ) -> None:
         self._token = tg_token
         self._chat_id = tg_chat_id
+        self._lineman = (lineman_url or "").rstrip("/")
+        self._account = lineman_account or "default"
         self._cooldown_sec = max(0, cooldown_sec)
-        # Injectable sender for tests; default posts to the Telegram Bot API.
-        self._send = send or self._send_telegram
+        # Injectable sender for tests; default posts to the Telegram Bot API, а
+        # без токена — через Lineman, которому токен не нужен вовсе (хостер внутри
+        # WireGuard). До 17.08.2026 второго пути не было, и все алерты, включая
+        # CRITICAL RECON_MISMATCH, молча уходили в лог: 14.08 робот потерял три
+        # контракта, сорок минут держал их без стопа, и заметил это ЧЕЛОВЕК.
+        # Канал доставки, который надо не забыть настроить, — это отсутствующий
+        # канал доставки.
+        self._send = send or self._send_default
         # (agent, code, severity) -> last-sent monotonic seconds.
         self._last_sent: dict[tuple[str, str, int], float] = {}
 
     def configured(self) -> bool:
-        return bool(self._token and self._chat_id)
+        """Есть КУДА слать. Адресат нужен в обоих случаях, а вот токен — только
+        для прямого Bot API: через Lineman ключ провайдера в этой службе не
+        живёт (политика федерации 18.06.2026)."""
+        return bool(self._chat_id and (self._token or self._lineman))
 
     def _suppressed(self, key: tuple[str, str, int], code: str) -> bool:
         if _is_recovery(code):
@@ -119,8 +132,25 @@ class AlertForwarder:
         except Exception as exc:  # noqa: BLE001 — never let an alert break the stream
             log.warning("quik.alert.forward_failed", error=str(exc), code=alert.get("code", ""))
 
+    async def _send_default(self, text: str) -> None:
+        if self._token:
+            await self._send_telegram(text)
+        else:
+            await self._send_lineman(text)
+
     async def _send_telegram(self, text: str) -> None:
         url = _TG_API.format(token=self._token)
         async with httpx.AsyncClient(timeout=8.0) as http:
             r = await http.post(url, json={"chat_id": self._chat_id, "text": text})
             r.raise_for_status()
+
+    async def _send_lineman(self, text: str) -> None:
+        """Тот же путь, которым ходит почта окон (scripts/devmsg.py cmd_alert):
+        Lineman держит бота, служба не держит ничего."""
+        async with httpx.AsyncClient(timeout=15.0, trust_env=False) as http:
+            r = await http.post(f"{self._lineman}/api/tg/send",
+                                json={"account": self._account,
+                                      "chat_id": self._chat_id, "text": text[:3900]})
+            r.raise_for_status()
+            if not (r.json() or {}).get("ok"):
+                raise RuntimeError(f"lineman tg: {r.text[:200]}")

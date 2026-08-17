@@ -286,6 +286,7 @@ async def lifespan(app: FastAPI):
                 tg_token=settings.quik_alert_tg_token.get_secret_value(),
                 tg_chat_id=settings.quik_alert_tg_chat_id,
                 cooldown_sec=settings.quik_alert_cooldown_sec,
+                lineman_url=settings.lineman_url,
             )
             quik_server = QuikAgentServer(
                 listen=settings.quik_agent_grpc_listen,

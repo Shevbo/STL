@@ -127,3 +127,24 @@ async def test_real_sender_uses_httpx(monkeypatch):
     assert captured["json"]["chat_id"] == "12345"
     assert "DDE_DOWN" in captured["json"]["text"]
     assert captured.get("raised") is True
+
+
+async def test_lineman_path_needs_no_token():
+    """Без токена алерт уходит через Lineman: ключа провайдера в этой службе нет
+    по политике федерации, а молчащий канал стоил нам 40 минут неуправляемой
+    реальной позиции 14.08.2026."""
+    sent = []
+
+    async def sender(text):
+        sent.append(text)
+
+    fwd = AlertForwarder("", "36910539", cooldown_sec=0, send=sender,
+                         lineman_url="http://10.66.0.1:9090")
+    assert fwd.configured()
+    await fwd.forward({"severity": 3, "code": "RECON_MISMATCH", "message": "x"}, "vds")
+    assert len(sent) == 1
+
+
+def test_not_configured_without_a_recipient():
+    fwd = AlertForwarder("", "", cooldown_sec=0, lineman_url="http://10.66.0.1:9090")
+    assert not fwd.configured()
