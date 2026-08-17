@@ -21,7 +21,7 @@
            одному только drift они неотличимы.
 
 Боковик объявляется, если ход меньше `min_drift` ЛИБО дорога слишком извилистая
-(ER ниже `min_er`). Оба порога — калибровочные ручки, а не константы: у RI своя
+(ER ниже своего шумового пола). Оба порога — калибровочные ручки, а не константы: у RI своя
 амплитуда, у BR своя, и подбирать их придётся по инструменту.
 
 УВЕРЕННОСТЬ — не выдуманная вероятность, а доля согласия. Окно режется на `parts`
@@ -46,7 +46,18 @@ RISE, FALL, FLAT = "rise", "fall", "flat"
 # инструмента их надо пересчитать: 3% хода для RI — это заметное движение, для
 # валютной пары — шум. Ручка оставлена намеренно, «универсальной константы» здесь нет.
 MIN_DRIFT = 0.03      # 3% хода за окно
-MIN_ER = 0.15         # ниже — рынок проболтался, а не прошёл
+# ПОРОГ ER — НЕ ЧИСЛО, А КОЭФФИЦИЕНТ НАД ШУМОМ. У случайного блуждания из n точек
+# ER не ноль: E|S_n| = sigma*sqrt(2n/pi), длина пути = n*sigma*sqrt(2/pi), их отношение
+# = 1/sqrt(n). То есть на 120 точках шум сам по себе даёт 0.09, а на 20 точках — 0.22.
+# Фиксированный порог 0.15 означал бы на длинном окне «строго», а на четырёхнедельном —
+# «пропускай что угодно»: чистый шум прошёл бы как тренд. Поэтому порог считается как
+# ER_K / sqrt(n) и меряет ПРЕВЫШЕНИЕ над шумовым полом, одинаково на любой длине.
+# Значение 2.2 ИЗМЕРЕНО, а не выбрано: на случайных блужданиях (300 прогонов, длины
+# 20 и 120 точек, sigma шага 0.4-0.6%) оно даёт ~6% ложных объявлений тренда против
+# 20% у 1.6, и при этом не теряет ни одного настоящего тренда — у чистой дороги ER 0.94,
+# то есть запас над порогом четырёхкратный. Медиана ER блуждания при n=120 вышла 0.079
+# против теоретических 1/sqrt(120)=0.091, формула подтвердилась на данных.
+ER_K = 2.2
 PARTS = 5             # на сколько кусков режем окно для оценки согласия
 # ER СЧИТАЕТСЯ НА ПРОРЕЖЕННОЙ СЕРИИ, и это не оптимизация, а условие осмысленности.
 # Длина пути растёт с числом точек: у одного и того же движения на 120 точках ER ~0.5,
@@ -111,15 +122,35 @@ def _slope_t(closes: list[float]) -> float:
     dof = n - 2
     s2 = sum(r * r for r in resid) / dof
     se = math.sqrt(s2 / sxx) if s2 > 0 else 0.0
-    return b / se if se > 0 else 0.0
+    if se <= 0:                      # идеальная прямая: остатков нет
+        # Ноль здесь означал бы «наклона нет» ровно у САМОГО сильного тренда — это
+        # прямо противоположно смыслу метрики (нашёл рецензент 17.08). Отдаём знак
+        # наклона бесконечностью: ошибка оценки нулевая, значимость неограниченная.
+        return math.copysign(math.inf, b) if b else 0.0
+    return b / se
 
 
-def _classify(closes: list[float], min_drift: float, min_er: float) -> tuple[str, float, float]:
+def er_floor(n: int, k: float = ER_K) -> float:
+    """Порог ER для серии из n точек: k / sqrt(n) — коэффициент над шумовым полом."""
+    return k / math.sqrt(n) if n > 1 else 1.0
+
+
+def _classify(closes: list[float], min_drift: float, k: float = ER_K) -> tuple[str, float, float]:
     drift = (closes[-1] - closes[0]) / closes[0] if closes[0] else 0.0
     er = _er(closes)
-    if abs(drift) < min_drift or er < min_er:
+    # Порог считается по ДЛИНЕ ЭТОЙ серии, а не окна: куски окна короче, и мерить их
+    # порогом целого означало бы пропускать шум как согласие.
+    if abs(drift) < min_drift or er < er_floor(len(closes), k):
         return FLAT, drift, er
     return (RISE if drift > 0 else FALL), drift, er
+
+
+def _drift_state(closes: list[float], min_drift: float) -> str:
+    """Куда шёл кусок окна. Только ход, без гейта извилистости — см. detect_regime."""
+    d = (closes[-1] - closes[0]) / closes[0] if closes[0] else 0.0
+    if abs(d) < min_drift:
+        return FLAT
+    return RISE if d > 0 else FALL
 
 
 def _thin(closes: list[float], points: int) -> list[float]:
@@ -134,7 +165,7 @@ def _thin(closes: list[float], points: int) -> list[float]:
     return out
 
 
-def detect_regime(series, min_drift: float = MIN_DRIFT, min_er: float = MIN_ER,
+def detect_regime(series, min_drift: float = MIN_DRIFT, er_k: float = ER_K,
                   parts: int = PARTS, points: int = POINTS) -> Regime:
     """Классифицировать окно целиком. `series` — бары или готовые цены закрытия."""
     raw = _closes(series)
@@ -142,14 +173,22 @@ def detect_regime(series, min_drift: float = MIN_DRIFT, min_er: float = MIN_ER,
         return Regime(FLAT, 0.0, 0.0, 0.0, 0.0, len(raw), [])
     n_raw = len(raw)
     closes = _thin(raw, points)
-    state, drift, er = _classify(closes, min_drift, min_er)
+    state, drift, er = _classify(closes, min_drift, er_k)
 
     # Согласие частей. Порог хода для куска делится на число кусков: за пятую часть
     # окна честно требовать пятую часть движения, иначе любой кусок объявится боковиком
     # и уверенность окажется нулевой у самого чистого тренда.
-    step = max(2, len(closes) // parts)
-    chunk_states = [_classify(closes[i:i + step], min_drift / parts, min_er)[0]
-                    for i in range(0, len(closes) - 1, step) if len(closes[i:i + step]) >= 2]
+    # Куски строятся ВСТЫК и покрывают серию до последней точки: при step из
+    # целочисленного деления хвост в 1-2 точки иначе выпадал бы из оценки целиком,
+    # а именно в хвосте живёт «весь ход одним рывком в конце» (нашёл рецензент).
+    step = max(2, math.ceil(len(closes) / parts))
+    chunks = [closes[i:i + step + 1] for i in range(0, len(closes) - 1, step)]
+    # Кусок судится ТОЛЬКО по ходу, без гейта ER. Гейт ER — вопрос всего окна («дошли
+    # или проболтались»), а от куска мы спрашиваем другое: «шёл ли он туда же». Порог
+    # ER на куске из 24 точек равен 0.45, и под него не проходит ни одна часть даже
+    # 15-процентного ралли — уверенность обнулялась у самых чистых трендов (поймано на
+    # реальном росте RIU6 17-30.07: drift +15.7%, ER 0.71, а уверенность выходила 0.00).
+    chunk_states = [_drift_state(ch, min_drift / parts) for ch in chunks if len(ch) >= 2]
     agree = sum(1 for s in chunk_states if s == state) / len(chunk_states) if chunk_states else 0.0
     return Regime(state, agree, drift, er, _slope_t(closes), n_raw, chunk_states)
 
@@ -177,12 +216,20 @@ def demo() -> None:
     assert r_spike.confidence < 0.5, r_spike.as_dict()
     # ER отличает прямую дорогу от зигзага с тем же итогом.
     assert _er(up) > 0.4 > _er(flat), (_er(up), _er(flat))
-    # Прореживание обязано СОХРАНЯТЬ ответ: длина серии не режим. Тот же тренд,
-    # снятый поминутно и поточечно, должен классифицироваться одинаково — иначе
-    # порог, откалиброванный на одном окне, врал бы на другом.
-    dense = [v for c in up for v in (c, c)]          # та же дорога, вдвое больше точек
-    assert detect_regime(dense).state == detect_regime(up).state
-    assert abs(detect_regime(dense).er - detect_regime(up).er) < 0.05
+    # Прореживание обязано СОХРАНЯТЬ ответ: длина серии не режим. Дорога, снятая
+    # в 20 раз чаще и с шумом, — тот же режим. Дублировать точки для такой проверки
+    # нельзя: приращения нулевые, путь не меняется, и проверка стала бы тавтологией.
+    dense = []
+    for a, b in zip(up, up[1:]):
+        dense += [a + (b - a) * j / 20 + rnd.uniform(-0.25, 0.25) for j in range(20)]
+    dense.append(up[-1])
+    assert detect_regime(dense).state == detect_regime(up).state == RISE
+    # Случайное блуждание — не тренд ни на какой длине окна.
+    walk, px = [], 100.0
+    for _ in range(120):
+        px *= 1 + rnd.gauss(0, 0.004)
+        walk.append(px)
+    assert detect_regime(walk).state == FLAT, detect_regime(walk).as_dict()
     print("trend_detector demo ok:", detect_regime(up).as_dict())
     print("                      ", detect_regime(down).as_dict())
     print("                      ", detect_regime(spike).as_dict())

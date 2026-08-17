@@ -49,15 +49,46 @@ def test_confidence_falls_when_move_is_one_late_spike():
     assert spike.confidence < 0.5, spike.as_dict()
 
 
+def _densify(closes: list[float], factor: int, noise: float, seed: int = 3) -> list[float]:
+    """Та же дорога, снятая в `factor` раз чаще: между точками линейная интерполяция
+    ПЛЮС шум. Простое дублирование точек здесь не годится — приращения нулевые, длина
+    пути не меняется, и тест прошёл бы даже с полностью удалённым прореживанием."""
+    rnd = random.Random(seed)
+    out = []
+    for a, b in zip(closes, closes[1:]):
+        for j in range(factor):
+            t = j / factor
+            out.append(a + (b - a) * t + rnd.uniform(-noise, noise))
+    out.append(closes[-1])
+    return out
+
+
 def test_answer_survives_resampling():
-    """Одна и та же дорога, снятая вдвое чаще, — тот же режим и почти тот же ER.
-    Без прореживания ER падает с числом точек, и порог, откалиброванный на одном
-    окне, врал бы на другом."""
+    """Одна и та же дорога, снятая в 20 раз чаще и с шумом, — тот же режим.
+    Без прореживания ER падает как 1/sqrt(n), и порог, честный на одном окне,
+    объявил бы боковиком то же самое движение на другом."""
     up = _series("up")
-    dense = [v for c in up for v in (c, c)]
+    dense = _densify(up, 20, noise=0.25)
     a, b = detect_regime(up), detect_regime(dense)
-    assert a.state == b.state
-    assert abs(a.er - b.er) < 0.05
+    assert len(dense) > len(up) * 15
+    assert a.state == b.state == RISE
+    assert abs(a.er - b.er) < 0.2, (a.as_dict(), b.as_dict())
+
+
+def test_random_walk_is_not_a_trend_on_any_window_length():
+    """Шумовой пол ER равен 1/sqrt(n): на 20 точках это 0.22, на 120 — 0.09. Порог
+    фиксированным числом означал бы на коротком окне «пропускай что угодно», и
+    случайное блуждание разметилось бы трендом. Пин на обеих длинах."""
+    for n in (20, 120):
+        flats = 0
+        for seed in range(12):
+            rnd = random.Random(seed)
+            px, walk = 100.0, []
+            for _ in range(n):
+                px *= 1 + rnd.gauss(0, 0.004)
+                walk.append(px)
+            flats += detect_regime(walk).state == FLAT
+        assert flats >= 10, f"n={n}: блуждание объявлено трендом {12 - flats} раз из 12"
 
 
 def test_efficiency_ratio_separates_road_from_zigzag():

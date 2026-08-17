@@ -92,7 +92,34 @@ def combo(arg):
         if sp < 0 <= prev and (t["time"] or 0) >= T0 and first_short is None:
             first_short = t["time"]
         max_short = min(max_short, sp)
-    return {"sid": sid, "params": params, "net": round(eq[-1]["equity"] - base, 1),
+    # РИСК СРЕЗА. Ранжировать по net нельзя: строка, набравшая его двадцатью
+    # контрактами, и строка на одном контракте несравнимы. Знаменателем берём MAE —
+    # худшую просадку ОТКРЫТОЙ позиции в рублях внутри отрезка: она сама учитывает и
+    # размер, и пирамидинг, и время вне рынка (кто стоял в стороне, тот и не рисковал).
+    fills_by_ts = {}
+    for t in r["trades"]:
+        fills_by_ts.setdefault(int(t["time"] or 0), []).append(t)
+    p_, avg_, realized_, mae, peak = 0, 0.0, 0.0, 0.0, None
+    for b in bars:
+        for t in fills_by_ts.get(b.time, ()):  # фиксация на баре сделки
+            q = t["qty"] * (1 if t["side"] == "buy" else -1)
+            if p_ == 0 or (p_ > 0) == (q > 0):
+                avg_ = (avg_ * abs(p_) + t["price"] * abs(q)) / (abs(p_) + abs(q))
+            else:
+                closed = min(abs(p_), abs(q))
+                realized_ += (t["price"] - avg_) * closed * (1 if p_ > 0 else -1) * pv
+                if abs(q) > abs(p_):
+                    avg_ = t["price"]
+            p_ += q
+        if b.time < T0:
+            continue
+        unreal = (b.close - avg_) * p_ * pv if p_ else 0.0
+        cur = realized_ + unreal
+        peak = cur if peak is None else max(peak, cur)
+        mae = max(mae, peak - cur)
+    net_slice = round(eq[-1]["equity"] - base, 1)
+    return {"sid": sid, "params": params, "net": net_slice,
+            "mae": round(mae, 1), "rf": round(net_slice / mae, 3) if mae > 0 else None,
             "fills": len(fills), "first_short": first_short, "max_short": -max_short,
             "open_pos": pos,
             "open_vm": round((bars[-1].close - avgq) * pos * pv, 1) if pos else 0.0}
@@ -110,9 +137,17 @@ async def main():
         out = list(ex.map(combo, jobs, chunksize=4))
     td = [b for b in bars if b.time >= T0]
     hold = (td[-1].close - td[0].open) * pv          # купил на открытии, держал до конца
+    # MAE эталона считается ТЕМ ЖЕ способом, что у строк, иначе RF несравнимы:
+    # худший минус по ходу удержания одного контракта, купленного на открытии.
+    peak_h, mae_h = 0.0, 0.0
+    for b in td:
+        cur = (b.close - td[0].open) * pv
+        peak_h = max(peak_h, cur)
+        mae_h = max(mae_h, peak_h - cur)
     print(json.dumps({"point_value": pv, "symbol": SYMBOL, "n": len(out),
                       "secs": round(time.time() - t0), "bars_period": len(td),
-                      "buy_and_hold_rub": round(hold, 1),
+                      "buy_and_hold_rub": round(hold, 1), "buy_and_hold_mae": round(mae_h, 1),
+                      "buy_and_hold_rf": round(hold / mae_h, 3) if mae_h > 0 else None,
                       "p_open": td[0].open, "p_close": td[-1].close,
                       "rows": out}, ensure_ascii=False))
 

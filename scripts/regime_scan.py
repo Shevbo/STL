@@ -10,7 +10,10 @@ from trader.lab.iss_loader import load_bars_iss
 from trader.lab.trend_detector import detect_regime
 
 CONTRACTS = ["RIZ5", "RIH6", "RIM6", "RIU6"]
-WEEKS = [4, 8, 12]
+# Короткие окна тоже нужны: минутная история ISS живёт около четырёх месяцев, и
+# 8-12-недельный рост 2025 года перебором не проверить — минутных баров под ним нет.
+# Поэтому размечаем и 2-3-недельные отрезки: внутри них данные есть.
+WEEKS = [2, 3, 4, 8, 12]
 
 
 async def main():
