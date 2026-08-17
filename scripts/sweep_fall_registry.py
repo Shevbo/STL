@@ -15,9 +15,18 @@ from trader.lab.iss_loader import load_bars_iss, fetch_contract_spec
 from trader.lab.backtest import run_single_backtest, Bar
 from trader.lab.strategies.library import REGISTRY
 
-SYMBOL = "RIU6"
-T0 = int(datetime(2026, 8, 12, 7, tzinfo=timezone.utc).timestamp())  # бары = MSK-стенка в UTC
+# Отрезок задаётся аргументами: окно рынка — это ДАННЫЕ задачи, а не константа кода.
+# argv: N [strategy_ids|all] [SYMBOL] [T0=YYYY-MM-DD] [LOAD_FROM=YYYY-MM-DD] [TO=YYYY-MM-DD]
 N = int(sys.argv[1]) if len(sys.argv) > 1 else 100
+SYMBOL = sys.argv[3] if len(sys.argv) > 3 else "RIU6"
+_t0 = sys.argv[4] if len(sys.argv) > 4 else "2026-08-12"
+_from = sys.argv[5] if len(sys.argv) > 5 else "2026-08-05"
+_to = sys.argv[6] if len(sys.argv) > 6 else "2026-08-14"
+# Бары ISS проштампованы МОСКОВСКОЙ стенкой в UTC, поэтому граница отрезка
+# записывается как есть, без перевода зон.
+T0 = int(datetime(*[int(x) for x in _t0.split("-")], tzinfo=timezone.utc).timestamp())
+LOAD_FROM = date(*[int(x) for x in _from.split("-")])
+LOAD_TO = date(*[int(x) for x in _to.split("-")])
 PINNED = {"symbol", "qty", "min_gap_pts"}
 
 
@@ -91,16 +100,20 @@ def combo(arg):
 
 async def main():
     pv = (await fetch_contract_spec(SYMBOL) or {}).get("point_value") or 1.0
-    bars = await load_bars_iss(SYMBOL, date(2026, 8, 5), date(2026, 8, 14), 1)
+    bars = await load_bars_iss(SYMBOL, LOAD_FROM, LOAD_TO, 1)
     rows = [b.__dict__ for b in bars]
-    only = sys.argv[2].split(",") if len(sys.argv) > 2 else list(REGISTRY)
+    only = (list(REGISTRY) if len(sys.argv) <= 2 or sys.argv[2] == "all"
+            else sys.argv[2].split(","))
     jobs = [(rows, pv, sid, c) for sid in only for c in sample(sid, N)]
     t0 = time.time()
     with ProcessPoolExecutor(max_workers=3) as ex:
         out = list(ex.map(combo, jobs, chunksize=4))
     td = [b for b in bars if b.time >= T0]
-    print(json.dumps({"point_value": pv, "n": len(out), "secs": round(time.time() - t0),
-                      "bars_period": len(td), "p_open": td[0].open, "p_close": td[-1].close,
+    hold = (td[-1].close - td[0].open) * pv          # купил на открытии, держал до конца
+    print(json.dumps({"point_value": pv, "symbol": SYMBOL, "n": len(out),
+                      "secs": round(time.time() - t0), "bars_period": len(td),
+                      "buy_and_hold_rub": round(hold, 1),
+                      "p_open": td[0].open, "p_close": td[-1].close,
                       "rows": out}, ensure_ascii=False))
 
 asyncio.run(main())
