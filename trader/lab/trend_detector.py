@@ -65,6 +65,15 @@ PARTS = 5             # на сколько кусков режем окно д�
 # шумом. Порог, откалиброванный на одной длине окна, на другой означал бы совсем другое,
 # поэтому серия сначала приводится к фиксированному числу точек, и только потом меряется.
 POINTS = 120
+# СКОЛЬКО ТОЧЕК НУЖНО, ЧТОБЫ ОТВЕТ ВООБЩЕ ЧТО-ТО ЗНАЧИЛ. Порог ER падает как
+# 1/sqrt(n), и на десяти точках он равен 0.70: мимо такого порога проходит только
+# идеально прямая линия, а чуть менее прямая объявляется боковиком. Проверено на
+# реальном росте RIU6 17-30.07: по дневным барам (10 точек) режим «рост» с ER 0.713
+# при пороге 0.696 — то есть ответ решался третьим знаком, а те же две недели по
+# часовым и минутным барам дают «боковик». Минуты и часы между собой сходятся
+# (ER 0.155 против 0.169), расходится именно нехватка точек. Ниже MIN_POINTS ответ
+# помечается `enough=False`, и автоматике его брать нельзя.
+MIN_POINTS = 60
 
 
 @dataclass
@@ -76,11 +85,14 @@ class Regime:
     t: float            # t-статистика наклона log-регрессии (справочно)
     bars: int
     parts: list[str]    # состояние каждого куска, в порядке времени
+    samples: int = 0    # сколько точек реально участвовало в расчёте
+    enough: bool = True # хватило ли точек, чтобы ответу можно было верить
 
     def as_dict(self) -> dict:
         return {"state": self.state, "confidence": round(self.confidence, 3),
                 "drift": round(self.drift, 5), "er": round(self.er, 4),
-                "t": round(self.t, 2), "bars": self.bars, "parts": self.parts}
+                "t": round(self.t, 2), "bars": self.bars, "samples": self.samples,
+                "enough": self.enough, "parts": self.parts}
 
 
 def _closes(series) -> list[float]:
@@ -170,7 +182,7 @@ def detect_regime(series, min_drift: float = MIN_DRIFT, er_k: float = ER_K,
     """Классифицировать окно целиком. `series` — бары или готовые цены закрытия."""
     raw = _closes(series)
     if len(raw) < 2 or raw[0] <= 0:
-        return Regime(FLAT, 0.0, 0.0, 0.0, 0.0, len(raw), [])
+        return Regime(FLAT, 0.0, 0.0, 0.0, 0.0, len(raw), [], len(raw), False)
     n_raw = len(raw)
     closes = _thin(raw, points)
     state, drift, er = _classify(closes, min_drift, er_k)
@@ -190,7 +202,11 @@ def detect_regime(series, min_drift: float = MIN_DRIFT, er_k: float = ER_K,
     # реальном росте RIU6 17-30.07: drift +15.7%, ER 0.71, а уверенность выходила 0.00).
     chunk_states = [_drift_state(ch, min_drift / parts) for ch in chunks if len(ch) >= 2]
     agree = sum(1 for s in chunk_states if s == state) / len(chunk_states) if chunk_states else 0.0
-    return Regime(state, agree, drift, er, _slope_t(closes), n_raw, chunk_states)
+    enough = len(closes) >= MIN_POINTS
+    # Нехватка точек не «немного снижает точность», она меняет ОТВЕТ, поэтому
+    # уверенность обнуляется явно: пусть автоматика видит ноль, а не 0.6.
+    return Regime(state, agree if enough else 0.0, drift, er, _slope_t(closes),
+                  n_raw, chunk_states, len(closes), enough)
 
 
 def demo() -> None:

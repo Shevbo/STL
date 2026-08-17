@@ -98,3 +98,15 @@ def test_efficiency_ratio_separates_road_from_zigzag():
 def test_degenerate_input_does_not_crash():
     for bad in ([], [100.0], [0.0, 0.0]):
         assert detect_regime(bad).state == FLAT
+
+
+def test_too_few_points_is_flagged_not_trusted():
+    """На десяти точках порог ER равен 0.70, и ответ решается третьим знаком.
+    Поймано на живых данных: рост RIU6 17-30.07 по дневным барам — «рост» с ER
+    0.713 при пороге 0.696, а те же две недели по часовым и минутным — «боковик».
+    Детектор обязан пометить такой ответ, а не выдавать его наравне с остальными."""
+    up = _series("up", 400)
+    thin_10 = up[::40]
+    r = detect_regime(thin_10)
+    assert r.enough is False and r.confidence == 0.0, r.as_dict()
+    assert detect_regime(up).enough is True
