@@ -91,3 +91,53 @@ def test_prompt_names_the_zone_and_the_ack_step(agent):
     assert AGENTS[agent][:20] in p          # своя зона названа
     assert "ack" in p                        # подтверждение обязательно
     assert "чуж" in p                        # правило про чужую зону
+
+
+# ── предохранитель от почтовой петли (17.08.2026) ────────────────────────────
+
+def _auto(frm, to, ts):
+    return {"id": str(ts), "from": frm, "to": to, "topic": "получено автоответчиком",
+            "body": "принято", "created_ms": ts, "read_ms": 0}
+
+
+def test_auto_topic_is_recognised():
+    from trader.api.dev_msg import is_auto_topic
+    assert is_auto_topic("получено автоответчиком")
+    assert is_auto_topic("  Получено Автоответчиком ")
+    assert is_auto_topic("auto: доставлено")
+    assert not is_auto_topic("ИНЦИДЕНТ: раннер потерял 3 контракта")
+    assert not is_auto_topic("")
+
+
+def test_second_receipt_to_the_same_window_is_dropped():
+    """Петля 17.08 крутилась по письму каждые 2.9 минуты — окно дедупа 10 минут
+    гасит её, не мешая редким настоящим квитанциям."""
+    from trader.api.dev_msg import auto_is_duplicate
+    now = 10_000_000
+    rows = [_auto("backtests", "real-trade", now - 60_000)]
+    assert auto_is_duplicate(rows, "backtests", "real-trade", now)
+    # встречное направление — своя пара, гасится отдельно
+    assert not auto_is_duplicate(rows, "real-trade", "backtests", now)
+    # старая квитанция петлёй не считается
+    assert not auto_is_duplicate([_auto("backtests", "real-trade", now - 3_600_000)],
+                                 "backtests", "real-trade", now)
+
+
+def test_real_letters_are_never_treated_as_receipts():
+    """Главный риск предохранителя — проглотить настоящее письмо."""
+    from trader.api.dev_msg import auto_is_duplicate
+    now = 10_000_000
+    real = {"id": "1", "from": "backtests", "to": "real-trade",
+            "topic": "ОПЕРАТОР РАЗРЕШИЛ АРМИНГ", "body": "x",
+            "created_ms": now - 60_000, "read_ms": 0}
+    assert not auto_is_duplicate([real], "backtests", "real-trade", now)
+
+
+def test_receipt_never_becomes_fuel():
+    """Квитанция кладётся ПРОЧИТАННОЙ: бот пропускает прочитанное, и следующего
+    круга не будет. Это и есть точка, где петля умирает."""
+    from trader.api.dev_msg import filter_inbox, is_auto_topic
+    now = 10_000_000
+    receipt = dict(_auto("backtests", "real-trade", now), read_ms=now)
+    assert is_auto_topic(receipt["topic"])
+    assert filter_inbox([receipt], "real-trade", unread_only=True) == []

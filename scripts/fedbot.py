@@ -174,11 +174,23 @@ def serve_legacy(win: str) -> int:
         mid = str(m.get("id") or "")
         if not mid or mid in seen or m.get("read_ms"):
             continue
+        # КВИТАНЦИЯ — НЕ РАБОТА. 17.08.2026 два окна двенадцать часов подряд
+        # подтверждали друг другу подтверждения: 255 писем и 247 запусков модели,
+        # раз в 2.9 минуты, без человека. У каждого письма был новый id, поэтому
+        # дедуп по seen был бессилен — гасить надо по СМЫСЛУ письма, а не по id.
+        if str(m.get("topic") or "").strip().lower().startswith(
+                ("получено автоответчиком", "auto:")):
+            seen.add(mid)
+            continue
         seen.add(mid)
         text = (f"[из старого ящика devmsg, id {mid}, лежит {m.get('age_h')} ч]\n"
                 f"тема: {m.get('topic') or 'без темы'}\n\n{m.get('body') or ''}")
         try:
-            fedmail.send(win, json.dumps({"topic": "legacy.forward",
+            # auto=True: мост ПЕРЕКЛАДЫВАЕТ письмо, а не задаёт вопрос. Без этой
+            # метки собственная пересылка выглядела для answering-цикла живым
+            # письмом и оплачивалась запуском модели — половина сожжённого
+            # 17.08 лимита это она.
+            fedmail.send(win, json.dumps({"topic": "legacy.forward", "auto": True,
                                           "payload": text}, ensure_ascii=False),
                          str(m.get("from") or "legacy"))
             subprocess.run(
