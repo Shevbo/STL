@@ -130,6 +130,29 @@ func TestMissingFillsTailCutGuard(t *testing.T) {
 	}
 }
 
+// Активный робот с ПОЛНЫМ хвостом лечится по ордерам, а не пропускается целиком.
+// 14.08 lxk22 наторговал больше 200 филлов за день, потерял 3 контракта на
+// перевороте и сорок минут держал реальный лонг, о котором не знал: старый страж
+// снимал с заживления весь робот, и оно не бралось НИКОГДА. Ордер новее начала
+// хвоста урезанием не задет — по нему journalQty полон.
+func TestMissingFillsHealsOrderNewerThanTailStart(t *testing.T) {
+	fills := make([]*quikv1.RobotFill, syncTailCap)
+	for i := range fills {
+		fills[i] = fill("x", 1, nowMs-3600_000) // хвост начался час назад
+	}
+	st := map[string]*quikv1.RobotStatus{"r1": status(false, nowMs-5000, fills, nil)}
+	lost := trade("r1", "610", "B", 3, 80290, nowMs-600_000) // сделка НОВЕЕ начала хвоста
+	got := MissingFills(st, []accounts.Trade{lost}, nowMs)
+	if len(got) != 1 || got[0].GetFilled() != 3 {
+		t.Fatalf("потерянный переворот не вылечен: %+v", got)
+	}
+	// А ордер СТАРШЕ начала хвоста по-прежнему не трогаем: его филлы могли выпасть.
+	old := trade("r1", "620", "B", 3, 80290, nowMs-7200_000)
+	if got := MissingFills(st, []accounts.Trade{old}, nowMs); len(got) != 0 {
+		t.Fatalf("ордер из урезанной части вылечен вслепую: %+v", got)
+	}
+}
+
 // The journal stamp must be the EXCHANGE trade time when the Lua build supplies
 // it: a restart re-stamps receipt times to NOW, which would journal a restored
 // fill hours off its true chart spot.

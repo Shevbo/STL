@@ -55,6 +55,11 @@ func MissingFills(statuses map[string]*quikv1.RobotStatus, trades []accounts.Tra
 		journalQty map[string]int64
 		working    map[string]bool
 		manual     []manualCredit
+		// Начало хвоста: время САМОГО СТАРОГО филла в 200-хвосте, когда хвост полон.
+		// Ордер, чья первая сделка НЕ старше этой метки, урезанием не задет — его
+		// филлы, если робот их записывал, все ещё в хвосте, и journalQty по нему
+		// полон. Ноль = хвост не полон, резать нечего.
+		tailFloorMs int64
 	}
 	views := map[string]*robotView{}
 	for id, st := range statuses {
@@ -65,13 +70,20 @@ func MissingFills(statuses map[string]*quikv1.RobotStatus, trades []accounts.Tra
 			continue // stale book view: healing against it could double-apply
 		}
 		fills := st.GetRecentFills()
-		// Tail-cut guard: a 200-capped tail whose OLDEST entry is already inside
-		// today may have dropped today's fills -> journalQty would undercount and
-		// the heal would double-apply. Skip such a robot (recon still flags it).
-		if len(fills) >= syncTailCap && len(fills) > 0 && fills[0].GetTsUnixMs() >= floor {
-			continue
+		// Урезание хвоста. Раньше робот с полным 200-хвостом, начавшимся уже
+		// сегодня, пропускался ЦЕЛИКОМ: journalQty мог недосчитать, а заживление
+		// тогда удваивает. Плата за эту осторожность оказалась в живых деньгах:
+		// активный робот, наторговавший больше 200 филлов за день, не лечился
+		// НИКОГДА. 14.08 lxk22 потерял 3 контракта на перевороте и сорок минут
+		// держал реальный лонг, о котором не знал, — заживление даже не бралось.
+		// Режем не робота, а ОРДЕРА: те, чья первая сделка старше начала хвоста
+		// (ниже, у выпуска). По остальным journalQty полон, и лечить их безопасно.
+		var tailFloor int64
+		if len(fills) >= syncTailCap && fills[0].GetTsUnixMs() > 0 {
+			tailFloor = fills[0].GetTsUnixMs()
 		}
-		v := &robotView{journalQty: map[string]int64{}, working: map[string]bool{}}
+		v := &robotView{journalQty: map[string]int64{}, working: map[string]bool{},
+			tailFloorMs: tailFloor}
 		for _, f := range fills {
 			if f.GetStatus() == "filled" && f.GetOrderId() != "" {
 				v.journalQty[f.GetOrderId()] += f.GetQty()
@@ -117,6 +129,7 @@ func MissingFills(statuses map[string]*quikv1.RobotStatus, trades []accounts.Tra
 		robot, sec, side string
 		qty              int64
 		vwapNum          float64 // Σ price×qty
+		firstTsMs        int64   // самая ранняя сделка ордера: сверяется с началом хвоста
 		lastTsMs         int64   // journal stamp: EXCHANGE time when known (cc3+ Lua),
 		// else the Lua receipt stamp. A restart re-stamps receipts to NOW, which
 		// would journal a restored fill hours off its true spot on the chart.
@@ -166,6 +179,9 @@ func MissingFills(statuses map[string]*quikv1.RobotStatus, trades []accounts.Tra
 		if ts > a.lastTsMs {
 			a.lastTsMs = ts
 		}
+		if a.firstTsMs == 0 || ts < a.firstTsMs {
+			a.firstTsMs = ts
+		}
 	}
 
 	var out []*quikv1.OrderUpdate
@@ -175,6 +191,9 @@ func MissingFills(statuses map[string]*quikv1.RobotStatus, trades []accounts.Tra
 		orderNum := k[len(a.robot)+1:]
 		if v.working[orderNum] {
 			continue // normal event path still owns this order
+		}
+		if v.tailFloorMs > 0 && a.firstTsMs < v.tailFloorMs {
+			continue // филлы этого ордера могли выпасть из хвоста: journalQty неполон
 		}
 		missing := a.qty - v.journalQty[orderNum]
 		if missing <= 0 {
