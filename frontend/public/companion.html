@@ -935,7 +935,8 @@ function renderWatch(w) {
     // годовые — единственная величина, сравнимая между строками разного размера.
     const per = (s.date_from && s.date_to) ? `${s.date_from} → ${s.date_to}` : 'период не записан';
     const go = s.margin_rub ? `ГО ${Number(s.margin_rub).toLocaleString('ru-RU')} ₽` : 'ГО н/д';
-    // Годовые приходят УЖЕ в процентах (в базе лежит доля: 4.179 = 418%).
+    // Годовые приходят УЖЕ в процентах и ЛИНЕЙНО от того же ГО, что напечатано
+    // рядом. Сложные годовые из базы обещали 45 897% по двум неделям истории.
     const ann = (s.ann_go_pct != null)
       ? `${Number(s.ann_go_pct).toLocaleString('ru-RU')}% годовых`
         + (s.period_return_pct != null ? ` (${s.period_return_pct}% за период)` : '')

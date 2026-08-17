@@ -364,6 +364,34 @@ def _account_margin(params, exchange_margin) -> int | None:
     return round(_max_position(params) * m * mult)
 
 
+def _star_return(net, margin_rub, date_from, date_to) -> dict:
+    """Доходность кандидата: за период и в год — ЛИНЕЙНО и от ТОГО ЖЕ ГО, что
+    напечатано рядом.
+
+    Две причины не брать готовые ann_return_go/total_return из хитпарада.
+    (1) В базе годовая СЛОЖНАЯ: (1+r)^(365/дни). На окне 14 дней 26% за период
+    превращаются в 45 897% годовых — панель обещала оператору 458 концов за год
+    по двум неделям истории (14.08.2026). Робот в этой же панели считает годовую
+    линейно, так что панель ещё и противоречила сама себе.
+    (2) total_return считается от БИРЖЕВОГО ГО пика (а без экономики строки — от
+    условных 100k), а рядом печатается ГО СЧЁТА с брокерским множителем: процент
+    и его же база расходились в разы.
+
+    Нет ГО или нет окна — обе цифры н/д: панель скажет «н/д», но не соврёт.
+    """
+    try:
+        n = float(net or 0)
+        m = float(margin_rub or 0)
+        days = (date_to - date_from).days if (date_from and date_to) else 0
+    except (TypeError, ValueError, AttributeError):
+        return {"ann_go_pct": None, "period_return_pct": None}
+    if m <= 0 or days < 1:
+        return {"ann_go_pct": None, "period_return_pct": None}
+    period = n / m * 100
+    return {"ann_go_pct": round(period * 365 / days),
+            "period_return_pct": round(period)}
+
+
 def _margin_fits(params, exchange_margin) -> bool:
     """Влезает ли полный набор кандидата в деньги счёта. Экономика неизвестна —
     не судим: молча резать строку из-за отсутствующего числа хуже, чем показать."""
@@ -1045,7 +1073,7 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
         # по формуле самой стратегии, и первая по прибыли может её не пройти.
         rows = await pool.fetch(
             "SELECT campaign_run, strategy, symbol, net_profit, recovery_factor, "
-            "total_trades, params, date_from, date_to, ann_return_go, total_return, "
+            "total_trades, params, date_from, date_to, "
             "initial_margin, max_mae, max_drawdown "
             "FROM optimization_leaderboard "
             "WHERE created_at > now() - interval '24 hours' "
@@ -1108,14 +1136,9 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
                 "max_position": _max_position(p),
                 "date_from": str(row["date_from"] or "")[:10] or None,
                 "date_to": str(row["date_to"] or "")[:10] or None,
-                # ДОЛЯ, а не проценты: 4.179 в базе означает 418% годовых.
-                # 15.08.2026 это поле вынесли на панель как есть и прочитали
-                # «4.2% годовых» — ошибка в сто раз, ровно в том числе, ради
-                # которого строку и показывают.
-                "ann_go_pct": (round(float(row["ann_return_go"]) * 100)
-                               if row["ann_return_go"] is not None else None),
-                "period_return_pct": (round(float(row["total_return"]) * 100)
-                                      if row["total_return"] is not None else None),
+                **_star_return(row["net_profit"],
+                               _account_margin(p, _row_margin(row)),
+                               row["date_from"], row["date_to"]),
                 # ПРОСАДКА ПО ВМ (max adverse excursion) — насколько глубоко уходила
                 # в минус ОТКРЫТАЯ позиция. Это не то же, что max_drawdown: тот
                 # считается по кривой ЗАКРЫТЫХ сделок и у стратегии, которая держит

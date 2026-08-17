@@ -464,3 +464,28 @@ def test_max_position_survives_broken_params():
     assert _max_position({}) == 1
     assert _max_position({"qty": "x", "avg_max": None}) == 1
     assert _max_position('{"qty": 2, "avg_max": 7}') == 7      # params строкой из БД
+
+
+def test_star_annual_is_linear_and_shares_the_printed_go():
+    """Годовая кандидата: линейно и от ТОГО ЖЕ ГО, что печатается рядом.
+
+    Живой случай 14.08.2026: +65 723 ₽ на ГО 251 435 ₽ за 14 дней. Сложная
+    формула базы давала 45 897% годовых — панель обещала 458 концов за год по
+    двум неделям истории.
+    """
+    from datetime import date
+
+    from trader.api.quik_companion import _star_return
+
+    r = _star_return(65723, 251435, date(2026, 7, 16), date(2026, 7, 30))
+    assert r["period_return_pct"] == 26
+    assert r["ann_go_pct"] == 681                      # 26.14% × 365/14
+    assert r["ann_go_pct"] < 1000                      # не сложные проценты
+
+    # Нет ГО или нет окна — молчим обеими цифрами, а не показываем ноль.
+    assert _star_return(65723, None, date(2026, 7, 16), date(2026, 7, 30)) == {
+        "ann_go_pct": None, "period_return_pct": None}
+    assert _star_return(65723, 251435, None, None) == {
+        "ann_go_pct": None, "period_return_pct": None}
+    assert _star_return(65723, 251435, date(2026, 7, 16), date(2026, 7, 16)) == {
+        "ann_go_pct": None, "period_return_pct": None}
