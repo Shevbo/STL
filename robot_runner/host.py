@@ -47,6 +47,33 @@ def resolve_on_bar(strategy_id: str):
         return mod.on_bar
 
 
+# Параметры, читающие ВРЕМЯ СУТОК. Их окна задаются минутами от полуночи МСК, а
+# бары раннера строятся из ленты в ИСТИННОМ UTC — без сдвига стратегия живёт на
+# три часа в прошлом.
+_WALL_CLOCK_KEYS = ("tod_m1", "tod_m2", "open_hour", "eod_hour")
+_MSK_OFFSET_MIN = 180
+
+
+def fix_wall_clock(params: dict, on_fix=None) -> dict:
+    """Проставить bar_offset_min=180, если стратегия смотрит на часы.
+
+    18.08.2026 lxk22 торговал с расписанием сторон БЕЗ этого ключа: окно «после
+    18:00, только лонг» стояло на 15:00, робот девятнадцатью контрактами набрал
+    шорт в запрещённое окно и вынес стоп на 29 тысяч. Правило «деплой обязан
+    передать 180» существовало только в документации, и никто его не проверял.
+    Здесь оно становится машинным: раннер ЗНАЕТ, что его бары в UTC, и чинит
+    спеку сам, кто бы её ни прислал. Явно переданное значение не трогаем —
+    оператор вправе поставить своё."""
+    if "bar_offset_min" in params:
+        return params
+    if not any(int(params.get(k, 0) or 0) for k in _WALL_CLOCK_KEYS):
+        return params
+    params["bar_offset_min"] = _MSK_OFFSET_MIN
+    if on_fix:
+        on_fix()
+    return params
+
+
 class HostedRobot:
     def __init__(self, spec: dict, runtime: AgentRuntime, bars: BarBuilder) -> None:
         self.spec = spec
@@ -129,6 +156,9 @@ class RobotHost:
             # params symbol in lockstep with the spec so any route deploys clean.
             if spec["symbol"]:
                 spec["params"]["symbol"] = spec["symbol"]
+            fix_wall_clock(spec["params"], lambda: log.warning(
+                "host.wall_clock_offset_forced", robot_id=spec["robot_id"],
+                bar_offset_min=_MSK_OFFSET_MIN))
             prev = self.robots.get(spec["robot_id"])
             # ARMING: a LIVE paper->real flip re-deploys this spec. Reset the P&L +
             # fills statistics so the REAL account starts from ZERO — the paper era
@@ -214,6 +244,9 @@ class RobotHost:
                 params = json.loads(rc.set_params.params_json or "{}")
                 if r.spec.get("symbol"):     # see deploy: params must carry symbol
                     params["symbol"] = r.spec["symbol"]
+                fix_wall_clock(params, lambda: log.warning(
+                    "host.wall_clock_offset_forced",
+                    robot_id=rc.set_params.robot_id, bar_offset_min=_MSK_OFFSET_MIN))
                 r.spec["params"] = params
                 r.runtime.event("LIFECYCLE", "параметры обновлены: "
                                 + json.dumps(params, ensure_ascii=False))
