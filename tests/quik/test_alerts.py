@@ -148,3 +148,38 @@ async def test_lineman_path_needs_no_token():
 def test_not_configured_without_a_recipient():
     fwd = AlertForwarder("", "", cooldown_sec=0, lineman_url="http://10.66.0.1:9090")
     assert not fwd.configured()
+
+
+async def test_failed_send_unstamps_cooldown_so_retry_passes():
+    """Упавшая отправка не глушит свой же повтор: молчание канала уже стоило
+    40 минут слепой позиции 14.08."""
+    calls = []
+
+    async def flaky(text):
+        calls.append(text)
+        if len(calls) == 1:
+            raise RuntimeError("tg down")
+
+    fwd = AlertForwarder("tok", "chat", cooldown_sec=600, send=flaky)
+    await fwd.forward(_alert(), agent_host="a")   # падает, штамп снят
+    await fwd.forward(_alert(), agent_host="a")   # повтор проходит сразу
+    assert len(calls) == 2
+
+
+async def test_token_failure_falls_back_to_lineman(monkeypatch):
+    """Цепочка, не выбор при старте: недоступный Bot API не глушит CRITICAL,
+    когда Lineman жив."""
+    sent = []
+
+    async def tg_down(self, text):
+        raise RuntimeError("api.telegram.org unreachable")
+
+    async def lineman_ok(self, text):
+        sent.append(text)
+
+    monkeypatch.setattr(AlertForwarder, "_send_telegram", tg_down)
+    monkeypatch.setattr(AlertForwarder, "_send_lineman", lineman_ok)
+    fwd = AlertForwarder("tok", "chat", cooldown_sec=0,
+                         lineman_url="http://10.66.0.1:9090")
+    await fwd.forward(_alert(), agent_host="a")
+    assert len(sent) == 1

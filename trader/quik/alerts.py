@@ -125,18 +125,32 @@ class AlertForwarder:
             if self._suppressed(key, code):
                 log.info("quik.alert.suppressed_cooldown", code=code, agent=agent_host)
                 return
+            # _suppressed уже проштамповал key. Если отправка ниже упадёт, штамп
+            # снимается (см. except): неудавшийся алерт не должен глушить свой же
+            # повтор на весь cooldown — молчание канала и так стоило 40 минут
+            # слепой позиции 14.08.
 
             text = _format_alert(alert, agent_host)
             await self._send(text)
             log.info("quik.alert.forwarded", code=code, severity=severity, agent=agent_host)
         except Exception as exc:  # noqa: BLE001 — never let an alert break the stream
+            self._last_sent.pop((agent_host or "", alert.get("code", ""),
+                                 int(alert.get("severity", 0))), None)
             log.warning("quik.alert.forward_failed", error=str(exc), code=alert.get("code", ""))
 
     async def _send_default(self, text: str) -> None:
+        # ЦЕПОЧКА, а не выбор при старте: заданный токен с недоступным
+        # api.telegram.org (RU-блокировки, аварии TG) не должен глушить CRITICAL,
+        # когда живой Lineman в двух строках ниже. Падение первого канала —
+        # причина попробовать второй, а не записать warning в лог.
         if self._token:
-            await self._send_telegram(text)
-        else:
-            await self._send_lineman(text)
+            try:
+                await self._send_telegram(text)
+                return
+            except Exception:
+                if not self._lineman:
+                    raise
+        await self._send_lineman(text)
 
     async def _send_telegram(self, text: str) -> None:
         url = _TG_API.format(token=self._token)

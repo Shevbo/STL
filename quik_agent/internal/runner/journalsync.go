@@ -79,8 +79,19 @@ func MissingFills(statuses map[string]*quikv1.RobotStatus, trades []accounts.Tra
 		// Режем не робота, а ОРДЕРА: те, чья первая сделка старше начала хвоста
 		// (ниже, у выпуска). По остальным journalQty полон, и лечить их безопасно.
 		var tailFloor int64
-		if len(fills) >= syncTailCap && fills[0].GetTsUnixMs() > 0 {
-			tailFloor = fills[0].GetTsUnixMs()
+		tailBlind := false
+		if len(fills) >= syncTailCap {
+			if ts0 := fills[0].GetTsUnixMs(); ts0 > 0 {
+				tailFloor = ts0
+			} else {
+				// Полный хвост, а у старейшего филла нет метки (старый
+				// runner_state.json): где прошёл срез — неизвестно, сверять не с
+				// чем. Такого робота не лечим вовсе, как старый страж.
+				tailBlind = true
+			}
+		}
+		if tailBlind {
+			continue
 		}
 		v := &robotView{journalQty: map[string]int64{}, working: map[string]bool{},
 			tailFloorMs: tailFloor}
@@ -130,6 +141,7 @@ func MissingFills(statuses map[string]*quikv1.RobotStatus, trades []accounts.Tra
 		qty              int64
 		vwapNum          float64 // Σ price×qty
 		firstTsMs        int64   // самая ранняя сделка ордера: сверяется с началом хвоста
+		receiptOnly      bool    // хоть одна сделка без БИРЖЕВОГО времени (старый Lua)
 		lastTsMs         int64   // journal stamp: EXCHANGE time when known (cc3+ Lua),
 		// else the Lua receipt stamp. A restart re-stamps receipts to NOW, which
 		// would journal a restored fill hours off its true spot on the chart.
@@ -182,6 +194,9 @@ func MissingFills(statuses map[string]*quikv1.RobotStatus, trades []accounts.Tra
 		if a.firstTsMs == 0 || ts < a.firstTsMs {
 			a.firstTsMs = ts
 		}
+		if tr.ExchTsMs <= 0 {
+			a.receiptOnly = true
+		}
 	}
 
 	var out []*quikv1.OrderUpdate
@@ -192,7 +207,17 @@ func MissingFills(statuses map[string]*quikv1.RobotStatus, trades []accounts.Tra
 		if v.working[orderNum] {
 			continue // normal event path still owns this order
 		}
-		if v.tailFloorMs > 0 && a.firstTsMs < v.tailFloorMs {
+		// Сравнение с началом хвоста имеет смысл только между ОДНИМИ часами.
+		// Биржевое время сделки против журнального штампа филла — честно; а вот
+		// время ПРИЁМА (старый Lua без ExchTsMs) рестарт QUIK перештамповывает в
+		// NOW, и утренний ордер читается «новее начала хвоста» — ровно те филлы,
+		// что хвост срезал, и вылечились бы вторым разом. Без биржевого времени
+		// при полном хвосте не лечим вовсе: осторожность старого стража, но
+		// только там, где часам верить нельзя.
+		// <=, не <: срез идёт по ЧИСЛУ записей, и залповый ордер (1+1+1 в одну
+		// миллисекунду) может быть разрезан так, что выпавшие братья делят ту же
+		// метку с самым старым выжившим филлом. Равенство = тоже не лечим.
+		if v.tailFloorMs > 0 && (a.receiptOnly || a.firstTsMs <= v.tailFloorMs) {
 			continue // филлы этого ордера могли выпасть из хвоста: journalQty неполон
 		}
 		missing := a.qty - v.journalQty[orderNum]

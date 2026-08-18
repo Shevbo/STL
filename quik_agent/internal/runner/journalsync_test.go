@@ -142,14 +142,23 @@ func TestMissingFillsHealsOrderNewerThanTailStart(t *testing.T) {
 	}
 	st := map[string]*quikv1.RobotStatus{"r1": status(false, nowMs-5000, fills, nil)}
 	lost := trade("r1", "610", "B", 3, 80290, nowMs-600_000) // сделка НОВЕЕ начала хвоста
+	lost.ExchTsMs = nowMs - 600_000 // сверка с хвостом требует БИРЖЕВОГО времени
 	got := MissingFills(st, []accounts.Trade{lost}, nowMs)
 	if len(got) != 1 || got[0].GetFilled() != 3 {
 		t.Fatalf("потерянный переворот не вылечен: %+v", got)
 	}
 	// А ордер СТАРШЕ начала хвоста по-прежнему не трогаем: его филлы могли выпасть.
 	old := trade("r1", "620", "B", 3, 80290, nowMs-7200_000)
+	old.ExchTsMs = nowMs - 7200_000
 	if got := MissingFills(st, []accounts.Trade{old}, nowMs); len(got) != 0 {
 		t.Fatalf("ордер из урезанной части вылечен вслепую: %+v", got)
+	}
+	// Без биржевого времени сверка с хвостом — сравнение разных часов: рестарт
+	// QUIK перештамповывает приём в NOW, и срезанный утренний ордер читался бы
+	// «новым». При полном хвосте такое не лечим.
+	rcpt := trade("r1", "630", "B", 3, 80290, nowMs-600_000) // ExchTsMs нет
+	if got := MissingFills(st, []accounts.Trade{rcpt}, nowMs); len(got) != 0 {
+		t.Fatalf("receipt-time ордер вылечен при полном хвосте: %+v", got)
 	}
 }
 
