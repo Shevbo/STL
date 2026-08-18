@@ -127,8 +127,8 @@
   {#if adding}
     <div class="arc-form">
       <div class="arc-fgrid">
-        <label>Название робота<input bind:value={form.robot_name} placeholder="Williams %R (GZU6)" /></label>
-        <label>Инструмент<input bind:value={form.symbol} placeholder="GZU6" /></label>
+        <label>Название робота<input bind:value={form.robot_name} placeholder="Williams %R (RIU6)" /></label>
+        <label>Инструмент<input bind:value={form.symbol} placeholder="RIU6" /></label>
         <label>ID робота<input bind:value={form.robot_id} placeholder="f4a9rbens4wbal1b89ns6iph" /></label>
         <label>Бэктест с<input type="date" bind:value={form.bt_from} /></label>
         <label>Бэктест по<input type="date" bind:value={form.bt_to} /></label>
