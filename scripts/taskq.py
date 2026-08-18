@@ -51,8 +51,12 @@ TIERS = ("mechanical", "standard", "trading")
 ZONES = ("lab", "api", "frontend", "agent", "infra", "any")
 STALE_CLAIM_SEC = 900          # не бьётся сердце 15 минут — задача возвращается в очередь
 
+# ИМЯ ТАБЛИЦЫ. `agent_tasks` уже занята очередью RPC-заданий агента перебора i9
+# (trader/api/app.py, 40 живых строк) — совпадение имён вскрылось на первом же
+# init и могло стоить чужой очереди. Эта таблица про задачи РАЗРАБОТКИ, отсюда
+# dev_tasks.
 DDL = """
-CREATE TABLE IF NOT EXISTS agent_tasks (
+CREATE TABLE IF NOT EXISTS dev_tasks (
     id            BIGSERIAL PRIMARY KEY,
     zone          TEXT NOT NULL,
     title         TEXT NOT NULL,
@@ -70,7 +74,7 @@ CREATE TABLE IF NOT EXISTS agent_tasks (
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     finished_at   TIMESTAMPTZ
 );
-CREATE INDEX IF NOT EXISTS agent_tasks_pick ON agent_tasks (status, priority DESC, id);
+CREATE INDEX IF NOT EXISTS dev_tasks_pick ON dev_tasks (status, priority DESC, id);
 """
 
 
@@ -110,7 +114,7 @@ async def cmd_init(a) -> int:
         await c.execute(DDL)
     finally:
         await c.close()
-    print("таблица agent_tasks готова")
+    print("таблица dev_tasks готова")
     return 0
 
 
@@ -122,7 +126,7 @@ async def cmd_add(a) -> int:
     c = await asyncpg.connect(dsn())
     try:
         tid = await c.fetchval(
-            "INSERT INTO agent_tasks(zone,title,body,tier,priority,budget_tokens,created_by)"
+            "INSERT INTO dev_tasks(zone,title,body,tier,priority,budget_tokens,created_by)"
             " VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id",
             a.zone, a.title, a.body, a.tier, a.priority, a.budget, a.by)
     finally:
@@ -137,7 +141,7 @@ async def cmd_list(a) -> int:
         rows = await c.fetch(
             "SELECT id,zone,tier,status,priority,budget_tokens,tokens_spent,claimed_by,"
             "       title, extract(epoch from (now()-created_at))::int age"
-            "  FROM agent_tasks"
+            "  FROM dev_tasks"
             " WHERE ($1='' OR zone=$1) AND ($2='' OR status=$2)"
             " ORDER BY status, priority DESC, id LIMIT $3", a.zone, a.status, a.limit)
     finally:
@@ -162,7 +166,7 @@ async def cmd_claim(a) -> int:
     c = await asyncpg.connect(dsn())
     try:
         spent = await c.fetchval(
-            "SELECT coalesce(sum(tokens_spent),0) FROM agent_tasks"
+            "SELECT coalesce(sum(tokens_spent),0) FROM dev_tasks"
             " WHERE claimed_at > now() - interval '1 day'") or 0
         cap = int(await _ctl(c, "taskq_budget_day", "0") or 0)
         why = may_claim(await _ctl(c, "taskq_disabled", "0"), int(spent), cap)
@@ -171,13 +175,13 @@ async def cmd_claim(a) -> int:
             return 0
         # Возврат зависших: исполнитель мог умереть, и задача не должна пропасть.
         await c.execute(
-            "UPDATE agent_tasks SET status='queued', claimed_by=NULL, claimed_at=NULL"
+            "UPDATE dev_tasks SET status='queued', claimed_by=NULL, claimed_at=NULL"
             " WHERE status='claimed' AND heartbeat_at < now() - make_interval(secs => $1)",
             STALE_CLAIM_SEC)
         row = await c.fetchrow(
-            "UPDATE agent_tasks SET status='claimed', claimed_by=$1,"
+            "UPDATE dev_tasks SET status='claimed', claimed_by=$1,"
             "       claimed_at=now(), heartbeat_at=now()"
-            " WHERE id = (SELECT id FROM agent_tasks"
+            " WHERE id = (SELECT id FROM dev_tasks"
             "              WHERE status='queued' AND ($2='' OR zone=$2 OR zone='any')"
             "              ORDER BY priority DESC, id"
             "              FOR UPDATE SKIP LOCKED LIMIT 1)"
@@ -196,7 +200,7 @@ async def cmd_beat(a) -> int:
     c = await asyncpg.connect(dsn())
     try:
         row = await c.fetchrow(
-            "UPDATE agent_tasks SET heartbeat_at=now(),"
+            "UPDATE dev_tasks SET heartbeat_at=now(),"
             "       tokens_spent=GREATEST(tokens_spent,$3)"
             " WHERE id=$1 AND claimed_by=$2 AND status='claimed'"
             " RETURNING budget_tokens, tokens_spent", a.id, a.agent, a.tokens)
@@ -218,7 +222,7 @@ async def cmd_done(a) -> int:
     c = await asyncpg.connect(dsn())
     try:
         row = await c.fetchrow(
-            "UPDATE agent_tasks SET status=$4, finished_at=now(), result=$5,"
+            "UPDATE dev_tasks SET status=$4, finished_at=now(), result=$5,"
             "       tokens_spent=GREATEST(tokens_spent,$3)"
             " WHERE id=$1 AND claimed_by=$2 RETURNING id", a.id, a.agent, a.tokens, st, a.result)
     finally:
@@ -235,7 +239,7 @@ async def cmd_spend(a) -> int:
     try:
         rows = await c.fetch(
             "SELECT claimed_by, count(*) n, sum(tokens_spent) t"
-            "  FROM agent_tasks WHERE claimed_at > now() - make_interval(hours => $1)"
+            "  FROM dev_tasks WHERE claimed_at > now() - make_interval(hours => $1)"
             " GROUP BY 1 ORDER BY t DESC NULLS LAST", a.hours)
         cap = int(await _ctl(c, "taskq_budget_day", "0") or 0)
         disabled = await _ctl(c, "taskq_disabled", "0")
