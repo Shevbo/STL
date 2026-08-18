@@ -42,17 +42,6 @@
           }
         ]
       }
-    ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_PROJECT_DIR:-.}/scripts/fedwindow.py\" show 2>/dev/null || true",
-            "timeout": 5
-          }
-        ]
-      }
     ]
   }
 }
