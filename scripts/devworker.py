@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -40,7 +41,53 @@ TASKQ = ("cd ~/apps/shectory-trader && set -a; . ~/.shectory_trade.env; set +a; 
 WORKTREES = Path("/tmp/agent-work")
 # Уровни, которые исполнитель берёт сам. `trading` намеренно отсутствует.
 ALLOWED_TIERS = ("mechanical", "standard")
-BEAT_EVERY_S = 120
+
+# ── ВЫБОР МОДЕЛИ ─────────────────────────────────────────────────────────────
+# Профиль = чем именно запускать. Ключи и адреса в git не живут: реестр
+# переопределяется файлом ~/.stl-agent-models.json того же вида.
+#
+# ПОРЯДОК ПРОФИЛЕЙ ЗАДАЁТ УРОВЕНЬ ЗАДАЧИ, и это не про экономию, а про
+# безопасность. Механическую работу (снести мёртвый файл, поправить импорты)
+# не жалко отдать дешёвой модели: ошибка видна сразу и стоит ноль. Задача
+# уровня standard трогает смысл, и молчаливая подмена модели там означает
+# правдоподобный результат, который некому проверить, — ровно тот класс
+# ошибки, который мы ловили весь день 17.08.
+# Когда роутинг по моделям появится внутри самого claude, профиль вырождается в
+# ОДНО ИМЯ МОДЕЛИ: {"cmd": "claude", "model": "<имя>"}. Поле env остаётся для
+# случаев, которые роутинг не покрывает (свой endpoint, отдельный ключ), и по
+# умолчанию пусто — секретам в git не место.
+MODEL_PROFILES: dict[str, dict] = {
+    "claude": {"cmd": "claude", "model": "", "env": {}},
+    "kimi": {"cmd": "claude", "model": "", "env": {}},
+}
+TIER_PROFILES = {
+    "mechanical": ["claude", "kimi"],
+    "standard": ["claude"],
+}
+MODELS_FILE = Path.home() / ".stl-agent-models.json"
+
+
+def load_profiles() -> tuple[dict, dict]:
+    """Реестр профилей и раскладка по уровням, с внешним переопределением."""
+    profiles, tiers = dict(MODEL_PROFILES), dict(TIER_PROFILES)
+    try:
+        cfg = json.loads(MODELS_FILE.read_text(encoding="utf-8"))
+    except Exception:                                 # noqa: BLE001 — файла нет, это норма
+        return profiles, tiers
+    for name, spec in (cfg.get("profiles") or {}).items():
+        profiles[name] = {**profiles.get(name, {}), **spec}
+    for tier, order in (cfg.get("tiers") or {}).items():
+        tiers[tier] = list(order)
+    return profiles, tiers
+
+
+def profile_chain(tier: str, profiles: dict, tiers: dict, only: str = "") -> list[str]:
+    """Кого пробовать по порядку. Профиль без команды пропускаем молча: это
+    означает «Kimi ещё не настроен», а не ошибку."""
+    if only:
+        return [only] if only in profiles else []
+    return [n for n in tiers.get(tier, ["claude"])
+            if profiles.get(n, {}).get("cmd")]
 
 
 def q(cmd: str) -> str:
@@ -76,12 +123,16 @@ def prompt_for(task: dict, branch: str) -> str:
         "что осталось.")
 
 
-def run_model(cmd: list[str], cwd: Path, timeout_s: int) -> tuple[str, int, str]:
+def run_model(prompt: str, spec: dict, cwd: Path, timeout_s: int) -> tuple[str, int, str]:
     """(текст отчёта, потрачено токенов, ошибка). Расход берём из usage самой
     модели: другой честной цифры не существует."""
+    cmd = [spec["cmd"], "-p", prompt, "--output-format", "json"]
+    if spec.get("model"):
+        cmd += ["--model", spec["model"]]
+    env = {**os.environ, **{k: str(v) for k, v in (spec.get("env") or {}).items()}}
     try:
         r = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True,
-                           encoding="utf-8", errors="replace", timeout=timeout_s)
+                           encoding="utf-8", errors="replace", timeout=timeout_s, env=env)
     except subprocess.TimeoutExpired:
         return "", 0, f"модель не уложилась в {timeout_s} с"
     raw = (r.stdout or "").strip()
@@ -129,8 +180,21 @@ def one_round(a) -> bool:
                     str(wt), "origin/main"], check=True, timeout=120)
     t0 = time.time()
     try:
-        cmd = [a.claude, "-p", prompt_for(task, branch), "--output-format", "json"]
-        report, spent, err = run_model(cmd, wt, a.timeout)
+        profiles, tiers = load_profiles()
+        chain = profile_chain(tier, profiles, tiers, a.profile)
+        if not chain:
+            raise RuntimeError(f"для уровня {tier} нет ни одного настроенного профиля")
+        prompt = prompt_for(task, branch)
+        report = err = ""
+        spent = 0
+        used = ""
+        for name in chain:
+            used = name
+            report, spent, err = run_model(prompt, profiles[name], wt, a.timeout)
+            if not err:
+                break
+            print(f"[{a.agent}] профиль {name} не отработал: {err}", flush=True)
+        report += f"\n\nМОДЕЛЬ: {used}"
         # Пушим ВСЕГДА, если что-то закоммичено: незапушенная работа для остальных
         # не существует — на этом 13.08 сутки простоял чужой фикс.
         head = subprocess.run(["git", "-C", str(wt), "log", "--oneline", "origin/main..HEAD"],
@@ -157,7 +221,8 @@ def main() -> int:
     ap.add_argument("--agent", required=True)
     ap.add_argument("--zone", default="")
     ap.add_argument("--repo", default=str(Path.home() / "stl"))
-    ap.add_argument("--claude", default="claude")
+    ap.add_argument("--profile", default="",
+                    help="принудительный профиль модели вместо цепочки уровня")
     ap.add_argument("--timeout", type=int, default=1800)
     ap.add_argument("--idle", type=int, default=60, help="сон при пустой очереди, с")
     ap.add_argument("--once", action="store_true")
