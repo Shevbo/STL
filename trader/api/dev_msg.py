@@ -165,47 +165,6 @@ def filter_inbox(rows: list[dict], agent: str, unread_only: bool) -> list[dict]:
     return sorted(out, key=lambda m: m.get("created_ms") or 0)
 
 
-# ── предохранитель от почтовой петли ─────────────────────────────────────────
-# 17.08.2026 автоответчики двух окон переписывались двенадцать часов подряд: 255
-# писем «получено автоответчиком» и 247 запусков модели, один раз в 2.9 минуты,
-# без единого человека. Пятичасовой лимит тарифа сгорел к вечеру — ровно в тот
-# день, когда завис торговый VDS и инструмент был нужен.
-#
-# Топливом петли были НЕПРОЧИТАННЫЕ автоответы: бот пропускает прочитанное, но
-# каждое подтверждение приходило непрочитанным и само требовало подтверждения.
-# Поэтому здесь: автоответ — это КВИТАНЦИЯ О ДОСТАВКЕ, а не работа. Он кладётся
-# сразу прочитанным и никогда не становится топливом. Предохранитель стоит на
-# СЕРВЕРЕ намеренно: хостер жив всегда, а на машине окон может крутиться старый
-# код, до которого никто не дошёл.
-_AUTO_TOPIC = "получено автоответчиком"
-_AUTO_DEDUP_MS = 600_000          # один автоответ на пару окон в 10 минут
-
-
-def is_auto_topic(topic: str) -> bool:
-    """Письмо — машинная квитанция, а не работа."""
-    t = (topic or "").strip().lower()
-    return t == _AUTO_TOPIC or t.startswith("auto:") or t.startswith("re.auto")
-
-
-def auto_is_duplicate(rows: list[dict], frm: str, to: str, now: int,
-                      window_ms: int = _AUTO_DEDUP_MS) -> bool:
-    """Была ли уже квитанция от этого окна этому окну в последние минуты.
-
-    Второй рубеж на случай, если у квитанции сменят тему: даже под новым именем
-    десять писем в час одной и той же паре — это петля, а не переписка.
-    """
-    for m in rows:
-        if not is_auto_topic(m.get("topic") or ""):
-            continue
-        if str(m.get("from") or "").lower() != frm.lower():
-            continue
-        if str(m.get("to") or "").lower() != to.lower():
-            continue
-        if now - int(m.get("created_ms") or 0) <= window_ms:
-            return True
-    return False
-
-
 class MsgBody(BaseModel):
     to: str
     topic: str = ""
@@ -223,17 +182,11 @@ async def send_msg(body: MsgBody, request: Request):
     if not text:
         raise HTTPException(status_code=422, detail="body: пустое письмо")
     now = int(time.time() * 1000)
-    pool = _pool(request)
-    topic = (body.topic or "").strip()[:120]
-    auto = is_auto_topic(topic)
-    if auto and auto_is_duplicate(await _all_msgs(pool), frm, to, now):
-        # Не 4xx: отправитель — робот, на ошибку он ответит повтором. Тихо гасим.
-        return {"ok": True, "dropped": "петля автоответов", "to": to, "from": frm}
     key = f"{_PREFIX}{now}:{uuid.uuid4().hex[:6]}"
     payload = {"id": key[len(_PREFIX):], "from": frm, "to": to,
-               "topic": topic, "body": text[:8000],
-               # Квитанция приходит УЖЕ прочитанной: она доставлена, а не задана.
-               "created_ms": now, "read_ms": now if auto else 0}
+               "topic": (body.topic or "").strip()[:120], "body": text[:8000],
+               "created_ms": now, "read_ms": 0}
+    pool = _pool(request)
     await pool.execute(
         "INSERT INTO agent_control(key, value) VALUES($1, $2) "
         "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
