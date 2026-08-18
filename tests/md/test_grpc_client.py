@@ -230,3 +230,39 @@ async def test_close_drains_sentinel_so_iter_quotes_exits():
     await qs.close()
     await asyncio.wait_for(exited.wait(), timeout=2.0)
     task.cancel()
+
+
+async def test_permanent_refusal_stops_the_stream_instead_of_retrying_forever():
+    """UNIMPLEMENTED — отказ по существу, а не обрыв связи: поток встаёт.
+
+    18.08.2026 подписка на стакан истёкшего GZM6@RTSX переподписывалась вечно и
+    сутками сыпала в лог по три строки в минуту. Ретрай здесь для связи, а
+    «такого инструмента нет» повторением не лечится.
+    """
+    import grpc as _grpc
+
+    from trader.md.grpc_client import QuoteStream
+
+    exc = _grpc.aio.AioRpcError(_grpc.StatusCode.UNIMPLEMENTED, None, None,
+                                details="no such symbol")
+    stub = _make_stub([], raise_after=exc)
+
+    qs = QuoteStream()
+    await qs.start(get_token=AsyncMock(return_value="tok"))
+    with (
+        patch("trader.md.grpc_client.grpc.ssl_channel_credentials"),
+        patch("trader.md.grpc_client.grpc.aio.secure_channel", return_value=AsyncMock()),
+        patch("trader.md.grpc_client.MarketDataServiceStub", return_value=stub),
+    ):
+        await qs.subscribe("GZM6@RTSX")
+        await asyncio.sleep(0.05)
+        task = qs._stream_tasks["GZM6@RTSX"]
+        assert task.done(), "поток обязан встать, а не уйти на переподписку"
+        # Обрыв связи — наоборот, лечится ретраем: поток остаётся жив.
+        stub2 = _make_stub([], raise_after=_grpc.aio.AioRpcError(
+            _grpc.StatusCode.UNAVAILABLE, None, None, details="conn reset"))
+        with patch("trader.md.grpc_client.MarketDataServiceStub", return_value=stub2):
+            await qs.subscribe("RIU6@RTSX")
+            await asyncio.sleep(0.05)
+            assert not qs._stream_tasks["RIU6@RTSX"].done()
+    await qs.close()

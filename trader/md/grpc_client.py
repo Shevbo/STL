@@ -43,6 +43,19 @@ def _backoff(attempt: int) -> float:
     return random.uniform(0, min(RECONNECT_BASE * (2**attempt), RECONNECT_MAX))
 
 
+# Статусы, которые ретраем НИКОГДА не лечатся: сервер понял запрос и отказал
+# по существу. 18.08.2026 подписка на стакан истёкшего GZM6@RTSX получала
+# UNIMPLEMENTED и переподписывалась вечно — раз в 20-40 секунд, сутками, тремя
+# строками в лог за минуту. Ретрай здесь для СВЯЗИ (обрыв, таймаут, протухший
+# токен), а «такого инструмента нет» повторением не исправить: поток
+# останавливаем и говорим об этом один раз.
+_FATAL_CODES = frozenset({
+    grpc.StatusCode.UNIMPLEMENTED,
+    grpc.StatusCode.NOT_FOUND,
+    grpc.StatusCode.INVALID_ARGUMENT,
+})
+
+
 def bar_from_proto(pb) -> dict:
     ts = pb.timestamp.ToDatetime(tzinfo=timezone.utc)
 
@@ -130,6 +143,10 @@ class QuoteStream:
                 await asyncio.sleep(_backoff(0))
             except grpc.aio.AioRpcError as exc:
                 if not self._running:
+                    return
+                if exc.code() in _FATAL_CODES:
+                    log.error("md.stream_refused", symbol=symbol,
+                              code=str(exc.code()), detail=exc.details())
                     return
                 log.warning(
                     "md.rpc_error",
@@ -230,6 +247,10 @@ class BarsStream:
                 attempt = 0
             except grpc.aio.AioRpcError as exc:
                 if not self._running:
+                    return
+                if exc.code() in _FATAL_CODES:
+                    log.error("bars.stream_refused", symbol=symbol,
+                              code=str(exc.code()), detail=exc.details())
                     return
                 log.warning("bars.rpc_error", symbol=symbol, code=str(exc.code()), attempt=attempt)
                 await asyncio.sleep(_backoff(attempt))
@@ -347,6 +368,10 @@ class OrderBookStream:
                 attempt = 0
             except grpc.aio.AioRpcError as exc:
                 if not self._running:
+                    return
+                if exc.code() in _FATAL_CODES:
+                    log.error("book.stream_refused", symbol=symbol,
+                              code=str(exc.code()), detail=exc.details())
                     return
                 log.warning("book.rpc_error", symbol=symbol, code=str(exc.code()), attempt=attempt)
                 await asyncio.sleep(_backoff(attempt))
