@@ -11,6 +11,7 @@ Settings); a token value is never hardcoded or logged.
 
 from __future__ import annotations
 
+import asyncio
 import time
 
 import httpx
@@ -160,11 +161,20 @@ class AlertForwarder:
 
     async def _send_lineman(self, text: str) -> None:
         """Тот же путь, которым ходит почта окон (scripts/devmsg.py cmd_alert):
-        Lineman держит бота, служба не держит ничего."""
-        async with httpx.AsyncClient(timeout=15.0, trust_env=False) as http:
-            r = await http.post(f"{self._lineman}/api/tg/send",
-                                json={"account": self._account,
-                                      "chat_id": self._chat_id, "text": text[:3900]})
-            r.raise_for_status()
-            if not (r.json() or {}).get("ok"):
-                raise RuntimeError(f"lineman tg: {r.text[:200]}")
+        Lineman держит бота, служба не держит ничего.
+
+        429 повторяем один раз через паузу: RECOVERED идёт следом за MISMATCH в
+        те же секунды и попадал под rate-limit — оператор видел тревогу и никогда
+        отбой (18.08, дважды за утро). Тревога без отбоя читается как спам."""
+        for attempt in (1, 2):
+            async with httpx.AsyncClient(timeout=15.0, trust_env=False) as http:
+                r = await http.post(f"{self._lineman}/api/tg/send",
+                                    json={"account": self._account,
+                                          "chat_id": self._chat_id, "text": text[:3900]})
+                if r.status_code == 429 and attempt == 1:
+                    await asyncio.sleep(5)
+                    continue
+                r.raise_for_status()
+                if not (r.json() or {}).get("ok"):
+                    raise RuntimeError(f"lineman tg: {r.text[:200]}")
+                return
