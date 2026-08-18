@@ -51,7 +51,7 @@ async def main():
         fills = {}
         for t in r["trades"]:
             fills.setdefault(int(t["time"] or 0), []).append(t)
-        pos, avg, realized, peak, mae, maxpos, in_mkt = 0, 0.0, 0.0, None, 0.0, 0, 0
+        pos, avg, realized, peak, mae, maxpos, in_mkt, expo = 0, 0.0, 0.0, None, 0.0, 0, 0, 0
         for b in bars:
             for t in fills.get(b.time, ()):
                 q = t["qty"] * (1 if t["side"] == "buy" else -1)
@@ -65,13 +65,21 @@ async def main():
                 pos += q
             maxpos = max(maxpos, abs(pos))
             in_mkt += 1 if pos else 0
+            expo += abs(pos)          # для СРЕДНЕЙ экспозиции по времени
             cur = realized + ((b.close - avg) * pos * pv if pos else 0.0)
             peak = cur if peak is None else max(peak, cur)
             mae = max(mae, peak - cur)
         net = r.get("net_profit")
         print(f"{name} ({sid}): net {net:,.0f}  пик позиции {maxpos} контр.  MAE {mae:,.0f}  "
               f"RF {net/mae if mae else float('inf'):.2f}")
-        print(f"   на контракт {net/max(1,maxpos):,.0f} против {hold:,.0f} у эталона | "
-              f"в рынке {100*in_mkt/len(bars):.0f}% времени | сделок {r.get('total_trades')}")
+        avg_expo = expo / len(bars)
+        # ДВЕ разные величины, и обе нужны (поправка окна stl-dev-spare 17.08):
+        # пик меряет ЗАРЕЗЕРВИРОВАННЫЙ капитал — ГО надо иметь под пик, даже если он
+        # держался минуту; средняя экспозиция меряет ЗАНЯТЫЙ. Лестничный конфиг по
+        # первой проигрывает эталону, а по второй может его обгонять втрое.
+        print(f"   на ПИК-контракт {net/max(1,maxpos):,.0f} | на СРЕДНИЙ контракт "
+              f"{net/avg_expo if avg_expo else 0:,.0f} (средняя экспозиция {avg_expo:.2f}) | "
+              f"эталон {hold:,.0f}")
+        print(f"   в рынке {100*in_mkt/len(bars):.0f}% времени | сделок {r.get('total_trades')}")
 
 asyncio.run(main())

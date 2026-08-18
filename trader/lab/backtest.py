@@ -142,17 +142,18 @@ def compute_metrics(trades: list[dict], initial_equity: float,
     notional = (peak_contracts * avg_entry_price * point_value) if avg_entry_price else 0.0
     return_full = (net_profit / notional) if notional > 0 else None
 
-    # Annualize: compound (1+r)^(365/days) − 1. Require ≥7 days to avoid noise.
+    # ГОДОВЫЕ СЧИТАЮТСЯ ЛИНЕЙНО: r × 365/дни. Сложная формула (1+r)^(365/дни) на
+    # коротком окне выдаёт число, которое нельзя показывать человеку: 26% за 14 дней
+    # превращались в 45 897% годовых, и это ушло оператору в компаньон как обещание
+    # 458 концов за год по двум неделям истории (нашло окно ui-ux 18.08.2026).
+    # Сложный процент здесь и по смыслу неверен — он предполагает реинвестирование
+    # прибыли в ту же стратегию 26 раз подряд, чего перебор не моделирует и чего на
+    # фьючерсе с фиксированным ГО не происходит. Линейная форма ещё и СРАВНИМА между
+    # строками с окнами разной длины, а сложная — нет.
     def _annualize(r):
         if r is None or bars_days < 7:
             return None
-        # r <= -100% (futures loss beyond initial equity): a negative base to a
-        # fractional power is COMPLEX in Python and poisons the whole sweep
-        # batch at json.dumps ("Object of type complex is not JSON serializable",
-        # killed a 55-min 100k run). Annualizing a wipeout is meaningless — None.
-        if r <= -1.0:
-            return None
-        return (1.0 + r) ** (365.0 / bars_days) - 1.0
+        return r * (365.0 / bars_days)
 
     ann_return_go = _annualize(total_return)
     ann_return_full = _annualize(return_full)
