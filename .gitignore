@@ -69,3 +69,7 @@ AI_STL_Developers/
 # подготовленный на хостере файл, чья sha256 сверяется прямо перед публикацией.
 dist/
 build/
+# Исследовательские данные ai46: 196 МБ, не код, выкачиваются заново
+# scripts/dl_ai46_bars.py и scripts/dl_ai46_ticks.py. В git не место.
+data/ai46_bt/
+data/ai46_bt_3m/
