@@ -377,10 +377,14 @@ def _star_return(net, margin_rub, date_from, date_to) -> dict:
     условных 100k), а рядом печатается ГО СЧЁТА с брокерским множителем: процент
     и его же база расходились в разы.
 
-    Нет ГО или нет окна — обе цифры н/д: панель скажет «н/д», но не соврёт.
+    Нет прибыли, ГО или окна — обе цифры н/д: панель скажет «н/д», но не соврёт.
+    Пустой net это НЕИЗВЕСТНО, а не ноль: строка без прибыли печаталась как
+    «0% годовых», и оператор читал измеренный ноль там, где не измерено ничего.
     """
+    if net is None:
+        return {"ann_go_pct": None, "period_return_pct": None}
     try:
-        n = float(net or 0)
+        n = float(net)
         m = float(margin_rub or 0)
         days = (date_to - date_from).days if (date_from and date_to) else 0
     except (TypeError, ValueError, AttributeError):

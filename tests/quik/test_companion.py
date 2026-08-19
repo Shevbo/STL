@@ -489,3 +489,9 @@ def test_star_annual_is_linear_and_shares_the_printed_go():
         "ann_go_pct": None, "period_return_pct": None}
     assert _star_return(65723, 251435, date(2026, 7, 16), date(2026, 7, 16)) == {
         "ann_go_pct": None, "period_return_pct": None}
+    # Пустая прибыль — НЕИЗВЕСТНО, а не измеренный ноль.
+    assert _star_return(None, 251435, date(2026, 7, 16), date(2026, 7, 30)) == {
+        "ann_go_pct": None, "period_return_pct": None}
+    # А настоящий ноль остаётся нулём: строка отработала и не заработала.
+    assert _star_return(0, 251435, date(2026, 7, 16), date(2026, 7, 30)) == {
+        "ann_go_pct": 0, "period_return_pct": 0}

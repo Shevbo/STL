@@ -399,6 +399,28 @@ export function annualizedPct(net: number, maxGo: number, startMs: number,
   return (net / maxGo) * (365 / days) * 100;
 }
 
+// Годовая строки ХИТПАРАДА — считается здесь, а не берётся из базы. До
+// 18.08.2026 бэктестер писал в ann_return_go СЛОЖНЫЙ процент: (1+r)^(365/дни).
+// На двухнедельном окне честные +26% превращались в 45 897% годовых, и это
+// число уехало оператору в компаньон. Формулу починили, но в хитпараде лежат
+// миллионы строк, посчитанных СТАРЫМ кодом, и по колонке нельзя понять, какая
+// из них какая. Доходность ЗА ПЕРИОД (total_return) и окно строки от правки не
+// зависят, поэтому годовую восстанавливаем из них — линейно, одинаково для
+// старых и новых строк. Возвращаем ДОЛЮ (как в базе): 6.81 = 681%.
+// null = считать нечем: нет доходности или не записано окно (у ~15k строк
+// хитпарада date_from пустой, и период прогона утрачен навсегда).
+export function rowAnnGo(row: { total_return?: number | null; date_from?: string | null;
+                                date_to?: string | null }): number | null {
+  // Number(null) === 0, поэтому пустую доходность отсекаем ДО приведения:
+  // иначе строка без числа печатается уверенным «0.00%» вместо «—».
+  if (row?.total_return == null || !row?.date_from || !row?.date_to) return null;
+  const r = Number(row.total_return);
+  if (!Number.isFinite(r)) return null;
+  const days = (Date.parse(row.date_to) - Date.parse(row.date_from)) / 86400_000;
+  if (!(days >= 1)) return null;
+  return r * (365 / days);
+}
+
 // ─── Per-contract (roll-aware) P&L ──────────────────────────────────────────
 // A robot that rolled (RIM6 → RIU6 → …) traded DISTINCT instruments at very
 // different price levels. Realized P&L MUST be computed per contract and summed —

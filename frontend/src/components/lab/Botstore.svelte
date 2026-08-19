@@ -11,6 +11,7 @@
   import ScreenTag from './ScreenTag.svelte';
   import MustDescription from './MustDescription.svelte';
   import { nameFor, docBase, behaviorFor } from '$lib/strategy-help';
+  import { rowAnnGo } from '$lib/lab-analytics';
 
   let loading = $state(true);
   let error = $state('');
@@ -246,6 +247,10 @@
     });
   });
   function cellVal(r: any, col: string) {
+    // Годовую на ГО НЕ берём из строки: у миллионов старых строк там сложный
+    // процент (см. rowAnnGo). Считаем сами — и показываем, и сортируем одним
+    // числом, иначе колонка и её же порядок расходятся.
+    if (col === 'ann_return_go') return rowAnnGo(r);
     return (r.params && col in r.params) ? r.params[col] : r[col];
   }
   function sortRows(rows: any[]) {
@@ -1009,8 +1014,10 @@
                         {#each paramCols as col}
                           <td class="num">{fmtNum(r.params?.[col], 0)}</td>
                         {/each}
-                        <td class="num ann" class:pos={(r.ann_return_go ?? 0) > 0} class:neg={(r.ann_return_go ?? 0) < 0}>{fmtPct(r.ann_return_go)}</td>
-                        <td class="num ann" class:pos={(r.ann_return_full ?? 0) > 0} class:neg={(r.ann_return_full ?? 0) < 0}>{fmtPct(r.ann_return_full)}</td>
+                        <td class="num ann" title="линейно из доходности за период и окна строки: годовая в базе у старых строк сложная"
+                            class:pos={(rowAnnGo(r) ?? 0) > 0} class:neg={(rowAnnGo(r) ?? 0) < 0}>{fmtPct(rowAnnGo(r))}</td>
+                        <td class="num ann" title="из базы как есть: пересчитать нечем, полное плечо строки не записано. У строк старше 18.08.2026 здесь СЛОЖНЫЙ процент — на коротком окне он завышен в разы"
+                            class:pos={(r.ann_return_full ?? 0) > 0} class:neg={(r.ann_return_full ?? 0) < 0}>{fmtPct(r.ann_return_full)}</td>
                         <td class="num" class:pos={r.total_return > 0} class:neg={r.total_return < 0}>{fmtPct(r.total_return)}</td>
                         <td class="num" class:pos={r.net_profit > 0} class:neg={r.net_profit < 0}>{fmtMoney(r.net_profit)}</td>
                         <td class="num">{fmtPct(r.max_drawdown)}</td>
