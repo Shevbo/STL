@@ -81,6 +81,8 @@ type MemStatus struct {
 	TotalMB    uint64 `json:"total_mb"`
 	AvailMB    uint64 `json:"avail_mb"`
 	CommitPct  uint32 `json:"commit_pct"`   // committed/limit — allocation-failure proxy
+	CommitTotalMB uint64 `json:"commit_total_mb"` // лимит фиксации: RAM + файл подкачки
+	CommitUsedMB  uint64 `json:"commit_used_mb"`  // сколько из него занято
 }
 
 // StatusView is what the local status page publishes (opaque-mirrored to STL).

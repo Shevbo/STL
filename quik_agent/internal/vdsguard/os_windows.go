@@ -49,6 +49,13 @@ func ReadMem() (MemStatus, bool) {
 		TotalMB:   m.TotalPhys / mb,
 		AvailMB:   m.AvailPhys / mb,
 		CommitPct: commitPct,
+		// АБСОЛЮТНЫЕ гигабайты фиксации, а не только проценты. 21.08 пришлось
+		// вычислять лимит обратным счётом из процента и физической памяти, чтобы
+		// понять, применён ли файл подкачки: процент отвечает «насколько полно»,
+		// но молчит о том, ЧТО полно — 8 ГБ или 20. Для поиска утечки нужен рост
+		// в гигабайтах за час, его из процента не достать.
+		CommitTotalMB: m.TotalPageFile / mb,
+		CommitUsedMB:  (m.TotalPageFile - m.AvailPageFile) / mb,
 	}, true
 }
 
