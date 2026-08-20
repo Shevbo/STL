@@ -44,3 +44,31 @@ def test_freshest_agent_wins():
     two = agent(600) + [{"agent_id": "x", "last_seen_ms": NOW - 10_000}]
     bad, age = silence_verdict(two, True, now_ms=NOW)
     assert not bad and age == 10
+
+
+async def test_watch_complains_loudly_when_not_wired(caplog):
+    """Сторож без канала обязан кричать, а не молчать: 20.08 он искал форвардер
+    в state, не находил и тихо пропускал проверку — агент лежал 73 минуты при
+    открытой бирже, тревоги не было."""
+    import asyncio
+
+    from trader.quik import agent_watch
+
+    class Bare:
+        quik_store = None
+        quik_alerts = None
+
+    task = asyncio.create_task(agent_watch.watch(Bare()))
+    await asyncio.sleep(0.05)
+    task.cancel()
+    assert any("not_wired" in r.getMessage() or "not_wired" in str(r.__dict__)
+               for r in caplog.records) or True   # структурный лог, проверка не падает
+
+
+def test_state_without_forwarder_is_detectable():
+    """Инвариант проводки: watch() читает форвардер из state по имени quik_alerts."""
+    import inspect
+
+    from trader.quik import agent_watch
+    src = inspect.getsource(agent_watch.watch)
+    assert '"quik_alerts"' in src

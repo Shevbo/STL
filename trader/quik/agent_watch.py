@@ -51,11 +51,20 @@ def silence_verdict(agents: list[dict[str, Any]], market_open: bool | None,
 async def watch(state) -> None:
     """Фоновая задача: раз в минуту сверяет тишину агента с состоянием рынка."""
     raised = False
+    complained = False
     while True:
         try:
             store = getattr(state, "quik_store", None)
             alerts = getattr(state, "quik_alerts", None)
-            if store is not None and alerts is not None:
+            if store is None or alerts is None:
+                # ГРОМКО, и только один раз: сторож без канала это не сторож.
+                # Ровно так он и промолчал 20.08 — форвардер не был выложен в
+                # state, проверка тихо пропускалась, а выглядело как «следим».
+                if not complained:
+                    complained = True
+                    log.error("quik.agent_watch.not_wired",
+                              store=store is not None, alerts=alerts is not None)
+            else:
                 ms = getattr(state, "market_session", None) or {}
                 bad, age = silence_verdict(store.agent_status(), ms.get("open"))
                 if bad and not raised:

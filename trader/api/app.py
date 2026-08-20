@@ -307,6 +307,12 @@ async def lifespan(app: FastAPI):
     app.state.quik_store = quik_store
     app.state.quik_server = quik_server
     app.state.quik_order_store = quik_order_store
+    # Форвардер тревог кладём в state ЯВНО: он нужен не только gRPC-серверу, но и
+    # фоновым сторожам. 20.08 сторож молчания агента искал его в state, не находил
+    # и молча ничего не делал — агент лежал 73 минуты при открытой бирже, тревоги
+    # не было. Страж, подключённый к пустоте, хуже отсутствующего: он создаёт
+    # уверенность, что за этим следят.
+    app.state.quik_alerts = quik_alerts if quik_store is not None else None
 
     # Broker abstraction (trader/broker): robots trade through BrokerInterface, the
     # concrete adapter chosen from settings.exchange_interface. Built here with the QUIK
