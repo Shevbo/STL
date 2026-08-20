@@ -112,3 +112,45 @@ async def test_filter_never_holds_a_position():
     sold = sum(q for s, q in trades if s == "sell")
     assert abs(bought - sold) <= 1, (
         f"позиция зависла: куплено {bought}, продано {sold} — фильтр держит выход")
+
+
+async def _run_state(params: dict) -> dict:
+    """Прогон, возвращающий СОСТОЯНИЕ робота: в нём счётчики отсева по фильтрам."""
+    rt = BacktestRuntime(bars=_bars(), symbol=SYM, initial_equity=5_000_000.0)
+    on_bar = make_on_bar("macd_shectory1")
+    while True:
+        await on_bar(rt, params)
+        if not rt.advance():
+            break
+    return dict(rt._state)
+
+
+@pytest.mark.asyncio
+async def test_counter_is_charged_per_signal_edge_not_per_bar():
+    """ГЛАВНОЕ ПО СМЫСЛУ ПАРАМЕТРА. Сигнал стратегии это УРОВЕНЬ: +1 держится, пока
+    держится условие, десятки баров подряд. Списание на каждом баре превращало
+    «пропустить N сигналов» в «подождать N минут» — счётчик выгорал, и робот входил
+    в тот же самый сигнал, ради пропуска которого фильтр и заводился (нашло окно
+    real-trade 19.08.2026).
+
+    Пин прямой: s2i_skips — сколько БАРОВ фильтр не пустил, s2i_spent — сколько
+    ЕДИНИЦ счётчика на это ушло. При списании за бар эти числа равны. При списании
+    по кромке заблокированных баров кратно больше потраченных единиц.
+    """
+    st = await _run_state(dict(BASE, signals2ignor_win=3, signals2ignor_lose=3,
+                               signals2ignor_value=100))
+    skips = int(st.get("s2i_skips", 0) or 0)
+    spent = int(st.get("s2i_spent", 0) or 0)
+    assert skips > 0 and spent > 0, "фильтр не сработал — ряд не даёт крупных сделок"
+    assert skips >= spent * 2, (
+        f"единица счётчика тратится почти на каждый бар: баров {skips}, единиц {spent}")
+
+
+@pytest.mark.asyncio
+async def test_same_uninterrupted_signal_costs_exactly_one_unit():
+    """Пока сигнал не сменился и не пропадал, повторные бары бесплатны: счётчик
+    после прогона не должен быть выеден до нуля там, где волн меньше, чем единиц."""
+    st = await _run_state(dict(BASE, signals2ignor_win=10, signals2ignor_lose=10,
+                               signals2ignor_value=100))
+    left = int(st.get("s2i_left", 0) or 0)
+    assert left > 0, "счётчик выеден полностью — значит списывался за бар, а не за кромку"

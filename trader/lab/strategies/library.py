@@ -268,6 +268,10 @@ def make_on_bar(rid: str):
         # тейк, стоп) живут в долине всегда — см. комментарий у in_death_valley.
         in_dv = dv_on and in_death_valley(_c(bars), dv_win, dv_pts)
         want = signal(bars[-need:], params)        # +1 / -1 / 0 / None
+        # Кромка райдера s2i: сигнал пропал или сменил сторону — прошлое списание
+        # больше не действует, следующее появление сигнала будет стоить свою единицу.
+        if s2i_on and want != int(stl.get_state("s2i_charged", 0) or 0):
+            stl.set_state("s2i_charged", 0)
         if inv and want:                   # контр-стратегия: фейдим базовый сигнал
             want = -want
         # Гейт сторон — ПОСЛЕ инверсии: фильтруем ту сторону, в которую робот реально
@@ -454,22 +458,35 @@ def make_on_bar(rid: str):
             if cooldown_min > 0 and ret >= cooldown_frac:
                 stl.set_state("cooldown_until", bar_time + cooldown_min * 60)
 
-        def s2i_consume() -> bool:
-            """True = этот сигнал пропускаем, списав один из счётчика.
+        def s2i_consume(side: int) -> bool:
+            """True = этот вход пропускаем. Списание — ПО КРОМКЕ сигнала.
 
             Счётчик читается ИЗ СОСТОЯНИЯ каждый раз, а не с начала бара: on_exit
             взводит его прямо перед обратной ногой разворота, и снимок начала бара
             эту установку не увидел бы — переворот проскочил бы мимо фильтра.
 
-            Списываем ЗА СИГНАЛ, а не за бар: оператор просил пропустить N сигналов,
-            а не N минут. В тихом рынке без сигналов счётчик не тратится.
+            КРОМКА, А НЕ БАР. Сигнал стратегии — это УРОВЕНЬ (+1/-1 держится, пока
+            держится условие), а не событие. Списание на каждом баре превращало
+            «пропустить N сигналов» в «подождать N минут»: в тренде want не меняется
+            десятки баров подряд, и счётчик выгорал за N минут, после чего робот
+            входил в тот же самый сигнал, ради пропуска которого фильтр и заводился
+            (нашло окно real-trade 19.08.2026). Поэтому один и тот же непрерывный
+            сигнал стоит РОВНО ОДНУ единицу: пока сторона не сменилась и сигнал не
+            пропадал, вход блокируется бесплатно. Та же механика кромки, что у
+            sl_block.
             """
             if not s2i_on:
                 return False
             left = int(stl.get_state("s2i_left", 0) or 0)
             if left <= 0:
                 return False
-            stl.set_state("s2i_left", left - 1)
+            if int(stl.get_state("s2i_charged", 0) or 0) != side:
+                stl.set_state("s2i_left", left - 1)
+                stl.set_state("s2i_charged", side)
+                # Сколько единиц счётчика РЕАЛЬНО списано. Отдельно от s2i_skips
+                # (числа заблокированных баров) — именно расхождение этих двух чисел
+                # и означает, что списываем по кромке, а не за бар.
+                stl.set_state("s2i_spent", int(stl.get_state("s2i_spent", 0) or 0) + 1)
             return True
 
         def fresh_entry_size() -> int:
@@ -497,7 +514,7 @@ def make_on_bar(rid: str):
                 # вход, и она обязана считаться сигналом наравне с входом из флэта.
                 # Выход выше уже исполнен: фильтр не держит в позиции, он не пускает
                 # обратно.
-                if s2i_consume():
+                if s2i_consume(1 if want > 0 else -1):
                     note_skip("s2i", price, d=1 if want > 0 else -1)
                     return
                 await stl.place_order(symbol, "buy" if want > 0 else "sell", fresh_entry_size(), price)
@@ -521,7 +538,7 @@ def make_on_bar(rid: str):
                     note_skip("dv", price)
                 elif in_cooldown:
                     note_skip("cooldown", price)
-                elif s2i_consume():
+                elif s2i_consume(1 if want > 0 else -1):
                     note_skip("s2i", price)
                 else:
                     await stl.place_order(symbol, "buy" if want > 0 else "sell", fresh_entry_size(), price)
