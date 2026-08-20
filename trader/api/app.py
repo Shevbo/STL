@@ -435,6 +435,12 @@ async def lifespan(app: FastAPI):
     # замершей ленте — чтобы закрытый рынок не читался как авария QUIK.
     app.state.market_session = None
     market_session_task = asyncio.create_task(_market_session_poller(app.state))
+    # Сторож молчания агента: роботы живут ВНУТРИ него, поэтому его пропажа это
+    # остановка торговли. 20.08.2026 агент лежал с 02:04 до 09:09 (два часа при
+    # открытой бирже) и ни одной тревоги не ушло — рекон следит за расхождением
+    # книг и молчит, когда книг нет вовсе.
+    from trader.quik.agent_watch import watch as _agent_silence_watch
+    agent_watch_task = asyncio.create_task(_agent_silence_watch(app.state))
     # Множитель брокера над биржевым ГО. Он сидит КОНСТАНТОЙ в отборе кандидатов,
     # в отчёте компаньона и в карточке робота, а оператор (15.08.2026) заметил,
     # что он, похоже, гуляет по времени дня и на ралли. Пока не измерен — все три
@@ -444,6 +450,7 @@ async def lifespan(app: FastAPI):
     yield
 
     margin_stats_task.cancel()
+    agent_watch_task.cancel()
     market_session_task.cancel()
 
     if fallback_task is not None:
