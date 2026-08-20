@@ -164,6 +164,37 @@ func TestLowMemoryAlertThrottled(t *testing.T) {
 	}
 }
 
+// 20.08.2026, машина QUIK: Диспетчер задач показывал 5.9 из 8 ГБ (74%), то есть
+// физической памяти четверть свободна, а Windows писал «Не удается создать новую
+// страницу защиты для стека» — кончился ЛИМИТ ФИКСАЦИИ. Агент дважды за сутки
+// падал и не поднимался. Старые пороги (avail и load) такое не ловят: оба смотрят
+// на физическую память и оба здесь молчали.
+func TestCommitLimitAlarmsEvenWithFreeRAM(t *testing.T) {
+	h := newHarness(Config{})
+	h.pongAge = 4000
+	h.memOK = true
+	h.mem = MemStatus{LoadPct: 74, TotalMB: 8192, AvailMB: 2100, CommitPct: 96}
+	h.g.tick()
+	if got := strings.Join(h.alerts, ","); got != "VDS_LOW_MEMORY" {
+		t.Fatalf("исчерпанный commit обязан поднимать тревогу, получено %q", got)
+	}
+	if !h.g.Status().LowMemory {
+		t.Fatalf("состояние обязано быть видно на странице статуса")
+	}
+}
+
+// Обратный конец: физической памяти вдоволь И фиксация в норме — тишина.
+func TestHealthyMemoryIsQuiet(t *testing.T) {
+	h := newHarness(Config{})
+	h.pongAge = 4000
+	h.memOK = true
+	h.mem = MemStatus{LoadPct: 60, TotalMB: 8192, AvailMB: 3000, CommitPct: 55}
+	h.g.tick()
+	if len(h.alerts) != 0 {
+		t.Fatalf("здоровая память не должна тревожить, получено %q", strings.Join(h.alerts, ","))
+	}
+}
+
 func TestRestartFailureAlerts(t *testing.T) {
 	h := newHarness(Config{ForceRestart: true})
 	h.pongAge, h.fail = 400_000, true

@@ -33,6 +33,13 @@ type Config struct {
 	CooldownMs  int64 // min gap between forced restarts; default 900s
 	LowAvailMB  uint64 // low-memory alert when available RAM below; default 400
 	HighLoadPct uint32 // ...or memory load at/above; default 92
+	// ЛИМИТ ФИКСАЦИИ, а не физическая память. 20.08.2026 машина QUIK дважды за
+	// сутки роняла агента и не давала ему подняться, а Диспетчер задач показывал
+	// 5.9 из 8 ГБ (74%) — свободной памяти четверть. Windows при этом писал
+	// «Не удается создать новую страницу защиты для стека»: кончился не RAM, а
+	// commit — под стек нового потока нечего зафиксировать, и процессы просто не
+	// стартуют. Оба прежних порога (avail и load) такое НЕ ловят по построению.
+	HighCommitPct uint32 // тревога при фиксации выше; default 90
 }
 
 func (c *Config) defaults() {
@@ -41,6 +48,9 @@ func (c *Config) defaults() {
 	}
 	if c.HungMs == 0 {
 		c.HungMs = 300_000
+	}
+	if c.HighCommitPct == 0 {
+		c.HighCommitPct = 90
 	}
 	if c.CooldownMs == 0 {
 		c.CooldownMs = 900_000
@@ -144,11 +154,21 @@ func (g *Guard) tick() {
 		if m, ok := g.deps.Mem(); ok {
 			mm := m
 			v.Mem = &mm
-			v.LowMemory = m.AvailMB < g.cfg.LowAvailMB || m.LoadPct >= g.cfg.HighLoadPct
+			commitBad := g.cfg.HighCommitPct > 0 && m.CommitPct >= g.cfg.HighCommitPct
+			v.LowMemory = m.AvailMB < g.cfg.LowAvailMB || m.LoadPct >= g.cfg.HighLoadPct || commitBad
 			if v.LowMemory && g.throttle(&g.lastMemAlert, now, memAlertEveryMs) {
-				g.alert(quikv1.AlertSeverity_ALERT_SEVERITY_WARN, "VDS_LOW_MEMORY",
-					fmt.Sprintf("VDS память на пределе: свободно %d МБ из %d (load %d%%, commit %d%%) — риск отказов выделения",
-						m.AvailMB, m.TotalMB, m.LoadPct, m.CommitPct))
+				// Исчерпанный commit — это ОТКАЗ ЗАПУСКА процессов и потоков, а не
+				// замедление: агент после него не поднимается. Поэтому CRITICAL,
+				// тогда как теснота по физической памяти остаётся WARN.
+				sev := quikv1.AlertSeverity_ALERT_SEVERITY_WARN
+				msg := fmt.Sprintf("VDS память на пределе: свободно %d МБ из %d (load %d%%, commit %d%%) — риск отказов выделения",
+					m.AvailMB, m.TotalMB, m.LoadPct, m.CommitPct)
+				if commitBad {
+					sev = quikv1.AlertSeverity_ALERT_SEVERITY_CRITICAL
+					msg = fmt.Sprintf("VDS: ЛИМИТ ФИКСАЦИИ %d%% (свободно RAM %d МБ из %d). Windows перестаёт создавать потоки и процессы — агент и раннер не запустятся. Проверь файл подкачки и утечку по «Фиксация» в Диспетчере задач.",
+						m.CommitPct, m.AvailMB, m.TotalMB)
+				}
+				g.alert(sev, "VDS_LOW_MEMORY", msg)
 			}
 		}
 	}
