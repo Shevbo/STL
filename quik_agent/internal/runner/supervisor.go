@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"sync"
 	"time"
+	"shectory/quik_agent/internal/vdsguard"
 )
 
 // Supervisor keeps the bundled robot-runner child process alive: start, wait
@@ -79,6 +80,9 @@ func ExecStart(exe string, args []string, logf func(string, ...any)) func(ctx co
 			return err
 		}
 		logf("runner started pid=%d", cmd.Process.Pid)
+		// Сторожу VDS нужен pid, чтобы в снимке была НАША доля лимита фиксации:
+		// 21.08 долю раннера пришлось выяснять оператору руками в PowerShell.
+		vdsguard.SetRunnerPID(cmd.Process.Pid)
 		return cmd.Wait()
 	}
 }

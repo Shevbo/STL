@@ -18,21 +18,23 @@ package vdsguard
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	quikv1 "shectory/quik_agent/internal/pb"
 )
 
 type Config struct {
-	Disabled    bool  // no restarts, no alerts (operator servicing the terminal)
-	ForceRestart bool // opt IN to auto taskkill+relaunch on HUNG; default off (detect+alert only)
-	SlowMs      int64 // pong/rtt soft alarm; default 15s (operator: ">10s = думает")
-	HungMs      int64 // forced restart threshold; default 300s
-	CooldownMs  int64 // min gap between forced restarts; default 900s
-	LowAvailMB  uint64 // low-memory alert when available RAM below; default 400
-	HighLoadPct uint32 // ...or memory load at/above; default 92
+	Disabled     bool   // no restarts, no alerts (operator servicing the terminal)
+	ForceRestart bool   // opt IN to auto taskkill+relaunch on HUNG; default off (detect+alert only)
+	SlowMs       int64  // pong/rtt soft alarm; default 15s (operator: ">10s = думает")
+	HungMs       int64  // forced restart threshold; default 300s
+	CooldownMs   int64  // min gap between forced restarts; default 900s
+	LowAvailMB   uint64 // low-memory alert when available RAM below; default 400
+	HighLoadPct  uint32 // ...or memory load at/above; default 92
 	// ЛИМИТ ФИКСАЦИИ, а не физическая память. 20.08.2026 машина QUIK дважды за
 	// сутки роняла агента и не давала ему подняться, а Диспетчер задач показывал
 	// 5.9 из 8 ГБ (74%) — свободной памяти четверть. Windows при этом писал
@@ -77,12 +79,18 @@ type Deps struct {
 }
 
 type MemStatus struct {
-	LoadPct    uint32 `json:"load_pct"`     // GlobalMemoryStatusEx dwMemoryLoad
-	TotalMB    uint64 `json:"total_mb"`
-	AvailMB    uint64 `json:"avail_mb"`
-	CommitPct  uint32 `json:"commit_pct"`   // committed/limit — allocation-failure proxy
+	LoadPct       uint32 `json:"load_pct"` // GlobalMemoryStatusEx dwMemoryLoad
+	TotalMB       uint64 `json:"total_mb"`
+	AvailMB       uint64 `json:"avail_mb"`
+	CommitPct     uint32 `json:"commit_pct"`      // committed/limit — allocation-failure proxy
 	CommitTotalMB uint64 `json:"commit_total_mb"` // лимит фиксации: RAM + файл подкачки
 	CommitUsedMB  uint64 `json:"commit_used_mb"`  // сколько из него занято
+	// Кто съедает лимит. 21.08 виновника искал ОПЕРАТОР руками в PowerShell,
+	// потому что снаружи VDS виден только общий процент. Свои процессы мы знаем
+	// по pid и называем их сами: если наши стоят, а общий растёт — течём не мы,
+	// и это видно из снимка, а не из переписки.
+	AgentMB  uint64 `json:"agent_mb"`  // сам агент
+	RunnerMB uint64 `json:"runner_mb"` // robot-runner.exe
 }
 
 // StatusView is what the local status page publishes (opaque-mirrored to STL).
@@ -156,6 +164,17 @@ func (g *Guard) tick() {
 		if m, ok := g.deps.Mem(); ok {
 			mm := m
 			v.Mem = &mm
+			// Свои процессы называем ПОИМЁННО. Чужие не перечисляем намеренно: обход
+			// списка процессов требует запуска и памяти ровно тогда, когда их нет.
+			// Вычитание работает не хуже: наши стоят, а общий растёт — течём не мы.
+			if v, ok := ProcPrivateMB(os.Getpid()); ok {
+				m.AgentMB = v
+			}
+			if pid := RunnerPID(); pid > 0 {
+				if v, ok := ProcPrivateMB(pid); ok {
+					m.RunnerMB = v
+				}
+			}
 			commitBad := g.cfg.HighCommitPct > 0 && m.CommitPct >= g.cfg.HighCommitPct
 			v.LowMemory = m.AvailMB < g.cfg.LowAvailMB || m.LoadPct >= g.cfg.HighLoadPct || commitBad
 			if v.LowMemory && g.throttle(&g.lastMemAlert, now, memAlertEveryMs) {
@@ -306,3 +325,11 @@ func AutostartBat(quikDir, exeDir, exeName string) string {
 		fmt.Sprintf(`if errorlevel 1 ( cd /d "%s" & start "" "%s\%s" )`, exeDir, exeDir, exeName))
 	return strings.Join(lines, "\r\n") + "\r\n"
 }
+
+// PID раннера кладёт супервизор при каждом запуске: сторожу он нужен, чтобы
+// назвать нашу долю фиксации, а тащить его через конструктор ради одного числа
+// не стоит.
+var runnerPID atomic.Int64
+
+func SetRunnerPID(pid int) { runnerPID.Store(int64(pid)) }
+func RunnerPID() int       { return int(runnerPID.Load()) }
