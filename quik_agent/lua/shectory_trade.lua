@@ -38,7 +38,7 @@
 -- Bump on every change you deliver to the VDS. Logged FIRST on OnInit so the
 -- operator can confirm which version QUIK actually loaded (the running script is
 -- in MEMORY; a file on disk with the same name may be a different build).
-local SCRIPT_VERSION = "2026.07.24-posvm"
+local SCRIPT_VERSION = "2026.08.21-gc"
 
 local CONFIG = {
   HOST          = "127.0.0.1",
@@ -116,6 +116,49 @@ local orderNum_to_transId = {}   -- [order_num] = trans_id
 -- Forward declaration: real body assigned after the acc publisher state below
 -- (transport connect hooks below reference it; Lua locals are lexically scoped).
 local acc_resync = function() end
+
+----------------------------------------------------------------------
+-- Сборщик мусора Lua
+--
+-- ПОЧЕМУ ЭТО ВООБЩЕ ЗДЕСЬ. Начиная с QUIK 9 терминал несёт Lua 5.4 с
+-- ИНКРЕМЕНТАЛЬНЫМ сборщиком, и с настройками по умолчанию он не успевает за
+-- скриптом, который много аллоцирует: мусор копится в виртуальной машине внутри
+-- info.exe и наружу выглядит как утечка памяти терминала. Мы аллоцируем много и
+-- непрерывно: главный цикл крутится каждые 10 мс, а на каждом тике, стакане и
+-- пачке ленты собирается JSON — тысячи временных таблиц и строк в секунду.
+--
+-- Измерено 21.08.2026 на боевой машине: info.exe 1586 МБ в 09:26 и 7132 МБ в
+-- 17:44, около 690 МБ в час. Дважды за сутки это исчерпало лимит фиксации
+-- Windows, и агент не смог создать поток: роботы стояли 7 часов и 1 час.
+--
+-- Лечение — принудительные шаги сборки в главном цикле плюс полная сборка по
+-- таймеру. Шаг дешевле полной сборки и размазывает работу; полная нужна, чтобы
+-- отдать освободившееся операционной системе. Обе вызываются ВНЕ обработчиков
+-- котировок: пауза сборщика в OnAllTrade задержала бы ленту.
+----------------------------------------------------------------------
+local gc = {
+  last_full_ms = 0,
+  FULL_EVERY_MS = 60000,   -- полная сборка раз в минуту
+  STEP_KB       = 64,      -- сколько работы делать за один шаг цикла
+  peak_kb       = 0,
+}
+
+-- Текущий и пиковый размер кучи Lua в килобайтах — уходит в pong, чтобы рост
+-- было ВИДНО на графике, а не по факту отказа терминала.
+local function gc_stats()
+  return math.floor(collectgarbage("count")), math.floor(gc.peak_kb)
+end
+
+local function gc_pump(now_ms)
+  -- Шаг на каждом обороте цикла: дёшево и не даёт куче разбегаться.
+  collectgarbage("step", gc.STEP_KB)
+  local kb = collectgarbage("count")
+  if kb > gc.peak_kb then gc.peak_kb = kb end
+  if now_ms - gc.last_full_ms >= gc.FULL_EVERY_MS then
+    gc.last_full_ms = now_ms
+    collectgarbage("collect")
+  end
+end
 
 ----------------------------------------------------------------------
 -- Logging helper
@@ -1044,8 +1087,14 @@ local function dispatch_command(line)
     local wf = ""
     local okw, w = pcall(getWorkingFolder)
     if okw and w then wf = tostring(w) end
+    -- lua_kb/lua_peak_kb: размер кучи скрипта. Утечка памяти терминала 20-21.08
+    -- была НЕВИДИМА снаружи — снаружи виден только общий расход info.exe, а он
+    -- складывается из терминала и нашей виртуальной машины. Теперь наша доля
+    -- едет в каждом pong, и следующий рост будет назван по имени сразу.
+    local lua_kb, lua_peak = gc_stats()
     emit({ event = "pong", t0 = cmd.t0 or 0, ts = now_ms(), server_time = st,
-           last_trade_ts_ms = md.last_trade_ts_ms or 0, wf = wf })
+           last_trade_ts_ms = md.last_trade_ts_ms or 0, wf = wf,
+           lua_kb = lua_kb, lua_peak_kb = lua_peak })
   else
     log("unknown cmd '" .. tostring(cmd.cmd) .. "' (dropped)")
   end
@@ -1205,6 +1254,10 @@ function main()
     -- md_pump is internally pcall-guarded per publisher, but wrap the whole pump too
     -- so an unexpected error in the timer path can never stop the main loop either.
     pcall(md_pump)   -- market-data snapshots on their own cadence (no-op when disabled)
+
+    -- Сборщик мусора. Под pcall, как и всё в этом цикле: отказ сборки не имеет
+    -- права уронить мост котировок и заявок.
+    pcall(gc_pump, now_ms())
 
     -- idle sleep; QUIK provides sleep(ms). Guard in case it is absent.
     if sleep then
