@@ -271,3 +271,38 @@ async def test_exit_only_off_by_default():
     assert rt.exit_only is False
     o = await rt.place_order("RIU6", "buy", 1, 90000)
     assert o.status == "paper" and rt.signed_position() == 1
+
+
+@pytest.mark.asyncio
+async def test_same_quik_trade_from_two_paths_is_not_double_applied():
+    """21.08.2026, реальные деньги: после перезапуска QUIK одна и та же сделка
+    (ордер …253975, продажа 1 по 81270) легла в книгу дважды — в 17:27 и в 17:54.
+    У копий были РАЗНЫЕ client_id, поэтому дедупликация по cid их не связала, и
+    робот считал себя на контракт короче счёта. Ловим инвариантом: ордер не может
+    исполниться больше, чем был выставлен."""
+    rt = _rt(max_position=5)
+    order = await rt.place_order("RIU6", "sell", 1, 81270.0)
+    rt.on_order_event(U(order.order_id, state=4, price=81270.0, qty=1,
+                        side=2, order_id="253975"))
+    assert rt.signed_position() == -1
+
+    events = []
+    rt.event = lambda kind, msg, **kw: events.append((kind, msg))
+    # Тот же ордер приходит вторым путём (заживление журнала: свой client_id).
+    rt.on_order_event(U("rr:r1:qsync:253975:1", state=4, price=81270.0, qty=1,
+                        side=2, order_id="253975"))
+    assert rt.signed_position() == -1, "повтор не должен углублять позицию"
+    assert any(k == "SKIP" for k, _ in events), "повтор обязан быть назван в логе"
+
+
+@pytest.mark.asyncio
+async def test_partial_fills_of_one_order_still_add_up():
+    """Обратный конец: честные частичные исполнения одного ордера складываются
+    до его объёма и не режутся потолком."""
+    rt = _rt(max_position=5)
+    order = await rt.place_order("RIU6", "buy", 3, 81000.0)
+    rt.on_order_event(U(order.order_id, state=3, price=81000.0, qty=1, order_id="777"))
+    assert rt.signed_position() == 1
+    u = U(order.order_id, state=4, price=81000.0, qty=3, order_id="777")
+    rt.on_order_event(u)          # накопительное filled=3
+    assert rt.signed_position() == 3

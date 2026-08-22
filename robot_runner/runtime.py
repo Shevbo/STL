@@ -299,6 +299,30 @@ class AgentRuntime:
             already = sum(f["qty"] for f in self._fills if f.get("client_id") == cid
                           and f.get("status") == "filled")
             fresh = max(0, qty - already)
+            # ПОТОЛОК ПО ОРДЕРУ. Дедупликация выше считает по client_id, и её
+            # хватало, пока событие приходило одним путём. 21.08 после перезапуска
+            # QUIK одна и та же сделка (ордер …253975, продажа 1 по 81270) легла
+            # в книгу ДВАЖДЫ, в 17:27 и в 17:54: у копий разные client_id, и
+            # сумма по cid их не связала. Робот считал себя на контракт короче,
+            # чем счёт, и позицию пришлось править руками.
+            #
+            # Инвариант, который это закрывает независимо от пути события: ордер
+            # НЕ МОЖЕТ исполниться больше, чем был выставлен. Считаем записанное
+            # по НОМЕРУ ОРДЕРА и режем по его объёму — так ловится повтор из
+            # любого источника: обычный путь, заживление журнала, переигранная
+            # таблица сделок после рестарта терминала.
+            onum = str(getattr(u, "order_id", "") or "")
+            cap = int(getattr(u, "quantity", 0) or 0) or (order.qty if order else 0)
+            if fresh and onum and cap > 0:
+                by_order = sum(f["qty"] for f in self._fills
+                               if str(f.get("order_id") or "") == onum
+                               and f.get("status") == "filled")
+                room = max(0, cap - by_order)
+                if fresh > room:
+                    self.event("SKIP", f"повтор филла отброшен: ордер {onum} уже "
+                               f"исполнен на {by_order} из {cap}, пришло ещё {fresh}",
+                               level="error")
+                    fresh = room
             if fresh:
                 self._apply_fill(side, fresh, price, client_id=cid,
                                  order_id=getattr(u, "order_id", ""),
