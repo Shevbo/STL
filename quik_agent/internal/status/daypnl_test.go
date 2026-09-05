@@ -17,6 +17,10 @@ const (
 	// МСК-полночь, а на эпохе 1970 она уходит в минус и сделка со штампом
 	// «вчера» проходит фильтр.
 	riNow = int64(1_788_530_400_000)
+	// ID длиннее 20 символов — QUIK вернёт его в brokerref обрезанным, и сверять
+	// надо по обрезку. Живой lxk22tsffsxiiotb8kmpsato именно такой.
+	longRobotID = "lxk22tsffsxiiotb8kmpsato"
+	quikRobotID = "lxk22tsffsxiiotb8kmp"
 )
 
 // dayDeps: один реальный робот на RIU6 плюс ручная торговля оператора.
@@ -28,11 +32,11 @@ func dayDeps(robotPos int64, accNet int64, trades []accounts.Trade, posVM float6
 		params: []quikdde.ParamRow{{Code: "RIU6", PriceStep: 10, StepCost: 17.37744}},
 	}
 	d.Robots = fakeRobots{
-		specs:  []*quikv1.RobotSpec{{RobotId: "r1", Symbol: "RIU6", StrategyId: "macd"}},
+		specs:  []*quikv1.RobotSpec{{RobotId: longRobotID, Symbol: "RIU6", StrategyId: "macd"}},
 		paused: map[string]bool{}, times: map[string][2]int64{},
 	}
 	d.Runner = fakeRunner{statuses: map[string]*quikv1.RobotStatus{
-		"r1": {RobotId: "r1", Position: robotPos},
+		longRobotID: {RobotId: longRobotID, Position: robotPos},
 	}}
 	d.Accounts = fakeAccounts{snap: accounts.Snapshot{
 		Positions: []accounts.Position{
@@ -67,12 +71,21 @@ func TestDayPnL_SplitsManualFromRobots(t *testing.T) {
 	// ВМ счёта = робот (шорт от 82650 против 82830) + ручные (3 по 170 пунктов).
 	const quikVM = riCoef * ((82650 - riLast) + 3*(82600-82430))
 	d := dayDeps(-1, -1, []accounts.Trade{
-		dayTrade("r1", "S", 82650, 1, now),         // робот открыл шорт внутри дня
+		dayTrade(quikRobotID, "S", 82650, 1, now),         // робот открыл шорт внутри дня
 		dayTrade("", "S", 82600, 3, now),           // оператор руками продал 3
 		dayTrade("stl-so-abc", "B", 82430, 3, now), // и закрыл их умной заявкой
 	}, quikVM, quikVM)
 
 	got := buildDayJSON(d, d.Accounts.Snapshot())
+	// Тег в QUIK обрезан до 20 символов — робот обязан узнаться по обрезку и
+	// приехать в строку со СВОИМ полным ID, а не в «прочие».
+	rows := map[string]dayClassJSON{}
+	for _, c := range got.Classes {
+		rows[c.Kind] = c
+	}
+	if rows["robot"].Key != longRobotID {
+		t.Errorf("робота не узнали по обрезанному тегу: %+v", got.Classes)
+	}
 	robots, manual := sumVM(got)
 	wantRobots := riCoef * (82650 - riLast)      // -312.79
 	wantManual := riCoef * (3*82600 - 3*82430)   // +886.25
@@ -96,7 +109,7 @@ func TestDayPnL_CarriedPositionSumsToQuikVM(t *testing.T) {
 	// accNet = -2 + 1 - 1 = -2; за окно наторговали +1-1 = 0, значит на начало -2.
 	const quikVM = 4_242.42
 	d := dayDeps(-1, -2, []accounts.Trade{
-		dayTrade("r1", "B", 82500, 1, now),
+		dayTrade(quikRobotID, "B", 82500, 1, now),
 		dayTrade("", "S", 82700, 1, now),
 	}, quikVM, quikVM)
 
@@ -144,8 +157,8 @@ func TestDayPnL_DropsPreSessionTrades(t *testing.T) {
 	d.Accounts = fakeAccounts{snap: accounts.Snapshot{
 		Positions: []accounts.Position{{Sec: "RIU6", Net: 0, VarMargin: 0, HasVarMargin: true}},
 		Trades: []accounts.Trade{
-			dayTrade("r1", "S", 90000, 5, floor-1),
-			dayTrade("r1", "B", 80000, 5, floor-1),
+			dayTrade(quikRobotID, "S", 90000, 5, floor-1),
+			dayTrade(quikRobotID, "B", 80000, 5, floor-1),
 		},
 		Money: &accounts.Money{VarMargin: 0},
 	}}

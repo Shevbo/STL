@@ -88,12 +88,18 @@ type dayJSON struct {
 // значит робот» приписала бы сделку оператора конкретному роботу — ровно тот
 // вид ошибки, из-за которого и завели эту разбивку. Снятый робот тоже попадёт
 // сюда, но со СВОИМ ключом: он виден в строке, а не растворён.
-func classOf(tag string, robots map[string]bool) (key, kind string) {
+//
+// СВЕРЯЕМ ПО ОБРЕЗАННОМУ ИМЕНИ. QUIK хранит brokerref шириной 20 символов, и
+// длинный ID приезжает обратно кусочком: "lxk22tsffsxiiotb8kmpsato" читается
+// как "lxk22tsffsxiiotb8kmp". Сравнение целиком не совпадало НИКОГДА, и оба
+// живых робота уехали в «приложение брокера» (05.09.2026, первый же прогон).
+// robots здесь — карта уже обрезанных тегов, ровно как в recon.quikTag.
+func classOf(tag string, robots map[string]string) (key, kind string) {
 	switch {
 	case tag == "":
 		return "terminal", "terminal"
-	case robots[tag]:
-		return tag, "robot"
+	case robots[tag] != "":
+		return robots[tag], "robot"
 	case tag == "recon":
 		return "recon", "recon"
 	case len(tag) >= 6 && tag[:6] == "stl-so":
@@ -101,6 +107,16 @@ func classOf(tag string, robots map[string]bool) (key, kind string) {
 	default:
 		return tag, "external"
 	}
+}
+
+// maxBrokerrefLen — ширина brokerref в QUIK, та же 20, что в recon и trade.
+const maxBrokerrefLen = 20
+
+func quikTag(full string) string {
+	if len(full) > maxBrokerrefLen {
+		return full[:maxBrokerrefLen]
+	}
+	return full
 }
 
 func buildDayJSON(d Deps, acc accounts.Snapshot) dayJSON {
@@ -121,14 +137,14 @@ func buildDayJSON(d Deps, acc accounts.Snapshot) dayJSON {
 
 	// Позиция сейчас: у роботов — своя, у ручной торговли — всё остальное на счёте.
 	robotNet := map[string]map[string]int64{} // sec -> robot -> net
-	realRobots := map[string]bool{}
+	realRobots := map[string]string{} // обрезанный тег QUIK -> полный robot_id
 	st := d.Runner.LastStatuses()
 	for _, spec := range d.Robots.All() {
 		if spec.GetPaper() {
 			continue // бумажный робот на счёт не выходит
 		}
 		id := spec.GetRobotId()
-		realRobots[id] = true
+		realRobots[quikTag(id)] = id
 		sec := spec.GetSymbol()
 		if robotNet[sec] == nil {
 			robotNet[sec] = map[string]int64{}

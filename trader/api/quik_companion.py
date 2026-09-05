@@ -951,7 +951,11 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
     # оператора мимо агента: терминал QUIK или мобильное приложение брокера.
     # Приложение вправе поставить СВОЙ brokerref, поэтому фильтруем не «есть
     # тег», а «тег наш»: иначе сделка из мобильного молча пропадала из списка.
-    _our_tags = {rid for rid, rob in mirror_by_id.items() if rob.get("mode") == "real"}
+    # Сверяем по ОБРЕЗАННОМУ имени: QUIK хранит brokerref шириной 20 символов,
+    # и длинный ID приезжает кусочком (lxk22tsffsxiiotb8kmpsato -> ...b8kmp).
+    # Сравнение целиком не совпадает никогда, и заявки роботов уехали бы в
+    # ручные.
+    _our_tags = {rid[:20] for rid, rob in mirror_by_id.items() if rob.get("mode") == "real"}
     manual_orders = []
     for o in (status.get("quik") or {}).get("orders") or []:
         _tag = str(o.get("tag") or "")
