@@ -79,20 +79,27 @@ type dayJSON struct {
 }
 
 // classOf: чей это тег. Робот стамповал в комментарий заявки свой ID, align —
-// "recon", умная заявка — "stl-so-<id>", ручная заявка из терминала — ничего.
-func classOf(tag string) (key, kind string) {
+// "recon", умная заявка — "stl-so-<id>". Пустой тег — торговля оператора мимо
+// агента: терминал QUIK или мобильное приложение брокера, они комментарий не
+// заполняют.
+//
+// Незнакомый НЕПУСТОЙ тег объявляем «прочим», а НЕ роботом. Мобильное
+// приложение Finam вправе поставить свой brokerref, и трактовка «раз тег есть,
+// значит робот» приписала бы сделку оператора конкретному роботу — ровно тот
+// вид ошибки, из-за которого и завели эту разбивку. Снятый робот тоже попадёт
+// сюда, но со СВОИМ ключом: он виден в строке, а не растворён.
+func classOf(tag string, robots map[string]bool) (key, kind string) {
 	switch {
 	case tag == "":
-		return "terminal", "terminal" // заявка оператора из терминала QUIK
+		return "terminal", "terminal"
+	case robots[tag]:
+		return tag, "robot"
 	case tag == "recon":
 		return "recon", "recon"
 	case len(tag) >= 6 && tag[:6] == "stl-so":
 		return "smart", "smart"
 	default:
-		// Агент штампует в комментарий ТОЛЬКО эти три вида тегов, значит любой
-		// прочий тег — робот, даже уже снятый. Схлопнуть его в «ручные» значит
-		// приписать оператору чужую торговлю.
-		return tag, "robot"
+		return tag, "external"
 	}
 }
 
@@ -114,12 +121,14 @@ func buildDayJSON(d Deps, acc accounts.Snapshot) dayJSON {
 
 	// Позиция сейчас: у роботов — своя, у ручной торговли — всё остальное на счёте.
 	robotNet := map[string]map[string]int64{} // sec -> robot -> net
+	realRobots := map[string]bool{}
 	st := d.Runner.LastStatuses()
 	for _, spec := range d.Robots.All() {
 		if spec.GetPaper() {
 			continue // бумажный робот на счёт не выходит
 		}
 		id := spec.GetRobotId()
+		realRobots[id] = true
 		sec := spec.GetSymbol()
 		if robotNet[sec] == nil {
 			robotNet[sec] = map[string]int64{}
@@ -154,7 +163,7 @@ func buildDayJSON(d Deps, acc accounts.Snapshot) dayJSON {
 		if ts < out.FromMs || t.Qty == 0 {
 			continue
 		}
-		key, kind := classOf(t.Tag)
+		key, kind := classOf(t.Tag, realRobots)
 		id := kind + "\x00" + key + "\x00" + t.Sec
 		a := byKey[id]
 		if a == nil {

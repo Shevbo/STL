@@ -858,7 +858,10 @@ function renderOrders(o, d) {
   // Время ВЗВЕДЕНИЯ: у простой заявки это время в QUIK, у умной created_ms.
   for (const m of o.manual || []) {
     rowsBy.quik.push({ ts: Number(m.ts_ms || 0), done: !m.active, html:
-      `<div class="row"><span class="k">${esc(m.sec)} ${sideRu(m.side)} ${m.qty}</span>` +
+      `<div class="row"><span class="k">${esc(m.sec)} ${sideRu(m.side)} ${m.qty}` +
+      // Непустой тег у ручной заявки = она пришла не из терминала, а из
+      // приложения брокера: оператору важно, каким каналом он торговал.
+      `${m.tag ? ` <span class="dim">${esc(m.tag)}</span>` : ''}</span>` +
       `<span class="sub">@ ${num(m.price)}${m.active && m.balance < m.qty ? ` · осталось ${m.balance}` : ''}</span>` +
       `<span class="sp"></span><span class="v ${m.active ? 'up' : 'nil'}">${esc(m.state)}</span></div>` });
   }

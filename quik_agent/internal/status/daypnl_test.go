@@ -115,6 +115,27 @@ func TestDayPnL_CarriedPositionSumsToQuikVM(t *testing.T) {
 	}
 }
 
+// Заявка из мобильного приложения брокера вправе нести свой brokerref. Принять
+// её за робота значит приписать чужую сделку роботу — то самое, из-за чего эту
+// разбивку и завели. Незнакомый тег идёт в ручные, со своим ключом.
+func TestDayPnL_UnknownTagIsNotARobot(t *testing.T) {
+	d := dayDeps(0, 0, []accounts.Trade{
+		dayTrade("FINAM-MOBILE", "S", 82700, 1, riNow),
+		dayTrade("FINAM-MOBILE", "B", 82600, 1, riNow),
+	}, 0, riCoef*100)
+
+	got := buildDayJSON(d, d.Accounts.Snapshot())
+	if len(got.Classes) != 1 {
+		t.Fatalf("ждали одну строку, получили %+v", got.Classes)
+	}
+	if got.Classes[0].Kind != "external" || got.Classes[0].Key != "FINAM-MOBILE" {
+		t.Errorf("чужой тег принят за робота: %+v", got.Classes[0])
+	}
+	if math.Abs(got.Classes[0].VMRub-riCoef*100) > 0.01 {
+		t.Errorf("P&L ручной сделки %.2f, ждали %.2f", got.Classes[0].VMRub, riCoef*100)
+	}
+}
+
 // Сделки прошлой сессии лежат в кольце QUIK ещё сутки; попав в окно, они
 // сдвинули бы результат дня. Отсекаются по бирже, как в recon.
 func TestDayPnL_DropsPreSessionTrades(t *testing.T) {

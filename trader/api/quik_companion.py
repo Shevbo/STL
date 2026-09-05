@@ -946,10 +946,17 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
 
     # 3.5 Ручные заявки (#6): простые — из таблицы заявок QUIK (без тега = ручной
     # класс, включая детей умных заявок so:), умные — из книги STL. Только чтение.
+    # Свой тег агент ставит только роботу, выравниванию (recon) и детям умных
+    # заявок; последние показаны отдельным списком. Всё остальное — торговля
+    # оператора мимо агента: терминал QUIK или мобильное приложение брокера.
+    # Приложение вправе поставить СВОЙ brokerref, поэтому фильтруем не «есть
+    # тег», а «тег наш»: иначе сделка из мобильного молча пропадала из списка.
+    _our_tags = {rid for rid, rob in mirror_by_id.items() if rob.get("mode") == "real"}
     manual_orders = []
     for o in (status.get("quik") or {}).get("orders") or []:
-        if o.get("tag"):
-            continue  # роботные/recon — не ручные
+        _tag = str(o.get("tag") or "")
+        if _tag and (_tag in _our_tags or _tag == "recon" or _tag.startswith("stl-so")):
+            continue  # роботные / выравнивание / дети умных заявок — не ручные
         try:
             qty, bal = int(o.get("qty") or 0), int(o.get("balance") or 0)
         except (TypeError, ValueError):
@@ -964,6 +971,7 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
                               "side": o.get("side"), "price": o.get("price"),
                               "qty": qty, "balance": bal, "state": st,
                               "active": bool(o.get("active")),
+                              "tag": _tag,   # непустой = приложение брокера, а не терминал
                               "ts_ms": o.get("ts_ms")})
     manual_orders.sort(key=lambda d: (not d["active"], -(d.get("ts_ms") or 0)))
     smart_list = []
@@ -1000,7 +1008,7 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
     # умных заявок и align-заявки recon делают свой результат, а показать его
     # было негде. Названия видов — как в блоке заявок, чтобы строка читалась.
     _MANUAL_RU = {"terminal": "терминал QUIK", "smart": "умные заявки",
-                  "recon": "выравнивание"}
+                  "recon": "выравнивание", "external": "приложение брокера"}
     _manual_rows = [c for c in day_classes if c.get("kind") != "robot"]
     if _manual_rows:
         orders_block["today"] = {
