@@ -73,3 +73,6 @@ build/
 # scripts/dl_ai46_bars.py и scripts/dl_ai46_ticks.py. В git не место.
 data/ai46_bt/
 data/ai46_bt_3m/
+
+# История плагина remember: сессионная, у каждой машины своя.
+.remember/

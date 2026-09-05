@@ -4,7 +4,13 @@
 разваливается у соседей, это подгонка, а не преимущество. Разножку в пунктах
 оператор оставил на нуле; контракт один, RIU6, другие не трогаем.
 """
-import asyncio, json, types, os, random, sys, time
+import asyncio
+import json
+import types
+import os
+import random
+import sys
+import time
 from concurrent.futures import ProcessPoolExecutor
 from datetime import date, datetime, timezone
 from trader.lab.iss_loader import load_bars_iss, fetch_contract_spec

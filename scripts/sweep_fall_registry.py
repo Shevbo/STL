@@ -8,7 +8,13 @@ qty=1, min_gap_pts=0 (закреплено оператором). Вырожде
 Финрез считается ТОЛЬКО на срезе периода: equity на конце минус equity на последнем
 баре до 12.08 07:00. Бары грузятся с 05.08 — прогрев должен лежать ДО среза.
 """
-import asyncio, json, types, os, random, sys, time
+import asyncio
+import json
+import types
+import os
+import random
+import sys
+import time
 from concurrent.futures import ProcessPoolExecutor
 from datetime import date, datetime, timezone
 from trader.lab.iss_loader import load_bars_iss, fetch_contract_spec
