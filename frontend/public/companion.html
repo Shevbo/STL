@@ -860,8 +860,9 @@ function toggleOrdDone() {
 // обязаны давать ВМ счёта: всё, что не робот, сделал оператор своими руками.
 function manualTotal(t) {
   if (!t || t.rows == null) return '';
-  const sub = t.rows.filter((r) => r.vm_rub)
-    .map((r) => `${esc(r.name)} ${rub(r.vm_rub, { signed: true })}`).join(' · ');
+  const sub = (t.rows || []).filter((r) => r.vm_rub)
+    .map((r) => `${esc(r.name)} ${rub(r.vm_rub, { signed: true })}`).join(' · ')
+    || 'своих сделок сегодня не было';
   return `<div class="row total ${cls(t.total)}" title="Результат ЗА СЕГОДНЯ по вашим собственным сделкам: заявки из терминала QUIK, дети умных заявок и заявки выравнивания. Роботы сюда не входят.">` +
     `<span class="k">Итог ручных</span><span class="sp"></span>` +
     `<span class="sub">${sub}</span>${val(rub(t.total, { signed: true }), cls(t.total))}</div>`;

@@ -1014,7 +1014,10 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
     _MANUAL_RU = {"terminal": "терминал QUIK", "smart": "умные заявки",
                   "recon": "выравнивание", "external": "приложение брокера"}
     _manual_rows = [c for c in day_classes if c.get("kind") != "robot"]
-    if _manual_rows:
+    # Строку показываем и на НУЛЕ, если разбивка вообще пришла: «ручных сегодня
+    # ноль» — это факт, из которого складывается ВМ, а отсутствие строки читается
+    # как «не считаем».
+    if day.get("classes") is not None:
         orders_block["today"] = {
             "total": sum(float(c.get("vm_rub") or 0) for c in _manual_rows),
             "rows": [{"kind": c.get("kind"), "name": _MANUAL_RU.get(c.get("kind"), c.get("kind")),

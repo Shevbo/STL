@@ -453,8 +453,9 @@ function vmNote(a) {
 // Итог ручной торговли за день — тем же видом, что итог роботов.
 function manualTotal(t) {
   if (!t || t.rows == null) return '';
-  const sub = t.rows.filter((r) => r.vm_rub)
-    .map((r) => `${r.name} ${rub(r.vm_rub, { signed: true })}`).join(' · ');
+  const sub = (t.rows || []).filter((r) => r.vm_rub)
+    .map((r) => `${r.name} ${rub(r.vm_rub, { signed: true })}`).join(' · ')
+    || 'своих сделок сегодня не было';
   return `<div class="row total ${cls(t.total)}">` +
     `<span class="k">Итог ручных</span><span class="sp"></span>` +
     `<span class="sub">${esc(sub)}</span>${val(rub(t.total, { signed: true }), cls(t.total))}</div>`;
