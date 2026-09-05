@@ -802,6 +802,8 @@ type statusJSON struct {
 	Robots []robotJSON `json:"robots"`
 	Recon  reconJSON   `json:"recon"`
 	Quik   quikJSON    `json:"quik"`
+	// Day — ВМ счёта, разложенная по роботам и ручной торговле (см. daypnl.go).
+	Day dayJSON `json:"day"`
 }
 
 func toPlanJSON(p *recon.Plan) *planJSON {
@@ -1019,6 +1021,7 @@ func BuildStatus(d Deps) ([]byte, error) {
 		Robots: buildRobotsJSON(d),
 		Recon:  toReconJSON(rep),
 		Quik:   buildQuikJSON(acc),
+		Day:    buildDayJSON(d, acc),
 	}
 	return json.Marshal(out)
 }
@@ -1049,6 +1052,11 @@ func GateHash(data []byte) ([32]byte, error) {
 	for i := range v.Health.Feed {
 		v.Health.Feed[i].AgeMs = 0
 	}
+	// Разбивка ВМ переоценивается на КАЖДОМ тике (в ней сидит last), поэтому в
+	// гейт она не входит вовсе: иначе смена цены на шаг слала бы весь статус в
+	// STL секунда в секунду. Настоящее её изменение — новая сделка или позиция —
+	// и так меняет Quik.Trades/Health.Positions, которые в гейте остались.
+	v.Day = dayJSON{}
 	gateData, err := json.Marshal(v)
 	if err != nil {
 		return [32]byte{}, err

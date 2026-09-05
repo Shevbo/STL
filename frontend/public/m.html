@@ -437,8 +437,27 @@ function renderAccount(a) {
   return row('Лимит откр. поз.', rub(a.limit)) +
     `<div class="row"><span class="k">Тек. чист. поз.</span><span class="sp"></span>${used}</div>` +
     row('План. чист. поз.', rub(a.planned)) +
-    row('Вариац. маржа', rub(a.varmargin, { signed: true }), a.varmargin) +
+    row('Вариац. маржа', rub(a.varmargin, { signed: true }), a.varmargin, vmNote(a)) +
     row('Биржевые сборы', rub(a.ts_comission), a.ts_comission ? -1 : 0);
+}
+
+// ВМ счёта = «сегодня» роботов + «Итог ручных». Расхождение печатаем, а не прячем.
+function vmNote(a) {
+  const c = a.vm_check;
+  if (!c) return '';
+  if (c.ok) return 'роботы + ручные';
+  return c.residual == null ? (c.note || 'не сходится')
+    : `не сходится на ${rub(c.residual, { signed: true })}`;
+}
+
+// Итог ручной торговли за день — тем же видом, что итог роботов.
+function manualTotal(t) {
+  if (!t || t.rows == null) return '';
+  const sub = t.rows.filter((r) => r.vm_rub)
+    .map((r) => `${r.name} ${rub(r.vm_rub, { signed: true })}`).join(' · ');
+  return `<div class="row total ${cls(t.total)}">` +
+    `<span class="k">Итог ручных</span><span class="sp"></span>` +
+    `<span class="sub">${esc(sub)}</span>${val(rub(t.total, { signed: true }), cls(t.total))}</div>`;
 }
 
 // Живая котировка инструмента: та же разметка, что на Windows-панели (гашение
@@ -475,11 +494,14 @@ function robotsTotal(list) {
   for (const r of list) {
     if (r.real_net != null) { fix += r.real_net; hasN = true; }
     if (r.varmargin != null) vm += r.varmargin;
-    if (r.real_today != null) { today += r.real_today; hasT = true; }
+    // Складываем ровно то, что напечатано в строках роботов (фикс+переоценка),
+    // иначе шапка спорит со своими же строками — см. companion.html.
+    const t = r.today_total != null ? r.today_total : r.real_today;
+    if (t != null) { today += t; hasT = true; }
   }
   const total = fix + vm;
-  const split = vm ? `фикс ${rub(fix, { signed: true })} · ВМ ${rub(vm, { signed: true })}`
-                   : `сегодня ${hasT ? rub(today, { signed: true }) : '—'}`;
+  const split = `сегодня ${hasT ? rub(today, { signed: true }) : '—'}`
+    + (vm ? ` · ВМ поз. ${rub(vm, { signed: true })}` : '');
   return `<div class="row total ${cls(hasN ? total : null)}">` +
     `<span class="k">Итог реал (${list.length})</span><span class="sp"></span>` +
     `<span class="sub">${esc(split)}</span>` +
@@ -962,7 +984,7 @@ function paintPanel(d) {
       DENSITY.map((n) => `<b class="${n === density() ? 'on' : ''}" data-dens="${n}">${n}</b>`).join('') +
       `</span></div>
       ${robotsTotal(d.robots)}${renderRobots(d.robots)}
-    <div class="sec">заявки ручные <a href="#/orders">подробно ↗</a></div>${renderOrders(d.orders, d)}
+    <div class="sec">заявки ручные <a href="#/orders">подробно ↗</a></div>${manualTotal((d.orders || {}).today)}${renderOrders(d.orders, d)}
     <div class="sec">вотчер <a href="#/watch">подробно ↗</a></div>${renderWatch(d.watch)}
     <div class="sec">уведомления <a href="#/watch">детали ↗</a>
       <span class="sp" style="flex:1"></span><span class="copy" id="copyAlerts">копировать</span>

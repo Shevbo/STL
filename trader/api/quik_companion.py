@@ -614,6 +614,16 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
         "ts_comission": money.get("ts_comission"), "equity": money.get("equity"),
         "age_ms": money.get("age_ms"), "has_data": bool(money),
     }
+    # Сверка: ВМ счёта против суммы «сегодня» роботов и ручной торговли. Остаток
+    # значит, что часть сделок дня агент не видит (кольцо сделок QUIK обрезано) —
+    # печатаем его, а не прячем: невидимая разница и была исходной жалобой.
+    _day = status.get("day") or {}
+    if _day:
+        account["vm_check"] = {
+            "ok": bool(_day.get("ok")), "sum": _day.get("sum_rub"),
+            "quik": _day.get("quik_vm"), "residual": _day.get("residual"),
+            "note": _day.get("note") or "",
+        }
 
     # 2. Positions per instrument (ВМ is null on an old Lua build).
     # last/bid/ask — живая котировка инструмента из фида агента (панель их показывает
@@ -662,10 +672,12 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
                                        "first_ts": int(r["first_ts"] or 0),
                                        "peak": int(r["peak"] or 0)}
         for r in await pool.fetch(
-                "SELECT robot_id, sum(pnl_net_rub) AS net, count(*) AS trades "
+                "SELECT robot_id, sum(pnl_net_rub) AS net, sum(pnl_gross_rub) AS gross, "
+                "count(*) AS trades "
                 "FROM algo_trades WHERE mode='real' AND ts_ms >= $1 GROUP BY robot_id",
                 today_lo):
             real_today[r["robot_id"]] = {"net": float(r["net"] or 0),
+                                         "gross": float(r["gross"] or 0),
                                          "trades": int(r["trades"])}
     except Exception:
         pass
@@ -677,6 +689,15 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
             carry[r["robot_id"]] = (float(r["pos_after"] or 0), float(r["avg_after"] or 0))
     except Exception:  # noqa: BLE001 — панель не должна падать из-за журнала
         pass
+    # РАЗБИВКА ВМ СЧЁТА (агент, блок `day`). Единственное место, где видны ВСЕ
+    # сделки счёта: журнал знает только роботов, а ручную торговлю оператора —
+    # никто. Пока её не показывали, «сегодня» роботов не сходилось с ВМ счёта на
+    # величину этой торговли (04.09.2026: ВМ +16 248 ₽, роботы +5 074 ₽).
+    # Сумма всех участников блока равна ВМ счёта ДО КОПЕЙКИ — см. daypnl.go.
+    day = status.get("day") or {}
+    day_classes = day.get("classes") or []
+    day_by_robot = {c.get("key"): c for c in day_classes if c.get("kind") == "robot"}
+
     # Текущее состояние робота из зеркала (позиция/пауза/режим сейчас).
     mirror_by_id = {rob.get("id"): rob for rob in status.get("robots") or []}
     # Список = все, у кого есть РЕАЛЬНАЯ история, плюс те, кто ПРЯМО СЕЙЧАС в реале
@@ -772,8 +793,18 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
         # молча меняет смысл и число прыгает на величину ВМ (жалоба 29.07).
         today_fix = float(rt.get("net") or 0)
         today_total = None if vm_today is None else today_fix + float(vm_today)
+        # Агент посчитал долю робота в ВМ счёта — она главнее нашей арифметики:
+        # только так сумма по панели сходится с ВМ. Фикс тогда берём ВАЛОВЫЙ (ВМ
+        # комиссии не знает, она отдельной строкой «биржевые сборы»), а
+        # переоценка — остаток. Старая сборка агента блока не шлёт: считаем
+        # по-прежнему.
+        _dc = day_by_robot.get(rid)
+        if _dc is not None and _dc.get("vm_rub") is not None:
+            today_total = float(_dc["vm_rub"])
+            today_fix = float(rt.get("gross") or 0)
+            vm_today = today_total - today_fix
         chg_pct = None
-        if total is not None and today_total is not None and vm_y is not None:
+        if total is not None and today_total is not None and (vm_y is not None or _dc is not None):
             base = float(total) - today_total
             if abs(base) >= 100:          # у копеечной базы процент — шум
                 chg_pct = today_total / abs(base) * 100
@@ -964,6 +995,22 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
     # восьми значило бы прятать половину раскрытой группы.
     orders_block = {"manual": manual_orders[:20], "smart": smart_list[:20],
                     "counts": counts}
+    # «СЕГОДНЯ» РУЧНОЙ ТОРГОВЛИ — та же величина, что у робота, и в том же виде.
+    # Без неё ВМ счёта не с чем сводить: заявки оператора из терминала, дети
+    # умных заявок и align-заявки recon делают свой результат, а показать его
+    # было негде. Названия видов — как в блоке заявок, чтобы строка читалась.
+    _MANUAL_RU = {"terminal": "терминал QUIK", "smart": "умные заявки",
+                  "recon": "выравнивание"}
+    _manual_rows = [c for c in day_classes if c.get("kind") != "robot"]
+    if _manual_rows:
+        orders_block["today"] = {
+            "total": sum(float(c.get("vm_rub") or 0) for c in _manual_rows),
+            "rows": [{"kind": c.get("kind"), "name": _MANUAL_RU.get(c.get("kind"), c.get("kind")),
+                      "sec": c.get("sec"), "vm_rub": c.get("vm_rub"),
+                      "fills": c.get("fills"), "lots": c.get("lots"),
+                      "net_end": c.get("net_end")}
+                     for c in sorted(_manual_rows, key=lambda x: -abs(float(x.get("vm_rub") or 0)))],
+        }
 
     # Состояние сессии MOEX (открыта/закрыта по ISS) — нужно и вотчеру раннера
     # (гейт лага ленты), и панели (отдельная строка «биржа»).

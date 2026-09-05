@@ -449,8 +449,20 @@ function renderAccount(a) {
   return row('Лимит откр. поз.', rub(a.limit)) +
     `<div class="row"><span class="k">Тек. чист. поз.</span><span class="sp"></span>${used}</div>` +
     row('План. чист. поз.', rub(a.planned)) +
-    row('Вариац. маржа', rub(a.varmargin, { signed: true }), a.varmargin) +
+    row('Вариац. маржа', rub(a.varmargin, { signed: true }), a.varmargin, vmNote(a)) +
     row('Биржевые сборы', rub(a.ts_comission), a.ts_comission ? -1 : 0);
+}
+
+// ВМ счёта = сумма «сегодня» роботов + «Итог ручных». Расхождение значит, что
+// часть сделок дня агенту не видна — и тогда об этом надо СКАЗАТЬ, а не оставить
+// оператора сверять числа глазами, как 04.09.2026.
+function vmNote(a) {
+  const c = a.vm_check;
+  if (!c) return '';
+  if (c.ok) return 'роботы + ручные';
+  const r = c.residual;
+  return r == null ? (c.note || 'не сходится')
+    : `не сходится на ${rub(r, { signed: true })}${c.note ? ' · ' + c.note : ''}`;
 }
 
 // Цена инструмента: НИКОГДА не округляем до целого (у BR шаг 0.01) — только
@@ -496,11 +508,15 @@ function robotsTotal(list) {
   for (const r of list) {
     if (r.real_net != null) { fix += r.real_net; hasN = true; }
     if (r.varmargin != null) vm += r.varmargin;
-    if (r.real_today != null) { today += r.real_today; hasT = true; }
+    // СКЛАДЫВАЕМ РОВНО ТО, ЧТО НАПИСАНО В СТРОКАХ. Раньше здесь суммировался
+    // голый фикс, а строки роботов показывали фикс + переоценку: шапка и строки
+    // спорили друг с другом (04.09.2026: +1019 против +1193).
+    const t = r.today_total != null ? r.today_total : r.real_today;
+    if (t != null) { today += t; hasT = true; }
   }
   const total = fix + vm;
-  const split = vm ? `фикс ${rub(fix, { signed: true })} · ВМ ${rub(vm, { signed: true })}`
-                   : `сегодня ${hasT ? rub(today, { signed: true }) : '—'}`;
+  const split = `сегодня ${hasT ? rub(today, { signed: true }) : '—'}`
+    + (vm ? ` · ВМ поз. ${rub(vm, { signed: true })}` : '');
   return `<div class="row total ${cls(hasN ? total : null)}">` +
     `<span class="k">Итог реал (${list.length})</span><span class="sp"></span>` +
     `<span class="sub">${split}</span>` +
@@ -840,6 +856,17 @@ function toggleOrdDone() {
   if (lastData) paint(lastData);
 }
 
+// Итог ручной торговли за день — в том же виде, что у роботов. Вместе они
+// обязаны давать ВМ счёта: всё, что не робот, сделал оператор своими руками.
+function manualTotal(t) {
+  if (!t || t.rows == null) return '';
+  const sub = t.rows.filter((r) => r.vm_rub)
+    .map((r) => `${esc(r.name)} ${rub(r.vm_rub, { signed: true })}`).join(' · ');
+  return `<div class="row total ${cls(t.total)}" title="Результат ЗА СЕГОДНЯ по вашим собственным сделкам: заявки из терминала QUIK, дети умных заявок и заявки выравнивания. Роботы сюда не входят.">` +
+    `<span class="k">Итог ручных</span><span class="sp"></span>` +
+    `<span class="sub">${sub}</span>${val(rub(t.total, { signed: true }), cls(t.total))}</div>`;
+}
+
 function renderOrders(o, d) {
   if (!o) return '<div class="empty">ручных заявок нет</div>';
   const sideRu = (s) => s === 'buy' ? 'покупка' : 'продажа';
@@ -1076,7 +1103,7 @@ function paint(d) {
       `</span></div>` +
       robotsTotal(d.robots) + renderRobots(d.robots) +
     `<div class="sec">заявки ручные <a href="${STL}/?orders=1" data-ext>терминал ↗</a></div>` +
-      renderOrders(d.orders, d) +
+      manualTotal((d.orders || {}).today) + renderOrders(d.orders, d) +
     `<div class="sec">вотчер <a href="${STL}/?lab=botstore" data-ext>хитпарад ↗</a></div>` +
       renderWatch(d.watch) +
     `<div class="sec">уведомления <a href="${STL}/watchdog-log.html" data-ext>детали ↗</a>` +

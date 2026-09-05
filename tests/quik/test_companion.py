@@ -495,3 +495,55 @@ def test_star_annual_is_linear_and_shares_the_printed_go():
     # А настоящий ноль остаётся нулём: строка отработала и не заработала.
     assert _star_return(0, 251435, date(2026, 7, 16), date(2026, 7, 30)) == {
         "ann_go_pct": 0, "period_return_pct": 0}
+
+
+def test_vm_splits_between_robots_and_manual_and_sums_to_account(monkeypatch):
+    """ВМ счёта обязана складываться из «сегодня» роботов и «Итога ручных».
+
+    04.09.2026 они не сходились: ВМ была +16 248 ₽, роботы вместе давали +5 074 ₽,
+    а остальное сделал оператор своими руками — и показать это было негде, поэтому
+    разница читалась как ошибка учёта робота. Агент считает разбивку (блок `day`),
+    панель обязана взять её как есть, а не пересчитывать по-своему.
+    """
+    monkeypatch.delenv("SHECTORY_AUTH_DEV_BYPASS", raising=False)
+    app = FastAPI()
+    app.include_router(companion_router)
+    app.state.settings = _Settings()
+    app.state.db_pool = FakePool()
+    store = QuikAgentStore()
+    store.set_agent_status("A1", json.dumps({
+        "agent": {"version": "x", "link_up": True},
+        "health": {
+            "runner_healthy": True,
+            "money": {"limit": 1.0, "varmargin": 16_247.89, "ts_comission": -1863.27,
+                      "age_ms": 100},
+            "positions": [{"sec": "RIU6", "net": -2, "avg": 82_426.0,
+                           "varmargin": 16_247.89}],
+        },
+        "robots": [{"id": "lxk22", "symbol": "RIU6", "mode": "real", "paused": False,
+                    "position": -1, "avg_price": 82_650.0}],
+        "day": {
+            "ok": True, "from_ms": 1, "sum_rub": 16_247.89, "quik_vm": 16_247.89,
+            "residual": 0.0,
+            "classes": [
+                {"key": "lxk22", "kind": "robot", "sec": "RIU6", "vm_rub": 5_074.0,
+                 "fills": 116, "lots": 232, "net_end": -1, "net_start": 0},
+                {"key": "terminal", "kind": "terminal", "sec": "RIU6",
+                 "vm_rub": 8_029.0, "fills": 1, "lots": 8, "net_end": 0},
+                {"key": "smart", "kind": "smart", "sec": "RIU6", "vm_rub": 3_144.89,
+                 "fills": 2, "lots": 8, "net_end": 0},
+            ],
+        },
+    }), 0)
+    app.state.quik_store = store
+    body = TestClient(app).get("/api/v1/quik/companion/snapshot",
+                               headers=_operator_headers()).json()
+
+    robot = next(r for r in body["robots"] if r["id"] == "lxk22")
+    assert robot["today_total"] == 5_074.0        # доля робота, а не наша арифметика
+    manual = body["orders"]["today"]
+    assert manual["total"] == pytest.approx(11_173.89)
+    assert [r["kind"] for r in manual["rows"]] == ["terminal", "smart"]
+    assert robot["today_total"] + manual["total"] == pytest.approx(
+        body["account"]["varmargin"])
+    assert body["account"]["vm_check"]["ok"] is True
