@@ -1,10 +1,13 @@
 # Archive
 
-## Week of 2026-08-05
-Enhanced ParamPanel UI (sheet, draggable frames, keyboard nav, registration); library.py infra (i9 self-update, dv_filter, nginx, SetPosition refactor). Fixed critical bugs: TP oracle, margin overstatement (2.4×), journalsync QUIK-drift, MACD warmup (60→238), shectory_2ema (ema1==ema2, warmup, queue), dv_sig_window. Deployed frontend drag-drop, mini-chart widget (320×64), runner.exe + Go agent (696 Py/79 Go/168 FE), bar-density UI (30–200), backtest leaderboard (21k rows). RIU6 hourly complete; lxk22 +10k pts; 713 tests.
+## Week of 2026-08-19
+Completed min_gap_atr sweep (51 combos, 0.0-5.0×ATR step 0.1). Diagnosed 7h shectory-trader outage (self-update crash, no restart); deployed STL watchdog prod (fd8b9ae). Diagnosed QUIK terminal memory leak (1.5→7.1 GB, 8h); Lua GC & fill-dedup fixes deployed (98 tests✓). Fixed lxk22 duplicate-trade bug; rejected UNI-3sma real armoring. Deployed margin-mult 2.342 with weekly auto-recalc; root-caused ±25k swing (averaging income).
 
-## Week of 2026-08-03
-Fixed serialization bugs (job_body/params_json double/triple-encode, 2,744 runs); repaired 8 robots, scheduler bars. Debugged companion snapshot API perf (21.6s→54ms via missing 3.5M-row index + cache); fixed test-stand auth. Deployed Shectory P&L reconciliation (168,252₽ verified) and cassette UI redesign.
+## Week of 2026-08-12
+Archive recorder & proto refinements deployed (TapeTrade/TapeBatch); gzip incident fixed (recovered 2538 stack/1993 ticks), SMS hardening, inbox dedup. Fixed devmail_hook.py (STL_WINDOW, 3-window sync), deployed devchat.html (280 tests✓), completed trail_sl enhancements. Wrote devmail_autopilot.py watchdog, fixed 403 lineman proxy (ANTHROPIC_BASE_URL). Deployed autonomous mail autoresponder (fedbot/fedmail; token burn, disabled). Fixed lxk22 schedule bug (bar_offset_min=180) preventing ~28k₽ loss; token diagnostics (dev-spare ~95M).
+
+## Week of 2026-08-05
+Deployed min_gap_atr & inter-window msg API; completed first opt campaign (272 combos RIU6) with k_avg as main driver. Fixed chart coordinates, deployed UI refresh (price scale, time axis, height, curve-switcher, candles). Queued verification (144 combos) and stop-loss sweep (112 combos). UI fixes: companion panel (DPI/monitor), ORDERS frame (type-grouping, gesture controls), robot-card labels, order-xfer settings, lamp filter.
 
 ## Week of 2026-07-29
 Refactored AgentRobotScreen (3-frame redesign, Lineman agent); fixed position-sizing (16→34 via 2.4×), chart-table mismatch. Fixed 10+ bugs (param panel, filter calc, VM); exit-only mode (soft exits, cross-order alerts), stop-loss (½TP, dd 19.9k→2.2k). Enhanced runner diag, lab-analytics integ, 5 revisions (660 tests). Fixed taker/maker commission (253k₽); Williams %R sweep (4 inst., 88–90%); archive tracker UI.
