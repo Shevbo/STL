@@ -1,5 +1,12 @@
 # M1 Market Data — Implementation Plan
 
+План приёма живого потока котировок от Finam Trade API по вебсокету: транспорт с
+переподключением, подписки на инструменты и слоты последней цены, из которых стратегия
+читает рынок. Отвечает на вопросы вида «откуда берутся минутные бары и котировки»,
+«что происходит при обрыве связи с брокером», «почему потребитель видит последнюю цену,
+а не очередь тиков». Термины: фид, поток котировок, вебсокет, переподключение,
+конфляция, минутка.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Implement a reliable, reconnecting WebSocket feed of real-time QUOTES from Finam Trade API with a conflated-slot consumer interface suited for tick-level strategies.

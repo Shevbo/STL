@@ -1,5 +1,12 @@
 # Paper-robot auto-roll + gap simulation Implementation Plan
 
+План перевода бумажных роботов на следующий фьючерсный контракт без потери статистики:
+робот сам переезжает на ближний контракт при экспирации, а провал между старым и новым
+досчитывается симуляцией и пишется в журнал сделок. Отвечает на вопросы вида «что
+происходит с бумажным роботом после экспирации», «почему кривая робота не рвётся на
+ролле», «как заполняется мёртвое окно между контрактами». Слова, которыми это называют
+в работе: ролл, перекладка контракта, экспирация, склейка, ближний контракт.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Paper Lab robots follow the front futures contract across expiry (seamless quote stream), and the dead window since expiry is backfilled by simulating the strategy on the new contract so the витрина statistics are continuous.
