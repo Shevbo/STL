@@ -66,6 +66,11 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
     rr = float(params.get("rr_x10", 20)) / 10.0
     allow_long = int(params.get("allow_long", 1))
     allow_short = int(params.get("allow_short", 1))
+    # ИНВЕРСИЯ: тот же сигнал, но сделка в ПРОТИВОПОЛОЖНУЮ сторону — фейдим пробой
+    # вместо того, чтобы за ним идти. У реестровых стратегий это делает суффикс
+    # `__inv` в make_on_bar, но этот модуль самостоятельный и через make_on_bar не
+    # проходит, поэтому инверсия здесь своя, отдельным параметром.
+    invert = int(params.get("invert", 0))
     flatten_eod = int(params.get("flatten_eod", 1))
     tp_trail = int(params.get("tp_trail", 0))               # 0=fixed TP, 1=trailing
     trail_act = float(params.get("trail_act", 100)) / 100.0  # activate after this profit (×H)
@@ -177,15 +182,37 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
         return
 
     async def enter(dirn: int, price: float) -> bool:
+        # Инверсия применяется ПЕРВОЙ, до всего остального: и стоп с тейком, и гейт
+        # сторон обязаны считаться по той стороне, в которую робот РЕАЛЬНО пойдёт.
+        # Геометрия переворачивается сама: фейд пробоя вверх становится шортом со
+        # стопом над верхом диапазона — то есть вплотную к уровню, что для фейда и
+        # правильно, а цель уезжает вниз на rr риска.
+        if invert:
+            dirn = -dirn
+        if (dirn > 0 and not allow_long) or (dirn < 0 and not allow_short):
+            return False
+        # ГДЕ СТОИТ СТОП. У обычной сделки он на ДАЛЬНЕМ крае диапазона: пробили верх,
+        # идём в лонг, стоп под низом. У инвертированной так нельзя — мы продаём ВЫШЕ
+        # верха, и дальний край оказался бы в стороне ПРИБЫЛИ: риск получается
+        # отрицательным, и вход просто не состоялся бы (первая версия так и молчала).
+        # Для фейда стоп живёт сразу ЗА пробитым уровнем, то есть за экстремумом
+        # пробойного бара, а stop_pct раздвигает его долей высоты диапазона.
+        # Вырожденный случай (закрылись ровно на экстремуме, буфер нулевой) страхуем
+        # минимальным риском в 10% высоты: сделка с нулевым стопом это не сделка.
+        min_risk = 0.10 * height
         if dirn > 0:
-            sl = rl - (stop_pct / 100.0) * height
+            sl = (min(cur.low, rl) - (stop_pct / 100.0) * height) if invert                 else (rl - (stop_pct / 100.0) * height)
+            if invert:
+                sl = min(sl, price - min_risk)
             risk = price - sl
             if risk <= 0:
                 return False
             tp = price + rr * risk
             await stl.place_order(symbol, "buy", qty, price)
         else:
-            sl = rh + (stop_pct / 100.0) * height
+            sl = (max(cur.high, rh) + (stop_pct / 100.0) * height) if invert                 else (rh + (stop_pct / 100.0) * height)
+            if invert:
+                sl = max(sl, price + min_risk)
             risk = sl - price
             if risk <= 0:
                 return False
@@ -208,10 +235,10 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
     if entry_mode in (0, 2):
         bull_fvg = bars[-1].low > bars[-3].high
         bear_fvg = bars[-1].high < bars[-3].low
-        if allow_long and cur.close > rh and (not req_fvg or (bull_fvg and body >= min_frac)):
+        if cur.close > rh and (not req_fvg or (bull_fvg and body >= min_frac)):
             if await enter(1, cur.close):
                 return
-        if allow_short and cur.close < rl and (not req_fvg or (bear_fvg and -body >= min_frac)):
+        if cur.close < rl and (not req_fvg or (bear_fvg and -body >= min_frac)):
             if await enter(-1, cur.close):
                 return
 
@@ -219,9 +246,11 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
     if entry_mode in (1, 2):
         bd = int(stl.get_state("broke_dir", 0) or 0)
         if bd == 0:                                        # stage 1: record the breakout close
-            if allow_long and cur.close > rh:
+            # Пробой записываем ВСЕГДА, независимо от разрешённых сторон: при
+            # инверсии именно пробой вверх и станет поводом для шорта.
+            if cur.close > rh:
                 stl.set_state("broke_dir", 1)
-            elif allow_short and cur.close < rl:
+            elif cur.close < rl:
                 stl.set_state("broke_dir", -1)
             return
         rej = rng > 0 and abs(cur.close - cur.open) / rng >= rej_frac   # "shaved" bar
@@ -271,6 +300,10 @@ STRATEGY_META = {
          "hint": "Разрешить входы в лонг"},
         {"key": "allow_short", "label": "Шорты (0/1)", "type": "number", "default": 1, "min": 0, "max": 1,
          "hint": "Разрешить входы в шорт"},
+        {"key": "invert", "label": "Инверсия сигнала (0/1)", "type": "number", "default": 0, "min": 0, "max": 1,
+         "hint": "1 = торговать ПРОТИВ сигнала: пробой вверх продаём, пробой вниз покупаем. "
+                 "Стоп и тейк переворачиваются вместе со стороной, гейт сторон считается по "
+                 "фактической стороне сделки"},
         {"key": "tp_trail", "label": "Трейлинг TP (0/1)", "type": "number", "default": 0, "min": 0, "max": 1,
          "hint": "0 = фикс TP (R:R). 1 = трейлинг-стоп вместо фикс TP (профит едет за ценой)"},
         {"key": "trail_act", "label": "Активация трейла % H", "type": "number", "default": 100, "min": 0, "max": 500,
