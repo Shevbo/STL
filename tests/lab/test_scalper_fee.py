@@ -92,5 +92,6 @@ def test_margin_doubles_on_weekend_and_scales_by_account_status():
 
 def test_missing_timestamp_is_treated_as_a_weekday():
     """Старые вызовы без метки не должны внезапно подорожать вдвое."""
-    assert commission_for(SYM, 80000.0, 1, PV, taker=True) == \
-challenge if False else commission_for(SYM, 80000.0, 1, PV, taker=True, ts=None)
+    assert (commission_for(SYM, 80000.0, 1, PV, taker=True)
+            == commission_for(SYM, 80000.0, 1, PV, taker=True, ts=None)
+            == commission_for(SYM, 80000.0, 1, PV, taker=True, ts=_WED))
