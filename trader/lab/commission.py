@@ -18,6 +18,19 @@ from __future__ import annotations
 # Finam base-tariff broker fee, rubles per contract (per fill).
 BROKER_FEE_PER_CONTRACT = 0.45
 
+# СКАЛЬПЕРСКАЯ СКИДКА БИРЖИ. Позиция, открытая и закрытая ВНУТРИ одной сессии,
+# платит бирже половину: ISS публикует обе ставки, и SCALPERFEE ровно вдвое меньше
+# BUYSELLFEE на каждом проверенном контракте (RIU6 9.50/4.75, SiU6 3.97/1.99,
+# BRV6 10.94/5.47, GZU6 1.81/0.91, MXU6 14.92/7.46 — 06.09.2026).
+#
+# Скидка касается ТОЛЬКО биржевого сбора; брокерская часть берётся с каждого филла
+# целиком. Без неё модель завышала издержки вдвое на оборотистых днях — окно
+# real-trade сверило факт QUIK против модели за две недели на RIU6 и получило долю
+# 0.44-0.61 в активные дни против 1.07 в тихий, когда позиция ночевала. Ошибка не
+# нейтральна: она наказывает именно высокочастотные стратегии, то есть искажает
+# СРАВНЕНИЕ, а не только абсолютный итог.
+SCALPER_DISCOUNT = 0.5
+
 # MOEX taker fee as a FRACTION of contract notional, by instrument group
 # (exchange + clearing combined). Maker pays 0.
 MOEX_TAKER_RATE = {
@@ -57,6 +70,7 @@ def fee_config() -> dict:
         "moexTakerRate": dict(MOEX_TAKER_RATE),
         "tickerGroup": dict(_TICKER_GROUP),
         "defaultGroup": _DEFAULT_GROUP,
+        "scalperDiscount": SCALPER_DISCOUNT,
     }
 
 
@@ -71,11 +85,13 @@ def fee_group(symbol: str) -> str:
 
 
 def commission_for(symbol: str, price: float, qty: int, point_value: float,
-                   taker: bool) -> float:
+                   taker: bool, scalper: bool = False) -> float:
     """Total commission (rubles) for ONE fill of `qty` contracts of `symbol`.
 
     taker=True  → MOEX group fee on notional + broker fee  (backtests / market).
     taker=False → broker fee only                          (live / maker limit).
+    scalper=True → биржевая часть вдвое: филл принадлежит кругу, открытому и
+                   закрытому в ОДНОЙ сессии. Брокерская часть не скидывается.
     """
     q = abs(int(qty)) or 1
     broker = BROKER_FEE_PER_CONTRACT * q
@@ -84,7 +100,17 @@ def commission_for(symbol: str, price: float, qty: int, point_value: float,
     notional = abs(price) * (point_value or 1.0)
     rate = MOEX_TAKER_RATE.get(fee_group(symbol), MOEX_TAKER_RATE[_DEFAULT_GROUP])
     exchange = rate * notional * q
+    if scalper:
+        exchange *= SCALPER_DISCOUNT
     return broker + exchange
+
+
+def exchange_part(symbol: str, price: float, qty: int, point_value: float) -> float:
+    """Только БИРЖЕВАЯ часть тейкерского сбора (рубли). Отдельно от брокерской,
+    потому что скальперская скидка касается биржевой и НЕ касается брокерской."""
+    q = abs(int(qty)) or 1
+    rate = MOEX_TAKER_RATE.get(fee_group(symbol), MOEX_TAKER_RATE[_DEFAULT_GROUP])
+    return rate * abs(price) * (point_value or 1.0) * q
 
 
 def taker_points(symbol: str, price: float, qty: int, point_value: float | None = None) -> float:

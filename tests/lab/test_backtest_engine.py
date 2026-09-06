@@ -14,11 +14,15 @@ def make_bars(n=100, trend="up") -> list[Bar]:
             for i, p in enumerate(prices)]
 
 
+# Круги НОЧУЮТ (выход на следующие сутки после входа) — тогда биржевой сбор полный,
+# и ожидания ниже сравнимы с плоской моделью. Внутридневную скидку пинит
+# tests/lab/test_scalper_fee.py, здесь проверяется сам учёт комиссии в парах.
+_D = 86400
 _TRADES = [
     {"side": "buy", "price": 100.0, "qty": 1, "time": 1000},
-    {"side": "sell", "price": 105.0, "qty": 1, "time": 2000},
-    {"side": "buy", "price": 103.0, "qty": 1, "time": 3000},
-    {"side": "sell", "price": 108.0, "qty": 1, "time": 4000},
+    {"side": "sell", "price": 105.0, "qty": 1, "time": 1000 + _D},
+    {"side": "buy", "price": 103.0, "qty": 1, "time": 3000 + _D},
+    {"side": "sell", "price": 108.0, "qty": 1, "time": 3000 + 2 * _D},
 ]
 
 

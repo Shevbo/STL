@@ -5,7 +5,8 @@ import os
 from types import ModuleType
 from typing import Any
 
-from trader.lab.commission import commission_for
+from trader.lab.commission import (SCALPER_DISCOUNT, commission_for,
+                                   exchange_part)
 from trader.lab.runtime import BacktestRuntime, Bar
 from trader.lab.splice import seam_plan
 from trader.lab.script_guard import validate_script
@@ -84,48 +85,76 @@ def compute_metrics(trades: list[dict], initial_equity: float,
     pos_qty = 0               # signed open position, contracts
     pos_avg = 0.0             # entry average of the OPEN position
     carried_entry_fee = 0.0   # entry/averaging fees not yet realized against a close
+    carried_entry_exch = 0.0  # из них БИРЖЕВАЯ часть: только её режет скальперская скидка
+    # ВРЕМЯ ВХОДА, взвешенное по объёму — ровно так же, как pos_avg взвешивает цену.
+    # Нужно, чтобы отличить круг, закрытый ВНУТРИ сессии (биржевой сбор вдвое, см.
+    # SCALPER_DISCOUNT), от позиции, которая ночевала и платит полный.
+    pos_entry_ts = 0.0
     # Track weighted-average entry price across all round-trips for notional calc.
     _entry_price_sum = 0.0
     _entry_qty_sum = 0
     for t in trades:
         q = t["qty"] * (1 if t["side"] == "buy" else -1)
         p = t["price"]
+        ts = float(t.get("time") or 0)
         c = commission_for(symbol, p, t["qty"], point_value, taker=True)
         if pos_qty == 0:                       # flat → open
             pos_qty, pos_avg, carried_entry_fee = q, p, c
+            carried_entry_exch = exchange_part(symbol, p, t["qty"], point_value)
+            pos_entry_ts = ts
             _entry_price_sum += p * t["qty"]
             _entry_qty_sum += t["qty"]
         elif (pos_qty > 0) == (q > 0):         # same direction → average in
             tot = abs(pos_qty) + abs(q)
             pos_avg = (pos_avg * abs(pos_qty) + p * abs(q)) / tot
+            pos_entry_ts = (pos_entry_ts * abs(pos_qty) + ts * abs(q)) / tot
             pos_qty += q
             carried_entry_fee += c
+            carried_entry_exch += exchange_part(symbol, p, t["qty"], point_value)
             _entry_price_sum += p * t["qty"]
             _entry_qty_sum += t["qty"]
         else:                                  # opposite → close (fully or partially)
             closed = min(abs(pos_qty), abs(q))
             gross = (p - pos_avg) * (1 if pos_qty > 0 else -1) * closed * point_value
+            # СЕССИЯ. Бары бэктеста проштампованы московской стенкой в UTC, а вечерняя
+            # сессия FORTS принадлежит своему календарному дню, поэтому день = деление
+            # метки на сутки. Круг, у которого взвешенный вход и выход в одном дне,
+            # платит бирже половину.
+            same_session = int(ts // 86400) == int(pos_entry_ts // 86400)
+            entry_fee = carried_entry_fee
+            if same_session:
+                # Скидка касается ОБЕИХ ног круга и только БИРЖЕВОЙ их части.
+                c = commission_for(symbol, p, t["qty"], point_value,
+                                   taker=True, scalper=True)
+                entry_fee -= carried_entry_exch * (1 - SCALPER_DISCOUNT)
             # Net of: this closing fill's fee share + the carried entry fee share.
-            entry_fee_closed = carried_entry_fee * closed / abs(pos_qty)
+            entry_fee_closed = entry_fee * closed / abs(pos_qty)
             close_fee_closed = c * closed / abs(q)
             pairs.append({"time": t["time"], "pnl": gross - entry_fee_closed - close_fee_closed})
             new_qty = pos_qty + q
             if new_qty == 0:
-                pos_qty, pos_avg, carried_entry_fee = 0, 0.0, 0.0
+                pos_qty, pos_avg, carried_entry_fee, carried_entry_exch = 0, 0.0, 0.0, 0.0
             elif (new_qty > 0) == (pos_qty > 0):
                 # Partial reduce: fewer contracts at the SAME entry average. The
                 # old code re-based avg to the closing fill's price here, mis-
                 # realizing every later close of an averaging strategy — fixed
                 # identically in trader/lab/runtime.py and robot_runner/runtime.py.
                 pos_qty = new_qty
-                carried_entry_fee -= entry_fee_closed
+                # Списываем ДОЛЮ закрытого объёма, а не вычитаем начисленное: при
+                # скальперской скидке entry_fee_closed уже урезан, и вычитание его
+                # из полного котла оставило бы в нём лишнее.
+                _left = 1.0 - closed / (closed + abs(new_qty))
+                carried_entry_fee *= _left
+                carried_entry_exch *= _left
                 _entry_price_sum += p * abs(new_qty)
                 _entry_qty_sum += abs(new_qty)
             else:
                 # Flip through zero → the new leg opens fresh at the fill price.
                 pos_qty = new_qty
                 pos_avg = p
+                pos_entry_ts = ts          # новая нога открылась ЗДЕСЬ, не раньше
                 carried_entry_fee = c * abs(new_qty) / abs(q)
+                carried_entry_exch = exchange_part(symbol, p, abs(new_qty), point_value)
                 _entry_price_sum += p * abs(new_qty)
                 _entry_qty_sum += abs(new_qty)
 

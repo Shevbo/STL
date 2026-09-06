@@ -21,10 +21,14 @@ from trader.lab.runtime import Bar
 _SYMBOL = ""
 _PV = 1.0
 
+# Выходы НА СЛЕДУЮЩИЕ СУТКИ: иначе сработала бы скальперская скидка биржи и
+# ожидаемые числа перестали бы совпадать с плоской моделью. Здесь проверяется
+# частичное закрытие, а не тарифы — скидку пинит tests/lab/test_scalper_fee.py.
+_D = 86400
 _TRADES = [
     {"side": "buy", "price": 100.0, "qty": 10, "time": 1000},
-    {"side": "sell", "price": 110.0, "qty": 3, "time": 2000},
-    {"side": "sell", "price": 105.0, "qty": 7, "time": 3000},
+    {"side": "sell", "price": 110.0, "qty": 3, "time": 1000 + _D},
+    {"side": "sell", "price": 105.0, "qty": 7, "time": 1000 + 2 * _D},
 ]
 
 
@@ -57,8 +61,8 @@ def test_compute_metrics_partial_reduce_keeps_entry_avg():
     assert len(result["closed_pairs"]) == 2
     assert result["closed_pairs"][0]["pnl"] == pytest.approx(pair1)
     assert result["closed_pairs"][1]["pnl"] == pytest.approx(pair2)
-    assert result["closed_pairs"][0]["time"] == 2000
-    assert result["closed_pairs"][1]["time"] == 3000
+    assert result["closed_pairs"][0]["time"] == 1000 + _D
+    assert result["closed_pairs"][1]["time"] == 1000 + 2 * _D
 
 
 def _bar(t, price):
