@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from functools import lru_cache
 
 from trader.lab import indicators as I
+from trader.lab.commission import is_weekend
 from trader.lab.runtime import STLRuntime
 
 # registry: id -> dict(name, source, params_schema, signal, warmup, default_params)
@@ -267,6 +268,21 @@ def make_on_bar(rid: str):
         # баров, не по всему хвосту (урок explain 05.08.2026). Выходы (разворот,
         # тейк, стоп) живут в долине всегда — см. комментарий у in_death_valley.
         in_dv = dv_on and in_death_valley(_c(bars), dv_win, dv_pts)
+        # ВЫХОДНЫЕ. FORTS торгует в субботу и воскресенье, но там всё дороже вдвое —
+        # и биржевой сбор, и брокерский, и ГО. Замер бумажных роботов 06.09.2026:
+        # у восьми из десяти выходные плюсовые, а у macd_shectory1 они СЪЕЛИ весь
+        # результат (минус 20 856 руб по выходным против плюс 22 116 в будни). То
+        # есть запрет нужен адресный, а не всему реестру, — потому это параметр и
+        # он по умолчанию выключен.
+        #
+        # Гейтит ТОЛЬКО входы и доборы, как долина и разножка. Выходы работают в
+        # выходные всегда: позиция, открытая в пятницу, обязана иметь возможность
+        # закрыться в субботу, иначе фильтр держал бы её против сигнала.
+        # Смещение то же, что у расписания сторон: у агента бары в истинном UTC, и без
+        # поправки суббота начиналась бы для робота на три часа раньше московской.
+        _woff = int(params.get("bar_offset_min", 0) or 0) * 60
+        no_weekend = bool(int(params.get("skip_weekend", 0) or 0)
+                          and is_weekend(bars[-1].time + _woff))
         want = signal(bars[-need:], params)        # +1 / -1 / 0 / None
         # Кромка райдера s2i: сигнал пропал или сменил сторону — прошлое списание
         # больше не действует, следующее появление сигнала будет стоить свою единицу.
@@ -510,6 +526,9 @@ def make_on_bar(rid: str):
                 if in_dv:
                     note_skip("dv", price, d=1 if want > 0 else -1)
                     return
+                if no_weekend:
+                    note_skip("weekend", price, d=1 if want > 0 else -1)
+                    return
                 # Пропуск после крупной сделки: обратная нога разворота — это НОВЫЙ
                 # вход, и она обязана считаться сигналом наравне с входом из флэта.
                 # Выход выше уже исполнен: фильтр не держит в позиции, он не пускает
@@ -536,6 +555,8 @@ def make_on_bar(rid: str):
                     note_skip("sl", price)
                 elif in_dv:
                     note_skip("dv", price)
+                elif no_weekend:
+                    note_skip("weekend", price)
                 elif in_cooldown:
                     note_skip("cooldown", price)
                 elif s2i_consume(1 if want > 0 else -1):
@@ -597,8 +618,8 @@ def make_on_bar(rid: str):
             next_add = max(1, int(prev_add * k_avg + 0.5))
             add = min(next_add, avg_max - abs(cur))
             if cur_dir > 0 and price <= avg - k_step * atrv:
-                if in_dv:
-                    note_skip("dv", price)
+                if in_dv or no_weekend:
+                    note_skip("weekend" if no_weekend else "dv", price)
                 elif gap_ok(price):
                     await stl.place_order(symbol, "buy", add, price)
                     stl.set_state("avg_add", next_add)
@@ -607,8 +628,8 @@ def make_on_bar(rid: str):
                     note_skip("gap", price)
                 return
             if cur_dir < 0 and price >= avg + k_step * atrv:
-                if in_dv:
-                    note_skip("dv", price)
+                if in_dv or no_weekend:
+                    note_skip("weekend" if no_weekend else "dv", price)
                 elif gap_ok(price):
                     await stl.place_order(symbol, "sell", add, price)
                     stl.set_state("avg_add", next_add)
@@ -668,6 +689,7 @@ AVG_PARAMS = [
     # доходнее, и это надо мерить, а не предполагать. Запрещённая сторона означает
     # ВЫХОД В ФЛЭТ по своему сигналу (want -> 0), а не игнорирование сигнала: иначе
     # робот сидел бы в лонге против развернувшегося рынка вообще без выхода.
+    P("skip_weekend", "Не входить в выходные (0/1)", 0, 0, 1),
     P("allow_long", "Разрешить ЛОНГ (0=только шорт)", 1, 0, 1),
     P("allow_short", "Разрешить ШОРТ (0=только лонг)", 1, 0, 1),
     # РАСПИСАНИЕ СТОРОН ВНУТРИ ДНЯ. Утро, день и вечерка — разные рынки: утром
@@ -729,6 +751,7 @@ AVG_PARAMS_FORCED = [
     # доходнее, и это надо мерить, а не предполагать. Запрещённая сторона означает
     # ВЫХОД В ФЛЭТ по своему сигналу (want -> 0), а не игнорирование сигнала: иначе
     # робот сидел бы в лонге против развернувшегося рынка вообще без выхода.
+    P("skip_weekend", "Не входить в выходные (0/1)", 0, 0, 1),
     P("allow_long", "Разрешить ЛОНГ (0=только шорт)", 1, 0, 1),
     P("allow_short", "Разрешить ШОРТ (0=только лонг)", 1, 0, 1),
     # РАСПИСАНИЕ СТОРОН ВНУТРИ ДНЯ. Утро, день и вечерка — разные рынки: утром
