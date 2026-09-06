@@ -13,7 +13,10 @@ from trader.lab.commission import BROKER_FEE_PER_CONTRACT, commission_for
 
 SYM, PV = "RIU6", 1.7
 DAY = 86400
-T0 = 1788000000 // DAY * DAY + 8 * 3600      # утро условной сессии
+# СРЕДА 02.09.2026, 08:00. День недели тут не косметика: на выходных торгах сбор
+# удваивается, и фикстура, случайно попавшая на субботу, мерила бы совсем другое
+# (первая версия этого файла так и попала — T0 оказался субботой).
+T0 = 1788336000
 
 
 def _pair(exit_ts: int) -> float:
@@ -47,3 +50,47 @@ def test_scalper_flag_touches_only_the_exchange_part():
     broker = BROKER_FEE_PER_CONTRACT * 3
     assert abs((half - broker) - (full - broker) * 0.5) < 1e-9
     assert half > broker            # биржевая часть не обнулилась
+
+
+# ── выходные торги ───────────────────────────────────────────────────────────
+# FORTS торгует в субботу и воскресенье, и там И биржевой сбор, И брокерский, И ГО
+# удваиваются (оператор, 06.09.2026). У нас весь реестр минутный, то есть два дня
+# из семи считались вдвое дешевле, чем стоят.
+_SAT = 1788595200            # суббота 05.09.2026
+_WED = T0                    # среда 02.09.2026
+
+
+def test_the_fixture_days_are_what_they_claim():
+    """Тест про выходные бессмыслен, если фикстура промахнулась днём недели."""
+    import datetime as dt
+    assert dt.datetime.fromtimestamp(_SAT, dt.UTC).weekday() == 5
+    assert dt.datetime.fromtimestamp(_WED, dt.UTC).weekday() == 2
+
+
+def test_weekend_fill_costs_double():
+    weekday = commission_for(SYM, 80000.0, 1, PV, taker=True, ts=_WED)
+    weekend = commission_for(SYM, 80000.0, 1, PV, taker=True, ts=_SAT)
+    assert abs(weekend / weekday - 2.0) < 1e-9
+
+
+def test_weekend_and_scalper_discount_compose():
+    """Внутридневной круг в субботу: удвоение биржи и половинная ставка вместе."""
+    full_wknd = commission_for(SYM, 80000.0, 1, PV, taker=True, ts=_SAT)
+    scal_wknd = commission_for(SYM, 80000.0, 1, PV, taker=True, scalper=True, ts=_SAT)
+    broker_wknd = BROKER_FEE_PER_CONTRACT * 2
+    assert abs((scal_wknd - broker_wknd) - (full_wknd - broker_wknd) * 0.5) < 1e-9
+
+
+def test_margin_doubles_on_weekend_and_scales_by_account_status():
+    from trader.lab.commission import margin_for
+    exch = 21000.0
+    assert margin_for(exch, _WED, 1.0) == exch                  # КПУР, будни
+    assert margin_for(exch, _SAT, 1.0) == exch * 2              # КПУР, выходной
+    assert margin_for(exch, _WED, 2.4) == exch * 2.4            # до 01.09
+    assert margin_for(exch, _SAT, 2.4) == exch * 4.8
+
+
+def test_missing_timestamp_is_treated_as_a_weekday():
+    """Старые вызовы без метки не должны внезапно подорожать вдвое."""
+    assert commission_for(SYM, 80000.0, 1, PV, taker=True) == \
+challenge if False else commission_for(SYM, 80000.0, 1, PV, taker=True, ts=None)

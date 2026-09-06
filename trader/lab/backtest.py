@@ -97,10 +97,10 @@ def compute_metrics(trades: list[dict], initial_equity: float,
         q = t["qty"] * (1 if t["side"] == "buy" else -1)
         p = t["price"]
         ts = float(t.get("time") or 0)
-        c = commission_for(symbol, p, t["qty"], point_value, taker=True)
+        c = commission_for(symbol, p, t["qty"], point_value, taker=True, ts=ts)
         if pos_qty == 0:                       # flat → open
             pos_qty, pos_avg, carried_entry_fee = q, p, c
-            carried_entry_exch = exchange_part(symbol, p, t["qty"], point_value)
+            carried_entry_exch = exchange_part(symbol, p, t["qty"], point_value, ts)
             pos_entry_ts = ts
             _entry_price_sum += p * t["qty"]
             _entry_qty_sum += t["qty"]
@@ -110,7 +110,7 @@ def compute_metrics(trades: list[dict], initial_equity: float,
             pos_entry_ts = (pos_entry_ts * abs(pos_qty) + ts * abs(q)) / tot
             pos_qty += q
             carried_entry_fee += c
-            carried_entry_exch += exchange_part(symbol, p, t["qty"], point_value)
+            carried_entry_exch += exchange_part(symbol, p, t["qty"], point_value, ts)
             _entry_price_sum += p * t["qty"]
             _entry_qty_sum += t["qty"]
         else:                                  # opposite → close (fully or partially)
@@ -125,7 +125,7 @@ def compute_metrics(trades: list[dict], initial_equity: float,
             if same_session:
                 # Скидка касается ОБЕИХ ног круга и только БИРЖЕВОЙ их части.
                 c = commission_for(symbol, p, t["qty"], point_value,
-                                   taker=True, scalper=True)
+                                   taker=True, scalper=True, ts=ts)
                 entry_fee -= carried_entry_exch * (1 - SCALPER_DISCOUNT)
             # Net of: this closing fill's fee share + the carried entry fee share.
             entry_fee_closed = entry_fee * closed / abs(pos_qty)
@@ -154,7 +154,7 @@ def compute_metrics(trades: list[dict], initial_equity: float,
                 pos_avg = p
                 pos_entry_ts = ts          # новая нога открылась ЗДЕСЬ, не раньше
                 carried_entry_fee = c * abs(new_qty) / abs(q)
-                carried_entry_exch = exchange_part(symbol, p, abs(new_qty), point_value)
+                carried_entry_exch = exchange_part(symbol, p, abs(new_qty), point_value, ts)
                 _entry_price_sum += p * abs(new_qty)
                 _entry_qty_sum += abs(new_qty)
 

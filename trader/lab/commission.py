@@ -31,6 +31,29 @@ BROKER_FEE_PER_CONTRACT = 0.45
 # СРАВНЕНИЕ, а не только абсолютный итог.
 SCALPER_DISCOUNT = 0.5
 
+# ВЫХОДНЫЕ ДОРОЖЕ ВДВОЕ. На субботних и воскресных торгах FORTS и биржевой сбор, и
+# брокерская часть удваиваются, и вместе с ними удваивается ГО (риск переноса через
+# два нерабочих дня). Источник — оператор, 06.09.2026; в ISS отдельной выходной
+# ставки нет, там published BUYSELLFEE будних торгов.
+#
+# Для стратегии это не мелочь: у нас M1-реестр, а FORTS торгует и в выходные, то
+# есть примерно два дня из семи считались вдвое дешевле, чем стоят. Ошибка снова
+# НЕ нейтральна — она сильнее бьёт по тем конфигам, что крутят объём по выходным.
+WEEKEND_FEE_MULTIPLIER = 2.0
+
+
+def is_weekend(ts: float | int | None) -> bool:
+    """Суббота или воскресенье по МОСКОВСКОМУ календарю.
+
+    Бары бэктеста проштампованы московской стенкой в UTC, поэтому день недели берётся
+    из метки как есть. Для истинно-UTC источника (раннер на агенте) вызывающий обязан
+    прибавить смещение сам — здесь его взять неоткуда.
+    """
+    if not ts:
+        return False
+    import datetime as _dt
+    return _dt.datetime.fromtimestamp(float(ts), _dt.UTC).weekday() >= 5
+
 # MOEX taker fee as a FRACTION of contract notional, by instrument group
 # (exchange + clearing combined). Maker pays 0.
 MOEX_TAKER_RATE = {
@@ -85,32 +108,52 @@ def fee_group(symbol: str) -> str:
 
 
 def commission_for(symbol: str, price: float, qty: int, point_value: float,
-                   taker: bool, scalper: bool = False) -> float:
+                   taker: bool, scalper: bool = False,
+                   ts: float | int | None = None) -> float:
     """Total commission (rubles) for ONE fill of `qty` contracts of `symbol`.
 
     taker=True  → MOEX group fee on notional + broker fee  (backtests / market).
     taker=False → broker fee only                          (live / maker limit).
     scalper=True → биржевая часть вдвое: филл принадлежит кругу, открытому и
                    закрытому в ОДНОЙ сессии. Брокерская часть не скидывается.
+    ts           → метка филла: на выходных торгах ОБЕ части удваиваются.
     """
     q = abs(int(qty)) or 1
-    broker = BROKER_FEE_PER_CONTRACT * q
+    weekend = WEEKEND_FEE_MULTIPLIER if is_weekend(ts) else 1.0
+    broker = BROKER_FEE_PER_CONTRACT * q * weekend
     if not taker:
         return broker
     notional = abs(price) * (point_value or 1.0)
     rate = MOEX_TAKER_RATE.get(fee_group(symbol), MOEX_TAKER_RATE[_DEFAULT_GROUP])
-    exchange = rate * notional * q
+    exchange = rate * notional * q * weekend
     if scalper:
         exchange *= SCALPER_DISCOUNT
     return broker + exchange
 
 
-def exchange_part(symbol: str, price: float, qty: int, point_value: float) -> float:
+def exchange_part(symbol: str, price: float, qty: int, point_value: float,
+                  ts: float | int | None = None) -> float:
     """Только БИРЖЕВАЯ часть тейкерского сбора (рубли). Отдельно от брокерской,
     потому что скальперская скидка касается биржевой и НЕ касается брокерской."""
     q = abs(int(qty)) or 1
     rate = MOEX_TAKER_RATE.get(fee_group(symbol), MOEX_TAKER_RATE[_DEFAULT_GROUP])
-    return rate * abs(price) * (point_value or 1.0) * q
+    w = WEEKEND_FEE_MULTIPLIER if is_weekend(ts) else 1.0
+    return rate * abs(price) * (point_value or 1.0) * q * w
+
+
+def margin_for(exchange_margin: float, ts: float | int | None = None,
+               account_multiplier: float = 1.0) -> float:
+    """ГО ПОД ОДИН КОНТРАКТ на счёте, рубли.
+
+    Два множителя, и оба измерены, а не выбраны:
+      account_multiplier — во сколько раз брокер держит больше биржи. С 01.09.2026
+        у счёта статус КПУР, и замеры margin_multiplier_samples упали с ~2.3-2.8
+        до 1.00-1.11 (минимум 1.001): брокер держит практически биржевое ГО.
+        До 01.09 туда надо подставлять 2.4 — старые отчёты считались по нему.
+      выходные — биржа удваивает требование на субботу и воскресенье.
+    """
+    w = WEEKEND_FEE_MULTIPLIER if is_weekend(ts) else 1.0
+    return float(exchange_margin) * float(account_multiplier) * w
 
 
 def taker_points(symbol: str, price: float, qty: int, point_value: float | None = None) -> float:
