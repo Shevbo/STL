@@ -1,4 +1,6 @@
 # QUIK agent <-> STL contract (sprint02 Phase 1)
+nПроектная спецификация: gRPC контракт между STL и QUIK-агентом. Сообщения OrchestratorMessage/AgentMessage, их сериализация, версионирование proto. Основа связи STL↔агент.
+
 
 Phase 1 is READ-ONLY. No order transactions. See docs/sprint02.md for the source spec.
 

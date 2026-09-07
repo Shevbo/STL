@@ -1,4 +1,6 @@
 # Phase 2 — orders & maker execution (Slice 1)
+nПлан фазы 2 Sprint02: заявки и maker-исполнение из STL на боевом счёте. Описывает разделение ответственности между Lua/агентом/STL и приёмочную последовательность для оператора перед арминг.
+
 
 HUMAN-INITIATED ONLY. Orders are decided + confirmed by the operator in the STL UI.
 The agent and STL each enforce hard limits (defense in depth). No strategy/signals —
