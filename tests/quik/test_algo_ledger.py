@@ -10,29 +10,34 @@ from trader.quik.algo_ledger import (
 
 
 def test_apply_fill_open_extend_averages():
-    pos, avg, real = apply_fill(0, 0.0, 2, 100.0)
-    assert (pos, avg, real) == (2, 100.0, 0.0)
-    pos, avg, real = apply_fill(pos, avg, 2, 110.0)
+    # entry_ts_ms взвешивается ПО ОБЪЁМУ тем же приёмом, что и avg (07.09.2026).
+    pos, avg, ets, real = apply_fill(0, 0.0, 0, 2, 100.0, 1000)
+    assert (pos, avg, real, ets) == (2, 100.0, 0.0, 1000)
+    pos, avg, ets, real = apply_fill(pos, avg, ets, 2, 110.0, 2000)
     assert (pos, avg, real) == (4, 105.0, 0.0)
+    assert ets == 1500  # (1000×2 + 2000×2) / 4
 
 
 def test_apply_fill_partial_reduce_keeps_avg():
     # The 2026-07 partial-reduce bug class: fewer contracts, SAME entry average.
-    pos, avg, real = apply_fill(4, 105.0, -1, 120.0)
-    assert (pos, avg) == (3, 105.0)
+    # entry_ts_ms точно так же ДЕРЖИТСЯ на частичном закрытии, а не съезжает.
+    pos, avg, ets, real = apply_fill(4, 105.0, 1000, -1, 120.0, 5000)
+    assert (pos, avg, ets) == (3, 105.0, 1000)
     assert real == 15.0
     # Later full close realizes against the ORIGINAL avg.
-    pos, avg, real = apply_fill(pos, avg, -3, 100.0)
-    assert (pos, avg) == (0, 0.0)
+    pos, avg, ets, real = apply_fill(pos, avg, ets, -3, 100.0, 6000)
+    assert (pos, avg, ets) == (0, 0.0, 0)
     assert real == -15.0
 
 
 def test_apply_fill_short_and_flip():
-    pos, avg, real = apply_fill(0, 0.0, -2, 200.0)
-    assert (pos, avg, real) == (-2, 200.0, 0.0)
+    pos, avg, ets, real = apply_fill(0, 0.0, 0, -2, 200.0, 1000)
+    assert (pos, avg, real, ets) == (-2, 200.0, 0.0, 1000)
     # Flip -2 @200 -> +1 via buy 3 @190: realize 2x(200-190)=20, remainder opens at 190.
-    pos, avg, real = apply_fill(pos, avg, 3, 190.0)
-    assert (pos, avg, real) == (1, 190.0, 20.0)
+    # Новая нога открывается ЗДЕСЬ — entry_ts перескакивает на время флипа, а не
+    # наследует старый вход.
+    pos, avg, ets, real = apply_fill(pos, avg, ets, 3, 190.0, 2000)
+    assert (pos, avg, real, ets) == (1, 190.0, 20.0, 2000)
 
 
 def test_price_row_gross_net_commission():
@@ -40,12 +45,61 @@ def test_price_row_gross_net_commission():
                 order_num="o1", symbol="RIU6", side="sell", qty=2, price=84000.0,
                 dedup_key="q:t1")
     pv = 1.5  # RI: step 10, step cost 15 -> 1.5 ₽/point
-    row = price_row(f, pos=2, avg=83000.0, pv=pv)
+    row = price_row(f, pos=2, avg=83000.0, entry_ts_ms=0, pv=pv)
     assert row["pos_after"] == 0 and row["avg_after"] == 0.0
+    assert row["entry_ts_after"] == 0          # позиция закрыта целиком
     assert row["pnl_gross_rub"] == round((84000 - 83000) * 2 * pv, 2)
     assert row["commission_rub"] > 0
     assert row["pnl_net_rub"] == round(row["pnl_gross_rub"] - row["commission_rub"], 2)
     assert row["order_kind"] == "market"
+
+
+def test_price_row_scalper_discount_same_msk_day_only():
+    """07.09.2026: журнал не передавал ни scalper=, ни ts= в commission_for и всегда
+    брал полную ставку — оператор заметил это как «комиссия сегодня как на выходных»
+    в обычный будний день. Круг внутри одного МСК-дня обязан стоить меньше, чем тот
+    же круг, растянутый на сутки."""
+    entry_ts = 1_000_000_000            # произвольная будняя точка (не суббота/воскр.)
+    pv = 1.5
+    same_day = RawFill(robot_id="r1", mode="real", ts_ms=entry_ts + 3600_000,
+                       trade_num="t1", order_num="o1", symbol="RIU6", side="sell",
+                       qty=1, price=84000.0, dedup_key="q:t1")
+    next_day = RawFill(robot_id="r1", mode="real", ts_ms=entry_ts + 30 * 3600_000,
+                       trade_num="t2", order_num="o2", symbol="RIU6", side="sell",
+                       qty=1, price=84000.0, dedup_key="q:t2")
+    row_same = price_row(same_day, pos=1, avg=83000.0, entry_ts_ms=entry_ts, pv=pv)
+    row_next = price_row(next_day, pos=1, avg=83000.0, entry_ts_ms=entry_ts, pv=pv)
+    assert row_same["commission_rub"] < row_next["commission_rub"]
+    # gross тот же (сделки идентичны) — расходится только комиссия
+    assert row_same["pnl_gross_rub"] == row_next["pnl_gross_rub"]
+
+
+def test_price_row_opening_fill_never_gets_the_scalper_discount():
+    """Скидку нельзя применить к входу — журнал пишется в реальном времени и не
+    знает заранее, закроется ли круг в тот же день. Открывающий филл всегда полный."""
+    f = RawFill(robot_id="r1", mode="real", ts_ms=1_000_000_000, trade_num="t1",
+                order_num="o1", symbol="RIU6", side="buy", qty=1, price=83000.0,
+                dedup_key="q:t1")
+    row = price_row(f, pos=0, avg=0.0, entry_ts_ms=0, pv=1.5)
+    from trader.lab.commission import commission_for
+    full = commission_for("RIU6", 83000.0, 1, 1.5, taker=True)
+    assert abs(row["commission_rub"] - round(full, 2)) < 1e-9
+
+
+def test_price_row_weekend_fill_costs_more():
+    import datetime as dt
+    sat = dt.datetime(2026, 8, 22, 12, 0, tzinfo=dt.UTC)          # суббота, МСК = UTC+3 внутри дня
+    wed = dt.datetime(2026, 8, 19, 12, 0, tzinfo=dt.UTC)          # среда
+    pv = 1.5
+    f_sat = RawFill(robot_id="r1", mode="real", ts_ms=int(sat.timestamp() * 1000),
+                    trade_num="t1", order_num="o1", symbol="RIU6", side="buy", qty=1,
+                    price=83000.0, dedup_key="q:t1")
+    f_wed = RawFill(robot_id="r1", mode="real", ts_ms=int(wed.timestamp() * 1000),
+                    trade_num="t2", order_num="o2", symbol="RIU6", side="buy", qty=1,
+                    price=83000.0, dedup_key="q:t2")
+    row_sat = price_row(f_sat, pos=0, avg=0.0, entry_ts_ms=0, pv=pv)
+    row_wed = price_row(f_wed, pos=0, avg=0.0, entry_ts_ms=0, pv=pv)
+    assert row_sat["commission_rub"] > row_wed["commission_rub"]
 
 
 def _mirror():

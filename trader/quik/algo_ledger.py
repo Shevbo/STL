@@ -65,24 +65,37 @@ DDL = [
         avg_price    DOUBLE PRECISION NOT NULL,
         seeded_at_ms BIGINT NOT NULL
     )""",
+    # Взвешенное время входа открытой позиции — опора для скальперской скидки на
+    # закрывающем филле (07.09.2026, см. price_row). ADD COLUMN IF NOT EXISTS, а не
+    # только CREATE TABLE: на уже существующей таблице второе не добавит колонку.
+    "ALTER TABLE algo_ledger_state ADD COLUMN IF NOT EXISTS entry_ts_ms BIGINT NOT NULL DEFAULT 0",
 ]
 
 
-def apply_fill(pos: int, avg: float, delta: int, price: float) -> tuple[int, float, float]:
+def apply_fill(pos: int, avg: float, entry_ts_ms: int, delta: int, price: float,
+              ts_ms: int) -> tuple[int, float, int, float]:
     """Signed-space avg-cost replay of ONE fill. delta is +qty (buy) / -qty (sell).
-    Returns (new_pos, new_avg, realized_points). Mirrors robot_runner/runtime.py:
-    extending averages in, a partial reduce KEEPS the avg, a flip realizes the
-    whole old position and opens the remainder at the fill price."""
+    Returns (new_pos, new_avg, new_entry_ts_ms, realized_points). Mirrors
+    robot_runner/runtime.py: extending averages in, a partial reduce KEEPS the avg,
+    a flip realizes the whole old position and opens the remainder at the fill price.
+
+    entry_ts_ms — ВЗВЕШЕННОЕ время входа открытой позиции, тот же приём, каким уже
+    взвешивается avg: он копит доли ПО ОБЪЁМУ у каждого добора. Опора для
+    скальперской скидки в price_row (07.09.2026) — без него закрывающий филл не
+    знает, был ли вход в том же торговом дне."""
     new = pos + delta
     if pos == 0 or (pos > 0) == (delta > 0):  # open / extend
-        avg = (avg * abs(pos) + price * abs(delta)) / (abs(pos) + abs(delta))
-        return new, avg, 0.0
+        tot = abs(pos) + abs(delta)
+        avg = (avg * abs(pos) + price * abs(delta)) / tot
+        entry_ts_ms = int((entry_ts_ms * abs(pos) + ts_ms * abs(delta)) / tot)
+        return new, avg, entry_ts_ms, 0.0
     sign = 1 if pos > 0 else -1
-    if abs(delta) <= abs(pos):  # reduce (partial keeps avg) or full close
+    if abs(delta) <= abs(pos):  # reduce (partial keeps avg + entry_ts) or full close
         realized = (price - avg) * abs(delta) * sign
-        return new, (0.0 if new == 0 else avg), realized
+        return (new, (0.0 if new == 0 else avg),
+                (0 if new == 0 else entry_ts_ms), realized)
     realized = (price - avg) * abs(pos) * sign  # flip: close all, remainder opens here
-    return new, price, realized
+    return new, price, ts_ms, realized
 
 
 @dataclass
@@ -204,11 +217,11 @@ def backfill_real_tail(rid: str, fallback_symbol: str, recent_fills: list[dict],
             side=side, qty=qty, price=price,
             dedup_key=f"bf:{rid}:{oid}:{ts}:{side}:{qty}:{price:g}"))
     fills.sort(key=lambda f: (f.ts_ms, f.dedup_key))
-    pos, avg = 0, 0.0
+    pos, avg, entry_ts = 0, 0.0, 0
     rows: list[dict] = []
     for f in fills:
-        row = price_row(f, pos, avg, pv)
-        pos, avg = row["pos_after"], row["avg_after"]
+        row = price_row(f, pos, avg, entry_ts, pv)
+        pos, avg, entry_ts = row["pos_after"], row["avg_after"], row["entry_ts_after"]
         rows.append(row)
     if pos != seed_pos:
         return None
@@ -261,15 +274,44 @@ def parse_runner_log(text: str) -> list[dict]:
     return out
 
 
-def price_row(f: RawFill, pos: int, avg: float, pv: float) -> dict[str, Any]:
+def price_row(f: RawFill, pos: int, avg: float, entry_ts_ms: int,
+             pv: float) -> dict[str, Any]:
     """Apply one fill to (pos, avg) and price its P&L. Returns the DB row dict
-    plus the advanced state under 'pos_after'/'avg_after'."""
+    plus the advanced state under 'pos_after'/'avg_after'/'entry_ts_after'.
+
+    ИЗДЕРЖКИ (07.09.2026). До этой правки каждый филл стоил ПОЛНУЮ тейкерскую ставку
+    независимо от дня и от того, закрылся ли круг внутри сессии — оператор заметил
+    сам: «комиссия сегодня осталась высокой как на выходных», хотя день был будний.
+    Причина: trader.lab.commission получил скальперскую скидку и удвоение выходного
+    06.09, но ЭТОТ вызывающий (реальный журнал алготорговли) не передавал ни
+    scalper=, ни ts= — оставался на плоской модели молча, день за днём, будни и
+    выходные одинаково. Отсюда и наблюдение: «сегодня как на выходных» было буквально
+    точным описанием бага, а не совпадением.
+
+    СКИДКА ЗАДНИМ ЧИСЛОМ НЕВОЗМОЖНА. Журнал пишется в реальном времени: комиссия
+    ВХОДНОГО филла фиксируется ДО того, как станет известно, закроется ли круг в тот
+    же день. Поэтому скидка применяется только к ЗАКРЫВАЮЩЕМУ филлу и только на его
+    СОБСТВЕННОЙ комиссии — настоящая биржевая скидка касается обеих ног круга, здесь
+    экономия занижена, но никогда не переоценена. Той же логике в trader/lab/backtest.py
+    ретроспектива доступна (бэктест видит всю историю сразу), поэтому там скидка
+    честно делится на обе ноги — расхождение между бэктестом и этим журналом отсюда,
+    а не из ошибки.
+
+    МСК-СМЕЩЕНИЕ ОБЯЗАТЕЛЬНО. f.ts_ms — ИСТИННЫЙ UTC с агента, а не барная стенка
+    бэктеста (см. «Strategy time semantics» в CLAUDE.md); is_weekend() документирует
+    именно это требование к вызывающему.
+    """
     delta = f.qty if f.side == "buy" else -f.qty
-    new_pos, new_avg, realized_pts = apply_fill(pos, avg, delta, f.price)
+    is_close = pos != 0 and (pos > 0) != (delta > 0)      # закрывающая (или частичная)
+    new_pos, new_avg, new_entry_ts, realized_pts = apply_fill(
+        pos, avg, entry_ts_ms, delta, f.price, f.ts_ms)
     gross = realized_pts * pv
+    msk_ts = (f.ts_ms + _MSK_OFFSET_MS) / 1000.0
+    scalper = is_close and msk_date(entry_ts_ms) == msk_date(f.ts_ms)
     # Real robot orders go MARKETABLE (taker); paper follows the backtest taker
     # convention. Both therefore price the MOEX fee + broker fee.
-    comm = commission_for(f.symbol, f.price, f.qty, pv, taker=True)
+    comm = commission_for(f.symbol, f.price, f.qty, pv, taker=True,
+                          scalper=scalper, ts=msk_ts)
     return {
         "robot_id": f.robot_id, "mode": f.mode, "ts_ms": f.ts_ms,
         "trade_num": f.trade_num, "order_num": f.order_num, "symbol": f.symbol,
@@ -277,7 +319,8 @@ def price_row(f: RawFill, pos: int, avg: float, pv: float) -> dict[str, Any]:
         "order_kind": "market" if f.mode == "real" else "limit",
         "point_value": pv, "pnl_gross_rub": round(gross, 2),
         "commission_rub": round(comm, 2), "pnl_net_rub": round(gross - comm, 2),
-        "pos_after": new_pos, "avg_after": new_avg, "dedup_key": f.dedup_key,
+        "pos_after": new_pos, "avg_after": new_avg, "entry_ts_after": new_entry_ts,
+        "dedup_key": f.dedup_key,
     }
 
 
@@ -347,23 +390,33 @@ async def ingest_once(pool, store, now_ms: int) -> int:
     async with pool.acquire() as conn:
         async with conn.transaction():
             states = {r["robot_id"]: dict(r) for r in await conn.fetch(
-                "SELECT robot_id, position, avg_price, seeded_at_ms FROM algo_ledger_state")}
+                "SELECT robot_id, position, avg_price, seeded_at_ms, entry_ts_ms "
+                "FROM algo_ledger_state")}
             # Seed robots we see for the first time with their CURRENT book: the
             # open position predates the ledger and cannot be attributed per-fill.
             # The seed moment is the MIRROR's receipt time, not now: a fill landing
             # in the report gap is not yet inside the seeded position and must
             # still be ingested (ts > seed) rather than silently skipped.
+            #
+            # entry_ts_ms СЕЕТСЯ ТЕМ ЖЕ seed_ms: подлинное время входа сеянной
+            # позиции неизвестно (она открылась ДО первого запуска журнала), а
+            # seed_ms — консервативная оценка. Если позиция закроется в тот же
+            # день — скидка применится, возможно ошибочно; если позже — нет,
+            # и это чаще правда. Ошибка живёт максимум один раз на робота.
             seed_ms = int(mirror.get("received_at_ms") or now_ms)
             for r in mirror.get("robots", []):
                 rid = r.get("robot_id")
                 if not rid or rid in states:
                     continue
                 st = {"robot_id": rid, "position": int(r.get("position") or 0),
-                      "avg_price": float(r.get("avg_price") or 0), "seeded_at_ms": seed_ms}
+                      "avg_price": float(r.get("avg_price") or 0),
+                      "seeded_at_ms": seed_ms, "entry_ts_ms": seed_ms}
                 await conn.execute(
-                    "INSERT INTO algo_ledger_state(robot_id,position,avg_price,seeded_at_ms) "
-                    "VALUES($1,$2,$3,$4) ON CONFLICT (robot_id) DO NOTHING",
-                    rid, st["position"], st["avg_price"], st["seeded_at_ms"])
+                    "INSERT INTO algo_ledger_state(robot_id,position,avg_price,"
+                    "seeded_at_ms,entry_ts_ms) VALUES($1,$2,$3,$4,$5) "
+                    "ON CONFLICT (robot_id) DO NOTHING",
+                    rid, st["position"], st["avg_price"], st["seeded_at_ms"],
+                    st["entry_ts_ms"])
                 states[rid] = st
 
             for f in fills:
@@ -373,7 +426,8 @@ async def ingest_once(pool, store, now_ms: int) -> int:
                 pv = pv_map.get(f.symbol)
                 if not pv:
                     continue  # params not seen yet (60s cadence) — retry next pass
-                row = price_row(f, int(st["position"]), float(st["avg_price"]), pv)
+                row = price_row(f, int(st["position"]), float(st["avg_price"]),
+                                int(st.get("entry_ts_ms") or st["seeded_at_ms"]), pv)
                 got = await conn.fetchrow(
                     """INSERT INTO algo_trades (robot_id,mode,ts_ms,trade_num,order_num,
                          symbol,side,qty,price,order_kind,point_value,pnl_gross_rub,
@@ -388,8 +442,11 @@ async def ingest_once(pool, store, now_ms: int) -> int:
                 if got is None:
                     continue  # already ledgered
                 inserted += 1
-                st["position"], st["avg_price"] = row["pos_after"], row["avg_after"]
+                st["position"], st["avg_price"], st["entry_ts_ms"] = (
+                    row["pos_after"], row["avg_after"], row["entry_ts_after"])
                 await conn.execute(
-                    "UPDATE algo_ledger_state SET position=$2, avg_price=$3 WHERE robot_id=$1",
-                    f.robot_id, row["pos_after"], row["avg_after"])
+                    "UPDATE algo_ledger_state SET position=$2, avg_price=$3, "
+                    "entry_ts_ms=$4 WHERE robot_id=$1",
+                    f.robot_id, row["pos_after"], row["avg_after"],
+                    row["entry_ts_after"])
     return inserted
