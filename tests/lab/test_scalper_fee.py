@@ -113,6 +113,7 @@ def test_no_python_311_only_aliases_in_the_lab_hot_path():
     for f in root.rglob("*.py"):
         text = f.read_text(encoding="utf-8")
         for i, line in enumerate(text.splitlines(), 1):
-            if "datetime.UTC" in line or re.search(r"\b_?dt\.UTC\b", line):
+            code = line.split("#", 1)[0]   # комментарий про ловушку не ловушка
+            if "datetime.UTC" in code or re.search(r"_?dt\.UTC", code):
                 bad.append(f"{f.relative_to(root)}:{i}")
     assert not bad, f"datetime.UTC есть только с Python 3.11: {bad}"
