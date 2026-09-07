@@ -8,6 +8,8 @@
 Тест пинит ровно то, что было сломано: одинаковую цену круга независимо от того,
 закрылся он в тот же день или назавтра.
 """
+import re
+
 from trader.lab.backtest import compute_metrics
 from trader.lab.commission import BROKER_FEE_PER_CONTRACT, commission_for
 
@@ -95,3 +97,22 @@ def test_missing_timestamp_is_treated_as_a_weekday():
     assert (commission_for(SYM, 80000.0, 1, PV, taker=True)
             == commission_for(SYM, 80000.0, 1, PV, taker=True, ts=None)
             == commission_for(SYM, 80000.0, 1, PV, taker=True, ts=_WED))
+
+
+def test_no_python_311_only_aliases_in_the_lab_hot_path():
+    """i9 держит СВОЮ копию кода и свой интерпретатор постарше.
+
+    07.09.2026 одна буква — datetime.UTC вместо timezone.utc — уронила все 12 960
+    прогонов кампании: комбинации возвращали ошибку, задания помечались done и не
+    оставляли ни одной строки. Тест сторожит именно этот класс: псевдонимы,
+    появившиеся в 3.11, в коде, который уезжает на машину перебора.
+    """
+    import pathlib
+    root = pathlib.Path(__file__).resolve().parents[2] / "trader" / "lab"
+    bad = []
+    for f in root.rglob("*.py"):
+        text = f.read_text(encoding="utf-8")
+        for i, line in enumerate(text.splitlines(), 1):
+            if "datetime.UTC" in line or re.search(r"\b_?dt\.UTC\b", line):
+                bad.append(f"{f.relative_to(root)}:{i}")
+    assert not bad, f"datetime.UTC есть только с Python 3.11: {bad}"

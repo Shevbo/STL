@@ -63,7 +63,11 @@ def is_weekend(ts: float | int | None) -> bool:
     if not ts:
         return False
     import datetime as _dt
-    return _dt.datetime.fromtimestamp(float(ts), _dt.UTC).weekday() >= 5
+    # timezone.utc, а НЕ datetime.UTC: псевдоним UTC появился только в Python 3.11, а
+    # машина перебора i9 держит свою копию кода и свой интерпретатор постарше. 07.09.2026
+    # эта одна буква стоила кампании: 12 960 прогонов вернули «module datetime has no
+    # attribute UTC», шесть заданий пометились done и не оставили НИ ОДНОЙ строки.
+    return _dt.datetime.fromtimestamp(float(ts), _dt.timezone.utc).weekday() >= 5
 
 # MOEX taker fee as a FRACTION of contract notional, by instrument group
 # (exchange + clearing combined). Maker pays 0.
