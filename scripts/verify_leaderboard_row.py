@@ -32,7 +32,11 @@ async def main():
     pv = (await fetch_contract_spec(SYM) or {}).get("point_value") or 1.0
     bars = await load_bars_iss(SYM, A, B, 1)
     o, c = bars[0].open, bars[-1].close
-    fee = commission_for(SYM, o, 1, pv, taker=True) + commission_for(SYM, c, 1, pv, taker=True)
+    # ts= обязателен и здесь: без него эталон всегда берёт будничную ставку, даже
+    # если открытие или закрытие легло на выходной торговый день — нашло окно
+    # stl-dev-spare 07.09.2026, читая verify_leaderboard_row.py против свежей модели.
+    fee = (commission_for(SYM, o, 1, pv, taker=True, ts=bars[0].time)
+          + commission_for(SYM, c, 1, pv, taker=True, ts=bars[-1].time))
     peak = mae_h = 0.0
     for b in bars:
         cur = (b.close - o) * pv
