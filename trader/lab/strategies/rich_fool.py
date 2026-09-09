@@ -58,6 +58,7 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
     step_gap_pct = float(params.get("step_gap_pct", 25)) / 100.0  # шаг между ступенями = amp·gap
     sl_pct = float(params.get("sl_pct", 30)) / 100.0             # риск R = amp·sl_pct
     rr = float(params.get("rr_x10", 20)) / 10.0
+    vol_mult = float(params.get("vol_mult", 10)) / 10.0          # рост объёма ступени ×hit (10=1.0=ровно qty)
     invert = int(params.get("invert", 0))
     allow_long = int(params.get("allow_long", 1))
     allow_short = int(params.get("allow_short", 1))
@@ -166,7 +167,8 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
                 allowed = (trade_dir > 0 and allow_long) or (trade_dir < 0 and allow_short)
                 if allowed and (fresh or add):
                     px = up[hit] if fire > 0 else dn[hit]
-                    await stl.place_order(symbol, "buy" if trade_dir > 0 else "sell", qty, px)
+                    step_qty = max(1, round(qty * (vol_mult ** hit)))   # ступень hit: qty·vol_mult^hit
+                    await stl.place_order(symbol, "buy" if trade_dir > 0 else "sell", step_qty, px)
                     stl.set_state("hit", hit + 1)
                     stl.set_state("side_locked", fire)
                     stl.set_state("dir", trade_dir)
@@ -210,6 +212,8 @@ STRATEGY_META = {
          "hint": "Объём одной сработавшей заявки"},
         {"key": "sl_pct", "label": "Риск R, % амплитуды", "type": "number", "default": 30, "min": 5, "max": 100,
          "hint": "Стоп-лосс от средней входа = amp·sl_pct/100"},
+        {"key": "vol_mult", "label": "Рост объёма ступени ×10 (10=ровно, 20=×2)", "type": "number", "default": 10, "min": 10, "max": 40,
+         "hint": "Объём ступени hit = qty·(vol_mult/10)^hit. 20 = каждая следующая ступень вдвое крупнее"},
         {"key": "rr_x10", "label": "R:R ×10 (20=2:1)", "type": "number", "default": 20, "min": 5, "max": 50,
          "hint": "Тейк = rr × R от средней входа"},
         {"key": "invert", "label": "Инверсия (0/1)", "type": "number", "default": 0, "min": 0, "max": 1,

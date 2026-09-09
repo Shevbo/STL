@@ -91,6 +91,16 @@ def test_up_breakout_enters_long_and_ladders_the_second_step():
     assert len(buys_before_first_sell) == 2, f"две ступени лестницы, получили {buys_before_first_sell}"
 
 
+def test_ladder_volume_doubles_each_step():
+    orders = _run(_up_break_then_run_up(), vol_mult=20, step_count=3)
+    qtys = []
+    for s, q, _ in orders:
+        if s == "sell":
+            break
+        qtys.append(q)
+    assert qtys == [1, 2, 4], f"объёмы ступеней ×2: ожидали [1,2,4], получили {qtys}"
+
+
 def test_up_breakout_inverted_is_a_short():
     plain = _run(_up_break_then_run_up())
     inv = _run(_up_break_then_run_up(), invert=1)
