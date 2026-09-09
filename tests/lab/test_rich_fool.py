@@ -101,6 +101,31 @@ def test_ladder_volume_doubles_each_step():
     assert qtys == [1, 2, 4], f"объёмы ступеней ×2: ожидали [1,2,4], получили {qtys}"
 
 
+def _entry_prices(orders):
+    px = []
+    for s, q, p in orders:
+        if s == "sell":
+            break
+        px.append(p)
+    return px
+
+
+def test_spacing_progression_shrinks_the_gap_further_out():
+    # долгий проезд вверх, чтобы набрать все 5 ступеней
+    d2 = D0 + 2 * DAY
+    tail = [_bar(d2, OPEN_HM + m, 100.0, 100.2, 99.8, 100.0) for m in range(0, 2)]
+    for i, m in enumerate(range(2, 44)):
+        px = 101.0 + i * 3.0
+        tail.append(_bar(d2, OPEN_HM + m, px, px + 1.0, px - 0.5, px))
+    lin = _entry_prices(_run(tail, step_count=5, spacing=0, step_gap_pct=25))
+    prog = _entry_prices(_run(tail, step_count=5, spacing=1, span_pct=120))
+    assert len(lin) == 5 and len(prog) == 5, (lin, prog)
+    lin_gaps = [round(lin[i + 1] - lin[i], 3) for i in range(4)]
+    prog_gaps = [round(prog[i + 1] - prog[i], 3) for i in range(4)]
+    assert max(lin_gaps) - min(lin_gaps) < 1e-6, f"spacing=0 — равный шаг: {lin_gaps}"
+    assert all(prog_gaps[i] > prog_gaps[i + 1] for i in range(3)), f"spacing=1 — шаг убывает: {prog_gaps}"
+
+
 def test_up_breakout_inverted_is_a_short():
     plain = _run(_up_break_then_run_up())
     inv = _run(_up_break_then_run_up(), invert=1)

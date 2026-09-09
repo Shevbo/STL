@@ -55,7 +55,9 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
     n_days = max(1, int(params.get("n_days", 5)))
     dist_pct = float(params.get("dist_pct", 50)) / 100.0        # 1-я ступень = amp·dist_pct
     step_count = max(1, int(params.get("step_count", 3)))
-    step_gap_pct = float(params.get("step_gap_pct", 25)) / 100.0  # шаг между ступенями = amp·gap
+    step_gap_pct = float(params.get("step_gap_pct", 25)) / 100.0  # равный шаг (spacing=0) = amp·gap
+    spacing = int(params.get("spacing", 0))                       # 0=лин, 1=убыв.шаг, 2=нараст.шаг
+    span_pct = float(params.get("span_pct", 100)) / 100.0         # D = размах 1-й..последней ступени (spacing!=0)
     sl_pct = float(params.get("sl_pct", 30)) / 100.0             # риск R = amp·sl_pct
     rr = float(params.get("rr_x10", 20)) / 10.0
     vol_mult = float(params.get("vol_mult", 10)) / 10.0          # рост объёма ступени ×hit (10=1.0=ровно qty)
@@ -136,9 +138,27 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
         if amp <= 0 or prev_close <= 0:
             stl.set_state("day_done", 1)
             return
-        base, gap = amp * dist_pct, amp * step_gap_pct
-        stl.set_state("levels_up", [prev_close + base + i * gap for i in range(step_count)])
-        stl.set_state("levels_dn", [prev_close - base - i * gap for i in range(step_count)])
+        # Смещения ступеней от вчерашнего закрытия. base = 1-я ступень.
+        # spacing=0: равный шаг amp·step_gap_pct (прежнее поведение).
+        # spacing!=0: НЕЛИНЕЙНАЯ прогрессия. D = полный размах 1-й..последней ступени
+        #   = amp·span_pct. Веса промежутков w_k (k=1..step_count-1): 1 = убывающий шаг
+        #   (w_k=1/k, плотнее ДАЛЬШЕ от цены), 2 = нарастающий (w_k=1/(N-k), реже дальше).
+        #   gap_k = D·w_k/Σw — сумма промежутков ровно D.
+        base = amp * dist_pct
+        n = step_count
+        if spacing == 0 or n <= 1:
+            offs = [base + i * amp * step_gap_pct for i in range(n)]
+        else:
+            D = amp * span_pct
+            w = [1.0 / k for k in range(1, n)] if spacing == 1 else [1.0 / (n - k) for k in range(1, n)]
+            sw = sum(w) or 1.0
+            gaps = [D * x / sw for x in w]
+            offs, acc = [base], base
+            for g in gaps:
+                acc += g
+                offs.append(acc)
+        stl.set_state("levels_up", [prev_close + o for o in offs])
+        stl.set_state("levels_dn", [prev_close - o for o in offs])
         stl.set_state("R", amp * sl_pct)
         stl.set_state("hit", 0)
         stl.set_state("side_locked", 0)
@@ -206,8 +226,12 @@ STRATEGY_META = {
          "hint": "Первый уровень = вчерашнее закрытие ± amp·dist_pct/100"},
         {"key": "step_count", "label": "Ступеней в лестнице", "type": "number", "default": 3, "min": 1, "max": 5,
          "hint": "Сколько стоп-заявок с каждой стороны"},
-        {"key": "step_gap_pct", "label": "Шаг между ступенями, % амплитуды", "type": "number", "default": 25, "min": 0, "max": 100,
-         "hint": "Расстояние между соседними ступенями = amp·step_gap_pct/100"},
+        {"key": "step_gap_pct", "label": "Шаг между ступенями, % амплитуды (при spacing=0)", "type": "number", "default": 25, "min": 0, "max": 100,
+         "hint": "Равный шаг между соседними ступенями = amp·step_gap_pct/100. Игнорируется при spacing!=0"},
+        {"key": "spacing", "label": "Прогрессия ступеней 0/1/2", "type": "number", "default": 0, "min": 0, "max": 2,
+         "hint": "0=равный шаг. 1=убывающий шаг (ступени плотнее ДАЛЬШЕ от цены). 2=нарастающий шаг (реже дальше). При 1/2 общий размах задаёт span_pct"},
+        {"key": "span_pct", "label": "Полный размах лестницы D, % амплитуды (при spacing!=0)", "type": "number", "default": 100, "min": 20, "max": 300,
+         "hint": "Расстояние от 1-й до последней ступени = amp·span_pct/100. Промежутки делятся по прогрессии spacing"},
         {"key": "qty", "label": "Контрактов на ступень", "type": "number", "default": 1, "min": 1, "max": 10,
          "hint": "Объём одной сработавшей заявки"},
         {"key": "sl_pct", "label": "Риск R, % амплитуды", "type": "number", "default": 30, "min": 5, "max": 100,
