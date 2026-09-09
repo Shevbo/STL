@@ -61,6 +61,7 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
     sl_pct = float(params.get("sl_pct", 30)) / 100.0             # риск R = amp·sl_pct
     rr = float(params.get("rr_x10", 20)) / 10.0
     vol_mult = float(params.get("vol_mult", 10)) / 10.0          # рост объёма ступени ×hit (10=1.0=ровно qty)
+    max_contracts = max(1, int(params.get("max_contracts", 100)))  # жёсткий потолок позиции (защита от vol_mult^step_count)
     invert = int(params.get("invert", 0))
     allow_long = int(params.get("allow_long", 1))
     allow_short = int(params.get("allow_short", 1))
@@ -188,6 +189,10 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
                 if allowed and (fresh or add):
                     px = up[hit] if fire > 0 else dn[hit]
                     step_qty = max(1, round(qty * (vol_mult ** hit)))   # ступень hit: qty·vol_mult^hit
+                    step_qty = min(step_qty, max_contracts - abs(cur_qty))   # жёсткий потолок
+                    if step_qty <= 0:
+                        stl.set_state("hit", step_count)                # лестница упёрлась в потолок
+                        return
                     await stl.place_order(symbol, "buy" if trade_dir > 0 else "sell", step_qty, px)
                     stl.set_state("hit", hit + 1)
                     stl.set_state("side_locked", fire)
@@ -220,11 +225,11 @@ STRATEGY_META = {
     "source": "гипотеза оператора 09.09.2026",
     "params_schema": [
         {"key": "symbol", "label": "Инструмент", "type": "text", "default": "RIU6", "hint": "FORTS тикер"},
-        {"key": "n_days", "label": "N дней для амплитуды", "type": "number", "default": 5, "min": 1, "max": 10,
+        {"key": "n_days", "label": "N дней для амплитуды", "type": "number", "default": 5, "min": 1, "max": 30,
          "hint": "Сколько завершённых дней усредняем в дневной размах (high-low)"},
         {"key": "dist_pct", "label": "Отдаление 1-й ступени, % амплитуды", "type": "number", "default": 50, "min": 5, "max": 200,
          "hint": "Первый уровень = вчерашнее закрытие ± amp·dist_pct/100"},
-        {"key": "step_count", "label": "Ступеней в лестнице", "type": "number", "default": 3, "min": 1, "max": 5,
+        {"key": "step_count", "label": "Ступеней в лестнице", "type": "number", "default": 3, "min": 1, "max": 25,
          "hint": "Сколько стоп-заявок с каждой стороны"},
         {"key": "step_gap_pct", "label": "Шаг между ступенями, % амплитуды (при spacing=0)", "type": "number", "default": 25, "min": 0, "max": 100,
          "hint": "Равный шаг между соседними ступенями = amp·step_gap_pct/100. Игнорируется при spacing!=0"},
@@ -238,6 +243,8 @@ STRATEGY_META = {
          "hint": "Стоп-лосс от средней входа = amp·sl_pct/100"},
         {"key": "vol_mult", "label": "Рост объёма ступени ×10 (10=ровно, 20=×2)", "type": "number", "default": 10, "min": 10, "max": 40,
          "hint": "Объём ступени hit = qty·(vol_mult/10)^hit. 20 = каждая следующая ступень вдвое крупнее"},
+        {"key": "max_contracts", "label": "Жёсткий потолок позиции", "type": "number", "default": 100, "min": 1, "max": 500,
+         "hint": "Лестница перестаёт доливать при достижении этого числа контрактов (защита от vol_mult^step_count)"},
         {"key": "rr_x10", "label": "R:R ×10 (20=2:1)", "type": "number", "default": 20, "min": 5, "max": 50,
          "hint": "Тейк = rr × R от средней входа"},
         {"key": "invert", "label": "Инверсия (0/1)", "type": "number", "default": 0, "min": 0, "max": 1,

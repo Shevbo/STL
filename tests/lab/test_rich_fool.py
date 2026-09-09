@@ -126,6 +126,18 @@ def test_spacing_progression_shrinks_the_gap_further_out():
     assert all(prog_gaps[i] > prog_gaps[i + 1] for i in range(3)), f"spacing=1 — шаг убывает: {prog_gaps}"
 
 
+def test_max_contracts_caps_the_ladder():
+    # vol_mult=20, step_count=5 -> объёмы 1,2,4,8,16 (сумма 31). Потолок 6 -> добор
+    # останавливается, суммарная позиция не превышает 6.
+    orders = _run(_up_break_then_run_up(), step_count=5, vol_mult=20, max_contracts=6)
+    signed = 0
+    peak = 0
+    for s, q, _ in orders:
+        signed += q if s == "buy" else -q
+        peak = max(peak, abs(signed))
+    assert peak <= 6, f"позиция превысила потолок max_contracts=6: пик {peak}"
+
+
 def test_up_breakout_inverted_is_a_short():
     plain = _run(_up_break_then_run_up())
     inv = _run(_up_break_then_run_up(), invert=1)
