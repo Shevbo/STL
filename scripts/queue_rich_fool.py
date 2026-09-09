@@ -62,6 +62,7 @@ def main() -> None:
                     "scriptCode": CODE, "symbol": sym,
                     "baseParams": dict(PIN, symbol=sym, open_hour=oh, invert=inv),
                     "dateFrom": D_FROM, "dateTo": D_TO, "engine": "remote",
+                    "priority": 40,        # прямой запрос оператора — вперёд фоновых кампаний
                     "paramSets": [{k: c[k] for k in keys if k not in ("open_hour", "invert")}
                                  for c in sets],
                 })
