@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "rag": {
+      "command": "ssh",
+      "args": ["sdev", "cd /home/shevbo/ragkit && ./.venv/bin/python -m ragkit.server configs/stl.toml"]
+    }
+  }
+}
