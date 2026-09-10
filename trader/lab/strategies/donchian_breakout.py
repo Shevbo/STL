@@ -32,6 +32,7 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
     entry_period = int(params.get("entry_period", 20))
     exit_period  = int(params.get("exit_period", 10))
     qty          = int(params.get("qty", 1))
+    invert       = int(params.get("invert", 0))
 
     # Need enough bars for the longest channel
     n_needed = entry_period + 2
@@ -43,13 +44,31 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
     history = bars[:-1]
     current = bars[-1]
 
-    entry_high = max(b.high for b in history[-entry_period:])
-
     # Exit channel (shorter period) — safe minimum
     xp = min(exit_period, len(history))
-    exit_low = min(b.low for b in history[-xp:])
 
     pos = await stl.get_position(symbol)
+
+    if invert:
+        # Зеркало: short-only. Вход при пробое низа вниз, выход при пробое верха вверх.
+        entry_low = min(b.low for b in history[-entry_period:])
+        exit_high = max(b.high for b in history[-xp:])
+        if pos.side == "flat":
+            if current.close < entry_low:
+                await stl.place_order(symbol, "sell", qty, current.close)
+                stl.log(
+                    f"SELL close={current.close:.2f}  entry_low={entry_low:.2f}"
+                )
+        elif pos.side == "short":
+            if current.close > exit_high:
+                await stl.place_order(symbol, "buy", pos.quantity, current.close)
+                stl.log(
+                    f"BUY  close={current.close:.2f}  exit_high={exit_high:.2f}"
+                )
+        return
+
+    entry_high = max(b.high for b in history[-entry_period:])
+    exit_low = min(b.low for b in history[-xp:])
 
     if pos.side == "flat":
         if current.close > entry_high:

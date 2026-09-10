@@ -36,6 +36,7 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
     atr_period = int(params.get("atr_period", 10))
     mult = float(params.get("multiplier", 30)) / 10.0
     qty = int(params.get("qty", 1))
+    invert = int(params.get("invert", 0))
 
     need = atr_period + 3
     bars = await stl.get_bars(symbol, tf=1, n=need)
@@ -58,13 +59,16 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
     # Persisted trend direction: +1 up, -1 down, 0 not set yet.
     # Enter ONLY on an actual trend change, then hold until it reverses —
     # otherwise the band test fires every bar and the position keeps growing.
-    trend = int(stl.get_state("trend", 0))
+    # invert=1 зеркалит сигнал (лонг↔шорт) для проверки «механизм, а не сторона».
+    trend_raw = int(stl.get_state("trend", 0))
+    trend = -trend_raw if invert else trend_raw
 
-    new_trend = trend
+    new_trend_raw = trend_raw
     if cur_close > upper_prev:
-        new_trend = 1
+        new_trend_raw = 1
     elif cur_close < lower_prev:
-        new_trend = -1
+        new_trend_raw = -1
+    new_trend = -new_trend_raw if invert else new_trend_raw
 
     # Publish the next planned operation: the price level at which the trend would
     # flip and the robot would act. Drawn as a dotted line in the robot window.
@@ -101,7 +105,7 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
         await stl.place_order(symbol, "sell", qty, cur_close)               # open short
         stl.log(f"ST flip DOWN — short @ {cur_close:.0f} (lower={lower_prev:.0f})")
 
-    stl.set_state("trend", new_trend)
+    stl.set_state("trend", new_trend_raw)
 
 
 async def on_stop(stl: STLRuntime, params: dict) -> None:
