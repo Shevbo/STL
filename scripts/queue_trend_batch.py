@@ -53,6 +53,9 @@ STRATEGIES = {
         },
     },
 }
+# slug campaign в run_id обрезается бэкендом до 20 символов — имена держим короче,
+# иначе суффикс i0/i1 отрежется и зеркало сколлапсирует в дубликат.
+ABBR = {"supertrend": "sup", "donchian": "don"}
 PIN = dict(qty=1, allow_long=1, allow_short=1, bar_offset_min=0)
 
 
@@ -70,6 +73,8 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--submit", action="store_true")
+    ap.add_argument("--inv", type=int, default=None,
+                    help="только это зеркало (0/1); по умолчанию оба")
     args = ap.parse_args()
 
     jobs = []
@@ -78,8 +83,10 @@ def main() -> None:
         for sym in SYMBOLS:
             for win, d_from, d_to in WINDOWS:
                 for inv in (0, 1):
+                    if args.inv is not None and inv != args.inv:
+                        continue
                     jobs.append({
-                        "campaign": f"trendbatch-{strategy}-{sym}-{win}-inv{inv}",
+                        "campaign": f"tb-{ABBR[strategy]}-{sym.lower()}-{win}-i{inv}",
                         "scriptCode": meta["code"], "symbol": sym,
                         "baseParams": dict(PIN, symbol=sym, invert=inv),
                         "dateFrom": d_from, "dateTo": d_to, "engine": "remote",
