@@ -1880,6 +1880,7 @@ def create_app() -> FastAPI:
         """Return available built-in strategy templates with param schemas."""
         _require_any_auth(request)
         from trader.lab.strategies.donchian_breakout import STRATEGY_META as donchian_meta
+        from trader.lab.strategies.rich_fool import STRATEGY_META as rich_fool_meta
         from trader.lab.strategies.shaving_ri import STRATEGY_META as shaving_ri_meta
         from trader.lab.strategies.us_open_fvg import STRATEGY_META as us_open_fvg_meta
         core = [
@@ -2029,6 +2030,15 @@ def create_app() -> FastAPI:
                 "params_schema": us_open_fvg_meta["params_schema"],
                 "script_code": "from trader.lab.strategies.us_open_fvg import on_bar, on_start, on_stop",
                 "default_params": {p["key"]: p["default"] for p in us_open_fvg_meta["params_schema"]},
+            },
+            {
+                "id": "rich_fool",
+                "name": rich_fool_meta["name"],
+                "description": rich_fool_meta["description"],
+                "source": rich_fool_meta["source"],
+                "params_schema": rich_fool_meta["params_schema"],
+                "script_code": "from trader.lab.strategies.rich_fool import on_bar, on_start, on_stop",
+                "default_params": {p["key"]: p["default"] for p in rich_fool_meta["params_schema"]},
             },
             {
                 "id": "shaving_ri",
