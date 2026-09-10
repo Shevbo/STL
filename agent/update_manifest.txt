@@ -5,6 +5,7 @@ trader/lab/window_metrics.py
 trader/lab/strategies/library.py
 trader/lab/strategies/us_open_fvg.py
 trader/lab/strategies/rich_fool.py
+trader/lab/strategies/swing_trend.py
 trader/lab/strategies/donchian_breakout.py
 trader/lab/strategies/ema_crossover.py
 trader/lab/strategies/rsi_mean_reversion.py
