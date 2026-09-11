@@ -180,6 +180,12 @@ export interface StrategyOverview {
   sl: string;         // описание стоп-лосса
 }
 
+// Автор ТЕКСТА ОПИСАНИЯ на портале (/?strategy=<id>) — НЕ автор стратегии.
+export interface StrategyCopyBy {
+  author: string;   // кто писал текст описания
+  date: string;     // когда
+}
+
 // Timeframe + TP + SL are shared: all strategies run on M1 and use the SAME
 // position-management layer (make_on_bar) — take-profit by tp_atr and an OPTIONAL
 // stop-loss by sl_frac (% of the TP distance, off by default — averaging instead).
@@ -223,10 +229,26 @@ export const STRATEGY_OVERVIEW: Record<string, StrategyOverview> = {
     entry: 'Order Block (ICT): в окне lookback ищется импульсная свеча (|тело| ≥ impulse_frac), затем последняя контр-свеча перед ней — зона заказов. Лонг, когда цена возвращается в зону бычьего OB [low, high]; шорт — в зону медвежьего.' },
   pivot_reversal: { timeframe: TF, tp: TP, sl: SL,
     entry: 'Контртренд от вчерашних floor-пивотов: P=(H+L+C)/3 предыдущего дня, R1=2P−L, S1=2P−H (уровень 2 = R2/S2, дальше). Цена ≤ S1 → лонг (перепродано), ≥ R1 → шорт.' },
+  rich_fool: {
+    timeframe: 'Предоткрытийное окно: лестница выставляется за place_lead_min минут до открытия (07:00 МСК по умолчанию) и живёт ещё hold_min минут после него, то есть на барах ночной сессии и открытия.',
+    entry: 'Предоткрытийная лестница пробоя. От вчерашнего закрытия вверх и вниз расставляются step_count стоп-заявок: первая на amp×dist_pct/100, каждая следующая дальше на amp×step_gap_pct/100 (при spacing≠0 шаг идёт по прогрессии в полный размах span_pct). amp — средний дневной размах high-low за n_days. Сторону решает факт срабатывания: пробило вверх — робот в лонге, вниз — в шорте. invert=1 переворачивает обе стороны (фейд пробоя).',
+    tp: 'Тейк — в долях риска: rr_x10/10 × R (по умолчанию 2:1), от средней входа. Незаполненные ступени лестницы снимаются через hold_min минут после открытия. Позиция НЕ закрывается принудительно в конце дня — держится до тейка или стопа, в том числе овернайт.',
+    sl: 'Жёсткий стоп R = amp×sl_pct/100 от средней входа (по умолчанию 30% амплитуды) — на весь объём. Усреднения ПРОТИВ движения нет: лестница добирает только по направлению пробоя, ступени той же стороны, с потолком max_contracts. Встречные ступени после входа снимаются.'
+  },
 };
 
 export function overviewFor(strategyId: string): StrategyOverview | null {
   return STRATEGY_OVERVIEW[strategyId.replace(/__inv$/, '')] ?? null;
+}
+
+// Тексты лонгридов писались разными моделями; тут указано кто и когда.
+// Дефолт — исторические тексты июня 2026, конкретная стратегия переопределяет.
+const COPY_DEFAULT: StrategyCopyBy = { author: 'claude opus', date: 'июнь 2026' };
+const STRATEGY_COPY_BY: Record<string, StrategyCopyBy> = {
+  rich_fool: { author: 'deepseek-v4-pro', date: 'сентябрь 2026' },
+};
+export function copyByFor(strategyId: string): StrategyCopyBy {
+  return STRATEGY_COPY_BY[strategyId.replace(/__inv$/, '')] ?? COPY_DEFAULT;
 }
 
 // Human-readable NAME per strategy (for headings / chart title). Falls back to the id.
@@ -238,6 +260,7 @@ export const STRATEGY_NAME: Record<string, string> = {
   ema_atr: 'EMA + ATR-фильтр', order_block: 'Order Block (ICT)', pivot_reversal: 'Pivot Reversal',
   donchian_breakout: 'Donchian Breakout', ema_crossover: 'EMA Crossover', rsi_mean_reversion: 'RSI Mean-Reversion',
   supertrend: 'SuperTrend', us_open_fvg: 'US-Open Range + FVG/Ретест',
+  rich_fool: 'Rich Fool — предоткрытийная лестница пробоя',
 };
 export function nameFor(strategyId: string): string {
   const base = strategyId.replace(/__inv$/, '');
@@ -275,6 +298,31 @@ export function behaviorFor(strategyId: string, params: Record<string, any> | nu
       : stop > 0 ? `на ${stop}% высоты диапазона ЗА краем (шире, меньше выбивов)`
       : `на ${-stop}% высоты диапазона ВНУТРЬ диапазона (туже, лучше R:R)`;
     return `Отмечает хай и лоу первой ${rng}-минутной свечи после открытия биржи США (16:30 МСК). В течение ${sig} минут ждёт ${modeTxt} и заходит ${sides} на ${num('qty', 1)} контракт(ов) ${sym} — ОДИН раз за день, без повторных входов. ${cap(tpTxt)}. Стоп — ${stopTxt}. Если ни тейк, ни стоп не сработали, позиция закрывается по рынку в конце сессии.`;
+  }
+
+  if (strategyId === 'rich_fool' || strategyId === 'rich_fool__inv') {
+    const lead = Math.max(0, Math.round(num('place_lead_min', 10)));
+    const oh = Math.max(0, Math.round(num('open_hour', 7)));
+    const steps = Math.max(1, Math.round(num('step_count', 3)));
+    const nDays = Math.max(1, Math.round(num('n_days', 5)));
+    const dist = num('dist_pct', 50), gap = num('step_gap_pct', 25);
+    const spacing = num('spacing', 0), span = num('span_pct', 100);
+    const hold = Math.max(0, Math.round(num('hold_min', 30)));
+    const slPct = num('sl_pct', 30), rr = num('rr_x10', 20);
+    const volMult = num('vol_mult', 10);
+    const maxC = Math.max(1, Math.round(num('max_contracts', 100)));
+    const invert = num('invert', 0) === 1 || strategyId.endsWith('__inv');
+    const lastStep = dist + gap * (steps - 1);
+    const ladderTxt = spacing !== 0
+      ? `${steps} ступеней вверх и ${steps} вниз, разложенных по прогрессии от ${(dist / 100).toFixed(2)} до ${(span / 100).toFixed(2)} амплитуды`
+      : `${steps} ступеней вверх и ${steps} вниз: первая на ${(dist / 100).toFixed(2)} амплитуды, дальше шаг ${(gap / 100).toFixed(2)} (последняя примерно на ${(lastStep / 100).toFixed(2)})`;
+    const sideTxt = invert
+      ? `Стороны ПЕРЕВЁРНУТЫ (invert=1): пробой вверх робот продаёт, пробой вниз покупает — он фейдит пробой, а не следует ему.`
+      : `Сторона решается фактом: пробило вверх — робот покупает, вниз — продаёт.`;
+    const volTxt = volMult !== 10
+      ? `, объём каждой следующей ступени той же стороны умножается на ${(volMult / 10).toFixed(1)}`
+      : '';
+    return `За ${lead} мин до открытия (${oh}:00 МСК) ставит от вчерашнего закрытия ${sym} ${ladderTxt} стоп-заявок. Амплитуда — средний дневной размах за ${nDays} дн. Заявки живут ${hold} мин после открытия, неисполненные снимаются. ${sideTxt} Сработавшая ступень — вход на ${num('qty', 1)} контракт(ов); следующие ступени той же стороны в пределах окна доливают${volTxt}, потолок ${maxC} контракт(ов). Выход ЖЁСТКИЙ с обеих сторон: стоп ${(slPct / 100).toFixed(2)} амплитуды от средней, тейк ${(rr / 10).toFixed(1)} к 1 от стопа. В конце дня позиция НЕ закрывается — носится овернайт до тейка или стопа.`;
   }
 
   const ov = overviewFor(strategyId);

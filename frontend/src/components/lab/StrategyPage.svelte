@@ -6,7 +6,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { fetchWithAuth } from '$lib/fetch-auth';
-  import { helpFor, overviewFor, behaviorFor, nameFor } from '$lib/strategy-help';
+  import { helpFor, overviewFor, behaviorFor, nameFor, copyByFor } from '$lib/strategy-help';
   import { setTitle } from '$lib/page-title';
   import ParamHelp from './ParamHelp.svelte';
 
@@ -18,6 +18,8 @@
 
   const ov = $derived(overviewFor(strategyId));
   const name = $derived(nameFor(strategyId));
+  // Автор ТЕКСТА описания (не автор стратегии) — по нему видно, кто писал лонгрид.
+  const copyBy = $derived(copyByFor(strategyId));
   // Закладка: человеческое имя стратегии вместо id — по нему оператор находит
   // нужную закладку среди десятка открытых.
   $effect(() => setTitle(`Стратегия ${name || strategyId}`));
@@ -69,6 +71,9 @@
         {/if}
       </div>
       {#if ov}<p class="hero-thesis">{ov.entry}</p>{/if}
+      {#if copyBy}
+        <div class="hero-byline">Описание: {copyBy.author} · {copyBy.date}</div>
+      {/if}
     </header>
 
     <div class="rule"></div>
@@ -153,6 +158,7 @@
   .hero-src { font-size: 13px; color: var(--accent); text-decoration: none; }
   .hero-src:hover { text-decoration: underline; }
   .hero-thesis { margin: 24px 0 0; font-size: 18px; line-height: 1.6; color: var(--ink2); max-width: 62ch; font-weight: 400; }
+  .hero-byline { margin-top: 18px; font-size: 12px; letter-spacing: .4px; color: var(--muted); font-family: var(--mono); }
 
   .rule { height: 1px; margin: 44px 0; background: linear-gradient(90deg, var(--accent), transparent 62%); opacity: .45; }
   .sec-title { font-size: 12px; letter-spacing: 1.8px; text-transform: uppercase; color: var(--muted); font-weight: 700; margin: 0 0 26px; }
