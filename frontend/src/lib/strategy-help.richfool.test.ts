@@ -44,6 +44,11 @@ describe('rich_fool: описание на портале', () => {
     expect(t).toContain('фейдит');
   });
 
+  it('время открытия — часы И минуты, а не только часы', () => {
+    expect(behaviorFor('rich_fool', defaults)).toContain('7:00 МСК');
+    expect(behaviorFor('rich_fool', { ...defaults, open_hour: 10, open_min: 5 })).toContain('10:05 МСК');
+  });
+
   it('автор текста описания — не автор стратегии', () => {
     expect(copyByFor('rich_fool').author).toBeTruthy();
     expect(copyByFor('rich_fool').date).toBeTruthy();

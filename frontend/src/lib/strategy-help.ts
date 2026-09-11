@@ -303,6 +303,8 @@ export function behaviorFor(strategyId: string, params: Record<string, any> | nu
   if (strategyId === 'rich_fool' || strategyId === 'rich_fool__inv') {
     const lead = Math.max(0, Math.round(num('place_lead_min', 10)));
     const oh = Math.max(0, Math.round(num('open_hour', 7)));
+    const om = Math.max(0, Math.round(num('open_min', 0)));
+    const openTxt = `${oh}:${String(om).padStart(2, '0')}`;
     const steps = Math.max(1, Math.round(num('step_count', 3)));
     const nDays = Math.max(1, Math.round(num('n_days', 5)));
     const dist = num('dist_pct', 50), gap = num('step_gap_pct', 25);
@@ -322,7 +324,7 @@ export function behaviorFor(strategyId: string, params: Record<string, any> | nu
     const volTxt = volMult !== 10
       ? `, объём каждой следующей ступени той же стороны умножается на ${(volMult / 10).toFixed(1)}`
       : '';
-    return `За ${lead} мин до открытия (${oh}:00 МСК) ставит от вчерашнего закрытия ${sym} ${ladderTxt} стоп-заявок. Амплитуда — средний дневной размах за ${nDays} дн. Заявки живут ${hold} мин после открытия, неисполненные снимаются. ${sideTxt} Сработавшая ступень — вход на ${num('qty', 1)} контракт(ов); следующие ступени той же стороны в пределах окна доливают${volTxt}, потолок ${maxC} контракт(ов). Выход ЖЁСТКИЙ с обеих сторон: стоп ${(slPct / 100).toFixed(2)} амплитуды от средней, тейк ${(rr / 10).toFixed(1)} к 1 от стопа. В конце дня позиция НЕ закрывается — носится овернайт до тейка или стопа.`;
+    return `За ${lead} мин до открытия (${openTxt} МСК) ставит от вчерашнего закрытия ${sym} ${ladderTxt} стоп-заявок. Амплитуда — средний дневной размах за ${nDays} дн. Заявки живут ${hold} мин после открытия, неисполненные снимаются. ${sideTxt} Сработавшая ступень — вход на ${num('qty', 1)} контракт(ов); следующие ступени той же стороны в пределах окна доливают${volTxt}, потолок ${maxC} контракт(ов). Выход ЖЁСТКИЙ с обеих сторон: стоп ${(slPct / 100).toFixed(2)} амплитуды от средней, тейк ${(rr / 10).toFixed(1)} к 1 от стопа. В конце дня позиция НЕ закрывается — носится овернайт до тейка или стопа.`;
   }
 
   const ov = overviewFor(strategyId);
