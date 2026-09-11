@@ -32,18 +32,25 @@ D_FROM, D_TO = "2026-03-09", "2026-09-09"
 CODE = ("from trader.lab.strategies.rich_fool import on_bar, on_start, on_stop")
 
 SYMBOLS = ["RI", "Si"]
+# open_hour=7 (утренняя сессия) ИСКЛЮЧЁН 11.09.2026: в кэше баров утро разрежено
+# (~17 баров/час против 60 в основную сессию), арм-бар 06:50-06:59 существует лишь
+# в 27 днях из 162, окно 07:00-07:30 набирает >=5 баров в 43 днях. Такие прогоны
+# дают 2-5 сделок за полгода — статистический мусор, а не оценка гипотезы.
+# Освободившийся бюджет отдан окну входа (hold_min/place_lead_min).
 AXES = {
-    "n_days":     [2, 3, 5, 8, 12, 20, 30],
-    "step_count": [2, 3, 5, 8, 12, 20],
-    "vol_mult":   [10, 15, 20, 30, 50],
+    "n_days":         [2, 3, 5, 8, 12, 20, 30],
+    "step_count":     [2, 3, 5, 8, 12, 20],
+    "vol_mult":       [10, 15, 20, 30, 50],
     # TP/SL — широко, по прямому запросу оператора. R = amp·sl_pct (15% амплитуды —
     # тесный стоп, 80% — «пусть дышит»), тейк = rr·R (1.0 — снять сразу, 6.0 — везти).
-    "sl_pct":     [15, 20, 30, 45, 60, 80],
-    "rr_x10":     [10, 15, 20, 30, 40, 60],
-    "invert":     [0, 1],
-    "open_hour":  [7, 10],
+    "sl_pct":         [15, 20, 30, 45, 60, 80],
+    "rr_x10":         [10, 15, 20, 30, 40, 60],
+    "invert":         [0, 1],
+    # Сколько минут лестница живёт после открытия: 15 — только импульс открытия,
+    # 120 — вся первая половина дня.
+    "hold_min":       [15, 30, 60, 120],
 }
-PIN = dict(qty=1, open_min=0, place_lead_min=10, hold_min=30,
+PIN = dict(qty=1, open_hour=10, open_min=0, place_lead_min=10,
            allow_long=1, allow_short=1, bar_offset_min=0)
 
 
@@ -56,23 +63,21 @@ def main() -> None:
     keys = list(AXES)
     combos = [dict(zip(keys, vals)) for vals in itertools.product(*AXES.values())]
     jobs = []
-    # Чанк по open_hour + invert + n_days: после расширения осей TP/SL один чанк
-    # «символ×час×invert» разросся бы до ~7.5k paramSets в одном задании.
-    fixed = ("open_hour", "invert", "n_days")
+    # Чанк по invert + n_days: после расширения осей TP/SL один чанк «символ×invert»
+    # разросся бы до ~10k paramSets в одном задании.
+    fixed = ("invert", "n_days")
     for sym in SYMBOLS:
-        for oh in AXES["open_hour"]:
-            for inv in AXES["invert"]:
-                for nd in AXES["n_days"]:
-                    sets = [c for c in combos if c["open_hour"] == oh
-                            and c["invert"] == inv and c["n_days"] == nd]
-                    jobs.append({
-                        "campaign": f"richfool-{sym}-oh{oh}-inv{inv}-nd{nd}",
-                        "scriptCode": CODE, "symbol": sym,
-                        "baseParams": dict(PIN, symbol=sym, open_hour=oh, invert=inv, n_days=nd),
-                        "dateFrom": D_FROM, "dateTo": D_TO, "engine": "remote",
-                        "priority": 40,    # прямой запрос оператора — вперёд фоновых кампаний
-                        "paramSets": [{k: c[k] for k in keys if k not in fixed} for c in sets],
-                    })
+        for inv in AXES["invert"]:
+            for nd in AXES["n_days"]:
+                sets = [c for c in combos if c["invert"] == inv and c["n_days"] == nd]
+                jobs.append({
+                    "campaign": f"richfool-{sym}-inv{inv}-nd{nd}",
+                    "scriptCode": CODE, "symbol": sym,
+                    "baseParams": dict(PIN, symbol=sym, invert=inv, n_days=nd),
+                    "dateFrom": D_FROM, "dateTo": D_TO, "engine": "remote",
+                    "priority": 40,    # прямой запрос оператора — вперёд фоновых кампаний
+                    "paramSets": [{k: c[k] for k in keys if k not in fixed} for c in sets],
+                })
     total = sum(len(j["paramSets"]) for j in jobs)
     print(f"символы {SYMBOLS} | заданий {len(jobs)} | комбо {total}")
     for j in jobs[:4]:
