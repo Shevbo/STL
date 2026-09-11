@@ -2,10 +2,11 @@
 Rich Fool — предоткрытийная лестница пробойных заявок.
 
 Гипотеза оператора: за 10 минут до открытия сессии выставить серию СТОП-заявок
-вверх и вниз ДАЛЕКО от вчерашнего закрытия (на долю амплитуды за N дней). Держать
-заявки `hold_min` минут после открытия, неисполненные снять. Что исполнилось —
-вести по классике: стоп = R, тейк = rr·R (по умолчанию 2:1). Позицию НЕ закрывать
-в конце дня — только по TP/SL (носим овернайт).
+вверх и вниз от вчерашнего закрытия по формуле price(n)=price(n-1)+D/(n+1),
+где D = амплитуда за N дней (зазоры убывают: D/2, D/3, D/4, …). Держать заявки
+`hold_min` минут после открытия, неисполненные снять. Что исполнилось — вести по
+классике: стоп = R, тейк = rr·R (по умолчанию 2:1). Позицию НЕ закрывать в конце
+дня — только по TP/SL (носим овернайт).
 
 Один сетап за раз: пока позиция открыта, новых лестниц не ставим. Первый пробой
 запирает сторону; следующие ступени той же стороны в пределах окна доливают
@@ -40,8 +41,8 @@ async def on_start(stl: STLRuntime, params: dict) -> None:
     stl.log(
         f"Rich Fool started | open={params.get('open_hour', 7)}:{params.get('open_min', 0):02d} "
         f"lead={params.get('place_lead_min', 10)}m hold={params.get('hold_min', 30)}m "
-        f"N={params.get('n_days', 5)}d dist={params.get('dist_pct', 50)}% steps={params.get('step_count', 3)} "
-        f"gap={params.get('step_gap_pct', 25)}% sl={params.get('sl_pct', 30)}% "
+        f"N={params.get('n_days', 5)}d steps={params.get('step_count', 3)} "
+        f"sl={params.get('sl_pct', 30)}% "
         f"rr={float(params.get('rr_x10', 20)) / 10:.1f}:1 invert={params.get('invert', 0)} symbol={params.get('symbol')}"
     )
 
@@ -53,11 +54,7 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
     lead = int(params.get("place_lead_min", 10))
     hold = int(params.get("hold_min", 30))
     n_days = max(1, int(params.get("n_days", 5)))
-    dist_pct = float(params.get("dist_pct", 50)) / 100.0        # 1-я ступень = amp·dist_pct
     step_count = max(1, int(params.get("step_count", 3)))
-    step_gap_pct = float(params.get("step_gap_pct", 25)) / 100.0  # равный шаг (spacing=0) = amp·gap
-    spacing = int(params.get("spacing", 0))                       # 0=лин, 1=убыв.шаг, 2=нараст.шаг
-    span_pct = float(params.get("span_pct", 100)) / 100.0         # D = размах 1-й..последней ступени (spacing!=0)
     sl_pct = float(params.get("sl_pct", 30)) / 100.0             # риск R = amp·sl_pct
     rr = float(params.get("rr_x10", 20)) / 10.0
     vol_mult = float(params.get("vol_mult", 10)) / 10.0          # рост объёма ступени ×hit (10=1.0=ровно qty)
@@ -93,28 +90,26 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
         return
 
     # 1) Ведение открытой позиции: только TP/SL, каждый бар, БЕЗ флэта в конце дня.
+    #    Филл ТОЧНЫЙ (place_order_at), не по открытию следующего бара: иначе стоп
+    #    получал бы цену отскока и выходы выглядели бы лучше реальных. Гэп СКВОЗЬ
+    #    уровень (бар открылся уже за ним) исполняем по открытию — так стоп и
+    #    получает проскальзывание. Внутри бара порядок пессимистичный: сперва стоп.
     if cur_qty != 0 and dirn != 0:
         avg = float(pos.avg_price)
         R = float(stl.get_state("R", 0) or 0)
         if R > 0 and avg > 0:
-            if dirn > 0:
-                if cur.low <= avg - R:
-                    await stl.place_order(symbol, "sell", abs(cur_qty), avg - R)
-                    _reset_position_state(stl)
-                    return
-                if cur.high >= avg + rr * R:
-                    await stl.place_order(symbol, "sell", abs(cur_qty), avg + rr * R)
-                    _reset_position_state(stl)
-                    return
-            else:
-                if cur.high >= avg + R:
-                    await stl.place_order(symbol, "buy", abs(cur_qty), avg + R)
-                    _reset_position_state(stl)
-                    return
-                if cur.low <= avg - rr * R:
-                    await stl.place_order(symbol, "buy", abs(cur_qty), avg - rr * R)
-                    _reset_position_state(stl)
-                    return
+            sl_px = avg - R if dirn > 0 else avg + R
+            tp_px = avg + rr * R if dirn > 0 else avg - rr * R
+            gapped = (cur.open <= sl_px or cur.open >= tp_px) if dirn > 0 else \
+                     (cur.open >= sl_px or cur.open <= tp_px)
+            hit_sl = cur.low <= sl_px if dirn > 0 else cur.high >= sl_px
+            hit_tp = cur.high >= tp_px if dirn > 0 else cur.low <= tp_px
+            exit_px = cur.open if gapped else (sl_px if hit_sl else (tp_px if hit_tp else None))
+            if exit_px is not None:
+                await stl.place_order_at(symbol, "sell" if dirn > 0 else "buy",
+                                         abs(cur_qty), exit_px, cur.time)
+                _reset_position_state(stl)
+                return
         # позиция открыта — долив по лестнице делаем ниже (только в окне)
 
     in_window = open_hm <= hm <= open_hm + hold
@@ -139,25 +134,13 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
         if amp <= 0 or prev_close <= 0:
             stl.set_state("day_done", 1)
             return
-        # Смещения ступеней от вчерашнего закрытия. base = 1-я ступень.
-        # spacing=0: равный шаг amp·step_gap_pct (прежнее поведение).
-        # spacing!=0: НЕЛИНЕЙНАЯ прогрессия. D = полный размах 1-й..последней ступени
-        #   = amp·span_pct. Веса промежутков w_k (k=1..step_count-1): 1 = убывающий шаг
-        #   (w_k=1/k, плотнее ДАЛЬШЕ от цены), 2 = нарастающий (w_k=1/(N-k), реже дальше).
-        #   gap_k = D·w_k/Σw — сумма промежутков ровно D.
-        base = amp * dist_pct
-        n = step_count
-        if spacing == 0 or n <= 1:
-            offs = [base + i * amp * step_gap_pct for i in range(n)]
-        else:
-            D = amp * span_pct
-            w = [1.0 / k for k in range(1, n)] if spacing == 1 else [1.0 / (n - k) for k in range(1, n)]
-            sw = sum(w) or 1.0
-            gaps = [D * x / sw for x in w]
-            offs, acc = [base], base
-            for g in gaps:
-                acc += g
-                offs.append(acc)
+        # Смещения ступеней от вчерашнего закрытия. Формула оператора:
+        #   price(0) = prev_close, price(n) = price(n-1) + amp/(n+1).
+        #   Зазоры убывают: amp/2, amp/3, amp/4, … Смещение ступени n = amp·Σ 1/(k+1).
+        offs, acc = [], 0.0
+        for j in range(1, step_count + 1):
+            acc += amp * (1.0 / (j + 1))
+            offs.append(acc)
         stl.set_state("levels_up", [prev_close + o for o in offs])
         stl.set_state("levels_dn", [prev_close - o for o in offs])
         stl.set_state("R", amp * sl_pct)
@@ -170,36 +153,43 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
     # 3) Исполнение ступеней внутри окна. Первый пробой запирает сторону; следующие
     #    ступени той же стороны доливают. Противоположная сторона после запирания
     #    мертва до конца дня.
-    if stl.get_state("armed") and in_window:
+    if stl.get_state("armed") and not stl.get_state("day_done") and in_window:
         up = stl.get_state("levels_up") or []
         dn = stl.get_state("levels_dn") or []
         hit = int(stl.get_state("hit", 0) or 0)
         locked = int(stl.get_state("side_locked", 0) or 0)
-        if hit < step_count:
+        # Один бар может пересечь сразу несколько ступеней — исполняем ВСЕ, а не первую.
+        while hit < step_count:
             fire = 0
             if locked in (0, 1) and cur.high >= up[hit]:
                 fire = 1
             elif locked in (0, -1) and cur.low <= dn[hit]:
                 fire = -1
-            if fire:
-                trade_dir = -fire if invert else fire
-                fresh = cur_qty == 0
-                add = cur_qty != 0 and dirn == trade_dir
-                allowed = (trade_dir > 0 and allow_long) or (trade_dir < 0 and allow_short)
-                if allowed and (fresh or add):
-                    px = up[hit] if fire > 0 else dn[hit]
-                    step_qty = max(1, round(qty * (vol_mult ** hit)))   # ступень hit: qty·vol_mult^hit
-                    step_qty = min(step_qty, max_contracts - abs(cur_qty))   # жёсткий потолок
-                    if step_qty <= 0:
-                        stl.set_state("hit", step_count)                # лестница упёрлась в потолок
-                        return
-                    await stl.place_order(symbol, "buy" if trade_dir > 0 else "sell", step_qty, px)
-                    stl.set_state("hit", hit + 1)
-                    stl.set_state("side_locked", fire)
-                    stl.set_state("dir", trade_dir)
-                else:
-                    stl.set_state("side_locked", fire)   # сторона запрещена — заперли, не спамим
-                return
+            if not fire:
+                break
+            trade_dir = -fire if invert else fire
+            fresh = cur_qty == 0
+            add = cur_qty != 0 and dirn == trade_dir
+            allowed = (trade_dir > 0 and allow_long) or (trade_dir < 0 and allow_short)
+            if not (allowed and (fresh or add)):
+                stl.set_state("side_locked", fire)   # сторона запрещена/чужая — заперли
+                break
+            step_qty = max(1, round(qty * (vol_mult ** hit)))   # ступень hit: qty·vol_mult^hit
+            step_qty = min(step_qty, max_contracts - abs(cur_qty))   # жёсткий потолок
+            if step_qty <= 0:
+                stl.set_state("hit", step_count)                # лестница упёрлась в потолок
+                break
+            level = up[hit] if fire > 0 else dn[hit]
+            # Стоп-филл: по цене уровня; при гэпе через уровень — по цене открытия бара.
+            fill_px = max(level, cur.open) if fire > 0 else min(level, cur.open)
+            await stl.place_order_at(symbol, "buy" if trade_dir > 0 else "sell",
+                                     step_qty, fill_px, cur.time)
+            stl.set_state("hit", hit + 1)
+            stl.set_state("side_locked", fire)
+            stl.set_state("dir", trade_dir)
+            dirn = trade_dir
+            cur_qty += step_qty if trade_dir > 0 else -step_qty
+            hit += 1
 
     # 4) Окно ПРОШЛО, позиции нет — «снимаем заявки», день закрыт. Именно
     #    hm > open_hm+hold, а не "вне окна": арм-бар стоит ДО открытия и тоже вне
@@ -217,26 +207,18 @@ STRATEGY_META = {
     "name": "Rich Fool — предоткрытийная лестница пробоя",
     "description": (
         "За place_lead_min минут до открытия сессии — серия стоп-заявок вверх и вниз "
-        "на amp·dist_pct от вчерашнего закрытия, где amp = средний дневной размах за n_days. "
-        "step_count ступеней с шагом amp·step_gap_pct. Заявки живут hold_min минут после "
-        "открытия. Что исполнилось — стоп R=amp·sl_pct, тейк rr·R (2:1). Позиция носится "
-        "овернайт до TP/SL, в конце дня не закрывается. invert=1 — фейд пробоя."
+        "от вчерашнего закрытия по формуле price(n)=price(n-1)+D/(n+1), D=amp (средний "
+        "дневной размах за n_days). Зазоры убывают: D/2, D/3, D/4, … Объём ступени растёт "
+        "×vol_mult. Заявки живут hold_min минут после открытия. Что исполнилось — стоп "
+        "R=amp·sl_pct, тейк rr·R (2:1). Позиция носится овернайт до TP/SL. invert=1 — фейд пробоя."
     ),
     "source": "гипотеза оператора 09.09.2026",
     "params_schema": [
         {"key": "symbol", "label": "Инструмент", "type": "text", "default": "RIU6", "hint": "FORTS тикер"},
         {"key": "n_days", "label": "N дней для амплитуды", "type": "number", "default": 5, "min": 1, "max": 30,
          "hint": "Сколько завершённых дней усредняем в дневной размах (high-low)"},
-        {"key": "dist_pct", "label": "Отдаление 1-й ступени, % амплитуды", "type": "number", "default": 50, "min": 5, "max": 200,
-         "hint": "Первый уровень = вчерашнее закрытие ± amp·dist_pct/100"},
         {"key": "step_count", "label": "Ступеней в лестнице", "type": "number", "default": 3, "min": 1, "max": 25,
-         "hint": "Сколько стоп-заявок с каждой стороны"},
-        {"key": "step_gap_pct", "label": "Шаг между ступенями, % амплитуды (при spacing=0)", "type": "number", "default": 25, "min": 0, "max": 100,
-         "hint": "Равный шаг между соседними ступенями = amp·step_gap_pct/100. Игнорируется при spacing!=0"},
-        {"key": "spacing", "label": "Прогрессия ступеней 0/1/2", "type": "number", "default": 0, "min": 0, "max": 2,
-         "hint": "0=равный шаг. 1=убывающий шаг (ступени плотнее ДАЛЬШЕ от цены). 2=нарастающий шаг (реже дальше). При 1/2 общий размах задаёт span_pct"},
-        {"key": "span_pct", "label": "Полный размах лестницы D, % амплитуды (при spacing!=0)", "type": "number", "default": 100, "min": 20, "max": 300,
-         "hint": "Расстояние от 1-й до последней ступени = amp·span_pct/100. Промежутки делятся по прогрессии spacing"},
+         "hint": "Сколько стоп-заявок с каждой стороны. Уровни: prev_close ± amp·(1/2+1/3+…)"},
         {"key": "qty", "label": "Контрактов на ступень", "type": "number", "default": 1, "min": 1, "max": 10,
          "hint": "Объём одной сработавшей заявки"},
         {"key": "sl_pct", "label": "Риск R, % амплитуды", "type": "number", "default": 30, "min": 5, "max": 100,

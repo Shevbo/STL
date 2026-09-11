@@ -198,6 +198,13 @@ class AgentRuntime:
         self._orders[client_id] = order
         return order
 
+    async def place_order_at(self, symbol: str, side: str, qty: int, fill_price: float,
+                             fill_time: int | None = None) -> Order:
+        # Стоп-лестницы (rich_fool) в live исполняются как обычная маркетируемая
+        # заявка по цене ступени. Точное стоп-моделирование live — отдельная задача;
+        # здесь главное не упасть и не открыть позицию в обход place_order.
+        return await self.place_order(symbol, side, qty, fill_price)
+
     async def _await_opposite_clear(self, side: str, symbol: str) -> None:
         """Ждём, пока встречная заявка по этому инструменту сойдёт с рынка (см.
         _CROSS_WAIT_SEC). Цену считаем ПОСЛЕ ожидания — за эти секунды рынок уходит."""

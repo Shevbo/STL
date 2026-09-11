@@ -2,8 +2,8 @@
 синтетических днях, а не наличие веток в коде.
 
 Что легко сломать и что здесь закреплено:
-  1. Уровни считаются от вчерашнего закрытия ± amp·dist_pct, amp = средний дневной
-     размах за n_days завершённых дней.
+  1. Уровни по формуле оператора: price(0)=prev_close, price(n)=price(n-1)+amp/(n+1),
+     amp = средний дневной размах за n_days завершённых дней (зазоры amp/2, amp/3, …).
   2. Первый пробой запирает сторону; встречная сторона после этого мертва.
   3. Исполнение только в окне [открытие, открытие+hold_min]; вне окна и без
      позиции робот разоружается («снимает заявки»).
@@ -38,15 +38,15 @@ def _prior_day(day_epoch: int, lo: float, hi: float, last_close: float) -> list[
 
 def _bars(day2_tail: list[Bar]) -> list[Bar]:
     # day -2: размах 90..110 (=20); day -1: 95..105 (=10), закрытие 100.
-    # amp за 2 дня = 15. dist_pct=50 -> base 7.5 -> up[0]=107.5 dn[0]=92.5
-    # step_gap_pct=20 -> gap 3.0 -> up[1]=110.5 dn[1]=89.5 ; sl_pct=40 -> R=6.0
+    # amp за 2 дня = 15. Формула price(n)=price(n-1)+amp/(n+1):
+    #   up[0]=100+15/2=107.5, up[1]=107.5+15/3=112.5 ; sl_pct=40 -> R=6.0
     b = _prior_day(D0, 90.0, 110.0, 100.0) + _prior_day(D0 + DAY, 95.0, 105.0, 100.0)
     b.append(_bar(D0 + 2 * DAY, OPEN_HM - 1, 100.0, 100.1, 99.9, 100.0))  # арм-бар (вне окна)
     return b + day2_tail
 
 
-PARAMS = {"symbol": SYM, "n_days": 2, "dist_pct": 50, "step_count": 2,
-          "step_gap_pct": 20, "qty": 1, "sl_pct": 40, "rr_x10": 20,
+PARAMS = {"symbol": SYM, "n_days": 2, "step_count": 2,
+          "qty": 1, "sl_pct": 40, "rr_x10": 20,
           "open_hour": 7, "open_min": 0, "place_lead_min": 10, "hold_min": 30}
 
 
@@ -110,20 +110,20 @@ def _entry_prices(orders):
     return px
 
 
-def test_spacing_progression_shrinks_the_gap_further_out():
-    # долгий проезд вверх, чтобы набрать все 5 ступеней
+def test_harmonic_gaps_shrink_further_out():
+    # формула оператора: price(n)=price(n-1)+amp/(n+1), D=amp. Зазоры amp/2, amp/3, …
+    # amp=15, prev_close=100 → уровни 107.5, 112.5, 116.25, 119.25, 121.75 (зазоры 5, 3.75, 3, 2.5).
+    # Ползём на 0.25 (open точно попадает в уровень — филл без гэпа), окно расширяем до 120 мин.
     d2 = D0 + 2 * DAY
     tail = [_bar(d2, OPEN_HM + m, 100.0, 100.2, 99.8, 100.0) for m in range(0, 2)]
-    for i, m in enumerate(range(2, 44)):
-        px = 101.0 + i * 3.0
-        tail.append(_bar(d2, OPEN_HM + m, px, px + 1.0, px - 0.5, px))
-    lin = _entry_prices(_run(tail, step_count=5, spacing=0, step_gap_pct=25))
-    prog = _entry_prices(_run(tail, step_count=5, spacing=1, span_pct=120))
-    assert len(lin) == 5 and len(prog) == 5, (lin, prog)
-    lin_gaps = [round(lin[i + 1] - lin[i], 3) for i in range(4)]
-    prog_gaps = [round(prog[i + 1] - prog[i], 3) for i in range(4)]
-    assert max(lin_gaps) - min(lin_gaps) < 1e-6, f"spacing=0 — равный шаг: {lin_gaps}"
-    assert all(prog_gaps[i] > prog_gaps[i + 1] for i in range(3)), f"spacing=1 — шаг убывает: {prog_gaps}"
+    for i, m in enumerate(range(2, 100)):
+        px = 100.0 + i * 0.25
+        tail.append(_bar(d2, OPEN_HM + m, px, px + 0.1, px - 0.1, px + 0.1))
+    px = _entry_prices(_run(tail, step_count=5, hold_min=120))
+    assert px == [107.5, 112.5, 116.25, 119.25, 121.75], px
+    gaps = [round(px[i + 1] - px[i], 3) for i in range(4)]
+    assert gaps == [5.0, 3.75, 3.0, 2.5], gaps
+    assert all(gaps[i] > gaps[i + 1] for i in range(3)), f"зазоры строго убывают: {gaps}"
 
 
 def test_max_contracts_caps_the_ladder():
@@ -161,6 +161,52 @@ def test_breakout_after_window_is_ignored():
     late.append(_bar(d2, OPEN_HM + 35, 100.0, 108.0, 100.0, 107.6))   # пробой ПОСЛЕ окна (>30)
     late += [_bar(d2, OPEN_HM + m, 108.0, 109.0, 107.0, 108.0) for m in range(36, 45)]
     assert _run(late) == [], "пробой за пределами hold_min не входит"
+
+
+def _one_step_entry_then(tail: list[Bar]) -> list[Bar]:
+    """Одна ступень (step_count=1) -> avg=107.5, R=6.0, стоп 101.5, тейк 119.5."""
+    d2 = D0 + 2 * DAY
+    t = [_bar(d2, OPEN_HM + m, 100.0, 100.2, 99.8, 100.0) for m in range(0, 3)]
+    t.append(_bar(d2, OPEN_HM + 3, 100.0, 108.0, 100.0, 107.6))   # вход long по up[0]=107.5
+    return t + tail
+
+
+def _exit_price(orders):
+    sells = [px for s, _, px in orders if s == "sell"]
+    assert sells, f"выхода не было: {orders}"
+    return sells[-1]
+
+
+def test_take_profit_fills_at_the_exact_level():
+    """Тейк исполняется ПО ЦЕНЕ УРОВНЯ (119.5), а не по открытию следующего бара."""
+    d2 = D0 + 2 * DAY
+    tail = []
+    for i, m in enumerate(range(4, 16)):
+        px = 108.0 + i * 1.0                       # ползём вверх, тейк 119.5 пробьём хвостом бара
+        tail.append(_bar(d2, OPEN_HM + m, px, px + 0.5, px - 0.3, px))
+    orders = _run(_one_step_entry_then(tail), step_count=1)
+    assert _exit_price(orders) == 119.5, orders
+
+
+def test_stop_loss_fills_at_the_exact_level():
+    """Стоп исполняется ПО ЦЕНЕ УРОВНЯ (101.5), а не по отскоку на следующем баре."""
+    d2 = D0 + 2 * DAY
+    tail = []
+    for i, m in enumerate(range(4, 11)):
+        px = 107.0 - i * 1.0                       # сползаем вниз до стопа 101.5
+        tail.append(_bar(d2, OPEN_HM + m, px, px + 0.3, px - 0.5, px))
+    orders = _run(_one_step_entry_then(tail), step_count=1)
+    assert _exit_price(orders) == 101.5, orders
+
+
+def test_gap_through_the_stop_fills_at_the_open_not_at_the_level():
+    """Бар открылся СКВОЗЬ стоп — выход по открытию (99.0), т.е. с проскальзыванием.
+    Ровно тот случай, где филл «по уровню» рисовал бы результат лучше реального."""
+    d2 = D0 + 2 * DAY
+    tail = [_bar(d2, OPEN_HM + 4, 99.0, 99.5, 98.0, 98.5)]        # гэп ниже стопа 101.5
+    tail += [_bar(d2, OPEN_HM + m, 99.0, 99.5, 98.5, 99.0) for m in range(5, 12)]
+    orders = _run(_one_step_entry_then(tail), step_count=1)
+    assert _exit_price(orders) == 99.0, orders
 
 
 def test_position_is_not_flattened_at_end_of_day():

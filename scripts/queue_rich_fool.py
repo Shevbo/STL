@@ -1,9 +1,12 @@
 """Перебор стратегии rich_fool (предоткрытийная лестница пробоя) на i9.
 
-Гипотеза оператора 09.09.2026. Оси: n_days (амплитуда), dist_pct (отдаление 1-й
-ступени), step_count, step_gap_pct, sl_pct (риск R), rr_x10 (тейк:стоп),
-invert (пробой/фейд), open_hour (07:00 утро vs 10:00 осн. сессия — пусть данные
-решат). Контракты RI + Si непрерывной склейкой, 6 месяцев.
+Гипотеза оператора 09.09.2026, ФОРМУЛА v2 (после правки алгоритма):
+    price(0) = prev_close, price(n) = price(n-1) + D/(n+1), D = amp (амплитуда за n_days).
+Зазоры убывают: D/2, D/3, D/4, … Объём ступени растёт ×vol_mult (10 = 1.0 = ровно qty).
+
+Оси: n_days (амплитуда), step_count (число ступеней), vol_mult (рост объёма),
+sl_pct (риск R = amp·sl_pct), rr_x10 (тейк:стоп), invert (пробой/фейд),
+open_hour (07:00 утро vs 10:00 осн. сессия). Контракты RI + Si, 6 месяцев.
 
 BR исключён: непрерывный загрузчик отдаёт для BR один день на запрошенный период,
 и BR-сессия открывается ~09:00, не 07:00 — отдельный разбор, не здесь.
@@ -30,14 +33,15 @@ CODE = ("from trader.lab.strategies.rich_fool import on_bar, on_start, on_stop")
 
 SYMBOLS = ["RI", "Si"]
 AXES = {
-    "n_days":       [3, 5, 8],
-    "dist_pct":     [10, 20, 30, 45, 65],
-    "step_count":   [1, 2, 3],
-    "step_gap_pct": [15, 30],
-    "sl_pct":       [20, 30, 45],
-    "rr_x10":       [15, 20, 30],
-    "invert":       [0, 1],
-    "open_hour":    [7, 10],
+    "n_days":     [2, 3, 5, 8, 12, 20, 30],
+    "step_count": [2, 3, 5, 8, 12, 20],
+    "vol_mult":   [10, 15, 20, 30, 50],
+    # TP/SL — широко, по прямому запросу оператора. R = amp·sl_pct (15% амплитуды —
+    # тесный стоп, 80% — «пусть дышит»), тейк = rr·R (1.0 — снять сразу, 6.0 — везти).
+    "sl_pct":     [15, 20, 30, 45, 60, 80],
+    "rr_x10":     [10, 15, 20, 30, 40, 60],
+    "invert":     [0, 1],
+    "open_hour":  [7, 10],
 }
 PIN = dict(qty=1, open_min=0, place_lead_min=10, hold_min=30,
            allow_long=1, allow_short=1, bar_offset_min=0)
@@ -52,20 +56,23 @@ def main() -> None:
     keys = list(AXES)
     combos = [dict(zip(keys, vals)) for vals in itertools.product(*AXES.values())]
     jobs = []
+    # Чанк по open_hour + invert + n_days: после расширения осей TP/SL один чанк
+    # «символ×час×invert» разросся бы до ~7.5k paramSets в одном задании.
+    fixed = ("open_hour", "invert", "n_days")
     for sym in SYMBOLS:
-        # чанк по open_hour + invert, чтобы paramSets в одном задании не разрастался
         for oh in AXES["open_hour"]:
             for inv in AXES["invert"]:
-                sets = [c for c in combos if c["open_hour"] == oh and c["invert"] == inv]
-                jobs.append({
-                    "campaign": f"richfool-{sym}-oh{oh}-inv{inv}",
-                    "scriptCode": CODE, "symbol": sym,
-                    "baseParams": dict(PIN, symbol=sym, open_hour=oh, invert=inv),
-                    "dateFrom": D_FROM, "dateTo": D_TO, "engine": "remote",
-                    "priority": 40,        # прямой запрос оператора — вперёд фоновых кампаний
-                    "paramSets": [{k: c[k] for k in keys if k not in ("open_hour", "invert")}
-                                 for c in sets],
-                })
+                for nd in AXES["n_days"]:
+                    sets = [c for c in combos if c["open_hour"] == oh
+                            and c["invert"] == inv and c["n_days"] == nd]
+                    jobs.append({
+                        "campaign": f"richfool-{sym}-oh{oh}-inv{inv}-nd{nd}",
+                        "scriptCode": CODE, "symbol": sym,
+                        "baseParams": dict(PIN, symbol=sym, open_hour=oh, invert=inv, n_days=nd),
+                        "dateFrom": D_FROM, "dateTo": D_TO, "engine": "remote",
+                        "priority": 40,    # прямой запрос оператора — вперёд фоновых кампаний
+                        "paramSets": [{k: c[k] for k in keys if k not in fixed} for c in sets],
+                    })
     total = sum(len(j["paramSets"]) for j in jobs)
     print(f"символы {SYMBOLS} | заданий {len(jobs)} | комбо {total}")
     for j in jobs[:4]:

@@ -79,6 +79,8 @@ class STLRuntime(Protocol):
     async def get_bars(self, symbol: str, tf: int, n: int) -> list[Bar]: ...
     async def get_orderbook(self, symbol: str) -> Any: ...
     async def place_order(self, symbol: str, side: str, qty: int, price: float) -> Order: ...
+    async def place_order_at(self, symbol: str, side: str, qty: int, fill_price: float,
+                             fill_time: int | None = None) -> Order: ...
     async def cancel_order(self, order_id: str) -> None: ...
     async def get_orders(self) -> list[Order]: ...
     async def get_position(self, symbol: str) -> Position: ...
@@ -139,13 +141,26 @@ class BacktestRuntime:
         return {"bids": [], "asks": []}
 
     async def place_order(self, symbol: str, side: str, qty: int, price: float) -> Order:
-        order_id = uuid4().hex[:12]
         next_bar = self._bars[self._cursor + 1]
-        fill_price = next_bar.open
+        return self._apply_fill(symbol, side, qty, next_bar.open, next_bar.time)
+
+    async def place_order_at(self, symbol: str, side: str, qty: int, fill_price: float,
+                             fill_time: int | None = None) -> Order:
+        # Точный филл по заданной цене — для стоп-лестниц (rich_fool) и прочих
+        # стратегий, которые сами определяют цену исполнения внутри бара. Обычный
+        # place_order исполняет «на открытии следующего бара»; это НЕ подходит
+        # лестнице, чьи ступени должны срабатывать по своим уровням.
+        if fill_time is None:
+            fill_time = self._bars[self._cursor].time
+        return self._apply_fill(symbol, side, qty, fill_price, fill_time)
+
+    def _apply_fill(self, symbol: str, side: str, qty: int, fill_price: float,
+                    fill_time: int) -> Order:
+        order_id = uuid4().hex[:12]
         order = Order(
             order_id=order_id, symbol=symbol, side=side,
-            qty=qty, price=price, status="filled",
-            fill_price=fill_price, fill_time=next_bar.time,
+            qty=qty, price=fill_price, status="filled",
+            fill_price=fill_price, fill_time=fill_time,
         )
         self._orders.append(order)
         # Backtest = TAKER fill: MOEX exchange fee (by instrument group, on notional)
