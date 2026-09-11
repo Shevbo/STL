@@ -1,24 +1,30 @@
 """
-Rich Fool — предоткрытийная лестница пробойных заявок.
+Rich Fool — предоткрытийная лестница контр-движения (фейд резкого импульса).
 
-Гипотеза оператора: за 10 минут до открытия сессии выставить серию СТОП-заявок
-вверх и вниз от вчерашнего закрытия по формуле price(n)=price(n-1)+D/(n+1),
-где D = амплитуда за N дней (зазоры убывают: D/2, D/3, D/4, …). Держать заявки
-`hold_min` минут после открытия, неисполненные снять. Что исполнилось — вести по
-классике: стоп = R, тейк = rr·R (по умолчанию 2:1). Позицию НЕ закрывать в конце
-дня — только по TP/SL (носим овернайт).
+Гипотеза оператора 09.09.2026: за 10 минут до открытия сессии выставить серию
+СТОП-заявок вверх и вниз от вчерашнего закрытия по формуле
+  price(n) = price(n-1) + D/(n+1),  где D = amp (средний дневной размах за N дней).
+Зазоры убывают: D/2, D/3, D/4, … Объём ступени растёт ×vol_mult.
 
-Один сетап за раз: пока позиция открыта, новых лестниц не ставим. Первый пробой
-запирает сторону; следующие ступени той же стороны в пределах окна доливают
-(усреднение по лестнице). invert=1 → пробой вверх торгуем В ШОРТ, вниз — В ЛОНГ.
+Базовое направление (invert=0, рабочий режим):
+  - Цена УСКАКАЛА ВВЕРХ (пересекла уровни up[]) → открываем ШОРТ и набираем
+    позицию по уровням лестницы вверх (добавляем шорт на каждой следующей ступени).
+  - Цена УСКАКАЛА ВНИЗ (пересекла уровни dn[]) → открываем ЛОНГ и набираем
+    позицию по уровням лестницы вниз.
 
-Бары бэктеста/ISS проштампованы МСК-стенным временем как UTC → bar_offset_min=0
-(историческое поведение). Раннер агента строит истинно-UTC бары из ленты QUIK —
-там deploy обязан передать bar_offset_min=180, иначе окно «07:00» встанет на 04:00.
+invert=1 — КОНТРОЛЬ обратной гипотезы (прямой пробой): вверх → лонг, вниз → шорт.
+В переборе идёт как зеркальная ось: фейд обязан бить прямой пробой, иначе преимущества нет.
 
-Standalone-модуль (свой per-day конечный автомат) — фреймворку make_on_bar
-состояние «сегодня вооружён / сторона заперта / ступеней набрано» держать негде.
-Каждая развилка — параметр под перебор.
+Стоп (SL): СТАНДАРТНЫЙ, в % ОТ ЦЕНЫ входа — sl_price_pct от средней (avg_price).
+Тейк (TP): ТРЕЙЛИНГ. Следим за экстремумом в нашу пользу (MIN для шорта, MAX для
+лонга) и выходим при откате на trail_tp_pct % от цены. Трейлинг срабатывает ТОЛЬКО
+в прибыли: откат от экстремума не должен резать позицию в убыток — убыток это дело
+стопа. Оба уровня в % от цены, поэтому сетка переносится между инструментами.
+
+Позиция НЕ закрывается принудительно в конце дня — держится до TP/SL, в том
+числе овернайт. Неисполненные заявки лестницы снимаются через hold_min минут
+после открытия. Усреднения ПРОТИВ движения нет — лестница добирает только по
+стороне пробоя.
 """
 from datetime import datetime, timezone
 
@@ -32,18 +38,19 @@ def _hm_day(t: int, offset_min: int = 0):
 
 
 def _reset_position_state(stl: STLRuntime) -> None:
-    for k in ("dir", "R", "hit", "side_locked"):
+    for k in ("dir", "hit", "side_locked", "tp_peak"):
         stl.set_state(k, 0)
     stl.set_state("day_done", 1)          # больше в этот день не входим
 
 
 async def on_start(stl: STLRuntime, params: dict) -> None:
+    tp_mode = f"trail_tp={float(params.get('trail_tp_pct', 50)) / 100:.2f}%"
     stl.log(
         f"Rich Fool started | open={params.get('open_hour', 7)}:{params.get('open_min', 0):02d} "
         f"lead={params.get('place_lead_min', 10)}m hold={params.get('hold_min', 30)}m "
         f"N={params.get('n_days', 5)}d steps={params.get('step_count', 3)} "
-        f"sl={params.get('sl_pct', 30)}% "
-        f"rr={float(params.get('rr_x10', 20)) / 10:.1f}:1 invert={params.get('invert', 0)} symbol={params.get('symbol')}"
+        f"sl={float(params.get('sl_price_pct', 100)) / 100:.2f}% tp={tp_mode} "
+        f"symbol={params.get('symbol')}"
     )
 
 
@@ -55,11 +62,11 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
     hold = int(params.get("hold_min", 30))
     n_days = max(1, int(params.get("n_days", 5)))
     step_count = max(1, int(params.get("step_count", 3)))
-    sl_pct = float(params.get("sl_pct", 30)) / 100.0             # риск R = amp·sl_pct
-    rr = float(params.get("rr_x10", 20)) / 10.0
+    sl_price_pct = float(params.get("sl_price_pct", 100)) / 10000.0   # СТОП = % от цены (100 = 1.00%)
+    trail_tp_pct = float(params.get("trail_tp_pct", 50)) / 10000.0    # ТРЕЙЛИНГ-ТЕЙК = % от цены (50 = 0.50%)
     vol_mult = float(params.get("vol_mult", 10)) / 10.0          # рост объёма ступени ×hit (10=1.0=ровно qty)
-    max_contracts = max(1, int(params.get("max_contracts", 100)))  # жёсткий потолок позиции (защита от vol_mult^step_count)
-    invert = int(params.get("invert", 0))
+    max_contracts = max(1, int(params.get("max_contracts", 100)))  # жёсткий потолок позиции
+    invert = int(params.get("invert", 0))                        # 1 = прямой пробой (тест), 0 = фейд (рабочий)
     allow_long = int(params.get("allow_long", 1))
     allow_short = int(params.get("allow_short", 1))
     bar_off = int(params.get("bar_offset_min", 0))
@@ -80,7 +87,7 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
         stl.set_state("day_done", 0)
         stl.set_state("levels_up", None)
         stl.set_state("levels_dn", None)
-        # dir / R / hit / side_locked НЕ трогаем — позиция носится овернайт
+        # dir / R / hit / side_locked / tp_peak НЕ трогаем — позиция носится овернайт
 
     # Пояс безопасности: позиция есть, а состояния направления нет (перезапуск,
     # потеря state) — закрыть по рынку, а не доливать вслепую.
@@ -89,22 +96,34 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
         _reset_position_state(stl)
         return
 
-    # 1) Ведение открытой позиции: только TP/SL, каждый бар, БЕЗ флэта в конце дня.
-    #    Филл ТОЧНЫЙ (place_order_at), не по открытию следующего бара: иначе стоп
-    #    получал бы цену отскока и выходы выглядели бы лучше реальных. Гэп СКВОЗЬ
-    #    уровень (бар открылся уже за ним) исполняем по открытию — так стоп и
-    #    получает проскальзывание. Внутри бара порядок пессимистичный: сперва стоп.
+    # 1) Ведение открытой позиции: TP/SL, каждый бар. Филл ТОЧНЫЙ (place_order_at).
+    #    Гэп сквозь ФИКСИРОВАННЫЙ уровень исполняем по open (проскальзывание).
+    #    Trail TP — движущийся уровень, гэп-логика к нему НЕ применяется.
+    #    Внутри бара порядок пессимистичный: сперва стоп.
     if cur_qty != 0 and dirn != 0:
         avg = float(pos.avg_price)
-        R = float(stl.get_state("R", 0) or 0)
-        if R > 0 and avg > 0:
+        if avg > 0:
+            R = avg * sl_price_pct                  # стоп в пунктах = % от цены входа
             sl_px = avg - R if dirn > 0 else avg + R
-            tp_px = avg + rr * R if dirn > 0 else avg - rr * R
-            gapped = (cur.open <= sl_px or cur.open >= tp_px) if dirn > 0 else \
-                     (cur.open >= sl_px or cur.open <= tp_px)
+            gap_sl = cur.open <= sl_px if dirn > 0 else cur.open >= sl_px
             hit_sl = cur.low <= sl_px if dirn > 0 else cur.high >= sl_px
-            hit_tp = cur.high >= tp_px if dirn > 0 else cur.low <= tp_px
-            exit_px = cur.open if gapped else (sl_px if hit_sl else (tp_px if hit_tp else None))
+
+            # Трейлинг-тейк: экстремум В НАШУ ПОЛЬЗУ с момента входа. Стартует от
+            # средней (а не от нуля-сентинела) — иначе первый же бар задал бы peak
+            # хуже входа и тейк поехал бы в убыток.
+            peak = float(stl.get_state("tp_peak", 0) or 0) or avg
+            tp_px = peak - avg * trail_tp_pct if dirn > 0 else peak + avg * trail_tp_pct
+            # ТОЛЬКО в прибыли: иначе трейлинг превратился бы во второй стоп.
+            armed = (tp_px > avg) if dirn > 0 else (tp_px < avg)
+            hit_tp = armed and (cur.low <= tp_px if dirn > 0 else cur.high >= tp_px)
+            # Экстремум обновляем ПОСЛЕ проверки: иначе один и тот же бар и задавал бы
+            # пик своим low/high, и выбивал бы тейк другим концом — заглядывание внутрь
+            # бара, порядок тиков в котором неизвестен.
+            stl.set_state("tp_peak", max(peak, cur.high) if dirn > 0 else min(peak, cur.low))
+
+            # Пессимистично: стоп раньше тейка. Гэп сквозь СТОП — по open (скольжение);
+            # к движущемуся трейлингу гэп-логика не применяется.
+            exit_px = cur.open if gap_sl else (sl_px if hit_sl else (tp_px if hit_tp else None))
             if exit_px is not None:
                 await stl.place_order_at(symbol, "sell" if dirn > 0 else "buy",
                                          abs(cur_qty), exit_px, cur.time)
@@ -114,8 +133,8 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
 
     in_window = open_hm <= hm <= open_hm + hold
 
-    # 2) Вооружение: один раз за день, на первом баре от (открытие − lead). Считаем
-    #    вчерашнее закрытие и амплитуду за N завершённых дней по большому хвосту.
+    # 2) Вооружение: один раз за день, на первом баре от (открытие − lead).
+    #    Считаем вчерашнее закрытие и амплитуду за N завершённых дней.
     if (not stl.get_state("armed") and not stl.get_state("day_done")
             and cur_qty == 0 and hm >= open_hm - lead):
         big = await stl.get_bars(symbol, tf=1, n=(n_days + 2) * 1500)
@@ -136,19 +155,20 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
             return
         # Смещения ступеней от вчерашнего закрытия. Формула оператора:
         #   price(0) = prev_close, price(n) = price(n-1) + amp/(n+1).
-        #   Зазоры убывают: amp/2, amp/3, amp/4, … Смещение ступени n = amp·Σ 1/(k+1).
+        #   Зазоры убывают: amp/2, amp/3, amp/4, … Смещение n = amp·Σ 1/(k+1).
         offs, acc = [], 0.0
         for j in range(1, step_count + 1):
             acc += amp * (1.0 / (j + 1))
             offs.append(acc)
         stl.set_state("levels_up", [prev_close + o for o in offs])
         stl.set_state("levels_dn", [prev_close - o for o in offs])
-        stl.set_state("R", amp * sl_pct)
         stl.set_state("hit", 0)
         stl.set_state("side_locked", 0)
+        stl.set_state("tp_peak", 0)
         stl.set_state("armed", 1)
         stl.log(f"armed {day}: prev_close={prev_close:.0f} amp={amp:.0f} "
-                f"up={stl.get_state('levels_up')[0]:.0f}.. dn={stl.get_state('levels_dn')[0]:.0f}.. R={amp * sl_pct:.0f}")
+                f"шорт-лестница от {stl.get_state('levels_up')[0]:.0f}, "
+                f"лонг-лестница от {stl.get_state('levels_dn')[0]:.0f}")
 
     # 3) Исполнение ступеней внутри окна. Первый пробой запирает сторону; следующие
     #    ступени той же стороны доливают. Противоположная сторона после запирания
@@ -167,7 +187,10 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
                 fire = -1
             if not fire:
                 break
-            trade_dir = -fire if invert else fire
+            # Базовое направление: invert=0 -> fire=1(верх) -> ШОРТ (trade_dir=-1)
+            #                   fire=-1(низ)  -> ЛОНГ (trade_dir=+1)
+            # invert=1 реверсирует (прямой пробой)
+            trade_dir = -fire if invert == 0 else fire
             fresh = cur_qty == 0
             add = cur_qty != 0 and dirn == trade_dir
             allowed = (trade_dir > 0 and allow_long) or (trade_dir < 0 and allow_short)
@@ -191,9 +214,7 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
             cur_qty += step_qty if trade_dir > 0 else -step_qty
             hit += 1
 
-    # 4) Окно ПРОШЛО, позиции нет — «снимаем заявки», день закрыт. Именно
-    #    hm > open_hm+hold, а не "вне окна": арм-бар стоит ДО открытия и тоже вне
-    #    окна — по "not in_window" он бы разоружился в ту же секунду.
+    # 4) Окно ПРОШЛО, позиции нет — «снимаем заявки», день закрыт.
     if stl.get_state("armed") and hm > open_hm + hold and cur_qty == 0:
         stl.set_state("armed", 0)
         stl.set_state("day_done", 1)
@@ -204,13 +225,17 @@ async def on_stop(stl: STLRuntime, params: dict) -> None:
 
 
 STRATEGY_META = {
-    "name": "Rich Fool — предоткрытийная лестница пробоя",
+    "name": "Rich Fool — предоткрытийная лестница фейда импульса",
     "description": (
         "За place_lead_min минут до открытия сессии — серия стоп-заявок вверх и вниз "
         "от вчерашнего закрытия по формуле price(n)=price(n-1)+D/(n+1), D=amp (средний "
         "дневной размах за n_days). Зазоры убывают: D/2, D/3, D/4, … Объём ступени растёт "
-        "×vol_mult. Заявки живут hold_min минут после открытия. Что исполнилось — стоп "
-        "R=amp·sl_pct, тейк rr·R (2:1). Позиция носится овернайт до TP/SL. invert=1 — фейд пробоя."
+        "×vol_mult. Заявки живут hold_min минут после открытия. Базовое направление (invert=0): "
+        "цена ускакала ВВЕРХ → ШОРТ и набор позиции по уровням лестницы вверх; ускакала ВНИЗ → "
+        "ЛОНГ и набор по уровням вниз (фейд импульса с возвратом к средней). "
+        "Стоп — СТАНДАРТНЫЙ, sl_price_pct % ОТ ЦЕНЫ входа. Тейк — ТРЕЙЛИНГ: экстремум в нашу "
+        "пользу минус trail_tp_pct % от цены, срабатывает только в прибыли. "
+        "Позиция носится овернайт до TP/SL. invert=1 — контроль обратной гипотезы (прямой пробой)."
     ),
     "source": "гипотеза оператора 09.09.2026",
     "params_schema": [
@@ -221,16 +246,18 @@ STRATEGY_META = {
          "hint": "Сколько стоп-заявок с каждой стороны. Уровни: prev_close ± amp·(1/2+1/3+…)"},
         {"key": "qty", "label": "Контрактов на ступень", "type": "number", "default": 1, "min": 1, "max": 10,
          "hint": "Объём одной сработавшей заявки"},
-        {"key": "sl_pct", "label": "Риск R, % амплитуды", "type": "number", "default": 30, "min": 5, "max": 100,
-         "hint": "Стоп-лосс от средней входа = amp·sl_pct/100"},
+        {"key": "sl_price_pct", "label": "Стоп-лосс, % от цены ×100 (100 = 1.00%)", "type": "number",
+         "default": 100, "min": 10, "max": 500,
+         "hint": "Стандартный стоп: расстояние = средняя цена входа × sl_price_pct/10000. 100 = 1.00% от цены"},
+        {"key": "trail_tp_pct", "label": "Трейлинг-тейк, % от цены ×100 (50 = 0.50%)", "type": "number",
+         "default": 50, "min": 10, "max": 500,
+         "hint": "Выход при откате от экстремума в нашу пользу на trail_tp_pct/10000 от цены. Срабатывает только в прибыли"},
         {"key": "vol_mult", "label": "Рост объёма ступени ×10 (10=ровно, 20=×2)", "type": "number", "default": 10, "min": 10, "max": 40,
          "hint": "Объём ступени hit = qty·(vol_mult/10)^hit. 20 = каждая следующая ступень вдвое крупнее"},
         {"key": "max_contracts", "label": "Жёсткий потолок позиции", "type": "number", "default": 100, "min": 1, "max": 500,
          "hint": "Лестница перестаёт доливать при достижении этого числа контрактов (защита от vol_mult^step_count)"},
-        {"key": "rr_x10", "label": "R:R ×10 (20=2:1)", "type": "number", "default": 20, "min": 5, "max": 50,
-         "hint": "Тейк = rr × R от средней входа"},
         {"key": "invert", "label": "Инверсия (0/1)", "type": "number", "default": 0, "min": 0, "max": 1,
-         "hint": "1 = пробой вверх торгуем в ШОРТ, пробой вниз в ЛОНГ (фейд)"},
+         "hint": "0 = фейд (рабочий): вверх=шорт, вниз=лонг. 1 = прямой пробой (только для теста)"},
         {"key": "allow_long", "label": "Лонги (0/1)", "type": "number", "default": 1, "min": 0, "max": 1,
          "hint": "Разрешить сделки в лонг"},
         {"key": "allow_short", "label": "Шорты (0/1)", "type": "number", "default": 1, "min": 0, "max": 1,

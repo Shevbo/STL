@@ -1,15 +1,26 @@
-"""Перебор стратегии rich_fool (предоткрытийная лестница пробоя) на i9.
+"""Перебор rich_fool — лестница ФЕЙДА импульса — на i9.
 
-Гипотеза оператора 09.09.2026, ФОРМУЛА v2 (после правки алгоритма):
-    price(0) = prev_close, price(n) = price(n-1) + D/(n+1), D = amp (амплитуда за n_days).
-Зазоры убывают: D/2, D/3, D/4, … Объём ступени растёт ×vol_mult (10 = 1.0 = ровно qty).
+СПЕЦИФИКАЦИЯ ОПЕРАТОРА (09.09.2026, уточнена 12.09.2026):
+  Уровни:  price(0) = вчерашнее закрытие, price(n) = price(n-1) + D/(n+1), D = amp
+           (средний дневной размах high-low за n_days). Зазоры убывают: D/2, D/3, D/4…
+  Вход:    цена УСКАКАЛА ВВЕРХ -> ШОРТ, далее набор позиции по уровням вверх;
+           цена УСКАКАЛА ВНИЗ  -> ЛОНГ, далее набор по уровням вниз.
+  Объём:   ступень hit = qty × (vol_mult/10)^hit, потолок max_contracts.
+  Стоп:    СТАНДАРТНЫЙ, sl_price_pct % ОТ ЦЕНЫ входа (от средней).
+  Тейк:    ТРЕЙЛИНГ, откат на trail_tp_pct % от цены от экстремума в нашу пользу,
+           срабатывает только в прибыли.
 
-Оси: n_days (амплитуда), step_count (число ступеней), vol_mult (рост объёма),
-sl_pct (риск R = amp·sl_pct), rr_x10 (тейк:стоп), invert (пробой/фейд),
-open_hour (07:00 утро vs 10:00 осн. сессия). Контракты RI + Si, 6 месяцев.
+ВАЖНО ПРО СЕТКУ: стоп в % от цены и шаг лестницы КОНКУРИРУЮТ. Для RI (amp≈2500 на
+цене≈80000) зазор до 2-й ступени amp/3 ≈ 1.04% цены: при sl_price_pct ≤ 100 стоп
+выбивает позицию РАНЬШЕ второй ступени, и step_count становится инертным. Поэтому
+ось sl_price_pct растянута до 6%, а step_count — только до 8: дальние ступени
+недостижимы ни при каком стопе за те же hold_min минут.
 
-BR исключён: непрерывный загрузчик отдаёт для BR один день на запрошенный период,
-и BR-сессия открывается ~09:00, не 07:00 — отдельный разбор, не здесь.
+invert — ЗЕРКАЛЬНАЯ ось контроля (1 = прямой пробой). Фейд обязан бить прямой
+пробой, иначе преимущества нет, а есть подгонка.
+
+open_hour=10 закреплён: утренняя сессия 07:00 в данных разрежена (~17 баров/час),
+арм-бар 06:50-06:59 есть лишь в 27 днях из 162 — прогон по ней давал 2-5 сделок.
 
 ЗАПУСК НА ХОСТЕРЕ:
     cd ~/apps/shectory-trader && set -a; . ~/.shectory_trade.env; set +a
@@ -29,29 +40,25 @@ from trader.auth.portal import make_session_token
 API = "http://localhost:8000"
 EMAIL = "bshevelev75@gmail.com"
 D_FROM, D_TO = "2026-03-09", "2026-09-09"
-CODE = ("from trader.lab.strategies.rich_fool import on_bar, on_start, on_stop")
+CODE = "from trader.lab.strategies.rich_fool import on_bar, on_start, on_stop"
 
 SYMBOLS = ["RI", "Si"]
-# open_hour=7 (утренняя сессия) ИСКЛЮЧЁН 11.09.2026: в кэше баров утро разрежено
-# (~17 баров/час против 60 в основную сессию), арм-бар 06:50-06:59 существует лишь
-# в 27 днях из 162, окно 07:00-07:30 набирает >=5 баров в 43 днях. Такие прогоны
-# дают 2-5 сделок за полгода — статистический мусор, а не оценка гипотезы.
-# Освободившийся бюджет отдан окну входа (hold_min/place_lead_min).
 AXES = {
-    "n_days":         [2, 3, 5, 8, 12, 20, 30],
-    "step_count":     [2, 3, 5, 8, 12, 20],
-    "vol_mult":       [10, 15, 20, 30, 50],
-    # TP/SL — широко, по прямому запросу оператора. R = amp·sl_pct (15% амплитуды —
-    # тесный стоп, 80% — «пусть дышит»), тейк = rr·R (1.0 — снять сразу, 6.0 — везти).
-    "sl_pct":         [15, 20, 30, 45, 60, 80],
-    "rr_x10":         [10, 15, 20, 30, 40, 60],
-    "invert":         [0, 1],
-    # Сколько минут лестница живёт после открытия: 15 — только импульс открытия,
-    # 120 — вся первая половина дня.
-    "hold_min":       [15, 30, 60, 120],
+    "n_days":       [3, 5, 10, 15, 20],
+    "step_count":   [1, 2, 3, 5, 8],
+    "vol_mult":     [10, 15, 20, 30],
+    # стоп, % от цены ×100: 40 = 0.40%, 600 = 6.00%
+    "sl_price_pct": [40, 70, 100, 150, 220, 320, 450, 600],
+    # трейлинг-тейк, % от цены ×100: 10 = 0.10%, 260 = 2.60%
+    "trail_tp_pct": [10, 20, 35, 50, 80, 120, 180, 260],
+    "hold_min":     [30, 60, 120, 240, 480],
+    "invert":       [0, 1],
 }
 PIN = dict(qty=1, open_hour=10, open_min=0, place_lead_min=10,
-           allow_long=1, allow_short=1, bar_offset_min=0)
+           max_contracts=120, allow_long=1, allow_short=1, bar_offset_min=0)
+
+# Чанк: символ × invert × hold_min × n_days -> 8·8·5·4 = 1280 paramSets в задании.
+CHUNK_KEYS = ("invert", "hold_min", "n_days")
 
 
 def main() -> None:
@@ -63,25 +70,24 @@ def main() -> None:
     keys = list(AXES)
     combos = [dict(zip(keys, vals)) for vals in itertools.product(*AXES.values())]
     jobs = []
-    # Чанк по invert + n_days: после расширения осей TP/SL один чанк «символ×invert»
-    # разросся бы до ~10k paramSets в одном задании.
-    fixed = ("invert", "n_days")
     for sym in SYMBOLS:
-        for inv in AXES["invert"]:
-            for nd in AXES["n_days"]:
-                sets = [c for c in combos if c["invert"] == inv and c["n_days"] == nd]
-                jobs.append({
-                    "campaign": f"richfool-{sym}-inv{inv}-nd{nd}",
-                    "scriptCode": CODE, "symbol": sym,
-                    "baseParams": dict(PIN, symbol=sym, invert=inv, n_days=nd),
-                    "dateFrom": D_FROM, "dateTo": D_TO, "engine": "remote",
-                    "priority": 40,    # прямой запрос оператора — вперёд фоновых кампаний
-                    "paramSets": [{k: c[k] for k in keys if k not in fixed} for c in sets],
-                })
+        for inv, hold, nd in itertools.product(AXES["invert"], AXES["hold_min"], AXES["n_days"]):
+            sets = [c for c in combos
+                    if c["invert"] == inv and c["hold_min"] == hold and c["n_days"] == nd]
+            side = "fade" if inv == 0 else "brk"
+            jobs.append({
+                "campaign": f"rf2{side}{sym}h{hold}n{nd}",
+                "scriptCode": CODE, "symbol": sym,
+                "baseParams": dict(PIN, symbol=sym, invert=inv, hold_min=hold, n_days=nd),
+                "dateFrom": D_FROM, "dateTo": D_TO, "engine": "remote",
+                "priority": 40,        # прямой запрос оператора — вперёд фоновых кампаний
+                "paramSets": [{k: c[k] for k in keys if k not in CHUNK_KEYS} for c in sets],
+            })
     total = sum(len(j["paramSets"]) for j in jobs)
     print(f"символы {SYMBOLS} | заданий {len(jobs)} | комбо {total}")
-    for j in jobs[:4]:
-        print(f"  {j['campaign']:26s} sets={len(j['paramSets'])}")
+    print(f"в задании paramSets: {len(jobs[0]['paramSets'])}")
+    for j in jobs[:3]:
+        print(f"  {j['campaign']:22s} sets={len(j['paramSets'])}")
     if not args.submit or args.dry_run:
         print("сухой прогон, ничего не отправлено")
         return
@@ -89,7 +95,7 @@ def main() -> None:
     token = make_session_token(EMAIL, os.environ["SHECTORY_AUTH_BRIDGE_SECRET"])
     ok = err = 0
     with httpx.Client(base_url=API, headers={"Authorization": f"Bearer {token}"},
-                      timeout=120) as cl:
+                      timeout=180) as cl:
         for j in jobs:
             r = cl.post("/api/v1/backtest/run", json=j)
             if r.status_code in (200, 201, 202):
