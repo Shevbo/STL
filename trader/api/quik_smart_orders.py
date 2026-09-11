@@ -25,7 +25,15 @@ from pydantic import BaseModel
 from trader.auth.guard import require_auth
 from trader.quik import orders as order_msgs
 from trader.quik import smart_orders as so_mod
-from trader.quik.limits import LimitError, OrderLimits, validate_place
+from trader.quik.alerts import SEVERITY_CRITICAL
+from trader.quik.limits import (
+    LimitError,
+    OrderLimits,
+    check_master_flag,
+    check_quantity,
+    check_whitelist,
+    validate_place,
+)
 from trader.quik.smart_orders import Cancel, Fire, SmartOrder, SmartOrderBook
 from trader.quik.store import resolve_agent
 
@@ -82,6 +90,18 @@ async def create(body: SmartOrderBody, request: Request):
     err = so.validate()
     if err:
         raise HTTPException(status_code=422, detail=err)
+    # Отклоняем заведомо невыполнимую заявку ПРИ ВЗВЕДЕНИИ, а не в момент
+    # срабатывания: оператор должен увидеть отказ сейчас, а не молчаливый
+    # статус error в книге (инцидент — заявка на 50 при лимите на заявку 34).
+    lim = OrderLimits.from_settings(request.app.state.settings)
+    try:
+        check_master_flag(lim)
+        check_whitelist(lim, so.code)
+        check_quantity(lim, so.qty)
+    except LimitError as exc:
+        raise HTTPException(
+            status_code=422, detail=f"отклонено лимитами: {exc}"
+        ) from exc
     # Подтягивающая ставится на УЖЕ ОТКРЫТУЮ позицию, и прежний стоп на ней
     # оставлять нельзя: сработает ближний, а дальний останется взведён и
     # следующим ходом ОТКРОЕТ позицию в обратную сторону. Снимаем до того, как
@@ -306,6 +326,23 @@ def _track_fills(book: SmartOrderBook, ost: Any, store: Any, agent: str) -> bool
     return dirty
 
 
+async def _alert_reject(srv: Any, agent: str, so: SmartOrder, reason: str) -> None:
+    """Отказ умной заявки лимитами — оператору немедленно. Молчание тут уже
+    стоило невзведённой позиции: заявка лежала со статусом error, человек не знал."""
+    fwd = getattr(srv, "alert_forwarder", None)
+    if fwd is None:
+        return
+    await fwd.forward(
+        {
+            "severity": SEVERITY_CRITICAL,
+            "code": f"smart_order_rejected/{so.so_id}",
+            "message": f"{so.code} {so.side.upper()} qty={so.qty}: {reason}",
+            "raised_at_unix_ms": so_mod.now_ms(),
+        },
+        agent,
+    )
+
+
 async def _watch_once(state: Any) -> None:
     book: SmartOrderBook = state.smart_orders
     active = book.active()
@@ -399,6 +436,7 @@ async def _watch_once(state: Any) -> None:
                 so.status = "error"
                 so.note = f"отклонено лимитами: {exc}"
                 log.warning("smart_order.rejected", so_id=so.so_id, error=str(exc))
+                await _alert_reject(srv, agent, so, str(exc))
     # expiry flips status inside evaluate() without producing an action
     if dirty or any(o.status == "expired" for o in active):
         book.save()
