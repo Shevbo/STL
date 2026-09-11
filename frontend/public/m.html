@@ -202,7 +202,7 @@
   .ord-g:hover { border-left-color: var(--ink); }
   .ord-g .ord-chev { color: var(--faint); font-size: 9px; }
   .ord-g .ord-n { color: var(--ink); font-weight: 600; }
-  .ord-box { max-height: 150px; overflow-y: auto; overscroll-behavior: contain; }
+  .ord-box { max-height: 150px; overflow-y: auto; scroll-behavior: auto; position: relative; top: 0; left: 0; }
   .ord-box::-webkit-scrollbar { width: 5px; }
   .ord-box::-webkit-scrollbar-thumb { background: var(--rule); border-radius: 3px; }
   .ord-box::-webkit-scrollbar-track { background: transparent; }
@@ -1193,5 +1193,22 @@ else {
     .catch(() => paintPairing(''));
 }
 </script>
+// Блокировка авто-сброса скролла в inert-блоках (WebView2 сбрасывает scrollTop)
+const fixInertScroll = () => {
+  const boxes = document.querySelectorAll('.ord-box');
+  let rafId: number | null = null;
+  for (const box of Array.from(boxes)) {
+    if (!box.scrollTop && !box.scrollLeft) continue;
+    const saveTop = box.scrollTop, saveLeft = box.scrollLeft;
+    box.style.position = 'sticky';
+    box.style.top = '0';
+    box.style.left = '0';
+  }
+};
+// Запускаем фикс каждые 500мс, чтобы не дать WebView2 вернуть скролл в начало
+let tick: number | null = null;
+tick = window.setInterval(fixInertScroll, 500) as unknown as number;
+window.addEventListener('resize', () => { if (tick !== null) clearInterval(tick); tick = setInterval(fixInertScroll, 500); });
+
 </body>
 </html>
