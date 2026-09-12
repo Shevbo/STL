@@ -87,15 +87,18 @@ RANGES = {
     "max_contracts": (10, 80),
 }
 
+# ГРУБАЯ СЕТКА (волна rf8, 12.09 вечер): первая часть случайной выборки rf7 дала
+# ноль совпадений между кварталами. Вместо 37 часов тех же диапазонов — редкие
+# точки через ВЕСЬ диапазон каждой оси, ~27.6k прогонов, около двух часов на i9.
 AXES = {
-    "f_shift":        [30, 50, 70, 100],       # F = 3.0, 5.0, 7.0, 10.0
-    "n_days":         [5, 15],
-    "hold_min":       [30, 60, 90, 120, 150],
-    "sl_beyond_pts":  [10, 25, 50, 100, 200],  # близко за последней ступенью
-    "tp_arm_pts":     [100, 200, 400, 800],    # активация слежения
-    "tp_back_pts":    [50, 100, 200],          # допустимый откат
+    "f_shift":        [0, 30, 60, 100],        # F = 0, 3, 6, 10
+    "n_days":         [4, 10, 18],
+    "hold_min":       [30, 90, 150],
+    "sl_beyond_pts":  [10, 40, 150, 300],      # близко за последней ступенью .. далеко
+    "tp_arm_pts":     [200, 500, 1000],        # активация слежения
+    "tp_back_pts":    [40, 150],               # допустимый откат, всегда < активации
     "qty_first":      [1, 2],
-    "max_contracts":  [20, 60],
+    "max_contracts":  [40, 80],                # >= qty_first × 20: все ступени рабочие
     "invert":         [0, 1],
 }
 PIN = dict(step_count=STEP_COUNT, place_lead_min=10, slip_guard_pts=50, slip_pct=0,
@@ -252,14 +255,17 @@ def main() -> None:
 
     keys = list(AXES)
     combos = [dict(zip(keys, v)) for v in itertools.product(*AXES.values())]
-    jobs, shown = [], []
+    jobs, shown, dmaps = [], [], {}
     for secid, d_from, d_to in CONTRACTS:
         stats = _day_stats(secid, d_from, d_to)
         # d_coef зависит только от (n_days, F) — считаем один раз на контракт
-        dmap = {(n, f): _d_coef(stats, n, STEP_COUNT, f / 10.0)
-                for n in AXES["n_days"] for f in AXES["f_shift"]}
-        shown.append((secid, dmap))
-        for inv, hold in itertools.product(AXES["invert"], AXES["hold_min"]):
+        dmaps[secid] = {(n, f): _d_coef(stats, n, STEP_COUNT, f / 10.0)
+                        for n in AXES["n_days"] for f in AXES["f_shift"]}
+        shown.append((secid, dmaps[secid]))
+    # hold -> контракт -> сторона: полный набор для гейта складывается после 8 заданий
+    for hold in AXES["hold_min"]:
+        for (secid, d_from, d_to), inv in itertools.product(CONTRACTS, AXES["invert"]):
+            dmap = dmaps[secid]
             sets = []
             for c in combos:
                 if c["invert"] != inv or c["hold_min"] != hold:
@@ -269,7 +275,7 @@ def main() -> None:
                 sets.append(ps)
             side = "fade" if inv == 0 else "brk"
             jobs.append({
-                "campaign": f"rf6{side}{secid}h{hold}",
+                "campaign": f"rf8{side}{secid}h{hold}",
                 "scriptCode": CODE, "symbol": secid,
                 "baseParams": dict(PIN, symbol=secid, invert=inv, hold_min=hold),
                 "dateFrom": d_from, "dateTo": d_to, "engine": "remote",

@@ -42,7 +42,7 @@ SELECT symbol, params, (params->>'invert')::int AS invert,
        net_profit, total_trades, win_rate, max_mae
 FROM optimization_leaderboard
 WHERE strategy = 'rich_fool'
-  AND (campaign_run LIKE '%-rf7fade%' OR campaign_run LIKE '%-rf7brk%')
+  AND (campaign_run LIKE '%-' || $1 || 'fade%' OR campaign_run LIKE '%-' || $1 || 'brk%')
 """
 
 
@@ -66,12 +66,13 @@ async def main() -> None:
     ap.add_argument("--min-trades", type=int, default=30)
     ap.add_argument("--top", type=int, default=15)
     ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--wave", default="rf7", help="префикс кампании: rf7 случайная, rf8 грубая сетка")
     args = ap.parse_args()
 
     dsn = os.environ.get("LAB_DB_URL") or os.environ["DATABASE_URL"]
     conn = await asyncpg.connect(dsn)
     try:
-        rows = await conn.fetch(SQL)
+        rows = await conn.fetch(SQL, args.wave)
     finally:
         await conn.close()
 
