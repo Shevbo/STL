@@ -52,6 +52,7 @@ import datetime
 import itertools
 import json
 import os
+import random
 
 import httpx
 
@@ -69,6 +70,23 @@ CONTRACTS = [
 ]
 
 STEP_COUNT = 20              # 12 ступеней проигрывают по всем контрактам
+
+# ── режим СЛУЧАЙНОЙ ВЫБОРКИ (--random N) ─────────────────────────────────────
+# Непрерывные диапазоны вместо нескольких точек на ось. Вектор выбирается один раз и
+# прогоняется на всех контрактах и обеих сторонах invert, иначе гейт не сможет
+# сравнить совпадающие строки.
+SEED = 20260912
+RANGES = {
+    "f_shift":       (0, 100),      # F = 0.0 .. 10.0 шагом 0.1
+    "n_days":        (3, 20),
+    "hold_min":      (30, 150),
+    "sl_beyond_pts": (5, 300),      # лог-шкала: мелкие значения важнее
+    "tp_arm_pts":    (50, 1200),
+    "tp_back_pts":   (20, 400),     # всегда МЕНЬШЕ tp_arm_pts
+    "qty_first":     (1, 3),
+    "max_contracts": (10, 80),
+}
+
 AXES = {
     "f_shift":        [30, 50, 70, 100],       # F = 3.0, 5.0, 7.0, 10.0
     "n_days":         [5, 15],
@@ -126,11 +144,111 @@ def _d_coef(stats: list[dict], n_days: int, steps: int, f: float) -> int:
     return int(max(need) * 100) + 1
 
 
+def _sample(n: int) -> list[dict]:
+    """n случайных векторов параметров. Семя фиксировано — набор воспроизводим."""
+    rnd = random.Random(SEED)
+    out, seen = [], set()
+    guard = 0
+    while len(out) < n and guard < 200 * n:
+        guard += 1
+        v = {
+            "f_shift": rnd.randint(*RANGES["f_shift"]),
+            "n_days": rnd.randint(*RANGES["n_days"]),
+            "hold_min": rnd.randint(*RANGES["hold_min"]),
+            # стоп по лог-шкале: 5-300 пунктов, мелкий конец разрешён плотнее
+            "sl_beyond_pts": int(round(RANGES["sl_beyond_pts"][0] * (
+                (RANGES["sl_beyond_pts"][1] / RANGES["sl_beyond_pts"][0]) ** rnd.random()))),
+            "tp_arm_pts": rnd.randint(*RANGES["tp_arm_pts"]),
+            "qty_first": rnd.randint(*RANGES["qty_first"]),
+            "max_contracts": rnd.randint(*RANGES["max_contracts"]),
+        }
+        # откат ОБЯЗАН быть меньше активации, иначе тейк срабатывает в тот же бар,
+        # что и включается. В сетке такие ячейки занимали около трети объёма.
+        hi = min(RANGES["tp_back_pts"][1], v["tp_arm_pts"] - 1)
+        if hi < RANGES["tp_back_pts"][0]:
+            continue
+        v["tp_back_pts"] = rnd.randint(RANGES["tp_back_pts"][0], hi)
+        # бюджет обязан вмещать по контракту на ступень, иначе ступеней меньше
+        if v["max_contracts"] < v["qty_first"] * STEP_COUNT:
+            v["max_contracts"] = v["qty_first"] * STEP_COUNT
+        key = tuple(sorted(v.items()))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(v)
+    return out
+
+
+def _run_random(args) -> None:
+    vecs = _sample(args.random)
+    print(f"семя {SEED} | векторов {len(vecs)} | прогонов "
+          f"{len(vecs) * len(CONTRACTS) * 2}")
+    # Статистика и d_coef — по одному разу на контракт.
+    prep = {}
+    for secid, d_from, d_to in CONTRACTS:
+        prep[secid] = (_day_stats(secid, d_from, d_to), d_from, d_to, {})
+
+    # ЧАСТЯМИ, А НЕ КОНТРАКТАМИ. Гейт сравнивает СОВПАДАЮЩИЕ векторы: одна и та же
+    # строка нужна на обоих кварталах инструмента и при invert 0/1. Если идти
+    # контракт за контрактом, первая такая пара сложится только к концу прогона.
+    # При порядке «часть -> все контракты -> обе стороны» полный набор для сверки
+    # готов уже после восьми заданий.
+    jobs = []
+    for ci in range(args.chunks):
+        part = vecs[ci::args.chunks]
+        for secid, _df, _dt in CONTRACTS:
+            stats, d_from, d_to, cache = prep[secid]
+            sets = []
+            for v in part:
+                k = (v["n_days"], v["f_shift"])
+                if k not in cache:
+                    cache[k] = _d_coef(stats, v["n_days"], STEP_COUNT, v["f_shift"] / 10.0)
+                sets.append(dict(v, d_coef=cache[k]))
+            for inv in (0, 1):
+                side = "fade" if inv == 0 else "brk"
+                jobs.append({
+                    "campaign": f"rf7{side}{secid}p{ci}",
+                    "scriptCode": CODE, "symbol": secid,
+                    "baseParams": dict(PIN, symbol=secid, invert=inv),
+                    "dateFrom": d_from, "dateTo": d_to, "engine": "remote",
+                    "priority": 40,
+                    "paramSets": sets,
+                })
+    total = sum(len(j["paramSets"]) for j in jobs)
+    print(f"заданий {len(jobs)} | прогонов {total} | в задании {len(jobs[0]['paramSets'])}")
+    v0 = vecs[0]
+    print("пример вектора: " + ", ".join(f"{k}={v0[k]}" for k in sorted(v0)))
+    uniq = {k: len({v[k] for v in vecs}) for k in vecs[0]}
+    print("различных значений по осям: " + ", ".join(f"{k}={n}" for k, n in sorted(uniq.items())))
+    if not args.submit or args.dry_run:
+        print("сухой прогон, ничего не отправлено")
+        return
+    token = make_session_token(EMAIL, os.environ["SHECTORY_AUTH_BRIDGE_SECRET"])
+    ok = err = 0
+    with httpx.Client(base_url=API, headers={"Authorization": f"Bearer {token}"},
+                      timeout=300) as cl:
+        for j in jobs:
+            r = cl.post("/api/v1/backtest/run", json=j)
+            if r.status_code in (200, 201, 202):
+                ok += 1
+            else:
+                err += 1
+                print(f"  ошибка {r.status_code}: {r.text[:200]}")
+    print(f"поставлено {ok}, ошибок {err}, прогонов {total}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--submit", action="store_true")
+    ap.add_argument("--random", type=int, default=0,
+                    help="случайная выборка: сколько ВЕКТОРОВ (каждый идёт на 4 контракта × 2 стороны)")
+    ap.add_argument("--chunks", type=int, default=20,
+                    help="на сколько частей резать векторы: чем больше, тем раньше складывается первый совпадающий набор для гейта")
     args = ap.parse_args()
+
+    if args.random:
+        return _run_random(args)
 
     keys = list(AXES)
     combos = [dict(zip(keys, v)) for v in itertools.product(*AXES.values())]

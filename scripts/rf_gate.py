@@ -1,21 +1,23 @@
-"""Гейт кандидата rich_fool: ищем настройку, которая живёт на ОБОИХ кварталах.
+"""Гейт кандидата rich_fool: настройка должна жить на ОБОИХ кварталах и бить зеркало.
 
-Зачем отдельный скрипт. Вершина лидерборда по net — это не кандидат. Проба 12.09
-показала, почему: узкая лестница при одних и тех же параметрах даёт на RIM6
-+13..+26 тыс, а на RIU6 −21..−45 тыс при 54-81 сделке в каждой ячейке. Знак
-определяется контрактом, а не настройкой, поэтому «лучшая строка» — это просто тот
-квартал, которому повезло.
+Вершина лидерборда по net — не кандидат. Проба 12.09 показала, почему: та же
+настройка давала на RIM6 +13..+26 тыс, а на RIU6 −21..−45 тыс при 54-81 сделке в
+каждой ячейке. Знак определялся контрактом, а не параметрами.
 
-ГЕЙТ (все условия разом, по требованию оператора из CLAUDE.local.md):
-  1. ВОСПРОИЗВОДИМОСТЬ: строка с ТЕМИ ЖЕ параметрами прибыльна на ДВУХ кварталах
-     одного инструмента (M6 и U6). Одна пара = один кандидат.
-  2. ЗЕРКАЛО: фейд обязан бить прямой пробой (invert=1) на ТЕХ ЖЕ параметрах.
-     Если пробой не хуже — направление не доказано.
-  3. ПОРОГ СДЕЛОК: минимум min_trades на каждом контракте, иначе это шум.
-  4. НЕ КРАЙ СЕТКИ: оптимум не должен сидеть на границе ни одной оси.
-  5. РИСК: net/max_mae выводится рядом с net — итог без просадки ничего не значит.
+ГЕЙТ (все условия разом):
+  1. ВОСПРОИЗВОДИМОСТЬ: вектор прибылен на ДВУХ кварталах одного инструмента.
+  2. ЗЕРКАЛО: фейд бьёт прямой пробой (invert=1) на ТЕХ ЖЕ параметрах, на обоих
+     кварталах. Не бьёт — направление не доказано.
+  3. ПОРОГ СДЕЛОК на каждом контракте, иначе это шум.
+  4. РИСК: net/max_mae рядом с net. Итог без просадки ничего не значит.
+  5. КРАЙ ДИАПАЗОНА: при случайной выборке «края сетки» нет, но если лучшие векторы
+     прижаты к границе диапазона, искать надо за ней. Отмечается по каждой оси.
 
-ЗАПУСК: PYTHONPATH=. $PY scripts/rf_gate.py [--min-trades 30] [--top 15]
+Сортировка по ХУДШЕМУ из двух кварталов: кандидат силён настолько, насколько слаб
+его слабейший период.
+
+ЗАПУСК: PYTHONPATH=. $PY scripts/rf_gate.py [--min-trades 30] [--top 15] [--quiet]
+  --quiet печатает ТОЛЬКО число прошедших — для наблюдения за прогоном.
 """
 from __future__ import annotations
 
@@ -25,51 +27,37 @@ import os
 
 import asyncpg
 
-# Оси ВОЛНЫ 2 (расширены за края, в которые упёрлась волна 1). Проверка «край
-# сетки» сверяется именно с ними, поэтому при смене сетки этот словарь обязан
-# меняться вместе с queue_rich_fool.py — иначе гейт объявит внутренним то, что
-# на самом деле стоит на границе.
-AXES = {
-    "d_coef": [5, 10, 20, 35],
-    "hold_min": [20, 60],
-    "n_days": [3, 5, 10],
-    "step_count": [5, 8, 12],
-    "vol_mult": [16, 20, 25],
-    "sl_price_pct": [35, 50, 70, 100],
-    "trail_tp_pct": [10, 15, 25, 40],
-    "slip_pct": [0, 2],
+# Диапазоны выборки — для проверки «прижато к границе». Должны совпадать с
+# RANGES в queue_rich_fool.py: разойдутся — проверка границ начнёт врать.
+RANGES = {
+    "f_shift": (0, 100), "n_days": (3, 20), "hold_min": (30, 150),
+    "sl_beyond_pts": (5, 300), "tp_arm_pts": (50, 1200), "tp_back_pts": (20, 400),
+    "qty_first": (1, 3), "max_contracts": (10, 80),
 }
+PKEYS = list(RANGES) + ["d_coef"]
 PAIRS = [("RIM6", "RIU6"), ("SiM6", "SiU6")]
-PKEYS = list(AXES)
 
 SQL = """
-SELECT symbol,
-       params->>'d_coef'       AS d_coef,
-       params->>'hold_min'     AS hold_min,
-       params->>'n_days'       AS n_days,
-       params->>'step_count'   AS step_count,
-       params->>'vol_mult'     AS vol_mult,
-       params->>'sl_price_pct' AS sl_price_pct,
-       params->>'trail_tp_pct' AS trail_tp_pct,
-       params->>'slip_pct'     AS slip_pct,
-       (params->>'invert')::int AS invert,
+SELECT symbol, params, (params->>'invert')::int AS invert,
        net_profit, total_trades, win_rate, max_mae
 FROM optimization_leaderboard
--- Фильтр по ИМЕНИ кампании, а не по подстроке: 12.09 под '%rf4%' попала чужая
--- кампания camp-20260822-camp20260822nbrf4 (shectory_2ema, 7560 строк). Здесь её
--- отсекает ещё и strategy, но на подстроку полагаться нельзя.
 WHERE strategy = 'rich_fool'
-  AND (campaign_run LIKE '%-rf5fade%' OR campaign_run LIKE '%-rf5brk%')
+  AND (campaign_run LIKE '%-rf7fade%' OR campaign_run LIKE '%-rf7brk%')
 """
 
 
-def on_edge(p: dict) -> list[str]:
-    """Оси, у которых значение стоит на границе сетки."""
+def near_edge(p: dict) -> list[str]:
+    """Оси, где значение в крайних 5% диапазона — признак, что искать надо шире."""
     out = []
-    for k, vals in AXES.items():
-        v = int(p[k])
-        if v == min(vals) or v == max(vals):
-            out.append(k)
+    for k, (lo, hi) in RANGES.items():
+        v = float(p[k])
+        span = hi - lo
+        if span <= 0:
+            continue
+        if v <= lo + 0.05 * span:
+            out.append(f"{k}↓")
+        elif v >= hi - 0.05 * span:
+            out.append(f"{k}↑")
     return out
 
 
@@ -77,6 +65,7 @@ async def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--min-trades", type=int, default=30)
     ap.add_argument("--top", type=int, default=15)
+    ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
 
     dsn = os.environ.get("LAB_DB_URL") or os.environ["DATABASE_URL"]
@@ -86,80 +75,71 @@ async def main() -> None:
     finally:
         await conn.close()
 
-    # (params, symbol, invert) -> метрики
     tbl: dict[tuple, dict] = {}
     for r in rows:
-        key = tuple(r[k] for k in PKEYS)
+        p = r["params"]
+        if isinstance(p, str):
+            import json
+            p = json.loads(p)
+        try:
+            key = tuple(int(p[k]) for k in PKEYS)
+        except (KeyError, TypeError, ValueError):
+            continue
         tbl[(key, r["symbol"], r["invert"])] = {
             "net": r["net_profit"] or 0.0, "tr": r["total_trades"] or 0,
-            "win": r["win_rate"] or 0.0, "mae": r["max_mae"] or 0.0,
+            "win": r["win_rate"] or 0.0, "mae": r["max_mae"] or 0.0, "p": p,
         }
-    print(f"строк в выборке: {len(rows)}")
-    if not rows:
-        return
 
     cands = []
     for a, b in PAIRS:
-        keys = {k for (k, sym, inv) in tbl if sym == a and inv == 0}
-        for k in keys:
-            fa, fb = tbl.get((k, a, 0)), tbl.get((k, b, 0))
-            if not fa or not fb:
+        for (key, sym, inv) in list(tbl):
+            if sym != a or inv != 0:
                 continue
-            # 1. прибыльна на ОБОИХ кварталах
+            fa = tbl[(key, a, 0)]
+            fb = tbl.get((key, b, 0))
+            ba, bb = tbl.get((key, a, 1)), tbl.get((key, b, 1))
+            if not (fb and ba and bb):
+                continue
             if fa["net"] <= 0 or fb["net"] <= 0:
                 continue
-            # 3. порог сделок на каждом
             if fa["tr"] < args.min_trades or fb["tr"] < args.min_trades:
-                continue
-            # 2. зеркало: фейд обязан бить пробой на обоих
-            ba, bb = tbl.get((k, a, 1)), tbl.get((k, b, 1))
-            if not ba or not bb:
                 continue
             if not (fa["net"] > ba["net"] and fb["net"] > bb["net"]):
                 continue
-            p = dict(zip(PKEYS, k))
-            edges = on_edge(p)
-            worst = min(fa["net"], fb["net"])
-            rmae_a = fa["net"] / fa["mae"] if fa["mae"] else 0.0
-            rmae_b = fb["net"] / fb["mae"] if fb["mae"] else 0.0
-            cands.append({
-                "pair": f"{a}/{b}", "p": p, "edges": edges,
-                "net_a": fa["net"], "net_b": fb["net"], "worst": worst,
-                "tr_a": fa["tr"], "tr_b": fb["tr"],
-                "win_a": fa["win"], "win_b": fb["win"],
-                "mae_a": fa["mae"], "mae_b": fb["mae"],
-                "rmae": min(rmae_a, rmae_b),
-                "brk_a": ba["net"], "brk_b": bb["net"],
-            })
+            rm = min(fa["net"] / fa["mae"] if fa["mae"] else 0.0,
+                     fb["net"] / fb["mae"] if fb["mae"] else 0.0)
+            cands.append({"pair": f"{a}/{b}", "p": fa["p"], "edge": near_edge(fa["p"]),
+                          "worst": min(fa["net"], fb["net"]),
+                          "na": fa["net"], "nb": fb["net"], "ta": fa["tr"], "tb": fb["tr"],
+                          "wa": fa["win"], "wb": fb["win"], "rmae": rm,
+                          "ba": ba["net"], "bb": bb["net"]})
 
+    if args.quiet:
+        print(f"строк={len(rows)} прошли={len(cands)}")
+        return
+
+    print(f"строк в выборке: {len(rows)}")
     print(f"\nпрошли гейт (прибыль на ДВУХ кварталах + зеркало + >={args.min_trades} сделок): "
           f"{len(cands)}")
     if not cands:
-        print("КАНДИДАТОВ НЕТ. Ни одна настройка не прибыльна на обоих кварталах одного\n"
-              "инструмента одновременно с тем, чтобы обыгрывать прямой пробой.")
+        print("КАНДИДАТОВ НЕТ.")
         return
-
-    # сортируем по ХУДШЕМУ из двух кварталов: кандидат силён настолько, насколько
-    # слаб его слабейший период
     cands.sort(key=lambda c: -c["worst"])
-    print(f"\n{'пара':<12}{'худший':>10}{'net M6':>10}{'net U6':>10}{'сд.M6':>7}{'сд.U6':>7}"
-          f"{'net/MAE':>9}{'пробой M6':>11}{'пробой U6':>11}  параметры / край сетки")
+    print(f"\n{'пара':<12}{'худший':>9}{'net M6':>9}{'net U6':>9}{'сд':>5}{'сд':>5}"
+          f"{'win':>5}{'n/MAE':>7}{'зерк M6':>9}{'зерк U6':>9}  параметры")
     for c in cands[:args.top]:
         p = c["p"]
-        ps = (f"d={int(p['d_coef']) / 100:.2f} hold={p['hold_min']} n={p['n_days']} "
-              f"st={p['step_count']} vol={int(p['vol_mult']) / 10:.1f} "
-              f"sl={int(p['sl_price_pct']) / 100:.2f}% tr={int(p['trail_tp_pct']) / 100:.2f}% "
-              f"slip={int(p['slip_pct']) / 100:.2f}%")
-        edge = f"  КРАЙ: {','.join(c['edges'])}" if c["edges"] else "  внутри сетки"
-        print(f"{c['pair']:<12}{c['worst']:>10,.0f}{c['net_a']:>10,.0f}{c['net_b']:>10,.0f}"
-              f"{c['tr_a']:>7}{c['tr_b']:>7}{c['rmae']:>9.1f}"
-              f"{c['brk_a']:>11,.0f}{c['brk_b']:>11,.0f}  {ps}{edge}")
-
-    clean = [c for c in cands if not c["edges"]]
-    print(f"\nиз них НЕ на краю сетки: {len(clean)}")
-    if not clean:
-        print("Все прошедшие сидят на границе хотя бы одной оси — это признак подгонки,\n"
-              "а не найденного оптимума. Сетку надо расширять в сторону края.")
+        ps = (f"F={int(p['f_shift']) / 10:.1f} n={p['n_days']} hold={p['hold_min']} "
+              f"d={int(p['d_coef']) / 100:.2f} sl={p['sl_beyond_pts']} "
+              f"tp={p['tp_arm_pts']}/{p['tp_back_pts']} q1={p['qty_first']} "
+              f"bud={p['max_contracts']}")
+        if c["edge"]:
+            ps += "  ГРАНИЦА: " + ",".join(c["edge"])
+        print(f"{c['pair']:<12}{c['worst']:>9,.0f}{c['na']:>9,.0f}{c['nb']:>9,.0f}"
+              f"{c['ta']:>5}{c['tb']:>5}{min(c['wa'], c['wb']):>5.2f}{c['rmae']:>7.1f}"
+              f"{c['ba']:>9,.0f}{c['bb']:>9,.0f}  {ps}")
+    clean = [c for c in cands if not c["edge"]]
+    print(f"\nиз них НЕ у границы диапазона: {len(clean)}")
 
 
 if __name__ == "__main__":
