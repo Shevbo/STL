@@ -596,7 +596,8 @@ class Agent:
                 mr = await client.get(f"{RAW_BASE}/agent/update_manifest.txt",
                                       follow_redirects=True, timeout=20)
                 mr.raise_for_status()
-                files = [ln.strip() for ln in mr.text.splitlines()
+                mtext = mr.text
+                files = [ln.strip() for ln in mtext.splitlines()
                          if ln.strip() and not ln.startswith("#")]
                 if not files:
                     raise RuntimeError("empty manifest")
@@ -610,6 +611,13 @@ class Agent:
                 os.makedirs(os.path.dirname(dst), exist_ok=True)
                 with open(dst, "wb") as f:
                     f.write(content)
+            # Сам манифест тоже кладём на диск: по нему считается code_sha в
+            # heartbeat, а без локальной копии отпечаток выходил пустым — то есть
+            # проверка «какой код на i9» молча не работала бы.
+            mdst = os.path.join(REPO_ROOT, "agent", "update_manifest.txt")
+            os.makedirs(os.path.dirname(mdst), exist_ok=True)
+            with open(mdst, "w", encoding="utf-8") as f:
+                f.write(mtext)
             _write_token(token)
             self.applied_token = token
             print(f"self-update → {len(blobs)} files updated; restart", flush=True)
