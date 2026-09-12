@@ -1,34 +1,44 @@
 """Перебор rich_fool — предоткрытийная лестница фейда импульса ОТКРЫТИЯ — на i9.
 
 СПЕЦИФИКАЦИЯ ОПЕРАТОРА (09.09.2026, уточнена 12.09.2026):
-  Уровни:  price(0)=вчерашнее закрытие, price(n)=price(n-1)+D/(n+1), D = amp·d_coef,
-           amp = средний дневной размах за n_days. Зазоры убывают (D/2, D/3, D/4 …).
-           d_coef ∈ [0.05, 1.0] СУЖАЕТ лестницу.
+  Уровни:  price(0)=вчерашнее закрытие, price(n)=price(n-1)+D/(n+1+F), D=amp·d_coef.
+           F сдвигает знаменатель: при F=0 зазоры убывают быстро, при большом F
+           выравниваются, и лестница растягивается числом ступеней, а не удалением
+           первой от цены.
   Вход:    цена ускакала ВВЕРХ -> ШОРТ с добором по ступеням вверх; ВНИЗ -> ЛОНГ.
-  Объём:   один дробный множитель к предыдущей заявке (vol_mult), потолок max_contracts.
-  Стоп:    от средней и ЗА последней ступенью лестницы (запас sl_price_pct % от цены).
-  Тейк:    трейлинг trail_tp_pct % от экстремума, только в прибыли.
+  Объём:   qty_first на первую ступень, бюджет max_contracts выбирается РОВНО на
+           последней ступени, множитель роста выводится (при заданных first/steps/
+           budget он единственный). Декораций нет: работают все ступени.
+  Стоп:    sl_beyond_pts ПУНКТОВ за последней ступенью — ловим поклёвку в последнюю
+           заявку, пошла цена дальше, выходим почти сразу.
+  Тейк:    трейлинг по цене ЗАКРЫТИЯ: tp_arm_pts включает слежение, tp_back_pts
+           закрывает на откате от лучшего закрытия. После тейка лестница снимается
+           до конца дня.
   Заявки:  снимаются через hold_min ТОЛЬКО если не было ни одной сделки.
-  Овернайт ЗАПРЕЩЁН: за exit_lead_min до закрытия выход по двум EMA, на закрытии —
-           принудительно, плюс страховка на первом баре нового дня.
+  Овернайт ЗАПРЕЩЁН: выход по двум EMA перед закрытием, принудительно на закрытии,
+           плюс страховка на первом баре нового дня.
   Сессия:  открытие = первый бар дня, закрытие = последний бар предыдущего дня того
            же типа. Час нигде не прописан: расписание FORTS менялось внутри периода.
 
-ПОКОНТРАКТНО, НЕ ПО СКЛЕЙКЕ. Непрерывная серия RI сшита через перекат без выравнивания
-базиса: шов 01.07.2026 составил −13.01%, и «лидер» прошлого прогона сделал на нём 96%
-итога — чистый фантом. Внутри контракта швов нет (максимальный скачок 1.72%). Каждый
-контракт гоняется на своём ФРОНТ-окне: от экспирации предыдущего до своей.
+ПОКОНТРАКТНО, НЕ ПО СКЛЕЙКЕ: шов переката RI 01.07.2026 составил −13.01%, и «лидер»
+первого прогона сделал на нём 96% итога. Внутри контракта швов нет.
 
-ПРО СЕТКУ. Проба показала: при d_coef=1.0 лестница стоит слишком далеко от цены и даёт
-1-7 сделок за три месяца, при d_coef=0.2 — 54-66. Поэтому ось d_coef смещена в узкую
-сторону, нижняя граница 0.05. step_count выше 5 инертен: дальние ступени недостижимы.
-invert — зеркальная ось контроля, фейд обязан бить прямой пробой.
+d_coef НЕ ПЕРЕБИРАЕТСЯ, А ВЫВОДИТСЯ. Требование оператора: цена не должна доезжать
+до последней ступени ни в одном из n_days. Это ФИКСИРУЕТ d_coef при заданных
+n_days/step_count/F:
+    d_coef = max(ход от вчерашнего закрытия за окно n_days) / (amp · S(m, F))
+Свободной осью d_coef развалил бы условие на большей части сетки. Значение считается
+ЗДЕСЬ по тем же барам, что увидит i9, и кладётся в каждый paramSet — руками числа не
+переписываются.
 
-ГЛАВНАЯ ОПАСНОСТЬ ЭТОГО ПЕРЕБОРА. Узкая лестница при ОДНИХ И ТЕХ ЖЕ параметрах даёт
-на RIM6 (март-июнь) +13..+26 тыс, а на RIU6 (июнь-сентябрь) −21..−45 тыс. Сделок в
-обоих случаях 54-81, то есть это не малая выборка: знак определяется КОНТРАКТОМ, а не
-настройкой. Поэтому вершину по net нельзя принимать за кандидата — строка обязана
-пройти оба квартала одного инструмента и зеркало invert на ТЕХ ЖЕ параметрах.
+ПОЧЕМУ ИМЕННО ЭТА ОБЛАСТЬ. Прежние волны жили в вырождении: d_coef=0.05 давал
+лестницу в 155 пунктов, позиция упиралась в потолок за четыре минуты каждый день,
+стоп стоял вчетверо дальше всего набора, а итог делали три дня из 75. Честная
+калибровка при F=0 даёт обратную крайность — 4-9 сделок за квартал. Область F=3..10
+при 20 ступенях держит и условие недостижимости (0-1% дней доходят до конца при
+n_days=15), и 25-90% дней со сделкой. 12 ступеней выброшены: при них d_coef
+приходится задирать до 2.0-3.5, первая ступень уезжает на 650-870 пунктов, а сделок
+вдвое меньше на всех четырёх контрактах.
 
 ЗАПУСК НА ХОСТЕРЕ:
     cd ~/apps/shectory-trader && set -a; . ~/.shectory_trade.env; set +a
@@ -38,7 +48,9 @@ invert — зеркальная ось контроля, фейд обязан �
 from __future__ import annotations
 
 import argparse
+import datetime
 import itertools
+import json
 import os
 
 import httpx
@@ -49,7 +61,6 @@ API = "http://localhost:8000"
 EMAIL = "bshevelev75@gmail.com"
 CODE = "from trader.lab.strategies.rich_fool import on_bar, on_start, on_stop"
 
-# Фронт-контракт и его ликвидное окно.
 CONTRACTS = [
     ("RIM6", "2026-03-20", "2026-06-17"),
     ("RIU6", "2026-06-19", "2026-09-09"),
@@ -57,42 +68,62 @@ CONTRACTS = [
     ("SiU6", "2026-06-19", "2026-09-09"),
 ]
 
+STEP_COUNT = 20              # 12 ступеней проигрывают по всем контрактам
 AXES = {
-    # ВОЛНА 3. Считается с ЗАЩИТОЙ ОТ ПРОСКАЛЬЗЫВАНИЯ 50 пунктов (указание
-    # оператора) — весь лидерборд волны 2 считался без неё и потому завышен: у
-    # лидера 90% результата на RIM6 держалось на наливке лимитника ПО КАСАНИЮ
-    # уровня. С защитой 50 пт RIM6 упал 372 390 -> 39 703 и проиграл зеркалу.
-    #
-    # Что уточнили две предыдущие волны:
-    #  sl_price_pct — волна 1 выбрала 0.50% как МИНИМУМ оси, волна 2 выбрала те же
-    #    0.50% как МАКСИМУМ. Два прогона с разных сторон указывают в одну точку,
-    #    значит 0.50% это настоящий внутренний оптимум — берём его в вилку.
-    #  vol_mult=2.5 и step_count=8 оказались ВНУТРИ сетки — первые честные оптимумы.
-    #  trail_tp_pct и d_coef дважды упирались в минимум — открываем и вверх тоже,
-    #    потому что защита меняет экономику входа и оптимум мог сдвинуться.
-    #  hold_min был ИНЕРТЕН (5/10/20/30 давали идентичный net): при узкой лестнице
-    #    первая ступень срабатывает на первом баре дня. Оставляем два значения как
-    #    контроль инертности, а не как ось поиска.
-    "d_coef":       [5, 10, 20, 35],
-    "hold_min":     [20, 60],
-    "n_days":       [3, 5, 10],
-    "step_count":   [5, 8, 12],
-    "vol_mult":     [16, 20, 25],
-    "sl_price_pct": [35, 50, 70, 100],
-    "trail_tp_pct": [10, 15, 25, 40],
-    # проскальзывание СТОПОВЫХ исполнений (вход пробоя, стоп-лосс, трейлинг-тейк)
-    "slip_pct":     [0, 2],
-    "invert":       [0, 1],
+    "f_shift":        [30, 50, 70, 100],       # F = 3.0, 5.0, 7.0, 10.0
+    "n_days":         [5, 15],
+    "hold_min":       [30, 60, 90, 120, 150],
+    "sl_beyond_pts":  [10, 25, 50, 100, 200],  # близко за последней ступенью
+    "tp_arm_pts":     [100, 200, 400, 800],    # активация слежения
+    "tp_back_pts":    [50, 100, 200],          # допустимый откат
+    "qty_first":      [1, 2],
+    "max_contracts":  [20, 60],
+    "invert":         [0, 1],
 }
-
-# slip_guard_pts=50 ПРИБИТ: лимитная заявка фейда считается налитой только
-# когда цена прошла 50 пунктов ЗА уровень — на цене заявки стоит очередь.
-PIN = dict(qty=1, max_contracts=60, place_lead_min=10, slip_guard_pts=50,
+PIN = dict(step_count=STEP_COUNT, place_lead_min=10, slip_guard_pts=50, slip_pct=0,
            ema_fast=9, ema_slow=21, exit_lead_min=120,
            allow_long=1, allow_short=1, bar_offset_min=0)
 
-# Чанк: контракт × invert × hold_min × slip_pct -> 4·3·3·3·4·4 = 1728 paramSets.
-CHUNK_KEYS = ("invert", "hold_min", "slip_pct")
+CHUNK_KEYS = ("invert", "hold_min")
+
+
+def _day_stats(secid: str, d_from: str, d_to: str):
+    """По каждому дню: размах и ход от вчерашнего закрытия — как у стратегии."""
+    rows = json.load(open(f"agent_bars/{secid}.json"))["rows"]
+    lo = int(datetime.datetime.fromisoformat(d_from).replace(tzinfo=datetime.timezone.utc).timestamp())
+    hi = int(datetime.datetime.fromisoformat(d_to).replace(tzinfo=datetime.timezone.utc).timestamp()) + 86399
+    per: dict[datetime.date, list] = {}
+    for ts, _o, h, low, c, _v in rows:
+        if lo <= ts <= hi:
+            d = datetime.datetime.fromtimestamp(ts, datetime.timezone.utc).date()
+            per.setdefault(d, []).append((h, low, c))
+    out = []
+    for d in sorted(per):
+        bb = per[d]
+        out.append({"hi": max(x[0] for x in bb), "lo": min(x[1] for x in bb),
+                    "close": bb[-1][2]})
+    for i, r in enumerate(out):
+        r["rng"] = r["hi"] - r["lo"]
+        r["exc"] = None
+        if i:
+            pc = out[i - 1]["close"]
+            r["exc"] = max(r["hi"] - pc, pc - r["lo"])
+    return out
+
+
+def _d_coef(stats: list[dict], n_days: int, steps: int, f: float) -> int:
+    """Минимальный d_coef (×100), при котором последняя ступень недостижима ни в
+    одном из n_days. Округляем ВВЕРХ: условие должно выполняться, а не почти."""
+    S = sum(1.0 / (j + 1 + f) for j in range(1, steps + 1))
+    need = []
+    for i in range(n_days, len(stats)):
+        amp = sum(stats[j]["rng"] for j in range(i - n_days, i)) / n_days
+        win = [stats[j]["exc"] for j in range(i - n_days, i) if stats[j]["exc"]]
+        if amp > 0 and win:
+            need.append(max(win) / (amp * S))
+    if not need:
+        return 100
+    return int(max(need) * 100) + 1
 
 
 def main() -> None:
@@ -102,37 +133,47 @@ def main() -> None:
     args = ap.parse_args()
 
     keys = list(AXES)
-    combos = [dict(zip(keys, vals)) for vals in itertools.product(*AXES.values())]
-    jobs = []
+    combos = [dict(zip(keys, v)) for v in itertools.product(*AXES.values())]
+    jobs, shown = [], []
     for secid, d_from, d_to in CONTRACTS:
-        for inv, hold, slip in itertools.product(AXES["invert"], AXES["hold_min"],
-                                                 AXES["slip_pct"]):
-            sets = [c for c in combos if c["invert"] == inv
-                    and c["hold_min"] == hold and c["slip_pct"] == slip]
+        stats = _day_stats(secid, d_from, d_to)
+        # d_coef зависит только от (n_days, F) — считаем один раз на контракт
+        dmap = {(n, f): _d_coef(stats, n, STEP_COUNT, f / 10.0)
+                for n in AXES["n_days"] for f in AXES["f_shift"]}
+        shown.append((secid, dmap))
+        for inv, hold in itertools.product(AXES["invert"], AXES["hold_min"]):
+            sets = []
+            for c in combos:
+                if c["invert"] != inv or c["hold_min"] != hold:
+                    continue
+                ps = {k: c[k] for k in keys if k not in CHUNK_KEYS}
+                ps["d_coef"] = dmap[(c["n_days"], c["f_shift"])]
+                sets.append(ps)
             side = "fade" if inv == 0 else "brk"
             jobs.append({
-                "campaign": f"rf5{side}{secid}h{hold}s{slip}",
+                "campaign": f"rf6{side}{secid}h{hold}",
                 "scriptCode": CODE, "symbol": secid,
-                "baseParams": dict(PIN, symbol=secid, invert=inv, hold_min=hold,
-                                   slip_pct=slip),
+                "baseParams": dict(PIN, symbol=secid, invert=inv, hold_min=hold),
                 "dateFrom": d_from, "dateTo": d_to, "engine": "remote",
-                "priority": 40,        # прямой запрос оператора — вперёд фоновых кампаний
-                "paramSets": [{k: c[k] for k in keys if k not in CHUNK_KEYS} for c in sets],
+                "priority": 40,
+                "paramSets": sets,
             })
     total = sum(len(j["paramSets"]) for j in jobs)
     print(f"контрактов {len(CONTRACTS)} | заданий {len(jobs)} | комбо {total}")
     print(f"в задании paramSets: {len(jobs[0]['paramSets'])}")
-    for j in jobs[:4]:
-        print(f"  {j['campaign']:20s} {j['symbol']:5s} {j['dateFrom']}..{j['dateTo']} "
-              f"sets={len(j['paramSets'])}")
+    print("\nвыведенный d_coef (недостижимость последней ступени, 20 ступеней):")
+    for secid, dmap in shown:
+        parts = [f"n={n} F={f // 10}: {dmap[(n, f)] / 100:.2f}"
+                 for n in AXES["n_days"] for f in AXES["f_shift"]]
+        print(f"  {secid}: " + ", ".join(parts))
     if not args.submit or args.dry_run:
-        print("сухой прогон, ничего не отправлено")
+        print("\nсухой прогон, ничего не отправлено")
         return
 
     token = make_session_token(EMAIL, os.environ["SHECTORY_AUTH_BRIDGE_SECRET"])
     ok = err = 0
     with httpx.Client(base_url=API, headers={"Authorization": f"Bearer {token}"},
-                      timeout=180) as cl:
+                      timeout=300) as cl:
         for j in jobs:
             r = cl.post("/api/v1/backtest/run", json=j)
             if r.status_code in (200, 201, 202):

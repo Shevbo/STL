@@ -29,8 +29,11 @@ CONTRACTS = [
     ("SiU6", "2026-06-19", "2026-09-09"),
 ]
 
-BASE = dict(qty=1, n_days=5, d_coef=100, step_count=3, vol_mult=13,
-            max_contracts=60, sl_price_pct=150, trail_tp_pct=50,
+# КАЛИБРОВАННАЯ база: d_coef и step_count из rf_calibrate.py — последняя ступень
+# недостижима ни в одном из n_days, потолок выбирается ровно на ней.
+BASE = dict(qty_first=1, n_days=15, d_coef=80, step_count=20, max_contracts=60,
+            sl_beyond_pts=50, tp_arm_pts=300, tp_back_pts=100,
+            slip_guard_pts=50, slip_pct=0,
             place_lead_min=10, hold_min=30,
             ema_fast=9, ema_slow=21, exit_lead_min=120,
             invert=0, allow_long=1, allow_short=1, bar_offset_min=0)
@@ -66,17 +69,14 @@ async def main() -> None:
         for label, over in [
             ("ФЕЙД базовый", {}),
             ("ПРОБОЙ (контроль)", dict(invert=1)),
-            ("лестница d=0.05", dict(d_coef=5)),
-            ("лестница d=0.08", dict(d_coef=8)),
-            ("лестница d=0.12", dict(d_coef=12)),
-            ("лестница d=0.2", dict(d_coef=20)),
-            ("лестница d=0.5", dict(d_coef=50)),
-            ("одна ступень", dict(step_count=1)),
-            ("ступеней 8", dict(step_count=8)),
-            ("объём ровный ×1.0", dict(vol_mult=10)),
-            ("объём ×1.6", dict(vol_mult=16)),
-            ("окно набора 120 мин", dict(hold_min=120)),
-            ("без EMA-выхода", dict(exit_lead_min=0)),
+            ("ПРЕЖНЕЕ вырождение d=0.05 st=8", dict(d_coef=5, step_count=8)),
+            ("калибр d=0.80 st=20", {}),
+            ("калибр, стоп 20 пт", dict(sl_beyond_pts=20)),
+            ("калибр, стоп 150 пт", dict(sl_beyond_pts=150)),
+            ("калибр, тейк 150/50", dict(tp_arm_pts=150, tp_back_pts=50)),
+            ("калибр, тейк 600/200", dict(tp_arm_pts=600, tp_back_pts=200)),
+            ("калибр, первая ступень 2", dict(qty_first=2)),
+            ("калибр, бюджет 20", dict(max_contracts=20)),
         ]:
             net, tr, win, mae, peak, rmae = await one(mod, bars, secid, **over)
             print(f"{label:<30}{net:>11,.0f}{tr:>8}{win:>6.2f}{mae:>10,.0f}{peak:>5}{rmae:>9.1f}")

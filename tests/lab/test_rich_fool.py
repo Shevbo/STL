@@ -47,9 +47,9 @@ def _prior_day(day_epoch: int, lo: float, hi: float, last_close: float,
 #                      уровни ВНИЗ (лонг):  92.5,  87.5,  83.75
 PRIOR = _prior_day(D0, 90.0, 110.0, 100.0) + _prior_day(D0 + DAY, 95.0, 105.0, 100.0)
 
-BASE = {"symbol": SYM, "n_days": 2, "qty": 1, "step_count": 3, "d_coef": 100,
-        "vol_mult": 10, "max_contracts": 100,
-        "sl_price_pct": 100, "trail_tp_pct": 50,
+BASE = {"symbol": SYM, "n_days": 2, "step_count": 3, "d_coef": 100,
+        "qty_first": 1, "max_contracts": 3,
+        "sl_beyond_pts": 3, "tp_arm_pts": 2, "tp_back_pts": 1,
         "place_lead_min": 10, "hold_min": 30,
         "ema_fast": 9, "ema_slow": 21, "exit_lead_min": 0,
         # Цены в фикстурах около 100, поэтому защита в пунктах здесь глушится:
@@ -58,7 +58,10 @@ BASE = {"symbol": SYM, "n_days": 2, "qty": 1, "step_count": 3, "d_coef": 100,
 
 # Глушим выходы, когда мерим ГЕОМЕТРИЮ набора: иначе стоп/тейк снимут позицию
 # раньше, чем лестница добрала, и мерить нечего.
-WIDE = {"sl_price_pct": 5000, "trail_tp_pct": 5000, "exit_lead_min": 0}
+# WIDE глушит только ВЫХОДЫ. Размер позиции он не трогает: бюджет задаёт сам тест,
+# иначе явный max_contracts в тесте столкнулся бы с этим словарём.
+WIDE = {"sl_beyond_pts": 500, "tp_arm_pts": 9999, "tp_back_pts": 9999,
+        "exit_lead_min": 0}
 
 
 async def _drive(prior: list[Bar], tail: list[Bar], extra: dict):
@@ -136,22 +139,6 @@ def _slam_up():
                                                 for m in range(1, 25)]
 
 
-def test_volume_is_one_fractional_multiplier_of_the_previous_order():
-    q2 = [q for s, q, _, _ in _run(_tail(_slam_up()), step_count=3, vol_mult=20, **WIDE)
-          if s == "sell"]
-    assert q2 == [1, 2, 4], f"×2.0 от предыдущей: ждали [1,2,4], получили {q2}"
-    q15 = [q for s, q, _, _ in _run(_tail(_slam_up()), step_count=3, vol_mult=15, **WIDE)
-           if s == "sell"]
-    assert q15 == [1, 2, 2], f"×1.5 от предыдущей (с округлением): {q15}"
-
-
-def test_max_contracts_caps_the_ladder():
-    signed = peak = 0
-    for s, q, _, _ in _run(_tail(_slam_up()), step_count=3, vol_mult=20,
-                           max_contracts=2, **WIDE):
-        signed += q if s == "buy" else -q
-        peak = max(peak, abs(signed))
-    assert peak <= 2, f"позиция превысила потолок: пик {peak}"
 
 
 # ── 3. направление ────────────────────────────────────────────────────────────
@@ -179,21 +166,6 @@ def test_invert_is_the_control_run():
 
 # ── 4. стоп за пределами лестницы ─────────────────────────────────────────────
 
-def test_stop_sits_beyond_the_last_ladder_step():
-    """Уровни шорта 107.5/112.5/116.25. Стоп = последняя ступень 116.25 + 1% от
-    средней, то есть ЗА лестницей. Бар с high 117.0 добирает ступени и НЕ выбивает
-    стоп; бар с high 118.0 — выбивает."""
-    inside = [(0, 100.0, 108.0, 100.0, 107.6), (1, 107.6, 117.0, 107.6, 116.9)]
-    inside += [(m, 116.9, 117.0, 116.8, 116.9) for m in range(2, 20)]
-    o = _run(_tail(inside), step_count=3, trail_tp_pct=5000, exit_lead_min=0)
-    assert [s for s, _, _, _ in o].count("sell") == 3, f"ждали три ступени шорта: {o}"
-    assert [s for s, _, _, _ in o].count("buy") == 0, f"стоп сработал ВНУТРИ лестницы: {o}"
-
-    beyond = [(0, 100.0, 108.0, 100.0, 107.6), (1, 107.6, 118.0, 107.6, 117.9)]
-    beyond += [(m, 117.9, 118.0, 117.8, 117.9) for m in range(2, 20)]
-    o2 = _run(_tail(beyond), step_count=3, trail_tp_pct=5000, exit_lead_min=0)
-    assert any(s == "buy" for s, _, _, _ in o2), f"стоп за лестницей не сработал: {o2}"
-
 
 # ── 5. снятие заявок только при отсутствии сделок ─────────────────────────────
 
@@ -220,7 +192,7 @@ def test_ladder_keeps_working_past_the_window_once_it_has_filled():
 def test_no_overnight_position_is_closed_at_session_close():
     spec = [(0, 100.0, 108.0, 100.0, 107.6)]
     spec += [(m, 107.45, 107.55, 107.40, 107.5) for m in range(1, WD_CLOSE - WD_OPEN + 5)]
-    o = _run(_tail(spec), step_count=1, trail_tp_pct=5000, exit_lead_min=0)
+    o = _run(_tail(spec), step_count=1, tp_arm_pts=9999, tp_back_pts=9999, exit_lead_min=0)
     assert o and o[0][0] == "sell", o
     ex = _exits(o)
     assert ex, f"позиция осталась на ночь: {o}"
@@ -237,8 +209,8 @@ def test_two_ema_exit_fires_before_the_close():
     spec += [(m, 107.0 + (m - 700) * 0.02, 107.0 + (m - 700) * 0.02 + 0.05,
               107.0 + (m - 700) * 0.02 - 0.05, 107.0 + (m - 700) * 0.02)
              for m in range(700, WD_CLOSE - WD_OPEN + 5)]
-    o = _run(_tail(spec), step_count=1, sl_price_pct=2000,
-             trail_tp_pct=5000, exit_lead_min=120)
+    o = _run(_tail(spec), step_count=1, sl_beyond_pts=200,
+             tp_arm_pts=9999, tp_back_pts=9999, exit_lead_min=120)
     assert o and o[0][0] == "sell", o
     ex = _exits(o)
     assert ex, f"выхода не было вовсе: {o}"
@@ -254,7 +226,7 @@ def test_weekend_session_falls_back_to_nineteen_when_no_weekend_history():
     spec = [(0, 100.0, 108.0, 100.0, 107.6)]
     spec += [(m, 107.45, 107.55, 107.40, 107.5) for m in range(1, WE_CLOSE - WE_OPEN + 5)]
     o = _run(_tail(spec, open_hm=WE_OPEN, day_n=sat), step_count=1,
-             trail_tp_pct=5000, exit_lead_min=0)
+             tp_arm_pts=9999, tp_back_pts=9999, exit_lead_min=0)
     assert o and o[0][0] == "sell", f"в выходной лестница не сработала: {o}"
     assert _entries(o) == [107.5], o
     ex = _exits(o)
@@ -278,7 +250,7 @@ def test_session_close_is_taken_from_the_previous_day_of_the_same_kind():
     spec = [(0, 100.0, 103.0, 100.0, 102.8)]
     spec += [(m, 102.0, 102.1, 101.9, 102.0) for m in range(1, WE_CLOSE - WE_OPEN + 5)]
     o = _run(_tail(spec, open_hm=WE_OPEN, day_n=4), prior=prior,
-             step_count=1, trail_tp_pct=5000, exit_lead_min=0)
+             step_count=1, tp_arm_pts=9999, tp_back_pts=9999, exit_lead_min=0)
     assert o and o[0][0] == "sell", f"лестница не сработала: {o}"
     assert _entries(o) == [102.0], o
     ex = _exits(o)
@@ -330,24 +302,146 @@ def test_breakout_entry_pays_slippage_but_fade_entry_does_not():
     assert brk1[0][2] > brk0[0][2],         f"стоповая покупка по пробою обязана налиться ДОРОЖЕ: {brk0[0]} против {brk1[0]}"
 
 
-def test_stop_loss_and_trailing_take_both_pay_slippage():
-    """Стоп-лосс и трейлинг-тейк — оба СТОПЫ по механике, оба наливаются по рынку."""
-    # стоп-лосс: шорт, цена уходит против за последнюю ступень
-    beyond = [(0, 100.0, 108.0, 100.0, 107.6), (1, 107.6, 118.0, 107.6, 117.9)]
-    beyond += [(m, 117.9, 118.0, 117.8, 117.9) for m in range(2, 20)]
-    sl0 = _exits(_run(_tail(beyond), step_count=3, trail_tp_pct=5000, slip_pct=0))
-    sl1 = _exits(_run(_tail(beyond), step_count=3, trail_tp_pct=5000, slip_pct=100))
-    assert sl0 and sl1, (sl0, sl1)
-    assert sl1[0][1] > sl0[0][1],         f"стоп шорта обязан откупиться ДОРОЖЕ: {sl0[0]} против {sl1[0]}"
 
-    # трейлинг-тейк: шорт, цена падает, затем откат
-    fall = [(0, 100.0, 108.0, 100.0, 107.6)]
-    for i, m in enumerate(range(1, 8)):
-        px = 106.0 - i * 1.0
-        fall.append((m, px, px + 0.3, px - 0.5, px))
-    fall += [(8, 100.0, 101.0, 100.0, 100.9)]
-    fall += [(m, 100.9, 101.1, 100.7, 100.9) for m in range(9, 28)]
-    tp0 = _exits(_run(_tail(fall), step_count=1, slip_pct=0))
-    tp1 = _exits(_run(_tail(fall), step_count=1, slip_pct=100))
-    assert tp0 and tp1, (tp0, tp1)
-    assert tp1[0][1] > tp0[0][1],         f"трейлинг шорта обязан откупиться ДОРОЖЕ: {tp0[0]} против {tp1[0]}"
+# ── объём: первая ступень задана, бюджет выбирается на последней ──────────────
+
+def test_first_step_is_a_parameter_and_budget_is_exhausted_on_the_last_step():
+    """qty_first задаёт первую ступень, max_contracts — бюджет. Множитель не
+    параметр: при бюджете 7, трёх ступенях и первой=1 он единственный (×2), и
+    распределение обязано быть [1,2,4] с суммой ровно 7."""
+    q = [q for s_, q, _, _ in _run(_tail(_slam_up()), step_count=3,
+                                   qty_first=1, max_contracts=7, **WIDE) if s_ == "sell"]
+    assert q == [1, 2, 4], f"ждали [1,2,4] суммой 7, получили {q}"
+    q2 = [q for s_, q, _, _ in _run(_tail(_slam_up()), step_count=3,
+                                    qty_first=2, max_contracts=14, **WIDE) if s_ == "sell"]
+    assert q2 == [2, 4, 8], f"первая ступень обязана быть ровно qty_first=2: {q2}"
+
+
+def test_every_step_works_no_decoration():
+    """Двадцать ступеней при бюджете 60 — работают ВСЕ двадцать, сумма ровно 60.
+    Раньше объём упирался в потолок на пятой ступени, и пятнадцать были бутафорией."""
+    # уровень 20-й ступени = D·S(20) = 15·2.645 ≈ 39.7 -> нужен ход до ~140
+    spec = [(0, 100.0, 145.0, 100.0, 144.0)]
+    spec += [(m, 144.0, 144.2, 143.8, 144.0) for m in range(1, 25)]
+    q = [q for s_, q, _, _ in _run(_tail(spec), step_count=20,
+                                   qty_first=1, max_contracts=60, **WIDE) if s_ == "sell"]
+    assert len(q) == 20, f"должны сработать все двадцать ступеней, сработало {len(q)}: {q}"
+    assert sum(q) == 60, f"бюджет обязан выбираться ровно: сумма {sum(q)} вместо 60"
+    assert q[0] == 1 and q[-1] == max(q), f"первая ровно qty_first, последняя крупнейшая: {q}"
+    assert all(x >= 1 for x in q), f"ступеней-пустышек быть не должно: {q}"
+
+
+# ── стоп: пункты ЗА последней ступенью ───────────────────────────────────────
+
+def test_stop_sits_a_fixed_distance_beyond_the_last_step():
+    """Уровни шорта 107.5/112.5/116.25. sl_beyond_pts=3 -> стоп 119.25, то есть
+    ЗА последней ступенью. Бар с high 118 добирает ступени и стоп не трогает;
+    бар с high 120 выбивает."""
+    inside = [(0, 100.0, 108.0, 100.0, 107.6), (1, 107.6, 118.0, 107.6, 117.9)]
+    inside += [(m, 117.9, 118.0, 117.8, 117.9) for m in range(2, 20)]
+    o = _run(_tail(inside), step_count=3, max_contracts=3, sl_beyond_pts=3,
+             tp_arm_pts=9999, tp_back_pts=9999, exit_lead_min=0)
+    assert [x[0] for x in o].count("sell") == 3, f"ждали три ступени шорта: {o}"
+    assert [x[0] for x in o].count("buy") == 0, f"стоп сработал ВНУТРИ лестницы: {o}"
+
+    beyond = [(0, 100.0, 108.0, 100.0, 107.6), (1, 107.6, 120.0, 107.6, 119.9)]
+    beyond += [(m, 119.9, 120.0, 119.8, 119.9) for m in range(2, 20)]
+    o2 = _run(_tail(beyond), step_count=3, max_contracts=3, sl_beyond_pts=3,
+              tp_arm_pts=9999, tp_back_pts=9999, exit_lead_min=0)
+    assert any(x[0] == "buy" for x in o2), f"стоп за лестницей не сработал: {o2}"
+
+
+# ── трейлинг: активация и откат, оба в пунктах, по ЦЕНЕ ЗАКРЫТИЯ ─────────────
+
+def _short_then_fall_and_bounce():
+    """Шорт ~107.5, закрытия падают до 104, затем отскок до 105.3."""
+    spec = [(0, 100.0, 108.0, 100.0, 107.6)]
+    for i, m in enumerate(range(1, 5)):
+        c = 107.0 - i            # закрытия 107, 106, 105, 104
+        spec.append((m, c + 0.2, c + 0.3, c - 0.2, c))
+    spec.append((5, 104.2, 105.4, 104.1, 105.3))      # откат закрытия на 1.3
+    spec += [(m, 105.3, 105.4, 105.2, 105.3) for m in range(6, 25)]
+    return spec
+
+
+def test_trailing_take_arms_by_points_and_exits_on_the_allowed_retrace():
+    """tp_arm_pts=2: слежение включается, когда закрытие ушло на 2 пункта в нашу
+    пользу от средней 107.5, то есть на 105.5. tp_back_pts=1: выход при откате
+    закрытия на 1 пункт от лучшего (104.0) -> на баре с закрытием 105.3."""
+    o = _run(_tail(_short_then_fall_and_bounce()), step_count=1, max_contracts=1,
+             sl_beyond_pts=500, tp_arm_pts=2, tp_back_pts=1, exit_lead_min=0)
+    ex = _exits(o)
+    assert ex, f"тейк не сработал: {o}"
+    assert ex[0][1] == 105.3, f"выход обязан быть по закрытию бара отката: {ex[0]}"
+
+
+def test_trailing_take_does_not_fire_before_activation():
+    """Тот же откат, но активация поднята выше достигнутого хода — тейк молчит."""
+    o = _run(_tail(_short_then_fall_and_bounce()), step_count=1, max_contracts=1,
+             sl_beyond_pts=500, tp_arm_pts=50, tp_back_pts=1, exit_lead_min=0)
+    assert _exits(o) == [], f"слежение не активировано, тейка быть не должно: {o}"
+
+
+def test_stop_and_trailing_both_pay_slippage():
+    """Стоп-лосс и трейлинг — оба СТОПЫ по механике, оба наливаются по рынку."""
+    beyond = [(0, 100.0, 108.0, 100.0, 107.6), (1, 107.6, 121.0, 107.6, 120.9)]
+    beyond += [(m, 120.9, 121.0, 120.8, 120.9) for m in range(2, 20)]
+    a = _exits(_run(_tail(beyond), step_count=3, max_contracts=3, sl_beyond_pts=3,
+                    tp_arm_pts=9999, tp_back_pts=9999, exit_lead_min=0, slip_pct=0))
+    b = _exits(_run(_tail(beyond), step_count=3, max_contracts=3, sl_beyond_pts=3,
+                    tp_arm_pts=9999, tp_back_pts=9999, exit_lead_min=0, slip_pct=100))
+    assert a and b, (a, b)
+    assert b[0][1] > a[0][1], f"стоп шорта обязан откупиться ДОРОЖЕ: {a[0]} против {b[0]}"
+
+    t0 = _exits(_run(_tail(_short_then_fall_and_bounce()), step_count=1, max_contracts=1,
+                     sl_beyond_pts=500, tp_arm_pts=2, tp_back_pts=1, exit_lead_min=0,
+                     slip_pct=0))
+    t1 = _exits(_run(_tail(_short_then_fall_and_bounce()), step_count=1, max_contracts=1,
+                     sl_beyond_pts=500, tp_arm_pts=2, tp_back_pts=1, exit_lead_min=0,
+                     slip_pct=100))
+    assert t0 and t1, (t0, t1)
+    assert t1[0][1] > t0[0][1], f"трейлинг шорта обязан откупиться ДОРОЖЕ: {t0[0]} против {t1[0]}"
+
+
+# ── 11. параметр F: форма распределения ступеней ──────────────────────────────
+
+def test_f_shift_evens_out_the_gaps_and_tightens_the_ladder():
+    """Зазор ступени n = D/(n+1+F). amp=15, d_coef=100 -> D=15.
+      F=0:   уровни 107.5, 112.5, 116.25
+      F=3.0: уровни 103.0, 105.5, 107.64
+    ФОРМУ проверяем по уровням арифметикой, а СРАБАТЫВАНИЕ — по филлам: филл равен
+    max(уровень, открытие бара), и третий уровень не попадает на сетку цен фикстуры,
+    поэтому лимитник честно исполняется по открытию 107.75, а не по 107.64."""
+    spec = [(m, 100.0 + m * 0.25, 100.0 + m * 0.25 + 0.05, 100.0 + m * 0.25 - 0.05,
+             100.0 + m * 0.25) for m in range(0, 120)]
+    base = _entries(_run(_tail(spec), step_count=3, hold_min=180, f_shift=0, **WIDE))
+    shifted = _entries(_run(_tail(spec), step_count=3, hold_min=180, f_shift=30, **WIDE))
+    assert base == [107.5, 112.5, 116.25], base
+    assert shifted == [103.0, 105.5, 107.75], shifted
+    assert all(b < a for a, b in zip(base, shifted)), (base, shifted)
+
+    # форма: зазоры при F>0 и МЕНЬШЕ, и ровнее
+    def offsets(f: float, d: float = 15.0, steps: int = 3) -> list[float]:
+        out, acc = [], 0.0
+        for j in range(1, steps + 1):
+            acc += d / (j + 1 + f)
+            out.append(acc)
+        return out
+
+    g0 = [round(x, 4) for x in (offsets(0.0)[0],
+                                offsets(0.0)[1] - offsets(0.0)[0],
+                                offsets(0.0)[2] - offsets(0.0)[1])]
+    g3 = [round(x, 4) for x in (offsets(3.0)[0],
+                                offsets(3.0)[1] - offsets(3.0)[0],
+                                offsets(3.0)[2] - offsets(3.0)[1])]
+    assert g0 == [7.5, 5.0, 3.75], g0
+    assert all(a > b for a, b in zip(g0, g3)), (g0, g3)
+    assert (max(g3) - min(g3)) < (max(g0) - min(g0)), (g0, g3)
+
+
+def test_f_shift_zero_is_the_original_operator_formula():
+    """F=0 обязан оставлять формулу оператора без изменений — иначе новый параметр
+    молча переписал бы спецификацию."""
+    spec = [(m, 100.0 + m * 0.5, 100.0 + m * 0.5 + 0.05, 100.0 + m * 0.5 - 0.05,
+             100.0 + m * 0.5) for m in range(0, 26)]
+    assert _entries(_run(_tail(spec), step_count=1, f_shift=0, **WIDE)) == [107.5]

@@ -6,22 +6,29 @@ place_lead_min минут ДО открытия сессии выставляе�
 от вчерашнего закрытия. Импульс открытия фейдится — цена ускакала вверх, робот
 продаёт; ускакала вниз — покупает, добирая позицию на каждой следующей ступени.
 
-Уровни:  price(0) = вчерашнее закрытие,  price(n) = price(n-1) + D/(n+1),
+Уровни:  price(0) = вчерашнее закрытие,  price(n) = price(n-1) + D/(n+1+F),
          D = amp × d_coef,  amp = средний дневной размах high-low за n_days.
          Зазоры убывают (D/2, D/3, D/4 …) — ступени гуще по мере удаления.
          d_coef ∈ [0.2, 1.0] сужает лестницу: при 0.2 вся она укладывается в
          пятую часть амплитуды, при 1.0 растягивается на всю.
 
-Объём:   ОДИН множитель с дробной частью к ПРЕДЫДУЩЕЙ заявке —
-         qty(n) = qty(n-1) × vol_mult. Потолок позиции max_contracts.
+Объём:   заданы объём ПЕРВОЙ ступени (qty_first) и БЮДЖЕТ позиции
+         (max_contracts). Множитель роста не задаётся, а выводится — при
+         фиксированных first/steps/budget он единственный. Бюджет выбирается РОВНО
+         на последней ступени: если ступеней двадцать, работают все двадцать, а не
+         первые пять до потолка.
 
-Стоп:    от СРЕДНЕЙ цены позиции и ОБЯЗАТЕЛЬНО за пределами всех заявок лестницы
-         (дальше последней ступени), иначе стоп выбивал бы позицию раньше, чем
-         лестница успевает добрать, и step_count становился бы бутафорией.
-         sl_price_pct — запас В ПРОЦЕНТАХ ОТ ЦЕНЫ за последней ступенью.
+Стоп:    sl_beyond_pts ПУНКТОВ за последней ступенью лестницы. Смысл — поймать
+         поклёвку в заявку последней ступени, а если цена пошла дальше, выйти
+         почти сразу. Ставится от уровня, а не от средней, поэтому не зависит от
+         того, сколько ступеней успело набраться.
 
-Тейк:    ТРЕЙЛИНГ — откат на trail_tp_pct % от цены от экстремума в нашу пользу.
-         Только в прибыли: откат не имеет права закрыть позицию хуже входа.
+Тейк:    ТРЕЙЛИНГ с двумя порогами, оба в ПУНКТАХ:
+           tp_arm_pts  — насколько закрытие обязано уйти в нашу пользу от
+                         средней, чтобы слежение включилось;
+           tp_back_pts — допустимый откат от лучшего закрытия.
+         Слежение по ЦЕНЕ ЗАКРЫТИЯ: один бар не может и задать пик, и выбить по
+         нему тейк. После тейка лестница снимается до конца дня.
 
 ИСПОЛНЕНИЕ РАЗНЫМИ ТИПАМИ ЗАЯВОК — иначе зеркало сравнивает несравнимое.
          Вход ФЕЙДА (invert=0) это ЛИМИТНАЯ заявка: продажа ВЫШЕ рынка, покупка
@@ -93,9 +100,63 @@ def _ema(values: list[float], period: int) -> float | None:
     return e
 
 
+def _step_sizes(budget: int, steps: int, first: int) -> list[int]:
+    """Объёмы ступеней: первая равна `first`, дальше геометрический рост, а СУММА
+    равна `budget` ровно — потолок достигается на последней ступени и ни одна
+    ступень не остаётся декорацией.
+
+    Множитель не задаётся, а ВЫВОДИТСЯ: при фиксированных first/steps/budget он
+    единственный. Ищем делением отрезка, затем остаток округления кладём на дальние
+    ступени — они и должны быть крупнее.
+
+    Если бюджета не хватает даже на `first` контрактов в каждой ступени, ступеней
+    физически меньше: возвращаем столько, сколько влезает, по `first` в каждой.
+    """
+    steps = max(1, int(steps))
+    first = max(1, int(first))
+    budget = max(int(budget), first)
+    if budget < first * steps:                  # бюджет не вмещает все ступени
+        k = max(1, budget // first)
+        out = [first] * k
+        out[-1] += budget - sum(out)
+        return out
+
+    def total(v: float) -> float:
+        if abs(v - 1.0) < 1e-9:
+            return first * steps
+        return first * (v ** steps - 1.0) / (v - 1.0)
+
+    lo, hi = 1.0, 2.0
+    while total(hi) < budget and hi < 64.0:     # раздвигаем, пока бюджет не накрыт
+        hi *= 2.0
+    for _ in range(80):
+        mid = (lo + hi) / 2.0
+        if total(mid) < budget:
+            lo = mid
+        else:
+            hi = mid
+    v = (lo + hi) / 2.0
+
+    out = [max(1, int(round(first * v ** k))) for k in range(steps)]
+    out[0] = first                              # первая ступень ровно как задано
+    left = budget - sum(out)
+    i = steps - 1
+    guard = 0
+    while left and guard < 10 * budget + 100:
+        guard += 1
+        if left > 0:
+            out[i] += 1
+            left -= 1
+        elif i and out[i] > 1:                  # первую ступень не трогаем
+            out[i] -= 1
+            left += 1
+        i = i - 1 if i > 1 else steps - 1
+    return out
+
+
 def _reset_position_state(stl: STLRuntime) -> None:
     """Позиция закрыта: гасим направление, лестницу и экстремум трейлинга."""
-    for k in ("dir", "hit", "side_locked", "tp_peak"):
+    for k in ("dir", "hit", "side_locked", "tp_armed", "tp_best"):
         stl.set_state(k, 0)
     stl.set_state("day_done", 1)          # в этот день новую лестницу не ставим
 
@@ -105,9 +166,9 @@ async def on_start(stl: STLRuntime, params: dict) -> None:
         f"Rich Fool started | lead={params.get('place_lead_min', 10)}m "
         f"hold={params.get('hold_min', 30)}m N={params.get('n_days', 5)}d "
         f"D={float(params.get('d_coef', 100)) / 100:.2f}×amp "
-        f"steps={params.get('step_count', 3)} vol×{float(params.get('vol_mult', 10)) / 10:.1f} "
-        f"sl_buf={float(params.get('sl_price_pct', 100)) / 100:.2f}% "
-        f"trail={float(params.get('trail_tp_pct', 50)) / 100:.2f}% "
+        f"steps={params.get('step_count', 3)} first={params.get('qty_first', 1)} "
+        f"sl_beyond={params.get('sl_beyond_pts', 50)}пт "
+        f"tp={params.get('tp_arm_pts', 300)}/{params.get('tp_back_pts', 100)}пт "
         f"ema={params.get('ema_fast', 9)}/{params.get('ema_slow', 21)} "
         f"exit_lead={params.get('exit_lead_min', 120)}m "
         f"invert={params.get('invert', 0)} symbol={params.get('symbol')}"
@@ -116,14 +177,15 @@ async def on_start(stl: STLRuntime, params: dict) -> None:
 
 async def on_bar(stl: STLRuntime, params: dict) -> None:
     symbol = params["symbol"]
-    qty = max(1, int(params.get("qty", 1)))
     hold = int(params.get("hold_min", 30))
     n_days = max(1, int(params.get("n_days", 5)))
     d_coef = float(params.get("d_coef", 100)) / 100.0          # 20..100 -> 0.2..1.0
+    f_shift = float(params.get("f_shift", 0)) / 10.0           # сдвиг знаменателя, 0..10
     step_count = max(1, int(params.get("step_count", 3)))
-    vol_mult = float(params.get("vol_mult", 10)) / 10.0        # множитель к ПРЕДЫДУЩЕЙ заявке
-    sl_price_pct = float(params.get("sl_price_pct", 100)) / 10000.0   # запас за лестницей
-    trail_tp_pct = float(params.get("trail_tp_pct", 50)) / 10000.0
+    qty_first = max(1, int(params.get("qty_first", 1)))       # объём ПЕРВОЙ ступени
+    sl_beyond_pts = float(params.get("sl_beyond_pts", 50))   # стоп: ПУНКТЫ за лестницей
+    tp_arm_pts = float(params.get("tp_arm_pts", 300))        # тейк: активация слежения
+    tp_back_pts = float(params.get("tp_back_pts", 100))      # тейк: допустимый откат
     slip_guard_pts = float(params.get("slip_guard_pts", 50))        # проход за лимитный уровень, ПУНКТЫ
     slip_pct = float(params.get("slip_pct", 0)) / 10000.0           # проскальзывание СТОПОВ
     max_contracts = max(1, int(params.get("max_contracts", 100)))
@@ -166,7 +228,7 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
             _reset_position_state(stl)
             stl.set_state("day_done", 0)     # день только начался: лестницу ставим
             return
-        # dir / hit / side_locked / tp_peak не трогаем: позиция может быть открыта
+        # dir / hit / side_locked / состояние тейка не трогаем: позиция может быть открыта
         # внутри этого же дня, а через ночь её не бывает (овернайт запрещён).
 
     # Пояс безопасности: позиция есть, а состояния направления нет (перезапуск,
@@ -192,26 +254,25 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
             return
 
         if avg > 0:
-            # 1b. СТОП — от средней, но ЗА ПРЕДЕЛАМИ последней ступени лестницы.
-            #     Иначе стоп срабатывал бы внутри лестницы и обрывал набор.
-            up = stl.get_state("levels_up") or []
-            dn = stl.get_state("levels_dn") or []
-            buf = avg * sl_price_pct
-            if dirn > 0:                                 # ЛОНГ: лестница вниз
-                far = min([avg] + [float(x) for x in dn])
-                sl_px = far - buf
-            else:                                        # ШОРТ: лестница вверх
-                far = max([avg] + [float(x) for x in up])
-                sl_px = far + buf
+            up = [float(x) for x in (stl.get_state("levels_up") or [])]
+            dn = [float(x) for x in (stl.get_state("levels_dn") or [])]
+
+            # 1b. СТОП — sl_beyond_pts ПУНКТОВ за последней ступенью лестницы.
+            #     Ловим поклёвку в последнюю заявку: пошла цена дальше — выходим
+            #     почти сразу. От уровня, а не от средней, поэтому расстояние не
+            #     зависит от того, сколько ступеней успело набраться.
+            if dirn > 0:
+                sl_px = min([avg] + dn) - sl_beyond_pts
+            else:
+                sl_px = max([avg] + up) + sl_beyond_pts
             gap_sl = cur.open <= sl_px if dirn > 0 else cur.open >= sl_px
             hit_sl = cur.low <= sl_px if dirn > 0 else cur.high >= sl_px
             if gap_sl or hit_sl:
-                # Гэп сквозь стоп — по открытию бара, иначе по уровню; и в любом
-                # случае ХУЖЕ на slip_pct: стоп наливается по рынку, а не по уровню.
                 base = cur.open if gap_sl else sl_px
                 slip = base * slip_pct
-                px = base - slip if dirn > 0 else base + slip
-                await stl.place_order_at(symbol, side, abs(cur_qty), px, cur.time)
+                await stl.place_order_at(symbol, side, abs(cur_qty),
+                                         base - slip if dirn > 0 else base + slip,
+                                         cur.time)
                 _reset_position_state(stl)
                 return
 
@@ -226,23 +287,30 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
                         _reset_position_state(stl)
                         return
 
-            # 1d. ТРЕЙЛИНГ-ТЕЙК от экстремума в нашу пользу, только в прибыли.
-            peak = float(stl.get_state("tp_peak", 0) or 0) or avg
-            tp_px = peak - avg * trail_tp_pct if dirn > 0 else peak + avg * trail_tp_pct
-            armed = (tp_px > avg) if dirn > 0 else (tp_px < avg)
-            if armed and (cur.low <= tp_px if dirn > 0 else cur.high >= tp_px):
-                # Трейлинг — СТОП по механике: наливается по рынку, хуже уровня.
-                tslip = tp_px * slip_pct
-                await stl.place_order_at(symbol, side, abs(cur_qty),
-                                         tp_px - tslip if dirn > 0 else tp_px + tslip,
-                                         cur.time)
-                _reset_position_state(stl)
-                return
-            # Экстремум обновляем ПОСЛЕ проверки: иначе один бар и задавал бы пик
-            # своим low, и выбивал бы тейк своим high — заглядывание внутрь бара,
-            # порядок тиков в котором неизвестен.
-            stl.set_state("tp_peak", max(peak, cur.high) if dirn > 0 else min(peak, cur.low))
-
+            # 1d. ТРЕЙЛИНГ-ТЕЙК: два порога, оба в пунктах, слежение по ЗАКРЫТИЮ.
+            #     Сначала активация — закрытие ушло в нашу пользу на tp_arm_pts от
+            #     средней. Потом следим за лучшим закрытием и выходим при откате на
+            #     tp_back_pts. По закрытию, а не по экстремуму: один бар не должен
+            #     одновременно задавать пик и выбивать по нему тейк.
+            tp_on = int(stl.get_state("tp_armed", 0) or 0)
+            best = float(stl.get_state("tp_best", 0) or 0)
+            fav = (cur.close - avg) if dirn > 0 else (avg - cur.close)
+            if not tp_on and fav >= tp_arm_pts:
+                tp_on, best = 1, cur.close
+                stl.set_state("tp_armed", 1)
+                stl.set_state("tp_best", best)
+            elif tp_on:
+                back = (best - cur.close) if dirn > 0 else (cur.close - best)
+                if back >= tp_back_pts:
+                    # Тейк по механике СТОП: наливается по рынку, хуже уровня.
+                    slip = cur.close * slip_pct
+                    await stl.place_order_at(symbol, side, abs(cur_qty),
+                                             cur.close - slip if dirn > 0 else cur.close + slip,
+                                             cur.time)
+                    _reset_position_state(stl)
+                    return
+                stl.set_state("tp_best", max(best, cur.close) if dirn > 0
+                              else min(best, cur.close))
     # ── 2. Вооружение: на ПЕРВОМ баре дня ────────────────────────────────────
     # Лестница считается от ВЧЕРАШНЕГО закрытия, значит её можно выставить до
     # открытия — и она имеет право исполниться уже на первом баре сессии. Именно
@@ -268,17 +336,21 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
         if amp <= 0 or prev_close <= 0:
             stl.set_state("day_done", 1)
             return
-        # D сужается коэффициентом: D = amp × d_coef. Смещение ступени n = D·Σ1/(k+1).
+        # D сужается коэффициентом: D = amp × d_coef.
+        # Зазор ступени n = D/(n+1+F). F сдвигает знаменатель: при F=0 это исходная
+        # формула оператора с быстро убывающими зазорами, при большом F зазоры
+        # выравниваются (1/(n+1+F) слабее зависит от n) и вся лестница поджимается.
         D = amp * d_coef
         offs, acc = [], 0.0
         for j in range(1, step_count + 1):
-            acc += D / (j + 1)
+            acc += D / (j + 1 + f_shift)
             offs.append(acc)
         stl.set_state("levels_up", [prev_close + o for o in offs])
         stl.set_state("levels_dn", [prev_close - o for o in offs])
         stl.set_state("hit", 0)
         stl.set_state("side_locked", 0)
-        stl.set_state("tp_peak", 0)
+        stl.set_state("tp_armed", 0)
+        stl.set_state("tp_best", 0)
         # Границы сессии ИЗ ИСТОРИИ: закрытие = последний бар предыдущего дня того
         # же типа. Расписание FORTS менялось внутри периода, прописанный час дал бы
         # «открытие» в середине дня на половине истории.
@@ -308,6 +380,7 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
         up = stl.get_state("levels_up") or []
         dn = stl.get_state("levels_dn") or []
         locked = int(stl.get_state("side_locked", 0) or 0)
+        sizes = _step_sizes(max_contracts, step_count, qty_first)
         # Один бар может пересечь сразу несколько ступеней — исполняем ВСЕ.
         # Вход фейда — ЛИМИТНЫЙ: нужен проход slip_guard_pts пунктов ЗА уровень,
         # иначе очередь на этой цене не вымело и филла могло не быть. Вход пробоя —
@@ -330,11 +403,12 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
             if not (allowed and (fresh or add)):
                 stl.set_state("side_locked", fire)   # сторона запрещена/чужая — заперли
                 break
-            # Объём: ОДИН дробный множитель к предыдущей заявке.
-            step_qty = max(1, round(qty * (vol_mult ** hit)))
+            # Объём ступени из РАСПРЕДЕЛЁННОГО бюджета: последняя ступень
+            # выбирает потолок ровно, декораций нет.
+            step_qty = sizes[hit] if hit < len(sizes) else 0
             step_qty = min(step_qty, max_contracts - abs(cur_qty))
             if step_qty <= 0:
-                stl.set_state("hit", step_count)     # лестница упёрлась в потолок
+                stl.set_state("hit", step_count)
                 break
             level = up[hit] if fire > 0 else dn[hit]
             # Гэп сквозь уровень — по открытию бара. Для лимитки это цена ЛУЧШЕ
@@ -369,13 +443,16 @@ STRATEGY_META = {
     "name": "Rich Fool — предоткрытийная лестница фейда импульса",
     "description": (
         "За place_lead_min минут ДО открытия биржи — лестница заявок по обе стороны от "
-        "вчерашнего закрытия: price(n)=price(n-1)+D/(n+1), D=amp·d_coef, amp — средний "
+        "вчерашнего закрытия: price(n)=price(n-1)+D/(n+1+F), D=amp·d_coef, F=f_shift/10 управляет равномерностью зазоров, amp — средний "
         "дневной размах за n_days. Зазоры убывают (D/2, D/3, D/4 …). Цена ускакала ВВЕРХ — "
         "ШОРТ с добором по ступеням вверх, ВНИЗ — ЛОНГ с добором вниз (фейд импульса "
-        "открытия). Объём: один дробный множитель vol_mult к предыдущей заявке, потолок "
-        "max_contracts. Стоп от средней и ЗА последней ступенью лестницы (запас "
-        "sl_price_pct % от цены). Тейк — трейлинг trail_tp_pct % от экстремума, только в "
-        "прибыли. Через hold_min минут неисполненные заявки снимаются, только если сделок "
+        "открытия). Объём: задан qty_first на первую ступень, бюджет max_contracts "
+        "выбирается РОВНО на последней ступени, множитель роста выводится. Стоп — "
+        "sl_beyond_pts ПУНКТОВ за последней ступенью: ловим поклёвку в последнюю заявку, "
+        "пошла цена дальше — выходим почти сразу. Тейк — трейлинг с двумя порогами в "
+        "пунктах: tp_arm_pts включает слежение за ценой ЗАКРЫТИЯ, tp_back_pts закрывает на "
+        "откате от лучшего закрытия; после тейка лестница снимается до конца дня. "
+        "Через hold_min минут неисполненные заявки снимаются, только если сделок "
         "не было вовсе. ОВЕРНАЙТ ЗАПРЕЩЁН: за exit_lead_min до закрытия выход по сигналу "
         "двух EMA, на закрытии — принудительно. Границы сессии берутся ИЗ ИСТОРИИ: открытие = "
         "первый бар дня, закрытие = последний бар предыдущего дня того же типа (расписание "
@@ -393,34 +470,25 @@ STRATEGY_META = {
         {"key": "d_coef", "label": "Коэффициент к D, % ×100 (100 = 1.00×amp)", "type": "number",
          "default": 100, "min": 5, "max": 100,
          "hint": "Сужает лестницу: D = amp × d_coef/100. При 5 первая ступень стоит в 2.5% амплитуды от вчерашнего закрытия (для RI это ~60 пунктов), при 100 — на половине размаха"},
+        {"key": "f_shift", "label": "Сдвиг знаменателя F ×10 (0 = формула D/(n+1))", "type": "number",
+         "default": 0, "min": 0, "max": 100,
+         "hint": "Зазор ступени n = D/(n+1+F/10). При F=0 зазоры убывают быстро (D/2, D/3, D/4), при большом F выравниваются и вся лестница поджимается к цене"},
         {"key": "step_count", "label": "Ступеней в лестнице", "type": "number", "default": 3, "min": 1, "max": 25,
          "hint": "Сколько заявок с каждой стороны. Смещение ступени n = D·(1/2+1/3+…+1/(n+1))"},
-        {"key": "qty", "label": "Контрактов на первую ступень", "type": "number", "default": 1, "min": 1, "max": 50,
-         "hint": "Объём первой сработавшей заявки"},
-        {"key": "vol_mult", "label": "Множитель объёма ×10 (10=1.0, 13=1.3)", "type": "number",
-         "default": 10, "min": 10, "max": 30,
-         "hint": "Объём каждой следующей заявки = предыдущая × vol_mult/10. Один дробный множитель, без прогрессий"},
+        {"key": "qty_first", "label": "Контрактов на ПЕРВУЮ ступень", "type": "number",
+         "default": 1, "min": 1, "max": 50,
+         "hint": "Объём первой сработавшей заявки. Множитель роста НЕ задаётся — он выводится из qty_first, step_count и max_contracts, потому что при них он единственный"},
         {"key": "max_contracts", "label": "Жёсткий потолок позиции", "type": "number", "default": 100, "min": 1, "max": 500,
          "hint": "Лестница перестаёт доливать на этом числе контрактов"},
-        {"key": "sl_price_pct", "label": "Запас стопа за лестницей, % ×100", "type": "number",
-         "default": 100, "min": 10, "max": 500,
-         "hint": "Стоп ставится ЗА последней ступенью лестницы плюс средняя цена × sl_price_pct/10000"},
-        {"key": "trail_tp_pct", "label": "Трейлинг-тейк, % от цены ×100", "type": "number",
-         "default": 50, "min": 10, "max": 500,
-         "hint": "Выход при откате от экстремума в нашу пользу на trail_tp_pct/10000 от цены. Только в прибыли"},
-        {"key": "place_lead_min", "label": "За сколько минут до открытия ставим", "type": "number",
-         "default": 10, "min": 0, "max": 60,
-         "hint": "Инфраструктурный: заявки выставляются ДО открытия биржи. В бэктесте лестница вооружается на первом баре дня и может исполниться уже на нём, поэтому на результат не влияет — значение нужно живому раннеру"},
-        {"key": "hold_min", "label": "Окно набора, мин после открытия", "type": "number",
-         "default": 30, "min": 5, "max": 720,
-         "hint": "Окно считается от первого бара дня. Неисполненные заявки снимаются через hold_min, НО только если сделок не было ни одной"},
-        {"key": "ema_fast", "label": "Быстрая EMA (выход)", "type": "number", "default": 9, "min": 2, "max": 100,
-         "hint": "Сигнал выхода в конце сессии: пересечение двух EMA против позиции"},
-        {"key": "ema_slow", "label": "Медленная EMA (выход)", "type": "number", "default": 21, "min": 3, "max": 300,
-         "hint": "Должна быть больше быстрой"},
-        {"key": "exit_lead_min", "label": "За сколько минут до закрытия включать выход по EMA", "type": "number",
-         "default": 120, "min": 0, "max": 480,
-         "hint": "Овернайт запрещён: в этом окне позиция закрывается по сигналу двух EMA, а на закрытии — принудительно"},
+        {"key": "sl_beyond_pts", "label": "Стоп: пунктов ЗА последней ступенью", "type": "number",
+         "default": 50, "min": 5, "max": 1000,
+         "hint": "Стоп ставится в sl_beyond_pts пунктах за последней ступенью лестницы. Смысл — поймать поклёвку в заявку последней ступени, а если цена пошла дальше, выйти почти сразу"},
+        {"key": "tp_arm_pts", "label": "Тейк: активация слежения, пункты", "type": "number",
+         "default": 300, "min": 10, "max": 5000,
+         "hint": "Насколько цена ЗАКРЫТИЯ обязана уйти в нашу пользу от средней цены позиции, чтобы трейлинг включился"},
+        {"key": "tp_back_pts", "label": "Тейк: допустимый откат, пункты", "type": "number",
+         "default": 100, "min": 5, "max": 2000,
+         "hint": "Откат от лучшего ЗАКРЫТИЯ, на котором позиция закрывается. После тейка лестница снимается и в этот день не ставится"},
         {"key": "slip_guard_pts", "label": "Защита от проскальзывания, пункты", "type": "number",
          "default": 50, "min": 0, "max": 500,
          "hint": "Сколько ПУНКТОВ цена обязана пройти ЗА уровень, чтобы лимитная заявка фейда считалась налитой: на цене заявки стоит очередь, и касание с отскоком наливает тех, кто впереди. Стоповых заявок не касается. ВНИМАНИЕ: пункт у инструментов разный — 50 пунктов это 5 тиков на RI и 50 тиков на Si"},
