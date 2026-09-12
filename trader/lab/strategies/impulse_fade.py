@@ -19,8 +19,12 @@ Impulse Fade — заявки СТОЯТ далеко от цены и ждут 
   ЯКОРЬ     EMA(mean_n) — «справедливая» цена, от которой меряется отклонение.
             Якорь плывёт за рынком, поэтому медленный ход его НЕ обгоняет: дистанция
             до уровня не набирается, и тренд заявку не задевает.
-  УРОВНИ    anchor ± (lvl_atr + k·step_atr)·ATR, k=0..step_count-1. Дистанция в ATR,
-            а не в пунктах: одна сетка живёт и на RI, и на Si.
+  УРОВНИ    anchor ± (dist + k·step_atr·ATR), k=0..step_count-1. Дистанция dist —
+            либо lvl_atr·ATR, либо (при lvl_amp>0) ДОЛЯ СРЕДНЕГО ДНЕВНОГО РАЗМАХА
+            за amp_days дней. Второе — по замеру 12.09: в ATR «прокол» на 6 ATR
+            оказывается обычным продолжением хода, а оператор описывает прокол
+            МАСШТАБА ДНЕВНОЙ СВЕЧИ («пробивает уровни нескольких дневных свечей»).
+            Ни то ни другое не в пунктах: одна сетка живёт и на RI, и на Si.
   ВХОД      прокол уровня = исполнение заявки ПРОТИВ хода (вверх → шорт, вниз →
             лонг). invert=1 зеркалит и торгует ПО проколу — гейт «механизм, а не
             сторона». Один бар может прошить несколько ступеней — исполняются ВСЕ.
@@ -57,6 +61,7 @@ _REG_POINTS = 240
 async def on_start(stl: STLRuntime, params: dict) -> None:
     stl.log(
         f"ImpulseFade started | lvl={params.get('lvl_atr', 60)}/10ATR "
+        f"amp={params.get('lvl_amp', 0)}%×{params.get('amp_days', 5)}д "
         f"×{params.get('step_count', 1)} шаг {params.get('step_atr', 20)}/10 "
         f"mean={params.get('mean_n', 60)} imp={params.get('imp_frac', 50)}%/"
         f"{params.get('imp_bars', 5)}бар ret={params.get('ret_pct', 50)}% "
@@ -72,6 +77,8 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
     mean_n = max(5, int(params.get("mean_n", 60)))
     atr_n = max(5, int(params.get("atr_n", 200)))
     lvl_atr = float(params.get("lvl_atr", 60)) / 10.0
+    lvl_amp = float(params.get("lvl_amp", 0) or 0) / 100.0    # 0 = дистанция в ATR
+    amp_days = max(1, int(params.get("amp_days", 5)))
     step_atr = float(params.get("step_atr", 20)) / 10.0
     step_count = max(1, int(params.get("step_count", 1)))
     imp_bars = max(1, int(params.get("imp_bars", 5)))
@@ -107,6 +114,27 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
     stl.set_state("n_seen", n_seen)
     stl.set_state("ema_mean", anchor)
     stl.set_state("atr", atr)
+
+    # --- средний дневной размах: кольцо hi/lo, O(1) на бар -----------------------
+    # Ведём инкрементально, а не пересчётом по большому окну: amp_days=20 — это
+    # ~20 000 минуток, и такой запрос на КАЖДОМ баре убил бы и перебор, и раннер
+    # (ровно этот приём стоит в library.py у авто-разножки). День = UTC-сутки:
+    # сессия FORTS 07:00-23:50 МСК укладывается в них целиком и в бэктесте, и у агента.
+    amp = 0.0
+    if lvl_amp > 0:
+        day = cur.time // 86400
+        ring = [list(r) for r in (stl.get_state("amp_ring", None) or [])]
+        if ring and int(ring[-1][0]) == day:
+            ring[-1][1] = max(float(ring[-1][1]), cur.high)
+            ring[-1][2] = min(float(ring[-1][2]), cur.low)
+        else:
+            ring.append([day, cur.high, cur.low])
+            ring = ring[-(amp_days + 1):]
+        stl.set_state("amp_ring", ring)
+        done = ring[:-1]                  # текущий день ещё не дорос
+        # СРЕДНЯЯ дневная свеча, а не размах всего окна: оператор описывает прокол
+        # относительно размера ОДНОГО дня, и max-min по окну завысил бы его в разы.
+        amp = (sum(r[1] - r[2] for r in done) / len(done)) if done else 0.0
 
     pos = await stl.get_position(symbol)
     cur_qty = pos.quantity if pos.side == "long" else (-pos.quantity if pos.side == "short" else 0)
@@ -202,7 +230,11 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
             return
 
     # ── 4. Заявки стоят далеко от цены; исполняет их сам прокол ────────────────
-    offs = [(lvl_atr + k * step_atr) * atr for k in range(step_count)]
+    # Дистанция первой заявки: доля средней дневной свечи, если задана, иначе ATR.
+    dist = amp * lvl_amp if lvl_amp > 0 else atr * lvl_atr
+    if dist <= 0:
+        return                       # дневного размаха ещё нет (первый день)
+    offs = [dist + k * step_atr * atr for k in range(step_count)]
     up = [anchor + o for o in offs]
     dn = [anchor - o for o in offs]
     fire = 0
@@ -276,11 +308,15 @@ STRATEGY_META = {
     "params_schema": [
         {"key": "symbol", "label": "Инструмент", "type": "text", "default": "RIU6", "hint": "ТОЛЬКО контракт, не сшитая серия"},
         {"key": "lvl_atr", "label": "Дистанция до заявки ×10 ATR (60=6.0)", "type": "number", "default": 60, "min": 20, "max": 300,
-         "hint": "Как далеко от якоря висит первая заявка. В ATR, чтобы одна сетка жила на разных инструментах"},
+         "hint": "Как далеко от якоря висит первая заявка. Работает, только если дистанция в дневных свечах выключена (lvl_amp=0)"},
+        {"key": "lvl_amp", "label": "Дистанция в % средней дневной свечи (0=выкл)", "type": "number", "default": 0, "min": 0, "max": 300,
+         "hint": "Включённой ОТМЕНЯЕТ lvl_atr. Прокол оператор описывает масштабом дневной свечи, а не ATR минуток"},
+        {"key": "amp_days", "label": "Дней для средней дневной свечи", "type": "number", "default": 5, "min": 1, "max": 30,
+         "hint": "Размах считается по ЗАВЕРШЁННЫМ дням: текущий ещё не дорос"},
         {"key": "step_count", "label": "Ступеней лестницы", "type": "number", "default": 1, "min": 1, "max": 5,
          "hint": "Одна заявка или лестница вглубь прокола"},
         {"key": "step_atr", "label": "Шаг лестницы ×10 ATR (20=2.0)", "type": "number", "default": 20, "min": 5, "max": 100},
-        {"key": "mean_n", "label": "Период якоря EMA (баров)", "type": "number", "default": 60, "min": 10, "max": 480,
+        {"key": "mean_n", "label": "Период якоря EMA (баров)", "type": "number", "default": 60, "min": 10, "max": 1440,
          "hint": "От него меряется дистанция и к нему возвращается цена"},
         {"key": "atr_n", "label": "Период ATR (баров)", "type": "number", "default": 200, "min": 20, "max": 1000},
         {"key": "imp_bars", "label": "Окно скорости (баров)", "type": "number", "default": 5, "min": 1, "max": 30,

@@ -134,3 +134,22 @@ def test_flat_gate_allows_a_sideways_market():
     calm = [100.0 + (0.4 if i % 2 else -0.4) for i in range(260)]
     bars = _bars(calm + [100.0] * 6, spikes={261: 110.0})   # зигзаг держит ATR выше, чем ровный ряд
     assert _run(bars, flat_only=1), "в боковике гейт обязан пропускать"
+
+
+def test_distance_in_daily_candles_replaces_atr():
+    # lvl_amp>0 ОТМЕНЯЕТ lvl_atr: два дня размахом 10.0 дают среднюю свечу 10.0,
+    # и при lvl_amp=50 заявка встаёт в 5.0 от якоря — прокол до 107 её берёт,
+    # а тот же прокол при lvl_amp=150 (дистанция 15.0) не достаёт.
+    day = 1440
+    d1 = [100.0 + (5.0 if i == 10 else (-5.0 if i == 20 else 0.0)) for i in range(day)]
+    d2 = list(d1)
+    tail = [100.0] * 30
+    bars = _bars(d1 + d2 + tail, spikes={2 * day + 5: 107.0})
+    assert _run(bars, lvl_amp=50, amp_days=5, imp_frac=0)[0][0] == "sell"
+    assert _run(bars, lvl_amp=150, amp_days=5, imp_frac=0) == []
+
+
+def test_first_day_has_no_daily_range_yet():
+    # Завершённых дней нет — дистанции нет, торговать нельзя (не по ATR молча).
+    bars = _bars([100.0] * 300, spikes={200: 130.0})
+    assert _run(bars, lvl_amp=50) == []
