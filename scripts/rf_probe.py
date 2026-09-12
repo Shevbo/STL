@@ -66,8 +66,11 @@ async def main() -> None:
         for label, over in [
             ("ФЕЙД базовый", {}),
             ("ПРОБОЙ (контроль)", dict(invert=1)),
-            ("лестница узкая d=0.2", dict(d_coef=20)),
-            ("лестница узкая d=0.5", dict(d_coef=50)),
+            ("лестница d=0.05", dict(d_coef=5)),
+            ("лестница d=0.08", dict(d_coef=8)),
+            ("лестница d=0.12", dict(d_coef=12)),
+            ("лестница d=0.2", dict(d_coef=20)),
+            ("лестница d=0.5", dict(d_coef=50)),
             ("одна ступень", dict(step_count=1)),
             ("ступеней 8", dict(step_count=8)),
             ("объём ровный ×1.0", dict(vol_mult=10)),
