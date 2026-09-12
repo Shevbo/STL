@@ -25,14 +25,18 @@ import os
 
 import asyncpg
 
+# Оси ВОЛНЫ 2 (расширены за края, в которые упёрлась волна 1). Проверка «край
+# сетки» сверяется именно с ними, поэтому при смене сетки этот словарь обязан
+# меняться вместе с queue_rich_fool.py — иначе гейт объявит внутренним то, что
+# на самом деле стоит на границе.
 AXES = {
-    "d_coef": [5, 8, 12, 20, 35, 60, 100],
-    "hold_min": [30, 60, 120, 240],
-    "n_days": [3, 5, 10],
-    "step_count": [1, 2, 3, 5],
-    "vol_mult": [10, 13, 16],
-    "sl_price_pct": [50, 100, 200],
-    "trail_tp_pct": [25, 50, 80],
+    "d_coef": [5, 10, 20],
+    "hold_min": [5, 10, 20, 30],
+    "step_count": [5, 8, 12, 20],
+    "vol_mult": [16, 20, 25, 30],
+    "sl_price_pct": [10, 20, 35, 50],
+    "trail_tp_pct": [10, 15, 25],
+    "n_days": [5, 10],
 }
 PAIRS = [("RIM6", "RIU6"), ("SiM6", "SiU6")]
 PKEYS = list(AXES)
@@ -49,7 +53,7 @@ SELECT symbol,
        (params->>'invert')::int AS invert,
        net_profit, total_trades, win_rate, max_mae
 FROM optimization_leaderboard
-WHERE strategy = 'rich_fool' AND campaign_run LIKE '%rf3%'
+WHERE strategy = 'rich_fool' AND campaign_run LIKE '%rf4%'
 """
 
 
