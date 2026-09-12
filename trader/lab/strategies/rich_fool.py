@@ -71,6 +71,7 @@ Standalone-модуль: фреймворку make_on_bar состояние «�
 ступеней набрано / экстремум» держать негде.
 """
 from datetime import datetime, timezone
+from functools import lru_cache
 
 from trader.lab.runtime import STLRuntime
 
@@ -82,11 +83,14 @@ _FALLBACK_CLOSE_WEEKEND = 19 * 60               # 19:00
 
 
 def _bar_clock(t: int, offset_min: int = 0):
-    """(минуты от полуночи МСК, YYYYMMDD, выходной?) для эпохи бара."""
-    d = datetime.fromtimestamp(t + offset_min * 60, tz=timezone.utc)
-    return (d.hour * 60 + d.minute,
-            d.year * 10000 + d.month * 100 + d.day,
-            d.weekday() >= 5)
+    """(минуты от полуночи МСК, номер дня от эпохи, выходной?) для эпохи бара.
+
+    Арифметика вместо datetime: при вооружении функция зовётся на каждый бар
+    истории, datetime съедал ~20% прогона. Номер дня сравнивается только внутри.
+    """
+    x = int(t) + offset_min * 60
+    day = x // 86400
+    return x % 86400 // 60, day, (day + 3) % 7 >= 5    # 01.01.1970 — четверг
 
 
 def _ema(values: list[float], period: int) -> float | None:
@@ -100,6 +104,7 @@ def _ema(values: list[float], period: int) -> float | None:
     return e
 
 
+@lru_cache(maxsize=256)     # зовётся на каждом баре окна, а зависит только от параметров
 def _step_sizes(budget: int, steps: int, first: int) -> list[int]:
     """Объёмы ступеней: первая равна `first`, дальше геометрический рост, а СУММА
     равна `budget` ровно — потолок достигается на последней ступени и ни одна
@@ -363,7 +368,7 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
                                         else _FALLBACK_CLOSE_WEEKDAY))
         stl.set_state("win_end", hm + hold)     # окно набора от первого бара дня
         stl.set_state("armed", 1)
-        stl.log(f"armed {day} ({'вых' if is_weekend else 'буд'}, первый бар "
+        stl.log(f"armed {datetime.fromtimestamp(day * 86400, tz=timezone.utc):%Y-%m-%d} ({'вых' if is_weekend else 'буд'}, первый бар "
                 f"{hm // 60:02d}:{hm % 60:02d}, закрытие сессии "
                 f"{int(stl.get_state('close_hm')) // 60:02d}:"
                 f"{int(stl.get_state('close_hm')) % 60:02d}): вчера={prev_close:.0f} "
