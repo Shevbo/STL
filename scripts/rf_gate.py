@@ -34,7 +34,10 @@ RANGES = {
     "sl_beyond_pts": (5, 300), "tp_arm_pts": (50, 1200), "tp_back_pts": (20, 400),
     "qty_first": (1, 3), "max_contracts": (10, 80), "time_exit_min": (0, 240),
 }
-PKEYS = list(RANGES) + ["d_coef"]
+# d_coef НЕ ключ: он выводится калибровкой ОТДЕЛЬНО под каждый контракт (RIM6 216,
+# RIU6 204 при одних F/n_days). С ним в ключе вектор не совпадал сам с собой на
+# другом квартале, и гейт rf7/rf8/rf9 показывал ноль при живых кандидатах (13.09).
+PKEYS = list(RANGES)
 PAIRS = [("RIM6", "RIU6"), ("SiM6", "SiU6")]
 
 SQL = """
@@ -132,7 +135,7 @@ async def main() -> None:
     for c in cands[:args.top]:
         p = c["p"]
         ps = (f"F={int(p['f_shift']) / 10:.1f} n={p['n_days']} hold={p['hold_min']} "
-              f"d={int(p['d_coef']) / 100:.2f} sl={p['sl_beyond_pts']} "
+              f"d={int(p['d_coef']) / 100:.2f}(M6) sl={p['sl_beyond_pts']} "
               f"tp={p['tp_arm_pts']}/{p['tp_back_pts']} q1={p['qty_first']} "
               f"bud={p['max_contracts']} te={p.get('time_exit_min', 0)}")
         if c["edge"]:
