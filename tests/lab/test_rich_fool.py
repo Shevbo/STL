@@ -211,6 +211,20 @@ def test_time_exit_closes_position_minutes_after_last_fill():
     assert ex and ex[0][2] == o[0][3] + 60, f"выход не через 60 минут после налива: {o}"
 
 
+def test_time_exit_anchor_counts_from_first_fill_not_last():
+    """Первая ступень в 1-ю минуту, вторая на 40-й. От последнего налива выход был бы
+    на 100-й минуте, от первого (anchor=1) — на 60-й."""
+    spec = [(0, 100.0, 108.0, 100.0, 107.6)]
+    spec += [(m, 107.45, 107.55, 107.40, 107.5) for m in range(1, 40)]
+    spec += [(40, 107.5, 113.0, 107.5, 112.6)]
+    spec += [(m, 112.45, 112.55, 112.40, 112.5) for m in range(41, 300)]
+    last = _exits(_run(_tail(spec), step_count=2, max_contracts=2, **WIDE, time_exit_min=60))
+    first = _exits(_run(_tail(spec), step_count=2, max_contracts=2, **WIDE, time_exit_min=60,
+                        time_exit_anchor=1))
+    assert last and first, (last, first)
+    assert first[0][2] + 40 == last[0][2], f"якорь не сдвинул выход на 40 минут: {first} {last}"
+
+
 # ── 7. выход по двум EMA перед закрытием ──────────────────────────────────────
 
 def test_two_ema_exit_fires_before_the_close():
