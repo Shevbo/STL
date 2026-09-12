@@ -2,6 +2,7 @@ scripts/opt_agent.py
 trader/lab/backtest.py
 trader/lab/splice.py
 trader/lab/window_metrics.py
+trader/lab/trend_detector.py
 trader/lab/strategies/library.py
 trader/lab/strategies/us_open_fvg.py
 trader/lab/strategies/rich_fool.py

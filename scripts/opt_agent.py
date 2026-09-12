@@ -350,6 +350,27 @@ def _write_token(tok: str) -> None:
         pass
 
 
+def _manifest_sha() -> str:
+    """Один отпечаток на ВЕСЬ код, который агенту привозит self-update.
+
+    Считается по тому же списку файлов, который агент качает (agent/update_manifest.txt),
+    поэтому его можно сравнить с таким же отпечатком в репозитории и увидеть
+    отставание i9 не гадая. Отсутствующий файл участвует как пустой — тогда сходство
+    невозможно, и это правильно: недовезённый файл и есть расхождение.
+    """
+    try:
+        mpath = os.path.join(REPO_ROOT, "agent", "update_manifest.txt")
+        with open(mpath, "r", encoding="utf-8") as f:
+            files = sorted(x.strip() for x in f if x.strip() and not x.startswith("#"))
+        h = hashlib.sha256()
+        for rel in files:
+            h.update(rel.encode())
+            h.update(_file_sha(os.path.join(REPO_ROOT, *rel.split("/"))).encode())
+        return h.hexdigest()[:12]
+    except Exception:
+        return ""
+
+
 def _file_sha(path: str) -> str:
     """Короткий отпечаток файла для heartbeat: чем именно считает этот агент."""
     try:
@@ -672,6 +693,12 @@ class Agent:
              # /allow_short не влияли ни на что. Отпечаток файла делает подмену
              # видимой без гадания.
              "lib_sha": _file_sha(os.path.join(REPO_ROOT, "trader", "lab", "strategies", "library.py")),
+             # ОТПЕЧАТОК ВСЕГО ПРИВОЗИМОГО КОДА, а не одной library.py. Урок 05.08
+             # повторился 12.09 на другом файле: i9 гонял ПРЕЖНИЙ impulse_fade, и
+             # кампания в 6912 прогонов вернула ровно 12 различных результатов —
+             # работали только те три оси, что существуют в старой версии, а
+             # остальные пять молча брали default. Одного lib_sha на такое не хватает.
+             "code_sha": _manifest_sha(),
              "applied_token": self.applied_token}
         if psutil is not None:
             try:
