@@ -153,3 +153,22 @@ def test_first_day_has_no_daily_range_yet():
     # Завершённых дней нет — дистанции нет, торговать нельзя (не по ATR молча).
     bars = _bars([100.0] * 300, spikes={200: 130.0})
     assert _run(bars, lvl_amp=50) == []
+
+
+def test_breakout_entry_slips_but_fade_entry_does_not():
+    # Один и тот же прокол. Фейд стоит ПРОТИВ него обычным лимитником — цена филла
+    # от slip_atr не зависит. Пробой стоит ПО проколу, это СТОП-заявка: филл обязан
+    # уехать в худшую сторону, иначе зеркальный гейт сравнивает несравнимое.
+    bars = _bars(QUIET + [100.0] * 5, spikes={62: 107.0})
+    fade0, fade1 = _run(bars)[0], _run(bars, slip_atr=50)[0]
+    assert fade0 == fade1, (fade0, fade1)
+    brk0, brk1 = _run(bars, invert=1)[0], _run(bars, invert=1, slip_atr=50)[0]
+    assert brk1[2] > brk0[2], (brk0, brk1)          # покупка дороже уровня
+
+
+def test_stop_order_gapping_through_fills_at_open():
+    # Бар открылся ЗА стопом: исполнение по открытию, а не по уровню.
+    bars = _bars(QUIET + [100.0] + [104.0] * 3 + [140.0] * 5, spikes={60: 107.0})
+    orders = _run(bars, stop_atr=20, ret_pct=500)
+    assert len(orders) == 2 and orders[1][0] == "buy"
+    assert orders[1][2] >= 139.0, orders

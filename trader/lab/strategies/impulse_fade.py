@@ -85,6 +85,7 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
     imp_frac = float(params.get("imp_frac", 50)) / 100.0
     ret_pct = float(params.get("ret_pct", 50)) / 100.0
     stop_atr = float(params.get("stop_atr", 20)) / 10.0
+    slip_atr = float(params.get("slip_atr", 0) or 0) / 100.0
     max_hold = max(1, int(params.get("max_hold", 60)))
     cooldown = max(0, int(params.get("cooldown", 5)))
     flat_only = int(params.get("flat_only", 1))
@@ -165,9 +166,10 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
         gap = cur.open <= sl_px if dirn > 0 else cur.open >= sl_px
         hit_sl = cur.low <= sl_px if dirn > 0 else cur.high >= sl_px
         if gap or hit_sl:
-            # Гэп сквозь стоп исполняется по открытию (проскальзывание), иначе по уровню.
-            await stl.place_order_at(symbol, side, abs(cur_qty),
-                                     cur.open if gap else sl_px, cur.time)
+            # Стоп-лосс — тоже СТОП-заявка: гэп сквозь неё исполняется по открытию,
+            # обычное срабатывание — по уровню плюс проскальзывание.
+            px = _fill(sl_px, cur, worse=dirn < 0, stop=True, slip=slip_atr * atr0)
+            await stl.place_order_at(symbol, side, abs(cur_qty), px, cur.time)
             _flat(stl, cooldown)
             return
 
@@ -260,16 +262,23 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
         return
 
     levels = up if fire > 0 else dn
+    # ЧЕМ ФЕЙД И ПРОБОЙ ОТЛИЧАЮТСЯ ПО ИСПОЛНЕНИЮ, и почему это не мелочь.
+    # Фейд (invert=0) стоит ПРОТИВ прокола: заявка на продажу ВЫШЕ рынка — обычный
+    # лимитник, он исполняется по своей цене или лучше, проскальзывания у него нет.
+    # Пробой (invert=1) стоит ПО проколу: заявка на покупку ВЫШЕ рынка — это СТОП,
+    # он срабатывает по уровню и наливается по рынку, то есть ХУЖЕ уровня, и тем
+    # хуже, чем резче шпиль. Ровный филл по уровню для обеих сторон делал бы
+    # зеркальный гейт нечестным: пробой получал бы цену, которой на шпиле не бывает.
+    stop_side = (trade_dir > 0) == (fire > 0)
     hit = 0
     while hit < step_count:
         lv = levels[hit]
         touched = cur.high >= lv if fire > 0 else cur.low <= lv
         if not touched:
             break
-        # Филл РОВНО по уровню, даже если бар открылся за ним: реальный лимитник
-        # в таком гэпе исполнился бы по открытию, то есть ЛУЧШЕ. Считаем хуже.
+        px = _fill(lv, cur, worse=fire > 0, stop=stop_side, slip=slip_atr * atr)
         await stl.place_order_at(symbol, "buy" if trade_dir > 0 else "sell",
-                                 qty, lv, cur.time)
+                                 qty, px, cur.time)
         hit += 1
     stl.set_state("dir", trade_dir)
     stl.set_state("spike", fire)
@@ -279,6 +288,22 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
     stl.set_state("atr0", atr)
     stl.set_state("entry", levels[0])
     stl.set_state("held", 0)
+
+
+def _fill(level: float, bar, worse: bool, stop: bool, slip: float) -> float:
+    """Цена исполнения заявки, стоящей на `level`.
+
+    `worse` — в какую сторону от уровня цена для НАС хуже (True = вверх). Лимитник
+    (stop=False) в гэпе исполнился бы ЛУЧШЕ уровня, но мы считаем ровно по уровню:
+    в свою пользу бэктест не округляет. Стоп-заявка (stop=True) в гэпе исполняется
+    по ОТКРЫТИЮ бара, а в обычном срабатывании — по уровню плюс проскальзывание.
+    """
+    if not stop:
+        return level
+    px = level + slip if worse else level - slip
+    # Гэп учитывается сам собой: если бар открылся за уровнем, открытие и есть
+    # худшая из двух цен, отдельной ветки для него не нужно.
+    return max(px, bar.open) if worse else min(px, bar.open)
 
 
 def _flat(stl: STLRuntime, cooldown: int) -> None:
@@ -329,6 +354,8 @@ STRATEGY_META = {
          "hint": "Отсчитывается от ПОСЛЕДНЕЙ ступени, не от средней"},
         {"key": "max_hold", "label": "Держать не дольше (баров)", "type": "number", "default": 60, "min": 3, "max": 240,
          "hint": "Возврат случается за 1-240 минут"},
+        {"key": "slip_atr", "label": "Проскальзывание стоп-заявки ×100 ATR (25=0.25)", "type": "number", "default": 0, "min": 0, "max": 200,
+         "hint": "Только для входа ПО проколу (invert=1) и для стоп-лосса: лимитник против прокола не проскальзывает"},
         {"key": "cooldown", "label": "Пауза после сделки (баров)", "type": "number", "default": 5, "min": 0, "max": 240},
         {"key": "flat_only", "label": "Только в боковике (0/1)", "type": "number", "default": 1, "min": 0, "max": 1,
          "hint": "Прокол в тренде — продолжение хода, а не прокол"},
