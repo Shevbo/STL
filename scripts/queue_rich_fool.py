@@ -90,21 +90,24 @@ RANGES = {
 # ГРУБАЯ СЕТКА (волна rf8, 12.09 вечер): первая часть случайной выборки rf7 дала
 # ноль совпадений между кварталами. Вместо 37 часов тех же диапазонов — редкие
 # точки через ВЕСЬ диапазон каждой оси, ~27.6k прогонов, около двух часов на i9.
+# rf10 (13.09 ночь): УТОЧНЕНИЕ вокруг лидеров rf9 на RI. rf9 прошли гейт 114 векторов,
+# все у границ сетки: F=10 (потолок спецификации), hold=30 (низ), бюджет 80 (верх),
+# тейк 1000 (верх оси). Раздвигаем стенки, где спецификация позволяет; Si отложен —
+# на нём 14-29 сделок за квартал, порог 30 не проходит.
 AXES = {
-    "f_shift":        [0, 30, 60, 100],        # F = 0, 3, 6, 10
-    "n_days":         [4, 10, 18],
-    "hold_min":       [30, 90, 150],
-    # rf9: стоп за калиброванной лестницей недостижим (rf8: пары векторов, отличных
-    # только стопом, давали одинаковый итог), поэтому ось стопа схлопнута в одну
-    # точку, а освободившийся объём отдан выходу по времени после последнего налива.
-    "sl_beyond_pts":  [150],
-    "time_exit_min":  [30, 90, 240],
-    "tp_arm_pts":     [200, 500, 1000],        # активация слежения
-    "tp_back_pts":    [40, 150],               # допустимый откат, всегда < активации
-    "qty_first":      [1, 2],
-    "max_contracts":  [40, 80],                # >= qty_first × 20: все ступени рабочие
+    "f_shift":        [90, 100],               # F = 9, 10 (выше 10 спецификация не пускает)
+    "n_days":         [3, 4, 6],
+    "hold_min":       [15, 30, 45],
+    "sl_beyond_pts":  [150],                   # недостижим при калибровке, см. rf8
+    "time_exit_min":  [60, 90, 120],
+    "tp_arm_pts":     [700, 1000, 1400],       # активация слежения
+    "tp_back_pts":    [40, 150, 300],          # допустимый откат, всегда < активации
+    "qty_first":      [2],
+    "max_contracts":  [40, 80, 120],           # >= qty_first × 20: все ступени рабочие
     "invert":         [0, 1],
 }
+WAVE = "rf10"
+ONLY = ("RIM6", "RIU6")
 PIN = dict(step_count=STEP_COUNT, place_lead_min=10, slip_guard_pts=50, slip_pct=0,
            ema_fast=9, ema_slow=21, exit_lead_min=120,
            allow_long=1, allow_short=1, bar_offset_min=0)
@@ -260,7 +263,8 @@ def main() -> None:
     keys = list(AXES)
     combos = [dict(zip(keys, v)) for v in itertools.product(*AXES.values())]
     jobs, shown, dmaps = [], [], {}
-    for secid, d_from, d_to in CONTRACTS:
+    contracts = [c for c in CONTRACTS if c[0] in ONLY]
+    for secid, d_from, d_to in contracts:
         stats = _day_stats(secid, d_from, d_to)
         # d_coef зависит только от (n_days, F) — считаем один раз на контракт
         dmaps[secid] = {(n, f): _d_coef(stats, n, STEP_COUNT, f / 10.0)
@@ -268,7 +272,7 @@ def main() -> None:
         shown.append((secid, dmaps[secid]))
     # hold -> контракт -> сторона: полный набор для гейта складывается после 8 заданий
     for hold in AXES["hold_min"]:
-        for (secid, d_from, d_to), inv in itertools.product(CONTRACTS, AXES["invert"]):
+        for (secid, d_from, d_to), inv in itertools.product(contracts, AXES["invert"]):
             dmap = dmaps[secid]
             sets = []
             for c in combos:
@@ -279,7 +283,7 @@ def main() -> None:
                 sets.append(ps)
             side = "fade" if inv == 0 else "brk"
             jobs.append({
-                "campaign": f"rf9{side}{secid}h{hold}",
+                "campaign": f"{WAVE}{side}{secid}h{hold}",
                 "scriptCode": CODE, "symbol": secid,
                 "baseParams": dict(PIN, symbol=secid, invert=inv, hold_min=hold),
                 "dateFrom": d_from, "dateTo": d_to, "engine": "remote",
@@ -287,7 +291,7 @@ def main() -> None:
                 "paramSets": sets,
             })
     total = sum(len(j["paramSets"]) for j in jobs)
-    print(f"контрактов {len(CONTRACTS)} | заданий {len(jobs)} | комбо {total}")
+    print(f"контрактов {len(contracts)} | заданий {len(jobs)} | комбо {total}")
     print(f"в задании paramSets: {len(jobs[0]['paramSets'])}")
     print("\nвыведенный d_coef (недостижимость последней ступени, 20 ступеней):")
     for secid, dmap in shown:
