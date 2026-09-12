@@ -75,9 +75,12 @@ def _audit(rows: list) -> str:
 
 
 async def fetch(secid: str) -> None:
+    # SECID:YYYY-MM-DD — последний торговый день задан явно. У истёкших контрактов ISS
+    # не отдаёт LASTTRADEDATE, и окно «по сегодня» срезало RIH6 до 21 дня, RIZ5 до нуля.
+    secid, _, forced = secid.partition(":")
     async with IssLoader() as ld:
-        meta = await ld.get_security_meta(secid)
-        ltd = None
+        meta = None if forced else await ld.get_security_meta(secid)
+        ltd = dt.date.fromisoformat(forced) if forced else None
         if meta:
             raw = meta.get("LASTTRADEDATE") or meta.get("lasttradedate")
             if raw:
@@ -97,6 +100,11 @@ async def fetch(secid: str) -> None:
     rows = [[b.time, b.open, b.high, b.low, b.close, b.volume] for b in bars]
     rows.sort(key=lambda r: r[0])
     path = os.path.join(BARS_DIR, f"{secid}.json")
+    if os.path.exists(path):
+        old = len(json.load(open(path))["rows"])
+        if old > len(rows):
+            print(f"  {secid}: новый набор КОРОЧЕ ({len(rows)} < {old} баров) — файл не трогаю; {_audit(rows)}")
+            return
     _write(path, rows)
     print(f"  {secid}: последний торговый день {ltd}; {_audit(rows)}")
 
