@@ -12,7 +12,7 @@ import { behaviorFor, copyByFor, nameFor, overviewFor } from './strategy-help';
 // код обязаны совпадать, иначе оператор читает одно, а перебор считает другое.
 
 const defaults = {
-  place_lead_min: 10, open_hour: 10, step_count: 3, n_days: 5,
+  place_lead_min: 10, open_hour: 7, step_count: 3, n_days: 5,
   hold_min: 30, qty: 1, sl_price_pct: 100, trail_tp_pct: 50,
   vol_mult: 10, max_contracts: 100, invert: 0,
 };
@@ -27,6 +27,7 @@ describe('rich_fool: описание на портале', () => {
   it('текст «как ведёт себя» говорит про лестницу, а не про M1-по-закрытию', () => {
     const t = behaviorFor('rich_fool', defaults)!;
     expect(t).toContain('до открытия');
+    expect(overviewFor('rich_fool')!.timeframe).toContain('ДО открытия биржи');
     expect(t).toContain('уровн');
     expect(t).toContain('овернайт');
     expect(t).not.toContain('без усреднения');
@@ -88,7 +89,7 @@ describe('rich_fool: описание на портале', () => {
   });
 
   it('время открытия — часы И минуты, а не только часы', () => {
-    expect(behaviorFor('rich_fool', defaults)).toContain('10:00 МСК');
+    expect(behaviorFor('rich_fool', defaults)).toContain('7:00 МСК');
     expect(behaviorFor('rich_fool', { ...defaults, open_hour: 10, open_min: 5 })).toContain('10:05 МСК');
   });
 
