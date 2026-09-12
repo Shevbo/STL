@@ -161,7 +161,7 @@ def _step_sizes(budget: int, steps: int, first: int) -> list[int]:
 
 def _reset_position_state(stl: STLRuntime) -> None:
     """Позиция закрыта: гасим направление, лестницу и экстремум трейлинга."""
-    for k in ("dir", "hit", "side_locked", "tp_armed", "tp_best"):
+    for k in ("dir", "hit", "side_locked", "tp_armed", "tp_best", "last_fill_t"):
         stl.set_state(k, 0)
     stl.set_state("day_done", 1)          # в этот день новую лестницу не ставим
 
@@ -197,6 +197,7 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
     ema_fast = max(2, int(params.get("ema_fast", 9)))
     ema_slow = max(ema_fast + 1, int(params.get("ema_slow", 21)))
     exit_lead = max(0, int(params.get("exit_lead_min", 120)))
+    time_exit = max(0, int(params.get("time_exit_min", 0)))   # выход через X мин после налива, 0=выкл
     invert = int(params.get("invert", 0))
     allow_long = int(params.get("allow_long", 1))
     allow_short = int(params.get("allow_short", 1))
@@ -277,6 +278,19 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
                 slip = base * slip_pct
                 await stl.place_order_at(symbol, side, abs(cur_qty),
                                          base - slip if dirn > 0 else base + slip,
+                                         cur.time)
+                _reset_position_state(stl)
+                return
+
+            # 1b'. ВЫХОД ПО ВРЕМЕНИ: time_exit_min минут без нового налива — закрываем
+            #      по рынку. Против трендового дня: 11.05 RIM6 шорт 13 часов добирал
+            #      до 16 контрактов, стоп за лестницей недостижим, спасал только
+            #      выход 2 EMA в 21:49 (−13 972 пт).
+            last_fill = int(stl.get_state("last_fill_t", 0) or 0)
+            if time_exit and last_fill and cur.time - last_fill >= time_exit * 60:
+                slip = cur.close * slip_pct
+                await stl.place_order_at(symbol, side, abs(cur_qty),
+                                         cur.close - slip if dirn > 0 else cur.close + slip,
                                          cur.time)
                 _reset_position_state(stl)
                 return
@@ -430,6 +444,7 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
             stl.set_state("hit", hit)
             stl.set_state("side_locked", fire)
             stl.set_state("dir", trade_dir)
+            stl.set_state("last_fill_t", cur.time)
             dirn = trade_dir
             cur_qty += step_qty if trade_dir > 0 else -step_qty
 

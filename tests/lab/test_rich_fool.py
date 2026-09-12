@@ -199,6 +199,18 @@ def test_no_overnight_position_is_closed_at_session_close():
     assert ex[0][2] >= WD_CLOSE, f"вышли раньше закрытия: {ex[0]}"
 
 
+def test_time_exit_closes_position_minutes_after_last_fill():
+    """Шорт налит в первую минуту, цена стоит: ни стоп, ни тейк не срабатывают.
+    time_exit_min=60 закрывает позицию ровно через час после налива, а не вечером."""
+    spec = [(0, 100.0, 108.0, 100.0, 107.6)]
+    spec += [(m, 107.45, 107.55, 107.40, 107.5) for m in range(1, 300)]
+    o = _run(_tail(spec), step_count=1, tp_arm_pts=9999, tp_back_pts=9999,
+             exit_lead_min=0, time_exit_min=60)
+    assert o and o[0][0] == "sell", o
+    ex = _exits(o)
+    assert ex and ex[0][2] == o[0][3] + 60, f"выход не через 60 минут после налива: {o}"
+
+
 # ── 7. выход по двум EMA перед закрытием ──────────────────────────────────────
 
 def test_two_ema_exit_fires_before_the_close():

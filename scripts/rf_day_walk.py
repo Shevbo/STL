@@ -33,7 +33,7 @@ WINDOWS = {
 LEADER = dict(f_shift=100, n_days=4, hold_min=30, sl_beyond_pts=150, tp_arm_pts=200,
               tp_back_pts=150, qty_first=2, max_contracts=40, d_coef=216, step_count=20,
               slip_guard_pts=50, slip_pct=0, place_lead_min=10, ema_fast=9, ema_slow=21,
-              exit_lead_min=120, invert=0, allow_long=1, allow_short=1, bar_offset_min=0)
+              exit_lead_min=120, time_exit_min=0, invert=0, allow_long=1, allow_short=1, bar_offset_min=0)
 
 RU_WD = ["пн", "вт", "ср", "чт", "пт", "СБ", "ВС"]
 
@@ -68,6 +68,9 @@ def exit_reason(bar: Bar, st: dict, avg: float, dirn: int, p: dict) -> str:
     sl = stop_px(st, avg, dirn, float(p["sl_beyond_pts"]))
     if (bar.low <= sl) if dirn > 0 else (bar.high >= sl):
         return "стоп"
+    lf = int(st.get("last_fill_t") or 0)
+    if p.get("time_exit_min") and lf and bar.time - lf >= p["time_exit_min"] * 60:
+        return "время"
     if p["exit_lead_min"] and hm >= close_hm - int(p["exit_lead_min"]):
         return "2ema"          # тейк в этом окне тоже возможен, но 2 EMA проверяется раньше
     return "тейк"

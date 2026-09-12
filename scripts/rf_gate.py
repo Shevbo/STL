@@ -32,7 +32,7 @@ import asyncpg
 RANGES = {
     "f_shift": (0, 100), "n_days": (3, 20), "hold_min": (30, 150),
     "sl_beyond_pts": (5, 300), "tp_arm_pts": (50, 1200), "tp_back_pts": (20, 400),
-    "qty_first": (1, 3), "max_contracts": (10, 80),
+    "qty_first": (1, 3), "max_contracts": (10, 80), "time_exit_min": (0, 240),
 }
 PKEYS = list(RANGES) + ["d_coef"]
 PAIRS = [("RIM6", "RIU6"), ("SiM6", "SiU6")]
@@ -50,7 +50,7 @@ def near_edge(p: dict) -> list[str]:
     """Оси, где значение в крайних 5% диапазона — признак, что искать надо шире."""
     out = []
     for k, (lo, hi) in RANGES.items():
-        v = float(p[k])
+        v = float(p.get(k, 0))
         span = hi - lo
         if span <= 0:
             continue
@@ -83,7 +83,8 @@ async def main() -> None:
             import json
             p = json.loads(p)
         try:
-            key = tuple(int(p[k]) for k in PKEYS)
+            # time_exit_min появился в rf9; у прежних волн его нет = выключен
+            key = tuple(int(p.get(k, 0) if k == "time_exit_min" else p[k]) for k in PKEYS)
         except (KeyError, TypeError, ValueError):
             continue
         tbl[(key, r["symbol"], r["invert"])] = {
@@ -133,7 +134,7 @@ async def main() -> None:
         ps = (f"F={int(p['f_shift']) / 10:.1f} n={p['n_days']} hold={p['hold_min']} "
               f"d={int(p['d_coef']) / 100:.2f} sl={p['sl_beyond_pts']} "
               f"tp={p['tp_arm_pts']}/{p['tp_back_pts']} q1={p['qty_first']} "
-              f"bud={p['max_contracts']}")
+              f"bud={p['max_contracts']} te={p.get('time_exit_min', 0)}")
         if c["edge"]:
             ps += "  ГРАНИЦА: " + ",".join(c["edge"])
         print(f"{c['pair']:<12}{c['worst']:>9,.0f}{c['na']:>9,.0f}{c['nb']:>9,.0f}"

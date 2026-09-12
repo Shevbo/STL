@@ -94,7 +94,11 @@ AXES = {
     "f_shift":        [0, 30, 60, 100],        # F = 0, 3, 6, 10
     "n_days":         [4, 10, 18],
     "hold_min":       [30, 90, 150],
-    "sl_beyond_pts":  [10, 40, 150, 300],      # близко за последней ступенью .. далеко
+    # rf9: стоп за калиброванной лестницей недостижим (rf8: пары векторов, отличных
+    # только стопом, давали одинаковый итог), поэтому ось стопа схлопнута в одну
+    # точку, а освободившийся объём отдан выходу по времени после последнего налива.
+    "sl_beyond_pts":  [150],
+    "time_exit_min":  [30, 90, 240],
     "tp_arm_pts":     [200, 500, 1000],        # активация слежения
     "tp_back_pts":    [40, 150],               # допустимый откат, всегда < активации
     "qty_first":      [1, 2],
@@ -275,7 +279,7 @@ def main() -> None:
                 sets.append(ps)
             side = "fade" if inv == 0 else "brk"
             jobs.append({
-                "campaign": f"rf8{side}{secid}h{hold}",
+                "campaign": f"rf9{side}{secid}h{hold}",
                 "scriptCode": CODE, "symbol": secid,
                 "baseParams": dict(PIN, symbol=secid, invert=inv, hold_min=hold),
                 "dateFrom": d_from, "dateTo": d_to, "engine": "remote",
