@@ -1,16 +1,19 @@
 # Archive
 
+## Week of 2026-09-02
+Root causes identified in commission tracking (2x overstated: 9.9 vs 5.8 /lot); account ВМ excludes manual orders; daypnl.go/_test.go written; commission.py & companion.html fixes pending (add manual block); email pending.
+
 ## Week of 2026-08-19
-Completed min_gap_atr sweep (51 combos, 0.0-5.0×ATR step 0.1). Diagnosed 7h shectory-trader outage (self-update crash, no restart); deployed STL watchdog prod (fd8b9ae). Diagnosed QUIK terminal memory leak (1.5→7.1 GB, 8h); Lua GC & fill-dedup fixes deployed (98 tests✓). Fixed lxk22 duplicate-trade bug; rejected UNI-3sma real armoring. Deployed margin-mult 2.342 with weekly auto-recalc; root-caused ±25k swing (averaging income).
+Deployed shectory-trader `1787379836` 6 fixes (Lua GC, order cap, fixation alert, abs mem metrics, hourly strategy guard, journal healing); immediate vs 03:00; <1m downtime; feed stalled, manual QUIK Trades reopen pending; mem "our share" 0 for agent/runner (OpenProcess perms incomplete); Lua GC verified: 9.1h stable (0 vs prior 870 MB/h); 9.3h uptime; fin 147,689 +124; remaining: Lua heap read incomplete (Go); mem-share 0 (observational; next release); UNI-3sma ongoing; report Wed.
 
 ## Week of 2026-08-12
-Archive recorder & proto refinements deployed (TapeTrade/TapeBatch); gzip incident fixed (recovered 2538 stack/1993 ticks), SMS hardening, inbox dedup. Fixed devmail_hook.py (STL_WINDOW, 3-window sync), deployed devchat.html (280 tests✓), completed trail_sl enhancements. Wrote devmail_autopilot.py watchdog, fixed 403 lineman proxy (ANTHROPIC_BASE_URL). Deployed autonomous mail autoresponder (fedbot/fedmail; token burn, disabled). Fixed lxk22 schedule bug (bar_offset_min=180) preventing ~28k₽ loss; token diagnostics (dev-spare ~95M).
+Deployed archive recorder & proto refinements (TapeTrade/TapeBatch); gzip incident fixed (recovered 2538 stack/1993 ticks), SMS hardening, inbox dedup. Fixed devmail_hook.py (STL_WINDOW, 3-window sync), deployed devchat.html (280 tests), completed trail_sl enhancements. Wrote devmail_autopilot.py watchdog, fixed 403 lineman proxy (ANTHROPIC_BASE_URL). Deployed autonomous mail autoresponder (fedbot/fedmail; token burn, disabled). Fixed lxk22 schedule bug (bar_offset_min=180) preventing ~28k loss; token diagnostics (dev-spare ~95M).
 
 ## Week of 2026-08-05
 Deployed min_gap_atr & inter-window msg API; completed first opt campaign (272 combos RIU6) with k_avg as main driver. Fixed chart coordinates, deployed UI refresh (price scale, time axis, height, curve-switcher, candles). Queued verification (144 combos) and stop-loss sweep (112 combos). UI fixes: companion panel (DPI/monitor), ORDERS frame (type-grouping, gesture controls), robot-card labels, order-xfer settings, lamp filter.
 
 ## Week of 2026-07-29
-Refactored AgentRobotScreen (3-frame redesign, Lineman agent); fixed position-sizing (16→34 via 2.4×), chart-table mismatch. Fixed 10+ bugs (param panel, filter calc, VM); exit-only mode (soft exits, cross-order alerts), stop-loss (½TP, dd 19.9k→2.2k). Enhanced runner diag, lab-analytics integ, 5 revisions (660 tests). Fixed taker/maker commission (253k₽); Williams %R sweep (4 inst., 88–90%); archive tracker UI.
+Refactored AgentRobotScreen (3-frame redesign, Lineman agent); fixed position-sizing (16→34 via 2.4×), chart-table mismatch. Fixed 10+ bugs (param panel, filter calc, VM); exit-only mode (soft exits, cross-order alerts), stop-loss (½TP, dd 19.9k→2.2k). Enhanced runner diag, lab-analytics integ, 5 revisions (660 tests). Fixed taker/maker commission (253k); Williams %R sweep (4 inst., 88–90%); archive tracker UI.
 
 ## Week of 2026-07-21
 Deployed Companion.exe (Windows tray, WebView2, DPAPI auth) with live portfolio/robot/watchdog display; rebuilt smart-orders UI (SL/TP/Trail/OCO, 2-click arm, orphan autoheal) and fixed 3 commission bugs. Integrated MOEX ISS oracle for session gating, watchdog SMS; optimized STL cache (8.3→0.012s) and tuned i9 workers. Completed 28-robot rename with live quotes, fixed 8+ logic bugs (phantom VM, SMS gateway, routing), resolved 11.7-load CPU spike, hardened SMS-watchdog with Telegram failover. UI polish: collapsible alerts, position display, header; audited 175 commits, cleaned 72 temp screens + 8 branches.
@@ -22,7 +25,7 @@ Armed live trading (Bollinger M1·RIU6, OrderBlock·BRU6) and fixed critical bug
 Fixed symbol KeyError and DDE watchdog infrastructure bugs. Deployed per-robot event logging and strategy pages. Swept counter-strategies (macd +419k RF 4.27); hardened runner UTF-8 crashes; us_open_fvg live with orphan-guard; backfilled top-3 campaigns.
 
 ## Week of 2026-07-06
-Swept 100k FVG params (17/21 profitable, macd_cross +670k); deployed param-editor UI, agent panel, backtest-sweep UI, run-history table (sort/filter/12 cols); fixed Lua crash (desync → 6 missed fills), symbol KeyError, DDE watchdog (892→0), UnicodeError, partial-close P&L, i9 queue/zombies. Built showcase layer (campaign-result DB, top-3 ranking); hardened zero-downtime deployment; 54 tests passing.
+Swept 100k FVG params (17/21 profitable, macd_cross +670k RF 4.27); deployed param-editor UI, agent panel, backtest-sweep UI, run-history table (sort/filter/12 cols); fixed Lua crash (desync → 6 missed fills), symbol KeyError, DDE watchdog (892→0), UnicodeError, partial-close P&L, i9 queue/zombies. Built showcase layer (campaign-result DB, top-3 ranking); hardened zero-downtime deployment; 54 tests passing.
 
 ## Week of 2026-06-29
 Fixed robot_runner order re-emit (backtest/paper/real distinction); deployed live dashboard + showcase UI (auth OK). Fixed Lua DDE bypass, orphaned orders snap, P&L calculations. FVG-RIU6 live: +880pts SELL, position limits 3/6 effective. Purged DDE legacy code; queued 234 backtest explorer jobs.
@@ -35,3 +38,12 @@ Completed M6→U6 robot migration (21 robots, pool 12→50) and ported AI46 feat
 
 ## Week of 2026-06-08
 Shipped agent control infra (pause/resume/stop/start) and BacktestLab redesign (equity metrics, leaderboard, grid-sweep). Added 3 strategies (FVG/Order Block/Pivot); deployed FVG paper trading (BRN6: RF 3.88, 305 trades). Fixed state amnesia via scheduler persistence, 413/500 errors, i9 KeyError. User feedback drove Russian i18n; optimized VDS; resolved post-deploy issues (self-update, param sync).
+
+## Week of 2026-06-01
+Fixed QUIK archive bug (gzip append); completed 24h+ P&L divergence diag (companion vs. main VM); root cause: commission 2x overstated (9.9 vs 5.8 /lot); account ВМ excludes manual orders; daypnl.go/_test.go written; commission.py & companion.html fixes pending (add manual block); email pending.
+
+## Week of 2026-05-25
+Deployed archive gzip fix (JSONL writes correct); recovering corrupt .gz files; fixed dup key settings.json; merged branches (prod unblocked); archive fix confirmed 19:52+; data lost 10:22-19:52; preserved Claude devmail svc on feat/devmail-live-session; mail delivery pending restart.
+
+## Week of 2026-05-18
+Deployed devmail_hook.py STL_WINDOW fix (silent→board print); extended sync 3 windows (real-trade/backtests/ui-ux); live-verified; blocked manual restart backtests/ui-ux config load. Deployed devchat.html prod (stl.s).
