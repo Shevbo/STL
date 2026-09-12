@@ -30,13 +30,14 @@ import asyncpg
 # меняться вместе с queue_rich_fool.py — иначе гейт объявит внутренним то, что
 # на самом деле стоит на границе.
 AXES = {
-    "d_coef": [5, 10, 20],
-    "hold_min": [5, 10, 20, 30],
-    "step_count": [5, 8, 12, 20],
-    "vol_mult": [16, 20, 25, 30],
-    "sl_price_pct": [10, 20, 35, 50],
-    "trail_tp_pct": [10, 15, 25],
-    "n_days": [5, 10],
+    "d_coef": [5, 10, 20, 35],
+    "hold_min": [20, 60],
+    "n_days": [3, 5, 10],
+    "step_count": [5, 8, 12],
+    "vol_mult": [16, 20, 25],
+    "sl_price_pct": [35, 50, 70, 100],
+    "trail_tp_pct": [10, 15, 25, 40],
+    "slip_pct": [0, 2],
 }
 PAIRS = [("RIM6", "RIU6"), ("SiM6", "SiU6")]
 PKEYS = list(AXES)
@@ -50,10 +51,15 @@ SELECT symbol,
        params->>'vol_mult'     AS vol_mult,
        params->>'sl_price_pct' AS sl_price_pct,
        params->>'trail_tp_pct' AS trail_tp_pct,
+       params->>'slip_pct'     AS slip_pct,
        (params->>'invert')::int AS invert,
        net_profit, total_trades, win_rate, max_mae
 FROM optimization_leaderboard
-WHERE strategy = 'rich_fool' AND campaign_run LIKE '%rf4%'
+-- Фильтр по ИМЕНИ кампании, а не по подстроке: 12.09 под '%rf4%' попала чужая
+-- кампания camp-20260822-camp20260822nbrf4 (shectory_2ema, 7560 строк). Здесь её
+-- отсекает ещё и strategy, но на подстроку полагаться нельзя.
+WHERE strategy = 'rich_fool'
+  AND (campaign_run LIKE '%-rf5fade%' OR campaign_run LIKE '%-rf5brk%')
 """
 
 
@@ -142,7 +148,8 @@ async def main() -> None:
         p = c["p"]
         ps = (f"d={int(p['d_coef']) / 100:.2f} hold={p['hold_min']} n={p['n_days']} "
               f"st={p['step_count']} vol={int(p['vol_mult']) / 10:.1f} "
-              f"sl={int(p['sl_price_pct']) / 100:.2f}% tr={int(p['trail_tp_pct']) / 100:.2f}%")
+              f"sl={int(p['sl_price_pct']) / 100:.2f}% tr={int(p['trail_tp_pct']) / 100:.2f}% "
+              f"slip={int(p['slip_pct']) / 100:.2f}%")
         edge = f"  КРАЙ: {','.join(c['edges'])}" if c["edges"] else "  внутри сетки"
         print(f"{c['pair']:<12}{c['worst']:>10,.0f}{c['net_a']:>10,.0f}{c['net_b']:>10,.0f}"
               f"{c['tr_a']:>7}{c['tr_b']:>7}{c['rmae']:>9.1f}"

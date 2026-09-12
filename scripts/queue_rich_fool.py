@@ -58,35 +58,41 @@ CONTRACTS = [
 ]
 
 AXES = {
-    # ВОЛНА 2: сетка расширена ЗА КРАЯ, в которые упёрлась волна 1. Все 262 строки,
-    # прошедшие гейт по двум кварталам RI, сидели на границах одновременно по
-    # пяти-семи осям (hold_min=30 мин, step_count=5 макс, sl=0.50% мин,
-    # trail=0.25% мин, vol=1.6 макс, d=0.05 мин) — это не найденный оптимум, а
-    # «перебор доехал до стенки». Прежние граничные значения ОСТАВЛЕНЫ в сетке,
-    # чтобы новый результат был сравним со старым и было видно, ушёл ли экстремум
-    # внутрь расширенного диапазона.
-    # d_coef: нижняя граница 0.05 задана оператором, ниже не идём
-    "d_coef":       [5, 10, 20],
-    # окно набора: вниз от 30 — лидеры выбирали минимум
-    "hold_min":     [5, 10, 20, 30],
-    # ступеней: вверх от 5 — лидеры выбирали максимум
-    "step_count":   [5, 8, 12, 20],
-    # множитель объёма к предыдущей заявке: вверх от 1.6
-    "vol_mult":     [16, 20, 25, 30],
-    # запас стопа за последней ступенью: вниз от 0.50%
-    "sl_price_pct": [10, 20, 35, 50],
-    # трейлинг-тейк: вниз от 0.25%
-    "trail_tp_pct": [10, 15, 25],
-    "n_days":       [5, 10],
+    # ВОЛНА 3. Считается с ЗАЩИТОЙ ОТ ПРОСКАЛЬЗЫВАНИЯ 50 пунктов (указание
+    # оператора) — весь лидерборд волны 2 считался без неё и потому завышен: у
+    # лидера 90% результата на RIM6 держалось на наливке лимитника ПО КАСАНИЮ
+    # уровня. С защитой 50 пт RIM6 упал 372 390 -> 39 703 и проиграл зеркалу.
+    #
+    # Что уточнили две предыдущие волны:
+    #  sl_price_pct — волна 1 выбрала 0.50% как МИНИМУМ оси, волна 2 выбрала те же
+    #    0.50% как МАКСИМУМ. Два прогона с разных сторон указывают в одну точку,
+    #    значит 0.50% это настоящий внутренний оптимум — берём его в вилку.
+    #  vol_mult=2.5 и step_count=8 оказались ВНУТРИ сетки — первые честные оптимумы.
+    #  trail_tp_pct и d_coef дважды упирались в минимум — открываем и вверх тоже,
+    #    потому что защита меняет экономику входа и оптимум мог сдвинуться.
+    #  hold_min был ИНЕРТЕН (5/10/20/30 давали идентичный net): при узкой лестнице
+    #    первая ступень срабатывает на первом баре дня. Оставляем два значения как
+    #    контроль инертности, а не как ось поиска.
+    "d_coef":       [5, 10, 20, 35],
+    "hold_min":     [20, 60],
+    "n_days":       [3, 5, 10],
+    "step_count":   [5, 8, 12],
+    "vol_mult":     [16, 20, 25],
+    "sl_price_pct": [35, 50, 70, 100],
+    "trail_tp_pct": [10, 15, 25, 40],
+    # проскальзывание СТОПОВЫХ исполнений (вход пробоя, стоп-лосс, трейлинг-тейк)
+    "slip_pct":     [0, 2],
     "invert":       [0, 1],
 }
 
-PIN = dict(qty=1, max_contracts=60, place_lead_min=10,
+# slip_guard_pts=50 ПРИБИТ: лимитная заявка фейда считается налитой только
+# когда цена прошла 50 пунктов ЗА уровень — на цене заявки стоит очередь.
+PIN = dict(qty=1, max_contracts=60, place_lead_min=10, slip_guard_pts=50,
            ema_fast=9, ema_slow=21, exit_lead_min=120,
            allow_long=1, allow_short=1, bar_offset_min=0)
 
-# Чанк: контракт × invert × hold_min -> 3·4·4·4·3·2 = 1152 paramSets в задании.
-CHUNK_KEYS = ("invert", "hold_min")
+# Чанк: контракт × invert × hold_min × slip_pct -> 4·3·3·3·4·4 = 1728 paramSets.
+CHUNK_KEYS = ("invert", "hold_min", "slip_pct")
 
 
 def main() -> None:
@@ -99,13 +105,16 @@ def main() -> None:
     combos = [dict(zip(keys, vals)) for vals in itertools.product(*AXES.values())]
     jobs = []
     for secid, d_from, d_to in CONTRACTS:
-        for inv, hold in itertools.product(AXES["invert"], AXES["hold_min"]):
-            sets = [c for c in combos if c["invert"] == inv and c["hold_min"] == hold]
+        for inv, hold, slip in itertools.product(AXES["invert"], AXES["hold_min"],
+                                                 AXES["slip_pct"]):
+            sets = [c for c in combos if c["invert"] == inv
+                    and c["hold_min"] == hold and c["slip_pct"] == slip]
             side = "fade" if inv == 0 else "brk"
             jobs.append({
-                "campaign": f"rf4{side}{secid}h{hold}",
+                "campaign": f"rf5{side}{secid}h{hold}s{slip}",
                 "scriptCode": CODE, "symbol": secid,
-                "baseParams": dict(PIN, symbol=secid, invert=inv, hold_min=hold),
+                "baseParams": dict(PIN, symbol=secid, invert=inv, hold_min=hold,
+                                   slip_pct=slip),
                 "dateFrom": d_from, "dateTo": d_to, "engine": "remote",
                 "priority": 40,        # прямой запрос оператора — вперёд фоновых кампаний
                 "paramSets": [{k: c[k] for k in keys if k not in CHUNK_KEYS} for c in sets],

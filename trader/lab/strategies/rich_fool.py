@@ -23,6 +23,18 @@ place_lead_min минут ДО открытия сессии выставляе�
 Тейк:    ТРЕЙЛИНГ — откат на trail_tp_pct % от цены от экстремума в нашу пользу.
          Только в прибыли: откат не имеет права закрыть позицию хуже входа.
 
+ИСПОЛНЕНИЕ РАЗНЫМИ ТИПАМИ ЗАЯВОК — иначе зеркало сравнивает несравнимое.
+         Вход ФЕЙДА (invert=0) это ЛИМИТНАЯ заявка: продажа ВЫШЕ рынка, покупка
+         НИЖЕ. Проскальзывания не имеет, но и касания фитилём недостаточно: на
+         цене заявки стоит ОЧЕРЕДЬ, и мгновенный отскок наливает тех, кто впереди.
+         Гарантированный филл — когда цена ПРОШЛА сквозь уровень и вымела очередь,
+         поэтому требуется проход slip_guard_pts ПУНКТОВ за уровень (защита от
+         проскальзывания).
+         Вход ПРОБОЯ (invert=1), СТОП-ЛОСС и ТРЕЙЛИНГ-ТЕЙК — СТОПОВЫЕ исполнения:
+         срабатывают по уровню, а наливаются по рынку, то есть всегда ХУЖЕ уровня.
+         На все три накладывается slip_pct. Трейлинг именно стоп: он следует за
+         ценой и срабатывает на ОТКАТЕ.
+
 Снятие заявок: через hold_min минут после открытия неисполненные заявки снимаются
          ТОЛЬКО если за это время не было НИ ОДНОЙ сделки. Если лестница начала
          набирать — она продолжает работать, пока позиция жива.
@@ -112,6 +124,8 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
     vol_mult = float(params.get("vol_mult", 10)) / 10.0        # множитель к ПРЕДЫДУЩЕЙ заявке
     sl_price_pct = float(params.get("sl_price_pct", 100)) / 10000.0   # запас за лестницей
     trail_tp_pct = float(params.get("trail_tp_pct", 50)) / 10000.0
+    slip_guard_pts = float(params.get("slip_guard_pts", 50))        # проход за лимитный уровень, ПУНКТЫ
+    slip_pct = float(params.get("slip_pct", 0)) / 10000.0           # проскальзывание СТОПОВ
     max_contracts = max(1, int(params.get("max_contracts", 100)))
     ema_fast = max(2, int(params.get("ema_fast", 9)))
     ema_slow = max(ema_fast + 1, int(params.get("ema_slow", 21)))
@@ -192,9 +206,12 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
             gap_sl = cur.open <= sl_px if dirn > 0 else cur.open >= sl_px
             hit_sl = cur.low <= sl_px if dirn > 0 else cur.high >= sl_px
             if gap_sl or hit_sl:
-                # Гэп сквозь стоп — по открытию бара (проскальзывание), иначе по уровню.
-                await stl.place_order_at(symbol, side, abs(cur_qty),
-                                         cur.open if gap_sl else sl_px, cur.time)
+                # Гэп сквозь стоп — по открытию бара, иначе по уровню; и в любом
+                # случае ХУЖЕ на slip_pct: стоп наливается по рынку, а не по уровню.
+                base = cur.open if gap_sl else sl_px
+                slip = base * slip_pct
+                px = base - slip if dirn > 0 else base + slip
+                await stl.place_order_at(symbol, side, abs(cur_qty), px, cur.time)
                 _reset_position_state(stl)
                 return
 
@@ -214,7 +231,11 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
             tp_px = peak - avg * trail_tp_pct if dirn > 0 else peak + avg * trail_tp_pct
             armed = (tp_px > avg) if dirn > 0 else (tp_px < avg)
             if armed and (cur.low <= tp_px if dirn > 0 else cur.high >= tp_px):
-                await stl.place_order_at(symbol, side, abs(cur_qty), tp_px, cur.time)
+                # Трейлинг — СТОП по механике: наливается по рынку, хуже уровня.
+                tslip = tp_px * slip_pct
+                await stl.place_order_at(symbol, side, abs(cur_qty),
+                                         tp_px - tslip if dirn > 0 else tp_px + tslip,
+                                         cur.time)
                 _reset_position_state(stl)
                 return
             # Экстремум обновляем ПОСЛЕ проверки: иначе один бар и задавал бы пик
@@ -288,11 +309,16 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
         dn = stl.get_state("levels_dn") or []
         locked = int(stl.get_state("side_locked", 0) or 0)
         # Один бар может пересечь сразу несколько ступеней — исполняем ВСЕ.
+        # Вход фейда — ЛИМИТНЫЙ: нужен проход slip_guard_pts пунктов ЗА уровень,
+        # иначе очередь на этой цене не вымело и филла могло не быть. Вход пробоя —
+        # СТОПОВЫЙ: достаточно касания, но с проскальзыванием ниже. guard=0
+        # возвращает прежнее оптимистичное «коснулся = налит».
+        guard = slip_guard_pts if invert == 0 else 0.0
         while hit < step_count:
             fire = 0
-            if locked in (0, 1) and cur.high >= up[hit]:
+            if locked in (0, 1) and cur.high >= up[hit] + guard:
                 fire = 1
-            elif locked in (0, -1) and cur.low <= dn[hit]:
+            elif locked in (0, -1) and cur.low <= dn[hit] - guard:
                 fire = -1
             if not fire:
                 break
@@ -311,9 +337,14 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
                 stl.set_state("hit", step_count)     # лестница упёрлась в потолок
                 break
             level = up[hit] if fire > 0 else dn[hit]
-            # Заявка лимитная: встречает цену на уровне. Гэп сквозь уровень —
-            # исполнение по открытию бара (цена лучше уровня, это честно для лимитки).
+            # Гэп сквозь уровень — по открытию бара. Для лимитки это цена ЛУЧШЕ
+            # уровня (честно), для стопа — ХУЖЕ (тоже честно): одна и та же формула
+            # потому, что обе стороны хотят один и тот же конец диапазона.
             fill_px = max(level, cur.open) if fire > 0 else min(level, cur.open)
+            if invert:
+                # СТОП наливается по рынку: покупка дороже, продажа дешевле.
+                slip = fill_px * slip_pct
+                fill_px += slip if trade_dir > 0 else -slip
             await stl.place_order_at(symbol, "buy" if trade_dir > 0 else "sell",
                                      step_qty, fill_px, cur.time)
             hit += 1
@@ -348,7 +379,10 @@ STRATEGY_META = {
         "не было вовсе. ОВЕРНАЙТ ЗАПРЕЩЁН: за exit_lead_min до закрытия выход по сигналу "
         "двух EMA, на закрытии — принудительно. Границы сессии берутся ИЗ ИСТОРИИ: открытие = "
         "первый бар дня, закрытие = последний бар предыдущего дня того же типа (расписание "
-        "FORTS менялось внутри периода). invert=1 — контроль (прямой пробой)."
+        "FORTS менялось внутри периода). Исполнение РАЗНЫМИ типами заявок: вход фейда "
+        "лимитный (нужен проход slip_guard_pts пунктов за уровень, проскальзывания нет), вход "
+        "пробоя, стоп-лосс и трейлинг-тейк стоповые (проскальзывание slip_pct). "
+        "invert=1 — контроль (прямой пробой)."
     ),
     "source": "гипотеза оператора 09.09.2026, спецификация уточнена 12.09.2026",
     "params_schema": [
@@ -387,6 +421,12 @@ STRATEGY_META = {
         {"key": "exit_lead_min", "label": "За сколько минут до закрытия включать выход по EMA", "type": "number",
          "default": 120, "min": 0, "max": 480,
          "hint": "Овернайт запрещён: в этом окне позиция закрывается по сигналу двух EMA, а на закрытии — принудительно"},
+        {"key": "slip_guard_pts", "label": "Защита от проскальзывания, пункты", "type": "number",
+         "default": 50, "min": 0, "max": 500,
+         "hint": "Сколько ПУНКТОВ цена обязана пройти ЗА уровень, чтобы лимитная заявка фейда считалась налитой: на цене заявки стоит очередь, и касание с отскоком наливает тех, кто впереди. Стоповых заявок не касается. ВНИМАНИЕ: пункт у инструментов разный — 50 пунктов это 5 тиков на RI и 50 тиков на Si"},
+        {"key": "slip_pct", "label": "Проскальзывание стопов, % ×100", "type": "number",
+         "default": 0, "min": 0, "max": 50,
+         "hint": "Накладывается на СТОПОВЫЕ исполнения: вход по пробою (invert=1), стоп-лосс и трейлинг-тейк. Лимитные заявки фейда проскальзывания не имеют"},
         {"key": "invert", "label": "Инверсия (0/1)", "type": "number", "default": 0, "min": 0, "max": 1,
          "hint": "0 = фейд (рабочий): вверх=шорт, вниз=лонг. 1 = прямой пробой (контроль)"},
         {"key": "allow_long", "label": "Лонги (0/1)", "type": "number", "default": 1, "min": 0, "max": 1,

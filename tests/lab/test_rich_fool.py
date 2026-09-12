@@ -51,7 +51,10 @@ BASE = {"symbol": SYM, "n_days": 2, "qty": 1, "step_count": 3, "d_coef": 100,
         "vol_mult": 10, "max_contracts": 100,
         "sl_price_pct": 100, "trail_tp_pct": 50,
         "place_lead_min": 10, "hold_min": 30,
-        "ema_fast": 9, "ema_slow": 21, "exit_lead_min": 0}
+        "ema_fast": 9, "ema_slow": 21, "exit_lead_min": 0,
+        # Цены в фикстурах около 100, поэтому защита в пунктах здесь глушится:
+        # иначе она запретит любой вход и геометрию мерить будет нечем.
+        "slip_guard_pts": 0, "slip_pct": 0}
 
 # Глушим выходы, когда мерим ГЕОМЕТРИЮ набора: иначе стоп/тейк снимут позицию
 # раньше, чем лестница добрала, и мерить нечего.
@@ -282,3 +285,69 @@ def test_session_close_is_taken_from_the_previous_day_of_the_same_kind():
     assert ex, f"позиция не закрыта: {o}"
     assert sat_close <= ex[0][2] < WE_CLOSE, \
         f"закрытие взято не из субботы ({sat_close}): {ex[0]}"
+
+
+# ── 9. защита от проскальзывания (лимитный вход) ──────────────────────────────
+
+def _touch_then_through():
+    """Сначала бар КАСАЕТСЯ уровня 107.5 и отскакивает, потом проходит сквозь."""
+    spec = [(0, 100.0, 107.5, 100.0, 104.0)]                  # ровно касание
+    spec += [(m, 104.0, 104.2, 103.8, 104.0) for m in range(1, 6)]
+    spec += [(6, 104.0, 110.0, 104.0, 109.5)]                 # проход сквозь
+    spec += [(m, 109.5, 109.7, 109.3, 109.5) for m in range(7, 30)]
+    return spec
+
+
+def test_slip_guard_rejects_a_touch_and_accepts_a_pass_through():
+    """Лимитник в очереди: касание уровня с отскоком наливает тех, кто впереди.
+    С защитой 2 пункта вход должен случиться не на касании 107.5, а на проходе."""
+    free = _run(_tail(_touch_then_through()), step_count=1, slip_guard_pts=0, **WIDE)
+    guarded = _run(_tail(_touch_then_through()), step_count=1, slip_guard_pts=2, **WIDE)
+    assert free and free[0][3] == WD_OPEN, f"без защиты вход на касании: {free[:1]}"
+    assert guarded, f"с защитой входа не случилось вовсе: {guarded}"
+    assert guarded[0][3] == WD_OPEN + 6, f"с защитой вход обязан быть на проходе: {guarded[:1]}"
+
+
+def test_slip_guard_does_not_apply_to_the_breakout_side():
+    """Вход по пробою — СТОПОВАЯ заявка, она срабатывает по касанию уровня.
+    Защита от проскальзывания к ней не относится (у стопа есть слип, а не очередь)."""
+    o = _run(_tail(_touch_then_through()), step_count=1, invert=1,
+             slip_guard_pts=2, **WIDE)
+    assert o and o[0][0] == "buy", f"пробой вверх обязан покупать: {o[:1]}"
+    assert o[0][3] == WD_OPEN, f"стоп обязан сработать на касании: {o[:1]}"
+
+
+# ── 10. проскальзывание стоповых исполнений ──────────────────────────────────
+
+def test_breakout_entry_pays_slippage_but_fade_entry_does_not():
+    up = [(0, 100.0, 108.0, 100.0, 107.6)] + [(m, 107.6, 107.7, 107.5, 107.6)
+                                              for m in range(1, 25)]
+    fade0 = _run(_tail(up), step_count=1, slip_pct=0, **WIDE)
+    fade1 = _run(_tail(up), step_count=1, slip_pct=100, **WIDE)
+    assert fade0[0][2] == fade1[0][2],         f"лимитный вход фейда проскальзывания не имеет: {fade0[0]} против {fade1[0]}"
+    brk0 = _run(_tail(up), step_count=1, invert=1, slip_pct=0, **WIDE)
+    brk1 = _run(_tail(up), step_count=1, invert=1, slip_pct=100, **WIDE)
+    assert brk1[0][2] > brk0[0][2],         f"стоповая покупка по пробою обязана налиться ДОРОЖЕ: {brk0[0]} против {brk1[0]}"
+
+
+def test_stop_loss_and_trailing_take_both_pay_slippage():
+    """Стоп-лосс и трейлинг-тейк — оба СТОПЫ по механике, оба наливаются по рынку."""
+    # стоп-лосс: шорт, цена уходит против за последнюю ступень
+    beyond = [(0, 100.0, 108.0, 100.0, 107.6), (1, 107.6, 118.0, 107.6, 117.9)]
+    beyond += [(m, 117.9, 118.0, 117.8, 117.9) for m in range(2, 20)]
+    sl0 = _exits(_run(_tail(beyond), step_count=3, trail_tp_pct=5000, slip_pct=0))
+    sl1 = _exits(_run(_tail(beyond), step_count=3, trail_tp_pct=5000, slip_pct=100))
+    assert sl0 and sl1, (sl0, sl1)
+    assert sl1[0][1] > sl0[0][1],         f"стоп шорта обязан откупиться ДОРОЖЕ: {sl0[0]} против {sl1[0]}"
+
+    # трейлинг-тейк: шорт, цена падает, затем откат
+    fall = [(0, 100.0, 108.0, 100.0, 107.6)]
+    for i, m in enumerate(range(1, 8)):
+        px = 106.0 - i * 1.0
+        fall.append((m, px, px + 0.3, px - 0.5, px))
+    fall += [(8, 100.0, 101.0, 100.0, 100.9)]
+    fall += [(m, 100.9, 101.1, 100.7, 100.9) for m in range(9, 28)]
+    tp0 = _exits(_run(_tail(fall), step_count=1, slip_pct=0))
+    tp1 = _exits(_run(_tail(fall), step_count=1, slip_pct=100))
+    assert tp0 and tp1, (tp0, tp1)
+    assert tp1[0][1] > tp0[0][1],         f"трейлинг шорта обязан откупиться ДОРОЖЕ: {tp0[0]} против {tp1[0]}"
