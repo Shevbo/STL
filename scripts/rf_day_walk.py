@@ -27,7 +27,9 @@ WINDOWS = {
     "RIU6": ("2026-06-19", "2026-09-09"),
     "SiM6": ("2026-03-20", "2026-06-17"),
     "SiU6": ("2026-06-19", "2026-09-09"),
-    "RIZ5": ("2025-09-19", "2025-12-18"),     # вне выборки отбора rf10
+    "RIM5": ("2025-03-21", "2025-06-19"),     # вне выборки отбора rf10
+    "RIU5": ("2025-06-20", "2025-09-18"),
+    "RIZ5": ("2025-09-19", "2025-12-18"),
     "RIH6": ("2025-12-19", "2026-03-19"),
 }
 
@@ -128,7 +130,7 @@ def summary(secid: str, rows, p: dict) -> None:
         print(f"{t:%Y-%m-%d}{RU_WD[t.weekday()]:>3} {t:%H:%M}{why:>10}{q0:>5}{avg0:>10,.0f}{px:>10,.0f}{pts:>10,.0f}")
 
 
-def day(secid: str, target: datetime.date, rows, p: dict, after: int) -> None:
+def day(secid: str, target: datetime.date, rows, p: dict, after: int, compact: bool = False) -> None:
     rows = [r for r in rows if dt(r[0].time).date() == target]
     if not rows:
         print(f"{secid}: за {target} баров нет")
@@ -158,6 +160,9 @@ def day(secid: str, target: datetime.date, rows, p: dict, after: int) -> None:
     print(f"\n{'время':<6}{'O':>8}{'H':>8}{'L':>8}{'C':>8}{'поз':>5}{'средняя':>9}{'стоп':>9}"
           f"{'тейк':>12}  событие")
     for bar, q1, avg, st, new, why, _q0, _a0 in rows:
+        # компактно: события + срез каждые 15 минут, иначе день = 700 строк
+        if compact and not new and bar.time % 900:
+            continue
         dirn = int(st.get("dir") or 0)
         sl_s = tp_s = "-"
         if q1 and avg > 0 and dirn:
@@ -181,6 +186,7 @@ async def main() -> None:
     ap.add_argument("secid", choices=list(WINDOWS))
     ap.add_argument("date", nargs="?")
     ap.add_argument("--after", type=int, default=3, help="баров после выхода")
+    ap.add_argument("--compact", action="store_true", help="события + срез каждые 15 минут")
     for k in LEADER:
         ap.add_argument(f"--{k}", type=int)
     args = ap.parse_args()
@@ -188,7 +194,7 @@ async def main() -> None:
          "symbol": args.secid}
     rows = await walk(args.secid, p)
     if args.date:
-        day(args.secid, datetime.date.fromisoformat(args.date), rows, p, args.after)
+        day(args.secid, datetime.date.fromisoformat(args.date), rows, p, args.after, args.compact)
     else:
         summary(args.secid, rows, p)
 
