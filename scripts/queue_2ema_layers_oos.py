@@ -32,9 +32,14 @@ def main() -> None:
     ap.add_argument("--submit", action="store_true")
     ap.add_argument("--tag", default="e2o")
     ap.add_argument("--priority", type=int, default=20)
+    # Соседи по решению оператора 13.09.2026 (e2n): --pairs 20:2100,30:2100 — ТОЛЬКО на
+    # нетронутых кварталах; старые заражены отбором.
+    ap.add_argument("--pairs", default="10:2100")
     args = ap.parse_args()
 
-    sets = [lay for lay in layers("Si") if lay["layer_id"] in KEEP]
+    pairs = [tuple(int(x) for x in pr.split(":")) for pr in args.pairs.split(",")]
+    sets = [{**lay, "ema1": f, "ema2": s} for f, s in pairs
+            for lay in layers("Si") if lay["layer_id"] in KEEP]
     body = [{
         "campaign": f"{args.tag}-{sym.lower()}", "scriptCode": CODE, "symbol": sym,
         "baseParams": dict(PIN, symbol=sym), "dateFrom": a, "dateTo": b,
