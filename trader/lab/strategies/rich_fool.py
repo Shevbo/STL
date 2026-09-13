@@ -159,6 +159,46 @@ def _step_sizes(budget: int, steps: int, first: int) -> list[int]:
     return out
 
 
+def _day_ladder(big: list, day: int, is_weekend: bool, bar_off: int, n_days: int,
+                d_coef: float, f_shift: float, step_count: int):
+    """Лестница дня по истории: (вчерашнее закрытие, amp, смещения ступеней, закрытие
+    сессии в минутах) или None, если истории мало. Общая для rich_fool и rich_fool_hold."""
+    by_day: dict[int, list] = {}
+    day_kind: dict[int, bool] = {}
+    for b in big:
+        _, bd, bw = _bar_clock(b.time, bar_off)
+        by_day.setdefault(bd, []).append(b)
+        day_kind[bd] = bw
+    prior = sorted(d for d in by_day if d < day)
+    if len(prior) < n_days:
+        return None
+    prev_close = by_day[prior[-1]][-1].close
+    rngs = [max(x.high for x in by_day[d]) - min(x.low for x in by_day[d])
+            for d in prior[-n_days:]]
+    amp = sum(rngs) / len(rngs)
+    if amp <= 0 or prev_close <= 0:
+        return None
+    # D сужается коэффициентом: D = amp × d_coef.
+    # Зазор ступени n = D/(n+1+F). F сдвигает знаменатель: при F=0 это исходная
+    # формула оператора с быстро убывающими зазорами, при большом F зазоры
+    # выравниваются (1/(n+1+F) слабее зависит от n) и вся лестница поджимается.
+    D = amp * d_coef
+    offs, acc = [], 0.0
+    for j in range(1, step_count + 1):
+        acc += D / (j + 1 + f_shift)
+        offs.append(acc)
+    # Границы сессии ИЗ ИСТОРИИ: закрытие = последний бар предыдущего дня того
+    # же типа. Расписание FORTS менялось внутри периода, прописанный час дал бы
+    # «открытие» в середине дня на половине истории.
+    cl = 0
+    for d in reversed(prior):
+        if day_kind.get(d) == is_weekend:
+            cl = max(_bar_clock(b.time, bar_off)[0] for b in by_day[d])
+            break
+    return prev_close, amp, offs, cl or (_FALLBACK_CLOSE_WEEKEND if is_weekend
+                                         else _FALLBACK_CLOSE_WEEKDAY)
+
+
 def _reset_position_state(stl: STLRuntime) -> None:
     """Позиция закрыта: гасим направление, лестницу и экстремум трейлинга."""
     for k in ("dir", "hit", "side_locked", "tp_armed", "tp_best", "last_fill_t", "first_fill_t"):
@@ -341,48 +381,19 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
     if (not stl.get_state("armed") and not stl.get_state("day_done")
             and cur_qty == 0):
         big = await stl.get_bars(symbol, tf=1, n=(n_days + 2) * 1500)
-        by_day: dict[int, list] = {}
-        day_kind: dict[int, bool] = {}
-        for b in big:
-            _, bd, bw = _bar_clock(b.time, bar_off)
-            by_day.setdefault(bd, []).append(b)
-            day_kind[bd] = bw
-        prior = sorted(d for d in by_day if d < day)
-        if len(prior) < n_days:
+        lad = _day_ladder(big, day, is_weekend, bar_off, n_days, d_coef, f_shift, step_count)
+        if lad is None:
             stl.set_state("day_done", 1)                # истории мало — пропускаем день
             return
-        prev_close = by_day[prior[-1]][-1].close
-        rngs = [max(x.high for x in by_day[d]) - min(x.low for x in by_day[d])
-                for d in prior[-n_days:]]
-        amp = sum(rngs) / len(rngs)
-        if amp <= 0 or prev_close <= 0:
-            stl.set_state("day_done", 1)
-            return
-        # D сужается коэффициентом: D = amp × d_coef.
-        # Зазор ступени n = D/(n+1+F). F сдвигает знаменатель: при F=0 это исходная
-        # формула оператора с быстро убывающими зазорами, при большом F зазоры
-        # выравниваются (1/(n+1+F) слабее зависит от n) и вся лестница поджимается.
+        prev_close, amp, offs, close_hm = lad
         D = amp * d_coef
-        offs, acc = [], 0.0
-        for j in range(1, step_count + 1):
-            acc += D / (j + 1 + f_shift)
-            offs.append(acc)
         stl.set_state("levels_up", [prev_close + o for o in offs])
         stl.set_state("levels_dn", [prev_close - o for o in offs])
         stl.set_state("hit", 0)
         stl.set_state("side_locked", 0)
         stl.set_state("tp_armed", 0)
         stl.set_state("tp_best", 0)
-        # Границы сессии ИЗ ИСТОРИИ: закрытие = последний бар предыдущего дня того
-        # же типа. Расписание FORTS менялось внутри периода, прописанный час дал бы
-        # «открытие» в середине дня на половине истории.
-        cl = 0
-        for d in reversed(prior):
-            if day_kind.get(d) == is_weekend:
-                cl = max(_bar_clock(b.time, bar_off)[0] for b in by_day[d])
-                break
-        stl.set_state("close_hm", cl or (_FALLBACK_CLOSE_WEEKEND if is_weekend
-                                        else _FALLBACK_CLOSE_WEEKDAY))
+        stl.set_state("close_hm", close_hm)
         stl.set_state("win_end", hm + hold)     # окно набора от первого бара дня
         stl.set_state("armed", 1)
         stl.log(f"armed {datetime.fromtimestamp(day * 86400, tz=timezone.utc):%Y-%m-%d} ({'вых' if is_weekend else 'буд'}, первый бар "

@@ -110,13 +110,19 @@ def summary(secid: str, rows, p: dict) -> None:
     a, b = WINDOWS[secid]
     by_reason: dict[str, list] = {}
     days = []
+    cur_day, first_t, early = None, 0, 0
     for bar, _q1, _a1, _st, new, why, q0, avg0 in rows:
+        # «гэп» = контракты, налитые в ПЕРВЫЕ 2 минуты дня: открытие пробило ступени
+        if bar.time // 86400 != cur_day:
+            cur_day, first_t, early = bar.time // 86400, bar.time, 0
+        if not why and bar.time - first_t <= 60:
+            early += sum(int(o.qty) for o in new)
         if not why:
             continue
         px = new[-1].price if new else bar.close
         pts = (px - avg0) * q0                      # q0 со знаком: лонг +, шорт −
         by_reason.setdefault(why, []).append(pts)
-        days.append((dt(bar.time), why, q0, avg0, px, pts))
+        days.append((dt(bar.time), why, q0, avg0, px, pts, early))
     tot = sum(x[5] for x in days)
     print(f"######## {secid} {a}..{b} ########")
     print("параметры: " + ", ".join(f"{k}={v}" for k, v in p.items()
@@ -125,9 +131,9 @@ def summary(secid: str, rows, p: dict) -> None:
     print(f"\n{'причина':<10}{'раз':>5}{'плюс':>6}{'пункты':>12}{'средний':>10}")
     for why, v in sorted(by_reason.items(), key=lambda kv: -len(kv[1])):
         print(f"{why:<10}{len(v):>5}{sum(1 for x in v if x > 0):>6}{sum(v):>12,.0f}{sum(v) / len(v):>10,.0f}")
-    print(f"\n{'дата':<12}{'дн':>3}{'выход':>6}{'причина':>10}{'поз':>5}{'средняя':>10}{'выход по':>10}{'пункты':>10}")
-    for t, why, q0, avg0, px, pts in days:
-        print(f"{t:%Y-%m-%d}{RU_WD[t.weekday()]:>3} {t:%H:%M}{why:>10}{q0:>5}{avg0:>10,.0f}{px:>10,.0f}{pts:>10,.0f}")
+    print(f"\n{'дата':<12}{'дн':>3}{'выход':>6}{'причина':>10}{'поз':>5}{'средняя':>10}{'выход по':>10}{'пункты':>10}{'гэп':>5}")
+    for t, why, q0, avg0, px, pts, early in days:
+        print(f"{t:%Y-%m-%d}{RU_WD[t.weekday()]:>3} {t:%H:%M}{why:>10}{q0:>5}{avg0:>10,.0f}{px:>10,.0f}{pts:>10,.0f}{early:>5}")
 
 
 def day(secid: str, target: datetime.date, rows, p: dict, after: int, compact: bool = False) -> None:
