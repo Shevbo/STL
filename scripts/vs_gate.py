@@ -26,20 +26,23 @@ import re
 import asyncpg
 
 IN_Q, OUT_Q = ("M6", "U6"), ("M5", "U5", "Z5", "H6")
-KEYS = ("min_gap_amp", "dv_bars")
 
 
 async def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--tag", default="vs1")
     ap.add_argument("--min-trades", type=int, default=100)
+    # Гейт общий для любого перебора «2 оси × 6 кварталов» (shectory_2ema: ema1,ema2).
+    ap.add_argument("--strategy", default="valley_spike")
+    ap.add_argument("--keys", default="min_gap_amp,dv_bars")
     a = ap.parse_args()
+    KEYS = tuple(a.keys.split(","))
 
     conn = await asyncpg.connect(os.environ.get("LAB_DB_URL") or os.environ["DATABASE_URL"])
     try:
         rows = await conn.fetch(
             "SELECT campaign_run, params, net_profit, total_trades FROM optimization_leaderboard "
-            "WHERE strategy = 'valley_spike' AND campaign_run LIKE $1", f"camp-%-{a.tag}%")
+            "WHERE strategy = $2 AND campaign_run LIKE $1", f"camp-%-{a.tag}%", a.strategy)
     finally:
         await conn.close()
 
@@ -59,13 +62,13 @@ async def main() -> None:
     if not t:
         print(f"строк кампании {a.tag} нет")
         return
-    print(f"строк {len(rows)}; живость осей (уникальных результатов из 24): "
+    keys = sorted({k for (_, _, k) in t})
+    print(f"строк {len(rows)}; живость осей (уникальных результатов из {len(keys)}): "
           + " ".join(f"{i}{q}={len(v)}" for (i, q), v in sorted(distinct.items())))
 
-    keys = sorted({k for (_, _, k) in t})
     grid = {k: sorted({key[n] for key in keys}) for n, k in enumerate(KEYS)}
     for inst in ("RI", "Si"):
-        print(f"\n=== {inst}  (разрыв%, окно) | " + " ".join(f"{q:>12}" for q in IN_Q + OUT_Q)
+        print(f"\n=== {inst}  ({', '.join(KEYS)}) | " + " ".join(f"{q:>12}" for q in IN_Q + OUT_Q)
               + " | выборка вне/4 минсд край")
         for key in keys:
             cells, nets, trs = [], [], []
@@ -79,7 +82,7 @@ async def main() -> None:
             oos = sum(1 for q, n in nets if q in OUT_Q and n > 0)
             edge = [k for n, k in enumerate(KEYS) if key[n] in (grid[k][0], grid[k][-1])]
             mark = " <<" if ins_ok and oos >= 3 and trs and min(trs) >= a.min_trades and not edge else ""
-            print(f"  ({key[0]:>2}%, {key[1]:>3}) | " + " ".join(cells)
+            print(f"  {str(key):>12} | " + " ".join(cells)
                   + f" | {'да ' if ins_ok else 'нет'}     {oos}/4 {min(trs) if trs else 0:>5} {','.join(edge) or '-'}{mark}")
     print("\n<< = плюс на обоих кварталах выборки, >=3 из 4 вне, сделок не меньше порога, не край сетки")
 
