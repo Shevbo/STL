@@ -186,6 +186,25 @@ def make_on_bar(rid: str):
         # sl_frac он не зависит ни от тейка, ни от ATR: одна и та же доля цены на любой
         # волатильности. Проверяется вместе с sl_frac ниже — срабатывает ближний.
         sl_pct = float(params.get("sl_pct", 0) or 0) / 100.0
+        # СЛОИ DESKBOT 2EMA (заказ оператора 13.09.2026). Все выключены по умолчанию.
+        # Проценты ×100 (120 = 1.20%), как sl_pct; считаются от СРЕДНЕЙ входа.
+        #   tp_pct            тейк долей цены (tp_atr меряет в ATR);
+        #   trail_act/back    трейлинг по сторонам: после хода trail_act% в плюс — выход
+        #                     на откате trail_back% от лучшей цены. «Подтягивающий стоп»
+        #                     DeskBot на закрытиях баров совпадает с этим откатом (ближний
+        #                     срабатывает первым), отдельной оси не заводим;
+        #   rsi_tp_n/lvl      тейк по RSI: лонг при RSI >= lvl, шорт при RSI <= 100-lvl;
+        #   avg_step_pts_l/s  шаг усреднения В ПУНКТАХ, отдельно по сторонам (0 = по ATR).
+        tp_pct = float(params.get("tp_pct", 0) or 0) / 10000.0
+        trail_cfg = {1: (float(params.get("trail_act_l", 0) or 0) / 10000.0,
+                         float(params.get("trail_back_l", 0) or 0) / 10000.0),
+                     -1: (float(params.get("trail_act_s", 0) or 0) / 10000.0,
+                          float(params.get("trail_back_s", 0) or 0) / 10000.0)}
+        trail_on = any(a > 0 and b > 0 for a, b in trail_cfg.values())
+        rsi_n = int(params.get("rsi_tp_n", 0) or 0)
+        rsi_lvl = float(params.get("rsi_tp_lvl", 72) or 72)
+        step_pts = {1: float(params.get("avg_step_pts_l", 0) or 0),
+                    -1: float(params.get("avg_step_pts_s", 0) or 0)}
         # «Долина смерти» (dv_bars>0 и dv_range_pts>0): затяжной боковик в узком
         # коридоре. MACD в нём пилит кроссоверы и отдаёт депо комиссией (живой
         # MACD·RIU6 2026-07-22: 200 сделок в коридоре 86 700-87 200 — разножка там
@@ -261,6 +280,10 @@ def make_on_bar(rid: str):
         # сделки при reg_n=240 — ось выглядела мёртвой, хотя код был на месте.
         if reg_n > 1:
             fetch_n = max(fetch_n, reg_n)
+        # ponytail: I.rsi пересчитывает всё окно на каждом баре — хвост 2×n (Уайлдер
+        # забывает старое), а в переборе периоды держать <=300, иначе минутки не потянут.
+        if rsi_n > 0:
+            fetch_n = max(fetch_n, 2 * rsi_n + 1)
         bars = await stl.get_bars(symbol, tf=1, n=fetch_n)
         if len(bars) < need:
             return
@@ -556,6 +579,7 @@ def make_on_bar(rid: str):
                     return
                 await stl.place_order(symbol, "buy" if want > 0 else "sell", fresh_entry_size(), price)
                 stl.set_state("avg_add", 0)      # новая позиция -> лестница k_avg с начала
+                stl.set_state("trail_pk", None)  # и пик трейлинга с начала
                 mark_entry(price)
             return
         # 2) Flat → open a fresh base position on a signal (unless cooling down).
@@ -582,12 +606,15 @@ def make_on_bar(rid: str):
                 else:
                     await stl.place_order(symbol, "buy" if want > 0 else "sell", fresh_entry_size(), price)
                     stl.set_state("avg_add", 0)      # новая позиция -> лестница k_avg с начала
+                    stl.set_state("trail_pk", None)  # и пик трейлинга с начала
                     mark_entry(price)
             return
         # 3) Holding (signal agrees or is None) → manage stop, take-profit, averaging by ATR.
         # sl_pct стоит в условии отдельно: процентный стоп не зависит ни от тейка, ни от
         # ATR, и без этого он молча пропадал бы у робота с полной лестницей и tp_atr=0.
-        if not ((tp > 0) or sl_pct > 0 or (k_step > 0 and abs(cur) < avg_max)):
+        if not ((tp > 0) or sl_pct > 0 or (k_step > 0 and abs(cur) < avg_max)
+                or tp_pct > 0 or trail_on or rsi_n > 0
+                or (step_pts[cur_dir] > 0 and abs(cur) < avg_max)):
             return
         # Стоп идёт ПЕРВЫМ и всегда важнее усреднения: оба срабатывают на ходе против
         # позиции, и если стоп стоит ближе шага усреднения, робот обязан выйти, а не
@@ -611,9 +638,35 @@ def make_on_bar(rid: str):
         # хвост даёт значение, неотличимое от полного (проверено: net бит-в-бит).
         # Без этого atr() гонял 2200-баровый цикл на КАЖДОМ баре — 84с из 142 в
         # профиле pivot с усреднением (2026-07-23). Касается ВСЕХ стратегий с avg/TP.
-        if atrv <= 0:
+
+        async def exit_all() -> None:
+            """Выход слоя DeskBot всей позицией; ставки считают знак результата."""
+            if bet_step > 0:
+                stl.set_state("bet_extra", 0 if (price - avg) * cur_dir > 0
+                              else min(bet_extra + bet_step, bet_max))
+            on_exit(price, avg, cur_dir)
+            await stl.place_order(symbol, "sell" if cur_dir > 0 else "buy", abs(cur), price)
+
+        if tp_pct > 0 and avg > 0 and (price - avg) * cur_dir >= avg * tp_pct:
+            await exit_all()
             return
-        if tp > 0:    # take-profit measured from the (averaged) entry (a TP is a win)
+        act, back = trail_cfg[cur_dir]
+        if act > 0 and back > 0 and avg > 0:
+            # Лучшая цена позиции по high/low ЗАКРЫТЫХ баров, выход по закрытию — без
+            # заглядывания: экстремум бара известен к моменту его закрытия.
+            pk = stl.get_state("trail_pk", None)
+            ext = float(pk[1]) if pk and int(pk[0]) == cur_dir else avg
+            ext = max(ext, bars[-1].high) if cur_dir > 0 else min(ext, bars[-1].low)
+            stl.set_state("trail_pk", [cur_dir, ext])
+            if (ext - avg) * cur_dir >= avg * act and (ext - price) * cur_dir >= ext * back:
+                await exit_all()
+                return
+        if rsi_n > 0 and len(bars) > rsi_n:
+            r = I.rsi(_c(bars[-(2 * rsi_n + 1):]), rsi_n)
+            if (cur_dir > 0 and r >= rsi_lvl) or (cur_dir < 0 and r <= 100 - rsi_lvl):
+                await exit_all()
+                return
+        if tp > 0 and atrv > 0:    # take-profit measured from the (averaged) entry (a TP is a win)
             if cur_dir > 0 and price >= avg + tp * atrv:
                 if bet_step > 0:
                     stl.set_state("bet_extra", 0)
@@ -626,7 +679,10 @@ def make_on_bar(rid: str):
                 on_exit(price, avg, cur_dir)
                 await stl.place_order(symbol, "buy", abs(cur), price)
                 return
-        if k_step > 0 and abs(cur) < avg_max and not flip_held:   # average in: add a unit on adverse move
+        # Шаг добора: пункты своей стороны (слой DeskBot), иначе k_step×ATR. Без ATR ветка
+        # раньше выходила целиком (atrv<=0 -> return); dist=0 даёт то же самое.
+        dist = step_pts[cur_dir] if step_pts[cur_dir] > 0 else (k_step * atrv if atrv > 0 else 0.0)
+        if dist > 0 and abs(cur) < avg_max and not flip_held:   # average in: add a unit on adverse move
             # Лестница объёмов: первый добор = unit, каждый следующий = round(пред × k_avg).
             # k_avg=1.0 -> ровно прежнее поведение (add = unit на каждом шаге).
             prev_add = int(stl.get_state("avg_add", 0) or 0) or unit
@@ -635,7 +691,7 @@ def make_on_bar(rid: str):
             # .5 к чётному — молча другая лестница, чем оператор задал).
             next_add = max(1, int(prev_add * k_avg + 0.5))
             add = min(next_add, avg_max - abs(cur))
-            if cur_dir > 0 and price <= avg - k_step * atrv:
+            if cur_dir > 0 and price <= avg - dist:
                 if in_dv or no_weekend:
                     note_skip("weekend" if no_weekend else "dv", price)
                 elif gap_ok(price):
@@ -645,7 +701,7 @@ def make_on_bar(rid: str):
                 else:
                     note_skip("gap", price)
                 return
-            if cur_dir < 0 and price >= avg + k_step * atrv:
+            if cur_dir < 0 and price >= avg + dist:
                 if in_dv or no_weekend:
                     note_skip("weekend" if no_weekend else "dv", price)
                 elif gap_ok(price):
@@ -917,12 +973,24 @@ def sig_2ema(bars, p):
     f = I.ema_last(closes, ema1)
     s = I.ema_last(closes, ema2)
     return 1 if f > s else -1
+# Слои DeskBot 2EMA (13.09.2026): механика в make_on_bar, все выключены по умолчанию.
+DESKBOT_PARAMS = [
+    P("tp_pct", "Тейк: % от средней ×100 (0=выкл, 120=1.20%)", 0, 0, 1000),
+    P("trail_act_l", "Трейл лонга: активация, % хода ×100 (0=выкл)", 0, 0, 1000),
+    P("trail_back_l", "Трейл лонга: откат от пика, % ×100", 0, 0, 500),
+    P("trail_act_s", "Трейл шорта: активация, % хода ×100 (0=выкл)", 0, 0, 1000),
+    P("trail_back_s", "Трейл шорта: откат от пика, % ×100", 0, 0, 500),
+    P("rsi_tp_n", "Тейк по RSI: период в барах (0=выкл)", 0, 0, 300),
+    P("rsi_tp_lvl", "Тейк по RSI: уровень лонга (шорт = 100 − уровень)", 72, 50, 95),
+    P("avg_step_pts_l", "Усреднение лонга: шаг в пунктах (0 = по ATR)", 0, 0, 5000),
+    P("avg_step_pts_s", "Усреднение шорта: шаг в пунктах (0 = по ATR)", 0, 0, 5000),
+]
 register("shectory_2ema", "Shectory-2EMA",
          "https://github.com/topics/moving-average-crossover",
          [SYM, P("ema1", "EMA1 (быстрая)", 10, 3, 60), P("ema2", "EMA2 (медленная)", 140, 20, 400),
           P("qty", "Базовый объём", 1, 1, 20),
           P("bet_step", "Система ставок +N после убытка (0=выкл)", 1, 0, 5),
-          P("bet_max", "Макс добавка по ставкам", 10, 1, 30)],
+          P("bet_max", "Макс добавка по ставкам", 10, 1, 30)] + DESKBOT_PARAMS,
          # ПРОГРЕВ: 4 × самого длинного периода (правило macd_cross/ema_atr). Прежнее
          # ema2+2 давало окно ЕДВА длиннее собственной EMA — она не успевала разойтись
          # с быстрой, и знак залипал. Схема к тому же пускает ema1 (до 60) выше ema2
