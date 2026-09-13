@@ -172,3 +172,17 @@ def test_stop_order_gapping_through_fills_at_open():
     orders = _run(bars, stop_atr=20, ret_pct=500)
     assert len(orders) == 2 and orders[1][0] == "buy"
     assert orders[1][2] >= 139.0, orders
+
+
+def test_ladder_add_on_gapping_through_fills_at_open_for_breakout_only():
+    # Вход на первой ступени, следующий бар ОТКРЫЛСЯ за второй и третьей. Докупка
+    # пробоя — стоп-заявка: обе ступени по открытию 112. Докупка фейда — лимитник:
+    # по своим уровням, ниже открытия. Тейк заглушён, иначе он закроет раньше.
+    bars = _bars(QUIET + [100.0, 100.0, 100.0, 112.0, 112.0], spikes={62: 107.0})
+    extra = dict(step_count=3, ret_pct=500, stop_atr=100)
+    brk = _run(bars, invert=1, **extra)
+    fade = _run(bars, invert=0, **extra)
+    assert [o[0] for o in brk[:3]] == ["buy"] * 3, brk
+    assert all(o[2] >= 112.0 for o in brk[1:3]), brk            # не дешевле открытия
+    assert [o[0] for o in fade[:3]] == ["sell"] * 3, fade
+    assert all(o[2] < 112.0 for o in fade[1:3]), fade           # лимитник по уровню

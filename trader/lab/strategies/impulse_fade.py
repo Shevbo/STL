@@ -198,8 +198,15 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
             touched = cur.high >= lv if spike > 0 else cur.low <= lv
             if not touched:
                 break
+            # Докупка по проколу (invert=1) — такая же СТОП-заявка, как первый вход:
+            # в гэпе за ступень она наливается по открытию, а не по уровню. До 13.09
+            # здесь стоял сырой уровень, и лестница из трёх ступеней покупала дешевле
+            # рынка: у лидеров imf5 на неё приходилось ~60% итога. У фейда докупка —
+            # лимитник, _fill вернёт тот же уровень.
+            px = _fill(lv, cur, worse=spike > 0, stop=(dirn > 0) == (spike > 0),
+                       slip=slip_atr * atr)
             await stl.place_order_at(symbol, "buy" if dirn > 0 else "sell",
-                                     qty, lv, cur.time)
+                                     qty, px, cur.time)
             hit += 1
         stl.set_state("hit", hit)
         return

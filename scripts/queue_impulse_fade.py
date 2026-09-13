@@ -118,6 +118,9 @@ def main() -> None:
     # честными в одном имени значило бы похоронить разницу.
     ap.add_argument("--tag", default="imf5")
     ap.add_argument("--oos", action="store_true", help="гонять сетку на кварталах 2025 (OOS_CONTRACTS)")
+    # Какие стороны ставить. Правка, затрагивающая только стоп-заявки пробоя (докупка
+    # лестницы 13.09), не меняет ни одного числа фейда — перезапускать его незачем.
+    ap.add_argument("--inverts", default="0,1", help="0 = фейд, 1 = пробой; через запятую")
     args = ap.parse_args()
 
     keys = list(AXES)
@@ -127,7 +130,7 @@ def main() -> None:
 
     jobs = []
     for sym, d_from, d_to in picked:
-        for inv in (0, 1):
+        for inv in (int(x) for x in args.inverts.split(",")):
             jobs.append({
                 "campaign": f"{args.tag}-{sym.lower()}-i{inv}",
                 "scriptCode": CODE, "symbol": sym,
