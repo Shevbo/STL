@@ -65,19 +65,29 @@ def main() -> None:
     ap.add_argument("--submit", action="store_true")
     ap.add_argument("--tag", default="rch")
     ap.add_argument("--priority", type=int, default=20)
+    # Серая зона стопов (оператор 13.09.2026): у __inv и вне выборки стоп не мерили.
+    # --stops: вместо оси R — ось sl_pct {0,50,100,200} (0.5/1/2%), sl_frac выключен.
+    # --inv: те же лидеры ещё и в контр-версии <id>__inv.
+    ap.add_argument("--stops", action="store_true")
+    ap.add_argument("--inv", action="store_true")
     args = ap.parse_args()
 
     body = []
     for ld in asyncio.run(leaders()):
-        code = f"from trader.lab.strategies.library import make_on_bar; on_bar = make_on_bar('{ld['strategy']}')"
-        for q, (a, b) in QUARTERS.items():
-            sym = ld["base"] + q
-            body.append({
-                "campaign": f"{args.tag}{sym.lower()}{ld['strategy'][:12]}",
-                "scriptCode": code, "symbol": sym, "baseParams": {"symbol": sym},
-                "dateFrom": a, "dateTo": b, "engine": "remote", "priority": args.priority,
-                "paramSets": [{**ld["params"], "r_inv_every": r} for r in RS],
-            })
+        for sid in [ld["strategy"]] + ([ld["strategy"] + "__inv"] if args.inv else []):
+            code = f"from trader.lab.strategies.library import make_on_bar; on_bar = make_on_bar('{sid}')"
+            if args.stops:
+                sets = [{**ld["params"], "r_inv_every": 0, "sl_frac": 0, "sl_pct": s} for s in (0, 50, 100, 200)]
+            else:
+                sets = [{**ld["params"], "r_inv_every": r} for r in RS]
+            for q, (a, b) in QUARTERS.items():
+                sym = ld["base"] + q
+                body.append({
+                    "campaign": f"{args.tag}{sym.lower()}{sid.replace('_', '')[:14]}",
+                    "scriptCode": code, "symbol": sym, "baseParams": {"symbol": sym},
+                    "dateFrom": a, "dateTo": b, "engine": "remote", "priority": args.priority,
+                    "paramSets": sets,
+                })
     total = sum(len(j["paramSets"]) for j in body)
     print(f"заданий {len(body)} | комбо {total}")
     if not args.submit or args.dry_run:
