@@ -62,6 +62,18 @@ CONTRACTS = [
     ("SiM6", "2026-03-20", "2026-06-17"),
     ("SiU6", "2026-06-19", "2026-09-10"),
 ]
+# ВНЕ ВЫБОРКИ (--oos): четыре квартала 2025, на которых сетка не отбиралась. Гоняется
+# ВСЯ сетка, а не только прошедшие гейт векторы: вопрос не «жив ли лидер», а несёт ли
+# отбор информацию — доля переживших среди прошедших гейт обязана быть выше, чем
+# среди не прошедших (приём rf_oos_gate.py). Окна те же, что у rich_fool rf11.
+OOS_CONTRACTS = [
+    (f"{inst}{q}", a, b) for inst in ("RI", "Si") for q, a, b in (
+        ("M5", "2025-03-20", "2025-06-19"),
+        ("U5", "2025-06-20", "2025-09-18"),
+        ("Z5", "2025-09-19", "2025-12-18"),
+        ("H6", "2025-12-19", "2026-03-19"),
+    )
+]
 
 # СЕТКА ПОСЛЕ ДВУХ ПРОБ 12.09 (scripts/imf_probe.py, 4 контракта).
 #
@@ -103,11 +115,12 @@ def main() -> None:
     # посчитаны устаревшим кодом на i9 (жили только 3 оси из 8), и смешать их с
     # честными в одном имени значило бы похоронить разницу.
     ap.add_argument("--tag", default="imf5")
+    ap.add_argument("--oos", action="store_true", help="гонять сетку на кварталах 2025 (OOS_CONTRACTS)")
     args = ap.parse_args()
 
     keys = list(AXES)
     combos = [dict(zip(keys, v)) for v in itertools.product(*AXES.values())]
-    picked = [c for c in CONTRACTS
+    picked = [c for c in (OOS_CONTRACTS if args.oos else CONTRACTS)
               if not args.symbols or c[0] in args.symbols.split(",")]
 
     jobs = []

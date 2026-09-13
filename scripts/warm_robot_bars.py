@@ -57,7 +57,19 @@ async def warm_one(symbol: str, lo: date, hi: date) -> int:
     if not bars:
         return 0
     rows = [[b.time, b.open, b.high, b.low, b.close, b.volume] for b in bars]
+    rows.sort(key=lambda r: r[0])
     path = os.path.join(OUT_DIR, f"{symbol}.json")
+    # СЛИЯНИЕ, А НЕ ПЕРЕЗАПИСЬ. В этот же файл пишет scripts/rf_fetch_contracts.py —
+    # полную историю контракта для бэктестов (~200 дней). Окно прогрева всего 75 дней,
+    # и прежняя перезапись каждое утро в 05:00 срезала голову ряда: 13.09.2026 RIU6 и
+    # SiU6 потеряли 19-29.06, и проба на них разошлась с лидербордом i9 вшестеро.
+    # Старые бары ДО первого свежего сохраняются; хвост берётся из свежей выгрузки.
+    try:
+        with open(path, encoding="utf-8") as f:
+            old = json.load(f).get("rows") or []
+    except (OSError, ValueError):
+        old = []
+    rows = [r for r in old if r[0] < rows[0][0]] + rows
     tmp = f"{path}.tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump({"key": symbol, "rows": rows}, f)
