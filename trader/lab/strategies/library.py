@@ -313,6 +313,22 @@ def make_on_bar(rid: str):
             stl.set_state("s2i_charged", 0)
         if inv and want:                   # контр-стратегия: фейдим базовый сигнал
             want = -want
+        # ХАОС R (заказ оператора 13.09.2026): каждая R-я СДЕЛКА открывается против
+        # сигнала — ломает ожидания того, кто читает поток заявок робота. Сделка = новая
+        # позиция (вход из флэта или обратная нога разворота). Инверсная позиция живёт,
+        # пока держится породивший её базовый сигнал, и закрывается на его развороте.
+        # У всегда-в-рынке стратегий это НЕ хаос, а пропуск двух переворотов: при R=2
+        # чередующийся сигнал превращается в вечную позицию одной стороны.
+        r_every = int(params.get("r_inv_every", 0) or 0)
+        r_inv = 0
+        if r_every > 0:
+            _p0 = await stl.get_position(symbol)
+            if _p0.side in ("long", "short"):
+                r_inv = int(stl.get_state("r_inv", 0) or 0)
+            else:                          # флэт: решение для СЛЕДУЮЩЕГО входа
+                r_inv = int((int(stl.get_state("r_count", 0) or 0) + 1) % r_every == 0)
+            if r_inv and want:
+                want = -want
         # Гейт сторон — ПОСЛЕ инверсии: фильтруем ту сторону, в которую робот реально
         # пойдёт, а не базовый сигнал. Запрещённая сторона = ВЫХОД В ФЛЭТ (want -> 0),
         # не «сигнала нет»: иначе лонг-онли робот при развороте вниз остался бы сидеть
@@ -555,6 +571,20 @@ def make_on_bar(rid: str):
         # 1) Signal flip / flat → close the whole position. In cooldown mode this is
         #    EXIT-ONLY; otherwise it reverses straight into the new side.
         if flip_now and not flip_held:
+            # Сторона новой ноги с учётом хаоса R: want несёт инверсию ЗАКРЫВАЕМОЙ позиции,
+            # у новой сделки своё решение (счётчик +1).
+            new_side, r_n, r_new = want, 0, 0
+            if r_every > 0 and want:
+                r_n = int(stl.get_state("r_count", 0) or 0) + 1
+                r_new = int(r_n % r_every == 0)
+                new_side = -want if r_new != r_inv else want
+                if ((new_side > 0) == (cur > 0) and cooldown_min == 0
+                        and not (in_dv or no_weekend or s2i_on)):
+                    # Новая сделка в ту же сторону, что уже стоит, — держим: круг
+                    # «закрыть-открыть» это две комиссии и два спреда впустую.
+                    stl.set_state("r_count", r_n)
+                    stl.set_state("r_inv", r_new)
+                    return
             if bet_step > 0:                      # closed-trade result drives the betting system
                 bet_extra = min(bet_extra + bet_step, bet_max) if (price - avg) * cur_dir < 0 else 0
                 stl.set_state("bet_extra", bet_extra)
@@ -565,19 +595,22 @@ def make_on_bar(rid: str):
                 # про доборы внутри позиции, а не про право войти в рынок. Долина —
                 # трогает: обратная нога разворота это новый вход, в боковике его нет.
                 if in_dv:
-                    note_skip("dv", price, d=1 if want > 0 else -1)
+                    note_skip("dv", price, d=1 if new_side > 0 else -1)
                     return
                 if no_weekend:
-                    note_skip("weekend", price, d=1 if want > 0 else -1)
+                    note_skip("weekend", price, d=1 if new_side > 0 else -1)
                     return
                 # Пропуск после крупной сделки: обратная нога разворота — это НОВЫЙ
                 # вход, и она обязана считаться сигналом наравне с входом из флэта.
                 # Выход выше уже исполнен: фильтр не держит в позиции, он не пускает
                 # обратно.
-                if s2i_consume(1 if want > 0 else -1):
-                    note_skip("s2i", price, d=1 if want > 0 else -1)
+                if s2i_consume(1 if new_side > 0 else -1):
+                    note_skip("s2i", price, d=1 if new_side > 0 else -1)
                     return
-                await stl.place_order(symbol, "buy" if want > 0 else "sell", fresh_entry_size(), price)
+                await stl.place_order(symbol, "buy" if new_side > 0 else "sell", fresh_entry_size(), price)
+                if r_every > 0:
+                    stl.set_state("r_count", r_n)
+                    stl.set_state("r_inv", r_new)
                 stl.set_state("avg_add", 0)      # новая позиция -> лестница k_avg с начала
                 stl.set_state("trail_pk", None)  # и пик трейлинга с начала
                 mark_entry(price)
@@ -605,6 +638,9 @@ def make_on_bar(rid: str):
                     note_skip("s2i", price)
                 else:
                     await stl.place_order(symbol, "buy" if want > 0 else "sell", fresh_entry_size(), price)
+                    if r_every > 0:                  # want уже несёт решение хаоса R
+                        stl.set_state("r_count", int(stl.get_state("r_count", 0) or 0) + 1)
+                        stl.set_state("r_inv", r_inv)
                     stl.set_state("avg_add", 0)      # новая позиция -> лестница k_avg с начала
                     stl.set_state("trail_pk", None)  # и пик трейлинга с начала
                     mark_entry(price)
@@ -790,6 +826,8 @@ AVG_PARAMS = [
     P("reg_n", "Гейт режима: период средней в барах (0=выкл)", 0, 0, 2000),
     P("reg_band", "Гейт режима: мёртвая зона, доля цены ×10000 (20=0.20%)", 0, 0, 200),
     P("reg_mode", "Гейт режима: 1=торговать ПО тренду, 2=ПРОТИВ", 1, 1, 2),
+    # ХАОС R (13.09.2026): каждая R-я сделка против сигнала, см. make_on_bar.
+    P("r_inv_every", "Хаос: каждая R-я сделка инверсная (0=выкл)", 0, 0, 20),
 ]
 # Модернизация «Shectory1»: разножка от РЕАЛЬНОГО размаха инструмента + мартингейл
 # по объёму доборов. Все три параметра выключены по умолчанию (gap_auto=0, k_avg=1.0),
@@ -853,6 +891,8 @@ AVG_PARAMS_FORCED = [
     P("reg_n", "Гейт режима: период средней в барах (0=выкл)", 0, 0, 2000),
     P("reg_band", "Гейт режима: мёртвая зона, доля цены ×10000 (20=0.20%)", 0, 0, 200),
     P("reg_mode", "Гейт режима: 1=торговать ПО тренду, 2=ПРОТИВ", 1, 1, 2),
+    # ХАОС R (13.09.2026): каждая R-я сделка против сигнала, см. make_on_bar.
+    P("r_inv_every", "Хаос: каждая R-я сделка инверсная (0=выкл)", 0, 0, 20),
 ]
 
 # ════════════════════════════════════════════════════════════════════════════
