@@ -28,6 +28,8 @@ Impulse Fade — заявки СТОЯТ далеко от цены и ждут 
   ВХОД      прокол уровня = исполнение заявки ПРОТИВ хода (вверх → шорт, вниз →
             лонг). invert=1 зеркалит и торгует ПО проколу — гейт «механизм, а не
             сторона». Один бар может прошить несколько ступеней — исполняются ВСЕ.
+            Фейд налит лимитником по уровню; пробой — по открытию СЛЕДУЮЩЕГО бара:
+            стоп-заявок у живого раннера нет (подробно в _enter).
   СКОРОСТЬ  imp_frac: до уровня цена обязана дойти БЫСТРО — за последние imp_bars
             баров пройти не меньше imp_frac% дистанции якорь→уровень. Шпиль это
             проходит, доползание — нет. 0 = выключено.
@@ -168,7 +170,7 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
         if gap or hit_sl:
             # Стоп-лосс — тоже СТОП-заявка: гэп сквозь неё исполняется по открытию,
             # обычное срабатывание — по уровню плюс проскальзывание.
-            px = _fill(sl_px, cur, worse=dirn < 0, stop=True, slip=slip_atr * atr0)
+            px = _stop_fill(sl_px, cur, worse=dirn < 0, slip=slip_atr * atr0)
             await stl.place_order_at(symbol, side, abs(cur_qty), px, cur.time)
             _flat(stl, cooldown)
             return
@@ -198,15 +200,7 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
             touched = cur.high >= lv if spike > 0 else cur.low <= lv
             if not touched:
                 break
-            # Докупка по проколу (invert=1) — такая же СТОП-заявка, как первый вход:
-            # в гэпе за ступень она наливается по открытию, а не по уровню. До 13.09
-            # здесь стоял сырой уровень, и лестница из трёх ступеней покупала дешевле
-            # рынка: у лидеров imf5 на неё приходилось ~60% итога. У фейда докупка —
-            # лимитник, _fill вернёт тот же уровень.
-            px = _fill(lv, cur, worse=spike > 0, stop=(dirn > 0) == (spike > 0),
-                       slip=slip_atr * atr)
-            await stl.place_order_at(symbol, "buy" if dirn > 0 else "sell",
-                                     qty, px, cur.time)
+            await _enter(stl, symbol, dirn, spike, qty, lv, cur)
             hit += 1
         stl.set_state("hit", hit)
         return
@@ -254,38 +248,36 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
     if not fire:
         return
 
-    # СКОРОСТЬ: до уровня надо дойти рывком, а не доползти. Меряем ход от закрытия
-    # imp_bars баров назад до экстремума текущего бара против дистанции якорь→уровень.
+    trade_dir = -fire if invert == 0 else fire      # фейд: вверх → шорт
+    if (trade_dir > 0 and not allow_long) or (trade_dir < 0 and not allow_short):
+        return
+    levels = up if fire > 0 else dn
+    breakout = (trade_dir > 0) == (fire > 0)
+
+    # СКОРОСТЬ: до уровня надо дойти рывком, а не доползти. Ход меряется от закрытия
+    # imp_bars баров назад против дистанции якорь→уровень — но до РАЗНОЙ точки у
+    # сторон, потому что решение принимается в разный момент:
+    #   фейд — лимитник, стоящий ДО бара: снять его по тому, как далеко бар потом
+    #   прошил уровень, нельзя, поэтому ход меряется до УРОВНЯ, известного заранее;
+    #   пробой входит по ЗАКРЫТОМУ бару (_enter), экстремум бара ему уже известен.
+    # До 13.09 обе стороны мерили до экстремума, и гейт пропускал только бары, далеко
+    # перехлестнувшие уровень, — заглядывал в будущее при филле внутри того же бара.
     if imp_frac > 0:
         if len(bars) < imp_bars + 1:
             return
         was = bars[-1 - imp_bars].close
-        travelled = (cur.high - was) if fire > 0 else (was - cur.low)
+        reach = (cur.high if fire > 0 else cur.low) if breakout else levels[0]
+        travelled = (reach - was) if fire > 0 else (was - reach)
         if travelled < imp_frac * offs[0]:
             return
 
-    trade_dir = -fire if invert == 0 else fire      # фейд: вверх → шорт
-    if (trade_dir > 0 and not allow_long) or (trade_dir < 0 and not allow_short):
-        return
-
-    levels = up if fire > 0 else dn
-    # ЧЕМ ФЕЙД И ПРОБОЙ ОТЛИЧАЮТСЯ ПО ИСПОЛНЕНИЮ, и почему это не мелочь.
-    # Фейд (invert=0) стоит ПРОТИВ прокола: заявка на продажу ВЫШЕ рынка — обычный
-    # лимитник, он исполняется по своей цене или лучше, проскальзывания у него нет.
-    # Пробой (invert=1) стоит ПО проколу: заявка на покупку ВЫШЕ рынка — это СТОП,
-    # он срабатывает по уровню и наливается по рынку, то есть ХУЖЕ уровня, и тем
-    # хуже, чем резче шпиль. Ровный филл по уровню для обеих сторон делал бы
-    # зеркальный гейт нечестным: пробой получал бы цену, которой на шпиле не бывает.
-    stop_side = (trade_dir > 0) == (fire > 0)
     hit = 0
     while hit < step_count:
         lv = levels[hit]
         touched = cur.high >= lv if fire > 0 else cur.low <= lv
         if not touched:
             break
-        px = _fill(lv, cur, worse=fire > 0, stop=stop_side, slip=slip_atr * atr)
-        await stl.place_order_at(symbol, "buy" if trade_dir > 0 else "sell",
-                                 qty, px, cur.time)
+        await _enter(stl, symbol, trade_dir, fire, qty, lv, cur)
         hit += 1
     stl.set_state("dir", trade_dir)
     stl.set_state("spike", fire)
@@ -297,19 +289,32 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
     stl.set_state("held", 0)
 
 
-def _fill(level: float, bar, worse: bool, stop: bool, slip: float) -> float:
-    """Цена исполнения заявки, стоящей на `level`.
+async def _enter(stl: STLRuntime, symbol: str, trade_dir: int, spike: int, qty: int,
+                 level: float, bar) -> None:
+    """Вход или докупка одной ступени — по-разному у сторон, и это не мелочь.
 
-    `worse` — в какую сторону от уровня цена для НАС хуже (True = вверх). Лимитник
-    (stop=False) в гэпе исполнился бы ЛУЧШЕ уровня, но мы считаем ровно по уровню:
-    в свою пользу бэктест не округляет. Стоп-заявка (stop=True) в гэпе исполняется
-    по ОТКРЫТИЮ бара, а в обычном срабатывании — по уровню плюс проскальзывание.
+    Фейд стоит ПРОТИВ прокола: продажа выше рынка — лимитник, он висит заранее и
+    исполняется по своему уровню внутри бара.
+
+    Пробой стоит ПО проколу: покупка выше рынка — стоп-заявка, а у живого раннера
+    стоп-заявок нет (robot_runner/runtime.py: place_order_at = обычная заявка по
+    цене). Реализуемо одно: заметить прокол по ЗАКРЫТОМУ бару и войти по открытию
+    следующего — это place_order. До 13.09 пробой наливался внутри бара по уровню
+    плюс 0.25 ATR (1-2 тика RI), а фитиль за этой ценой в медиане 110-160 пунктов:
+    модель покупала начало прокола, которого робот не получит никогда.
     """
-    if not stop:
-        return level
+    side = "buy" if trade_dir > 0 else "sell"
+    if (trade_dir > 0) == (spike > 0):
+        await stl.place_order(symbol, side, qty, bar.close)
+    else:
+        await stl.place_order_at(symbol, side, qty, level, bar.time)
+
+
+def _stop_fill(level: float, bar, worse: bool, slip: float) -> float:
+    """Цена стоп-лосса: уровень плюс проскальзывание в худшую сторону (`worse` —
+    True, если хуже вверх). Гэп учитывается сам собой: бар, открывшийся за уровнем,
+    даёт открытие, и оно худшая из двух цен."""
     px = level + slip if worse else level - slip
-    # Гэп учитывается сам собой: если бар открылся за уровнем, открытие и есть
-    # худшая из двух цен, отдельной ветки для него не нужно.
     return max(px, bar.open) if worse else min(px, bar.open)
 
 
@@ -361,8 +366,8 @@ STRATEGY_META = {
          "hint": "Отсчитывается от ПОСЛЕДНЕЙ ступени, не от средней"},
         {"key": "max_hold", "label": "Держать не дольше (баров)", "type": "number", "default": 60, "min": 3, "max": 240,
          "hint": "Возврат случается за 1-240 минут"},
-        {"key": "slip_atr", "label": "Проскальзывание стоп-заявки ×100 ATR (25=0.25)", "type": "number", "default": 0, "min": 0, "max": 200,
-         "hint": "Только для входа ПО проколу (invert=1) и для стоп-лосса: лимитник против прокола не проскальзывает"},
+        {"key": "slip_atr", "label": "Проскальзывание стоп-лосса ×100 ATR (25=0.25)", "type": "number", "default": 0, "min": 0, "max": 200,
+         "hint": "Только стоп-лосс: пробой входит по открытию следующего бара, лимитник фейда не проскальзывает"},
         {"key": "cooldown", "label": "Пауза после сделки (баров)", "type": "number", "default": 5, "min": 0, "max": 240},
         {"key": "flat_only", "label": "Только в боковике (0/1)", "type": "number", "default": 1, "min": 0, "max": 1,
          "hint": "Прокол в тренде — продолжение хода, а не прокол"},

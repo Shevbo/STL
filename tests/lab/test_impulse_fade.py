@@ -155,15 +155,25 @@ def test_first_day_has_no_daily_range_yet():
     assert _run(bars, lvl_amp=50) == []
 
 
-def test_breakout_entry_slips_but_fade_entry_does_not():
-    # Один и тот же прокол. Фейд стоит ПРОТИВ него обычным лимитником — цена филла
-    # от slip_atr не зависит. Пробой стоит ПО проколу, это СТОП-заявка: филл обязан
-    # уехать в худшую сторону, иначе зеркальный гейт сравнивает несравнимое.
+def test_breakout_enters_at_next_bar_open_fade_rests_at_level():
+    # Прокол на баре 62 (high 107, close 100), бар 63 открылся на 100. Фейд —
+    # лимитник, налит внутри бара 62 по уровню. Пробой — стоп-заявок у раннера нет:
+    # вход по открытию бара 63, а не по уровню внутри прокола.
     bars = _bars(QUIET + [100.0] * 5, spikes={62: 107.0})
-    fade0, fade1 = _run(bars)[0], _run(bars, slip_atr=50)[0]
-    assert fade0 == fade1, (fade0, fade1)
-    brk0, brk1 = _run(bars, invert=1)[0], _run(bars, invert=1, slip_atr=50)[0]
-    assert brk1[2] > brk0[2], (brk0, brk1)          # покупка дороже уровня
+    fade, brk = _run(bars)[0], _run(bars, invert=1)[0]
+    assert fade[0] == "sell" and 105.0 < fade[2] < 107.0, fade
+    assert brk[0] == "buy" and brk[2] == 100.0, brk
+
+
+def test_fade_speed_gate_measures_to_the_level_not_the_bar_extreme():
+    # Предыдущий бар уже на 103, прокол до 110. От 103 до уровня (~108.3) — 5.3, это
+    # меньше 85% дистанции (~6.2): стоящую заранее заявку фейда гейт снимает. Экстремум
+    # бара (7 от 103) порог проходит, но фейд знать его не может. Пробой входит по
+    # закрытому бару — экстремум ему известен законно.
+    bars = _bars(QUIET + [103.0, 103.0, 103.0, 103.0], spikes={61: 110.0})
+    extra = dict(imp_bars=1, imp_frac=85)
+    assert _run(bars, invert=0, **extra) == []
+    assert _run(bars, invert=1, **extra), "пробой по закрытому бару гейт проходит"
 
 
 def test_stop_order_gapping_through_fills_at_open():
@@ -175,8 +185,8 @@ def test_stop_order_gapping_through_fills_at_open():
 
 
 def test_ladder_add_on_gapping_through_fills_at_open_for_breakout_only():
-    # Вход на первой ступени, следующий бар ОТКРЫЛСЯ за второй и третьей. Докупка
-    # пробоя — стоп-заявка: обе ступени по открытию 112. Докупка фейда — лимитник:
+    # Вход на первой ступени, следующий бар ОТКРЫЛСЯ за второй и третьей. Пробой
+    # входит и докупает по открытию следующего бара (112), фейд докупает лимитником
     # по своим уровням, ниже открытия. Тейк заглушён, иначе он закроет раньше.
     bars = _bars(QUIET + [100.0, 100.0, 100.0, 112.0, 112.0], spikes={62: 107.0})
     extra = dict(step_count=3, ret_pct=500, stop_atr=100)
