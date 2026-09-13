@@ -211,6 +211,17 @@ def test_time_exit_closes_position_minutes_after_last_fill():
     assert ex and ex[0][2] == o[0][3] + 60, f"выход не через 60 минут после налива: {o}"
 
 
+def test_gap_skip_steps_skips_day_when_open_is_beyond_step_k():
+    """Первый бар дня открылся на 112.6 — за второй ступенью шорта (112.5). С k=2
+    лестница в этот день не ставится; без фильтра те же бары дают сделки."""
+    d = _day(2)
+    tail = [_bar(d, WD_OPEN, 112.6, 113.0, 112.4, 112.8)]
+    tail += [_bar(d, WD_OPEN + m, 112.8, 112.9, 112.7, 112.8) for m in range(1, 20)]
+    assert _run(tail, **WIDE), "без фильтра гэп должен наливать ступени"
+    assert _run(tail, **WIDE, gap_skip_steps=2) == [], "фильтр гэпа не сработал"
+    assert _run(tail, **WIDE, gap_skip_steps=3), "за 3-й ступенью открытия не было — день нужен"
+
+
 def test_time_exit_anchor_counts_from_first_fill_not_last():
     """Первая ступень в 1-ю минуту, вторая на 40-й. От последнего налива выход был бы
     на 100-й минуте, от первого (anchor=1) — на 60-й."""

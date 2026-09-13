@@ -239,6 +239,7 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
     exit_lead = max(0, int(params.get("exit_lead_min", 120)))
     time_exit = max(0, int(params.get("time_exit_min", 0)))   # выход через X мин после налива, 0=выкл
     te_first = int(params.get("time_exit_anchor", 0)) == 1    # 1: отсчёт от ПЕРВОГО налива
+    gap_k = max(0, int(params.get("gap_skip_steps", 0)))      # открытие за k-й ступенью = день пропущен
     invert = int(params.get("invert", 0))
     allow_long = int(params.get("allow_long", 1))
     allow_short = int(params.get("allow_short", 1))
@@ -402,6 +403,16 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
                 f"{int(stl.get_state('close_hm')) % 60:02d}): вчера={prev_close:.0f} "
                 f"amp={amp:.0f} D={D:.0f} шорт-лестница от {prev_close + offs[0]:.0f}, "
                 f"лонг-лестница от {prev_close - offs[0]:.0f}")
+        # ФИЛЬТР ГЭПА: открытие уже за k-й ступенью — это не импульс, а продолжение
+        # движения. Хит-парад 6 кварталов RI (13.09): дни, где первые 2 минуты
+        # наливали 6+ контрактов, в сумме −92 928 пт при 20 днях из 243. Решение
+        # принимается ДО первой сделки, по цене открытия.
+        if gap_k and gap_k <= step_count and (cur.open >= prev_close + offs[gap_k - 1]
+                                              or cur.open <= prev_close - offs[gap_k - 1]):
+            stl.set_state("armed", 0)
+            stl.set_state("day_done", 1)
+            stl.log(f"гэп: открытие {cur.open:.0f} за {gap_k}-й ступенью — день пропущен")
+            return
 
     # ── 3. Исполнение ступеней ────────────────────────────────────────────────
     # Окно живёт hold_min минут после открытия. НО если лестница уже что-то
