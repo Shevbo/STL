@@ -57,9 +57,14 @@ def main() -> None:
     ap.add_argument("--submit", action="store_true")
     ap.add_argument("--tag", default="e2a")
     ap.add_argument("--priority", type=int, default=20)
+    # Сетка из командной строки: e2b дотягивает край Si (10, 2100) — ema1 ниже, ema2 выше.
+    ap.add_argument("--ema1", default=",".join(map(str, EMA1)))
+    ap.add_argument("--ema2", default=",".join(map(str, EMA2)))
     args = ap.parse_args()
 
-    combos = [{"ema1": f, "ema2": s} for f, s in itertools.product(EMA1, EMA2) if f < s]
+    e1 = [int(x) for x in args.ema1.split(",")]
+    e2 = [int(x) for x in args.ema2.split(",")]
+    combos = [{"ema1": f, "ema2": s} for f, s in itertools.product(e1, e2) if f < s]
     jobs = [{
         "campaign": f"{args.tag}-{sym.lower()}",
         "scriptCode": CODE, "symbol": sym,
