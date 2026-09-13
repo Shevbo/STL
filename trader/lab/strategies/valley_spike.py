@@ -30,8 +30,10 @@ Valley Spike — дальняя лестница от долины смерти 
   СТОП      stop_amp% дневной свечи за ПОСЛЕДНЕЙ ступенью; гэп — по открытию, иначе
             по уровню плюс slip_amp%.
   ВРЕМЯ     max_hold баров с первого налива.
-  ЖИЗНЬ     одна долина — одна лестница: кончилась без налива — заявки сняты; после
-            выхода из позиции до конца той же долины новая не ставится.
+  ЖИЗНЬ     одна долина — одна лестница. Долина кончилась без налива — лестница живёт
+            ещё ttl_bars баров (выброс редко делается одним баром), потом снимается;
+            новая долина снимает старую сразу. После выхода из позиции до конца той
+            же долины новая лестница не ставится.
 
 ЖИВАЯ ТОРГОВЛЯ. Бэктест считает, что лестница СТОИТ в стакане. Живой раннер сейчас
 отправляет заявку ступени только после касания на закрытом баре, и лимитник после
@@ -50,7 +52,8 @@ async def on_start(stl: STLRuntime, params: dict) -> None:
         f"steps={params.get('step_count', 3)} D={params.get('d_coef', 50)}% "
         f"vol×{float(params.get('vol_mult', 10)) / 10:.1f} mirror={params.get('mirror', 0)} "
         f"ret={params.get('ret_pct', 50)}% stop={params.get('stop_amp', 25)}% "
-        f"hold={params.get('max_hold', 240)} symbol={params.get('symbol')}"
+        f"hold={params.get('max_hold', 240)} ttl={params.get('ttl_bars', 0)} "
+        f"symbol={params.get('symbol')}"
     )
 
 
@@ -92,11 +95,24 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
     if not in_valley:
         if stl.get_state("valley_on"):
             stl.set_state("valley_on", 0)
-            _disarm(stl)                       # долина кончилась без налива
+            # Долина кончилась без налива. Снимать лестницу СРАЗУ нельзя: выброс на
+            # полдневной свечи почти никогда не делается одним баром, а первый же его
+            # бар выводит закрытия из коридора. Проба 13.09: снятие на этом баре —
+            # 0 наливов из 78 вооружённых долин RIU6; лестница ttl_bars живёт дальше.
+            stl.set_state("ttl_left", max(0, int(params.get("ttl_bars", 0))))
+        ttl_left = int(stl.get_state("ttl_left", 0) or 0)
+        if ttl_left > 0:
+            stl.set_state("ttl_left", ttl_left - 1)
+        elif stl.get_state("ladders"):
+            _disarm(stl)
         return
     if stl.get_state("valley_on"):
         return                                 # эта долина уже обработана
     stl.set_state("valley_on", 1)
+    # Новая долина — новый режим: лестница прошлой, доживавшая ttl_bars, снимается,
+    # даже если новая не вооружится (иначе старый уровень простоял бы всю долину).
+    _disarm(stl)
+    stl.set_state("ttl_left", 0)
 
     hist = await stl.get_bars(symbol, tf=1, n=slow_n + dv_bars)
     if len(hist) < slow_n + dv_bars:
@@ -263,6 +279,8 @@ STRATEGY_META = {
         {"key": "ret_pct", "label": "Тейк: % пути к середине долины", "type": "number", "default": 50, "min": 10, "max": 100},
         {"key": "stop_amp", "label": "Стоп за последней ступенью, % свечи", "type": "number", "default": 25, "min": 5, "max": 200},
         {"key": "slip_amp", "label": "Проскальзывание стопа, % свечи", "type": "number", "default": 3, "min": 0, "max": 50},
+        {"key": "ttl_bars", "label": "Лестница живёт после долины (баров)", "type": "number", "default": 0, "min": 0, "max": 1440,
+         "hint": "0 = снять на первом баре вне коридора. Выброс на полсвечи одним баром почти не делается"},
         {"key": "max_hold", "label": "Держать не дольше (баров)", "type": "number", "default": 240, "min": 10, "max": 1440},
         {"key": "allow_long", "label": "Лонги (0/1)", "type": "number", "default": 1, "min": 0, "max": 1},
         {"key": "allow_short", "label": "Шорты (0/1)", "type": "number", "default": 1, "min": 0, "max": 1},
