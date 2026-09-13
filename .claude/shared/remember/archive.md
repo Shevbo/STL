@@ -1,5 +1,8 @@
 # Archive
 
+## Week of 2026-09-08
+Tested quik_age files; deployed shectory-trader push+restart (remote HTTP verify).
+
 ## Week of 2026-09-02
 Root causes identified in commission tracking (2x overstated: 9.9 vs 5.8 /lot); account ВМ excludes manual orders; daypnl.go/_test.go written; commission.py & companion.html fixes pending (add manual block); email pending.
 
