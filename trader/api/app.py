@@ -34,6 +34,30 @@ from trader.util import account_margin, i9_hb_view
 log = structlog.get_logger()
 
 
+def _point_value_of(spec: dict | None, symbol: str) -> tuple[float, float | None]:
+    """Цена пункта для прогона: (для движка, для записи в лидерборд).
+
+    Движку нужно число всегда — без него он не посчитает сделку. Но 1.0 бывает
+    и ПРАВДОЙ (у Si пункт стоит ровно рубль), и ЗАГЛУШКОЙ: у истёкших контрактов
+    (RIZ5, RIH6, SiM5…) ISS шаг цены уже не отдаёт ни в описании, ни в истории,
+    записи в instrument_meta нет, и прогон молча шёл в ПУНКТАХ. 13.09.2026 так
+    лидерборд смешал рубли RIU6 с пунктами RIZ5 той же сетки — на RI это 1.4-1.7
+    раза, а колонка point_value была пустой у всех строк, и разницу не было видно.
+    Поэтому движку отдаём 1.0 как раньше, а в запись — None: «неизвестно» нельзя
+    хранить числом, которое совпадает с настоящим значением другого инструмента.
+    Склейка («RI» без месяца) тоже получает None: у неё нет одной цены пункта.
+    """
+    pv = (spec or {}).get("point_value")
+    try:
+        pv = float(pv) if pv is not None else None
+    except (TypeError, ValueError):
+        pv = None
+    if pv and pv > 0:
+        return pv, pv
+    log.warning("backtest.point_value_unknown", symbol=symbol)
+    return 1.0, None
+
+
 def _auth(request: Request) -> str:
     """Shorthand for the per-endpoint auth plumbing (returns the caller's email).
 
@@ -662,7 +686,7 @@ async def _run_backtest_task(run_id: str, body: dict, pool, app_state) -> None:
         try:
             from trader.lab.market_store import refresh_instrument_spec
             spec = await refresh_instrument_spec(pool, symbol)
-            point_value = (spec or {}).get("point_value") or 1.0
+            point_value, _ = _point_value_of(spec, symbol)
             # ГО СЧЁТА, а не биржевое: брокер берёт кратно, и на биржевом значении
             # доходность прогона завышена ровно во столько же раз (trader/util).
             initial_margin = account_margin(getattr(app_state, "settings", None),
@@ -950,11 +974,12 @@ async def _run_remote_job_on_vds(row, app_state) -> None:
                 return
 
             point_value = 1.0
+            point_value_rec = None
             initial_margin = 0.0
             try:
                 from trader.lab.market_store import refresh_instrument_spec
                 spec = await refresh_instrument_spec(pool, symbol)
-                point_value = (spec or {}).get("point_value") or 1.0
+                point_value, point_value_rec = _point_value_of(spec, symbol)
                 initial_margin = account_margin(getattr(app_state, "settings", None),
                                                 (spec or {}).get("initial_margin"))
             except Exception:
@@ -982,7 +1007,7 @@ async def _run_remote_job_on_vds(row, app_state) -> None:
                         entry["result"].get("ann_return_go"), entry["result"].get("ann_return_full"),
                         entry["result"].get("max_mae"), entry["result"].get("recovery_factor_mtm_oos"),
                         entry["result"].get("windows_profitable"), entry["result"].get("windows_total"),
-                        entry["result"].get("degrade"),
+                        entry["result"].get("degrade"), point_value_rec,
                     )
                     for entry in graded if entry.get("ok")
                 ]
@@ -995,9 +1020,9 @@ async def _run_remote_job_on_vds(row, app_state) -> None:
                                       max_drawdown, win_rate, total_trades, score, candidate,
                                       net_profit, recovery_factor, ann_return_go, ann_return_full,
                                       max_mae, recovery_factor_mtm_oos, windows_profitable,
-                                      windows_total, degrade)
+                                      windows_total, degrade, point_value)
                                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
-                                           $16,$17,$18,$19,$20)""",
+                                           $16,$17,$18,$19,$20,$21)""",
                                 lb_rows,
                             )
                     except Exception as exc:
@@ -3685,8 +3710,9 @@ def create_app() -> FastAPI:
         initial_margin = 0.0
         try:
             from trader.lab.market_store import refresh_instrument_spec
-            spec = await refresh_instrument_spec(pool, row["symbol"] or base_params.get("symbol", ""))
-            point_value = (spec or {}).get("point_value") or 1.0
+            sym_ = row["symbol"] or base_params.get("symbol", "")
+            spec = await refresh_instrument_spec(pool, sym_)
+            point_value, _ = _point_value_of(spec, sym_)
             # ГО СЧЁТА, а не биржевое: брокер берёт кратно, и на биржевом значении
             # доходность прогона завышена ровно во столько же раз (trader/util).
             initial_margin = account_margin(request.app.state.settings,
@@ -4184,6 +4210,17 @@ def create_app() -> FastAPI:
                 return None if (_math.isnan(f) or _math.isinf(f) or abs(f) > 1e12) else v
             except (TypeError, ValueError):
                 return None
+        # Цена пункта для записи: из instrument_meta, которую выдача задания только
+        # что обновила с ISS. Сеть здесь не нужна, а истёкший контракт и склейка
+        # честно получают NULL (см. _point_value_of).
+        point_value_rec = None
+        if is_campaign and meta and meta["symbol"]:
+            try:
+                from trader.lab.market_store import get_instrument_meta
+                _, point_value_rec = _point_value_of(
+                    await get_instrument_meta(pool, meta["symbol"]), meta["symbol"])
+            except Exception:  # noqa: BLE001 — нет кэша: строка без цены пункта, не без строки
+                point_value_rec = None
         lb_rows = [
             (
                 campaign, strat_id, meta["symbol"], e["params"],
@@ -4196,6 +4233,7 @@ def create_app() -> FastAPI:
                 _fint(e, "windows_profitable"), _fint(e, "windows_total"), _fnum(e, "degrade"),
                 meta["date_from"].date() if meta and meta["date_from"] else None,
                 meta["date_to"].date() if meta and meta["date_to"] else None,
+                point_value_rec,
             )
             for e in ok
         ] if is_campaign else []
@@ -4219,9 +4257,9 @@ def create_app() -> FastAPI:
                                   max_drawdown, win_rate, total_trades, score, candidate,
                                   net_profit, recovery_factor, ann_return_go, ann_return_full,
                                   max_mae, recovery_factor_mtm_oos, windows_profitable,
-                                  windows_total, degrade, date_from, date_to)
+                                  windows_total, degrade, date_from, date_to, point_value)
                                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
-                                       $16,$17,$18,$19,$20,$21,$22)""",
+                                       $16,$17,$18,$19,$20,$21,$22,$23)""",
                             lb_rows,
                         )
                     except Exception as exc:
