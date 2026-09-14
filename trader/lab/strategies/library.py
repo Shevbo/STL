@@ -677,7 +677,11 @@ def make_on_bar(rid: str):
         # Стопов два и они независимы: доля тейка (sl_frac, в ×ATR) и процент от цены
         # входа (sl_pct). Включены оба — срабатывает БЛИЖНИЙ: это стоп-лосс, его смысл
         # в потолке убытка, а дальний из двух такого потолка не даёт.
-        stop_dist = stop_ref * sl_pct / 100.0 if sl_pct > 0 else 0.0
+        # Стоп по сторонам (TSLab/DeskBot 14.09.2026: первое число «Трейла» — фиксированный
+        # стоп от входа, лонг 1.1% / шорт 2.1%). Задан для стороны — перекрывает общий sl_pct.
+        _sl_side = float(params.get("sl_pct_l" if cur_dir > 0 else "sl_pct_s", 0) or 0) / 100.0
+        _sl_eff = _sl_side if _sl_side > 0 else sl_pct
+        stop_dist = stop_ref * _sl_eff / 100.0 if _sl_eff > 0 else 0.0
         if sl > 0 and atrv > 0:
             stop_dist = min(stop_dist, sl * atrv) if stop_dist > 0 else sl * atrv
         if stop_dist > 0 and ((cur_dir > 0 and price <= stop_ref - stop_dist)
