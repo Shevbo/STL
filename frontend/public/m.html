@@ -202,7 +202,7 @@
   .ord-g:hover { border-left-color: var(--ink); }
   .ord-g .ord-chev { color: var(--faint); font-size: 9px; }
   .ord-g .ord-n { color: var(--ink); font-weight: 600; }
-  .ord-box { max-height: 150px; overflow-y: auto; scroll-behavior: auto; position: relative; top: 0; left: 0; }
+  .ord-box { max-height: 150px; overflow-y: auto; }
   .ord-box::-webkit-scrollbar { width: 5px; }
   .ord-box::-webkit-scrollbar-thumb { background: var(--rule); border-radius: 3px; }
   .ord-box::-webkit-scrollbar-track { background: transparent; }
@@ -1115,11 +1115,19 @@ function paintPairing(msg) {
 // Маршрут в хэше: экран переживает перерисовку каждые 5 секунд и уезжает в
 // историю телефона, поэтому системное «назад» работает само.
 function paint(d) {
+  // ПРОКРУТКА ЗАЯВОК ПЕРЕЖИВАЕТ ПЕРЕРИСОВКУ. Каждый экран ниже переписывает #app
+  // целиком раз в 5 с, коробка заявок создаётся заново, и на телефоне список
+  // прыгал в начало, пока его листали. Место одно на все экраны — здесь, где
+  // перерисовка и происходит (так же, как в companion.html).
+  const was = document.querySelector('#app .ord-box');
+  const ordTop = was ? was.scrollTop : 0;
   const h = (location.hash || '#/').slice(1);
   if (h.startsWith('/robot/')) paintRobot(d, decodeURIComponent(h.slice(7)));
   else if (h === '/orders') paintOrders(d);
   else if (h === '/watch') paintWatch(d);
   else paintPanel(d);
+  const box = document.querySelector('#app .ord-box');
+  if (box && ordTop) box.scrollTop = ordTop;
 }
 
 // Клики делегированы на документ: #app перерисовывается целиком каждый тик.
@@ -1193,22 +1201,5 @@ else {
     .catch(() => paintPairing(''));
 }
 </script>
-// Блокировка авто-сброса скролла в inert-блоках (WebView2 сбрасывает scrollTop)
-const fixInertScroll = () => {
-  const boxes = document.querySelectorAll('.ord-box');
-  let rafId: number | null = null;
-  for (const box of Array.from(boxes)) {
-    if (!box.scrollTop && !box.scrollLeft) continue;
-    const saveTop = box.scrollTop, saveLeft = box.scrollLeft;
-    box.style.position = 'sticky';
-    box.style.top = '0';
-    box.style.left = '0';
-  }
-};
-// Запускаем фикс каждые 500мс, чтобы не дать WebView2 вернуть скролл в начало
-let tick: number | null = null;
-tick = window.setInterval(fixInertScroll, 500) as unknown as number;
-window.addEventListener('resize', () => { if (tick !== null) clearInterval(tick); tick = setInterval(fixInertScroll, 500); });
-
 </body>
 </html>
