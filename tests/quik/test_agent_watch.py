@@ -65,6 +65,37 @@ async def test_watch_complains_loudly_when_not_wired(caplog):
                for r in caplog.records) or True   # структурный лог, проверка не падает
 
 
+async def test_watch_reads_the_real_store_without_failing(caplog, monkeypatch):
+    """14.09: сторож с 20.08 звал store.agent_status() — один словарь вместо списка,
+    и падал каждую минуту ('str'.get). Проверяем на НАСТОЯЩЕМ хранилище: агент молчит
+    при открытом рынке — тревога уходит."""
+    import asyncio
+
+    from trader.quik import agent_watch
+    from trader.quik.store import QuikAgentStore
+
+    store = QuikAgentStore()
+    store.ensure_agent("9618").last_seen_ms = 1
+    sent = []
+
+    class Alerts:
+        async def forward(self, alert, agent):
+            sent.append(alert["code"])
+
+    class State:
+        quik_store = store
+        quik_alerts = Alerts()
+        market_session = {"open": True}
+
+    failed = []
+    monkeypatch.setattr(agent_watch.log, "warning", lambda *a, **k: failed.append(k))
+    task = asyncio.create_task(agent_watch.watch(State()))
+    await asyncio.sleep(0.05)
+    task.cancel()
+    assert not failed
+    assert sent == [agent_watch.CODE_DOWN]
+
+
 def test_state_without_forwarder_is_detectable():
     """Инвариант проводки: watch() читает форвардер из state по имени quik_alerts."""
     import inspect

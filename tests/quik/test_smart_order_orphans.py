@@ -7,7 +7,12 @@ QUIK снимает неисполненные заявки на границе 
 
 from __future__ import annotations
 
-from trader.api.quik_smart_orders import _ORPHAN_GRACE_MS, _mark_orphans
+from trader.api.quik_smart_orders import (
+    _ORPHAN_GRACE_MS,
+    _mark_orphans,
+    _revive_false_orphans,
+    _track_fills,
+)
 from trader.quik.smart_orders import SmartOrder, SmartOrderBook
 
 NOW = 1_700_000_000_000
@@ -43,12 +48,46 @@ def test_child_filled_stays_fired():
 
 
 def test_child_cancelled_unfilled_becomes_orphan():
-    so = _fired()
+    so = _fired(fired_ms=NOW - _ORPHAN_GRACE_MS - 1)
     book = _book(so)
     ost = FakeOrderStore([{"client_id": "so:a1", "state": "cancelled", "filled": 0}])
     assert _mark_orphans(book, ost, "A1", NOW) is True
     assert so.status == "orphaned"
     assert "не исполнилась" in so.note
+
+
+def test_fresh_reject_waits_for_the_grace():
+    """14.09: агент пометил rejected заявку, на которую QUIK молчал 20 с, а через
+    3.5 минуты пришло исполнение 10 RIU6. Без отсрочки книга звала перевзвести."""
+    so = _fired(fired_ms=NOW - 21_000)
+    book = _book(so)
+    ost = FakeOrderStore([{"client_id": "so:a1", "state": "rejected", "filled": 0}])
+    assert _mark_orphans(book, ost, "A1", NOW) is False
+    assert so.status == "fired"
+
+
+def test_found_trade_revives_a_false_orphan():
+    import trader.quik.smart_orders as so_mod
+    so = _fired(fired_ms=so_mod.now_ms() - 200_000)   # _track_fills смотрит на живые часы
+    so.status, so.note, so.qty = "orphaned", "дочерняя заявка rejected и не исполнилась", 10
+    book = _book(so)
+    ost = FakeOrderStore([{"client_id": "so:a1", "state": "rejected", "order_id": "777"}])
+
+    class Store:
+        def agent_status(self, agent_id=None):
+            return {"quik": {"trades": [{"order_num": "777", "qty": 10, "price": 87_620}]}}
+
+    assert _track_fills(book, ost, Store(), "A1") is True
+    assert (so.fired_price, so.fired_qty) == (87_620, 10)
+    assert _revive_false_orphans(book) is True
+    assert so.status == "fired" and so.note == ""
+
+
+def test_orphan_without_fill_stays_orphan():
+    so = _fired()
+    so.status = "orphaned"
+    assert _revive_false_orphans(_book(so)) is False
+    assert so.status == "orphaned"
 
 
 def test_child_partially_filled_is_not_an_orphan():

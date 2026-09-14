@@ -66,7 +66,9 @@ async def watch(state) -> None:
                               store=store is not None, alerts=alerts is not None)
             else:
                 ms = getattr(state, "market_session", None) or {}
-                bad, age = silence_verdict(store.agent_status(), ms.get("open"))
+                # status() — список агентов; agent_status() отдаёт ОДИН словарь, и
+                # сторож с 20.08 падал на каждом проходе ('str'.get), не тревожа никого.
+                bad, age = silence_verdict(store.status(), ms.get("open"))
                 if bad and not raised:
                     raised = True
                     await alerts.forward({

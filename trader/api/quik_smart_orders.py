@@ -227,7 +227,10 @@ def _mark_orphans(book: SmartOrderBook, ost: Any, agent: str, now: int) -> bool:
         rec = by_cid.get(so.fired_client_id)
         aged = now - so.fired_ms > _ORPHAN_GRACE_MS
         if rec is not None:
-            if rec.get("state") in _DEAD_STATES and not rec.get("filled"):
+            # Отсрочка и здесь: агент помечает rejected заявку, на которую QUIK не
+            # ответил за 20 с, а исполнение приходит позже (14.09 продажа 10 RIU6
+            # исполнилась, книга звала перевзвести уже открытую позицию).
+            if aged and rec.get("state") in _DEAD_STATES and not rec.get("filled"):
                 so.status = "orphaned"
                 so.note = f"дочерняя заявка {rec.get('state')} и не исполнилась"
                 dirty = True
@@ -326,6 +329,18 @@ def _track_fills(book: SmartOrderBook, ost: Any, store: Any, agent: str) -> bool
     return dirty
 
 
+def _revive_false_orphans(book: SmartOrderBook) -> bool:
+    """Сирота с найденным исполнением — не сирота: ребёнок жил и налился."""
+    dirty = False
+    for so in book.orders:
+        if so.status == "orphaned" and so.fired_qty > 0:
+            so.status, so.note = "fired", ""
+            dirty = True
+            log.warning("smart_order.orphan_revived", so_id=so.so_id,
+                        price=so.fired_price, qty=so.fired_qty)
+    return dirty
+
+
 async def _alert_reject(srv: Any, agent: str, so: SmartOrder, reason: str) -> None:
     """Отказ умной заявки лимитами — оператору немедленно. Молчание тут уже
     стоило невзведённой позиции: заявка лежала со статусом error, человек не знал."""
@@ -359,6 +374,7 @@ async def _watch_once(state: Any) -> None:
     # потерять ребёнка уже после того, как книга опустела.
     dirty_meta = _mark_orphans(book, ost, agent, so_mod.now_ms())
     dirty_meta = _track_fills(book, ost, store, agent) or dirty_meta
+    dirty_meta = _revive_false_orphans(book) or dirty_meta
     if dirty_meta:
         book.save()
     if not active:
