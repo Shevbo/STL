@@ -52,12 +52,17 @@ def main() -> None:
     ap.add_argument("--submit", action="store_true")
     ap.add_argument("--tag", default="tsl")
     ap.add_argument("--priority", type=int, default=20)
+    # Оператор 14.09.2026: «стоп у DeskBot, кажется, от средней». --sl-avg: варианты 1-2 со
+    # стопом от СРЕДНЕЙ (sl_first=0) как варианты 5-6. Тег по умолчанию меняйте на tsa.
+    ap.add_argument("--sl-avg", action="store_true")
     args = ap.parse_args()
 
+    variants = ([{**v, "variant": v["variant"] + 4, "sl_first": 0} for v in VARIANTS[:2]]
+                if args.sl_avg else VARIANTS)
     body = [{
         "campaign": f"{args.tag}-{sym.lower()}", "scriptCode": CODE, "symbol": sym,
         "baseParams": dict(PIN, symbol=sym), "dateFrom": a, "dateTo": b,
-        "engine": "remote", "priority": args.priority, "paramSets": VARIANTS,
+        "engine": "remote", "priority": args.priority, "paramSets": variants,
     } for sym, a, b in QUARTERS]
     total = sum(len(j["paramSets"]) for j in body)
     print(f"заданий {len(body)} | комбо {total}")
