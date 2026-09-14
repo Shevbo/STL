@@ -44,12 +44,17 @@ def main() -> None:
     ap.add_argument("--submit", action="store_true")
     ap.add_argument("--tag", default="t64")
     ap.add_argument("--priority", type=int, default=20)
+    # Подсказка DeskBot (оператор 14.09.2026): вход только на ПЕРЕСЕЧЕНИИ EMA. --cross: варианты
+    # 1-2 с cross_only=1 как 4-5 (тег t6c). Проверка репликации: позиций за 2026 ~573.
+    ap.add_argument("--cross", action="store_true")
     args = ap.parse_args()
 
+    variants = ([{**v, "variant": v["variant"] + 3, "cross_only": 1} for v in VARIANTS[:2]]
+                if args.cross else VARIANTS)
     body = [{
         "campaign": f"{args.tag}-{sym.lower()}", "scriptCode": CODE, "symbol": sym,
         "baseParams": dict(PIN, symbol=sym), "dateFrom": a, "dateTo": b,
-        "engine": "remote", "priority": args.priority, "paramSets": VARIANTS,
+        "engine": "remote", "priority": args.priority, "paramSets": variants,
     } for sym, a, b in QUARTERS]
     total = sum(len(j["paramSets"]) for j in body)
     print(f"заданий {len(body)} | комбо {total}")

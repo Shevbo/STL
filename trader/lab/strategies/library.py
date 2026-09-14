@@ -379,6 +379,15 @@ def make_on_bar(rid: str):
             # там, где тренда нет, а не выключает торговлю вовсе.
         if want and ((want > 0 and not a_long) or (want < 0 and not a_short)):
             want = 0
+        # ВХОД ТОЛЬКО НА ПЕРЕСЕЧЕНИИ (cross_only=1, DeskBot 2EMA 14.09.2026: «если EMA1
+        # пересекает EMA2 снизу вверх — лонг»). Сигнал у нас УРОВЕНЬ, и после выхода по
+        # тейку/стопу/трейлу робот входил снова на следующем же баре — у конфига TSLab
+        # это давало вдвое больше позиций (1143 против 573). С флагом вход из флэта
+        # разрешён только на баре, где сигнал сменился; разворот и выходы не трогаются.
+        cross_only = int(params.get("cross_only", 0) or 0)
+        sig_prev = stl.get_state("sig_prev", None) if cross_only else None
+        if cross_only:
+            stl.set_state("sig_prev", want)
         price = bars[-1].close
         bar_time = bars[-1].time
         if gap_auto:
@@ -635,6 +644,8 @@ def make_on_bar(rid: str):
             if blocked and blocked != want:
                 stl.set_state("sl_block", 0)
                 blocked = 0
+            if cross_only and (sig_prev is None or sig_prev == want):
+                return                           # сигнал не сменился (или прошлого нет) — пересечения не было
             if want is not None and want != 0:
                 if blocked == want:
                     note_skip("sl", price)
