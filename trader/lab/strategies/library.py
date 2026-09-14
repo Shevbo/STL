@@ -205,6 +205,14 @@ def make_on_bar(rid: str):
         rsi_lvl = float(params.get("rsi_tp_lvl", 72) or 72)
         step_pts = {1: float(params.get("avg_step_pts_l", 0) or 0),
                     -1: float(params.get("avg_step_pts_s", 0) or 0)}
+        # Лестница DeskBot/TSLab (14.09.2026): avg_vols="1,1,32,32" — ВСЯ позиция на уровне k,
+        # уровень k включается ходом против ПЕРВОГО входа на k × шаг своей стороны
+        # (avg_step_pts_l/s), добор = цель − текущая позиция. sl_first=1 — стоп sl_pct от
+        # первого входа, как у DeskBot (у нас по умолчанию — от средней).
+        _av = str(params.get("avg_vols", "") or "")
+        avg_vols = [int(float(x)) for x in _av.split(",") if x.strip()]
+        ladder_on = len(avg_vols) > 1
+        sl_first = int(params.get("sl_first", 0) or 0)
         # «Долина смерти» (dv_bars>0 и dv_range_pts>0): затяжной боковик в узком
         # коридоре. MACD в нём пилит кроссоверы и отдаёт депо комиссией (живой
         # MACD·RIU6 2026-07-22: 200 сделок в коридоре 86 700-87 200 — разножка там
@@ -617,6 +625,8 @@ def make_on_bar(rid: str):
             return
         # 2) Flat → open a fresh base position on a signal (unless cooling down).
         if cur == 0:
+            if ladder_on or sl_first:
+                stl.set_state("lad", None)       # новая позиция — лестница и стоп с первого входа
             # После стопа тот же сигнал обратно не пускаем: он никуда не делся (у OB
             # цена ещё стоит в зоне блока), и робот встал бы в ту же позицию следующим
             # баром — стоп не ограничивал бы ничего, только резал бы позицию в убыток
@@ -650,19 +660,28 @@ def make_on_bar(rid: str):
         # ATR, и без этого он молча пропадал бы у робота с полной лестницей и tp_atr=0.
         if not ((tp > 0) or sl_pct > 0 or (k_step > 0 and abs(cur) < avg_max)
                 or tp_pct > 0 or trail_on or rsi_n > 0
-                or (step_pts[cur_dir] > 0 and abs(cur) < avg_max)):
+                or (step_pts[cur_dir] > 0 and abs(cur) < avg_max) or ladder_on):
             return
+        # Лестница и стоп от первого входа помнят ПЕРВУЮ цену позиции: [сторона, цена, уровень].
+        # Сброс — во флэте (ветка 2); разворот меняет сторону и заводит запись заново.
+        lad = None
+        if ladder_on or sl_first:
+            lad = stl.get_state("lad", None)
+            if not (lad and int(lad[0]) == cur_dir):
+                lad = [cur_dir, avg, 0]
+                stl.set_state("lad", lad)
+        stop_ref = float(lad[1]) if (sl_first and lad) else avg
         # Стоп идёт ПЕРВЫМ и всегда важнее усреднения: оба срабатывают на ходе против
         # позиции, и если стоп стоит ближе шага усреднения, робот обязан выйти, а не
         # долить в убыточную позицию. Считается от СРЕДНЕЙ входа, как и тейк.
         # Стопов два и они независимы: доля тейка (sl_frac, в ×ATR) и процент от цены
         # входа (sl_pct). Включены оба — срабатывает БЛИЖНИЙ: это стоп-лосс, его смысл
         # в потолке убытка, а дальний из двух такого потолка не даёт.
-        stop_dist = avg * sl_pct / 100.0 if sl_pct > 0 else 0.0
+        stop_dist = stop_ref * sl_pct / 100.0 if sl_pct > 0 else 0.0
         if sl > 0 and atrv > 0:
             stop_dist = min(stop_dist, sl * atrv) if stop_dist > 0 else sl * atrv
-        if stop_dist > 0 and ((cur_dir > 0 and price <= avg - stop_dist)
-                              or (cur_dir < 0 and price >= avg + stop_dist)):
+        if stop_dist > 0 and ((cur_dir > 0 and price <= stop_ref - stop_dist)
+                              or (cur_dir < 0 and price >= stop_ref + stop_dist)):
             if bet_step > 0:                  # стоп — всегда убыток, ставка растёт
                 stl.set_state("bet_extra", min(bet_extra + bet_step, bet_max))
             stl.set_state("sl_block", cur_dir)
@@ -715,6 +734,22 @@ def make_on_bar(rid: str):
                 on_exit(price, avg, cur_dir)
                 await stl.place_order(symbol, "buy", abs(cur), price)
                 return
+        if ladder_on:
+            # ponytail: один уровень за бар — гэп через несколько уровней догоняется
+            # следующими барами; обычная лестница ниже при ladder_on не работает.
+            lvl, step = int(lad[2]), step_pts[cur_dir]
+            if (not flip_held and step > 0 and lvl + 1 < len(avg_vols)
+                    and (float(lad[1]) - price) * cur_dir >= (lvl + 1) * step):
+                lvl += 1
+                stl.set_state("lad", [cur_dir, float(lad[1]), lvl])
+                add = avg_vols[lvl] - abs(cur)
+                if add > 0:
+                    if in_dv or no_weekend:
+                        note_skip("weekend" if no_weekend else "dv", price)
+                    else:
+                        await stl.place_order(symbol, "buy" if cur_dir > 0 else "sell", add, price)
+                        mark_entry(price)
+            return
         # Шаг добора: пункты своей стороны (слой DeskBot), иначе k_step×ATR. Без ATR ветка
         # раньше выходила целиком (atrv<=0 -> return); dist=0 даёт то же самое.
         dist = step_pts[cur_dir] if step_pts[cur_dir] > 0 else (k_step * atrv if atrv > 0 else 0.0)

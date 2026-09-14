@@ -274,8 +274,13 @@ async def run_single_backtest(
         i = runtime._cursor
         if i in mute:
             pass                        # первые бары новой серии: сигнал ещё грязный
-        elif i in close_at:
-            await _flatten()            # последний бар старого контракта
+        elif i in close_at or (params.get("flatten_end") and i == len(bars) - 2):
+            # Последний бар старого контракта — или конец окна при flatten_end=1: net
+            # считает только ЗАКРЫТЫЕ сделки, и позиция, висящая на конце (у лестницы
+            # до 32 лотов это сотни тысяч), иначе в итог не попадает вовсе. len-2, а не
+            # len-1: цикл до последнего бара не доходит (advance), заявка исполняется
+            # по открытию следующего.
+            await _flatten()
         else:
             await strategy_module.on_bar(runtime, params)
         bar = bars[runtime._cursor]
