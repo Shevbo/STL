@@ -13,6 +13,9 @@ name only — never in this module.
 
 from __future__ import annotations
 
+import re
+import secrets
+
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
@@ -119,12 +122,27 @@ class PlaceStopBody(BaseModel):
     OFFSET...) КАК ЕСТЬ, текстом: настоящие имена и значения покажет серия S1 на GZ,
     поэтому здесь они не зашиты и не проверяются. Счёт, инструмент, сторону и объём
     агент ставит сам и отклоняет словарь, который пытается их нести."""
-    client_id: str
+    client_id: str = ""  # пусто = STL сгенерирует so:<10hex>
     code: str
     side: str          # "buy" | "sell"
     quantity: int
     fields: dict[str, str] = {}
     agent_id: str | None = None
+
+
+# client_id стоп-заявки: so:<10 hex>. Уходит в brokerref QUIK, у которого предел 20
+# символов — длинный или чужой id терминал обрежет, и ответ транзакции не
+# сопоставится с заявкой (формат задан окном real-trade для серии S1, 15.09.2026).
+_STOP_CLIENT_ID = re.compile(r"^so:[0-9a-f]{10}$")
+
+
+def _stop_client_id(given: str) -> str:
+    cid = (given or "").strip()
+    if not cid:
+        return "so:" + secrets.token_hex(5)
+    if not _STOP_CLIENT_ID.match(cid):
+        raise HTTPException(status_code=422, detail="client_id стоп-заявки: so:<10 hex> (пусто = сгенерирует STL).")
+    return cid
 
 
 class KillStopBody(BaseModel):
@@ -243,6 +261,7 @@ async def stop_place(body: PlaceStopBody, request: Request):
         )
     if body.side.lower() not in ("buy", "sell"):
         raise HTTPException(status_code=422, detail="side: buy или sell.")
+    client_id = _stop_client_id(body.client_id)
     try:
         check_master_flag(lim)
         check_whitelist(lim, body.code)
@@ -252,13 +271,13 @@ async def stop_place(body: PlaceStopBody, request: Request):
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     msg = order_msgs.build_place_stop_order(
-        client_id=body.client_id, code=body.code, side=body.side,
+        client_id=client_id, code=body.code, side=body.side,
         quantity=body.quantity, fields=body.fields,
     )
     # Постановка стоп-заявки — транзакция: считается в дневной лимит, как и лимитная.
     ost.record_placement(agent)
     srv.enqueue_order(agent, msg)
-    return {"ok": True, "agent_id": agent, "client_id": body.client_id}
+    return {"ok": True, "agent_id": agent, "client_id": client_id}
 
 
 @router.post("/stop-kill")
@@ -286,6 +305,24 @@ async def stop_orders(request: Request, agent_id: str | None = None):
     qstore = getattr(request.app.state, "quik_store", None)
     snap = qstore.stop_orders(agent_id) if qstore is not None else None
     return snap or {"table": [], "table_received_ms": 0, "events": []}
+
+
+@router.get("/trans-replies")
+async def trans_replies(request: Request, agent_id: str | None = None,
+                        client_id: str | None = None):
+    """Ответы QUIK на транзакции (OnTransReply), свежие сверху, последние 200 на агента.
+
+    Нужен серии S1: постановка стоп-заявки возвращает только client_id, а принял ли
+    терминал транзакцию и с каким текстом — видно лишь в ответе. ``client_id`` сужает
+    выдачу до одной заявки."""
+    _auth(request)
+    ost = _order_store(request)
+    if ost is None:
+        return {"replies": []}
+    rows = ost.trans_replies(agent_id)
+    if client_id:
+        rows = [r for r in rows if r.get("client_id") == client_id]
+    return {"replies": rows}
 
 
 @router.post("/cancel")

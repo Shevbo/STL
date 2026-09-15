@@ -37,6 +37,9 @@ class _OrderStore:
     def record_placement(self, agent):
         self.placed += 1
 
+    def trans_replies(self, agent_id=None):
+        return list(getattr(self, "replies", []))
+
 
 class _Server:
     def __init__(self):
@@ -65,7 +68,7 @@ def _app(**limits):
 
 
 def _place(client, **over):
-    body = dict(client_id="s1-1", code="GZU6", side="sell", quantity=1,
+    body = dict(client_id="so:0123456789", code="GZU6", side="sell", quantity=1,
                 fields={"STOP_ORDER_KIND": "SIMPLE_STOP_ORDER", "STOPPRICE": "12300"},
                 agent_id=AGENT)
     body.update(over)
@@ -145,3 +148,44 @@ def test_routes_require_auth():
     assert _place(client).status_code in (401, 403)
     assert client.get("/api/v1/quik/alerts").status_code in (401, 403)
     assert app.state.quik_server.sent == []
+
+
+def test_stop_client_id_generated_when_empty_and_format_enforced():
+    app, client = _app()
+    r = _place(client, client_id="")
+    assert r.status_code == 200, r.text
+    cid = r.json()["client_id"]
+    assert cid.startswith("so:") and len(cid) == 13      # влезает в brokerref QUIK (20)
+    assert app.state.quik_server.sent[0][1].place_stop_order.client_id == cid
+
+    for bad in ("s1-1", "so:XYZ", "so:0123456789abcdef"):
+        app2, client2 = _app()
+        r2 = _place(client2, client_id=bad)
+        assert r2.status_code == 422, bad
+        assert app2.state.quik_server.sent == []
+
+
+def test_stop_order_num_stays_a_string():
+    # Номер стоп-заявки QUIK ~1.9e18: числом в JSON он потерял бы последние цифры.
+    app, client = _app()
+    num = "1900000000000000123"
+    r = client.post("/api/v1/quik/orders/stop-kill",
+                    json={"client_id": "so:0123456789", "stop_order_num": num, "code": "GZU6",
+                          "agent_id": AGENT})
+    assert r.status_code == 200, r.text
+    assert app.state.quik_server.sent[0][1].kill_stop_order.stop_order_num == num
+
+
+def test_trans_replies_filtered_by_client_id():
+    # Ответ терминала — единственное место, где на серии видно, принята ли стоп-заявка.
+    app, client = _app()
+    app.state.quik_order_store.replies = [
+        {"client_id": "so:0123456789", "trans_id": 7, "result_code": 3,
+         "text": "стоп-заявка принята", "ts_unix_ms": 2, "agent_id": AGENT},
+        {"client_id": "so:aaaaaaaaaa", "trans_id": 8, "result_code": 4,
+         "text": "отвергнута", "ts_unix_ms": 1, "agent_id": AGENT},
+    ]
+    r = client.get("/api/v1/quik/orders/trans-replies", params={"client_id": "so:0123456789"})
+    assert r.status_code == 200, r.text
+    assert [x["text"] for x in r.json()["replies"]] == ["стоп-заявка принята"]
+    assert len(client.get("/api/v1/quik/orders/trans-replies").json()["replies"]) == 2
