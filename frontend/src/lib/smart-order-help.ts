@@ -365,6 +365,34 @@ function plural(n: number, one: string, few: string, many: string): string {
   return many;
 }
 
+/** Ключевая цена заявки для отдельной крупной колонки списка.
+ *
+ *  15.09.2026 оператор: направление, объём и цена тонули в строке условия мелким
+ *  моноширинным шрифтом. Цена у каждого типа своя, и подпись говорит, ЧТО это за
+ *  цена, иначе «86 300» у следящей (уровень активации) и у стопа (уровень
+ *  срабатывания) читались бы одинаково.
+ *  price = null — отдельного числа у заявки нет (следит сразу, по рынку): колонка
+ *  показывает подпись без числа, а не придуманный ноль. */
+export function keyPrice(o: any): { label: string; price: number | null } {
+  const k: Kind = o.kind;
+  if (k === 'trail_tp') {
+    if (o.activated && o.peak > 0) {
+      return { label: 'выход', price: o.side === 'buy' ? o.peak + o.trail_offset : o.peak - o.trail_offset };
+    }
+    return o.trigger_price > 0 ? { label: 'активация', price: o.trigger_price } : { label: 'следит сразу', price: null };
+  }
+  if (k === 'trail_sl') {
+    return o.peak > 0
+      ? { label: 'выход', price: o.side === 'sell' ? o.peak - o.trail_offset : o.peak + o.trail_offset }
+      : { label: 'ждёт позицию', price: null };
+  }
+  if (k === 'on_fill') {
+    return o.child_price > 0 ? { label: 'цена', price: o.child_price } : { label: 'по рынку', price: null };
+  }
+  const down = (k === 'sl' && o.side === 'sell') || (k === 'tp' && o.side === 'buy');
+  return { label: `${k === 'tp' ? 'тейк' : 'стоп'} ${down ? '≤' : '≥'}`, price: o.trigger_price || null };
+}
+
 /** Строка условия для списка взведённых заявок. */
 export function conditionText(o: any): string {
   const k: Kind = o.kind;

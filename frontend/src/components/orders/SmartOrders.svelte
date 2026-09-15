@@ -10,7 +10,7 @@
   import { smartOrdersStore, type SmartOrder } from '$lib/stores/smart-orders.svelte';
   import SmartOrderSchematic from './SmartOrderSchematic.svelte';
   import {
-    KINDS, KIND_BY_ID, COMMON_FACTS, STATUS_RU, codeSuggestions, conditionText,
+    KINDS, KIND_BY_ID, COMMON_FACTS, STATUS_RU, codeSuggestions, conditionText, keyPrice,
     closingSide, fmtWhen, fmtPts, fmtRub, manualPositions, ocoFact, preview,
     shortCodes, tillFact, type Kind, type OpenPos, type Side,
   } from '$lib/smart-order-help';
@@ -419,7 +419,9 @@
           <span class="so-c-num" title="номер связки: этим же номером заявка подписана на графике">{codes[o.so_id]}</span>
           <span class="so-c-tag">{KIND_BY_ID[o.kind].short}</span>
           <b class="so-c-code">{o.code}</b>
-          <span class="so-c-side" class:buy={o.side === 'buy'}>{o.side === 'buy' ? 'ПОКУПКА' : 'ПРОДАЖА'} {o.qty}</span>
+          <span class="so-c-dir" class:buy={o.side === 'buy'}>{o.side === 'buy' ? 'ПОКУПКА' : 'ПРОДАЖА'}</span>
+          <span class="so-c-qty" title="объём, контрактов">{o.qty}</span>
+          <span class="so-c-px" title={keyPrice(o).label}><small>{keyPrice(o).label}</small>{keyPrice(o).price != null ? fmtPrice(keyPrice(o).price) : '—'}</span>
           <span class="so-c-cond">{conditionText(o)}</span>
           <span class="so-c-sp"></span>
           <span class="so-c-status">{STATUS_RU[o.status] ?? o.status}</span>
@@ -469,7 +471,9 @@
             <div class="so-c-head">
               <span class="so-c-tag">{KIND_BY_ID[o.kind].short}</span>
               <b class="so-c-code">{o.code}</b>
-              <span class="so-c-side" class:buy={o.side === 'buy'}>{o.side === 'buy' ? 'ПОКУПКА' : 'ПРОДАЖА'} {o.qty}</span>
+              <span class="so-c-dir" class:buy={o.side === 'buy'}>{o.side === 'buy' ? 'ПОКУПКА' : 'ПРОДАЖА'}</span>
+              <span class="so-c-qty" title="объём, контрактов">{o.qty}</span>
+              <span class="so-c-px" title={keyPrice(o).label}><small>{keyPrice(o).label}</small>{keyPrice(o).price != null ? fmtPrice(keyPrice(o).price) : '—'}</span>
               <span class="so-c-cond">{conditionText(o)}</span>
               <span class="so-c-sp"></span>
               <span class="so-c-status" class:warn={o.status === 'orphaned' || o.status === 'error'}>
@@ -623,9 +627,17 @@
   }
   .so-c-tag { font: 600 10px/1 Consolas, monospace; letter-spacing: .1em; color: var(--accent); }
   .so-c-code { font-size: 14px; color: #e8e8f0; }
-  .so-c-side { color: #ff9d90; font-size: 11px; letter-spacing: .06em; }
-  .so-c-side.buy { color: #7ef0a6; }
-  .so-c-cond { color: #b9bfd4; font-family: Consolas, monospace; }
+  /* Ключевые цифры — отдельными колонками крупно (15.09.2026): направление, объём
+     и цена тонули в строке условия. Ширины фиксированы, чтобы колонки вставали
+     одна под другой от карточки к карточке и глаз шёл по столбцу. */
+  .so-c-dir { width: 84px; color: #ff9d90; font: 700 15px/1.1 system-ui, sans-serif; letter-spacing: .04em; }
+  .so-c-dir.buy { color: #7ef0a6; }
+  .so-c-qty { width: 44px; text-align: right; color: #e8e8f0; font: 700 18px/1.1 system-ui, sans-serif;
+    font-variant-numeric: tabular-nums; }
+  .so-c-px { min-width: 118px; color: #fff; font: 700 18px/1.1 system-ui, sans-serif;
+    font-variant-numeric: tabular-nums; display: inline-flex; flex-direction: column; }
+  .so-c-px small { font: 500 10px/1.2 system-ui, sans-serif; color: #8a90a8; letter-spacing: .04em; }
+  .so-c-cond { color: #8a90a8; font-family: Consolas, monospace; font-size: 11px; }
   .so-c-sp { flex: 1; }
   .so-c-track { margin: 6px 0 2px; padding: 5px 9px; border-radius: 5px; font-size: 12px;
     color: #9aa0b4; background: #14142400; border: 1px dashed #33335a; }
