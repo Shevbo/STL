@@ -42,6 +42,22 @@ def load_ri(path: str) -> dict[str, list[Bar]]:
     return by
 
 
+def aggregate(bars: list[Bar], tf: int) -> list[Bar]:
+    """M1 -> M{tf}: бакеты по началу интервала. Движок tf игнорирует, отдаёт бары как есть.
+    ponytail: прогрев стратегий в барах, pivot (2200) на H1 длиннее контракта и молчит."""
+    if tf <= 1:
+        return bars
+    out: list[Bar] = []
+    for b in bars:
+        t = b.time - b.time % (tf * 60)
+        if out and out[-1].time == t:
+            o = out[-1]
+            o.high, o.low, o.close, o.volume = max(o.high, b.high), min(o.low, b.low), b.close, o.volume + b.volume
+        else:
+            out.append(Bar(t, b.open, b.high, b.low, b.close, b.volume))
+    return out
+
+
 def daily_mtm(bars: list[Bar], fills: list[dict]) -> dict[str, tuple[float, int]]:
     """{дата: (P&L пунктов, филлов)}: equity = cash + pos*close на последнем баре дня."""
     fills = sorted((f for f in fills if f.get("time") is not None), key=lambda f: f["time"])
@@ -60,7 +76,7 @@ def daily_mtm(bars: list[Bar], fills: list[dict]) -> dict[str, tuple[float, int]
             s = 1 if f["side"] == "buy" else -1
             pos += s * f["qty"]
             cash -= s * f["qty"] * f["price"]
-            n_day += 1
+            n_day += f["qty"]           # контракты: переворот = 2
             i += 1
         last_close = b.close
     if day is not None:
@@ -84,9 +100,10 @@ def main() -> None:
     ap.add_argument("--out", required=True)
     ap.add_argument("--only", help="rid:контракт")
     ap.add_argument("--workers", type=int, default=6)
+    ap.add_argument("--tf", type=int, default=1, help="минут в баре (15 = M15, 60 = H1)")
     a = ap.parse_args()
 
-    by = load_ri(a.ri)
+    by = {c: aggregate(b, a.tf) for c, b in load_ri(a.ri).items()}
     if a.only:
         rid, c = a.only.split(":")
         jobs = [(rid, c)]
