@@ -11,6 +11,7 @@ from trader.api.quik_smart_orders import (
     _ORPHAN_GRACE_MS,
     _mark_orphans,
     _revive_false_orphans,
+    _snap_entries_to_grid,
     _track_fills,
 )
 from trader.quik.smart_orders import SmartOrder, SmartOrderBook
@@ -77,6 +78,9 @@ def test_found_trade_revives_a_false_orphan():
         def agent_status(self, agent_id=None):
             return {"quik": {"trades": [{"order_num": "777", "qty": 10, "price": 87_620}]}}
 
+        def params(self, agent_id=None):
+            return None                   # шаг неизвестен: округление не проверяем тут
+
     assert _track_fills(book, ost, Store(), "A1") is True
     assert (so.fired_price, so.fired_qty) == (87_620, 10)
     assert _revive_false_orphans(book) is True
@@ -137,3 +141,24 @@ def test_armed_and_cancelled_orders_are_untouched():
     assert _mark_orphans(book, FakeOrderStore([]), "A1", NOW + 10 * _ORPHAN_GRACE_MS) is False
     assert armed.status == "armed"
     assert dead.status == "cancelled"
+
+
+def test_entry_and_bracket_snap_to_price_step():
+    """15.09: 4 x 87440 + 1 x 87450 дали вход 87442, стоп 86942, тейк 88442 — у RI
+    шаг 10, таких цен нет. Вход покупки округляется вверх (хуже для лонга)."""
+    parent = SmartOrder(so_id="p1", kind="trail_tp", code="RIU6", side="buy", qty=5,
+                        trail_offset=50, sl_offset=500, tp_offset=1000, status="fired",
+                        fired_price=87442, fired_qty=5)
+    sl = SmartOrder(so_id="s1", kind="sl", code="RIU6", side="sell", qty=5,
+                    trigger_price=86942, parent_id="p1", status="armed")
+    tp = SmartOrder(so_id="t1", kind="tp", code="RIU6", side="sell", qty=5,
+                    trigger_price=88442, parent_id="p1", status="armed")
+    book = _book(parent, sl, tp)
+    assert _snap_entries_to_grid(book, {"RIU6": 10.0}) is True
+    assert (parent.fired_price, sl.trigger_price, tp.trigger_price) == (87450, 86950, 88450)
+    assert "вход 87450" in sl.note
+    assert _snap_entries_to_grid(book, {"RIU6": 10.0}) is False     # идемпотентно
+    short = SmartOrder(so_id="p2", kind="sl", code="RIU6", side="sell", qty=1,
+                       status="fired", fired_price=87442, fired_qty=1)
+    _snap_entries_to_grid(_book(short), {"RIU6": 10.0})
+    assert short.fired_price == 87440                                # продажа вниз

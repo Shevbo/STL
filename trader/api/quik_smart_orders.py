@@ -308,6 +308,7 @@ def _track_fills(book: SmartOrderBook, ost: Any, store: Any, agent: str) -> bool
         return False
     by_cid = {d["client_id"]: d for d in ost.working_orders(agent)}
     status = (store.agent_status(agent) if store is not None else None) or {}
+    steps = _price_steps(store, agent) if store is not None else {}
     dirty = False
     for so in want:
         rec = by_cid.get(so.fired_client_id) or {}
@@ -315,6 +316,8 @@ def _track_fills(book: SmartOrderBook, ost: Any, store: Any, agent: str) -> bool
         px, vol = _fill_price(status, oid) if oid else (0.0, 0)
         if px <= 0:
             px, vol = _match_trades(status, so)
+        if px > 0:
+            px = so_mod.quantize(px, steps.get(so.code, 0.0), so.side)
         if px > 0 and (px, vol) != (so.fired_price, so.fired_qty):
             so.fired_price, so.fired_qty = px, vol
             dirty = True
@@ -324,6 +327,29 @@ def _track_fills(book: SmartOrderBook, ost: Any, store: Any, agent: str) -> bool
             # заявки ещё взведены.
             if so_mod.rebase_protective(book.orders, so, px):
                 log.info("smart_order.protective_rebased", parent=so.so_id, entry=px)
+    return dirty
+
+
+def _snap_entries_to_grid(book: SmartOrderBook, steps: dict[str, float]) -> bool:
+    """Цена входа и уровни стопа/тейка — ТОЛЬКО на сетке шага цены.
+
+    Средневзвешенная по сделкам (4 x 87440 + 1 x 87450 = 87442) у RI с шагом 10
+    в природе не бывает, а стоп 86942 и тейк 88442 от неё несимметричны: первый
+    фактически срабатывает на 86940, второй на 88450. Вход округляем в сторону
+    ХУДШЕЙ для позиции цены (покупка вверх, продажа вниз), уровни пересчитываем
+    от него. Идемпотентно: догоняет и уже записанные в книгу входы."""
+    dirty = False
+    for p in book.orders:
+        step = steps.get(p.code, 0.0)
+        if p.status not in ("fired", "orphaned") or p.fired_price <= 0 or step <= 0:
+            continue
+        q = so_mod.quantize(p.fired_price, step, p.side)
+        if q != p.fired_price:
+            p.fired_price = q
+            dirty = True
+        if so_mod.rebase_protective(book.orders, p, p.fired_price):
+            dirty = True
+            log.info("smart_order.protective_snapped", parent=p.so_id, entry=p.fired_price)
     return dirty
 
 
@@ -373,6 +399,7 @@ async def _watch_once(state: Any) -> None:
     dirty_meta = _mark_orphans(book, ost, agent, so_mod.now_ms())
     dirty_meta = _track_fills(book, ost, store, agent) or dirty_meta
     dirty_meta = _revive_false_orphans(book) or dirty_meta
+    dirty_meta = _snap_entries_to_grid(book, _price_steps(store, agent)) or dirty_meta
     if dirty_meta:
         book.save()
     if not active:
