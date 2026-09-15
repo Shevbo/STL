@@ -1252,6 +1252,11 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
         "sms_today": [_with_control(e.get("text") or "", market_open) for e in today[-5:]],
         "sms_count": len(today),
         "last_run_ms": last_run_ms,
+        # Неснятые тревоги агента из флэш-списка (исполнительный модуль, раздел 12):
+        # пока список непуст, шапка компаньона мигает. Нет книги (агент выключен) —
+        # пусто, а не ошибка снапшота.
+        "flash": (_book.flash() if (_book := getattr(request.app.state,
+                                                     "quik_alert_book", None)) else []),
     }
 
     return {

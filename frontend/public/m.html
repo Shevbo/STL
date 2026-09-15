@@ -64,6 +64,11 @@
   .brand { flex: 1 0 100%; font-weight: 600; letter-spacing: .04em; font-size: 14px;
     color: inherit; text-decoration: none; }
   .fresh { flex: 1; color: var(--faint); font-size: 12px; }
+  /* Флэш исполнительного модуля — как на Windows-панели (companion.html). */
+  @keyframes stl-flash { 0%, 100% { background: transparent; } 50% { background: rgba(255, 82, 82, .45); } }
+  .top.flash { animation: stl-flash 1s step-end infinite; }
+  .flash-line { margin: 4px 8px; padding: 6px 12px; border-left: 3px solid var(--down);
+    color: var(--down); font-weight: 600; font-size: 14px; }
   .fresh.stale { color: var(--down); }
   .logout { color: var(--faint); font-size: 12px; background: none; border: none; padding: 4px; }
 
@@ -983,12 +988,22 @@ async function copyText(btn, text, done) {
 // ── экраны ────────────────────────────────────────────────────────────────────
 // Шапка одна на все экраны: индикатор связи tick() ищет по id, поэтому она
 // обязана быть в разметке КАЖДОГО экрана.
+// Первая неснятая флэш-тревога агента. Снять её можно только в STL: токен
+// компаньона открывает ровно один эндпоинт на чтение.
+function renderFlash(a) {
+  const f = (a && a.flash) || [];
+  if (!f.length) return '';
+  const more = f.length > 1 ? ` <span style="opacity:.7">и ещё ${f.length - 1}</span>` : '';
+  return `<div class="flash-line">⚠ ${esc(f[0].text || f[0].code)}${more}</div>`;
+}
+
 function head(d) {
-  return `<div class="top">
+  const flash = !!(((d && d.alerts) || {}).flash || []).length;
+  return `<div class="top${flash ? ' flash' : ''}">
       <a class="brand" id="brand" href="#/">${esc(brand(d))}</a>
       <span class="fresh" id="fresh">●</span>
       <button class="logout" title="Отвязать телефон">отвязать</button>
-    </div>`;
+    </div>` + renderFlash(d && d.alerts);
 }
 // «Назад» + копируемый идентификатор экрана в левом/правом верху.
 function nav(id) {

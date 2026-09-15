@@ -282,9 +282,10 @@ async def lifespan(app: FastAPI):
     quik_store = None
     quik_server = None
     quik_order_store = None
+    quik_alert_book = None
     if settings.quik_agent_enabled:
         try:
-            from trader.quik.alerts import AlertForwarder
+            from trader.api.quik_alerts import AlertBook, RecordingForwarder
             from trader.quik.orders import OrderStore, build_set_limits
             from trader.quik.limits import OrderLimits
             from trader.quik.server import QuikAgentServer
@@ -306,7 +307,12 @@ async def lifespan(app: FastAPI):
             # Phase 2 order/execution state. The server stores incoming order
             # updates here; the API reads it + re-checks limits before sending.
             quik_order_store = OrderStore()
-            quik_alerts = AlertForwarder(
+            # Книга тревог для экранов и флэша компаньона (исполнительный модуль,
+            # раздел 15). Записывающий форвардер: каждая тревога сначала ложится в
+            # книгу, затем уходит в Telegram как раньше.
+            quik_alert_book = AlertBook()
+            quik_alerts = RecordingForwarder(
+                book=quik_alert_book,
                 tg_token=settings.quik_alert_tg_token.get_secret_value(),
                 tg_chat_id=settings.quik_alert_tg_chat_id,
                 cooldown_sec=settings.quik_alert_cooldown_sec,
@@ -337,6 +343,7 @@ async def lifespan(app: FastAPI):
     # не было. Страж, подключённый к пустоте, хуже отсутствующего: он создаёт
     # уверенность, что за этим следят.
     app.state.quik_alerts = quik_alerts if quik_store is not None else None
+    app.state.quik_alert_book = quik_alert_book if quik_store is not None else None
 
     # Broker abstraction (trader/broker): robots trade through BrokerInterface, the
     # concrete adapter chosen from settings.exchange_interface. Built here with the QUIK
@@ -1608,6 +1615,8 @@ def create_app() -> FastAPI:
     # QUIK orders (sprint02 Phase 2): HUMAN-INITIATED placement + kill-switch.
     from trader.api.quik_orders import router as quik_orders_router
     fastapi_app.include_router(quik_orders_router)
+    from trader.api.quik_alerts import router as quik_alerts_router
+    fastapi_app.include_router(quik_alerts_router)
     from trader.api.quik_robots import router as quik_robots_router
     fastapi_app.include_router(quik_robots_router)
     # Algo-trade ledger: the journal + daily/per-robot report aggregates.

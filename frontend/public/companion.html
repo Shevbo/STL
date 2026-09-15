@@ -84,6 +84,13 @@
     text-decoration: none; cursor: pointer;
   }
   .brand:hover { color: var(--ink); }
+  /* ФЛЭШ ИСПОЛНИТЕЛЬНОГО МОДУЛЯ (раздел 12): неснятая тревога вроде «выход не
+     налился» мигает шапкой с периодом 1 с, первая строка панели — её текст. По
+     WARN не мигаем: мигание на всё подряд перестают замечать. */
+  @keyframes stl-flash { 0%, 100% { background: transparent; } 50% { background: rgba(255, 82, 82, .45); } }
+  .top.flash { animation: stl-flash 1s step-end infinite; }
+  .flash-line { padding: 3px 6px; margin-bottom: 4px; border-left: 3px solid var(--down);
+    color: var(--down); font-weight: 600; font-size: 12px; }
   .fresh { color: var(--faint); font-size: 10px; letter-spacing: .04em; white-space: nowrap; }
   .fresh.stale { color: var(--down); }
   /* Сама лампа — цветом: зелёная на связи, красная без связи. Текст остаётся
@@ -422,6 +429,17 @@ function lastTradeFmt(ms) {
 }
 
 // Заголовок: STL, дата, день недели, время (МСК), режим работы биржи.
+// Первая неснятая флэш-тревога агента. Снять её можно только в STL: токен
+// компаньона открывает ровно один эндпоинт на чтение, и подтверждение тревоги
+// его права не расширяет.
+function renderFlash(a) {
+  const f = (a && a.flash) || [];
+  if (!f.length) return '';
+  const more = f.length > 1 ? ` <span style="opacity:.7">и ещё ${f.length - 1}</span>` : '';
+  return `<div class="flash-line" title="Подтвердить тревогу — в STL (компаньон только читает)">` +
+    `⚠ ${esc(f[0].text || f[0].code)}${more}</div>`;
+}
+
 function renderBrand(d, withMode) {
   const now = new Date(d && d.ts_ms ? d.ts_ms : Date.now());
   const p = new Intl.DateTimeFormat('ru-RU', {
@@ -1121,7 +1139,9 @@ function paint(d) {
   // таймером «а не сбросилось ли» боролся со следствием и мешал живой прокрутке.
   const ordTop = ($('body').querySelector('.ord-box') || {}).scrollTop || 0;
   $('brand').textContent = renderBrand(d);
-  $('body').innerHTML =
+  const top = document.querySelector('.top');
+  if (top) top.classList.toggle('flash', !!(((d.alerts || {}).flash) || []).length);
+  $('body').innerHTML = renderFlash(d.alerts) +
     '<div class="sec">биржа</div>' + renderMarket(d.market) +
     '<div class="sec">счёт</div>' + renderAccount(d.account) +
     '<div class="sec">позиции</div>' + renderPositions(d.positions) +

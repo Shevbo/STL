@@ -21,7 +21,10 @@ from trader.quik import orders as order_msgs
 from trader.quik.limits import (
     LimitError,
     OrderLimits,
+    check_daily_cap,
     check_master_flag,
+    check_quantity,
+    check_whitelist,
     validate_place,
     validate_replace,
     validate_start_execution,
@@ -106,6 +109,28 @@ class StartExecBody(BaseModel):
 
 class StopExecBody(BaseModel):
     client_id: str
+    agent_id: str | None = None
+
+
+class PlaceStopBody(BaseModel):
+    """Нативная стоп-заявка QUIK (исполнительный модуль, этап 1).
+
+    ``fields`` — поля транзакции конкретного вида (STOP_ORDER_KIND, STOPPRICE, PRICE,
+    OFFSET...) КАК ЕСТЬ, текстом: настоящие имена и значения покажет серия S1 на GZ,
+    поэтому здесь они не зашиты и не проверяются. Счёт, инструмент, сторону и объём
+    агент ставит сам и отклоняет словарь, который пытается их нести."""
+    client_id: str
+    code: str
+    side: str          # "buy" | "sell"
+    quantity: int
+    fields: dict[str, str] = {}
+    agent_id: str | None = None
+
+
+class KillStopBody(BaseModel):
+    client_id: str
+    stop_order_num: str
+    code: str
     agent_id: str | None = None
 
 
@@ -196,6 +221,71 @@ async def place(body: PlaceBody, request: Request):
     ost.record_placement(agent)
     srv.enqueue_order(agent, msg)
     return {"ok": True, "agent_id": agent, "client_id": body.client_id}
+
+
+@router.post("/stop-place")
+async def stop_place(body: PlaceStopBody, request: Request):
+    """Поставить ОДНУ нативную стоп-заявку QUIK. HUMAN-INITIATED.
+
+    Проверки до агента: kill-switch, мастер-флаг, белый список, объём заявки, дневной
+    лимит. Ценового коллара нет — цены едут в ``fields`` необработанными до серии S1;
+    агент перепроверяет всё сам (defense in depth). Серия S1 запускается только из окна
+    real-trade при операторе и с белым списком = GZ на время серии (раздел 16)."""
+    _auth(request)
+    ost, srv = _require_wired(request)
+    lim = _limits(request)
+    agent = _resolve_agent(request, body.agent_id)
+
+    if ost.is_blocked(agent):
+        raise HTTPException(
+            status_code=409,
+            detail="Kill-switch активен: стоп-заявки заблокированы.",
+        )
+    if body.side.lower() not in ("buy", "sell"):
+        raise HTTPException(status_code=422, detail="side: buy или sell.")
+    try:
+        check_master_flag(lim)
+        check_whitelist(lim, body.code)
+        check_quantity(lim, body.quantity)
+        check_daily_cap(lim, ost.placed_today(agent))
+    except LimitError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    msg = order_msgs.build_place_stop_order(
+        client_id=body.client_id, code=body.code, side=body.side,
+        quantity=body.quantity, fields=body.fields,
+    )
+    # Постановка стоп-заявки — транзакция: считается в дневной лимит, как и лимитная.
+    ost.record_placement(agent)
+    srv.enqueue_order(agent, msg)
+    return {"ok": True, "agent_id": agent, "client_id": body.client_id}
+
+
+@router.post("/stop-kill")
+async def stop_kill(body: KillStopBody, request: Request):
+    """Снять нативную стоп-заявку по её номеру QUIK. Снимает экспозицию, поэтому, как и
+    отмена заявки, проходит при единственном условии — мастер-флаге."""
+    _auth(request)
+    ost, srv = _require_wired(request)
+    lim = _limits(request)
+    agent = _resolve_agent(request, body.agent_id)
+    try:
+        check_master_flag(lim)
+    except LimitError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    msg = order_msgs.build_kill_stop_order(body.client_id, body.stop_order_num, body.code)
+    srv.enqueue_order(agent, msg)
+    return {"ok": True, "agent_id": agent, "client_id": body.client_id}
+
+
+@router.get("/stop-orders")
+async def stop_orders(request: Request, agent_id: str | None = None):
+    """Зеркало стоп-заявок как прислал агент: таблица stop_orders целиком и кольцо
+    событий OnStopOrder. Поля — словари как есть, до серии S1 без интерпретации."""
+    _auth(request)
+    qstore = getattr(request.app.state, "quik_store", None)
+    snap = qstore.stop_orders(agent_id) if qstore is not None else None
+    return snap or {"table": [], "table_received_ms": 0, "events": []}
 
 
 @router.post("/cancel")

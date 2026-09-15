@@ -66,7 +66,7 @@ describe('перерисовка возвращает прокрутку зая�
       density: () => 60, fitWindow: stub,
       renderBrand: stub, renderMarket: stub, renderAccount: stub,
       renderPositions: stub, renderRobots: stub, robotsTotal: stub,
-      manualTotal: stub, renderWatch: stub, renderAlerts: stub, alertsToggle: stub,
+      manualTotal: stub, renderWatch: stub, renderAlerts: stub, alertsToggle: stub, renderFlash: stub,
       renderOrders: () => '<div class="ord-box">много строк</div>',
     });
     expect(scrollSurvives(paint)).toBe(42);
