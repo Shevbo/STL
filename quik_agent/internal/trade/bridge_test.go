@@ -133,6 +133,75 @@ func TestDispatchAccountEvents(t *testing.T) {
 	}
 }
 
+func TestStopTxEncodesFieldsAsGiven(t *testing.T) {
+	b := NewBridge(0, nil, nil)
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+	b.conn = client
+	lineCh := make(chan string, 1)
+	go func() {
+		sc := bufio.NewScanner(server)
+		if sc.Scan() {
+			lineCh <- sc.Text()
+		}
+	}()
+	err := b.StopTx(stopTxCmd{TransID: 7, Comment: "stl-so-0123456789",
+		Fields: map[string]string{"ACTION": "NEW_STOP_ORDER", "STOPPRICE": "12340"}})
+	if err != nil {
+		t.Fatalf("StopTx: %v", err)
+	}
+	var got struct {
+		Cmd     string            `json:"cmd"`
+		TransID int64             `json:"trans_id"`
+		Comment string            `json:"comment"`
+		Fields  map[string]string `json:"fields"`
+	}
+	if err := json.Unmarshal([]byte(<-lineCh), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Cmd != "stop_tx" || got.TransID != 7 || got.Comment != "stl-so-0123456789" ||
+		got.Fields["ACTION"] != "NEW_STOP_ORDER" || got.Fields["STOPPRICE"] != "12340" {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+// Stop-order rows are QUIK's fields verbatim; a 19-digit order number must survive as a
+// string (a JSON number would be rounded by float64), and an empty Lua table ([] on the
+// wire) must not drop the frame.
+func TestDispatchStopEvents(t *testing.T) {
+	var got []StopEvent
+	b := NewBridge(0, nil, nil)
+	b.SetStopSink(func(e StopEvent) { got = append(got, e) })
+	for _, line := range []string{
+		`{"event":"stop_order","fields":{"order_num":"1925040213634112099","condition_price":12340.0}}`,
+		`{"event":"stop_order","fields":[]}`,
+		`{"event":"acc_stop","maps":[{"order_num":"1925040213634112100"},[]]}`,
+		`{"event":"acc_stop","maps":[]}`,
+	} {
+		var ev luaEvent
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			t.Fatalf("%s: %v", line, err)
+		}
+		b.dispatch(ev)
+	}
+	if len(got) != 4 {
+		t.Fatalf("want 4 events, got %d: %+v", len(got), got)
+	}
+	if got[0].IsTable || got[0].Fields["order_num"] != "1925040213634112099" {
+		t.Fatalf("stop_order: %+v", got[0])
+	}
+	if len(got[1].Fields) != 0 {
+		t.Fatalf("empty fields: %+v", got[1])
+	}
+	if !got[2].IsTable || len(got[2].Maps) != 2 || got[2].Maps[0]["order_num"] != "1925040213634112100" {
+		t.Fatalf("acc_stop: %+v", got[2])
+	}
+	if !got[3].IsTable || len(got[3].Maps) != 0 {
+		t.Fatalf("empty acc_stop: %+v", got[3])
+	}
+}
+
 // A flat account emits acc_pos/acc_ord with an EMPTY rows array (the Lua encoder
 // serialises {} as []). That frame must decode cleanly and dispatch Kind=pos with
 // zero rows, so main.go calls SetPositions([]) and recon reads OK-empty (not STALE).

@@ -14,6 +14,12 @@
       {"cmd":"cancel","trans_id":N,"order_num":"..","class":"SPBFUT","sec":"RIU6"}
       {"cmd":"move","trans_id":N,"order_num":"..","class":"SPBFUT","sec":"RIU6",
        "price":"..","qty":K}   -- native atomic re-price; qty 0 = keep current
+      {"cmd":"stop_tx","trans_id":N,"comment":"<tag>","fields":{"ACTION":"NEW_STOP_ORDER",..}}
+                               -- stop-order relay: fields go to sendTransaction AS GIVEN
+                               -- (ACTION only NEW_STOP_ORDER|KILL_STOP_ORDER)
+    Lua -> agent (stop orders, fields dumped VERBATIM from QUIK, see stop_row):
+      {"event":"stop_order","fields":{..}}      -- OnStopOrder
+      {"event":"acc_stop","maps":[{..},..]}     -- stop_orders table, change-gated
     Lua -> agent:
       {"event":"trans_reply","trans_id":N,"result_code":I,"order_num":"..","text":".."}
       {"event":"order","order_num":"..","trans_id":N,
@@ -38,7 +44,7 @@
 -- Bump on every change you deliver to the VDS. Logged FIRST on OnInit so the
 -- operator can confirm which version QUIK actually loaded (the running script is
 -- in MEMORY; a file on disk with the same name may be a different build).
-local SCRIPT_VERSION = "2026.08.21-gc"
+local SCRIPT_VERSION = "2026.09.15-stoporders"
 
 local CONFIG = {
   HOST          = "127.0.0.1",
@@ -647,7 +653,8 @@ local function ser_rows(rows)
 end
 
 local acc = { last_pos = "", last_pos_vm = "", last_ord = "", last_pos_ms = 0,
-              last_ord_ms = 0, trd_seen = 0, last_money = "", last_money_ms = 0 }
+              last_ord_ms = 0, trd_seen = 0, last_money = "", last_money_ms = 0,
+              last_stop = "", last_stop_ms = 0 }
 
 -- QUIK datetime table -> epoch ms (0 when absent/unparsable). Same VDS-clock=MSK
 -- assumption as OnAllTrade's last_trade_ts_ms (see the comment there).
@@ -676,6 +683,7 @@ acc_resync = function()
   acc.last_pos, acc.last_pos_vm, acc.last_pos_ms = "", "", 0
   acc.last_ord, acc.last_ord_ms = "", 0
   acc.last_money, acc.last_money_ms = "", 0
+  acc.last_stop, acc.last_stop_ms = "", 0
 end
 
 -- Rows are [sec_code, totalnet, avrposnprice, varmargin]. The 4th element is new
@@ -832,6 +840,62 @@ local function publish_acc_trades()  -- incremental: only rows we have not sent 
   if #rows > 0 then emit({ event = "acc_trd", rows = rows }) end
 end
 
+-- Stop orders (15.09.2026, docs/design/execution-module.md). Field names of the
+-- stop_orders table and OnStopOrder are NOT verified on our terminal yet, so the
+-- script does not pick fields: it dumps the WHOLE QUIK row and the agent learns
+-- the real names on the first GZ series without another Lua restart.
+-- Integers go out as STRINGS: order numbers (~1.9e18) exceed a double, and the
+-- JSON encoder would print them with %.10g. Nested datetime tables -> epoch ms.
+local function stop_row(r)
+  local out = {}
+  for k, v in pairs(r) do
+    local tv = type(v)
+    if tv == "string" or tv == "boolean" then
+      out[tostring(k)] = v
+    elseif tv == "number" then
+      if math.type and math.type(v) == "integer" then
+        out[tostring(k)] = tostring(v)
+      else
+        out[tostring(k)] = v
+      end
+    elseif tv == "table" and v.year then
+      out[tostring(k) .. "_ms"] = dt_to_ms(v)
+    end
+  end
+  return out
+end
+
+-- Deterministic change key for a list of maps (pairs() order is random).
+local function maps_key(maps)
+  local parts = {}
+  for _, m in ipairs(maps) do
+    local keys = {}
+    for k in pairs(m) do keys[#keys + 1] = k end
+    table.sort(keys)
+    local kv = {}
+    for _, k in ipairs(keys) do kv[#kv + 1] = k .. "=" .. tostring(m[k]) end
+    parts[#parts + 1] = table.concat(kv, ",")
+  end
+  return table.concat(parts, ";")
+end
+
+local function publish_acc_stops()
+  local n = getNumberOf("stop_orders") or 0
+  local maps = {}
+  for i = 0, n - 1 do
+    local r = getItem("stop_orders", i)
+    if r then maps[#maps + 1] = stop_row(r) end
+  end
+  local key = maps_key(maps)
+  local t = now_ms()
+  -- Same first-pass + 15s keepalive gate as the other account tables.
+  if key ~= acc.last_stop or acc.last_stop_ms == 0 or (t - acc.last_stop_ms) >= 15000 then
+    acc.last_stop = key
+    acc.last_stop_ms = t
+    emit({ event = "acc_stop", maps = maps })
+  end
+end
+
 -- Anonymized all-trades tape: OnAllTrade buffers, md_pump flushes batches.
 -- QLua serialises callbacks vs main(), so plain tables are safe here.
 function OnAllTrade(t)
@@ -908,6 +972,7 @@ local function md_pump()
     pcall(publish_acc_money)
     pcall(publish_acc_orders)
     pcall(publish_acc_trades)
+    pcall(publish_acc_stops)
   end
 end
 
@@ -1066,6 +1131,50 @@ local function handle_move(cmd)
   end
 end
 
+-- Stop-order relay. The agent builds the WHOLE transaction (field names are verified
+-- on GZ and fixed in Go, not here); Lua only allows the two stop actions, stamps
+-- TRANS_ID/ACCOUNT/CLIENT_CODE the same way handle_place does, and sends.
+local STOP_ACTIONS = { NEW_STOP_ORDER = true, KILL_STOP_ORDER = true }
+
+local function handle_stop_tx(cmd)
+  local trans_id = cmd.trans_id
+  if type(trans_id) ~= "number" then
+    log("stop_tx: missing/invalid trans_id; ignoring"); return
+  end
+  local f = cmd.fields
+  if type(f) ~= "table" or not STOP_ACTIONS[tostring(f.ACTION or "")] then
+    log("stop_tx trans_id=" .. trans_id .. ": ACTION not allowed: " .. tostring(f and f.ACTION))
+    emit_trans_reply(trans_id, -1, "", "lua: stop_tx ACTION must be NEW_STOP_ORDER or KILL_STOP_ORDER")
+    return
+  end
+  local trans = {}
+  for k, v in pairs(f) do trans[tostring(k)] = tostring(v) end
+  trans.TRANS_ID = tostring(trans_id)
+  if (trans.ACCOUNT or "") == "" and CONFIG.ACCOUNT ~= "" then trans.ACCOUNT = CONFIG.ACCOUNT end
+  if trans.ACTION == "NEW_STOP_ORDER" then
+    if (trans.ACCOUNT or "") == "" then
+      emit_trans_reply(trans_id, -1, "", "lua: ACCOUNT not configured"); return
+    end
+    local cc = CONFIG.CLIENT_CODE
+    if cmd.comment and cmd.comment ~= "" then
+      cc = (cc ~= "") and string.sub(cc .. "//" .. tostring(cmd.comment), 1, 20)
+                       or string.sub(tostring(cmd.comment), 1, 20)
+    end
+    if cc ~= "" then trans.CLIENT_CODE = cc end
+  end
+  local keys = {}
+  for k in pairs(trans) do keys[#keys + 1] = k end
+  table.sort(keys)
+  local kv = {}
+  for _, k in ipairs(keys) do kv[#kv + 1] = k .. "=" .. trans[k] end
+  log("stop_tx " .. table.concat(kv, " "))
+  local res = sendTransaction(trans)
+  if res ~= nil and res ~= "" then
+    log(trans.ACTION .. " rejected: " .. tostring(res))
+    emit_trans_reply(trans_id, -1, "", "lua/" .. trans.ACTION .. ": " .. tostring(res))
+  end
+end
+
 local function dispatch_command(line)
   local cmd = json.decode(line)
   if type(cmd) ~= "table" then
@@ -1078,6 +1187,8 @@ local function dispatch_command(line)
     handle_cancel(cmd)
   elseif cmd.cmd == "move" then
     handle_move(cmd)
+  elseif cmd.cmd == "stop_tx" then
+    handle_stop_tx(cmd)
   elseif cmd.cmd == "ping" then
     local st = ""
     local ok, v = pcall(getInfoParam, "SERVERTIME")
@@ -1204,6 +1315,13 @@ function OnTrade(trade)
   if ts == 0 then ts = os.time() end
 
   emit_trade(order_num, qty, price_to_str(price), ts)
+end
+
+-- OnStopOrder: stop-order lifecycle (placed, activated -> child order, killed,
+-- expired). Dumped whole: see stop_row for why the script does not pick fields.
+function OnStopOrder(so)
+  if not so then return end
+  emit({ event = "stop_order", fields = stop_row(so) })
 end
 
 ----------------------------------------------------------------------

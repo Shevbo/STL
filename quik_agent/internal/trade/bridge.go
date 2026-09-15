@@ -149,6 +149,27 @@ type moveCmd struct {
 	Qty      int64  `json:"qty"`   // new quantity; 0 = keep current
 }
 
+// stopTxCmd is agent -> Lua: a stop-order transaction (NEW_STOP_ORDER / KILL_STOP_ORDER)
+// passed to sendTransaction AS GIVEN. The field names live here in Go, not in Lua: they
+// are verified on GZ first (docs/design/execution-module.md), and fixing a name must not
+// need an operator restart of the Lua script. Lua whitelists ACTION and stamps TRANS_ID,
+// ACCOUNT (fallback) and CLIENT_CODE from Comment exactly like a place.
+type stopTxCmd struct {
+	Cmd     string            `json:"cmd"` // "stop_tx"
+	TransID int64             `json:"trans_id"`
+	Comment string            `json:"comment"` // owner tag -> CLIENT_CODE/brokerref (see ownerTag)
+	Fields  map[string]string `json:"fields"`
+}
+
+// StopEvent is a QUIK stop-order event for the stop sink: one OnStopOrder (Fields) or a
+// full stop_orders table snapshot (Maps, IsTable). Rows are QUIK's own field names
+// verbatim; integers arrive as strings (order numbers exceed a double).
+type StopEvent struct {
+	IsTable bool
+	Fields  map[string]any
+	Maps    []map[string]any
+}
+
 // luaEvent is Lua -> agent: any of trans_reply / order / trade. A single struct with
 // the union of fields keeps decoding to one json.Unmarshal per line; the Event field
 // selects which fields are meaningful.
@@ -172,16 +193,20 @@ type luaEvent struct {
 	WF            string  `json:"wf"`               // pong: QUIK working folder (for info.log/news.log tail)
 
 	// market data (QLua getParamEx / getQuoteLevel2 / OnAllTrade publisher)
-	Code   string      `json:"code"`   // md, book, tape, param
-	Last   float64     `json:"last"`   // md
-	Bid    float64     `json:"bid"`    // md
-	Ask    float64     `json:"ask"`    // md
-	Bids   [][]float64 `json:"bids"`   // book: [[price, qty] ...] best-first
-	Asks   [][]float64 `json:"asks"`   // book: [[price, qty] ...] best-first
-	Trades [][]float64 `json:"trades"` // tape: [[price, qty, side, ts_ms] ...]
-	PriceStep float64  `json:"price_step"` // param
-	StepCost  float64  `json:"step_cost"`  // param
-	Margin    float64  `json:"margin"`     // param: initial margin (BUYDEPO), ₽/contract
+	Code      string      `json:"code"`       // md, book, tape, param
+	Last      float64     `json:"last"`       // md
+	Bid       float64     `json:"bid"`        // md
+	Ask       float64     `json:"ask"`        // md
+	Bids      [][]float64 `json:"bids"`       // book: [[price, qty] ...] best-first
+	Asks      [][]float64 `json:"asks"`       // book: [[price, qty] ...] best-first
+	Trades    [][]float64 `json:"trades"`     // tape: [[price, qty, side, ts_ms] ...]
+	PriceStep float64     `json:"price_step"` // param
+	StepCost  float64     `json:"step_cost"`  // param
+	Margin    float64     `json:"margin"`     // param: initial margin (BUYDEPO), ₽/contract
+
+	// stop orders: raw, decoded tolerantly in dispatch (Lua encodes an empty table as []).
+	Fields json.RawMessage `json:"fields"` // stop_order
+	Maps   json.RawMessage `json:"maps"`   // acc_stop
 }
 
 // MDEvent is a QLua market-data event (tick / book / tape / param) for the MD sink.
@@ -260,11 +285,12 @@ type TradeEvent struct {
 // of disconnect/reconnect, and exposes Place/Cancel to push commands out. Inbound
 // lines are decoded and dispatched to the handler.
 type Bridge struct {
-	addr    string
-	handler BridgeHandler
-	mdSink  func(MDEvent)
-	accSink func(AccEvent)
-	logf    func(string, ...any)
+	addr     string
+	handler  BridgeHandler
+	mdSink   func(MDEvent)
+	accSink  func(AccEvent)
+	stopSink func(StopEvent)
+	logf     func(string, ...any)
 
 	ln net.Listener
 
@@ -313,6 +339,21 @@ func (b *Bridge) SetAccSink(f func(AccEvent)) {
 	b.mu.Lock()
 	b.accSink = f
 	b.mu.Unlock()
+}
+
+// SetStopSink sets the stop-order sink (stop_order / acc_stop events). Optional; nil
+// drops them. Called on the bridge reader goroutine.
+func (b *Bridge) SetStopSink(f func(StopEvent)) {
+	b.mu.Lock()
+	b.stopSink = f
+	b.mu.Unlock()
+}
+
+// decodeMap reads a JSON object; an empty Lua table arrives as [] and yields an empty map.
+func decodeMap(raw json.RawMessage) map[string]any {
+	m := map[string]any{}
+	_ = json.Unmarshal(raw, &m)
+	return m
 }
 
 // SetHandler sets/replaces the event handler. Safe to call before Run.
@@ -420,8 +461,25 @@ func (b *Bridge) dispatch(ev luaEvent) {
 	h := b.handler
 	md := b.mdSink
 	acc := b.accSink
+	stop := b.stopSink
 	b.mu.Unlock()
 	switch ev.Event {
+	case "stop_order":
+		if stop != nil {
+			stop(StopEvent{Fields: decodeMap(ev.Fields)})
+		}
+		return
+	case "acc_stop":
+		if stop != nil {
+			var raws []json.RawMessage
+			_ = json.Unmarshal(ev.Maps, &raws)
+			maps := make([]map[string]any, 0, len(raws))
+			for _, r := range raws {
+				maps = append(maps, decodeMap(r))
+			}
+			stop(StopEvent{IsTable: true, Maps: maps})
+		}
+		return
 	case "md":
 		if md != nil {
 			md(MDEvent{Code: ev.Code, Last: ev.Last, Bid: ev.Bid, Ask: ev.Ask})
@@ -562,6 +620,14 @@ func (b *Bridge) Cancel(c cancelCmd) error {
 func (b *Bridge) Move(m moveCmd) error {
 	m.Cmd = "move"
 	return b.send(m)
+}
+
+// StopTx sends a stop-order transaction to Lua. The caller has assigned trans_id and
+// passed the hard limits; ACTION must be NEW_STOP_ORDER or KILL_STOP_ORDER (Lua refuses
+// anything else with a trans_reply -1).
+func (b *Bridge) StopTx(c stopTxCmd) error {
+	c.Cmd = "stop_tx"
+	return b.send(c)
 }
 
 // SendPing sends a clock-sync probe to Lua. t0 is the agent-stamped send time
