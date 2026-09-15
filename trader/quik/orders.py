@@ -363,6 +363,31 @@ def build_replace_order(
     )
 
 
+def build_place_stop_order(
+    client_id: str, code: str, side: str, quantity: int, fields: dict[str, str],
+) -> "pb.OrchestratorMessage":
+    """Native QUIK stop order (docs/design/execution-module.md, stage 1). `fields` are the
+    kind-specific QUIK transaction fields (STOP_ORDER_KIND, STOPPRICE, PRICE, OFFSET, ...),
+    values as text; the agent stamps account/instrument/side/quantity and REJECTS a map
+    that tries to carry them. Gated on the agent like PlaceOrder."""
+    return pb.OrchestratorMessage(
+        place_stop_order=pb.PlaceStopOrder(
+            client_id=client_id, code=code, side=side_to_pb(side), quantity=int(quantity),
+            fields={str(k): str(v) for k, v in (fields or {}).items()},
+        )
+    )
+
+
+def build_kill_stop_order(client_id: str, stop_order_num: str, code: str) -> "pb.OrchestratorMessage":
+    """Remove a native QUIK stop order by its number. Exposure-reducing: the agent allows
+    it with the master flag off (same rule as CancelOrder)."""
+    return pb.OrchestratorMessage(
+        kill_stop_order=pb.KillStopOrder(
+            client_id=client_id, stop_order_num=str(stop_order_num), code=code,
+        )
+    )
+
+
 def build_kill_switch(reason: str) -> "pb.OrchestratorMessage":
     return pb.OrchestratorMessage(kill_switch=pb.KillSwitch(reason=reason or ""))
 

@@ -20,6 +20,10 @@ only placement and maker-working of a human-decided order. Live account, small s
 - STL->agent: `PlaceOrder`, `CancelOrder`, `KillSwitch`, `StartExecution`, `StopExecution`.
 - agent->STL: `OrderUpdate` (PENDING/ACTIVE/PARTIAL/FILLED/CANCELLED/REJECTED), `TransReply`,
   `ExecutionUpdate` (1b progress). Enums `Side`, `OrderState`.
+- Native QUIK stop orders (15.09.2026, docs/design/execution-module.md): STL->agent
+  `PlaceStopOrder` (kind-specific QUIK fields as a raw map until verified on GZ),
+  `KillStopOrder`; agent->STL `StopOrderReport` (OnStopOrder event or full stop_orders
+  table, QUIK fields verbatim). Reject/QUIK reply rides `TransReply` with the client_id.
 
 ## Lua <-> agent TCP protocol (L and A MUST agree)
 - Agent runs a TCP server on `127.0.0.1:<trade_bridge_port>` (config, default 50063). The
@@ -44,6 +48,15 @@ only placement and maker-working of a human-decided order. Live account, small s
   both ride the move's TRANS_ID, so the agent re-keys the working order from the new
   `order` event and drops the old (superseded) leg's terminal event. This is the 1b maker
   loop's re-quote path: ONE atomic op, no cancel+place window, never two/zero live orders.
+- Stop orders (Lua script 2026.09.15-stoporders):
+  - agent -> Lua `{"cmd":"stop_tx","trans_id":N,"comment":"<tag>","fields":{"ACTION":"NEW_STOP_ORDER",..}}`:
+    fields go to `sendTransaction` AS GIVEN; Lua only whitelists ACTION
+    (NEW_STOP_ORDER|KILL_STOP_ORDER) and stamps TRANS_ID, ACCOUNT fallback and
+    CLIENT_CODE from comment like `place`. Field names live in Go (trade/stoporders.go),
+    so fixing one after a GZ series needs no Lua restart.
+  - Lua -> agent `{"event":"stop_order","fields":{..}}` (OnStopOrder) and
+    `{"event":"acc_stop","maps":[{..},..]}` (stop_orders table, change-gated + 15 s
+    keepalive): whole QUIK rows, integers as strings, datetime tables as `<name>_ms`.
 
 ## Hard limits (agent-enforced; STL enforces the same first)
 Config (extend internal/config + STL settings), defaults agreed with the operator:

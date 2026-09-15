@@ -509,6 +509,19 @@ Report { orders[], observers[], tx: TxRate,
    публикация `stop_orders`) и Go-команда агента, сразу в боевой форме, чтобы не
    писать дважды. Результат: таблица «поле -> что принял терминал» в этом документе.
    Lua-правка = рестарт скрипта оператором с выключенным vdsguard.
+
+   Статус 15.09 (не опубликовано): коммиты ea001f9, 9a4855e.
+   - Lua 2026.09.15-stoporders: `stop_tx` отдаёт транзакцию стоп-заявки в
+     sendTransaction КАК ПЕРЕДАНА (ACTION только NEW_STOP_ORDER|KILL_STOP_ORDER);
+     OnStopOrder и таблица `stop_orders` уходят ЦЕЛИКОМ. Имена полей не зашиты в Lua:
+     серия S1 покажет настоящие, правка потом только в Go, без рестарта Lua.
+   - proto: `PlaceStopOrder`/`KillStopOrder`/`StopOrderReport` (поля вида словарём до
+     проверки на GZ). Агент: затвор как у лимитной заявки, служебные поля ставит сам,
+     снятие при выключенном флаге, TransReply с client_id. STL: store/server принимают
+     отчёт, `orders.build_place_stop_order`/`build_kill_stop_order`.
+   - Осталось до S1: маршрут в STL API для постановки/снятия (зона ui-ux) или разовый
+     путь из окна real-trade; релиз агента; рестарт Lua оператором; рестарт STL;
+     белый список = GZ на время серии. Всё это с разрешения оператора.
 2. proto + Go: `PlaceStopOrder`/`KillStopOrder`/`StopOrderReport`/`SetLogMode`/
    `SetRobotProtection`, `ExecMode`/`ExecPurpose` в `PlaceOrder`; `internal/stoporders`
    (книга, зеркало, восстановление), доводка и гэп в `internal/trade`, ограничитель в
