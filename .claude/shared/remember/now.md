@@ -7,3 +7,5 @@
 Уточнил отказ Шага 0 (контекст >70%), начал инвентаризацию сохранения trades в backtest_results и параметров реестра (library.py, queue-скрипты) – в процессе.
 ## 22:59 | main
 Закоммитил regime_step0.py/regime_step0_test.py, завершил 304 бэктеста, обрабатывает результаты для A/B/C верификации к fable.
+## 07:05 | main
+Closed regime switch Step 0 (v2 criterion failed; all 15 strategies negative net); fable validated conclusion, refined findings in memory; started regime_tf_gate.py.
