@@ -16,8 +16,9 @@ func (f *fakeEmit) EmitOrderUpdate(u *quikv1.OrderUpdate) error {
 	f.orders = append(f.orders, u)
 	return nil
 }
-func (f *fakeEmit) EmitTransReply(*quikv1.TransReply) error         { return nil }
+func (f *fakeEmit) EmitTransReply(*quikv1.TransReply) error           { return nil }
 func (f *fakeEmit) EmitExecutionUpdate(*quikv1.ExecutionUpdate) error { return nil }
+func (f *fakeEmit) EmitStopOrderReport(*quikv1.StopOrderReport) error { return nil }
 func (f *fakeEmit) EmitAlert(_ quikv1.AlertSeverity, code, _ string) error {
 	f.alerts = append(f.alerts, code)
 	return nil

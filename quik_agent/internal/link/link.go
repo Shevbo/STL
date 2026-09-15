@@ -109,6 +109,9 @@ type TradeManager interface {
 	KillSwitch(*quikv1.KillSwitch)
 	StartExecution(*quikv1.StartExecution)
 	StopExecution(*quikv1.StopExecution)
+	// Native QUIK stop orders (trade/stoporders.go).
+	PlaceStopOrder(*quikv1.PlaceStopOrder)
+	KillStopOrder(*quikv1.KillStopOrder)
 	// ApplyLimits adopts a SetLimits pushed by STL (whitelist + caps; master flag stays
 	// dual). EffectiveLimits returns the agent's current limits for the agent->STL echo.
 	ApplyLimits(*quikv1.SetLimits)
@@ -124,9 +127,9 @@ type Link struct {
 
 	seq atomic.Uint64
 
-	mu       sync.RWMutex
-	subs     map[string]struct{} // codes the orchestrator subscribed to
-	startedAt time.Time
+	mu         sync.RWMutex
+	subs       map[string]struct{} // codes the orchestrator subscribed to
+	startedAt  time.Time
 	reconnects uint32
 
 	// secSentMs/paramsSentMs/tickSentMs gate the reference-data and tick flushes:

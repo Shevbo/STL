@@ -292,6 +292,13 @@ class QuikAgentLinkServicer(pb_grpc.QuikAgentLinkServicer):
                     ss = msg.status_snapshot
                     self.store.set_agent_status(
                         agent_id, ss.status_json, ss.generated_at_unix_ms)
+                elif field == "stop_order_report":
+                    # Native QUIK stop orders, verbatim. Store only: STL never acts on
+                    # a report (the stop order lives on the broker's server).
+                    rep = msg.stop_order_report
+                    self.store.set_stop_order_report(
+                        agent_id, rep.is_table,
+                        [dict(r.fields) for r in rep.rows], rep.received_at_unix_ms)
 
                 self.store.touch(agent_id, msg.seq)
 

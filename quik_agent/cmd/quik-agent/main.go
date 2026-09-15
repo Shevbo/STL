@@ -376,7 +376,8 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 	}, bridge, guard, lk, func(f string, a ...any) {
 		fmt.Printf("trade: "+f+"\n", a...)
 	})
-	bridge.SetHandler(mgr) // Lua events -> manager
+	bridge.SetHandler(mgr)              // Lua events -> manager
+	bridge.SetStopSink(mgr.OnStopEvent) // OnStopOrder / stop_orders -> StopOrderReport to STL
 	// acc_pos/acc_ord/acc_trd/pong -> accStore: the account-snapshot half of
 	// the QLua publisher (separate from the md/book/tape/param feed above).
 	// Converters are type-tolerant (accounts.*FromRow); a malformed row is

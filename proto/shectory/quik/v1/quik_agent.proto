@@ -35,6 +35,7 @@ message AgentMessage {
     LimitsState limits_state = 14;   // agent's CURRENTLY EFFECTIVE hard limits (echo)
     RobotStatusReport robot_status_report = 15; // agent-hosted robot status mirror
     AgentStatusSnapshot status_snapshot = 16; // local showcase JSON (opaque; STL serves verbatim)
+    StopOrderReport stop_order_report = 17;   // QUIK stop orders: OnStopOrder event or stop_orders table
   }
 }
 
@@ -169,6 +170,8 @@ message OrchestratorMessage {
     FlattenRobot flatten_robot = 15;   // operator: market-close the whole position + pause
     SetRobotPosition set_robot_position = 16;  // operator: force the believed position (belief-only)
     RecordRobotFill record_robot_fill = 17;    // operator: inject a fill (realizes P&L + history)
+    PlaceStopOrder place_stop_order = 18;      // native QUIK stop order (NEW_STOP_ORDER)
+    KillStopOrder kill_stop_order = 19;        // native QUIK stop order removal (KILL_STOP_ORDER)
   }
 }
 
@@ -390,6 +393,39 @@ message ReplaceOrder {
   string order_id = 2;
   double new_price = 3;
   int64 new_quantity = 4; // 0 = keep current quantity
+}
+
+// ===================== Native QUIK stop orders (docs/design/execution-module.md) =====================
+// Stage 1 is DISCOVERY on GZ: the QUIK field names of stop orders are not verified on our
+// terminal yet, so the kind-specific fields travel as a raw map and the report returns
+// QUIK's rows verbatim. Typed messages replace the maps once the GZ series pin the names.
+//
+// The agent stamps ACTION, CLASSCODE, SECCODE, OPERATION, QUANTITY, ACCOUNT, TRANS_ID and
+// the owner tag (CLIENT_CODE from client_id); `fields` must not carry those. Gated exactly
+// like PlaceOrder: master flag, kill-switch block, whitelist, per-order qty cap, daily cap.
+message PlaceStopOrder {
+  string client_id = 1;             // "so:<id>" (manual) or "rr:<robot>:.." (robot)
+  string code = 2;                  // instrument (must be whitelisted)
+  Side side = 3;                    // side of the order QUIK places on activation
+  int64 quantity = 4;
+  map<string, string> fields = 5;   // e.g. STOP_ORDER_KIND, STOPPRICE, PRICE, OFFSET, SPREAD, EXPIRY_DATE
+}
+
+// Removal is exposure-reducing: allowed with the master flag off (same rule as CancelOrder).
+message KillStopOrder {
+  string client_id = 1;
+  string stop_order_num = 2;        // QUIK stop order number (STOP_ORDER_KEY)
+  string code = 3;
+}
+
+message StopOrderRow {
+  map<string, string> fields = 1;   // QUIK field -> value as text; integers exact
+}
+
+message StopOrderReport {
+  bool is_table = 1;                // true = full stop_orders snapshot; false = one OnStopOrder
+  repeated StopOrderRow rows = 2;
+  int64 received_at_unix_ms = 3;    // agent clock
 }
 
 message KillSwitch {

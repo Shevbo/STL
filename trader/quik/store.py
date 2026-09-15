@@ -51,6 +51,11 @@ class AgentState:
     # table name -> latest RawTable dict
     # {"columns": [...], "rows": [[...]], "received_at_unix_ms": int, "last_seen": ts}
     raw_tables: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # native QUIK stop orders (agent StopOrderReport): last full stop_orders table and a
+    # ring of OnStopOrder events. Rows are QUIK's fields verbatim (names verified on GZ).
+    stop_orders_table: list[dict[str, str]] = field(default_factory=list)
+    stop_orders_table_ms: int = 0
+    stop_order_events: list[dict[str, Any]] = field(default_factory=list)
     # link bookkeeping
     last_seen_ms: int = field(default_factory=_now_ms)
     connected_at_ms: int = field(default_factory=_now_ms)
@@ -133,6 +138,31 @@ class QuikAgentStore:
         with self._lock:
             st = self._pick(agent_id)
             return st.limits_state if st else None
+
+    _STOP_EVENTS_KEEP = 200
+
+    def set_stop_order_report(self, agent_id: str, is_table: bool,
+                              rows: list[dict[str, str]], received_ms: int) -> None:
+        """Agent StopOrderReport: a full stop_orders snapshot replaces the table; an
+        OnStopOrder event is appended to a bounded ring (newest last)."""
+        with self._lock:
+            st = self._agents.setdefault(agent_id, AgentState(agent_id=agent_id))
+            if is_table:
+                st.stop_orders_table = rows
+                st.stop_orders_table_ms = received_ms
+            else:
+                for r in rows:
+                    st.stop_order_events.append({"received_ms": received_ms, "fields": r})
+                del st.stop_order_events[:-self._STOP_EVENTS_KEEP]
+
+    def stop_orders(self, agent_id: str | None = None) -> dict[str, Any] | None:
+        with self._lock:
+            st = self._pick(agent_id)
+            if st is None:
+                return None
+            return {"table": list(st.stop_orders_table),
+                    "table_received_ms": st.stop_orders_table_ms,
+                    "events": list(st.stop_order_events)}
 
     def set_robot_report(self, agent_id: str, report: dict[str, Any]) -> None:
         """Store the last RobotStatusReport from the agent-hosted robot-runner."""

@@ -30,6 +30,8 @@ func (b *recBridge) Cancel(c cancelCmd) error {
 }
 func (b *recBridge) Move(moveCmd) error { return nil }
 
+func (b *recBridge) StopTx(stopTxCmd) error { return nil }
+
 func TestPlaceOrderErr_AcceptedReturnsNil(t *testing.T) {
 	br := &recBridge{}
 	m := NewManager(ManagerConfig{ClassCode: "SPBFUT", Account: "A1"}, br,

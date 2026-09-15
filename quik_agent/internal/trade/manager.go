@@ -23,6 +23,7 @@ type Emitter interface {
 	EmitTransReply(*quikv1.TransReply) error
 	EmitExecutionUpdate(*quikv1.ExecutionUpdate) error
 	EmitAlert(sev quikv1.AlertSeverity, code, message string) error
+	EmitStopOrderReport(*quikv1.StopOrderReport) error
 }
 
 // bridgeAPI is the slice of *Bridge the manager needs. It lets execution.go and tests
@@ -32,6 +33,7 @@ type bridgeAPI interface {
 	Place(p placeCmd) error
 	Cancel(c cancelCmd) error
 	Move(m moveCmd) error
+	StopTx(c stopTxCmd) error
 }
 
 // workingOrder is one order the agent has sent to QUIK and not yet seen fully done.
@@ -98,9 +100,9 @@ type ManagerConfig struct {
 // OrderUpdate/TransReply emitted to STL. Guard 3: nothing reaches the bridge unless an
 // explicit command passed every limit AND the master flag is on.
 type Manager struct {
-	cfg    ManagerConfig
-	bridge bridgeAPI
-	guard  *Guard
+	cfg     ManagerConfig
+	bridge  bridgeAPI
+	guard   *Guard
 	emit    Emitter
 	logf    func(string, ...any)
 	nowMsFn func() int64
@@ -112,9 +114,9 @@ type Manager struct {
 
 	// book + priceStep feed the 1b maker loop's LOCAL order book. Set after
 	// construction via SetBookSource; nil means executions cannot start.
-	book      BookSource
-	execCtx   context.Context
-	execTick  time.Duration
+	book     BookSource
+	execCtx  context.Context
+	execTick time.Duration
 
 	mu      sync.Mutex
 	blocked bool // set by KillSwitch; new placements rejected until cleared
@@ -133,6 +135,10 @@ type Manager struct {
 
 	// exec holds running maker executions keyed by parent client_id (1b).
 	exec map[string]*execution
+
+	// stopTrans maps a stop-order transaction id to its client_id so QUIK's
+	// OnTransReply (which knows only TRANS_ID) reaches STL attributed.
+	stopTrans map[int64]string
 }
 
 // NewManager builds the order manager. emit and bridge must be non-nil in production;
@@ -142,18 +148,19 @@ func NewManager(cfg ManagerConfig, bridge bridgeAPI, guard *Guard, emit Emitter,
 		logf = func(string, ...any) {}
 	}
 	return &Manager{
-		cfg:      cfg,
-		bridge:   bridge,
-		guard:    guard,
-		emit:     emit,
-		logf:     logf,
-		nowMsFn:  func() int64 { return time.Now().UnixMilli() },
-		execTick: 50 * time.Millisecond,
+		cfg:        cfg,
+		bridge:     bridge,
+		guard:      guard,
+		emit:       emit,
+		logf:       logf,
+		nowMsFn:    func() int64 { return time.Now().UnixMilli() },
+		execTick:   50 * time.Millisecond,
 		byClient:   map[string]*workingOrder{},
 		byTrans:    map[int64]*workingOrder{},
 		byOrder:    map[string]*workingOrder{},
 		superseded: map[string]bool{},
 		exec:       map[string]*execution{},
+		stopTrans:  map[int64]string{},
 	}
 }
 
@@ -835,6 +842,8 @@ func (m *Manager) OnTransReply(ev TransReplyEvent) {
 		if ev.Text != "" {
 			wo.lastText = ev.Text
 		}
+	} else {
+		clientID = m.stopTrans[ev.TransID] // stop-order transaction (stoporders.go)
 	}
 	rejected := wo != nil && isTransReject(ev.ResultCode)
 	if rejected {

@@ -85,6 +85,18 @@ func (l *Link) EmitAlert(sev quikv1.AlertSeverity, code, message string) error {
 	return l.sendAlert(stream, sev, code, message)
 }
 
+// EmitStopOrderReport sends a StopOrderReport frame (trade.Emitter): QUIK stop-order
+// events and stop_orders snapshots, relayed verbatim.
+func (l *Link) EmitStopOrderReport(r *quikv1.StopOrderReport) error {
+	stream := l.currentStream()
+	if stream == nil {
+		return nil
+	}
+	return l.sendMsg(stream, &quikv1.AgentMessage{
+		Payload: &quikv1.AgentMessage_StopOrderReport{StopOrderReport: r},
+	})
+}
+
 // EmitStatusSnapshot sends the local status showcase JSON as an
 // AgentStatusSnapshot frame — mirrors EmitAlert exactly: drops quietly when no
 // session is open (STL keeps whatever it last received; the agent's own

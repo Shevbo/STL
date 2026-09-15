@@ -118,6 +118,14 @@ func (l *Link) recvLoop(stream quikv1.QuikAgentLink_SessionClient, cancel contex
 			if l.opt.Trade != nil {
 				l.opt.Trade.ReplaceOrder(p.ReplaceOrder)
 			}
+		case *quikv1.OrchestratorMessage_PlaceStopOrder:
+			if l.opt.Trade != nil {
+				l.opt.Trade.PlaceStopOrder(p.PlaceStopOrder)
+			}
+		case *quikv1.OrchestratorMessage_KillStopOrder:
+			if l.opt.Trade != nil {
+				l.opt.Trade.KillStopOrder(p.KillStopOrder)
+			}
 		case *quikv1.OrchestratorMessage_KillSwitch:
 			if l.opt.Trade != nil {
 				l.opt.Trade.KillSwitch(p.KillSwitch)
@@ -218,8 +226,8 @@ func (l *Link) sendHeartbeat(stream quikv1.QuikAgentLink_SessionClient) error {
 				SentAtUnixMs: time.Now().UnixMilli(),
 				// wire name is historical; semantics = market-data feed alive
 				// (legacy DDE off -> freshness-driven, same as health inputs)
-				DdeAlive:     quikdde.Alive() || !quikdde.LegacyEnabled(),
-				QuikAlive:    quikAlive,
+				DdeAlive:      quikdde.Alive() || !quikdde.LegacyEnabled(),
+				QuikAlive:     quikAlive,
 				LastTickAgeMs: l.opt.Provider.FreshnessMs(),
 			},
 		},
