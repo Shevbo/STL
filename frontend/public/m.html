@@ -209,6 +209,11 @@
   /* Переключатель истории живёт НАД коробкой: внутри он уезжал бы с прокруткой. */
   .ord-f { cursor: pointer; color: var(--muted); font-size: 10px; padding: 1px 0 2px 6px; }
   .ord-f:hover { color: var(--ink); }
+  /* Строка над коробкой: фильтр слева, «развернуть» справа. */
+  .ord-bar { display: flex; align-items: baseline; }
+  .ord-bar .ord-f + .ord-f { margin-left: auto; padding-right: 6px; }
+  /* Развёрнутая коробка — весь список без прокрутки. Свёрнутая — как была. */
+  .ord-box.full { max-height: none; overflow-y: visible; }
 
 
   /* Экранные формы: «назад», заголовок, копируемый идентификатор (левый верх). */
@@ -850,6 +855,16 @@ function toggleOrdDone() {
   if (lastData) paint(lastData);
 }
 
+// Коробка заявок свёрнута с прокруткой (прежний вид) или развёрнута во весь
+// список без прокрутки — как в companion.html. Состояние вне разметки:
+// перерисовка раз в 5 с его не сбросит.
+let ordFull = localStorage.getItem('stl.ordFull') === '1';
+function toggleOrdFull() {
+  ordFull = !ordFull;
+  localStorage.setItem('stl.ordFull', ordFull ? '1' : '0');
+  if (lastData) paint(lastData);
+}
+
 function renderOrders(o, d) {
   if (!o) return '<div class="empty">ручных заявок нет</div>';
   const sideRu = (s) => s === 'buy' ? 'покупка' : 'продажа';
@@ -919,7 +934,9 @@ function renderOrders(o, d) {
   }
   const filt = `<div class="ord-f" data-ordf>${ordDone ? '☑' : '☐'} исполненные и снятые</div>`;
   if (!out) return filt + '<div class="empty">ручных заявок нет</div>';
-  return filt + `<div class="ord-box">${out}</div>`;
+  const full = `<div class="ord-f" data-ordfull>${ordFull ? '▴ свернуть' : '▾ развернуть'}</div>`;
+  return `<div class="ord-bar">${filt}${full}</div>` +
+    `<div class="ord-box${ordFull ? ' full' : ''}">${out}</div>`;
 }
 
 // Уведомления схлопнуты до ПОСЛЕДНЕГО — остальные раскрываются стрелкой.
@@ -1144,6 +1161,7 @@ document.addEventListener('click', (e) => {
     return;
   }
   if (e.target.closest('.more')) { alertsOpen = !alertsOpen; if (lastData) paint(lastData); return; }
+  if (e.target.closest('[data-ordfull]')) { toggleOrdFull(); return; }
   if (e.target.closest('[data-ordf]')) { toggleOrdDone(); return; }
   const og = e.target.closest('[data-ord]');
   if (og) { toggleOrdGroup(og.dataset.ord); return; }

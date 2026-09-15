@@ -294,6 +294,11 @@
   /* Переключатель истории живёт НАД коробкой: внутри он уезжал бы с прокруткой. */
   .ord-f { cursor: pointer; color: var(--muted); font-size: 10px; padding: 1px 0 2px 6px; }
   .ord-f:hover { color: var(--ink); }
+  /* Строка над коробкой: фильтр слева, «развернуть» справа. */
+  .ord-bar { display: flex; align-items: baseline; }
+  .ord-bar .ord-f + .ord-f { margin-left: auto; padding-right: 6px; }
+  /* Развёрнутая коробка — весь список без прокрутки. Свёрнутая — как была. */
+  .ord-box.full { max-height: none; overflow-y: visible; }
 
   /* Кассета вместо слова-дубля. Первый тег говорит, ЧЕМ робот рискует (реал или
      бумага), второй раньше повторял то же слово: «РЕАЛ РЕАЛ». Смысл второго —
@@ -856,6 +861,17 @@ function toggleOrdDone() {
   if (lastData) paint(lastData);
 }
 
+// Коробка заявок свёрнута в 5 строк с прокруткой (прежний вид) или развёрнута
+// во весь список без прокрутки. Длинный список «Следящих» листать в окошке на
+// 5 строк неудобно, а держать его развёрнутым всегда — отжимает роботов вниз.
+// Состояние, как и у групп, живёт вне разметки: перерисовка раз в 5 с его не сбросит.
+let ordFull = localStorage.getItem('stl.ordFull') === '1';
+function toggleOrdFull() {
+  ordFull = !ordFull;
+  localStorage.setItem('stl.ordFull', ordFull ? '1' : '0');
+  if (lastData) paint(lastData);
+}
+
 // Итог ручной торговли за день — в том же виде, что у роботов. Вместе они
 // обязаны давать ВМ счёта: всё, что не робот, сделал оператор своими руками.
 function manualTotal(t) {
@@ -937,7 +953,9 @@ function renderOrders(o, d) {
   }
   const filt = `<div class="ord-f" data-ordf>${ordDone ? '☑' : '☐'} исполненные и снятые</div>`;
   if (!out) return filt + '<div class="empty">ручных заявок нет</div>';
-  return filt + `<div class="ord-box">${out}</div>`;
+  const full = `<div class="ord-f" data-ordfull>${ordFull ? '▴ свернуть' : '▾ развернуть'}</div>`;
+  return `<div class="ord-bar">${filt}${full}</div>` +
+    `<div class="ord-box${ordFull ? ' full' : ''}">${out}</div>`;
 }
 
 // Вотчер компактно, В ОДНУ СТРОКУ на проверку: имя + ОК/текст проблемы.
@@ -1167,6 +1185,7 @@ document.addEventListener('click', (e) => {
   const copyBtn = e.target.closest('.copy');
   if (copyBtn) { copyAlerts(copyBtn); return; }
   if (e.target.closest('.more')) { alertsOpen = !alertsOpen; if (lastData) paint(lastData); return; }
+  if (e.target.closest('[data-ordfull]')) { toggleOrdFull(); return; }
   if (e.target.closest('[data-ordf]')) { toggleOrdDone(); return; }
   const og = e.target.closest('[data-ord]');
   if (og) { toggleOrdGroup(og.dataset.ord); return; }
