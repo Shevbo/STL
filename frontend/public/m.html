@@ -69,6 +69,10 @@
   .top.flash { animation: stl-flash 1s step-end infinite; }
   .flash-line { margin: 4px 8px; padding: 6px 12px; border-left: 3px solid var(--down);
     color: var(--down); font-weight: 600; font-size: 14px; }
+  /* ЭКСПИРАЦИЯ (docs/design/expiry-roll.md), как в companion.html. */
+  .tag.exp-wait { color: #e0a53c; border-color: #e0a53c; }
+  .tag.exp-ok { color: var(--up); border-color: var(--up); }
+  .tag.exp-bad { color: var(--down); border-color: var(--down); }
   .fresh.stale { color: var(--down); }
   .logout { color: var(--faint); font-size: 12px; background: none; border: none; padding: 4px; }
 
@@ -772,6 +776,7 @@ function renderActive(list) {
           ? cassette(st === 'реал')
           : `<span class="tag ${stCls}">${esc(st)}</span>`}
         ${exitTag}
+        ${expiryTag(r.name, lastData && lastData.expiry)}
         ${val(rub(net, { signed: true }), k)}
         ${chg}
       </div>
@@ -988,6 +993,51 @@ async function copyText(btn, text, done) {
 // ── экраны ────────────────────────────────────────────────────────────────────
 // Шапка одна на все экраны: индикатор связи tick() ищет по id, поэтому она
 // обязана быть в разметке КАЖДОГО экрана.
+// ЭКСПИРАЦИЯ: карточка кампании перекладки и теги у роботов. Блок snapshot.expiry
+// приходит, только пока кампания активна (docs/design/expiry-roll.md, раздел 6).
+const EXP_TAG = {
+  exit_wait: ['exp-wait', 'ждёт выхода', 'робот в режиме «только на выход»: закрывает позицию по своему сигналу'],
+  switched: ['exp-ok', 'переключён', 'робот уже торгует новый контракт'],
+  refused: ['exp-bad', 'отклонён', 'перевод не подтвердился: нужен оператор'],
+  needs_operator: ['exp-bad', 'не вышел', 'робот не вышел из позиции: закрой руками, кампания сама НЕ закрывает'],
+  reset_needed: ['exp-bad', 'сброс позиции', 'бумажный робот на истёкшем контракте: закрывать нечем'],
+};
+function expiryTag(name, exp) {
+  const r = ((exp && exp.robots) || []).find((x) => x.name === name);
+  const t = r && EXP_TAG[r.state];
+  if (!t) return '';
+  const label = r.state === 'switched' && exp.new ? `${t[1]} ${exp.new}` : t[1];
+  return `<span class="tag ${t[0]}" title="${esc(r.note || t[2])}">${esc(label)}</span>`;
+}
+
+// «до дедлайна» — от срока выхода кампании (T-60), именно к нему роботы обязаны выйти.
+function expiryLeft(ms) {
+  const left = Math.round(((ms || 0) - Date.now()) / 60000);
+  if (!ms) return '';
+  if (left <= 0) return ', срок вышел';
+  const h = Math.floor(left / 60), m = left % 60;
+  return `, до дедлайна ${h ? h + ' ч ' : ''}${m} мин`;
+}
+
+function renderExpiry(e) {
+  if (!e || !e.base) return '';
+  const rs = e.robots || [];
+  const done = rs.filter((r) => r.state === 'switched').length;
+  const bad = rs.filter((r) => ['refused', 'needs_operator', 'reset_needed'].includes(r.state));
+  const man = e.manual || {};
+  const manLine = (man.old_net || man.new_net)
+    ? `<div class="row"><span class="k">ручная позиция</span><span class="sub">${esc(e.old)} ${man.old_net || 0} → ${esc(e.new)} ${man.new_net || 0}${man.state ? ' · ' + esc(man.state) : ''}</span></div>`
+    : '';
+  return `<div class="sec">экспирация <a href="/?expiry=1">экран ↗</a></div>` +
+    `<div class="row"><span class="k">${esc(e.base)}: ${esc(e.old)} → ${esc(e.new)}</span>` +
+    `<span class="sub">${esc(e.state || '')}${expiryLeft(e.deadline_ms)}</span><span class="sp"></span>` +
+    `<span class="v ${done === rs.length && rs.length ? 'up' : ''}">переключено ${done}/${rs.length}</span></div>` +
+    bad.map((r) => `<div class="row"><span class="k">${esc(r.name)}</span>` +
+      `<span class="sub">${esc(r.note || EXP_TAG[r.state][1])}${r.position ? ' · позиция ' + r.position : ''}</span>` +
+      `<span class="sp"></span><span class="v down">${esc(EXP_TAG[r.state][1])}</span></div>`).join('') +
+    manLine;
+}
+
 // Первая неснятая флэш-тревога агента. Снять её можно только в STL: токен
 // компаньона открывает ровно один эндпоинт на чтение.
 function renderFlash(a) {
@@ -1016,6 +1066,7 @@ function paintPanel(d) {
     <div class="sec">биржа</div>${renderMarket(d.market)}
     <div class="sec">счёт</div>${renderAccount(d.account)}
     <div class="sec">позиции</div>${renderPositions(d.positions)}
+    ${renderExpiry(d.expiry)}
     <div class="sec">роботы (реал)<span class="dens">` +
       DENSITY.map((n) => `<b class="${n === density() ? 'on' : ''}" data-dens="${n}">${n}</b>`).join('') +
       `</span></div>
@@ -1056,7 +1107,7 @@ function paintRobot(d, id) {
     ? `фикс · ${vmLabel(r)} н/д`
     : `фикс ${rub(r.real_today, { signed: true })} · ${vmLabel(r)} ${rub(r.vm_today, { signed: true })}`;
   $('app').innerHTML = head(d) + nav(r.id) + `
-    <div class="h1">${esc(r.name)} ${modeTag} ${stTag} ${exitTag}</div>
+    <div class="h1">${esc(r.name)} ${modeTag} ${stTag} ${exitTag} ${expiryTag(r.name, d && d.expiry)}</div>
     <div class="big ${k}">
       <div class="sub">фин. результат = фикс по закрытым + ВМ открытой позиции</div>
       <div class="n ${k}">${esc(rub(net, { signed: true }) || '—')} ${chg}</div>
