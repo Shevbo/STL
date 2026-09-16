@@ -565,3 +565,49 @@ async def test_contract_roll_refused_with_open_position(tmp_path):
     assert r.spec["symbol"] == "RIU6"                 # остался на старом контракте
     assert r.runtime.signed_position() == -3          # позиция цела
     assert len(r.bars.bars()) == bars_before          # бары целы
+
+
+@pytest.mark.asyncio
+async def test_roll_survives_runner_restart(tmp_path):
+    """16.09: агент обновился ПОСЛЕ включения ролла, раннер стартовал заново, prev=None -
+    и робот на RIZ6 получил 600 баров RIU6 из сохранённого состояния. Состояние обязано
+    помнить свой контракт, иначе перезапуск отменяет ролл молча."""
+    host = RobotHost(FakeBridge(), str(tmp_path))
+    await host.handle_control(_deploy_rc_symbol("RIU6"))
+    r = host.robots["r1"]
+    r.runtime.set_state("trend", "up")
+    t0 = 1_751_500_000_000
+    for i in range(12):
+        r.bars.on_tick(t0 + i * 60_000, 87_000 + i * 10)
+    host.persist()
+    assert json.loads((tmp_path / "runner_state.json").read_text())["r1"]["symbol"] == "RIU6"
+
+    host2 = RobotHost(FakeBridge(), str(tmp_path))          # свежий процесс (self-update)
+    await host2.handle_control(_deploy_rc_symbol("RIZ6"))
+    r2 = host2.robots["r1"]
+    assert r2.spec["symbol"] == "RIZ6"
+    assert r2.bars.bars() == []                              # бары старого контракта НЕ засеяны
+    assert r2.runtime.get_state("trend") is None
+    assert r2.runtime.signed_position() == 0
+
+
+@pytest.mark.asyncio
+async def test_roll_after_restart_with_saved_position_keeps_old_contract(tmp_path):
+    """Свежий процесс + непустая сохранённая позиция: отказать совсем нельзя, иначе
+    робота не будет вовсе и позицию старого контракта некому закрыть. Остаёмся на
+    старом контракте со своими барами и книгой."""
+    host = RobotHost(FakeBridge(), str(tmp_path))
+    await host.handle_control(_deploy_rc_symbol("RIU6"))
+    host.robots["r1"].runtime.restore(position=-2, avg=87000.0, realized=0.0)
+    t0 = 1_751_500_000_000
+    for i in range(8):
+        host.robots["r1"].bars.on_tick(t0 + i * 60_000, 87_000)
+    host.persist()
+
+    host2 = RobotHost(FakeBridge(), str(tmp_path))
+    await host2.handle_control(_deploy_rc_symbol("RIZ6"))
+    r2 = host2.robots["r1"]
+    assert r2.spec["symbol"] == "RIU6"                       # остался на старом
+    assert r2.spec["params"]["symbol"] == "RIU6"
+    assert r2.runtime.signed_position() == -2                # позиция цела
+    assert r2.bars.bars()                                    # бары старого контракта на месте

@@ -112,6 +112,11 @@ class RobotHost:
         out = {}
         for rid, r in self.robots.items():
             out[rid] = {"state": r.runtime.state,
+                        # КОНТРАКТ, к которому относится это состояние. Без него
+                        # перезапуск раннера (agent self-update) засевал бары СТАРОГО
+                        # контракта в робота, уже переведённого на новый: 16.09 три
+                        # реальных робота поехали на RIZ6 с 600 барами RIU6.
+                        "symbol": r.spec.get("symbol") or "",
                         "position": r.runtime.signed_position(),
                         "avg": r.runtime.avg_price(),
                         "realized": r.runtime.realized_gross(),   # GROSS points…
@@ -176,26 +181,40 @@ class RobotHost:
             # обязана быть нулевой: она живёт в СТАРОМ контракте, а робот на новом
             # закрывал бы её заявкой по чужому инструменту. Деньги и история сделок
             # робота сохраняются: ролл - это не новый робот.
-            old_symbol = prev.spec.get("symbol") if prev is not None else ""
-            rolled = bool(prev is not None and spec["symbol"] and old_symbol
-                          and old_symbol != spec["symbol"])
-            if rolled and prev.runtime.signed_position() != 0:
-                pos = prev.runtime.signed_position()
+            saved_all = self._saved.get(spec["robot_id"], {})
+            old_symbol = (prev.spec.get("symbol") if prev is not None
+                          else saved_all.get("symbol") or "")
+            rolled = bool(spec["symbol"] and old_symbol and old_symbol != spec["symbol"])
+            # Позиция принадлежит СТАРОМУ контракту: в живом процессе её знает runtime,
+            # после перезапуска - только сохранённое состояние.
+            old_position = (prev.runtime.signed_position() if prev is not None
+                            else int(saved_all.get("position") or 0))
+            if rolled and old_position != 0:
+                pos = old_position
                 log.warning("host.roll_refused", robot_id=spec["robot_id"],
-                            old_symbol=old_symbol, new_symbol=spec["symbol"], position=pos)
-                prev.runtime.event(
-                    "LIFECYCLE",
-                    f"смена контракта {old_symbol} -> {spec['symbol']} ОТКЛОНЕНА: "
-                    f"позиция {pos} не закрыта (закрой её в старом контракте)",
-                    level="error")
-                return
-            saved = self._saved.get(spec["robot_id"], {})
+                            old_symbol=old_symbol, new_symbol=spec["symbol"], position=pos,
+                            live=prev is not None)
+                if prev is not None:
+                    prev.runtime.event(
+                        "LIFECYCLE",
+                        f"смена контракта {old_symbol} -> {spec['symbol']} ОТКЛОНЕНА: "
+                        f"позиция {pos} не закрыта (закрой её в старом контракте)",
+                        level="error")
+                    return
+                # Свежий процесс: отказать совсем нельзя - робот не появится вовсе, и
+                # позицию старого контракта некому будет закрыть. Разворачиваем его на
+                # СТАРОМ контракте, с его барами и книгой.
+                spec["symbol"] = old_symbol
+                spec["params"]["symbol"] = old_symbol
+                rolled = False
+            saved = saved_all
             # keep accumulated bars across a re-deploy (params change, STL reconnect,
             # arming); a contract roll starts with an EMPTY builder
             bars = BarBuilder() if rolled else (prev.bars if prev is not None else BarBuilder())
-            if prev is None:
+            if prev is None and not rolled:
                 # fresh process: re-warm from the persisted tail so a restart never
-                # blinds a long-lookback robot (seed() is a no-op once live data flows)
+                # blinds a long-lookback robot (seed() is a no-op once live data flows).
+                # ПРИ РОЛЛЕ НЕ ЗАСЕВАЕМ: сохранённый хвост принадлежит старому контракту.
                 bars.seed(saved.get("bars") or [])
             sym = spec["symbol"]
             rt = AgentRuntime(spec["robot_id"], self._bridge, bars,
