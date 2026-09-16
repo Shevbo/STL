@@ -508,3 +508,60 @@ async def test_bad_control_message_does_not_kill_the_stream(tmp_path):
 
     assert "ok" in host.robots            # здоровый робот задеплоился
     assert "bad" not in host.robots and "ghost" not in host.robots
+
+
+def _deploy_rc_symbol(symbol, robot_id="r1", paper=False):
+    """Тот же deploy, но с произвольным контрактом (ролл RIU6 -> RIZ6)."""
+    rc = _deploy_rc(robot_id=robot_id, paper=paper,
+                    params={"symbol": symbol, "qty": 1, "min_frac": 12, "tp_atr": 60,
+                            "avg_max": 1, "avg_atr_n": 5, "avg_step_atr": 24})
+    rc.deploy.spec.symbol = symbol
+    return rc
+
+
+@pytest.mark.asyncio
+async def test_contract_roll_resets_bars_and_state_keeps_money(tmp_path):
+    """Ролл на экспирации (RIU6 -> RIZ6). У декабрьского контракта своя цена: склейка
+    баров нарисовала бы индикаторам разрыв, которого на рынке не было. Деньги робота
+    при этом не обнуляются - это тот же робот, просто другой контракт."""
+    host = RobotHost(FakeBridge(), str(tmp_path))
+    await host.handle_control(_deploy_rc_symbol("RIU6"))
+    r = host.robots["r1"]
+    r.runtime.set_state("trend", "up")
+    r.runtime.restore(position=0, avg=0.0, realized=777.0,
+                      fills=[{"side": "buy", "qty": 1, "price": 87000.0, "status": "filled",
+                              "order_id": "o", "client_id": "c", "symbol": "RIU6", "ts_ms": 1}])
+    t0 = 1_751_500_000_000
+    for i in range(12):
+        r.bars.on_tick(t0 + i * 60_000, 87_000 + i * 10)
+    assert len(r.bars.bars()) > 0
+    host.persist()
+
+    await host.handle_control(_deploy_rc_symbol("RIZ6"))
+    r2 = host.robots["r1"]
+    assert r2.spec["symbol"] == "RIZ6"
+    assert r2.spec["params"]["symbol"] == "RIZ6"
+    assert r2.bars.bars() == []                      # бары старого контракта не переехали
+    assert r2.runtime.get_state("trend") is None     # состояние стратегии с нуля
+    assert r2.runtime.signed_position() == 0
+    assert r2.runtime.realized_gross() == 777.0      # деньги и история робота сохранены
+    assert r2.runtime.fills_tail()
+
+
+@pytest.mark.asyncio
+async def test_contract_roll_refused_with_open_position(tmp_path):
+    """Позиция живёт в СТАРОМ контракте: на новом робот закрывал бы её заявкой по
+    чужому инструменту. Переключение отклоняется, робот остаётся на старом."""
+    host = RobotHost(FakeBridge(), str(tmp_path))
+    await host.handle_control(_deploy_rc_symbol("RIU6"))
+    host.robots["r1"].runtime.restore(position=-3, avg=87000.0, realized=0.0)
+    t0 = 1_751_500_000_000
+    for i in range(5):
+        host.robots["r1"].bars.on_tick(t0 + i * 60_000, 87_000)
+    bars_before = len(host.robots["r1"].bars.bars())
+
+    await host.handle_control(_deploy_rc_symbol("RIZ6"))
+    r = host.robots["r1"]
+    assert r.spec["symbol"] == "RIU6"                 # остался на старом контракте
+    assert r.runtime.signed_position() == -3          # позиция цела
+    assert len(r.bars.bars()) == bars_before          # бары целы

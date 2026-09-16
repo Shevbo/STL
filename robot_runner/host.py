@@ -169,9 +169,30 @@ class RobotHost:
             # ModeSet gate refuses a non-flat flip); bars are KEPT so it does not
             # re-warm (silent for an hour).
             arming = prev is not None and prev.spec.get("paper") and not spec["paper"]
+            # СМЕНА КОНТРАКТА (ролл на экспирации, RIU6 -> RIZ6). Бары старого контракта
+            # склеивать с новым НЕЛЬЗЯ: у следующего контракта своя цена (базис в сотни
+            # пунктов), и индикаторы поехали бы на разрыве, которого на рынке не было.
+            # Состояние стратегии привязано к прежним уровням - тоже с нуля. Позиция
+            # обязана быть нулевой: она живёт в СТАРОМ контракте, а робот на новом
+            # закрывал бы её заявкой по чужому инструменту. Деньги и история сделок
+            # робота сохраняются: ролл - это не новый робот.
+            old_symbol = prev.spec.get("symbol") if prev is not None else ""
+            rolled = bool(prev is not None and spec["symbol"] and old_symbol
+                          and old_symbol != spec["symbol"])
+            if rolled and prev.runtime.signed_position() != 0:
+                pos = prev.runtime.signed_position()
+                log.warning("host.roll_refused", robot_id=spec["robot_id"],
+                            old_symbol=old_symbol, new_symbol=spec["symbol"], position=pos)
+                prev.runtime.event(
+                    "LIFECYCLE",
+                    f"смена контракта {old_symbol} -> {spec['symbol']} ОТКЛОНЕНА: "
+                    f"позиция {pos} не закрыта (закрой её в старом контракте)",
+                    level="error")
+                return
             saved = self._saved.get(spec["robot_id"], {})
-            # keep accumulated bars across a re-deploy (params change, STL reconnect, arming)
-            bars = prev.bars if prev is not None else BarBuilder()
+            # keep accumulated bars across a re-deploy (params change, STL reconnect,
+            # arming); a contract roll starts with an EMPTY builder
+            bars = BarBuilder() if rolled else (prev.bars if prev is not None else BarBuilder())
             if prev is None:
                 # fresh process: re-warm from the persisted tail so a restart never
                 # blinds a long-lookback robot (seed() is a no-op once live data flows)
@@ -179,7 +200,8 @@ class RobotHost:
             sym = spec["symbol"]
             rt = AgentRuntime(spec["robot_id"], self._bridge, bars,
                               max_position=spec["max_position"],
-                              paper=spec["paper"], state=saved.get("state"),
+                              paper=spec["paper"],
+                              state=None if rolled else saved.get("state"),
                               quote_fn=lambda s=sym: self.quotes.get(s),
                               event_log_dir=self._data_dir)
             # Commission: on the FIRST restore after the fee upgrade the persisted
@@ -201,8 +223,8 @@ class RobotHost:
             # here is the backstop for the flat-gate racing on a stale status — without
             # it a paper +N "teleports" into real as a phantom the runner would try to
             # close with a REAL order (found live 2026-07-20). Paper P&L/fills already reset.
-            rt.restore(position=0 if arming else saved.get("position", 0),
-                       avg=0.0 if arming else saved.get("avg", 0.0),
+            rt.restore(position=0 if (arming or rolled) else saved.get("position", 0),
+                       avg=0.0 if (arming or rolled) else saved.get("avg", 0.0),
                        realized=0.0 if arming else saved.get("realized", 0.0),
                        commission=0.0 if arming else (saved_comm or 0.0),
                        fills=[] if arming else saved.get("fills"))
@@ -228,6 +250,11 @@ class RobotHost:
             rt.event("LIFECYCLE", f"деплой: стратегия={spec['strategy_id']} "
                      f"режим={'paper' if spec['paper'] else 'РЕАЛ'} "
                      f"max_pos={spec['max_position']} окно={spec['schedule']}")
+            if rolled:
+                rt.event("LIFECYCLE",
+                         f"смена контракта {old_symbol} -> {spec['symbol']}: бары и "
+                         "состояние стратегии с нуля, позиция 0, P&L и история сохранены",
+                         level="warning")
             if arming:
                 rt.event("LIFECYCLE", "АРМИНГ paper->РЕАЛ: статистика обнулена "
                          "(realized P&L и история сделок с нуля)", level="warning")
