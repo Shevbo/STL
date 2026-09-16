@@ -84,7 +84,7 @@ class BookRuntime(BacktestRuntime):
                       # СРЕДНЕЕ ПО СПРЕДУ ВРЁТ: медиана полспреда RIU6 = 5 пт, а среднее
                       # 7.8 — хвост делают ночь и предоткрытие (03:00 медиана 180 пт).
                       # Поэтому храним пофилловые значения и час МСК каждого филла.
-                      "spread_each": [], "hour_each": []}
+                      "spread_each": [], "hour_each": [], "drift_each": []}
 
     def _snapshot(self, ts: int):
         i = bisect.bisect_left(self._bt, ts)
@@ -131,5 +131,6 @@ class BookRuntime(BacktestRuntime):
         self.stats["gap_s"] += gap
         self.stats["spread_each"].append(sign * (fill - mid))
         self.stats["hour_each"].append(nxt.time % 86400 // 3600)   # бары в шкале МСК
+        self.stats["drift_each"].append(sign * (mid - nxt.open))
         self.stats["gap_max_s"] = max(self.stats["gap_max_s"], gap)
         return self._apply_fill(symbol, side, qty, fill, nxt.time)

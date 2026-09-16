@@ -58,6 +58,17 @@ def main() -> None:
 
     print(f"{'стратегия':15} {'филлов':>7} {'бар, пт':>10} {'стакан, пт':>11} {'разница':>10} "
           f"{'пт/филл':>8} {'спред ср':>8} {'медиана':>8} {'p90':>6} {'снос':>7} {'ночь%':>6} {'ночь дала':>10} {'нет кн':>6}")
+    def mean_se(xs):
+        """среднее и его ошибка: 'снос +7.3' без SE неотличим от одного ночного филла."""
+        if not xs:
+            return 0.0, 0.0
+        m = sum(xs) / len(xs)
+        if len(xs) < 3:
+            return m, 0.0
+        var = sum((x - m) ** 2 for x in xs) / (len(xs) - 1)
+        return m, (var / len(xs)) ** 0.5
+
+    rows_out = []
     for rid in STRATS:
         mod = types.ModuleType("m")
         mod.on_bar = make_on_bar(rid)
@@ -83,6 +94,19 @@ def main() -> None:
               f"{(d / k):8.1f} {st.get('spread_pts', 0) / k:8.1f} {sp[len(sp) // 2]:8.1f} "
               f"{sp[min(len(sp) - 1, int(0.9 * len(sp)))]:6.0f} {st.get('drift_pts', 0) / k:7.1f} "
               f"{night:6.0%} {night_share:10.0%} {st.get('no_book', 0):6}")
+        dr = st.get("drift_each") or []
+        day_d = [v for v, nt in zip(dr, is_night) if not nt]
+        night_d = [v for v, nt in zip(dr, is_night) if nt]
+        rows_out.append((rid, mean_se(day_d), len(day_d), mean_se(night_d), len(night_d)))
+
+    _print_drift(rows_out)
+
+
+def _print_drift(rows_out):
+    print("")
+    print("снос отдельно день/ночь (пт на филл, +- ошибка среднего):")
+    for rid, (dm, dse), dn, (nm, nse), nn in rows_out:
+        print(f"  {rid:15} день {dm:+6.1f} +-{dse:4.1f} (n={dn:3})   ночь {nm:+7.1f} +-{nse:6.1f} (n={nn:3})")
 
 
 if __name__ == "__main__":
