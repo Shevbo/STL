@@ -65,3 +65,18 @@ def test_without_snapshot_falls_back_to_bar_open():
     rt._cursor = 5
     o = asyncio.run(rt.place_order("RIU6", "buy", 1, 0))
     assert o.fill_price == bars[6].open and rt.stats["no_book"] == 1 and rt.stats["book"] == 0
+
+
+def test_stale_snapshot_counts_as_no_book():
+    """Снимок старше порога свежести = стакана нет: иначе замер мерит ход рынка за
+    трое суток вместо спреда (провалы архива при рестарте STL)."""
+    bars = _bars()
+    t = bars[6].time
+    book = ([t + 3600], [([(99.0, 10)], [(101.0, 10)])])    # час позже заявки
+    rt = BookRuntime(bars=bars, symbol="RIU6", initial_equity=0.0, book=book, max_gap_s=60)
+    rt._cursor = 5
+    o = asyncio.run(rt.place_order("RIU6", "buy", 1, 0))
+    assert o.fill_price == bars[6].open and rt.stats["no_book"] == 1
+    rt2 = BookRuntime(bars=bars, symbol="RIU6", initial_equity=0.0, book=book, max_gap_s=7200)
+    rt2._cursor = 5
+    assert asyncio.run(rt2.place_order("RIU6", "buy", 1, 0)).fill_price == 101.0

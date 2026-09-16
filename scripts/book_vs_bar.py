@@ -43,17 +43,21 @@ def main() -> None:
     ap.add_argument("--book", required=True, help="каталог с book-*.jsonl[.gz]")
     ap.add_argument("--code", default="RIU6")
     ap.add_argument("--tf", type=int, default=15)
+    ap.add_argument("--gap", type=int, default=60, help="порог свежести снимка, секунд")
     a = ap.parse_args()
 
     rows = json.load(open(a.bars, encoding="utf-8"))["rows"]
     times, books = load_dir(a.book, a.code)
     lo, hi = times[0], times[-1]
     bars = aggregate([Bar(int(r[0]), *map(float, r[1:5]), int(r[5])) for r in rows if lo <= r[0] <= hi], a.tf)
-    print(f"{a.code}: снимков стакана {len(times)}, баров M{a.tf} {len(bars)} "
-          f"({len(bars) and bars[0].time}..{len(bars) and bars[-1].time})")
+    import bisect
+    fresh = sum(1 for b in bars
+                if (i := bisect.bisect_left(times, b.time)) < len(times) and times[i] - b.time <= a.gap)
+    print(f"{a.code}: снимков стакана {len(times)}, баров M{a.tf} {len(bars)}, "
+          f"со свежим стаканом (<= {a.gap} с) {fresh} = {fresh / max(len(bars), 1):.0%}")
 
     print(f"{'стратегия':15} {'филлов':>7} {'бар, пт':>10} {'стакан, пт':>11} {'разница':>10} "
-          f"{'пт/филл':>8} {'глубины нет':>11} {'без стакана':>11}")
+          f"{'пт/филл':>8} {'спред':>7} {'снос':>7} {'зазор с':>8} {'макс':>5} {'глуб':>5} {'нет кн':>6}")
     for rid in STRATS:
         mod = types.ModuleType("m")
         mod.on_bar = make_on_bar(rid)
@@ -61,12 +65,14 @@ def main() -> None:
         r_bar = asyncio.run(run_single_backtest(mod, bars, a.code, params))
         r_bok = asyncio.run(run_single_backtest(mod, bars, a.code, params,
                                                 runtime_cls=BookRuntime,
-                                                runtime_kw={"book": (times, books)}))
+                                                runtime_kw={"book": (times, books), "max_gap_s": a.gap}))
         st = r_bok.get("fill_stats", {})
         n = len(r_bar["trades"])
         d = r_bok["net_profit"] - r_bar["net_profit"]
+        k = max(st.get("book", 0), 1)
         print(f"{rid:15} {n:7} {r_bar['net_profit']:10.0f} {r_bok['net_profit']:11.0f} {d:10.0f} "
-              f"{(d / n if n else 0):8.1f} {st.get('deep', 0):11} {st.get('no_book', 0):11}")
+              f"{(d / n if n else 0):8.1f} {st.get('spread_pts', 0) / k:7.1f} {st.get('drift_pts', 0) / k:7.1f} "
+              f"{st.get('gap_s', 0) / k:8.1f} {st.get('gap_max_s', 0):5} {st.get('deep', 0):5} {st.get('no_book', 0):6}")
 
 
 if __name__ == "__main__":

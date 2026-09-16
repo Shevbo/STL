@@ -68,14 +68,25 @@ class BookRuntime(BacktestRuntime):
     считаются в stats['no_book']: смешивать их с измерением нельзя.
     """
 
-    def __init__(self, *a, book: tuple[list[int], list[tuple]] | None = None, **kw) -> None:
+    def __init__(self, *a, book: tuple[list[int], list[tuple]] | None = None,
+                 max_gap_s: int = 60, **kw) -> None:
         super().__init__(*a, **kw)
         self._bt, self._bb = book or ([], [])
-        self.stats = {"book": 0, "no_book": 0, "deep": 0, "slip_pts": 0.0}
+        # ПОРОГ СВЕЖЕСТИ. В архиве есть провалы (рестарт STL, молчание агента): без
+        # порога заявка находила «ближайший» снимок трёхсуточной давности и замер мерил
+        # ход рынка за трое суток, а не спред. Дальше порога = стакана нет.
+        self._max_gap = max_gap_s
+        # slip = spread + drift: спред считается от середины ТОГО ЖЕ снимка, снос —
+        # разница середины снимка и open бара. Без разделения редко торгующая стратегия
+        # показывает «исполнение лучше бара»: это не спред, а уход цены за gap секунд.
+        self.stats = {"book": 0, "no_book": 0, "deep": 0, "slip_pts": 0.0,
+                      "spread_pts": 0.0, "drift_pts": 0.0, "gap_s": 0.0, "gap_max_s": 0}
 
     def _snapshot(self, ts: int):
         i = bisect.bisect_left(self._bt, ts)
-        return self._bb[i] if i < len(self._bt) else None
+        if i >= len(self._bt) or self._bt[i] - ts > self._max_gap:
+            return None
+        return self._bb[i], self._bt[i] - ts
 
     @staticmethod
     def _walk(levels: list[tuple], qty: int) -> tuple[float, bool]:
@@ -91,21 +102,28 @@ class BookRuntime(BacktestRuntime):
         return cost / qty, True
 
     async def get_orderbook(self, symbol: str):
-        snap = self._snapshot(self._bars[self._cursor].time)
-        if snap is None:
+        got = self._snapshot(self._bars[self._cursor].time)
+        if got is None:
             return {"bids": [], "asks": []}
-        return {"bids": [{"price": p, "quantity": q} for p, q in snap[0]],
-                "asks": [{"price": p, "quantity": q} for p, q in snap[1]]}
+        (bids, asks), _gap = got
+        return {"bids": [{"price": p, "quantity": q} for p, q in bids],
+                "asks": [{"price": p, "quantity": q} for p, q in asks]}
 
     async def place_order(self, symbol: str, side: str, qty: int, price: float):
         nxt = self._bars[self._cursor + 1]
-        snap = self._snapshot(nxt.time)
-        if snap is None:
+        got = self._snapshot(nxt.time)
+        if got is None:
             self.stats["no_book"] += 1
             return await super().place_order(symbol, side, qty, price)
-        fill, deep = self._walk(snap[1] if side == "buy" else snap[0], qty)
+        (bids, asks), gap = got
+        fill, deep = self._walk(asks if side == "buy" else bids, qty)
+        mid = (bids[0][0] + asks[0][0]) / 2
+        sign = 1 if side == "buy" else -1              # знак «хуже для нас»
         self.stats["book"] += 1
         self.stats["deep"] += deep
-        # Проскальзывание против бар-исполнения: со знаком «хуже для нас».
-        self.stats["slip_pts"] += (fill - nxt.open) if side == "buy" else (nxt.open - fill)
+        self.stats["slip_pts"] += sign * (fill - nxt.open)
+        self.stats["spread_pts"] += sign * (fill - mid)
+        self.stats["drift_pts"] += sign * (mid - nxt.open)
+        self.stats["gap_s"] += gap
+        self.stats["gap_max_s"] = max(self.stats["gap_max_s"], gap)
         return self._apply_fill(symbol, side, qty, fill, nxt.time)
