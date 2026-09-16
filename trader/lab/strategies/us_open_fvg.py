@@ -89,11 +89,24 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
         stl.set_state("day", day)
         for k in ("rh", "rl"):
             stl.set_state(k, None)
-        for k in ("entered", "done", "dir", "broke_dir"):
+        for k in ("entered", "done", "dir", "broke_dir", "pending"):
             stl.set_state(k, 0)
 
     pos = await stl.get_position(symbol)
     cur_qty = pos.quantity if pos.side == "long" else (-pos.quantity if pos.side == "short" else 0)
+
+    # ВХОД СЧИТАЕТСЯ ПО ФАКТУ ПОЗИЦИИ, А НЕ ПО ОТПРАВКЕ ЗАЯВКИ. В бэктесте заявка
+    # исполняется всегда, поэтому «отправил» и «вошёл» совпадали по построению; в реале
+    # лимитка может не налиться, и раннер снимает её перед следующим баром. 16.09.2026
+    # на РЕАЛЬНОМ agent-usopen-RIU6-v1 неисполненный вход записал entered=1 при нулевой
+    # позиции — робот считал, что уже отторговал, и простоял весь день (письмо real-trade).
+    # Поэтому вход сначала pending, и только появившаяся позиция превращает его в entered.
+    # Порядок важен: превращение стоит ДО страховки от осиротевшей позиции ниже, иначе
+    # та закроет только что исполнившийся вход как чужой.
+    if stl.get_state("pending"):
+        stl.set_state("pending", 0)
+        if cur_qty != 0:
+            stl.set_state("entered", 1)
 
     # Safety: a position that survived into a new day (its `entered` flag was cleared by the
     # reset) must be CLOSED, never added to by a fresh entry below — otherwise it accumulates
@@ -218,7 +231,7 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
                 return False
             tp = price - rr * risk
             await stl.place_order(symbol, "sell", qty, price)
-        stl.set_state("entered", 1)
+        stl.set_state("pending", 1)          # entered поставит следующий бар, если налилось
         stl.set_state("dir", dirn)
         stl.set_state("sl", sl)
         stl.set_state("tp", tp)
