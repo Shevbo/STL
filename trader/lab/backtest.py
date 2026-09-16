@@ -232,10 +232,15 @@ async def run_single_backtest(
     point_value: float = 1.0,
     initial_margin: float = 0.0,
     extra: dict[str, list[Bar]] | None = None,
+    runtime_cls: type[BacktestRuntime] | None = None,
+    runtime_kw: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    runtime = BacktestRuntime(bars=bars, symbol=symbol,
+    # runtime_cls — сменное ИСПОЛНЕНИЕ при неизменной стратегии и метриках: BookRuntime
+    # (trader/lab/book_replay.py) исполняет по архивному стакану вместо open следующего
+    # бара. По умолчанию поведение прежнее.
+    runtime = (runtime_cls or BacktestRuntime)(bars=bars, symbol=symbol,
                               initial_equity=initial_equity, point_value=point_value,
-                              extra=extra)
+                              extra=extra, **(runtime_kw or {}))
 
     # ШВЫ СКЛЕЙКИ. Непрерывный контракт сшит из разных серий без выравнивания
     # базиса: позиция, пережившая смену контракта, получает фантомный результат
@@ -328,7 +333,9 @@ async def run_single_backtest(
     # open position that never closes is exactly the mirage this feature exists
     # to expose, so its real MAE/mtm-dd/RF-mtm must win, not get stomped back to
     # zero by compute_metrics's placeholder defaults.
+    fill_stats = getattr(runtime, "stats", None)
     res = {"trades": trades, "equity_curve": equity_curve,
+           **({"fill_stats": fill_stats} if fill_stats else {}),
            "point_value": point_value, **metrics,
            "max_mae": max_mae, "max_drawdown_mtm": max_dd_mtm,
            "recovery_factor_mtm": rf_mtm,
