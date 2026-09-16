@@ -28,7 +28,8 @@ from trader.lab.book_replay import MSK_SHIFT, BookRuntime, load_dir
 
 
 def load_orders(root: str, code: str):
-    """[(t_send, t_fill, side, qty, price_fill)] по каждому исполненному client_id."""
+    """(исполненные, всего отправлено): неисполненные заявки тоже нужны — их цена не
+    спред, а упущенная сделка, и в выборке филлов их не видно (выжившие)."""
     sent, filled = {}, {}
     for name in sorted(os.listdir(root)):
         if not name.startswith("order-"):
@@ -58,7 +59,7 @@ def load_orders(root: str, code: str):
             t_fill, px_fill, n = filled[cid]
             if qty and px_fill:
                 out.append((t_send, t_fill, side, n or qty, px_fill, px_sent))
-    return sorted(out)
+    return sorted(out), len(sent)
 
 
 def main() -> None:
@@ -69,15 +70,20 @@ def main() -> None:
     ap.add_argument("--gap", type=int, default=60)
     a = ap.parse_args()
 
-    fills = load_orders(a.orders, a.code)
+    fills, n_sent = load_orders(a.orders, a.code)
     times, books = load_dir(a.book, a.code)
-    print(f"{a.code}: наших филлов {len(fills)}, снимков стакана {len(times)}")
+    print(f"{a.code}: отправлено заявок {n_sent}, из них исполнено {len(fills)} "
+          f"({len(fills) / max(n_sent, 1):.0%}); снимков стакана {len(times)}")
 
     rows, by_hour, no_book = [], defaultdict(list), 0
     for t_send, t_fill, side, qty, px_fill, px_sent in fills:
         ts = t_send + MSK_SHIFT
-        i = bisect.bisect_left(times, ts)
-        if i >= len(times) or times[i] - ts > a.gap:
+        # СНИМОК ДО ОТПРАВКИ. bisect_left брал первый снимок ПОСЛЕ отправки, а при
+        # медиане ожидания 0 с это книга уже ПОСЛЕ нашего филла и движения цены:
+        # модель шагала по обглоданной книге, mid был сдвинут, и получалось, что факт
+        # лучше модели на 4.5 пт (и p10 −10, невозможный для заявки по касанию).
+        i = bisect.bisect_right(times, ts) - 1
+        if i < 0 or ts - times[i] > a.gap:
             no_book += 1
             continue
         bids, asks = books[i]
@@ -113,6 +119,17 @@ def main() -> None:
           f"ожидание филла: медиана {median(w):.0f} с, p90 {w[9 * len(w) // 10]:.0f} с")
     print("  факт к mid по часам МСК: " + " ".join(f"{h:02d}:{median(v):+.0f}"
                                                    for h, v in sorted(by_hour.items())))
+    # Разбивка по объёму: модель шагает по уровням, факт — нет, и на 1 лоте оба должны
+    # сходиться к полспреда. Расхождение именно там показывает, врёт ли модель сама по
+    # себе, а не из-за объёма.
+    print("  по объёму заявки (лотов: филлов, модель к mid, факт к mid):")
+    for lo, hi in ((1, 1), (2, 4), (5, 9), (10, 1000)):
+        part = [r for r in rows if lo <= r["qty"] <= hi]
+        if part:
+            m = sorted(r["model_vs_mid"] for r in part)
+            f2 = sorted(r["fact_vs_mid"] for r in part)
+            tag = f"{lo}" if lo == hi else f"{lo}-{hi if hi < 1000 else '+'}"
+            print(f"    {tag:>5}: {len(part):5}  модель {median(m):+6.1f}  факт {median(f2):+6.1f}")
 
 
 if __name__ == "__main__":
