@@ -201,6 +201,9 @@ class MarketRecorder:
     async def start(self) -> None:
         if not self.enabled or self._task is not None:
             return
+        # Хвосты умершего процесса подбираем СРАЗУ на старте: иначе день лежит текстом
+        # до следующей ротации, а если процесс снова умрёт - навсегда (14.08.2026).
+        self.sweep_leftovers()
         self._lazy_start()
 
     async def stop(self) -> None:
@@ -272,6 +275,61 @@ class MarketRecorder:
             self._files[kind] = f
         return f
 
+    def _compress(self, path: str) -> None:
+        """Сжать закрытый файл АТОМАРНО: временный файл, затем переименование.
+
+        Прямая запись в итоговый .gz оставляет обрезанный архив, если процесс умер на
+        середине: reply-2026-08-12.jsonl.gz так и лежал нечитаемым («Compressed file
+        ended before the end-of-stream marker»), а earlyoom на этом хостере убивает
+        uvicorn по SIGKILL, то есть середина сжатия - штатный исход, а не редкость.
+        Переименование в пределах каталога атомарно: наружу попадает либо целый
+        архив, либо ничего, а исходник удаляется только после него.
+        """
+        tmp = path + ".gz.tmp"
+        try:
+            with open(path, "rb") as src, gzip.open(tmp, "wb", 6) as dst:
+                while chunk := src.read(1 << 20):
+                    dst.write(chunk)
+            os.replace(tmp, path + ".gz")
+            os.remove(path)
+        except Exception as exc:  # noqa: BLE001 — не сжалось: исходник остаётся целым
+            log.warning("recorder.compress_failed", path=path, error=str(exc))
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
+    def sweep_leftovers(self) -> int:
+        """Сжать несжатые файлы ПРОШЛЫХ суток, оставшиеся от умершего процесса.
+
+        Ротация знает только про файлы, которые открывал сама, поэтому смерть процесса
+        на границе суток оставляла день лежать текстом навсегда: 14.08.2026 так и лежит
+        book/tick/order/reply на 88 МБ. Зовётся при старте и при каждой ротации.
+        Возвращает число сжатых файлов.
+        """
+        if not self.enabled or not self.root:
+            return 0
+        today = self._utc_day()
+        done = 0
+        try:
+            names = os.listdir(self.root)
+        except OSError as exc:
+            log.warning("recorder.sweep_failed", error=str(exc))
+            return 0
+        for name in names:
+            if not name.endswith(".jsonl") or f"-{today}.jsonl" in name:
+                continue
+            path = os.path.join(self.root, name)
+            if path in {getattr(f, "name", None) for f in self._files.values()}:
+                continue
+            # Обрезанный .gz рядом с целым исходником - мусор прошлой попытки: сжимаем
+            # заново, os.replace его перезапишет.
+            self._compress(path)
+            done += 1
+        if done:
+            log.info("recorder.sweep_done", files=done)
+        return done
+
     def _rotate(self) -> None:
         """Закрыть вчерашние файлы и сжать их. Сжатие закрытого файла целостно."""
         paths = [getattr(f, "name", None) for f in self._files.values()]
@@ -280,13 +338,8 @@ class MarketRecorder:
         for path in paths:
             if not path or not os.path.exists(path) or path.endswith(".gz"):
                 continue
-            try:
-                with open(path, "rb") as src, gzip.open(path + ".gz", "wb", 6) as dst:
-                    while chunk := src.read(1 << 20):
-                        dst.write(chunk)
-                os.remove(path)
-            except Exception as exc:  # noqa: BLE001 — не сжалось, останется как есть
-                log.warning("recorder.compress_failed", path=path, error=str(exc))
+            self._compress(path)
+        self.sweep_leftovers()
 
     @staticmethod
     def _quality(kind: str, p: dict) -> str | None:
