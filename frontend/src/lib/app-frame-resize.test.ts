@@ -11,8 +11,12 @@ const src = readFileSync(resolve(process.cwd(), 'src/App.svelte'), 'utf8');
 
 describe('высота нижних фреймов', () => {
   it('у каждого фрейма QUIK есть своя ручка под ним', () => {
+    // Считаем ФРЕЙМЫ, а не помним их число: раньше здесь стояла тройка, и первый
+    // же новый фрейм («Экспирация», 16.09.2026) ронял тест, хотя ручку ему дали.
+    const frames = src.match(/class="quik-tables-wrap"/g) ?? [];
     const handles = src.match(/onPointerDown\('labBottom'/g) ?? [];
-    expect(handles.length, 'ORDERS, таблицы и кривая').toBe(3);
+    expect(frames.length).toBeGreaterThanOrEqual(3);      // ORDERS, таблицы, кривая
+    expect(handles.length, 'ручка под каждым фреймом').toBe(frames.length);
   });
 
   it('тянешь ВНИЗ — растёт: знак дельты противоположен верхней ручке', () => {

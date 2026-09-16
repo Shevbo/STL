@@ -20,6 +20,7 @@
   import EquityChart from './components/lab/EquityChart.svelte';
   import LoginDialog from './components/LoginDialog.svelte';
   import AgentRobotScreen from './components/lab/AgentRobotScreen.svelte';
+  import ExpiryScreen from './components/ExpiryScreen.svelte';
   import StrategyPage from './components/lab/StrategyPage.svelte';
   import { WsClient } from '$lib/ws';
   import { robotsStore } from '$lib/stores/robots.svelte';
@@ -57,6 +58,8 @@
   // Deep-link: ?equity=1 разворачивает общий график доходности всех роботов —
   // на него ссылается панель компаньона из блока «Роботы».
   let showEquity = $state(_qs.has('equity'));
+  // Дип-линк ?expiry=1 — экран кампании перекладки контрактов (меню «Торговля»).
+  let showExpiry = $state(_qs.has('expiry'));
   // OrderViz: default = auto (self-shows on active orders). Operator can pin it
   // open or hide it; "pin" forces it visible even with no active orders.
   let orderVizPinned = $state(false);
@@ -294,6 +297,7 @@
     if (showQuikOrders) { setTitle('Заявки'); return; }
     if (showQuikTables) { setTitle('Таблицы QUIK'); return; }
     if (showEquity) { setTitle('Доходность роботов'); return; }
+    if (showExpiry) { setTitle('Экспирация'); return; }
     setTitle('Терминал');
   });
 
@@ -445,6 +449,15 @@
     </div>
     <!-- Ручка ПОД фреймом: у фреймов QUIK её не было совсем, высота была
          намертво общей с панелью LAB и менялась только оттуда. -->
+    <div class="dh dh-h" title="Высота фрейма: потяните вниз — выше"
+         onpointerdown={(e) => onPointerDown('labBottom', e, labH)}>
+      <div class="dh-dot"></div>
+    </div>
+  {/if}
+  {#if showExpiry}
+    <div class="quik-tables-wrap" style="height:{labH}px">
+      <ExpiryScreen onClose={() => showExpiry = false} />
+    </div>
     <div class="dh dh-h" title="Высота фрейма: потяните вниз — выше"
          onpointerdown={(e) => onPointerDown('labBottom', e, labH)}>
       <div class="dh-dot"></div>
