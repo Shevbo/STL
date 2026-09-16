@@ -611,3 +611,54 @@ async def test_roll_after_restart_with_saved_position_keeps_old_contract(tmp_pat
     assert r2.spec["params"]["symbol"] == "RIU6"
     assert r2.runtime.signed_position() == -2                # позиция цела
     assert r2.bars.bars()                                    # бары старого контракта на месте
+
+
+@pytest.mark.asyncio
+async def test_warm_store_gives_new_contract_history_on_roll(tmp_path):
+    """Разогрев ЗАРАНЕЕ. 16.09 после перекладки роботы молчали 4 часа, набирая 238 баров.
+    Лента приходит раннеру по всем инструментам, поэтому историю нового контракта можно
+    копить заранее и отдать роботу в момент ролла."""
+    host = RobotHost(FakeBridge(), str(tmp_path))
+    await host.handle_control(_deploy_rc_symbol("RIU6"))
+    t0 = 1_751_500_000_000
+    for i in range(30):                      # склад копит будущий контракт
+        host._warm_for("RIZ6").on_tick(t0 + i * 60_000, 86_500 + i)
+        host._warm_for("RIU6").on_tick(t0 + i * 60_000, 86_300 + i)
+    warm_bars = len(host.warm["RIZ6"].bars())
+    assert warm_bars > 0
+
+    await host.handle_control(_deploy_rc_symbol("RIZ6"))
+    r = host.robots["r1"]
+    assert r.spec["symbol"] == "RIZ6"
+    assert len(r.bars.bars()) == warm_bars                     # робот НЕ с нуля
+    assert r.bars.bars()[-1].close >= 86_500                   # это бары НОВОГО контракта
+
+
+@pytest.mark.asyncio
+async def test_warm_store_survives_runner_restart(tmp_path):
+    """Обновление агента накануне экспирации не должно обнулять подготовленную историю."""
+    host = RobotHost(FakeBridge(), str(tmp_path))
+    t0 = 1_751_500_000_000
+    for i in range(20):
+        host._warm_for("RIZ6").on_tick(t0 + i * 60_000, 86_500 + i)
+    host.persist()
+    saved_rows = len(host.warm["RIZ6"].to_rows())
+
+    host2 = RobotHost(FakeBridge(), str(tmp_path))
+    assert "RIZ6" in host2.warm
+    assert len(host2.warm["RIZ6"].to_rows()) == saved_rows
+    # склад не притворяется роботом
+    assert "_warm" not in host2.robots
+
+
+@pytest.mark.asyncio
+async def test_warm_store_is_capped(tmp_path):
+    """Память раннера на VDS уже кончалась: число инструментов на складе ограничено."""
+    host = RobotHost(FakeBridge(), str(tmp_path))
+    for i in range(RobotHost.WARM_MAX_CODES + 5):
+        b = host._warm_for(f"XX{i}")
+        if i < RobotHost.WARM_MAX_CODES:
+            assert b is not None
+        else:
+            assert b is None                                   # сверх предела - молча мимо
+    assert len(host.warm) == RobotHost.WARM_MAX_CODES

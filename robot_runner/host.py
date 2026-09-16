@@ -97,7 +97,35 @@ class RobotHost:
         # freshest QUIK quote per symbol: code -> (bid, ask, ts_ms). Runtimes
         # price REAL orders marketable off it (see AgentRuntime.place_order).
         self.quotes: dict[str, tuple[float, float, int]] = {}
+        # РАЗОГРЕВ ЗАРАНЕЕ. Лента и котировки приходят раннеру по ВСЕМ инструментам, а
+        # роботам раздаются по символу. Копим бары каждого виденного контракта отдельно:
+        # тогда перекладка на экспирации отдаёт роботу ГОТОВУЮ историю нового контракта,
+        # а не пустоту. 16.09 роботы после ролла молчали 4 часа, набирая 238 баров -
+        # столько же они молчали бы в любой следующий раз.
+        self.warm: dict[str, BarBuilder] = {}
         self._saved = self._load()
+        for code, rows in (self._saved.get("_warm") or {}).items():
+            if len(self.warm) >= self.WARM_MAX_CODES:
+                break
+            b = BarBuilder()
+            b.seed(rows or [])
+            self.warm[code] = b
+
+    # Больше инструментов на складе, чем реально бывает в MD_CODES, держать незачем:
+    # это память раннера на VDS с 8 ГБ, где уже жил отказ по памяти.
+    WARM_MAX_CODES = 16
+
+    def _warm_for(self, code: str) -> "BarBuilder | None":
+        """Строитель баров склада для инструмента (создаётся по первому событию)."""
+        if not code:
+            return None
+        b = self.warm.get(code)
+        if b is None:
+            if len(self.warm) >= self.WARM_MAX_CODES:
+                return None
+            b = BarBuilder()
+            self.warm[code] = b
+        return b
 
     # ---- persistence ----
 
@@ -131,7 +159,12 @@ class RobotHost:
                         "bars": r.bars.to_rows()}
         # keep saved state for robots not currently deployed (undeploy != wipe)
         for rid, saved in self._saved.items():
+            if rid == "_warm":
+                continue
             out.setdefault(rid, saved)
+        # Склад разогрева переживает рестарт раннера: иначе обновление агента накануне
+        # экспирации обнуляло бы всю подготовленную историю.
+        out["_warm"] = {code: b.to_rows() for code, b in self.warm.items()}
         tmp = self._state_path + ".tmp"
         os.makedirs(self._data_dir, exist_ok=True)
         with open(tmp, "w", encoding="utf-8") as f:
@@ -211,6 +244,11 @@ class RobotHost:
             # keep accumulated bars across a re-deploy (params change, STL reconnect,
             # arming); a contract roll starts with an EMPTY builder
             bars = BarBuilder() if rolled else (prev.bars if prev is not None else BarBuilder())
+            if rolled:
+                # Разогрев заранее: отдаём роботу накопленную историю НОВОГО контракта.
+                warm = self.warm.get(spec["symbol"])
+                if warm is not None:
+                    bars.seed(warm.to_rows())
             if prev is None and not rolled:
                 # fresh process: re-warm from the persisted tail so a restart never
                 # blinds a long-lookback robot (seed() is a no-op once live data flows).
@@ -529,6 +567,10 @@ class RobotHost:
             # Exact bars: every exchange trade (price/qty) from the anonymized
             # tape -> OHLCV identical to what the backtest replays.
             async for b in self._bridge.tape([]):
+                warm = self._warm_for(b.code)
+                for t in b.trades:
+                    if warm is not None:
+                        warm.on_trade(t.ts_unix_ms, t.price, int(t.qty))
                 for r in self.robots.values():
                     if r.spec["symbol"] == b.code:
                         for t in b.trades:
@@ -543,6 +585,9 @@ class RobotHost:
                 price = pick_price(t.last, t.bid, t.ask)
                 if price <= 0:
                     continue
+                warm = self._warm_for(t.code)
+                if warm is not None:
+                    warm.on_tick(t.received_at_unix_ms, price)
                 for r in self.robots.values():
                     if r.spec["symbol"] == t.code:
                         r.bars.on_tick(t.received_at_unix_ms, price)
