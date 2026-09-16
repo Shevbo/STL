@@ -44,7 +44,7 @@
 -- Bump on every change you deliver to the VDS. Logged FIRST on OnInit so the
 -- operator can confirm which version QUIK actually loaded (the running script is
 -- in MEMORY; a file on disk with the same name may be a different build).
-local SCRIPT_VERSION = "2026.09.15-stoporders"
+local SCRIPT_VERSION = "2026.09.16-l2sub"
 
 local CONFIG = {
   HOST          = "127.0.0.1",
@@ -597,6 +597,25 @@ local function publish_ticks()
   end
 end
 
+-- ПОДПИСКА НА СТАКАН. getQuoteLevel2 отдаёт уровни ТОЛЬКО по инструментам, на
+-- которые терминал подписан: пока стакан не открыт окном в QUIK или не запрошен
+-- Subscribe_Level_II_Quotes, вызов возвращает пусто. 16.09.2026 из-за этого в
+-- архив рынка шли стаканы ровно трёх инструментов (у оператора были открыты три
+-- окна), а по RIZ6/SiZ6/BRZ6 не было ни одного снимка - и бэктест исполнения
+-- остался без данных ровно перед экспирацией. Подписываемся сами, при старте и
+-- после каждого переподключения транспорта; проверка IsSubscribed_ делает вызов
+-- идемпотентным.
+local function subscribe_books()
+  if not Subscribe_Level_II_Quotes then return end
+  for _, code in ipairs(md.codes) do
+    local okc, subbed = pcall(IsSubscribed_Level_II_Quotes, CONFIG.MD_CLASS, code)
+    if not (okc and subbed) then
+      local ok, res = pcall(Subscribe_Level_II_Quotes, CONFIG.MD_CLASS, code)
+      log("book subscribe " .. code .. ": " .. tostring(ok and res or "ошибка"))
+    end
+  end
+end
+
 local function publish_books()
   local ts = now_ms()
   for _, code in ipairs(md.codes) do
@@ -956,6 +975,10 @@ local function md_pump()
   end
   if t - md.last_book_ms >= CONFIG.MD_BOOK_INTERVAL_MS then
     md.last_book_ms = t
+    if not md.books_subscribed then
+      md.books_subscribed = true
+      pcall(subscribe_books)
+    end
     pcall(publish_books)
   end
   if t - md.last_tape_ms >= 300 then
