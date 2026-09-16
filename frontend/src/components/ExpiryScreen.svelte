@@ -9,14 +9,20 @@
 <script lang="ts">
   import { fetchWithAuth, errText } from '../lib/fetch-auth';
   import { downloadCSV } from '$lib/csv';
-  import { canStart, confirmMatches, leftToDeadline, robotName, robotsCsv, rollSummary,
-           stateLabel, stateTone, timeInState, type Check } from '$lib/expiry-help';
+  import { canStart, confirmMatches, leftToDeadline, pickCampaign, robotName, robotsCsv,
+           rollSummary, splitCampaigns, stateLabel, stateTone, timeInState,
+           type Check } from '$lib/expiry-help';
 
   let { onClose }: { onClose?: () => void } = $props();
 
   const API = '/api/v1/quik/expiry';
 
   let series = $state<any[]>([]);
+  // Активных кампаний бывает несколько сразу (RI, Si, GZ истекают в один день),
+  // поэтому держим ВЕСЬ список и выбор оператора, а не одну кампанию.
+  let campaigns = $state<any[]>([]);
+  let activeIds = $state<string[]>([]);
+  let selectedId = $state<string | null>(null);
   let camp = $state<any | null>(null);
   let checks = $state<Check[]>([]);
   let loading = $state(true);
@@ -52,9 +58,12 @@
   }
 
   async function loadCampaign(id?: string) {
-    const d = await call(id ? `/campaigns/${encodeURIComponent(id)}` : '/campaigns');
+    const d = await call('/campaigns');
     if (!d) return;
-    camp = Array.isArray(d.campaigns) ? (d.campaigns[0] ?? null) : (d.campaign ?? d);
+    campaigns = d.campaigns ?? (d.campaign ? [d.campaign] : (Array.isArray(d) ? d : []));
+    activeIds = d.active_ids ?? [];
+    if (id) selectedId = id;
+    camp = pickCampaign(campaigns, activeIds, selectedId);
     checks = camp?.checkup ?? [];
   }
 
@@ -62,7 +71,11 @@
     busy = true;
     const d = await call('/campaigns', { method: 'POST', body: JSON.stringify({ base }) });
     busy = false;
-    if (d) { camp = d.campaign ?? d; checks = camp?.checkup ?? []; }
+    if (d) {
+      const created = d.campaign ?? d;
+      selectedId = created?.id ?? null;          // id детерминированный: повтор вернёт ту же
+      await loadCampaign(selectedId ?? undefined);
+    }
   }
 
   async function runCheckup() {
@@ -173,6 +186,7 @@
     await loadCampaign(camp.id);
   }
 
+  let split = $derived(splitCampaigns(campaigns, activeIds));
   let summary = $derived(rollSummary(camp?.robots));
   let left = $derived(leftToDeadline(camp?.deadline_ms));
   let startable = $derived(canStart(checks));
@@ -235,7 +249,26 @@
     </table>
   {/if}
 
+  {#if split.active.length > 1}
+    <div class="exp-sec">Активные кампании</div>
+    <div class="exp-tabs">
+      {#each split.active as c (c.id)}
+        <button class="exp-btn" class:on={c.id === camp?.id}
+                onclick={() => { selectedId = c.id; camp = pickCampaign(campaigns, activeIds, c.id); checks = camp?.checkup ?? []; }}>
+          {c.base}: {c.old} → {c.new}
+        </button>
+      {/each}
+    </div>
+  {/if}
+
   {#if camp}
+    <div class="exp-camp">
+      <b>{camp.base}: {camp.old} → {camp.new}</b>
+      <span class="exp-tag {camp.state === 'failed' || camp.state === 'cancelled' ? 'bad' : (camp.active ? 'wait' : 'off')}">{camp.state}</span>
+      {#if camp.reason}<span class="exp-bad">{camp.reason}</span>{/if}
+      {#if camp.finished_ms}<span class="exp-dim">завершена {new Date(camp.finished_ms).toLocaleString('ru-RU')}</span>{/if}
+    </div>
+
     <!-- 2. Чекап готовности -->
     <div class="exp-sec">
       Чекап готовности
@@ -352,6 +385,17 @@
         <li>{new Date(e.ts_ms).toLocaleTimeString('ru-RU')} — {e.robot_id ? e.robot_id + ': ' : ''}{e.text}</li>
       {/each}
     </ul>
+    {#if split.history.length}
+      <details class="exp-hist">
+        <summary>Завершённые кампании ({split.history.length})</summary>
+        {#each split.history as c (c.id)}
+          <button class="exp-link" onclick={() => { selectedId = c.id; camp = pickCampaign(campaigns, activeIds, c.id); checks = camp?.checkup ?? []; }}>
+            {c.base}: {c.old} → {c.new} · {c.state}{c.reason ? ' · ' + c.reason : ''}
+          </button>
+        {/each}
+      </details>
+    {/if}
+
     <div class="exp-sec">Очередь SMS</div>
     <ul class="exp-ev">
       {#each (camp.sms_queue || []) as m (m.ts_ms)}
@@ -431,6 +475,12 @@
   .exp-btn.go { border-color: #00e676; color: #7ef0a6; }
   .exp-btn.bad { border-color: #ff5252; color: #ff9d90; }
   .exp-btn:disabled { opacity: .45; cursor: not-allowed; }
+  .exp-btn.on { border-color: #7ef0a6; color: #7ef0a6; }
+  .exp-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+  .exp-camp { display: flex; align-items: center; gap: 10px; margin: 6px 0; font-size: 12px; }
+  .exp-hist { margin: 10px 0; font-size: 11px; color: #8a90a8; }
+  .exp-hist summary { cursor: pointer; }
+  .exp-hist button { display: block; margin: 2px 0; }
   .exp-link { background: none; border: none; color: #d7dae8; cursor: pointer; font-size: 11px; padding: 0; }
   .exp-acts { display: flex; gap: 4px; }
   .exp-checks { list-style: none; padding: 0; margin: 0; font-size: 11px; }

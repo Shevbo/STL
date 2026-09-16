@@ -68,6 +68,42 @@ export function robotName(r: { display_name?: string; name?: string; robot_id?: 
   return r?.display_name || r?.name || r?.robot_id || '—';
 }
 
+/** Какую кампанию показать.
+ *
+ *  Активных бывает НЕСКОЛЬКО сразу: 17.09 у RI, Si и GZ экспирация в один день, и
+ *  это три разные кампании по своим сериям (real-trade 16.09). Правила выбора:
+ *  выбранная оператором, пока она в списке; иначе первая из active_ids (она же
+ *  самая свежая); иначе первая в списке — чтобы после завершения всех кампаний
+ *  экран показывал историю, а не пустоту.
+ */
+export function pickCampaign<T extends { id: string; active?: boolean }>(
+  list: T[] | null | undefined, activeIds: string[] | null | undefined, selectedId?: string | null,
+): T | null {
+  const all = list || [];
+  if (!all.length) return null;
+  if (selectedId) {
+    const sel = all.find((c) => c.id === selectedId);
+    if (sel) return sel;
+  }
+  for (const id of activeIds || []) {
+    const hit = all.find((c) => c.id === id);
+    if (hit) return hit;
+  }
+  return all.find((c) => c.active) ?? all[0];
+}
+
+/** Активные кампании отдельно от завершённых: первые — карточками, вторые — историей.
+ *  Признак берём из active_ids, если он есть, иначе из поля active самой кампании:
+ *  экран не должен зависеть от одного источника правды больше, чем нужно. */
+export function splitCampaigns<T extends { id: string; active?: boolean }>(
+  list: T[] | null | undefined, activeIds?: string[] | null,
+): { active: T[]; history: T[] } {
+  const ids = new Set(activeIds || []);
+  const isActive = (c: T) => (activeIds?.length ? ids.has(c.id) : !!c.active);
+  const all = list || [];
+  return { active: all.filter(isActive), history: all.filter((c) => !isActive(c)) };
+}
+
 /** Сводка кампании одной строкой: сколько переключено и сколько ждёт человека. */
 export function rollSummary(robots: Array<{ state: string }> | null | undefined) {
   const list = (robots || []).filter((r) => r.state !== 'skipped');

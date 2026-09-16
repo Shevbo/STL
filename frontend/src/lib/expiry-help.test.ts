@@ -2,8 +2,8 @@
 // экспирации на живом счёте (docs/design/expiry-roll.md).
 import { describe, expect, it } from 'vitest';
 
-import { canStart, confirmMatches, leftToDeadline, robotName, robotsCsv, rollSummary,
-         stateLabel, stateTone, timeInState } from './expiry-help';
+import { canStart, confirmMatches, leftToDeadline, pickCampaign, robotName, robotsCsv,
+         rollSummary, splitCampaigns, stateLabel, stateTone, timeInState } from './expiry-help';
 
 describe('старт кампании', () => {
   it('пустой чекап старт не разрешает: «не проверяли» это не «всё хорошо»', () => {
@@ -90,5 +90,37 @@ describe('имя робота и время в состоянии', () => {
     expect(timeInState(now - 95 * 60_000, now)).toBe('1 ч 35 мин');
     expect(timeInState(now - 26 * 3600_000, now)).toBe('1 сут');
     expect(timeInState(null, now)).toBe('');
+  });
+});
+
+
+describe('выбор кампании', () => {
+  // Активных бывает несколько: RI, Si и GZ истекают в один день (real-trade 16.09).
+  const list = [
+    { id: 'RI-RIU6-RIZ6', active: true }, { id: 'Si-SiU6-SiZ6', active: true },
+    { id: 'GZ-GZU6-GZZ6', active: false },
+  ];
+  const ids = ['RI-RIU6-RIZ6', 'Si-SiU6-SiZ6'];
+
+  it('по умолчанию — первая активная, а не первая в списке', () => {
+    expect(pickCampaign(list, ids)?.id).toBe('RI-RIU6-RIZ6');
+    expect(pickCampaign([{ id: 'GZ-old', active: false }, { id: 'Si-new', active: true }], [])?.id)
+      .toBe('Si-new');
+  });
+
+  it('выбор оператора держится, пока кампания в списке', () => {
+    expect(pickCampaign(list, ids, 'Si-SiU6-SiZ6')?.id).toBe('Si-SiU6-SiZ6');
+    expect(pickCampaign(list, ids, 'исчезла')?.id).toBe('RI-RIU6-RIZ6');   // откат к активной
+  });
+
+  it('все кампании завершены — показываем историю, а не пустоту', () => {
+    expect(pickCampaign([{ id: 'RI-старая', active: false }], [])?.id).toBe('RI-старая');
+    expect(pickCampaign([], [])).toBeNull();
+  });
+
+  it('активные и история делятся по active_ids, а без них — по полю active', () => {
+    expect(splitCampaigns(list, ids).active.map((c) => c.id)).toEqual(['RI-RIU6-RIZ6', 'Si-SiU6-SiZ6']);
+    expect(splitCampaigns(list, ids).history.map((c) => c.id)).toEqual(['GZ-GZU6-GZZ6']);
+    expect(splitCampaigns(list, []).active.map((c) => c.id)).toEqual(['RI-RIU6-RIZ6', 'Si-SiU6-SiZ6']);
   });
 });
