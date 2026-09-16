@@ -49,6 +49,25 @@ export function leftToDeadline(deadlineMs: number | null | undefined, now = Date
   return h ? `${h} ч ${m} мин` : `${m} мин`;
 }
 
+/** Сколько робот сидит в текущем состоянии. state_since приходит в unix ms
+ *  (уточнение real-trade 16.09), и печатать его сырым числом на экране нельзя:
+ *  «1789567582955» оператору не говорит ничего, а «12 мин» говорит всё. */
+export function timeInState(sinceMs: number | null | undefined, now = Date.now()): string {
+  if (!sinceMs) return '';
+  const min = Math.floor((now - sinceMs) / 60000);
+  if (min < 1) return 'только что';
+  if (min < 60) return `${min} мин`;
+  const h = Math.floor(min / 60);
+  return h < 24 ? `${h} ч ${min % 60} мин` : `${Math.floor(h / 24)} сут`;
+}
+
+/** Имя робота для экрана: бэкенд кампании зовёт его display_name, зеркало агента —
+ *  name. Показываем то, что пришло, и НИКОГДА не пустую ячейку: без имени оператор
+ *  не поймёт, какой робот застрял. */
+export function robotName(r: { display_name?: string; name?: string; robot_id?: string }): string {
+  return r?.display_name || r?.name || r?.robot_id || '—';
+}
+
 /** Сводка кампании одной строкой: сколько переключено и сколько ждёт человека. */
 export function rollSummary(robots: Array<{ state: string }> | null | undefined) {
   const list = (robots || []).filter((r) => r.state !== 'skipped');
@@ -60,7 +79,7 @@ export function rollSummary(robots: Array<{ state: string }> | null | undefined)
 /** Строки CSV таблицы роботов: ровно то, что видно на экране. */
 export function robotsCsv(robots: Array<Record<string, any>>): Array<Record<string, any>> {
   return (robots || []).map((r) => ({
-    robot_id: r.robot_id, name: r.name, mode: r.mode, state: r.state,
+    robot_id: r.robot_id, name: robotName(r), mode: r.mode, state: r.state,
     state_ru: stateLabel(r.state), position: r.position, working_orders: r.working_orders,
     bars_count: r.bars_count, paused: r.paused ? 1 : 0, note: r.note || '',
   }));

@@ -2,7 +2,8 @@
 // экспирации на живом счёте (docs/design/expiry-roll.md).
 import { describe, expect, it } from 'vitest';
 
-import { canStart, confirmMatches, leftToDeadline, robotsCsv, rollSummary, stateLabel, stateTone } from './expiry-help';
+import { canStart, confirmMatches, leftToDeadline, robotName, robotsCsv, rollSummary,
+         stateLabel, stateTone, timeInState } from './expiry-help';
 
 describe('старт кампании', () => {
   it('пустой чекап старт не разрешает: «не проверяли» это не «всё хорошо»', () => {
@@ -64,10 +65,30 @@ describe('перекладка ручной позиции', () => {
 
 describe('CSV роботов', () => {
   it('в выгрузке те же поля и та же подпись состояния, что на экране', () => {
-    expect(robotsCsv([{ robot_id: 'r1', name: 'fvg', mode: 'real', state: 'exit_wait',
+    expect(robotsCsv([{ robot_id: 'r1', display_name: 'fvg', mode: 'real', state: 'exit_wait',
                         position: -2, working_orders: 1, bars_count: 900, paused: false }])[0])
       .toEqual({ robot_id: 'r1', name: 'fvg', mode: 'real', state: 'exit_wait',
                  state_ru: 'ждёт выхода', position: -2, working_orders: 1, bars_count: 900,
                  paused: 0, note: '' });
+  });
+});
+
+
+describe('имя робота и время в состоянии', () => {
+  it('имя берём из того поля, которое пришло, и никогда не пустое', () => {
+    // Кампания зовёт робота display_name, зеркало агента — name (real-trade 16.09).
+    expect(robotName({ display_name: 'FVG RIU6' })).toBe('FVG RIU6');
+    expect(robotName({ name: 'FVG RIU6' })).toBe('FVG RIU6');
+    expect(robotName({ robot_id: 'agent-fvg-1' })).toBe('agent-fvg-1');
+    expect(robotName({} as any)).toBe('—');
+  });
+
+  it('state_since (unix ms) показывается сроком, а не сырым числом', () => {
+    const now = Date.UTC(2026, 8, 17, 12, 0, 0);
+    expect(timeInState(now - 30_000, now)).toBe('только что');
+    expect(timeInState(now - 12 * 60_000, now)).toBe('12 мин');
+    expect(timeInState(now - 95 * 60_000, now)).toBe('1 ч 35 мин');
+    expect(timeInState(now - 26 * 3600_000, now)).toBe('1 сут');
+    expect(timeInState(null, now)).toBe('');
   });
 });

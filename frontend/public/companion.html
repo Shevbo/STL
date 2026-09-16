@@ -443,7 +443,9 @@ const EXP_TAG = {
   reset_needed: ['exp-bad', 'сброс позиции', 'бумажный робот на истёкшем контракте: закрывать нечем'],
 };
 function expiryTag(name, exp) {
-  const r = ((exp && exp.robots) || []).find((x) => x.name === name);
+  // Кампания зовёт робота display_name, зеркало агента — name: снапшот может
+  // принести любое из двух, и по одному имени тег молча не находился бы.
+  const r = ((exp && exp.robots) || []).find((x) => (x.name || x.display_name) === name);
   const t = r && EXP_TAG[r.state];
   if (!t) return '';
   const label = r.state === 'switched' && exp.new ? `${t[1]} ${exp.new}` : t[1];

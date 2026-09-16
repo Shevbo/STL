@@ -9,8 +9,8 @@
 <script lang="ts">
   import { fetchWithAuth, errText } from '../lib/fetch-auth';
   import { downloadCSV } from '$lib/csv';
-  import { canStart, confirmMatches, leftToDeadline, robotsCsv, rollSummary,
-           stateLabel, stateTone, type Check } from '$lib/expiry-help';
+  import { canStart, confirmMatches, leftToDeadline, robotName, robotsCsv, rollSummary,
+           stateLabel, stateTone, timeInState, type Check } from '$lib/expiry-help';
 
   let { onClose }: { onClose?: () => void } = $props();
 
@@ -119,12 +119,12 @@
       return;
     }
     robotAction(`/api/v1/quik/robots/${encodeURIComponent(r.robot_id)}/flatten-agent`, {},
-                `Закрытие по рынку отправлено: ${r.name}`);
+                `Закрытие по рынку отправлено: ${robotName(r)}`);
   }
 
   function pause(r: any) {
     robotAction(`/api/v1/quik/robots/${encodeURIComponent(r.robot_id)}/pause-agent`, {},
-                `Пауза: ${r.name}`);
+                `Пауза: ${robotName(r)}`);
   }
 
   function resetPaper(r: any) {
@@ -132,7 +132,7 @@
     if (!r.paused) { error = 'Сначала пауза: обнулять книгу торгующего робота нельзя.'; return; }
     robotAction(`/api/v1/quik/robots/${encodeURIComponent(r.robot_id)}/set-position-agent`,
                 { position: 0, avg_price: 0, confirm_id: r.robot_id },
-                `Книга обнулена: ${r.name}`);
+                `Книга обнулена: ${robotName(r)}`);
   }
 
   // ── Ручная позиция (шаг 3) ────────────────────────────────────────────────
@@ -225,7 +225,7 @@
             <td><b>{s.base}</b></td><td>{s.old}</td><td>{s.new ?? '—'}</td>
             <td>{s.last_trade_date ?? '—'}</td>
             <td class="num">{s.days_left ?? '—'}</td>
-            <td class="num">{(s.robots?.length ?? 0)}</td>
+            <td class="num">{s.robots_count ?? s.robots?.length ?? 0}</td>
             <td class="num">{s.manual_net ?? 0}</td>
             <td><button class="exp-btn" disabled={busy || !s.new}
                         onclick={() => createCampaign(s.base)}>Создать кампанию</button></td>
@@ -280,16 +280,16 @@
                        onchange={(e) => toggleRobot(r.robot_id, (e.target as HTMLInputElement).checked)} /></td>
             <td>
               <button class="exp-link" onclick={() => openRobot = openRobot === r.robot_id ? null : r.robot_id}>
-                {openRobot === r.robot_id ? '▴' : '▾'} {r.name}
+                {openRobot === r.robot_id ? '▴' : '▾'} {robotName(r)}
               </button>
             </td>
             <td class={r.mode === 'real' ? 'exp-real' : 'exp-dim'}>{r.mode === 'real' ? 'РЕАЛ' : 'бумага'}</td>
-            <td>{r.symbol ?? camp.old}</td>
+            <td>{r.symbol ?? camp.old}{#if r.target_symbol && r.target_symbol !== r.symbol}<span class="exp-dim"> → {r.target_symbol}</span>{/if}</td>
             <td class="num" class:exp-bad={r.position}>{r.position ?? 0}</td>
             <td class="num">{r.working_orders ?? 0}</td>
             <td class="num">{r.bars_count ?? '—'}</td>
             <td><span class="exp-tag {stateTone(r.state)}" title={r.note || ''}>{stateLabel(r.state)}</span></td>
-            <td class="exp-dim">{r.state_since ?? ''}</td>
+            <td class="exp-dim">{timeInState(r.state_since)}</td>
             <td class="exp-acts">
               <a class="exp-btn sm" href={`/?agent_robot=${encodeURIComponent(r.robot_id)}`}>карточка</a>
               <button class="exp-btn sm" disabled={busy} onclick={() => pause(r)}>пауза</button>
