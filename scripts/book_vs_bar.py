@@ -57,7 +57,7 @@ def main() -> None:
           f"со свежим стаканом (<= {a.gap} с) {fresh} = {fresh / max(len(bars), 1):.0%}")
 
     print(f"{'стратегия':15} {'филлов':>7} {'бар, пт':>10} {'стакан, пт':>11} {'разница':>10} "
-          f"{'пт/филл':>8} {'спред':>7} {'снос':>7} {'зазор с':>8} {'макс':>5} {'глуб':>5} {'нет кн':>6}")
+          f"{'пт/филл':>8} {'спред ср':>8} {'медиана':>8} {'p90':>6} {'снос':>7} {'ночь%':>6} {'ночь дала':>10} {'нет кн':>6}")
     for rid in STRATS:
         mod = types.ModuleType("m")
         mod.on_bar = make_on_bar(rid)
@@ -70,9 +70,19 @@ def main() -> None:
         n = len(r_bar["trades"])
         d = r_bok["net_profit"] - r_bar["net_profit"]
         k = max(st.get("book", 0), 1)
+        sp = sorted(st.get("spread_each") or [0])
+        hrs = st.get("hour_each") or []
+        each = st.get("spread_each") or []
+        is_night = [h < 9 or h >= 24 for h in hrs]
+        night = sum(is_night) / max(len(hrs), 1)
+        # Доля ВСЕЙ платы за спред, которую дают ночные и предоткрытые филлы: если она
+        # много больше доли самих филлов, издержки лечатся расписанием, а не константой.
+        tot = sum(each) or 1.0
+        night_share = sum(v for v, nt in zip(each, is_night) if nt) / tot
         print(f"{rid:15} {n:7} {r_bar['net_profit']:10.0f} {r_bok['net_profit']:11.0f} {d:10.0f} "
-              f"{(d / n if n else 0):8.1f} {st.get('spread_pts', 0) / k:7.1f} {st.get('drift_pts', 0) / k:7.1f} "
-              f"{st.get('gap_s', 0) / k:8.1f} {st.get('gap_max_s', 0):5} {st.get('deep', 0):5} {st.get('no_book', 0):6}")
+              f"{(d / k):8.1f} {st.get('spread_pts', 0) / k:8.1f} {sp[len(sp) // 2]:8.1f} "
+              f"{sp[min(len(sp) - 1, int(0.9 * len(sp)))]:6.0f} {st.get('drift_pts', 0) / k:7.1f} "
+              f"{night:6.0%} {night_share:10.0%} {st.get('no_book', 0):6}")
 
 
 if __name__ == "__main__":
