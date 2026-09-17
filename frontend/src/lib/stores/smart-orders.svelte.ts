@@ -16,6 +16,7 @@ export interface SmartOrder {
   trail_offset: number;
   sl_offset: number;      // защитный стоп после входа, пункты (0 = без стопа)
   tp_offset: number;      // тейк после входа, пункты (0 = без тейка)
+  tp_trail?: number;      // тейк после входа следящий: откат, пункты (0 = фиксированный)
   parent_id: string;      // у защитного стопа — заявка, которая его породила
   watch_client_id: string;
   child_price: number;

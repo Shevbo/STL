@@ -25,6 +25,10 @@
   let trailOffset = $state('');
   let slOffset = $state('');          // защитный стоп после входа, пункты (0 = без стопа)
   let tpOffset = $state('');          // тейк после входа, пункты (0 = без тейка)
+  // Тейк после сделки: фиксированный или СЛЕДЯЩИЙ (real-trade 17.09, tp_trail). У
+  // следящего tpOffset — уровень активации, tpTrail — откат от экстремума.
+  let tpMode = $state<'fixed' | 'trail'>('fixed');
+  let tpTrail = $state('');
   // Подтягивающая после сделки. Со стопом НЕСОВМЕСТИМА (движок вернёт 422),
   // поэтому в форме это переключатель, а не третье независимое поле: сработает
   // ближний из двух, дальний останется взведён и откроет обратную позицию.
@@ -67,6 +71,7 @@
       watchId: watchId.trim(), childPrice: parseFloat(childPrice) || 0,
       slOffset: afterMode === 'sl' ? parseFloat(slOffset) || 0 : 0,
       tpOffset: parseFloat(tpOffset) || 0,
+      tpTrail: tpMode === 'trail' ? parseFloat(tpTrail) || 0 : 0,
       trailAfter: afterMode === 'trail' ? parseFloat(trailAfter) || 0 : 0,
       price, pointValue,
     });
@@ -143,6 +148,7 @@
       trail_offset: parseFloat(trailOffset) || 0,
       sl_offset: afterMode === 'sl' ? parseFloat(slOffset) || 0 : 0,
       tp_offset: parseFloat(tpOffset) || 0,
+      tp_trail: tpMode === 'trail' ? parseFloat(tpTrail) || 0 : 0,
       trail_after: afterMode === 'trail' ? parseFloat(trailAfter) || 0 : 0,
       watch_client_id: watchId.trim(),
       child_price: parseFloat(childPrice) || 0,
@@ -162,7 +168,7 @@
       const gone = (d.superseded || []).length;
       msg = `Заявка ${d.so_id} взведена. Сторож следит.`
         + (gone ? ` Сняты прежние стопы этой позиции: ${d.superseded.join(', ')}.` : '');
-      trigger = ''; trailOffset = ''; slOffset = ''; tpOffset = ''; trailAfter = '';
+      trigger = ''; trailOffset = ''; slOffset = ''; tpOffset = ''; trailAfter = ''; tpTrail = ''; tpMode = 'fixed';
       watchId = ''; childPrice = '';
       confirming = false;
       await smartOrdersStore.refresh();
@@ -186,6 +192,8 @@
     trailOffset = o.trail_offset ? String(o.trail_offset) : '';
     slOffset = o.sl_offset ? String(o.sl_offset) : '';
     tpOffset = o.tp_offset ? String(o.tp_offset) : '';
+    tpTrail = o.tp_trail ? String(o.tp_trail) : '';
+    tpMode = o.tp_trail ? 'trail' : 'fixed';
     trailAfter = (o as any).trail_after ? String((o as any).trail_after) : '';
     afterMode = (o as any).trail_after ? 'trail' : 'sl';
     watchId = o.watch_client_id || '';
@@ -332,7 +340,16 @@
               <input class="so-in" type="number" step="any" min="0" bind:value={trailAfter}
                      disabled={afterMode !== 'trail'} placeholder="0 — выключена" />
             {:else if f.key === 'tp_offset'}
-              <input class="so-in" type="number" step="any" min="0" bind:value={tpOffset} placeholder="0 — без тейка" />
+              <div class="so-seg" role="group" aria-label="Тейк после сделки">
+                <button type="button" class:on={tpMode === 'fixed'} onclick={() => tpMode = 'fixed'}>Фиксированный</button>
+                <button type="button" class:on={tpMode === 'trail'} onclick={() => tpMode = 'trail'}>Следящий</button>
+              </div>
+              <input class="so-in" type="number" step="any" min="0" bind:value={tpOffset}
+                     placeholder={tpMode === 'trail' ? 'активация, п. от входа' : '0 — без тейка'} />
+              {#if tpMode === 'trail'}
+                <input class="so-in" type="number" step="any" min="0" bind:value={tpTrail}
+                       placeholder="откат, п. от экстремума" title="на каком откате от лучшей цены закрыть" />
+              {/if}
             {:else if f.key === 'watch_client_id'}
               <input class="so-in text" bind:value={watchId} placeholder="client_id" spellcheck="false" />
             {:else}
@@ -449,7 +466,7 @@
              оставались бы невидимыми на карточке. -->
         {#if o.sl_offset || o.tp_offset}
           <div class="so-c-sl">после сделки автоматически встанут:
-            {#if o.sl_offset}<b>стоп {o.sl_offset} п.</b>{/if}{#if o.sl_offset && o.tp_offset} и {/if}{#if o.tp_offset}<b>тейк {o.tp_offset} п.</b>{/if}
+            {#if o.sl_offset}<b>стоп {o.sl_offset} п.</b>{/if}{#if o.sl_offset && o.tp_offset} и {/if}{#if o.tp_offset}<b>{#if o.tp_trail}следящий тейк: активация {o.tp_offset} п., откат {o.tp_trail} п.{:else}тейк {o.tp_offset} п.{/if}</b>{/if}
             от её цены{#if o.sl_offset && o.tp_offset}, в одной связке — сработает один, второй снимется{/if}</div>
         {/if}
         <div class="so-c-facts">

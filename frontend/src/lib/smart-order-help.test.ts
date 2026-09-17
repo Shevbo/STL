@@ -493,3 +493,25 @@ describe('открытые позиции для формы', () => {
     expect(manualPositions({}, { robots: [{ symbol: 'X' }] })).toEqual([]);
   });
 });
+
+
+describe('следящий тейк после сделки (tp_trail, real-trade 17.09)', () => {
+  const base = { kind: 'sl' as const, side: 'buy' as const, code: 'RIZ6', qty: 1, trigger: 90000,
+                 trailOffset: 0, price: 89000, watchId: '', childPrice: 0 };
+
+  it('без уровня активации не пускает до кнопки: движок вернул бы 422', () => {
+    expect(preview({ ...base, tpOffset: 0, tpTrail: 50 } as any).error).toMatch(/уровень активации/);
+  });
+
+  it('фраза называет следящий тейк с активацией и откатом', () => {
+    const r = preview({ ...base, tpOffset: 700, tpTrail: 50 } as any);
+    expect(r.error).toBe('');
+    expect(r.sentence).toMatch(/следящий тейк: активация через 700.*откат 50/);
+  });
+
+  it('без отката тейк остаётся фиксированным, как было', () => {
+    const r = preview({ ...base, tpOffset: 700, tpTrail: 0 } as any);
+    expect(r.sentence).toMatch(/тейк 700/);
+    expect(r.sentence).not.toMatch(/следящий/);
+  });
+});

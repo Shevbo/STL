@@ -1000,6 +1000,9 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
             # во что обошёлся вход
             "fired_price": so.fired_price, "fired_qty": so.fired_qty,
             "sl_offset": so.sl_offset, "tp_offset": so.tp_offset,
+            # следящий тейк после входа (real-trade 17.09): >0 = tp_offset это
+            # активация, а закрытие на откате tp_trail пунктов от экстремума
+            "tp_trail": so.tp_trail,
             "parent_id": so.parent_id})
     # СЧЁТЧИКИ СЧИТАЕМ ДО ОБРЕЗКИ. Панель группирует заявки по типам и пишет
     # рядом количество; посчитай его по урезанному списку — и число совпадёт с
