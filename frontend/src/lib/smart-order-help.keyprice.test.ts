@@ -2,7 +2,7 @@
 // типов разная, и подпись обязана говорить, что это за цена; нет числа — пусто,
 // а не придуманный ноль.
 import { describe, it, expect } from 'vitest';
-import { keyPrice, sortBySideAndPrice } from './smart-order-help';
+import { STATUS_RU, isLive, keyPrice, sortBySideAndPrice } from './smart-order-help';
 
 describe('keyPrice', () => {
   it('следящая до пробоя: уровень активации', () => {
@@ -79,5 +79,29 @@ describe('порядок заявок на экране', () => {
   it('пустой список и отсутствие списка не ломают экран', () => {
     expect(sortBySideAndPrice([])).toEqual([]);
     expect(sortBySideAndPrice(null)).toEqual([]);
+  });
+});
+
+
+describe('статус native — защита под охраной терминала', () => {
+  it('native живая: делить список по одному armed значит хоронить действующую защиту', () => {
+    expect(isLive('armed')).toBe(true);
+    expect(isLive('native')).toBe(true);
+    expect(isLive('fired')).toBe(false);
+    expect(isLive('cancelled')).toBe(false);
+    expect(isLive(undefined)).toBe(false);
+  });
+
+  it('подпись говорит, КТО держит защиту, а не просто «взведена»', () => {
+    expect(STATUS_RU.native).toBe('под охраной терминала');
+    expect(STATUS_RU.armed).toBe('взведена');
+  });
+
+  it('native встаёт в лестницу уровней наравне с armed', () => {
+    const list = [
+      { side: 'sell', kind: 'sl', status: 'armed', trigger_price: 90000 },
+      { side: 'sell', kind: 'sl', status: 'native', trigger_price: 91000 },
+    ];
+    expect(sortBySideAndPrice(list).map((x) => x.status)).toEqual(['native', 'armed']);
   });
 });

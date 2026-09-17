@@ -585,3 +585,42 @@ def test_armed_smart_orders_survive_the_snapshot_cut(monkeypatch):
     assert orders["counts_active"]["trail_tp"] == 4      # столько их в книге
     assert orders["counts"]["trail_tp"] == 28            # весь день, до обрезки
     assert len(orders["smart"]) == 20                    # потолок панели не вырос
+
+
+def test_native_orders_count_as_live_in_the_snapshot(monkeypatch):
+    """Заявка под охраной терминала (native) — живая.
+
+    real-trade 17.09.2026: после входа STL ставит нативную стоп-заявку QUIK на всю
+    защитную связку, и такая защита переживает падение STL. Делить список по одному
+    `armed` значит уронить действующую защиту в историю: за обрезку в 20 строк, из
+    счётчика живых и из выдачи вовсе, если она взведена не сегодня.
+    """
+    import time
+    from types import SimpleNamespace
+
+    now = int(time.time() * 1000)
+    old = now - 3 * 24 * 3600 * 1000          # позавчерашняя: по дате отсеялась бы
+
+    def _so(so_id, status, created, native_state="", num=""):
+        return SimpleNamespace(
+            so_id=so_id, kind="sl", status=status, code="RIZ6", side="sell", qty=1,
+            trigger_price=87000.0, trail_offset=0.0, activated=False, peak=0.0,
+            created_ms=created, fired_ms=created, fired_price=0.0, fired_qty=0,
+            sl_offset=0.0, tp_offset=0.0, tp_trail=0.0, parent_id="p",
+            native_state=native_state, native_stop_num=num)
+
+    book = [_so(f"done{i}", "fired", now - 1000) for i in range(24)]
+    book += [_so("nat", "native", old, "live", 1900000000000000123)]
+
+    client, _ = _client(monkeypatch)
+    client.app.state.smart_orders = SimpleNamespace(orders=book)
+    snap = client.get("/api/v1/quik/companion/snapshot", headers=_operator_headers())
+    assert snap.status_code == 200, snap.text
+    orders = snap.json()["orders"]
+
+    nat = [o for o in orders["smart"] if o["status"] == "native"]
+    assert nat, "заявка под охраной терминала не доехала до панели"
+    assert orders["counts_active"]["sl"] == 1          # живая, хоть и не armed
+    # Номер стоп-заявки QUIK ~1.9e18: строкой, иначе JSON потеряет последние цифры.
+    assert nat[0]["native_stop_num"] == "1900000000000000123"
+    assert nat[0]["native_state"] == "live"

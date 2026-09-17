@@ -10,7 +10,7 @@
   import { smartOrdersStore, type SmartOrder } from '$lib/stores/smart-orders.svelte';
   import SmartOrderSchematic from './SmartOrderSchematic.svelte';
   import {
-    KINDS, KIND_BY_ID, COMMON_FACTS, STATUS_RU, codeSuggestions, conditionText, keyPrice,
+    KINDS, KIND_BY_ID, COMMON_FACTS, STATUS_RU, codeSuggestions, conditionText, isLive, keyPrice,
     closingSide, fmtWhen, fmtPts, fmtRub, manualPositions, ocoFact, preview,
     shortCodes, sortBySideAndPrice, tillFact, type Kind, type OpenPos, type Side,
   } from '$lib/smart-order-help';
@@ -55,7 +55,9 @@
   const meta = $derived(KIND_BY_ID[kind]);
   const price = $derived(tick?.last || 0);
   const orders = $derived(smartOrdersStore.all);
-  const armed = $derived(orders.filter((o) => o.status === 'armed'));
+  // Живые — сторож STL (armed) И заявки под охраной терминала (native): последние
+  // переживают падение STL, и в истории им не место (real-trade 17.09).
+  const armed = $derived(orders.filter((o) => isLive(o.status)));
   // Двузначный код связки — тот же, что стоит в метке на графике. Он и связывает
   // карточку с линией: so_id в подпись на линии не влезает, а по цвету семь
   // заявок не различить. У защитных детей код РОДИТЕЛЯ: одна связка — один номер.
@@ -64,7 +66,7 @@
   // (просьба оператора 17.09). Список по времени взведения читался журналом:
   // что стоит над рынком, а что под ним, приходилось складывать в голове.
   const armedSorted = $derived(sortBySideAndPrice(armed));
-  const history = $derived(orders.filter((o) => o.status !== 'armed').slice(-30).reverse());
+  const history = $derived(orders.filter((o) => !isLive(o.status)).slice(-30).reverse());
   const goodTillMs = $derived(tillLocal ? new Date(tillLocal).getTime() : 0);
 
   const pv = $derived.by(() => {
@@ -451,7 +453,15 @@
           <span class="so-c-px" title={keyPrice(o).label}><small>{keyPrice(o).label}</small>{keyPrice(o).price != null ? fmtPrice(keyPrice(o).price) : '—'}</span>
           <span class="so-c-cond">{conditionText(o)}</span>
           <span class="so-c-sp"></span>
-          <span class="so-c-status">{STATUS_RU[o.status] ?? o.status}</span>
+          <span class="so-c-status" class:native={o.status === 'native'}
+                class:warn={o.status === 'native' && o.native_state === 'failed'}
+                title={o.status === 'native'
+                  ? (o.native_state === 'failed'
+                      ? 'терминал не принял стоп-заявку: защиту снова ведёт сторож STL'
+                      : 'защита стоит нативной стоп-заявкой QUIK и переживёт падение STL')
+                  : 'защиту ведёт сторож STL: пока STL лежит, заявка не сработает'}>
+            {o.status === 'native' ? '🛡' : '⏱'} {STATUS_RU[o.status] ?? o.status}
+          </span>
           <button class="so-btn sm" title="снять заявку, подставить её параметры в форму и взвести заново"
                   onclick={() => edit(o)}>Изменить</button>
           <button class="so-btn sm" onclick={() => cancel(o.so_id)}>Снять</button>
@@ -480,6 +490,13 @@
             от её цены{#if o.sl_offset && o.tp_offset}, в одной связке — сработает один, второй снимется{/if}</div>
         {/if}
         <div class="so-c-facts">
+          {#if o.status === 'native'}
+            {#if o.native_state === 'failed'}
+              <span class="so-c-bad">терминал НЕ принял стоп-заявку — защиту ведёт STL</span>
+            {:else if o.native_stop_num}
+              <span>стоп-заявка QUIK {o.native_stop_num}</span>
+            {/if}
+          {/if}
           <span>id {o.so_id}</span>
           <span>взведена {fmtWhen(o.created_ms)}</span>
           <span>{o.good_till_ms ? 'до ' + fmtWhen(o.good_till_ms) : 'бессрочно'}</span>
@@ -681,7 +698,10 @@
   .so-c-sl { margin-top: 3px; color: #9aa0b4; font-size: 11px; }
   .so-c-sl b { color: #ffb3a7; }
   .so-c-status { color: #e0a53c; font-size: 11px; }
-  .so-c-status.warn { color: #ff9d90; }
+  .so-c-status.warn { color: #ff9d90; font-weight: 700; }
+  /* Под охраной терминала — другой цвет и щит: это не «взведена сторожем STL». */
+  .so-c-status.native { color: #7ec8f0; }
+  .so-c-bad { color: #ff9d90; font-weight: 600; }
   .so-c-facts { display: flex; gap: 12px; flex-wrap: wrap; color: #6f7590; font-size: 11px; margin-top: 3px; }
   .so-c-note { color: #8a90a8; font-size: 11px; margin-top: 3px; }
   .so-hist { margin-top: 10px; }

@@ -985,7 +985,9 @@ function renderOrders(o, d) {
       `<span class="sub">@ ${num(m.price)}${m.active && m.balance < m.qty ? ` · осталось ${m.balance}` : ''}</span>` +
       `<span class="sp"></span><span class="v ${m.active ? 'up' : 'nil'}">${esc(m.state)}</span></div>` });
   }
-  const ST = { armed: 'взведена', fired: 'сработала', cancelled: 'снята',
+  // native — защиту держит сам терминал QUIK: она переживёт падение STL.
+  const ST = { armed: 'взведена', native: 'под охраной терминала',
+    fired: 'сработала', cancelled: 'снята',
     expired: 'истекла', orphaned: 'осиротела', error: 'ошибка' };
   for (const s of o.smart || []) {
     // У СРАБОТАВШЕЙ заявки показываем ЦЕНУ СДЕЛКИ, а не уровень срабатывания:
@@ -999,18 +1001,24 @@ function renderOrders(o, d) {
     if (s.tp_offset) sub += s.tp_trail
       ? ` · тейк следящий: активация ${s.tp_offset} п., откат ${s.tp_trail} п.`
       : ` · тейк ${s.tp_offset} п.`;
-    if (s.kind === 'trail_tp' && s.status === 'armed') {
+    if (s.kind === 'trail_tp' && (s.status === 'armed' || s.status === 'native')) {
       sub = s.activated
         ? `● от пика ${num(s.peak)}, сделка при ${s.side === 'buy' ? '≥' : '≤'} ` +
           num(s.side === 'buy' ? s.peak + s.trail_offset : s.peak - s.trail_offset)
         : `ждёт пробоя ${num(s.trigger)}`;
     }
-    const live = s.status === 'armed';
+    // Живая = ещё сработает: сторож STL или нативная стоп-заявка терминала.
+    const live = s.status === 'armed' || s.status === 'native';
+    // Терминал не принял защиту — её снова ведёт STL, и это надо видеть сразу.
+    const natBad = s.status === 'native' && s.native_state === 'failed';
+    if (s.status === 'native') sub += natBad
+      ? ' · терминал НЕ принял, защиту ведёт STL'
+      : (s.native_stop_num ? ` · стоп-заявка QUIK ${esc(s.native_stop_num)}` : '');
     (rowsBy[s.kind] || rowsBy.sl).push({ ts: Number(s.created_ms || s.fired_ms || 0),
       done: ORD_DONE_ST.has(s.status), side: s.side, px: soPx(s), html:
       `<div class="row"><span class="k">${esc(s.code)} ${sideRu(s.side)} ${s.qty}</span>` +
       `<span class="sub">${esc(sub)}</span><span class="sp"></span>` +
-      `<span class="v ${live ? (s.activated ? 'up' : '') : 'nil'}">${esc(ST[s.status] || s.status)}</span></div>` });
+      `<span class="v ${natBad ? 'down' : (live ? (s.activated ? 'up' : '') : 'nil')}">${esc(ST[s.status] || s.status)}</span></div>` });
   }
 
   // Счётчик берём У СЕРВЕРА: он считает ДО обрезки списка, а длина массива

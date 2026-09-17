@@ -347,6 +347,12 @@ def _max_position(params) -> int:
     return max(num("avg_max", 1), qty + num("bet_max", 0))
 
 
+# ЖИВЫЕ статусы умной заявки: сторож STL (armed) и нативная стоп-заявка терминала
+# (native, real-trade 17.09). Вторая переживает падение STL, поэтому «живая» — это
+# не синоним «armed», и делить по одному armed значит хоронить действующую защиту.
+_SO_LIVE = frozenset({"armed", "native"})
+
+
 def _account_margin(params, exchange_margin) -> int | None:
     """ГО СЧЁТА под полный набор, в рублях.
 
@@ -985,7 +991,9 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
     smart_list = []
     so_book = getattr(request.app.state, "smart_orders", None)
     for so in (so_book.orders if so_book else []):
-        if so.status != "armed" and max(so.created_ms, so.fired_ms) < today_lo:
+        # native — защиту держит сам терминал QUIK: заявка ЖИВАЯ, и в историю её
+        # ронять нельзя ни здесь, ни в сортировке, ни в счётчике живых.
+        if so.status not in _SO_LIVE and max(so.created_ms, so.fired_ms) < today_lo:
             continue  # старую историю в панель не тянем
         smart_list.append({
             # created_ms — время ВЗВЕДЕНИЯ. По нему панель сортирует список и
@@ -1003,13 +1011,16 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
             # следящий тейк после входа (real-trade 17.09): >0 = tp_offset это
             # активация, а закрытие на откате tp_trail пунктов от экстремума
             "tp_trail": so.tp_trail,
+            # защита под нативной стоп-заявкой QUIK (real-trade 17.09)
+            "native_state": getattr(so, "native_state", ""),
+            "native_stop_num": str(getattr(so, "native_stop_num", "") or ""),
             "parent_id": so.parent_id})
     # ВЗВЕДЁННЫЕ ЗАЯВКИ НЕ РЕЖЕМ. Список уходил в панель в порядке книги, и
     # сегодняшняя история (сработавшие и снятые) вытесняла живые заявки за
     # двадцатую строку: 17.09.2026 в книге было 4 взведённые следящие, а панель
     # показывала 2. Сначала взведённые, потом свежая история — обрезка после
     # сортировки отнимает только то, что уже неважно.
-    smart_list.sort(key=lambda x: (x.get("status") != "armed",
+    smart_list.sort(key=lambda x: (x.get("status") not in _SO_LIVE,
                                    -max(x.get("created_ms") or 0, x.get("fired_ms") or 0)))
     # СЧЁТЧИКИ СЧИТАЕМ ДО ОБРЕЗКИ. Панель группирует заявки по типам и пишет
     # рядом количество; посчитай его по урезанному списку — и число совпадёт с
@@ -1024,7 +1035,7 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
     for kind in ("sl", "tp", "trail_tp", "trail_sl", "on_fill"):
         counts[kind] = sum(1 for x in smart_list if x.get("kind") == kind)
         counts_active[kind] = sum(1 for x in smart_list
-                                  if x.get("kind") == kind and x.get("status") == "armed")
+                                  if x.get("kind") == kind and x.get("status") in _SO_LIVE)
     # Потолок поднят с 8 до 20: списки теперь раскрываются, и обрезать их на
     # восьми значило бы прятать половину раскрытой группы.
     orders_block = {"manual": manual_orders[:20], "smart": smart_list[:20],

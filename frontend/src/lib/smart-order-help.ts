@@ -163,6 +163,10 @@ export const TRAIL_ACTIVE_COLOR = '#b98cff';
 
 export const STATUS_RU: Record<string, string> = {
   armed: 'взведена',
+  // Защиту держит САМ ТЕРМИНАЛ: STL поставил нативную стоп-заявку QUIK на всю
+  // связку (real-trade 17.09). Смысл статуса в том, что такая защита переживёт
+  // падение STL, поэтому она не «взведена», а «под охраной терминала».
+  native: 'под охраной терминала',
   fired: 'сработала',
   cancelled: 'отменена',
   expired: 'истёк срок',
@@ -381,6 +385,14 @@ function plural(n: number, one: string, few: string, many: string): string {
  *  срабатывания) читались бы одинаково.
  *  price = null — отдельного числа у заявки нет (следит сразу, по рынку): колонка
  *  показывает подпись без числа, а не придуманный ноль. */
+/** ЖИВАЯ заявка — та, что ещё может сработать: сторож STL (armed) или нативная
+ *  стоп-заявка терминала (native). Делить список по одному `armed` нельзя: заявки
+ *  под охраной терминала уехали бы в историю, хотя именно они и защищают позицию. */
+export const LIVE_STATUSES = new Set(['armed', 'native']);
+export function isLive(status: string | null | undefined): boolean {
+  return LIVE_STATUSES.has(String(status || ''));
+}
+
 export function keyPrice(o: any): { label: string; price: number | null } {
   const k: Kind = o.kind;
   if (k === 'trail_tp') {

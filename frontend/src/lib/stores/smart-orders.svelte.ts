@@ -22,7 +22,9 @@ export interface SmartOrder {
   child_price: number;
   oco_group: string;
   good_till_ms: number;
-  status: string;
+  status: string;          // armed | native | fired | cancelled | expired | error | orphaned
+  native_state?: string;   // sent | live | failed | done — как приняла защиту сторона QUIK
+  native_stop_num?: string;// номер нативной стоп-заявки QUIK (строкой: ~1.9e18)
   note: string;
   peak: number;
   activated: boolean;
@@ -56,7 +58,8 @@ async function load(): Promise<void> {
 
 export const smartOrdersStore = {
   get all(): SmartOrder[] { return _orders; },
-  get armed(): SmartOrder[] { return _orders.filter((o) => o.status === 'armed'); },
+  // native тоже живая: защиту держит терминал, и в истории ей не место.
+  get armed(): SmartOrder[] { return _orders.filter((o) => o.status === 'armed' || o.status === 'native'); },
   get loaded(): boolean { return _loaded; },
   get error(): string { return _error; },
   /** Вне торгов сторож намеренно не срабатывает — взведённая заявка не сломана. */
