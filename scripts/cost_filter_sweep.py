@@ -50,12 +50,16 @@ def main() -> None:
     ap.add_argument("--ri", required=True)
     ap.add_argument("--tf", type=int, action="append", default=None)
     ap.add_argument("--workers", type=int, default=6)
+    ap.add_argument("--strats", help="через запятую; по умолчанию STRATS")
+    ap.add_argument("--grid", help="пороги cost_atr через запятую")
     a = ap.parse_args()
     tfs = a.tf or [1, 15]
+    strats = tuple(a.strats.split(",")) if a.strats else STRATS
+    grid = tuple(int(x) for x in a.grid.split(",")) if a.grid else GRID
 
     by = load_ri(a.ri)
     bars_by = {tf: {c: aggregate(b, tf) for c, b in by.items()} for tf in tfs}
-    jobs = [(rid, tf, c, cost) for rid in STRATS for tf in tfs for c in by for cost in GRID]
+    jobs = [(rid, tf, c, cost) for rid in strats for tf in tfs for c in by for cost in grid]
     print(f"контрактов {len(by)}, прогонов {len(jobs)}", flush=True)
 
     net = defaultdict(lambda: defaultdict(float))
@@ -73,10 +77,10 @@ def main() -> None:
     print(f"\n{'стратегия':12} {'ТФ':>3} {'порог':>6} {'контрактов':>10} {'2022-24 ₽':>11} "
           f"{'2025-26 ₽':>11} {'итог ₽':>11} {'₽/контр ост.':>13} {'₽/контр убр.':>13} "
           f"{'лучше базы':>11}")
-    for rid in STRATS:
+    for rid in strats:
         for tf in tfs:
             base = None
-            for cost in GRID:
+            for cost in grid:
                 d = net[(rid, tf, cost)]
                 a1 = sum(v for k, v in d.items() if k[:4] <= "2024") * 1.68
                 a2 = sum(v for k, v in d.items() if k[:4] >= "2025") * 1.68
