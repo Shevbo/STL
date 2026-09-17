@@ -81,6 +81,10 @@ class SmartOrder:
     sl_offset: float = 0.0       # ЛЮБОЙ тип: защитный стоп в ПУНКТАХ после входа (0 = без стопа)
     tp_offset: float = 0.0       # ЛЮБОЙ тип: тейк в ПУНКТАХ доходного хода после входа (0 = без тейка)
     trail_after: float = 0.0     # ЛЮБОЙ тип: ПОДТЯГИВАЮЩАЯ в пунктах после входа (0 = без неё)
+    # ЛЮБОЙ тип: тейк после входа СЛЕДЯЩИЙ. tp_offset становится уровнем активации, дальше
+    # тейк ведёт экстремум и закрывает на откате tp_trail пунктов. 0 = фиксированный тейк.
+    # Фиксированный отдаёт движение ровно на уровне, следящий забирает продолжение (17.09.2026).
+    tp_trail: float = 0.0
     parent_id: str = ""          # у защитного стопа — so_id заявки, которая его породила
     peak: float = 0.0            # trail bookkeeping (best price since activation)
     activated: bool = False      # trail: activation level crossed
@@ -113,12 +117,16 @@ class SmartOrder:
                 return "у подтягивающей нет уровня активации: она стережёт позицию сразу"
             # Она ВЫХОДИТ из позиции, а «блоки после сделки» ВХОДЯТ. Разрешить их
             # здесь значит после закрытия открыть новую позицию в обратную сторону.
-            if self.sl_offset or self.tp_offset or self.trail_after:
+            if self.sl_offset or self.tp_offset or self.trail_after or self.tp_trail:
                 return "подтягивающая закрывает позицию: блоки после сделки ей не ставятся"
         if self.kind == "on_fill" and not self.watch_client_id:
             return "watch_client_id обязателен для on_fill"
-        if self.sl_offset < 0 or self.tp_offset < 0 or self.trail_after < 0:
+        if self.sl_offset < 0 or self.tp_offset < 0 or self.trail_after < 0 or self.tp_trail < 0:
             return "блоки после сделки в пунктах не могут быть отрицательными"
+        if self.tp_trail and not self.tp_offset:
+            # Без уровня активации тейк вёл бы экстремум с первого тика и закрыл бы
+            # позицию на первом откате: в убытке, а не с прибылью.
+            return "следящий тейк: задай tp_offset, прибыль, с которой тейк начинает следить"
         if self.sl_offset and self.trail_after:
             # Два стопа на одну позицию: сработает ближний, дальний останется
             # висеть и на следующем ходу ОТКРОЕТ позицию в обратную сторону.
@@ -298,6 +306,15 @@ def _protective(parent: SmartOrder, entry_price: float, now: int, kind: str) -> 
     trigger = entry_price + sign * offset * (1 if parent.side == "buy" else -1)
     if trigger <= 0:
         return None
+    if kind == "tp" and parent.tp_trail > 0:
+        # Следящий тейк = обычная trail_tp стороны выхода: trigger_price это уровень
+        # активации, trail_offset это откат. Движок ведёт её штатно, связка OCO та же.
+        return SmartOrder(
+            so_id=new_id(), kind="trail_tp", code=parent.code, side=exit_side, qty=parent.qty,
+            trigger_price=trigger, trail_offset=parent.tp_trail, oco_group=_bracket_group(parent),
+            good_till_ms=parent.good_till_ms, parent_id=parent.so_id, created_ms=now,
+            note=(f"следящий тейк от {parent.so_id}: вход {entry_price:g}, "
+                  f"активация {offset:g} п., откат {parent.tp_trail:g} п."))
     what = "защитный стоп" if kind == "sl" else "тейк"
     return SmartOrder(
         so_id=new_id(), kind=kind, code=parent.code, side=exit_side, qty=parent.qty,
@@ -359,7 +376,14 @@ def rebase_protective(children: list[SmartOrder], parent: SmartOrder,
     for c in children:
         if c.status != "armed" or c.parent_id != parent.so_id:
             continue
-        fresh = _protective(parent, real_entry, c.created_ms, c.kind)
+        kind = c.kind
+        if kind == "trail_tp":
+            # Следящий тейк строится как «tp». Активированный уже ведёт экстремум:
+            # двигать его уровень активации задним числом бессмысленно.
+            if c.activated:
+                continue
+            kind = "tp"
+        fresh = _protective(parent, real_entry, c.created_ms, kind)
         if fresh is None or abs(fresh.trigger_price - c.trigger_price) < 1e-9:
             continue
         c.trigger_price = fresh.trigger_price

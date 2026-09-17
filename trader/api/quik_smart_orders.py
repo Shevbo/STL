@@ -68,6 +68,7 @@ class SmartOrderBody(BaseModel):
     sl_offset: float = 0.0         # защитный стоп в пунктах после входа (0 = без стопа)
     tp_offset: float = 0.0         # тейк в пунктах доходного хода после входа (0 = без тейка)
     trail_after: float = 0.0       # подтягивающая в пунктах после входа (0 = без неё)
+    tp_trail: float = 0.0          # тейк после входа следящий: откат в пунктах (0 = фиксированный)
     note: str = ""
 
 
@@ -81,6 +82,7 @@ async def create(body: SmartOrderBody, request: Request):
         trigger_price=float(body.trigger_price),
         trail_offset=float(body.trail_offset), sl_offset=float(body.sl_offset),
         tp_offset=float(body.tp_offset), trail_after=float(body.trail_after),
+        tp_trail=float(body.tp_trail),
         watch_client_id=body.watch_client_id, child_price=float(body.child_price),
         oco_group=body.oco_group, good_till_ms=int(body.good_till_ms),
         note=body.note, created_ms=so_mod.now_ms(),

@@ -452,3 +452,56 @@ def test_trailing_after_trade_is_offered_to_any_kind():
     assert "сразу обычный стоп и подтягивающую" in (
         so(kind="on_fill", watch_client_id="c1", sl_offset=100.0,
            trail_after=300.0).validate() or "")
+
+
+# ---- следящий тейк после входа (17.09.2026) ----
+
+def _long_parent(**kw):
+    base = dict(kind="trail_tp", side="buy", trail_offset=50, tp_offset=500, tp_trail=100)
+    base.update(kw)
+    return so(**base)
+
+
+def test_trailing_take_after_long_entry_is_trail_tp():
+    parent = _long_parent(qty=5)
+    (tp,) = protective_children(parent, entry_price=87000, now=NOW)
+    assert (tp.kind, tp.side, tp.trigger_price, tp.trail_offset, tp.qty) == ("trail_tp", "sell", 87500, 100, 5)
+    assert tp.oco_group == f"br:{parent.so_id}" and tp.parent_id == parent.so_id
+    assert tp.validate() is None
+
+
+def test_trailing_take_rides_the_move_and_exits_on_retrace():
+    (tp,) = protective_children(_long_parent(), entry_price=87000, now=NOW)
+    assert run([tp], last=87300) == [] and not tp.activated
+    assert run([tp], last=87600) == [] and tp.activated
+    assert run([tp], last=87800) == [] and tp.peak == 87800
+    acts = run([tp], last=87700)
+    assert len(acts) == 1 and isinstance(acts[0], Fire)
+
+
+def test_trailing_take_after_short_entry_is_mirrored():
+    (tp,) = protective_children(_long_parent(side="sell"), entry_price=87000, now=NOW)
+    assert (tp.side, tp.trigger_price, tp.trail_offset) == ("buy", 86500, 100)
+
+
+def test_trailing_take_with_stop_is_one_oco_bracket():
+    kids = protective_children(_long_parent(sl_offset=300), entry_price=87000, now=NOW)
+    assert sorted(k.kind for k in kids) == ["sl", "trail_tp"]
+    assert len({k.oco_group for k in kids}) == 1
+
+
+def test_trailing_take_validation():
+    assert _long_parent(tp_offset=0).validate()
+    assert _long_parent(tp_trail=-1).validate()
+    assert so(kind="trail_sl", side="sell", trail_offset=50, tp_trail=100).validate()
+    assert _long_parent().validate() is None
+    assert _long_parent(tp_trail=0).validate() is None
+
+
+def test_rebase_moves_trailing_take_only_before_activation():
+    from trader.quik.smart_orders import rebase_protective
+    parent = _long_parent()
+    (tp,) = protective_children(parent, entry_price=87000, now=NOW)
+    assert rebase_protective([tp], parent, 86990) is True and tp.trigger_price == 87490
+    tp.activated = True
+    assert rebase_protective([tp], parent, 86980) is False and tp.trigger_price == 87490
