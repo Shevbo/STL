@@ -447,11 +447,13 @@ describe('группы ручных заявок в панели', () => {
   const pages = ['public/companion.html', 'public/m.html'];
   const read = (f: string) => readFileSync(resolve(process.cwd(), f), 'utf8');
 
-  it('ровно пять групп в постоянном порядке: QUIK и четыре типа умных', () => {
+  it('шесть групп в постоянном порядке: QUIK и пять типов умных', () => {
     for (const f of pages) {
       const g = read(f).match(/const ORD_GROUPS = \[([\s\S]*?)\];/)![1];
+      // Подтягивающие (trail_sl) добавлены 17.09.2026: до этого их заявки падали
+      // в чужую группу «Условные» и не считались сервером вовсе.
       expect([...g.matchAll(/id: '(\w+)'/g)].map((m) => m[1]), f)
-        .toEqual(['quik', 'sl', 'tp', 'trail_tp', 'on_fill']);
+        .toEqual(['quik', 'sl', 'tp', 'trail_tp', 'trail_sl', 'on_fill']);
     }
   });
 
@@ -459,8 +461,12 @@ describe('группы ручных заявок в панели', () => {
     for (const f of pages) {
       const src = read(f);
       expect(src, f).toMatch(/const counts = o\.counts \|\| \{\}/);
-      // с фильтром истории счётчик считает видимое: серверный про фильтр не знает
+      // с историей — счётчик за весь день; без неё — серверный счётчик ЖИВЫХ.
+      // Считать видимые строки нельзя: список обрезан двадцатью, и 17.09.2026
+      // панель показала 2 следящие заявки там, где их было 4.
       expect(src, f).toMatch(/counts\[g\.id\] != null \? counts\[g\.id\] : all\.length/);
+      expect(src, f).toMatch(/o\.counts_active \|\| \{\}/);
+      expect(src, f).toMatch(/nActive != null \? nActive : rows\.length/);
     }
   });
 

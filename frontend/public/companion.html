@@ -909,6 +909,7 @@ const ORD_GROUPS = [
   { id: 'sl', name: 'Условные' },
   { id: 'tp', name: 'Лимитные' },
   { id: 'trail_tp', name: 'Следящие' },
+  { id: 'trail_sl', name: 'Подтягивающие' },
   { id: 'on_fill', name: 'Зависимые' },
 ];
 
@@ -959,7 +960,7 @@ function renderOrders(o, d) {
   if (!o) return '<div class="empty">ручных заявок нет</div>';
   const sideRu = (s) => s === 'buy' ? 'покупка' : 'продажа';
   const num = (v) => v == null ? '—' : Number(v).toLocaleString('ru-RU');
-  const rowsBy = { quik: [], sl: [], tp: [], trail_tp: [], on_fill: [] };
+  const rowsBy = { quik: [], sl: [], tp: [], trail_tp: [], trail_sl: [], on_fill: [] };
 
   // Время ВЗВЕДЕНИЯ: у простой заявки это время в QUIK, у умной created_ms.
   for (const m of o.manual || []) {
@@ -1011,7 +1012,9 @@ function renderOrders(o, d) {
     // поэтому с фильтром считаем видимое.
     // ponytail: с фильтром активные за 20-й строкой снапшота не видны и не
     // сосчитаны; понадобится точность — считать активные на сервере.
-    const n = ordDone ? (counts[g.id] != null ? counts[g.id] : all.length) : rows.length;
+    const nActive = (o.counts_active || {})[g.id];
+    const n = ordDone ? (counts[g.id] != null ? counts[g.id] : all.length)
+                      : (nActive != null ? nActive : rows.length);
     if (!n) continue;                       // пустую группу не показываем вовсе
     const open = ordOpen.has(g.id);
     out += `<div class="ord-g" data-ord="${g.id}">` +

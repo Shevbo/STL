@@ -547,3 +547,41 @@ def test_vm_splits_between_robots_and_manual_and_sums_to_account(monkeypatch):
     assert robot["today_total"] + manual["total"] == pytest.approx(
         body["account"]["varmargin"])
     assert body["account"]["vm_check"]["ok"] is True
+
+
+def test_armed_smart_orders_survive_the_snapshot_cut(monkeypatch):
+    """Взведённые заявки не вытесняются сегодняшней историей.
+
+    17.09.2026 оператор: панель показывала 2 следящие заявки, а в книге их было 4.
+    Список уходил в панель в порядке книги и резался двадцатой строкой, поэтому
+    сработавшие и снятые за день выталкивали живые. Плюс счётчик активных: без него
+    панель с выключенным фильтром считала видимые строки и повторяла ту же обрезку.
+    """
+    import time
+    from types import SimpleNamespace
+
+    now = int(time.time() * 1000)
+
+    def _so(so_id, kind, status, created):
+        return SimpleNamespace(
+            so_id=so_id, kind=kind, status=status, code="RIZ6", side="sell", qty=1,
+            trigger_price=90000.0, trail_offset=50.0, activated=False, peak=0.0,
+            created_ms=created, fired_ms=created, fired_price=0.0, fired_qty=0,
+            sl_offset=0.0, tp_offset=0.0, tp_trail=0.0, parent_id="")
+
+    # Сначала 24 сегодняшние отработавшие, ЗАТЕМ 4 взведённые — прежний код резал
+    # список до двадцати строк и живые в панель не попадали вовсе.
+    book = [_so(f"done{i}", "trail_tp", "fired", now - 1000) for i in range(24)]
+    book += [_so(f"live{i}", "trail_tp", "armed", now) for i in range(4)]
+
+    client, _ = _client(monkeypatch)
+    client.app.state.smart_orders = SimpleNamespace(orders=book)
+    snap = client.get("/api/v1/quik/companion/snapshot", headers=_operator_headers())
+    assert snap.status_code == 200, snap.text
+    orders = snap.json()["orders"]
+
+    armed = [o for o in orders["smart"] if o["status"] == "armed"]
+    assert len(armed) == 4, "живые заявки обрезаны историей"
+    assert orders["counts_active"]["trail_tp"] == 4      # столько их в книге
+    assert orders["counts"]["trail_tp"] == 28            # весь день, до обрезки
+    assert len(orders["smart"]) == 20                    # потолок панели не вырос
