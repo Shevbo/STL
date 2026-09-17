@@ -71,7 +71,8 @@ def main() -> None:
                 print(f"{i}/{len(jobs)}", flush=True)
 
     print(f"\n{'стратегия':12} {'ТФ':>3} {'порог':>6} {'контрактов':>10} {'2022-24 ₽':>11} "
-          f"{'2025-26 ₽':>11} {'итог ₽':>11} {'лучше базы':>11}")
+          f"{'2025-26 ₽':>11} {'итог ₽':>11} {'₽/контр ост.':>13} {'₽/контр убр.':>13} "
+          f"{'лучше базы':>11}")
     for rid in STRATS:
         for tf in tfs:
             base = None
@@ -79,13 +80,22 @@ def main() -> None:
                 d = net[(rid, tf, cost)]
                 a1 = sum(v for k, v in d.items() if k[:4] <= "2024") * 1.68
                 a2 = sum(v for k, v in d.items() if k[:4] >= "2025") * 1.68
+                # КОНТРОЛЬ «отбор или просто меньше сделок»: при отрицательном ожидании
+                # любое прореживание поднимает нетто, поэтому мало «нетто выросло».
+                # Фильтр отбирает, только если ОСТАВЛЕННЫЕ сделки лучше УБРАННЫХ на
+                # контракт (замечание fable 17.09: на спеке lxk22 при пороге 40
+                # оставленные были ХУЖЕ убранных — это «торгуй реже», а не отбор).
+                n = fills[(rid, tf, cost)]
                 if cost == 0:
-                    base = (a1, a2)
-                    mark = "база"
+                    base = (a1, a2, n)
+                    mark, kept, removed = "база", (a1 + a2) / n if n else 0.0, 0.0
                 else:
                     mark = "ДА" if a1 > base[0] and a2 > base[1] else ""
-                print(f"{rid:12} M{tf:<2} {cost:6} {fills[(rid, tf, cost)]:10} {a1:11.0f} {a2:11.0f} "
-                      f"{a1 + a2:11.0f} {mark:>11}")
+                    kept = (a1 + a2) / n if n else 0.0
+                    rm_n = base[2] - n
+                    removed = ((base[0] + base[1]) - (a1 + a2)) / rm_n if rm_n else 0.0
+                print(f"{rid:12} M{tf:<2} {cost:6} {n:10} {a1:11.0f} {a2:11.0f} "
+                      f"{a1 + a2:11.0f} {kept:13.1f} {removed:13.1f} {mark:>11}")
 
 
 if __name__ == "__main__":
