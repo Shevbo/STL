@@ -20,7 +20,7 @@ from datetime import date, datetime, timedelta, timezone
 from trader.lab.iss_loader import IssLoader
 
 LETTERS = "FGHJKMNQUVXZ"
-QUARTERLY = {"GD": "HMUZ", "RI": "HMUZ", "Si": "HMUZ"}
+QUARTERLY = {"GD": "HMUZ", "RI": "HMUZ", "Si": "HMUZ", "MX": "HMUZ"}
 
 
 def candidates(base: str, d_from: date, d_to: date):
