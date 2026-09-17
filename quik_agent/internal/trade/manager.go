@@ -74,6 +74,15 @@ type workingOrder struct {
 	// order price is still used (best available then).
 	tradeQty int64
 	tradeAvg float64
+	// Учёт перестановки. MOVE_ORDERS — ОТДЕЛЬНАЯ транзакция на заявку, которая УЖЕ
+	// стоит в рынке. Её отказ (коллар брокера, «неверные параметры транзакции»)
+	// не убивает заявку: она осталась стоять по СТАРОЙ цене. 17.09.2026 отказ
+	// перестановки помечал живую заявку REJECTED+done, STL считал её мёртвой и
+	// перестал её вести, а в QUIK она торговала. Помним, что откатывать.
+	moveTransID     int64
+	movePrevTransID int64
+	movePrevPrice   float64
+	movePrevQty     int64
 }
 
 func (w *workingOrder) restingQty() int64 {
@@ -446,6 +455,8 @@ func (m *Manager) sendMove(wo *workingOrder, newPrice float64, newQty int64) {
 	// The old leg dies as part of the move; flag it so its "cancelled" OnOrder (which
 	// rides the move's TRANS_ID) is dropped instead of marking the order done.
 	m.superseded[orderNum] = true
+	wo.moveTransID, wo.movePrevTransID = transID, wo.transID
+	wo.movePrevPrice, wo.movePrevQty = wo.price, wo.qty
 	wo.transID = transID
 	wo.price = newPrice // optimistic; QUIK confirms via OnOrder
 	if qty > 0 {
@@ -846,6 +857,21 @@ func (m *Manager) OnTransReply(ev TransReplyEvent) {
 		clientID = m.stopTrans[ev.TransID] // stop-order transaction (stoporders.go)
 	}
 	rejected := wo != nil && isTransReject(ev.ResultCode)
+	// Отказ ПЕРЕСТАНОВКИ — не смерть заявки. Заявка осталась в рынке по прежней
+	// цене: откатываем оптимистично записанную новую цену/объём и снимаем метку
+	// superseded, иначе настоящее снятие старой заявки будет молча проглочено.
+	moveRejected := rejected && wo.moveTransID != 0 && ev.TransID == wo.moveTransID
+	if moveRejected {
+		rejected = false
+		delete(m.superseded, wo.orderNum)
+		wo.price, wo.qty = wo.movePrevPrice, wo.movePrevQty
+		wo.transID = wo.movePrevTransID
+		wo.moveTransID = 0
+		m.logf("trade: move REJECTED, order still working (client=%q order=%q price=%v): %s",
+			wo.clientID, wo.orderNum, wo.price, ev.Text)
+	} else if wo != nil && wo.moveTransID == ev.TransID {
+		wo.moveTransID = 0 // перестановка принята
+	}
 	if rejected {
 		wo.state = quikv1.OrderState_ORDER_STATE_REJECTED
 		wo.done = true
@@ -864,7 +890,9 @@ func (m *Manager) OnTransReply(ev TransReplyEvent) {
 		Text:       ev.Text,
 		TsUnixMs:   m.nowMs(),
 	})
-	if rejected {
+	if rejected || moveRejected {
+		// И при отказе перестановки шлём обновление: STL обязан увидеть, что цена
+		// осталась прежней, иначе он будет вести заявку по цене, которой нет.
 		m.emitOrderUpdate(wo, ev.Text)
 	}
 	if deferredCancel {
