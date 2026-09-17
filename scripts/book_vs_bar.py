@@ -44,6 +44,7 @@ def main() -> None:
     ap.add_argument("--code", default="RIU6")
     ap.add_argument("--tf", type=int, default=15)
     ap.add_argument("--gap", type=int, default=60, help="порог свежести снимка, секунд")
+    ap.add_argument("--all", action="store_true", help="весь реестр, а не шесть стратегий")
     a = ap.parse_args()
 
     rows = json.load(open(a.bars, encoding="utf-8"))["rows"]
@@ -69,7 +70,8 @@ def main() -> None:
         return m, (var / len(xs)) ** 0.5
 
     rows_out = []
-    for rid in STRATS:
+    strats = [r for r in REGISTRY if r not in ("macd_shectory1", "bollinger_bo_m1", "williams_r")]         if a.all else STRATS
+    for rid in strats:
         mod = types.ModuleType("m")
         mod.on_bar = make_on_bar(rid)
         params = {**REGISTRY[rid]["default_params"], "bet_step": 0, "symbol": a.code, "flatten_end": 1}
