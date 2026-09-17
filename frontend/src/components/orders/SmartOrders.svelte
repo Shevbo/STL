@@ -12,7 +12,7 @@
   import {
     KINDS, KIND_BY_ID, COMMON_FACTS, STATUS_RU, codeSuggestions, conditionText, keyPrice,
     closingSide, fmtWhen, fmtPts, fmtRub, manualPositions, ocoFact, preview,
-    shortCodes, tillFact, type Kind, type OpenPos, type Side,
+    shortCodes, sortBySideAndPrice, tillFact, type Kind, type OpenPos, type Side,
   } from '$lib/smart-order-help';
 
   let { symbol = '' }: { symbol?: string } = $props();
@@ -60,6 +60,10 @@
   // карточку с линией: so_id в подпись на линии не влезает, а по цвету семь
   // заявок не различить. У защитных детей код РОДИТЕЛЯ: одна связка — один номер.
   const codes = $derived(shortCodes(armed));
+  // Порядок: продажи сверху, покупки снизу, внутри стороны цена по убыванию
+  // (просьба оператора 17.09). Список по времени взведения читался журналом:
+  // что стоит над рынком, а что под ним, приходилось складывать в голове.
+  const armedSorted = $derived(sortBySideAndPrice(armed));
   const history = $derived(orders.filter((o) => o.status !== 'armed').slice(-30).reverse());
   const goodTillMs = $derived(tillLocal ? new Date(tillLocal).getTime() : 0);
 
@@ -430,7 +434,13 @@
     {#if !armed.length}
       <p class="so-empty">Взведённых заявок нет. Сторож ничего не ждёт.</p>
     {/if}
-    {#each armed as o (o.so_id)}
+    {#each armedSorted as o, i (o.so_id)}
+      {#if i === 0 || armedSorted[i - 1].side !== o.side}
+        <div class="so-side-h" class:buy={o.side === 'buy'}>
+          {o.side === 'buy' ? 'ПОКУПКА' : 'ПРОДАЖА'}
+          <span class="so-side-n">{armedSorted.filter((x) => x.side === o.side).length}</span>
+        </div>
+      {/if}
       <article class="so-card" style="--accent:{KIND_BY_ID[o.kind].color}">
         <div class="so-c-head">
           <span class="so-c-num" title="номер связки: этим же номером заявка подписана на графике">{codes[o.so_id]}</span>
@@ -647,6 +657,12 @@
   /* Ключевые цифры — отдельными колонками крупно (15.09.2026): направление, объём
      и цена тонули в строке условия. Ширины фиксированы, чтобы колонки вставали
      одна под другой от карточки к карточке и глаз шёл по столбцу. */
+  /* Заголовок стороны над её заявками: список идёт лестницей уровней, и глазу
+     нужен якорь, где кончаются продажи и начинаются покупки. */
+  .so-side-h { margin: 10px 0 4px; font: 700 11px/1 system-ui, sans-serif; letter-spacing: .1em;
+    color: #ff9d90; display: flex; align-items: center; gap: 8px; }
+  .so-side-h.buy { color: #7ef0a6; }
+  .so-side-n { font-weight: 500; color: #8a90a8; }
   .so-c-dir { width: 84px; color: #ff9d90; font: 700 15px/1.1 system-ui, sans-serif; letter-spacing: .04em; }
   .so-c-dir.buy { color: #7ef0a6; }
   .so-c-qty { width: 44px; text-align: right; color: #e8e8f0; font: 700 18px/1.1 system-ui, sans-serif;

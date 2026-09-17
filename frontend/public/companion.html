@@ -303,6 +303,8 @@
   .ord-box::-webkit-scrollbar-thumb { background: var(--rule); border-radius: 3px; }
   .ord-box::-webkit-scrollbar-track { background: transparent; }
   /* Переключатель истории живёт НАД коробкой: внутри он уезжал бы с прокруткой. */
+  .ord-side { padding: 1px 0 1px 6px; font-size: 10px; letter-spacing: .08em; color: #ff9d90; }
+  .ord-side.buy { color: var(--up); }
   .ord-f { cursor: pointer; color: var(--muted); font-size: 10px; padding: 1px 0 2px 6px; }
   .ord-f:hover { color: var(--ink); }
   /* Строка над коробкой: фильтр слева, «развернуть» справа. */
@@ -961,10 +963,21 @@ function renderOrders(o, d) {
   const sideRu = (s) => s === 'buy' ? 'покупка' : 'продажа';
   const num = (v) => v == null ? '—' : Number(v).toLocaleString('ru-RU');
   const rowsBy = { quik: [], sl: [], tp: [], trail_tp: [], trail_sl: [], on_fill: [] };
+  // ЦЕНА, ПО КОТОРОЙ ЗАЯВКА СРАБОТАЕТ. У следящей в слежении это уровень выхода от
+  // пика, а не уровень активации: активация уже пройдена. По ней строки и стоят
+  // лестницей внутри стороны (просьба оператора 17.09).
+  const soPx = (s) => {
+    if (s.kind === 'trail_tp' && s.activated && s.peak)
+      return s.side === 'buy' ? s.peak + s.trail_offset : s.peak - s.trail_offset;
+    if (s.kind === 'trail_sl') return s.peak
+      ? (s.side === 'sell' ? s.peak - s.trail_offset : s.peak + s.trail_offset) : null;
+    return s.fired_price || s.trigger || null;
+  };
 
   // Время ВЗВЕДЕНИЯ: у простой заявки это время в QUIK, у умной created_ms.
   for (const m of o.manual || []) {
-    rowsBy.quik.push({ ts: Number(m.ts_ms || 0), done: !m.active, html:
+    rowsBy.quik.push({ ts: Number(m.ts_ms || 0), done: !m.active,
+      side: m.side, px: m.price == null ? null : Number(m.price), html:
       `<div class="row"><span class="k">${esc(m.sec)} ${sideRu(m.side)} ${m.qty}` +
       // Непустой тег у ручной заявки = она пришла не из терминала, а из
       // приложения брокера: оператору важно, каким каналом он торговал.
@@ -994,7 +1007,7 @@ function renderOrders(o, d) {
     }
     const live = s.status === 'armed';
     (rowsBy[s.kind] || rowsBy.sl).push({ ts: Number(s.created_ms || s.fired_ms || 0),
-      done: ORD_DONE_ST.has(s.status), html:
+      done: ORD_DONE_ST.has(s.status), side: s.side, px: soPx(s), html:
       `<div class="row"><span class="k">${esc(s.code)} ${sideRu(s.side)} ${s.qty}</span>` +
       `<span class="sub">${esc(sub)}</span><span class="sp"></span>` +
       `<span class="v ${live ? (s.activated ? 'up' : '') : 'nil'}">${esc(ST[s.status] || s.status)}</span></div>` });
@@ -1022,8 +1035,26 @@ function renderOrders(o, d) {
       `<span class="k">${esc(g.name)}</span><span class="sp"></span>` +
       `<span class="ord-n">${n}</span></div>`;
     if (!open) continue;
-    rows.sort((a, b) => b.ts - a.ts);       // свежие сверху
-    out += rows.map((r) => r.html).join('');
+    // ПРОДАЖИ СВЕРХУ, ПОКУПКИ СНИЗУ, внутри стороны цена по убыванию: список
+    // читается лестницей уровней, а не журналом взведения. Строки без своей цены
+    // уходят в конец своей стороны — ставить их между уровнями не за что.
+    rows.sort((a, b) => {
+      const ra = a.side === 'buy' ? 1 : 0, rb = b.side === 'buy' ? 1 : 0;
+      if (ra !== rb) return ra - rb;
+      if (a.px == null && b.px == null) return b.ts - a.ts;
+      if (a.px == null) return 1;
+      if (b.px == null) return -1;
+      return b.px - a.px;
+    });
+    let side = null;
+    for (const r of rows) {
+      if (r.side !== side) {
+        side = r.side;
+        out += `<div class="ord-side${side === 'buy' ? ' buy' : ''}">` +
+          `${side === 'buy' ? 'покупка' : 'продажа'}</div>`;
+      }
+      out += r.html;
+    }
     if (ordDone && n > rows.length) {
       out += `<div class="row"><span class="sub">и ещё ${n - rows.length} — в терминале</span></div>`;
     }
