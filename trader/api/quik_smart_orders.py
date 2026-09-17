@@ -21,6 +21,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from trader.auth.guard import require_auth
+from trader.quik import native_protect
 from trader.quik import orders as order_msgs
 from trader.quik import smart_orders as so_mod
 from trader.quik.alerts import SEVERITY_CRITICAL
@@ -140,14 +141,42 @@ async def cancel_order(so_id: str, request: Request):
     so = book.get(so_id)
     if so is None:
         raise HTTPException(status_code=404, detail="Нет такой умной заявки.")
-    if so.status != "armed":
+    if so.status not in ("armed", "native"):
         raise HTTPException(status_code=409, detail=f"Заявка уже {so.status}.")
+    if so.status == "native":
+        # Заявка живёт в терминале: снять её можно только там, иначе книга скажет
+        # «отменена», а стоп-заявка останется стеречь позицию.
+        _kill_native(request, so)
     so.status = "cancelled"
     so.note = (so.note + " " if so.note else "") + "отменена оператором"
     book.save()
     log.info("smart_order.cancelled", so_id=so_id, kind=so.kind, code=so.code,
              side=so.side, qty=so.qty)
     return {"ok": True, "so_id": so_id}
+
+
+def _kill_native(request: Request, so: SmartOrder) -> None:
+    """Снять нативную стоп-заявку, которой отдали защиту. Номер знает держатель."""
+    state = request.app.state
+    store = getattr(state, "quik_store", None)
+    srv = getattr(state, "quik_server", None)
+    book = _book(request)
+    holder = so if so.native_stop_num else next(
+        (c for c in book.orders if c.parent_id == so.parent_id and c.native_stop_num), None)
+    if holder is None or not holder.native_stop_num or srv is None or store is None:
+        raise HTTPException(status_code=409,
+                            detail="Заявка под охраной терминала, номер стоп-заявки неизвестен: снимите её в QUIK.")
+    agent = resolve_agent(store, None)
+    srv.enqueue_order(agent, order_msgs.build_kill_stop_order(
+        f"so:{holder.so_id}", holder.native_stop_num, so.code))
+    for c in book.orders:
+        if c.parent_id == so.parent_id and c.status == "native" and c is not so:
+            c.status = "cancelled"
+            c.note = (c.note + " " if c.note else "") + "снята вместе со связкой в терминале"
+    parent = book.get(so.parent_id)
+    if parent is not None:
+        parent.native_state = "done"
+    log.info("smart_order.native_killed", so_id=so.so_id, stop_num=holder.native_stop_num)
 
 
 @router.post("/{so_id}/activate")
@@ -214,6 +243,135 @@ _PROC_START_MS = so_mod.now_ms()
 # там, где QUIK налил все 19 (06.08.2026). Дальше суток смотреть незачем —
 # неисполненный остаток снимает граница сессии, это ловит _mark_orphans.
 _FILL_TRACK_MS = 24 * 3600 * 1000
+# Передача защиты под охрану терминала. Столько ждём регистрации стоп-заявки в
+# QUIK; не дождались - возвращаем защиту сторожу STL и будим оператора. Ждать
+# долго нельзя: всё это время позиция защищена только нашими заявками, а они
+# уже помечены как отданные.
+_NATIVE_CONFIRM_MS = 20_000
+# Флаги стоп-заявки QUIK: бит 0 «активна». Снят - запись отработала или снята
+# (28 исполнена, 26/30 снята; серии S1-S2, execution-module.md 3a/3b).
+_STOP_ALIVE_BIT = 1
+
+
+def _stop_rows_by_tag(store: Any, agent: str) -> dict[str, dict]:
+    """Таблица стоп-заявок QUIK по нашему тегу (brokerref). Тег ребёнка-держателя
+    наследуется и дочерней заявкой, и сделкой - по нему видно всё."""
+    snap = (store.stop_orders(agent) if store is not None else None) or {}
+    out: dict[str, dict] = {}
+    for row in snap.get("table") or []:
+        tag = str(row.get("brokerref") or "")
+        if tag.startswith("stl-so-"):
+            out[tag[len("stl-so-"):]] = row
+    return out
+
+
+def _handover_to_terminal(book: SmartOrderBook, steps: dict[str, float], ost: Any,
+                          srv: Any, agent: str, now: int) -> bool:
+    """Отдать защиту открытой позиции терминалу.
+
+    Наш сторож живёт в STL: упал STL или оборвалась связь - позиция без стопа и
+    без тейка. Стоп-заявку QUIK держит сам, поэтому как только известна ФАКТИЧЕСКАЯ
+    цена входа, ставим нативную запись, а свои защитные заявки переводим в
+    «под охраной терминала» (сторож их больше не трогает). Не приняли - вернём.
+    """
+    dirty = False
+    for parent in book.orders:
+        if parent.status != "fired" or parent.fired_price <= 0 or parent.native_state:
+            continue
+        kids = [c for c in book.orders
+                if c.parent_id == parent.so_id and c.status == "armed"]
+        if not kids:
+            continue
+        plan = native_protect.build_native_protection(
+            parent, parent.fired_price, steps.get(parent.code, 0.0))
+        if plan is None:
+            continue                      # нативного аналога нет: стережёт STL
+        holder = kids[0]
+        client_id = f"so:{holder.so_id}"
+        try:
+            srv.enqueue_order(agent, order_msgs.build_place_stop_order(
+                client_id=client_id, code=parent.code, side=plan["side"],
+                quantity=plan["quantity"], fields=plan["fields"]))
+        except Exception as exc:  # noqa: BLE001 - связь с агентом не должна ронять проход
+            log.warning("smart_order.native_send_failed", parent=parent.so_id, error=str(exc))
+            continue
+        ost.record_placement(agent)
+        parent.native_state, parent.native_ms = "sent", now
+        for c in kids:
+            c.status = "native"
+            c.note = (c.note + " " if c.note else "") + \
+                f"под охраной терминала (стоп-заявка {holder.so_id})"
+        dirty = True
+        log.info("smart_order.native_sent", parent=parent.so_id, holder=holder.so_id,
+                 kind=plan["fields"].get("STOP_ORDER_KIND"), kinds=plan["kinds"],
+                 entry=parent.fired_price, fields=plan["fields"])
+    return dirty
+
+
+def _native_holder(book: SmartOrderBook, parent: SmartOrder) -> SmartOrder | None:
+    return next((c for c in book.orders
+                 if c.parent_id == parent.so_id and c.status in ("native", "fired", "cancelled")
+                 and c.native_state), None)
+
+
+def _track_native(book: SmartOrderBook, store: Any, agent: str, now: int) -> list[SmartOrder]:
+    """Следить за отданными записями: зарегистрирована, отработала, снята, не принята.
+
+    Возвращает родителей, у которых передача СОРВАЛАСЬ: их защиту вернули сторожу
+    STL, и оператора надо разбудить - позиция была бы голой, промолчи мы тут."""
+    watched = [p for p in book.orders if p.native_state in ("sent", "live")]
+    if not watched:
+        return []
+    rows = _stop_rows_by_tag(store, agent)
+    failed: list[SmartOrder] = []
+    for parent in watched:
+        kids = [c for c in book.orders if c.parent_id == parent.so_id]
+        holder = next((c for c in kids if c.status == "native"), None)
+        row = rows.get(holder.so_id) if holder is not None else None
+        if row is None:
+            if parent.native_state == "sent" and now - parent.native_ms > _NATIVE_CONFIRM_MS:
+                parent.native_state = "failed"
+                for c in kids:
+                    if c.status == "native":
+                        c.status = "armed"
+                        c.note = (c.note + " " if c.note else "") + \
+                            "терминал стоп-заявку не принял: защиту снова ведёт STL"
+                failed.append(parent)
+                log.warning("smart_order.native_rejected", parent=parent.so_id)
+            elif parent.native_state == "live":
+                # Была в таблице и исчезла: считаем отработавшей, судить о судьбе
+                # позиции по отсутствию записи нельзя - это делает сверка позиций.
+                parent.native_state = "done"
+                for c in kids:
+                    if c.status == "native":
+                        c.status = "fired"
+                        c.note = (c.note + " " if c.note else "") + "исполнена терминалом"
+                log.info("smart_order.native_gone", parent=parent.so_id)
+            continue
+        try:
+            flags = int(row.get("flags") or 0)
+        except (TypeError, ValueError):
+            flags = 0
+        if parent.native_state == "sent":
+            parent.native_state = "live"
+            if holder is not None:
+                holder.native_state = "live"
+                holder.native_stop_num = str(row.get("order_num") or "")
+            log.info("smart_order.native_live", parent=parent.so_id,
+                     stop_num=row.get("order_num"), flags=row.get("flags"))
+        if not flags & _STOP_ALIVE_BIT:
+            parent.native_state = "done"
+            done_as = "fired" if flags == 28 else "cancelled"
+            for c in kids:
+                if c.status == "native":
+                    c.status = done_as
+                    c.note = (c.note + " " if c.note else "") + (
+                        "исполнена терминалом" if done_as == "fired" else "снята в терминале")
+            log.info("smart_order.native_done", parent=parent.so_id, flags=flags,
+                     linked=row.get("linkedorder"))
+    return failed
+
+
 
 
 def _mark_orphans(book: SmartOrderBook, ost: Any, agent: str, now: int) -> bool:
@@ -401,7 +559,16 @@ async def _watch_once(state: Any) -> None:
     dirty_meta = _mark_orphans(book, ost, agent, so_mod.now_ms())
     dirty_meta = _track_fills(book, ost, store, agent) or dirty_meta
     dirty_meta = _revive_false_orphans(book) or dirty_meta
-    dirty_meta = _snap_entries_to_grid(book, _price_steps(store, agent)) or dirty_meta
+    steps_all = _price_steps(store, agent)
+    dirty_meta = _snap_entries_to_grid(book, steps_all) or dirty_meta
+    # Защита открытой позиции переезжает в терминал: он держит стоп-заявку сам и
+    # переживает падение STL. Порядок важен - сначала уточнённая цена входа
+    # (_track_fills/_snap_entries_to_grid), потом передача от неё.
+    dirty_meta = _handover_to_terminal(book, steps_all, ost, srv, agent, so_mod.now_ms()) or dirty_meta
+    for parent in _track_native(book, store, agent, so_mod.now_ms()):
+        dirty_meta = True
+        await _alert_reject(srv, agent, parent,
+                            "терминал не принял стоп-заявку защиты: защиту ведёт STL")
     if dirty_meta:
         book.save()
     if not active:

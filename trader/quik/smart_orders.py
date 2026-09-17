@@ -86,6 +86,12 @@ class SmartOrder:
     # Фиксированный отдаёт движение ровно на уровне, следящий забирает продолжение (17.09.2026).
     tp_trail: float = 0.0
     parent_id: str = ""          # у защитного стопа — so_id заявки, которая его породила
+    # Передача защиты под охрану терминала (native_protect.py): "" пока в STL,
+    # sent - транзакция ушла, live - QUIK зарегистрировал, failed - не принял и
+    # защиту снова стережёт STL, done - стоп-заявка отработала или снята.
+    native_state: str = ""
+    native_stop_num: str = ""    # номер стоп-заявки QUIK у ребёнка-держателя
+    native_ms: int = 0
     peak: float = 0.0            # trail bookkeeping (best price since activation)
     activated: bool = False      # trail: activation level crossed
     created_ms: int = 0
