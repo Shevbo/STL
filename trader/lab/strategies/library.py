@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from functools import lru_cache
 
 from trader.lab import indicators as I
-from trader.lab.commission import is_weekend
+from trader.lab.commission import is_weekend, taker_points
 from trader.lab.runtime import STLRuntime
 
 # registry: id -> dict(name, source, params_schema, signal, warmup, default_params)
@@ -277,7 +277,10 @@ def make_on_bar(rid: str):
         reg_band = float(params.get("reg_band", 0) or 0)
         reg_mode = int(params.get("reg_mode", 1) or 1)
         atr_n = int(params.get("avg_atr_n", 14) or 14)
-        atr_active = (k_step > 0) or (tp > 0)        # ATR only needed for averaging/TP
+        # Фильтр издержек: сравнивает ход бара с ценой круга (см. AVG_PARAMS).
+        cost_atr = float(params.get("cost_atr", 0) or 0) / 10.0
+        spread_pts = float(params.get("spread_pts", 0) or 0)
+        atr_active = (k_step > 0) or (tp > 0) or cost_atr > 0   # ATR: усреднение, тейк, издержки
         need = max(warmup(params), atr_n + 1) if atr_active else warmup(params)
         fetch_n = max(need, dv_win) if dv_on else need   # детектору нужно своё окно
         # ГЕЙТУ РЕЖИМА ТОЖЕ НУЖНО СВОЁ ОКНО, и это не мелочь. Стратегия берёт ровно
@@ -425,6 +428,13 @@ def make_on_bar(rid: str):
         # максимум: включённые режимы разножки не отменяют друг друга.
         if min_gap_atr > 0 and atrv > 0:
             min_gap = max(min_gap, min_gap_atr * atrv)
+        # Цена круга в пунктах: два конца, на каждом полспреда и биржевой сбор тейкера.
+        # Гейтит ТОЛЬКО входы (вход с нуля и обратную ногу переворота); выходы, тейк и
+        # стоп не трогает никогда — иначе фильтр держал бы позицию против сигнала.
+        too_cheap = False
+        if cost_atr > 0 and atrv > 0:
+            round_trip = 2.0 * (spread_pts + taker_points(symbol, price, 1))
+            too_cheap = atrv < cost_atr * round_trip
         in_cooldown = cooldown_min > 0 and bar_time < int(stl.get_state("cooldown_until", 0) or 0)
         pos = await stl.get_position(symbol)
         cur = pos.quantity if pos.side == "long" else (-pos.quantity if pos.side == "short" else 0)
@@ -614,6 +624,9 @@ def make_on_bar(rid: str):
                 if in_dv:
                     note_skip("dv", price, d=1 if new_side > 0 else -1)
                     return
+                if too_cheap:
+                    note_skip("cost", price, d=1 if new_side > 0 else -1)
+                    return
                 if no_weekend:
                     note_skip("weekend", price, d=1 if new_side > 0 else -1)
                     return
@@ -649,6 +662,8 @@ def make_on_bar(rid: str):
             if want is not None and want != 0:
                 if blocked == want:
                     note_skip("sl", price)
+                elif too_cheap:
+                    note_skip("cost", price)
                 elif in_dv:
                     note_skip("dv", price)
                 elif no_weekend:
@@ -849,6 +864,15 @@ AVG_PARAMS = [
     # доходнее, и это надо мерить, а не предполагать. Запрещённая сторона означает
     # ВЫХОД В ФЛЭТ по своему сигналу (want -> 0), а не игнорирование сигнала: иначе
     # робот сидел бы в лонге против развернувшегося рынка вообще без выхода.
+    # ФИЛЬТР ИЗДЕРЖЕК. Гоняет ли робот сделки, которые не окупают круг? Цена круга
+    # считается ПО ФАКТУ: биржевой сбор тейкера в пунктах (commission.taker_points,
+    # point_value сокращается) плюс полспреда инструмента дважды. Вход разрешён, только
+    # если ATR не меньше cost_atr/10 цены круга: если типичный ход бара меньше
+    # издержек, любая сделка здесь — дарёная комиссия. Полспреда по замеру архива
+    # 16-17.09.2026: RI 5, Si 3, GZ 1, GD 0.2, MX 25 пунктов.
+    P("cost_atr", "Фильтр издержек: вход, только если ATR >= cost_atr/10 × цены круга (0=выкл)",
+      0, 0, 100),
+    P("spread_pts", "Полспреда инструмента, пунктов (для фильтра издержек)", 0, 0, 500),
     P("skip_weekend", "Не входить в выходные (0/1)", 0, 0, 1),
     P("allow_long", "Разрешить ЛОНГ (0=только шорт)", 1, 0, 1),
     P("allow_short", "Разрешить ШОРТ (0=только лонг)", 1, 0, 1),
