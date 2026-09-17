@@ -93,37 +93,53 @@ def close_trade(en, mxo, rio, sio, pos, cost_mult):
     return en["ts"], year, gross - cost * cost_mult, gross
 
 
-def backtest(rows, p, cost_mult=1.0, rand_dir=None):
+def prepare(rows):
+    """Общие для всех комбинаций ряды: остаток, минута МСК, шов."""
+    e = [math.log(r[2]) - math.log(r[4]) - math.log(r[6]) for r in rows]
+    mins = [(r[0] % 86400) // 60 for r in rows]
+    seam = [i + 1 >= len(rows) or rows[i + 1][7] != rows[i][7] or rows[i + 1][0] - rows[i][0] > 3600
+            for i in range(len(rows))]
+    return e, mins, seam
+
+
+def rolling(e, W):
+    """Скользящие среднее и SD по окну W через накопленные суммы: O(n), а не O(n·W)."""
+    c1, c2 = [0.0], [0.0]
+    for x in e:
+        c1.append(c1[-1] + x)
+        c2.append(c2[-1] + x * x)
+    m, sd = [None] * len(e), [None] * len(e)
+    for i in range(W - 1, len(e)):
+        s1 = c1[i + 1] - c1[i + 1 - W]
+        s2 = c2[i + 1] - c2[i + 1 - W]
+        mu = s1 / W
+        m[i] = mu
+        sd[i] = max(s2 / W - mu * mu, 0.0) ** 0.5 or 1e-9
+    return m, sd
+
+
+def backtest(rows, p, cost_mult=1.0, rand_dir=None, prep=None, roll=None):
     """Сделки: (время входа, год, P&L ₽ нетто, P&L ₽ валовый) на 1 лот MX и хедж."""
-    W, mode = p["W"], p["mode"]
+    mode = p["mode"]
+    e, mins, seam = prep or prepare(rows)
+    m, sdv = roll or rolling(e, p["W"])
     trades = []
-    hist: list[float] = []
     pos = 0                           # +1 длинный спред (long MX), −1 короткий
     entry = None
     f_ema = s_ema = None
     prev_diff = None
     for i in range(len(rows) - 1):
-        ts, mxo, mxc, rio, ric, sio, sic, cyc = rows[i]
-        nts, nmxo, _, nrio, _, nsio, _, ncyc = rows[i + 1]
-        e = math.log(mxc) - math.log(ric) - math.log(sic)
-        hist.append(e)
-        if len(hist) > W:
-            hist.pop(0)
-        mins = (ts % 86400) // 60
-        in_session = SESSION[0] <= mins < SESSION[1]
-        seam = ncyc != cyc or nts - ts > 3600          # смена контракта или дыра в данных
-        if len(hist) < W:
+        if m[i] is None:
             continue
-        m = sum(hist) / W
-        sd = (sum((x - m) ** 2 for x in hist) / W) ** 0.5 or 1e-9
-        z = (e - m) / sd
-        dev = e - m
-
+        in_session = SESSION[0] <= mins[i] < SESSION[1]
+        sd = sdv[i]
+        dev = e[i] - m[i]
+        z = dev / sd
         want = pos
         if pos != 0:
             move = (dev - entry["dev"]) * pos
             stop, take = p["k_sl"] * entry["sd"], 2 * p["k_sl"] * entry["sd"]
-            if (move <= -stop or move >= take or seam or not in_session
+            if (move <= -stop or move >= take or seam[i] or not in_session
                     or i - entry["i"] >= p["max_bars"]
                     or (mode == "zrev" and z * pos >= 0)):
                 want = 0
@@ -131,19 +147,21 @@ def backtest(rows, p, cost_mult=1.0, rand_dir=None):
             f_ema = ema_step(f_ema, dev, p["fast"])
             s_ema = ema_step(s_ema, dev, p["slow"])
             diff = f_ema - s_ema
-            if pos == 0 and want == 0 and in_session and not seam and prev_diff is not None:
+            if pos == 0 and want == 0 and in_session and not seam[i] and prev_diff is not None:
                 if prev_diff <= 0 < diff:
                     want = 1
                 elif prev_diff >= 0 > diff:
                     want = -1
             prev_diff = diff
-        elif pos == 0 and want == 0 and in_session and not seam:
+        elif pos == 0 and want == 0 and in_session and not seam[i]:
             if z >= p["entry"]:
                 want = -1                                  # MX дорог к синтетике: продаём спред
             elif z <= -p["entry"]:
                 want = 1
 
         if want != pos:
+            _, nmxo, _, nrio, _, nsio, _, _ = rows[i + 1]
+            nts = rows[i + 1][0]
             if pos != 0:
                 trades.append(close_trade(entry, nmxo, nrio, nsio, pos, cost_mult))
                 pos = 0
@@ -184,14 +202,19 @@ def main() -> None:
           f"{datetime.fromtimestamp(rows[0][0], timezone.utc):%Y-%m-%d}.."
           f"{datetime.fromtimestamp(rows[-1][0], timezone.utc):%Y-%m-%d}", flush=True)
     rng = random.Random(20260917)
+    prep = prepare(rows)
+    rolls = {}
     with open(a.out, "w", newline="", encoding="utf-8") as fo:
         w = csv.writer(fo)
         w.writerow(["params", "n", "net", "gross", "n_train", "net_train", "n_test", "net_test",
                     "net_test_2x_cost", "net_placebo"])
         for k, p in enumerate(grid(), 1):
-            s = summarize(backtest(rows, p))
-            s2 = summarize(backtest(rows, p, cost_mult=2.0))
-            pl = summarize(backtest(rows, p, rand_dir=rng))
+            if p["W"] not in rolls:
+                rolls[p["W"]] = rolling(prep[0], p["W"])
+            kw = {"prep": prep, "roll": rolls[p["W"]]}
+            s = summarize(backtest(rows, p, **kw))
+            s2 = summarize(backtest(rows, p, cost_mult=2.0, **kw))
+            pl = summarize(backtest(rows, p, rand_dir=rng, **kw))
             w.writerow([p, s["n"], round(s["net"]), round(s["gross"]), s["n_train"], round(s["net_train"]),
                         s["n_test"], round(s["net_test"]), round(s2["net_test"]), round(pl["net"])])
             fo.flush()
