@@ -118,7 +118,7 @@ def rolling(e, W):
     return m, sd
 
 
-def backtest(rows, p, cost_mult=1.0, rand_dir=None, prep=None, roll=None):
+def backtest(rows, p, cost_mult=1.0, rand_dir=None, prep=None, roll=None, delay=1):
     """Сделки: (время входа, год, P&L ₽ нетто, P&L ₽ валовый) на 1 лот MX и хедж."""
     mode = p["mode"]
     e, mins, seam = prep or prepare(rows)
@@ -128,7 +128,7 @@ def backtest(rows, p, cost_mult=1.0, rand_dir=None, prep=None, roll=None):
     entry = None
     f_ema = s_ema = None
     prev_diff = None
-    for i in range(len(rows) - 1):
+    for i in range(len(rows) - delay):
         if m[i] is None:
             continue
         in_session = SESSION[0] <= mins[i] < SESSION[1]
@@ -160,8 +160,12 @@ def backtest(rows, p, cost_mult=1.0, rand_dir=None, prep=None, roll=None):
                 want = 1
 
         if want != pos:
-            _, nmxo, _, nrio, _, nsio, _, _ = rows[i + 1]
-            nts = rows[i + 1][0]
+            # delay=1: open следующего бара. delay=2-3 — проверка дребезга bid/ask: сигнал
+            # «нога дешёвая» часто = последняя сделка по bid, и open t+1 та же котировка.
+            # Дребезг умирает уже через бар, настоящий возврат с полупериодом в десятки
+            # минут переживает задержку (разбор fable 17.09.2026).
+            _, nmxo, _, nrio, _, nsio, _, _ = rows[i + delay]
+            nts = rows[i + delay][0]
             if pos != 0:
                 trades.append(close_trade(entry, nmxo, nrio, nsio, pos, cost_mult))
                 pos = 0
