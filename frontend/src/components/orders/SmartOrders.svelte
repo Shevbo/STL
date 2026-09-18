@@ -347,8 +347,10 @@
                      disabled={afterMode !== 'trail'} placeholder="0 — выключена" />
             {:else if f.key === 'tp_offset'}
               <div class="so-seg" role="group" aria-label="Тейк после сделки">
-                <button type="button" class:on={tpMode === 'fixed'} onclick={() => tpMode = 'fixed'}>Фиксированный</button>
-                <button type="button" class:on={tpMode === 'trail'} onclick={() => tpMode = 'trail'}>Следящий</button>
+                <button type="button" class:on={tpMode === 'fixed'} onclick={() => tpMode = 'fixed'}
+                        title="тейк стоит на фиксированном расстоянии от цены входа">Фикс.</button>
+                <button type="button" class:on={tpMode === 'trail'} onclick={() => tpMode = 'trail'}
+                        title="тейк идёт за экстремумом и закрывает на откате">Следящий</button>
               </div>
               <input class="so-in" type="number" step="any" min="0" bind:value={tpOffset}
                      placeholder={tpMode === 'trail' ? 'активация, п. от входа' : '0 — без тейка'} />
@@ -604,9 +606,13 @@
   /* Переключатель «стоп / подтягивающая»: одно из двух, физически не даёт
      заполнить оба поля сразу. */
   .so-after { grid-column: 1 / -1; }
-  .so-seg { display: inline-flex; border: 1px solid #2d2d4a; border-radius: 6px; overflow: hidden; }
-  .so-seg button { background: #0e0e1e; border: 0; color: #8a90a8; cursor: pointer;
-    font: 600 12px/1 system-ui, sans-serif; padding: 8px 14px; }
+  /* Ширину берём У ЯЧЕЙКИ, а не у текста: форма — сетка в две колонки, и
+     inline-flex с фиксированными отступами не ужимался, а обрезался по
+     overflow — «Следящий» уезжал за край (оператор, 18.09.2026). */
+  .so-seg { display: flex; width: 100%; border: 1px solid #2d2d4a; border-radius: 6px; overflow: hidden; }
+  .so-seg button { flex: 1 1 0; min-width: 0; white-space: nowrap;
+    background: #0e0e1e; border: 0; color: #8a90a8; cursor: pointer;
+    font: 600 12px/1 system-ui, sans-serif; padding: 8px 6px; }
   .so-seg button + button { border-left: 1px solid #2d2d4a; }
   .so-seg button:hover { color: #dfe6ff; }
   .so-seg button.on { background: #1b1b34; color: #e8e8f0; }
