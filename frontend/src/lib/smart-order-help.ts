@@ -775,10 +775,15 @@ export function closingSide(pos: number): Side {
  *  поэтому здесь честно сказано «при входе около».
  */
 export function afterFillPreview(o: {
-  side: Side; price: number; slOffset: string; slPrice: string;
-  tpOffset: string; tpPrice: string; tpMode: 'fixed' | 'trail'; afterMode: 'sl' | 'trail';
+  side: Side; price: number;
+  // Поля формы: из <input type="number"> прилетает ЧИСЛО, из пустого — '' или null.
+  slOffset: string | number | null; slPrice: string | number | null;
+  tpOffset: string | number | null; tpPrice: string | number | null;
+  tpMode: 'fixed' | 'trail'; afterMode: 'sl' | 'trail';
 }): { sl: string; tp: string } {
-  const num = (v: string) => parseFloat((v || '').trim()) || 0;
+  // Значения приходят ЧИСЛАМИ из <input type="number"> (bind:value), а не
+  // строками: `.trim()` на числе падал с TypeError и рвал реактивность экрана.
+  const num = (v: unknown) => parseFloat(String(v ?? '').trim()) || 0;
   const long = o.side === 'buy';
   const at = o.price ? `при входе около ${o.price.toLocaleString('ru-RU')}: ` : '';
   const out = { sl: '', tp: '' };

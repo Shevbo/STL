@@ -77,7 +77,12 @@
     tpPriceTrail: 'ЦЕНА уровня, с которого тейк начнёт следить за максимумом. Дальше он закроет позицию на откате.',
     tpTrail: 'ПУНКТЫ отката от лучшей достигнутой цены, на котором тейк закрывает позицию.',
   };
-  const tr = (v: string) => (v || '').trim();
+  // ЧИСЛО, А НЕ СТРОКА. `bind:value` на <input type="number"> кладёт в состояние
+  // число, и `(v || '').trim()` падал с TypeError на первом же введённом
+  // значении. Падение в $derived рвало реактивность всего экрана: переключатели
+  // «не нажимались», заполненный стоп выглядел выключенным, а строка пары врала
+  // «защиты нет» при заполненных полях (оператор, 18.09.2026).
+  const tr = (v: unknown) => String(v ?? '').trim();
 
   const meta = $derived(KIND_BY_ID[kind]);
   const price = $derived(tick?.last || 0);
@@ -730,7 +735,7 @@
   /* Ширину ограничиваем: на широком мониторе строка объяснения иначе
      растягивается на полтора метра и перестаёт читаться. */
   .so { padding: 10px 14px 16px; color: #d7dbe8; font-size: 12px; overflow: auto;
-        height: 100%; max-width: 1180px; }
+        height: 100%; max-width: 1480px; }
   .so-h {
     display: flex; align-items: center; gap: 8px;
     font-size: 10px; letter-spacing: .16em; text-transform: uppercase;
@@ -751,9 +756,10 @@
   .so-kind-ess { font-size: 11px; color: #8a90a8; line-height: 1.35; }
 
   .so-main { display: grid; grid-template-columns: minmax(300px, 1fr) minmax(300px, 380px); gap: 20px; margin-top: 12px; }
-  /* Справка свёрнута — форма забирает освободившееся место, но не растягивается
-     на весь монитор: поля в 20px шириной в метр читаются хуже, а не лучше. */
-  .so-main.solo { grid-template-columns: minmax(300px, 560px); }
+  /* Справка свёрнута — форма забирает ВСЮ ширину экранной формы (оператор
+     18.09). Чтобы поля при этом не превращались в полосы во весь монитор,
+     сетка внутри группы сама добирает колонки по ширине. */
+  .so-main.solo { grid-template-columns: 1fr; }
   @media (max-width: 900px) { .so-main { grid-template-columns: 1fr; } }
 
   /* строка-сворачиватель справки */
@@ -797,7 +803,7 @@
   .so-side:hover { border-color: #4a4a7a; color: #dfe6ff; }
   .so-side.on.buy { background: #123a22; border-color: #2ecc71; color: #7ef0a6; }
   .so-side.on.sell { background: #3a1616; border-color: #ff6b5a; color: #ff9d90; }
-  .so-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 12px; }
+  .so-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px 16px; }
   /* Выбор позиции внутри формы: кнопка называет ДЕЙСТВИЕ («Продать 13»), а не
      просто число — иначе она читается как справка о счёте и её не нажимают.
      Доля роботов подписана рядом: закрывать чужие контракты нельзя даже случайно. */

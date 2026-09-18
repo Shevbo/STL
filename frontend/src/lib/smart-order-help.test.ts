@@ -634,3 +634,34 @@ describe('пара защитников после сделки называет
     expect(pp({ hasStop: false, hasTake: false })).toContain('Защиты после сделки нет');
   });
 });
+
+// КОРЕНЬ «глюков» формы (оператор 18.09): bind:value на <input type="number">
+// кладёт в состояние ЧИСЛО, а не строку. Хелперы звали .trim(), падали с
+// TypeError внутри $derived — и рвали реактивность ВСЕГО экрана: переключатели
+// переставали нажиматься, заполненный стоп выглядел выключенным, итоговая
+// строка врала «защиты нет». Поэтому числа тут первоклассный вход, не строки.
+describe('поля формы приходят числами, а не строками', () => {
+  it('afterFillPreview не падает на числах и считает те же уровни', () => {
+    const asNum = afterFillPreview({
+      side: 'buy', price: 83_500, slOffset: 390, slPrice: '', tpOffset: '', tpPrice: 83_690,
+      tpMode: 'trail', afterMode: 'sl',
+    });
+    expect(norm(asNum.sl)).toContain('83 110');
+    expect(norm(asNum.tp)).toBe('тейк начнёт следить с 83 690');
+  });
+
+  it('пустое поле приходит как null и не превращается в ноль-уровень', () => {
+    const r = afterFillPreview({
+      side: 'buy', price: 83_500, slOffset: null, slPrice: null, tpOffset: null, tpPrice: null,
+      tpMode: 'fixed', afterMode: 'sl',
+    });
+    expect(r.sl).toBe('');
+    expect(r.tp).toBe('');
+  });
+
+  it('экран не зовёт .trim() на значении числового поля', () => {
+    const src = readFileSync(resolve(process.cwd(), 'src/components/orders/SmartOrders.svelte'), 'utf8');
+    const tr = src.match(/const tr = .*/)![0];
+    expect(tr).toContain('String(');
+  });
+});
