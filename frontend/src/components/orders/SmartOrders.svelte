@@ -764,7 +764,16 @@
           <span>взведена {fmtWhen(o.created_ms)}</span>
           <span>{o.good_till_ms ? 'до ' + fmtWhen(o.good_till_ms) : 'бессрочно'}</span>
           {#if o.oco_group}<span>связка {o.oco_group}</span>{/if}
-          <span>хранится на STL · сторож раз в секунду</span>
+          <!-- Кто на самом деле сторожит. Под охраной терминала заявку ведёт САМ
+               QUIK, и она переживёт падение STL — писать ей «хранится на STL ·
+               сторож раз в секунду» значит называть неверного сторожа
+               (real-trade 18.09: туда же уезжает одиночный стоп или тейк,
+               взведённый на уже открытую позицию). -->
+          {#if o.status === 'native' && o.native_state !== 'failed'}
+            <span>ведёт терминал QUIK · переживёт падение STL</span>
+          {:else}
+            <span>хранится на STL · сторож раз в секунду</span>
+          {/if}
         </div>
         {#if o.note}<div class="so-c-note">{o.note}</div>{/if}
       </article>

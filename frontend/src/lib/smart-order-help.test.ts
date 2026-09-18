@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { KIND_BY_ID, afterFillFacts, afterFillPreview, defaultCode, closingSide, conditionText, entryOrders, manualPositions, ocoNameOf, preview, protectionPair, shortCodes, smartLegend, smartLevels,
+import { KIND_BY_ID, afterFillFacts, afterFillPreview, defaultCode, closingSide, conditionText, entryOrders, isLive, manualPositions, ocoNameOf, preview, protectionPair, shortCodes, smartLegend, smartLevels,
          type Kind, type Side } from './smart-order-help';
 
 const base = {
@@ -761,5 +761,26 @@ describe('связка выхода берётся у входа', () => {
     expect(ocoNameOf({ so_id: 'abc', oco_group: 'bracket-1' })).toBe('bracket-1');
     expect(ocoNameOf({ so_id: 'abc', oco_group: '  ' })).toBe('abc');
     expect(ocoNameOf({ so_id: 'abc' })).toBe('abc');
+  });
+});
+
+// real-trade 18.09: под охрану терминала уезжает и одиночный стоп/тейк на уже
+// открытую позицию. Такую заявку ведёт САМ QUIK — подпись «хранится на STL ·
+// сторож раз в секунду» называла бы неверного сторожа.
+describe('карточка называет верного сторожа', () => {
+  const src = readFileSync(resolve(process.cwd(), 'src/components/orders/SmartOrders.svelte'), 'utf8');
+
+  it('под охраной терминала сказано про терминал, а не про сторожа STL', () => {
+    const i = src.indexOf('ведёт терминал QUIK');
+    expect(i, 'подписи про терминал нет').toBeGreaterThan(0);
+    // Она стоит в ветке native, а «хранится на STL» — в противоположной.
+    const block = src.slice(i - 400, i + 400);
+    expect(block).toContain("o.status === 'native'");
+    expect(block).toContain('хранится на STL');
+  });
+
+  it('native считается живым статусом: терминал стережёт и без STL', () => {
+    expect(isLive('native')).toBe(true);
+    expect(isLive('fired')).toBe(false);
   });
 });
