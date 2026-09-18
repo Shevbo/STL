@@ -2,7 +2,7 @@
 // типов разная, и подпись обязана говорить, что это за цена; нет числа — пусто,
 // а не придуманный ноль.
 import { describe, it, expect } from 'vitest';
-import { STATUS_RU, defaultCode, isLive, keyPrice, sortBySideAndPrice } from './smart-order-help';
+import { KINDS, STATUS_RU, defaultCode, isLive, keyPrice, sortBySideAndPrice } from './smart-order-help';
 
 describe('keyPrice', () => {
   it('следящая до пробоя: уровень активации', () => {
@@ -127,5 +127,37 @@ describe('инструмент по умолчанию в форме', () => {
   it('нет ни книги, ни фида — пусто, оператор введёт сам', () => {
     expect(defaultCode([], [], '')).toBe('');
     expect(defaultCode(null, null, '')).toBe('');
+  });
+});
+
+
+describe('подсказки полей называют единицу', () => {
+  // 18.09.2026: оператор ввёл в поле активации тейка ЦЕНУ 84700 вместо пунктов,
+  // движок сложил её с входом 83510 и поставил активацию 168210 — позиция 5 RIZ6
+  // осталась без тейка. Поэтому каждая подсказка обязана сказать, ЦЕНА это или ПУНКТЫ.
+  const fields = KINDS.flatMap((k) => k.fields.map((f) => ({ kind: k.id, ...f })));
+
+  it('у поля уровня/цены в подсказке стоит слово ЦЕНА', () => {
+    for (const f of fields.filter((x) => x.key === 'trigger_price' || x.key === 'child_price')) {
+      expect(f.hint, `${f.kind}.${f.key}`).toMatch(/ЦЕНА/);
+    }
+  });
+
+  it('у полей расстояния в подсказке стоит слово ПУНКТ', () => {
+    for (const f of fields.filter((x) => ['trail_offset', 'trail_after', 'tp_trail'].includes(x.key))) {
+      expect(f.hint, `${f.kind}.${f.key}`).toMatch(/ПУНКТ/);
+    }
+  });
+
+  it('у стопа и тейка после сделки сказано про оба способа: пунктами ИЛИ ценой', () => {
+    for (const f of fields.filter((x) => ['sl_offset', 'tp_offset'].includes(x.key))) {
+      expect(f.hint, `${f.kind}.${f.key}`).toMatch(/ПУНКТ/);
+      expect(f.hint, `${f.kind}.${f.key}`).toMatch(/ЦЕН/);
+    }
+  });
+
+  it('у подтягивающей нет поля уровня активации: движок его не принимает', () => {
+    const trailSl = KINDS.find((k) => k.id === 'trail_sl')!;
+    expect(trailSl.fields.some((f) => f.key === 'trigger_price')).toBe(false);
   });
 });

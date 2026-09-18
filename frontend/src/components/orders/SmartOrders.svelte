@@ -395,13 +395,19 @@
             {#if f.key === 'trigger_price'}
               <input class="so-in" type="number" step="any" bind:value={trigger} placeholder="0" />
             {:else if f.key === 'trail_offset'}
-              <input class="so-in" type="number" step="any" bind:value={trailOffset} placeholder="0" />
+              <div class="so-unit-wrap">
+                <input class="so-in pts" type="number" step="any" bind:value={trailOffset} placeholder="0" />
+                <span class="so-unit">п.</span>
+              </div>
             {:else if f.key === 'sl_offset'}
               <div class="so-two">
                 <div class="so-col">
                   <b>в пунктах<button type="button" class="so-q" title={HELP.slPts} aria-label={HELP.slPts}>?</button></b>
-                  <input class="so-in" type="number" step="any" min="0" bind:value={slOffset}
-                         disabled={afterMode !== 'sl' || !!tr(slPrice)} placeholder="0 — без стопа" />
+                  <div class="so-unit-wrap">
+                    <input class="so-in pts" type="number" step="any" min="0" bind:value={slOffset}
+                           disabled={afterMode !== 'sl' || !!tr(slPrice)} placeholder="0 — без стопа" />
+                    <span class="so-unit">п.</span>
+                  </div>
                 </div>
                 <div class="so-col">
                   <b>ценой<button type="button" class="so-q" title={HELP.slPrice} aria-label={HELP.slPrice}>?</button></b>
@@ -416,8 +422,11 @@
                 </button>
               {/if}
             {:else if f.key === 'trail_after'}
-              <input class="so-in" type="number" step="any" min="0" bind:value={trailAfter}
-                     disabled={afterMode !== 'trail'} placeholder="0 — выключена" />
+              <div class="so-unit-wrap">
+                <input class="so-in pts" type="number" step="any" min="0" bind:value={trailAfter}
+                       disabled={afterMode !== 'trail'} placeholder="0 — выключена" />
+                <span class="so-unit">п.</span>
+              </div>
               {#if afterMode !== 'trail'}
                 <button type="button" class="so-enable" onclick={() => afterMode = 'trail'}>
                   включить подтягивающую вместо стопа
@@ -435,9 +444,12 @@
                   <b>в пунктах<button type="button" class="so-q"
                       title={tpMode === 'trail' ? HELP.tpPtsTrail : HELP.tpPts}
                       aria-label={tpMode === 'trail' ? HELP.tpPtsTrail : HELP.tpPts}>?</button></b>
-                  <input class="so-in" type="number" step="any" min="0" bind:value={tpOffset}
-                         disabled={!!tr(tpPrice)}
-                         placeholder={tpMode === 'trail' ? 'активация, п. от входа' : '0 — без тейка'} />
+                  <div class="so-unit-wrap">
+                    <input class="so-in pts" type="number" step="any" min="0" bind:value={tpOffset}
+                           disabled={!!tr(tpPrice)}
+                           placeholder={tpMode === 'trail' ? 'активация от входа' : '0 — без тейка'} />
+                    <span class="so-unit">п.</span>
+                  </div>
                 </div>
                 <div class="so-col">
                   <b>ценой<button type="button" class="so-q"
@@ -450,8 +462,11 @@
               {#if tpMode === 'trail'}
                 <div class="so-col">
                   <b>откат<button type="button" class="so-q" title={HELP.tpTrail} aria-label={HELP.tpTrail}>?</button></b>
-                  <input class="so-in" type="number" step="any" min="0" bind:value={tpTrail}
-                         placeholder="откат, п. от экстремума" />
+                  <div class="so-unit-wrap">
+                    <input class="so-in pts" type="number" step="any" min="0" bind:value={tpTrail}
+                           placeholder="откат от экстремума" />
+                    <span class="so-unit">п.</span>
+                  </div>
                 </div>
               {/if}
               {#if levelPreview.tp}<em class="so-calc">{levelPreview.tp}</em>{/if}
@@ -753,6 +768,12 @@
     letter-spacing: .08em; text-transform: uppercase; display: flex; align-items: center; gap: 4px; }
   .so-calc { font-size: 10px; color: #7f86a6; font-style: normal; margin-top: 2px; }
   /* Значок подсказки: курсор мыши на нём — всплывает объяснение поля. */
+  /* Единица прямо В ПОЛЕ: «п.» видно без наведения на «?». Поля ЦЕНЫ суффикса не
+     получают — именно смешение цены и пунктов 18.09 оставило позицию без тейка. */
+  .so-unit-wrap { position: relative; display: block; }
+  .so-unit-wrap .so-in.pts { padding-right: 30px; }
+  .so-unit { position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+    color: #6f7590; font: 12px/1 Consolas, monospace; pointer-events: none; }
   .so-q { width: 13px; height: 13px; border-radius: 50%; border: 1px solid #3a3a5e;
     background: #15152c; color: #9aa1c0; font: 700 9px/1 system-ui, sans-serif;
     cursor: help; padding: 0; flex: none; }
