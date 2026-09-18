@@ -513,6 +513,19 @@ describe('следящий тейк после сделки (tp_trail, real-trad
     expect(r.sentence).toMatch(/следящий тейк: активация через 700.*откат 50/);
   });
 
+  // 18.09: активация ценой гасила кнопку взвода намертво, хотя движок такую
+  // заявку принимает (smart_orders.py:169) — форма была строже движка.
+  it('активация ценой уровня — такой же полноценный уровень, как пункты', () => {
+    const r = preview({ ...base, tpOffset: 0, tpPrice: 83456, tpTrail: 50 } as any);
+    expect(r.error).toBe('');
+    expect(norm(r.sentence)).toMatch(/следящий тейк: активация с 83 456.*откат 50/);
+  });
+
+  it('стоп ценой уровня тоже виден форме: с подтягивающей его не пускают', () => {
+    expect(preview({ ...base, slPrice: 82000, trailAfter: 200 } as any).error).toContain('вместе нельзя');
+    expect(norm(preview({ ...base, slPrice: 82000 } as any).sentence)).toMatch(/стоп на 82 000/);
+  });
+
   it('без отката тейк остаётся фиксированным, как было', () => {
     const r = preview({ ...base, tpOffset: 700, tpTrail: 0 } as any);
     expect(r.sentence).toMatch(/тейк 700/);
