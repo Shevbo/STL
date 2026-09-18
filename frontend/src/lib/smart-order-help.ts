@@ -880,3 +880,28 @@ export function afterFillFacts(o: {
   return [stop, take].filter(Boolean).join(' и ')
     + (stop && take ? ', в одной связке — сработает один, второй снимется' : '');
 }
+
+/** Заявки, которыми НАБРАНА открытая позиция: тот же инструмент, сторона входа,
+ *  и заявка уже сработала. Свежие сверху.
+ *
+ *  Нужны кнопке «Закрыть свою позицию»: закрывающая заявка должна попасть в ту
+ *  же связку OCO, что и вход, иначе два выхода на одну позицию сработают оба и
+ *  второй откроет обратную (оператор 18.09.2026 — связка не подставлялась вовсе).
+ */
+export function entryOrders<T extends {
+  code: string; side: Side; status: string; fired_ms?: number; parent_id?: string;
+}>(orders: T[], code: string, manual: number): T[] {
+  if (!code || !manual) return [];
+  const entrySide: Side = manual > 0 ? 'buy' : 'sell';   // лонг набран покупкой
+  return orders
+    // Только СВОИ входы: защитные дети (parent_id) позицию не набирали.
+    .filter((o) => o.code === code && o.side === entrySide && !o.parent_id
+                   && (o.status === 'fired' || (o.fired_ms || 0) > 0))
+    .sort((a, b) => (b.fired_ms || 0) - (a.fired_ms || 0));
+}
+
+/** Имя связки, в которую встаёт выход по этой заявке: своё имя, если оно у входа
+ *  уже есть, иначе его id — он уникален и читается в карточке. */
+export function ocoNameOf(o: { so_id: string; oco_group?: string }): string {
+  return (o.oco_group || '').trim() || o.so_id;
+}

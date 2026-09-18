@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { KIND_BY_ID, afterFillFacts, afterFillPreview, defaultCode, closingSide, conditionText, manualPositions, preview, protectionPair, shortCodes, smartLegend, smartLevels,
+import { KIND_BY_ID, afterFillFacts, afterFillPreview, defaultCode, closingSide, conditionText, entryOrders, manualPositions, ocoNameOf, preview, protectionPair, shortCodes, smartLegend, smartLevels,
          type Kind, type Side } from './smart-order-help';
 
 const base = {
@@ -725,5 +725,41 @@ describe('карточка перечисляет ВСЕ блоки после �
   it('блоков нет — строки нет', () => {
     expect(afterFillFacts({})).toBe('');
     expect(afterFillFacts({ sl_offset: 0, tp_offset: 0 })).toBe('');
+  });
+});
+
+// Оператор 18.09: «Связка OCO не подтягивается при нажатии "Закрыть свою
+// позицию" — должна браться у заявки, по которой набрана позиция».
+describe('связка выхода берётся у входа', () => {
+  const o = (over: any) => ({ so_id: 'x', code: 'RIZ6', side: 'buy' as Side, qty: 1,
+                              status: 'fired', fired_ms: 1, ...over });
+
+  it('лонг набран покупками: берём их, продажи не берём', () => {
+    const book = [o({ so_id: 'a', fired_ms: 10 }), o({ so_id: 'b', side: 'sell', fired_ms: 20 }),
+                  o({ so_id: 'c', fired_ms: 30 })];
+    expect(entryOrders(book, 'RIZ6', 5).map((x) => x.so_id)).toEqual(['c', 'a']);  // свежие сверху
+  });
+
+  it('шорт набран продажами', () => {
+    const book = [o({ so_id: 'a' }), o({ so_id: 'b', side: 'sell' })];
+    expect(entryOrders(book, 'RIZ6', -5).map((x) => x.so_id)).toEqual(['b']);
+  });
+
+  it('несработавшие и защитные дети позицию не набирали', () => {
+    const book = [o({ so_id: 'armed', status: 'armed', fired_ms: 0 }),
+                  o({ so_id: 'child', parent_id: 'a' }),
+                  o({ so_id: 'real' })];
+    expect(entryOrders(book, 'RIZ6', 5).map((x) => x.so_id)).toEqual(['real']);
+  });
+
+  it('чужой инструмент и пустая позиция не дают кандидатов', () => {
+    expect(entryOrders([o({})], 'GZZ6', 5)).toEqual([]);
+    expect(entryOrders([o({})], 'RIZ6', 0)).toEqual([]);
+  });
+
+  it('имя связки: своё, если есть, иначе id входа', () => {
+    expect(ocoNameOf({ so_id: 'abc', oco_group: 'bracket-1' })).toBe('bracket-1');
+    expect(ocoNameOf({ so_id: 'abc', oco_group: '  ' })).toBe('abc');
+    expect(ocoNameOf({ so_id: 'abc' })).toBe('abc');
   });
 });

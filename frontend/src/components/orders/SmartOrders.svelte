@@ -12,7 +12,8 @@
   import {
     KINDS, KIND_BY_ID, COMMON_FACTS, STATUS_RU, afterFillFacts, afterFillPreview, codeSuggestions, conditionText,
     defaultCode, isLive, keyPrice,
-    closingSide, fmtWhen, fmtPts, fmtRub, manualPositions, ocoFact, preview, protectionPair,
+    closingSide, entryOrders, fmtWhen, fmtPts, fmtRub, manualPositions, ocoFact, ocoNameOf,
+    preview, protectionPair,
     shortCodes, sortBySideAndPrice, tillFact, type Kind, type OpenPos, type Side,
   } from '$lib/smart-order-help';
 
@@ -47,6 +48,10 @@
   let watchId = $state('');
   let childPrice = $state('');
   let ocoGroup = $state('');
+  // Входы, которыми набрана выбранная позиция: один — связка подставляется сама,
+  // несколько — оператор выбирает, к какому входу привязать выход.
+  let ocoChoices = $state<SmartOrder[]>([]);
+  let ocoWhy = $state('');
   let tillLocal = $state('');          // datetime-local, пусто = бессрочно
   let confirming = $state(false);
   // «Как это работает» свёрнуто по умолчанию: оператор читает его раз, а место
@@ -183,12 +188,29 @@
     } catch { /* позиции не обязательны для формы */ }
   }
 
-  /** Подставить закрытие ЭТОЙ позиции: инструмент, сторона закрытия и объём. */
+  /** Подставить закрытие ЭТОЙ позиции: инструмент, сторона закрытия, объём И
+   *  СВЯЗКУ входа. Без связки два выхода на одну позицию срабатывают оба, и
+   *  второй открывает обратную (оператор 18.09.2026). */
   function pickPosition(p: OpenPos) {
     code = p.code;
+    codeTouched = true;
     side = closingSide(p.manual);
     qty = Math.abs(p.manual);
+    const entries = entryOrders(orders, p.code, p.manual);
+    ocoChoices = entries.length > 1 ? entries : [];
+    ocoGroup = entries.length === 1 ? ocoNameOf(entries[0]) : '';
+    ocoWhy = entries.length === 1
+      ? `связка взята у входа ${entries[0].so_id}`
+      : entries.length > 1
+        ? `позицию набрали ${entries.length} заявки — выберите, к какой привязать выход`
+        : 'вход умной заявкой не найден: позиция набрана вручную или заявка уже ушла из книги. Связку можно задать самому';
     loadTick();
+  }
+
+  function pickOco(o: SmartOrder) {
+    ocoGroup = ocoNameOf(o);
+    ocoChoices = [];
+    ocoWhy = `связка взята у входа ${o.so_id}`;
   }
 
   async function loadPointValue() {
@@ -616,11 +638,23 @@
             <input class="so-in text" type="datetime-local" bind:value={tillLocal} />
             <em>пусто — бессрочно</em>
           </label>
-          <label class="so-f wide">
+          <div class="so-f wide">
             <span>Связка OCO</span>
-            <input class="so-in text" bind:value={ocoGroup} placeholder="напр. bracket-1" spellcheck="false" />
+            <input class="so-in text" bind:value={ocoGroup} placeholder="напр. bracket-1"
+                   spellcheck="false" aria-label="Связка OCO" />
+            {#if ocoChoices.length}
+              <div class="so-oco">
+                {#each ocoChoices as o (o.so_id)}
+                  <button type="button" onclick={() => pickOco(o)}>
+                    <b>{ocoNameOf(o)}</b>
+                    <span>{o.side === 'buy' ? 'покупка' : 'продажа'} {o.qty} · {fmtWhen(o.fired_ms || o.created_ms)}</span>
+                  </button>
+                {/each}
+              </div>
+            {/if}
+            {#if ocoWhy}<em class="so-oco-why">{ocoWhy}</em>{/if}
             <em>одинаковое имя = сработала одна, остальные снялись</em>
-          </label>
+          </div>
         </div>
       </div>
     </section>
@@ -912,6 +946,14 @@
   .so-col > b { font: 600 10px/1.4 system-ui, sans-serif; color: #8a90a8;
     letter-spacing: .08em; text-transform: uppercase; display: flex; align-items: center; gap: 4px; }
   .so-calc { font-size: 10px; color: #7f86a6; font-style: normal; margin-top: 2px; }
+  /* Выбор входа, к которому привязывается выход: заявок может быть несколько. */
+  .so-oco { display: grid; gap: 4px; margin-top: 4px; }
+  .so-oco button { display: flex; align-items: baseline; gap: 8px; text-align: left; cursor: pointer;
+    background: #16243c; border: 1px solid #3a6ba8; border-radius: 5px; padding: 6px 9px; color: #dfe6ff; }
+  .so-oco button:hover { background: #1c2f4e; border-color: #5b8fd6; }
+  .so-oco button b { font: 12px/1 Consolas, monospace; }
+  .so-oco button span { margin-left: auto; font-size: 10px; color: #93a2c4; }
+  .so-oco-why { color: #8a90a8 !important; }
   /* Итог группы: какая пара ног получилась и куда она уедет. */
   .so-pair { margin: 14px 0 0; padding-top: 10px; border-top: 1px solid #23233f;
     font-size: 11px; line-height: 1.5; color: #9aa1c0; }
