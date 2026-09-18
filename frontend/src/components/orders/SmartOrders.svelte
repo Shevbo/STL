@@ -74,6 +74,7 @@
   let stopRows = $state<Record<string, any>[]>([]);
   let stopMs = $state(0);
   let stopOpen = $state<string | null>(null);
+  let stopDone = $state(false);        // показывать отработавшие и снятые
   let timers: Array<ReturnType<typeof setInterval>> = [];
   let unsub: (() => void) | null = null;
 
@@ -248,6 +249,10 @@
   const codeOptions = $derived(codeSuggestions(orders, feedCodes));
   // Стоп-заявки терминала, приведённые к виду для экрана, с пометкой «наша».
   const stops = $derived(stopRows.map((r) => stopOrderRow(r, nativeStopIndex(orders))));
+  // На экране ЖИВЫЕ. Снятая стоп-заявка остаётся в таблице QUIK до конца сессии
+  // (execution-module.md, S1), и без фильтра список был историей за день.
+  const stopsLive = $derived(stops.filter((r) => !r.done));
+  const stopsDone = $derived(stops.filter((r) => r.done));
 
   // Поля делятся на две группы по смыслу: ЧЕМ заявка сработает и ЧТО встанет
   // после сделки. Одной плоской сеткой уровень срабатывания и защитная пара
@@ -805,10 +810,15 @@
          именами QUIK, без трактовки: flags/state на нашем терминале не
          проверены, а угаданный статус защиты - худшая из лжей. -->
     <div class="so-h" style="margin-top:16px">
-      Стоп-заявки в терминале QUIK ({stops.length})
+      Стоп-заявки в терминале QUIK ({stopsLive.length})
       {#if stops.length}
         <button class="so-csv" onclick={() => downloadCSV(stopRows, 'quik_stop_orders.csv')}
-                title="выгрузить таблицу терминала в CSV">CSV</button>
+                title="выгрузить ВСЮ таблицу терминала в CSV, включая снятые">CSV</button>
+      {/if}
+      {#if stopsDone.length}
+        <button class="so-csv" onclick={() => stopDone = !stopDone}>
+          {stopDone ? 'скрыть' : 'показать'} отработавшие и снятые ({stopsDone.length})
+        </button>
       {/if}
       {#if stopMs}<span class="so-stale">снимок {fmtWhen(stopMs)}</span>{/if}
     </div>
@@ -816,8 +826,12 @@
       <p class="so-empty">Агент не прислал таблицу стоп-заявок. Она приходит при
         изменении и раз в 15 с; пустой список тут не значит, что в терминале пусто.</p>
     {/if}
-    {#each stops as r, i (r.num || i)}
-      <article class="so-card" class:ours={!!r.ours}>
+    {#if stops.length && !stopsLive.length}
+      <p class="so-empty">Активных стоп-заявок в терминале нет
+        {#if stopsDone.length}— все {stopsDone.length} отработали или сняты{/if}.</p>
+    {/if}
+    {#each (stopDone ? stops : stopsLive) as r, i (r.num || i)}
+      <article class="so-card" class:ours={!!r.ours} class:done={r.done}>
         <div class="so-c-head">
           <b class="so-c-code">{r.code ?? '—'}</b>
           {#if r.kind}<span class="so-c-tag">{r.kind}</span>{/if}
@@ -835,6 +849,7 @@
           </button>
         </div>
         <div class="so-c-facts">
+          <span>{r.state ?? 'состояние неизвестно: агент не прислал flags'}</span>
           <span>номер {r.num ?? '—'}</span>
           {#if r.whenMs}<span>{fmtWhen(r.whenMs)}</span>{/if}
           {#if r.cls}<span>{r.cls}</span>{/if}

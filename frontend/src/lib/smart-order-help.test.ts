@@ -798,7 +798,7 @@ describe('стоп-заявки терминала', () => {
     expect(r.code).toBe('RIZ6');
     expect(r.qty).toBe(10);
     expect(r.cond).toBe(84510);
-    expect(r.rest).toContain('flags=1');          // смысл flags не трактуем
+    expect(r.state).toBe('активна');              // flags расшифрованы сериями S1/S2
     expect(r.rest.some((x) => x.startsWith('brokerref='))).toBe(true);
   });
 
@@ -818,5 +818,39 @@ describe('стоп-заявки терминала', () => {
     expect(r.qty).toBeNull();
     expect(r.cond).toBeNull();
     expect(r.code).toBeNull();
+  });
+});
+
+// Состояние стоп-заявки НЕ угадано: числа взяты из docs/design/execution-module.md,
+// серии S1 и S2 на живом счёте (25/26 постановка и снятие, 29->28 срабатывание,
+// 30 и 4126 снятие вместе с базовой).
+describe('состояние стоп-заявки терминала по проверенным флагам', () => {
+  const st = (flags: number) => stopOrderRow({ flags: String(flags) }).state;
+
+  it('бит0 — активна', () => {
+    expect(st(25)).toBe('активна');
+    expect(st(29)).toBe('активна');
+  });
+
+  it('бит1 — снята, и снятая остаётся в таблице до конца сессии', () => {
+    expect(st(26)).toBe('снята');
+    expect(st(30)).toBe('снята');
+    expect(st(4126)).toBe('снята');
+  });
+
+  it('бит0 снят, бита1 нет — исполнена, а не снята', () => {
+    expect(st(28)).toBe('исполнена');
+  });
+
+  it('флагов нет — состояние неизвестно, и такую строку не прячем', () => {
+    const r = stopOrderRow({ stop_order_num: '1' });
+    expect(r.state).toBeNull();
+    expect(r.done).toBe(false);
+  });
+
+  it('прячем только то, что точно отработало', () => {
+    expect(stopOrderRow({ flags: '29' }).done).toBe(false);
+    expect(stopOrderRow({ flags: '26' }).done).toBe(true);
+    expect(stopOrderRow({ flags: '28' }).done).toBe(true);
   });
 });

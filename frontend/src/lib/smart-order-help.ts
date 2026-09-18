@@ -927,7 +927,16 @@ export function stopOrderRow(raw: Record<string, any>, byNum: Map<string, string
   const num = s('stop_order_num');
   const known = new Set(['stop_order_num', 'sec_code', 'class_code', 'qty', 'price',
                          'condition_price', 'condition_price2', 'stop_order_kind',
-                         'order_date_time_ms']);
+                         'order_date_time_ms', 'flags']);
+  // СОСТОЯНИЕ — по проверенным фактам, а не по догадке: docs/design/execution-module.md,
+  // серии S1 и S2 на живом счёте. flags бит0 «активна», бит1 «снята»; снятая остаётся
+  // в таблице до конца сессии (26), исполненная теряет бит0 и не получает бит1 (28).
+  // Флагов в строке нет — состояние НЕИЗВЕСТНО, и такую строку мы не прячем.
+  const flags = n('flags');
+  const state = flags === null ? null
+    : flags % 2 === 1 ? 'активна'
+    : Math.floor(flags / 2) % 2 === 1 ? 'снята'
+    : 'исполнена';
   return {
     num,
     code: s('sec_code'),
@@ -942,6 +951,9 @@ export function stopOrderRow(raw: Record<string, any>, byNum: Map<string, string
     // метку `stl-so-<id>`, и в терминале она видна в «Комментарии». В каком
     // именно поле QUIK её отдаёт, на нашем терминале не проверено, поэтому метку
     // ИЩЕМ ПО ВСЕЙ СТРОКЕ, а не гадаем имя поля.
+    flags, state,
+    // Прячем только то, что ТОЧНО отработало. Неизвестное состояние — на экран.
+    done: state === 'снята' || state === 'исполнена',
     ours: (num ? byNum.get(num) : null) || stlMark(raw),
     rest: Object.keys(raw).filter((k) => !known.has(k)).sort()
       .map((k) => `${k}=${raw[k]}`),
