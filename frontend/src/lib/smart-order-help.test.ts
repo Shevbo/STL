@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { KIND_BY_ID, afterFillFacts, afterFillPreview, defaultCode, closingSide, conditionText, entryOrders, isLive, manualPositions, ocoNameOf, preview, protectionPair, shortCodes, smartLegend, smartLevels,
+import { KIND_BY_ID, afterFillFacts, afterFillPreview, defaultCode, closingSide, conditionText, entryOrders, isLive, manualPositions, ocoNameOf, nativeStopIndex, preview, protectionPair, shortCodes, smartLegend, smartLevels, stopOrderRow,
          type Kind, type Side } from './smart-order-help';
 
 const base = {
@@ -782,5 +782,41 @@ describe('карточка называет верного сторожа', () =
   it('native считается живым статусом: терминал стережёт и без STL', () => {
     expect(isLive('native')).toBe(true);
     expect(isLive('fired')).toBe(false);
+  });
+});
+
+// Оператор 18.09: в терминале три активные стоп-заявки от STL, а на экране
+// ORDERS их нет вовсе — маршрут /orders/stop-orders не читал никто.
+describe('стоп-заявки терминала', () => {
+  it('известные поля берутся по точному имени, прочее уходит в сырое раскрытие', () => {
+    const r = stopOrderRow({
+      stop_order_num: '310471054', sec_code: 'RIZ6', class_code: 'SPBFUT',
+      qty: '10', condition_price: '84510', price: '84490', stop_order_kind: 'SIMPLE_STOP_ORDER',
+      flags: '1', brokerref: 'stl-so-afa462a78',
+    });
+    expect(r.num).toBe('310471054');
+    expect(r.code).toBe('RIZ6');
+    expect(r.qty).toBe(10);
+    expect(r.cond).toBe(84510);
+    expect(r.rest).toContain('flags=1');          // смысл flags не трактуем
+    expect(r.rest.some((x) => x.startsWith('brokerref='))).toBe(true);
+  });
+
+  it('наша запись узнаётся по метке stl-so в ЛЮБОМ поле, не только по номеру', () => {
+    // В каком поле QUIK отдаёт комментарий, на нашем терминале не проверено.
+    expect(stopOrderRow({ some_unknown_column: 'stl-so-e73e0d1b4' }).ours).toBe('e73e0d1b4');
+    expect(stopOrderRow({ sec_code: 'RIZ6' }).ours).toBeNull();
+  });
+
+  it('номер связывает запись с нашей умной заявкой', () => {
+    const idx = nativeStopIndex([{ so_id: 'ff52047ab0', native_stop_num: '310471054' }]);
+    expect(stopOrderRow({ stop_order_num: '310471054' }, idx).ours).toBe('ff52047ab0');
+  });
+
+  it('отсутствующее поле остаётся пустым, а не превращается в ноль', () => {
+    const r = stopOrderRow({ stop_order_num: '1' });
+    expect(r.qty).toBeNull();
+    expect(r.cond).toBeNull();
+    expect(r.code).toBeNull();
   });
 });

@@ -905,3 +905,61 @@ export function entryOrders<T extends {
 export function ocoNameOf(o: { so_id: string; oco_group?: string }): string {
   return (o.oco_group || '').trim() || o.so_id;
 }
+
+/** Одна строка таблицы `stop_orders` терминала, приведённая к виду для экрана.
+ *
+ *  Агент отдаёт строку QUIK КАК ЕСТЬ, своими именами полей (shectory_trade.lua:
+ *  stop_row копирует весь ряд). Поэтому здесь НЕ ВЫДУМЫВАЕТСЯ смысл: известные
+ *  поля берутся по точному имени, отсутствующие остаются null и рисуются
+ *  прочерком, а всё прочее уходит в `rest` и показывается сырым в раскрытии.
+ *  Трактовать flags/state не берёмся: их значения на нашем терминале не
+ *  проверены сериями, а угаданный статус на экране защиты — худшая из лжей.
+ *
+ *  `byNum` — номера нативных стоп-заявок наших умных заявок: так видно, какие
+ *  записи в терминале поставил STL, а какие оператор руками в QUIK.
+ */
+export function stopOrderRow(raw: Record<string, any>, byNum: Map<string, string> = new Map()) {
+  const s = (k: string) => (raw[k] === undefined || raw[k] === null || raw[k] === '' ? null : String(raw[k]));
+  const n = (k: string) => {
+    const v = parseFloat(String(raw[k] ?? ''));
+    return Number.isFinite(v) ? v : null;
+  };
+  const num = s('stop_order_num');
+  const known = new Set(['stop_order_num', 'sec_code', 'class_code', 'qty', 'price',
+                         'condition_price', 'condition_price2', 'stop_order_kind',
+                         'order_date_time_ms']);
+  return {
+    num,
+    code: s('sec_code'),
+    cls: s('class_code'),
+    qty: n('qty'),
+    price: n('price'),
+    cond: n('condition_price'),
+    cond2: n('condition_price2'),
+    kind: s('stop_order_kind'),
+    whenMs: n('order_date_time_ms'),
+    // ЧЬЯ ЭТА ЗАПИСЬ. Номер знаем не всегда, зато STL кладёт в транзакцию свою
+    // метку `stl-so-<id>`, и в терминале она видна в «Комментарии». В каком
+    // именно поле QUIK её отдаёт, на нашем терминале не проверено, поэтому метку
+    // ИЩЕМ ПО ВСЕЙ СТРОКЕ, а не гадаем имя поля.
+    ours: (num ? byNum.get(num) : null) || stlMark(raw),
+    rest: Object.keys(raw).filter((k) => !known.has(k)).sort()
+      .map((k) => `${k}=${raw[k]}`),
+  };
+}
+
+/** Метка STL в любом поле строки: транзакция уходит с комментарием `stl-so-<id>`. */
+function stlMark(raw: Record<string, any>): string | null {
+  for (const v of Object.values(raw)) {
+    const m = String(v ?? '').match(/stl-so-([0-9a-zA-Z]+)/);
+    if (m) return m[1];
+  }
+  return null;
+}
+
+/** Номер нативной стоп-заявки -> id нашей умной заявки, которая её поставила. */
+export function nativeStopIndex(orders: Array<{ so_id: string; native_stop_num?: string }>): Map<string, string> {
+  const m = new Map<string, string>();
+  for (const o of orders) if (o.native_stop_num) m.set(String(o.native_stop_num), o.so_id);
+  return m;
+}

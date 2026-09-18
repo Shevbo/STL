@@ -12,7 +12,8 @@
   import {
     KINDS, KIND_BY_ID, COMMON_FACTS, STATUS_RU, afterFillFacts, afterFillPreview, codeSuggestions, conditionText,
     defaultCode, isLive, keyPrice,
-    closingSide, entryOrders, fmtWhen, fmtPts, fmtRub, manualPositions, ocoFact, ocoNameOf,
+    closingSide, entryOrders, fmtWhen, fmtPts, fmtRub, manualPositions, nativeStopIndex,
+    ocoFact, ocoNameOf, stopOrderRow,
     preview, protectionPair,
     shortCodes, sortBySideAndPrice, tillFact, type Kind, type OpenPos, type Side,
   } from '$lib/smart-order-help';
@@ -67,6 +68,12 @@
   // инструмент, сторону и объём отдельно, и на вопрос «а где выбрать свою
   // позицию, к которой подтянуть стоп» ответить было нечем (оператор, 12.08).
   let positions = $state<OpenPos[]>([]);
+  // Таблица стоп-заявок САМОГО терминала. Её не показывал ни один экран: в QUIK
+  // висели три активные записи от STL, а на экране их не было вовсе (оператор
+  // 18.09.2026). Строки идут как есть, именами полей QUIK.
+  let stopRows = $state<Record<string, any>[]>([]);
+  let stopMs = $state(0);
+  let stopOpen = $state<string | null>(null);
   let timers: Array<ReturnType<typeof setInterval>> = [];
   let unsub: (() => void) | null = null;
 
@@ -177,6 +184,16 @@
     } catch { /* следующий тик перезапросит */ }
   }
 
+  async function loadStopOrders() {
+    try {
+      const r = await fetchWithAuth('/api/v1/quik/orders/stop-orders');
+      if (!r.ok) return;                      // молчим: следующий опрос повторит
+      const d = await r.json();
+      stopRows = Array.isArray(d?.table) ? d.table : [];
+      stopMs = Number(d?.table_received_ms || 0);
+    } catch { /* не обязательна для формы */ }
+  }
+
   async function loadPositions() {
     try {
       const [st, mir] = await Promise.all([
@@ -229,6 +246,8 @@
 
   // Подсказки инструмента: частые из книги, затем остальные коды фида.
   const codeOptions = $derived(codeSuggestions(orders, feedCodes));
+  // Стоп-заявки терминала, приведённые к виду для экрана, с пометкой «наша».
+  const stops = $derived(stopRows.map((r) => stopOrderRow(r, nativeStopIndex(orders))));
 
   // Поля делятся на две группы по смыслу: ЧЕМ заявка сработает и ЧТО встанет
   // после сделки. Одной плоской сеткой уровень срабатывания и защитная пара
@@ -345,9 +364,11 @@
 
   onMount(() => {
     unsub = smartOrdersStore.subscribe(2000);
-    timers = [setInterval(loadTick, 2000), setInterval(loadPositions, 5000)];
+    timers = [setInterval(loadTick, 2000), setInterval(loadPositions, 5000),
+              setInterval(loadStopOrders, 5000)];
     loadPointValue();   // и без выбранного кода: наполняет подсказки инструментов
     loadPositions();
+    loadStopOrders();
   });
   onDestroy(() => { unsub?.(); for (const t of timers) clearInterval(t); });
 </script>
@@ -779,6 +800,51 @@
       </article>
     {/each}
 
+    <!-- 6. Стоп-заявки терминала: то, что STL уже отдал QUIK. Экрана для них не
+         было вовсе, и оператор видел их только в самом терминале. Поля идут
+         именами QUIK, без трактовки: flags/state на нашем терминале не
+         проверены, а угаданный статус защиты - худшая из лжей. -->
+    <div class="so-h" style="margin-top:16px">
+      Стоп-заявки в терминале QUIK ({stops.length})
+      {#if stops.length}
+        <button class="so-csv" onclick={() => downloadCSV(stopRows, 'quik_stop_orders.csv')}
+                title="выгрузить таблицу терминала в CSV">CSV</button>
+      {/if}
+      {#if stopMs}<span class="so-stale">снимок {fmtWhen(stopMs)}</span>{/if}
+    </div>
+    {#if !stops.length}
+      <p class="so-empty">Агент не прислал таблицу стоп-заявок. Она приходит при
+        изменении и раз в 15 с; пустой список тут не значит, что в терминале пусто.</p>
+    {/if}
+    {#each stops as r, i (r.num || i)}
+      <article class="so-card" class:ours={!!r.ours}>
+        <div class="so-c-head">
+          <b class="so-c-code">{r.code ?? '—'}</b>
+          {#if r.kind}<span class="so-c-tag">{r.kind}</span>{/if}
+          <span class="so-c-qty" title="объём">{r.qty ?? '—'}</span>
+          <span class="so-c-px" title="условие"><small>условие</small>{r.cond != null ? fmtPrice(r.cond) : '—'}</span>
+          <span class="so-c-px" title="цена заявки"><small>цена</small>{r.price != null ? fmtPrice(r.price) : '—'}</span>
+          <span class="so-c-sp"></span>
+          {#if r.ours}
+            <span class="so-c-status native" title="эту запись поставил STL: метка stl-so в транзакции">🛡 наша · {r.ours}</span>
+          {:else}
+            <span class="so-c-status" title="метки STL в строке нет — запись поставлена в терминале руками">руками в QUIK</span>
+          {/if}
+          <button class="so-btn sm" onclick={() => stopOpen = stopOpen === (r.num || String(i)) ? null : (r.num || String(i))}>
+            {stopOpen === (r.num || String(i)) ? 'Свернуть' : 'Поля'}
+          </button>
+        </div>
+        <div class="so-c-facts">
+          <span>номер {r.num ?? '—'}</span>
+          {#if r.whenMs}<span>{fmtWhen(r.whenMs)}</span>{/if}
+          {#if r.cls}<span>{r.cls}</span>{/if}
+        </div>
+        {#if stopOpen === (r.num || String(i))}
+          <div class="so-raw">{r.rest.length ? r.rest.join(' · ') : 'других полей агент не прислал'}</div>
+        {/if}
+      </article>
+    {/each}
+
     {#if history.length}
       <details class="so-hist">
         <summary>Отработавшие и снятые ({history.length})</summary>
@@ -1023,6 +1089,10 @@
     padding: 7px 10px; margin-bottom: 6px;
   }
   .so-card.done { opacity: .72; }
+  /* Запись терминала, которую поставил STL: отличать от поставленной руками. */
+  .so-card.ours { border-left-color: #7ec8f0; }
+  .so-raw { margin-top: 5px; padding-top: 5px; border-top: 1px solid #23233f;
+    font: 10px/1.5 Consolas, monospace; color: #8a90a8; word-break: break-all; }
   .so-c-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
   /* Номер связки: моноширинный, чтобы двузначные не плясали по ширине. */
   .so-c-num {
