@@ -49,6 +49,9 @@
   let ocoGroup = $state('');
   let tillLocal = $state('');          // datetime-local, пусто = бессрочно
   let confirming = $state(false);
+  // «Как это работает» свёрнуто по умолчанию: оператор читает его раз, а место
+  // под формой оно занимает всегда (просьба оператора 18.09).
+  let explainOpen = $state(false);
   let msg = $state('');
   let msgKind = $state<'ok' | 'err'>('ok');
 
@@ -173,6 +176,13 @@
   // Подсказки инструмента: частые из книги, затем остальные коды фида.
   const codeOptions = $derived(codeSuggestions(orders, feedCodes));
 
+  // Поля делятся на две группы по смыслу: ЧЕМ заявка сработает и ЧТО встанет
+  // после сделки. Одной плоской сеткой уровень срабатывания и защитная пара
+  // читались одинаково, хотя это разные моменты времени.
+  const TRIGGER_KEYS = ['trigger_price', 'trail_offset', 'watch_client_id', 'child_price'];
+  const triggerFields = $derived(meta.fields.filter((f) => TRIGGER_KEYS.includes(f.key)));
+  const afterFields = $derived(meta.fields.filter((f) => !TRIGGER_KEYS.includes(f.key)));
+
   async function arm() {
     msg = '';
     const body = {
@@ -294,10 +304,17 @@
     {/each}
   </div>
 
-  <div class="so-main">
-    <!-- 2. Как это работает -->
+  <!-- 2. Как это работает — свёрнуто в строку: справка нужна редко, место под
+       формой нужно всегда. -->
+  <button class="so-fold" aria-expanded={explainOpen} onclick={() => explainOpen = !explainOpen}>
+    <span class="so-fold-ar">{explainOpen ? '▾' : '▸'}</span>
+    Как это работает
+    <span class="so-fold-hint">{explainOpen ? 'свернуть' : 'раскрыть'}</span>
+  </button>
+
+  <div class="so-main" class:solo={!explainOpen}>
+    {#if explainOpen}
     <section class="so-explain">
-      <div class="so-h">Как это работает</div>
       <SmartOrderSchematic {kind} {side} trigger={parseFloat(trigger) || 0}
                            trailOffset={parseFloat(trailOffset) || 0} {price} watchId={watchId} />
       <ol class="so-algo">
@@ -313,6 +330,7 @@
         <dt>Связка</dt><dd>{ocoFact(ocoGroup.trim())}</dd>
       </dl>
     </section>
+    {/if}
 
     <!-- 3. Параметры -->
     <section class="so-form">
@@ -343,13 +361,21 @@
         </div>
       {/if}
 
-      <div class="so-sides">
-        <button class="so-side buy" class:on={side === 'buy'} onclick={() => side = 'buy'}>Купить</button>
-        <button class="so-side sell" class:on={side === 'sell'} onclick={() => side = 'sell'}>Продать</button>
-      </div>
+      <!-- ГРУППА 1: что и сколько. Сторона, инструмент и объём — один вопрос
+           «какая сделка», и стоят они вместе. -->
+      <div class="so-group">
+        <div class="so-g-h">Сделка</div>
+        <div class="so-sides">
+          <button class="so-side buy" class:on={side === 'buy'} onclick={() => side = 'buy'}>Купить</button>
+          <button class="so-side sell" class:on={side === 'sell'} onclick={() => side = 'sell'}>Продать</button>
+        </div>
 
-      <div class="so-fields">
-        <label class="so-f">
+        <div class="so-fields">
+        <!-- Здесь и ниже поля обёрнуты в div, а НЕ в label: внутри стоят кнопки
+             («?», переключатели), а клик по кнопке внутри label браузер дублирует
+             на связанный контрол — переключатели срабатывали через раз и
+             «нажимались с третьей попытки» (оператор, 18.09.2026). -->
+        <div class="so-f">
           <span>Инструмент</span>
           <!-- Свой список, а не datalist: браузерный фильтрует подсказки по уже
                введённому значению, и с заполненным полем оператор видел ровно одну
@@ -358,6 +384,7 @@
                  if (!e.currentTarget.contains(e.relatedTarget as Node)) codeOpen = false;
                }}>
             <input class="so-in" bind:value={code} placeholder="RIU6" spellcheck="false"
+                   aria-label="Инструмент"
                    autocomplete="off" oninput={() => { codeTouched = true; codeOpen = true; }}
                    onfocus={() => codeOpen = true}
                    onkeydown={(e) => { if (e.key === 'Escape') codeOpen = false; }} />
@@ -373,26 +400,21 @@
               </ul>
             {/if}
           </div>
-        </label>
-        <label class="so-f">
-          <span>Контрактов</span>
-          <input class="so-in" type="number" min="1" step="1" bind:value={qty} />
-        </label>
-        <!-- Блок «после сделки»: ОДИН из двух защитников, не оба. Два стопа на
-             одной позиции — не двойная защита: сработает ближний, дальний
-             останется взведён и следующим ходом откроет обратную позицию. -->
-        <div class="so-f so-after">
-          <span>Защита после сделки</span>
-          <div class="so-seg" role="group" aria-label="Защита после сделки">
-            <button type="button" class:on={afterMode === 'sl'}
-                    onclick={() => afterMode = 'sl'}>Стоп</button>
-            <button type="button" class:on={afterMode === 'trail'}
-                    onclick={() => afterMode = 'trail'}>Подтягивающая</button>
-          </div>
-          <em>вместе они запрещены: сработает ближний, дальний откроет обратную позицию. Тейк сочетается с любым</em>
         </div>
-        {#each meta.fields as f}
-          <label class="so-f">
+        <div class="so-f">
+          <span>Контрактов</span>
+          <input class="so-in" type="number" min="1" step="1" bind:value={qty} aria-label="Контрактов" />
+        </div>
+        </div>
+      </div>
+
+      <!-- ГРУППА 2: чем заявка сработает. Это МОМЕНТ ВХОДА, и он отделён от
+           того, что встанет после него. -->
+      <div class="so-group">
+        <div class="so-g-h">Чем сработает</div>
+        <div class="so-fields">
+        {#each triggerFields as f}
+          <div class="so-f">
             <span>{f.label}<button type="button" class="so-q" title={f.hint} aria-label={f.hint}>?</button></span>
             {#if f.key === 'trigger_price'}
               <input class="so-in" type="number" step="any" bind:value={trigger} placeholder="0" />
@@ -401,7 +423,39 @@
                 <input class="so-in pts" type="number" step="any" bind:value={trailOffset} placeholder="0" />
                 <span class="so-unit">п.</span>
               </div>
-            {:else if f.key === 'sl_offset'}
+            {:else if f.key === 'watch_client_id'}
+              <input class="so-in text" bind:value={watchId} placeholder="client_id" spellcheck="false"
+                     aria-label={f.label} />
+            {:else}
+              <input class="so-in" type="number" step="any" bind:value={childPrice} placeholder="по рынку"
+                     aria-label={f.label} />
+            {/if}
+            <em>{f.hint}</em>
+          </div>
+        {/each}
+        </div>
+      </div>
+
+      <!-- ГРУППА 3: что встанет ПОСЛЕ сделки. Защита — ОДИН из двух
+           защитников, не оба: два стопа на одной позиции не удваивают защиту,
+           сработает ближний, а дальний откроет обратную позицию. -->
+      <div class="so-group">
+        <div class="so-g-h">Что встанет после сделки</div>
+        <div class="so-f so-after">
+          <span>Защита</span>
+          <div class="so-seg" role="group" aria-label="Защита после сделки">
+            <button type="button" class:on={afterMode === 'sl'}
+                    onclick={() => afterMode = 'sl'}>Стоп</button>
+            <button type="button" class:on={afterMode === 'trail'}
+                    onclick={() => afterMode = 'trail'}>Подтягивающая</button>
+          </div>
+          <em>вместе они запрещены: сработает ближний, дальний откроет обратную позицию. Тейк сочетается с любым</em>
+        </div>
+        <div class="so-fields">
+        {#each afterFields as f}
+          <div class="so-f">
+            <span>{f.label}<button type="button" class="so-q" title={f.hint} aria-label={f.hint}>?</button></span>
+            {#if f.key === 'sl_offset'}
               <div class="so-two">
                 <div class="so-col">
                   <b>в пунктах<button type="button" class="so-q" title={HELP.slPts} aria-label={HELP.slPts}>?</button></b>
@@ -472,18 +526,15 @@
                 </div>
               {/if}
               {#if levelPreview.tp}<em class="so-calc">{levelPreview.tp}</em>{/if}
-            {:else if f.key === 'watch_client_id'}
-              <input class="so-in text" bind:value={watchId} placeholder="client_id" spellcheck="false" />
-            {:else}
-              <input class="so-in" type="number" step="any" bind:value={childPrice} placeholder="по рынку" />
             {/if}
             <em>{(f.key === 'sl_offset' && afterMode !== 'sl')
                  || (f.key === 'trail_after' && afterMode !== 'trail')
                  ? 'выключено: вместе со вторым видом защиты нельзя (движок вернёт 422). '
                    + 'Кнопка выше переключает, какой из них ставим.'
                  : f.hint}</em>
-          </label>
+          </div>
         {/each}
+        </div>
       </div>
 
       {#if rail}
@@ -503,17 +554,22 @@
         </div>
       {/if}
 
-      <div class="so-fields">
-        <label class="so-f wide">
-          <span>Действует до</span>
-          <input class="so-in text" type="datetime-local" bind:value={tillLocal} />
-          <em>пусто — бессрочно</em>
-        </label>
-        <label class="so-f wide">
-          <span>Связка OCO</span>
-          <input class="so-in text" bind:value={ocoGroup} placeholder="напр. bracket-1" spellcheck="false" />
-          <em>одинаковое имя = сработала одна, остальные снялись</em>
-        </label>
+      <!-- ГРУППА 4: сколько заявка живёт и с кем связана. Ни то, ни другое не
+           влияет на цену, поэтому они внизу и отдельно. -->
+      <div class="so-group">
+        <div class="so-g-h">Срок и связка</div>
+        <div class="so-fields">
+          <label class="so-f wide">
+            <span>Действует до</span>
+            <input class="so-in text" type="datetime-local" bind:value={tillLocal} />
+            <em>пусто — бессрочно</em>
+          </label>
+          <label class="so-f wide">
+            <span>Связка OCO</span>
+            <input class="so-in text" bind:value={ocoGroup} placeholder="напр. bracket-1" spellcheck="false" />
+            <em>одинаковое имя = сработала одна, остальные снялись</em>
+          </label>
+        </div>
       </div>
     </section>
   </div>
@@ -683,8 +739,22 @@
   .so-kind-name { font-size: 14px; color: #e8e8f0; }
   .so-kind-ess { font-size: 11px; color: #8a90a8; line-height: 1.35; }
 
-  .so-main { display: grid; grid-template-columns: minmax(300px, 1fr) minmax(300px, 360px); gap: 20px; margin-top: 14px; }
+  .so-main { display: grid; grid-template-columns: minmax(300px, 1fr) minmax(300px, 380px); gap: 20px; margin-top: 12px; }
+  /* Справка свёрнута — форма забирает освободившееся место, но не растягивается
+     на весь монитор: поля в 20px шириной в метр читаются хуже, а не лучше. */
+  .so-main.solo { grid-template-columns: minmax(300px, 560px); }
   @media (max-width: 900px) { .so-main { grid-template-columns: 1fr; } }
+
+  /* строка-сворачиватель справки */
+  .so-fold {
+    display: flex; align-items: center; gap: 8px; width: 100%; margin-top: 14px;
+    background: none; border: 0; border-bottom: 1px solid #2d2d4a; cursor: pointer;
+    padding: 0 0 6px; color: #8a90a8;
+    font: 10px/1 system-ui, sans-serif; letter-spacing: .16em; text-transform: uppercase;
+  }
+  .so-fold:hover { color: #dfe6ff; border-color: #4a4a7a; }
+  .so-fold-ar { color: #6f7590; font-size: 11px; }
+  .so-fold-hint { margin-left: auto; letter-spacing: .08em; color: #6f7590; text-transform: none; }
 
   /* объяснение */
   .so-algo { margin: 10px 0 14px; padding-left: 18px; line-height: 1.55; }
@@ -695,14 +765,28 @@
   .so-facts dt.warn, .so-facts dd.warn { color: #e0a53c; }
 
   /* параметры: крупно */
-  .so-sides { display: flex; gap: 6px; margin-bottom: 10px; }
-  .so-side {
-    flex: 1; padding: 9px 0; font-size: 13px; letter-spacing: .06em; cursor: pointer;
-    background: #14142a; border: 1px solid #2d2d4a; color: #8a90a8;
+  /* Группы, а не одна сплошная сетка: «какая сделка», «чем сработает» и «что
+     встанет после» — три разных вопроса, и глазу нужна граница между ними
+     (просьба оператора 18.09). Воздух внутри группы меньше, чем между ними —
+     на этом и держится группировка. */
+  .so-group {
+    background: #12122480; border: 1px solid #23233f; border-radius: 8px;
+    padding: 12px 14px 14px; margin-bottom: 14px;
   }
+  .so-group:last-child { margin-bottom: 0; }
+  .so-g-h {
+    font: 600 10px/1 system-ui, sans-serif; letter-spacing: .16em; text-transform: uppercase;
+    color: #7f86a6; margin-bottom: 12px;
+  }
+  .so-sides { display: flex; gap: 8px; margin-bottom: 14px; }
+  .so-side {
+    flex: 1; padding: 11px 0; font-size: 13px; letter-spacing: .06em; cursor: pointer;
+    background: #14142a; border: 1px solid #2d2d4a; border-radius: 6px; color: #8a90a8;
+  }
+  .so-side:hover { border-color: #4a4a7a; color: #dfe6ff; }
   .so-side.on.buy { background: #123a22; border-color: #2ecc71; color: #7ef0a6; }
   .so-side.on.sell { background: #3a1616; border-color: #ff6b5a; color: #ff9d90; }
-  .so-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .so-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 12px; }
   /* Выбор позиции внутри формы: кнопка называет ДЕЙСТВИЕ («Продать 13»), а не
      просто число — иначе она читается как справка о счёте и её не нажимают.
      Доля роботов подписана рядом: закрывать чужие контракты нельзя даже случайно. */
@@ -717,33 +801,37 @@
   .so-pick-b b { font-family: Consolas, monospace; font-size: 13px; }
   .so-pick-b .sub { margin-left: auto; font-size: 10px; color: #93a2c4; }
 
-  .so-f { display: grid; gap: 2px; }
+  .so-f { display: grid; gap: 5px; align-content: start; }
   .so-f.wide { grid-column: 1 / -1; }
-  .so-f > span { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: #8a90a8; }
-  .so-f > em { font-size: 10px; color: #6f7590; font-style: normal; }
+  .so-f > span { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: #8a90a8;
+    display: flex; align-items: center; gap: 5px; }
+  .so-f > em { font-size: 10px; line-height: 1.4; color: #6f7590; font-style: normal; }
   /* Переключатель «стоп / подтягивающая»: одно из двух, физически не даёт
      заполнить оба поля сразу. */
-  .so-after { grid-column: 1 / -1; }
+  .so-after { margin-bottom: 14px; }
   /* Ширину берём У ЯЧЕЙКИ, а не у текста: форма — сетка в две колонки, и
      inline-flex с фиксированными отступами не ужимался, а обрезался по
      overflow — «Следящий» уезжал за край (оператор, 18.09.2026). */
   .so-seg { display: flex; width: 100%; border: 1px solid #2d2d4a; border-radius: 6px; overflow: hidden; }
   .so-seg button { flex: 1 1 0; min-width: 0; white-space: nowrap;
     background: #0e0e1e; border: 0; color: #8a90a8; cursor: pointer;
-    font: 600 12px/1 system-ui, sans-serif; padding: 8px 6px; }
+    font: 600 12px/1 system-ui, sans-serif; padding: 10px 6px; }
   .so-seg button + button { border-left: 1px solid #2d2d4a; }
-  .so-seg button:hover { color: #dfe6ff; }
-  .so-seg button.on { background: #1b1b34; color: #e8e8f0; }
+  .so-seg button:hover { color: #dfe6ff; background: #17172e; }
+  /* Выбранное положение видно ИЗДАЛЕКА. Прежние #1b1b34 на #14142a отличались
+     на один тон: оператор не понимал, включён стоп или подтягивающая, и жал
+     кнопку по второму разу (18.09.2026). */
+  .so-seg button.on { background: #1d3557; color: #dfe6ff; box-shadow: inset 0 -2px 0 #4f8bd6; }
   .so-in {
     background: #0e0e1e; border: 1px solid #2d2d4a; color: #e8e8f0;
     font: 20px/1.2 Consolas, 'Cascadia Mono', monospace; font-variant-numeric: tabular-nums;
-    padding: 5px 8px; width: 100%;
+    padding: 7px 10px; width: 100%; border-radius: 5px;
   }
   .so-in.text { font-size: 13px; }
   /* Выключенное поле обязано ВЫГЛЯДЕТЬ выключенным: без этого «Стоп» и
      «Подтягивающая» читались как бутафория (оператор, 18.09.2026). */
   .so-in:disabled { opacity: .45; cursor: not-allowed; }
-  .so-enable { margin-top: 2px; background: none; border: 1px dashed #3a3a5a; border-radius: 4px;
+  .so-enable { margin-top: 6px; background: none; border: 1px dashed #3a3a5a; border-radius: 4px;
     color: #8a90a8; cursor: pointer; font: 10px/1.3 system-ui, sans-serif; padding: 4px 6px;
     text-align: left; }
   .so-enable:hover { color: #e8e8f0; border-color: #4a4a7a; }
@@ -764,8 +852,9 @@
   .so-code-list button:hover { background: #1b1b34; color: #fff; }
   .so-code-list button.on { color: #7ef0a6; }
   /* Пара «в пунктах | ценой»: цена стоит СПРАВА от пунктов (оператор 18.09). */
-  .so-two { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-  .so-col { display: grid; gap: 2px; min-width: 0; }
+  .so-two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 2px; }
+  .so-col { display: grid; gap: 4px; min-width: 0; margin-top: 8px; }
+  .so-two .so-col { margin-top: 0; }
   .so-col > b { font: 600 10px/1.4 system-ui, sans-serif; color: #8a90a8;
     letter-spacing: .08em; text-transform: uppercase; display: flex; align-items: center; gap: 4px; }
   .so-calc { font-size: 10px; color: #7f86a6; font-style: normal; margin-top: 2px; }

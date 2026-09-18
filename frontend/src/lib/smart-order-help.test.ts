@@ -590,3 +590,23 @@ describe('инструмент по умолчанию: только живой 
     expect(defaultCode([], ['RIZ6', 'GZZ6'], 'GZZ6@SPBFUT')).toBe('GZZ6');
   });
 });
+
+// Клик по <button> внутри <label> браузер дублирует на связанный контрол:
+// переключатели «Стоп/Подтягивающая» и «Фикс./Следящий» срабатывали через раз
+// и «нажимались с третьей попытки» (оператор, 18.09.2026). Поля формы с
+// кнопками внутри обязаны быть div, а не label.
+describe('форма умных заявок: кнопки не живут внутри label', () => {
+  const src = readFileSync(resolve(process.cwd(), 'src/components/orders/SmartOrders.svelte'), 'utf8');
+  const form = src.slice(src.indexOf('<div class="so-fields">'), src.indexOf('<style>'));
+
+  it('ни один label не оборачивает кнопку', () => {
+    for (const block of form.split(/<label\b/).slice(1)) {
+      const body = block.slice(0, block.indexOf('</label>'));
+      expect(body, `label с кнопкой внутри:\n${body.slice(0, 200)}`).not.toMatch(/<button\b/);
+    }
+  });
+
+  it('переключатели различимы: у выбранного положения свой фон, а не соседний тон', () => {
+    expect(src).toMatch(/\.so-seg button\.on\s*\{[^}]*box-shadow/);
+  });
+});
