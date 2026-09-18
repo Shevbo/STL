@@ -370,9 +370,19 @@
             {:else if f.key === 'sl_offset'}
               <input class="so-in" type="number" step="any" min="0" bind:value={slOffset}
                      disabled={afterMode !== 'sl'} placeholder="0 — без стопа" />
+              {#if afterMode !== 'sl'}
+                <button type="button" class="so-enable" onclick={() => afterMode = 'sl'}>
+                  включить стоп вместо подтягивающей
+                </button>
+              {/if}
             {:else if f.key === 'trail_after'}
               <input class="so-in" type="number" step="any" min="0" bind:value={trailAfter}
                      disabled={afterMode !== 'trail'} placeholder="0 — выключена" />
+              {#if afterMode !== 'trail'}
+                <button type="button" class="so-enable" onclick={() => afterMode = 'trail'}>
+                  включить подтягивающую вместо стопа
+                </button>
+              {/if}
             {:else if f.key === 'tp_offset'}
               <div class="so-seg" role="group" aria-label="Тейк после сделки">
                 <button type="button" class:on={tpMode === 'fixed'} onclick={() => tpMode = 'fixed'}
@@ -391,7 +401,11 @@
             {:else}
               <input class="so-in" type="number" step="any" bind:value={childPrice} placeholder="по рынку" />
             {/if}
-            <em>{f.hint}</em>
+            <em>{(f.key === 'sl_offset' && afterMode !== 'sl')
+                 || (f.key === 'trail_after' && afterMode !== 'trail')
+                 ? 'выключено: вместе со вторым видом защиты нельзя (движок вернёт 422). '
+                   + 'Кнопка выше переключает, какой из них ставим.'
+                 : f.hint}</em>
           </label>
         {/each}
       </div>
@@ -650,6 +664,13 @@
     padding: 5px 8px; width: 100%;
   }
   .so-in.text { font-size: 13px; }
+  /* Выключенное поле обязано ВЫГЛЯДЕТЬ выключенным: без этого «Стоп» и
+     «Подтягивающая» читались как бутафория (оператор, 18.09.2026). */
+  .so-in:disabled { opacity: .45; cursor: not-allowed; }
+  .so-enable { margin-top: 2px; background: none; border: 1px dashed #3a3a5a; border-radius: 4px;
+    color: #8a90a8; cursor: pointer; font: 10px/1.3 system-ui, sans-serif; padding: 4px 6px;
+    text-align: left; }
+  .so-enable:hover { color: #e8e8f0; border-color: #4a4a7a; }
   /* Свой выпадающий список инструментов: показывает ВСЕ коды, а не подходящие
      под введённое, и порядок в нём — по частоте использования. */
   .so-code { position: relative; }
