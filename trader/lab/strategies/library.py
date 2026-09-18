@@ -1125,6 +1125,38 @@ register("shectory_2ema", "Shectory-2EMA",
          sig_2ema, lambda p: 4 * max(int(p["ema1"]), int(p["ema2"])))
 
 
+def sig_3ema(bars, p):
+    """Три EMA выстроены по порядку → тренд; иначе сигнала нет (None = держим).
+
+    Отличие от shectory_2ema не в числе линий, а в наличии НЕЙТРАЛЬНОЙ зоны:
+    пересечение двух линий переворачивает позицию на каждом шуме, а тройка
+    требует согласия всех трёх. Заведено 18.09.2026 по запросу оператора —
+    вместе с 2EMA это проверка оси «не выходить по перевороту» на семействе,
+    которое устроено иначе, чем MACD.
+    """
+    e1, e2, e3 = int(p["ema1"]), int(p["ema2"]), int(p["ema3"])
+    if len({e1, e2, e3}) < 3:      # совпавшие периоды = вырождение, см. sig_2ema
+        return None
+    closes = _c(bars)
+    f, m, s = (I.ema_last(closes, n) for n in (e1, e2, e3))
+    if f > m > s:
+        return 1
+    if f < m < s:
+        return -1
+    return None                    # линии перепутаны — ждём, позицию не трогаем
+
+
+register("shectory_3ema", "Shectory-3EMA",
+         "https://github.com/topics/moving-average-crossover",
+         [SYM, P("ema1", "EMA1 (быстрая)", 10, 3, 60),
+          P("ema2", "EMA2 (средняя)", 40, 10, 200),
+          P("ema3", "EMA3 (медленная)", 140, 20, 400),
+          P("qty", "Базовый объём", 1, 1, 20),
+          P("bet_step", "Система ставок +N после убытка (0=выкл)", 1, 0, 5),
+          P("bet_max", "Макс добавка по ставкам", 10, 1, 30)] + DESKBOT_PARAMS,
+         sig_3ema, lambda p: 4 * max(int(p["ema1"]), int(p["ema2"]), int(p["ema3"])))
+
+
 # 4. Stochastic oscillator
 def sig_stochastic(bars, p):
     k = I.stochastic(_h(bars), _l(bars), _c(bars), int(p["period"]))
