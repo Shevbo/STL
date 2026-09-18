@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { KIND_BY_ID, afterFillPreview, defaultCode, closingSide, conditionText, manualPositions, preview, protectionPair, shortCodes, smartLegend, smartLevels,
+import { KIND_BY_ID, afterFillFacts, afterFillPreview, defaultCode, closingSide, conditionText, manualPositions, preview, protectionPair, shortCodes, smartLegend, smartLevels,
          type Kind, type Side } from './smart-order-help';
 
 const base = {
@@ -704,5 +704,26 @@ describe('форма не обещает того, чего движок не д
     for (const k of ['trigger_price', 'trail_offset', 'sl_offset', 'tp_offset', 'trail_after']) {
       expect(body, k).toContain(`${k}: only(`);
     }
+  });
+});
+
+// Оператор 18.09: «у 4117394fd0 не описан следящий тейк». Тейк был задан ЦЕНОЙ
+// уровня, а карточка перечисляла только пунктовые блоки и молчала про него.
+describe('карточка перечисляет ВСЕ блоки после сделки', () => {
+  it('тейк, заданный ценой, назван — и назван следящим, если есть откат', () => {
+    const s = norm(afterFillFacts({ sl_offset: 300, tp_price: 83_610, tp_trail: 50 }));
+    expect(s).toContain('стоп 300 п. от её цены');
+    expect(s).toContain('следящий тейк: активация на 83 610, откат 50 п.');
+    expect(s).toContain('в одной связке');
+  });
+
+  it('стоп ценой уровня и подтягивающая тоже видны', () => {
+    expect(norm(afterFillFacts({ sl_price: 82_000 }))).toBe('стоп на 82 000');
+    expect(norm(afterFillFacts({ trail_after: 200 }))).toBe('подтягивающийся стоп 200 п. от лучшей цены');
+  });
+
+  it('блоков нет — строки нет', () => {
+    expect(afterFillFacts({})).toBe('');
+    expect(afterFillFacts({ sl_offset: 0, tp_offset: 0 })).toBe('');
   });
 });

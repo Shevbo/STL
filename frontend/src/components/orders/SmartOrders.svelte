@@ -10,7 +10,7 @@
   import { smartOrdersStore, type SmartOrder } from '$lib/stores/smart-orders.svelte';
   import SmartOrderSchematic from './SmartOrderSchematic.svelte';
   import {
-    KINDS, KIND_BY_ID, COMMON_FACTS, STATUS_RU, afterFillPreview, codeSuggestions, conditionText,
+    KINDS, KIND_BY_ID, COMMON_FACTS, STATUS_RU, afterFillFacts, afterFillPreview, codeSuggestions, conditionText,
     defaultCode, isLive, keyPrice,
     closingSide, fmtWhen, fmtPts, fmtRub, manualPositions, ocoFact, preview, protectionPair,
     shortCodes, sortBySideAndPrice, tillFact, type Kind, type OpenPos, type Side,
@@ -712,10 +712,11 @@
              входит и после срабатывания забывает про позицию. Блок вынесен из
              ветки следящей, иначе у остальных типов заказанные стоп и тейк
              оставались бы невидимыми на карточке. -->
-        {#if o.sl_offset || o.tp_offset}
-          <div class="so-c-sl">после сделки автоматически встанут:
-            {#if o.sl_offset}<b>стоп {o.sl_offset} п.</b>{/if}{#if o.sl_offset && o.tp_offset} и {/if}{#if o.tp_offset}<b>{#if o.tp_trail}следящий тейк: активация {o.tp_offset} п., откат {o.tp_trail} п.{:else}тейк {o.tp_offset} п.{/if}</b>{/if}
-            от её цены{#if o.sl_offset && o.tp_offset}, в одной связке — сработает один, второй снимется{/if}</div>
+        <!-- Перечисление собирает ОДИН формулировщик: инлайн-разметка знала только
+             про пункты и молча теряла блоки, заданные ценой уровня, и
+             подтягивающую (оператор 18.09.2026, заявка 4117394fd0). -->
+        {#if afterFillFacts(o)}
+          <div class="so-c-sl">после сделки автоматически встанут: <b>{afterFillFacts(o)}</b></div>
         {/if}
         <div class="so-c-facts">
           {#if o.status === 'native'}

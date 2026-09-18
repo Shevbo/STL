@@ -680,8 +680,18 @@ export function protectiveLevels(
                  color: KIND_BY_ID[kind].color, title: `${who} · ${word}` });
     }
   };
+  // Уровень, заданный ЦЕНОЙ, рисуем как есть: считать его от входа не нужно и
+  // нельзя. Без этого заявка с защитой по цене оставалась на графике без линий
+  // (оператор 18.09.2026, заявка 4117394fd0).
+  const addLevel = (kind: 'sl' | 'tp', price: number, word: string) => {
+    if (!(price > 0)) return;
+    out.push({ key: `${o.so_id}:${kind}`, price, dim: true,
+               color: KIND_BY_ID[kind].color, title: `${who} · ${word}` });
+  };
   add('sl', Number(o.sl_offset || 0), 'стоп');
+  addLevel('sl', Number(o.sl_price || 0), 'стоп');
   add('tp', Number(o.tp_offset || 0), 'тейк');
+  addLevel('tp', Number(o.tp_price || 0), 'тейк');
   return out;
 }
 
@@ -843,4 +853,30 @@ export function protectionPair(o: {
   }
   if (stop && take) return `${pair}. Одна нативная запись QUIK, две ноги: сработал один — второй снимется.`;
   return `${pair}. Уйдёт под охрану терминала и переживёт падение STL.`;
+}
+
+/** Блоки «после сделки» ВЗВЕДЁННОЙ заявки, словами для карточки.
+ *
+ *  Карточка перечисляла только `sl_offset`/`tp_offset` и молчала про блоки,
+ *  заданные ЦЕНОЙ уровня, и про подтягивающую: заявка 4117394fd0 со следящим
+ *  тейком по цене выглядела как заявка без тейка (оператор 18.09.2026). Пустая
+ *  строка = блоков нет, тогда карточка не рисует строку вовсе.
+ */
+export function afterFillFacts(o: {
+  sl_offset?: number; tp_offset?: number; tp_trail?: number;
+  sl_price?: number; tp_price?: number; trail_after?: number;
+}): string {
+  const n = (v: number | undefined) => (v && v > 0 ? v : 0);
+  const sl = n(o.sl_offset), tp = n(o.tp_offset), tra = n(o.trail_after);
+  const slLvl = n(o.sl_price), tpLvl = n(o.tp_price), trail = n(o.tp_trail);
+  const stop = sl ? `стоп ${fmtPts(sl)} от её цены`
+    : slLvl ? `стоп на ${fmtNum(slLvl)}`
+    : tra ? `подтягивающийся стоп ${fmtPts(tra)} от лучшей цены` : '';
+  const tpWhere = tp ? `${fmtPts(tp)} от её цены` : tpLvl ? `на ${fmtNum(tpLvl)}` : '';
+  const take = !tpWhere ? ''
+    : trail ? `следящий тейк: активация ${tpWhere}, откат ${fmtPts(trail)}`
+    : `тейк ${tpWhere}`;
+  if (!stop && !take) return '';
+  return [stop, take].filter(Boolean).join(' и ')
+    + (stop && take ? ', в одной связке — сработает один, второй снимется' : '');
 }
