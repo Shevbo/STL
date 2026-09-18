@@ -13,7 +13,7 @@
     KINDS, KIND_BY_ID, COMMON_FACTS, STATUS_RU, afterFillFacts, afterFillPreview, codeSuggestions, conditionText,
     defaultCode, isLive, keyPrice,
     closingSide, entryOrders, fmtWhen, fmtPts, fmtRub, manualPositions, nativeStopIndex,
-    ocoFact, ocoNameOf, stopOrderRow,
+    ocoFact, ocoNameOf, stopOrderRow, stopOrderWhy,
     preview, protectionPair,
     shortCodes, sortBySideAndPrice, tillFact, type Kind, type OpenPos, type Side,
   } from '$lib/smart-order-help';
@@ -75,6 +75,10 @@
   let stopMs = $state(0);
   let stopOpen = $state<string | null>(null);
   let stopDone = $state(false);        // показывать отработавшие и снятые
+  let stopOursOnly = $state(false);    // только записи, поставленные STL
+  let stopCode = $state('');           // фильтр по инструменту
+  let stopDir = $state<'' | 'buy' | 'sell'>('');
+  let stopSort = $state<'time' | 'near' | 'price'>('time');
   let timers: Array<ReturnType<typeof setInterval>> = [];
   let unsub: (() => void) | null = null;
 
@@ -253,6 +257,37 @@
   // (execution-module.md, S1), и без фильтра список был историей за день.
   const stopsLive = $derived(stops.filter((r) => !r.done));
   const stopsDone = $derived(stops.filter((r) => r.done));
+  const stopCodes = $derived([...new Set(stops.map((r) => r.code).filter(Boolean))].sort() as string[]);
+  // Что реально показываем: фильтры оператора поверх «живых».
+  const stopsShown = $derived.by(() => {
+    let rows = stopDone ? stops : stopsLive;
+    if (stopOursOnly) rows = rows.filter((r) => !!r.ours);
+    if (stopCode) rows = rows.filter((r) => r.code === stopCode);
+    if (stopDir) rows = rows.filter((r) => r.dir === stopDir);
+    const near = (r: typeof rows[number]) =>
+      r.cond != null && price > 0 ? Math.abs(r.cond - price) : Number.POSITIVE_INFINITY;
+    return [...rows].sort((a, b) => {
+      if (stopSort === 'near') return near(a) - near(b);
+      if (stopSort === 'price') return (b.cond ?? -Infinity) - (a.cond ?? -Infinity);
+      return (b.whenMs ?? 0) - (a.whenMs ?? 0);
+    });
+  });
+  // ГРУППЫ: дочерняя запись терминала стоит под своей умной заявкой. Связь —
+  // по метке stl-so-<id> и по номеру native_stop_num; у нашей заявки дети носят
+  // parent_id, поэтому группу называем КОРНЕМ связки, а не первым попавшимся id.
+  const byId = $derived(new Map(orders.map((o) => [o.so_id, o])));
+  const stopGroups = $derived.by(() => {
+    const groups = new Map<string, { so: SmartOrder | null; rows: typeof stopsShown }>();
+    for (const r of stopsShown) {
+      const own = r.ours ? byId.get(r.ours) || null : null;
+      const root = own ? (own.parent_id || own.so_id) : '';
+      const key = root || (r.ours ? r.ours : 'quik');
+      const g = groups.get(key) || { so: root ? byId.get(root) || own : null, rows: [] };
+      g.rows.push(r);
+      groups.set(key, g);
+    }
+    return [...groups.entries()].map(([key, g]) => ({ key, ...g }));
+  });
 
   // Поля делятся на две группы по смыслу: ЧЕМ заявка сработает и ЧТО встанет
   // после сделки. Одной плоской сеткой уровень срабатывания и защитная пара
@@ -826,38 +861,107 @@
       <p class="so-empty">Агент не прислал таблицу стоп-заявок. Она приходит при
         изменении и раз в 15 с; пустой список тут не значит, что в терминале пусто.</p>
     {/if}
-    {#if stops.length && !stopsLive.length}
-      <p class="so-empty">Активных стоп-заявок в терминале нет
-        {#if stopsDone.length}— все {stopsDone.length} отработали или сняты{/if}.</p>
+    {#if stops.length}
+      <!-- Сортировка и фильтры: список стоп-заявок читают глазами на скорости,
+           и «покажи только продажи по RIZ6, ближайшие к срабатыванию» должно
+           быть одним кликом, а не чтением всех строк. -->
+      <div class="so-filters">
+        <label>инструмент
+          <select bind:value={stopCode}>
+            <option value="">все</option>
+            {#each stopCodes as c}<option value={c}>{c}</option>{/each}
+          </select>
+        </label>
+        <div class="so-seg sm" role="group" aria-label="Направление">
+          <button type="button" class:on={stopDir === ''} onclick={() => stopDir = ''}>все</button>
+          <button type="button" class:on={stopDir === 'buy'} onclick={() => stopDir = 'buy'}>покупка</button>
+          <button type="button" class:on={stopDir === 'sell'} onclick={() => stopDir = 'sell'}>продажа</button>
+        </div>
+        <div class="so-seg sm" role="group" aria-label="Сортировка">
+          <button type="button" class:on={stopSort === 'time'} onclick={() => stopSort = 'time'}
+                  title="свежие сверху">по времени</button>
+          <button type="button" class:on={stopSort === 'near'} onclick={() => stopSort = 'near'}
+                  title="ближе всего к срабатыванию — сверху">до срабатывания</button>
+          <button type="button" class:on={stopSort === 'price'} onclick={() => stopSort = 'price'}
+                  title="лестницей уровней, цена по убыванию">по цене</button>
+        </div>
+        <label class="so-chk"><input type="checkbox" bind:checked={stopOursOnly} /> только наши</label>
+      </div>
     {/if}
-    {#each (stopDone ? stops : stopsLive) as r, i (r.num || i)}
-      <article class="so-card" class:ours={!!r.ours} class:done={r.done}>
-        <div class="so-c-head">
-          <b class="so-c-code">{r.code ?? '—'}</b>
-          {#if r.kind}<span class="so-c-tag">{r.kind}</span>{/if}
-          <span class="so-c-qty" title="объём">{r.qty ?? '—'}</span>
-          <span class="so-c-px" title="условие"><small>условие</small>{r.cond != null ? fmtPrice(r.cond) : '—'}</span>
-          <span class="so-c-px" title="цена заявки"><small>цена</small>{r.price != null ? fmtPrice(r.price) : '—'}</span>
-          <span class="so-c-sp"></span>
-          {#if r.ours}
-            <span class="so-c-status native" title="эту запись поставил STL: метка stl-so в транзакции">🛡 наша · {r.ours}</span>
-          {:else}
-            <span class="so-c-status" title="метки STL в строке нет — запись поставлена в терминале руками">руками в QUIK</span>
+    {#if stops.length && !stopsShown.length}
+      <p class="so-empty">Под фильтры ничего не попало
+        {#if stopsDone.length && !stopDone}(отработавшие и снятые скрыты){/if}.</p>
+    {/if}
+
+    {#each stopGroups as g (g.key)}
+      <section class="so-grp">
+        {#if g.so}
+          <!-- ИСХОДНАЯ ЗАЯВКА целиком: направление, объём, условие, когда взведена
+               и что произойдёт. Без неё дочерние записи терминала висят в воздухе. -->
+          <div class="so-grp-h" style="--accent:{KIND_BY_ID[g.so.kind].color}">
+            <span class="so-c-tag">{KIND_BY_ID[g.so.kind].short}</span>
+            <b class="so-c-code">{g.so.code}</b>
+            <span class="so-c-dir" class:buy={g.so.side === 'buy'}>{g.so.side === 'buy' ? 'ПОКУПКА' : 'ПРОДАЖА'}</span>
+            <span class="so-c-qty">{g.so.qty}</span>
+            <span class="so-c-cond">{conditionText(g.so)}</span>
+            <span class="so-c-sp"></span>
+            <span class="so-grp-when">взведена {fmtWhen(g.so.created_ms)}</span>
+            <span class="so-c-status" class:native={g.so.status === 'native'}>
+              {g.so.status === 'native' ? '🛡' : '⏱'} {STATUS_RU[g.so.status] ?? g.so.status}</span>
+          </div>
+          <div class="so-grp-plan">{preview({
+              kind: g.so.kind, side: g.so.side, qty: g.so.qty, code: g.so.code,
+              trigger: g.so.trigger_price, trailOffset: g.so.trail_offset,
+              watchId: g.so.watch_client_id, childPrice: g.so.child_price,
+              slOffset: g.so.sl_offset, slPrice: g.so.sl_price,
+              tpOffset: g.so.tp_offset, tpPrice: g.so.tp_price,
+              tpTrail: g.so.tp_trail, trailAfter: g.so.trail_after,
+              price: g.so.code === code ? price : 0, pointValue: g.so.code === code ? pointValue : 0,
+            }).sentence}</div>
+          {#if g.so.code === code && price > 0 && g.so.trigger_price > 0}
+            {@const gap = Math.abs(g.so.trigger_price - price)}
+            <div class="so-grp-gap">сейчас {fmtPrice(price)} · до срабатывания {fmtPts(gap)}{
+              pointValue ? ` = ${fmtRub(gap * pointValue * g.so.qty)} по ${g.so.qty}` : ''}</div>
           {/if}
-          <button class="so-btn sm" onclick={() => stopOpen = stopOpen === (r.num || String(i)) ? null : (r.num || String(i))}>
-            {stopOpen === (r.num || String(i)) ? 'Свернуть' : 'Поля'}
-          </button>
-        </div>
-        <div class="so-c-facts">
-          <span>{r.state ?? 'состояние неизвестно: агент не прислал flags'}</span>
-          <span>номер {r.num ?? '—'}</span>
-          {#if r.whenMs}<span>{fmtWhen(r.whenMs)}</span>{/if}
-          {#if r.cls}<span>{r.cls}</span>{/if}
-        </div>
-        {#if stopOpen === (r.num || String(i))}
-          <div class="so-raw">{r.rest.length ? r.rest.join(' · ') : 'других полей агент не прислал'}</div>
+        {:else}
+          <div class="so-grp-h foreign">
+            <b>Поставлено в терминале руками</b>
+            <span class="so-grp-when">STL эти записи не ставил и не снимает</span>
+          </div>
         {/if}
-      </article>
+
+        {#each g.rows as r, i (r.num || i)}
+          {@const why = stopOrderWhy(r, g.so, r.code === code ? price : 0, r.code === code ? pointValue : 0)}
+          <article class="so-card child" class:ours={!!r.ours} class:done={r.done}>
+            <div class="so-c-head">
+              <span class="so-c-dir" class:buy={r.dir === 'buy'}>
+                {r.dir === 'buy' ? 'ПОКУПКА' : r.dir === 'sell' ? 'ПРОДАЖА' : 'направление не пришло'}</span>
+              <b class="so-c-code">{r.code ?? '—'}</b>
+              <span class="so-c-qty" title="объём · остаток · исполнено">{r.qty ?? '—'}{
+                r.balance != null || r.filled != null ? ` · ${r.balance ?? '—'} · ${r.filled ?? '—'}` : ''}</span>
+              <span class="so-c-px" title="условие срабатывания"><small>условие</small>{r.cond != null ? fmtPrice(r.cond) : '—'}</span>
+              <span class="so-c-px" title="лимитная цена ребёнка"><small>лимит</small>{r.price != null ? fmtPrice(r.price) : '—'}</span>
+              <span class="so-c-sp"></span>
+              <span class="so-c-status" class:native={r.state === 'активна'}>
+                {r.state ?? 'состояние не пришло'}</span>
+              <button class="so-btn sm" onclick={() => stopOpen = stopOpen === (r.num || String(i)) ? null : (r.num || String(i))}>
+                {stopOpen === (r.num || String(i)) ? 'Свернуть' : 'Поля'}
+              </button>
+            </div>
+            <div class="so-c-sl">{why.waits}</div>
+            <div class="so-c-why">почему так: {why.why}</div>
+            <div class="so-c-facts">
+              <span>номер {r.num ?? '—'}</span>
+              {#if r.whenMs}<span>{fmtWhen(r.whenMs)}</span>{/if}
+              {#if r.linked}<span>дочерняя заявка {r.linked}</span>{/if}
+              {#if r.cls}<span>{r.cls}</span>{/if}
+            </div>
+            {#if stopOpen === (r.num || String(i))}
+              <div class="so-raw">{r.rest.length ? r.rest.join(' · ') : 'других полей агент не прислал'}</div>
+            {/if}
+          </article>
+        {/each}
+      </section>
     {/each}
 
     {#if history.length}
@@ -1106,6 +1210,28 @@
   .so-card.done { opacity: .72; }
   /* Запись терминала, которую поставил STL: отличать от поставленной руками. */
   .so-card.ours { border-left-color: #7ec8f0; }
+  /* Группа: исходная заявка и её дочерние записи в терминале. Отступ слева и
+     общая рамка держат связь глазом — списком вперемешку её не видно. */
+  .so-grp { border: 1px solid #23233f; border-radius: 8px; padding: 10px 12px; margin-bottom: 10px;
+    background: #12122480; }
+  .so-grp-h { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+    border-left: 3px solid var(--accent, #3a6ba8); padding-left: 9px; }
+  .so-grp-h.foreign { border-left-color: #4a4a7a; color: #8a90a8; }
+  .so-grp-h.foreign b { color: #b9bfd4; font-weight: 600; }
+  .so-grp-when { font-size: 10px; color: #8a90a8; }
+  .so-grp-plan { margin: 6px 0 0 12px; font-size: 12px; line-height: 1.45; color: #d7dbe8; }
+  .so-grp-gap { margin: 3px 0 0 12px; font-size: 11px; color: #8a90a8; }
+  .so-card.child { margin: 8px 0 0 12px; background: #0f0f22; }
+  .so-c-why { margin-top: 3px; font-size: 10px; line-height: 1.5; color: #7f86a6; }
+  /* Фильтры и сортировка над списком. */
+  .so-filters { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px;
+    font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: #8a90a8; }
+  .so-filters label { display: flex; align-items: center; gap: 5px; }
+  .so-filters select { background: #0e0e1e; border: 1px solid #2d2d4a; border-radius: 4px;
+    color: #d7dae8; font: 11px/1 Consolas, monospace; padding: 4px 6px; text-transform: none; }
+  .so-chk { text-transform: none; letter-spacing: 0; cursor: pointer; }
+  .so-seg.sm { width: auto; }
+  .so-seg.sm button { padding: 5px 9px; font-size: 10px; letter-spacing: .04em; text-transform: none; }
   .so-raw { margin-top: 5px; padding-top: 5px; border-top: 1px solid #23233f;
     font: 10px/1.5 Consolas, monospace; color: #8a90a8; word-break: break-all; }
   .so-c-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }

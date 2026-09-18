@@ -924,10 +924,14 @@ export function stopOrderRow(raw: Record<string, any>, byNum: Map<string, string
     const v = parseFloat(String(raw[k] ?? ''));
     return Number.isFinite(v) ? v : null;
   };
-  const num = s('stop_order_num');
-  const known = new Set(['stop_order_num', 'sec_code', 'class_code', 'qty', 'price',
-                         'condition_price', 'condition_price2', 'stop_order_kind',
-                         'order_date_time_ms', 'flags']);
+  // НОМЕР: терминал вернул его в `order_num`/`ordernum` (execution-module.md, S1),
+  // а не в `stop_order_num` — по одному только последнему имени номер на экране
+  // всегда был прочерком.
+  const num = s('order_num') || s('ordernum') || s('stop_order_num');
+  const known = new Set(['stop_order_num', 'order_num', 'ordernum', 'sec_code', 'class_code',
+                         'qty', 'price', 'condition_price', 'condition_price2',
+                         'stop_order_kind', 'order_date_time_ms', 'flags', 'operation',
+                         'brokerref', 'balance', 'filled_qty', 'linkedorder']);
   // СОСТОЯНИЕ — по проверенным фактам, а не по догадке: docs/design/execution-module.md,
   // серии S1 и S2 на живом счёте. flags бит0 «активна», бит1 «снята»; снятая остаётся
   // в таблице до конца сессии (26), исполненная теряет бит0 и не получает бит1 (28).
@@ -952,12 +956,32 @@ export function stopOrderRow(raw: Record<string, any>, byNum: Map<string, string
     // именно поле QUIK её отдаёт, на нашем терминале не проверено, поэтому метку
     // ИЩЕМ ПО ВСЕЙ СТРОКЕ, а не гадаем имя поля.
     flags, state,
+    // НАПРАВЛЕНИЕ. Явное поле, если терминал его прислал; иначе бит2 flags — тот же
+    // разряд, что у обычных заявок QUIK, и он сошёлся на двух наших опытах:
+    // S1 покупка flags 25, S2 продажа flags 29 (различие ровно в бите2).
+    // Ни того, ни другого нет — направление НЕИЗВЕСТНО, прочерк вместо догадки.
+    dir: dirOf(raw, flags),
+    balance: n('balance'),
+    filled: n('filled_qty'),
+    linked: s('linkedorder') === '0' ? null : s('linkedorder'),
     // Прячем только то, что ТОЧНО отработало. Неизвестное состояние — на экран.
     done: state === 'снята' || state === 'исполнена',
     ours: (num ? byNum.get(num) : null) || stlMark(raw),
     rest: Object.keys(raw).filter((k) => !known.has(k)).sort()
       .map((k) => `${k}=${raw[k]}`),
   };
+}
+
+/** Направление стоп-заявки: 'buy' | 'sell' | null (неизвестно). */
+function dirOf(raw: Record<string, any>, flags: number | null): Side | null {
+  const op = String(raw.operation ?? '').trim().toUpperCase();
+  if (op === 'B' || op === 'BUY') return 'buy';
+  if (op === 'S' || op === 'SELL') return 'sell';
+  if (raw.is_sell !== undefined && raw.is_sell !== null && raw.is_sell !== '') {
+    return String(raw.is_sell) === '1' || raw.is_sell === true ? 'sell' : 'buy';
+  }
+  if (flags === null) return null;
+  return Math.floor(flags / 4) % 2 === 1 ? 'sell' : 'buy';
 }
 
 /** Метка STL в любом поле строки: транзакция уходит с комментарием `stl-so-<id>`. */
@@ -974,4 +998,55 @@ export function nativeStopIndex(orders: Array<{ so_id: string; native_stop_num?:
   const m = new Map<string, string>();
   for (const o of orders) if (o.native_stop_num) m.set(String(o.native_stop_num), o.so_id);
   return m;
+}
+
+/** Чего ждёт запись терминала и ПОЧЕМУ у неё такие параметры.
+ *
+ *  Объяснение строится от НАШЕЙ книги, а не от полей QUIK: вид стоп-заявки
+ *  терминал возвращает числом `stop_order_type`, и его расшифровка на нашем
+ *  терминале сериями не проверена. Для чужой записи (поставлена руками в QUIK)
+ *  говорим только то, что видно, и направление условия не выдумываем.
+ *
+ *  `price` — текущая цена инструмента (0 = неизвестна), `pointValue` — ₽ за пункт.
+ */
+export function stopOrderWhy(
+  r: { dir: Side | null; cond: number | null; price: number | null; ours: string | null },
+  so: { kind: Kind; side: Side; sl_offset?: number; tp_offset?: number; tp_trail?: number;
+        sl_price?: number; tp_price?: number } | null,
+  price = 0, pointValue = 0,
+): { waits: string; why: string } {
+  const cond = r.cond ?? 0;
+  // Куда должна пойти цена. Знаем это ТОЛЬКО для своих: у стопа условие против
+  // позиции, у тейка — в её пользу (trader/quik/native_protect.py).
+  const isTake = !!so && (so.tp_offset || so.tp_price ? true : false) && !so.sl_offset && !so.sl_price;
+  let waits = cond > 0 ? `условие ${fmtNum(cond)}` : 'условие не указано';
+  if (cond > 0 && r.dir && so) {
+    // Выход продажей ждёт падения (стоп) или роста (тейк); покупкой — наоборот.
+    const down = r.dir === 'sell' ? !isTake : isTake;
+    waits = `ждёт цену ${down ? '≤' : '≥'} ${fmtNum(cond)}`;
+    if (price > 0) {
+      const gap = Math.abs(cond - price);
+      const passed = down ? price <= cond : price >= cond;
+      waits += passed
+        ? ` — цена ${fmtNum(price)}, уровень уже пройден`
+        : `, сейчас ${fmtNum(price)}, до срабатывания ${fmtPts(gap)}`
+          + (pointValue ? ` = ${fmtRub(gap * pointValue)} на контракт` : '');
+    }
+  } else if (cond > 0 && price > 0) {
+    waits += `, сейчас ${fmtNum(price)} (${fmtPts(Math.abs(cond - price))} между ними)`;
+  }
+
+  if (!so) {
+    return { waits, why: r.ours
+      ? 'запись поставил STL, но её умной заявки в книге уже нет — параметры смотрите в терминале'
+      : 'запись поставлена в терминале руками: STL её не ставил и не снимает' };
+  }
+  // Почему параметры именно такие — по фактам движка, а не по догадке.
+  const bits: string[] = [];
+  if (so.sl_offset) bits.push(`стоп в ${fmtPts(so.sl_offset)} от цены входа, против позиции`);
+  if (so.sl_price) bits.push(`стоп ровно на уровне ${fmtNum(so.sl_price)}, заданном оператором`);
+  if (so.tp_trail) bits.push(`тейк следящий: с уровня активации идёт за экстремумом и закрывает на откате ${fmtPts(so.tp_trail)}`);
+  else if (so.tp_offset || so.tp_price) bits.push('тейк фиксированный: в терминале это тейк-профит с откатом в ОДИН шаг цены, отката 0 QUIK не принимает');
+  bits.push('лимитная цена ребёнка на 2 шага ХУЖЕ уровня: иначе на быстром движении заявка не нальётся и позиция останется незакрытой');
+  return { waits, why: bits.join('; ') };
 }

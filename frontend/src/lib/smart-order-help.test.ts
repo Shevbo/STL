@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { KIND_BY_ID, afterFillFacts, afterFillPreview, defaultCode, closingSide, conditionText, entryOrders, isLive, manualPositions, ocoNameOf, nativeStopIndex, preview, protectionPair, shortCodes, smartLegend, smartLevels, stopOrderRow,
+import { KIND_BY_ID, afterFillFacts, afterFillPreview, defaultCode, closingSide, conditionText, entryOrders, isLive, manualPositions, ocoNameOf, nativeStopIndex, preview, protectionPair, shortCodes, smartLegend, smartLevels, stopOrderRow, stopOrderWhy,
          type Kind, type Side } from './smart-order-help';
 
 const base = {
@@ -799,7 +799,8 @@ describe('стоп-заявки терминала', () => {
     expect(r.qty).toBe(10);
     expect(r.cond).toBe(84510);
     expect(r.state).toBe('активна');              // flags расшифрованы сериями S1/S2
-    expect(r.rest.some((x) => x.startsWith('brokerref='))).toBe(true);
+    expect(r.ours).toBe('afa462a78');             // метка из brokerref (S1: тег дошёл)
+    expect(r.rest).toEqual([]);                   // непрочитанных полей в этой строке нет
   });
 
   it('наша запись узнаётся по метке stl-so в ЛЮБОМ поле, не только по номеру', () => {
@@ -852,5 +853,57 @@ describe('состояние стоп-заявки терминала по пр�
     expect(stopOrderRow({ flags: '29' }).done).toBe(false);
     expect(stopOrderRow({ flags: '26' }).done).toBe(true);
     expect(stopOrderRow({ flags: '28' }).done).toBe(true);
+  });
+});
+
+// Оператор 18.09: «ты забыл указать направление заявки». Номер тоже не рисовался:
+// терминал вернул его в order_num (execution-module.md, S1), а не stop_order_num.
+describe('направление и номер стоп-заявки терминала', () => {
+  it('номер берётся из order_num / ordernum, а не только из stop_order_num', () => {
+    expect(stopOrderRow({ order_num: '1012419293' }).num).toBe('1012419293');
+    expect(stopOrderRow({ ordernum: '310471054' }).num).toBe('310471054');
+  });
+
+  it('явное поле операции сильнее флагов', () => {
+    expect(stopOrderRow({ operation: 'S', flags: '25' }).dir).toBe('sell');
+    expect(stopOrderRow({ operation: 'B', flags: '29' }).dir).toBe('buy');
+  });
+
+  it('без явного поля — бит2 flags: S1 покупка 25, S2 продажа 29', () => {
+    expect(stopOrderRow({ flags: '25' }).dir).toBe('buy');
+    expect(stopOrderRow({ flags: '29' }).dir).toBe('sell');
+  });
+
+  it('флагов нет — направление неизвестно, а не «покупка»', () => {
+    expect(stopOrderRow({ order_num: '1' }).dir).toBeNull();
+  });
+});
+
+describe('дочерняя запись объясняет себя', () => {
+  const row = { dir: 'sell' as Side, cond: 84_510, price: 84_490, ours: 'abc' };
+
+  it('стоп на продажу ждёт падения и называет расстояние', () => {
+    const so = { kind: 'sl' as Kind, side: 'buy' as Side, sl_offset: 300 };
+    const r = stopOrderWhy(row, so, 84_800, 1.5681);
+    expect(norm(r.waits)).toContain('ждёт цену ≤ 84 510');
+    expect(norm(r.waits)).toContain('290 п.');
+    expect(r.why).toContain('против позиции');
+    expect(r.why).toContain('2 шага');           // подушка лимита ребёнка
+  });
+
+  it('тейк на продажу ждёт РОСТА: условие смотрит в другую сторону', () => {
+    const so = { kind: 'sl' as Kind, side: 'buy' as Side, tp_offset: 700 };
+    expect(norm(stopOrderWhy(row, so, 84_200).waits)).toContain('ждёт цену ≥ 84 510');
+  });
+
+  it('следящий тейк называет откат', () => {
+    const so = { kind: 'sl' as Kind, side: 'buy' as Side, tp_offset: 700, tp_trail: 50 };
+    expect(stopOrderWhy(row, so).why).toContain('откате 50 п.');
+  });
+
+  it('чужая запись не получает выдуманного условия', () => {
+    const r = stopOrderWhy({ ...row, ours: null }, null, 84_800);
+    expect(r.waits).not.toContain('ждёт цену');
+    expect(r.why).toContain('руками');
   });
 });
