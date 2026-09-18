@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { KIND_BY_ID, afterFillPreview, closingSide, conditionText, manualPositions, preview, shortCodes, smartLegend, smartLevels,
+import { KIND_BY_ID, afterFillPreview, defaultCode, closingSide, conditionText, manualPositions, preview, shortCodes, smartLegend, smartLevels,
          type Kind, type Side } from './smart-order-help';
 
 const base = {
@@ -123,9 +123,13 @@ describe('codeSuggestions', () => {
       { code: 'BRU6' },
       { code: 'GZU6' }, { code: 'GZU6' },
     ];
+    // Частые ИЗ ТОРГУЮЩИХСЯ, затем хвост фида по алфавиту, без дублей. RIU6 и GZU6
+    // в фиде нет (контракт истёк) — в подсказках им не место (real-trade 18.09).
     expect(codeSuggestions(orders, ['SiU6', 'BRU6', 'GDU6'])).toEqual(
-      ['RIU6', 'GZU6', 'BRU6', 'GDU6', 'SiU6'],   // частые -> хвост фида по алфавиту, без дублей
+      ['BRU6', 'GDU6', 'SiU6'],
     );
+    // Пока фид не приехал, список подсказок остаётся прежним.
+    expect(codeSuggestions(orders, [])).toEqual(['RIU6', 'GZU6', 'BRU6']);
   });
   it('empty book falls back to feed codes', async () => {
     const { codeSuggestions } = await import('./smart-order-help');
@@ -549,5 +553,27 @@ describe('блок после сделки: пункты или цена уро�
 
   it('подтягивающая вместо стопа: строки стопа нет', () => {
     expect(pv({ slOffset: '390', afterMode: 'trail' }).sl).toBe('');
+  });
+});
+
+
+describe('инструмент по умолчанию: только живой контракт (real-trade 18.09)', () => {
+  const history = [{ code: 'RIU6' }, { code: 'RIU6' }, { code: 'RIU6' }, { code: 'RIZ6' }];
+
+  it('истёкший контракт из истории не подставляется, даже если он самый частый', () => {
+    expect(defaultCode(history, ['RIZ6', 'GZZ6'])).toBe('RIZ6');
+  });
+
+  it('среди живых по-прежнему выигрывает самый используемый', () => {
+    const h = [{ code: 'GZZ6' }, { code: 'GZZ6' }, { code: 'RIZ6' }];
+    expect(defaultCode(h, ['RIZ6', 'GZZ6'])).toBe('GZZ6');
+  });
+
+  it('фида ещё нет — история всё же лучше пустого поля', () => {
+    expect(defaultCode(history, [])).toBe('RIU6');
+  });
+
+  it('истории нет — берём символ экрана, если он торгуется', () => {
+    expect(defaultCode([], ['RIZ6', 'GZZ6'], 'GZZ6@SPBFUT')).toBe('GZZ6');
   });
 });

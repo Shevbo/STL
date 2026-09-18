@@ -94,6 +94,9 @@ async def create(body: SmartOrderBody, request: Request):
     # Рыночная цена инструмента даёт валидации точку отсчёта: без неё ЦЕНУ,
     # введённую в поле пунктов, не отличить от больших пунктов (заявка без уровня
     # активации собственного trigger_price не имеет).
+    silent = _silent_instrument(request, so.code)
+    if silent:
+        raise HTTPException(status_code=422, detail=silent)
     err = so.validate(_market_price(request, so.code))
     if err:
         raise HTTPException(status_code=422, detail=err)
@@ -226,6 +229,27 @@ def _market_price(request: Request, code: str) -> float:
         return float(tick.get("last") or 0)
     except Exception:  # noqa: BLE001 - валидация не должна падать из-за отсутствия кадра
         return 0.0
+
+
+def _silent_instrument(request: Request, code: str) -> str | None:
+    """Инструмент молчит (истёк, снят с торгов, не подключён) - взводить нельзя."""
+    store = getattr(request.app.state, "quik_store", None)
+    if store is None:
+        return None
+    try:
+        agent = resolve_agent(store, None)
+        now = so_mod.now_ms()
+        ages: dict[str, int] = {}
+        for row in ((store.params(agent) or {}).get("rows") or []):
+            c = str(row.get("code") or "")
+            ts = int((store.tick(c, agent) or {}).get("received_at_unix_ms") or 0)
+            if c and ts:
+                ages[c] = now - ts
+        if not ages:
+            return None          # кадров нет вовсе (агент молчит) - судить не по чему
+        return so_mod.silent_code(code, ages)
+    except Exception:  # noqa: BLE001 - проверка не должна ронять взведение
+        return None
 
 
 def _price_steps(store: Any, agent: str) -> dict[str, float]:

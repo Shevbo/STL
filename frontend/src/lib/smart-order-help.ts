@@ -472,13 +472,19 @@ export function codeSuggestions(orders: Array<{ code?: string }>, feedCodes: str
   for (const o of orders) {
     if (o.code) freq.set(o.code, (freq.get(o.code) || 0) + 1);
   }
-  const frequent = [...freq.entries()].sort((a, b) => b[1] - a[1]).map(([c]) => c);
-  return [...frequent, ...feedCodes.filter((c) => c && !freq.has(c)).sort()];
+  // Из истории берём только то, что торгуется сейчас: истёкший контракт в списке
+  // выглядит как обычный выбор (18.09.2026 оператор так и взвёл заявку на RIU6).
+  const live = new Set((feedCodes || []).filter(Boolean));
+  const frequent = [...freq.entries()].sort((a, b) => b[1] - a[1]).map(([c]) => c)
+    .filter((c) => !live.size || live.has(c));
+  return [...frequent, ...feedCodes.filter((c) => c && !frequent.includes(c)).sort()];
 }
 
 /** Инструмент, подставляемый в форму при открытии.
  *
- *  Правило оператора: САМЫЙ ИСПОЛЬЗУЕМЫЙ из книги умных заявок. До 18.09.2026
+ *  Правило оператора: САМЫЙ ИСПОЛЬЗУЕМЫЙ из книги умных заявок, но ТОЛЬКО среди
+ *  инструментов, которые агент отдаёт сейчас (18.09.2026: книга помнит прошлый
+ *  контракт, и форма подставляла истёкший RIU6). До 18.09.2026
  *  форма ставила символ главного экрана, и оператор получал в поле GDU6 просто
  *  потому, что на графике был газ. Книга приходит асинхронно, поэтому запасные
  *  варианты по убыванию осмысленности: частый из книги -> символ экрана (если он
@@ -489,12 +495,18 @@ export function defaultCode(
   feedCodes: string[] | null | undefined,
   screenSymbol = '',
 ): string {
+  const feed = (feedCodes || []).filter(Boolean);
+  // ТОЛЬКО инструменты, которые агент реально отдаёт сейчас. История заявок живёт
+  // дольше контракта: 18.09.2026 самым частым кодом в ней был истёкший RIU6, форма
+  // подставила его, и заявка на 10 контрактов ждала цену, которой больше нет.
+  const live = new Set(feed);
   const freq = new Map<string, number>();
-  for (const o of orders || []) if (o.code) freq.set(o.code, (freq.get(o.code) || 0) + 1);
+  for (const o of orders || []) {
+    if (o.code && (!live.size || live.has(o.code))) freq.set(o.code, (freq.get(o.code) || 0) + 1);
+  }
   if (freq.size) {
     return [...freq.entries()].sort((a, b) => b[1] - a[1])[0][0];
   }
-  const feed = (feedCodes || []).filter(Boolean);
   const screen = (screenSymbol || '').split('@')[0];
   if (screen && (!feed.length || feed.includes(screen))) return screen;
   return feed[0] || '';

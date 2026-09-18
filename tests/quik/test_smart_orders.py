@@ -557,3 +557,17 @@ def test_level_and_points_for_the_same_block_are_rejected():
               tp_price=180000).validate()          # это не уровень этого инструмента
     assert so(kind="trail_tp", side="buy", trail_offset=50, trigger_price=83490,
               sl_price=83100, tp_price=83690).validate() is None
+
+
+def test_silent_instrument_is_named_by_its_lag_not_by_the_clock():
+    from trader.quik.smart_orders import silent_code
+    # День: живые идут секундами, истёкший RIU6 стоит со вчера.
+    day = {"RIZ6": 500, "GZZ6": 700, "RIU6": 81_924_530}
+    assert silent_code("RIZ6", day) is None
+    why = silent_code("RIU6", day)
+    assert why and "RIU6" in why and "истёк" in why
+    # Ночь: молчат все одинаково — запрещать нечего.
+    night = {"RIZ6": 40_000_000, "GZZ6": 40_000_100}
+    assert silent_code("RIZ6", night) is None
+    # Инструмента нет в кадре вовсе.
+    assert silent_code("SRZ6", day)
