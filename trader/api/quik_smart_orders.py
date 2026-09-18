@@ -238,13 +238,7 @@ def _silent_instrument(request: Request, code: str) -> str | None:
         return None
     try:
         agent = resolve_agent(store, None)
-        now = so_mod.now_ms()
-        ages: dict[str, int] = {}
-        for row in ((store.params(agent) or {}).get("rows") or []):
-            c = str(row.get("code") or "")
-            ts = int((store.tick(c, agent) or {}).get("received_at_unix_ms") or 0)
-            if c and ts:
-                ages[c] = now - ts
+        ages = store.tick_ages_ms(so_mod.now_ms(), agent)
         if not ages:
             return None          # кадров нет вовсе (агент молчит) - судить не по чему
         return so_mod.silent_code(code, ages)

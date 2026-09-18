@@ -80,3 +80,13 @@ def test_pick_prefers_single_green_when_others_stale():
     live.last_seen_ms = now_ms
     assert store.order_book("GZU6") is not None
     assert store.order_book("GZU6")["code"] == "GZU6"
+
+
+def test_tick_ages_ms_reports_lag_per_instrument():
+    """Живой контракт от истёкшего отличается только тем, что по нему идёт лента."""
+    store = QuikAgentStore()
+    store.set_tick("9618", {"code": "RIZ6", "last": 83500, "received_at_unix_ms": 1_000_000})
+    store.set_tick("9618", {"code": "RIU6", "last": 84460, "received_at_unix_ms": 900_000})
+    ages = store.tick_ages_ms(1_000_500, "9618")
+    assert ages == {"RIZ6": 500, "RIU6": 100_500}
+    assert store.tick_ages_ms(1_000_500, "нет-такого-агента") == {}

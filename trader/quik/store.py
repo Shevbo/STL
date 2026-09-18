@@ -291,6 +291,24 @@ class QuikAgentStore:
             st = self._pick(agent_id)
             return st.ticks.get(code) if st else None
 
+    def tick_ages_ms(self, now_ms: int, agent_id: str | None = None) -> dict[str, int]:
+        """Возраст последней котировки по каждому инструменту кадра.
+
+        Нужен, чтобы отличить живой контракт от истёкшего: QUIK держит истёкший
+        инструмент в таблицах как обычный, и по нему просто перестаёт идти лента.
+        Берём именно ленту, а не таблицу параметров: параметры могут не приехать
+        после перезапуска агента, а тик есть у всего, что торгуется."""
+        with self._lock:
+            st = self._pick(agent_id)
+            if st is None:
+                return {}
+            out: dict[str, int] = {}
+            for code, tick in st.ticks.items():
+                ts = int((tick or {}).get("received_at_unix_ms") or 0)
+                if code and ts:
+                    out[str(code)] = now_ms - ts
+            return out
+
     def order_book(self, code: str, agent_id: str | None = None) -> dict[str, Any] | None:
         with self._lock:
             st = self._pick(agent_id)
