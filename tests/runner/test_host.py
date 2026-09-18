@@ -662,3 +662,41 @@ async def test_warm_store_is_capped(tmp_path):
         else:
             assert b is None                                   # сверх предела - молча мимо
     assert len(host.warm) == RobotHost.WARM_MAX_CODES
+
+
+@pytest.mark.asyncio
+async def test_brand_new_robot_starts_from_the_warm_store(tmp_path):
+    """НОВЫЙ робот тоже не должен молчать 4 часа.
+
+    18.09.2026: бумажный двойник выложили на агента, и он встал на «накопление баров
+    1/238» — почти четыре часа простоя, хотя лента по этому инструменту шла всё утро
+    и склад её копил. Склад отдаётся не только при ролле, но и при первой выкладке."""
+    host = RobotHost(FakeBridge(), str(tmp_path))
+    t0 = 1_751_500_000_000
+    for i in range(40):
+        host._warm_for("RIZ6").on_tick(t0 + i * 60_000, 83_500 + i)
+    warm_bars = len(host.warm["RIZ6"].bars())
+    assert warm_bars > 0
+
+    await host.handle_control(_deploy_rc_symbol("RIZ6"))
+    r = host.robots["r1"]
+    assert len(r.bars.bars()) == warm_bars
+    assert r.bars.bars()[-1].close >= 83_500
+
+
+@pytest.mark.asyncio
+async def test_own_history_wins_over_the_warm_store(tmp_path):
+    """У робота с собственным хвостом склад ничего не перебивает: его бары - правда."""
+    host = RobotHost(FakeBridge(), str(tmp_path))
+    await host.handle_control(_deploy_rc_symbol("RIZ6"))
+    t0 = 1_751_500_000_000
+    for i in range(12):
+        host.robots["r1"].bars.on_tick(t0 + i * 60_000, 83_000)
+    own = len(host.robots["r1"].bars.bars())
+    for i in range(40):
+        host._warm_for("RIZ6").on_tick(t0 + i * 60_000, 83_500 + i)
+    host.persist()
+
+    host2 = RobotHost(FakeBridge(), str(tmp_path))
+    await host2.handle_control(_deploy_rc_symbol("RIZ6"))
+    assert len(host2.robots["r1"].bars.bars()) == own

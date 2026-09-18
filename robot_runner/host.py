@@ -253,7 +253,16 @@ class RobotHost:
                 # fresh process: re-warm from the persisted tail so a restart never
                 # blinds a long-lookback robot (seed() is a no-op once live data flows).
                 # ПРИ РОЛЛЕ НЕ ЗАСЕВАЕМ: сохранённый хвост принадлежит старому контракту.
-                bars.seed(saved.get("bars") or [])
+                tail = saved.get("bars") or []
+                if not tail:
+                    # НОВЫЙ робот: своего хвоста у него нет, и без склада он молчит
+                    # столько, сколько нужно его сигналу (у macd_shectory1 ~238 минут,
+                    # то есть почти четыре часа простоя). Склад копит бары по всем
+                    # инструментам заранее ровно для этого (18.09.2026).
+                    warm = self.warm.get(spec["symbol"])
+                    if warm is not None:
+                        tail = warm.to_rows()
+                bars.seed(tail)
             sym = spec["symbol"]
             rt = AgentRuntime(spec["robot_id"], self._bridge, bars,
                               max_position=spec["max_position"],
