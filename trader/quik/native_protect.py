@@ -54,7 +54,7 @@ def build_native_protection(parent: SmartOrder, entry_price: float,
     if parent.trail_after > 0:
         return None                      # подтягивающая: у QUIK такого вида нет
     sl, tp, trail = parent.sl_offset, parent.tp_offset, parent.tp_trail
-    if sl <= 0 and tp <= 0:
+    if sl <= 0 and tp <= 0 and parent.sl_price <= 0 and parent.tp_price <= 0:
         return None
 
     long_side = parent.side == "buy"
@@ -64,15 +64,27 @@ def build_native_protection(parent: SmartOrder, entry_price: float,
     fields: dict[str, str] = {"EXPIRY_DATE": "TODAY"}
     kinds: list[str] = []
 
+    # Блок, заданный ЦЕНОЙ уровня, идёт в терминал этим же уровнем.
+    take_level = parent.tp_price if parent.tp_price > 0 else 0.0
+    stop_level = parent.sl_price if parent.sl_price > 0 else 0.0
+    if take_level and (take_level <= entry_price if long_side else take_level >= entry_price):
+        take_level = 0.0                  # вход уже за уровнем: тейк не ставим
+    if stop_level and (stop_level >= entry_price if long_side else stop_level <= entry_price):
+        stop_level = 0.0
+    tp = tp or take_level
+    sl = sl or stop_level
+    if tp <= 0 and sl <= 0:
+        return None
     if tp > 0:
-        take = _level(entry_price + sign * tp, step, "buy" if long_side else "sell")
+        raw_take = take_level or (entry_price + sign * tp)
+        take = _level(raw_take, step, "buy" if long_side else "sell")
         offset = trail if trail > 0 else (step or 1.0) * _MIN_OFFSET_STEPS
         fields.update({"STOPPRICE": _fmt(take), "OFFSET": _fmt(offset),
                        "OFFSET_UNITS": "PRICE_UNITS", "SPREAD": _fmt(cushion),
                        "SPREAD_UNITS": "PRICE_UNITS"})
         kinds.append("trail_tp" if trail > 0 else "tp")
     if sl > 0:
-        stop = _level(entry_price - sign * sl, step, exit_side)
+        stop = _level(stop_level or (entry_price - sign * sl), step, exit_side)
         limit = stop - sign * cushion    # лимит ребёнка ХУЖЕ уровня, иначе не нальётся
         key = "STOPPRICE2" if tp > 0 else "STOPPRICE"
         fields.update({key: _fmt(stop), "PRICE": _fmt(limit)})

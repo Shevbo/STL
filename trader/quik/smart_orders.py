@@ -85,6 +85,12 @@ class SmartOrder:
     # тейк ведёт экстремум и закрывает на откате tp_trail пунктов. 0 = фиксированный тейк.
     # Фиксированный отдаёт движение ровно на уровне, следящий забирает продолжение (17.09.2026).
     tp_trail: float = 0.0
+    # ЛЮБОЙ тип: блок после сделки ЦЕНОЙ УРОВНЯ вместо пунктов от входа. Оператор
+    # видит коридор и ставит тейк под его границей; пунктами туда не попасть, пока
+    # цена входа неизвестна (замечание оператора 18.09.2026). Уровень с пунктами
+    # того же блока взаимоисключающи; следящий тейк берёт уровень как АКТИВАЦИЮ.
+    sl_price: float = 0.0
+    tp_price: float = 0.0
     parent_id: str = ""          # у защитного стопа — so_id заявки, которая его породила
     # Передача защиты под охрану терминала (native_protect.py): "" пока в STL,
     # sent - транзакция ушла, live - QUIK зарегистрировал, failed - не принял и
@@ -126,7 +132,8 @@ class SmartOrder:
                 return "у подтягивающей нет уровня активации: она стережёт позицию сразу"
             # Она ВЫХОДИТ из позиции, а «блоки после сделки» ВХОДЯТ. Разрешить их
             # здесь значит после закрытия открыть новую позицию в обратную сторону.
-            if self.sl_offset or self.tp_offset or self.trail_after or self.tp_trail:
+            if (self.sl_offset or self.tp_offset or self.trail_after or self.tp_trail
+                    or self.sl_price or self.tp_price):
                 return "подтягивающая закрывает позицию: блоки после сделки ей не ставятся"
         # Цена в поле пунктов. 18.09.2026 оператор ввёл в «активацию» тейка уровень
         # 84700; движок сложил его с входом 83510 и поставил активацию на 168210 -
@@ -143,11 +150,23 @@ class SmartOrder:
                     return (f"{what}: {value:g} похоже на ЦЕНУ, а не на пункты. "
                             f"Здесь задаётся расстояние от входа в пунктах "
                             f"(цена инструмента около {ref:g})")
+            for what, value in (("уровень стопа", self.sl_price), ("уровень тейка", self.tp_price)):
+                if value and not (ref * 0.5 <= value <= ref * 2):
+                    return (f"{what}: {value:g} слишком далеко от цены инструмента "
+                            f"(около {ref:g}) - это цена уровня, а не пункты")
         if self.kind == "on_fill" and not self.watch_client_id:
             return "watch_client_id обязателен для on_fill"
         if self.sl_offset < 0 or self.tp_offset < 0 or self.trail_after < 0 or self.tp_trail < 0:
             return "блоки после сделки в пунктах не могут быть отрицательными"
-        if self.tp_trail and not self.tp_offset:
+        if self.sl_price and self.sl_offset:
+            return "защитный стоп: задай либо пункты от входа, либо цену уровня, не оба"
+        if self.tp_price and self.tp_offset:
+            return "тейк: задай либо пункты от входа, либо цену уровня, не оба"
+        if self.sl_price < 0 or self.tp_price < 0:
+            return "цена уровня не может быть отрицательной"
+        if self.sl_price and self.trail_after:
+            return "после сделки нельзя ставить сразу обычный стоп и подтягивающую"
+        if self.tp_trail and not (self.tp_offset or self.tp_price):
             # Без уровня активации тейк вёл бы экстремум с первого тика и закрыл бы
             # позицию на первом откате: в убытке, а не с прибылью.
             return "следящий тейк: задай tp_offset, прибыль, с которой тейк начинает следить"
@@ -314,9 +333,15 @@ def _protective(parent: SmartOrder, entry_price: float, now: int, kind: str) -> 
     """
     offset = {"sl": parent.sl_offset, "tp": parent.tp_offset,
               "trail_sl": parent.trail_after}.get(kind, 0.0)
-    if offset <= 0 or entry_price <= 0:
+    level = {"sl": parent.sl_price, "tp": parent.tp_price}.get(kind, 0.0)
+    if (offset <= 0 and level <= 0) or entry_price <= 0:
         return None
     exit_side = "sell" if parent.side == "buy" else "buy"
+    if level > 0 and _level_wrong_side(parent, entry_price, kind, level):
+        # Вход случился уже за уровнем: ставить такой тейк или стоп нельзя, он
+        # закрыл бы позицию сразу и не по делу. РЕШЕНИЕ ОПЕРАТОРА 18.09.2026:
+        # ничего не выдумывать, сказать человеку (тревогу шлёт сторож).
+        return None
     # Подтягивающая уровня не имеет: она ведёт его сама от цены. Поэтому
     # trigger_price остаётся нулём, а шаг едет в trail_offset.
     if kind == "trail_sl":
@@ -330,6 +355,21 @@ def _protective(parent: SmartOrder, entry_price: float, now: int, kind: str) -> 
     trigger = entry_price + sign * offset * (1 if parent.side == "buy" else -1)
     if trigger <= 0:
         return None
+    if level > 0 and kind != "trail_sl":
+        trigger = level
+        if kind == "tp" and parent.tp_trail > 0:
+            return SmartOrder(
+                so_id=new_id(), kind="trail_tp", code=parent.code, side=exit_side, qty=parent.qty,
+                trigger_price=trigger, trail_offset=parent.tp_trail, oco_group=_bracket_group(parent),
+                good_till_ms=parent.good_till_ms, parent_id=parent.so_id, created_ms=now,
+                note=(f"следящий тейк от {parent.so_id}: активация по уровню {trigger:g}, "
+                      f"откат {parent.tp_trail:g} п. (вход {entry_price:g})"))
+        return SmartOrder(
+            so_id=new_id(), kind=kind, code=parent.code, side=exit_side, qty=parent.qty,
+            trigger_price=trigger, oco_group=_bracket_group(parent),
+            good_till_ms=parent.good_till_ms, parent_id=parent.so_id, created_ms=now,
+            note=(f"{'защитный стоп' if kind == 'sl' else 'тейк'} от {parent.so_id}: "
+                  f"уровень {trigger:g} (вход {entry_price:g})"))
     if kind == "tp" and parent.tp_trail > 0:
         # Следящий тейк = обычная trail_tp стороны выхода: trigger_price это уровень
         # активации, trail_offset это откат. Движок ведёт её штатно, связка OCO та же.
@@ -346,6 +386,28 @@ def _protective(parent: SmartOrder, entry_price: float, now: int, kind: str) -> 
         good_till_ms=parent.good_till_ms, parent_id=parent.so_id,
         created_ms=now,
         note=f"{what} от {parent.so_id}: вход {entry_price:g}, {offset:g} п.")
+
+
+def _level_wrong_side(parent: SmartOrder, entry_price: float, kind: str, level: float) -> bool:
+    """Уровень оказался НЕ с той стороны от входа: тейк ниже покупки, стоп выше."""
+    long_side = parent.side == "buy"
+    if kind == "tp":
+        return level <= entry_price if long_side else level >= entry_price
+    return level >= entry_price if long_side else level <= entry_price
+
+
+def level_violations(parent: SmartOrder, entry_price: float) -> list[str]:
+    """Какие заданные ЦЕНОЙ блоки после сделки не удалось поставить и почему.
+
+    Человеку это надо сказать немедленно: он думает, что позиция под защитой."""
+    out: list[str] = []
+    if entry_price <= 0:
+        return out
+    for kind, level, what in (("sl", parent.sl_price, "стоп"), ("tp", parent.tp_price, "тейк")):
+        if level > 0 and _level_wrong_side(parent, entry_price, kind, level):
+            side = "выше" if parent.side == "buy" else "ниже"
+            out.append(f"{what} по уровню {level:g} не поставлен: вход {entry_price:g} уже {side} него")
+    return out
 
 
 def protective_sl(parent: SmartOrder, entry_price: float, now: int) -> SmartOrder | None:

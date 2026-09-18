@@ -519,3 +519,41 @@ def test_price_typed_into_a_points_field_is_rejected():
               tp_offset=700, tp_trail=70).validate() is None
     assert so(kind="trail_sl", side="sell", trail_offset=50).validate(reference_price=83490) is None
     assert so(kind="trail_sl", side="sell", trail_offset=83000).validate(reference_price=83490)
+
+
+# ---- блоки после сделки, заданные ЦЕНОЙ уровня (оператор, 18.09.2026) ----
+
+def test_take_by_level_ignores_where_the_entry_landed():
+    from trader.quik.smart_orders import level_violations
+    parent = so(kind="trail_tp", side="buy", trail_offset=50, qty=2,
+                trigger_price=83490, sl_price=83100, tp_price=83690)
+    kids = {k.kind: k for k in protective_children(parent, entry_price=83510, now=NOW)}
+    assert kids["sl"].trigger_price == 83100 and kids["tp"].trigger_price == 83690
+    # Вход уехал: уровни те же, в отличие от пунктов от входа.
+    kids2 = {k.kind: k for k in protective_children(parent, entry_price=83560, now=NOW)}
+    assert kids2["tp"].trigger_price == 83690
+    assert level_violations(parent, 83510) == []
+
+
+def test_take_level_with_retrace_is_a_trailing_take_from_that_level():
+    parent = so(kind="trail_tp", side="buy", trail_offset=50, trigger_price=83490,
+                tp_price=83690, tp_trail=70)
+    (tp,) = protective_children(parent, entry_price=83510, now=NOW)
+    assert (tp.kind, tp.side, tp.trigger_price, tp.trail_offset) == ("trail_tp", "sell", 83690, 70)
+
+
+def test_entry_past_the_level_places_nothing_and_says_why():
+    from trader.quik.smart_orders import level_violations
+    parent = so(kind="trail_tp", side="buy", trail_offset=50, trigger_price=83490, tp_price=83690)
+    assert protective_children(parent, entry_price=83700, now=NOW) == []
+    (why,) = level_violations(parent, 83700)
+    assert "83690" in why and "83700" in why
+
+
+def test_level_and_points_for_the_same_block_are_rejected():
+    assert so(kind="trail_tp", side="buy", trail_offset=50, trigger_price=83490,
+              tp_offset=700, tp_price=83690).validate()
+    assert so(kind="trail_tp", side="buy", trail_offset=50, trigger_price=83490,
+              tp_price=180000).validate()          # это не уровень этого инструмента
+    assert so(kind="trail_tp", side="buy", trail_offset=50, trigger_price=83490,
+              sl_price=83100, tp_price=83690).validate() is None

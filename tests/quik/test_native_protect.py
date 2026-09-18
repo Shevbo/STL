@@ -65,3 +65,17 @@ def test_nothing_to_guard_or_no_native_equivalent():
     assert build_native_protection(parent(sl_offset=300), 0, STEP) is None  # нет цены входа
     # Подтягивающая ведёт стоп за ценой: у QUIK такого вида нет, остаётся в STL.
     assert build_native_protection(parent(trail_after=200), 87000, STEP) is None
+
+
+def test_levels_go_to_the_terminal_as_they_are():
+    p = build_native_protection(parent(sl_price=86700, tp_price=87500, tp_trail=100), 87000, STEP)
+    f = p["fields"]
+    assert f["STOP_ORDER_KIND"] == "TAKE_PROFIT_AND_STOP_LIMIT_ORDER"
+    assert f["STOPPRICE"] == "87500" and f["STOPPRICE2"] == "86700" and f["OFFSET"] == "100"
+
+
+def test_level_behind_the_entry_is_not_sent():
+    # Купили выше уровня тейка: тейк не ставим (решение оператора), стоп ставим.
+    p = build_native_protection(parent(sl_price=86700, tp_price=86900), 87000, STEP)
+    assert p["kinds"] == ["sl"] and p["fields"]["STOP_ORDER_KIND"] == "SIMPLE_STOP_ORDER"
+    assert build_native_protection(parent(tp_price=86900), 87000, STEP) is None

@@ -70,6 +70,8 @@ class SmartOrderBody(BaseModel):
     tp_offset: float = 0.0         # тейк в пунктах доходного хода после входа (0 = без тейка)
     trail_after: float = 0.0       # подтягивающая в пунктах после входа (0 = без неё)
     tp_trail: float = 0.0          # тейк после входа следящий: откат в пунктах (0 = фиксированный)
+    sl_price: float = 0.0          # стоп после входа ЦЕНОЙ уровня (вместо пунктов)
+    tp_price: float = 0.0          # тейк после входа ЦЕНОЙ уровня (вместо пунктов)
     note: str = ""
 
 
@@ -83,7 +85,8 @@ async def create(body: SmartOrderBody, request: Request):
         trigger_price=float(body.trigger_price),
         trail_offset=float(body.trail_offset), sl_offset=float(body.sl_offset),
         tp_offset=float(body.tp_offset), trail_after=float(body.trail_after),
-        tp_trail=float(body.tp_trail),
+        tp_trail=float(body.tp_trail), sl_price=float(body.sl_price),
+        tp_price=float(body.tp_price),
         watch_client_id=body.watch_client_id, child_price=float(body.child_price),
         oco_group=body.oco_group, good_till_ms=int(body.good_till_ms),
         note=body.note, created_ms=so_mod.now_ms(),
@@ -652,6 +655,11 @@ async def _watch_once(state: Any) -> None:
                 # без стопа выходить нечем, а без тейка некому забрать прибыль.
                 # Обе в одной связке OCO: сработала одна — вторая снимается, иначе
                 # она открыла бы позицию в обратную сторону.
+                for miss in so_mod.level_violations(so, act.price):
+                    # Уровень оказался не с той стороны от входа. Оператор решил
+                    # (18.09): ничего не выдумывать, сказать человеку сразу.
+                    log.warning("smart_order.level_skipped", parent=so.so_id, reason=miss)
+                    await _alert_reject(srv, agent, so, miss)
                 for child in so_mod.protective_children(so, act.price, now):
                     book.orders.append(child)
                     log.info("smart_order.protective", parent=so.so_id, kind=child.kind,
