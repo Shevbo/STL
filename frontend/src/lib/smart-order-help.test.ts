@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { KIND_BY_ID, closingSide, conditionText, manualPositions, preview, shortCodes, smartLegend, smartLevels,
+import { KIND_BY_ID, afterFillPreview, closingSide, conditionText, manualPositions, preview, shortCodes, smartLegend, smartLevels,
          type Kind, type Side } from './smart-order-help';
 
 const base = {
@@ -513,5 +513,41 @@ describe('следящий тейк после сделки (tp_trail, real-trad
     const r = preview({ ...base, tpOffset: 700, tpTrail: 0 } as any);
     expect(r.sentence).toMatch(/тейк 700/);
     expect(r.sentence).not.toMatch(/следящий/);
+  });
+});
+
+describe('блок после сделки: пункты или цена уровня (real-trade 18.09)', () => {
+  const pv = (over: Partial<Parameters<typeof afterFillPreview>[0]>) =>
+    afterFillPreview({
+      side: 'buy', price: 83_500, slOffset: '', slPrice: '', tpOffset: '', tpPrice: '',
+      tpMode: 'fixed', afterMode: 'sl', ...over,
+    });
+
+  it('пункты считаются от предполагаемого входа и честно это говорят', () => {
+    const r = pv({ slOffset: '390', tpOffset: '700' });
+    expect(norm(r.sl)).toContain('при входе около 83 500');
+    expect(norm(r.sl)).toContain('83 110');
+    expect(norm(r.tp)).toContain('84 200');
+  });
+
+  it('цена уровня показывается как точный уровень, без «около»', () => {
+    const r = pv({ slPrice: '83100', tpPrice: '83690' });
+    expect(norm(r.sl)).toBe('стоп ровно на 83 100');
+    expect(norm(r.tp)).toBe('тейк на 83 690');
+    expect(r.tp).not.toContain('около');
+  });
+
+  it('следящий тейк называет уровень точкой начала слежения', () => {
+    expect(norm(pv({ tpPrice: '83690', tpMode: 'trail' }).tp)).toBe('тейк начнёт следить с 83 690');
+  });
+
+  it('для шорта пункты откладываются в другую сторону', () => {
+    const r = pv({ side: 'sell', slOffset: '390', tpOffset: '700' });
+    expect(norm(r.sl)).toContain('83 890');
+    expect(norm(r.tp)).toContain('82 800');
+  });
+
+  it('подтягивающая вместо стопа: строки стопа нет', () => {
+    expect(pv({ slOffset: '390', afterMode: 'trail' }).sl).toBe('');
   });
 });

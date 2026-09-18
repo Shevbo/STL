@@ -32,10 +32,10 @@ export interface KindMeta {
  *  выходить нечем и прибыль забрать некому. Движок разрешает их каждому типу
  *  (`SmartOrder.validate`), поэтому и в форме они стоят везде. */
 const AFTER_FILL_FIELDS = [
-  { key: 'sl_offset', label: 'Стоп после сделки, пункты',
-    hint: '0 — без стопа. Иначе сразу после сделки встанет защитный стоп на этом расстоянии ПРОТИВ цены входа' },
-  { key: 'tp_offset', label: 'Тейк после сделки, пункты',
-    hint: '0 — без тейка. Иначе после сделки встанет тейк на этом расстоянии В ПОЛЬЗУ входа; со стопом они в одной связке — сработал один, второй снимется' },
+  { key: 'sl_offset', label: 'Стоп после сделки',
+    hint: 'Задаётся ПУНКТАМИ от фактической цены входа (против позиции) ИЛИ ЦЕНОЙ уровня — одно из двух. 0 и пусто — без стопа' },
+  { key: 'tp_offset', label: 'Тейк после сделки',
+    hint: 'Задаётся ПУНКТАМИ от фактической цены входа (в пользу позиции) ИЛИ ЦЕНОЙ уровня — одно из двух. Со стопом они в одной связке: сработал один, второй снимется' },
   // Третий блок «после сделки» (12.08.2026). Со стопом он НЕСОВМЕСТИМ, и это не
   // вкусовщина: сработает ближний, дальний останется взведён и следующим ходом
   // откроет позицию в обратную сторону. Поэтому в форме это переключатель
@@ -730,4 +730,34 @@ export function manualPositions(status: any, mirror: any): OpenPos[] {
 /** Сторона ЗАКРЫТИЯ позиции: лонг закрывают продажей, шорт — покупкой. */
 export function closingSide(pos: number): Side {
   return pos > 0 ? 'sell' : 'buy';
+}
+
+
+/** Что встанет после сделки при ТЕКУЩЕЙ цене — строкой под полями.
+ *
+ *  Ошибку видно до отправки, а не в карточке взведённой заявки: 18.09.2026
+ *  уровень 84700, введённый в поле пунктов, дал активацию 168210, и позиция
+ *  осталась без тейка. Пункты считаются от цены входа, которая ещё неизвестна,
+ *  поэтому здесь честно сказано «при входе около».
+ */
+export function afterFillPreview(o: {
+  side: Side; price: number; slOffset: string; slPrice: string;
+  tpOffset: string; tpPrice: string; tpMode: 'fixed' | 'trail'; afterMode: 'sl' | 'trail';
+}): { sl: string; tp: string } {
+  const num = (v: string) => parseFloat((v || '').trim()) || 0;
+  const long = o.side === 'buy';
+  const at = o.price ? `при входе около ${o.price.toLocaleString('ru-RU')}: ` : '';
+  const out = { sl: '', tp: '' };
+  if (o.afterMode === 'sl') {
+    const lvl = num(o.slPrice);
+    const pts = num(o.slOffset);
+    if (lvl) out.sl = `стоп ровно на ${lvl.toLocaleString('ru-RU')}`;
+    else if (pts && o.price) out.sl = `${at}стоп ${(long ? o.price - pts : o.price + pts).toLocaleString('ru-RU')}`;
+  }
+  const tlvl = num(o.tpPrice);
+  const tpts = num(o.tpOffset);
+  const what = o.tpMode === 'trail' ? 'тейк начнёт следить с' : 'тейк на';
+  if (tlvl) out.tp = `${what} ${tlvl.toLocaleString('ru-RU')}`;
+  else if (tpts && o.price) out.tp = `${at}${what} ${(long ? o.price + tpts : o.price - tpts).toLocaleString('ru-RU')}`;
+  return out;
 }

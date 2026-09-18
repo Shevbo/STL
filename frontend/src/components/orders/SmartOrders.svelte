@@ -10,8 +10,8 @@
   import { smartOrdersStore, type SmartOrder } from '$lib/stores/smart-orders.svelte';
   import SmartOrderSchematic from './SmartOrderSchematic.svelte';
   import {
-    KINDS, KIND_BY_ID, COMMON_FACTS, STATUS_RU, codeSuggestions, conditionText, defaultCode,
-    isLive, keyPrice,
+    KINDS, KIND_BY_ID, COMMON_FACTS, STATUS_RU, afterFillPreview, codeSuggestions, conditionText,
+    defaultCode, isLive, keyPrice,
     closingSide, fmtWhen, fmtPts, fmtRub, manualPositions, ocoFact, preview,
     shortCodes, sortBySideAndPrice, tillFact, type Kind, type OpenPos, type Side,
   } from '$lib/smart-order-help';
@@ -29,6 +29,12 @@
   let trailOffset = $state('');
   let slOffset = $state('');          // защитный стоп после входа, пункты (0 = без стопа)
   let tpOffset = $state('');          // тейк после входа, пункты (0 = без тейка)
+  // Те же два блока, но ЦЕНОЙ УРОВНЯ (real-trade 18.09, sl_price/tp_price).
+  // Пунктами не попасть в уровень, пока цена входа неизвестна: оператор видит
+  // коридор и ставит тейк под его границей. Пункты и цена одного блока
+  // взаимоисключающи — движок вернёт 422, поэтому поля гасят друг друга.
+  let slPrice = $state('');
+  let tpPrice = $state('');
   // Тейк после сделки: фиксированный или СЛЕДЯЩИЙ (real-trade 17.09, tp_trail). У
   // следящего tpOffset — уровень активации, tpTrail — откат от экстремума.
   let tpMode = $state<'fixed' | 'trail'>('fixed');
@@ -56,9 +62,27 @@
   let timers: Array<ReturnType<typeof setInterval>> = [];
   let unsub: (() => void) | null = null;
 
+  // Подсказки под «?»: у каждого варианта поля свой текст, потому что цена и
+  // пункты — разные величины, и перепутать их стоило оператору тейка (18.09:
+  // уровень 84700 в поле пунктов дал активацию 168210, позиция осталась без тейка).
+  const HELP = {
+    slPts: 'ПУНКТЫ от фактической цены входа, против позиции. Купили по 83510 со стопом 390 — стоп встанет на 83120. Не цена.',
+    slPrice: 'ЦЕНА уровня. Стоп встанет ровно на ней, где бы ни случился вход. Вход уже за уровнем — стоп не ставится, придёт тревога.',
+    tpPts: 'ПУНКТЫ от фактической цены входа, в пользу позиции. Купили по 83510 с тейком 700 — тейк на 84210. Не цена.',
+    tpPrice: 'ЦЕНА уровня. Тейк встанет ровно на ней — так ставят под границу коридора, когда цена входа ещё неизвестна.',
+    tpPtsTrail: 'ПУНКТЫ от входа до точки, где тейк начнёт следить за максимумом. Дальше он закроет позицию на откате.',
+    tpPriceTrail: 'ЦЕНА уровня, с которого тейк начнёт следить за максимумом. Дальше он закроет позицию на откате.',
+    tpTrail: 'ПУНКТЫ отката от лучшей достигнутой цены, на котором тейк закрывает позицию.',
+  };
+  const tr = (v: string) => (v || '').trim();
+
   const meta = $derived(KIND_BY_ID[kind]);
   const price = $derived(tick?.last || 0);
   const orders = $derived(smartOrdersStore.all);
+  // Что получится при текущей цене: ошибку «цена в поле пунктов» видно ДО отправки.
+  const levelPreview = $derived(afterFillPreview({
+    side, price, slOffset, slPrice, tpOffset, tpPrice, tpMode, afterMode,
+  }));
   // Живые — сторож STL (armed) И заявки под охраной терминала (native): последние
   // переживают падение STL, и в истории им не место (real-trade 17.09).
   const armed = $derived(orders.filter((o) => isLive(o.status)));
@@ -157,7 +181,9 @@
       trigger_price: kind === 'trail_sl' ? 0 : parseFloat(trigger) || 0,
       trail_offset: parseFloat(trailOffset) || 0,
       sl_offset: afterMode === 'sl' ? parseFloat(slOffset) || 0 : 0,
+      sl_price: afterMode === 'sl' ? parseFloat(slPrice) || 0 : 0,
       tp_offset: parseFloat(tpOffset) || 0,
+      tp_price: parseFloat(tpPrice) || 0,
       tp_trail: tpMode === 'trail' ? parseFloat(tpTrail) || 0 : 0,
       trail_after: afterMode === 'trail' ? parseFloat(trailAfter) || 0 : 0,
       watch_client_id: watchId.trim(),
@@ -179,6 +205,7 @@
       msg = `Заявка ${d.so_id} взведена. Сторож следит.`
         + (gone ? ` Сняты прежние стопы этой позиции: ${d.superseded.join(', ')}.` : '');
       trigger = ''; trailOffset = ''; slOffset = ''; tpOffset = ''; trailAfter = ''; tpTrail = ''; tpMode = 'fixed';
+      slPrice = ''; tpPrice = '';
       watchId = ''; childPrice = '';
       confirming = false;
       await smartOrdersStore.refresh();
@@ -202,6 +229,8 @@
     trailOffset = o.trail_offset ? String(o.trail_offset) : '';
     slOffset = o.sl_offset ? String(o.sl_offset) : '';
     tpOffset = o.tp_offset ? String(o.tp_offset) : '';
+    slPrice = (o as any).sl_price ? String((o as any).sl_price) : '';
+    tpPrice = (o as any).tp_price ? String((o as any).tp_price) : '';
     tpTrail = o.tp_trail ? String(o.tp_trail) : '';
     tpMode = o.tp_trail ? 'trail' : 'fixed';
     trailAfter = (o as any).trail_after ? String((o as any).trail_after) : '';
@@ -362,14 +391,25 @@
         </div>
         {#each meta.fields as f}
           <label class="so-f">
-            <span>{f.label}</span>
+            <span>{f.label}<button type="button" class="so-q" title={f.hint} aria-label={f.hint}>?</button></span>
             {#if f.key === 'trigger_price'}
               <input class="so-in" type="number" step="any" bind:value={trigger} placeholder="0" />
             {:else if f.key === 'trail_offset'}
               <input class="so-in" type="number" step="any" bind:value={trailOffset} placeholder="0" />
             {:else if f.key === 'sl_offset'}
-              <input class="so-in" type="number" step="any" min="0" bind:value={slOffset}
-                     disabled={afterMode !== 'sl'} placeholder="0 — без стопа" />
+              <div class="so-two">
+                <div class="so-col">
+                  <b>в пунктах<button type="button" class="so-q" title={HELP.slPts} aria-label={HELP.slPts}>?</button></b>
+                  <input class="so-in" type="number" step="any" min="0" bind:value={slOffset}
+                         disabled={afterMode !== 'sl' || !!tr(slPrice)} placeholder="0 — без стопа" />
+                </div>
+                <div class="so-col">
+                  <b>ценой<button type="button" class="so-q" title={HELP.slPrice} aria-label={HELP.slPrice}>?</button></b>
+                  <input class="so-in" type="number" step="any" min="0" bind:value={slPrice}
+                         disabled={afterMode !== 'sl' || !!tr(slOffset)} placeholder="уровень" />
+                </div>
+              </div>
+              {#if levelPreview.sl}<em class="so-calc">{levelPreview.sl}</em>{/if}
               {#if afterMode !== 'sl'}
                 <button type="button" class="so-enable" onclick={() => afterMode = 'sl'}>
                   включить стоп вместо подтягивающей
@@ -390,12 +430,31 @@
                 <button type="button" class:on={tpMode === 'trail'} onclick={() => tpMode = 'trail'}
                         title="тейк идёт за экстремумом и закрывает на откате">Следящий</button>
               </div>
-              <input class="so-in" type="number" step="any" min="0" bind:value={tpOffset}
-                     placeholder={tpMode === 'trail' ? 'активация, п. от входа' : '0 — без тейка'} />
+              <div class="so-two">
+                <div class="so-col">
+                  <b>в пунктах<button type="button" class="so-q"
+                      title={tpMode === 'trail' ? HELP.tpPtsTrail : HELP.tpPts}
+                      aria-label={tpMode === 'trail' ? HELP.tpPtsTrail : HELP.tpPts}>?</button></b>
+                  <input class="so-in" type="number" step="any" min="0" bind:value={tpOffset}
+                         disabled={!!tr(tpPrice)}
+                         placeholder={tpMode === 'trail' ? 'активация, п. от входа' : '0 — без тейка'} />
+                </div>
+                <div class="so-col">
+                  <b>ценой<button type="button" class="so-q"
+                      title={tpMode === 'trail' ? HELP.tpPriceTrail : HELP.tpPrice}
+                      aria-label={tpMode === 'trail' ? HELP.tpPriceTrail : HELP.tpPrice}>?</button></b>
+                  <input class="so-in" type="number" step="any" min="0" bind:value={tpPrice}
+                         disabled={!!tr(tpOffset)} placeholder="уровень" />
+                </div>
+              </div>
               {#if tpMode === 'trail'}
-                <input class="so-in" type="number" step="any" min="0" bind:value={tpTrail}
-                       placeholder="откат, п. от экстремума" title="на каком откате от лучшей цены закрыть" />
+                <div class="so-col">
+                  <b>откат<button type="button" class="so-q" title={HELP.tpTrail} aria-label={HELP.tpTrail}>?</button></b>
+                  <input class="so-in" type="number" step="any" min="0" bind:value={tpTrail}
+                         placeholder="откат, п. от экстремума" />
+                </div>
               {/if}
+              {#if levelPreview.tp}<em class="so-calc">{levelPreview.tp}</em>{/if}
             {:else if f.key === 'watch_client_id'}
               <input class="so-in text" bind:value={watchId} placeholder="client_id" spellcheck="false" />
             {:else}
@@ -687,6 +746,17 @@
     font: 14px/1 Consolas, monospace; }
   .so-code-list button:hover { background: #1b1b34; color: #fff; }
   .so-code-list button.on { color: #7ef0a6; }
+  /* Пара «в пунктах | ценой»: цена стоит СПРАВА от пунктов (оператор 18.09). */
+  .so-two { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .so-col { display: grid; gap: 2px; min-width: 0; }
+  .so-col > b { font: 600 10px/1.4 system-ui, sans-serif; color: #8a90a8;
+    letter-spacing: .08em; text-transform: uppercase; display: flex; align-items: center; gap: 4px; }
+  .so-calc { font-size: 10px; color: #7f86a6; font-style: normal; margin-top: 2px; }
+  /* Значок подсказки: курсор мыши на нём — всплывает объяснение поля. */
+  .so-q { width: 13px; height: 13px; border-radius: 50%; border: 1px solid #3a3a5e;
+    background: #15152c; color: #9aa1c0; font: 700 9px/1 system-ui, sans-serif;
+    cursor: help; padding: 0; flex: none; }
+  .so-q:hover { border-color: #6f76a8; color: #dfe6ff; }
   .so-in:focus { outline: none; border-color: #4a4a7a; background: #12122a; }
 
   /* ценовая рейка */
