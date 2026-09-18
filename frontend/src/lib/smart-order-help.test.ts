@@ -138,9 +138,11 @@ describe('codeSuggestions', () => {
 });
 
 describe('блоки «после сделки»', () => {
-  it('every kind offers the SL/TP-after-fill pair', async () => {
+  // ВСЕМ, КРОМЕ ПОДТЯГИВАЮЩЕЙ: она выходит из позиции, блоки после сделки в неё
+  // входят, и движок отвечает 422 (smart_orders.py:135, аудит 18.09.2026).
+  it('every ENTERING kind offers the SL/TP-after-fill pair', async () => {
     const { KINDS } = await import('./smart-order-help');
-    for (const k of KINDS) {
+    for (const k of KINDS.filter((x) => x.id !== 'trail_sl')) {
       const keys = k.fields.map((f) => f.key);
       expect(keys, k.id).toContain('sl_offset');
       expect(keys, k.id).toContain('tp_offset');
@@ -625,7 +627,8 @@ describe('пара защитников после сделки называет
   });
 
   it('подтягивающийся стоп у QUIK невыразим и остаётся сторожу STL', () => {
-    expect(pp({ afterMode: 'trail' })).toContain('остаётся сторожу STL');
+    expect(pp({ afterMode: 'trail' })).toContain('сторожу STL');
+    expect(pp({ afterMode: 'trail', hasTake: false })).toContain('остаётся сторожу STL');
   });
 
   it('одна нога — это одна нога, а пустая защита названа пустой', () => {
@@ -663,5 +666,41 @@ describe('поля формы приходят числами, а не стро�
     const src = readFileSync(resolve(process.cwd(), 'src/components/orders/SmartOrders.svelte'), 'utf8');
     const tr = src.match(/const tr = .*/)![0];
     expect(tr).toContain('String(');
+  });
+});
+
+// Аудит экрана 18.09.2026: форма обещала то, чего движок не делает.
+describe('форма не обещает того, чего движок не делает', () => {
+  it('у подтягивающей блоков после сделки НЕТ: движок отвечает 422', () => {
+    // trader/quik/smart_orders.py:135 — она ВЫХОДИТ из позиции, блоки ВХОДЯТ.
+    const keys = KIND_BY_ID.trail_sl.fields.map((f) => f.key);
+    expect(keys).not.toContain('sl_offset');
+    expect(keys).not.toContain('tp_offset');
+    expect(keys).not.toContain('trail_after');
+  });
+
+  it('входящие типы блоки после сделки сохраняют', () => {
+    for (const id of ['sl', 'tp', 'trail_tp', 'on_fill'] as const) {
+      const keys = KIND_BY_ID[id].fields.map((f) => f.key);
+      expect(keys, id).toContain('sl_offset');
+      expect(keys, id).toContain('tp_offset');
+    }
+  });
+
+  it('с подтягивающей терминал не берёт и тейк — охрану ему не обещаем', () => {
+    // native_protect.py:54: trail_after > 0 -> None, вся пара остаётся в STL.
+    const s = protectionPair({ afterMode: 'trail', tpMode: 'trail', hasStop: true, hasTake: true });
+    expect(s).toContain('Оба остаются сторожу STL');
+    expect(s).not.toContain('под охрану терминала');
+  });
+
+  it('арминг шлёт только поля своего типа', () => {
+    const src = readFileSync(resolve(process.cwd(), 'src/components/orders/SmartOrders.svelte'), 'utf8');
+    const body = src.slice(src.indexOf('async function arm()'), src.indexOf('good_till_ms'));
+    expect(body).toContain('meta.fields.map((f) => f.key)');
+    // Каждое числовое поле тела проходит через гвард своего ключа.
+    for (const k of ['trigger_price', 'trail_offset', 'sl_offset', 'tp_offset', 'trail_after']) {
+      expect(body, k).toContain(`${k}: only(`);
+    }
   });
 });

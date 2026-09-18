@@ -83,6 +83,11 @@
   // «не нажимались», заполненный стоп выглядел выключенным, а строка пары врала
   // «защиты нет» при заполненных полях (оператор, 18.09.2026).
   const tr = (v: unknown) => String(v ?? '').trim();
+  const num = (v: unknown) => parseFloat(tr(v)) || 0;
+  // ЗАПОЛНЕНО = положительное число, а не «непустая строка». Плейсхолдеры сами
+  // зовут ввести «0 — без стопа»: набранный ноль гасил парное поле «ценой» и
+  // считался защитой в итоговой строке (аудит 18.09.2026).
+  const pos = (v: unknown) => num(v) > 0;
 
   const meta = $derived(KIND_BY_ID[kind]);
   const price = $derived(tick?.last || 0);
@@ -94,8 +99,8 @@
   // Пара защитников словами: стоп и тейк независимы, и это должно быть видно.
   const pairLine = $derived(protectionPair({
     afterMode, tpMode,
-    hasStop: afterMode === 'sl' ? !!(tr(slOffset) || tr(slPrice)) : !!tr(trailAfter),
-    hasTake: !!(tr(tpOffset) || tr(tpPrice)),
+    hasStop: afterMode === 'sl' ? (pos(slOffset) || pos(slPrice)) : pos(trailAfter),
+    hasTake: pos(tpOffset) || pos(tpPrice),
   }));
   // Живые — сторож STL (armed) И заявки под охраной терминала (native): последние
   // переживают падение STL, и в истории им не место (real-trade 17.09).
@@ -114,17 +119,24 @@
   const pv = $derived.by(() => {
     const p = preview({
       kind, side, qty, code,
-      trigger: parseFloat(trigger) || 0,
-      trailOffset: parseFloat(trailOffset) || 0,
-      watchId: watchId.trim(), childPrice: parseFloat(childPrice) || 0,
-      slOffset: afterMode === 'sl' ? parseFloat(slOffset) || 0 : 0,
-      slPrice: afterMode === 'sl' ? parseFloat(slPrice) || 0 : 0,
-      tpOffset: parseFloat(tpOffset) || 0,
-      tpPrice: parseFloat(tpPrice) || 0,
-      tpTrail: tpMode === 'trail' ? parseFloat(tpTrail) || 0 : 0,
-      trailAfter: afterMode === 'trail' ? parseFloat(trailAfter) || 0 : 0,
+      trigger: num(trigger),
+      trailOffset: num(trailOffset),
+      watchId: tr(watchId), childPrice: num(childPrice),
+      slOffset: afterMode === 'sl' ? num(slOffset) : 0,
+      slPrice: afterMode === 'sl' ? num(slPrice) : 0,
+      tpOffset: num(tpOffset),
+      tpPrice: num(tpPrice),
+      tpTrail: tpMode === 'trail' ? num(tpTrail) : 0,
+      trailAfter: afterMode === 'trail' ? num(trailAfter) : 0,
       price, pointValue,
     });
+    // «Следящий» выбран, а откат не введён — движок поставит ОБЫЧНЫЙ тейк на
+    // уровне активации и не возразит (smart_orders.py:169). Экран при этом
+    // обещал слежение: три места говорили «следящий», а уезжал фиксированный
+    // (аудит 18.09.2026). Раз обещание не выполнимо — до кнопки не пускаем.
+    if (!p.error && tpMode === 'trail' && (pos(tpOffset) || pos(tpPrice)) && !pos(tpTrail)) {
+      return { ...p, error: 'Следящий тейк: укажите откат от экстремума в пунктах.' };
+    }
     if (!p.error && goodTillMs && goodTillMs <= Date.now()) {
       return { ...p, error: 'Срок «действует до» уже прошёл.' };
     }
@@ -134,7 +146,11 @@
   // Ценовая рейка: где сейчас цена, где сработает и сколько между ними.
   const rail = $derived.by(() => {
     const t = parseFloat(trigger) || 0;
-    if (kind === 'on_fill' || !(price > 0) || !(t > 0)) return null;
+    // Уровень рисуем только там, где поле уровня есть. Остаток trigger от
+    // прошлого типа рисовал «сработает 83 000» под Подтягивающей, у которой
+    // уровня активации нет вовсе (аудит 18.09.2026).
+    if (!meta.fields.some((f) => f.key === 'trigger_price')) return null;
+    if (!(price > 0) || !(t > 0)) return null;
     const lo = Math.min(price, t), hi = Math.max(price, t);
     const pad = Math.max((hi - lo) * 0.45, hi * 0.0004);
     const top = hi + pad, bot = lo - pad;
@@ -145,9 +161,14 @@
 
   async function loadTick() {
     if (!code) { tick = null; return; }
+    // Инструмент могли сменить, пока запрос летел: ответ по ПРЕЖНЕМУ коду писать
+    // нельзя — экран показал бы чужую котировку под новым инструментом, а рубли
+    // считались бы из цены одного и коэффициента другого (аудит 18.09.2026).
+    const asked = code;
     try {
-      const r = await fetchWithAuth(`/api/v1/quik/tick/${encodeURIComponent(code)}`);
-      tick = r.ok ? await r.json() : null;
+      const r = await fetchWithAuth(`/api/v1/quik/tick/${encodeURIComponent(asked)}`);
+      const t = r.ok ? await r.json() : null;
+      if (asked === code) tick = t;
     } catch { /* следующий тик перезапросит */ }
   }
 
@@ -196,22 +217,26 @@
 
   async function arm() {
     msg = '';
+    // ОТПРАВЛЯЕМ ТОЛЬКО ПОЛЯ СВОЕГО ТИПА. Состояние формы переживает смену типа,
+    // и остатки уезжали молча: набранный в Следящей отступ возвращался с 422 на
+    // Условной, где поля «отступ» нет вовсе, а блоки после сделки у
+    // Подтягивающей движок отвергает целиком (smart_orders.py:135). Раньше
+    // обнулялся один trigger_price — теперь гасим всё, чего нет в meta.fields.
+    const mine = new Set(meta.fields.map((f) => f.key));
+    const only = (key: string, v: number) => (mine.has(key) ? v : 0);
     const body = {
       kind, code, side, qty: Math.floor(qty),
-      // У подтягивающей уровня активации НЕТ: движок вернёт 422, если его
-      // прислать. Поля в форме тоже нет, но страховка нужна на случай
-      // перевзвода из истории, где trigger_price мог остаться от другого типа.
-      trigger_price: kind === 'trail_sl' ? 0 : parseFloat(trigger) || 0,
-      trail_offset: parseFloat(trailOffset) || 0,
-      sl_offset: afterMode === 'sl' ? parseFloat(slOffset) || 0 : 0,
-      sl_price: afterMode === 'sl' ? parseFloat(slPrice) || 0 : 0,
-      tp_offset: parseFloat(tpOffset) || 0,
-      tp_price: parseFloat(tpPrice) || 0,
-      tp_trail: tpMode === 'trail' ? parseFloat(tpTrail) || 0 : 0,
-      trail_after: afterMode === 'trail' ? parseFloat(trailAfter) || 0 : 0,
-      watch_client_id: watchId.trim(),
-      child_price: parseFloat(childPrice) || 0,
-      oco_group: ocoGroup.trim(),
+      trigger_price: only('trigger_price', num(trigger)),
+      trail_offset: only('trail_offset', num(trailOffset)),
+      sl_offset: only('sl_offset', afterMode === 'sl' ? num(slOffset) : 0),
+      sl_price: only('sl_offset', afterMode === 'sl' ? num(slPrice) : 0),
+      tp_offset: only('tp_offset', num(tpOffset)),
+      tp_price: only('tp_offset', num(tpPrice)),
+      tp_trail: only('tp_offset', tpMode === 'trail' ? num(tpTrail) : 0),
+      trail_after: only('trail_after', afterMode === 'trail' ? num(trailAfter) : 0),
+      watch_client_id: mine.has('watch_client_id') ? tr(watchId) : '',
+      child_price: only('child_price', num(childPrice)),
+      oco_group: tr(ocoGroup),
       good_till_ms: goodTillMs,
     };
     try {
@@ -282,7 +307,10 @@
 
   $effect(() => { if (code) { loadTick(); loadPointValue(); } });
   // Смена стороны/типа меняет смысл введённого уровня — подтверждение сбрасываем.
-  $effect(() => { void kind; void side; void trigger; void qty; confirming = false; });
+  $effect(() => {
+    void kind; void side; void trigger; void qty; void code; void afterMode; void tpMode;
+    confirming = false;
+  });
 
   // Инструмент по умолчанию — САМЫЙ ИСПОЛЬЗУЕМЫЙ из книги (правило оператора).
   // Ставим в эффекте, а не в onMount: книга и фид приезжают асинхронно, и на
@@ -450,6 +478,7 @@
       <!-- ГРУППА 3: что встанет ПОСЛЕ сделки. Защита — ОДИН из двух
            защитников, не оба: два стопа на одной позиции не удваивают защиту,
            сработает ближний, а дальний откроет обратную позицию. -->
+      {#if afterFields.length}
       <div class="so-group">
         <div class="so-g-h">Что встанет после сделки</div>
         <!-- Переключатель называет ВИД СТОПА, а не «стоп или что-то другое»:
@@ -476,14 +505,14 @@
                   <b>в пунктах<button type="button" class="so-q" title={HELP.slPts} aria-label={HELP.slPts}>?</button></b>
                   <div class="so-unit-wrap">
                     <input class="so-in pts" type="number" step="any" min="0" bind:value={slOffset}
-                           disabled={afterMode !== 'sl' || !!tr(slPrice)} placeholder="0 — без стопа" />
+                           disabled={afterMode !== 'sl' || pos(slPrice)} placeholder="0 — без стопа" />
                     <span class="so-unit">п.</span>
                   </div>
                 </div>
                 <div class="so-col">
                   <b>ценой<button type="button" class="so-q" title={HELP.slPrice} aria-label={HELP.slPrice}>?</button></b>
                   <input class="so-in" type="number" step="any" min="0" bind:value={slPrice}
-                         disabled={afterMode !== 'sl' || !!tr(slOffset)} placeholder="уровень" />
+                         disabled={afterMode !== 'sl' || pos(slOffset)} placeholder="уровень" />
                 </div>
               </div>
               {#if levelPreview.sl}<em class="so-calc">{levelPreview.sl}</em>{/if}
@@ -517,7 +546,7 @@
                       aria-label={tpMode === 'trail' ? HELP.tpPtsTrail : HELP.tpPts}>?</button></b>
                   <div class="so-unit-wrap">
                     <input class="so-in pts" type="number" step="any" min="0" bind:value={tpOffset}
-                           disabled={!!tr(tpPrice)}
+                           disabled={pos(tpPrice)}
                            placeholder={tpMode === 'trail' ? 'активация от входа' : '0 — без тейка'} />
                     <span class="so-unit">п.</span>
                   </div>
@@ -527,7 +556,7 @@
                       title={tpMode === 'trail' ? HELP.tpPriceTrail : HELP.tpPrice}
                       aria-label={tpMode === 'trail' ? HELP.tpPriceTrail : HELP.tpPrice}>?</button></b>
                   <input class="so-in" type="number" step="any" min="0" bind:value={tpPrice}
-                         disabled={!!tr(tpOffset)} placeholder="уровень" />
+                         disabled={pos(tpOffset)} placeholder="уровень" />
                 </div>
               </div>
               {#if tpMode === 'trail'}
@@ -552,6 +581,7 @@
         </div>
         <p class="so-pair">{pairLine}</p>
       </div>
+      {/if}
 
       {#if rail}
         <!-- Ценовая рейка: расстояние до срабатывания видно глазом, а не текстом. -->
@@ -564,7 +594,7 @@
             <line class="trg" x1="14" y1={rail.yTrig} x2="86" y2={rail.yTrig} />
             <text class="trgt" x="92" y={rail.yTrig + 4}>сработает {rail.trig.toLocaleString('ru-RU')}</text>
             <text class="gapt" x="30" y={(rail.yPrice + rail.yTrig) / 2 + 4}>
-              {fmtPts(rail.gap)}{pointValue ? ' · ' + fmtRub(rail.gap * pointValue * Math.max(1, qty)) : ''}
+              {fmtPts(rail.gap)}{pointValue && qty > 0 ? ' · ' + fmtRub(rail.gap * pointValue * qty) : ''}
             </text>
           </svg>
         </div>
