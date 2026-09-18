@@ -495,10 +495,15 @@ export function codeSuggestions(orders: Array<{ code?: string }>, feedCodes: str
   }
   // Из истории берём только то, что торгуется сейчас: истёкший контракт в списке
   // выглядит как обычный выбор (18.09.2026 оператор так и взвёл заявку на RIU6).
+  // ФИД - ЕДИНСТВЕННЫЙ ИСТОЧНИК «контракт существует». Фида нет - подсказок нет:
+  // прежде в этом случае показывалась история, и в списке снова всплывал истёкший
+  // RIU6 (оператор 18.09.2026). Мёртвый контракт в списке выглядит как обычный
+  // выбор, и заявка на него ждёт цену, которой больше нет.
   const live = new Set((feedCodes || []).filter(Boolean));
+  if (!live.size) return [];
   const frequent = [...freq.entries()].sort((a, b) => b[1] - a[1]).map(([c]) => c)
-    .filter((c) => !live.size || live.has(c));
-  return [...frequent, ...feedCodes.filter((c) => c && !frequent.includes(c)).sort()];
+    .filter((c) => live.has(c));
+  return [...frequent, ...[...live].filter((c) => !frequent.includes(c)).sort()];
 }
 
 /** Инструмент, подставляемый в форму при открытии.
@@ -520,16 +525,20 @@ export function defaultCode(
   // ТОЛЬКО инструменты, которые агент реально отдаёт сейчас. История заявок живёт
   // дольше контракта: 18.09.2026 самым частым кодом в ней был истёкший RIU6, форма
   // подставила его, и заявка на 10 контрактов ждала цену, которой больше нет.
+  // Фида нет - НЕ ПОДСТАВЛЯЕМ НИЧЕГО. Пустое поле честнее истёкшего контракта:
+  // 18.09.2026 фид молчал, форма достала из истории RIU6, и оператор увидел на
+  // экране мёртвый контракт как ни в чём не бывало.
+  if (!feed.length) return '';
   const live = new Set(feed);
   const freq = new Map<string, number>();
   for (const o of orders || []) {
-    if (o.code && (!live.size || live.has(o.code))) freq.set(o.code, (freq.get(o.code) || 0) + 1);
+    if (o.code && live.has(o.code)) freq.set(o.code, (freq.get(o.code) || 0) + 1);
   }
   if (freq.size) {
     return [...freq.entries()].sort((a, b) => b[1] - a[1])[0][0];
   }
   const screen = (screenSymbol || '').split('@')[0];
-  if (screen && (!feed.length || feed.includes(screen))) return screen;
+  if (screen && feed.includes(screen)) return screen;
   return feed[0] || '';
 }
 

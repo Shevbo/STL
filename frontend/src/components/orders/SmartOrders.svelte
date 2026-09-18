@@ -422,7 +422,8 @@
           <div class="so-code" onfocusout={(e) => {
                  if (!e.currentTarget.contains(e.relatedTarget as Node)) codeOpen = false;
                }}>
-            <input class="so-in" bind:value={code} placeholder="RIU6" spellcheck="false"
+            <input class="so-in" bind:value={code}
+                   placeholder={codeOptions[0] || 'ждём список от агента'} spellcheck="false"
                    aria-label="Инструмент"
                    autocomplete="off" oninput={() => { codeTouched = true; codeOpen = true; }}
                    onfocus={() => codeOpen = true}
@@ -439,6 +440,11 @@
               </ul>
             {/if}
           </div>
+          {#if !codeOptions.length}
+            <em>агент не прислал список инструментов — подставлять нечего. Истёкший
+              контракт из истории заявок здесь не предлагаем: заявка на него ждала бы
+              цену, которой больше нет</em>
+          {/if}
         </div>
         <div class="so-f">
           <span>Контрактов</span>

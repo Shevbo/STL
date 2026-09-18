@@ -128,8 +128,10 @@ describe('codeSuggestions', () => {
     expect(codeSuggestions(orders, ['SiU6', 'BRU6', 'GDU6'])).toEqual(
       ['BRU6', 'GDU6', 'SiU6'],
     );
-    // Пока фид не приехал, список подсказок остаётся прежним.
-    expect(codeSuggestions(orders, [])).toEqual(['RIU6', 'GZU6', 'BRU6']);
+    // Фида нет — подсказок нет. Прежде показывалась история, и в списке снова
+    // всплывал истёкший RIU6 (оператор 18.09.2026: «в перечне контрактов не
+    // должно быть несуществующих»).
+    expect(codeSuggestions(orders, [])).toEqual([]);
   });
   it('empty book falls back to feed codes', async () => {
     const { codeSuggestions } = await import('./smart-order-help');
@@ -584,8 +586,8 @@ describe('инструмент по умолчанию: только живой 
     expect(defaultCode(h, ['RIZ6', 'GZZ6'])).toBe('GZZ6');
   });
 
-  it('фида ещё нет — история всё же лучше пустого поля', () => {
-    expect(defaultCode(history, [])).toBe('RIU6');
+  it('фида ещё нет — поле остаётся ПУСТЫМ, истёкший контракт не подставляем', () => {
+    expect(defaultCode(history, [])).toBe('');
   });
 
   it('истории нет — берём символ экрана, если он торгуется', () => {
