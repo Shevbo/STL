@@ -12,7 +12,7 @@
   import {
     KINDS, KIND_BY_ID, COMMON_FACTS, STATUS_RU, afterFillPreview, codeSuggestions, conditionText,
     defaultCode, isLive, keyPrice,
-    closingSide, fmtWhen, fmtPts, fmtRub, manualPositions, ocoFact, preview,
+    closingSide, fmtWhen, fmtPts, fmtRub, manualPositions, ocoFact, preview, protectionPair,
     shortCodes, sortBySideAndPrice, tillFact, type Kind, type OpenPos, type Side,
   } from '$lib/smart-order-help';
 
@@ -85,6 +85,12 @@
   // Что получится при текущей цене: ошибку «цена в поле пунктов» видно ДО отправки.
   const levelPreview = $derived(afterFillPreview({
     side, price, slOffset, slPrice, tpOffset, tpPrice, tpMode, afterMode,
+  }));
+  // Пара защитников словами: стоп и тейк независимы, и это должно быть видно.
+  const pairLine = $derived(protectionPair({
+    afterMode, tpMode,
+    hasStop: afterMode === 'sl' ? !!(tr(slOffset) || tr(slPrice)) : !!tr(trailAfter),
+    hasTake: !!(tr(tpOffset) || tr(tpPrice)),
   }));
   // Живые — сторож STL (armed) И заявки под охраной терминала (native): последние
   // переживают падение STL, и в истории им не место (real-trade 17.09).
@@ -441,15 +447,19 @@
            сработает ближний, а дальний откроет обратную позицию. -->
       <div class="so-group">
         <div class="so-g-h">Что встанет после сделки</div>
+        <!-- Переключатель называет ВИД СТОПА, а не «стоп или что-то другое»:
+             прежние «Стоп | Подтягивающая» читались как выбор между защитой и
+             её отсутствием, и оператор не нашёл «стоп фиксированный + тейк
+             следящий», хотя связка законна (18.09.2026). -->
         <div class="so-f so-after">
-          <span>Защита</span>
-          <div class="so-seg" role="group" aria-label="Защита после сделки">
+          <span>Стоп — какой</span>
+          <div class="so-seg" role="group" aria-label="Вид стопа после сделки">
             <button type="button" class:on={afterMode === 'sl'}
-                    onclick={() => afterMode = 'sl'}>Стоп</button>
+                    onclick={() => afterMode = 'sl'}>Фиксированный</button>
             <button type="button" class:on={afterMode === 'trail'}
-                    onclick={() => afterMode = 'trail'}>Подтягивающая</button>
+                    onclick={() => afterMode = 'trail'}>Подтягивающийся</button>
           </div>
-          <em>вместе они запрещены: сработает ближний, дальний откроет обратную позицию. Тейк сочетается с любым</em>
+          <em>два стопа сразу запрещены: сработает ближний, дальний откроет обратную позицию. Тейк — отдельная нога, он сочетается с любым стопом</em>
         </div>
         <div class="so-fields">
         {#each afterFields as f}
@@ -535,6 +545,7 @@
           </div>
         {/each}
         </div>
+        <p class="so-pair">{pairLine}</p>
       </div>
 
       {#if rail}
@@ -858,6 +869,9 @@
   .so-col > b { font: 600 10px/1.4 system-ui, sans-serif; color: #8a90a8;
     letter-spacing: .08em; text-transform: uppercase; display: flex; align-items: center; gap: 4px; }
   .so-calc { font-size: 10px; color: #7f86a6; font-style: normal; margin-top: 2px; }
+  /* Итог группы: какая пара ног получилась и куда она уедет. */
+  .so-pair { margin: 14px 0 0; padding-top: 10px; border-top: 1px solid #23233f;
+    font-size: 11px; line-height: 1.5; color: #9aa1c0; }
   /* Значок подсказки: курсор мыши на нём — всплывает объяснение поля. */
   /* Единица прямо В ПОЛЕ: «п.» видно без наведения на «?». Поля ЦЕНЫ суффикса не
      получают — именно смешение цены и пунктов 18.09 оставило позицию без тейка. */

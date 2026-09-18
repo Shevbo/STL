@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { KIND_BY_ID, afterFillPreview, defaultCode, closingSide, conditionText, manualPositions, preview, shortCodes, smartLegend, smartLevels,
+import { KIND_BY_ID, afterFillPreview, defaultCode, closingSide, conditionText, manualPositions, preview, protectionPair, shortCodes, smartLegend, smartLevels,
          type Kind, type Side } from './smart-order-help';
 
 const base = {
@@ -608,5 +608,29 @@ describe('форма умных заявок: кнопки не живут вн�
 
   it('переключатели различимы: у выбранного положения свой фон, а не соседний тон', () => {
     expect(src).toMatch(/\.so-seg button\.on\s*\{[^}]*box-shadow/);
+  });
+});
+
+// Оператор 18.09: «стоп может быть фиксированным, а тейк следящим — у тебя на
+// форме нет этой опции». Связка законна (native_protect.py: стоп + любой тейк =
+// одна запись TAKE_PROFIT_AND_STOP_LIMIT_ORDER), не читалась только подпись.
+describe('пара защитников после сделки называется вслух', () => {
+  const pp = (o: Partial<Parameters<typeof protectionPair>[0]>) =>
+    protectionPair({ afterMode: 'sl', tpMode: 'fixed', hasStop: true, hasTake: true, ...o });
+
+  it('фиксированный стоп и следящий тейк — законная пара, обе ноги названы', () => {
+    const s = pp({ tpMode: 'trail' });
+    expect(s).toContain('фиксированный стоп + следящий тейк');
+    expect(s).toContain('две ноги');
+  });
+
+  it('подтягивающийся стоп у QUIK невыразим и остаётся сторожу STL', () => {
+    expect(pp({ afterMode: 'trail' })).toContain('остаётся сторожу STL');
+  });
+
+  it('одна нога — это одна нога, а пустая защита названа пустой', () => {
+    expect(pp({ hasStop: false, tpMode: 'trail' })).toMatch(/^следящий тейк\./);
+    expect(pp({ hasTake: false })).toMatch(/^фиксированный стоп\./);
+    expect(pp({ hasStop: false, hasTake: false })).toContain('Защиты после сделки нет');
   });
 });

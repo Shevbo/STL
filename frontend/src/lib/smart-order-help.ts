@@ -795,3 +795,31 @@ export function afterFillPreview(o: {
   else if (tpts && o.price) out.tp = `${at}${what} ${(long ? o.price + tpts : o.price - tpts).toLocaleString('ru-RU')}`;
   return out;
 }
+
+/** Какая ПАРА защитников получится после сделки и чем её выразит терминал.
+ *
+ *  Стоп и тейк — две НЕЗАВИСИМЫЕ ноги: стоп бывает фиксированным или
+ *  подтягивающимся, тейк — фиксированным или следящим, и любая комбинация
+ *  законна. Оператор этого на форме не видел и решил, что «стоп фиксированный
+ *  + тейк следящий» не предусмотрен (18.09.2026), — теперь пара названа вслух.
+ *  Факты о терминале сверены с trader/quik/native_protect.py.
+ */
+export function protectionPair(o: {
+  afterMode: 'sl' | 'trail'; tpMode: 'fixed' | 'trail';
+  hasStop: boolean; hasTake: boolean;
+}): string {
+  const stop = !o.hasStop ? ''
+    : o.afterMode === 'trail' ? 'подтягивающийся стоп' : 'фиксированный стоп';
+  const take = !o.hasTake ? '' : o.tpMode === 'trail' ? 'следящий тейк' : 'фиксированный тейк';
+  if (!stop && !take) return 'Защиты после сделки нет: позиция останется без стопа и без тейка.';
+  const pair = [stop, take].filter(Boolean).join(' + ');
+  // Подтягивающая — единственный вид, которого у QUIK нет: он остаётся сторожу STL
+  // и вместе с ним переживёт падение STL только наполовину.
+  if (o.afterMode === 'trail' && stop) {
+    return take
+      ? `${pair}. Подтягивающийся стоп QUIK не умеет — он остаётся сторожу STL, тейк уходит под охрану терминала.`
+      : `${pair}. QUIK такого вида не умеет — стоп остаётся сторожу STL и умрёт вместе с ним.`;
+  }
+  if (stop && take) return `${pair}. Одна нативная запись QUIK, две ноги: сработал один — второй снимется.`;
+  return `${pair}. Уйдёт под охрану терминала и переживёт падение STL.`;
+}
