@@ -471,6 +471,30 @@ export function codeSuggestions(orders: Array<{ code?: string }>, feedCodes: str
   return [...frequent, ...feedCodes.filter((c) => c && !freq.has(c)).sort()];
 }
 
+/** Инструмент, подставляемый в форму при открытии.
+ *
+ *  Правило оператора: САМЫЙ ИСПОЛЬЗУЕМЫЙ из книги умных заявок. До 18.09.2026
+ *  форма ставила символ главного экрана, и оператор получал в поле GDU6 просто
+ *  потому, что на графике был газ. Книга приходит асинхронно, поэтому запасные
+ *  варианты по убыванию осмысленности: частый из книги -> символ экрана (если он
+ *  есть в фиде) -> первый код фида -> пусто.
+ */
+export function defaultCode(
+  orders: Array<{ code?: string }> | null | undefined,
+  feedCodes: string[] | null | undefined,
+  screenSymbol = '',
+): string {
+  const freq = new Map<string, number>();
+  for (const o of orders || []) if (o.code) freq.set(o.code, (freq.get(o.code) || 0) + 1);
+  if (freq.size) {
+    return [...freq.entries()].sort((a, b) => b[1] - a[1])[0][0];
+  }
+  const feed = (feedCodes || []).filter(Boolean);
+  const screen = (screenSymbol || '').split('@')[0];
+  if (screen && (!feed.length || feed.includes(screen))) return screen;
+  return feed[0] || '';
+}
+
 /** Ценовые линии умной заявки на графике: что рисуем и как подписываем.
  *
  *  Жила внутри ChartFrame, но линии нужны И большому графику, И мини-графикам

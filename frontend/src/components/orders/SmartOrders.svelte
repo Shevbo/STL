@@ -10,7 +10,8 @@
   import { smartOrdersStore, type SmartOrder } from '$lib/stores/smart-orders.svelte';
   import SmartOrderSchematic from './SmartOrderSchematic.svelte';
   import {
-    KINDS, KIND_BY_ID, COMMON_FACTS, STATUS_RU, codeSuggestions, conditionText, isLive, keyPrice,
+    KINDS, KIND_BY_ID, COMMON_FACTS, STATUS_RU, codeSuggestions, conditionText, defaultCode,
+    isLive, keyPrice,
     closingSide, fmtWhen, fmtPts, fmtRub, manualPositions, ocoFact, preview,
     shortCodes, sortBySideAndPrice, tillFact, type Kind, type OpenPos, type Side,
   } from '$lib/smart-order-help';
@@ -21,6 +22,9 @@
   let side = $state<Side>('sell');
   let qty = $state(1);
   let code = $state('');
+  // Оператор выбрал инструмент руками — больше не подставляем ничего сами.
+  let codeTouched = $state(false);
+  let codeOpen = $state(false);
   let trigger = $state('');
   let trailOffset = $state('');
   let slOffset = $state('');          // защитный стоп после входа, пункты (0 = без стопа)
@@ -228,8 +232,16 @@
   // Смена стороны/типа меняет смысл введённого уровня — подтверждение сбрасываем.
   $effect(() => { void kind; void side; void trigger; void qty; confirming = false; });
 
+  // Инструмент по умолчанию — САМЫЙ ИСПОЛЬЗУЕМЫЙ из книги (правило оператора).
+  // Ставим в эффекте, а не в onMount: книга и фид приезжают асинхронно, и на
+  // монтировании их ещё нет — до 18.09 из-за этого в поле попадал символ графика.
+  $effect(() => {
+    if (codeTouched || code) return;
+    const d = defaultCode(orders, feedCodes, symbol);
+    if (d) code = d;
+  });
+
   onMount(() => {
-    code = (symbol || '').split('@')[0];
     unsub = smartOrdersStore.subscribe(2000);
     timers = [setInterval(loadTick, 2000), setInterval(loadPositions, 5000)];
     loadPointValue();   // и без выбранного кода: наполняет подсказки инструментов
@@ -308,12 +320,28 @@
       <div class="so-fields">
         <label class="so-f">
           <span>Инструмент</span>
-          <input class="so-in" bind:value={code} placeholder="RIU6" spellcheck="false"
-                 list="so-code-list" autocomplete="off" />
-          <!-- datalist: подсказки по частоте использования, ручной ввод не отменяет -->
-          <datalist id="so-code-list">
-            {#each codeOptions as c (c)}<option value={c}></option>{/each}
-          </datalist>
+          <!-- Свой список, а не datalist: браузерный фильтрует подсказки по уже
+               введённому значению, и с заполненным полем оператор видел ровно одну
+               строку — «список перестал работать» (18.09.2026). Ручной ввод остаётся. -->
+          <div class="so-code" onfocusout={(e) => {
+                 if (!e.currentTarget.contains(e.relatedTarget as Node)) codeOpen = false;
+               }}>
+            <input class="so-in" bind:value={code} placeholder="RIU6" spellcheck="false"
+                   autocomplete="off" oninput={() => { codeTouched = true; codeOpen = true; }}
+                   onfocus={() => codeOpen = true}
+                   onkeydown={(e) => { if (e.key === 'Escape') codeOpen = false; }} />
+            <button type="button" class="so-code-btn" tabindex="-1"
+                    title="частые инструменты: сверху те, которыми торгуете чаще"
+                    onclick={() => codeOpen = !codeOpen}>▾</button>
+            {#if codeOpen && codeOptions.length}
+              <ul class="so-code-list">
+                {#each codeOptions.slice(0, 12) as c (c)}
+                  <li><button type="button" class:on={c === code}
+                              onclick={() => { code = c; codeTouched = true; codeOpen = false; }}>{c}</button></li>
+                {/each}
+              </ul>
+            {/if}
+          </div>
         </label>
         <label class="so-f">
           <span>Контрактов</span>
@@ -622,6 +650,22 @@
     padding: 5px 8px; width: 100%;
   }
   .so-in.text { font-size: 13px; }
+  /* Свой выпадающий список инструментов: показывает ВСЕ коды, а не подходящие
+     под введённое, и порядок в нём — по частоте использования. */
+  .so-code { position: relative; }
+  .so-code .so-in { padding-right: 26px; }
+  .so-code-btn { position: absolute; right: 1px; top: 1px; bottom: 1px; width: 24px;
+    background: #14142a; border: 0; border-left: 1px solid #2d2d4a; color: #8a90a8;
+    cursor: pointer; font-size: 12px; }
+  .so-code-btn:hover { color: #e8e8f0; }
+  .so-code-list { position: absolute; z-index: 20; left: 0; right: 0; top: calc(100% + 2px);
+    margin: 0; padding: 2px; list-style: none; max-height: 220px; overflow: auto;
+    background: #0e0e1e; border: 1px solid #2d2d4a; }
+  .so-code-list button { display: block; width: 100%; text-align: left; background: none;
+    border: 0; color: #d7dae8; cursor: pointer; padding: 5px 8px;
+    font: 14px/1 Consolas, monospace; }
+  .so-code-list button:hover { background: #1b1b34; color: #fff; }
+  .so-code-list button.on { color: #7ef0a6; }
   .so-in:focus { outline: none; border-color: #4a4a7a; background: #12122a; }
 
   /* ценовая рейка */

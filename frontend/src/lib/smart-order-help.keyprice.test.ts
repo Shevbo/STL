@@ -2,7 +2,7 @@
 // типов разная, и подпись обязана говорить, что это за цена; нет числа — пусто,
 // а не придуманный ноль.
 import { describe, it, expect } from 'vitest';
-import { STATUS_RU, isLive, keyPrice, sortBySideAndPrice } from './smart-order-help';
+import { STATUS_RU, defaultCode, isLive, keyPrice, sortBySideAndPrice } from './smart-order-help';
 
 describe('keyPrice', () => {
   it('следящая до пробоя: уровень активации', () => {
@@ -103,5 +103,29 @@ describe('статус native — защита под охраной терми�
       { side: 'sell', kind: 'sl', status: 'native', trigger_price: 91000 },
     ];
     expect(sortBySideAndPrice(list).map((x) => x.status)).toEqual(['native', 'armed']);
+  });
+});
+
+
+describe('инструмент по умолчанию в форме', () => {
+  const book = [{ code: 'RIZ6' }, { code: 'RIZ6' }, { code: 'RIZ6' }, { code: 'BRZ6' }];
+  const feed = ['BRZ6', 'GDU6', 'RIZ6', 'SiZ6'];
+
+  it('самый используемый из книги, а не символ с графика', () => {
+    // 18.09.2026: форма подставляла GDU6 только потому, что на графике был газ.
+    expect(defaultCode(book, feed, 'GDU6@RTSX')).toBe('RIZ6');
+  });
+
+  it('книга пуста — берём символ экрана, если такой код торгуется', () => {
+    expect(defaultCode([], feed, 'GDU6@RTSX')).toBe('GDU6');
+  });
+
+  it('символа экрана нет в фиде — первый код фида, а не выдуманный', () => {
+    expect(defaultCode([], feed, 'XXZ9@RTSX')).toBe('BRZ6');
+  });
+
+  it('нет ни книги, ни фида — пусто, оператор введёт сам', () => {
+    expect(defaultCode([], [], '')).toBe('');
+    expect(defaultCode(null, null, '')).toBe('');
   });
 });
