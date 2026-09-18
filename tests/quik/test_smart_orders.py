@@ -505,3 +505,17 @@ def test_rebase_moves_trailing_take_only_before_activation():
     assert rebase_protective([tp], parent, 86990) is True and tp.trigger_price == 87490
     tp.activated = True
     assert rebase_protective([tp], parent, 86980) is False and tp.trigger_price == 87490
+
+
+def test_price_typed_into_a_points_field_is_rejected():
+    # 18.09.2026: уровень 84700 в поле активации тейка при входе 83510 дал
+    # активацию 168210 — позиция осталась без тейка.
+    err = so(kind="trail_tp", side="buy", trail_offset=50, trigger_price=83490,
+             tp_offset=84700, tp_trail=70).validate()
+    assert err and "похоже на ЦЕНУ" in err
+    # Настоящие пункты проходят, в том числе когда уровня активации нет и цену
+    # подсказывает рынок.
+    assert so(kind="trail_tp", side="buy", trail_offset=50, trigger_price=83490,
+              tp_offset=700, tp_trail=70).validate() is None
+    assert so(kind="trail_sl", side="sell", trail_offset=50).validate(reference_price=83490) is None
+    assert so(kind="trail_sl", side="sell", trail_offset=83000).validate(reference_price=83490)

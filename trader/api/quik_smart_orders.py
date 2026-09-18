@@ -88,7 +88,10 @@ async def create(body: SmartOrderBody, request: Request):
         oco_group=body.oco_group, good_till_ms=int(body.good_till_ms),
         note=body.note, created_ms=so_mod.now_ms(),
     )
-    err = so.validate()
+    # Рыночная цена инструмента даёт валидации точку отсчёта: без неё ЦЕНУ,
+    # введённую в поле пунктов, не отличить от больших пунктов (заявка без уровня
+    # активации собственного trigger_price не имеет).
+    err = so.validate(_market_price(request, so.code))
     if err:
         raise HTTPException(status_code=422, detail=err)
     # Отклоняем заведомо невыполнимую заявку ПРИ ВЗВЕДЕНИИ, а не в момент
@@ -209,6 +212,18 @@ async def activate_order(so_id: str, body: dict, request: Request):
 
 
 # ---- watcher ----
+
+def _market_price(request: Request, code: str) -> float:
+    """Последняя цена инструмента из кадра агента, 0 если её нет."""
+    store = getattr(request.app.state, "quik_store", None)
+    if store is None:
+        return 0.0
+    try:
+        tick = store.tick(code, resolve_agent(store, None)) or {}
+        return float(tick.get("last") or 0)
+    except Exception:  # noqa: BLE001 - валидация не должна падать из-за отсутствия кадра
+        return 0.0
+
 
 def _price_steps(store: Any, agent: str) -> dict[str, float]:
     """code -> price_step from the QLua params feed (rows shape is the same the

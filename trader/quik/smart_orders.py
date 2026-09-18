@@ -100,8 +100,11 @@ class SmartOrder:
     fired_price: float = 0.0     # РЕАЛЬНАЯ средняя цена исполнения дочерней заявки
     fired_qty: int = 0           # сколько контрактов реально исполнилось
 
-    def validate(self) -> str | None:
-        """Returns a human error or None. Kept dumb and explicit."""
+    def validate(self, reference_price: float = 0.0) -> str | None:
+        """Returns a human error or None. Kept dumb and explicit.
+
+        reference_price - цена инструмента (рыночная или уровень заявки), если она
+        известна вызывающему: по ней ловится ЦЕНА, введённая в поле ПУНКТОВ."""
         if self.kind not in KINDS:
             return f"kind должен быть одним из {KINDS}"
         if self.side not in ("buy", "sell"):
@@ -125,6 +128,21 @@ class SmartOrder:
             # здесь значит после закрытия открыть новую позицию в обратную сторону.
             if self.sl_offset or self.tp_offset or self.trail_after or self.tp_trail:
                 return "подтягивающая закрывает позицию: блоки после сделки ей не ставятся"
+        # Цена в поле пунктов. 18.09.2026 оператор ввёл в «активацию» тейка уровень
+        # 84700; движок сложил его с входом 83510 и поставил активацию на 168210 -
+        # недостижимую. Позиция осталась с одним стопом и без тейка, и это было
+        # видно только в мелком тексте карточки. Блок после сделки - это РАССТОЯНИЕ
+        # от входа: половина цены инструмента заведомо не расстояние.
+        ref = reference_price or self.trigger_price
+        if ref > 0:
+            for what, value in (("защитный стоп", self.sl_offset), ("тейк", self.tp_offset),
+                                ("подтягивающая", self.trail_after),
+                                ("откат следящего тейка", self.tp_trail),
+                                ("откат", self.trail_offset)):
+                if value and value >= ref * _PRICE_IN_POINTS_FRAC:
+                    return (f"{what}: {value:g} похоже на ЦЕНУ, а не на пункты. "
+                            f"Здесь задаётся расстояние от входа в пунктах "
+                            f"(цена инструмента около {ref:g})")
         if self.kind == "on_fill" and not self.watch_client_id:
             return "watch_client_id обязателен для on_fill"
         if self.sl_offset < 0 or self.tp_offset < 0 or self.trail_after < 0 or self.tp_trail < 0:
@@ -445,6 +463,12 @@ class SmartOrderBook:
 
     def codes(self) -> set[str]:
         return {o.code for o in self.active()}
+
+
+# Доля цены инструмента, с которой «пункты» перестают быть похожими на пункты.
+# Половина: реальный блок после сделки - это сотни пунктов при цене в десятки тысяч,
+# а ошибочно введённая цена всегда около самой цены.
+_PRICE_IN_POINTS_FRAC = 0.5
 
 
 def new_id() -> str:
