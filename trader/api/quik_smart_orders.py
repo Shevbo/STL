@@ -182,7 +182,7 @@ def _kill_native(request: Request, so: SmartOrder) -> None:
         if c.parent_id == so.parent_id and c.status == "native" and c is not so:
             c.status = "cancelled"
             c.note = (c.note + " " if c.note else "") + "снята вместе со связкой в терминале"
-    parent = book.get(so.parent_id)
+    parent = book.get(so.parent_id) if so.parent_id else so
     if parent is not None:
         parent.native_state = "done"
     log.info("smart_order.native_killed", so_id=so.so_id, stop_num=holder.native_stop_num)
@@ -344,6 +344,52 @@ def _handover_to_terminal(book: SmartOrderBook, steps: dict[str, float], ost: An
     return dirty
 
 
+def _open_positions(store: Any, agent: str) -> dict[str, int]:
+    """Открытые позиции счёта: инструмент -> нетто (знак = сторона)."""
+    status = (store.agent_status(agent) if store is not None else None) or {}
+    out: dict[str, int] = {}
+    for p in ((status.get("health") or {}).get("positions") or []):
+        try:
+            code, net = str(p.get("sec") or ""), int(p.get("net") or 0)
+        except (TypeError, ValueError):
+            continue
+        if code and net:
+            out[code] = net
+    return out
+
+
+def _handover_standalone(book: SmartOrderBook, steps: dict[str, float], store: Any,
+                         ost: Any, srv: Any, agent: str, now: int) -> bool:
+    """Отдать терминалу одиночный стоп или тейк, которым оператор закрыл позицию.
+
+    Такая заявка живёт в книге сама по себе (родителя нет), и до 18.09 её вёл
+    только сторож STL: падение STL оставляло позицию без защиты.
+    """
+    dirty = False
+    positions = _open_positions(store, agent)
+    for so in book.orders:
+        if so.status != "armed" or so.parent_id or so.native_state:
+            continue
+        plan = native_protect.build_native_standalone(
+            so, steps.get(so.code, 0.0), positions.get(so.code, 0))
+        if plan is None:
+            continue
+        try:
+            srv.enqueue_order(agent, order_msgs.build_place_stop_order(
+                client_id=f"so:{so.so_id}", code=so.code, side=plan["side"],
+                quantity=plan["quantity"], fields=plan["fields"]))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("smart_order.native_send_failed", so_id=so.so_id, error=str(exc))
+            continue
+        ost.record_placement(agent)
+        so.native_state, so.native_ms, so.status = "sent", now, "native"
+        so.note = (so.note + " " if so.note else "") + "под охраной терминала"
+        dirty = True
+        log.info("smart_order.native_sent_standalone", so_id=so.so_id, kind=so.kind,
+                 code=so.code, side=so.side, qty=so.qty, fields=plan["fields"])
+    return dirty
+
+
 def _native_holder(book: SmartOrderBook, parent: SmartOrder) -> SmartOrder | None:
     return next((c for c in book.orders
                  if c.parent_id == parent.so_id and c.status in ("native", "fired", "cancelled")
@@ -361,8 +407,12 @@ def _track_native(book: SmartOrderBook, store: Any, agent: str, now: int) -> lis
     rows = _stop_rows_by_tag(store, agent)
     failed: list[SmartOrder] = []
     for parent in watched:
-        kids = [c for c in book.orders if c.parent_id == parent.so_id]
-        holder = next((c for c in kids if c.status == "native"), None)
+        if not parent.parent_id and parent.status in ("native", "armed") and not any(
+                c.parent_id == parent.so_id for c in book.orders):
+            kids, holder = [parent], parent   # одиночная заявка: сама себе держатель
+        else:
+            kids = [c for c in book.orders if c.parent_id == parent.so_id]
+            holder = next((c for c in kids if c.status == "native"), None)
         row = rows.get(holder.so_id) if holder is not None else None
         if row is None:
             if parent.native_state == "sent" and now - parent.native_ms > _NATIVE_CONFIRM_MS:
@@ -601,6 +651,9 @@ async def _watch_once(state: Any) -> None:
     # переживает падение STL. Порядок важен - сначала уточнённая цена входа
     # (_track_fills/_snap_entries_to_grid), потом передача от неё.
     dirty_meta = _handover_to_terminal(book, steps_all, ost, srv, agent, so_mod.now_ms()) or dirty_meta
+    # Одиночный стоп или тейк оператора на уже открытую позицию - туда же.
+    dirty_meta = _handover_standalone(book, steps_all, store, ost, srv, agent,
+                                      so_mod.now_ms()) or dirty_meta
     for parent in _track_native(book, store, agent, so_mod.now_ms()):
         dirty_meta = True
         await _alert_reject(srv, agent, parent,

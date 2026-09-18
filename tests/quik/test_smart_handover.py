@@ -104,3 +104,60 @@ def test_executed_in_the_terminal_closes_our_records(tmp_path):
                   "9618", NOW + 9000)
     assert parent.native_state == "done"
     assert {c.status for c in book.orders if c.parent_id == parent.so_id} == {"fired"}
+
+
+class FakeStoreWithPositions(FakeStore):
+    def __init__(self, rows=(), positions=()):
+        super().__init__(rows)
+        self.positions = list(positions)
+
+    def agent_status(self, agent=None):
+        return {"health": {"positions": self.positions}}
+
+
+def test_standalone_stop_is_handed_over_and_guards_itself(tmp_path):
+    from trader.api.quik_smart_orders import _handover_standalone
+    book = SmartOrderBook(str(tmp_path / "b.json"))
+    so = SmartOrder(so_id=new_id(), kind="sl", code="RIZ6", side="buy", qty=10,
+                    trigger_price=84510, status="armed", created_ms=NOW)
+    book.orders.append(so)
+    srv, ost = FakeSrv(), FakeOst()
+    store = FakeStoreWithPositions(positions=[{"sec": "RIZ6", "net": -13}])
+
+    assert _handover_standalone(book, STEPS, store, ost, srv, "9618", NOW) is True
+    assert so.status == "native" and so.native_state == "sent"
+    assert srv.sent[0].place_stop_order.fields["STOPPRICE"] == "84510"
+    # Второй проход не шлёт вторую транзакцию.
+    assert _handover_standalone(book, STEPS, store, ost, srv, "9618", NOW + 1000) is False
+
+    # Регистрация: заявка сама себе держатель, номер стоп-заявки пишется ей же.
+    rows = FakeStore([{"brokerref": f"stl-so-{so.so_id}", "order_num": "310471000", "flags": "29"}])
+    assert _track_native(book, rows, "9618", NOW + 3000) == []
+    assert so.native_state == "live" and so.native_stop_num == "310471000"
+
+
+def test_standalone_entry_order_stays_in_stl(tmp_path):
+    from trader.api.quik_smart_orders import _handover_standalone
+    book = SmartOrderBook(str(tmp_path / "b.json"))
+    entry = SmartOrder(so_id=new_id(), kind="trail_tp", code="RIZ6", side="sell", qty=15,
+                       trigger_price=84990, trail_offset=150, sl_offset=300, tp_trail=50,
+                       status="armed", created_ms=NOW)
+    book.orders.append(entry)
+    srv, ost = FakeSrv(), FakeOst()
+    store = FakeStoreWithPositions(positions=[{"sec": "RIZ6", "net": -13}])
+    assert _handover_standalone(book, STEPS, store, ost, srv, "9618", NOW) is False
+    assert not srv.sent and entry.status == "armed"
+
+
+def test_terminal_refusal_returns_a_standalone_order_to_stl(tmp_path):
+    from trader.api.quik_smart_orders import _NATIVE_CONFIRM_MS, _handover_standalone
+    book = SmartOrderBook(str(tmp_path / "b.json"))
+    so = SmartOrder(so_id=new_id(), kind="sl", code="RIZ6", side="buy", qty=10,
+                    trigger_price=84510, status="armed", created_ms=NOW)
+    book.orders.append(so)
+    srv, ost = FakeSrv(), FakeOst()
+    store = FakeStoreWithPositions(positions=[{"sec": "RIZ6", "net": -13}])
+    _handover_standalone(book, STEPS, store, ost, srv, "9618", NOW)
+
+    failed = _track_native(book, FakeStore(), "9618", NOW + _NATIVE_CONFIRM_MS + 1)
+    assert failed == [so] and so.status == "armed" and so.native_state == "failed"

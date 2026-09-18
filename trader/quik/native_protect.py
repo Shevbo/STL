@@ -98,3 +98,47 @@ def build_native_protection(parent: SmartOrder, entry_price: float,
         fields["STOP_ORDER_KIND"] = "SIMPLE_STOP_ORDER"
     return {"side": exit_side, "quantity": int(parent.qty), "fields": fields,
             "kinds": kinds}
+
+
+def build_native_standalone(so: SmartOrder, step: float, position: int) -> dict | None:
+    """Поля нативной стоп-заявки для ОДИНОЧНОЙ защитной заявки оператора.
+
+    Стоп или тейк, взведённый руками на уже открытую позицию, до 18.09.2026
+    оставался в STL: упал STL - позиция без защиты, хотя терминал держал бы её сам.
+
+    Отдаём в терминал только то, что ЗАКРЫВАЕТ позицию: сторона противоположна
+    позиции и объём не больше открытого. Заявка на ВХОД остаётся сторожу STL -
+    у входа свои режимы исполнения и свои блоки после сделки, которые терминал
+    к своей стоп-заявке не прицепит.
+    """
+    if position == 0 or so.qty <= 0:
+        return None
+    closing = "sell" if position > 0 else "buy"
+    if so.side != closing or so.qty > abs(position):
+        return None
+    if so.sl_offset or so.tp_offset or so.trail_after or so.tp_trail or so.sl_price or so.tp_price:
+        return None                      # это вход с блоками после сделки, не защита
+    cushion = (step or 0.0) * CUSHION_STEPS
+    fields: dict[str, str] = {"EXPIRY_DATE": "TODAY"}
+    if so.kind == "sl":
+        if so.trigger_price <= 0:
+            return None
+        limit = so.trigger_price - (cushion if so.side == "sell" else -cushion)
+        fields.update({"STOP_ORDER_KIND": "SIMPLE_STOP_ORDER",
+                       "STOPPRICE": _fmt(so.trigger_price), "PRICE": _fmt(limit)})
+    elif so.kind in ("tp", "trail_tp"):
+        # Тейк в терминале - это TAKE_PROFIT: он ждёт цену В ПОЛЬЗУ позиции, тогда
+        # как SIMPLE_STOP на продажу ждёт цену НИЖЕ. Фиксированный тейк = тот же
+        # тейк-профит с откатом в один шаг цены.
+        if so.trigger_price <= 0:
+            return None                  # следящая без уровня активации: вести её некому
+        offset = so.trail_offset if so.kind == "trail_tp" else (step or 1.0)
+        if offset <= 0:
+            return None
+        fields.update({"STOP_ORDER_KIND": "TAKE_PROFIT_STOP_ORDER",
+                       "STOPPRICE": _fmt(so.trigger_price), "OFFSET": _fmt(offset),
+                       "OFFSET_UNITS": "PRICE_UNITS", "SPREAD": _fmt(cushion),
+                       "SPREAD_UNITS": "PRICE_UNITS"})
+    else:
+        return None                      # подтягивающая и «по исполнению» - только STL
+    return {"side": so.side, "quantity": int(so.qty), "fields": fields, "kinds": [so.kind]}

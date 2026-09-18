@@ -79,3 +79,45 @@ def test_level_behind_the_entry_is_not_sent():
     p = build_native_protection(parent(sl_price=86700, tp_price=86900), 87000, STEP)
     assert p["kinds"] == ["sl"] and p["fields"]["STOP_ORDER_KIND"] == "SIMPLE_STOP_ORDER"
     assert build_native_protection(parent(tp_price=86900), 87000, STEP) is None
+
+
+# ---- одиночная защита оператора на уже открытую позицию (18.09.2026) ----
+
+def lone(**kw):
+    base = dict(so_id=new_id(), kind="sl", code="RIZ6", side="buy", qty=10,
+                trigger_price=84510, created_ms=0)
+    base.update(kw)
+    return SmartOrder(**base)
+
+
+def test_manual_stop_on_a_short_goes_to_the_terminal():
+    from trader.quik.native_protect import build_native_standalone
+    p = build_native_standalone(lone(), STEP, position=-13)
+    assert p["side"] == "buy" and p["quantity"] == 10
+    assert p["fields"]["STOP_ORDER_KIND"] == "SIMPLE_STOP_ORDER"
+    assert p["fields"]["STOPPRICE"] == "84510" and p["fields"]["PRICE"] == "84530"
+
+
+def test_manual_take_uses_take_profit_not_a_plain_stop():
+    from trader.quik.native_protect import build_native_standalone
+    # Тейк лонга ждёт цену ВЫШЕ, а SIMPLE_STOP на продажу ждёт цену НИЖЕ.
+    f = build_native_standalone(lone(kind="tp", side="sell", trigger_price=85500), STEP, 10)["fields"]
+    assert f["STOP_ORDER_KIND"] == "TAKE_PROFIT_STOP_ORDER" and f["OFFSET"] == "10"
+    f2 = build_native_standalone(lone(kind="trail_tp", side="sell", trigger_price=85500,
+                                      trail_offset=150), STEP, 10)["fields"]
+    assert f2["STOP_ORDER_KIND"] == "TAKE_PROFIT_STOP_ORDER" and f2["OFFSET"] == "150"
+
+
+def test_only_position_closing_orders_are_handed_over():
+    from trader.quik.native_protect import build_native_standalone
+    assert build_native_standalone(lone(), STEP, position=0) is None       # позиции нет
+    assert build_native_standalone(lone(), STEP, position=13) is None      # это ВХОД, не защита
+    assert build_native_standalone(lone(qty=20), STEP, position=-13) is None   # больше позиции
+    # Заявка с блоками после сделки - это вход: терминал детей к стопу не прицепит.
+    assert build_native_standalone(lone(sl_offset=300), STEP, position=-13) is None
+    # Подтягивающая и «по исполнению» нативного вида не имеют.
+    assert build_native_standalone(lone(kind="trail_sl", trail_offset=100, trigger_price=0),
+                                   STEP, position=-13) is None
+    # Следящая без уровня активации: вести её в терминале нечем.
+    assert build_native_standalone(lone(kind="trail_tp", trail_offset=100, trigger_price=0),
+                                   STEP, position=-13) is None
