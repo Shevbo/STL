@@ -69,3 +69,18 @@ def test_other_codes_and_date_window_are_filtered(tmp_path):
     assert build(str(tmp_path), "RIU6", "2026-07-01", None)["rows"] != []   # день в окне
     assert build(str(tmp_path), "RIU6", "2026-09-01", None)["rows"] == []   # левее окна
     assert build(str(tmp_path), "RIU6", None, "2026-07-01")["rows"] == []   # правее окна
+
+
+def test_short_side_is_padded_not_shifted(tmp_path):
+    """Сторона короче LEVELS не сдвигает аски в биды: добивка худшей ценой, объём 0."""
+    base = 1_789_516_800_000
+    snap = _snap(base, 99, 101)
+    snap["bids"] = snap["bids"][:2]
+    _write(tmp_path, [snap])
+    d = build(str(tmp_path), "RIU6", None, None)
+    _, books = load_digest(d["rows"])
+    bids, asks = books[0]
+    assert len(d["rows"][0]) == 1 + 4 * 5
+    assert [p for p, _ in bids] == [99.0, 98.0, 98.0, 98.0, 98.0]
+    assert [q for _, q in bids] == [5, 5, 0, 0, 0]
+    assert asks[0] == (101.0, 5)

@@ -65,6 +65,14 @@ def build(archive: str, code: str, d_from: str | None, d_to: str | None) -> dict
                     for lvl in side:
                         row.append(float(lvl["price"]))
                         row.append(int(lvl["quantity"]))
+                    # ДОБИВКА ДО LEVELS. load_digest читает стороны по фиксированному
+                    # смещению 2*LEVELS; сторона короче пяти уровней сдвигала аски в
+                    # биды: sell исполнялся по ask (лучше рынка), buy начинал с 3-4-го
+                    # уровня. Пустой уровень = худшая цена стороны с нулевым объёмом,
+                    # _walk его пропускает. Найдено 20.09.2026: 1 минута из 29110 RIU6.
+                    for _ in range(LEVELS - len(side)):
+                        row.append(float(side[-1]["price"]))
+                        row.append(0)
                 # ПЕРВЫЙ снимок минуты, и время у него НАСТОЯЩЕЕ. BookRuntime ищет
                 # книгу не раньше открытия следующего бара, то есть на границе
                 # минуты; если оставить последний снимок и подписать его границей,
