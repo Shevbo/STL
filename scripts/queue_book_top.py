@@ -78,7 +78,11 @@ def main() -> None:
                     "dateFrom": f"{a.date_from}T00:00:00",
                     "dateTo": f"{a.date_to}T23:59:59",
                     "engine": "remote",
-                    "campaign": f"{a.campaign}-{'book' if mode == 'стакан' else 'bar'}",
+                    # НОМЕР СТРОКИ В ИМЕНИ КАМПАНИИ ОБЯЗАТЕЛЕН: id прогона сервер
+                    # собирает из кампании, стратегии и символа, а в топе одна и та
+                    # же стратегия стоит десятком строк с разными параметрами —
+                    # одинаковые имена дают duplicate key и молча теряют задания.
+                    "campaign": f"{a.campaign}{'book' if mode == 'стакан' else 'bar'}{i:02d}",
                     "_meta": {"rank": i, "strategy": r["strategy"], "mode": mode,
                               "fit_net": r.get("net_profit")},
                 })
