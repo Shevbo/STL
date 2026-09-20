@@ -57,13 +57,20 @@ def build(archive: str, code: str, d_from: str | None, d_to: str | None) -> dict
                     ts = int(r["received_at_unix_ms"]) // 1000 + MSK_SHIFT
                 except (KeyError, TypeError, ValueError):
                     continue
-                row = [ts - ts % 60]
+                row = [ts]
                 for side in (bids[:LEVELS], asks[:LEVELS]):
                     for lvl in side:
                         row.append(float(lvl["price"]))
                         row.append(int(lvl["quantity"]))
-                # Последний снимок минуты побеждает: он ближе всего к закрытию бара.
-                per_minute[row[0]] = row
+                # ПЕРВЫЙ снимок минуты, и время у него НАСТОЯЩЕЕ. BookRuntime ищет
+                # книгу не раньше открытия следующего бара, то есть на границе
+                # минуты; если оставить последний снимок и подписать его границей,
+                # заявка исполнится по книге, которая была на 59 секунд позже, —
+                # это снос цены, записанный в цену исполнения (и заглядывание
+                # вперёд). Найдено 20.09.2026 на первом же прогоне пар.
+                key = ts - ts % 60
+                if key not in per_minute or ts < per_minute[key][0]:
+                    per_minute[key] = row
     rows = [per_minute[k] for k in sorted(per_minute)]
     return {"key": f"book{code}", "code": code, "levels": LEVELS,
             "time_base": "bars (+3h от UTC архива)", "rows": rows}

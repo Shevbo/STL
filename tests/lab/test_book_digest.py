@@ -26,14 +26,21 @@ def _snap(ms: int, bid: float, ask: float, qty: int = 5, code: str = "RIU6"):
             "asks": [{"price": ask + i, "quantity": str(qty)} for i in range(5)]}
 
 
-def test_last_snapshot_of_the_minute_wins(tmp_path):
-    """В минуте несколько снимков — берём последний: он ближе к закрытию бара."""
+def test_first_snapshot_of_the_minute_wins(tmp_path):
+    """В минуте несколько снимков — берём ПЕРВЫЙ, и время у него настоящее.
+
+    BookRuntime ищет книгу не раньше открытия следующего бара, то есть на границе
+    минуты. Последний снимок, подписанный границей, дал бы исполнение по книге,
+    которой на тот момент ещё не было: снос цены за 59 секунд, записанный в цену
+    исполнения.
+    """
     base = 1_789_516_800_000                      # ровная минута
-    _write(tmp_path, [_snap(base, 99, 101), _snap(base + 30_000, 98, 102)])
+    _write(tmp_path, [_snap(base + 30_000, 98, 102), _snap(base, 99, 101)])
     d = build(str(tmp_path), "RIU6", None, None)
     assert len(d["rows"]) == 1
     row = d["rows"][0]
-    assert row[1] == 98.0 and row[1 + 2 * 5] == 102.0
+    assert row[0] == base // 1000 + MSK_SHIFT     # время первого снимка, без округления
+    assert row[1] == 99.0 and row[1 + 2 * 5] == 101.0
 
 
 def test_time_is_already_in_bar_scale(tmp_path):
