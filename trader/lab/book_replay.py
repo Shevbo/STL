@@ -59,6 +59,31 @@ def load_dir(root: str, code: str) -> tuple[list[int], list[tuple]]:
     return load_book(files, code)
 
 
+def load_digest(rows: list[list], levels: int = 5) -> tuple[list[int], list[tuple]]:
+    """Выжимка стакана (scripts/book_digest.py) -> тот же вид, что даёт load_book.
+
+    Сырой архив весит сотню мегабайт и лежит только на хостере; i9 получает вместо
+    него один снимок на минуту в файле `agent_bars/book<КОД>.json`. Строка:
+    [ts, bid1,qty1 ... bid5,qty5, ask1,qty1 ... ask5,qty5], время УЖЕ в шкале баров
+    (сдвиг +3 ч сделан при сборке), поэтому здесь ничего не сдвигаем.
+    """
+    times: list[int] = []
+    books: list[tuple] = []
+    for r in rows:
+        ts = int(r[0])
+        vals = r[1:]
+        bids = [(float(vals[2 * i]), int(vals[2 * i + 1]))
+                for i in range(levels) if 2 * i + 1 < len(vals)]
+        off = 2 * levels
+        asks = [(float(vals[off + 2 * i]), int(vals[off + 2 * i + 1]))
+                for i in range(levels) if off + 2 * i + 1 < len(vals)]
+        if not bids or not asks:
+            continue
+        times.append(ts)
+        books.append((sorted(bids, reverse=True), sorted(asks)))
+    return times, books
+
+
 class BookRuntime(BacktestRuntime):
     """BacktestRuntime, исполняющий рыночные заявки по архивному стакану.
 

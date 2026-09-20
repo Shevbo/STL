@@ -414,7 +414,8 @@ def _run_chunk(args: tuple) -> list[dict]:
     # Workers inherit env; honor the insecure flag for the ISS fetch they do.
     if os.environ.get("OPT_AGENT_INSECURE"):
         _patch_httpx_insecure()
-    script_code, bars_data, symbol, param_sets, point_value, initial_margin, publish = args
+    (script_code, bars_data, symbol, param_sets, point_value, initial_margin, publish,
+     book_rows) = args
     _demote_to_background()  # be a polite background citizen on the shared host too
     from trader.lab.script_guard import validate_script
     validate_script(script_code)
@@ -448,12 +449,21 @@ def _run_chunk(args: tuple) -> list[dict]:
         except Exception:  # noqa: BLE001
             pass
 
+    # ИСПОЛНЕНИЕ ПО СТАКАНУ. book_rows — выжимка архива (один снимок на минуту,
+    # 5 уровней), приехавшая тем же каналом, что бары: /api/v1/agent/bars/book<КОД>.
+    # Без неё всё как раньше: заявка по открытию следующего бара, без спреда.
+    run_kw: dict = {}
+    if book_rows:
+        from trader.lab.book_replay import BookRuntime, load_digest
+        run_kw = {"runtime_cls": BookRuntime,
+                  "runtime_kw": {"book": load_digest(book_rows), "max_gap_s": 60}}
+
     async def _all():
         out = []
         for ps in param_sets:
             try:
                 r = await run_single_backtest(mod, bars, symbol, ps, point_value=point_value,
-                                              initial_margin=initial_margin)
+                                              initial_margin=initial_margin, **run_kw)
                 if isinstance(r.get("equity_curve"), list):
                     r["equity_curve"] = _downsample(r["equity_curve"])
                 out.append({"ok": True, "params": ps, "result": r})
@@ -537,6 +547,7 @@ class Agent:
         # Последняя выкачанная история (symbol, rows): сетку гонят десятками заданий
         # по одному символу, качать склейку на каждое — впустую.
         self._bars_cache: tuple | None = None
+        self._book_cache: tuple | None = None    # (ключ, строки выжимки стакана)
         self._started = time.time()
         if psutil is not None:
             try:
@@ -976,6 +987,29 @@ class Agent:
         return [{"time": b.time, "open": b.open, "high": b.high,
                  "low": b.low, "close": b.close, "volume": b.volume} for b in bars]
 
+    async def _book_for(self, client: httpx.AsyncClient, key: str) -> list | None:
+        """Выжимка стакана по ключу — тем же каналом, что бары (agent_bars/<key>.json).
+
+        Кэш на один ключ: сетку гонят десятками заданий по одному инструменту, а
+        файл весит мегабайты. Нет файла или сеть легла — возвращаем None, и задание
+        считается по барам; молча подменять исполнение нельзя, поэтому пишем в лог.
+        """
+        if self._book_cache and self._book_cache[0] == key:
+            return self._book_cache[1]
+        try:
+            r = await client.get(f"{self.api}/api/v1/agent/bars/{key}",
+                                 headers=self.h, timeout=300)
+            if r.status_code != 200:
+                _log(f"стакан: {key} не отдан ({r.status_code}) — считаю по барам")
+                return None
+            rows = (r.json() or {}).get("rows") or []
+            self._book_cache = (key, rows)
+            _log(f"стакан: {key} — {len(rows)} минут")
+            return rows
+        except Exception as exc:  # noqa: BLE001
+            _log(f"стакан: {key} недоступен ({exc}) — считаю по барам")
+            return None
+
     async def process(self, client: httpx.AsyncClient, job: dict, pool: ProcessPoolExecutor,
                       side: bool = False):
         """side=True — ручной прогон, взятый ВПЕРЁД очереди на резервный воркер, пока
@@ -1017,10 +1051,20 @@ class Agent:
                                   "combos": len(param_sets), "since": time.time(),
                                   "done": 0, "top": []}
 
+            # Ключ стакана едет в base_params: ручка /claim отдаёт фиксированный
+            # набор полей и своих ключей задания не пропускает, а base_params —
+            # пропускает как есть. Здесь он снимается с КАЖДОГО набора, чтобы не
+            # уехать в параметры стратегии.
+            book_key = None
+            for ps in param_sets:
+                k = ps.pop("book_key", None)
+                book_key = book_key or k
+            book_rows = await self._book_for(client, book_key) if book_key else None
+
             chunks = _chunked(param_sets, 1 if side else self.workers)
             im = job.get("initial_margin", 0) or 0
             args = [(job["script_code"], bars_data, symbol, ch, job["point_value"], im,
-                     not side) for ch in chunks]
+                     not side, book_rows) for ch in chunks]
             loop = asyncio.get_event_loop()
             t0 = time.time()
             futs = [loop.run_in_executor(pool, _run_chunk, a) for a in args]

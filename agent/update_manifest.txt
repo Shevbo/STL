@@ -31,3 +31,4 @@ trader/lab/ai46/runner.py
 trader/lab/ai46/params.py
 trader/lab/ai46/backtest.py
 trader/lab/ai46/sweep_task.py
+trader/lab/book_replay.py
