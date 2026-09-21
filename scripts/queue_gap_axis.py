@@ -48,6 +48,9 @@ def main() -> None:
     ap.add_argument("--date-to", required=True)
     ap.add_argument("--book-key", help="ключ выжимки стакана; без него — по барам")
     ap.add_argument("--campaign", default="gapaxis")
+    # Своя ось вместо стандартной пары (разножка × ATR-без-выходных):
+    #   --axis flip_back_pct=0,30,50,70
+    ap.add_argument("--axis", help="КЛЮЧ=знач,знач,... — гнать эту ось вместо стандартной")
     ap.add_argument("--api", default=os.environ.get("STL_API", "https://stl.shectory.ru"))
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
@@ -64,10 +67,18 @@ def main() -> None:
             sys.exit("нет шаблона macd_shectory1")
         code = tpl["macd_shectory1"]["script_code"]
 
+        if a.axis:
+            key, _, vals = a.axis.partition("=")
+            grid = [{key.strip(): int(v)} for v in vals.split(",") if v.strip()]
+            tag = key.strip()[:6]
+        else:
+            grid = [{"min_gap_pts": g, "atr_skip_weekend": w}
+                    for g in GAPS for w in ATR_WEEKEND]
+            tag = ""
+
         ok = err = 0
-        for gap, aw in [(g, w) for g in GAPS for w in ATR_WEEKEND]:
-            ps = {**LIVE, "min_gap_pts": gap, "atr_skip_weekend": aw,
-                  "symbol": a.symbol}
+        for i, extra in enumerate(grid):
+            ps = {**LIVE, **extra, "symbol": a.symbol}
             if a.book_key:
                 ps["book_key"] = a.book_key
             body = {
@@ -79,18 +90,19 @@ def main() -> None:
                 "dateTo": f"{a.date_to}T23:59:59",
                 "engine": "remote",
                 # номер в имени кампании обязателен: id прогона = кампания+стратегия+символ
-                "campaign": f"{a.campaign}{mode}{gap:03d}w{aw}",
+                "campaign": (f"{a.campaign}{mode}{tag}{i:02d}" if a.axis else
+                             f"{a.campaign}{mode}"
+                             f"{extra['min_gap_pts']:03d}w{extra['atr_skip_weekend']}"),
             }
             if a.dry_run:
-                print(f"  {mode} разножка {gap} atr_без_выходных {aw}: "
-                      f"{a.symbol} {a.date_from}..{a.date_to}")
+                print(f"  {mode} {extra}: {a.symbol} {a.date_from}..{a.date_to}")
                 continue
             try:
                 client.post("/api/v1/backtest/run", json=body).raise_for_status()
                 ok += 1
             except Exception as exc:  # noqa: BLE001
                 err += 1
-                print(f"  ошибка на разножке {gap}/w{aw}: {exc}")
+                print(f"  ошибка на {extra}: {exc}")
         print(f"{mode}: поставлено {ok}, ошибок {err}"
               if not a.dry_run else "dry-run, ничего не поставлено")
 
