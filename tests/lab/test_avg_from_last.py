@@ -54,11 +54,19 @@ def _fills(params: dict) -> list[tuple]:
 
 
 def _ladder_span(fills: list[tuple]) -> tuple[int, float]:
-    """(набранных контрактов, расстояние от первого добора до последнего)."""
-    buys = [f for f in fills if f[0] == "buy"]
-    assert len(buys) >= 3, buys
-    qty = sum(q for _s, q, _p in buys)
-    return qty, abs(buys[0][2] - buys[-1][2])
+    """(набранных контрактов, расстояние от первого филла лестницы до последнего).
+
+    Сторона лестницы берётся у ПЕРВОГО филла: на спуске после разворота сигнала
+    робот строит шортовую лестницу, и смотреть только покупки нельзя.
+    """
+    side = fills[0][0]
+    legs = []
+    for s, q, p in fills:
+        if s != side:
+            break                       # лестница кончилась, дальше выход
+        legs.append((s, q, p))
+    assert len(legs) >= 3, legs
+    return sum(q for _s, q, _p in legs), abs(legs[0][2] - legs[-1][2])
 
 
 def test_step_from_last_fill_stretches_the_ladder():
