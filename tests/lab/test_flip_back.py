@@ -23,8 +23,12 @@ from trader.lab.runtime import BacktestRuntime, Bar
 from trader.lab.strategies.library import make_on_bar
 
 SYM = "RIU6"
+# flip_close_loss=1 — ПРЕЖНЕЕ поведение (сброс убытка по развороту сигнала). С
+# 21.09.2026 по умолчанию это запрещено распоряжением оператора, поэтому базу для
+# сравнения приходится задавать явно: иначе «как было» и «с осью» совпадают.
 BASE = {"symbol": SYM, "qty": 1, "fast": 5, "slow": 20, "signal": 5,
-        "tp_atr": 400, "avg_atr_n": 14, "avg_max": 1, "sl_pct": 300}
+        "tp_atr": 400, "avg_atr_n": 14, "avg_max": 1, "sl_pct": 300,
+        "flip_close_loss": 1}
 
 
 def _bars() -> list[Bar]:
