@@ -570,17 +570,32 @@
   let campaign = $state<any | null>(null);
   let campaignLoading = $state(false);
   let heatCanvas = $state<HTMLCanvasElement | null>(null);
+  // Счётчик ожидания. Витрина кампании грузилась СЕМЬ МИНУТ, и всё это время на
+  // экране стояло неподвижное «Загрузка…» — неотличимо от зависшей страницы
+  // (оператор 21.09.2026). Запрос ищет кампанию перебором всей таблицы
+  // результатов: индекса по campaign_run в БД нет. Ускорить это фронт не может,
+  // но обязан показывать, что работа идёт, и сколько она уже длится.
+  let campaignWait = $state(0);
+  let campaignTimer: ReturnType<typeof setInterval> | null = null;
   async function openCampaign(id: string) {
     if (!id) return;
     campaignLoading = true; campaign = null; notice = '';
+    campaignWait = 0;
+    if (campaignTimer) clearInterval(campaignTimer);
+    const t0 = Date.now();
+    campaignTimer = setInterval(() => { campaignWait = Math.round((Date.now() - t0) / 1000); }, 1000);
     try {
       const r = await fetchWithAuth(`/api/v1/agent/campaign?id=${encodeURIComponent(id)}`);
       if (r.ok) campaign = await r.json();
       else notice = 'Кампания недоступна';
     } catch (e) { notice = 'Ошибка загрузки кампании: ' + String(e); }
+    if (campaignTimer) { clearInterval(campaignTimer); campaignTimer = null; }
     campaignLoading = false;
   }
-  function closeCampaign() { campaign = null; }
+  function closeCampaign() {
+    campaign = null;
+    if (campaignTimer) { clearInterval(campaignTimer); campaignTimer = null; }
+  }
 
   function heatColor(n: number, mx: number) {
     if (n <= 0) return '#0c0c18';
@@ -1074,6 +1089,11 @@
           {#if chartLoading}
             <div class="cm-status">
               <div class="cm-spin">Прогоняю бэктест…</div>
+              <!-- Почему не мгновенно: перебор хранит МЕТРИКИ комбинаций без сделок
+                   (ради места на сотнях тысяч комбо), поэтому график лидера считается
+                   заново. Оператор 21.09.2026 принял это за зависание. -->
+              <div class="cm-line">Перебор хранит только метрики комбинаций, без сделок —
+                график лидера считается заново. Это минуты, а не секунды.</div>
               <div class="cm-line">Инструмент: <b>{chartJob?.symbol}</b> · <span class="cm-p">{JSON.stringify(chartJob?.params)}</span></div>
               <!-- ГДЕ считается — крупно, ярко, только i9 -->
               <div class="cm-where" class:offline={chartStatus?.i9_offline}>
@@ -1207,7 +1227,12 @@
         </div>
         <div class="cmp-body">
           {#if campaignLoading}
-            <div class="bs-msg">Загрузка деталей кампании…</div>
+            <div class="bs-msg">Загрузка деталей кампании… прошло {campaignWait} с</div>
+            {#if campaignWait >= 10}
+              <div class="bs-msg bs-msg-why">Долго: кампания ищется перебором всей таблицы
+                результатов — указателя по кампании в базе нет, и запрос читает её целиком.
+                Страница не зависла, ответа стоит дождаться.</div>
+            {/if}
           {:else if campaign && campaign.combos === 0}
             <div class="bs-msg">Пока нет результатов: кампания только стартовала.</div>
           {:else if campaign}
@@ -1363,6 +1388,8 @@
   .ag-jst { font-weight: 700; }
 
   .bs-msg { font-size: 12px; color: #666; padding: 20px; text-align: center; }
+  /* Объяснение долгого ожидания: видно, что идёт работа, а не зависание. */
+  .bs-msg-why { padding: 0 20px 16px; color: #8a7f55; line-height: 1.5; max-width: 620px; margin: 0 auto; }
   .bs-msg.err { color: #f44336; }
 
   .bs-cols { display: flex; gap: 10px; flex: 1; min-height: 0; }
