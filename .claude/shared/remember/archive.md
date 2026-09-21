@@ -1,7 +1,10 @@
 # Archive
 
+## Week of 2026-09-15
+Tested cost_atr filter (1.1–1.4₽ edge negated by 20₽ costs, ineffective). 2EMA analysis showed 44k₽ spread impact (4%). Walk-forward test (6m opt→3m trade) pending; cross-period instability and grid-edge optimization remain validation blockers.
+
 ## Week of 2026-09-08
-Deployed shectory-trader 1787379836 (6 fixes: Lua GC 9.1h stable, order cap, fixation alert, mem metrics, hourly guard, journal healing); <1m downtime, 9.3h uptime (+147.6k fin). Implemented rich_fool/swing_trend/impulse_fade strategies; bar-cache cut (31.07) invalidated 182 tasks/45d. Optimized rich_fool sweep (rf4-rf10, d_coef 0.05–1.0, anti-skew protection); discovered point_value DB NULL; i9 acceleration to 217 runs/min (38h ETA vs 74h).
+Deployed shectory-trader 1787379836 (6 fixes: Lua GC 9.1h stable, order cap, fixation alert, mem metrics, hourly guard, journal healing); <1m downtime, 9.3h uptime (+147.6k fin). Tested 10+ strategy variants (rich_fool, impulse_fade, 2EMA, MACD, valley_spike) with high rejection velocity; OOS failures from gap-at-open and lookahead. Ported TSLab 2EMA (ladder configs, 498 OOS tests, 1090 positions, bid-ask stops); expanded RI.txt to 2022–2026 (589K). Designed regime-switch protocol (Steps 0-3); Step 0 closure all 15 strategies net-negative (304 backtests); initiated regime_tf_gate.py. Implemented DeskBot layers; optimized rich_fool sweep; i9 to 217 runs/min.
 
 ## Week of 2026-09-02
 Root causes identified in commission tracking (2x overstated: 9.9 vs 5.8 /lot); account ВМ excludes manual orders; daypnl.go/_test.go written; commission.py & companion.html fixes pending (add manual block); email pending.
