@@ -672,9 +672,30 @@ def make_on_bar(rid: str):
         # распорядился, зная это; flip_close_loss=1 возвращает прежнее поведение и
         # нужен для замеров.
         _close_loss = int(params.get("flip_close_loss", 0) or 0)
-        if (flip_now and not flip_held and not _close_loss and avg > 0
-                and (sl_pct > 0 or sl > 0) and (price - avg) * cur_dir < 0):
+        _loss_flip = (flip_now and not flip_held and not _close_loss and avg > 0
+                      and (sl_pct > 0 or sl > 0) and (price - avg) * cur_dir < 0)
+        if _loss_flip:
             flip_held = True
+        # ФИНАЛЬНОЕ УСРЕДНЕНИЕ НА КРОССОВЕРЕ (flip_add_max, заказ оператора
+        # 21.09.2026). Его мысль: замедление хода — повод УСИЛИТЬ позицию, а не
+        # выходить в убыток. Поэтому на убыточном развороте робот один раз доливает
+        # МАКСИМАЛЬНОЙ ступенью лестницы и дальше только держит: тейк и стоп на
+        # месте, новых доборов в этой позиции больше нет.
+        # Ограничители, без которых это было бы безумием: доливка ОДНА на позицию
+        # (флаг в состоянии), она не пробивает потолок лестницы avg_max, и ось
+        # армится только со стопом — пол по убытку обязателен.
+        _add_max = int(params.get("flip_add_max", 0) or 0)
+        if _loss_flip and _add_max and abs(cur) < avg_max:
+            if not int(stl.get_state("flip_add_done", 0) or 0):
+                _step = max(1, int(stl.get_state("avg_add", 0) or 0) or unit)
+                _final = min(int(_step * k_avg + 0.5), avg_max - abs(cur))
+                if _final > 0:
+                    stl.set_state("flip_add_done", 1)
+                    stl.set_state("avg_add", _final)
+                    await stl.place_order(symbol, "buy" if cur_dir > 0 else "sell",
+                                          _final, price)
+                    mark_entry(price)
+                    return
         _hold_win = int(params.get("flip_hold_win", 0) or 0)
         if (flip_now and not flip_held and _hold_win and avg > 0
                 and (sl_pct > 0 or sl > 0)):
@@ -727,6 +748,8 @@ def make_on_bar(rid: str):
             # ожидания оставляли запись, и следующая позиция той же стороны наследовала
             # чужой экстремум — мгновенный ложный выход либо замороженная лестница.
             stl.set_state("flip_back", None)
+        if cur == 0:
+            stl.set_state("flip_add_done", 0)   # новая позиция — новое право на доливку
         if _back_exit and cur != 0:
             # Выход по возврату: закрываем ВСЮ позицию и новую ногу не открываем —
             # сигнал к этому моменту мог стать любым, а решение о входе принимает
@@ -1097,6 +1120,7 @@ SHECTORY1_PARAMS = [
     P("k_avg", "k_avg: рост объёма добора ×10 (10=1.0, без роста)", 10, 10, 50),
     P("flip_min_pts", "Фильтр флипа: мин. пунктов хода от средней входа до разворота по сигналу (0=выкл; армится только со стопом)", 0, 0, 5000),
     P("flip_close_loss", "РАЗРЕШИТЬ закрывать убыток по развороту сигнала (0=запрещено, для замеров)", 0, 0, 1),
+    P("flip_add_max", "На убыточном развороте один раз долить МАКСИМАЛЬНОЙ ступенью (0=выкл)", 0, 0, 1),
     P("flip_hold_win", "Флип по знаку результата: 1=держать прибыльную позицию (выход по тейку), 2=держать убыточную (выход по стопу), 0=выкл", 0, 0, 2),
     # Выход убыточной позиции на ВОЗВРАТЕ, а не на экстремуме (день двух горок
     # 21.09.2026: обе лестницы закрыты ровно в крайней точке хода).
