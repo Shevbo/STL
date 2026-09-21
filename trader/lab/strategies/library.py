@@ -225,6 +225,16 @@ def make_on_bar(rid: str):
         dv_pts = float(params.get("dv_range_pts", 0) or 0)
         dv_on = dv_win > 0 and dv_pts > 0
 
+        # ШАГ ЛЕСТНИЦЫ ОТ ПОСЛЕДНЕГО ФИЛЛА, А НЕ ОТ СРЕДНЕЙ (avg_from_last, 21.09.2026).
+        # Разбор утреннего лося: шаг считается от СРЕДНЕЙ цены позиции, а объём добора
+        # растёт (k_avg=2.0), поэтому средняя бежит навстречу цене и следующий добор
+        # оказывается ближе предыдущего. Лестница 1+2+4+8+5 = 20 контрактов уложилась
+        # в 2.77 шага (≈280 пт при шаге 100), тогда как утро прошло 620 пт: позиция
+        # кончилась раньше хода. От последнего ИСПОЛНИВШЕГОСЯ филла те же 20 контрактов
+        # растягиваются на 20 шагов. Отсчёт берём тот же, что у разножки (gap_ref) —
+        # он и есть цена подтверждённого входа.
+        avg_from_last = int(params.get("avg_from_last", 0) or 0)
+
         def gap_ok(p: float) -> bool:
             return min_gap <= 0 or gap_ref <= 0 or abs(p - gap_ref) >= min_gap
 
@@ -232,7 +242,7 @@ def make_on_bar(rid: str):
             # Запоминаем ПОПЫТКУ. Точкой отсчёта она станет только когда вход реально
             # исполнится (см. подтверждение ниже): живая заявка может простоять
             # неисполненной и быть снята перед следующим баром.
-            if min_gap > 0:
+            if min_gap > 0 or avg_from_last:      # min_gap меняется ниже — читаем на месте
                 stl.set_state("gap_pending", p)
 
         unit = base_unit + bet_extra + super_add                 # current entry size
@@ -475,7 +485,7 @@ def make_on_bar(rid: str):
         # отсчёт, и добор 11:42 прошёл в 40 пунктах от исполнения 11:14 по 85490).
         # Позиция, УШЕДШАЯ от нуля или сменившая знак = вход исполнился; сокращение
         # к нулю (выход) отсчёт не двигает, иначе развороту некуда открываться.
-        if min_gap > 0:
+        if min_gap > 0 or avg_from_last:
             gap_prev_pos = int(stl.get_state("gap_pos", cur) or 0)
             gap_pending = float(stl.get_state("gap_pending", 0) or 0)
             if gap_pending > 0 and (abs(cur) > abs(gap_prev_pos) or cur * gap_prev_pos < 0):
@@ -889,7 +899,9 @@ def make_on_bar(rid: str):
             # .5 к чётному — молча другая лестница, чем оператор задал).
             next_add = max(1, int(prev_add * k_avg + 0.5))
             add = min(next_add, avg_max - abs(cur))
-            if cur_dir > 0 and price <= avg - dist:
+            # Отсчёт шага: средняя (как было) либо последний исполнившийся вход.
+            step_ref = gap_ref if (avg_from_last and gap_ref > 0) else avg
+            if cur_dir > 0 and price <= step_ref - dist:
                 if in_dv or no_weekend:
                     note_skip("weekend" if no_weekend else "dv", price)
                 elif gap_ok(price):
@@ -899,7 +911,7 @@ def make_on_bar(rid: str):
                 else:
                     note_skip("gap", price)
                 return
-            if cur_dir < 0 and price >= avg + dist:
+            if cur_dir < 0 and price >= step_ref + dist:
                 if in_dv or no_weekend:
                     note_skip("weekend" if no_weekend else "dv", price)
                 elif gap_ok(price):
@@ -928,6 +940,7 @@ GH = "https://github.com/topics/trading-strategies"
 AVG_PARAMS = [
     P("avg_max", "Усреднение: потолок доборов (не всей позиции)", 1, 1, 10),
     P("avg_step_atr", "Усреднение: шаг ×ATR/10 (0=выкл)", 0, 0, 30),
+    P("avg_from_last", "Шаг усреднения от последнего филла, а не от средней (0/1)", 0, 0, 1),
     P("tp_atr", "Тейк-профит ×ATR/10 (0=по сигналу)", 0, 0, 60),
     P("sl_frac", "Стоп-лосс: % от дистанции тейка (0=выкл, 50=половина)", 0, 0, 200),
     # Второй стоп, НЕЗАВИСИМЫЙ от тейка. Движок читал его у любой стратегии
@@ -1025,6 +1038,7 @@ SHECTORY1_PARAMS = [
 AVG_PARAMS_FORCED = [
     P("avg_max", "Усреднение: потолок доборов (не всей позиции)", 5, 2, 10),
     P("avg_step_atr", "Усреднение: шаг ×ATR/10", 10, 5, 30),
+    P("avg_from_last", "Шаг усреднения от последнего филла, а не от средней (0/1)", 0, 0, 1),
     P("tp_atr", "Тейк-профит ×ATR/10 (0=по сигналу)", 0, 0, 60),
     P("sl_frac", "Стоп-лосс: % от дистанции тейка (0=выкл, 50=половина)", 0, 0, 200),
     P("sl_pct", "Стоп-лосс: % от цены входа ×100 (0=выкл, 50=0.50%)", 0, 0, 200),
