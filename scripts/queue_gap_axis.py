@@ -35,6 +35,10 @@ LIVE = {"qty": 1, "avg_max": 20, "fast": 57, "slow": 48, "signal": 10, "tp_atr":
         "tod_m1": 600, "tod_m2": 1080, "tod_s1": 3, "tod_s2": 2, "tod_s3": 1,
         "bar_offset_min": 0, "flatten_end": 1}
 GAPS = (0, 100, 150, 200, 300, 400)
+# Ось «ATR без выходных» (21.09.2026): вторая половина того же разбора. Гоняется
+# ВМЕСТЕ с разножкой, потому что обе лечат одну болезнь — лестницу, рассчитанную
+# по мёртвому рынку, — и надо видеть, не мешают ли они друг другу.
+ATR_WEEKEND = (0, 1)
 
 
 def main() -> None:
@@ -61,8 +65,9 @@ def main() -> None:
         code = tpl["macd_shectory1"]["script_code"]
 
         ok = err = 0
-        for gap in GAPS:
-            ps = {**LIVE, "min_gap_pts": gap, "symbol": a.symbol}
+        for gap, aw in [(g, w) for g in GAPS for w in ATR_WEEKEND]:
+            ps = {**LIVE, "min_gap_pts": gap, "atr_skip_weekend": aw,
+                  "symbol": a.symbol}
             if a.book_key:
                 ps["book_key"] = a.book_key
             body = {
@@ -74,17 +79,18 @@ def main() -> None:
                 "dateTo": f"{a.date_to}T23:59:59",
                 "engine": "remote",
                 # номер в имени кампании обязателен: id прогона = кампания+стратегия+символ
-                "campaign": f"{a.campaign}{mode}{gap:03d}",
+                "campaign": f"{a.campaign}{mode}{gap:03d}w{aw}",
             }
             if a.dry_run:
-                print(f"  {mode} разножка {gap}: {a.symbol} {a.date_from}..{a.date_to}")
+                print(f"  {mode} разножка {gap} atr_без_выходных {aw}: "
+                      f"{a.symbol} {a.date_from}..{a.date_to}")
                 continue
             try:
                 client.post("/api/v1/backtest/run", json=body).raise_for_status()
                 ok += 1
             except Exception as exc:  # noqa: BLE001
                 err += 1
-                print(f"  ошибка на разножке {gap}: {exc}")
+                print(f"  ошибка на разножке {gap}/w{aw}: {exc}")
         print(f"{mode}: поставлено {ok}, ошибок {err}"
               if not a.dry_run else "dry-run, ничего не поставлено")
 
