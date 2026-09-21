@@ -61,6 +61,8 @@ async def main() -> None:
 
     print(f"{'прогон':44} {'итог руб':>11} {'кругов':>7} {'реализ.прос':>12} "
           f"{'прос.MTM руб':>13} {'max_mae':>9} {'пик контр':>10}")
+    seen: dict[tuple, str] = {}
+    twins = 0
     for r in rows:
         if r["net_profit"] is None and r["equity_curve"] is None:
             continue
@@ -69,6 +71,20 @@ async def main() -> None:
               f"{100 * float(r['max_drawdown'] or 0):11.0f}% "
               f"{dd_from_curve(r['equity_curve']):13.0f} "
               f"{float(r['max_mae'] or 0):9.0f} {r['peak_contracts'] or 0:10}")
+        # ПРОБНИК ЖИВОСТИ ОСИ: совпавшие ИТОГ и число кругов у разных вариантов
+        # значат, что на i9 старый движок и параметр молча игнорируется. Этим
+        # 21.09.2026 был потрачен целый прогон на 32 задания.
+        sig = (round(float(r["net_profit"] or 0), 4), r["total_trades"])
+        if sig in seen and seen[sig][:-2] != r["id"][:-2]:
+            twins += 1
+        seen.setdefault(sig, r["id"])
+
+
+    if twins:
+        print()
+        print(f"ВНИМАНИЕ: {twins} прогонов совпали с другими бит-в-бит — похоже, "
+              f"ось на i9 не работает (старый движок). Проверь applied_token в "
+              f"i9_heartbeat и lib_sha (локальный файл сверять в версии с LF).")
 
 
 if __name__ == "__main__":
