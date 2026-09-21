@@ -81,3 +81,34 @@ def test_step_from_last_fill_stretches_the_ladder():
 
 def test_off_by_default():
     assert _fills({**BASE}) == _fills({**BASE, "avg_from_last": 0})
+
+
+def test_no_add_while_price_moves_back_in_our_favour():
+    """Наблюдение оператора 21.09: при выключенной оси робот доливал шорт НА ПАДЕНИИ.
+
+    Условие добора «price >= avg + dist» — это УРОВЕНЬ от средней: пока цена за
+    уровнем, добор проходит на любом баре, в том числе когда цена возвращается в
+    пользу позиции (у живого agent-macdshort пять таких доборов за день:
+    84710 -> 84670, 84850 -> 84820, 84820 -> 84780). Шаг от ФИЛЛА требует нового
+    хода против позиции, поэтому такие доборы исчезают.
+    """
+    def back_adds(params: dict) -> int:
+        fills = _fills(params)
+        pos = 0
+        last = None
+        back = 0
+        for side, qty, price in fills:
+            sgn = 1 if side == "buy" else -1
+            grows = pos == 0 or (pos > 0) == (sgn > 0)
+            if grows and pos != 0 and last is not None:
+                if (price - last) * (1 if pos > 0 else -1) > 0:
+                    back += 1          # добор по ЛУЧШЕЙ цене = в сторону прибыли
+            if grows:
+                last = price
+            pos += sgn * qty
+            if pos == 0:
+                last = None
+        return back
+
+    # Пила внутри хода против позиции: цена то идёт против, то отходит назад.
+    assert back_adds({**BASE, "avg_from_last": 1}) == 0

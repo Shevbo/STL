@@ -488,11 +488,27 @@ def make_on_bar(rid: str):
         if min_gap > 0 or avg_from_last:
             gap_prev_pos = int(stl.get_state("gap_pos", cur) or 0)
             gap_pending = float(stl.get_state("gap_pending", 0) or 0)
-            if gap_pending > 0 and (abs(cur) > abs(gap_prev_pos) or cur * gap_prev_pos < 0):
+            grew = abs(cur) > abs(gap_prev_pos) or cur * gap_prev_pos < 0
+            if gap_pending > 0 and grew:
                 gap_ref = gap_pending
                 stl.set_state("gap_ref", gap_pending)
                 stl.set_state("gap_pending", 0)
+            # ТОЧНАЯ ЦЕНА ИСПОЛНЕНИЯ последнего входа — для шага лестницы. Разножке
+            # хватает цены ЗАЯВКИ (она про «не лепить заявки рядом»), а шагу лестницы
+            # нужна цена ФИЛЛА: заявка идёт по закрытию сигнального бара, а
+            # исполняется по открытию следующего, и на быстром ходе это десятки
+            # пунктов — ровно те, на которых лестница и сжимается (21.09.2026).
+            # Считаем из средней: filled = (avg_new·|pos_new| − avg_old·|pos_old|) / Δ.
+            prev_avg = float(stl.get_state("gap_avg", 0) or 0)
+            if grew and avg > 0:
+                d_qty = abs(cur) - abs(gap_prev_pos)
+                if d_qty > 0 and prev_avg > 0 and cur * gap_prev_pos > 0:
+                    filled = (avg * abs(cur) - prev_avg * abs(gap_prev_pos)) / d_qty
+                else:
+                    filled = avg          # вход с нуля или переворот: средняя и есть филл
+                stl.set_state("last_fill", filled)
             stl.set_state("gap_pos", cur)
+            stl.set_state("gap_avg", avg)
 
         # Эффект фильтров в ПУНКТАХ (рубли считает UI через ₽/пункт). Методика — в
         # settle_skip_phantoms: фантом живёт до тейка или разворота сигнала, как
@@ -899,8 +915,15 @@ def make_on_bar(rid: str):
             # .5 к чётному — молча другая лестница, чем оператор задал).
             next_add = max(1, int(prev_add * k_avg + 0.5))
             add = min(next_add, avg_max - abs(cur))
-            # Отсчёт шага: средняя (как было) либо последний исполнившийся вход.
-            step_ref = gap_ref if (avg_from_last and gap_ref > 0) else avg
+            # Отсчёт шага: средняя (как было) либо ФАКТИЧЕСКАЯ цена последнего
+            # исполнившегося входа. Именно это чинит наблюдение оператора 21.09:
+            # условие «price >= avg + dist» — это УРОВЕНЬ от средней, и пока цена за
+            # уровнем, робот доливал на каждом баре, в том числе когда цена уже
+            # возвращалась в его пользу (у agent-macdshort пять таких доборов за
+            # день: 84710 -> 84670, 84850 -> 84820, 84820 -> 84780). Шаг от филла
+            # требует НОВОГО хода против позиции, а не пребывания за уровнем.
+            _lf = float(stl.get_state("last_fill", 0) or 0)
+            step_ref = _lf if (avg_from_last and _lf > 0) else avg
             if cur_dir > 0 and price <= step_ref - dist:
                 if in_dv or no_weekend:
                     note_skip("weekend" if no_weekend else "dv", price)
