@@ -485,7 +485,10 @@ def make_on_bar(rid: str):
         # отсчёт, и добор 11:42 прошёл в 40 пунктах от исполнения 11:14 по 85490).
         # Позиция, УШЕДШАЯ от нуля или сменившая знак = вход исполнился; сокращение
         # к нулю (выход) отсчёт не двигает, иначе развороту некуда открываться.
-        if min_gap > 0 or avg_from_last:
+        # Отслеживаем ВСЕГДА: цена последнего филла нужна запрету добора в сторону
+        # прибыли (он по умолчанию включён, см. add_on_profit ниже), а не только
+        # разножке и оси avg_from_last.
+        if True:
             gap_prev_pos = int(stl.get_state("gap_pos", cur) or 0)
             gap_pending = float(stl.get_state("gap_pending", 0) or 0)
             grew = abs(cur) > abs(gap_prev_pos) or cur * gap_prev_pos < 0
@@ -906,7 +909,23 @@ def make_on_bar(rid: str):
         # Шаг добора: пункты своей стороны (слой DeskBot), иначе k_step×ATR. Без ATR ветка
         # раньше выходила целиком (atrv<=0 -> return); dist=0 даёт то же самое.
         dist = step_pts[cur_dir] if step_pts[cur_dir] > 0 else (k_step * atrv if atrv > 0 else 0.0)
-        if dist > 0 and abs(cur) < avg_max and not flip_held:   # average in: add a unit on adverse move
+        # ЗАПРЕТ ДОБОРА В СТОРОНУ ПРИБЫЛИ (прямое распоряжение оператора 21.09.2026).
+        # Условие шага — уровень от средней, поэтому пока цена за уровнем, робот
+        # доливал на КАЖДОМ баре, в том числе когда цена уже возвращалась в его
+        # пользу: за два месяца живой торговли так вошли 487 контрактов из 5378
+        # добранных (9.1%), у agent-macdshort 21.09 пять доборов подряд на падении
+        # шорта (84710 -> 84670, 84850 -> 84820, 84820 -> 84780). Теперь добор
+        # требует, чтобы цена была ХУЖЕ последнего исполнения для позиции.
+        # add_on_profit=1 возвращает прежнее поведение — он нужен только для
+        # замеров на i9, в торговле включать его нечем.
+        _last_fill = float(stl.get_state("last_fill", 0) or 0)
+        _profit_add = (_last_fill > 0 and cur != 0
+                       and (price - _last_fill) * cur_dir > 0
+                       and not int(params.get("add_on_profit", 0) or 0))
+        if _profit_add and dist > 0 and abs(cur) < avg_max and not flip_held:
+            note_skip("profitadd", price, d=cur_dir)
+        if (dist > 0 and abs(cur) < avg_max and not flip_held
+                and not _profit_add):          # average in: add a unit on adverse move
             # Лестница объёмов: первый добор = unit, каждый следующий = round(пред × k_avg).
             # k_avg=1.0 -> ровно прежнее поведение (add = unit на каждом шаге).
             prev_add = int(stl.get_state("avg_add", 0) or 0) or unit
@@ -973,6 +992,7 @@ GH = "https://github.com/topics/trading-strategies"
 AVG_PARAMS = [
     P("avg_max", "Усреднение: потолок доборов (не всей позиции)", 1, 1, 10),
     P("avg_step_atr", "Усреднение: шаг ×ATR/10 (0=выкл)", 0, 0, 30),
+    P("add_on_profit", "РАЗРЕШИТЬ добор при ходе в сторону прибыли (0=запрещено, для замеров)", 0, 0, 1),
     P("avg_from_last", "Шаг усреднения от последнего филла, а не от средней (0/1)", 0, 0, 1),
     P("tp_atr", "Тейк-профит ×ATR/10 (0=по сигналу)", 0, 0, 60),
     P("sl_frac", "Стоп-лосс: % от дистанции тейка (0=выкл, 50=половина)", 0, 0, 200),
@@ -1071,6 +1091,7 @@ SHECTORY1_PARAMS = [
 AVG_PARAMS_FORCED = [
     P("avg_max", "Усреднение: потолок доборов (не всей позиции)", 5, 2, 10),
     P("avg_step_atr", "Усреднение: шаг ×ATR/10", 10, 5, 30),
+    P("add_on_profit", "РАЗРЕШИТЬ добор при ходе в сторону прибыли (0=запрещено, для замеров)", 0, 0, 1),
     P("avg_from_last", "Шаг усреднения от последнего филла, а не от средней (0/1)", 0, 0, 1),
     P("tp_atr", "Тейк-профит ×ATR/10 (0=по сигналу)", 0, 0, 60),
     P("sl_frac", "Стоп-лосс: % от дистанции тейка (0=выкл, 50=половина)", 0, 0, 200),
