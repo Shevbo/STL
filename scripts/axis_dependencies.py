@@ -70,6 +70,12 @@ GATES = [
      lambda p: not p.get("super_y"),
      ["super_z"],
      "эскалация выключена"),
+    ("int(qty * k_avg) не поднимает ступень",
+     lambda p: int(max(1, int(p.get("qty", 1) or 1))
+                   * float(p.get("k_avg", 10) or 10) / 10.0 + 0.5)
+               == max(1, int(p.get("qty", 1) or 1)),
+     ["k_avg"],
+     "объём добора целый: при qty=1 любое k_avg < 1.5 = побитовый дубль 1.0"),
     ("flip_min_pts >= 3000",
      lambda p: (p.get("flip_min_pts") or 0) >= 3000,
      ["flip_close_loss", "flip_back_pct", "flip_hold_win"],
