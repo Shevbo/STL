@@ -1082,15 +1082,30 @@ function renderWatch(w) {
   const bt = w.backtests || {};
   const pl = w.platform || {};
   const i9 = pl.i9;
-  const oneLine = (name, blk, extra) => {
+  // `always` печатается и при поломке блока: оператор просил видеть загрузку обеих
+  // машин ПОСТОЯННО, а не только когда всё в порядке (22.09.2026). Именно в аварии
+  // она и нужна: 21.09 хостер стоял под LA 21.81, и в строке было только «таймаут».
+  const oneLine = (name, blk, extra, always) => {
     const bad = blk && blk.ok === false;
-    const txt = bad ? (blk.issues || []).join('; ') : 'ОК' + (extra ? ' · ' + extra : '');
+    let txt = bad ? (blk.issues || []).join('; ') : 'ОК' + (extra ? ' · ' + extra : '');
+    if (always) txt += ' · ' + always;
     return `<div class="chk ${bad ? 'bad' : ''}"><span class="n">${esc(name)}</span>` +
       `<span class="s">${esc(txt)}</span></div>`;
   };
   const btExtra = `в работе ${bt.running || 0} · ждут ${bt.queued || 0}`;
-  const platExtra = 'LA ' + (pl.hoster && pl.hoster.load != null ? pl.hoster.load : '—') +
-    ' · i9 ' + (i9 ? (i9.stale ? 'молчит' : (i9.cpu_pct != null ? i9.cpu_pct + '%' : 'он')) : 'н/д');
+  // Возраст LA smain обязателен: сторож приносит его раз в 10 минут, и молча
+  // показывать десятиминутное число как текущее нельзя.
+  const agoMin = (ms) => (ms == null ? null : Math.round(ms / 60000));
+  const hostLA = (pl.hoster && pl.hoster.load != null)
+    ? 'хостер LA ' + pl.hoster.load + (pl.hoster.cores ? ' (' + pl.hoster.cores + ' ядра)' : '')
+    : 'хостер LA н/д';
+  const sm = pl.smain;
+  const smAge = sm ? agoMin(sm.age_ms) : null;
+  const smainLA = (sm && sm.load != null)
+    ? 'smain LA ' + sm.load + (smAge != null ? ' (' + smAge + ' мин назад)' : '')
+    : 'smain LA н/д';
+  const platAlways = hostLA + ' · ' + smainLA;
+  const platExtra = 'i9 ' + (i9 ? (i9.stale ? 'молчит' : (i9.cpu_pct != null ? i9.cpu_pct + '%' : 'он')) : 'н/д');
   let star = '';
   if (bt.star) {
     const s = bt.star;
@@ -1125,7 +1140,7 @@ function renderWatch(w) {
   }
   return oneLine('раннер + lua', w.runner) +
     oneLine('бэктесты', bt, btExtra) +
-    oneLine('платформа', pl, platExtra) +
+    oneLine('платформа', pl, platExtra, platAlways) +
     star;
 }
 

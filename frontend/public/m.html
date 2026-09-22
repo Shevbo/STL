@@ -798,12 +798,24 @@ function renderActive(list) {
 function renderWatch(w) {
   if (!w) return '<div class="empty">нет данных</div>';
   const bt = w.backtests || {}, pl = w.platform || {}, i9 = pl.i9;
-  const one = (name, blk, extra) => {
+  // `always` печатается и при поломке блока: загрузку обеих машин оператор должен
+  // видеть ПОСТОЯННО, в аварии она нужнее всего (22.09.2026).
+  const one = (name, blk, extra, always) => {
     const bad = blk && blk.ok === false;
-    const txt = bad ? (blk.issues || []).join('; ') : 'ОК' + (extra ? ' · ' + extra : '');
+    let txt = bad ? (blk.issues || []).join('; ') : 'ОК' + (extra ? ' · ' + extra : '');
+    if (always) txt += ' · ' + always;
     return `<div class="chk ${bad ? 'bad' : ''}"><span class="n">${esc(name)}</span>` +
       `<span class="s">${esc(txt)}</span></div>`;
   };
+  // Возраст LA smain обязателен: сторож приносит его раз в 10 минут.
+  const hostLA = (pl.hoster && pl.hoster.load != null)
+    ? 'хостер LA ' + pl.hoster.load + (pl.hoster.cores ? ' (' + pl.hoster.cores + ' ядра)' : '')
+    : 'хостер LA н/д';
+  const sm = pl.smain;
+  const smAge = (sm && sm.age_ms != null) ? Math.round(sm.age_ms / 60000) : null;
+  const smainLA = (sm && sm.load != null)
+    ? 'smain LA ' + sm.load + (smAge != null ? ' (' + smAge + ' мин назад)' : '')
+    : 'smain LA н/д';
   // Кандидат перебора: ссылку на кампанию в Ботсторе не даём — Ботстор свёрстан
   // под десктоп, а телефон с токеном компаньона туда всё равно не пустят. Все
   // цифры кандидата уже в самой строке.
@@ -817,8 +829,9 @@ function renderWatch(w) {
   }
   return one('раннер + lua', w.runner) +
     one('бэктесты', bt, `в работе ${bt.running || 0} · ждут ${bt.queued || 0}`) +
-    one('платформа', pl, 'LA ' + (pl.hoster && pl.hoster.load != null ? pl.hoster.load : '—') +
-      ' · i9 ' + (i9 ? (i9.stale ? 'молчит' : (i9.cpu_pct != null ? i9.cpu_pct + '%' : 'он')) : 'н/д')) +
+    one('платформа', pl,
+      'i9 ' + (i9 ? (i9.stale ? 'молчит' : (i9.cpu_pct != null ? i9.cpu_pct + '%' : 'он')) : 'н/д'),
+      hostLA + ' · ' + smainLA) +
     star;
 }
 

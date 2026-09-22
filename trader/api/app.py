@@ -614,8 +614,17 @@ _MAX_COMBOS = 2000
 # grid subprocess is already nice(19)+SCHED_IDLE+ionice, and combos are capped.
 # Jobs the real agent claims (within seconds) never go stale, so this only fires
 # when nothing is claiming — i.e. the i9 is unavailable.
-_FB_ENABLED = os.environ.get("VDS_FALLBACK_ENABLED", "1") not in ("0", "false", "False")
+# ВЫКЛЮЧЕНО ПО УМОЛЧАНИЮ. У оператора прямой запрет считать переборы на хостере, и
+# держаться он обязан на коде, а не на строке pause_local в таблице: default "1"
+# означал, что путь включается сам при пустом окружении (письмо backtests 22.09.2026).
+# Включить можно только явным VDS_FALLBACK_ENABLED=1.
+_FB_ENABLED = os.environ.get("VDS_FALLBACK_ENABLED", "0") in ("1", "true", "True")
 _FB_POLL_SEC = int(os.environ.get("VDS_FALLBACK_POLL_SEC", "45"))
+# Витрина Botstore: сколько живёт готовый каталог и сколько максимум ждём базу.
+# Каталог меняется медленно (результаты копятся минутами), а один проход по
+# optimization_leaderboard - минуты, поэтому TTL заметно больше времени запроса.
+_BOTSTORE_TTL_SEC = int(os.environ.get("BOTSTORE_CACHE_TTL_SEC", "180"))
+_BOTSTORE_SQL_TIMEOUT = float(os.environ.get("BOTSTORE_SQL_TIMEOUT_SEC", "90"))
 _FB_MAX_LOAD = float(os.environ.get("VDS_FALLBACK_MAX_LOAD", "2.0"))   # 4-core box; leaves headroom
 _FB_STALE_SEC = int(os.environ.get("VDS_FALLBACK_STALE_SEC", "600"))   # untaken this long → agent down
 # (10 min: ride out brief i9 network blips without loading the VDS — the agent
@@ -2180,6 +2189,46 @@ def create_app() -> FastAPI:
         _auth(request)
         pool = request.app.state.db_pool
 
+        # ОДИН СКАН НА ВСЕХ. Витрина делает DISTINCT ON и GROUP BY по
+        # optimization_leaderboard - 4.84 млн строк, 2.9 ГБ, подходящего индекса нет,
+        # один проход живёт минутами. Каждое открытие страницы добавляло ЕЩЁ один
+        # полный скан, а предыдущие не отменялись: 21.09.2026 в 11:10 их крутилось
+        # девять разом, LA хостера 21.81, API отвечал таймаутами (письма backtests и
+        # real-trade). Кэш с одиночным пропуском: первый считает, остальные ждут его
+        # результат, повторные открытия в течение TTL не считают вовсе.
+        import asyncio as _asyncio
+        import time as _t
+        st = request.app.state
+        cached = getattr(st, "_botstore_cache", None)
+        if cached and (_t.monotonic() - cached[0]) < _BOTSTORE_TTL_SEC:
+            return cached[1]
+        lock = getattr(st, "_botstore_lock", None)
+        if lock is None:
+            lock = st._botstore_lock = _asyncio.Lock()
+        async with lock:
+            # Пока ждали замок, его мог наполнить сосед — второй раз не считаем.
+            cached = getattr(st, "_botstore_cache", None)
+            if cached and (_t.monotonic() - cached[0]) < _BOTSTORE_TTL_SEC:
+                return cached[1]
+            try:
+                out = await _botstore_payload(request, pool)
+            except (TimeoutError, _asyncio.TimeoutError):
+                # Запрос не уложился в потолок. Отдаём ПРЕДЫДУЩИЙ ответ и честно
+                # помечаем его возраст: свежих данных нет, выдумывать их нельзя.
+                if cached:
+                    stale = dict(cached[1])
+                    stale["stale_sec"] = int(_t.monotonic() - cached[0])
+                    return stale
+                raise HTTPException(
+                    status_code=503,
+                    detail="Каталог не собрался за отведённое время: таблица результатов "
+                           "перебора читается целиком. Повторите через минуту.")
+            st._botstore_cache = (_t.monotonic(), out)
+            return out
+
+    async def _botstore_payload(request: Request, pool):
+        """Тело витрины. Вынесено из обработчика, чтобы кэш с одиночным пропуском
+        оборачивал ровно этот расчёт."""
         # robot catalog (strategy templates)
         try:
             from trader.lab.strategies.library import list_strategies as _lib_list
@@ -2205,11 +2254,11 @@ def create_app() -> FastAPI:
                        created_at
                 FROM optimization_leaderboard
                 ORDER BY strategy, symbol, score DESC NULLS LAST
-            """)
+            """, timeout=_BOTSTORE_SQL_TIMEOUT)
             counts = await pool.fetch("""
                 SELECT strategy, count(*) AS variants, max(created_at) AS last_run
                 FROM optimization_leaderboard GROUP BY strategy
-            """)
+            """, timeout=_BOTSTORE_SQL_TIMEOUT)
         else:
             counts = []
         variants_by = {c["strategy"]: c["variants"] for c in counts}

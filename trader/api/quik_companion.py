@@ -1112,7 +1112,9 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
               "running": 0, "queued": 0, "stuck": []}
 
     # 4.3 platform: hoster (this box), i9 (heartbeat), smain (watchdog freshness)
-    hoster: dict = {"load": None}
+    # Ядра рядом с LA: без них число ни о чём не говорит - LA 4 на четырёх ядрах и
+    # на шестнадцати это разные новости. Берём фактическое, а не записанное в код.
+    hoster: dict = {"load": None, "cores": os.cpu_count()}
     try:
         hoster["load"] = round(os.getloadavg()[0], 2)
     except (OSError, AttributeError):
@@ -1141,7 +1143,26 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
         plat_issues.append(f"i9 память {i9.get('ram_pct')}%")
     if smain_silent:
         plat_issues.append("вотчер молчит (smain/cron)")
+    # LA ВТОРОЙ МАШИНЫ. smain своего эндпоинта не имеет, его загрузку приносит сторож
+    # в записи прогона (real-trade 22.09.2026). Значение обновляется раз в 10 минут,
+    # поэтому рядом с ним ОБЯЗАТЕЛЕН возраст: показать десятиминутной давности число
+    # как текущее - соврать о состоянии машины.
+    smain = None
+    smain_load = (last_run or {}).get("smain_load")
+    if smain_load is not None:
+        try:
+            smain = {"load": round(float(smain_load), 2),
+                     "age_ms": max(0, now_ms - last_run_ms) if last_run_ms else None}
+        except (TypeError, ValueError):
+            smain = None
+    # LA хостера в той же записи - запасной источник, когда os.getloadavg() недоступен.
+    if hoster["load"] is None:
+        try:
+            hoster["load"] = round(float((last_run or {}).get("hoster_load")), 2)
+        except (TypeError, ValueError):
+            pass
     platform = {"ok": not plat_issues, "issues": plat_issues, "hoster": hoster,
+                "smain": smain,
                 "i9": i9, "watchdog_last_ms": last_run_ms, "in_session": in_session}
 
     # Сигнальная лампа перебора: лучший СВЕЖИЙ кандидат из хитпарада за 24ч.
