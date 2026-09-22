@@ -10,6 +10,7 @@
   import { smartOrdersStore } from '$lib/stores/smart-orders.svelte';
   import MiniChart from './MiniChart.svelte';
   import { TF_BUTTONS } from '$lib/chart-time';
+  import { robotCodes } from '$lib/robot-plan';
 
   type Entry = {
     symbol: string;
@@ -29,10 +30,23 @@
       quikCodes = [...new Set(active.map((o) => o.code))];
     } catch { /* keep previous */ }
   }
+  // Зеркало живых роботов: их планы рисуются на тех же графиках, а инструменты с
+  // позицией или планом обязаны попадать в сетку - раньше робот мог держать
+  // позицию, а его инструмента на экране не было вовсе (оператор 22.09.2026).
+  let robots = $state<any[]>([]);
+  async function loadRobots() {
+    try {
+      const r = await fetch('/api/v1/quik/robots-mirror', { credentials: 'include' });
+      if (!r.ok) return;
+      robots = ((await r.json()).robots ?? []).filter((x: any) => !x?.paper);
+    } catch { /* keep previous */ }
+  }
   $effect(() => {
     loadQuik();
+    loadRobots();
     const t = setInterval(loadQuik, 4000);
-    return () => clearInterval(t);
+    const t2 = setInterval(loadRobots, 5000);
+    return () => { clearInterval(t); clearInterval(t2); };
   });
 
   // Книгу умных заявок опрашиваем ЗДЕСЬ, один раз на всю сетку (у стора общий
@@ -96,6 +110,17 @@
       else map.set(symbol, { symbol, label: tickerOf(symbol), badge: `${n} умных`, badgeKind: 'neutral' });
     }
 
+    // Живые роботы — ПЯТЫЙ источник. Робот держит позицию и ведёт свои заявки
+    // сам, в позициях счёта его часть видна суммарно, а инструмента с одним лишь
+    // планом (без позиции и ручных заявок) на экране не было вовсе.
+    for (const code of robotCodes(robots)) {
+      const symbol = code.includes('@') ? code : `${code}@RTSX`;
+      const n = robots.filter((r: any) => String(r?.symbol ?? '') === code).length;
+      const e = map.get(symbol);
+      if (e) e.badge += ` · ${n} робот.`;
+      else map.set(symbol, { symbol, label: tickerOf(symbol), badge: `${n} робот.`, badgeKind: 'neutral' });
+    }
+
     return [...map.values()];
   });
 
@@ -133,7 +158,7 @@
   {:else}
     <div class="gf-grid">
       {#each entries as e (e.symbol)}
-        <MiniChart symbol={e.symbol} label={e.label} badge={e.badge} badgeKind={e.badgeKind} {tf} />
+        <MiniChart symbol={e.symbol} label={e.label} badge={e.badge} badgeKind={e.badgeKind} {tf} {robots} />
       {/each}
     </div>
   {/if}

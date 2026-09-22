@@ -12,6 +12,7 @@
   import { KINDS, preview } from '$lib/smart-order-help';
   import { draftBody, kindFromEvent, levelAt, priceSteps, quantize, sideFor } from '$lib/chart-orders';
   import { mskTickFormatter, mskCrosshairFormatter, tfName } from '$lib/chart-time';
+  import { ROBOT_LINE_COLOR, robotPlanLines } from '$lib/robot-plan';
 
   let {
     symbol,
@@ -19,12 +20,16 @@
     badge = '',
     badgeKind = 'neutral',
     tf = 5,
+    robots = [],
   }: {
     symbol: string;
     label?: string;
     badge?: string;
     badgeKind?: 'long' | 'short' | 'neutral';
     tf?: number;
+    // Зеркало живых роботов: их планы рисуются на том же графике, что и ручные
+    // заявки оператора (просьба оператора 22.09.2026).
+    robots?: any[];
   } = $props();
 
   // Карта таймфреймов ОБЩАЯ с большим графиком ($lib/chart-time): здешняя копия
@@ -56,6 +61,9 @@
   // Легенда показывает ТОЛЬКО нарисованные сейчас типы: постоянный список
   // стилей превращается в шум, который перестают читать.
   const legend = $derived(smartLegend(smartHere));
+  // Линии робота в легенде называются отдельно: на одном графике рядом стоят
+  // ручные заявки оператора и планы робота, и по цвету должно быть видно, чьи.
+  const planHere = $derived(robotPlanLines(robots, symbol.split('@')[0]));
 
   // ── Заявки мышкой прямо на графике ──────────────────────────────────────
   // Ни один жест сам по себе заявку НЕ ставит: всё кончается подтверждением с
@@ -211,8 +219,12 @@
     }
   }
 
-  async function loadHistory(attempt = 0) {
-    loading = true; failed = false;
+  // Первую отрисовку подгоняем по размеру, ПОВТОРНЫЕ - нет: fitContent на каждом
+  // обновлении сбрасывал бы масштаб и прокрутку под руками оператора.
+  let fitted = false;
+  async function loadHistory(attempt = 0, silent = false) {
+    if (!silent) { loading = true; }
+    failed = false;
     try {
       const tfLabel = tfName(tf);
       const r = await fetchWithAuth(
@@ -221,7 +233,10 @@
       const data = r.ok ? await r.json() : null;
       if (!Array.isArray(data) || !data.length) {
         // No data yet (slow Finam / transient): retry a couple of times, then show a hint.
-        if (attempt < 3) { setTimeout(() => loadHistory(attempt + 1), 1500); return; }
+        if (attempt < 3) { setTimeout(() => loadHistory(attempt + 1, silent), 1500); return; }
+        // Тихое обновление молча оставляет прежние бары: они всё ещё вернее пустого
+        // графика. Экран «нет данных» показываем только на ПЕРВОЙ загрузке.
+        if (silent) return;
         loading = false; failed = true; return;
       }
       bars = data.map((b: Record<string, number>) => ({
@@ -229,15 +244,28 @@
       }));
       if (series) {
         series.setData(bars);
-        chart.timeScale().fitContent();
+        if (!fitted) { chart.timeScale().fitContent(); fitted = true; }
         lastClose = bars[bars.length - 1].close;
       }
       loading = false; failed = false;
     } catch {
-      if (attempt < 3) { setTimeout(() => loadHistory(attempt + 1), 1500); return; }
+      if (attempt < 3) { setTimeout(() => loadHistory(attempt + 1, silent), 1500); return; }
+      if (silent) return;
       loading = false; failed = true;
     }
   }
+
+  // НОВЫЕ СВЕЧИ. Живая котировка двигает только ПОСЛЕДНЮЮ свечу, а следующая не
+  // появлялась никогда: историю грузили один раз при монтировании. График замирал
+  // на баре, который шёл в момент открытия экрана, и выглядел живым - у него
+  // дёргалась последняя свеча (оператор 22.09.2026, свечи стояли с 14:00 при 14:53
+  // на часах). Перечитываем историю минимум раз в полминуты и не реже, чем
+  // закрывается бар выбранного таймфрейма.
+  $effect(() => {
+    const periodMs = Math.min(30_000, Math.max(10_000, tf * 60_000 / 4));
+    const t = setInterval(() => loadHistory(0, true), periodMs);
+    return () => clearInterval(t);
+  });
 
   // nudge the last candle's close from the live quote (same as the main chart)
   $effect(() => {
@@ -265,6 +293,9 @@
     // коснувшись smartHere, оставался без зависимостей и не запускался больше
     // никогда — заявки на графике не появлялись вовсе (09.08.2026).
     const orders = smartHere;
+    // Планы роботов читаем ТОЖЕ ДО выхода и по той же причине: эффект
+    // подписывается только на то, что реально прочитал за прогон.
+    const plan = robotPlanLines(robots, symbol.split('@')[0]);
     if (!ready || !series) return;
     const want = new Map<string, { price: number; title: string; color: string; style: number; dim?: boolean }>();
     // Двузначный код связки в начале подписи: so_id в метку не влезает, а без
@@ -281,6 +312,10 @@
         }
       }
     }
+    // Планы живых роботов идут в ТУ ЖЕ карту: один механизм линий на оба
+    // источника, иначе уровни оператора и робота жили бы своей жизнью и
+    // расходились по виду. Цвет у робота свой - кто поставил уровень, видно.
+    for (const lv of plan) want.set(lv.key, lv);
     for (const [key, line] of smartLines) {
       if (!want.has(key)) { series.removePriceLine(line); smartLines.delete(key); }
     }
@@ -449,7 +484,7 @@
       </div>
     </div>
   {/if}
-  {#if legend.length}
+  {#if legend.length || planHere.length}
     <!-- Легенда ПОД графиком отдельной строкой. Накладкой поверх канвы её не
          было видно вовсе: lightweight-charts добавляет свой canvas в контейнер
          ПОСЛЕ svelte-детей и закрывал её собой. Здесь названы типы (цвет +
@@ -463,6 +498,18 @@
           </svg>{l.text}
         </span>
       {/each}
+      {#if planHere.length}
+        <span class="mc-l">
+          <svg viewBox="0 0 18 8" aria-hidden="true">
+            <line x1="1" y1="4" x2="17" y2="4" stroke={ROBOT_LINE_COLOR} stroke-width="2" />
+          </svg>робот: заявка в стакане
+        </span>
+        <span class="mc-l">
+          <svg viewBox="0 0 18 8" aria-hidden="true">
+            <line x1="1" y1="4" x2="17" y2="4" stroke={ROBOT_LINE_COLOR} stroke-width="2" stroke-dasharray="5 3" />
+          </svg>робот: план (тейк, стоп, следующий вход)
+        </span>
+      {/if}
       <span class="mc-l muted">▲ покупка · ▼ продажа · «к» — контракты; тонкая линия — вспомогательный уровень</span>
     </div>
   {/if}
