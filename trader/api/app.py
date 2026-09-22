@@ -2246,14 +2246,32 @@ def create_app() -> FastAPI:
 
         rows = []
         if pool is not None:
+            # СКАЧУЩИЙ СКАН ВМЕСТО DISTINCT ON. Результат тот же - лучшая строка на
+            # каждую пару (стратегия, инструмент), - но DISTINCT ON обходил ВСЕ 4.84 млн
+            # записей индекса ради 934 итоговых строк (7.9 с и 4.2 млн буферов на
+            # прогон, вымывало кэш базы). Рекурсия прыгает от группы к группе: 934
+            # спуска по индексу вместо полного прохода, 0.4 с. Замерено на проде
+            # 22.09.2026, обе формы дают одни и те же 934 строки.
+            # Опирается на idx_lb_strategy_symbol_score (strategy, symbol, score DESC).
             rows = await pool.fetch("""
-                SELECT DISTINCT ON (strategy, symbol)
-                       strategy, symbol, params, total_return, max_drawdown,
-                       recovery_factor, sharpe, win_rate, total_trades, net_profit,
-                       point_value, initial_margin, initial_equity, date_from, date_to,
-                       created_at
-                FROM optimization_leaderboard
-                ORDER BY strategy, symbol, score DESC NULLS LAST
+                WITH RECURSIVE pairs AS (
+                    (SELECT strategy, symbol FROM optimization_leaderboard
+                      ORDER BY strategy, symbol LIMIT 1)
+                    UNION ALL
+                    SELECT n.strategy, n.symbol FROM pairs p
+                      CROSS JOIN LATERAL (
+                        SELECT o.strategy, o.symbol FROM optimization_leaderboard o
+                         WHERE (o.strategy, o.symbol) > (p.strategy, p.symbol)
+                         ORDER BY o.strategy, o.symbol LIMIT 1) n
+                )
+                SELECT b.* FROM pairs p CROSS JOIN LATERAL (
+                    SELECT o.strategy, o.symbol, o.params, o.total_return, o.max_drawdown,
+                           o.recovery_factor, o.sharpe, o.win_rate, o.total_trades,
+                           o.net_profit, o.point_value, o.initial_margin, o.initial_equity,
+                           o.date_from, o.date_to, o.created_at
+                      FROM optimization_leaderboard o
+                     WHERE o.strategy = p.strategy AND o.symbol = p.symbol
+                     ORDER BY o.score DESC NULLS LAST LIMIT 1) b
             """, timeout=_BOTSTORE_SQL_TIMEOUT)
             counts = await pool.fetch("""
                 SELECT strategy, count(*) AS variants, max(created_at) AS last_run
