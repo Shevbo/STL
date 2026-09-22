@@ -287,6 +287,10 @@ _NATIVE_CONFIRM_MS = 20_000
 # Флаги стоп-заявки QUIK: бит 0 «активна». Снят - запись отработала или снята
 # (28 исполнена, 26/30 снята; серии S1-S2, execution-module.md 3a/3b).
 _STOP_ALIVE_BIT = 1
+_STOP_FLAG_EXECUTED = 28
+# Сколько ждём сделки дочерней заявки, прежде чем признать, что ногу связки
+# определить не удалось. Сделки приезжают через секунду-две после исполнения.
+_NATIVE_FILL_WAIT_MS = 60_000
 
 
 def _stop_rows_by_tag(store: Any, agent: str) -> dict[str, dict]:
@@ -390,6 +394,35 @@ def _handover_standalone(book: SmartOrderBook, steps: dict[str, float], store: A
     return dirty
 
 
+def _native_fill(store: Any, agent: str, row: dict) -> tuple[float, int, int]:
+    """Цена, объём и время сделки, которой закрылась нативная стоп-заявка.
+
+    Берём ДОЧЕРНЮЮ заявку записи (linkedorder) и её сделки: это единственное
+    доказательство исполнения. Нет сделок - нет утверждения об исполнении."""
+    oid = str(row.get("linkedorder") or "")
+    if not oid or oid == "0" or store is None:
+        return 0.0, 0, 0
+    status = store.agent_status(agent) or {}
+    px, vol = _fill_price(status, oid)
+    ts = 0
+    for t in ((status.get("quik") or {}).get("trades") or []):
+        if str(t.get("order_num") or "") == oid:
+            ts = max(ts, int(t.get("ts_ms") or 0))
+    return px, vol, ts
+
+
+def _fired_leg(kids: list[SmartOrder], price: float) -> SmartOrder | None:
+    """Какая нога связки сработала: та, чей уровень ближе к цене сделки.
+
+    Одна запись QUIK держит и стоп, и тейк. 22.09.2026 книга помечала
+    ИСПОЛНЕННЫМИ обе, и карточка стопа на 85 420 говорила «сработала», хотя
+    позицию закрыл тейк на 86 250 - оператор читал это как выбитый стоп."""
+    cand = [c for c in kids if c.trigger_price > 0]
+    if not cand or price <= 0:
+        return None
+    return min(cand, key=lambda c: abs(c.trigger_price - price))
+
+
 def _native_holder(book: SmartOrderBook, parent: SmartOrder) -> SmartOrder | None:
     return next((c for c in book.orders
                  if c.parent_id == parent.so_id and c.status in ("native", "fired", "cancelled")
@@ -401,11 +434,16 @@ def _track_native(book: SmartOrderBook, store: Any, agent: str, now: int) -> lis
 
     Возвращает родителей, у которых передача СОРВАЛАСЬ: их защиту вернули сторожу
     STL, и оператора надо разбудить - позиция была бы голой, промолчи мы тут."""
-    watched = [p for p in book.orders if p.native_state in ("sent", "live")]
+    # Только ВЛАДЕЛЬЦЫ записи: у связки это родитель, у одиночной заявки она сама.
+    # Ребёнок-держатель тоже носит native_state (в нём лежит номер стоп-заявки), и
+    # без этого условия он разбирался бы вторым, отдельным «родителем».
+    watched = [p for p in book.orders
+               if p.native_state in ("sent", "live") and not p.parent_id]
     if not watched:
         return []
     rows = _stop_rows_by_tag(store, agent)
     failed: list[SmartOrder] = []
+    orphaned: list[SmartOrder] = []
     for parent in watched:
         if not parent.parent_id and parent.status in ("native", "armed") and not any(
                 c.parent_id == parent.so_id for c in book.orders):
@@ -425,14 +463,17 @@ def _track_native(book: SmartOrderBook, store: Any, agent: str, now: int) -> lis
                 failed.append(parent)
                 log.warning("smart_order.native_rejected", parent=parent.so_id)
             elif parent.native_state == "live":
-                # Была в таблице и исчезла: считаем отработавшей, судить о судьбе
-                # позиции по отсутствию записи нельзя - это делает сверка позиций.
+                # Запись была и исчезла. ЧТО с ней случилось - неизвестно: исполнение
+                # это отдельный факт, и придумывать его нельзя (22.09.2026: книга
+                # писала «сработала» там, где доказательства не было).
                 parent.native_state = "done"
                 for c in kids:
                     if c.status == "native":
-                        c.status = "fired"
-                        c.note = (c.note + " " if c.note else "") + "исполнена терминалом"
-                log.info("smart_order.native_gone", parent=parent.so_id)
+                        c.status = "orphaned"
+                        c.note = (c.note + " " if c.note else "") + \
+                            "запись исчезла из терминала, исполнение НЕ подтверждено: проверьте позицию"
+                orphaned.append(parent)
+                log.warning("smart_order.native_gone", parent=parent.so_id)
             continue
         try:
             flags = int(row.get("flags") or 0)
@@ -446,15 +487,47 @@ def _track_native(book: SmartOrderBook, store: Any, agent: str, now: int) -> lis
             log.info("smart_order.native_live", parent=parent.so_id,
                      stop_num=row.get("order_num"), flags=row.get("flags"))
         if not flags & _STOP_ALIVE_BIT:
+            natives = [c for c in kids if c.status == "native"]
+            if flags != _STOP_FLAG_EXECUTED:
+                parent.native_state = "done"
+                for c in natives:
+                    c.status = "cancelled"
+                    c.note = (c.note + " " if c.note else "") + "снята в терминале"
+                log.info("smart_order.native_cancelled", parent=parent.so_id, flags=flags)
+                continue
+            # Исполнена. ОДНА запись QUIK держит обе ноги связки, поэтому «сработала»
+            # имеет право стоять только у той, чей уровень совпал с ценой сделки;
+            # вторая снята вместе с ней. Цена берётся из сделок дочерней заявки.
+            px, vol, ts = _native_fill(store, agent, row)
+            winner = _fired_leg(natives, px)
+            if winner is None:
+                if now - parent.native_ms < _NATIVE_FILL_WAIT_MS:
+                    continue          # сделки ещё не доехали, ждём следующий проход
+                parent.native_state = "done"
+                for c in natives:
+                    c.status = "orphaned"
+                    c.note = (c.note + " " if c.note else "") + \
+                        "связка исполнена терминалом, какая нога сработала - не установлено"
+                orphaned.append(parent)
+                log.warning("smart_order.native_done_unattributed", parent=parent.so_id,
+                            stop_num=row.get("order_num"), linked=row.get("linkedorder"))
+                continue
             parent.native_state = "done"
-            done_as = "fired" if flags == 28 else "cancelled"
-            for c in kids:
-                if c.status == "native":
-                    c.status = done_as
-                    c.note = (c.note + " " if c.note else "") + (
-                        "исполнена терминалом" if done_as == "fired" else "снята в терминале")
-            log.info("smart_order.native_done", parent=parent.so_id, flags=flags,
-                     linked=row.get("linkedorder"))
+            winner.status = "fired"
+            winner.fired_price, winner.fired_qty = px, vol or winner.qty
+            winner.fired_ms = ts or now
+            winner.note = (winner.note + " " if winner.note else "") + \
+                f"сработала в терминале: {px:g} x {vol or winner.qty}"
+            what = {"sl": "стоп", "tp": "тейк", "trail_tp": "следящий тейк"}.get(winner.kind, winner.kind)
+            for c in natives:
+                if c is winner:
+                    continue
+                c.status = "cancelled"
+                c.note = (c.note + " " if c.note else "") + \
+                    f"снята вместе со связкой: в терминале сработал {what} по {px:g}"
+            log.info("smart_order.native_fired", parent=parent.so_id, leg=winner.so_id,
+                     kind=winner.kind, price=px, qty=vol, linked=row.get("linkedorder"))
+    failed.extend(orphaned)
     return failed
 
 

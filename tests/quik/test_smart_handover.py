@@ -92,18 +92,70 @@ def test_terminal_did_not_take_it_so_stl_guards_again(tmp_path):
     assert [c.status for c in book.orders if c.parent_id == parent.so_id] == ["armed"]
 
 
-def test_executed_in_the_terminal_closes_our_records(tmp_path):
+class FakeStoreWithTrades(FakeStore):
+    """Стоп-таблица плюс сделки дочерней заявки: чем закрылась связка на деле."""
+
+    def __init__(self, rows=(), trades=()):
+        super().__init__(rows)
+        self.trades = list(trades)
+
+    def agent_status(self, agent=None):
+        return {"quik": {"trades": self.trades}}
+
+
+def _executed_bracket(tmp_path, fill_price):
     book, parent = _book_with_bracket(tmp_path, sl_offset=300, tp_offset=500)
     srv, ost = FakeSrv(), FakeOst()
     _handover_to_terminal(book, STEPS, ost, srv, "9618", NOW)
     holder = next(c for c in book.orders if c.status == "native")
     tag = f"stl-so-{holder.so_id}"
-    _track_native(book, FakeStore([{"brokerref": tag, "order_num": "310467778", "flags": "29"}]),
-                  "9618", NOW + 3000)
-    _track_native(book, FakeStore([{"brokerref": tag, "order_num": "310467778", "flags": "28"}]),
-                  "9618", NOW + 9000)
+    live = [{"brokerref": tag, "order_num": "310467778", "flags": "29"}]
+    _track_native(book, FakeStore(live), "9618", NOW + 3000)
+    done = [{"brokerref": tag, "order_num": "310467778", "flags": "28",
+             "linkedorder": "1925040235109497119"}]
+    trades = [{"order_num": "1925040235109497119", "qty": 1, "price": fill_price,
+               "ts_ms": NOW + 8000}]
+    return book, parent, FakeStoreWithTrades(done, trades)
+
+
+def test_executed_bracket_marks_only_the_leg_that_actually_fired(tmp_path):
+    # Вход 87000, стоп 86700, тейк 87500. Закрылись по 87510 — значит ТЕЙК.
+    book, parent, store = _executed_bracket(tmp_path, 87510)
+    _track_native(book, store, "9618", NOW + 9000)
+    kids = {c.kind: c for c in book.orders if c.parent_id == parent.so_id}
     assert parent.native_state == "done"
-    assert {c.status for c in book.orders if c.parent_id == parent.so_id} == {"fired"}
+    assert kids["tp"].status == "fired" and kids["tp"].fired_price == 87510
+    assert kids["sl"].status == "cancelled"
+    assert "сработал тейк" in kids["sl"].note
+    # Обратный случай: закрылись по 86690 — сработал СТОП, тейк снят.
+    book2, parent2, store2 = _executed_bracket(tmp_path, 86690)
+    _track_native(book2, store2, "9618", NOW + 9000)
+    kids2 = {c.kind: c for c in book2.orders if c.parent_id == parent2.so_id}
+    assert kids2["sl"].status == "fired" and kids2["tp"].status == "cancelled"
+
+
+def test_execution_without_proof_is_not_called_fired(tmp_path):
+    # Сделок дочерней заявки нет: какая нога сработала — неизвестно, и врать нельзя.
+    book, parent, _ = _executed_bracket(tmp_path, 87510)
+    store = FakeStoreWithTrades([{"brokerref": f"stl-so-{next(c.so_id for c in book.orders if c.status == 'native')}",
+                                  "order_num": "310467778", "flags": "28", "linkedorder": "0"}])
+    assert _track_native(book, store, "9618", NOW + 9000) == []      # ждём сделки
+    out = _track_native(book, store, "9618", NOW + 9000 + 60_001)
+    assert out == [parent]
+    assert {c.status for c in book.orders if c.parent_id == parent.so_id} == {"orphaned"}
+
+
+def test_record_vanished_is_reported_not_assumed_executed(tmp_path):
+    book, parent = _book_with_bracket(tmp_path, sl_offset=300, tp_offset=500)
+    srv, ost = FakeSrv(), FakeOst()
+    _handover_to_terminal(book, STEPS, ost, srv, "9618", NOW)
+    holder = next(c for c in book.orders if c.status == "native")
+    _track_native(book, FakeStore([{"brokerref": f"stl-so-{holder.so_id}",
+                                    "order_num": "310467778", "flags": "29"}]), "9618", NOW + 3000)
+    out = _track_native(book, FakeStore(), "9618", NOW + 9000)       # запись пропала
+    assert out == [parent]
+    assert {c.status for c in book.orders if c.parent_id == parent.so_id} == {"orphaned"}
+    assert all("НЕ подтверждено" in c.note for c in book.orders if c.parent_id == parent.so_id)
 
 
 class FakeStoreWithPositions(FakeStore):
