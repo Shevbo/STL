@@ -23,6 +23,8 @@ import sys
 
 import httpx
 
+BOOK_CHUNK = 150      # см. --chunk: крупное задание по стакану теряется молча
+
 CODE = ("from trader.lab.strategies.library import make_on_bar\n"
         "on_bar = make_on_bar('macd_shectory1')")
 
@@ -35,6 +37,13 @@ def main() -> None:
     ap.add_argument("--campaign", required=True)
     ap.add_argument("--date-from", required=True)
     ap.add_argument("--date-to", required=True)
+    # ПОТОЛОК ПРИ ИСПОЛНЕНИИ ПО СТАКАНУ. 22.09.2026 одно задание на 542 набора по
+    # 40-дневной выжимке (29 110 минут стакана) вернулось с i9 ПУСТЫМ СПИСКОМ
+    # результатов: ни одной упавшей комбинации, ни ошибки в логе хостера, задание
+    # помечено done, строк ноль. Те же 542 набора четырьмя заданиями по 140 легли
+    # полностью. Стакан держит каждый воркер, их 14, поэтому крупное задание
+    # выносит память молча. Никогда не полагаться на видимый статус задания:
+    # сверять число строк в лидерборде с числом отправленных наборов.
     ap.add_argument("--chunk", type=int, default=5000)
     ap.add_argument("--api", default=os.environ.get("STL_API", "http://localhost:8000"))
     a = ap.parse_args()
@@ -49,7 +58,11 @@ def main() -> None:
         base["book_key"] = a.book_key
 
     h = {"X-Agent-Token": tok, "Content-Type": "application/json"}
-    chunks = [sets[i:i + a.chunk] for i in range(0, len(sets), a.chunk)]
+    chunk = a.chunk
+    if a.book_key and chunk > BOOK_CHUNK:
+        chunk = BOOK_CHUNK
+        print(f"исполнение по стакану: размер задания срезан до {chunk} наборов")
+    chunks = [sets[i:i + chunk] for i in range(0, len(sets), chunk)]
     ok = 0
     with httpx.Client(base_url=a.api, headers=h, timeout=300) as c:
         for i, part in enumerate(chunks):
@@ -63,6 +76,13 @@ def main() -> None:
             except Exception as exc:  # noqa: BLE001
                 print(f"  кусок {i} не встал: {exc}")
     print(f"поставлено {ok} наборов в {len(chunks)} заданиях, кампания {a.campaign}*")
+    # Задание может вернуться пустым при статусе done (см. --chunk). Считать прогон
+    # состоявшимся только после сверки числа строк с числом отправленных наборов.
+    print(f"СВЕРЬ по окончании: строк в лидерборде должно быть {ok}
+"
+          f"  SELECT count(*) FROM optimization_leaderboard
+"
+          f"  WHERE campaign_run LIKE 'camp-%{a.campaign.replace('-', '')}%';")
 
 
 if __name__ == "__main__":
