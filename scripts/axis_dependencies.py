@@ -102,13 +102,16 @@ def eta(data: list[tuple[dict, float]], key: str) -> tuple[float, int]:
 
 async def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--base", required=True)
+    ap.add_argument("--base", required=True,
+                    help="ПРЕФИКС кампании (camp-YYYYMMDD-tag): подстрока с ведущим
+                          %% заставляла Postgres сканировать 4.8 млн строк лидерборда
+                          целиком и грузила хостер, 22.09.2026 LA дошла до 31")
     a = ap.parse_args()
 
     c = await asyncpg.connect(os.environ["LAB_DB_URL"])
     rows = await c.fetch(
         "SELECT params, net_profit, total_trades FROM optimization_leaderboard "
-        "WHERE campaign_run LIKE $1 AND net_profit IS NOT NULL", f"%{a.base}%")
+        "WHERE campaign_run LIKE $1 AND net_profit IS NOT NULL", f"{a.base}%")
     await c.close()
     data, traded = [], []
     for r in rows:

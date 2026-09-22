@@ -51,7 +51,10 @@ def spearman(xs: list[float], ys: list[float]) -> float:
 
 async def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--base", required=True)
+    ap.add_argument("--base", required=True,
+                    help="ПРЕФИКС кампании (camp-YYYYMMDD-tag): подстрока с ведущим
+                          %% заставляла Postgres сканировать 4.8 млн строк лидерборда
+                          целиком и грузила хостер, 22.09.2026 LA дошла до 31")
     ap.add_argument("--min-rows", type=int, default=1000)
     ap.add_argument("--top", type=int, default=99)
     # Случайная сетка по 47 осям в большинстве наборов ГЛУШИТ торговлю (долина,
@@ -65,11 +68,11 @@ async def main() -> None:
     c = await asyncpg.connect(os.environ["LAB_DB_URL"])
     total = await c.fetchval(
         "SELECT count(*) FROM optimization_leaderboard WHERE campaign_run LIKE $1",
-        f"%{a.base}%")
+        f"{a.base}%")
     cond = "" if a.all_sets else " AND total_trades > 0"
     rows = await c.fetch(
         "SELECT params, net_profit, total_trades FROM optimization_leaderboard "
-        f"WHERE campaign_run LIKE $1 AND net_profit IS NOT NULL{cond}", f"%{a.base}%")
+        f"WHERE campaign_run LIKE $1 AND net_profit IS NOT NULL{cond}", f"{a.base}%")
     await c.close()
     print(f"всего наборов {total}, торгующих {len(rows)} "
           f"({100 * len(rows) / max(total, 1):.1f}%)")
