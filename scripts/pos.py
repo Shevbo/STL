@@ -75,6 +75,12 @@ def main() -> int:
           f"(снят {hhmm(t.get('ts_ms'))})")
     if why:
         print(f"  {why} — про позиции честный ответ «не знаю», проверяй QUIK")
+    feed = t.get("feed") or []
+    if feed:
+        print("лента: " + "; ".join(
+            "%s %s (бид %s аск %s, %s с)" % (
+                f.get("code"), f.get("last"), f.get("bid"), f.get("ask"),
+                round((f.get("age_ms") or 0) / 1000, 1)) for f in feed))
     print("позиции счёта:")
     for p in t.get("positions") or []:
         print("  %-6s net %+d (роботы %+d, рука %+d) avg %s ВМ %s" % (

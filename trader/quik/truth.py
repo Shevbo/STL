@@ -138,8 +138,15 @@ def build(status: dict[str, Any] | None, agents: list[dict[str, Any]],
     else:
         why = ""
 
+    # Цена и возраст ленты: без них нельзя сказать, ЗАКОННО ли взведённая заявка
+    # ещё не сработала (23.09.2026 вечером вопрос по заявке встал именно так).
+    feed = [{"code": f.get("code"), "last": f.get("last"), "bid": f.get("bid"),
+             "ask": f.get("ask"), "age_ms": f.get("age_ms")}
+            for f in (status.get("health") or {}).get("feed") or []]
+
     return {
         "ts_ms": now_ms,
+        "feed": feed,
         "age_ms": age_ms,
         "stale": bool(why),
         "stale_why": why,
