@@ -418,13 +418,15 @@ def _trades_between(status: dict, code: str, sides: set[str],
                     t0: int, t1: int) -> tuple[float, int]:
     """Средняя цена и объём сделок РУЧНОГО класса по инструменту в окне времени.
 
-    Доказательство того, что исчезнувшая стоп-заявка всё-таки исполнилась. Тег
-    пустой: нативные стопы умных заявок приходят без brokerref, роботные (rr:)
-    сюда попадать не должны."""
+    Доказательство того, что исчезнувшая стоп-заявка всё-таки исполнилась. Свой
+    класс — это пустой brokerref (рука оператора) и "stl-so-*" (ребёнок умной
+    заявки, так его метит агент). Роботные сделки несут ID робота и сюда не идут:
+    робот торгует свою позицию, к стоп-заявке оператора она отношения не имеет."""
     num, vol = 0.0, 0
     first = {s[:1].lower() for s in sides if s}
     for t in ((status.get("quik") or {}).get("trades") or []):
-        if t.get("sec") != code or (t.get("tag") or ""):
+        tag = str(t.get("tag") or "")
+        if t.get("sec") != code or (tag and not tag.startswith("stl-so-")):
             continue
         if first and str(t.get("side") or "").lower()[:1] not in first:
             continue

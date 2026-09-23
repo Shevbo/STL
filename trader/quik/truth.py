@@ -46,14 +46,23 @@ MSK_OFFSET_MS = 3 * 3600 * 1000
 _LAST_TRADES = 20          # хвост сделок прямо в снимке, чтобы хватало одного файла
 
 
+SMART_TAG = "stl-so-"      # см. quik_agent/internal/trade/bridge.go: ownerTag()
+
+
 def owner(tag: str) -> str:
-    """Чья сделка: робота (brokerref rr:), умной заявки (so:) или руки оператора."""
+    """Чья сделка, по brokerref из таблицы QUIK.
+
+    Агент пишет в комментарий заявки: ID робота, "recon" у выравнивающей, а у
+    ребёнка умной заявки "stl-so-<so_id>". Пусто — торговал человек руками.
+    Это НЕ client_id ("rr:"/"so:"): в brokerref QUIK всего 20 символов."""
     tag = (tag or "").strip()
-    if tag.startswith("rr:"):
-        return "robot"
-    if tag.startswith("so:"):
+    if not tag:
+        return "manual"
+    if tag.startswith(SMART_TAG):
         return "smart"
-    return "manual"
+    if tag == "recon":
+        return "recon"
+    return "robot"
 
 
 def _msk_day_start_ms(now_ms: int) -> int:

@@ -255,3 +255,28 @@ def test_vanished_with_a_matching_trade_is_a_fill_not_a_reset(tmp_path):
     kids = {c.kind: c for c in book.orders if c.parent_id == parent.so_id}
     assert kids["tp"].status == "fired" and kids["tp"].fired_price == 87490
     assert kids["sl"].status == "cancelled"
+
+
+def test_a_smart_order_child_trade_counts_as_proof(tmp_path):
+    """Сделку ребёнка умной заявки агент метит stl-so-*, а не пустым тегом.
+
+    С фильтром «только пустой тег» доказательство исполнения терялось, и
+    сработавшая стоп-заявка переставлялась заново — дубль на живом счёте."""
+    book, parent = _live_bracket(tmp_path)
+    holder = next(c for c in book.orders if c.parent_id == parent.so_id)
+    store = FakeStoreWithTrades((), [{"sec": "RIZ6", "side": "S", "qty": 1,
+                                      "price": 87490, "ts_ms": NOW + 30_000,
+                                      "tag": f"stl-so-{holder.so_id}"}])
+    assert _track_native(book, store, "9618", NOW + 40_000) == [parent]
+    assert parent.native_state == "done"
+    assert {c.status for c in book.orders if c.parent_id == parent.so_id} == {"fired", "cancelled"}
+
+
+def test_a_robot_trade_is_never_taken_as_proof(tmp_path):
+    """Робот торгует свою позицию: его сделка стоп-заявке оператора не доказательство."""
+    book, parent = _live_bracket(tmp_path)
+    store = FakeStoreWithTrades((), [{"sec": "RIZ6", "side": "S", "qty": 1,
+                                      "price": 87490, "ts_ms": NOW + 30_000,
+                                      "tag": "agent-macdshort-RIU6"}])
+    assert _track_native(book, store, "9618", NOW + 40_000) == [parent]
+    assert parent.native_state == ""       # вернули охрану себе, а не «сработало»

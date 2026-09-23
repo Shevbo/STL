@@ -21,7 +21,7 @@ def _status(**kw):
             {"num": "1", "ts_ms": NOW - 60_000, "sec": "RIZ6", "side": "S", "qty": 10,
              "price": 86320.0, "order_num": "77", "tag": ""},
             {"num": "2", "ts_ms": NOW - 30_000, "sec": "RIZ6", "side": "S", "qty": 10,
-             "price": 86420.0, "order_num": "78", "tag": "rr:agent-macd-RIZ6-v1"},
+             "price": 86420.0, "order_num": "78", "tag": "agent-macd-RIZ6-v1"},
         ]},
     }
     base.update(kw)
@@ -90,3 +90,15 @@ def test_journal_survives_restart_by_reading_back_its_own_day(tmp_path):
     d = str(tmp_path)
     truth.append_trades(_status(), set(), NOW, d)
     assert truth.append_trades(_status(), truth._load_seen(NOW, d), NOW, d) == 0
+
+
+def test_owner_reads_the_brokerref_quik_actually_stores():
+    """Тег в таблице QUIK — не client_id: 20 символов, ID робота как есть.
+
+    До 23.09 классификация ждала префиксов rr:/so: и записывала в «руку»
+    ВСЕ роботные сделки — первый же живой снимок показал 100 ручных из 100."""
+    assert truth.owner("agent-macdshort-RIU6") == "robot"
+    assert truth.owner("lxk22tsffsxiiotb8kmp") == "robot"
+    assert truth.owner("stl-so-1521ee8cd8") == "smart"
+    assert truth.owner("recon") == "recon"
+    assert truth.owner("") == "manual" and truth.owner(None) == "manual"
