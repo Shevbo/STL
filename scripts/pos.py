@@ -95,11 +95,24 @@ def main() -> int:
             r.get("id"), r.get("symbol"), r.get("mode"), r.get("position"),
             r.get("avg_price"), " ПАУЗА" if r.get("paused") else ""))
     so = t.get("smart_orders") or []
+    watch = {w.get("so_id"): w for w in (t.get("watch") or [])}
     print(f"умные заявки живые: {len(so)}")
     for o in so:
         print("  %s %-8s %-4s %3d %-6s %-7s уровень %s откат %s" % (
             o.get("so_id"), o.get("kind"), o.get("side"), o.get("qty"), o.get("code"),
             o.get("status"), o.get("level"), o.get("trail_offset")))
+        w = watch.get(o.get("so_id"))
+        if not w:
+            continue
+        d = w.get("distance")
+        print("     сторож видит %s (кадр %.1f с), до уровня %s; с постановки "
+              "ходила %s..%s%s%s" % (
+                  w.get("last"), (w.get("tick_age_ms") or 0) / 1000,
+                  "—" if d is None else round(d, 1),
+                  w.get("lo_since"), w.get("hi_since"),
+                  ", АКТИВИРОВАНА пик %s" % w.get("peak") if w.get("activated") else "",
+                  "  !! СЛЕП: " + ("биржа закрыта" if w.get("session_open") is not True
+                                   else "кадр мёртвый") if w.get("watcher_blind") else ""))
     tt = t.get("trades_today") or {}
     print(f"сделок сегодня: {tt.get('count')} {tt.get('by_owner') or {}}")
     for r in (t.get("last_trades") or [])[-5:]:

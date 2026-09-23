@@ -70,8 +70,66 @@ def _msk_day_start_ms(now_ms: int) -> int:
     return day * 86_400_000 - MSK_OFFSET_MS
 
 
+def watch_view(book_orders: list[Any], ticks: dict[str, dict[str, Any]],
+               extremes: dict[str, dict[str, float]], session_open: Any,
+               now_ms: int) -> list[dict[str, Any]]:
+    """Чем сторож ЖИВЁТ по каждой взведённой заявке: цена, которую он видит,
+    возраст кадра, торгует ли биржа, сколько осталось до уровня и куда цена
+    ходила с постановки.
+
+    Без этого «почему не сработала» не имеет ответа: сторож судит по store.tick
+    (типизированный кадр), а показываем мы feed из витрины агента — это разные
+    каналы, и расходятся они молча. 23.09.2026 вопрос по заявке 2b2990d2c4
+    пришлось закрывать свечами ISS с четвертьчасовым опозданием."""
+    out = []
+    for o in book_orders:
+        if o.status != "armed":
+            continue
+        t = ticks.get(o.code) or {}
+        last = float(t.get("last") or 0)
+        age = now_ms - int(t.get("received_at_unix_ms") or 0) if t else -1
+        ext = extremes.get(o.code) or {}
+        level = o.trigger_price or 0.0
+        out.append({
+            "so_id": o.so_id, "kind": o.kind, "code": o.code, "side": o.side,
+            "qty": o.qty, "level": level, "trail_offset": o.trail_offset,
+            "activated": bool(getattr(o, "activated", False)),
+            "peak": getattr(o, "peak", 0.0),
+            "last": last,
+            "distance": round(level - last, 6) if (level and last) else None,
+            "tick_age_ms": age,
+            "watcher_blind": bool(age < 0 or age > 30_000 or last <= 0
+                                  or session_open is not True),
+            "session_open": session_open,
+            "hi_since": ext.get("hi"), "lo_since": ext.get("lo"),
+            "since_ms": ext.get("since_ms"),
+        })
+    return out
+
+
+def track_extremes(extremes: dict[str, dict[str, float]], codes: set[str],
+                   ticks: dict[str, dict[str, Any]], now_ms: int) -> None:
+    """Максимум и минимум ПО ТОМУ ЖЕ кадру, по которому судит сторож.
+
+    Ходила ли цена к уровню — вопрос факта, а не памяти оператора; ISS отвечает
+    на него с опозданием на четверть часа."""
+    for code in codes:
+        last = float((ticks.get(code) or {}).get("last") or 0)
+        if last <= 0:
+            continue
+        e = extremes.get(code)
+        if e is None:
+            extremes[code] = {"hi": last, "lo": last, "since_ms": now_ms}
+        else:
+            e["hi"], e["lo"] = max(e["hi"], last), min(e["lo"], last)
+    for code in list(extremes):
+        if code not in codes:
+            del extremes[code]          # заявок по инструменту нет — и следить не за чем
+
+
 def build(status: dict[str, Any] | None, agents: list[dict[str, Any]],
-          book_orders: list[Any], now_ms: int) -> dict[str, Any]:
+          book_orders: list[Any], now_ms: int,
+          watch: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Снимок: позиции счёта с разбивкой робот/рука, роботы, живые умные заявки.
 
     `status` — зеркало агента (store.agent_status()); None или старое зеркало
@@ -147,6 +205,7 @@ def build(status: dict[str, Any] | None, agents: list[dict[str, Any]],
     return {
         "ts_ms": now_ms,
         "feed": feed,
+        "watch": watch or [],
         "age_ms": age_ms,
         "stale": bool(why),
         "stale_why": why,
@@ -222,6 +281,7 @@ async def run(state: Any, path: str = PATH, directory: str = TRADES_DIR,
               period: float = PERIOD_SEC) -> None:
     """Фоновая задача: снимок на диск раз в две секунды + журнал сделок."""
     now = int(time.time() * 1000)
+    extremes: dict[str, dict[str, float]] = {}
     seen = _load_seen(now, directory)
     day = journal_path(now, directory)
     log.info("quik.truth.started", path=path, journal=day, known_trades=len(seen))
@@ -232,8 +292,14 @@ async def run(state: Any, path: str = PATH, directory: str = TRADES_DIR,
                 now = int(time.time() * 1000)
                 status = store.agent_status(None)
                 book = getattr(state, "smart_orders", None)
-                _write_atomic(path, build(status, store.status(),
-                                          list(book.orders) if book else [], now))
+                orders = list(book.orders) if book else []
+                codes = {o.code for o in orders if o.status == "armed"}
+                ticks = {c: (store.tick(c, None) or {}) for c in codes}
+                track_extremes(extremes, codes, ticks, now)
+                session_open = (getattr(state, "market_session", None) or {}).get("open")
+                _write_atomic(path, build(status, store.status(), orders, now,
+                                          watch_view(orders, ticks, extremes,
+                                                     session_open, now)))
                 today = journal_path(now, directory)
                 if today != day:            # смена суток МСК — журнал новый, дедуп тоже
                     seen, day = set(), today

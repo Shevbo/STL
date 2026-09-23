@@ -102,3 +102,39 @@ def test_owner_reads_the_brokerref_quik_actually_stores():
     assert truth.owner("stl-so-1521ee8cd8") == "smart"
     assert truth.owner("recon") == "recon"
     assert truth.owner("") == "manual" and truth.owner(None) == "manual"
+
+
+class _SO:
+    def __init__(self, **kw):
+        self.__dict__.update({"so_id": "x", "kind": "trail_tp", "code": "RIZ6",
+                              "side": "sell", "qty": 20, "status": "armed",
+                              "trigger_price": 85790.0, "trail_offset": 220.0,
+                              "activated": False, "peak": 0.0, "native_state": "",
+                              "parent_id": ""})
+        self.__dict__.update(kw)
+
+
+def test_watch_view_explains_why_an_armed_order_did_not_fire():
+    ticks = {"RIZ6": {"last": 85680.0, "received_at_unix_ms": NOW - 600}}
+    ext = {"RIZ6": {"hi": 85700.0, "lo": 85500.0, "since_ms": NOW - 600_000}}
+    w = truth.watch_view([_SO()], ticks, ext, True, NOW)[0]
+    assert w["distance"] == 110.0 and w["watcher_blind"] is False
+    assert (w["lo_since"], w["hi_since"]) == (85500.0, 85700.0)
+
+
+def test_watch_view_calls_a_dead_frame_blindness():
+    ticks = {"RIZ6": {"last": 85680.0, "received_at_unix_ms": NOW - 45_000}}
+    assert truth.watch_view([_SO()], ticks, {}, True, NOW)[0]["watcher_blind"] is True
+    # Биржа закрыта — сторож тоже не действует, и это должно быть видно.
+    fresh = {"RIZ6": {"last": 85680.0, "received_at_unix_ms": NOW - 500}}
+    assert truth.watch_view([_SO()], fresh, {}, False, NOW)[0]["watcher_blind"] is True
+
+
+def test_extremes_follow_the_same_frame_the_watcher_judges_by():
+    ext: dict = {}
+    truth.track_extremes(ext, {"RIZ6"}, {"RIZ6": {"last": 85600.0}}, NOW)
+    truth.track_extremes(ext, {"RIZ6"}, {"RIZ6": {"last": 85830.0}}, NOW + 1000)
+    truth.track_extremes(ext, {"RIZ6"}, {"RIZ6": {"last": 85500.0}}, NOW + 2000)
+    assert (ext["RIZ6"]["hi"], ext["RIZ6"]["lo"]) == (85830.0, 85500.0)
+    truth.track_extremes(ext, set(), {}, NOW + 3000)      # заявок нет — след снят
+    assert ext == {}
