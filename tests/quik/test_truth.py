@@ -28,6 +28,16 @@ def _status(**kw):
     return base
 
 
+def test_paper_robots_do_not_move_the_account_split():
+    """Бумажной позиции на счёте нет: сложи её в разбивку — и «рука» соврёт."""
+    st = _status()
+    st["robots"] = st["robots"] + [{"id": "paper-fvg", "symbol": "RIZ6",
+                                    "mode": "paper", "position": 5}]
+    pos = truth.build(st, [{"last_seen_age_ms": 500}], [], NOW)["positions"][0]
+    assert (pos["robots"], pos["manual"]) == (-10, -30)
+    assert len(truth.build(st, [], [], NOW)["robots"]) == 2   # показываем оба
+
+
 def test_position_is_split_between_robots_and_the_hand():
     t = truth.build(_status(), [{"last_seen_age_ms": 800}], [], NOW)
     assert t["stale"] is False
@@ -62,7 +72,7 @@ def test_no_mirror_at_all_is_stale_and_empty():
 
 def test_robot_position_missing_from_the_account_table_is_shown_not_hidden():
     st = _status(health={"positions": []})
-    t = truth.build(st, [], [], NOW)
+    t = truth.build(st, [{"last_seen_age_ms": 500}], [], NOW)
     assert t["positions"] == [{"sec": "RIZ6", "net": 0, "avg": None, "varmargin": None,
                                "robots": -10, "manual": 10}]
 

@@ -77,7 +77,10 @@ def build(status: dict[str, Any] | None, agents: list[dict[str, Any]],
     for r in status.get("robots") or []:
         pos = int(r.get("position") or 0)
         sym = str(r.get("symbol") or "")
-        if sym:
+        # Только РЕАЛЬНЫЕ: бумажный робот считает свою позицию у себя и на счёте
+        # её нет. Сложив его в разбивку, мы вычли бы несуществующие контракты из
+        # ручной позиции — и «рука» врала бы ровно на бумажный объём.
+        if sym and str(r.get("mode") or "") == "real":
             by_symbol[sym] = by_symbol.get(sym, 0) + pos
         robots.append({
             "id": r.get("id"), "symbol": sym, "mode": r.get("mode"),
@@ -96,8 +99,8 @@ def build(status: dict[str, Any] | None, agents: list[dict[str, Any]],
             "varmargin": p.get("varmargin"),
             "robots": robot_net, "manual": net - robot_net,
         })
-    # Робот в позиции по инструменту, которого нет в таблице счёта, — расхождение,
-    # а не отсутствие позиции: показываем строку с net=0, чтобы оно било в глаза.
+    # РЕАЛЬНЫЙ робот в позиции по инструменту, которого нет в таблице счёта, —
+    # расхождение, а не отсутствие позиции: строка с net=0, чтобы било в глаза.
     for sym, robot_net in by_symbol.items():
         if robot_net and not any(p["sec"] == sym for p in positions):
             positions.append({"sec": sym, "net": 0, "avg": None, "varmargin": None,
