@@ -98,6 +98,11 @@ class SmartOrder:
     native_state: str = ""
     native_stop_num: str = ""    # номер стоп-заявки QUIK у ребёнка-держателя
     native_ms: int = 0
+    # Когда запись стоп-заявки ПОСЛЕДНИЙ РАЗ видели живой в таблице терминала.
+    # Нужен, чтобы отличить исполнение от снятия по сроку: у стоп-заявки QUIK срок
+    # жизни - торговый день, и утром она исчезает сама (23.09.2026 так молча
+    # пропала следящая продажа 30 контрактов).
+    native_seen_ms: int = 0
     peak: float = 0.0            # trail bookkeeping (best price since activation)
     activated: bool = False      # trail: activation level crossed
     created_ms: int = 0

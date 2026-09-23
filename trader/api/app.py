@@ -483,8 +483,15 @@ async def lifespan(app: FastAPI):
     # что он, похоже, гуляет по времени дня и на ралли. Пока не измерен — все три
     # места врут ровно на величину ошибки.
     margin_stats_task = asyncio.create_task(_margin_multiplier_sampler(app.state))
+    # Снимок правды о позициях на диск раз в 2 с + журнал сделок. Фактическая
+    # картина живёт в памяти store и стирается рестартом; 23.09.2026 отчёт
+    # оператору строился по книге НАМЕРЕНИЙ и назвал закрытый шорт открытым.
+    from trader.quik.truth import run as _truth_dump
+    truth_task = asyncio.create_task(_truth_dump(app.state))
 
     yield
+
+    truth_task.cancel()
 
     margin_stats_task.cancel()
     agent_watch_task.cancel()

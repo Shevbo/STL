@@ -76,3 +76,5 @@ data/ai46_bt_3m/
 
 # История плагина remember: сессионная, у каждой машины своя.
 .remember/
+data/truth.json
+data/trades/

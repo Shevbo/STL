@@ -411,6 +411,36 @@ def _native_fill(store: Any, agent: str, row: dict) -> tuple[float, int, int]:
     return px, vol, ts
 
 
+_NATIVE_GONE_PAD_MS = 5_000   # запас: запись могла исчезнуть раньше, чем мы посмотрели
+
+
+def _trades_between(status: dict, code: str, sides: set[str],
+                    t0: int, t1: int) -> tuple[float, int]:
+    """Средняя цена и объём сделок РУЧНОГО класса по инструменту в окне времени.
+
+    Доказательство того, что исчезнувшая стоп-заявка всё-таки исполнилась. Тег
+    пустой: нативные стопы умных заявок приходят без brokerref, роботные (rr:)
+    сюда попадать не должны."""
+    num, vol = 0.0, 0
+    first = {s[:1].lower() for s in sides if s}
+    for t in ((status.get("quik") or {}).get("trades") or []):
+        if t.get("sec") != code or (t.get("tag") or ""):
+            continue
+        if first and str(t.get("side") or "").lower()[:1] not in first:
+            continue
+        ts = int(t.get("ts_ms") or 0)
+        if not ts or ts < t0 or ts > t1:
+            continue
+        try:
+            q, px = int(t.get("qty") or 0), float(t.get("price") or 0)
+        except (TypeError, ValueError):
+            continue
+        if q > 0 and px > 0:
+            num += px * q
+            vol += q
+    return (num / vol, vol) if vol else (0.0, 0)
+
+
 def _fired_leg(kids: list[SmartOrder], price: float) -> SmartOrder | None:
     """Какая нога связки сработала: та, чей уровень ближе к цене сделки.
 
@@ -463,22 +493,61 @@ def _track_native(book: SmartOrderBook, store: Any, agent: str, now: int) -> lis
                 failed.append(parent)
                 log.warning("smart_order.native_rejected", parent=parent.so_id)
             elif parent.native_state == "live":
-                # Запись была и исчезла. ЧТО с ней случилось - неизвестно: исполнение
-                # это отдельный факт, и придумывать его нельзя (22.09.2026: книга
-                # писала «сработала» там, где доказательства не было).
-                parent.native_state = "done"
-                for c in kids:
-                    if c.status == "native":
-                        c.status = "orphaned"
-                        c.note = (c.note + " " if c.note else "") + \
-                            "запись исчезла из терминала, исполнение НЕ подтверждено: проверьте позицию"
-                orphaned.append(parent)
-                log.warning("smart_order.native_gone", parent=parent.so_id)
+                # Запись была и исчезла. Причин ровно две, и они противоположны по
+                # смыслу: либо стоп-заявка сработала, либо её сняло СРОКОМ - у
+                # стоп-заявки QUIK срок жизни торговый день (EXPIRY_DATE TODAY), и
+                # утром вчерашняя запись исчезает сама. 23.09.2026 так молча пропала
+                # следящая продажа 30 контрактов: книга похоронила её в orphaned,
+                # охрану себе STL не вернул, и заявки не стало нигде.
+                # Судим по ФАКТУ - по сделкам того же инструмента и стороны в окне
+                # между последним подтверждением записи и её пропажей.
+                natives = [c for c in kids if c.status == "native"]
+                status = (store.agent_status(agent) or {}) if store is not None else {}
+                seen = parent.native_seen_ms or parent.native_ms
+                px, vol = _trades_between(
+                    status, parent.code, {c.side for c in natives},
+                    seen - _NATIVE_GONE_PAD_MS, now)
+                if vol > 0:
+                    # Сделка есть - исполнение. Чья нога, решает цена; не решилась -
+                    # честное «не установлено». Но переставлять заявку в этой ветке
+                    # нельзя никогда: дубль на живом счёте дороже неопределённости.
+                    parent.native_state = "done"
+                    winner = _fired_leg(natives, px)
+                    for c in natives:
+                        if c is winner:
+                            c.status = "fired"
+                            c.fired_price, c.fired_qty, c.fired_ms = px, vol, now
+                            c.note = (c.note + " " if c.note else "") +                                 f"запись исчезла, сработала по сделке: {px:g} x {vol}"
+                        else:
+                            c.status = "cancelled" if winner is not None else "orphaned"
+                            c.note = (c.note + " " if c.note else "") + (
+                                f"снята вместе со связкой: сделка по {px:g}"
+                                if winner is not None else
+                                f"запись исчезла, сделка по инструменту {px:g} x {vol}: "
+                                "какая нога сработала - не установлено, проверьте позицию")
+                    orphaned.append(parent)
+                    log.warning("smart_order.native_gone_filled", parent=parent.so_id,
+                                price=px, qty=vol,
+                                leg=winner.so_id if winner is not None else None)
+                else:
+                    # Сделок нет - заявка снялась, а не сработала. Возвращаем охрану
+                    # себе: armed и чистый native_state, и ближайший проход передачи
+                    # поставит запись в терминал заново, уже на новый торговый день.
+                    parent.native_state = ""
+                    parent.native_seen_ms = 0
+                    for c in natives:
+                        c.status = "armed"
+                        c.native_state, c.native_stop_num, c.native_seen_ms = "", "", 0
+                        c.note = (c.note + " " if c.note else "") +                             "запись снялась в терминале (срок стоп-заявки - торговый день), "                             "сделок по ней нет: заявка снова взведена, её ведёт STL"
+                    failed.append(parent)
+                    log.warning("smart_order.native_expired", parent=parent.so_id,
+                                since_seen_ms=now - seen, legs=len(natives))
             continue
         try:
             flags = int(row.get("flags") or 0)
         except (TypeError, ValueError):
             flags = 0
+        parent.native_seen_ms = now
         if parent.native_state == "sent":
             parent.native_state = "live"
             if holder is not None:
@@ -729,8 +798,15 @@ async def _watch_once(state: Any) -> None:
                                       so_mod.now_ms()) or dirty_meta
     for parent in _track_native(book, store, agent, so_mod.now_ms()):
         dirty_meta = True
-        await _alert_reject(srv, agent, parent,
-                            "терминал не принял стоп-заявку защиты: защиту ведёт STL")
+        # Причины разные, и оператору важно ИМЕННО какая: не принял терминал,
+        # сняло сроком (заявка жива и снова у STL) или исполнилось непонятно чем.
+        await _alert_reject(srv, agent, parent, {
+            "failed": "терминал не принял стоп-заявку защиты: защиту ведёт STL",
+            "": "стоп-заявка снялась в терминале (срок - торговый день), сделок нет: "
+                "заявка снова взведена, её ведёт STL",
+        }.get(parent.native_state,
+              "стоп-заявка исчезла из терминала и по инструменту есть сделка: "
+              "проверьте позицию"))
     if dirty_meta:
         book.save()
     if not active:

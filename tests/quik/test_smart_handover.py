@@ -38,6 +38,9 @@ class FakeStore:
     def stop_orders(self, agent=None):
         return {"table": self.rows}
 
+    def agent_status(self, agent=None):
+        return {"quik": {"trades": []}}
+
 
 def _book_with_bracket(tmp_path, **kw):
     book = SmartOrderBook(str(tmp_path / "book.json"))
@@ -145,17 +148,17 @@ def test_execution_without_proof_is_not_called_fired(tmp_path):
     assert {c.status for c in book.orders if c.parent_id == parent.so_id} == {"orphaned"}
 
 
-def test_record_vanished_is_reported_not_assumed_executed(tmp_path):
-    book, parent = _book_with_bracket(tmp_path, sl_offset=300, tp_offset=500)
-    srv, ost = FakeSrv(), FakeOst()
-    _handover_to_terminal(book, STEPS, ost, srv, "9618", NOW)
-    holder = next(c for c in book.orders if c.status == "native")
-    _track_native(book, FakeStore([{"brokerref": f"stl-so-{holder.so_id}",
-                                    "order_num": "310467778", "flags": "29"}]), "9618", NOW + 3000)
-    out = _track_native(book, FakeStore(), "9618", NOW + 9000)       # запись пропала
-    assert out == [parent]
-    assert {c.status for c in book.orders if c.parent_id == parent.so_id} == {"orphaned"}
-    assert all("НЕ подтверждено" in c.note for c in book.orders if c.parent_id == parent.so_id)
+def test_a_foreign_trade_is_not_taken_as_our_fill(tmp_path):
+    """Сделка того же инструмента, но ЧУЖОЙ стороны, исполнением не считается.
+
+    Иначе покупка оператора руками «закрыла» бы висящий защитный стоп на продажу,
+    и позиция осталась бы без защиты с отметкой «сработала»."""
+    book, parent = _live_bracket(tmp_path)
+    foreign = FakeStoreWithTrades((), [{"sec": "RIZ6", "side": "B", "qty": 1,
+                                        "price": 87490, "ts_ms": NOW + 30_000, "tag": ""}])
+    assert _track_native(book, foreign, "9618", NOW + 40_000) == [parent]
+    assert parent.native_state == ""
+    assert {c.status for c in book.orders if c.parent_id == parent.so_id} == {"armed"}
 
 
 class FakeStoreWithPositions(FakeStore):
@@ -213,3 +216,42 @@ def test_terminal_refusal_returns_a_standalone_order_to_stl(tmp_path):
 
     failed = _track_native(book, FakeStore(), "9618", NOW + _NATIVE_CONFIRM_MS + 1)
     assert failed == [so] and so.status == "armed" and so.native_state == "failed"
+
+
+def _live_bracket(tmp_path):
+    """Связка, отданная терминалу и подтверждённая в его таблице."""
+    book, parent = _book_with_bracket(tmp_path, sl_offset=300, tp_offset=500)
+    srv, ost = FakeSrv(), FakeOst()
+    _handover_to_terminal(book, STEPS, ost, srv, "9618", NOW)
+    holder = next(c for c in book.orders if c.status == "native")
+    tag = f"stl-so-{holder.so_id}"
+    _track_native(book, FakeStore([{"brokerref": tag, "order_num": "310469000",
+                                    "flags": "29"}]), "9618", NOW + 3000)
+    return book, parent
+
+
+def test_vanished_without_a_trade_returns_the_guard_to_stl(tmp_path):
+    """Снятие по СРОКУ (торговый день кончился) - не исполнение.
+
+    23.09.2026 вчерашняя следящая продажа 30 контрактов исчезла утром из
+    терминала, книга похоронила её в orphaned, и заявки не стало нигде."""
+    book, parent = _live_bracket(tmp_path)
+    failed = _track_native(book, FakeStore(), "9618", NOW + 40_000)
+    assert failed == [parent]
+    assert parent.native_state == ""        # чистый: связка уедет в терминал заново
+    kids = [c for c in book.orders if c.parent_id == parent.so_id]
+    assert [c.status for c in kids] == ["armed", "armed"]
+    assert all(c.native_state == "" for c in kids)
+
+
+def test_vanished_with_a_matching_trade_is_a_fill_not_a_reset(tmp_path):
+    """Сделка по инструменту в окне = исполнение: заявку переставлять НЕЛЬЗЯ."""
+    book, parent = _live_bracket(tmp_path)
+    # Стоп на 86700, тейк на 87500; сделка по 87490 - сработал тейк.
+    store = FakeStoreWithTrades((), [{"sec": "RIZ6", "side": "S", "qty": 1,
+                                      "price": 87490, "ts_ms": NOW + 30_000, "tag": ""}])
+    orphaned = _track_native(book, store, "9618", NOW + 40_000)
+    assert orphaned == [parent] and parent.native_state == "done"
+    kids = {c.kind: c for c in book.orders if c.parent_id == parent.so_id}
+    assert kids["tp"].status == "fired" and kids["tp"].fired_price == 87490
+    assert kids["sl"].status == "cancelled"
