@@ -40,3 +40,45 @@ describe('подпись строки разбивки ручной торгов
     });
   }
 });
+
+// «Расшифруй логику каждой цифры» (оператор 23.09.2026). Число в строке — не
+// прибыль по сделкам, а рыночная переоценка участника, и подсказка обязана
+// назвать ВСЕ её слагаемые, иначе итог по-прежнему берётся ниоткуда.
+describe('подсказка объясняет, из чего сложено число', () => {
+  // Функции достаём срезом по имени, без регулярок: нужна их РАБОТА, а не текст.
+  const cut = (src: string, name: string) => {
+    const i = src.indexOf('function ' + name + '(r) {');
+    const j = src.indexOf(String.fromCharCode(10) + '}', i);
+    if (i < 0 || j < 0) throw new Error(name + ' не найдена');
+    return src.slice(i, j + 2);
+  };
+  const why = (src: string) => {
+    const rubSrc = "function rub(v,o){return (v>0&&o&&o.signed?'+':'')+String(v)+' Р'}";
+    return new Function(
+      rubSrc + ';' + cut(src, 'manualRowName') + cut(src, 'manualRowWhy') + 'return manualRowWhy;',
+    )() as (r: any) => string;
+  };
+  const row = { kind: 'external', name: 'приложение брокера', key: 'mob1', sec: 'RIZ6',
+                vm_rub: 124882, fills: 12, lots: 40, cash_pts: -1500,
+                net_start: 0, net_end: 10, last: 86000, coef: 1.5681,
+                base: 85500, base_src: 'quik_vm' };
+
+  for (const [page, src] of Object.entries(PAGES)) {
+    it(`${page}: названы сделки, деньги, позиция, цена и коэффициент`, () => {
+      const s2 = why(src)(row);
+      expect(s2).toContain('сделок 12');
+      expect(s2).toContain('продажи − покупки');
+      expect(s2).toContain('на утро');
+      expect(s2).toContain('₽ за пункт');
+      expect(s2).toContain('решена из ВМ');
+    });
+
+    it(`${page}: неизвестная цена клиринга названа неизвестной, а не подставлена молча`, () => {
+      expect(why(src)({ ...row, base_src: 'unresolved' })).toContain('неизвестна');
+    });
+
+    it(`${page}: доля участника названа оценкой, а не фактом`, () => {
+      expect(why(src)(row)).toContain('пропорционально');
+    });
+  }
+});

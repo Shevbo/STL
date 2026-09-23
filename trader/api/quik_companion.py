@@ -1047,6 +1047,8 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
     _MANUAL_RU = {"terminal": "терминал QUIK", "smart": "умные заявки",
                   "recon": "выравнивание", "external": "приложение брокера"}
     _manual_rows = [c for c in day_classes if c.get("kind") != "robot"]
+    # Цена, коэффициент и расчётная цена клиринга лежат рядом, по инструментам.
+    _day_secs = {x.get("code"): x for x in (day.get("secs") or []) if x.get("code")}
     # Строку показываем и на НУЛЕ, если разбивка вообще пришла: «ручных сегодня
     # ноль» — это факт, из которого складывается ВМ, а отсутствие строки читается
     # как «не считаем».
@@ -1058,11 +1060,21 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
             # печатала одно лишь название вида и выбрасывала и тег, и инструмент:
             # три разные строки выглядели как три одинаковые «приложение брокера»
             # с несовместимыми числами (оператор 23.09.2026).
+            # СЛАГАЕМЫЕ ФОРМУЛЫ, А НЕ ТОЛЬКО ИТОГ. Число в строке - рыночная
+            # переоценка участника за день: coef × (cash + net_end×last −
+            # net_start×base). Оператор видел один результат и не мог понять, из
+            # чего он вышел («расшифруй логику каждой цифры», 23.09.2026).
+            # Отдаём всё, из чего он сложен, чтобы панель показала арифметику.
             "rows": [{"kind": c.get("kind"), "name": _MANUAL_RU.get(c.get("kind"), c.get("kind")),
                       "key": c.get("key"),
                       "sec": c.get("sec"), "vm_rub": c.get("vm_rub"),
                       "fills": c.get("fills"), "lots": c.get("lots"),
-                      "net_end": c.get("net_end")}
+                      "cash_pts": c.get("cash_pts"),
+                      "net_start": c.get("net_start"), "net_end": c.get("net_end"),
+                      "last": _day_secs.get(c.get("sec"), {}).get("last"),
+                      "coef": _day_secs.get(c.get("sec"), {}).get("coef"),
+                      "base": _day_secs.get(c.get("sec"), {}).get("base"),
+                      "base_src": _day_secs.get(c.get("sec"), {}).get("base_src")}
                      for c in sorted(_manual_rows, key=lambda x: -abs(float(x.get("vm_rub") or 0)))],
         }
 

@@ -477,14 +477,43 @@ function manualRowName(r) {
   if (r.sec) s += ' ' + r.sec;
   return s;
 }
+// РАСШИФРОВКА ОДНОЙ ЦИФРЫ. Число в строке — не «прибыль по сделкам», а рыночная
+// переоценка участника за день, ровно та, из которой QUIK складывает ВМ счёта:
+//     ₽ = коэф × ( деньги_сделок + позиция_сейчас×цена − позиция_на_утро×клиринг )
+// где деньги_сделок = продажи минус покупки В ПУНКТАХ за день. Отсюда и знаки:
+// участник может ничего не «заработать» сделками и всё равно дать большой плюс
+// или минус — переоценкой перенесённой позиции. Оператор видел итог и не мог
+// понять, из чего он вышел (23.09.2026); теперь под каждой цифрой её арифметика.
+function manualRowWhy(r) {
+  const n = (v, d) => (v == null ? '—' : Number(v).toLocaleString('ru-RU',
+    { minimumFractionDigits: d || 0, maximumFractionDigits: d || 0 }));
+  const parts = [];
+  parts.push(`${manualRowName(r)}: ${rub(r.vm_rub, { signed: true })} за сегодня`);
+  parts.push(`сделок ${n(r.fills)}, объём ${n(r.lots)} контр.`);
+  if (r.cash_pts != null) parts.push(`деньги сделок (продажи − покупки): ${n(r.cash_pts, 0)} п.`);
+  if (r.net_start != null || r.net_end != null)
+    parts.push(`позиция: на утро ${n(r.net_start)} → сейчас ${n(r.net_end)} контр.`);
+  if (r.last) parts.push(`текущая цена ${n(r.last)}`);
+  if (r.base) {
+    parts.push(r.base_src === 'quik_vm'
+      ? `цена клиринга ${n(r.base)} (решена из ВМ, которую отдал QUIK)`
+      : `цена клиринга неизвестна, взята текущая ${n(r.base)} — перенос может уехать между участниками`);
+  }
+  if (r.coef) parts.push(`${n(r.coef, 2)} ₽ за пункт`);
+  parts.push('Позиция участника выделяется из общей ручной позиции пропорционально ' +
+    'тому, сколько он наторговал за день: точнее данных нет. Сумма всех участников ' +
+    'равна ВМ счёта в точности, отдельная строка — оценка его доли.');
+  return parts.join(String.fromCharCode(10));
+}
 function manualTotal(t) {
   if (!t || t.rows == null) return '';
   const sub = (t.rows || []).filter((r) => r.vm_rub)
-    .map((r) => `${manualRowName(r)} ${rub(r.vm_rub, { signed: true })}`).join(' · ')
+    .map((r) => `<span title="${esc(manualRowWhy(r))}">${esc(manualRowName(r))} `
+               + `${rub(r.vm_rub, { signed: true })}</span>`).join(' · ')
     || 'своих сделок сегодня не было';
   return `<div class="row total ${cls(t.total)}">` +
     `<span class="k">Итог ручных</span><span class="sp"></span>` +
-    `<span class="sub">${esc(sub)}</span>${val(rub(t.total, { signed: true }), cls(t.total))}</div>`;
+    `<span class="sub">${sub}</span>${val(rub(t.total, { signed: true }), cls(t.total))}</div>`;
 }
 
 // Живая котировка инструмента: та же разметка, что на Windows-панели (гашение
