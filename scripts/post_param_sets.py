@@ -78,11 +78,10 @@ def main() -> None:
     print(f"поставлено {ok} наборов в {len(chunks)} заданиях, кампания {a.campaign}*")
     # Задание может вернуться пустым при статусе done (см. --chunk). Считать прогон
     # состоявшимся только после сверки числа строк с числом отправленных наборов.
-    print(f"СВЕРЬ по окончании: строк в лидерборде должно быть {ok}
-"
-          f"  SELECT count(*) FROM optimization_leaderboard
-"
-          f"  WHERE campaign_run LIKE 'camp-%{a.campaign.replace('-', '')}%';")
+    tag = a.campaign.replace("-", "")
+    print(f"СВЕРЬ по окончании: строк в лидерборде должно быть {ok}")
+    print(f"  SELECT count(*) FROM optimization_leaderboard "
+          f"WHERE campaign_run LIKE 'camp-%{tag}%';")
 
 
 if __name__ == "__main__":
