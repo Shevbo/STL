@@ -1,7 +1,15 @@
 <script lang="ts">
   import { overviewFor, behaviorFor, nameFor, docBase } from '$lib/strategy-help';
-  let { strategyId, params = null, symbol = '', compact = false, showName = true }:
-    { strategyId: string; params?: Record<string, any> | null; symbol?: string; compact?: boolean; showName?: boolean } = $props();
+  let { strategyId, params = null, symbol = '', compact = false, showName = true,
+        startClosed = false }:
+    { strategyId: string; params?: Record<string, any> | null; symbol?: string;
+      compact?: boolean; showName?: boolean; startClosed?: boolean } = $props();
+  // Лонг-рид читают ОДИН раз, а место он занимает всегда. Там, где под ним стоит
+  // рабочая форма (Лаборатория), он стартует свёрнутым (оператор 23.09.2026).
+  let open = $state(false);
+  // Смена стратегии — новый текст: сворачиваем обратно, иначе форма снова уезжает
+  // вниз ровно в тот момент, когда с ней собираются работать.
+  $effect(() => { void strategyId; open = !startClosed; });
   const ov = $derived(overviewFor(strategyId));
   const behavior = $derived(behaviorFor(strategyId, params, symbol));
   const name = $derived(nameFor(strategyId));
@@ -14,16 +22,22 @@
         <div class="sd-eyebrow">Робот-стратегия</div>
         <h2 class="sd-name">{name}</h2>
         <a class="sd-doc" href={'/?strategy=' + encodeURIComponent(docBase(strategyId))} target="_blank" rel="noopener">Полное описание ↗</a>
+        {#if startClosed}
+          <button class="sd-fold" aria-expanded={open} onclick={() => open = !open}>
+            {open ? 'свернуть' : 'развернуть описание'}
+          </button>
+        {/if}
       </header>
     {/if}
 
-    {#if behavior}
+    {#if behavior && open}
       <div class="sd-behavior">
         <div class="sd-b-label">Как ведёт себя робот с текущими параметрами</div>
         <p class="sd-b-text">{behavior}</p>
       </div>
     {/if}
 
+    {#if open}
     <div class="sd-pillars">
       <section class="sd-pillar">
         <div class="sd-p-eyebrow">Период анализа</div>
@@ -42,6 +56,7 @@
         <p class="sd-p-text">{ov.sl}</p>
       </section>
     </div>
+    {/if}
   </article>
 {/if}
 
@@ -57,6 +72,11 @@
     font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
   }
   .sd.compact { padding: 14px 16px; }
+  .sd-fold {
+    margin-left: auto; background: none; border: 1px solid var(--sd-edge); border-radius: 5px;
+    color: var(--sd-ink2); cursor: pointer; font: 11px/1 inherit; padding: 5px 9px;
+  }
+  .sd-fold:hover { color: var(--sd-ink); border-color: var(--sd-rail); }
   .sd-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; margin-bottom: 14px; }
   .sd-eyebrow { flex-basis: 100%; font-size: 11px; letter-spacing: 1.4px; text-transform: uppercase;
     color: var(--sd-eye); font-weight: 600; }

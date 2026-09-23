@@ -167,6 +167,7 @@
     // части сразу. Именно так приходит ссылка «Прогоны робота» с карточки графика.
     const words = histFilter.trim().toLowerCase().split(/\s+/).filter(Boolean);
     let rows = labCampaigns.filter((c: any) => {
+      if (histMineOnly && selectedStrategyId && !histBelongs(c, selectedStrategyId)) return false;
       if (histWinOnly && !((c.leader_net ?? 0) > 0)) return false;
       if (!words.length) return true;
       const hay = [c.campaign, c.strategy, (c.symbols || []).join(' '), c.leader_symbol]
@@ -208,6 +209,19 @@
   let instruments = $state<any[]>([]);
   let selectedStrategyId = $state('');
   let selectedStrategy = $derived(catalog.find((s: any) => s.id === selectedStrategyId) ?? null);
+
+  // ИСТОРИЯ ИДЁТ ЗА ВЫБРАННОЙ СТРАТЕГИЕЙ. Список показывал ВСЕ кампании подряд, и
+  // при выборе стратегии не менялся вовсе: оператор искал свои прогоны глазами
+  // среди сотни чужих (23.09.2026). Контр-версия стратегии (`__inv`) - та же
+  // стратегия, её прогоны прятать нельзя.
+  let histMineOnly = $state(true);
+  const histBelongs = (c: any, id: string) => {
+    if (!id) return true;
+    const base = (x: string) => (x.endsWith('__inv') ? x.slice(0, -5) : x);
+    return base(String(c.strategy ?? '')) === base(id);
+  };
+  const histOwnCount = $derived(selectedStrategyId
+    ? labCampaigns.filter((c: any) => histBelongs(c, selectedStrategyId)).length : 0);
 
   // ── Parameter form ─────────────────────────────────────────────────────
   let paramValues = $state<Record<string, any>>({});
@@ -1193,7 +1207,10 @@
             <a class="btl-src-link" href={selectedStrategy.source_url} target="_blank" rel="noopener">источник ↗</a>
           {/if}
         </div>
-        <MustDescription strategyId={selectedStrategyId} params={paramValues} symbol={paramValues.symbol} />
+        <!-- Свёрнут по умолчанию: под ним рабочая форма параметров, а описание
+             читают один раз (оператор 23.09.2026). -->
+        <MustDescription strategyId={selectedStrategyId} params={paramValues}
+                         symbol={paramValues.symbol} startClosed />
         <!-- ТОТ ЖЕ фрейм параметров, что на стенде робота (ParamPanel): группы по
              смыслу, крупные значения, переключатели, перевод в пункты. Плюс строка
              «от / до / шаг» под каждой числовой осью — Лаборатория перебирает, а не
@@ -1344,11 +1361,21 @@
           <div class="btl-hist-empty">Сохранённых прогонов пока нет. Задай «Имя перебора» и запусти R0 — кампания сохранится сюда.</div>
         {:else}
           <div class="btl-hist-tools">
+            {#if selectedStrategy}
+              <label class="btl-hist-chk" title="показывать только прогоны выбранной стратегии (вместе с её контр-версией)">
+                <input type="checkbox" bind:checked={histMineOnly} />
+                только «{selectedStrategy.name || selectedStrategy.id}» ({histOwnCount})
+              </label>
+            {/if}
             <input class="btl-hist-search" placeholder="фильтр: ID, стратегия, контракт…" bind:value={histFilter} />
             <label class="btl-hist-chk"><input type="checkbox" bind:checked={histWinOnly} /> только прибыльные</label>
             <span class="btl-hist-count">{histRows.length} из {labCampaigns.length}</span>
             <button class="btl-hist-csv" onclick={histCsv}>Выгрузить в CSV</button>
           </div>
+          {#if histMineOnly && selectedStrategy && histOwnCount === 0}
+            <div class="btl-hist-empty">У стратегии «{selectedStrategy.name || selectedStrategy.id}»
+              сохранённых прогонов нет. Снимите галку слева, чтобы увидеть остальные.</div>
+          {/if}
           <div class="btl-hist-scroll">
             <table class="btl-ht">
               <thead>
@@ -1418,9 +1445,17 @@
           {#each crt as l (l.t + l.text)}
             <div class="crt-line {l.kind}"><span class="crt-ts">[{crtTime(l.t)}]</span> {l.text}</div>
           {/each}
+          <!-- НЕ ПРИТВОРЯЕМСЯ КОМАНДНОЙ СТРОКОЙ. «STL:lab> жду команды» с мигающим
+               курсором читается как поле ввода, и оператор в него печатал, а ввода
+               здесь нет вовсе (23.09.2026). Курсор оставлен только на время
+               расчёта - там он означает работу, а не приглашение. -->
           <div class="crt-line prompt">
-            <span class="crt-ps">STL:lab&gt; {runPhase || 'жду команды'}</span>
-            <span class="crt-cur">█</span>
+            {#if running}
+              <span class="crt-ps">STL:lab&gt; {runPhase || 'считаю…'}</span>
+              <span class="crt-cur">█</span>
+            {:else}
+              <span class="crt-ps dim">STL:lab · журнал прогона{runPhase ? ' · ' + runPhase : ' · запустите R0, шаги появятся здесь'}</span>
+            {/if}
           </div>
         </div>
       </div>
