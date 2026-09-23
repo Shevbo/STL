@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { KIND_BY_ID, afterFillFacts, afterFillPreview, defaultCode, closingSide, conditionText, entryOrders, isLive, manualPositions, ocoNameOf, nativeStopIndex, preview, protectionPair, shortCodes, smartLegend, smartLevels, stopOrderRow, stopOrderWhy,
+import { KIND_BY_ID, afterFillFacts, afterFillPreview, defaultCode, closingSide, canRearm, conditionText, entryOrders, isLive, manualPositions, statusRu, ocoNameOf, nativeStopIndex, preview, protectionPair, shortCodes, smartLegend, smartLevels, stopOrderRow, stopOrderWhy,
          type Kind, type Side } from './smart-order-help';
 
 const base = {
@@ -905,5 +905,34 @@ describe('дочерняя запись объясняет себя', () => {
     const r = stopOrderWhy({ ...row, ours: null }, null, 84_800);
     expect(r.waits).not.toContain('ждёт цену');
     expect(r.why).toContain('руками');
+  });
+});
+
+// real-trade 22.09.2026 (коммит 7760133): у `orphaned` появился ВТОРОЙ смысл —
+// связка в терминале исполнилась, но какая нога сработала, не установлено.
+// Подписывать это словами «дочерняя заявка не дожила» значит звать чинить не то,
+// а кнопка «Перевзвести» на закрытой позиции откроет обратную.
+describe('статус orphaned: два разных смысла', () => {
+  it('нативная связка без атрибуции зовёт проверить позицию', () => {
+    const s = statusRu({ status: 'orphaned', native_stop_num: '310471054' });
+    expect(s).toContain('НЕ подтверждено');
+    expect(s).toContain('проверьте позицию');
+  });
+
+  it('прежний смысл сохранён: дочерняя заявка не дожила', () => {
+    expect(statusRu({ status: 'orphaned' })).toBe('дочерняя заявка не дожила');
+  });
+
+  it('перевзводить можно прежний случай и истёкший срок, но НЕ неподтверждённое', () => {
+    expect(canRearm({ status: 'orphaned' })).toBe(true);
+    expect(canRearm({ status: 'expired' })).toBe(true);
+    expect(canRearm({ status: 'orphaned', native_state: 'done' })).toBe(false);
+    expect(canRearm({ status: 'orphaned', native_stop_num: '1' })).toBe(false);
+    expect(canRearm({ status: 'fired' })).toBe(false);
+  });
+
+  it('остальные статусы словами не изменились', () => {
+    expect(statusRu({ status: 'native' })).toBe('под охраной терминала');
+    expect(statusRu({ status: 'armed' })).toBe('взведена');
   });
 });

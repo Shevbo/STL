@@ -10,7 +10,7 @@
   import { smartOrdersStore, type SmartOrder } from '$lib/stores/smart-orders.svelte';
   import SmartOrderSchematic from './SmartOrderSchematic.svelte';
   import {
-    KINDS, KIND_BY_ID, COMMON_FACTS, STATUS_RU, afterFillFacts, afterFillPreview, codeSuggestions, conditionText,
+    KINDS, KIND_BY_ID, COMMON_FACTS, STATUS_RU, afterFillFacts, canRearm, statusRu, afterFillPreview, codeSuggestions, conditionText,
     defaultCode, isLive, keyPrice,
     closingSide, entryOrders, fmtWhen, fmtPts, fmtRub, manualPositions, nativeStopIndex,
     ocoFact, ocoNameOf, stopOrderRow, stopOrderWhy,
@@ -977,10 +977,13 @@
               <span class="so-c-px" title={keyPrice(o).label}><small>{keyPrice(o).label}</small>{keyPrice(o).price != null ? fmtPrice(keyPrice(o).price) : '—'}</span>
               <span class="so-c-cond">{conditionText(o)}</span>
               <span class="so-c-sp"></span>
+              <!-- Статус пишем по ТОМУ, ЧТО СЛУЧИЛОСЬ: у orphaned теперь два разных
+                   смысла, и «дочерняя заявка не дожила» на неподтверждённом
+                   исполнении звало чинить не то (real-trade 22.09.2026). -->
               <span class="so-c-status" class:warn={o.status === 'orphaned' || o.status === 'error'}>
-                {STATUS_RU[o.status] ?? o.status}
+                {statusRu(o)}
               </span>
-              {#if o.status === 'orphaned' || o.status === 'expired'}
+              {#if canRearm(o)}
                 <button class="so-btn sm" onclick={() => rearm(o)}>Перевзвести</button>
               {/if}
             </div>

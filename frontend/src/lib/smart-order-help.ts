@@ -183,6 +183,29 @@ export const STATUS_RU: Record<string, string> = {
   orphaned: 'дочерняя заявка не дожила',
 };
 
+/** Статус словами С УЧЁТОМ ТОГО, ЧТО ИМЕННО СЛУЧИЛОСЬ.
+ *
+ *  У `orphaned` теперь ДВА разных смысла (real-trade 22.09.2026, коммит 7760133):
+ *  прежний - дочерняя заявка не дожила до исполнения; новый - связка в терминале
+ *  ИСПОЛНИЛАСЬ, но какая её нога сработала, установить не удалось. Второй случай
+ *  требует от оператора проверить позицию, и подписывать его словами «дочерняя
+ *  заявка не дожила» значит звать чинить не то.
+ */
+export function statusRu(o: { status: string; native_state?: string; native_stop_num?: string }): string {
+  if (o.status === 'orphaned' && (o.native_state || o.native_stop_num)) {
+    return 'исполнение НЕ подтверждено — проверьте позицию';
+  }
+  return STATUS_RU[o.status] ?? o.status;
+}
+
+/** Можно ли предлагать «Перевзвести». У неподтверждённого исполнения - НЕЛЬЗЯ:
+ *  позиция могла уже закрыться, и повторный взвод откроет обратную. Ровно этим
+ *  26.07.2026 ложный orphaned позвал перевзвести уже исполненный выкуп. */
+export function canRearm(o: { status: string; native_state?: string; native_stop_num?: string }): boolean {
+  if (o.status === 'expired') return true;
+  return o.status === 'orphaned' && !o.native_state && !o.native_stop_num;
+}
+
 /** Условия, одинаковые для всех типов. Взяты из движка, не выдуманы. */
 export const COMMON_FACTS: Array<{ label: string; text: string; warn?: boolean }> = [
   {
