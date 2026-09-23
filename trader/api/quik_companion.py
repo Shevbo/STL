@@ -1053,7 +1053,13 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
     if day.get("classes") is not None:
         orders_block["today"] = {
             "total": sum(float(c.get("vm_rub") or 0) for c in _manual_rows),
+            # KEY ОТДАЁМ ТОЖЕ. У «приложения брокера» ключ - это ТЕГ брокера, у
+            # каждого канала свой, и строк с таким видом бывает несколько. Панель
+            # печатала одно лишь название вида и выбрасывала и тег, и инструмент:
+            # три разные строки выглядели как три одинаковые «приложение брокера»
+            # с несовместимыми числами (оператор 23.09.2026).
             "rows": [{"kind": c.get("kind"), "name": _MANUAL_RU.get(c.get("kind"), c.get("kind")),
+                      "key": c.get("key"),
                       "sec": c.get("sec"), "vm_rub": c.get("vm_rub"),
                       "fills": c.get("fills"), "lots": c.get("lots"),
                       "net_end": c.get("net_end")}

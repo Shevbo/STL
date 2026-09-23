@@ -467,10 +467,20 @@ function vmNote(a) {
 }
 
 // Итог ручной торговли за день — тем же видом, что итог роботов.
+// Подпись строки разбивки: вид торговли + ИНСТРУМЕНТ, а у «приложения брокера»
+// ещё и тег канала. Строк одного вида бывает несколько (разные инструменты,
+// разные теги), и без этого три несовместимых числа подписывались одинаково —
+// «приложение брокера» трижды подряд (оператор 23.09.2026).
+function manualRowName(r) {
+  let s = r.name || r.kind || '—';
+  if (r.kind === 'external' && r.key && r.key !== r.name) s += ' ' + r.key;
+  if (r.sec) s += ' ' + r.sec;
+  return s;
+}
 function manualTotal(t) {
   if (!t || t.rows == null) return '';
   const sub = (t.rows || []).filter((r) => r.vm_rub)
-    .map((r) => `${r.name} ${rub(r.vm_rub, { signed: true })}`).join(' · ')
+    .map((r) => `${manualRowName(r)} ${rub(r.vm_rub, { signed: true })}`).join(' · ')
     || 'своих сделок сегодня не было';
   return `<div class="row total ${cls(t.total)}">` +
     `<span class="k">Итог ручных</span><span class="sp"></span>` +
