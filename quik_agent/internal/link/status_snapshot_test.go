@@ -177,3 +177,35 @@ func TestMaybeSendStatusSnapshot_AgeOnlyChangeDoesNotResend(t *testing.T) {
 		t.Fatalf("uptime-only change must not resend (GateHash must zero volatile fields), got %d sends", len(fs.sent))
 	}
 }
+
+// A reconnect must make the agent re-send the status snapshot even when nothing
+// changed: STL keeps the mirror in memory only, so a restarted STL has no
+// positions and no trades until one arrives. Before 23.09.2026 the change-gate
+// hash survived the reconnect and STL stayed blind for minutes.
+func TestMaybeSendStatusSnapshot_ResendsAfterReconnect(t *testing.T) {
+	l := New(Options{StatusSnapshotMinSec: 5})
+	fs := &fakeSessionClient{}
+	l.setStream(fs)
+	src := &fakeStatusSrc{price: 100}
+	l.SetStatusDeps(statusDeps(src))
+
+	if err := l.maybeSendStatusSnapshot(0); err != nil {
+		t.Fatalf("first send: %v", err)
+	}
+	if err := l.maybeSendStatusSnapshot(60_000); err != nil {
+		t.Fatalf("unchanged resend check: %v", err)
+	}
+	if len(fs.sent) != 1 {
+		t.Fatalf("unchanged content must not resend, got %d", len(fs.sent))
+	}
+
+	// New session: same reset runOnce does after Register.
+	l.lastStatusHash = [32]byte{}
+	l.hasSentStatus = false
+	if err := l.maybeSendStatusSnapshot(120_000); err != nil {
+		t.Fatalf("resend after reconnect: %v", err)
+	}
+	if len(fs.sent) != 2 {
+		t.Fatalf("a reconnect must re-send the snapshot, got %d frames", len(fs.sent))
+	}
+}

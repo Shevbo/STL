@@ -341,6 +341,13 @@ func (l *Link) runOnce(ctx context.Context) error {
 	l.secSentMs, l.paramsSentMs = 0, 0
 	l.tickSentMs = map[string]int64{}
 	l.bookSentFp = map[string]string{}
+	// The status snapshot belongs in that same reset: STL keeps the mirror in
+	// memory only, so a restarted STL starts with NO positions/trades at all.
+	// Leaving the hash set made the agent wait for the next content CHANGE before
+	// sending anything — minutes of a blind STL right after every restart
+	// (23.09.2026: the position table showed up only four minutes in).
+	l.lastStatusHash = [32]byte{}
+	l.hasSentStatus = false
 
 	// Publish the live stream for the trade Emitter; clear it when the session ends.
 	l.setStream(stream)
