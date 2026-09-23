@@ -593,9 +593,23 @@ def make_on_bar(rid: str):
             else:
                 stl.log("[SKIP] " + msg)
 
-        def on_exit(exit_price: float, entry_avg: float, direction: int) -> None:
+        def on_exit(exit_price: float, entry_avg: float, direction: int,
+                    reason: str = "other") -> None:
             """Book a close: update SuperAverage escalation + the cooldown timer.
-            ret>0 is a winner (resets escalation), ret<0 a loser (escalates)."""
+            ret>0 is a winner (resets escalation), ret<0 a loser (escalates).
+
+            ПРИЧИНА ВЫХОДА. Все выходы стратегии идут через эту функцию, поэтому
+            счётчик стоит здесь, а не в шести местах. Заказ real-trade 23.09.2026:
+            по живой торговле тейк lxk22 (8xATR = 391 п. при ATR 49) попадает в 3%
+            циклов, а за 22-23.09 ни один из 41 цикла до тейка не дошёл — позиции
+            закрывает разворот сигнала. Утверждение «тейк почти не участвует» надо
+            проверять числом, а не двумя днями, и для этого нужно РАСПРЕДЕЛЕНИЕ
+            причин: tp (тейк по ATR), layer (слой DeskBot: tp_pct, трейл, RSI),
+            flip (разворот сигнала), sl (стоп), back (возврат после удержанного
+            флипа). Счётчики попадают в результат бэктеста как exit_reasons.
+            """
+            stl.set_state("exit_" + reason,
+                          int(stl.get_state("exit_" + reason, 0) or 0) + 1)
             ret = (exit_price - entry_avg) / entry_avg * direction if entry_avg else 0.0
             if s2i_on:
                 # Планка меряется в ПУНКТАХ хода от средней входа, а не в процентах:
@@ -770,7 +784,7 @@ def make_on_bar(rid: str):
             if bet_step > 0:                      # ставки считают знак круга, как в ветке флипа
                 stl.set_state("bet_extra", min(bet_extra + bet_step, bet_max)
                               if (price - avg) * cur_dir < 0 else 0)
-            on_exit(price, avg, cur_dir)
+            on_exit(price, avg, cur_dir, "back")
             await stl.place_order(symbol, "sell" if cur_dir > 0 else "buy",
                                   abs(cur), price)
             return
@@ -796,7 +810,7 @@ def make_on_bar(rid: str):
             if bet_step > 0:                      # closed-trade result drives the betting system
                 bet_extra = min(bet_extra + bet_step, bet_max) if (price - avg) * cur_dir < 0 else 0
                 stl.set_state("bet_extra", bet_extra)
-            on_exit(price, avg, cur_dir)
+            on_exit(price, avg, cur_dir, "flip")
             await stl.place_order(symbol, "sell" if cur > 0 else "buy", abs(cur), price)
             if want != 0 and cooldown_min == 0:      # cooldown mode -> exit-only, not a skip
                 # Разножка НЕ трогает вход с нуля (позиция только что закрыта): она
@@ -896,7 +910,7 @@ def make_on_bar(rid: str):
             if bet_step > 0:                  # стоп — всегда убыток, ставка растёт
                 stl.set_state("bet_extra", min(bet_extra + bet_step, bet_max))
             stl.set_state("sl_block", cur_dir)
-            on_exit(price, avg, cur_dir)
+            on_exit(price, avg, cur_dir, "sl")
             await stl.place_order(symbol, "sell" if cur_dir > 0 else "buy", abs(cur), price)
             return
         # ATR посчитан выше по ХВОСТУ (atr_n*40 баров): pivot тянет 2200 баров ради
@@ -910,7 +924,7 @@ def make_on_bar(rid: str):
             if bet_step > 0:
                 stl.set_state("bet_extra", 0 if (price - avg) * cur_dir > 0
                               else min(bet_extra + bet_step, bet_max))
-            on_exit(price, avg, cur_dir)
+            on_exit(price, avg, cur_dir, "layer")
             await stl.place_order(symbol, "sell" if cur_dir > 0 else "buy", abs(cur), price)
 
         if tp_pct > 0 and avg > 0 and (price - avg) * cur_dir >= avg * tp_pct:
@@ -936,13 +950,13 @@ def make_on_bar(rid: str):
             if cur_dir > 0 and price >= avg + tp * atrv:
                 if bet_step > 0:
                     stl.set_state("bet_extra", 0)
-                on_exit(price, avg, cur_dir)
+                on_exit(price, avg, cur_dir, "tp")
                 await stl.place_order(symbol, "sell", abs(cur), price)
                 return
             if cur_dir < 0 and price <= avg - tp * atrv:
                 if bet_step > 0:
                     stl.set_state("bet_extra", 0)
-                on_exit(price, avg, cur_dir)
+                on_exit(price, avg, cur_dir, "tp")
                 await stl.place_order(symbol, "buy", abs(cur), price)
                 return
         if ladder_on:

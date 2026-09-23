@@ -334,7 +334,15 @@ async def run_single_backtest(
     # to expose, so its real MAE/mtm-dd/RF-mtm must win, not get stomped back to
     # zero by compute_metrics's placeholder defaults.
     fill_stats = getattr(runtime, "stats", None)
+    # ПРИЧИНЫ ВЫХОДА. Стратегия копит их в своём состоянии (make_on_bar -> on_exit),
+    # метрики строятся из сделок и о причинах ничего не знают. Достаём здесь: без
+    # этого нельзя ответить на вопрос real-trade «участвует ли тейк вообще», а он
+    # описательный и не требует ни статистики, ни длинных окон.
+    exit_reasons = {k[5:]: int(v) for k, v in
+                    (getattr(runtime, "_state", None) or {}).items()
+                    if isinstance(k, str) and k.startswith("exit_") and v}
     res = {"trades": trades, "equity_curve": equity_curve,
+           **({"exit_reasons": exit_reasons} if exit_reasons else {}),
            **({"fill_stats": fill_stats} if fill_stats else {}),
            "point_value": point_value, **metrics,
            "max_mae": max_mae, "max_drawdown_mtm": max_dd_mtm,
