@@ -26,6 +26,19 @@ def hhmm(ms):
     return time.strftime("%d.%m %H:%M:%S", time.localtime((ms or 0) / 1000)) if ms else "-"
 
 
+def _blind_why(w) -> str:
+    """Почему сторож не действует. None у расписания — это «не знаю», и называть
+    это закрытой биржей нельзя: причины лечатся по-разному."""
+    so = w.get("session_open")
+    if so is None:
+        return "расписание торгов ещё не опрошено (оракул молчит)"
+    if so is not True:
+        return "биржа не торгует"
+    if (w.get("last") or 0) <= 0:
+        return "цены в кадре нет"
+    return "кадр мёртвый (%.0f с)" % ((w.get("tick_age_ms") or 0) / 1000)
+
+
 def show_trades(day: str | None) -> int:
     day = day or time.strftime("%Y-%m-%d", time.localtime())
     path = os.path.join(TRADES, f"{day}.jsonl")
@@ -111,8 +124,7 @@ def main() -> int:
                   "—" if d is None else round(d, 1),
                   w.get("lo_since"), w.get("hi_since"),
                   ", АКТИВИРОВАНА пик %s" % w.get("peak") if w.get("activated") else "",
-                  "  !! СЛЕП: " + ("биржа закрыта" if w.get("session_open") is not True
-                                   else "кадр мёртвый") if w.get("watcher_blind") else ""))
+                  "  !! СЛЕП: " + _blind_why(w) if w.get("watcher_blind") else ""))
     tt = t.get("trades_today") or {}
     print(f"сделок сегодня: {tt.get('count')} {tt.get('by_owner') or {}}")
     for r in (t.get("last_trades") or [])[-5:]:
