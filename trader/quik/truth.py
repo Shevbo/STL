@@ -15,9 +15,12 @@ QUIK в неё не попадает вовсе.
   data/trades/YYYY-MM-DD.jsonl  журнал сделок, дедуп по номеру, растёт навсегда.
 
 Правило, ради которого всё написано: снимок НИКОГДА не выдаёт себя за свежий.
-В файле лежит `age_ms` (возраст зеркала агента) и `stale` — и если данные старше
-десяти секунд, любой читатель обязан говорить «не знаю», а не пересказывать
-вчерашнее. Молчаливое устаревание и есть то, что стоило оператору доверия.
+Судья свежести — КАНАЛ, а не возраст зеркала: агент шлёт статус только когда
+содержимое изменилось (change-gate в link/status_snapshot), поэтому в тихий час
+зеркалу может быть и десять минут, и это норма — менять было нечего. Но если
+молчит heartbeat линка, картины нет вовсе, и читатель обязан сказать «не знаю».
+Отдельно ловится замерший сборщик статуса: канал жив, а зеркало не обновлялось
+дольше MIRROR_MAX_MS — тогда тишина не «ничего не менялось», а поломка.
 
 Чистая логика — в build(); запись на диск и цикл — в run().
 """
@@ -37,7 +40,8 @@ log = structlog.get_logger(__name__)
 PATH = "data/truth.json"
 TRADES_DIR = "data/trades"
 PERIOD_SEC = 2.0
-STALE_MS = 10_000          # старше — это воспоминание, а не знание
+STALE_MS = 10_000          # молчащий линк старше — это воспоминание, а не знание
+MIRROR_MAX_MS = 300_000    # живой линк, но зеркало не двигалось: сборщик статуса замер
 MSK_OFFSET_MS = 3 * 3600 * 1000
 _LAST_TRADES = 20          # хвост сделок прямо в снимке, чтобы хватало одного файла
 
@@ -113,10 +117,20 @@ def build(status: dict[str, Any] | None, agents: list[dict[str, Any]],
         "parent_id": o.parent_id,
     } for o in book_orders if o.status in ("armed", "native")]
 
+    if received == 0:
+        why = "зеркала агента нет вовсе"
+    elif link_age < 0 or link_age > STALE_MS:
+        why = f"линк агента молчит {link_age / 1000:.0f} с"
+    elif age_ms > MIRROR_MAX_MS:
+        why = f"линк жив, но статус агента не обновлялся {age_ms / 1000:.0f} с"
+    else:
+        why = ""
+
     return {
         "ts_ms": now_ms,
         "age_ms": age_ms,
-        "stale": age_ms < 0 or age_ms > STALE_MS,
+        "stale": bool(why),
+        "stale_why": why,
         "link_age_ms": link_age,
         "pos_age_ms": (status.get("health") or {}).get("pos_age_ms"),
         "equity": ((status.get("health") or {}).get("money") or {}).get("equity"),

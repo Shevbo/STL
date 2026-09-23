@@ -66,11 +66,15 @@ def main() -> int:
         t = json.load(fh)
     age = int(t.get("age_ms") or -1)
     file_age = int(time.time() * 1000) - int(os.path.getmtime(TRUTH) * 1000)
-    verdict = "СВЕЖО" if not t.get("stale") and file_age <= STALE_MS else "СТАРО"
-    print(f"{verdict}: зеркало агента {age/1000:.1f} с, файл {file_age/1000:.1f} с "
+    why = t.get("stale_why") or ""
+    if file_age > STALE_MS:
+        why = why or f"STL не обновляет снимок {file_age/1000:.0f} с (сторож упал?)"
+    verdict = "СТАРО" if why else "СВЕЖО"
+    print(f"{verdict}: линк {int(t.get('link_age_ms') or -1)/1000:.1f} с, "
+          f"зеркало {age/1000:.1f} с, файл {file_age/1000:.1f} с "
           f"(снят {hhmm(t.get('ts_ms'))})")
-    if verdict == "СТАРО":
-        print("  данные устарели — про позиции честный ответ «не знаю», проверяй QUIK")
+    if why:
+        print(f"  {why} — про позиции честный ответ «не знаю», проверяй QUIK")
     print("позиции счёта:")
     for p in t.get("positions") or []:
         print("  %-6s net %+d (роботы %+d, рука %+d) avg %s ВМ %s" % (

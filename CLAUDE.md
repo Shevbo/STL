@@ -106,6 +106,10 @@ Full list (~24, several "bitten prod") in `docs/critical-gotchas.md` — rag_sea
 - **Protobuf 5.29:** regen Python stubs ONLY with `grpcio-tools<1.71`; ≥1.81 emits gencode 6.x that crash-loops prod.
 - **Live trading is human-initiated** — never arm, place real orders, or cut over without explicit operator permission.
 - **Runner P&L is in price points**, not rubles; convert via `coef = step_cost / price_step`.
+- **Позиции и сделки — только из `scripts/pos.py`** (снимок `data/truth.json`, обновляется раз в 2 с,
+  журнал сделок `data/trades/*.jsonl`). Книга умных заявок `data/smart_orders.json` хранит НАМЕРЕНИЯ:
+  закрытие нативной стоп-заявкой QUIK в неё не попадает. 23.09.2026 отчёт по книге назвал открытым
+  шорт, закрытый полутора часами ранее. Шапка `СТАРО` = ответ про позиции «не знаю».
 
 ## Style
 

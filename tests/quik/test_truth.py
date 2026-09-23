@@ -36,13 +36,27 @@ def test_position_is_split_between_robots_and_the_hand():
     assert t["trades_today"]["by_owner"] == {"manual": 1, "robot": 1}
 
 
-def test_old_mirror_is_marked_stale_not_served_as_now():
-    t = truth.build(_status(_received_at_ms=NOW - 45_000), [], [], NOW)
-    assert t["stale"] is True and t["age_ms"] == 45_000
+def test_quiet_mirror_with_a_live_link_is_not_stale():
+    """Агент шлёт статус только при ИЗМЕНЕНИИ: тишина в спокойный час — норма."""
+    t = truth.build(_status(_received_at_ms=NOW - 45_000),
+                    [{"last_seen_age_ms": 900}], [], NOW)
+    assert t["stale"] is False and t["age_ms"] == 45_000
+
+
+def test_silent_link_is_stale_however_fresh_the_mirror_looks():
+    t = truth.build(_status(), [{"last_seen_age_ms": 30_000}], [], NOW)
+    assert t["stale"] is True and "молчит" in t["stale_why"]
+
+
+def test_live_link_with_a_frozen_status_builder_is_stale_too():
+    """Канал жив, а зеркало стоит часами — это поломка сборщика, не тишина."""
+    t = truth.build(_status(_received_at_ms=NOW - 600_000),
+                    [{"last_seen_age_ms": 900}], [], NOW)
+    assert t["stale"] is True and "не обновлялся" in t["stale_why"]
 
 
 def test_no_mirror_at_all_is_stale_and_empty():
-    t = truth.build(None, [], [], NOW)
+    t = truth.build(None, [{"last_seen_age_ms": 500}], [], NOW)
     assert t["stale"] is True and t["positions"] == [] and t["age_ms"] == -1
 
 
