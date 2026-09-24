@@ -520,6 +520,36 @@ function manualRowWhy(r) {
     'равна ВМ счёта в точности, отдельная строка — оценка его доли.');
   return parts.join(String.fromCharCode(10));
 }
+// ЖУРНАЛ РУЧНЫХ ЗАЯВОК НА ТЕЛЕФОНЕ. Токен компаньона открывает ровно один
+// эндпоинт, поэтому в SPA телефон не ходит: real-trade положил итог дня и
+// последние строки ленты прямо в снапшот (блок manual, 24.09.2026).
+// В снапшоте ТОЛЬКО ДЕНЬ: неделя и месяц остались на десктопе.
+var CH_RU = { quik: 'терминал QUIK', broker: 'приложение брокера',
+              smart: 'умные заявки STL', recon: 'выравнивание' };
+function manualDay(m) {
+  if (!m || m.net_rub == null) return '';
+  var warn = [];
+  // Те же оговорки, что на десктопе: неточный итог нельзя подавать как итог.
+  if (m.journal_complete === false) warn.push('итог НЕТОЧЕН: часть сделок не попала в журнал');
+  if (m.partial) warn.push('данные с ' + esc(m.coverage_from || '?'));
+  if (m.priced === false) warn.push('₽ за пункт известен не по всем инструментам');
+  var chans = (m.by_channel || []).map(function (c) {
+    return '<div class="row"><span class="k">' + esc(CH_RU[c.channel] || c.channel) + '</span>' +
+      '<span class="sub">' + (c.orders != null ? 'заявок ' + c.orders + ' · ' : '') +
+      'сделок ' + (c.fills || 0) + '</span>' +
+      val(rub(c.net_rub, { signed: true }), cls(c.net_rub)) + '</div>';
+  }).join('');
+  var feed = (m.rows || []).slice(0, 8).map(function (r) {
+    return '<div class="row"><span class="k">' + esc(r.event || '') + '</span>' +
+      '<span class="sub">' + esc(r.source || '') + ' · ' + esc(r.code || '') + '</span></div>';
+  }).join('');
+  return '<div class="row total ' + cls(m.net_rub) + '">' +
+      '<span class="k">Ручная торговля за день</span><span class="sp"></span>' +
+      '<span class="sub">сделок ' + (m.fills || 0) + (m.orders != null ? ' · заявок ' + m.orders : '') + '</span>' +
+      val(rub(m.net_rub, { signed: true }), cls(m.net_rub)) + '</div>' +
+    (warn.length ? '<div class="row"><span class="sub warn">' + esc(warn.join(' · ')) + '</span></div>' : '') +
+    chans + feed;
+}
 function manualTotal(t) {
   if (!t || t.rows == null) return '';
   const sub = (t.rows || []).filter((r) => r.vm_rub)
@@ -1185,7 +1215,7 @@ function paintPanel(d) {
       DENSITY.map((n) => `<b class="${n === density() ? 'on' : ''}" data-dens="${n}">${n}</b>`).join('') +
       `</span></div>
       ${robotsTotal(d.robots)}${renderRobots(d.robots)}
-    <div class="sec">заявки ручные <a href="#/orders">подробно ↗</a></div>${manualTotal((d.orders || {}).today)}${renderOrders(d.orders, d)}
+    <div class="sec">заявки ручные <a href="#/orders">подробно ↗</a></div>${manualTotal((d.orders || {}).today)}${manualDay(d.manual)}${renderOrders(d.orders, d)}
     <div class="sec">вотчер <a href="#/watch">подробно ↗</a></div>${renderWatch(d.watch)}
     <div class="sec">уведомления <a href="#/watch">детали ↗</a>
       <span class="sp" style="flex:1"></span><span class="copy" id="copyAlerts">копировать</span>

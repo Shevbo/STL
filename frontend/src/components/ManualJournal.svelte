@@ -14,8 +14,8 @@
   import { fmtPrice } from '$lib/format';
   import ScreenTag from './lab/ScreenTag.svelte';
   import {
-    PERIOD_RU, accountNet, eventRu, filterRows, openMismatch, openTotalRub, pnlCaveats,
-    rowCodes, unpricedPoints,
+    CHANNELS_WITH_EVENTS, PERIOD_RU, accountNet, channelRu, eventRu, filterRows,
+    openMismatch, openTotalRub, pnlCaveats, rowCodes, unpricedPoints,
     type JournalRow, type Period, type PnlReport,
   } from '$lib/manual-journal';
 
@@ -40,7 +40,14 @@
 
   const caveats = $derived(pnlCaveats(pnl));
   const openRub = $derived(openTotalRub(pnl));
-  const mismatch = $derived(openMismatch(pnl, net));
+  // Сверку остатка с позицией счёта теперь делает СЕРВЕР (open_vs_account). Своя
+  // остаётся запасной: она работает и на старом бэкенде, до рестарта.
+  const mismatch = $derived(
+    pnl?.open_vs_account && Object.keys(pnl.open_vs_account).length
+      ? Object.entries(pnl.open_vs_account).map(([symbol, diff]) => ({
+          symbol, journal: Number(diff) + Number(pnl?.account_manual?.[symbol] ?? 0),
+          account: Number(pnl?.account_manual?.[symbol] ?? 0) }))
+      : openMismatch(pnl, net));
   const unpriced = $derived(unpricedPoints(pnl));
   const shown = $derived(filterRows(rows, { query, kind: kindFilter, code: codeFilter }));
   const codes = $derived(rowCodes(rows));
@@ -201,25 +208,52 @@
           </table>
         </section>
       {/if}
-      {#if (pnl?.by_source ?? []).length}
+      {#if (pnl?.by_channel ?? pnl?.by_source ?? []).length}
+        <!-- ТРИ КАНАЛА, как их называет оператор. Различает их сервер по реестру
+             роботов, а не по форме тега; экран только переводит имена. -->
         <section class="mj-break">
-          <div class="mj-b-h">По источнику</div>
+          <div class="mj-b-h">По каналам
+            <button class="mj-csv" onclick={() => downloadCSV(pnl?.by_channel ?? [], 'manual_by_channel')}>CSV</button>
+          </div>
           <table class="mj-t">
-            <thead><tr><th>источник</th><th>сделок</th><th>контр.</th><th>валовый</th><th>комиссия</th></tr></thead>
+            <thead><tr><th>канал</th><th title="заявки С ИСПОЛНЕНИЕМ: считаются по уникальным номерам заявок в сделках, снятые и неисполненные сюда не попадают">заявок*</th><th>сделок</th><th>контр.</th><th>нетто</th></tr></thead>
             <tbody>
-              {#each pnl?.by_source ?? [] as s}
+              {#each (pnl?.by_channel ?? []) as c}
                 <tr>
-                  <td>{s.source === 'smart' ? 'умные заявки' : s.source === 'manual' ? 'руками в терминале' : s.source}</td>
-                  <td>{num(s.fills)}</td><td>{num(s.lots)}</td>
-                  <td>{rub(s.gross_rub)}</td>
-                  <td>{rub(-Math.abs(Number(s.commission_rub ?? 0)))}</td>
+                  <td>{channelRu(c.channel)}{#if !CHANNELS_WITH_EVENTS.has(c.channel)}<span class="mj-nopv" title="терминал и приложение брокера своих намерений STL не рассказывают: от них видны только сделки">только сделки</span>{/if}</td>
+                  <td>{num(c.orders)}</td>
+                  <td>{num(c.fills)}</td><td>{num(c.lots)}</td>
+                  <td class:pos={(c.net_rub ?? 0) > 0} class:neg={(c.net_rub ?? 0) < 0}>{rub(c.net_rub)}</td>
                 </tr>
               {/each}
             </tbody>
           </table>
+          <em class="mj-note">* заявки с исполнением. История заявок целиком есть
+            только у умных заявок STL.</em>
         </section>
       {/if}
     </div>
+  {/if}
+
+  {#if (pnl?.by_day ?? []).length > 1}
+    <!-- Неделя и месяц одним числом не читаются: оператор смотрит их по дням. -->
+    {@const days = pnl?.by_day ?? []}
+    {@const mx = Math.max(1, ...days.map((d) => Math.abs(Number(d.net_rub ?? 0))))}
+    <section class="mj-break mj-days">
+      <div class="mj-b-h">По дням
+        <button class="mj-csv" onclick={() => downloadCSV(days, 'manual_by_day')}>CSV</button>
+      </div>
+      <div class="mj-bars">
+        {#each days as d}
+          {@const v = Number(d.net_rub ?? 0)}
+          <div class="mj-bar" title="{d.date}: {rub(v)} · сделок {num(d.fills)}">
+            <div class="mj-bar-fill" class:neg={v < 0}
+                 style="height:{Math.round(Math.abs(v) / mx * 46) + 2}px"></div>
+            <span class="mj-bar-d">{String(d.date).slice(8, 10)}</span>
+          </div>
+        {/each}
+      </div>
+    </section>
   {/if}
 
   <!-- ЛЕНТА. Источник — отдельной колонкой: ради него журнал и заведён. -->
@@ -341,6 +375,14 @@
     cursor: pointer; font-size: 10px; padding: 3px 8px; }
   .mj-csv:hover { color: #e8e8f0; border-color: #4a4a7a; }
   .mj-empty { color: #6f7590; }
+  .mj-note { display: block; margin-top: 6px; font-style: normal; font-size: 10px; color: #6f7590; }
+  .mj-days { grid-column: 1 / -1; }
+  .mj-bars { display: flex; align-items: flex-end; gap: 4px; height: 60px; }
+  .mj-bar { display: flex; flex-direction: column; align-items: center; justify-content: flex-end;
+    gap: 2px; min-width: 14px; }
+  .mj-bar-fill { width: 12px; background: #2ecc71; border-radius: 2px 2px 0 0; }
+  .mj-bar-fill.neg { background: #ff6b5a; }
+  .mj-bar-d { font: 9px/1 Consolas, monospace; color: #6f7590; }
 
   .mj-row { display: flex; align-items: baseline; gap: 10px; padding: 4px 6px;
     border-bottom: 1px solid #1a1a2e; }

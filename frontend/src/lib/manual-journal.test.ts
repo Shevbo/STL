@@ -2,7 +2,7 @@
 // соврать про деньги (предупреждение real-trade 24.09.2026).
 import { describe, expect, it } from 'vitest';
 import {
-  accountNet, eventRu, filterRows, openMismatch, openTotalRub, pnlCaveats, rowCodes, unpricedPoints,
+  CHANNELS_WITH_EVENTS, accountNet, channelRu, eventRu, filterRows, openMismatch, openTotalRub, pnlCaveats, rowCodes, unpricedPoints,
 } from './manual-journal';
 
 describe('оговорки к итогу', () => {
@@ -102,5 +102,36 @@ describe('открытая позиция сверяется с позицией
       { sec: 'RIZ6', net: -4 }, { sec: 'GZZ6', net: 0 }, { net: 7 },
     ] } })).toEqual({ RIZ6: -4, GZZ6: 0 });
     expect(accountNet(null)).toEqual({});
+  });
+});
+
+// real-trade 24.09.2026: сведение журнала может НЕ сойтись с позицией счёта —
+// агент отдаёт кольцо 500 последних сделок, и простой STL длиннее его оборота
+// теряет сделки. Тогда итог НЕ точный, и сказать это надо так же прямо, как про
+// неполный период: иначе оператор читает неточную цифру как итог.
+describe('неполный журнал назван неточным итогом', () => {
+  it('journal_complete=false даёт оговорку с расхождением', () => {
+    const c = pnlCaveats({ journal_complete: false, open_vs_account: { RIZ6: -4 } });
+    expect(c.join(' ')).toContain('НЕТОЧЕН');
+    expect(c.join(' ')).toContain('RIZ6 -4');
+  });
+
+  it('журнал полон — оговорки нет', () => {
+    expect(pnlCaveats({ journal_complete: true, partial: false, priced: true })).toEqual([]);
+  });
+});
+
+describe('три канала', () => {
+  it('имена каналов переводятся, незнакомый показывается как есть', () => {
+    expect(channelRu('quik')).toBe('терминал QUIK');
+    expect(channelRu('broker')).toBe('приложение брокера (FINAM)');
+    expect(channelRu('smart')).toBe('умные заявки STL');
+    expect(channelRu('новый_канал')).toBe('новый_канал');
+  });
+
+  it('история заявок полна только у умных заявок', () => {
+    expect(CHANNELS_WITH_EVENTS.has('smart')).toBe(true);
+    expect(CHANNELS_WITH_EVENTS.has('quik')).toBe(false);
+    expect(CHANNELS_WITH_EVENTS.has('broker')).toBe(false);
   });
 });

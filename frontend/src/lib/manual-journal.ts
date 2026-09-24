@@ -15,11 +15,38 @@ export const PERIOD_RU: Record<Period, string> = {
   day: 'день', week: 'неделя', month: 'месяц',
 };
 
+/** Три канала ручной торговли — ровно те, что называет оператор. Имена каналов
+ *  даёт сервер (quik|broker|smart), он же их и различает: по реестру роботов, а
+ *  не по форме тега (real-trade 24.09.2026). Экран только переводит. */
+export const CHANNEL_RU: Record<string, string> = {
+  quik: 'терминал QUIK',
+  broker: 'приложение брокера (FINAM)',
+  smart: 'умные заявки STL',
+  recon: 'выравнивание книг робота',
+};
+export function channelRu(c: string | undefined): string {
+  return CHANNEL_RU[String(c ?? '')] ?? String(c ?? '—');
+}
+
+/** История ЗАЯВОК полна только у умных: терминал и приложение брокера своих
+ *  намерений STL не рассказывают, от них видны только сделки. */
+export const CHANNELS_WITH_EVENTS = new Set(['smart']);
+
 export interface PnlReport {
   period?: string; from?: string; to?: string;
   fills?: number; lots?: number;
   gross_rub?: number; commission_rub?: number; net_rub?: number;
   priced?: boolean; partial?: boolean; coverage_from?: string | null;
+  orders?: number;
+  // Сведение не сошлось с позицией счёта: часть сделок в журнал не попала
+  // (агент отдаёт ринг 500 последних). Итог тогда НЕ точный.
+  journal_complete?: boolean;
+  open_vs_account?: Record<string, number>;
+  account_manual?: Record<string, number>;
+  by_channel?: Array<{ channel: string; fills?: number; lots?: number; orders?: number;
+                       gross_rub?: number; commission_rub?: number; net_rub?: number }>;
+  by_day?: Array<{ date: string; fills?: number; lots?: number;
+                   gross_rub?: number; commission_rub?: number; net_rub?: number }>;
   by_symbol?: Array<{ symbol: string; point_value?: number; fills?: number; lots?: number;
                       realized_points?: number; gross_rub?: number; commission_rub?: number }>;
   by_source?: Array<{ source: string; fills?: number; lots?: number;
@@ -36,6 +63,15 @@ export function pnlCaveats(r: PnlReport | null): string[] {
     out.push(r.coverage_from
       ? `Данные с ${r.coverage_from}: журнал сделок начат позже начала периода, за весь «${PERIOD_RU[(r.period as Period)] ?? r.period}» фактов ещё нет.`
       : 'Журнал покрывает не весь период: часть окна без фактов.');
+  }
+  // ИТОГ НЕТОЧЕН — говорим это так же прямо, как про неполный период.
+  if (r.journal_complete === false) {
+    const d = Object.entries(r.open_vs_account ?? {})
+      .map(([sym, diff]) => `${sym} ${diff > 0 ? '+' : ''}${diff}`).join(', ');
+    out.push('Итог НЕТОЧЕН: сведение journal не сошлось с позицией счёта'
+      + (d ? ` (${d})` : '')
+      + '. Часть сделок в журнал не попала — агент отдаёт кольцо последних 500,'
+      + ' и простой STL длиннее его оборота теряет сделки.');
   }
   if (r.priced === false) {
     const noPv = (r.by_symbol ?? []).filter((s) => !(s.point_value && s.point_value > 0))
