@@ -856,6 +856,10 @@ def make_on_bar(rid: str):
                     stl.set_state("r_count", r_n)
                     stl.set_state("r_inv", r_new)
                 stl.set_state("avg_add", 0)      # новая позиция -> лестница k_avg с начала
+                stl.set_state("avg_add_exec", 0)  # и ФАКТИЧЕСКАЯ ступень тоже: без
+                # сброса финальная доливка режима 3 на свежей позиции брала ступень
+                # ПРЕДЫДУЩЕЙ позиции (проверка 24.09: 26 доливок по 4-20 лотов на
+                # позицию из одного лота, пик до 21 вместо 2)
                 stl.set_state("trail_pk", None)  # и пик трейлинга с начала
                 mark_entry(price)
             return
@@ -892,6 +896,10 @@ def make_on_bar(rid: str):
                         stl.set_state("r_count", int(stl.get_state("r_count", 0) or 0) + 1)
                         stl.set_state("r_inv", r_inv)
                     stl.set_state("avg_add", 0)      # новая позиция -> лестница k_avg с начала
+                    stl.set_state("avg_add_exec", 0)  # и ФАКТИЧЕСКАЯ ступень тоже: без
+                    # сброса финальная доливка режима 3 на свежей позиции брала ступень
+                    # ПРЕДЫДУЩЕЙ позиции (проверка 24.09: 26 доливок по 4-20 лотов на
+                    # позицию из одного лота, пик до 21 вместо 2)
                     stl.set_state("trail_pk", None)  # и пик трейлинга с начала
                     mark_entry(price)
             return

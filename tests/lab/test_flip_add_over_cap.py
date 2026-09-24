@@ -75,3 +75,39 @@ def test_schema_allows_mode3():
     spec = next(s for s in REGISTRY["macd_shectory1"]["params_schema"]
                 if s["key"] == "flip_add_max")
     assert spec["max"] >= 3, spec
+
+
+def test_state_reset_is_not_testable_by_mirroring():
+    """Зеркало арифметики НЕ ловит несброс состояния — ловит только прогон.
+
+    24.09 проверка нашла в режиме 3 баг, которого этот файл поймать не мог:
+    ключ avg_add_exec не сбрасывался на новой позиции, и финальная доливка на
+    свежей позиции из одного лота брала ступень ПРЕДЫДУЩЕЙ позиции (26 таких
+    доливок по 4-20 лотов, пик до 21 вместо 2). Проверка ниже гоняет движок.
+    """
+    import asyncio
+
+    from trader.lab.backtest import run_single_backtest
+    from trader.lab.runtime import Bar
+    from trader.lab.strategies import library
+
+    def bars(n=600):
+        out, px, t = [], 100000.0, 1_700_000_000
+        for i in range(n):
+            px += (150.0 if (i // 30) % 2 == 0 else -150.0)
+            out.append(Bar(time=t + i * 60, open=px, high=px + 50, low=px - 50,
+                           close=px, volume=100))
+        return out
+
+    mod = type("M", (), {"on_bar": library.make_on_bar("macd_shectory1")})
+    p = {"symbol": "TEST", "qty": 1, "fast": 5, "slow": 12, "signal": 4,
+         "avg_atr_n": 14, "avg_step_atr": 21, "avg_max": 4, "k_avg": 20,
+         "tp_atr": 80, "sl_pct": 100, "flip_add_max": 3, "flatten_end": 1}
+    res = asyncio.run(run_single_backtest(mod, bars(), "TEST", p, point_value=1.0))
+    peak, signed = 0, 0
+    for t in res["trades"]:
+        signed += t["qty"] * (1 if t["side"] == "buy" else -1)
+        peak = max(peak, abs(signed))
+    # Потолок лестницы 4, доливка сверх него = 2x фактической ступени. Даже в
+    # худшем случае это 4 + 2*4 = 12; при несброшенном состоянии пик уезжал выше.
+    assert peak <= 12, f"пик позиции {peak} — похоже, состояние не сбрасывается"
