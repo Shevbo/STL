@@ -189,6 +189,13 @@ async def lifespan(app: FastAPI):
             "ALTER TABLE backtest_results ADD COLUMN IF NOT EXISTS net_profit DOUBLE PRECISION",
             "ALTER TABLE backtest_results ADD COLUMN IF NOT EXISTS recovery_factor DOUBLE PRECISION",
             "ALTER TABLE backtest_results ADD COLUMN IF NOT EXISTS point_value DOUBLE PRECISION",
+            # PASSTHROUGH ДЛЯ ТОГО, ЧЕГО НЕТ В КОЛОНКАХ. Движок считает больше, чем
+            # у нас колонок: exit_reasons (чем закрылись сделки: тейк/разворот/стоп)
+            # и fill_stats доезжали до API и МОЛЧА терялись — ручка пишет
+            # фиксированный список полей (просьба backtests 23.09.2026). Одна
+            # jsonb-колонка вместо колонки на каждую новую величину: следующая
+            # такая метрика доедет до экрана без миграции.
+            "ALTER TABLE backtest_results ADD COLUMN IF NOT EXISTS extra JSONB",
             "ALTER TABLE robots ADD COLUMN IF NOT EXISTS retire_comment TEXT",
             # MAE / OOS walk-forward metrics mirrored into the leaderboard (task 5)
             "ALTER TABLE optimization_leaderboard ADD COLUMN IF NOT EXISTS max_mae DOUBLE PRECISION",
@@ -744,14 +751,18 @@ async def _run_backtest_task(run_id: str, body: dict, pool, app_state) -> None:
                 result.get("total_trades"),
                 result.get("net_profit"), result.get("recovery_factor"), point_value,
                 result.get("peak_contracts"),
+                # Тот же passthrough, что и у пути агента.
+                json.dumps({k: result[k] for k in ("exit_reasons", "fill_stats")
+                                 if result.get(k)}, ensure_ascii=False)
+                if (result.get("exit_reasons") or result.get("fill_stats")) else None,
             ))
         if rows:
             await pool.executemany(
                 """INSERT INTO backtest_results
                    (id, run_id, params, trades, equity_curve, sharpe, max_drawdown, win_rate,
                     total_return, total_trades, net_profit, recovery_factor, point_value,
-                    peak_contracts)
-                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)""",
+                    peak_contracts, extra)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)""",
                 rows,
             )
 
@@ -3519,8 +3530,12 @@ def create_app() -> FastAPI:
             )
         else:
             rows = await pool.fetch(
+                # `extra` отдаём и в компактном виде: там лежит exit_reasons — чем
+                # закрывались сделки. Одна строка «тейк 4%, разворот 93%, стоп 3%»
+                # объясняет поведение робота лучше всей таблицы метрик, и тянуть
+                # ради неё полный ответ со сделками незачем.
                 "SELECT id, run_id, params, sharpe, max_drawdown, win_rate, total_return, "
-                "total_trades, net_profit, recovery_factor, point_value, peak_contracts "
+                "total_trades, net_profit, recovery_factor, point_value, peak_contracts, extra "
                 "FROM backtest_results WHERE run_id=$1 ORDER BY total_return DESC NULLS LAST",
                 run_id,
             )
@@ -4273,6 +4288,15 @@ def create_app() -> FastAPI:
                 return iv if -2_000_000_000 <= iv <= 2_000_000_000 else None
             except (TypeError, ValueError):
                 return None
+        # ЧТО ДВИЖОК ПОСЧИТАЛ СВЕРХ НАШИХ КОЛОНОК. exit_reasons (чем закрылись
+        # сделки) и fill_stats доезжали сюда и терялись: ручка писала фиксированный
+        # список полей. Складываем их в jsonb `extra` — следующая такая величина
+        # доедет до экрана без миграции (просьба backtests 23.09.2026).
+        _EXTRA_KEYS = ("exit_reasons", "fill_stats")
+        def _extra(res: dict):
+            got = {k: res.get(k) for k in _EXTRA_KEYS if res.get(k)}
+            return _json.dumps(got, ensure_ascii=False) if got else None
+
         result_rows = [
             (
                 cuid(), run_id, e["params"],
@@ -4281,7 +4305,7 @@ def create_app() -> FastAPI:
                 _fnum(e, "win_rate"), _fnum(e, "total_return"),
                 _fint(e, "total_trades"),
                 _fnum(e, "net_profit"), _fnum(e, "recovery_factor"),
-                _fint(e, "peak_contracts"),
+                _fint(e, "peak_contracts"), _extra(e["result"]),
             )
             for e in ok
         ]
@@ -4331,8 +4355,9 @@ def create_app() -> FastAPI:
                         await conn.executemany(
                             """INSERT INTO backtest_results
                                (id, run_id, params, trades, equity_curve, sharpe, max_drawdown, win_rate,
-                                total_return, total_trades, net_profit, recovery_factor, peak_contracts)
-                               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)""",
+                                total_return, total_trades, net_profit, recovery_factor, peak_contracts,
+                                extra)
+                               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)""",
                             result_rows,
                         )
                 if lb_rows:
