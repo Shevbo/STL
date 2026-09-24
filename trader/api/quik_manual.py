@@ -48,6 +48,24 @@ def _robot_ids(store) -> set[str]:
     return ids
 
 
+def _account_manual(store) -> dict[str, int]:
+    """Ручная позиция СЧЁТА: нетто QUIK минус позиции реальных роботов."""
+    if store is None:
+        return {}
+    status = store.agent_status(None) or {}
+    by_robot: dict[str, int] = {}
+    for r in status.get("robots") or []:
+        if str(r.get("mode") or "") == "real" and r.get("symbol"):
+            by_robot[str(r["symbol"])] = by_robot.get(str(r["symbol"]), 0) + int(r.get("position") or 0)
+    out = {}
+    for p in (status.get("health") or {}).get("positions") or []:
+        sym, net = str(p.get("sec") or ""), int(p.get("net") or 0)
+        manual = net - by_robot.get(sym, 0)
+        if sym and manual:
+            out[sym] = manual
+    return out
+
+
 def _prices(store) -> tuple[dict[str, float], dict[str, float]]:
     """(₽ за пункт, последняя цена) по инструментам — из зеркала агента."""
     if store is None:
@@ -71,7 +89,22 @@ async def pnl(request: Request, period: str = "day"):
                             detail=f"period должен быть одним из {manual_pnl.PERIODS}")
     store = _store(request)
     pv, last = _prices(store)
-    return manual_pnl.report(period, pv, last, robot_ids=_robot_ids(store))
+    out = manual_pnl.report(period, pv, last, robot_ids=_robot_ids(store))
+    # СВЕРКА С ФАКТОМ. Остаток из сведения — это то, что осталось незакрытым ВНУТРИ
+    # окна, а не позиция счёта: часть могла быть открыта раньше начала окна, а часть
+    # сделок могла не попасть в журнал (агент отдаёт ринг последних 500, и простой
+    # STL длиннее его оборота теряет сделки безвозвратно). Расхождение показываем
+    # числом, потому что молча оно превращает неполный журнал в «прибыль».
+    out["account_manual"] = _account_manual(store)
+    diff = {}
+    swept = {r["symbol"]: r["position"] for r in out["open"]}
+    for sym in set(swept) | set(out["account_manual"]):
+        d = swept.get(sym, 0) - out["account_manual"].get(sym, 0)
+        if d:
+            diff[sym] = d
+    out["open_vs_account"] = diff
+    out["journal_complete"] = not diff
+    return out
 
 
 @router.get("/journal")
