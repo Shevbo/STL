@@ -31,11 +31,14 @@ from typing import Any
 
 from trader.lab.commission import commission_for
 from trader.quik.algo_ledger import apply_fill, msk_date
+from trader.quik.truth import channel as tag_channel
 
 TRADES_DIR = "data/trades"
 MSK = datetime.timezone(datetime.timedelta(hours=3))
 PERIODS = ("day", "week", "month")
-MANUAL_OWNERS = ("manual", "smart")
+# Три канала, которыми торгует оператор, — так их называет он сам: терминал QUIK,
+# приложение брокера и умные заявки STL. Робот и выравнивание ручными не являются.
+MANUAL_CHANNELS = ("quik", "broker", "smart")
 
 
 def period_days(period: str, today: datetime.date) -> list[str]:
@@ -46,8 +49,15 @@ def period_days(period: str, today: datetime.date) -> list[str]:
     return [(today - datetime.timedelta(days=i)).isoformat() for i in range(span - 1, -1, -1)]
 
 
-def read_trades(days: list[str], directory: str | None = None) -> list[dict[str, Any]]:
-    """Ручные сделки за перечисленные дни, по времени."""
+def read_trades(days: list[str], directory: str | None = None,
+                robot_ids: set[str] | None = None) -> list[dict[str, Any]]:
+    """Ручные сделки за перечисленные дни, по времени, с проставленным каналом.
+
+    КАНАЛ СЧИТАЕТСЯ ЗАНОВО, из тега, а записанному в строке `owner` доверия нет:
+    журнал пишется в реальном времени, и строки, записанные до исправления
+    классификации (23.09.2026), несут прежний ответ. Тег — факт от QUIK,
+    классификация — наше суждение о нём, и пересматривать его задним числом
+    можно, а переписывать факт нельзя."""
     directory = directory or TRADES_DIR
     out: list[dict[str, Any]] = []
     for day in days:
@@ -60,8 +70,9 @@ def read_trades(days: list[str], directory: str | None = None) -> list[dict[str,
                     row = json.loads(line)
                 except ValueError:
                     continue
-                if row.get("owner") in MANUAL_OWNERS:
-                    out.append(row)
+                ch = tag_channel(row.get("tag"), robot_ids)
+                if ch in MANUAL_CHANNELS:
+                    out.append({**row, "channel": ch})
     out.sort(key=lambda r: int(r.get("ts_ms") or 0))
     return out
 
@@ -85,7 +96,9 @@ def summarize(trades: list[dict[str, Any]], point_values: dict[str, float],
     last_prices = last_prices or {}
     state: dict[str, tuple[int, float, int]] = {}       # symbol -> (pos, avg, entry_ts)
     by_symbol: dict[str, dict[str, Any]] = {}
-    by_source: dict[str, dict[str, Any]] = {}
+    by_channel: dict[str, dict[str, Any]] = {}
+    by_day: dict[str, dict[str, Any]] = {}
+    orders: dict[str, set[str]] = {}                   # канал -> номера заявок
 
     for t in trades:
         sym = str(t.get("sec") or "")
@@ -120,15 +133,29 @@ def summarize(trades: list[dict[str, Any]], point_values: dict[str, float],
         s["gross_rub"] += realized_pts * pv
         s["commission_rub"] += comm
 
-        # Источник: реализация приписывается ЗАКРЫВАЮЩЕЙ сделке — той, что превратила
-        # переоценку в деньги. Комиссия и объём — каждой своей.
-        src = "smart" if t.get("owner") == "smart" else "manual"
-        b = by_source.setdefault(src, {"source": src, "fills": 0, "lots": 0,
-                                       "gross_rub": 0.0, "commission_rub": 0.0})
+        # Канал: реализация приписывается ЗАКРЫВАЮЩЕЙ сделке — той, что превратила
+        # переоценку в деньги. Комиссия и объём — каждой своей. Поэтому круг,
+        # открытый руками и закрытый умной заявкой, отдаёт деньги умной: это не
+        # огрех, а единственный способ не делить один результат надвое.
+        ch = str(t.get("channel") or "quik")
+        b = by_channel.setdefault(ch, {"channel": ch, "fills": 0, "lots": 0,
+                                       "orders": 0, "gross_rub": 0.0,
+                                       "commission_rub": 0.0})
         b["fills"] += 1
         b["lots"] += qty
         b["gross_rub"] += realized_pts * pv
         b["commission_rub"] += comm
+        num = str(t.get("order_num") or "")
+        if num:
+            orders.setdefault(ch, set()).add(num)
+
+        day = msk_date(ts)
+        d = by_day.setdefault(day, {"date": day, "fills": 0, "lots": 0,
+                                    "gross_rub": 0.0, "commission_rub": 0.0})
+        d["fills"] += 1
+        d["lots"] += qty
+        d["gross_rub"] += realized_pts * pv
+        d["commission_rub"] += comm
 
     open_rows = []
     for sym, (pos, avg, _ts) in state.items():
@@ -145,6 +172,15 @@ def summarize(trades: list[dict[str, Any]], point_values: dict[str, float],
                                if (last and pv) else None),
         })
 
+    for ch, rows in orders.items():
+        by_channel[ch]["orders"] = len(rows)
+    for r in by_channel.values():
+        r["net_rub"] = round(r["gross_rub"] - r["commission_rub"], 2)
+        r["gross_rub"], r["commission_rub"] = round(r["gross_rub"], 2), round(r["commission_rub"], 2)
+    for r in by_day.values():
+        r["net_rub"] = round(r["gross_rub"] - r["commission_rub"], 2)
+        r["gross_rub"], r["commission_rub"] = round(r["gross_rub"], 2), round(r["commission_rub"], 2)
+
     gross = sum(r["gross_rub"] for r in by_symbol.values())
     comm = sum(r["commission_rub"] for r in by_symbol.values())
     priced = all(r["point_value"] > 0 for r in by_symbol.values())
@@ -157,8 +193,13 @@ def summarize(trades: list[dict[str, Any]], point_values: dict[str, float],
         # Хоть один инструмент без ₽/пункт — итог в рублях НЕПОЛНЫЙ, и экран обязан
         # это сказать, а не показывать заниженную сумму как окончательную.
         "priced": priced,
+        "orders": sum(len(v) for v in orders.values()),
         "by_symbol": sorted(by_symbol.values(), key=lambda r: r["symbol"]),
-        "by_source": sorted(by_source.values(), key=lambda r: r["source"]),
+        "by_channel": sorted(by_channel.values(), key=lambda r: r["channel"]),
+        # by_source — прежнее имя тех же строк: экран компаньона уже выложен с ним.
+        "by_source": [{**r, "source": r["channel"]}
+                      for r in sorted(by_channel.values(), key=lambda r: r["channel"])],
+        "by_day": sorted(by_day.values(), key=lambda r: r["date"]),
         "open": sorted(open_rows, key=lambda r: r["symbol"]),
     }
 
@@ -166,12 +207,13 @@ def summarize(trades: list[dict[str, Any]], point_values: dict[str, float],
 def report(period: str, point_values: dict[str, float],
            last_prices: dict[str, float] | None = None,
            now: datetime.datetime | None = None,
-           directory: str | None = None) -> dict[str, Any]:
+           directory: str | None = None,
+           robot_ids: set[str] | None = None) -> dict[str, Any]:
     """Готовый ответ для экрана: итог за период плюс честные границы данных."""
     period = period if period in PERIODS else "day"
     today = (now or datetime.datetime.now(MSK)).date()
     days = period_days(period, today)
-    trades = read_trades(days, directory)
+    trades = read_trades(days, directory, robot_ids)
     out = summarize(trades, point_values, last_prices)
     have = coverage_from(directory)
     out.update({

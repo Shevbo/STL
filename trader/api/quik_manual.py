@@ -24,7 +24,7 @@ from fastapi import APIRouter, HTTPException, Request
 from trader.auth.guard import require_auth
 from trader.quik import manual_pnl, so_journal
 from trader.quik.algo_ledger import point_values
-from trader.quik.truth import SMART_TAG
+from trader.quik.truth import SMART_TAG, load_robot_ids
 
 router = APIRouter(prefix="/api/v1/quik/manual", tags=["quik-manual"])
 
@@ -35,6 +35,17 @@ def _auth(request: Request) -> str:
 
 def _store(request: Request):
     return getattr(request.app.state, "quik_store", None)
+
+
+def _robot_ids(store) -> set[str]:
+    """Реестр роботов: накопленный на диске плюс те, кто прямо сейчас в зеркале.
+
+    Без него незнакомый непустой brokerref пришлось бы звать роботом, и сделки из
+    приложения брокера (теги вида "}S…XдD") не попали бы в ручную торговлю вовсе."""
+    ids = load_robot_ids()
+    status = (store.agent_status(None) or {}) if store is not None else {}
+    ids |= {str(r.get("id")) for r in status.get("robots") or [] if r.get("id")}
+    return ids
 
 
 def _prices(store) -> tuple[dict[str, float], dict[str, float]]:
@@ -58,8 +69,9 @@ async def pnl(request: Request, period: str = "day"):
     if period not in manual_pnl.PERIODS:
         raise HTTPException(status_code=422,
                             detail=f"period должен быть одним из {manual_pnl.PERIODS}")
-    pv, last = _prices(_store(request))
-    return manual_pnl.report(period, pv, last)
+    store = _store(request)
+    pv, last = _prices(store)
+    return manual_pnl.report(period, pv, last, robot_ids=_robot_ids(store))
 
 
 @router.get("/journal")
@@ -82,19 +94,25 @@ async def journal(request: Request, period: str = "day", so_id: str = "",
         if so_id and e.get("so_id") != so_id:
             continue
         rows.append({"ts_ms": e.get("ts_ms"), "type": "event", "event": e.get("event"),
+                     # События есть только у умных заявок: терминал QUIK и приложение
+                     # брокера своих намерений STL не рассказывают, от них видны
+                     # только сделки.
+                     "channel": "smart",
                      "source": e.get("source"), "so_id": e.get("so_id"),
                      "code": e.get("code"), "side": e.get("side"), "qty": e.get("qty"),
                      "kind": e.get("kind"), "parent_id": e.get("parent_id"),
                      "detail": e.get("detail")})
-    for t in manual_pnl.read_trades(days):
+    for t in manual_pnl.read_trades(days, robot_ids=_robot_ids(_store(request))):
         tag = str(t.get("tag") or "")
         sid = tag[len(SMART_TAG):] if tag.startswith(SMART_TAG) else ""
         if so_id and sid != so_id:
             continue
         rows.append({"ts_ms": t.get("ts_ms"), "type": "trade",
                      "event": "сделка", "so_id": sid,
-                     "source": (f"умная заявка {sid}" if sid
-                                else f"{so_journal.TERMINAL} (рука)"),
+                     "channel": t.get("channel"), "tag": tag,
+                     "source": (f"умная заявка {sid}" if sid else
+                                f"{so_journal.TERMINAL} (рука)" if not tag else
+                                "приложение брокера"),
                      "code": t.get("sec"), "side": t.get("side"), "qty": t.get("qty"),
                      "price": t.get("price"), "order_num": t.get("order_num"),
                      "detail": f"{t.get('qty')} по {t.get('price')}"})

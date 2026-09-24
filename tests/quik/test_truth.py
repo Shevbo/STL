@@ -39,7 +39,8 @@ def test_paper_robots_do_not_move_the_account_split():
 
 
 def test_position_is_split_between_robots_and_the_hand():
-    t = truth.build(_status(), [{"last_seen_age_ms": 800}], [], NOW)
+    t = truth.build(_status(), [{"last_seen_age_ms": 800}], [], NOW,
+                    robot_ids={"agent-macd-RIZ6-v1"})
     assert t["stale"] is False
     pos = t["positions"][0]
     assert (pos["net"], pos["robots"], pos["manual"]) == (-40, -10, -30)
@@ -138,3 +139,21 @@ def test_extremes_follow_the_same_frame_the_watcher_judges_by():
     assert (ext["RIZ6"]["hi"], ext["RIZ6"]["lo"]) == (85830.0, 85500.0)
     truth.track_extremes(ext, set(), {}, NOW + 3000)      # заявок нет — след снят
     assert ext == {}
+
+
+def test_unknown_tag_is_the_brokers_app_not_a_robot():
+    """Приложение брокера метит сделки своими тегами ("}S…XдD"). Без реестра
+    роботов они звались роботными, и 69 сделок оператора 24.09 ушли не туда."""
+    assert truth.owner("}SЖЮqXдD", {"lxk22tsffsxiiotb8kmp"}) == "external"
+    assert truth.owner("lxk22tsffsxiiotb8kmp", {"lxk22tsffsxiiotb8kmpQQQ"}) == "robot"
+    assert truth.channel("", set()) == "quik"
+    assert truth.channel("stl-so-abc", set()) == "smart"
+    assert truth.channel("}SЖЮqXдD", set()) == "broker"
+    assert truth.channel("recon", set()) == "recon"
+
+
+def test_registry_round_trips_through_disk(tmp_path):
+    p = str(tmp_path / "robot_ids.json")
+    truth.save_robot_ids({"a", "b"}, p)
+    assert truth.load_robot_ids(p) == {"a", "b"}
+    assert truth.load_robot_ids(str(tmp_path / "missing.json")) == set()

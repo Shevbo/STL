@@ -47,14 +47,21 @@ _LAST_TRADES = 20          # хвост сделок прямо в снимке,
 
 
 SMART_TAG = "stl-so-"      # см. quik_agent/internal/trade/bridge.go: ownerTag()
+TAG_WIDTH = 20             # brokerref QUIK: длинный robot_id в нём обрезан
+ROBOTS_PATH = "data/robot_ids.json"
 
 
-def owner(tag: str) -> str:
+def owner(tag: str, robot_ids: set[str] | None = None) -> str:
     """Чья сделка, по brokerref из таблицы QUIK.
 
     Агент пишет в комментарий заявки: ID робота, "recon" у выравнивающей, а у
     ребёнка умной заявки "stl-so-<so_id>". Пусто — торговал человек руками.
-    Это НЕ client_id ("rr:"/"so:"): в brokerref QUIK всего 20 символов."""
+    Это НЕ client_id ("rr:"/"so:"): в brokerref QUIK всего 20 символов.
+
+    `robot_ids` — реестр известных роботов. БЕЗ НЕГО любой незнакомый непустой тег
+    приходилось звать роботом, и в роботы попадало приложение брокера (теги вида
+    "}S…XдD", 24.09.2026 их набралось 69 сделок). С реестром незнакомый тег честно
+    зовётся "external": это тоже торговля оператора, просто другим каналом."""
     tag = (tag or "").strip()
     if not tag:
         return "manual"
@@ -62,7 +69,40 @@ def owner(tag: str) -> str:
         return "smart"
     if tag == "recon":
         return "recon"
-    return "robot"
+    if robot_ids is None:
+        return "robot"
+    return "robot" if tag in {r[:TAG_WIDTH] for r in robot_ids} else "external"
+
+
+# Канал ручной торговли для экрана: три, как их называет оператор. Робот и
+# выравнивание каналами не являются и в ручную торговлю не входят.
+CHANNELS = {"manual": "quik", "external": "broker", "smart": "smart"}
+
+
+def channel(tag: str, robot_ids: set[str] | None = None) -> str:
+    """quik | broker | smart | robot | recon."""
+    own = owner(tag, robot_ids)
+    return CHANNELS.get(own, own)
+
+
+def load_robot_ids(path: str = ROBOTS_PATH) -> set[str]:
+    """Накопленный реестр id роботов. Пусто — файла ещё нет."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return set(json.load(fh))
+    except (OSError, ValueError):
+        return set()
+
+
+def save_robot_ids(ids: set[str], path: str = ROBOTS_PATH) -> None:
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        tmp = f"{path}.tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(sorted(ids), fh, ensure_ascii=False)
+        os.replace(tmp, path)
+    except OSError as exc:
+        log.warning("quik.truth.robot_ids_save_failed", error=str(exc))
 
 
 def _msk_day_start_ms(now_ms: int) -> int:
@@ -129,7 +169,8 @@ def track_extremes(extremes: dict[str, dict[str, float]], codes: set[str],
 
 def build(status: dict[str, Any] | None, agents: list[dict[str, Any]],
           book_orders: list[Any], now_ms: int,
-          watch: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+          watch: list[dict[str, Any]] | None = None,
+          robot_ids: set[str] | None = None) -> dict[str, Any]:
     """Снимок: позиции счёта с разбивкой робот/рука, роботы, живые умные заявки.
 
     `status` — зеркало агента (store.agent_status()); None или старое зеркало
@@ -178,7 +219,8 @@ def build(status: dict[str, Any] | None, agents: list[dict[str, Any]],
     today = [t for t in trades if int(t.get("ts_ms") or 0) >= day_start]
     by_owner: dict[str, int] = {}
     for t in today:
-        by_owner[owner(t.get("tag"))] = by_owner.get(owner(t.get("tag")), 0) + 1
+        who = owner(t.get("tag"), robot_ids)
+        by_owner[who] = by_owner.get(who, 0) + 1
 
     smart = [{
         "so_id": o.so_id, "kind": o.kind, "code": o.code, "side": o.side,
@@ -219,7 +261,7 @@ def build(status: dict[str, Any] | None, agents: list[dict[str, Any]],
         "last_trades": [{
             "num": t.get("num"), "ts_ms": t.get("ts_ms"), "sec": t.get("sec"),
             "side": t.get("side"), "qty": t.get("qty"), "price": t.get("price"),
-            "owner": owner(t.get("tag")), "tag": t.get("tag"),
+            "owner": owner(t.get("tag"), robot_ids), "tag": t.get("tag"),
         } for t in sorted(today, key=lambda x: int(x.get("ts_ms") or 0))[-_LAST_TRADES:]],
     }
 
@@ -238,7 +280,8 @@ def journal_path(now_ms: int, directory: str = TRADES_DIR) -> str:
 
 
 def append_trades(status: dict[str, Any] | None, seen: set[str], now_ms: int,
-                  directory: str = TRADES_DIR) -> int:
+                  directory: str = TRADES_DIR,
+                  robot_ids: set[str] | None = None) -> int:
     """Дописать новые сделки в суточный журнал. Дедуп по номеру сделки QUIK.
 
     Ринг агента держит 500 последних сделок и обнуляется рестартом QUIK — через
@@ -257,7 +300,8 @@ def append_trades(status: dict[str, Any] | None, seen: set[str], now_ms: int,
                 "num": t.get("num"), "ts_ms": t.get("ts_ms"), "sec": t.get("sec"),
                 "side": t.get("side"), "qty": t.get("qty"), "price": t.get("price"),
                 "order_num": t.get("order_num"), "tag": t.get("tag"),
-                "owner": owner(t.get("tag")),
+                "owner": owner(t.get("tag"), robot_ids),
+                "channel": channel(t.get("tag"), robot_ids),
             }, ensure_ascii=False) + "\n")
     return len(fresh)
 
@@ -282,6 +326,7 @@ async def run(state: Any, path: str = PATH, directory: str = TRADES_DIR,
     """Фоновая задача: снимок на диск раз в две секунды + журнал сделок."""
     now = int(time.time() * 1000)
     extremes: dict[str, dict[str, float]] = {}
+    robot_ids = load_robot_ids()
     seen = _load_seen(now, directory)
     day = journal_path(now, directory)
     log.info("quik.truth.started", path=path, journal=day, known_trades=len(seen))
@@ -299,11 +344,20 @@ async def run(state: Any, path: str = PATH, directory: str = TRADES_DIR,
                 session_open = (getattr(state, "market_session", None) or {}).get("open")
                 _write_atomic(path, build(status, store.status(), orders, now,
                                           watch_view(orders, ticks, extremes,
-                                                     session_open, now)))
+                                                     session_open, now),
+                                          robot_ids))
+                # Реестр роботов НАКАПЛИВАЕТСЯ: снятый робот исчезает из зеркала,
+                # но его сегодняшние сделки в журнале остаются, и без памяти они
+                # переехали бы в «приложение брокера».
+                seen_ids = {str(r.get("id")) for r in (status or {}).get("robots") or []
+                            if r.get("id")}
+                if not seen_ids <= robot_ids:
+                    robot_ids |= seen_ids
+                    save_robot_ids(robot_ids)
                 today = journal_path(now, directory)
                 if today != day:            # смена суток МСК — журнал новый, дедуп тоже
                     seen, day = set(), today
-                append_trades(status, seen, now, directory)
+                append_trades(status, seen, now, directory, robot_ids)
         except Exception as exc:  # noqa: BLE001 — сторож не имеет права падать
             log.warning("quik.truth.failed", error=str(exc))
         await asyncio.sleep(period)
