@@ -1083,6 +1083,9 @@
     finally { robotRunsLoading = false; }
   }
 
+  // Открытая строка без сохранённых сделок: график рисовать нечем, и досчёт
+  // запускает ОПЕРАТОР кнопкой, а не открытие строки.
+  let needRecalc = $state(false);
   /** Открыть результат конкретного прогона на графике (без пересчёта). */
   async function openRun(run: any) {
     say(`открываю прогон ${run.id.slice(0, 24)} (${run.combos} комбинаций)…`, 'dim');
@@ -1105,11 +1108,14 @@
       // а в шапке стояла «комиссия 0 ₽» — признак отсутствующих сделок
       // (06.08.2026). Рисовать нечего, значит пересчитываем ОДНУ комбинацию
       // лидера на том же окне — это секунды, и кривая становится настоящей.
-      const hasTrades = Array.isArray(best.trades) && best.trades.length > 0;
-      if (!hasTrades) {
-        say('в свипе сохранены только метрики — пересчитываю лидера ради кривой…', 'dim');
-        await rerunFromChart({ ...(best.params ?? {}) });
-      }
+      // ДОСЧЁТ ТОЛЬКО ПО КНОПКЕ. Многокомбинационный прогон хранит лишь метрики:
+      // массивы сделок и equity вырезаются на записи, иначе Postgres на VDS не
+      // выдержит. Раньше открытие строки САМО запускало пересчёт лидера, и
+      // двадцать кликов оператора превращались в двадцать заданий на i9, где в это
+      // время идёт кампания (backtests 23.09.2026). Теперь показываем плашку и
+      // ждём решения: считать или нет.
+      needRecalc = !(Array.isArray(best.trades) && best.trades.length > 0);
+      if (needRecalc) say('в свипе сохранены только метрики: кривой нет, нужен досчёт одной комбинации', 'dim');
     } catch (e) {
       say('не удалось открыть прогон: ' + String(e).slice(0, 120), 'err');
     }
@@ -1590,6 +1596,19 @@
           📈 Лидер: прибыль×RF
           {#if chartLoading}<span class="btl-sec-sub">загрузка сделок для графика…</span>{/if}
         </div>
+        <!-- Плашка вместо молчаливого пересчёта: сделок у строки свипа нет, и
+             решение потратить очередь i9 принимает оператор. -->
+        {#if needRecalc && !chartLoading}
+          <div class="btl-recalc">
+            <span>Кривой нет: в свипе сохранены только метрики этой комбинации.</span>
+            <button class="btl-recalc-btn"
+                    onclick={() => { needRecalc = false; rerunFromChart({ ...(leaderResult?.params ?? {}) }); }}>
+              Досчитать одну комбинацию на i9
+            </button>
+            <em>одна комбинация на этом окне — секунды счёта, но ждать придётся очередь i9,
+              если там идёт кампания</em>
+          </div>
+        {/if}
         <div class="btl-chart-wrap">
           {#key JSON.stringify(leaderResult.params)}
             <BacktestChart
@@ -1793,6 +1812,16 @@
   /* flex: none у обоих. .btl-results — флекс-колонка, и без этого раскрытая
      история сжимала монитор ниже его содержимого: у .crt стоит overflow:hidden,
      и нижняя рамка уезжала поверх последней строки (замечено 06.08.2026). */
+  .btl-recalc {
+    display: grid; gap: 6px; margin: 8px 0 10px; padding: 10px 12px;
+    background: #17203a; border: 1px solid #2f4b7a; border-radius: 8px; font-size: 12px;
+  }
+  .btl-recalc-btn {
+    justify-self: start; background: #1d3557; border: 1px solid #4f8bd6; border-radius: 5px;
+    color: #dfe6ff; cursor: pointer; font-size: 12px; padding: 7px 12px;
+  }
+  .btl-recalc-btn:hover { background: #24436e; }
+  .btl-recalc em { font-style: normal; font-size: 10px; color: #8a90a8; line-height: 1.45; }
   .btl-history { flex: none; border: 1px solid #24406a; border-radius: 8px;
     background: #0c1424; padding: 8px 12px; }
   .btl-hist-btn { background: transparent; border: none; color: #7ab8ff; cursor: pointer;
