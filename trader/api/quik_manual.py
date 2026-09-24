@@ -48,6 +48,20 @@ def _robot_ids(store) -> set[str]:
     return ids
 
 
+def _open_vs_account(report: dict[str, Any], store) -> dict[str, int]:
+    """На сколько контрактов сведённый остаток расходится с позицией счёта."""
+    account = report.get("account_manual")
+    if account is None:
+        account = _account_manual(store)
+    swept = {r["symbol"]: r["position"] for r in report.get("open") or []}
+    diff = {}
+    for sym in set(swept) | set(account):
+        d = swept.get(sym, 0) - account.get(sym, 0)
+        if d:
+            diff[sym] = d
+    return diff
+
+
 def _account_manual(store) -> dict[str, int]:
     """Ручная позиция СЧЁТА: нетто QUIK минус позиции реальных роботов."""
     if store is None:
@@ -96,14 +110,8 @@ async def pnl(request: Request, period: str = "day"):
     # STL длиннее его оборота теряет сделки безвозвратно). Расхождение показываем
     # числом, потому что молча оно превращает неполный журнал в «прибыль».
     out["account_manual"] = _account_manual(store)
-    diff = {}
-    swept = {r["symbol"]: r["position"] for r in out["open"]}
-    for sym in set(swept) | set(out["account_manual"]):
-        d = swept.get(sym, 0) - out["account_manual"].get(sym, 0)
-        if d:
-            diff[sym] = d
-    out["open_vs_account"] = diff
-    out["journal_complete"] = not diff
+    out["open_vs_account"] = _open_vs_account(out, store)
+    out["journal_complete"] = not out["open_vs_account"]
     return out
 
 
@@ -122,6 +130,20 @@ async def journal(request: Request, period: str = "day", so_id: str = "",
     today = datetime.datetime.now(manual_pnl.MSK).date()
     days = manual_pnl.period_days(period, today)
 
+    rows = feed_rows(days, _robot_ids(_store(request)), so_id)
+    rows.sort(key=lambda r: int(r.get("ts_ms") or 0), reverse=True)
+    return {"period": period, "from": days[0], "to": days[-1],
+            "events_from": so_journal.coverage(),
+            "trades_from": manual_pnl.coverage_from(),
+            "count": len(rows), "rows": rows[:max(1, min(int(limit), 5000))]}
+
+
+def feed_rows(days: list[str], robot_ids: set[str], so_id: str = "") -> list[dict[str, Any]]:
+    """События заявок и сделки одной лентой, по возрастанию времени.
+
+    События и сделки живут в РАЗНЫХ журналах (намерение и факт — разные вещи, и
+    сведение их в один файл потеряло бы это различие), но читать их оператору
+    удобнее вместе, по одной оси времени."""
     rows: list[dict[str, Any]] = []
     for e in so_journal.read_days(days):
         if so_id and e.get("so_id") != so_id:
@@ -135,7 +157,7 @@ async def journal(request: Request, period: str = "day", so_id: str = "",
                      "code": e.get("code"), "side": e.get("side"), "qty": e.get("qty"),
                      "kind": e.get("kind"), "parent_id": e.get("parent_id"),
                      "detail": e.get("detail")})
-    for t in manual_pnl.read_trades(days, robot_ids=_robot_ids(_store(request))):
+    for t in manual_pnl.read_trades(days, robot_ids=robot_ids):
         tag = str(t.get("tag") or "")
         sid = tag[len(SMART_TAG):] if tag.startswith(SMART_TAG) else ""
         if so_id and sid != so_id:
@@ -149,9 +171,31 @@ async def journal(request: Request, period: str = "day", so_id: str = "",
                      "code": t.get("sec"), "side": t.get("side"), "qty": t.get("qty"),
                      "price": t.get("price"), "order_num": t.get("order_num"),
                      "detail": f"{t.get('qty')} по {t.get('price')}"})
+    rows.sort(key=lambda r: int(r.get("ts_ms") or 0))
+    return rows
 
-    rows.sort(key=lambda r: int(r.get("ts_ms") or 0), reverse=True)
-    return {"period": period, "from": days[0], "to": days[-1],
-            "events_from": so_journal.coverage(),
-            "trades_from": manual_pnl.coverage_from(),
-            "count": len(rows), "rows": rows[:max(1, min(int(limit), 5000))]}
+
+def companion_block(store, limit: int = 20) -> dict[str, Any]:
+    """Короткий блок ручной торговли для снапшота компаньона (телефон).
+
+    Токен компаньона открывает РОВНО ОДИН эндпоинт, поэтому ссылка на журнал с
+    телефона упиралась бы в форму входа (ui-ux, 24.09.2026). Даём итог ДНЯ и
+    хвост ленты прямо в снапшоте: за неделю и месяц оператор идёт на десктоп."""
+    pv, last = _prices(store)
+    ids = _robot_ids(store)
+    rep = manual_pnl.report("day", pv, last, robot_ids=ids)
+    rows = feed_rows([rep["to"]], ids)[-max(1, int(limit)):]
+    rows.reverse()
+    return {
+        "period": "day", "date": rep["to"],
+        "net_rub": rep["net_rub"], "gross_rub": rep["gross_rub"],
+        "commission_rub": rep["commission_rub"],
+        "fills": rep["fills"], "lots": rep["lots"], "orders": rep["orders"],
+        "priced": rep["priced"], "partial": rep["partial"],
+        "coverage_from": rep["coverage_from"],
+        "by_channel": rep["by_channel"], "open": rep["open"],
+        # Тот же флаг, что на десктопе: неполный журнал не имеет права выглядеть
+        # точным итогом просто потому, что экран маленький.
+        "journal_complete": not _open_vs_account(rep, store),
+        "rows": rows,
+    }

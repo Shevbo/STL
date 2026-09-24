@@ -583,6 +583,16 @@ def _watch_runner(health: dict, received_ms: int | None, now_ms: int,
             "orders_used": used, "orders_cap": cap}
 
 
+def _manual_block(store) -> dict:
+    """Блок ручной торговли для снапшота. Ошибка здесь не имеет права ронять
+    снапшот целиком: панель нужнее, чем один её блок."""
+    try:
+        from trader.api.quik_manual import companion_block
+        return companion_block(store)
+    except Exception:  # noqa: BLE001 — блок необязателен, панель важнее
+        return {}
+
+
 @router.get("/snapshot")
 async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30):
     """Everything the tray panel shows, in one read. Companion token or session.
@@ -1358,6 +1368,9 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
         "ping_ms": health.get("rtt_ms"),   # пинг агент<->QUIK (pong RTT) для шапки
         "account": account, "positions": positions, "robots": robots,
         "orders": orders_block,
+        # Ручная торговля за день + хвост ленты журнала: токен компаньона открывает
+        # только снапшот, поэтому телефон берёт журнал отсюда (просьба ui-ux 24.09).
+        "manual": _manual_block(store),
         "watch": {"runner": watch_runner, "backtests": bt, "platform": platform},
         "alerts": alerts, "market": market_out,
     }
