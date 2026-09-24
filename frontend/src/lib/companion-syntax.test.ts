@@ -36,3 +36,26 @@ describe('страницы компаньона разбираются как к
     });
   }
 });
+
+// Панель молча оставалась на старой вёрстке: nginx отдаёт её без Cache-Control,
+// WebView держит страницу сколько хочет, и оператор смотрел вчерашний экран
+// (24.09.2026, тот же случай, что с SPA 06.08.2026). Сторож версии обязан быть
+// на обеих страницах и НЕ опираться на зашитый в файл маркер — его забудут.
+describe('сторож версии панели', () => {
+  for (const page of ['companion.html', 'm.html']) {
+    const src = fs.readFileSync(path.resolve('public', page), 'utf8');
+
+    it(`${page}: сторож есть и сравнивает заголовки страницы, а не зашитый номер`, () => {
+      expect(src).toContain('versionWatch');
+      expect(src).toMatch(/etag/i);
+      expect(src).toMatch(/last-modified/i);
+      expect(src).toContain("cache: 'no-store'");
+    });
+
+    it(`${page}: полоса обновления и кнопка перезагрузки с обходом кэша`, () => {
+      expect(src).toContain('Вышла новая версия панели');
+      expect(src).toMatch(/location\.pathname \+ '\?r=' \+ Date\.now\(\)/);
+      expect(src).toContain('.newver');
+    });
+  }
+});

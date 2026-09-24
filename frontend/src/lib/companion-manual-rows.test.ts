@@ -24,13 +24,21 @@ describe('подпись строки разбивки ручной торгов
       expect(f({ kind: 'smart', name: 'умные заявки', sec: 'GZZ6' })).toBe('умные заявки GZZ6');
     });
 
-    it(`${page}: у приложения брокера назван и канал`, () => {
+    // 24.09.2026: я вытащил тег брокера в подпись, и блок стал «приложение
+    // брокера }СЖЮqХдД» — мусор. Каналов ровно три, теги схлопывает сервер.
+    it(`${page}: тег канала в подпись НЕ попадает`, () => {
       const f = nameFn(src);
-      const a = f({ kind: 'external', name: 'приложение брокера', key: 'mob1', sec: 'RIZ6' });
-      const b = f({ kind: 'external', name: 'приложение брокера', key: 'mob2', sec: 'RIZ6' });
-      expect(a).not.toBe(b);            // две строки одного вида различимы
-      expect(a).toContain('mob1');
-      expect(a).toContain('RIZ6');
+      const a = f({ kind: 'external', channel: 'broker', name: 'приложение брокера',
+                    tags: ['}СЖЮqХдД', '}SbaqХдД'], sec: 'RIZ6' });
+      expect(a).toBe('приложение брокера RIZ6');
+      expect(a).not.toContain('}');
+    });
+
+    it(`${page}: строки одного канала различаются инструментом`, () => {
+      const f = nameFn(src);
+      const a = f({ channel: 'broker', name: 'приложение брокера', sec: 'RIZ6' });
+      const b = f({ channel: 'broker', name: 'приложение брокера', sec: 'GZZ6' });
+      expect(a).not.toBe(b);
     });
 
     it(`${page}: нет инструмента — подпись не выдумывается`, () => {
@@ -58,7 +66,8 @@ describe('подсказка объясняет, из чего сложено ч
       rubSrc + ';' + cut(src, 'manualRowName') + cut(src, 'manualRowWhy') + 'return manualRowWhy;',
     )() as (r: any) => string;
   };
-  const row = { kind: 'external', name: 'приложение брокера', key: 'mob1', sec: 'RIZ6',
+  const row = { kind: 'external', channel: 'broker', name: 'приложение брокера',
+                tags: ['}СЖЮqХдД'], sec: 'RIZ6',
                 vm_rub: 124882, fills: 12, lots: 40, cash_pts: -1500,
                 net_start: 0, net_end: 10, last: 86000, coef: 1.5681,
                 base: 85500, base_src: 'quik_vm' };

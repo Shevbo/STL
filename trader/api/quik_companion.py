@@ -1044,8 +1044,18 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
     # Без неё ВМ счёта не с чем сводить: заявки оператора из терминала, дети
     # умных заявок и align-заявки recon делают свой результат, а показать его
     # было негде. Названия видов — как в блоке заявок, чтобы строка читалась.
-    _MANUAL_RU = {"terminal": "терминал QUIK", "smart": "умные заявки",
-                  "recon": "выравнивание", "external": "приложение брокера"}
+    # ТРИ КАНАЛА, А НЕ СПИСОК ТЕГОВ. Оператор торгует ровно тремя способами:
+    # руками в терминале QUIK, из приложения брокера (FINAM) и умными заявками
+    # STL. Разбивка агента дробит канал приложения на ОТДЕЛЬНЫЕ ТЕГИ (`classOf`
+    # возвращает сам brokerref), и панель печатала их как есть: «приложение
+    # брокера }СЖЮqХдД», «приложение брокера }SbaqХдД» — три строки мусора вместо
+    # одной понятной (оператор 24.09.2026, и это сделал я, вытащив тег в подпись).
+    # Теперь канал один, теги видны только в подсказке — они нужны для разбора,
+    # но читать их оператору незачем.
+    _CHANNEL = {"terminal": ("quik", "терминал QUIK"),
+                "smart": ("smart", "умные заявки STL"),
+                "external": ("broker", "приложение брокера"),
+                "recon": ("recon", "выравнивание")}
     _manual_rows = [c for c in day_classes if c.get("kind") != "robot"]
     # Цена, коэффициент и расчётная цена клиринга лежат рядом, по инструментам.
     _day_secs = {x.get("code"): x for x in (day.get("secs") or []) if x.get("code")}
@@ -1053,29 +1063,41 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
     # ноль» — это факт, из которого складывается ВМ, а отсутствие строки читается
     # как «не считаем».
     if day.get("classes") is not None:
+        # Схлопываем по (КАНАЛ, инструмент). Величины линейны по составу, поэтому
+        # сумма канала равна сумме его тегов — итог не меняется ни на копейку.
+        merged: dict[tuple[str, str], dict] = {}
+        for c in _manual_rows:
+            chan, chan_ru = _CHANNEL.get(str(c.get("kind")), ("other", str(c.get("kind"))))
+            sec = str(c.get("sec") or "")
+            row = merged.get((chan, sec))
+            if row is None:
+                row = merged[(chan, sec)] = {
+                    "channel": chan, "kind": c.get("kind"), "name": chan_ru, "sec": sec,
+                    "vm_rub": 0.0, "fills": 0, "lots": 0, "cash_pts": 0.0,
+                    "net_start": 0, "net_end": 0, "tags": [],
+                    "last": _day_secs.get(sec, {}).get("last"),
+                    "coef": _day_secs.get(sec, {}).get("coef"),
+                    "base": _day_secs.get(sec, {}).get("base"),
+                    "base_src": _day_secs.get(sec, {}).get("base_src"),
+                }
+            row["vm_rub"] += float(c.get("vm_rub") or 0)
+            row["fills"] += int(c.get("fills") or 0)
+            row["lots"] += int(c.get("lots") or 0)
+            row["cash_pts"] += float(c.get("cash_pts") or 0)
+            row["net_start"] += int(c.get("net_start") or 0)
+            row["net_end"] += int(c.get("net_end") or 0)
+            # Тег канала оставляем в данных: он нужен при разборе «откуда сделка»,
+            # но на экран не выносится.
+            tag = str(c.get("key") or "")
+            if tag and tag not in row["tags"]:
+                row["tags"].append(tag)
         orders_block["today"] = {
             "total": sum(float(c.get("vm_rub") or 0) for c in _manual_rows),
-            # KEY ОТДАЁМ ТОЖЕ. У «приложения брокера» ключ - это ТЕГ брокера, у
-            # каждого канала свой, и строк с таким видом бывает несколько. Панель
-            # печатала одно лишь название вида и выбрасывала и тег, и инструмент:
-            # три разные строки выглядели как три одинаковые «приложение брокера»
-            # с несовместимыми числами (оператор 23.09.2026).
             # СЛАГАЕМЫЕ ФОРМУЛЫ, А НЕ ТОЛЬКО ИТОГ. Число в строке - рыночная
             # переоценка участника за день: coef × (cash + net_end×last −
             # net_start×base). Оператор видел один результат и не мог понять, из
             # чего он вышел («расшифруй логику каждой цифры», 23.09.2026).
-            # Отдаём всё, из чего он сложен, чтобы панель показала арифметику.
-            "rows": [{"kind": c.get("kind"), "name": _MANUAL_RU.get(c.get("kind"), c.get("kind")),
-                      "key": c.get("key"),
-                      "sec": c.get("sec"), "vm_rub": c.get("vm_rub"),
-                      "fills": c.get("fills"), "lots": c.get("lots"),
-                      "cash_pts": c.get("cash_pts"),
-                      "net_start": c.get("net_start"), "net_end": c.get("net_end"),
-                      "last": _day_secs.get(c.get("sec"), {}).get("last"),
-                      "coef": _day_secs.get(c.get("sec"), {}).get("coef"),
-                      "base": _day_secs.get(c.get("sec"), {}).get("base"),
-                      "base_src": _day_secs.get(c.get("sec"), {}).get("base_src")}
-                     for c in sorted(_manual_rows, key=lambda x: -abs(float(x.get("vm_rub") or 0)))],
+            "rows": sorted(merged.values(), key=lambda r: -abs(float(r.get("vm_rub") or 0))),
         }
 
     # Состояние сессии MOEX (открыта/закрыта по ISS) — нужно и вотчеру раннера

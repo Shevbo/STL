@@ -366,6 +366,19 @@
     .cass .hub, .cass .note, .cass.stopped .zzz { animation: none; }
     .cass .note, .cass.stopped .zzz { opacity: .8; }
   }
+
+  /* Полоса «вышла новая версия»: поверх всего, но не закрывает данные. */
+  .newver {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 9999;
+    display: flex; align-items: center; gap: 10px; justify-content: center;
+    padding: 7px 10px; background: #1d3557; border-top: 1px solid #4f8bd6;
+    color: #dfe6ff; font-size: 12px;
+  }
+  .newver button {
+    background: #2a4d7d; border: 1px solid #6fa3e0; border-radius: 5px; color: #fff;
+    cursor: pointer; font-size: 12px; padding: 4px 12px;
+  }
+  .newver button:hover { background: #35619c; }
 </style>
 </head>
 <body>
@@ -948,13 +961,12 @@ function toggleOrdFull() {
 
 // Итог ручной торговли за день — в том же виде, что у роботов. Вместе они
 // обязаны давать ВМ счёта: всё, что не робот, сделал оператор своими руками.
-// Подпись строки разбивки: вид торговли + ИНСТРУМЕНТ, а у «приложения брокера»
-// ещё и тег канала. Строк одного вида бывает несколько (разные инструменты,
-// разные теги), и без этого три несовместимых числа подписывались одинаково —
-// «приложение брокера» трижды подряд (оператор 23.09.2026).
+// Подпись строки разбивки: КАНАЛ + инструмент. Каналов ровно три — терминал
+// QUIK, приложение брокера (FINAM) и умные заявки STL; сервер уже схлопнул по
+// ним теги. Тег брокера в подпись НЕ выносим: 24.09.2026 я вытащил его сюда, и
+// блок превратился в «приложение брокера }СЖЮqХдД» — мусор вместо картины.
 function manualRowName(r) {
   let s = r.name || r.kind || '—';
-  if (r.kind === 'external' && r.key && r.key !== r.name) s += ' ' + r.key;
   if (r.sec) s += ' ' + r.sec;
   return s;
 }
@@ -981,6 +993,9 @@ function manualRowWhy(r) {
       : `цена клиринга неизвестна, взята текущая ${n(r.base)} — перенос может уехать между участниками`);
   }
   if (r.coef) parts.push(`${n(r.coef, 2)} ₽ за пункт`);
+  // Теги канала нужны при разборе «откуда сделка», но в подписи строки им не
+  // место: у приложения брокера тег выглядит как }СЖЮqХдД.
+  if (r.tags && r.tags.length > 1) parts.push(`каналов в этой строке: ${r.tags.length}`);
   parts.push('Позиция участника выделяется из общей ручной позиции пропорционально ' +
     'тому, сколько он наторговал за день: точнее данных нет. Сумма всех участников ' +
     'равна ВМ счёта в точности, отдельная строка — оценка его доли.');
@@ -1543,6 +1558,50 @@ async function tick() {
 if (LOCAL) applySize();
 tick();
 setInterval(tick, 5000);
+
+// ── «ВЫШЛА НОВАЯ ВЕРСИЯ — ОБНОВИТЬ» ──────────────────────────────────────────
+// В вебе это уже есть (lib/version-watch.ts сравнивает имя бандла), а панель
+// молча оставалась на старой вёрстке: nginx отдаёт страницу без Cache-Control,
+// и WebView держит её сколько хочет. Оператор смотрел вчерашнюю панель и считал
+// правки несделанными — ровно тот же случай, что был с SPA 06.08.2026.
+// Маркер версии НЕ зашиваем в файл: я его забуду обновить. Сравниваем ETag или
+// Last-Modified САМОЙ страницы — их выставляет nginx, и они меняются на каждой
+// выкладке сами.
+(function versionWatch() {
+  var url = location.pathname + '?v=' + Date.now();
+  var mine = null;
+  var shown = false;
+  function stamp(res) {
+    return res.headers.get('etag') || res.headers.get('last-modified') || null;
+  }
+  function show() {
+    if (shown) return;
+    shown = true;
+    var bar = document.createElement('div');
+    bar.className = 'newver';
+    bar.innerHTML = '<span>Вышла новая версия панели</span>';
+    var b = document.createElement('button');
+    b.textContent = 'Обновить';
+    b.onclick = function () { location.href = location.pathname + '?r=' + Date.now(); };
+    bar.appendChild(b);
+    document.body.appendChild(bar);
+  }
+  function check() {
+    if (shown) return;
+    fetch(location.pathname + '?v=' + Date.now(), { method: 'HEAD', cache: 'no-store' })
+      .then(function (r) {
+        if (!r.ok) return;                       // сеть моргнула — проверим позже
+        var now = stamp(r);
+        if (!now) return;                        // заголовков нет: молчим, а не гадаем
+        if (mine === null) { mine = now; return; }
+        if (now !== mine) show();
+      })
+      .catch(function () { /* следующая проверка повторит */ });
+  }
+  check();
+  setInterval(check, 120000);
+  void url;
+})();
 </script>
 </body>
 </html>
