@@ -1303,7 +1303,10 @@ function paint(d) {
       DENSITY.map((n) => `<b class="${n === density() ? 'on' : ''}" data-dens="${n}">${n}</b>`).join('') +
       `</span></div>` +
       robotsTotal(d.robots) + renderRobots(d.robots) +
-    `<div class="sec">заявки ручные <a href="${STL}/?orders=1" data-ext>терминал ↗</a></div>` +
+    `<div class="sec">заявки ручные <a href="${STL}/?orders=1" data-ext>терминал ↗</a>` +
+    // Журнал: что происходило с заявками и ПО ЧЬЕЙ ВОЛЕ, плюс итог ручной
+    // торговли за день/неделю/месяц (просьба оператора 24.09.2026).
+    `<a href="${STL}/?journal=1" data-ext>журнал ↗</a></div>` +
       manualTotal((d.orders || {}).today) + renderOrders(d.orders, d) +
     `<div class="sec">вотчер <a href="${STL}/?lab=botstore" data-ext>хитпарад ↗</a></div>` +
       renderWatch(d.watch) +

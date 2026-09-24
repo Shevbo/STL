@@ -21,6 +21,7 @@
   import LoginDialog from './components/LoginDialog.svelte';
   import AgentRobotScreen from './components/lab/AgentRobotScreen.svelte';
   import ExpiryScreen from './components/ExpiryScreen.svelte';
+  import ManualJournal from './components/ManualJournal.svelte';
   import StrategyPage from './components/lab/StrategyPage.svelte';
   import { WsClient } from '$lib/ws';
   import { robotsStore } from '$lib/stores/robots.svelte';
@@ -60,6 +61,10 @@
   let showEquity = $state(_qs.has('equity'));
   // Дип-линк ?expiry=1 — экран кампании перекладки контрактов (меню «Торговля»).
   let showExpiry = $state(_qs.has('expiry'));
+  // Дип-линк ?journal=1[&so=<id>] — журнал ручных заявок: что происходило с
+  // заявками оператора и по чьей воле, плюс итог его торговли за период.
+  // Ссылка на него стоит в обоих компаньонах (real-trade 24.09.2026).
+  let showJournal = $state(_qs.has('journal'));
   // OrderViz: default = auto (self-shows on active orders). Operator can pin it
   // open or hide it; "pin" forces it visible even with no active orders.
   let orderVizPinned = $state(false);
@@ -449,6 +454,15 @@
     </div>
     <!-- Ручка ПОД фреймом: у фреймов QUIK её не было совсем, высота была
          намертво общей с панелью LAB и менялась только оттуда. -->
+    <div class="dh dh-h" title="Высота фрейма: потяните вниз — выше"
+         onpointerdown={(e) => onPointerDown('labBottom', e, labH)}>
+      <div class="dh-dot"></div>
+    </div>
+  {/if}
+  {#if showJournal}
+    <div class="quik-tables-wrap" style="height:{labH}px">
+      <ManualJournal onClose={() => showJournal = false} />
+    </div>
     <div class="dh dh-h" title="Высота фрейма: потяните вниз — выше"
          onpointerdown={(e) => onPointerDown('labBottom', e, labH)}>
       <div class="dh-dot"></div>
