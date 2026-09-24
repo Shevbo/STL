@@ -22,6 +22,7 @@ from pydantic import BaseModel
 
 from trader.auth.guard import require_auth
 from trader.quik import native_protect
+from trader.quik import so_journal
 from trader.quik import orders as order_msgs
 from trader.quik import smart_orders as so_mod
 from trader.quik.alerts import SEVERITY_CRITICAL
@@ -42,6 +43,28 @@ router = APIRouter(prefix="/api/v1/quik/smart-orders", tags=["quik-smart-orders"
 
 BOOK_PATH = "data/smart_orders.json"
 _TICK_SEC = 1.0
+
+
+def _created_detail(so: SmartOrder) -> str:
+    """Человеческая расшифровка заявки для журнала: без неё строка «создана»
+    не говорит, ЧТО именно оператор поставил."""
+    what = {"sl": "стоп", "tp": "тейк", "trail_tp": "следящий тейк",
+            "trail_sl": "подтягивающая", "on_fill": "по исполнению"}.get(so.kind, so.kind)
+    side = "покупка" if so.side == "buy" else "продажа"
+    parts = [f"{what}: {side} {so.qty} {so.code}"]
+    if so.trigger_price:
+        parts.append(f"уровень {so.trigger_price:g}")
+    if so.trail_offset:
+        parts.append(f"откат {so.trail_offset:g} п.")
+    for label, value, unit in (("стоп после входа", so.sl_offset, "п."),
+                               ("тейк после входа", so.tp_offset, "п."),
+                               ("подтягивающая после входа", so.trail_after, "п."),
+                               ("откат следящего тейка", so.tp_trail, "п."),
+                               ("стоп уровнем", so.sl_price, ""),
+                               ("тейк уровнем", so.tp_price, "")):
+        if value:
+            parts.append(f"{label} {value:g} {unit}".strip())
+    return ", ".join(parts)
 
 
 def _auth(request: Request) -> str:
@@ -122,11 +145,15 @@ async def create(body: SmartOrderBody, request: Request):
         old.note = ((old.note + " ") if old.note else "") + \
             f"снят подтягивающей {so.so_id}: два стопа на одной позиции"
         log.info("smart_order.superseded", so_id=old.so_id, by=so.so_id, kind=old.kind)
+        so_journal.record("cancelled", old, so_journal.OPERATOR,
+                          f"снят подтягивающей {so.so_id}: два стопа на одной позиции")
     book.add(so)
     if superseded:
         book.save()
     log.info("smart_order.created", so_id=so.so_id, kind=so.kind, code=so.code,
              side=so.side, qty=so.qty, trigger=so.trigger_price)
+    so_journal.record("created", so, so_journal.OPERATOR,
+                      _created_detail(so), now_ms=so.created_ms)
     return {"ok": True, "so_id": so.so_id,
             "superseded": [o.so_id for o in superseded]}
 
@@ -159,6 +186,7 @@ async def cancel_order(so_id: str, request: Request):
     so.status = "cancelled"
     so.note = (so.note + " " if so.note else "") + "отменена оператором"
     book.save()
+    so_journal.record("cancelled", so, so_journal.OPERATOR, "снята оператором")
     log.info("smart_order.cancelled", so_id=so_id, kind=so.kind, code=so.code,
              side=so.side, qty=so.qty)
     return {"ok": True, "so_id": so_id}
@@ -214,6 +242,8 @@ async def activate_order(so_id: str, body: dict, request: Request):
     so.note = (so.note + " " if so.note else "") + f"активирована оператором от {peak:g}"
     book.save()
     log.info("smart_orders.manual_activate", so_id=so_id, peak=peak, side=so.side, code=so.code)
+    so_journal.record("activated", so, so_journal.OPERATOR,
+                      f"активирована вручную, пик {peak:g}")
     return {"ok": True, "so_id": so_id, "activated": True, "peak": peak}
 
 
@@ -342,6 +372,10 @@ def _handover_to_terminal(book: SmartOrderBook, steps: dict[str, float], ost: An
             c.note = (c.note + " " if c.note else "") + \
                 f"под охраной терминала (стоп-заявка {holder.so_id})"
         dirty = True
+        for c in kids:
+            so_journal.record("native_sent", c, so_journal.WATCHER,
+                              f"защита отдана терминалу (связка {holder.so_id}, "
+                              f"вход {parent.fired_price:g})", now_ms=now)
         log.info("smart_order.native_sent", parent=parent.so_id, holder=holder.so_id,
                  kind=plan["fields"].get("STOP_ORDER_KIND"), kinds=plan["kinds"],
                  entry=parent.fired_price, fields=plan["fields"])
@@ -389,6 +423,8 @@ def _handover_standalone(book: SmartOrderBook, steps: dict[str, float], store: A
         so.native_state, so.native_ms, so.status = "sent", now, "native"
         so.note = (so.note + " " if so.note else "") + "под охраной терминала"
         dirty = True
+        so_journal.record("native_sent", so, so_journal.WATCHER,
+                          "заявка отдана под охрану терминала", now_ms=now)
         log.info("smart_order.native_sent_standalone", so_id=so.so_id, kind=so.kind,
                  code=so.code, side=so.side, qty=so.qty, fields=plan["fields"])
     return dirty
@@ -493,6 +529,9 @@ def _track_native(book: SmartOrderBook, store: Any, agent: str, now: int) -> lis
                         c.note = (c.note + " " if c.note else "") + \
                             "терминал стоп-заявку не принял: защиту снова ведёт STL"
                 failed.append(parent)
+                so_journal.record("native_rejected", parent, so_journal.TERMINAL,
+                                  "терминал не принял стоп-заявку: защиту ведёт STL",
+                                  now_ms=now)
                 log.warning("smart_order.native_rejected", parent=parent.so_id)
             elif parent.native_state == "live":
                 # Запись была и исчезла. Причин ровно две, и они противоположны по
@@ -528,6 +567,12 @@ def _track_native(book: SmartOrderBook, store: Any, agent: str, now: int) -> lis
                                 f"запись исчезла, сделка по инструменту {px:g} x {vol}: "
                                 "какая нога сработала - не установлено, проверьте позицию")
                     orphaned.append(parent)
+                    for c in natives:
+                        so_journal.record(
+                            "fired" if c.status == "fired" else "orphaned", c,
+                            so_journal.TERMINAL,
+                            f"запись исчезла, сделка по инструменту {px:g} x {vol}",
+                            now_ms=now)
                     log.warning("smart_order.native_gone_filled", parent=parent.so_id,
                                 price=px, qty=vol,
                                 leg=winner.so_id if winner is not None else None)
@@ -542,6 +587,10 @@ def _track_native(book: SmartOrderBook, store: Any, agent: str, now: int) -> lis
                         c.native_state, c.native_stop_num, c.native_seen_ms = "", "", 0
                         c.note = (c.note + " " if c.note else "") +                             "запись снялась в терминале (срок стоп-заявки - торговый день), "                             "сделок по ней нет: заявка снова взведена, её ведёт STL"
                     failed.append(parent)
+                    for c in natives:
+                        so_journal.record("native_expired", c, so_journal.TERMINAL,
+                                          "стоп-заявка снялась по сроку (торговый день), "
+                                          "сделок нет: заявку снова ведёт STL", now_ms=now)
                     log.warning("smart_order.native_expired", parent=parent.so_id,
                                 since_seen_ms=now - seen, legs=len(natives))
             continue
@@ -555,6 +604,9 @@ def _track_native(book: SmartOrderBook, store: Any, agent: str, now: int) -> lis
             if holder is not None:
                 holder.native_state = "live"
                 holder.native_stop_num = str(row.get("order_num") or "")
+            so_journal.record("native_live", parent, so_journal.TERMINAL,
+                              f"стоп-заявка зарегистрирована, номер {row.get('order_num')}",
+                              now_ms=now)
             log.info("smart_order.native_live", parent=parent.so_id,
                      stop_num=row.get("order_num"), flags=row.get("flags"))
         if not flags & _STOP_ALIVE_BIT:
@@ -564,6 +616,8 @@ def _track_native(book: SmartOrderBook, store: Any, agent: str, now: int) -> lis
                 for c in natives:
                     c.status = "cancelled"
                     c.note = (c.note + " " if c.note else "") + "снята в терминале"
+                    so_journal.record("native_cancelled", c, so_journal.TERMINAL,
+                                      "стоп-заявка снята в терминале", now_ms=now)
                 log.info("smart_order.native_cancelled", parent=parent.so_id, flags=flags)
                 continue
             # Исполнена. ОДНА запись QUIK держит обе ноги связки, поэтому «сработала»
@@ -580,6 +634,10 @@ def _track_native(book: SmartOrderBook, store: Any, agent: str, now: int) -> lis
                     c.note = (c.note + " " if c.note else "") + \
                         "связка исполнена терминалом, какая нога сработала - не установлено"
                 orphaned.append(parent)
+                for c in natives:
+                    so_journal.record("orphaned", c, so_journal.TERMINAL,
+                                      "связка исполнена терминалом, нога не установлена",
+                                      now_ms=now)
                 log.warning("smart_order.native_done_unattributed", parent=parent.so_id,
                             stop_num=row.get("order_num"), linked=row.get("linkedorder"))
                 continue
@@ -596,6 +654,9 @@ def _track_native(book: SmartOrderBook, store: Any, agent: str, now: int) -> lis
                 c.status = "cancelled"
                 c.note = (c.note + " " if c.note else "") + \
                     f"снята вместе со связкой: в терминале сработал {what} по {px:g}"
+            so_journal.record("fired", winner, so_journal.TERMINAL,
+                              f"сработала в терминале: {px:g} x {vol or winner.qty}",
+                              now_ms=ts or now)
             log.info("smart_order.native_fired", parent=parent.so_id, leg=winner.so_id,
                      kind=winner.kind, price=px, qty=vol, linked=row.get("linkedorder"))
     failed.extend(orphaned)
@@ -841,12 +902,22 @@ async def _watch_once(state: Any) -> None:
         # начинала вести откат от новой, случайной точки. Сохраняем сдвиг.
         if trail_before != [(o.so_id, o.activated, o.peak) for o in book.orders]:
             dirty = True
+            # Активация следящей — событие, которого оператор ждёт глазами:
+            # «дошла ли цена до уровня» (вопрос по 2b2990d2c4, 23.09.2026).
+            was = {sid: act for sid, act, _ in trail_before}
+            for o in book.orders:
+                if o.activated and not was.get(o.so_id, True):
+                    so_journal.record("activated", o, so_journal.WATCHER,
+                                      f"цена дошла до {o.trigger_price:g}, "
+                                      f"ведём от пика {o.peak:g}", now_ms=now)
         for act in actions:
             dirty = True
             if isinstance(act, Cancel):
                 act.so.status = "cancelled"
                 act.so.note = act.reason
                 log.info("smart_order.oco_cancelled", so_id=act.so.so_id)
+                so_journal.record("cancelled", act.so, so_journal.WATCHER,
+                                  act.reason, now_ms=now)
                 continue
             assert isinstance(act, Fire)
             so = act.so
@@ -872,6 +943,9 @@ async def _watch_once(state: Any) -> None:
                 so.fired_client_id = client_id
                 log.info("smart_order.fired", so_id=so.so_id, kind=so.kind,
                          code=so.code, side=so.side, qty=so.qty, price=act.price)
+                so_journal.record("fired", so, so_journal.WATCHER,
+                                  f"заявка выставлена по {act.price:g}"
+                                  + (f", пик {so.peak:g}" if so.peak else ""), now_ms=now)
                 # Защитная пара после входа (если оператор её заказал): trail и
                 # on_fill только ВХОДЯТ и после срабатывания забывают про позицию —
                 # без стопа выходить нечем, а без тейка некому забрать прибыль.
@@ -887,10 +961,14 @@ async def _watch_once(state: Any) -> None:
                     log.info("smart_order.protective", parent=so.so_id, kind=child.kind,
                              so_id=child.so_id, side=child.side,
                              trigger=child.trigger_price, oco=child.oco_group)
+                    so_journal.record("created", child, so_journal.WATCHER,
+                                      f"защита после входа по {act.price:g}: "
+                                      f"уровень {child.trigger_price:g}", now_ms=now)
             except LimitError as exc:
                 so.status = "error"
                 so.note = f"отклонено лимитами: {exc}"
                 log.warning("smart_order.rejected", so_id=so.so_id, error=str(exc))
+                so_journal.record("rejected", so, so_journal.LIMITS, str(exc), now_ms=now)
                 await _alert_reject(srv, agent, so, str(exc))
     # expiry flips status inside evaluate() without producing an action
     if dirty or any(o.status == "expired" for o in active):

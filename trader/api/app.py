@@ -1638,6 +1638,9 @@ def create_app() -> FastAPI:
     # Algo-trade ledger: the journal + daily/per-robot report aggregates.
     from trader.api.quik_algo_ledger import router as quik_algo_ledger_router
     fastapi_app.include_router(quik_algo_ledger_router)
+    # Ручная торговля оператора: журнал событий заявок и доходность за период.
+    from trader.api.quik_manual import router as quik_manual_router
+    fastapi_app.include_router(quik_manual_router)
     # Operator's manual smart orders (SL/TP/Trail/OnFill; STL-side watcher).
     from trader.api.quik_smart_orders import router as quik_smart_router
     fastapi_app.include_router(quik_smart_router)
