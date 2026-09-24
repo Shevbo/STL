@@ -47,6 +47,42 @@ export function pnlCaveats(r: PnlReport | null): string[] {
   return out;
 }
 
+/** Позиция счёта по инструментам: {RIZ6: -4}. Берётся из зеркала агента —
+ *  это ФАКТ счёта, в отличие от остатка, который получается проигрыванием
+ *  журнала сделок за окно. */
+export function accountNet(status: any): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const p of (status?.health?.positions ?? [])) {
+    const code = String(p?.sec ?? '');
+    const net = Number(p?.net ?? 0);
+    if (code) out[code] = net;
+  }
+  return out;
+}
+
+/** Расхождение «открытой позиции» отчёта с позицией счёта.
+ *
+ *  `open` в отчёте — это ОСТАТОК проигрывания журнала сделок ЗА ОКНО, а не
+ *  позиция счёта: позиция, набранная до начала окна, в журнал окна не входит, и
+ *  остаток получается любым. 24.09.2026 экран написал «RIZ6 −4, переоценка −976
+ *  ₽», когда счёт был ПУСТ. Печатать такое числом нельзя — это выдуманная
+ *  позиция; печатаем расхождение словами.
+ *
+ *  `null` в `net` = позиции счёта мы не знаем (зеркало не приехало): тогда и
+ *  расхождения не утверждаем.
+ */
+export function openMismatch(r: PnlReport | null, net: Record<string, number> | null):
+    Array<{ symbol: string; journal: number; account: number }> {
+  if (!r || !net) return [];
+  const out: Array<{ symbol: string; journal: number; account: number }> = [];
+  for (const o of r.open ?? []) {
+    const j = Number(o.position ?? 0);
+    const a = Number(net[o.symbol] ?? 0);
+    if (j !== a) out.push({ symbol: o.symbol, journal: j, account: a });
+  }
+  return out;
+}
+
 /** Переоценка открытой позиции — ОТДЕЛЬНО от итога, суммировать с ним нельзя. */
 export function openTotalRub(r: PnlReport | null): number | null {
   const rows = r?.open ?? [];

@@ -2,7 +2,7 @@
 // соврать про деньги (предупреждение real-trade 24.09.2026).
 import { describe, expect, it } from 'vitest';
 import {
-  eventRu, filterRows, openTotalRub, pnlCaveats, rowCodes, unpricedPoints,
+  accountNet, eventRu, filterRows, openMismatch, openTotalRub, pnlCaveats, rowCodes, unpricedPoints,
 } from './manual-journal';
 
 describe('оговорки к итогу', () => {
@@ -77,5 +77,30 @@ describe('лента', () => {
 
   it('инструменты для выпадашки — без пустых и без дублей', () => {
     expect(rowCodes(rows)).toEqual(['GZZ6', 'RIZ6']);
+  });
+});
+
+// 24.09.2026: экран написал «RIZ6 −4, переоценка −976 ₽», когда счёт был ПУСТ.
+// `open` в отчёте — это остаток проигрывания журнала ЗА ОКНО, а не позиция счёта:
+// набранное ДО начала окна в журнал окна не попадает, и остаток может быть любым.
+describe('открытая позиция сверяется с позицией счёта', () => {
+  it('счёт пуст, а журнал показывает остаток — это расхождение, а не позиция', () => {
+    const m = openMismatch({ open: [{ symbol: 'RIZ6', position: -4 }] }, { });
+    expect(m).toEqual([{ symbol: 'RIZ6', journal: -4, account: 0 }]);
+  });
+
+  it('сошлось — расхождения нет', () => {
+    expect(openMismatch({ open: [{ symbol: 'RIZ6', position: -4 }] }, { RIZ6: -4 })).toEqual([]);
+  });
+
+  it('позиция счёта неизвестна — расхождение НЕ утверждаем', () => {
+    expect(openMismatch({ open: [{ symbol: 'RIZ6', position: -4 }] }, null)).toEqual([]);
+  });
+
+  it('позиция счёта читается из зеркала агента', () => {
+    expect(accountNet({ health: { positions: [
+      { sec: 'RIZ6', net: -4 }, { sec: 'GZZ6', net: 0 }, { net: 7 },
+    ] } })).toEqual({ RIZ6: -4, GZZ6: 0 });
+    expect(accountNet(null)).toEqual({});
   });
 });

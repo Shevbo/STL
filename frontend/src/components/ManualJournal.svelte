@@ -14,7 +14,8 @@
   import { fmtPrice } from '$lib/format';
   import ScreenTag from './lab/ScreenTag.svelte';
   import {
-    PERIOD_RU, eventRu, filterRows, openTotalRub, pnlCaveats, rowCodes, unpricedPoints,
+    PERIOD_RU, accountNet, eventRu, filterRows, openMismatch, openTotalRub, pnlCaveats,
+    rowCodes, unpricedPoints,
     type JournalRow, type Period, type PnlReport,
   } from '$lib/manual-journal';
 
@@ -29,12 +30,17 @@
   let kindFilter = $state<'all' | 'event' | 'trade'>('all');
   let codeFilter = $state('');
   let openRow = $state<string | null>(null);
+  // Позиция СЧЁТА: нужна, чтобы не выдать остаток журнала за открытую позицию.
+  let net = $state<Record<string, number> | null>(null);
+  let fullscreen = $state(false);
+  function onKeydown(e: KeyboardEvent) { if (e.key === 'Escape' && fullscreen) fullscreen = false; }
   // Лента по ОДНОЙ заявке: ?journal=1&so=<id> — так на неё ссылается карточка.
   const soId = typeof location !== 'undefined'
     ? (new URLSearchParams(location.search).get('so') ?? '') : '';
 
   const caveats = $derived(pnlCaveats(pnl));
   const openRub = $derived(openTotalRub(pnl));
+  const mismatch = $derived(openMismatch(pnl, net));
   const unpriced = $derived(unpricedPoints(pnl));
   const shown = $derived(filterRows(rows, { query, kind: kindFilter, code: codeFilter }));
   const codes = $derived(rowCodes(rows));
@@ -53,10 +59,14 @@
     loading = true; err = '';
     try {
       const q = `period=${period}` + (soId ? `&so_id=${encodeURIComponent(soId)}` : '');
-      const [p, j] = await Promise.all([
+      const [p, j, st] = await Promise.all([
         fetchWithAuth(`/api/v1/quik/manual/pnl?period=${period}`),
         fetchWithAuth(`/api/v1/quik/manual/journal?${q}&limit=1000`),
+        // Позиция счёта — для сверки: «открытая позиция» отчёта это остаток
+        // проигрывания журнала ЗА ОКНО, а не факт счёта.
+        fetchWithAuth('/api/v1/quik/agent-local-status'),
       ]);
+      net = st.ok ? accountNet(await st.json()) : null;
       // Итог и лента независимы: упала одна — вторая всё равно показывается.
       pnl = p.ok ? await p.json() : null;
       if (j.ok) { const d = await j.json(); rows = d?.rows ?? []; }
@@ -75,7 +85,9 @@
   function setPeriod(p: Period) { period = p; load(); }
 </script>
 
-<div class="mj">
+<svelte:window onkeydown={onKeydown} />
+
+<div class="mj" class:fullscreen>
   <ScreenTag id="MANUAL-JOURNAL" name="журнал ручных заявок" corner="tl"
              copyText={typeof location !== 'undefined' ? location.href : '/?journal=1'} />
   <header class="mj-head">
@@ -86,6 +98,10 @@
       {/each}
     </div>
     {#if loading}<span class="mj-load">обновляю…</span>{/if}
+    <button class="mj-full" title={fullscreen ? 'Свернуть (Esc)' : 'Развернуть на весь экран'}
+            onclick={() => fullscreen = !fullscreen}>
+      {fullscreen ? '⊟ Свернуть' : '⛶ Во весь экран'}
+    </button>
     {#if onClose}<button class="mj-close" onclick={onClose}>✕</button>{/if}
   </header>
 
@@ -108,6 +124,19 @@
         итог не пришёл
       {/if}
     </div>
+    <!-- ДВЕ РАЗНЫЕ ВЕЛИЧИНЫ С ПОХОЖИМИ НАЗВАНИЯМИ. В компаньоне «Итог ручных» —
+         рыночная переоценка за день из разбивки агента: она включает переоценку
+         перенесённой позиции и по построению складывается в ВМ счёта. Здесь —
+         РЕАЛИЗОВАННЫЙ результат закрытых кругов по журналу сделок, без
+         переоценки и с ОЦЕНОЧНОЙ комиссией. Цифры законно расходятся, и молчать
+         об этом нельзя: оператор сверял их и не сошёлся (24.09.2026). -->
+    <div class="mj-method">
+      Это РЕАЛИЗОВАННЫЙ результат закрытых кругов по журналу сделок: переоценка
+      открытой позиции сюда не входит, комиссия — оценка по модели FORTS
+      (QUIK её в таблице сделок не отдаёт). В компаньоне строка «Итог ручных»
+      считает другое — рыночную переоценку за день, которая складывается в ВМ
+      счёта. Две разные величины, сходиться они не обязаны.
+    </div>
     {#each caveats as c}<div class="mj-warn">{c}</div>{/each}
     {#if unpriced.length}
       <div class="mj-warn">
@@ -115,12 +144,30 @@
         — эти результаты в рублёвый итог НЕ вошли.
       </div>
     {/if}
-    {#if openRub != null}
+    {#if mismatch.length}
+      <!-- ОСТАТОК ЖУРНАЛА != ПОЗИЦИЯ СЧЁТА. «Открытая позиция» отчёта получается
+           проигрыванием сделок ЗА ОКНО: позиция, набранная до начала окна, в него
+           не входит, и остаток может быть любым. 24.09.2026 экран написал «RIZ6
+           −4, переоценка −976 ₽», когда счёт был ПУСТ. Числом такое не печатаем. -->
+      <div class="mj-open bad">
+        <span class="mj-o-k">Остаток журнала не сходится с позицией счёта</span>
+        <div class="mj-o-rows">
+          {#each mismatch as m}
+            <span>{m.symbol}: по журналу за период {num(m.journal)},
+              на счёте {num(m.account)}</span>
+          {/each}
+        </div>
+        <em>Переоценку не показываем: она считалась бы от позиции, которой на счёте
+          нет. Причина обычно в том, что позиция набрана ДО начала выбранного
+          периода — переключите период или смотрите позицию в терминале.</em>
+      </div>
+    {:else if openRub != null}
       <!-- ОТДЕЛЬНО И ДРУГИМИ СЛОВАМИ: это не заработано, это текущая переоценка. -->
       <div class="mj-open">
         <span class="mj-o-k">Открытая позиция, переоценка сейчас</span>
         <span class="mj-o-v" class:pos={openRub > 0} class:neg={openRub < 0}>{rub(openRub)}</span>
-        <em>в итог выше НЕ входит и меняется каждую секунду</em>
+        <em>в итог выше НЕ входит и меняется каждую секунду{#if net === null}; позиция счёта
+          не пришла, сверить не с чем{/if}</em>
         <div class="mj-o-rows">
           {#each pnl?.open ?? [] as o}
             <span>{o.symbol} {num(o.position)} по {fmtPrice(o.avg_price ?? 0)}
@@ -233,7 +280,12 @@
   .mj-head h2 { margin: 0; font-size: 17px; color: #e8e8f0; font-weight: 600; }
   .mj-one { margin-left: 8px; font: 11px/1 Consolas, monospace; color: #7ec8f0; }
   .mj-load { font-size: 10px; color: #8a90a8; }
-  .mj-close { margin-left: auto; background: none; border: 1px solid #2d2d4a; border-radius: 5px;
+  .mj.fullscreen { position: fixed; inset: 0; z-index: 1000; width: 100vw; height: 100vh;
+    max-width: none; background: #0f0f1e; }
+  .mj-full { margin-left: auto; background: none; border: 1px solid #2d2d4a; border-radius: 5px;
+    color: #8a90a8; cursor: pointer; font-size: 11px; padding: 4px 10px; }
+  .mj-full:hover { color: #e8e8f0; border-color: #4a4a7a; }
+  .mj-close { margin-left: 0; background: none; border: 1px solid #2d2d4a; border-radius: 5px;
     color: #8a90a8; cursor: pointer; padding: 4px 9px; }
   .mj-err { margin-bottom: 10px; padding: 8px 10px; border-radius: 6px;
     background: #3a1616; border: 1px solid #ff6b5a; color: #ff9d90; }
@@ -253,8 +305,12 @@
   .mj-t-v.pos, .mj-o-v.pos { color: #7ef0a6; }
   .mj-t-v.neg, .mj-o-v.neg { color: #ff9d90; }
   .mj-t-sub { margin-top: 6px; color: #8a90a8; }
+  .mj-method { margin-top: 8px; padding: 7px 9px; border-radius: 6px; line-height: 1.5;
+    background: #16203a; border: 1px solid #2a3c5e; color: #9aa8c4; font-size: 11px; }
   .mj-warn { margin-top: 8px; padding: 7px 9px; border-radius: 6px; line-height: 1.5;
     background: #2a2416; border: 1px solid #6b5a2a; color: #e0c98a; }
+  .mj-open.bad { border-top-color: #6b2a2a; }
+  .mj-open.bad .mj-o-k { color: #ff9d90; }
   .mj-open { margin-top: 10px; padding-top: 9px; border-top: 1px dashed #2d2d4a;
     display: grid; gap: 3px; }
   .mj-o-k { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8a90a8; }
