@@ -44,7 +44,7 @@
 -- Bump on every change you deliver to the VDS. Logged FIRST on OnInit so the
 -- operator can confirm which version QUIK actually loaded (the running script is
 -- in MEMORY; a file on disk with the same name may be a different build).
-local SCRIPT_VERSION = "2026.09.16-l2sub"
+local SCRIPT_VERSION = "2026.09.25-l2opt"
 
 local CONFIG = {
   HOST          = "127.0.0.1",
@@ -70,8 +70,18 @@ local CONFIG = {
   MD_CODES         = "RIU6,GZU6,SiU6,SRU6",  -- comma-separated instrument codes
   MD_CLASS         = "SPBFUT",               -- QUIK class code for the instruments
   MD_INTERVAL_MS   = 500,                    -- tick snapshot cadence
-  MD_BOOK_INTERVAL_MS = 1000,                -- order-book (L2) snapshot cadence
+  MD_BOOK_INTERVAL_MS = 5000,                -- order-book (L2) snapshot cadence
   MD_BOOK_DEPTH    = 10,                     -- levels per side
+  -- ПОДПИСКА НА СТАКАНЫ — ОТДЕЛЬНЫЙ И ПУСТОЙ ПО УМОЛЧАНИЮ СПИСОК.
+  -- 16.09.2026 скрипт начал подписываться на L2 по ВСЕМ MD_CODES разом, чтобы в
+  -- архив попадали стаканы всех инструментов. 25.09 брокер объяснил разрывы
+  -- соединения перегрузкой терминала: QUIK не успевает отправить серверу
+  -- «я на связи», и сервер рвёт сессию. Шесть потоков стаканов внутри процесса
+  -- терминала — ровно такая нагрузка, и включилась она молча, вместе с обновлением.
+  -- Теперь подписка включается ПОИМЕННО и осознанно: пусто = не подписываемся
+  -- ни на что, стаканы не публикуются вовсе. Архиву рынка это стоит данных, но
+  -- архив не стоит разорванной торговой сессии.
+  MD_BOOK_CODES    = "",                     -- напр. "RIZ6"; пусто = стаканы выключены
 
   -- Account tables (positions/orders/trades) publish cadence for the agent showcase (ms).
   ACC_INTERVAL_MS  = 2000,
@@ -572,6 +582,13 @@ for code in string.gmatch(CONFIG.MD_CODES or "", "([^,%s]+)") do
   md.codes[#md.codes + 1] = code
   md.code_set[code] = true
 end
+-- Стаканы идут ТОЛЬКО по своему списку: тики дёшевы (getParamEx подписки не
+-- требует), стакан дорог и подписки требует. Раньше это был один список, и
+-- включение стаканов расширилось на всё сразу.
+md.book_codes = {}
+for code in string.gmatch(CONFIG.MD_BOOK_CODES or "", "([^,%s]+)") do
+  md.book_codes[#md.book_codes + 1] = code
+end
 
 local function now_ms()
   return math.floor(os.time() * 1000)
@@ -607,7 +624,7 @@ end
 -- идемпотентным.
 local function subscribe_books()
   if not Subscribe_Level_II_Quotes then return end
-  for _, code in ipairs(md.codes) do
+  for _, code in ipairs(md.book_codes) do
     local okc, subbed = pcall(IsSubscribed_Level_II_Quotes, CONFIG.MD_CLASS, code)
     if not (okc and subbed) then
       local ok, res = pcall(Subscribe_Level_II_Quotes, CONFIG.MD_CLASS, code)
@@ -618,7 +635,7 @@ end
 
 local function publish_books()
   local ts = now_ms()
-  for _, code in ipairs(md.codes) do
+  for _, code in ipairs(md.book_codes) do
     local ok, l2 = pcall(getQuoteLevel2, CONFIG.MD_CLASS, code)
     if ok and type(l2) == "table" then
       -- QUIK: bid = buy side ascending (best LAST), offer = sell side ascending (best FIRST)
@@ -973,7 +990,7 @@ local function md_pump()
     md.last_tick_ms = t
     pcall(publish_ticks)
   end
-  if t - md.last_book_ms >= CONFIG.MD_BOOK_INTERVAL_MS then
+  if #md.book_codes > 0 and t - md.last_book_ms >= CONFIG.MD_BOOK_INTERVAL_MS then
     md.last_book_ms = t
     if not md.books_subscribed then
       md.books_subscribed = true
