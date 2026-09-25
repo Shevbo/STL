@@ -208,6 +208,13 @@ def main() -> int:
     ap.add_argument("csv", help="файл выгрузки из QUIK (Действия -> Экспорт в файл)")
     ap.add_argument("--out", default="/home/ubuntu/market-archive")
     ap.add_argument("--date", default="", help="дата сделок ДД.ММ.ГГГГ, если её нет в файле")
+    # ЗАМЕНА, А НЕ ДОПИСЫВАНИЕ. Выгрузка таблицы всех сделок — ПОЛНЫЙ день, и
+    # повторный импорт обновлённого файла обязан заменить день целиком: дедуп
+    # здесь опирается на (время, инструмент, цена, объём), потому что номера
+    # сделки в выгрузке нет, и две ОДИНАКОВЫЕ сделки в одну секунду он схлопнул
+    # бы в одну. Дописывать можно только выгрузку, где номер сделки есть.
+    ap.add_argument("--replace", action="store_true",
+                    help="заменить день целиком (для полной выгрузки — правильный режим)")
     args = ap.parse_args()
 
     fallback = args.date or ""
@@ -230,7 +237,9 @@ def main() -> int:
     for day, items in sorted(by_day.items()):
         path = os.path.join(args.out, f"trade-{day}.jsonl")
         seen = set()
-        if os.path.exists(path):
+        if args.replace and os.path.exists(path):
+            os.replace(path, path + ".prev")
+        if not args.replace and os.path.exists(path):
             with open(path, encoding="utf-8") as fh:
                 for line in fh:
                     try:
@@ -238,7 +247,7 @@ def main() -> int:
                     except ValueError:
                         continue
         fresh = [r for r in items if _key(r) not in seen]
-        with open(path, "a", encoding="utf-8") as fh:
+        with open(path, "a" if not args.replace else "w", encoding="utf-8") as fh:
             for r in fresh:
                 fh.write(json.dumps(r, ensure_ascii=False) + "\n")
         codes = sorted({r["code"] for r in fresh})
