@@ -1542,7 +1542,16 @@ async function tick() {
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const d = await r.json();
     lastGood = d.ts_ms || Date.now();
-    paint(d);
+    // Та же правка, что в m.html: поломка рисования не должна называться обрывом
+    // связи — иначе ищут сеть там, где упала разметка.
+    try {
+      paint(d);
+    } catch (perr) {
+      $('fresh').className = 'fresh stale';
+      $('fresh').innerHTML = '<span class="lamp">●</span> данные есть, экран не нарисовался';
+      console.error('paint failed', perr);
+      return;
+    }
     // Время уже в заголовке; здесь индикатор связи + пинг агент<->QUIK.
     $('fresh').className = 'fresh';
     $('fresh').innerHTML = '<span class="lamp">●</span> на связи'

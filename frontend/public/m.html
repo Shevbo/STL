@@ -1405,7 +1405,19 @@ async function tick() {
     const d = await r.json();
     lastGood = d.ts_ms || Date.now();
     lastData = d;
-    paint(d);
+    // ОШИБКА РИСОВАНИЯ — НЕ «НЕТ СВЯЗИ». paint() стоял внутри общего try, и любое
+    // падение разметки показывалось как обрыв канала: 25.09.2026 я полчаса искал
+    // сетевую причину там, где её не было. Данные пришли — так и говорим, а
+    // поломку рисования называем поломкой рисования.
+    try {
+      paint(d);
+    } catch (perr) {
+      const f0 = $('fresh');
+      if (f0) { f0.className = 'fresh stale';
+        f0.textContent = '● данные есть, экран не нарисовался'; }
+      console.error('paint failed', perr);
+      return;
+    }
     // Время уже в заголовке; здесь индикатор связи + пинг агент<->QUIK.
     $('fresh').className = 'fresh';
     $('fresh').textContent = '● на связи' + (d.ping_ms != null ? ' (' + d.ping_ms + ' мс)' : '');
