@@ -485,6 +485,11 @@ async def lifespan(app: FastAPI):
     # книг и молчит, когда книг нет вовсе.
     from trader.quik.agent_watch import watch as _agent_silence_watch
     agent_watch_task = asyncio.create_task(_agent_silence_watch(app.state))
+    # Сторож архива рынка: агент жив, а сбор встал. 25.09.2026 архив умер в 16:29
+    # и это заметили в одиннадцать вечера — восемь торговых часов стакана потеряны
+    # безвозвратно, задним числом он не восстанавливается.
+    from trader.quik.archive_watch import watch as _archive_watch
+    archive_watch_task = asyncio.create_task(_archive_watch(app.state))
     # Множитель брокера над биржевым ГО. Он сидит КОНСТАНТОЙ в отборе кандидатов,
     # в отчёте компаньона и в карточке робота, а оператор (15.08.2026) заметил,
     # что он, похоже, гуляет по времени дня и на ралли. Пока не измерен — все три
@@ -499,6 +504,7 @@ async def lifespan(app: FastAPI):
     yield
 
     truth_task.cancel()
+    archive_watch_task.cancel()
 
     margin_stats_task.cancel()
     agent_watch_task.cancel()
