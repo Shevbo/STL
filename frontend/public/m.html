@@ -526,6 +526,21 @@ function manualRowWhy(r) {
 // В снапшоте ТОЛЬКО ДЕНЬ: неделя и месяц остались на десктопе.
 var CH_RU = { quik: 'терминал QUIK', broker: 'приложение брокера',
               smart: 'умные заявки STL', recon: 'выравнивание' };
+// СТРОКА ЛЕНТЫ. Раньше здесь были только событие, источник и инструмент: без
+// времени, направления и объёма прочитать сделку нельзя (оператор 25.09.2026).
+function journalRow(r) {
+  var side = r.side === 'buy' ? 'покупка' : r.side === 'sell' ? 'продажа' : '';
+  var when = r.ts_ms ? new Date(Number(r.ts_ms)).toLocaleString('ru-RU',
+    { timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '';
+  var what = [side, r.qty != null ? r.qty : ''].filter(Boolean).join(' ');
+  return '<div class="row"><span class="k">' + esc(r.event || '') +
+    (what ? ' <b class="' + (r.side === 'buy' ? 'up' : 'down') + '">' + esc(what) + '</b>' : '') +
+    '</span>' +
+    '<span class="sub">' + esc(when) + ' · ' + esc(r.source || '') + ' · ' + esc(r.code || '') +
+    (r.price ? ' @ ' + esc(r.price) : '') + '</span></div>';
+}
+
 function manualDay(m) {
   if (!m || m.net_rub == null) return '';
   var warn = [];
@@ -539,10 +554,7 @@ function manualDay(m) {
       'сделок ' + (c.fills || 0) + '</span>' +
       val(rub(c.net_rub, { signed: true }), cls(c.net_rub)) + '</div>';
   }).join('');
-  var feed = (m.rows || []).slice(0, 8).map(function (r) {
-    return '<div class="row"><span class="k">' + esc(r.event || '') + '</span>' +
-      '<span class="sub">' + esc(r.source || '') + ' · ' + esc(r.code || '') + '</span></div>';
-  }).join('');
+  var feed = (m.rows || []).slice(0, 6).map(journalRow).join('');
   return '<div class="row total ' + cls(m.net_rub) + '">' +
       '<span class="k">Ручная торговля за день</span><span class="sp"></span>' +
       '<span class="sub">сделок ' + (m.fills || 0) + (m.orders != null ? ' · заявок ' + m.orders : '') + '</span>' +
@@ -1215,7 +1227,8 @@ function paintPanel(d) {
       DENSITY.map((n) => `<b class="${n === density() ? 'on' : ''}" data-dens="${n}">${n}</b>`).join('') +
       `</span></div>
       ${robotsTotal(d.robots)}${renderRobots(d.robots)}
-    <div class="sec">заявки ручные <a href="#/orders">подробно ↗</a></div>${manualTotal((d.orders || {}).today)}${manualDay(d.manual)}${renderOrders(d.orders, d)}
+    <div class="sec">заявки ручные <a href="#/orders">подробно ↗</a>
+      <a href="#/journal">журнал ↗</a></div>${manualTotal((d.orders || {}).today)}${manualDay(d.manual)}${renderOrders(d.orders, d)}
     <div class="sec">вотчер <a href="#/watch">подробно ↗</a></div>${renderWatch(d.watch)}
     <div class="sec">уведомления <a href="#/watch">детали ↗</a>
       <span class="sp" style="flex:1"></span><span class="copy" id="copyAlerts">копировать</span>
@@ -1285,6 +1298,39 @@ function paintOrders(d) {
     <div class="sec">счёт</div>${renderAccount(d.account)}`;
 }
 
+// ЭКРАН ЖУРНАЛА НА ТЕЛЕФОНЕ. В снапшот real-trade кладёт ПОСЛЕДНИЕ 20 строк и
+// итог ДНЯ — больше туда тянуть нельзя, телефон опрашивает раз в 5 с. Поэтому
+// экран честно говорит, сколько он видит и где лежит остальное, вместо того
+// чтобы выглядеть полным журналом (оператор 25.09.2026: «непонятно, как
+// посмотреть весь журнал»).
+function paintJournal(d) {
+  const m = d.manual || {};
+  const rows = m.rows || [];
+  const chans = (m.by_channel || []).map(function (c) {
+    return '<div class="row"><span class="k">' + esc(CH_RU[c.channel] || c.channel) + '</span>' +
+      '<span class="sub">' + (c.orders != null ? 'заявок ' + c.orders + ' · ' : '') +
+      'сделок ' + (c.fills || 0) + ' · контр. ' + (c.lots || 0) + '</span>' +
+      val(rub(c.net_rub, { signed: true }), cls(c.net_rub)) + '</div>';
+  }).join('') || '<div class="empty">каналов нет</div>';
+  const warn = [];
+  if (m.journal_complete === false) warn.push('итог НЕТОЧЕН: часть сделок не попала в журнал');
+  if (m.partial) warn.push('данные с ' + (m.coverage_from || '?'));
+  if (m.priced === false) warn.push('₽ за пункт известен не по всем инструментам');
+  $('app').innerHTML = head(d) + nav(null) + `
+    <div class="h1">Журнал ручных заявок</div>
+    <div class="sec">итог за день</div>
+    <div class="row total ${cls(m.net_rub)}"><span class="k">нетто</span>
+      <span class="sp"></span><span class="sub">сделок ${m.fills || 0}${m.orders != null ? ' · заявок ' + m.orders : ''}</span>
+      ${val(rub(m.net_rub, { signed: true }), cls(m.net_rub))}</div>
+    ${warn.length ? `<div class="row"><span class="sub warn">${esc(warn.join(' · '))}</span></div>` : ''}
+    <div class="sec">по каналам</div>${chans}
+    <div class="sec">события и сделки (${rows.length})</div>
+    ${rows.length ? rows.map(journalRow).join('') : '<div class="empty">за сегодня пусто</div>'}
+    <div class="hint">Телефон видит последние ${rows.length} строк за СЕГОДНЯ: столько кладётся
+      в снапшот, который опрашивается раз в 5 секунд. Весь журнал, неделя и месяц —
+      на десктопе, экран «Журнал ручных заявок».</div>`;
+}
+
 function paintWatch(d) {
   const a = d.alerts || {};
   const list = (arr, empty) => (arr && arr.length)
@@ -1352,6 +1398,7 @@ function paint(d) {
   if (h.startsWith('/robot/')) paintRobot(d, decodeURIComponent(h.slice(7)));
   else if (h === '/orders') paintOrders(d);
   else if (h === '/watch') paintWatch(d);
+  else if (h === '/journal') paintJournal(d);
   else paintPanel(d);
   const box = document.querySelector('#app .ord-box');
   if (box && ordTop) box.scrollTop = ordTop;
