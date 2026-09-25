@@ -27,6 +27,24 @@ def _auth(request: Request) -> str:
     return require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
 
 
+def current_state(store) -> dict[str, dict[str, Any]]:
+    """Что с роботом ПРЯМО СЕЙЧАС: режим, работает ли, позиция.
+
+    Без этого экран качества врёт самым опасным образом: лучший по RF робот у нас
+    набрал свою статистику в июле в реале, а сейчас стоит на бумаге (25.09.2026).
+    Совет «увеличить объём» по такой строке был бы советом про выключённого."""
+    status = (store.agent_status(None) or {}) if store is not None else {}
+    out = {}
+    for r in status.get("robots") or []:
+        rid = str(r.get("id") or "")
+        if rid:
+            out[rid] = {"mode": r.get("mode"), "running": bool(r.get("running")),
+                        "paused": bool(r.get("paused")),
+                        "position": int(r.get("position") or 0),
+                        "symbol": r.get("symbol")}
+    return out
+
+
 def _pool(request: Request):
     pool = getattr(request.app.state, "db_pool", None)
     if pool is None:
@@ -65,6 +83,11 @@ async def robot_stats_endpoint(request: Request, period: str = "all",
                             detail=f"bucket должен быть одним из {robot_stats.BUCKETS}")
     robots = await collect(_pool(request), period, bucket,
                            None if mode == "all" else mode, robot_id)
+    live = current_state(getattr(request.app.state, "quik_store", None))
+    for r in robots:
+        # "mode" в строке — режим СДЕЛОК из журнала, а не сегодняшнее состояние.
+        r["current"] = live.get(r["robot_id"])
+        r["alive"] = bool(r["current"] and r["current"].get("running"))
     lo, hi = robot_stats.period_bounds(period)
     return {"period": period, "bucket": bucket, "mode": mode,
             "from_ms": lo, "to_ms": hi, "count": len(robots), "robots": robots}
