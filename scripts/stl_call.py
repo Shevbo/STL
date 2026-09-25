@@ -43,11 +43,13 @@ def main() -> int:
     headers = {"Authorization": "Bearer " + make_session_token(who, secret)}
 
     r = httpx.request(method, BASE + path, headers=headers, json=body, timeout=30.0)
-    print(r.status_code)
+    # Ответ печатается ЦЕЛИКОМ: обрезка по символам рвала JSON посередине, и
+    # вызывающий не мог его распарсить. Резать — дело того, кто читает.
+    print(r.status_code, file=sys.stderr)
     try:
-        print(json.dumps(r.json(), ensure_ascii=False, indent=2)[:8000])
+        print(json.dumps(r.json(), ensure_ascii=False))
     except ValueError:
-        print(r.text[:4000])
+        print(r.text)
     return 0 if r.status_code < 400 else 1
 
 
