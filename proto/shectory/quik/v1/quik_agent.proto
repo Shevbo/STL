@@ -36,6 +36,7 @@ message AgentMessage {
     RobotStatusReport robot_status_report = 15; // agent-hosted robot status mirror
     AgentStatusSnapshot status_snapshot = 16; // local showcase JSON (opaque; STL serves verbatim)
     StopOrderReport stop_order_report = 17;   // QUIK stop orders: OnStopOrder event or stop_orders table
+    OpsResult ops_result = 18;                // result of an OS/QUIK maintenance operation
   }
 }
 
@@ -172,6 +173,7 @@ message OrchestratorMessage {
     RecordRobotFill record_robot_fill = 17;    // operator: inject a fill (realizes P&L + history)
     PlaceStopOrder place_stop_order = 18;      // native QUIK stop order (NEW_STOP_ORDER)
     KillStopOrder kill_stop_order = 19;        // native QUIK stop order removal (KILL_STOP_ORDER)
+    OpsCommand ops_command = 20;               // maintenance: run ONE catalogued OS/QUIK operation
   }
 }
 
@@ -489,4 +491,35 @@ message ExecutionUpdate {
   string state = 6;         // working | done | stopped | collar_hit | rejected
   string text = 7;
   int64 ts_unix_ms = 8;
+}
+
+// ---------------------------------------------------------------------------
+// Обслуживание VDS: операции с ОС и QUIK по согласованию оператора.
+//
+// Канал НЕ является удалённым shell. `op` — идентификатор из каталога, вшитого в
+// бинарь агента (quik_agent/internal/ops); операция, которой в каталоге нет, не
+// выполняется, чем бы её ни прислали. Аргументы — именованные строки, их набор
+// проверяет сама операция.
+//
+// Изменяющие состояние операции требуют `confirm_id` — одноразового токена,
+// выданного ЧЕЛОВЕКОМ (кнопка в компаньоне или ответ на SMS) и связанного с этой
+// операцией И этими аргументами. Подтверждение живёт пять минут: данное полчаса
+// назад относится к другой рыночной ситуации.
+// ---------------------------------------------------------------------------
+message OpsCommand {
+  string request_id = 1;              // сквозной id заявки на операцию (для журнала)
+  string op = 2;                      // идентификатор из каталога, напр. "status.windows"
+  map<string, string> args = 3;       // именованные аргументы операции
+  string confirm_id = 4;              // одноразовое подтверждение оператора (пусто у читающих)
+  int64 issued_at_unix_ms = 5;        // когда STL выпустил команду (агент судит о сроке)
+}
+
+message OpsResult {
+  string request_id = 1;
+  string op = 2;
+  bool ok = 3;
+  string error = 4;                   // причина отказа: нет в каталоге, нет подтверждения, истекло
+  string output = 5;                  // человекочитаемый вывод операции (журнал, хвост лога, таблица)
+  int64 started_unix_ms = 6;
+  int64 finished_unix_ms = 7;
 }
