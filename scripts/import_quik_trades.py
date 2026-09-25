@@ -49,6 +49,50 @@ COLUMNS = {
 }
 
 
+# База FORTS -> код инструмента. Выгрузка таблицы сделок даёт НАЗВАНИЕ
+# ("RTS-12.26 [ФОРТС фьючерсы]"), а архив живёт на кодах (RIZ6).
+_BASES = {"RTS": "RI", "SI": "Si", "BR": "BR", "GOLD": "GD", "GAZR": "GZ",
+          "MIX": "MX", "SBRF": "SR", "MXI": "MX", "NG": "NG", "ED": "ED"}
+_MONTH = "FGHJKMNQUVXZ"      # январь..декабрь, коды месяцев фьючерсов
+
+
+def code_from_title(title: str) -> str:
+    """'RTS-12.26 [ФОРТС фьючерсы]' -> 'RIZ6'. Не разобрали — отдаём как есть."""
+    t = (title or "").split("[")[0].strip()
+    if "-" not in t:
+        return t
+    base, _, tail = t.partition("-")
+    mm, _, yy = tail.partition(".")
+    b = _BASES.get(base.strip().upper())
+    try:
+        m, y = int(mm), int(yy)
+    except ValueError:
+        return t
+    if not b or not 1 <= m <= 12:
+        return t
+    return f"{b}{_MONTH[m - 1]}{y % 10}"
+
+
+def parse_tail_row(line: str) -> tuple[str, str, float, int, str] | None:
+    """Разбор строки, где ЦЕНА содержит тот же разделитель, что и поля.
+
+    QUIK экспортирует «96,52» (цена) внутри CSV с запятыми, поэтому колонок в
+    строке больше, чем в заголовке, и позиционный разбор слева ломается. Читаем
+    С КОНЦА: операция, количество, а всё между инструментом и количеством —
+    цена, склеенная из одного или двух кусков."""
+    parts = line.rstrip().rstrip(",").split(",")
+    if len(parts) < 6:
+        return None
+    op, qty_s = parts[-1].strip(), parts[-2].strip()
+    price_s = ".".join(x.strip() for x in parts[3:-2])
+    price_s = price_s.replace(" ", "").replace(" ", "").replace(" ", "")
+    try:
+        price, qty = float(price_s), int(qty_s)
+    except ValueError:
+        return None
+    return parts[1].strip(), code_from_title(parts[2]), price, qty, op
+
+
 def _norm(name: str) -> str:
     return re.sub(r"\s+", " ", (name or "").strip().lower())
 
@@ -82,6 +126,10 @@ def _number(s: str) -> float:
 
 
 def convert(path: str, fallback_date: str) -> list[dict]:
+    with open(path, encoding="cp1251", errors="replace") as fh:
+        header = fh.readline()
+    if "Инструмент" in header and "Цена" in header and header.count(",") >= 4:
+        return _convert_tail(path, fallback_date)
     sep = _sniff(path)
     rows: list[dict] = []
     with open(path, encoding="cp1251", errors="replace", newline="") as fh:
@@ -119,6 +167,32 @@ def convert(path: str, fallback_date: str) -> list[dict]:
                 "price": price, "qty": qty, "side": side,
                 "received_at_unix_ms": ts, "ts_ms": ts,
                 "num": (r[idx["num"]].strip() if "num" in idx else ""),
+                "source": "quik_export",
+            })
+    rows.sort(key=lambda x: x["ts_ms"])
+    return rows
+
+
+def _convert_tail(path: str, fallback_date: str) -> list[dict]:
+    """Ветка для выгрузки «Время,Инструмент,Цена,Кол-во,Операция» без даты."""
+    rows: list[dict] = []
+    with open(path, encoding="cp1251", errors="replace") as fh:
+        fh.readline()                      # заголовок
+        for line in fh:
+            got = parse_tail_row(line)
+            if not got:
+                continue
+            time_s, code, price, qty, op = got
+            if price <= 0 or qty <= 0 or not code:
+                continue
+            ts = _parse_ms("", time_s, fallback_date)
+            if not ts:
+                continue
+            low = op.lower()
+            rows.append({
+                "code": code, "price": price, "qty": qty,
+                "side": 2 if low.startswith("куп") else 1 if low.startswith("прод") else 0,
+                "received_at_unix_ms": ts, "ts_ms": ts, "num": "",
                 "source": "quik_export",
             })
     rows.sort(key=lambda x: x["ts_ms"])
