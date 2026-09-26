@@ -92,7 +92,20 @@ type TransReply struct {
 // tradesRing caps how many recent trades Snapshot() exposes. QUIK re-sends the full
 // trades table from scratch on every session rollover; without a cap that would grow
 // the in-memory slice without bound over an agent's uptime.
-const tradesRing = 500
+//
+// ПОЧЕМУ ПЯТИСОТ МАЛО (26.09.2026). Кольцо — единственный путь, которым сделки
+// счёта доезжают до STL. Пока связь с STL цела, этого хватает: снимок уходит
+// каждые пять секунд. Но 25.09 агент был отключён от STL три часа, торговля шла,
+// и к моменту возвращения старые сделки из кольца уже вытеснились — журнал
+// алготорговли недосчитал их навсегда, а панель показала «часть сделок дня не
+// видна агенту, ВМ не сходится».
+//
+// Сам агент при этом знал ВСЁ: Lua читает таблицу сделок QUIK целиком по курсору
+// и при появлении агента перепубликовывает день заново. Терялось именно на этом
+// участке. Десять тысяч строк это единицы мегабайт памяти против дня торговли в
+// журнале — цена несопоставима, а торговый день высокочастотного робота в них
+// укладывается с запасом.
+const tradesRing = 10000
 
 // mskOffsetMs is the fixed MSK UTC offset. MSK has observed no DST since 2014, so a
 // fixed +3h is correct year-round (unlike, say, US/Europe offsets).

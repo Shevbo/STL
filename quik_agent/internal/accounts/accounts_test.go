@@ -189,25 +189,31 @@ func TestStoreAddTradesDedupeOnResend(t *testing.T) {
 func TestStoreAddTradesDedupeSurvivesRingEviction(t *testing.T) {
 	now := int64(1000)
 	s := New(func() int64 { return now })
-	// 600 unique trades: t0..t99 get evicted by the 500-ring, t100..t599 remain.
+	// Ёмкость берётся ИЗ КОНСТАНТЫ, а не числом: тест сторожит МЕХАНИКУ кольца
+	// (вытеснение старых, дедуп при перепосылке), и менять его при каждом
+	// изменении ёмкости незачем. 26.09.2026 ёмкость подняли с 500 до 10000,
+	// потому что трёхчасовой обрыв связи вытеснял сделки безвозвратно.
+	const extra = 100
+	total := tradesRing + extra
 	var all []Trade
-	for i := 0; i < 600; i++ {
+	for i := 0; i < total; i++ {
 		all = append(all, Trade{Num: fmt.Sprintf("t%d", i), OrderNum: "1", Sec: "RIU6", Price: 100, Qty: 1, TsMs: int64(i)})
 	}
 	s.AddTrades(all)
 
-	// Session rollover resend: trades #1-#50 (ALREADY EVICTED) plus one new trade.
+	// Session rollover resend: the 50 OLDEST (already evicted) plus one new trade.
+	newNum := fmt.Sprintf("t%d", total)
 	resend := append([]Trade(nil), all[1:51]...)
-	resend = append(resend, Trade{Num: "t600", OrderNum: "1", Sec: "RIU6", Price: 102, Qty: 1, TsMs: 600})
+	resend = append(resend, Trade{Num: newNum, OrderNum: "1", Sec: "RIU6", Price: 102, Qty: 1, TsMs: int64(total)})
 	s.AddTrades(resend)
 
 	snap := s.Snapshot()
-	if len(snap.Trades) != 500 {
-		t.Fatalf("got %d trades, want 500", len(snap.Trades))
+	if len(snap.Trades) != tradesRing {
+		t.Fatalf("got %d trades, want %d", len(snap.Trades), tradesRing)
 	}
 	// The genuinely new trade must be at the tail.
-	if snap.Trades[499].Num != "t600" {
-		t.Fatalf("tail = %s, want t600", snap.Trades[499].Num)
+	if snap.Trades[tradesRing-1].Num != newNum {
+		t.Fatalf("tail = %s, want %s", snap.Trades[tradesRing-1].Num, newNum)
 	}
 	// Evicted trades must NOT re-enter, and the newest pre-resend trades must NOT be
 	// displaced: expect exactly t101..t599 then t600 (t100 dropped for t600's slot).
@@ -220,33 +226,35 @@ func TestStoreAddTradesDedupeSurvivesRingEviction(t *testing.T) {
 			t.Fatalf("evicted trade t%d re-entered the ring on resend", i)
 		}
 	}
-	for i := 101; i <= 599; i++ {
+	for i := extra + 1; i < total; i++ {
 		if !present[fmt.Sprintf("t%d", i)] {
 			t.Fatalf("newer trade t%d was displaced by the resend", i)
 		}
 	}
-	if snap.Trades[0].Num != "t101" {
-		t.Fatalf("front = %s, want t101 (pure arrival order)", snap.Trades[0].Num)
+	if want := fmt.Sprintf("t%d", extra+1); snap.Trades[0].Num != want {
+		t.Fatalf("front = %s, want %s (pure arrival order)", snap.Trades[0].Num, want)
 	}
 }
 
-func TestStoreAddTradesCapsAt500(t *testing.T) {
+func TestStoreAddTradesCapsAtRingSize(t *testing.T) {
 	now := int64(1000)
 	s := New(func() int64 { return now })
+	const extra = 100
+	total := tradesRing + extra
 	var batch []Trade
-	for i := 0; i < 600; i++ {
+	for i := 0; i < total; i++ {
 		batch = append(batch, Trade{Num: fmt.Sprintf("t%d", i), OrderNum: "1", Sec: "RIU6", Price: 100, Qty: 1, TsMs: int64(i)})
 	}
 	s.AddTrades(batch)
 	snap := s.Snapshot()
-	if len(snap.Trades) != 500 {
-		t.Fatalf("got %d trades, want 500 (ring cap)", len(snap.Trades))
+	if len(snap.Trades) != tradesRing {
+		t.Fatalf("got %d trades, want %d (ring cap)", len(snap.Trades), tradesRing)
 	}
-	if snap.Trades[0].Num != "t100" {
-		t.Fatalf("ring should drop oldest 100, first = %s", snap.Trades[0].Num)
+	if want := fmt.Sprintf("t%d", extra); snap.Trades[0].Num != want {
+		t.Fatalf("ring should drop the oldest %d, first = %s", extra, snap.Trades[0].Num)
 	}
-	if snap.Trades[499].Num != "t599" {
-		t.Fatalf("ring should keep newest, last = %s", snap.Trades[499].Num)
+	if want := fmt.Sprintf("t%d", total-1); snap.Trades[tradesRing-1].Num != want {
+		t.Fatalf("ring should keep newest, last = %s", snap.Trades[tradesRing-1].Num)
 	}
 }
 
