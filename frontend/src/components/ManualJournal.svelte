@@ -117,7 +117,7 @@
   <!-- ИТОГ. Рубли крупно, но рядом ровно то, что мешает читать их буквально. -->
   <section class="mj-total">
     <div class="mj-t-main">
-      <span class="mj-t-k">Итог ручной торговли за {PERIOD_RU[period]}</span>
+      <span class="mj-t-k">Реализовано ручными за {PERIOD_RU[period]}</span>
       <span class="mj-t-v" class:pos={(pnl?.net_rub ?? 0) > 0} class:neg={(pnl?.net_rub ?? 0) < 0}>
         {pnl ? rub(pnl.net_rub) : '—'}
       </span>

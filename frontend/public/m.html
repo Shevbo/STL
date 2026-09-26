@@ -476,7 +476,7 @@ function renderAccount(a) {
     row('Биржевые сборы', rub(a.ts_comission), a.ts_comission ? -1 : 0);
 }
 
-// ВМ счёта = «сегодня» роботов + «Итог ручных». Расхождение печатаем, а не прячем.
+// ВМ счёта = «сегодня» роботов + «ВМ ручных за день». Расхождение печатаем, а не прячем.
 function vmNote(a) {
   const c = a.vm_check;
   if (!c) return '';
@@ -485,7 +485,8 @@ function vmNote(a) {
     : `не сходится на ${rub(c.residual, { signed: true })}`;
 }
 
-// Итог ручной торговли за день — тем же видом, что итог роботов.
+// ВМ РУЧНЫХ ЗА ДЕНЬ (рыночная переоценка), тем же видом, что итог роботов.
+// Не путать с «Реализовано ручными» ниже — это разные величины.
 // Подпись строки разбивки: КАНАЛ + инструмент. Каналов ровно три — терминал
 // QUIK, приложение брокера (FINAM) и умные заявки STL; сервер уже схлопнул по
 // ним теги. Тег брокера в подпись НЕ выносим: 24.09.2026 я вытащил его сюда, и
@@ -562,7 +563,7 @@ function manualDay(m) {
   }).join('');
   var feed = (m.rows || []).slice(0, 6).map(journalRow).join('');
   return '<div class="row total ' + cls(m.net_rub) + '">' +
-      '<span class="k">Ручная торговля за день</span><span class="sp"></span>' +
+      '<span class="k">Реализовано ручными за день</span><span class="sp"></span>' +
       '<span class="sub">сделок ' + (m.fills || 0) + (m.orders != null ? ' · заявок ' + m.orders : '') + '</span>' +
       val(rub(m.net_rub, { signed: true }), cls(m.net_rub)) + '</div>' +
     (warn.length ? '<div class="row"><span class="sub warn">' + esc(warn.join(' · ')) + '</span></div>' : '') +
@@ -575,7 +576,7 @@ function manualTotal(t) {
                + `${rub(r.vm_rub, { signed: true })}</span>`).join(' · ')
     || 'своих сделок сегодня не было';
   return `<div class="row total ${cls(t.total)}">` +
-    `<span class="k">Итог ручных</span><span class="sp"></span>` +
+    `<span class="k">ВМ ручных за день</span><span class="sp"></span>` +
     `<span class="sub">${sub}</span>${val(rub(t.total, { signed: true }), cls(t.total))}</div>`;
 }
 
