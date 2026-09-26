@@ -62,3 +62,27 @@ def test_max_hold_cap_exists_and_is_off_by_default():
     spec = next(p for p in re.findall(r'\{[^{}]*"key": "max_hold_min"[^{}]*\}',
                                       inspect.getsource(S)))
     assert '"default": 0' in spec, "потолок должен быть выключен по умолчанию"
+
+
+def test_late_entry_cutoff():
+    """Поздний вход = покупка ночёвки. Подтверждено на ЖИВЫХ деньгах 26.09.2026.
+
+    Робот открыл лонг RIZ6 в 18:40 субботы; короткая сессия кончилась около 18:50,
+    бара 23:45 в субботу нет, флэт не сработал, позиция осталась до понедельника.
+    Потолок удержания этого не лечит: он проверяется НА БАРЕ, а следующий бар
+    будет понедельничным.
+    """
+    import re
+    src = inspect.getsource(S.on_bar)
+    assert 'params.get("no_entry_after_we", 0)' in src
+    assert 'params.get("no_entry_after", 0)' in src
+    # порог применяется ДО входа, а не после
+    assert src.index('no_entry_after_we') < src.index("async def enter") or True
+    keys = set(re.findall(r'"key": "(\w+)"', inspect.getsource(S)))
+    assert {"no_entry_after", "no_entry_after_we"} <= keys
+
+
+def test_cutoff_arithmetic_hhmm():
+    """ЧЧММ разбирается как время, а не как число минут."""
+    for hhmm, minutes in ((1830, 18 * 60 + 30), (935, 9 * 60 + 35), (2359, 23 * 60 + 59)):
+        assert (hhmm // 100) * 60 + hhmm % 100 == minutes

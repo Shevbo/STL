@@ -213,6 +213,19 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
     # 3) Entry only inside the signal window after the range.
     if hm < open_hm + range_min or hm > open_hm + range_min + signal_min:
         return
+    # ПОЗДНИЙ ВХОД = ПОКУПКА НОЧЁВКИ. Подтверждено на ЖИВЫХ деньгах 26.09.2026:
+    # робот открыл лонг RIZ6 в 18:40 субботы, короткая сессия кончилась около
+    # 18:50, бара 23:45 в субботу не существует, флэт не сработал — позиция
+    # осталась висеть до понедельника. Такой вход не имеет шанса отработать ни
+    # тейком, ни стопом; потолок max_hold_min его НЕ лечит, потому что
+    # проверяется на баре, а следующий бар будет уже понедельничным.
+    # Порог задаётся временем, а не вычисляется из расписания: единственный
+    # законный источник расписания торгов — сама биржа, и угадывать конец сессии
+    # в коде стратегии нельзя. 0 = выключено (прежнее поведение).
+    _wd = datetime.strptime(str(day), "%Y%m%d").weekday()
+    _cut = int(params.get("no_entry_after_we", 0) or 0) if _wd >= 5         else int(params.get("no_entry_after", 0) or 0)
+    if _cut > 0 and hm >= (_cut // 100) * 60 + _cut % 100:
+        return
     height = rh - rl
     if height <= 0:
         return
@@ -327,6 +340,10 @@ STRATEGY_META = {
          "hint": "Длина опорной свечи после открытия США (видео: 5). Хай/лоу = диапазон дня"},
         {"key": "signal_min", "label": "Окно входа (мин)", "type": "number", "default": 60, "min": 15, "max": 180,
          "hint": "Сколько минут после закрытия диапазона разрешён вход"},
+        {"key": "no_entry_after", "label": "Не входить позже, ЧЧММ в будни (0=выкл)",
+         "type": "number", "default": 0, "min": 0, "max": 2359},
+        {"key": "no_entry_after_we", "label": "Не входить позже, ЧЧММ в выходные (0=выкл)",
+         "type": "number", "default": 0, "min": 0, "max": 2359},
         {"key": "max_hold_min", "label": "Потолок удержания позиции, мин (0=выкл)",
          "type": "number", "default": 0, "min": 0, "max": 720},
         {"key": "stop_slip", "label": "Проскальзывание на стопе, % высоты диапазона",
