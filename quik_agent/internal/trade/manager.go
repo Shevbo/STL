@@ -200,7 +200,15 @@ func (m *Manager) ApplyLimits(req *quikv1.SetLimits) {
 // the agent->STL echo (so STL/UI can confirm a push applied and detect divergence).
 func (m *Manager) EffectiveLimits() *quikv1.LimitsState {
 	lim := m.guard.Limits()
+	// KILL-SWITCH ЕДЕТ ВМЕСТЕ С ЛИМИТАМИ. 26.09.2026 агент час отклонял каждую
+	// заявку обоих реальных роботов — они пытались ЗАКРЫТЬ свои шорты, — а STL
+	// считал торговлю разрешённой: блокировка нигде не публиковалась, и ни один
+	// экран её не показывал. Увидел это человек, в логе раннера на VDS.
+	m.mu.Lock()
+	blocked := m.blocked
+	m.mu.Unlock()
 	return &quikv1.LimitsState{
+		Blocked:              blocked,
 		TradingEnabled:       lim.TradingEnabled,
 		InstrumentWhitelist:  append([]string(nil), lim.InstrumentWhitelist...),
 		MaxContractsPerOrder: lim.MaxContractsPerOrder,

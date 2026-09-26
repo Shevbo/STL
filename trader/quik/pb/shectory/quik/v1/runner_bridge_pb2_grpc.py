@@ -6,7 +6,7 @@ import warnings
 from shectory.quik.v1 import quik_agent_pb2 as shectory_dot_quik_dot_v1_dot_quik__agent__pb2
 from shectory.quik.v1 import runner_bridge_pb2 as shectory_dot_quik_dot_v1_dot_runner__bridge__pb2
 
-GRPC_GENERATED_VERSION = '1.70.0'
+GRPC_GENERATED_VERSION = '1.71.2'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 

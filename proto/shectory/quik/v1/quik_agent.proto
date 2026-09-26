@@ -228,6 +228,12 @@ message LimitsState {
   double price_collar_frac = 5;
   int32 daily_order_cap = 6;
   int64 last_push_unix_ms = 7;              // when the agent last applied a SetLimits (0 = never)
+  // Kill-switch агента: пока true, ЛЮБАЯ заявка отклоняется, включая ВЫХОД из
+  // позиции. Снимается только перезапуском агента (Manager.KillSwitch ставит
+  // m.blocked=true, и обратного присваивания в коде нет). 26.09.2026 он час
+  // отклонял каждую заявку обоих реальных роботов, пока STL считал торговлю
+  // разрешённой: блокировка не публиковалась нигде, и увидел это человек.
+  bool blocked = 8;
 }
 
 // ===================== Robot hosting (agent-side execution) =====================
