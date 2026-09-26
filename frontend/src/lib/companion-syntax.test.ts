@@ -59,3 +59,42 @@ describe('сторож версии панели', () => {
     });
   }
 });
+
+// 26.09.2026: kill-switch агента час отклонял заявки реальных роботов, а STL
+// считал торговлю разрешённой — на экранах это не было видно вовсе. Полоса
+// обязана быть на обеих страницах и обязана различать ТРИ состояния, потому что
+// null («агент старее поля») это не «разрешено».
+describe('блокировка торговли агентом видна', () => {
+  const cut = (src: string, name: string) => {
+    const i = src.indexOf('function ' + name + '(tb) {');
+    const j = src.indexOf(String.fromCharCode(10) + '}', i);
+    if (i < 0 || j < 0) throw new Error(name + ' не найдена');
+    return src.slice(i, j + 2);
+  };
+  for (const page of ['companion.html', 'm.html']) {
+    const src = fs.readFileSync(path.resolve('public', page), 'utf8');
+    const f = new Function(
+      'function esc(x){return String(x==null?"":x);}' + cut(src, 'tradingBlockHtml')
+      + 'return tradingBlockHtml;',
+    )() as (tb: any) => string;
+
+    it(`${page}: блокировка названа и сказано, что снимается перезапуском`, () => {
+      const h = f({ trading_blocked: true, reason: 'kill-switch агента', reversible: false,
+                    since_ms: Date.parse('2026-09-26T10:00:00Z'), echo_age_ms: 37000 });
+      expect(h).toContain('ЗАБЛОКИРОВАНА');
+      expect(h).toContain('kill-switch');
+      expect(h).toContain('перезапуском агента');
+    });
+
+    it(`${page}: null — это НЕ «разрешено», а «не знаем»`, () => {
+      const h = f({ trading_blocked: null, echo_age_ms: 5000 });
+      expect(h).toContain('не сообщает');
+      expect(h).not.toContain('ЗАБЛОКИРОВАНА');
+    });
+
+    it(`${page}: торговля разрешена — полосы нет вовсе`, () => {
+      expect(f({ trading_blocked: false })).toBe('');
+      expect(f(null)).toBe('');
+    });
+  }
+});

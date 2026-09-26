@@ -267,6 +267,12 @@
   .mchart .ema.ef { stroke: #b06a00; }
   .mchart .ema.em { stroke: #8a7a3a; }
   .mchart .ema.es { stroke: #5a6a8a; }
+  /* Коридор долины смерти — заливка, разножка — пунктирные уровни. */
+  .mchart .dvband { fill: #8a7a3a; opacity: .13; }
+  .mchart .gapl { stroke: #8a5a12; stroke-width: 1; stroke-dasharray: 2 3; opacity: .8; }
+  /* Восстановленная минута: контур штрихом, чтобы её было видно как чужую. */
+  .mchart .cndl.rstr { stroke-dasharray: 1.5 1.5; opacity: .55; }
+  .mchart .wick.rstr { stroke-dasharray: 1.5 1.5; opacity: .55; }
   /* Выход без уровня: строкой рядом с сигналом, не линией на графике. */
   .mstat .flip { color: #7a5a1a; }
   .mstat .emad { color: #6a5a2a; }
@@ -392,6 +398,12 @@
     cursor: pointer; font-size: 12px; padding: 4px 12px;
   }
   .newver button:hover { background: #35619c; }
+
+  /* Блокировка торговли: красная полоса поверх всего, её нельзя пропустить. */
+  .tblock { margin: 4px 0; padding: 6px 9px; border-radius: 5px; font-size: 12px; line-height: 1.4; }
+  .tblock.on { background: #7a1414; color: #fff; font-weight: 700; }
+  .tblock.unknown { background: #4a3a10; color: #f0dca8; }
+  .tblock .sub { display: block; font-weight: 400; font-size: 11px; opacity: .92; margin-top: 2px; }
 </style>
 </head>
 <body>
@@ -718,22 +730,63 @@ function miniChart(ch) {
     const k = b.c >= b.o ? 'up' : 'down';
     const yo = y(b.o), ycl = y(b.c);
     const top = Math.min(yo, ycl), hgt = Math.max(0.8, Math.abs(ycl - yo));
-    s += `<line class="wick ${k}" x1="${r1(cx)}" y1="${y(b.h)}" x2="${r1(cx)}" y2="${y(b.l)}"/>`
-      + `<rect class="cndl ${k}" x="${r1(cx - body / 2)}" y="${r1(top)}"`
-      + ` width="${r1(body)}" height="${r1(hgt)}"/>`;
+    // Свеча ИНСТРУМЕНТА на месте дыры в журнале робота (агент восстановил её из
+    // своего кэша): робот в эту минуту рынка не видел. Рисуем отличимо —
+    // замазывать дыру нельзя (real-trade 26.09.2026).
+    const rst = b.restored ? ' rstr' : '';
+    s += `<line class="wick ${k}${rst}" x1="${r1(cx)}" y1="${y(b.h)}" x2="${r1(cx)}" y2="${y(b.l)}"/>`
+      + `<rect class="cndl ${k}${rst}" x="${r1(cx - body / 2)}" y="${r1(top)}"`
+      + ` width="${r1(body)}" height="${r1(hgt)}">`
+      + (b.restored ? '<title>минута восстановлена из кэша агента: робот её не видел</title>' : '')
+      + `</rect>`;
   }
   // Средняя цена позиции — сплошная тонкая линия.
   if (ch.avg) s += `<line class="avg" x1="0" y1="${yc(ch.avg)}" x2="${PW}" y2="${yc(ch.avg)}"/>`;
   // EMA СТРАТЕГИИ. Рисуем РОВНО присланные значения: раннер считает их на окне
   // прогрева (до 560 баров), и пересчёт по видимому хвосту дал бы другое число,
   // похожее на правду. Линии горизонтальные — это срез «сейчас», а не история.
-  const ema = ch.ema;
-  if (ema && ema.fast && ema.slow) {
+  const ema = ch.ema, eser = ch.ema_series;
+  // КРИВЫЕ ПО БАРАМ. Серия выровнена по bars_tail: i-е значение относится к i-му
+  // бару, где прогрева не хватило — null. Линию через null НЕ проводим: разрыв
+  // честнее прямой через точку, которой не было.
+  if (eser) {
+    for (const [key, cls2] of [['fast', 'ef'], ['mid', 'em'], ['slow', 'es']]) {
+      const arr = eser[key];
+      if (!Array.isArray(arr) || arr.length !== bars.length) continue;
+      let d = '', pen = false;
+      for (let i = 0; i < arr.length; i++) {
+        const v = arr[i];
+        if (v == null) { pen = false; continue; }
+        d += (pen ? ' L' : ' M') + r1(xOf(i)) + ' ' + r1(yc(v));
+        pen = true;
+      }
+      if (d) s += `<path class="ema ${cls2}" d="${d.trim()}" fill="none"><title>`
+        + `EMA(${esc((ema && ema[key + '_n']) || '?')})</title></path>`;
+    }
+  } else if (ema && ema.fast && ema.slow) {
+    // Серии нет (старый раннер) — остаётся срез «сейчас» горизонталями.
     for (const [key, cls2] of [['fast', 'ef'], ['mid', 'em'], ['slow', 'es']]) {
       if (!ema[key]) continue;
       const ey = yc(ema[key]);
       s += `<line class="ema ${cls2}" x1="0" y1="${ey}" x2="${PW}" y2="${ey}"><title>`
         + `EMA(${esc(ema[key + '_n'] || '?')}) = ${esc(px(ema[key]))}</title></line>`;
+    }
+  }
+  // ДОЛИНА СМЕРТИ — полосой: это коридор, а не уровень. Границы считает раннер на
+  // своём окне dv_bars, оно бывает длиннее видимого хвоста.
+  if (ch.dv && ch.dv.hi && ch.dv.lo) {
+    const yhi = yc(ch.dv.hi), ylo = yc(ch.dv.lo);
+    s += `<rect class="dvband" x="0" y="${r1(Math.min(yhi, ylo))}" width="${PW}"`
+      + ` height="${r1(Math.abs(ylo - yhi))}"><title>долина смерти: коридор закрытий`
+      + ` ${esc(px(ch.dv.lo))}…${esc(px(ch.dv.hi))} за ${esc(ch.dv.bars)} баров`
+      + ` (порог ${esc(ch.dv.range_pts)} пт) — новые входы закрыты до пробоя</title></rect>`;
+  }
+  // РАЗНОЖКА — две тонкие линии: вход откроется, когда цена уйдёт за одну из них.
+  if (ch.gap && ch.gap.lo && ch.gap.hi) {
+    for (const lv of [ch.gap.lo, ch.gap.hi]) {
+      s += `<line class="gapl" x1="0" y1="${yc(lv)}" x2="${PW}" y2="${yc(lv)}"><title>`
+        + `разножка: вход откроется за ${esc(px(lv))} (опора ${esc(px(ch.gap.ref))}`
+        + ` ± ${esc(ch.gap.min_pts)} пт)</title></line>`;
     }
   }
   // Висящие заявки. Заявка ВНЕ диапазона свечей прижимается к краю со стрелкой:
@@ -1208,7 +1261,32 @@ function renderOrders(o, d) {
 // Вотчер компактно, В ОДНУ СТРОКУ на проверку: имя + ОК/текст проблемы.
 // Плюс лампа перебора: свежий отличный кандидат (прибыльный, RF>=3, сделок>=30
 // за 24ч) — жёлтая пульсация со ссылкой на его кампанию в Ботсторе.
-function renderWatch(w) {
+// БЛОКИРОВКА ТОРГОВЛИ АГЕНТОМ — ВАЖНЕЕ ВСЕГО ОСТАЛЬНОГО НА ЭКРАНЕ. 26.09.2026
+// kill-switch агента час отклонял заявки реальных роботов, а STL считал торговлю
+// разрешённой: роботы выглядели работающими, пока каждая их заявка отбивалась.
+// null это НЕ «разрешено»: агент старее релиза поля, и утверждать мы ничего не
+// можем — так и пишем.
+function tradingBlockHtml(tb) {
+  if (!tb) return '';
+  const st = tb.trading_blocked;
+  if (st === false) return '';
+  const age = tb.echo_age_ms != null ? Math.round(tb.echo_age_ms / 1000) + ' с назад' : '';
+  if (st == null) {
+    return '<div class="tblock unknown">Агент не сообщает, разрешена ли торговля'
+      + ' (версия агента старее поля). Считать её разрешённой нельзя'
+      + (age ? ' · эхо ' + esc(age) : '') + '</div>';
+  }
+  const since = tb.since_ms
+    ? new Date(tb.since_ms).toLocaleTimeString('ru-RU', { timeZone: 'Europe/Moscow' }) : null;
+  return '<div class="tblock on">ТОРГОВЛЯ ЗАБЛОКИРОВАНА АГЕНТОМ'
+    + (since ? ' с ' + esc(since) : '')
+    + '<span class="sub">' + esc(tb.reason || 'заявки отклоняются')
+    + (tb.reversible === false
+        ? ' · снимается ТОЛЬКО перезапуском агента, кнопки «включить обратно» нет' : '')
+    + (age ? ' · эхо ' + esc(age) : '') + '</span></div>';
+}
+
+function renderWatch(w, tb) {
   if (!w) return '<div class="empty">нет данных</div>';
   const bt = w.backtests || {};
   const pl = w.platform || {};
@@ -1271,6 +1349,7 @@ function renderWatch(w) {
   }
   return oneLine('раннер + lua', w.runner) +
     oneLine('бэктесты', bt, btExtra) +
+    tradingBlockHtml(tb) +
     oneLine('платформа', pl, platExtra, platAlways) +
     star;
 }
@@ -1401,7 +1480,7 @@ function paint(d) {
     `<a href="${STL}/?journal=1" data-ext>журнал ↗</a></div>` +
       manualTotal((d.orders || {}).today) + renderOrders(d.orders, d) +
     `<div class="sec">вотчер <a href="${STL}/?lab=botstore" data-ext>хитпарад ↗</a></div>` +
-      renderWatch(d.watch) +
+      renderWatch(d.watch, d.trading_block) +
     `<div class="sec">уведомления <a href="${STL}/watchdog-log.html" data-ext>детали ↗</a>` +
       `<span class="sp" style="flex:1"></span><span class="copy" id="copyAlerts">копировать</span>` +
       alertsToggle(d.alerts) + `</div>` +
