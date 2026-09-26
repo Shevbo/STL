@@ -22,6 +22,7 @@ from pydantic import BaseModel
 
 from trader.auth.guard import require_auth
 from trader.quik import native_protect
+from trader.quik import blind_quarantine as bq
 from trader.quik import so_journal
 from trader.quik import orders as order_msgs
 from trader.quik import smart_orders as so_mod
@@ -887,6 +888,28 @@ async def _watch_once(state: Any) -> None:
     # Торгует ли биржа ПРЯМО СЕЙЧАС — по оракулу расписания, не по свежести кадра.
     session_open = (getattr(state, "market_session", None) or {}).get("open")
 
+    # КАРАНТИН ПОСЛЕ СЛЕПОТЫ. 25.09.2026 связь вернулась после трёх часов тишины,
+    # и через одиннадцать минут сторож купил 20 контрактов по уровню, пройденному
+    # в дыре, — пока оператор в дороге уже набирал позицию руками. Формально
+    # правильно, фактически исполнено намерение, устаревшее за три часа.
+    quar = getattr(state, "blind_quarantine", None)
+    if quar is None:
+        quar = state.blind_quarantine = bq.BlindQuarantine()
+    fresh_now = any(
+        (now - int((store.tick(c, agent) or {}).get("received_at_unix_ms") or 0))
+        <= so_mod._STALE_TICK_MS for c in book.codes())
+    was_active = quar.active(now)
+    quar.observe(fresh_now, now)
+    if quar.active(now) and not was_active:
+        log.warning("smart_order.blind_quarantine", gap_sec=quar.gap_sec,
+                    hold_sec=quar.left_sec(now))
+        await _alert_reject(
+            srv, agent, next(iter(active), book.orders[0] if book.orders else None) or
+            SmartOrder(so_id="-", kind="sl", code="-", side="buy", qty=0),
+            f"данных не было {quar.gap_sec} с: входы взведённых заявок задержаны на "
+            f"{quar.left_sec(now)} с. Проверьте, нужны ли они ещё — сигнал мог "
+            "родиться, пока мы не видели рынок. Защитные заявки не задержаны.")
+
     for code in book.codes():
         t = store.tick(code, agent) or {}
         trail_before = [(o.so_id, o.activated, o.peak) for o in book.orders]
@@ -921,6 +944,16 @@ async def _watch_once(state: Any) -> None:
                 continue
             assert isinstance(act, Fire)
             so = act.so
+            # Карантин держит ВХОДЫ: защитные заявки закрывают открытую позицию,
+            # и их задержка оставила бы её голой.
+            if quar.active(now) and bq.holds(so):
+                so_journal.record("held", so, so_journal.WATCHER,
+                                  f"карантин после слепоты ({quar.gap_sec} с без данных): "
+                                  f"вход отложен, осталось {quar.left_sec(now)} с",
+                                  now_ms=now)
+                log.info("smart_order.held_by_quarantine", so_id=so.so_id,
+                         left_sec=quar.left_sec(now))
+                continue
             client_id = f"so:{so.so_id}"
             try:
                 validate_place(
