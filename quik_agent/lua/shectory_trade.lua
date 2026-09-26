@@ -44,7 +44,7 @@
 -- Bump on every change you deliver to the VDS. Logged FIRST on OnInit so the
 -- operator can confirm which version QUIK actually loaded (the running script is
 -- in MEMORY; a file on disk with the same name may be a different build).
-local SCRIPT_VERSION = "2026.09.25-l2opt"
+local SCRIPT_VERSION = "2026.09.27-l2unsub"
 
 local CONFIG = {
   HOST          = "127.0.0.1",
@@ -586,8 +586,10 @@ end
 -- требует), стакан дорог и подписки требует. Раньше это был один список, и
 -- включение стаканов расширилось на всё сразу.
 md.book_codes = {}
+md.book_code_set = {}
 for code in string.gmatch(CONFIG.MD_BOOK_CODES or "", "([^,%s]+)") do
   md.book_codes[#md.book_codes + 1] = code
+  md.book_code_set[code] = true
 end
 
 local function now_ms()
@@ -629,6 +631,23 @@ local function subscribe_books()
     if not (okc and subbed) then
       local ok, res = pcall(Subscribe_Level_II_Quotes, CONFIG.MD_CLASS, code)
       log("book subscribe " .. code .. ": " .. tostring(ok and res or "ошибка"))
+    end
+  end
+  -- ОТПИСКА ОТ ЛИШНИХ. Сузить MD_BOOK_CODES и перезапустить скрипт НЕ снимает
+  -- нагрузку: подписка живёт в терминале, а не в скрипте, и поток от сервера по
+  -- прежним кодам продолжает идти внутрь процесса QUIK до его рестарта. Именно
+  -- эта нагрузка 25.09.2026 стоила восьми торговых часов, поэтому сужение списка
+  -- обязано действовать сразу. Отписываемся только по нашему же списку
+  -- инструментов (MD_CODES): подписывал их скрипт, окна оператора тут не при чём —
+  -- окно стакана в QUIK живёт отдельно от QLua-подписки.
+  if not Unsubscribe_Level_II_Quotes then return end
+  for _, code in ipairs(md.codes) do
+    if not md.book_code_set[code] then
+      local okc, subbed = pcall(IsSubscribed_Level_II_Quotes, CONFIG.MD_CLASS, code)
+      if okc and subbed then
+        local ok, res = pcall(Unsubscribe_Level_II_Quotes, CONFIG.MD_CLASS, code)
+        log("book unsubscribe " .. code .. ": " .. tostring(ok and res or "ошибка"))
+      end
     end
   end
 end
@@ -990,11 +1009,11 @@ local function md_pump()
     md.last_tick_ms = t
     pcall(publish_ticks)
   end
-  if #md.book_codes > 0 and t - md.last_book_ms >= CONFIG.MD_BOOK_INTERVAL_MS then
+  if t - md.last_book_ms >= CONFIG.MD_BOOK_INTERVAL_MS then
     md.last_book_ms = t
     if not md.books_subscribed then
       md.books_subscribed = true
-      pcall(subscribe_books)
+      pcall(subscribe_books)   -- и при пустом списке: снимает прежние подписки
     end
     pcall(publish_books)
   end
