@@ -627,6 +627,41 @@ def _watch_runner(health: dict, received_ms: int | None, now_ms: int,
             "orders_used": used, "orders_cap": cap}
 
 
+# Состояние блокировки, которое агент публикует эхом лимитов. Момент ПЕРЕХОДА в
+# блокировку STL помнит сам: агент шлёт только текущее значение, а оператору на
+# экране нужно «с какого времени», иначе непонятно, идёт ли это десять секунд
+# или уже час (26.09.2026 это длилось час и не было видно нигде).
+_BLOCK_SINCE: dict[str, int] = {}
+
+
+def _trading_block(store) -> dict:
+    """Блокировка торговли на стороне АГЕНТА — для шапки панели и карточек роботов.
+
+    Робот выглядит работающим, пока его заявки молча отклоняются: 26.09.2026 оба
+    реальных робота час пытались ЗАКРЫТЬ свои шорты, каждая заявка отклонялась
+    агентом, а STL считал торговлю разрешённой. Теперь это состояние публикуется.
+
+    `blocked: None` = агент старее релиза поля, «разрешено» из этого НЕ следует."""
+    ls = (store.limits_state(None) if store is not None else None) or {}
+    blocked = ls.get("blocked")
+    now = int(time.time() * 1000)
+    if blocked:
+        _BLOCK_SINCE.setdefault("9618", now)
+    else:
+        _BLOCK_SINCE.pop("9618", None)
+    return {
+        "trading_blocked": (bool(blocked) if blocked is not None else None),
+        "since_ms": _BLOCK_SINCE.get("9618"),
+        "echo_age_ms": (now - int(ls.get("received_at_ms") or 0)) if ls.get("received_at_ms") else None,
+        "reason": ("kill-switch агента: ЛЮБАЯ заявка отклоняется, включая выход из позиции"
+                   if blocked else None),
+        # Снимается ТОЛЬКО перезапуском агента: в manager.go есть m.blocked=true и
+        # нет обратного присваивания. Экран обязан писать именно это, а не
+        # «включите обратно» — кнопки не существует.
+        "reversible": (False if blocked else None),
+    }
+
+
 def _manual_block(store) -> dict:
     """Блок ручной торговли для снапшота. Ошибка здесь не имеет права ронять
     снапшот целиком: панель нужнее, чем один её блок."""
@@ -1433,5 +1468,6 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
         # только снапшот, поэтому телефон берёт журнал отсюда (просьба ui-ux 24.09).
         "manual": _manual_block(store),
         "watch": {"runner": watch_runner, "backtests": bt, "platform": platform},
+        "trading_block": _trading_block(store),
         "alerts": alerts, "market": market_out,
     }
