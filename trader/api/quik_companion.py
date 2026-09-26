@@ -368,6 +368,14 @@ MARGIN_SHARE = 0.5
 # их «B 15 план»: тейк, стоп и усреднение читались как одно и то же, и оператор
 # просил «подписывать SL или TP» (26.09.2026). Причина — текст раннера, роль — наше
 # суждение о нём, поэтому разбор живёт здесь и покрыт тестом.
+# Стратегии, у которых EMA — РАБОЧЕЕ ПЕРЕСЕЧЕНИЕ, а не фильтр. Список от
+# real-trade 26.09.2026: у keltner_bo и rsi_trend EMA фильтрует, и линий там нет
+# намеренно. Нужен только для того, чтобы отличить «EMA не бывает» от «EMA не
+# приехали»; рисуем мы всё равно только присланные значения.
+_EMA_STRATEGIES = {"macd_cross", "macd_shectory1", "ema_atr",
+                   "shectory_2ema", "shectory_3ema"}
+
+
 def plan_role(reason: str, entry: bool = False) -> str:
     r = (reason or "").lower()
     if "тейк" in r:
@@ -1049,6 +1057,12 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
                     # графика нельзя: получится другое число, похожее на правду.
                     # Ключа нет — линий нет, и это верно (real-trade 26.09.2026).
                     "ema": (sig.get("features") or {}).get("ema"),
+                    # ПУСТОТА ОБЪЯСНЯЕТ СЕБЯ. У стратегии на пересечении EMA линии
+                    # обязаны быть; если их нет — значит раннер на VDS ещё старый
+                    # (features.ema появился в robot_runner/explain.py, и он живёт
+                    # в robot-runner.exe рядом с QUIK). Молчащий график в этом
+                    # случае неотличим от «стратегия без EMA» (оператор 26.09.2026).
+                    "ema_expected": str(rob.get("strategy_id") or "") in _EMA_STRATEGIES,
                     "flip_exit": next(
                         (o.get("reason") for o in (sig.get("planned_orders") or [])
                          if plan_role(o.get("reason"), bool(o.get("entry"))) == "flip"),

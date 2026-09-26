@@ -856,6 +856,13 @@ function chartStatus(ch) {
   // ДИСТАНЦИЯ МЕЖДУ EMA — то, ради чего их и просили показать: по ней видно,
   // насколько сигнал близок к пересечению. Считаем по ПРИСЛАННЫМ значениям.
   const e = ch.ema;
+  // Линий ждали, а их нет: это не «стратегия без EMA», а старый раннер на VDS.
+  // Молчать здесь нельзя — оператор видит пустой график и считает, что сломан он.
+  if (!e && ch.ema_expected) {
+    out += `<span class="emad" title="features.ema приходит из robot_runner/explain.py; `
+      + `он живёт в robot-runner.exe рядом с QUIK, и на VDS нужна свежая версия">`
+      + `EMA не присланы раннером</span>`;
+  }
   if (e && e.fast && e.slow) {
     const d = Math.abs(e.fast - e.slow);
     const near = e.fast > e.slow ? 'быстрая выше' : 'быстрая ниже';
