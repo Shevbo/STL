@@ -323,6 +323,50 @@ FREE_MARGIN_RUB = 1_529_640.0
 MARGIN_SHARE = 0.5
 
 
+# РОЛЬ УРОВНЯ НА ГРАФИКЕ. Раннер кладёт в план человеческую причину («тейк-профит:
+# avg 84 500 − 1.5×ATR(14)=120»), а панель рисовала все линии одинаково, подписывая
+# их «B 15 план»: тейк, стоп и усреднение читались как одно и то же, и оператор
+# просил «подписывать SL или TP» (26.09.2026). Причина — текст раннера, роль — наше
+# суждение о нём, поэтому разбор живёт здесь и покрыт тестом.
+def plan_role(reason: str, entry: bool = False) -> str:
+    r = (reason or "").lower()
+    if "тейк" in r:
+        return "tp"
+    if "стоп" in r or "sl " in r:
+        return "sl"
+    if "усреднение" in r:
+        return "avg"
+    # Выход по смене сигнала: ЦЕНОВОГО УРОВНЯ у него нет, робот закрывается по
+    # рынку. Роль называем, но линию по ней рисовать нельзя — цена будет выдумана.
+    if "смена" in r or "снятие сигнала" in r or "переворот" in r:
+        return "flip"
+    return "entry" if entry else "plan"
+
+
+PLAN_ROLE_RU = {"tp": "TP", "sl": "SL", "avg": "усреднение",
+                "flip": "переворот", "entry": "вход", "plan": "план"}
+
+def _exit_level_plans(sig: dict, rob: dict) -> list[dict]:
+    """TP и SL из `exit_levels` стратегии — как планируемые уровни для графика."""
+    el = (sig or {}).get("exit_levels") or {}
+    try:
+        tp, sl = float(el.get("tp") or 0), float(el.get("sl") or 0)
+    except (TypeError, ValueError):
+        return []
+    if tp <= 0 or sl <= 0:
+        return []
+    # Выход закрывает позицию: сторона противоположна её направлению.
+    long_pos = int(el.get("dir") or 0) > 0
+    side = "sell" if long_pos else "buy"
+    qty = abs(int(rob.get("position") or 0)) or 1
+    return [
+        {"side": side, "price": tp, "qty": qty, "role": "tp", "role_ru": "TP",
+         "reason": "тейк-профит стратегии (точный уровень)", "blocked": False},
+        {"side": side, "price": sl, "qty": qty, "role": "sl", "role_ru": "SL",
+         "reason": "стоп-лосс стратегии (точный уровень)", "blocked": False},
+    ]
+
+
 def _params_dict(params) -> dict:
     try:
         return params if isinstance(params, dict) else json.loads(params or "{}")
@@ -905,9 +949,18 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
                     # сейчас держит фильтр: рисуем бледнее, а не молчим.
                     "planned": [{"side": o.get("side"), "price": o.get("price"),
                                  "qty": o.get("qty"), "reason": o.get("reason"),
+                                 "role": plan_role(o.get("reason"), bool(o.get("entry"))),
+                                 "role_ru": PLAN_ROLE_RU.get(
+                                     plan_role(o.get("reason"), bool(o.get("entry"))), "план"),
                                  "blocked": bool(o.get("blocked"))}
                                 for o in (sig.get("planned_orders") or [])
-                                if o.get("level") and o.get("price")],
+                                if o.get("level") and o.get("price")]
+                               # ТОЧНЫЕ УРОВНИ ВЫХОДА модульной стратегии лежат не в
+                               # planned_orders, а в её собственном состоянии
+                               # (explain.py: exit_levels). Панель их не читала вовсе,
+                               # и линии TP у такого робота на графике не было
+                               # (оператор 26.09.2026). Роль называем явно.
+                               + _exit_level_plans(sig, rob),
                     # Сделки, попадающие в окно графика. Хвост в зеркале длиннее
                     # окна, и филлы ОДНОГО ордера схлопываем в один маркер: журнал
                     # хранит строку на каждую сделку QUIK, и ордер, налившийся
