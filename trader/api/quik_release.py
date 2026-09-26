@@ -101,3 +101,32 @@ async def trigger_self_update(agent_id: str, request: Request) -> dict:
     server.enqueue_command(agent_id, cmd)
     log.info("quik.self_update.triggered", agent=agent_id)
     return {"ok": True, "agent_id": agent_id, "command": "self_update"}
+
+
+@router.post("/agent/{agent_id}/restart")
+async def agent_restart(agent_id: str, request: Request):
+    """Перезапустить АГЕНТА на VDS (COMMAND_TYPE_RESTART).
+
+    ЗАЧЕМ ОТДЕЛЬНАЯ РУЧКА. 26.09.2026 выяснилось, что kill-switch на стороне
+    агента НЕОБРАТИМ: `m.blocked = true` в manager.go есть, а обратного
+    присваивания нет нигде. /clear-kill-switch снимал блок только в STL, и
+    реальные роботы час подряд не могли закрыть свои шорты — каждая их заявка
+    отклонялась агентом. Единственный способ снять блок на живом агенте, не
+    дожидаясь релиза, — перезапуск, а дотянуться до VDS больше нечем.
+
+    Роботы переживут: спеки и флаг паузы персистятся в robots.json, агент
+    поднимет их сам. Позиции на счёте перезапуск не трогает."""
+    require_auth(request.app.state.settings.shectory_auth_bridge_secret, request)
+    server = getattr(request.app.state, "quik_server", None)
+    if server is None:
+        raise HTTPException(status_code=503, detail="quik agent link not enabled")
+
+    import sys
+
+    sys.path.insert(0, str(Path("trader/quik/pb")))
+    from shectory.quik.v1 import quik_agent_pb2 as pb  # noqa: E402
+
+    server.enqueue_command(agent_id, pb.Command(
+        id="restart", type=pb.CommandType.COMMAND_TYPE_RESTART))
+    log.info("quik.agent_restart.triggered", agent=agent_id)
+    return {"ok": True, "agent_id": agent_id, "command": "restart"}
