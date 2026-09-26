@@ -25,14 +25,26 @@ import httpx
 
 BOOK_CHUNK = 150      # см. --chunk: крупное задание по стакану теряется молча
 
-CODE = ("from trader.lab.strategies.library import make_on_bar\n"
-        "on_bar = make_on_bar('macd_shectory1')")
+def script_code(strategy: str, module: str | None) -> str:
+    """Тело прогона. Стратегии живут двумя способами, и это надо различать:
+    в РЕЕСТРЕ library (macd_shectory1 и прочие, собираются make_on_bar) и
+    ОТДЕЛЬНЫМ модулем со своим on_bar (us_open_fvg, rich_fool, impulse_fade).
+    Скрипт был прибит к первому способу, и прогон робота открытия США поставить
+    было нельзя (упёрся заказ real-trade 25.09.2026)."""
+    if module:
+        return f"from trader.lab.strategies.{module} import on_bar"
+    return ("from trader.lab.strategies.library import make_on_bar" + chr(10) +
+            f"on_bar = make_on_bar({strategy!r})")
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--file", required=True, help="JSON: {base: {...}, sets: [...]}")
     ap.add_argument("--symbol", required=True)
+    ap.add_argument("--strategy", default="macd_shectory1",
+                    help="id стратегии из реестра library")
+    ap.add_argument("--module", help="модуль trader/lab/strategies/<имя>.py со своим "
+                                     "on_bar; отменяет --strategy")
     ap.add_argument("--book-key")
     ap.add_argument("--campaign", required=True)
     ap.add_argument("--date-from", required=True)
@@ -66,7 +78,7 @@ def main() -> None:
     ok = 0
     with httpx.Client(base_url=a.api, headers=h, timeout=300) as c:
         for i, part in enumerate(chunks):
-            body = {"scriptCode": CODE, "baseParams": base, "paramSets": part,
+            body = {"scriptCode": script_code(a.strategy, a.module), "baseParams": base, "paramSets": part,
                     "symbol": a.symbol, "dateFrom": f"{a.date_from}T00:00:00",
                     "dateTo": f"{a.date_to}T23:59:59", "engine": "remote",
                     "campaign": f"{a.campaign}{i:03d}"}
