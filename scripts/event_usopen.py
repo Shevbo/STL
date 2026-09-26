@@ -90,7 +90,18 @@ def post() -> None:
 
 
 def _rounds(trades: list[dict]) -> list[tuple[dt.date, float]]:
-    """Круги от флэта до флэта: дата входа и итог в пунктах."""
+    """Круги от флэта до флэта: дата входа, итог в пунктах, дата ВЫХОДА.
+
+    ФАНТОМЫ СКЛЕЙКИ (найдено проверкой 26.09.2026, отравляло весь вывод).
+    Непрерывные ряды RI/Si/GD не непрерывны: после каждой экспирации дыра в
+    12-18 дней. В день экспирации бары кончаются в 18:49-18:58, флэт в 23:45 не
+    срабатывает (такого бара нет), и позиция закрывается «страховкой» на первом
+    баре СЛЕДУЮЩЕГО контракта. Итог такого круга равен скачку ряда, а не сделке:
+    один круг RI 18.06 -> 01.07 дал −13 760 пунктов при разрыве ряда −13 690.
+    Из-за него обычные дни RI в 16:30 выглядели как −12 710, а на самом деле
+    +1 090. Поэтому возвращаем дату выхода, и вызывающая сторона обязана
+    выбросить круги, где выход не в день входа.
+    """
     out, pos, avg = [], 0, 0.0
     d0 = None
     for t in trades:
@@ -103,7 +114,8 @@ def _rounds(trades: list[dict]) -> list[tuple[dt.date, float]]:
             avg = (avg * abs(pos) + px * abs(q)) / (abs(pos) + abs(q))
             pos += q
         else:
-            out.append((d0, (px - avg) * (1 if pos > 0 else -1) * min(abs(pos), abs(q))))
+            d1 = dt.datetime.utcfromtimestamp(int(t["time"])).date()
+            out.append((d0, (px - avg) * (1 if pos > 0 else -1) * min(abs(pos), abs(q)), d1))
             pos += q
             if pos == 0:
                 avg, d0 = 0.0, None
@@ -135,7 +147,11 @@ def report() -> None:
             days = {e["date"] for e in ev
                     if e["kind"] == r["kind"] and e["hh"] == r["hh"]}
             on, off = [], []
-            for d, pnl in _rounds(tr):
+            for d, pnl, d1 in _rounds(tr):
+                if d1 != d:            # круг через границу дня = фантом склейки
+                    continue
+                if d.weekday() >= 5:   # выходная сессия: событий в выходные нет
+                    continue
                 (on if d in days else off).append(pnl)
             def fmt(v):
                 if not v:
