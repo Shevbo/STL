@@ -338,11 +338,15 @@ async def run_single_backtest(
     # метрики строятся из сделок и о причинах ничего не знают. Достаём здесь: без
     # этого нельзя ответить на вопрос real-trade «участвует ли тейк вообще», а он
     # описательный и не требует ни статистики, ни длинных окон.
+    entry_reasons = {k[4:]: int(v) for k, v in
+                     (getattr(runtime, "_state", None) or {}).items()
+                     if isinstance(k, str) and k.startswith("why_") and v}
     exit_reasons = {k[5:]: int(v) for k, v in
                     (getattr(runtime, "_state", None) or {}).items()
                     if isinstance(k, str) and k.startswith("exit_") and v}
     res = {"trades": trades, "equity_curve": equity_curve,
            **({"exit_reasons": exit_reasons} if exit_reasons else {}),
+           **({"entry_reasons": entry_reasons} if entry_reasons else {}),
            **({"fill_stats": fill_stats} if fill_stats else {}),
            "point_value": point_value, **metrics,
            "max_mae": max_mae, "max_drawdown_mtm": max_dd_mtm,

@@ -71,6 +71,13 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
     # `__inv` в make_on_bar, но этот модуль самостоятельный и через make_on_bar не
     # проходит, поэтому инверсия здесь своя, отдельным параметром.
     invert = int(params.get("invert", 0))
+    # ПРОСКАЛЬЗЫВАНИЕ НА ФИКСИРОВАННОМ СТОПЕ, доля высоты диапазона x100.
+    # Заказ real-trade 25.09.2026. До этого фиксированный стоп исполнялся РОВНО по
+    # своей цене, а модель проскальзывания была только у трейлинга (trail_slip).
+    # В реале заявка маркетируемая и стоп перелетает на ход бара; при инвертированной
+    # сделке стоп получается 4-8 тиков, и для него это не поправка, а весь результат.
+    # 0 = прежнее поведение.
+    stop_slip = float(params.get("stop_slip", 0)) / 100.0
     flatten_eod = int(params.get("flatten_eod", 1))
     tp_trail = int(params.get("tp_trail", 0))               # 0=fixed TP, 1=trailing
     trail_act = float(params.get("trail_act", 100)) / 100.0  # activate after this profit (×H)
@@ -137,7 +144,7 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
                     exit_px = eff_stop - trail_slip * height
             else:
                 if cur.low <= sl:
-                    exit_px = sl
+                    exit_px = sl - stop_slip * height
                 elif cur.high >= tp:
                     exit_px = tp
             if exit_px is not None:
@@ -154,7 +161,7 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
                     exit_px = eff_stop + trail_slip * height
             else:
                 if cur.high >= sl:
-                    exit_px = sl
+                    exit_px = sl + stop_slip * height
                 elif cur.low <= tp:
                     exit_px = tp
             if exit_px is not None:
@@ -194,7 +201,7 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
     if height <= 0:
         return
 
-    async def enter(dirn: int, price: float) -> bool:
+    async def enter(dirn: int, price: float, why: str = "?") -> bool:
         # Инверсия применяется ПЕРВОЙ, до всего остального: и стоп с тейком, и гейт
         # сторон обязаны считаться по той стороне, в которую робот РЕАЛЬНО пойдёт.
         # Геометрия переворачивается сама: фейд пробоя вверх становится шортом со
@@ -237,8 +244,14 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
         stl.set_state("tp", tp)
         stl.set_state("entry", price)
         stl.set_state("peak", price)
+        # ПРИЧИНА ВХОДА в журнале и в счётчике. Просьба real-trade 25.09.2026: по
+        # живому журналу за два месяца нельзя было сказать, сколько убыточных кругов
+        # дал ложный пробой — 42 круга есть, причина входа нет. Счётчик why_* уезжает
+        # в результат бэктеста как entry_reasons, поэтому прогон и живой журнал
+        # становятся сравнимы.
+        stl.set_state("why_" + why, int(stl.get_state("why_" + why, 0) or 0) + 1)
         stl.log(f"{'LONG' if dirn > 0 else 'SHORT'} {price:.0f} SL={sl:.0f} TP={tp:.0f} "
-                f"(range {rl:.0f}-{rh:.0f})")
+                f"(range {rl:.0f}-{rh:.0f}) вход={why}")
         return True
 
     body = (cur.close - cur.open) / cur.close if cur.close else 0.0
@@ -249,10 +262,10 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
         bull_fvg = bars[-1].low > bars[-3].high
         bear_fvg = bars[-1].high < bars[-3].low
         if cur.close > rh and (not req_fvg or (bull_fvg and body >= min_frac)):
-            if await enter(1, cur.close):
+            if await enter(1, cur.close, "fvg"):
                 return
         if cur.close < rl and (not req_fvg or (bear_fvg and -body >= min_frac)):
-            if await enter(-1, cur.close):
+            if await enter(-1, cur.close, "fvg"):
                 return
 
     # --- Retest + rejection mode (1 or 2): the video's false-breakout filter ---
@@ -268,10 +281,10 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
             return
         rej = rng > 0 and abs(cur.close - cur.open) / rng >= rej_frac   # "shaved" bar
         if bd > 0 and cur.low <= rh and cur.close > rh and cur.close > cur.open and rej:
-            await enter(1, cur.close)
+            await enter(1, cur.close, "retest")
             return
         if bd < 0 and cur.high >= rl and cur.close < rl and cur.close < cur.open and rej:
-            await enter(-1, cur.close)
+            await enter(-1, cur.close, "retest")
             return
 
 
@@ -297,6 +310,8 @@ STRATEGY_META = {
          "hint": "Длина опорной свечи после открытия США (видео: 5). Хай/лоу = диапазон дня"},
         {"key": "signal_min", "label": "Окно входа (мин)", "type": "number", "default": 60, "min": 15, "max": 180,
          "hint": "Сколько минут после закрытия диапазона разрешён вход"},
+        {"key": "stop_slip", "label": "Проскальзывание на стопе, % высоты диапазона",
+         "type": "number", "default": 0, "min": 0, "max": 100},
         {"key": "entry_mode", "label": "Режим входа 0/1/2", "type": "number", "default": 1, "min": 0, "max": 2,
          "hint": "0=FVG+пробой, 1=ретест+отвержение (видео), 2=любой"},
         {"key": "rr_x10", "label": "R:R ×10 (20=2:1)", "type": "number", "default": 20, "min": 5, "max": 50,
