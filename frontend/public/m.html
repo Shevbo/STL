@@ -188,6 +188,8 @@
      когда оба «B 15» (выход из шорта покупкой). */
   .mchart .olbl.r-tp { fill: #0a7d32; font-weight: 700; }
   .mchart .olbl.r-sl { fill: #c01515; font-weight: 700; }
+  /* Выход без уровня: строкой рядом с сигналом, не линией на графике. */
+  .mstat .flip { color: #7a5a1a; }
   .mchart .fill { stroke: #202020; stroke-width: .7; }
   .mchart .fill.up { fill: #00a000; }
   .mchart .fill.down { fill: #e00000; }
@@ -826,6 +828,14 @@ function chartStatus(ch) {
   }
   if (ch.blocked_tag) {
     out += `<span class="blk" title="${esc(ch.blocked)}">${esc(ch.blocked_tag)}</span>`;
+  }
+  // ВЫХОД ПО ПЕРЕВОРОТУ. У него НЕТ ценового уровня: робот закрывается по рынку,
+  // когда сигнал сменится. Линию по нему рисовать нельзя — цена была бы выдумана,
+  // а молчать тоже нельзя: оператор должен знать, что выход у позиции есть
+  // (26.09.2026). Поэтому строкой, а не линией.
+  if (ch.flip_exit) {
+    out += `<span class="flip" title="${esc(ch.flip_exit)}">`
+      + `выход по перевороту: по рынку</span>`;
   }
   return `<div class="mstat">${out}</div>`;
 }
