@@ -126,7 +126,8 @@
       {#if pnl}
         валовый {rub(pnl.gross_rub)} · комиссия {rub(-Math.abs(Number(pnl.commission_rub ?? 0)))}
         · сделок {num(pnl.fills)} · контрактов {num(pnl.lots)}
-        {#if pnl.from}· период {pnl.from}…{pnl.to}{/if}
+        {#if pnl.from_ms}· окно {when(pnl.from_ms)} … {when(pnl.to_ms)}
+        {:else if pnl.from}· период {pnl.from}…{pnl.to}{/if}
       {:else if !loading}
         итог не пришёл
       {/if}
@@ -176,9 +177,15 @@
         <em>в итог выше НЕ входит и меняется каждую секунду{#if net === null}; позиция счёта
           не пришла, сверить не с чем{/if}</em>
         <div class="mj-o-rows">
+          <!-- НЕИЗВЕСТНАЯ СРЕДНЯЯ — ПРОЧЕРК, А НЕ НОЛЬ. Позиция счёта может быть
+               известна, а средней для неё из окна нет: сервер её не выдумывает и
+               шлёт null. `?? 0` печатал «по 0» — цену, которой не было
+               (real-trade 26.09.2026, заметили раньше меня). -->
           {#each pnl?.open ?? [] as o}
-            <span>{o.symbol} {num(o.position)} по {fmtPrice(o.avg_price ?? 0)}
-              · сейчас {fmtPrice(o.last ?? 0)} · {rub(o.unrealized_rub)}</span>
+            <span>{o.symbol} {num(o.position)}
+              {#if o.avg_price}по {fmtPrice(o.avg_price)}{:else}· средняя неизвестна{/if}
+              {#if o.last}· сейчас {fmtPrice(o.last)}{/if}
+              · {o.unrealized_rub == null ? 'переоценка не считается' : rub(o.unrealized_rub)}</span>
           {/each}
         </div>
       </div>

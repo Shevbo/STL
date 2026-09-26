@@ -38,6 +38,12 @@ export interface PnlReport {
   gross_rub?: number; commission_rub?: number; net_rub?: number;
   priced?: boolean; partial?: boolean; coverage_from?: string | null;
   orders?: number;
+  // Границы окна ЯВНО, в миллисекундах: день считается с 07:00 МСК, и писать
+  // «период 26.09…26.09» значило бы подтверждать сутки (real-trade 26.09.2026).
+  from_ms?: number; to_ms?: number;
+  // Откуда взята открытая позиция и остаток окна, который раньше и был в `open`.
+  open_source?: 'account' | 'window';
+  window_residual?: Record<string, number>;
   // Сведение не сошлось с позицией счёта: часть сделок в журнал не попала
   // (агент отдаёт ринг 500 последних). Итог тогда НЕ точный.
   journal_complete?: boolean;
