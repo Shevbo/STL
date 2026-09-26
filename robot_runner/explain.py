@@ -178,6 +178,75 @@ def ema_lines(strategy_id: str, bars, params: dict) -> dict:
     return out
 
 
+def ema_series(strategy_id: str, bars, params: dict, tail) -> dict:
+    """Те же EMA, но СЕРИЕЙ по барам хвоста — линии на графике, а не два уровня.
+
+    Хвост это traded_bars: подмножество bars() без синтетических минут. Поэтому
+    значения считаем не подряд, а для каждого бара хвоста на его месте в ПОЛНОМ
+    ряду, окном ровно spec["warmup"] — как ema_lines и как _generic_explain зовёт
+    signal(). Взять одну сплошную серию по укороченному окну нельзя: у 2EMA
+    прогрев 560 баров, влияние сида гаснет только за ~n/2, и линия оказалась бы
+    похожей на EMA робота, ею не являясь. Прогрева на бар не хватило — None в
+    этой позиции: панель разорвёт линию, а не проведёт её через выдуманную точку.
+    """
+    spec = REGISTRY.get(strategy_id)
+    keys = _EMA_KEYS.get(strategy_id)
+    if spec is None or not keys or not tail:
+        return {}
+    p = {**spec["default_params"], **params}
+    try:
+        ns = [int(p[k]) for k in keys]
+        need = int(spec["warmup"](p))
+    except (KeyError, TypeError, ValueError):
+        return {}
+    if len(set(ns)) < len(ns) or len(bars) < need:
+        return {}
+    closes = [b.close for b in bars]
+    pos = {b.time: i for i, b in enumerate(bars)}
+    names = ("fast", "slow") if len(ns) == 2 else ("fast", "mid", "slow")
+    out: dict = {}
+    for name, n in zip(names, ns):
+        vals: list = []
+        for tb in tail:
+            i = pos.get(tb.time)
+            if i is None or i + 1 < need:
+                vals.append(None)
+                continue
+            try:
+                vals.append(round(I.ema_last(closes[i + 1 - need:i + 1], n), 2))
+            except ValueError:
+                vals.append(None)
+        if not any(v is not None for v in vals):
+            return {}
+        out[name] = vals
+    return out
+
+
+def gap_levels(params: dict, state: dict) -> dict:
+    """ЧИСЛА разножки: опора и цены, с которых она перестаёт держать добор.
+    Текстового side_block/entry_block панели не хватает — ref живёт в состоянии
+    стратегии и снаружи его нет вовсе, посчитать его на панели невозможно."""
+    min_pts = float(params.get("min_gap_pts", 0) or 0)
+    ref = float(state.get("gap_ref", 0) or 0)
+    if min_pts <= 0 or ref <= 0:
+        return {}
+    return {"ref": round(ref, 2), "min_pts": min_pts,
+            "lo": round(ref - min_pts, 2), "hi": round(ref + min_pts, 2)}
+
+
+def dv_levels(params: dict, bars) -> dict:
+    """Границы коридора «долины смерти» по окну dv_bars — по тем же закрытиям,
+    что читает гейт in_dv. Панель посчитать их не может: dv_bars бывает больше
+    хвоста, который едет в снапшот, и коридор вышел бы другой."""
+    win = int(params.get("dv_bars", 0) or 0)
+    pts = float(params.get("dv_range_pts", 0) or 0)
+    if win <= 0 or pts <= 0 or not bars or len(bars) < win:
+        return {}
+    closes = [b.close for b in bars[-win:]]
+    return {"bars": win, "range_pts": pts,
+            "hi": round(max(closes), 2), "lo": round(min(closes), 2)}
+
+
 def side_block(want, params: dict, bar_time: int) -> str:
     """Почему сторона, в которую смотрит сигнал, запрещена ПРЯМО СЕЙЧАС.
 
@@ -312,7 +381,7 @@ def management_levels(bars, params: dict, position: int, avg: float) -> list[dic
 
 
 def explain(strategy_id: str, bars, params: dict, position: int,
-            avg: float = 0.0, state: dict | None = None) -> dict:
+            avg: float = 0.0, state: dict | None = None, tail_bars=None) -> dict:
     """Full introspection blob for RobotStatus.signal_json. `state` is the
     strategy's own live state dict (STLRuntime get_state/set_state) — the only
     place a standalone module keeps its real exit levels."""
@@ -340,6 +409,20 @@ def explain(strategy_id: str, bars, params: dict, position: int,
     lines = ema_lines(strategy_id, bars, params)
     if lines:
         d.setdefault("features", {})["ema"] = lines
+    # Серия EMA по барам хвоста (нужен сам хвост — статус-отчёт его передаёт) и
+    # числовые уровни фильтров: панель рисует линии по НАШИМ числам, потому что
+    # её собственный пересчёт по видимому хвосту дал бы другую EMA и другой
+    # коридор. Ключа нет — линий нет, как договорено с ui-ux 26.09.2026.
+    if tail_bars:
+        series = ema_series(strategy_id, bars, params, tail_bars)
+        if series:
+            d.setdefault("features", {})["ema_series"] = series
+    gl = gap_levels(params, state)
+    if gl:
+        d.setdefault("features", {})["gap"] = gl
+    dl = dv_levels(params, bars)
+    if dl:
+        d.setdefault("features", {})["dv"] = dl
     # What fires on the NEXT confirming signal: if a signal is live now, the
     # actual orders; otherwise the hypothetical entry orders for either side.
     want = d.get("want")

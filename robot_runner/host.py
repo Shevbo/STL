@@ -494,12 +494,17 @@ class RobotHost:
                 side=pb.SIDE_BUY if w["side"] == "buy" else pb.SIDE_SELL,
                 price=w["price"], qty=w["qty"], state=w["state"])
                 for w in r.runtime.working_orders()]
+            # Хвост нужен ДО explain: серия EMA выравнивается ровно по нему
+            # (traded_bars, без синтетических минут), иначе i-е значение легло бы
+            # на чужой бар. Что именно едет в хвост — комментарий ниже.
+            tail = r.bars.traded_bars(BARS_TAIL_N)
             try:
                 sig = json.dumps(explain(r.spec["strategy_id"], r.bars.bars(),
                                          r.spec["params"],
                                          r.runtime.signed_position(),
                                          avg=r.runtime.avg_price(),
-                                         state=r.runtime.state_snapshot()),
+                                         state=r.runtime.state_snapshot(),
+                                         tail_bars=tail),
                                  ensure_ascii=False)
             except Exception as exc:  # noqa: BLE001 — showcase must never break status
                 sig = json.dumps({"error": str(exc)}, ensure_ascii=False)
@@ -538,7 +543,7 @@ class RobotHost:
             # bars() и её вход не меняется — иначе это была бы правка торговли.
             bars_tail = [pb.RobotBar(t_unix=b.time, o=b.open, h=b.high,
                                      l=b.low, c=b.close)
-                         for b in r.bars.traded_bars(BARS_TAIL_N)]
+                         for b in tail]
             robots.append(pb.RobotStatus(
                 robot_id=rid, running=not (self.killed or r.paused), paused=r.paused,
                 bars_tail=bars_tail,
