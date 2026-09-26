@@ -43,3 +43,22 @@ def test_slippage_is_in_the_schema():
         import re
         keys = set(re.findall(r'"key": "(\w+)"', inspect.getsource(S)))
     assert "stop_slip" in keys
+
+
+def test_max_hold_cap_exists_and_is_off_by_default():
+    """Потолок удержания: флэт в 23:45 не срабатывает на коротких сессиях.
+
+    В выходные и в день экспирации торги кончаются в 18:49-18:59, бара 23:45 нет,
+    и позиция доживает до первого бара следующей сессии: в бэктесте это фантом
+    склейки контрактов (круг RI 18.06 -> 01.07 на −13 760 пт = разрыв ряда), у
+    живого робота субботняя позиция доживёт до понедельника.
+    """
+    import re
+    src = inspect.getsource(S.on_bar)
+    assert 'params.get("max_hold_min", 0)' in src
+    assert 'stl.set_state("entry_hm", hm)' in src
+    keys = set(re.findall(r'"key": "(\w+)"', inspect.getsource(S)))
+    assert "max_hold_min" in keys
+    spec = next(p for p in re.findall(r'\{[^{}]*"key": "max_hold_min"[^{}]*\}',
+                                      inspect.getsource(S)))
+    assert '"default": 0' in spec, "потолок должен быть выключен по умолчанию"

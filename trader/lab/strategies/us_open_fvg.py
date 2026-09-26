@@ -168,6 +168,22 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
                 await stl.place_order(symbol, "buy", abs(cur_qty), exit_px)
                 stl.set_state("done", 1)
                 return
+        # ПОТОЛОК ВРЕМЕНИ УДЕРЖАНИЯ (max_hold_min, 0 = выкл). Флэт привязан к бару
+        # 23:45, а на коротких сессиях такого бара НЕТ: в выходные и в день
+        # экспирации торги кончаются в 18:49-18:59. Позиция тогда живёт до первого
+        # бара следующей сессии — в бэктесте это давало фантом склейки контрактов
+        # (круг RI 18.06 -> 01.07 на −13 760 пунктов, равный разрыву ряда), а у
+        # ЖИВОГО робота субботняя позиция доживёт до понедельника. Найдено
+        # проверкой 26.09.2026. Потолок закрывает позицию по своему времени, не
+        # дожидаясь несуществующего бара.
+        hold = int(params.get("max_hold_min", 0) or 0)
+        if hold > 0 and cur_qty != 0:
+            t0 = stl.get_state("entry_hm")
+            if t0 is not None and (hm - int(t0)) % (24 * 60) >= hold:
+                await stl.place_order(symbol, "sell" if dirn > 0 else "buy",
+                                      abs(cur_qty), cur.close)
+                stl.set_state("done", 1)
+                return
         if flatten_eod and hm >= _EOD_HM:
             await stl.place_order(symbol, "sell" if dirn > 0 else "buy", abs(cur_qty), cur.close)
             stl.set_state("done", 1)
@@ -243,6 +259,7 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
         stl.set_state("sl", sl)
         stl.set_state("tp", tp)
         stl.set_state("entry", price)
+        stl.set_state("entry_hm", hm)      # для потолка времени удержания
         stl.set_state("peak", price)
         # ПРИЧИНА ВХОДА в журнале и в счётчике. Просьба real-trade 25.09.2026: по
         # живому журналу за два месяца нельзя было сказать, сколько убыточных кругов
@@ -310,6 +327,8 @@ STRATEGY_META = {
          "hint": "Длина опорной свечи после открытия США (видео: 5). Хай/лоу = диапазон дня"},
         {"key": "signal_min", "label": "Окно входа (мин)", "type": "number", "default": 60, "min": 15, "max": 180,
          "hint": "Сколько минут после закрытия диапазона разрешён вход"},
+        {"key": "max_hold_min", "label": "Потолок удержания позиции, мин (0=выкл)",
+         "type": "number", "default": 0, "min": 0, "max": 720},
         {"key": "stop_slip", "label": "Проскальзывание на стопе, % высоты диапазона",
          "type": "number", "default": 0, "min": 0, "max": 100},
         {"key": "entry_mode", "label": "Режим входа 0/1/2", "type": "number", "default": 1, "min": 0, "max": 2,
