@@ -170,11 +170,15 @@ def track_extremes(extremes: dict[str, dict[str, float]], codes: set[str],
 def build(status: dict[str, Any] | None, agents: list[dict[str, Any]],
           book_orders: list[Any], now_ms: int,
           watch: list[dict[str, Any]] | None = None,
-          robot_ids: set[str] | None = None) -> dict[str, Any]:
+          robot_ids: set[str] | None = None,
+          limits: dict[str, Any] | None = None) -> dict[str, Any]:
     """Снимок: позиции счёта с разбивкой робот/рука, роботы, живые умные заявки.
 
     `status` — зеркало агента (store.agent_status()); None или старое зеркало
-    даёт stale=True и пустые списки: лучше «не знаю», чем позавчерашний шорт."""
+    даёт stale=True и пустые списки: лучше «не знаю», чем позавчерашний шорт.
+
+    `limits` — эхо эффективных лимитов агента (store.limits_state()); из него
+    берётся kill-switch, см. agent_blocked ниже."""
     status = status or {}
     received = int(status.get("_received_at_ms") or 0)
     age_ms = (now_ms - received) if received else -1
@@ -244,9 +248,22 @@ def build(status: dict[str, Any] | None, agents: list[dict[str, Any]],
              "ask": f.get("ask"), "age_ms": f.get("age_ms")}
             for f in (status.get("health") or {}).get("feed") or []]
 
+    # KILL-SWITCH АГЕНТА. 26.09.2026 агент час отклонял КАЖДУЮ заявку обоих реальных
+    # роботов — они пытались ЗАКРЫТЬ свои шорты, — а STL считал торговлю разрешённой:
+    # блокировка не публиковалась нигде, и нашёл её человек в логе раннера на VDS.
+    # None значит «НЕ ЗНАЮ»: агент старше релиза поля не присылает, и звать это
+    # «торговля разрешена» нельзя — это разные утверждения.
+    # Возраст эха важен: агент шлёт LimitsState на старте сессии и на каждый
+    # SetLimits, а не по таймеру, поэтому старое эхо это память, а не знание.
+    lim = limits or {}
+    blocked = lim.get("blocked")
+    got = int(lim.get("received_at_ms") or 0)
+
     return {
         "ts_ms": now_ms,
         "feed": feed,
+        "agent_blocked": (bool(blocked) if blocked is not None else None),
+        "limits_age_ms": (now_ms - got) if got else -1,
         "watch": watch or [],
         "age_ms": age_ms,
         "stale": bool(why),
@@ -345,7 +362,7 @@ async def run(state: Any, path: str = PATH, directory: str = TRADES_DIR,
                 _write_atomic(path, build(status, store.status(), orders, now,
                                           watch_view(orders, ticks, extremes,
                                                      session_open, now),
-                                          robot_ids))
+                                          robot_ids, store.limits_state(None)))
                 # Реестр роботов НАКАПЛИВАЕТСЯ: снятый робот исчезает из зеркала,
                 # но его сегодняшние сделки в журнале остаются, и без памяти они
                 # переехали бы в «приложение брокера».

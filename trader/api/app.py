@@ -490,6 +490,11 @@ async def lifespan(app: FastAPI):
     # безвозвратно, задним числом он не восстанавливается.
     from trader.quik.archive_watch import watch as _archive_watch
     archive_watch_task = asyncio.create_task(_archive_watch(app.state))
+    # Сторож застрявшего робота: агент отклоняет заявки kill-switch'ем, а робот сидит
+    # в позиции. 26.09.2026 так был потерян час — оба реальных робота не могли закрыть
+    # шорты, STL считал торговлю разрешённой, нашёл человек в логе раннера на VDS.
+    from trader.quik.stuck_robot_watch import watch as _stuck_robot_watch
+    stuck_robot_task = asyncio.create_task(_stuck_robot_watch(app.state))
     # Множитель брокера над биржевым ГО. Он сидит КОНСТАНТОЙ в отборе кандидатов,
     # в отчёте компаньона и в карточке робота, а оператор (15.08.2026) заметил,
     # что он, похоже, гуляет по времени дня и на ралли. Пока не измерен — все три
@@ -504,6 +509,7 @@ async def lifespan(app: FastAPI):
     yield
 
     truth_task.cancel()
+    stuck_robot_task.cancel()
     archive_watch_task.cancel()
 
     margin_stats_task.cancel()

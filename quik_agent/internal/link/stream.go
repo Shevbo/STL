@@ -129,6 +129,13 @@ func (l *Link) recvLoop(stream quikv1.QuikAgentLink_SessionClient, cancel contex
 		case *quikv1.OrchestratorMessage_KillSwitch:
 			if l.opt.Trade != nil {
 				l.opt.Trade.KillSwitch(p.KillSwitch)
+				// ЭХО СРАЗУ. Kill-switch агента необратим (снимается только
+				// перезапуском), а эхо лимитов иначе уходит лишь на старте сессии
+				// и на SetLimits. 26.09.2026 из-за этого STL час считал торговлю
+				// разрешённой, пока агент отклонял КАЖДУЮ заявку обоих реальных
+				// роботов: они пытались закрыть свои шорты, и увидел это человек
+				// в логе раннера на VDS.
+				_ = l.sendLimitsState(stream)
 			}
 			// Also halt the hosted robots (block new strategy orders). Scope stays
 			// this agent only; positions are left open by design.
@@ -136,6 +143,8 @@ func (l *Link) recvLoop(stream quikv1.QuikAgentLink_SessionClient, cancel contex
 				l.opt.Runner.PushControl(&quikv1.RunnerControl{
 					Payload: &quikv1.RunnerControl_Kill{Kill: p.KillSwitch}})
 			}
+		case *quikv1.OrchestratorMessage_OpsCommand:
+			l.handleOps(stream, p.OpsCommand)
 		case *quikv1.OrchestratorMessage_StartExecution:
 			if l.opt.Trade != nil {
 				l.opt.Trade.StartExecution(p.StartExecution)
@@ -213,6 +222,41 @@ func (l *Link) handleCommand(stream quikv1.QuikAgentLink_SessionClient, cmd *qui
 			l.opt.OnRestart()
 		}
 	}
+}
+
+// handleOps выполняет ОДНУ операцию обслуживания и отвечает результатом.
+//
+// Операция идёт СИНХРОННО в приёмном цикле сознательно: каталог содержит только
+// короткие чтения (процессы, окна, хвост лога), а последовательность важнее
+// параллелизма — два одновременных перезапуска QUIK хуже, чем один с задержкой.
+// Если каталог обрастёт долгими операциями, это место придётся пересмотреть.
+// opsTimeout ограничивает ОДНУ операцию обслуживания. Чтения каталога укладываются
+// в доли секунды; всё, что дольше, — признак того, что застрял сам терминал, и
+// тогда честнее вернуть отказ, чем держать приёмный цикл.
+const opsTimeout = 20 * time.Second
+
+func (l *Link) handleOps(stream quikv1.QuikAgentLink_SessionClient, cmd *quikv1.OpsCommand) {
+	if cmd == nil {
+		return
+	}
+	started := time.Now().UnixMilli()
+	out, err := "", error(nil)
+	if l.opt.Ops == nil {
+		err = fmt.Errorf("обслуживание в этой сборке агента выключено")
+	} else {
+		ctx, cancel := context.WithTimeout(context.Background(), opsTimeout)
+		out, err = l.opt.Ops.Run(ctx, cmd.GetOp(), cmd.GetArgs(), cmd.GetConfirmId())
+		cancel()
+	}
+	res := &quikv1.OpsResult{
+		RequestId: cmd.GetRequestId(), Op: cmd.GetOp(), Ok: err == nil,
+		Output: out, StartedUnixMs: started, FinishedUnixMs: time.Now().UnixMilli(),
+	}
+	if err != nil {
+		res.Error = err.Error()
+	}
+	_ = l.sendMsg(stream, &quikv1.AgentMessage{
+		Payload: &quikv1.AgentMessage_OpsResult{OpsResult: res}})
 }
 
 func (l *Link) sendHeartbeat(stream quikv1.QuikAgentLink_SessionClient) error {

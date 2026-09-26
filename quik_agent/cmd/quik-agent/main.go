@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"shectory/quik_agent/internal/accounts"
+	"shectory/quik_agent/internal/ops"
 	"shectory/quik_agent/internal/config"
 	"shectory/quik_agent/internal/health"
 	"shectory/quik_agent/internal/link"
@@ -291,6 +292,13 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 	// создаётся позже (ему нужен уже собранный bridge). Замыкание берёт значение
 	// в момент вызова — к первому heartbeat стор уже присвоен.
 	var accStore *accounts.Store
+	// Исполнитель операций обслуживания. Подтверждения оператора живут в нём же;
+	// изменяющие операции пока не зарегистрированы, значит их и не выполнить.
+	opsConfirms := ops.NewConfirmations()
+	opsRunner := ops.NewRunner(ops.Deps{
+		RealRobotsPaused: func() bool { return true },
+		KillSwitch:       func() bool { return false },
+	}, opsConfirms)
 
 	lk := link.New(link.Options{
 		Target:               cfg.STLGRPCURL,
@@ -317,6 +325,12 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 			age := accStore.Snapshot().PongAgeMs
 			return age >= 0 && age < int64(cfg.QuikGuardHungSec)*1000
 		},
+		// ОБСЛУЖИВАНИЕ VDS. Каталог операций вшит в бинарь (internal/ops); здесь
+		// подключаются только ЧИТАЮЩИЕ: они ничего не меняют и не требуют
+		// подтверждения, а именно их отсутствие 25.09.2026 стоило часа простоя
+		// вслепую — диагноз «терминал не отвечает» ставится за тридцать секунд,
+		// но дотянуться до машины было нечем.
+		Ops: opsRunner,
 		Thresholds: health.Thresholds{
 			StaleTickMs: int64(cfg.StaleTickMs),
 			DDEDownMs:   int64(cfg.DDEDownMs),
@@ -359,6 +373,23 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 	// status showcase (Deps.Accounts) reads it; recon compares it against the
 	// robots' believed books.
 	accStore = accounts.New(func() int64 { return time.Now().UnixMilli() })
+	// Env операций: каталог терминала и понг приходят ИЗВНЕ, пакет ops не лезет
+	// в accounts сам — иначе диагностику нельзя было бы собрать и протестировать
+	// отдельно от всего агента.
+	// Логи: раннер пишет свой рядом со своим exe (см. FileTee ниже), агент
+	// логирует в консоль — файла у него нет, и врать про путь нельзя.
+	opsRunnerLog := ""
+	if exe, err := os.Executable(); err == nil {
+		opsRunnerLog = filepath.Join(filepath.Dir(exe), "runner.log")
+	}
+	ops.RegisterReads(opsRunner, ops.Env{
+		QuikFolder: func() string { return accStore.Snapshot().QuikFolder },
+		RunnerLog:  opsRunnerLog,
+		Pong: func() (int64, int64) {
+			snap := accStore.Snapshot()
+			return snap.PongAgeMs, snap.RTTMs
+		},
+	})
 	// pingSentMs records the agent-clock send time of the most recent ping so the
 	// pong handler can compute RTT on the agent clock ALONE (never the Lua-echoed
 	// t0, which does not survive QUIK's 32-bit Lua integer encoding). One ping is

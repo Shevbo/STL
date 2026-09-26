@@ -29,6 +29,13 @@ import (
 )
 
 // Options configures the link.
+// OpsRunner выполняет одну операцию каталога и возвращает человекочитаемый
+// вывод. Реализация — quik_agent/internal/ops.Runner; интерфейс нужен, чтобы
+// link не зависел от пакета обслуживания и наоборот.
+type OpsRunner interface {
+	Run(ctx context.Context, op string, args map[string]string, confirmID string) (string, error)
+}
+
 type Options struct {
 	// Target is the STL gRPC endpoint, e.g. "stl.example.com:8443".
 	Target string
@@ -90,6 +97,11 @@ type Options struct {
 	// runner bridge. Both nil = robot hosting disabled (wired via SetRobots).
 	Robots *robots.Store
 	Runner RunnerControlSink
+
+	// Ops выполняет ОБСЛУЖИВАЮЩИЕ операции (диагностика ОС и QUIK) из каталога,
+	// вшитого в бинарь. nil = канал выключен, любая OpsCommand отклоняется: так
+	// собирается сборка, которой обслуживание не доверено вовсе.
+	Ops OpsRunner
 
 	// ---- Status snapshot mirror (Task 9, additive) ----
 

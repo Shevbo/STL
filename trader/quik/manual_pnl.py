@@ -49,15 +49,47 @@ def period_days(period: str, today: datetime.date) -> list[str]:
     return [(today - datetime.timedelta(days=i)).isoformat() for i in range(span - 1, -1, -1)]
 
 
+def day_window(now: datetime.datetime) -> tuple[int, int]:
+    """Границы окна «день» в миллисекундах: с 07:00 МСК текущего дня по сейчас.
+
+    Не сутки с полуночи. QUIK датирует вечернюю сессию СЛЕДУЮЩИМ торговым днём,
+    поэтому в файл сегодняшней даты попадают сделки, сделанные вчера вечером — и
+    утром оператор видел их в «итоге за день» как сегодняшние. 07:00 МСК стоит
+    после вечерки (закрытие 23:50) и до утренней сессии, то есть режет ровно
+    между торговыми днями. Ночью до семи торговый день ещё вчерашний, иначе окно
+    получилось бы пустым.
+    """
+    n = (now if now.tzinfo else now.replace(tzinfo=MSK)).astimezone(MSK)
+    start = n.replace(hour=7, minute=0, second=0, microsecond=0)
+    if n < start:
+        start -= datetime.timedelta(days=1)
+    return int(start.timestamp() * 1000), int(n.timestamp() * 1000)
+
+
+def window_days(from_ms: int, to_ms: int) -> list[str]:
+    """Даты файлов, в которых могут лежать сделки окна, — с запасом в сутки по
+    обе стороны: из-за датировки вечерки следующим днём сегодняшний вечер лежит
+    в файле ЗАВТРАШНЕЙ даты, а вчерашний — в сегодняшнем. Что попало в окно
+    решает ts_ms, имя файла тут только подсказка, где искать."""
+    d0 = datetime.datetime.fromtimestamp(from_ms / 1000, MSK).date()
+    d1 = datetime.datetime.fromtimestamp(to_ms / 1000, MSK).date() + datetime.timedelta(days=1)
+    return [(d0 + datetime.timedelta(days=i)).isoformat() for i in range((d1 - d0).days + 1)]
+
+
 def read_trades(days: list[str], directory: str | None = None,
-                robot_ids: set[str] | None = None) -> list[dict[str, Any]]:
+                robot_ids: set[str] | None = None,
+                from_ms: int = 0, to_ms: int = 0) -> list[dict[str, Any]]:
     """Ручные сделки за перечисленные дни, по времени, с проставленным каналом.
 
     КАНАЛ СЧИТАЕТСЯ ЗАНОВО, из тега, а записанному в строке `owner` доверия нет:
     журнал пишется в реальном времени, и строки, записанные до исправления
     классификации (23.09.2026), несут прежний ответ. Тег — факт от QUIK,
     классификация — наше суждение о нём, и пересматривать его задним числом
-    можно, а переписывать факт нельзя."""
+    можно, а переписывать факт нельзя.
+
+    `from_ms`/`to_ms` (0 = без границы) режут по ВРЕМЕНИ СДЕЛКИ, а не по имени
+    файла: дата файла — это торговый день QUIK, и вечерние сделки в нём старше
+    своей даты."""
     directory = directory or TRADES_DIR
     out: list[dict[str, Any]] = []
     for day in days:
@@ -69,6 +101,9 @@ def read_trades(days: list[str], directory: str | None = None,
                 try:
                     row = json.loads(line)
                 except ValueError:
+                    continue
+                ts = int(row.get("ts_ms") or 0)
+                if (from_ms and ts < from_ms) or (to_ms and ts > to_ms):
                     continue
                 ch = tag_channel(row.get("tag"), robot_ids)
                 if ch in MANUAL_CHANNELS:
@@ -87,12 +122,30 @@ def coverage_from(directory: str | None = None) -> str:
 
 
 def summarize(trades: list[dict[str, Any]], point_values: dict[str, float],
-              last_prices: dict[str, float] | None = None) -> dict[str, Any]:
+              last_prices: dict[str, float] | None = None,
+              account_positions: dict[str, int] | None = None) -> dict[str, Any]:
     """Свести ручные сделки в итог: закрытое (деньги) и открытое (переоценка).
 
     `point_values` — ₽ за пункт по инструменту (algo_ledger.point_values). Без него
     результат остаётся в ПУНКТАХ и деньгами не притворяется: пункт не рубль, и
-    домножать на единицу в денежном пути запрещено."""
+    домножать на единицу в денежном пути запрещено.
+
+    ОБ ОТКРЫТОМ ОТДАЮТСЯ ДВА РАЗНЫХ УТВЕРЖДЕНИЯ, и путать их нельзя:
+
+      `open`            — позиция СЧЁТА (ручная часть: нетто QUIK минус позиции
+                          РЕАЛЬНЫХ роботов). Приходит параметром `account_positions`
+                          из API-слоя: этот модуль до store не достаёт и не должен.
+      `window_residual` — что осталось незакрытым ВНУТРИ ОКНА, проигрыванием сделок
+                          периода. К позиции счёта отношения не имеет.
+
+    26.09.2026 экран ручной торговли назвал открытым шорт RIZ6 -4 со средней
+    85565.4167, когда на счёте по RIZ6 был FLAT: вчерашний лонг закрывался внутри
+    дня четырьмя продажами, и остаток окна оказался ровно -4. Остаток при этом не
+    выбрасывается — расхождение между ним и счётом это признак НЕПОЛНОГО журнала
+    (флаг journal_complete в trader/api/quik_manual.py считается именно по нему).
+
+    `account_positions=None` — позиции счёта нет (зеркало агента молчит): тогда
+    `open` повторяет остаток окна и `open_source` говорит об этом прямо."""
     last_prices = last_prices or {}
     state: dict[str, tuple[int, float, int]] = {}       # symbol -> (pos, avg, entry_ts)
     by_symbol: dict[str, dict[str, Any]] = {}
@@ -157,20 +210,36 @@ def summarize(trades: list[dict[str, Any]], point_values: dict[str, float],
         d["gross_rub"] += realized_pts * pv
         d["commission_rub"] += comm
 
-    open_rows = []
-    for sym, (pos, avg, _ts) in state.items():
-        if not pos:
-            continue
+    def open_row(sym: str, pos: int, avg: float) -> dict[str, Any]:
         pv = float(point_values.get(sym) or 0)
         last = float(last_prices.get(sym) or 0)
-        open_rows.append({
-            "symbol": sym, "position": pos, "avg_price": round(avg, 4),
+        return {
+            "symbol": sym, "position": pos,
+            "avg_price": round(avg, 4) if avg else None,
             "last": last or None, "point_value": pv,
-            # Переоценка считается только когда цена ИЗВЕСТНА: нулём подменять нельзя,
-            # иначе «минус вся позиция» появится на пустом месте.
+            # Переоценка считается только когда цена И СРЕДНЯЯ известны: нулём
+            # подменять нельзя, иначе «минус вся позиция» появится на пустом месте.
+            # У позиции счёта средней может не быть вовсе — она набрана до начала
+            # окна, и выдумывать цену входа вместо null запрещено.
             "unrealized_rub": (round((last - avg) * pos * pv, 2)
-                               if (last and pv) else None),
-        })
+                               if (last and pv and avg) else None),
+        }
+
+    residual = {sym: (pos, avg) for sym, (pos, avg, _ts) in state.items() if pos}
+    window_rows = [open_row(s, p, a) for s, (p, a) in sorted(residual.items())]
+    if account_positions is None:
+        open_rows, open_source = window_rows, "window"
+    else:
+        open_rows, open_source = [], "account"
+        for sym, pos in sorted(account_positions.items()):
+            if not pos:
+                continue
+            r_pos, r_avg = residual.get(sym, (0, 0.0))
+            # Средняя из окна годится ТОЛЬКО если остаток окна той же стороны: у
+            # позиции противоположного знака это средняя ЧУЖОЙ позиции, и считать
+            # по ней переоценку значит врать в рублях.
+            avg = r_avg if (r_pos and (r_pos > 0) == (pos > 0)) else 0.0
+            open_rows.append(open_row(sym, pos, avg))
 
     for ch, rows in orders.items():
         by_channel[ch]["orders"] = len(rows)
@@ -200,7 +269,12 @@ def summarize(trades: list[dict[str, Any]], point_values: dict[str, float],
         "by_source": [{**r, "source": r["channel"]}
                       for r in sorted(by_channel.values(), key=lambda r: r["channel"])],
         "by_day": sorted(by_day.values(), key=lambda r: r["date"]),
-        "open": sorted(open_rows, key=lambda r: r["symbol"]),
+        "open": open_rows,
+        # Откуда взята строка «открыто»: "account" — позиция счёта, "window" —
+        # остаток окна (позиции счёта не знаем). Экран обязан называть это разное
+        # разными словами.
+        "open_source": open_source,
+        "window_residual": window_rows,
     }
 
 
@@ -208,18 +282,39 @@ def report(period: str, point_values: dict[str, float],
            last_prices: dict[str, float] | None = None,
            now: datetime.datetime | None = None,
            directory: str | None = None,
-           robot_ids: set[str] | None = None) -> dict[str, Any]:
+           robot_ids: set[str] | None = None,
+           account_positions: dict[str, int] | None = None) -> dict[str, Any]:
     """Готовый ответ для экрана: итог за период плюс честные границы данных."""
     period = period if period in PERIODS else "day"
-    today = (now or datetime.datetime.now(MSK)).date()
-    days = period_days(period, today)
-    trades = read_trades(days, directory, robot_ids)
-    out = summarize(trades, point_values, last_prices)
+    now = now or datetime.datetime.now(MSK)
+    if now.tzinfo is None:                 # деньги: наивное время молча уехало бы в tz машины
+        now = now.replace(tzinfo=MSK)
+    now = now.astimezone(MSK)
+    today = now.date()
+    # ДЕНЬ — не сутки, а торговый день с 07:00 МСК (см. day_window). Неделя и
+    # месяц остались скользящими сутками: там граница вечерки на итог не влияет.
+    if period == "day":
+        from_ms, to_ms = day_window(now)
+        trades = read_trades(window_days(from_ms, to_ms), directory, robot_ids,
+                             from_ms, to_ms)
+        start = datetime.datetime.fromtimestamp(from_ms / 1000, MSK).date().isoformat()
+    else:
+        days = period_days(period, today)
+        trades = read_trades(days, directory, robot_ids)
+        from_ms = int(datetime.datetime.fromisoformat(days[0])
+                      .replace(tzinfo=MSK).timestamp() * 1000)
+        to_ms = int(now.timestamp() * 1000)
+        start = days[0]
+    out = summarize(trades, point_values, last_prices, account_positions)
     have = coverage_from(directory)
     out.update({
-        "period": period, "from": days[0], "to": days[-1],
+        "period": period, "from": start, "to": today.isoformat(),
+        # ГРАНИЦЫ ОКНА ЯВНО, в мс: экран пишет «с 07:00 26.09» словами, а не
+        # подразумевает начало дня. Подразумеваемая граница и была причиной того,
+        # что вчерашний вечер читался как сегодняшний итог.
+        "from_ms": from_ms, "to_ms": to_ms,
         "coverage_from": have,
         # Журнал начат позже, чем начинается период: часть окна не покрыта фактами.
-        "partial": bool(have and have > days[0]),
+        "partial": bool(have and have > start),
     })
     return out

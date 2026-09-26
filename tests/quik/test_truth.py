@@ -157,3 +157,27 @@ def test_registry_round_trips_through_disk(tmp_path):
     truth.save_robot_ids({"a", "b"}, p)
     assert truth.load_robot_ids(p) == {"a", "b"}
     assert truth.load_robot_ids(str(tmp_path / "missing.json")) == set()
+
+
+# ---- kill-switch агента в снимке ----
+# 26.09.2026 агент час отклонял каждую заявку обоих реальных роботов, а STL считал
+# торговлю разрешённой: блокировка не публиковалась нигде.
+
+def test_agent_block_is_visible_in_the_snapshot():
+    t = truth.build(_status(), [{"last_seen_age_ms": 500}], [], NOW,
+                    limits={"blocked": True, "received_at_ms": NOW - 20_000})
+    assert t["agent_blocked"] is True and t["limits_age_ms"] == 20_000
+
+
+def test_missing_block_field_is_unknown_not_allowed():
+    """Старый агент поля не присылает: «не знаю» и «разрешено» — разные утверждения."""
+    t = truth.build(_status(), [{"last_seen_age_ms": 500}], [], NOW,
+                    limits={"trading_enabled": True})
+    assert t["agent_blocked"] is None and t["limits_age_ms"] == -1
+    assert truth.build(_status(), [], [], NOW)["agent_blocked"] is None
+
+
+def test_unblocked_agent_says_so():
+    t = truth.build(_status(), [{"last_seen_age_ms": 500}], [], NOW,
+                    limits={"blocked": False, "received_at_ms": NOW - 1000})
+    assert t["agent_blocked"] is False

@@ -17,6 +17,7 @@ No order placement / routing / trade code paths exist here (Guard 3).
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import AsyncIterator
 
 import grpc
@@ -119,6 +120,14 @@ def _limits_state_to_dict(ls) -> dict:
         "price_collar_frac": ls.price_collar_frac,
         "daily_order_cap": ls.daily_order_cap,
         "last_push_unix_ms": ls.last_push_unix_ms,
+        # KILL-SWITCH ВИДЕН СНАРУЖИ ТОЛЬКО ОТСЮДА. 26.09.2026 агент час отклонял
+        # КАЖДУЮ заявку обоих реальных роботов (они закрывали шорты), а STL считал
+        # торговлю разрешённой: блокировка жила только в логе раннера на VDS.
+        # `received_at_ms` — когда пришло эхо: агент шлёт его на старте сессии и на
+        # каждый SetLimits, а не периодически, поэтому возраст эха обязан быть виден
+        # читателю, иначе «blocked=false» может оказаться воспоминанием.
+        "blocked": bool(ls.blocked),
+        "received_at_ms": int(time.time() * 1000),
     }
 
 

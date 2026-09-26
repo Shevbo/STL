@@ -49,11 +49,18 @@ def _robot_ids(store) -> set[str]:
 
 
 def _open_vs_account(report: dict[str, Any], store) -> dict[str, int]:
-    """На сколько контрактов сведённый остаток расходится с позицией счёта."""
+    """На сколько контрактов остаток ОКНА расходится с позицией счёта.
+
+    Сравнивается именно `window_residual`, а не `open`: с 26.09.2026 в `open`
+    лежит позиция счёта, и сверка её с собой давала бы вечный ноль — то есть
+    молча потеряла бы признак неполного журнала, ради которого она и написана.
+    Позиции счёта нет вовсе — расхождения не заявляем: «не знаю» не расхождение."""
     account = report.get("account_manual")
     if account is None:
         account = _account_manual(store)
-    swept = {r["symbol"]: r["position"] for r in report.get("open") or []}
+    if account is None:
+        return {}
+    swept = {r["symbol"]: r["position"] for r in report.get("window_residual") or []}
     diff = {}
     for sym in set(swept) | set(account):
         d = swept.get(sym, 0) - account.get(sym, 0)
@@ -62,11 +69,17 @@ def _open_vs_account(report: dict[str, Any], store) -> dict[str, int]:
     return diff
 
 
-def _account_manual(store) -> dict[str, int]:
-    """Ручная позиция СЧЁТА: нетто QUIK минус позиции реальных роботов."""
+def _account_manual(store) -> dict[str, int] | None:
+    """Ручная позиция СЧЁТА: нетто QUIK минус позиции реальных роботов.
+
+    None — зеркала агента нет, позиция счёта НЕИЗВЕСТНА; пустой словарь — на счёте
+    ручного ничего нет. Два разных ответа, и подменять первый вторым нельзя: тогда
+    экран назовёт флэтом то, чего не видел."""
     if store is None:
-        return {}
+        return None
     status = store.agent_status(None) or {}
+    if not status:
+        return None
     by_robot: dict[str, int] = {}
     for r in status.get("robots") or []:
         if str(r.get("mode") or "") == "real" and r.get("symbol"):
@@ -103,13 +116,18 @@ async def pnl(request: Request, period: str = "day"):
                             detail=f"period должен быть одним из {manual_pnl.PERIODS}")
     store = _store(request)
     pv, last = _prices(store)
-    out = manual_pnl.report(period, pv, last, robot_ids=_robot_ids(store))
-    # СВЕРКА С ФАКТОМ. Остаток из сведения — это то, что осталось незакрытым ВНУТРИ
-    # окна, а не позиция счёта: часть могла быть открыта раньше начала окна, а часть
-    # сделок могла не попасть в журнал (агент отдаёт ринг последних 500, и простой
-    # STL длиннее его оборота теряет сделки безвозвратно). Расхождение показываем
-    # числом, потому что молча оно превращает неполный журнал в «прибыль».
-    out["account_manual"] = _account_manual(store)
+    account = _account_manual(store)
+    # ОТКРЫТОЕ БЕРЁТСЯ ОТ СЧЁТА, а не от остатка окна: остаток окна — это то, что
+    # осталось незакрытым ВНУТРИ периода, и позицией счёта он не является. 26.09.2026
+    # экран показал по этому полю шорт RIZ6 -4 при FLAT на счёте.
+    out = manual_pnl.report(period, pv, last, robot_ids=_robot_ids(store),
+                            account_positions=account)
+    # СВЕРКА С ФАКТОМ. Расхождение остатка окна со счётом остаётся ценным признаком:
+    # часть позиции могла быть открыта раньше начала окна, а часть сделок могла не
+    # попасть в журнал (агент отдаёт ринг последних 500, и простой STL длиннее его
+    # оборота теряет сделки безвозвратно). Показываем числом, потому что молча оно
+    # превращает неполный журнал в «прибыль».
+    out["account_manual"] = account
     out["open_vs_account"] = _open_vs_account(out, store)
     out["journal_complete"] = not out["open_vs_account"]
     return out
@@ -183,7 +201,8 @@ def companion_block(store, limit: int = 20) -> dict[str, Any]:
     хвост ленты прямо в снапшоте: за неделю и месяц оператор идёт на десктоп."""
     pv, last = _prices(store)
     ids = _robot_ids(store)
-    rep = manual_pnl.report("day", pv, last, robot_ids=ids)
+    rep = manual_pnl.report("day", pv, last, robot_ids=ids,
+                            account_positions=_account_manual(store))
     rows = feed_rows([rep["to"]], ids)[-max(1, int(limit)):]
     rows.reverse()
     return {
@@ -194,6 +213,7 @@ def companion_block(store, limit: int = 20) -> dict[str, Any]:
         "priced": rep["priced"], "partial": rep["partial"],
         "coverage_from": rep["coverage_from"],
         "by_channel": rep["by_channel"], "open": rep["open"],
+        "open_source": rep["open_source"],
         # Тот же флаг, что на десктопе: неполный журнал не имеет права выглядеть
         # точным итогом просто потому, что экран маленький.
         "journal_complete": not _open_vs_account(rep, store),

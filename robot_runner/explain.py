@@ -129,6 +129,55 @@ def _generic_explain(strategy_id: str, bars, params: dict, state: dict) -> dict:
             "waiting_for": label or "сигнала нет — держу текущее состояние"}
 
 
+# Периоды скрещивающихся EMA по стратегиям. Ключи — РОВНО те, что читает
+# соответствующая sig_* в library.py (fast/slow у MACD и ema_atr, ema1..3 у
+# семейства Shectory); поменяется схема там — правится здесь.
+_EMA_KEYS = {
+    "macd_cross": ("fast", "slow"),
+    "macd_shectory1": ("fast", "slow"),
+    "ema_atr": ("fast", "slow"),
+    "shectory_2ema": ("ema1", "ema2"),
+    "shectory_3ema": ("ema1", "ema2", "ema3"),
+}
+
+
+def ema_lines(strategy_id: str, bars, params: dict) -> dict:
+    """Текущие значения EMA робота — для линий на мини-графике карточки.
+
+    Считаем ЗДЕСЬ, а не на панели, и тем же I.ema_last, которым считает
+    стратегия. EMA зависит от ПРОГРЕВА: посчитанная по видимому хвосту (десятки
+    минут) она выглядит как EMA робота, но ею не является. Поэтому окно берём
+    ровно spec["warmup"] — то же, на котором _generic_explain зовёт signal().
+    Цена ошибки известна: у macd_cross fast=57/slow=48 окно короче самой длинной
+    EMA заморозило знак, 6 суток реала дали 778 лонгов и ноль шортов, а консоль
+    по всему хвосту всё это время рисовала переворот.
+    """
+    spec = REGISTRY.get(strategy_id)
+    keys = _EMA_KEYS.get(strategy_id)
+    if spec is None or not keys:
+        return {}
+    p = {**spec["default_params"], **params}
+    try:
+        ns = [int(p[k]) for k in keys]
+        need = int(spec["warmup"](p))
+    except (KeyError, TypeError, ValueError):
+        return {}
+    # Совпавшие периоды = вырождение (sig_2ema/sig_macd отдают None): рисовать
+    # две слипшиеся линии и «дистанцию» ноль нечестно, ключа просто не будет.
+    if len(set(ns)) < len(ns) or len(bars) < need:
+        return {}
+    closes = [b.close for b in bars[-need:]]
+    try:
+        vals = [I.ema_last(closes, n) for n in ns]
+    except ValueError:
+        return {}
+    out = {"fast": round(vals[0], 2), "slow": round(vals[-1], 2),
+           "fast_n": ns[0], "slow_n": ns[-1]}
+    if len(ns) == 3:
+        out["mid"], out["mid_n"] = round(vals[1], 2), ns[1]
+    return out
+
+
 def side_block(want, params: dict, bar_time: int) -> str:
     """Почему сторона, в которую смотрит сигнал, запрещена ПРЯМО СЕЙЧАС.
 
@@ -286,6 +335,11 @@ def explain(strategy_id: str, bars, params: dict, position: int,
             d["atr"] = 0.0
     else:
         d["atr"] = 0.0
+    # Линии EMA для мини-графика: только у стратегий на пересечении, только
+    # текущее значение. Нет пересечения — нет ключа, панель ничего не рисует.
+    lines = ema_lines(strategy_id, bars, params)
+    if lines:
+        d.setdefault("features", {})["ema"] = lines
     # What fires on the NEXT confirming signal: if a signal is live now, the
     # actual orders; otherwise the hypothetical entry orders for either side.
     want = d.get("want")
