@@ -2,6 +2,7 @@ import asyncio
 import hmac
 import json
 import os
+import re
 import time
 from contextlib import asynccontextmanager
 
@@ -231,6 +232,16 @@ async def lifespan(app: FastAPI):
                )""",
         ):
             try:
+                # ALTER ... ADD COLUMN IF NOT EXISTS на ЧУЖОЙ таблице падает
+                # ВСЕГДА: Postgres проверяет владельца ДО IF NOT EXISTS. Таблица
+                # robots принадлежит postgres, приложение ходит другим ролью, и
+                # каждый старт писал в лог провал миграции, которой нечего делать
+                # (колонка на месте). Ошибка безвредная, но она МАСКИРУЕТ реальный
+                # провал — тот, где колонки действительно нет. Поэтому сначала
+                # смотрим, есть ли колонка, и молча пропускаем.
+                _skip = await _column_exists(db_pool, _ddl)
+                if _skip:
+                    continue
                 await db_pool.execute(_ddl)
             except Exception as _exc:
                 log.warning("lab.backtest_runs_migrate_failed", ddl=_ddl, error=str(_exc))
@@ -827,6 +838,29 @@ def _strat_id_from_code(code: str) -> str | None:
     if m:
         return m.group(1)
     return None
+
+
+_ADD_COL_RE = re.compile(
+    r"ALTER\s+TABLE\s+(\w+)\s+ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\s+(\w+)", re.I)
+
+
+async def _column_exists(pool, ddl: str) -> bool:
+    """Колонка из этого ALTER уже есть? Только для `ADD COLUMN IF NOT EXISTS`.
+
+    Нужно потому, что IF NOT EXISTS не спасает от проверки ВЛАДЕЛЬЦА: на таблице
+    чужой роли ALTER падает всегда, даже когда добавлять нечего. Спрашиваем
+    каталог и пропускаем такой шаг молча — в логе должны оставаться только
+    настоящие провалы миграции (real-trade 27.09.2026).
+    """
+    m = _ADD_COL_RE.search(ddl or "")
+    if not m:
+        return False
+    try:
+        return bool(await pool.fetchval(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name=$1 AND column_name=$2", m.group(1), m.group(2)))
+    except Exception:  # noqa: BLE001 — не смогли спросить каталог: пусть ALTER решает сам
+        return False
 
 
 def _sweep_campaign(run_id: str) -> str | None:
@@ -4307,7 +4341,10 @@ def create_app() -> FastAPI:
         # сделки) и fill_stats доезжали сюда и терялись: ручка писала фиксированный
         # список полей. Складываем их в jsonb `extra` — следующая такая величина
         # доедет до экрана без миграции (просьба backtests 23.09.2026).
-        _EXTRA_KEYS = ("exit_reasons", "fill_stats")
+        # ПРИЧИНА ВХОДА тоже сюда. backtests добавили entry_reasons (fvg / retest)
+        # в движок, а кортеж остался прежним — поле доезжало до ручки и молча
+        # терялось, ровно то, от чего extra и заводился (real-trade 27.09.2026).
+        _EXTRA_KEYS = ("exit_reasons", "entry_reasons", "fill_stats")
         def _extra(res: dict):
             got = {k: res.get(k) for k in _EXTRA_KEYS if res.get(k)}
             return _json.dumps(got, ensure_ascii=False) if got else None
