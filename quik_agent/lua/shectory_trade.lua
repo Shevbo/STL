@@ -44,7 +44,7 @@
 -- Bump on every change you deliver to the VDS. Logged FIRST on OnInit so the
 -- operator can confirm which version QUIK actually loaded (the running script is
 -- in MEMORY; a file on disk with the same name may be a different build).
-local SCRIPT_VERSION = "2026.09.27-l2unsub"
+local SCRIPT_VERSION = "2026.09.27-l2resub"
 
 local CONFIG = {
   HOST          = "127.0.0.1",
@@ -1011,10 +1011,14 @@ local function md_pump()
   end
   if t - md.last_book_ms >= CONFIG.MD_BOOK_INTERVAL_MS then
     md.last_book_ms = t
-    if not md.books_subscribed then
-      md.books_subscribed = true
-      pcall(subscribe_books)   -- и при пустом списке: снимает прежние подписки
-    end
+    -- ПОДПИСКА КАЖДЫЙ ЦИКЛ, А НЕ ОДИН РАЗ ЗА ЖИЗНЬ СКРИПТА. Флаг books_subscribed
+    -- пробовал подписаться единожды: скрипт, перезапущенный в закрытый рынок (или
+    -- в момент, когда сервер L2 не отдаёт), оставался без стаканов НАВСЕГДА — до
+    -- следующего перезапуска, молча. Поймано 27.09.2026: тики шли каждые 0.4 с,
+    -- стаканов не было восемь минут. IsSubscribed_ внутри делает вызов
+    -- идемпотентным, так что цена повтора — четыре pcall раз в пять секунд.
+    -- Зовём и при ПУСТОМ списке: иначе MD_BOOK_CODES="" ничего не отписывает.
+    pcall(subscribe_books)
     pcall(publish_books)
   end
   if t - md.last_tape_ms >= 300 then
