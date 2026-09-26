@@ -285,6 +285,46 @@ def _tape_last_ms(received_ms: int | None, lag_ms) -> int | None:
     return None
 
 
+def _fill_chart_gaps(tail: list[dict], symbol: str, want: int) -> list[dict]:
+    """Дополнить хвост робота барами из кэша, когда раннер их НЕ СТРОИЛ.
+
+    25.09.2026 сбор данных стоял восемь торговых часов: терминал захлёбывался,
+    лента не шла, и раннер за эти часы не построил ни одной свечи. На мини-графике
+    робота получилась дыра, которую нечем закрыть его собственными данными — они
+    просто не существуют.
+
+    Кэш agent_bars (ночная загрузка из ISS) эти часы знает. Берём недостающие
+    минуты ОТТУДА и помечаем каждую restored=true: это бары ИНСТРУМЕНТА, а не
+    бары робота, и панель обязана нарисовать их иначе. Подменять одно другим
+    молча нельзя — робот в те минуты рынка не видел, и график не должен этого
+    скрывать."""
+    if not tail or want <= 0:
+        return tail
+    rows = _agent_bars_rows_safe(symbol)
+    if not rows:
+        return tail
+    have = {int(b["t"]) for b in tail}
+    lo = int(tail[0]["t"])
+    hi = int(tail[-1]["t"])
+    # Только ВНУТРЕННИЕ дыры: достраивать хвост в будущее или прошлое за пределы
+    # того, что робот успел увидеть, значит выдумывать его историю.
+    extra = [{"t": int(r[0]), "o": r[1], "h": r[2], "l": r[3], "c": r[4],
+              "v": r[5] if len(r) > 5 else 0, "restored": True}
+             for r in rows if lo < int(r[0]) < hi and int(r[0]) not in have]
+    if not extra:
+        return tail
+    return sorted(tail + extra, key=lambda b: int(b["t"]))[-want:]
+
+
+def _agent_bars_rows_safe(symbol: str) -> list:
+    """Строки кэша баров инструмента; пусто, если кэша нет или он битый."""
+    try:
+        from trader.api.app import _agent_bars_rows
+        return _agent_bars_rows(os.path.join("agent_bars", f"{symbol}.json")) or []
+    except Exception:  # noqa: BLE001 — график не стоит сбоя снапшота
+        return []
+
+
 def _live_bars(bars: list[dict], tape_last_ms: int | None) -> list[dict]:
     """Только те минутки, в которые биржа ДЕЙСТВИТЕЛЬНО торговала.
 
@@ -937,6 +977,9 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
             # нитка съест окно и до живых баров дело не дойдёт.
             tail = _live_bars([b for b in (rob.get("bars_tail") or [])
                                if b.get("t") and b.get("c")], tape_last_ms)[-bars_n:]
+            # Дыры внутри хвоста (раннер не строил бары, пока не было данных)
+            # закрываем кэшем инструмента с пометкой restored — см. _fill_chart_gaps.
+            tail = _fill_chart_gaps(tail, str(rob.get("symbol") or ""), bars_n)
             # ЗАМЕРЕТЬ, А НЕ ИСЧЕЗНУТЬ. Раннер шлёт последние 200 баров, и за
             # три с половиной часа закрытой биржи живые минуты вытесняются
             # синтетикой полностью — после обрезки не остаётся ничего, и виджет
