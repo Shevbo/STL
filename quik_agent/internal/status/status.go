@@ -679,6 +679,10 @@ type quikJSON struct {
 	Messages []string        `json:"messages"` // info.log tail, newest first
 	News     []string        `json:"news"`     // news.log tail, newest first
 	Dir      string          `json:"dir"`      // QUIK working folder ("" until a cc3 pong)
+	// Какой скрипт работает и на какие стаканы он подписан — из pong. Пусто на
+	// скрипте старше 2026.09.28: тогда «не знаю», а не «не подписан».
+	ScriptVersion string `json:"script_version,omitempty"`
+	BookCodes     string `json:"book_codes,omitempty"`
 }
 
 // Caps keep the mirrored status_json payload bounded (flush discipline: this
@@ -713,6 +717,7 @@ func sideRu(s string) string {
 
 func buildQuikJSON(acc accounts.Snapshot) quikJSON {
 	q := quikJSON{Dir: acc.QuikFolder,
+		ScriptVersion: acc.LuaVersion, BookCodes: acc.LuaBooks,
 		Orders: []quikOrderJSON{}, Trades: []quikTradeJSON{}, Trans: []quikTransJSON{}}
 	// Lua publishes tables in QUIK's own (chronological) order: take the tail, newest first.
 	ords := acc.Orders

@@ -452,6 +452,9 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 			// time (pingSentMs), NOT the Lua-echoed ev.T0 (see pingSentMs decl).
 			accStore.SetPong(pingSentMs.Load(), ev.TS, ev.ServerTime, ev.LastTradeTsMs)
 			accStore.SetQuikFolder(ev.WF) // "" (old Lua) is ignored
+			// Версия работающего скрипта и его РЕАЛЬНЫЕ подписки на стакан:
+			// единственный путь узнать это из STL (log() Lua не выходит наружу).
+			accStore.SetLuaInfo(ev.LuaVer, ev.Books)
 		case "trans":
 			accStore.AddTransReply(ev.TransID, ev.ResultCode, ev.OrderNum, ev.Text)
 		}

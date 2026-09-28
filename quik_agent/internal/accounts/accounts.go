@@ -125,6 +125,15 @@ type Snapshot struct {
 	// a cc3+ pong arrives); the status page tails info.log/news.log there.
 	QuikFolder string
 
+	// LuaVersion / LuaBooks: WHICH QLua build is running and which L2 codes it is
+	// actually subscribed to, both from the pong ("" on a script older than
+	// 2026.09.28). The script's own log() only reaches the QUIK message window,
+	// so without this the running version is invisible from STL — and on
+	// 28.09.2026 that left the question "old script or new?" unanswerable while
+	// four books were streaming against a one-code sidecar.
+	LuaVersion string
+	LuaBooks   string
+
 	// Money is the futures_limits money row; nil until the first acc_money
 	// frame arrives (old Lua build publishes none). MoneyAgeMs is -1 then.
 	Money      *Money
@@ -173,6 +182,8 @@ type Store struct {
 
 	transReplies []TransReply
 	quikFolder   string
+	luaVersion string
+	luaBooks   string
 
 	money       *Money
 	moneyRecvMs int64
@@ -287,6 +298,19 @@ func (s *Store) SetMoney(m Money) {
 	s.moneyRecvMs = s.now()
 }
 
+// SetLuaInfo records the running script version and its L2 subscription list from
+// a Lua pong. An empty version is ignored (older script); an empty book list is
+// MEANINGFUL (subscribed to nothing) and only stored alongside a known version.
+func (s *Store) SetLuaInfo(version, books string) {
+	if version == "" {
+		return
+	}
+	s.mu.Lock()
+	s.luaVersion = version
+	s.luaBooks = books
+	s.mu.Unlock()
+}
+
 // SetQuikFolder records the QUIK working folder from a Lua pong (ignored when empty).
 func (s *Store) SetQuikFolder(dir string) {
 	if dir == "" {
@@ -377,6 +401,8 @@ func (s *Store) Snapshot() Snapshot {
 		Trades:       append([]Trade(nil), s.trades...),
 		TransReplies: append([]TransReply(nil), s.transReplies...),
 		QuikFolder:   s.quikFolder,
+		LuaVersion:   s.luaVersion,
+		LuaBooks:     s.luaBooks,
 
 		Money:      money,
 		MoneyAgeMs: moneyAge,

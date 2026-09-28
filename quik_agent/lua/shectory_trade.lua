@@ -44,7 +44,7 @@
 -- Bump on every change you deliver to the VDS. Logged FIRST on OnInit so the
 -- operator can confirm which version QUIK actually loaded (the running script is
 -- in MEMORY; a file on disk with the same name may be a different build).
-local SCRIPT_VERSION = "2026.09.27-l2resub"
+local SCRIPT_VERSION = "2026.09.28-luaver"
 
 local CONFIG = {
   HOST          = "127.0.0.1",
@@ -1266,9 +1266,15 @@ local function dispatch_command(line)
     -- складывается из терминала и нашей виртуальной машины. Теперь наша доля
     -- едет в каждом pong, и следующий рост будет назван по имени сразу.
     local lua_kb, lua_peak = gc_stats()
+    -- lua_ver/books: КАКАЯ версия скрипта работает и на какие стаканы он реально
+    -- подписан. log() пишет только в окно сообщений QUIK, наружу не уходит, и
+    -- 28.09.2026 это стоило прямого ответа оператору: стаканы шли по четырём
+    -- инструментам при sidecar на одном, а сказать, старый скрипт работает или
+    -- новый, было нечем. Версия и список подписок обязаны быть видны из STL.
     emit({ event = "pong", t0 = cmd.t0 or 0, ts = now_ms(), server_time = st,
            last_trade_ts_ms = md.last_trade_ts_ms or 0, wf = wf,
-           lua_kb = lua_kb, lua_peak_kb = lua_peak })
+           lua_kb = lua_kb, lua_peak_kb = lua_peak,
+           lua_ver = SCRIPT_VERSION, books = table.concat(md.book_codes, ",") })
   else
     log("unknown cmd '" .. tostring(cmd.cmd) .. "' (dropped)")
   end

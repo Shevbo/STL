@@ -328,3 +328,36 @@ func TestDispatchTransReplyTeeAndPongWF(t *testing.T) {
 		t.Fatalf("pong wf = %+v", got[1])
 	}
 }
+
+// Версия работающего скрипта и его список стаканов доезжают из pong: без них
+// «какой Lua работает» из STL не видно вовсе (log() Lua не выходит за пределы
+// окна сообщений QUIK). Пустой список подписок — ЗНАЧИМОЕ значение: скрипт
+// работает и не подписан ни на что.
+func TestDispatchPongCarriesLuaVersionAndBooks(t *testing.T) {
+	var got []AccEvent
+	b := NewBridge(0, nil, nil)
+	b.SetAccSink(func(e AccEvent) { got = append(got, e) })
+	for _, line := range []string{
+		`{"event":"pong","ts":1,"lua_ver":"2026.09.28-luaver","books":"RIZ6"}`,
+		`{"event":"pong","ts":2,"lua_ver":"2026.09.28-luaver","books":""}`,
+		`{"event":"pong","ts":3}`,
+	} {
+		var ev luaEvent
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			t.Fatal(err)
+		}
+		b.dispatch(ev)
+	}
+	if len(got) != 3 {
+		t.Fatalf("got %d events, want 3", len(got))
+	}
+	if got[0].LuaVer != "2026.09.28-luaver" || got[0].Books != "RIZ6" {
+		t.Fatalf("pong lua info = %+v", got[0])
+	}
+	if got[1].Books != "" || got[1].LuaVer == "" {
+		t.Fatalf("empty book list must survive: %+v", got[1])
+	}
+	if got[2].LuaVer != "" {
+		t.Fatalf("old script must report no version: %+v", got[2])
+	}
+}

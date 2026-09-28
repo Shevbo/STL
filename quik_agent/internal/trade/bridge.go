@@ -191,6 +191,8 @@ type luaEvent struct {
 	ServerTime    string  `json:"server_time"`      // pong: QUIK server time "HH:MM:SS" (MSK)
 	LastTradeTsMs int64   `json:"last_trade_ts_ms"` // pong: freshest OnAllTrade's exchange ts (epoch ms), 0 if none seen
 	WF            string  `json:"wf"`               // pong: QUIK working folder (for info.log/news.log tail)
+	LuaVer        string  `json:"lua_ver"`          // pong: SCRIPT_VERSION of the running QLua script
+	Books         string  `json:"books"`            // pong: order-book codes the script is actually subscribed to
 
 	// market data (QLua getParamEx / getQuoteLevel2 / OnAllTrade publisher)
 	Code      string      `json:"code"`       // md, book, tape, param
@@ -235,6 +237,8 @@ type AccEvent struct {
 	ServerTime    string  // pong: QUIK server time "HH:MM:SS" (MSK)
 	LastTradeTsMs int64   // pong: freshest OnAllTrade's exchange ts (epoch ms), 0 if none seen
 	WF            string  // pong: QUIK working folder ("" on an old Lua build)
+	LuaVer        string  // pong: running QLua SCRIPT_VERSION ("" on an old Lua build)
+	Books         string  // pong: comma-separated L2 codes the script subscribes to
 
 	// trans: one OnTransReply, teed to the account sink for the status page's
 	// транзакции table (the manager keeps receiving it via BridgeHandler as before).
@@ -523,7 +527,7 @@ func (b *Bridge) dispatch(ev luaEvent) {
 		return
 	case "pong":
 		if acc != nil {
-			acc(AccEvent{Kind: "pong", T0: ev.T0, TS: ev.TS, ServerTime: ev.ServerTime, LastTradeTsMs: ev.LastTradeTsMs, WF: ev.WF})
+			acc(AccEvent{Kind: "pong", T0: ev.T0, TS: ev.TS, ServerTime: ev.ServerTime, LastTradeTsMs: ev.LastTradeTsMs, WF: ev.WF, LuaVer: ev.LuaVer, Books: ev.Books})
 		}
 		return
 	case "trans_reply":
