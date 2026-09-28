@@ -87,6 +87,48 @@ class HostedRobot:
         self.last_want = "unset"     # sentinel: first computed signal always logs
 
 
+
+def _with_filter_stats(rt, sig: str) -> str:
+    """Дописать в signal_json статистику фильтров, ВЫХОДОВ и удержанных переворотов.
+
+    Едет внутри signal_json — свободного поля отчёта, чтобы не менять proto, агента
+    и STL. saved_pts в ПУНКТАХ: рубли считает карточка через ₽/пункт инструмента.
+
+    exits/flip_skips здесь потому, что приказ «убыток закрывает ТОЛЬКО стоп, а не
+    переворот сигнала» (оператор 21.09.2026) снаружи проверить было нечем: 28.09
+    лестница на 20 контрактов вышла на −32.5 тыс, и ответ «это был стоп, а не
+    переворот» приходилось доказывать арифметикой по ленте сделок вместо чтения
+    счётчика. Ключи exit_* и flip_skips стратегия уже копит в своём состоянии.
+    Нулевые причины не едут: «ноль выходов по тейку» и «тейка не было ни разу» —
+    одно и то же, а пустой ключ на карточке выглядит как измеренный нуль.
+    """
+    try:
+        gs = int(rt.get_state("gap_skips", 0) or 0)
+        cs = int(rt.get_state("cooldown_skips", 0) or 0)
+        ds = int(rt.get_state("dv_skips", 0) or 0)
+        fs = int(rt.get_state("flip_skips", 0) or 0)
+        exits = {k[5:]: int(v) for k, v in (rt.state_snapshot() or {}).items()
+                 if isinstance(k, str) and k.startswith("exit_") and v}
+        if not (gs or cs or ds or fs or exits):
+            return sig
+        d = json.loads(sig)
+        if not isinstance(d, dict):
+            return sig
+        d["filter_stats"] = {
+            "gap_skips": gs, "cooldown_skips": cs, "dv_skips": ds,
+            "saved_pts": round(float(rt.get_state("filter_saved_pts", 0) or 0), 2),
+            "pending": len(rt.get_state("skip_phantoms", None) or []),
+            # с какого момента копится (методика менялась 29.07 — копилка
+            # обнуляется, иначе смешались бы две модели)
+            "since": int(rt.get_state("filter_since", 0) or 0),
+            "dropped": int(rt.get_state("skip_dropped", 0) or 0),
+            "flip_skips": fs,
+            "exits": exits,
+        }
+        return json.dumps(d, ensure_ascii=False)
+    except Exception:  # noqa: BLE001 — статистика никогда не ломает отчёт
+        return sig
+
 class RobotHost:
     def __init__(self, bridge, data_dir: str) -> None:
         self._bridge = bridge
@@ -508,29 +550,7 @@ class RobotHost:
                                  ensure_ascii=False)
             except Exception as exc:  # noqa: BLE001 — showcase must never break status
                 sig = json.dumps({"error": str(exc)}, ensure_ascii=False)
-            # Статистика фильтров входа (разножка/остывание) едет наружу ВНУТРИ
-            # signal_json — свободного поля отчёта, чтобы не менять proto/агент/STL.
-            # saved_pts в ПУНКТАХ: рубли считает карточка через ₽/пункт инструмента.
-            try:
-                gs = int(r.runtime.get_state("gap_skips", 0) or 0)
-                cs = int(r.runtime.get_state("cooldown_skips", 0) or 0)
-                ds = int(r.runtime.get_state("dv_skips", 0) or 0)
-                if gs or cs or ds:
-                    _d = json.loads(sig)
-                    if isinstance(_d, dict):
-                        _d["filter_stats"] = {
-                            "gap_skips": gs, "cooldown_skips": cs, "dv_skips": ds,
-                            "saved_pts": round(float(
-                                r.runtime.get_state("filter_saved_pts", 0) or 0), 2),
-                            "pending": len(r.runtime.get_state("skip_phantoms", None) or []),
-                            # с какого момента копится (методика менялась 29.07 —
-                            # копилка обнуляется, иначе смешались бы две модели)
-                            "since": int(r.runtime.get_state("filter_since", 0) or 0),
-                            "dropped": int(r.runtime.get_state("skip_dropped", 0) or 0),
-                        }
-                        sig = json.dumps(_d, ensure_ascii=False)
-            except Exception:  # noqa: BLE001 — статистика никогда не ломает отчёт
-                pass
+            sig = _with_filter_stats(r.runtime, sig)
             # Хвост закрытых баров для мини-графика панели: полчаса M1. Это ТЕ ЖЕ
             # бары, по которым робот принимал решение (лента всех сделок), поэтому
             # его заявки и сделки ложатся на свою свечу. Рисовать вместо них бары
