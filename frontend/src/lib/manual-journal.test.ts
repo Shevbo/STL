@@ -2,7 +2,8 @@
 // соврать про деньги (предупреждение real-trade 24.09.2026).
 import { describe, expect, it } from 'vitest';
 import {
-  CHANNELS_WITH_EVENTS, accountNet, channelRu, eventRu, filterRows, openMismatch, openTotalRub, pnlCaveats, rowCodes, unpricedPoints,
+  CHANNELS_WITH_EVENTS, channelRu, eventRu, filterRows, openTotalRub, pnlCaveats,
+  positionAtWindowStart, rowCodes, unpricedPoints,
 } from './manual-journal';
 
 describe('оговорки к итогу', () => {
@@ -83,57 +84,6 @@ describe('лента', () => {
 // 24.09.2026: экран написал «RIZ6 −4, переоценка −976 ₽», когда счёт был ПУСТ.
 // `open` в отчёте — это остаток проигрывания журнала ЗА ОКНО, а не позиция счёта:
 // набранное ДО начала окна в журнал окна не попадает, и остаток может быть любым.
-describe('открытая позиция сверяется с позицией счёта', () => {
-  it('счёт пуст, а журнал показывает остаток — это расхождение, а не позиция', () => {
-    const m = openMismatch({ open: [{ symbol: 'RIZ6', position: -4 }] }, { });
-    expect(m).toEqual([{ symbol: 'RIZ6', journal: -4, account: 0 }]);
-  });
-
-  it('сошлось — расхождения нет', () => {
-    expect(openMismatch({ open: [{ symbol: 'RIZ6', position: -4 }] }, { RIZ6: -4 })).toEqual([]);
-  });
-
-  it('позиция счёта неизвестна — расхождение НЕ утверждаем', () => {
-    expect(openMismatch({ open: [{ symbol: 'RIZ6', position: -4 }] }, null)).toEqual([]);
-  });
-
-  it('позиция счёта читается из зеркала агента', () => {
-    expect(accountNet({ health: { positions: [
-      { sec: 'RIZ6', net: -4 }, { sec: 'GZZ6', net: 0 }, { net: 7 },
-    ] } })).toEqual({ RIZ6: -4, GZZ6: 0 });
-    expect(accountNet(null)).toEqual({});
-  });
-});
-
-// real-trade 24.09.2026: сведение журнала может НЕ сойтись с позицией счёта —
-// агент отдаёт кольцо 500 последних сделок, и простой STL длиннее его оборота
-// теряет сделки. Тогда итог НЕ точный, и сказать это надо так же прямо, как про
-// неполный период: иначе оператор читает неточную цифру как итог.
-describe('неполный журнал назван неточным итогом', () => {
-  it('расхождение названо фактом, а причина — не одна', () => {
-    const c = pnlCaveats({ period: 'day', journal_complete: false,
-                           open_vs_account: { RIZ6: -10 } }).join(' ');
-    expect(c).toContain('RIZ6 -10');
-    // Граница окна названа ПЕРВОЙ: у дня с 07:00 это обычная причина, а не потеря.
-    expect(c).toContain('07:00');
-    expect(c).toContain('Обычная причина');
-    // Потеря сделок упомянута как ВТОРАЯ возможная, а не как установленный факт.
-    expect(c).toContain('Вторая возможная');
-    expect(c).not.toContain('Часть сделок в журнал не попала —');
-  });
-
-  it('у недели и месяца про 07:00 не пишем: там граница другая', () => {
-    const c = pnlCaveats({ period: 'week', journal_complete: false,
-                           open_vs_account: { RIZ6: -10 } }).join(' ');
-    expect(c).not.toContain('07:00');
-    expect(c).toContain('до начала периода');
-  });
-
-  it('журнал полон — оговорки нет', () => {
-    expect(pnlCaveats({ journal_complete: true, partial: false, priced: true })).toEqual([]);
-  });
-});
-
 describe('три канала', () => {
   it('имена каналов переводятся, незнакомый показывается как есть', () => {
     expect(channelRu('quik')).toBe('терминал QUIK');

@@ -43,7 +43,7 @@ export interface PnlReport {
   from_ms?: number; to_ms?: number;
   // Откуда взята открытая позиция и остаток окна, который раньше и был в `open`.
   open_source?: 'account' | 'window';
-  window_residual?: Record<string, number>;
+  window_residual?: Array<{ symbol: string; position?: number }>;
   // Сведение не сошлось с позицией счёта: часть сделок в журнал не попала
   // (агент отдаёт ринг 500 последних). Итог тогда НЕ точный.
   journal_complete?: boolean;
@@ -70,67 +70,25 @@ export function pnlCaveats(r: PnlReport | null): string[] {
       ? `Данные с ${r.coverage_from}: журнал сделок начат позже начала периода, за весь «${PERIOD_RU[(r.period as Period)] ?? r.period}» фактов ещё нет.`
       : 'Журнал покрывает не весь период: часть окна без фактов.');
   }
-  // РАСХОЖДЕНИЕ ЕСТЬ — ПРИЧИНУ НЕ НАЗЫВАЕМ ОДНУ. Раньше здесь стояло «часть
-  // сделок не попала в журнал», и это отправляло оператора искать потерю данных
-  // там, где её обычно нет: день считается с 07:00 МСК, и позиция, набранная
-  // ДО начала окна, в остаток окна не входит по построению. У флэтового счёта с
-  // остатком −10 это ровно тот случай, а не пропажа сделок (28.09.2026).
-  // Говорим ФАКТ и обе причины, не выбирая за оператора.
-  if (r.journal_complete === false) {
-    const d = Object.entries(r.open_vs_account ?? {})
-      .map(([sym, diff]) => `${sym} ${diff > 0 ? '+' : ''}${diff}`).join(', ');
-    const win = r.period === 'day' ? 'день считается с 07:00 МСК, и позиция, набранная до этого часа, в остаток окна не входит'
-      : 'позиция, набранная до начала периода, в остаток окна не входит';
-    out.push('Остаток окна не сходится с позицией счёта'
-      + (d ? ` (${d})` : '')
-      + `. Обычная причина — граница окна: ${win}.`
-      + ' Вторая возможная — часть сделок не доехала в журнал: агент отдаёт'
-      + ' кольцо последних 500, и простой STL длиннее его оборота теряет сделки.'
-      + ' Реализованный итог считается по сделкам ОКНА и от этого расхождения не'
-      + ' меняется; под сомнением остаётся полнота списка сделок.');
+  // ЭТО НЕ ТРЕВОГА, А АРИФМЕТИКА. Остаток окна считается проигрыванием сделок
+  // ВНУТРИ окна, с нуля. Значит остаток − позиция счёта = МИНУС позиция, которая
+  // была на начало окна. День считается с 07:00, и любая переночевавшая позиция
+  // даёт «расхождение» каждый день. Пугать им нельзя: 28.09.2026 оператор
+  // спросил, что ему сделать, чтобы это не появлялось, — а делать нечего, это
+  // нормальная работа границы. Печатаем факт: сколько было на начало окна.
+  // Тревогу оставляем ровно для случая, когда позиция счёта НЕИЗВЕСТНА и
+  // проверить нечем.
+  if (r.journal_complete === false && !r.account_manual) {
+    out.push('Полноту журнала проверить не с чем: позиция счёта неизвестна'
+      + ' (зеркало агента не пришло). Список сделок может быть неполным.');
   }
+
   if (r.priced === false) {
     const noPv = (r.by_symbol ?? []).filter((s) => !(s.point_value && s.point_value > 0))
       .map((s) => s.symbol);
     out.push('Рублёвый итог НЕПОЛНЫЙ: ₽ за пункт неизвестен'
       + (noPv.length ? ` у ${noPv.join(', ')}` : '')
       + '. Их результат смотрите в пунктах по инструментам ниже.');
-  }
-  return out;
-}
-
-/** Позиция счёта по инструментам: {RIZ6: -4}. Берётся из зеркала агента —
- *  это ФАКТ счёта, в отличие от остатка, который получается проигрыванием
- *  журнала сделок за окно. */
-export function accountNet(status: any): Record<string, number> {
-  const out: Record<string, number> = {};
-  for (const p of (status?.health?.positions ?? [])) {
-    const code = String(p?.sec ?? '');
-    const net = Number(p?.net ?? 0);
-    if (code) out[code] = net;
-  }
-  return out;
-}
-
-/** Расхождение «открытой позиции» отчёта с позицией счёта.
- *
- *  `open` в отчёте — это ОСТАТОК проигрывания журнала сделок ЗА ОКНО, а не
- *  позиция счёта: позиция, набранная до начала окна, в журнал окна не входит, и
- *  остаток получается любым. 24.09.2026 экран написал «RIZ6 −4, переоценка −976
- *  ₽», когда счёт был ПУСТ. Печатать такое числом нельзя — это выдуманная
- *  позиция; печатаем расхождение словами.
- *
- *  `null` в `net` = позиции счёта мы не знаем (зеркало не приехало): тогда и
- *  расхождения не утверждаем.
- */
-export function openMismatch(r: PnlReport | null, net: Record<string, number> | null):
-    Array<{ symbol: string; journal: number; account: number }> {
-  if (!r || !net) return [];
-  const out: Array<{ symbol: string; journal: number; account: number }> = [];
-  for (const o of r.open ?? []) {
-    const j = Number(o.position ?? 0);
-    const a = Number(net[o.symbol] ?? 0);
-    if (j !== a) out.push({ symbol: o.symbol, journal: j, account: a });
   }
   return out;
 }
@@ -203,4 +161,24 @@ export function filterRows(rows: JournalRow[], opts: {
 /** Инструменты, встретившиеся в ленте — для фильтра-выпадашки. */
 export function rowCodes(rows: JournalRow[]): string[] {
   return [...new Set((rows ?? []).map((r) => String(r.code ?? '')).filter(Boolean))].sort();
+}
+
+/** Позиция, которая была на начало окна, по инструментам.
+ *
+ *  Остаток окна считается с нуля, поэтому `остаток − счёт = −позиция на старте`.
+ *  Это не расхождение и не ошибка: день считается с 07:00 МСК, и всё, набранное
+ *  раньше, в окно не входит. Показываем это фактом вместо тревоги (28.09.2026).
+ */
+export function positionAtWindowStart(r: PnlReport | null): Array<{ symbol: string; qty: number }> {
+  if (!r || !r.account_manual) return [];
+  const resid: Record<string, number> = {};
+  for (const w of r.window_residual ?? [] as any) {
+    if (w && w.symbol) resid[w.symbol] = Number(w.position ?? 0);
+  }
+  const out: Array<{ symbol: string; qty: number }> = [];
+  for (const sym of new Set([...Object.keys(resid), ...Object.keys(r.account_manual)])) {
+    const qty = Number(r.account_manual[sym] ?? 0) - Number(resid[sym] ?? 0);
+    if (qty) out.push({ symbol: sym, qty });
+  }
+  return out.sort((a, b) => a.symbol.localeCompare(b.symbol));
 }

@@ -14,8 +14,8 @@
   import { fmtPrice } from '$lib/format';
   import ScreenTag from './lab/ScreenTag.svelte';
   import {
-    CHANNELS_WITH_EVENTS, PERIOD_RU, accountNet, channelRu, eventRu, filterRows,
-    openMismatch, openTotalRub, pnlCaveats, rowCodes, unpricedPoints,
+    CHANNELS_WITH_EVENTS, PERIOD_RU, channelRu, eventRu, filterRows,
+    openTotalRub, pnlCaveats, positionAtWindowStart, rowCodes, unpricedPoints,
     type JournalRow, type Period, type PnlReport,
   } from '$lib/manual-journal';
 
@@ -30,8 +30,6 @@
   let kindFilter = $state<'all' | 'event' | 'trade'>('all');
   let codeFilter = $state('');
   let openRow = $state<string | null>(null);
-  // Позиция СЧЁТА: нужна, чтобы не выдать остаток журнала за открытую позицию.
-  let net = $state<Record<string, number> | null>(null);
   let fullscreen = $state(false);
   function onKeydown(e: KeyboardEvent) { if (e.key === 'Escape' && fullscreen) fullscreen = false; }
   // Лента по ОДНОЙ заявке: ?journal=1&so=<id> — так на неё ссылается карточка.
@@ -40,14 +38,9 @@
 
   const caveats = $derived(pnlCaveats(pnl));
   const openRub = $derived(openTotalRub(pnl));
-  // Сверку остатка с позицией счёта теперь делает СЕРВЕР (open_vs_account). Своя
-  // остаётся запасной: она работает и на старом бэкенде, до рестарта.
-  const mismatch = $derived(
-    pnl?.open_vs_account && Object.keys(pnl.open_vs_account).length
-      ? Object.entries(pnl.open_vs_account).map(([symbol, diff]) => ({
-          symbol, journal: Number(diff) + Number(pnl?.account_manual?.[symbol] ?? 0),
-          account: Number(pnl?.account_manual?.[symbol] ?? 0) }))
-      : openMismatch(pnl, net));
+  // Позиция, бывшая на начало окна: разница остатка окна и позиции счёта. Это
+  // арифметика границы, а не расхождение — см. positionAtWindowStart.
+  const atStart = $derived(positionAtWindowStart(pnl));
   const unpriced = $derived(unpricedPoints(pnl));
   const shown = $derived(filterRows(rows, { query, kind: kindFilter, code: codeFilter }));
   const codes = $derived(rowCodes(rows));
@@ -66,14 +59,10 @@
     loading = true; err = '';
     try {
       const q = `period=${period}` + (soId ? `&so_id=${encodeURIComponent(soId)}` : '');
-      const [p, j, st] = await Promise.all([
+      const [p, j] = await Promise.all([
         fetchWithAuth(`/api/v1/quik/manual/pnl?period=${period}`),
         fetchWithAuth(`/api/v1/quik/manual/journal?${q}&limit=1000`),
-        // Позиция счёта — для сверки: «открытая позиция» отчёта это остаток
-        // проигрывания журнала ЗА ОКНО, а не факт счёта.
-        fetchWithAuth('/api/v1/quik/agent-local-status'),
       ]);
-      net = st.ok ? accountNet(await st.json()) : null;
       // Итог и лента независимы: упала одна — вторая всё равно показывается.
       pnl = p.ok ? await p.json() : null;
       if (j.ok) { const d = await j.json(); rows = d?.rows ?? []; }
@@ -152,30 +141,27 @@
         — эти результаты в рублёвый итог НЕ вошли.
       </div>
     {/if}
-    {#if mismatch.length}
-      <!-- ОСТАТОК ЖУРНАЛА != ПОЗИЦИЯ СЧЁТА. «Открытая позиция» отчёта получается
-           проигрыванием сделок ЗА ОКНО: позиция, набранная до начала окна, в него
-           не входит, и остаток может быть любым. 24.09.2026 экран написал «RIZ6
-           −4, переоценка −976 ₽», когда счёт был ПУСТ. Числом такое не печатаем. -->
-      <div class="mj-open bad">
-        <span class="mj-o-k">Остаток журнала не сходится с позицией счёта</span>
+    {#if atStart.length}
+      <!-- НЕ ТРЕВОГА, А ФАКТ. Остаток окна считается с нуля, поэтому его разница
+           с позицией счёта — это ровно позиция, которая была на начало окна.
+           День идёт с 07:00, и переночевавшая позиция даёт такую разницу КАЖДЫЙ
+           день. Оператор спросил, что ему сделать, чтобы сообщение исчезло, —
+           делать нечего, это нормальная работа границы (28.09.2026). -->
+      <div class="mj-open">
+        <span class="mj-o-k">На начало окна на счёте уже было</span>
         <div class="mj-o-rows">
-          {#each mismatch as m}
-            <span>{m.symbol}: по журналу за период {num(m.journal)},
-              на счёте {num(m.account)}</span>
-          {/each}
+          {#each atStart as a}<span>{a.symbol} {a.qty > 0 ? '+' : ''}{num(a.qty)} контр.</span>{/each}
         </div>
-        <em>Переоценку не показываем: она считалась бы от позиции, которой на счёте
-          нет. Причина обычно в том, что позиция набрана ДО начала выбранного
-          периода — переключите период или смотрите позицию в терминале.</em>
+        <em>эти контракты набраны ДО начала периода, их покупки в окно не входят —
+          поэтому сделки окна сами по себе в позицию счёта не складываются.
+          Реализованный итог выше считается по сделкам окна и от этого не зависит</em>
       </div>
     {:else if openRub != null}
       <!-- ОТДЕЛЬНО И ДРУГИМИ СЛОВАМИ: это не заработано, это текущая переоценка. -->
       <div class="mj-open">
         <span class="mj-o-k">Открытая позиция, переоценка сейчас</span>
         <span class="mj-o-v" class:pos={openRub > 0} class:neg={openRub < 0}>{rub(openRub)}</span>
-        <em>в итог выше НЕ входит и меняется каждую секунду{#if net === null}; позиция счёта
-          не пришла, сверить не с чем{/if}</em>
+        <em>в итог выше НЕ входит и меняется каждую секунду</em>
         <div class="mj-o-rows">
           <!-- НЕИЗВЕСТНАЯ СРЕДНЯЯ — ПРОЧЕРК, А НЕ НОЛЬ. Позиция счёта может быть
                известна, а средней для неё из окна нет: сервер её не выдумывает и
@@ -350,8 +336,6 @@
     background: #16203a; border: 1px solid #2a3c5e; color: #9aa8c4; font-size: 11px; }
   .mj-warn { margin-top: 8px; padding: 7px 9px; border-radius: 6px; line-height: 1.5;
     background: #2a2416; border: 1px solid #6b5a2a; color: #e0c98a; }
-  .mj-open.bad { border-top-color: #6b2a2a; }
-  .mj-open.bad .mj-o-k { color: #ff9d90; }
   .mj-open { margin-top: 10px; padding-top: 9px; border-top: 1px dashed #2d2d4a;
     display: grid; gap: 3px; }
   .mj-o-k { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8a90a8; }
