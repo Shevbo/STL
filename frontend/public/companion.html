@@ -1469,7 +1469,13 @@ function paint(d) {
     '<div class="sec">счёт</div>' + renderAccount(d.account) +
     '<div class="sec">позиции</div>' + renderPositions(d.positions) +
     renderExpiry(d.expiry) +
+    // КАЧЕСТВО — ССЫЛКОЙ, А НЕ РЕЙТИНГОМ ЗДЕСЬ. Собрать топ-5 можно было бы из
+    // realized_pnl раннера, но это ПУНКТЫ, GROSS и пожизненно с последнего
+    // обнуления: знак в пунктах и знак в рублях у оборотистого робота расходятся
+    // (комиссия до 39% валовой). Рейтинг из таких чисел хуже его отсутствия —
+    // считает его STL по журналу, там и смотрим (real-trade 28.09.2026).
     `<div class="sec">роботы <a href="${STL}/?lab=live&equity=1" data-ext>витрина ↗</a>` +
+    `<a href="${STL}/?quality=1" data-ext title="win rate и recovery factor по каждому роботу с историей">качество ↗</a>` +
       `<span class="dens" title="сколько минутных баров помещать в ширину графика">` +
       DENSITY.map((n) => `<b class="${n === density() ? 'on' : ''}" data-dens="${n}">${n}</b>`).join('') +
       `</span></div>` +
