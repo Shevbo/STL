@@ -110,10 +110,23 @@ describe('открытая позиция сверяется с позицией
 // теряет сделки. Тогда итог НЕ точный, и сказать это надо так же прямо, как про
 // неполный период: иначе оператор читает неточную цифру как итог.
 describe('неполный журнал назван неточным итогом', () => {
-  it('journal_complete=false даёт оговорку с расхождением', () => {
-    const c = pnlCaveats({ journal_complete: false, open_vs_account: { RIZ6: -4 } });
-    expect(c.join(' ')).toContain('НЕТОЧЕН');
-    expect(c.join(' ')).toContain('RIZ6 -4');
+  it('расхождение названо фактом, а причина — не одна', () => {
+    const c = pnlCaveats({ period: 'day', journal_complete: false,
+                           open_vs_account: { RIZ6: -10 } }).join(' ');
+    expect(c).toContain('RIZ6 -10');
+    // Граница окна названа ПЕРВОЙ: у дня с 07:00 это обычная причина, а не потеря.
+    expect(c).toContain('07:00');
+    expect(c).toContain('Обычная причина');
+    // Потеря сделок упомянута как ВТОРАЯ возможная, а не как установленный факт.
+    expect(c).toContain('Вторая возможная');
+    expect(c).not.toContain('Часть сделок в журнал не попала —');
+  });
+
+  it('у недели и месяца про 07:00 не пишем: там граница другая', () => {
+    const c = pnlCaveats({ period: 'week', journal_complete: false,
+                           open_vs_account: { RIZ6: -10 } }).join(' ');
+    expect(c).not.toContain('07:00');
+    expect(c).toContain('до начала периода');
   });
 
   it('журнал полон — оговорки нет', () => {
