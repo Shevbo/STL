@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   CHANNELS_WITH_EVENTS, channelRu, eventRu, filterRows, openTotalRub, pnlCaveats,
-  positionAtWindowStart, rowCodes, unpricedPoints,
+  positionAtWindowStart, reconcile, rowCodes, unpricedPoints, vmManualFromStatus,
 } from './manual-journal';
 
 describe('оговорки к итогу', () => {
@@ -96,5 +96,45 @@ describe('три канала', () => {
     expect(CHANNELS_WITH_EVENTS.has('smart')).toBe(true);
     expect(CHANNELS_WITH_EVENTS.has('quik')).toBe(false);
     expect(CHANNELS_WITH_EVENTS.has('broker')).toBe(false);
+  });
+});
+
+// Оператор: «Сумма P&L ручных сделок в компаньоне и в журнале должна совпадать».
+// Сами по себе они не сойдутся — это разные величины за разные окна. Поэтому
+// показываем МОСТ, и смотреть надо на необъяснённый остаток (28.09.2026).
+describe('сверка панели и журнала', () => {
+  it('ВМ ручных берётся из разбивки агента, роботы не считаются', () => {
+    expect(vmManualFromStatus({ day: { classes: [
+      { kind: 'terminal', vm_rub: 1000 },
+      { kind: 'smart', vm_rub: 500 },
+      { kind: 'robot', vm_rub: 99999 },
+    ] } })).toBe(1500);
+  });
+
+  it('разбивки нет — не выдумываем ноль', () => {
+    expect(vmManualFromStatus({})).toBeNull();
+    expect(vmManualFromStatus(null)).toBeNull();
+  });
+
+  it('мост сходится: ВМ = реализовано + комиссия + переоценка', () => {
+    const r = reconcile({ period: 'day', net_rub: 1000, commission_rub: -100,
+                          open: [{ symbol: 'RIZ6', unrealized_rub: 200 }] }, 1300);
+    expect(r!.residual).toBe(0);
+  });
+
+  it('необъяснённый остаток виден, когда он есть', () => {
+    const r = reconcile({ period: 'day', net_rub: 1000, commission_rub: 0, open: [] }, 1500);
+    expect(r!.residual).toBe(500);
+  });
+
+  it('разные окна названы прямо: полночь против 07:00', () => {
+    const r = reconcile({ period: 'day', net_rub: 0 }, 0);
+    expect(r!.notes.join(' ')).toContain('07:00');
+    expect(r!.notes.join(' ')).toContain('полуночи');
+  });
+
+  it('нет одной из величин — сверки нет, а не нули', () => {
+    expect(reconcile(null, 100)).toBeNull();
+    expect(reconcile({ period: 'day' }, null)).toBeNull();
   });
 });

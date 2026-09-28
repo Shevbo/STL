@@ -15,7 +15,8 @@
   import ScreenTag from './lab/ScreenTag.svelte';
   import {
     CHANNELS_WITH_EVENTS, PERIOD_RU, channelRu, eventRu, filterRows,
-    openTotalRub, pnlCaveats, positionAtWindowStart, rowCodes, unpricedPoints,
+    openTotalRub, pnlCaveats, positionAtWindowStart, reconcile, rowCodes, unpricedPoints,
+    vmManualFromStatus,
     type JournalRow, type Period, type PnlReport,
   } from '$lib/manual-journal';
 
@@ -30,6 +31,10 @@
   let kindFilter = $state<'all' | 'event' | 'trade'>('all');
   let codeFilter = $state('');
   let openRow = $state<string | null>(null);
+  // «ВМ ручных за день» — цифра из панели. Оператор требует, чтобы суммы
+  // сходились; сойтись сами по себе они не могут (разные величины и разные
+  // окна), поэтому показываем мост между ними (28.09.2026).
+  let vmManual = $state<number | null>(null);
   let fullscreen = $state(false);
   function onKeydown(e: KeyboardEvent) { if (e.key === 'Escape' && fullscreen) fullscreen = false; }
   // Лента по ОДНОЙ заявке: ?journal=1&so=<id> — так на неё ссылается карточка.
@@ -41,6 +46,7 @@
   // Позиция, бывшая на начало окна: разница остатка окна и позиции счёта. Это
   // арифметика границы, а не расхождение — см. positionAtWindowStart.
   const atStart = $derived(positionAtWindowStart(pnl));
+  const recon = $derived(period === 'day' ? reconcile(pnl, vmManual) : null);
   const unpriced = $derived(unpricedPoints(pnl));
   const shown = $derived(filterRows(rows, { query, kind: kindFilter, code: codeFilter }));
   const codes = $derived(rowCodes(rows));
@@ -59,10 +65,13 @@
     loading = true; err = '';
     try {
       const q = `period=${period}` + (soId ? `&so_id=${encodeURIComponent(soId)}` : '');
-      const [p, j] = await Promise.all([
+      const [p, j, st] = await Promise.all([
         fetchWithAuth(`/api/v1/quik/manual/pnl?period=${period}`),
         fetchWithAuth(`/api/v1/quik/manual/journal?${q}&limit=1000`),
+        // Разбивка агента: из неё панель берёт «ВМ ручных за день».
+        fetchWithAuth('/api/v1/quik/agent-local-status'),
       ]);
+      vmManual = st.ok ? vmManualFromStatus(await st.json()) : null;
       // Итог и лента независимы: упала одна — вторая всё равно показывается.
       pnl = p.ok ? await p.json() : null;
       if (j.ok) { const d = await j.json(); rows = d?.rows ?? []; }
@@ -139,6 +148,25 @@
       <div class="mj-warn">
         Без ₽ за пункт: {unpriced.map((u) => `${u.symbol} ${pts(u.points)}`).join(' · ')}
         — эти результаты в рублёвый итог НЕ вошли.
+      </div>
+    {/if}
+    {#if recon}
+      <!-- СВЕРКА С ПАНЕЛЬЮ. Оператор требует, чтобы суммы сходились. Равными
+           они быть не могут: панель считает рыночную переоценку за сутки с
+           полуночи, журнал — закрытые круги с 07:00 без переоценки и с
+           оценочной комиссией. Поэтому показываем МОСТ и необъяснённый
+           остаток: смотреть стоит только на него. -->
+      <div class="mj-recon">
+        <div class="mj-r-h">Сверка с компаньоном</div>
+        <div class="mj-r-rows">
+          <span>ВМ ручных за день (панель)</span><b>{rub(recon.vm)}</b>
+          <span>реализовано по журналу</span><b>{rub(recon.realizedNet)}</b>
+          <span>+ комиссия, которую журнал вычел, а ВМ не знает</span><b>{rub(recon.commission)}</b>
+          <span>+ переоценка открытой позиции</span><b>{rub(recon.unrealized)}</b>
+          <span class="mj-r-res">необъяснённый остаток</span>
+          <b class="mj-r-res" class:neg={Math.abs(recon.residual) > 1}>{rub(recon.residual)}</b>
+        </div>
+        {#each recon.notes as n}<em>{n}</em>{/each}
       </div>
     {/if}
     {#if atStart.length}
@@ -336,6 +364,17 @@
     background: #16203a; border: 1px solid #2a3c5e; color: #9aa8c4; font-size: 11px; }
   .mj-warn { margin-top: 8px; padding: 7px 9px; border-radius: 6px; line-height: 1.5;
     background: #2a2416; border: 1px solid #6b5a2a; color: #e0c98a; }
+  .mj-recon { margin-top: 10px; padding: 9px 11px; border-radius: 6px;
+    background: #16203a; border: 1px solid #2a3c5e; }
+  .mj-r-h { font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
+    color: #8a90a8; margin-bottom: 6px; }
+  .mj-r-rows { display: grid; grid-template-columns: 1fr max-content; gap: 3px 12px;
+    font-size: 11px; color: #b9bfd4; }
+  .mj-r-rows b { font: 12px/1.3 Consolas, monospace; text-align: right; color: #dfe6ff; }
+  .mj-r-res { color: #e0c98a; }
+  .mj-r-rows b.neg { color: #ff9d90; }
+  .mj-recon em { display: block; margin-top: 6px; font-style: normal; font-size: 10px;
+    line-height: 1.45; color: #7f86a6; }
   .mj-open { margin-top: 10px; padding-top: 9px; border-top: 1px dashed #2d2d4a;
     display: grid; gap: 3px; }
   .mj-o-k { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8a90a8; }

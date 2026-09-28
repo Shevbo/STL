@@ -182,3 +182,53 @@ export function positionAtWindowStart(r: PnlReport | null): Array<{ symbol: stri
   }
   return out.sort((a, b) => a.symbol.localeCompare(b.symbol));
 }
+
+/** «ВМ ручных за день» из разбивки агента — та самая цифра, что стоит в панели.
+ *  Складываем НЕ-роботов: всё, что не робот, сделал оператор своими руками. */
+export function vmManualFromStatus(status: any): number | null {
+  const classes = status?.day?.classes;
+  if (!Array.isArray(classes)) return null;
+  let sum = 0;
+  for (const c of classes) {
+    if (String(c?.kind ?? '') === 'robot') continue;
+    const v = Number(c?.vm_rub ?? 0);
+    if (Number.isFinite(v)) sum += v;
+  }
+  return sum;
+}
+
+export interface Reconcile {
+  vm: number;              // ВМ ручных за день (панель)
+  realizedNet: number;     // реализовано по журналу, после комиссии
+  commission: number;      // комиссия, которую журнал вычел
+  unrealized: number;      // переоценка открытой позиции
+  residual: number;        // что не объяснилось
+  notes: string[];
+}
+
+/** СВЕРКА ДВУХ ЦИФР. Оператор требует, чтобы суммы в панели и в журнале
+ *  сходились. Сами по себе они и не должны: одна считает рыночную переоценку за
+ *  день, вторая — закрытые круги без переоценки и с ОЦЕНОЧНОЙ комиссией.
+ *  Поэтому показываем не «равно», а МОСТ: из чего складывается разница и что
+ *  осталось необъяснённым. Необъяснённый остаток — единственное, на что стоит
+ *  смотреть; всё остальное это разные вопросы к одним и тем же сделкам.
+ */
+export function reconcile(r: PnlReport | null, vm: number | null): Reconcile | null {
+  if (!r || vm == null) return null;
+  const realizedNet = Number(r.net_rub ?? 0);
+  const commission = Math.abs(Number(r.commission_rub ?? 0));
+  const unrealized = openTotalRub(r) ?? 0;
+  // ВМ считается ДО комиссии (она списывается отдельно) и включает переоценку.
+  const explained = realizedNet + commission + unrealized;
+  const notes: string[] = [];
+  if (r.period !== 'day') {
+    notes.push('Сверка имеет смысл только для ДНЯ: в панели дневная величина.');
+  }
+  notes.push('Окна разные: панель считает сутки с полуночи МСК, журнал — день с 07:00.'
+    + ' Сделки вечерней сессии, которые QUIK датирует сегодняшним днём, попадают'
+    + ' в панель и не попадают в журнал.');
+  if (openTotalRub(r) == null) {
+    notes.push('Переоценка открытой позиции неизвестна — в мосте она принята нулём.');
+  }
+  return { vm, realizedNet, commission, unrealized, residual: vm - explained, notes };
+}
