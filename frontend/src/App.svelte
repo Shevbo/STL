@@ -22,6 +22,7 @@
   import AgentRobotScreen from './components/lab/AgentRobotScreen.svelte';
   import ExpiryScreen from './components/ExpiryScreen.svelte';
   import ManualJournal from './components/ManualJournal.svelte';
+  import RobotQuality from './components/RobotQuality.svelte';
   import StrategyPage from './components/lab/StrategyPage.svelte';
   import { WsClient } from '$lib/ws';
   import { robotsStore } from '$lib/stores/robots.svelte';
@@ -65,6 +66,9 @@
   // заявками оператора и по чьей воле, плюс итог его торговли за период.
   // Ссылка на него стоит в обоих компаньонах (real-trade 24.09.2026).
   let showJournal = $state(_qs.has('journal'));
+  // Дип-линк ?quality=1 — качество роботов: win rate и recovery factor с
+  // историей. Список по КАЧЕСТВУ, а не по деньгам (заказ оператора 25.09.2026).
+  let showQuality = $state(_qs.has('quality'));
   // OrderViz: default = auto (self-shows on active orders). Operator can pin it
   // open or hide it; "pin" forces it visible even with no active orders.
   let orderVizPinned = $state(false);
@@ -454,6 +458,15 @@
     </div>
     <!-- Ручка ПОД фреймом: у фреймов QUIK её не было совсем, высота была
          намертво общей с панелью LAB и менялась только оттуда. -->
+    <div class="dh dh-h" title="Высота фрейма: потяните вниз — выше"
+         onpointerdown={(e) => onPointerDown('labBottom', e, labH)}>
+      <div class="dh-dot"></div>
+    </div>
+  {/if}
+  {#if showQuality}
+    <div class="quik-tables-wrap" style="height:{labH}px">
+      <RobotQuality onClose={() => showQuality = false} />
+    </div>
     <div class="dh dh-h" title="Высота фрейма: потяните вниз — выше"
          onpointerdown={(e) => onPointerDown('labBottom', e, labH)}>
       <div class="dh-dot"></div>
