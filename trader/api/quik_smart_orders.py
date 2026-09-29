@@ -96,6 +96,11 @@ class SmartOrderBody(BaseModel):
     tp_trail: float = 0.0          # тейк после входа следящий: откат в пунктах (0 = фиксированный)
     sl_price: float = 0.0          # стоп после входа ЦЕНОЙ уровня (вместо пунктов)
     tp_price: float = 0.0          # тейк после входа ЦЕНОЙ уровня (вместо пунктов)
+    # Гарантированный выход стопа: сколько стоим у планки, сколько идём за ценой
+    # и с каким шагом переставляем. Дефолты 10/10/2 с — выход за 20 секунд.
+    esc_hold_sec: int = 10
+    esc_chase_sec: int = 10
+    esc_chase_every_sec: int = 2
     note: str = ""
 
 
@@ -113,6 +118,8 @@ async def create(body: SmartOrderBody, request: Request):
         tp_price=float(body.tp_price),
         watch_client_id=body.watch_client_id, child_price=float(body.child_price),
         oco_group=body.oco_group, good_till_ms=int(body.good_till_ms),
+        esc_hold_sec=int(body.esc_hold_sec), esc_chase_sec=int(body.esc_chase_sec),
+        esc_chase_every_sec=int(body.esc_chase_every_sec),
         note=body.note, created_ms=so_mod.now_ms(),
     )
     # Рыночная цена инструмента даёт валидации точку отсчёта: без неё ЦЕНУ,
@@ -992,6 +999,79 @@ async def _report_audit(srv: Any, agent: str, book: SmartOrderBook,
                            "raised_at_unix_ms": so_mod.now_ms()}, agent)
 
 
+
+def _escalate_protection(book: SmartOrderBook, store: Any, ost: Any, srv: Any,
+                         lim: Any, agent: str, steps: dict[str, float],
+                         now: int) -> bool:
+    """Довести защитную заявку до исполнения за три фазы, а не ждать у моря погоды.
+
+    Стоп выставляет ЛИМИТНУЮ заявку, и на быстром движении она не наливается:
+    29.09.2026 родной стоп оператора на 70 RIZ6 сработал в 14:50:06 с лимитом в
+    30 пунктов от уровня, рынок за минуту прошёл 690 пунктов, заявка умерла с
+    нулём исполнения, позиция осталась открытой. Заказ оператора в тот же день:
+    стоп обязан быть гарантированным — постоять у планки, потом идти за ценой,
+    потом бить по рынку.
+
+    Фазы считаются от fired_ms: hold (стоим) -> chase (переставляем каждые
+    every) -> market (один удар по границе коллара). Тейков и входов не
+    касается: опоздавший тейк — упущенная прибыль, опоздавший стоп — открытый
+    убыток, и торопить их надо по-разному.
+    """
+    by_cid = {d["client_id"]: d for d in ost.working_orders(agent)}
+    dirty = False
+    for so in book.orders:
+        if so.status != "fired" or so.kind != "sl" or not so.fired_client_id:
+            continue
+        rec = by_cid.get(so.fired_client_id)
+        if rec is None or rec.get("state") in _DEAD_STATES:
+            continue                       # снята/отвергнута — это к _mark_orphans
+        if int(rec.get("remaining") or 0) <= 0:
+            continue                       # налилась: гнать больше некуда
+        order_id = str(rec.get("order_id") or "")
+        if not order_id:
+            continue                       # QUIK ещё не ответил номером
+        age = now - (so.fired_ms or now)
+        hold = max(0, int(so.esc_hold_sec)) * 1000
+        chase = max(0, int(so.esc_chase_sec)) * 1000
+        every = max(1, int(so.esc_chase_every_sec)) * 1000
+        if age < hold:
+            continue                       # фаза 1: стоим у планки
+        t = store.tick(so.code, agent) or {}
+        last = float(t.get("last") or 0)
+        bid, ask = float(t.get("bid") or 0), float(t.get("ask") or 0)
+        step = steps.get(so.code, 0.0)
+        if age < hold + chase:             # фаза 2: идём за ценой
+            if now - (so.esc_last_ms or 0) < every:
+                continue
+            px = so_mod.marketable_price(so.side, bid, ask, last, step)
+            phase = "преследование"
+        elif not so.esc_market:            # фаза 3: по рынку, один раз
+            px = so_mod.market_price(so.side, bid, ask, last, step,
+                                     float(getattr(lim, "price_collar_frac", 0) or 0))
+            phase = "по рынку"
+        else:
+            continue
+        if px <= 0:
+            continue                       # без котировки не двигаем: цена вслепую хуже
+        try:
+            srv.enqueue_order(agent, order_msgs.build_replace_order(
+                client_id=so.fired_client_id, order_id=order_id, new_price=px))
+        except Exception as exc:  # noqa: BLE001 — связь не должна ронять проход
+            log.warning("smart_order.escalate_failed", so_id=so.so_id, error=str(exc))
+            continue
+        so.esc_last_ms = now
+        if phase == "по рынку":
+            so.esc_market = True
+        dirty = True
+        so_journal.record("escalated", so, so_journal.WATCHER,
+                          f"{phase}: заявка не налилась за {age // 1000} с, "
+                          f"переставлена на {px:g} (осталось {rec.get('remaining')})",
+                          now_ms=now)
+        log.warning("smart_order.escalated", so_id=so.so_id, phase=phase,
+                    price=px, remaining=rec.get("remaining"), age_ms=age)
+    return dirty
+
+
 async def _watch_once(state: Any) -> None:
     book: SmartOrderBook = state.smart_orders
     active = book.active()
@@ -1042,6 +1122,10 @@ async def _watch_once(state: Any) -> None:
 
     lim = OrderLimits.from_settings(state.settings)
     steps = _price_steps(store, agent)
+    # Незалившаяся защита — раньше новых срабатываний: открытая позиция без
+    # исполненного стопа опаснее пропущенного входа.
+    if _escalate_protection(book, store, ost, srv, lim, agent, steps, so_mod.now_ms()):
+        book.save()
     filled = {d["client_id"] for d in ost.working_orders(agent)
               if d.get("state") == "filled"}
     now = so_mod.now_ms()

@@ -110,6 +110,21 @@ class SmartOrder:
     fired_client_id: str = ""
     fired_price: float = 0.0     # РЕАЛЬНАЯ средняя цена исполнения дочерней заявки
     fired_qty: int = 0           # сколько контрактов реально исполнилось
+    # ГАРАНТИРОВАННЫЙ ВЫХОД ЗА ТРИ ФАЗЫ (заказ оператора 29.09.2026). Стоп ставит
+    # ЛИМИТНУЮ заявку, и на быстром движении она не наливается: его собственный
+    # стоп на 70 RIZ6 сработал в 14:50:06 с лимитом в 30 пунктов от уровня, рынок
+    # за минуту прошёл 690 пунктов, заявка умерла нетронутой и позиция осталась
+    # открытой. Поэтому защита больше не «поставил и жду»:
+    #   фаза 1 (esc_hold_sec)   стоим у планки — лучшая цена, если рынок вернётся;
+    #   фаза 2 (esc_chase_sec)  переставляем каждые esc_chase_every_sec за ценой;
+    #   фаза 3                  бьём по рынку (лимит у границы коллара).
+    # Ноль в esc_hold_sec/esc_chase_sec выключает свою фазу; оба нуля = сразу по
+    # рынку. Счётчик времени идёт от fired_ms, то есть от выстрела.
+    esc_hold_sec: int = 10
+    esc_chase_sec: int = 10
+    esc_chase_every_sec: int = 2
+    esc_last_ms: int = 0         # когда последний раз переставляли
+    esc_market: bool = False     # фаза 3 уже отработала: больше не трогаем
 
     def validate(self, reference_price: float = 0.0) -> str | None:
         """Returns a human error or None. Kept dumb and explicit.
@@ -220,6 +235,21 @@ def marketable_price(side: str, bid: float, ask: float, last: float, step: float
         return 0.0
     cushion = min(max(_CUSHION_FRAC * base, _CUSHION_MIN_STEPS * step),
                   _CUSHION_MAX_FRAC * base)
+    raw = base - cushion if side == "sell" else base + cushion
+    return quantize(raw, step, side)
+
+
+def market_price(side: str, bid: float, ask: float, last: float, step: float,
+                 collar: float) -> float:
+    """Цена «по рынку» в фазе 3: пробиваем спред на столько, сколько ПОЗВОЛЯЕТ
+    коллар агента, с запасом в 10% от него. Настоящей рыночной заявки в этом
+    протоколе нет (агент шлёт лимит и сам проверяет коллар), поэтому «по рынку»
+    здесь — самый агрессивный лимит, который пройдёт проверку.
+    """
+    base = (bid if side == "sell" else ask) or last
+    if base <= 0 or collar <= 0:
+        return 0.0
+    cushion = base * collar * 0.9
     raw = base - cushion if side == "sell" else base + cushion
     return quantize(raw, step, side)
 
