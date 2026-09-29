@@ -28,7 +28,6 @@ QUIK времени сделки в OnAllTrade не даёт — см. `recorder
 from __future__ import annotations
 
 import argparse
-import glob
 import gzip
 import json
 import os
@@ -39,11 +38,33 @@ SIDE_BUY = 2  # см. докстринг: 0x2 = buy aggressor в shectory_trade.
 DEFAULT_ARCHIVE = "~/market-archive"
 
 
+def _pick_file(archive: str, date: str) -> str | None:
+    """Ровно один файл на день. "(.prev|.gz)" в имени — варианты ОДНОГО дня, не
+    разные дни, конкатенировать их нельзя.
+
+    Найдено на архиве 25.09: `.gz` (260424 строки, `source=quik_export`) и `.prev`
+    (259382 строки) существуют одновременно — `.prev` короче и обрывается на ~13
+    минут раньше по времени последней сделки. `.gz` мтайм на следующий день в
+    03:00 — штатная ночная ротация, как у всех `book-*.jsonl.gz`; `.prev` датирован
+    тем же днём 23:51 — снят ДО ротации, видимо при починке остановленного потока
+    (см. `docs/algo-footprints-registry.md`: «поток встал, чинит real-trade»).
+    `.gz` — итоговый полный файл дня, `.prev` — более ранняя неполная версия.
+    Прочитать оба подряд задвоило бы общую часть (259382 строки). Приоритет: живой
+    `.jsonl` (день ещё не заротирован) > `.jsonl.gz` (штатная ротация, полный день)
+    > `.jsonl.prev` (запасной вариант, если ротации не было вовсе).
+    """
+    for suffix in ("", ".gz", ".prev"):
+        p = os.path.join(archive, f"trade-{date}.jsonl{suffix}")
+        if os.path.exists(p):
+            return p
+    return None
+
+
 def build(archive: str, code: str, date: str) -> dict:
     rows = []
-    files = sorted(glob.glob(os.path.join(archive, f"trade-{date}.jsonl*")))
-    needle = f'"{code}"'
-    for path in files:
+    path = _pick_file(archive, date)
+    if path is not None:
+        needle = f'"{code}"'
         op = gzip.open if path.endswith(".gz") else open
         with op(path, "rt", encoding="utf-8") as fh:
             for ln in fh:
@@ -65,7 +86,8 @@ def build(archive: str, code: str, date: str) -> dict:
     rows.sort(key=lambda r: r[0])
     return {"key": f"tape{code}", "code": code, "ts_unit": "ms", "side_buy": SIDE_BUY,
             "built": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "time_base": "bars (+3h от UTC архива)", "rows": rows}
+            "time_base": "bars (+3h от UTC архива)", "rows": rows, "source_file":
+                os.path.basename(path) if path else None}
 
 
 def main() -> None:
@@ -85,7 +107,8 @@ def main() -> None:
     with open(out, "w", encoding="utf-8") as fh:
         json.dump(data, fh, separators=(",", ":"))
     size = os.path.getsize(out) / 1e6
-    print(f"{a.code} {a.date}: сделок {len(rows)}, файл {size:.1f} МБ -> {out}")
+    print(f"{a.code} {a.date}: сделок {len(rows)}, файл {size:.1f} МБ -> {out} "
+          f"(источник {data['source_file']})")
     print(f"  первая {rows[0][0]}, последняя {rows[-1][0]}, side_buy={SIDE_BUY}")
 
 
