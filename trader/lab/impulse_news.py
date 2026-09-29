@@ -337,12 +337,27 @@ def analyze(bars: list, lo: int, hi: int, n_random: int = 3000, seed: int = 2026
                      "in_imp": int(_in_imp(times[i]))})
 
     # Ценовые импульсы БЕЗ объёмного подтверждения: та же детекция с k_vol=0 (объём
-    # не проверяется), минус пересечения по времени с обычными (цена+объём) событиями
-    # выше, чтобы не задвоить одни и те же импульсы. Отдельная группа отчёта: проверка
-    # показала, что они ведут себя так же, как события с объёмом.
+    # не проверяется). Исключаем событие, только если в ЕГО ПРОШЛОМ (не позже start_time)
+    # уже было сырое срабатывание цена+объём в пределах 10 минут - тогда это начало уже
+    # учтено группой «с объёмом». Раньше проверяли ещё и по future (объём после start
+    # ИЛИ до end) - это отбор по тому, что в момент start ещё не произошло, то есть
+    # подмена измеряемого: выдохшиеся цепочки (объём чуть позже) уходили сюда с ложным
+    # средним, продолжившиеся - в другую группу. Независимая проверка 29.09.2026: у 672
+    # выброшенных так событий медиана прихода объёма - через 3 минуты ПОСЛЕ старта
+    # (будущее относительно точки решения), число получалось -60 пт против честных
+    # ex-ante -17.6 [-39; +4] пт, как у всех импульсов.
+    move, v5, med_m, med_v = precomputed
+    raw_starts = sorted(times[t - 5] for t in range(len(times))
+                        if med_m[t] and med_v[t] and abs(move[t]) >= K_MOVE * med_m[t]
+                        and v5[t] >= K_VOL * med_v[t])
+
+    def _had_volume_before(start_time: int) -> bool:
+        i = bisect.bisect_left(raw_starts, start_time - MERGE_SEC)
+        return i < len(raw_starts) and raw_starts[i] <= start_time
+
     novol, _ = _detect(times, closes, vols, k_vol=0.0, precomputed=precomputed)
     novol = [e for e in novol if lo <= e["start_time"] <= hi
-             and not _in_imp(e["start_time"]) and not _in_imp(e["end_time"])]
+             and not _had_volume_before(e["start_time"])]
     _finish(novol, times, closes)
 
     layers = {f"m{tf}_{f}_{s}": cross_layer(times, closes, med_m, starts, lo, hi, tf, f, s,

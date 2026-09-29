@@ -2,6 +2,7 @@
 плюс контроль/исключения из scripts/impulse_news_report.py (не пакет - грузим по пути)."""
 import importlib.util
 import os
+from datetime import date, datetime, timedelta, timezone
 
 from trader.lab import impulse_news as im
 
@@ -155,6 +156,49 @@ def test_shift_control_steps_are_multiples_of_seven():
     assert len(inr.SHIFT_STEPS) == 10
     assert all(k % 7 == 0 for k in inr.SHIFT_STEPS)
     assert inr.SHIFT_STEPS == tuple(range(7, 71, 7))
+
+
+def test_novol_event_kept_when_volume_arrives_after_start():
+    """Bugfix 29.09.2026 (независимая проверка): исключение events_novol смотрело
+    на объём ПОСЛЕ начала цепочки (и до конца) - выдохшиеся импульсы (объём пришёл
+    чуть позже) ложно выбрасывались, отсюда откат -60 пт вместо честных -17.6.
+    Ценовой триггер без объёма, за которым через 3 минуты следует триггер цена+объём,
+    должен остаться в events_novol (раньше выбрасывался)."""
+    n = 3000
+    c, v = _noise(n), [100.0] * n
+    c[2000] += 50                        # цена без объёма
+    _spike(c, v, 2003, 50)               # 3 минуты спустя: цена + объём (в будущем)
+    res = im.analyze(_bars(c, v), T0, T0 + 60 * (n - 1))
+    starts = [e["start_time"] for e in res["events_novol"]]
+    assert T0 + 60 * 1995 in starts
+
+
+def test_novol_event_dropped_when_volume_precedes_start():
+    """Симметрично: сырое срабатывание цена+объём в прошлом (в пределах 10 минут
+    до начала) - честная причина исключить, событие остаётся выброшенным."""
+    n = 3000
+    c, v = _noise(n), [100.0] * n
+    _spike(c, v, 2000, 50)               # цена + объём
+    c[2004] += 50                        # 4 минуты спустя: та же цепочка, без объёма
+    res = im.analyze(_bars(c, v), T0, T0 + 60 * (n - 1))
+    starts = [e["start_time"] for e in res["events_novol"]]
+    assert T0 + 60 * 1995 not in starts
+
+
+def test_shifted_preserves_weekday_for_any_shift_step():
+    """Bugfix: shifted() заворачивала ряд дней по кругу длиной len(days), не кратной
+    7 (369 mod 7 = 5) - завёрнутые дни теряли день недели. days режется до кратной 7
+    длины перед сдвигом; проверяем по датам до/после для всех k из SHIFT_STEPS."""
+    days = [date(2025, 1, 1) + timedelta(days=i) for i in range(370)]     # 370, не кратно 7
+    news = [int(datetime(d.year, d.month, d.day, 12, tzinfo=timezone.utc).timestamp())
+            for d in days]
+    for k in inr.SHIFT_STEPS:
+        for t, d in zip(news, days):
+            sn = inr.shifted([t], days, k)
+            if not sn:
+                continue                # день попал в обрезанный (не кратный 7) хвост
+            assert datetime.fromtimestamp(sn[0], timezone.utc).weekday() == d.weekday(), \
+                (k, d)
 
 
 def test_split_by_gap_excludes_gap_and_roll_separately():
