@@ -180,10 +180,18 @@ async def cancel_order(so_id: str, request: Request):
         raise HTTPException(status_code=404, detail="Нет такой умной заявки.")
     if so.status not in ("armed", "native"):
         raise HTTPException(status_code=409, detail=f"Заявка уже {so.status}.")
+    # Снимаем нативную запись ПО ФАКТУ таблицы терминала, а не по статусу книги.
+    # 29.09.2026: STL решил, что терминал стоп-заявку не принял (подтверждение не
+    # пришло за 20 с — в 06:45 торги ещё не шли), и поставил статус armed. Терминал
+    # её ПРИНЯЛ. Дальше одна заявка охранялась дважды: стоп сработал в терминале на
+    # 40 контрактов, а сторож STL, не знавший о нём, продал ещё 40 — позиция
+    # оператора перевернулась с +40 в −40 без его решения. При отмене та же слепота
+    # оставляла живую стоп-заявку в QUIK: книга писала «отменена», терминал —
+    # «активна». Статус книги — мнение, таблица терминала — факт.
     if so.status == "native":
-        # Заявка живёт в терминале: снять её можно только там, иначе книга скажет
-        # «отменена», а стоп-заявка останется стеречь позицию.
         _kill_native(request, so)
+    else:
+        _kill_native_by_table(request, so)
     so.status = "cancelled"
     so.note = (so.note + " " if so.note else "") + "отменена оператором"
     book.save()
@@ -191,6 +199,38 @@ async def cancel_order(so_id: str, request: Request):
     log.info("smart_order.cancelled", so_id=so_id, kind=so.kind, code=so.code,
              side=so.side, qty=so.qty)
     return {"ok": True, "so_id": so_id}
+
+
+def _kill_native_by_table(request: Request, so: SmartOrder) -> None:
+    """Снять нативную запись, о которой книга не знает: ищем её в таблице
+    стоп-заявок терминала по нашему же тегу. Нет записи — тихо выходим: это
+    обычный случай заявки, которую терминалу не отдавали."""
+    state = request.app.state
+    store = getattr(state, "quik_store", None)
+    srv = getattr(state, "quik_server", None)
+    if store is None or srv is None:
+        return
+    try:
+        agent = resolve_agent(store, None)
+    except Exception:  # noqa: BLE001 — нет агента, снимать нечем
+        return
+    book = _book(request)
+    ids = {so.so_id} | {c.so_id for c in book.orders if c.parent_id == so.so_id}
+    if so.parent_id:
+        ids.add(so.parent_id)
+    rows = _stop_rows_by_tag(store, agent)
+    for sid in ids:
+        row = rows.get(sid)
+        num = str((row or {}).get("stop_order_num") or "")
+        if not num:
+            continue
+        srv.enqueue_order(agent, order_msgs.build_kill_stop_order(
+            f"so:{sid}", num, so.code))
+        so.note = (so.note + " " if so.note else "") +             f"снята и в терминале (стоп-заявка {num}, книга её не числила)"
+        so_journal.record("native_killed", so, so_journal.OPERATOR,
+                          f"снята забытая книгой стоп-заявка {num}")
+        log.warning("smart_order.native_killed_by_table", so_id=so.so_id,
+                    found_under=sid, stop_num=num)
 
 
 def _kill_native(request: Request, so: SmartOrder) -> None:
@@ -508,9 +548,34 @@ def _track_native(book: SmartOrderBook, store: Any, agent: str, now: int) -> lis
     # без этого условия он разбирался бы вторым, отдельным «родителем».
     watched = [p for p in book.orders
                if p.native_state in ("sent", "live") and not p.parent_id]
+    rows = _stop_rows_by_tag(store, agent)
+    # ЗАПИСЬ ПОЯВИЛАСЬ ПОСЛЕ ОТКАЗА. Подтверждение регистрации приходит за секунды
+    # на торгах и дольше до них: 29.09.2026 отправленная в 06:45 стоп-заявка не
+    # подтвердилась за 20 с, STL объявил «терминал не принял» и взял охрану себе,
+    # а терминал её принял. Двойная охрана стоила оператору 40 лишних проданных
+    # контрактов. Поэтому «не принял» — не приговор: увидели запись — отдаём охрану
+    # обратно терминалу, иначе сторожей снова двое.
+    for p in book.orders:
+        if p.native_state != "failed" or p.parent_id:
+            continue
+        ids = {p.so_id} | {c.so_id for c in book.orders if c.parent_id == p.so_id}
+        row = next((rows[i] for i in ids if i in rows), None)
+        if row is None:
+            continue
+        p.native_state, p.native_seen_ms = "live", now
+        for c in ([p] if not any(c.parent_id == p.so_id for c in book.orders)
+                  else [c for c in book.orders if c.parent_id == p.so_id]):
+            if c.status == "armed":
+                c.status = "native"
+                c.native_stop_num = str(row.get("stop_order_num") or "")
+                c.note = (c.note + " " if c.note else "") +                     "терминал всё-таки принял: охрана возвращена терминалу"
+        so_journal.record("native_live", p, so_journal.TERMINAL,
+                          "запись нашлась после отказа: охрана снова у терминала",
+                          now_ms=now)
+        log.warning("smart_order.native_late_confirm", so_id=p.so_id,
+                    stop_num=row.get("stop_order_num"))
     if not watched:
         return []
-    rows = _stop_rows_by_tag(store, agent)
     failed: list[SmartOrder] = []
     orphaned: list[SmartOrder] = []
     for parent in watched:
@@ -848,6 +913,7 @@ async def _watch_once(state: Any) -> None:
         return  # no/ambiguous agent -> nothing to fire against
     # Осиротевших ищем ДАЖЕ когда взведённых нет: сработавшая заявка может
     # потерять ребёнка уже после того, как книга опустела.
+    native_rows = _stop_rows_by_tag(store, agent)
     dirty_meta = _mark_orphans(book, ost, agent, so_mod.now_ms())
     dirty_meta = _track_fills(book, ost, store, agent) or dirty_meta
     dirty_meta = _revive_false_orphans(book) or dirty_meta
@@ -944,6 +1010,19 @@ async def _watch_once(state: Any) -> None:
                 continue
             assert isinstance(act, Fire)
             so = act.so
+            # ПОСЛЕДНИЙ РУБЕЖ ПРОТИВ ДВОЙНОЙ ОХРАНЫ: в терминале жива наша же
+            # стоп-заявка — стрелять нельзя, иначе одну заявку исполнят дважды
+            # (29.09.2026: 80 проданных контрактов вместо 40). Проверяем факт
+            # таблицы, а не статус книги: именно расхождение между ними и стоило
+            # оператору перевёрнутой позиции.
+            if so.so_id in native_rows or any(
+                    c.parent_id == so.so_id and c.so_id in native_rows
+                    for c in book.orders):
+                so_journal.record("held", so, so_journal.WATCHER,
+                                  "в терминале жива своя стоп-заявка: сторож не стреляет",
+                                  now_ms=now)
+                log.warning("smart_order.fire_blocked_by_native", so_id=so.so_id)
+                continue
             # Карантин держит ВХОДЫ: защитные заявки закрывают открытую позицию,
             # и их задержка оставила бы её голой.
             if quar.active(now) and bq.holds(so):
