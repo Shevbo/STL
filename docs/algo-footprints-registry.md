@@ -99,6 +99,15 @@
 6. Отчёт исполнителя: цифры и что помешало. Без выводов о торгуемости, вывод
    делает окно после проверки fable.
 
+### Каркас (`trader/lab/footprints/common.py`, образец `a4_bar_boundary.py`)
+
+- Загрузка: `load_bars(key, since, until)` (бары `[ts,o,h,l,c,v]`), `load_book(key, since, until)` -> `(times, books)`; окно ISO-дата/epoch, until-дата включительно.
+- Время: метки уже МСК-стенка как UTC, `day_of(ts)`, `minute_of_day(ts)`, `by_day(rows)` без сдвига +3 ч.
+- Контроли: `shuffle_within_day(values, days, rng)`, `permute_days(rows_by_day, rng)`, `shift_grid(offset)(minute, g)`; интервал `bootstrap_days(rows_by_day, stat, draws, rng)`; вердикт `pvalue_and_ci(real, nulls, boots)` -> `{stat, p, ci95, n_null}` (p односторонний, «нуль >= настоящего»).
+- Справки: `halves(rows)` (по целым дням), `atr_minute(rows)`, `round_trip_cost_pts(symbol, price)` (RI 10 пт по стакану, прочие только комиссия или None).
+- Минимальный модуль: чистая `analyze(rows, ...) -> {"rows", "halves", "n_days", "notes"}` (её тестирует синтетика) и тонкая `run(arg: dict)`: `arg = {"symbol_key", "since", "until", <свои оси>, "draws", "seed"}`, `rows = common.load_bars(...)`, затем `return common.report("<ID>", key, [since, until], res["rows"], res["notes"], n_days=..., halves=..., cost_pts=..., atr_min_pts=...)`.
+- Исключённые минуты (клиринги, ночь, открытия) считаются в `notes`, не выбрасываются молча. Нуль с одним фиксированным сдвигом даёт p не ниже 1/g: сдвиг разыгрывается по дням (см. a4).
+
 ## Журнал
 
 - 29.09 A1 закрыта: пересечения средних — след уже прошедшего движения.
