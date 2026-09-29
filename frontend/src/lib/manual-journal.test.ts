@@ -3,7 +3,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   CHANNELS_WITH_EVENTS, channelRu, eventRu, filterRows, openTotalRub, pnlCaveats,
-  positionAtWindowStart, reconcile, rowCodes, unpricedPoints, vmManualFromStatus,
+  eventTone, positionAtWindowStart, reconcile, rowCodes, unpricedPoints,
+  vmManualFromStatus,
 } from './manual-journal';
 
 describe('оговорки к итогу', () => {
@@ -136,5 +137,42 @@ describe('сверка панели и журнала', () => {
   it('нет одной из величин — сверки нет, а не нули', () => {
     expect(reconcile(null, 100)).toBeNull();
     expect(reconcile({ period: 'day' }, null)).toBeNull();
+  });
+});
+
+// Доведение заявки до исполнения и ходы фигуры — события, появившиеся
+// 29.09.2026. Разбор родного стопа на 70 контрактов занял у real-trade час
+// ровно потому, что событий не было: карточка говорит, что БУДЕТ, а лента —
+// что БЫЛО, и разбирать потом приходится второе.
+describe('громкость событий в ленте', () => {
+  it('новые коды названы словами, а не показаны кодом', () => {
+    expect(eventRu({ event: 'escalated' })).toBe('доведение до исполнения');
+    expect(eventRu({ event: 'corridor' })).toBe('ход фигуры');
+  });
+
+  // Единственное место во всей системе, где заявка уходит БЕЗ ЦЕНЫ.
+  it('рыночная фаза выделяется сильнее прочего', () => {
+    expect(eventTone({ event: 'escalated', detail: 'по рынку: лимит не налился за 20 с, остаток 40 выводим рыночной заявкой' }))
+      .toBe('market');
+  });
+
+  it('фаза преследования заметна, но не чрезвычайна', () => {
+    expect(eventTone({ event: 'escalated', detail: 'преследование: заявка не налилась за 10 с, переставлена на 82840' }))
+      .toBe('warn');
+  });
+
+  // Текст движка может измениться. Пропустить громкое событие хуже, чем
+  // подсветить лишнее, поэтому незнакомый текст остаётся заметным.
+  it('незнакомый текст доведения не теряет подсветку совсем', () => {
+    expect(eventTone({ event: 'escalated', detail: 'что-то новое' })).toBe('warn');
+  });
+
+  it('обычный ход фигуры не кричит', () => {
+    expect(eventTone({ event: 'corridor', detail: 'продажа от верхней стенки: sell 2 по 83600' })).toBe('');
+    expect(eventTone({ event: 'fired' })).toBe('');
+  });
+
+  it('незнакомый код события показывается КАК ЕСТЬ, а не прячется', () => {
+    expect(eventRu({ event: 'совсем_новое' })).toBe('совсем_новое');
   });
 });

@@ -19,6 +19,7 @@
     apexMs, corridorFromClicks, corridorState, corridorWidth,
   } from '$lib/smart-order-help';
   import { candlesStore } from '$lib/stores/candles.svelte';
+  import { eventRu, eventTone, type JournalRow } from '$lib/manual-journal';
   import { corridorDraw } from '$lib/stores/corridor-draw.svelte';
 
   let { symbol = '' }: { symbol?: string } = $props();
@@ -65,6 +66,28 @@
   let cStopPts = $state('');
   let cFlipsMax = $state('');
   let cErr = $state('');
+  // Лента событий ОДНОЙ заявки прямо в карточке (real-trade 29.09.2026):
+  // карточка говорит, что БУДЕТ, лента — что БЫЛО, и разбирать потом придётся
+  // второе. Тянем по требованию: у книги бывает два десятка заявок, и грузить
+  // журнал всем сразу значит возить мегабайты ради одной раскрытой строки.
+  let feedFor = $state('');
+  let feedRows = $state<JournalRow[]>([]);
+  let feedErr = $state('');
+
+  async function toggleFeed(soId: string) {
+    if (feedFor === soId) { feedFor = ''; feedRows = []; return; }
+    feedFor = soId; feedRows = []; feedErr = '';
+    try {
+      const r = await fetchWithAuth(
+        `/api/v1/quik/manual/journal?period=day&limit=200&so_id=${encodeURIComponent(soId)}`);
+      if (!r.ok) { feedErr = `HTTP ${r.status}`; return; }
+      const d = await r.json();
+      feedRows = (d?.rows ?? []) as JournalRow[];
+      // Пустая лента — это НЕ «ничего не было»: журнал ведётся с какой-то даты,
+      // а заявка могла быть взведена раньше. Говорим об этом прямо.
+      if (!feedRows.length) feedErr = `за сегодня событий нет (журнал с ${d?.events_from ?? '—'})`;
+    } catch (e: any) { feedErr = e?.message || 'ошибка'; }
+  }
   let ocoGroup = $state('');
   // Входы, которыми набрана выбранная позиция: один — связка подставляется сама,
   // несколько — оператор выбирает, к какому входу привязать выход.
@@ -913,6 +936,8 @@
           </span>
           <button class="so-btn sm" title="снять заявку, подставить её параметры в форму и взвести заново"
                   onclick={() => edit(o)}>Изменить</button>
+          <button class="so-btn sm" title="что с этой заявкой уже произошло: ходы фигуры, доведение до исполнения, отказы"
+                  onclick={() => toggleFeed(o.so_id)}>{feedFor === o.so_id ? 'Скрыть ленту' : 'Лента'}</button>
           <button class="so-btn sm" onclick={() => cancel(o.so_id)}>Снять</button>
         </div>
         <!-- КОРИДОР: позиция важнее самого факта заявки (real-trade 29.09.2026).
@@ -921,11 +946,29 @@
         {#if o.kind === 'corridor' || o.kind === 'triangle'}
           <div class="so-c-corr">
             <b>{corridorState(o)}</b>
-            {#if o.c_p1 && o.c_low}
-              <span class="so-c-corr-w">ширина {fmtPts(o.c_p1 - o.c_low)}{pointValue && o.code === code
-                ? ` = ${fmtRub((o.c_p1 - o.c_low) * pointValue)} на контракт` : ''}</span>
+            <!-- СТЕНКИ СЧИТАЕТ ДВИЖОК (c_now), панель их не пересчитывает: две
+                 реализации одной прямой расходятся, вопрос только когда
+                 (real-trade 29.09.2026). Нет c_now — молчим про стенки, а не
+                 подставляем свою геометрию: разойдясь, она соврёт тише всего. -->
+            {#if o.c_now}
+              <span class="so-c-corr-w">стенки {fmtPrice(o.c_now.low)} … {fmtPrice(o.c_now.top)}</span>
+              <span class="so-c-corr-w">ширина {fmtPts(o.c_now.width)}{pointValue && o.code === code
+                ? ` = ${fmtRub(o.c_now.width * pointValue)} на контракт` : ''}</span>
             {/if}
             {#if o.c_stop_pts}<span class="so-c-corr-w">стоп за стенкой {fmtPts(o.c_stop_pts)}</span>{/if}
+          </div>
+        {/if}
+        {#if feedFor === o.so_id}
+          <div class="so-feed">
+            {#if feedErr}<div class="so-feed-e">{feedErr}</div>{/if}
+            {#each feedRows as r, i (String(r.ts_ms) + ':' + i)}
+              <div class="so-feed-r">
+                <span class="so-feed-t mono">{fmtWhen(r.ts_ms ?? 0)}</span>
+                <span class="so-feed-ev" class:warn={eventTone(r) === 'warn'}
+                      class:market={eventTone(r) === 'market'}>{eventRu(r)}{eventTone(r) === 'market' ? ' — ПО РЫНКУ' : ''}</span>
+                <span class="so-feed-d">{r.detail ?? ''}</span>
+              </div>
+            {/each}
           </div>
         {/if}
         {#if o.kind === 'trail_tp'}
@@ -1171,6 +1214,14 @@
                padding: 4px 8px; font-size: 11px; }
   .so-c-corr b { color: #5ecfb1; }
   .so-c-corr-w { color: #9aa0b4; }
+  .so-feed { padding: 4px 8px 6px; font-size: 11px; border-top: 1px solid #23233f; }
+  .so-feed-e { color: #9aa0b4; }
+  .so-feed-r { display: flex; gap: 8px; align-items: baseline; padding: 1px 0; }
+  .so-feed-t { color: #9aa0b4; min-width: 92px; }
+  .so-feed-ev { color: #e8e8f0; min-width: 150px; }
+  .so-feed-ev.warn { color: #e0a35c; }
+  .so-feed-ev.market { color: #ff6b6b; font-weight: 700; }
+  .so-feed-d { color: #9aa0b4; }
   .so-kind.on { background: #1b1b34; border-color: var(--accent); color: #e8e8f0; }
   .so-kind-tag { font: 600 10px/1 Consolas, monospace; letter-spacing: .1em; color: var(--accent); }
   .so-kind-name { font-size: 14px; color: #e8e8f0; }

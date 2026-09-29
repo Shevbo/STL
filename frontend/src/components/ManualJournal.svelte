@@ -14,7 +14,7 @@
   import { fmtPrice } from '$lib/format';
   import ScreenTag from './lab/ScreenTag.svelte';
   import {
-    CHANNELS_WITH_EVENTS, PERIOD_RU, channelRu, eventRu, filterRows,
+    CHANNELS_WITH_EVENTS, PERIOD_RU, channelRu, eventRu, eventTone, filterRows,
     openTotalRub, pnlCaveats, positionAtWindowStart, reconcile, rowCodes, unpricedPoints,
     vmManualFromStatus,
     type JournalRow, type Period, type PnlReport,
@@ -303,7 +303,10 @@
       {@const key = String(r.ts_ms) + ':' + i}
       <article class="mj-row" class:trade={r.type === 'trade'}>
         <span class="mj-ts mono">{when(r.ts_ms)}</span>
-        <span class="mj-ev">{eventRu(r)}</span>
+        <!-- «По рынку» — единственное место в системе, где заявка уходит БЕЗ
+             ЦЕНЫ. Её надо видеть мгновенно, не вчитываясь (real-trade 29.09.2026). -->
+        <span class="mj-ev" class:warn={eventTone(r) === 'warn'}
+              class:market={eventTone(r) === 'market'}>{eventRu(r)}{eventTone(r) === 'market' ? ' — ПО РЫНКУ' : ''}</span>
         <span class="mj-src" title="кто это сделал">{r.source ?? '—'}</span>
         <span class="mj-code mono">{r.code ?? ''}</span>
         <span class="mj-side" class:buy={r.side === 'buy'}>{sideRu(r.side)}{r.qty ? ' ' + r.qty : ''}</span>
@@ -419,6 +422,8 @@
   .mj-row.trade { background: #14142a; }
   .mj-ts { font-size: 11px; color: #8a90a8; flex: none; }
   .mj-ev { min-width: 150px; color: #e8e8f0; }
+  .mj-ev.warn { color: #e0a35c; }
+  .mj-ev.market { color: #ff6b6b; font-weight: 700; }
   .mj-src { min-width: 150px; color: #7ec8f0; }
   .mj-code { min-width: 60px; color: #d7dae8; }
   .mj-side { min-width: 90px; color: #ff9d90; }

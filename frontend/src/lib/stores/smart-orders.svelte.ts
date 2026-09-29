@@ -51,6 +51,10 @@ export interface SmartOrder {
   c_flips?: number;
   c_pos?: number;          // + лонг, − шорт, 0 вне рынка
   c_done?: boolean;
+  // ТЕКУЩИЕ стенки считает ДВИЖОК и отдаёт готовыми (real-trade 29.09.2026).
+  // Панель их не пересчитывает: две реализации одной прямой расходятся, вопрос
+  // только когда. width сразу в пунктах.
+  c_now?: { low: number; top: number; width: number; ts_ms: number };
   note: string;
   peak: number;
   activated: boolean;
