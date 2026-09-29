@@ -29,9 +29,14 @@ class FakeStore:
         return {"quik": {"trades": []}}
 
 
-def _row(so_id, num="310501606"):
-    return {"brokerref": f"stl-so-{so_id}", "stop_order_num": num,
-            "sec_code": "RIZ6", "operation": "S"}
+def _row(so_id, num="310501606", **dead):
+    """Живая строка таблицы стоп-заявок QUIK. Номер лежит в order_num —
+    поля stop_order_num в таблице нет вовсе."""
+    row = {"brokerref": f"stl-so-{so_id}", "order_num": num, "ordernum": num,
+           "seccode": "RIZ6", "withdraw_datetime_ms": "0",
+           "activation_date_time_ms": "0", "linkedorder": "0"}
+    row.update(dead)
+    return row
 
 
 def _standalone(tmp_path, **kw):
@@ -64,14 +69,14 @@ def test_fire_is_blocked_while_our_native_row_is_alive(tmp_path):
     """Сторож не стреляет поверх живой записи терминала — источник двойной продажи."""
     import trader.api.quik_smart_orders as m
     book, so = _standalone(tmp_path, status="armed", native_state="failed")
-    native_rows = m._stop_rows_by_tag(FakeStore([_row(so.so_id)]), "9618")
+    native_rows = m._stop_rows_live(FakeStore([_row(so.so_id)]), "9618")
     assert so.so_id in native_rows
     # блок в _watch_once читает ровно это множество: id заявки или её ребёнка
     blocked = so.so_id in native_rows or any(
         c.parent_id == so.so_id and c.so_id in native_rows for c in book.orders)
     assert blocked is True
     # чужая запись не блокирует
-    other = m._stop_rows_by_tag(FakeStore([_row("deadbeef01")]), "9618")
+    other = m._stop_rows_live(FakeStore([_row("deadbeef01")]), "9618")
     assert (so.so_id in other) is False
 
 
@@ -94,3 +99,21 @@ def test_audit_sees_both_directions(tmp_path):
     assert len(msgs) == 1 and "без сторожа" in msgs[0]
     # 5. та же заявка и живая запись — расхождения нет
     assert _audit_book_vs_terminal(book, {so.so_id: _row(so.so_id)}) == []
+
+
+def test_dead_rows_are_not_custody(tmp_path):
+    """Таблица QUIK хранит ВСЕ стоп-заявки дня. Сработавшая и снятая ничего не
+    стерегут: принять их за живую охрану значит и заглушить сторожа, и поднять
+    ложную тревогу — ровно это случилось в первый же час после выкладки."""
+    import trader.api.quik_smart_orders as m
+    live = _row("aaaaaaaa01")
+    withdrawn = _row("aaaaaaaa02", "310501606", withdraw_datetime_ms="1790674445000")
+    executed = _row("aaaaaaaa03", "310501605", activation_date_time_ms="1790663538000",
+                    linkedorder="1925040256583954673")
+    store = FakeStore([live, withdrawn, executed])
+    assert set(m._stop_rows_live(store, "9618")) == {"aaaaaaaa01"}
+    # а «все строки» обязаны остаться полными: по сработавшей записи разбирается,
+    # какая нога связки исполнилась (её linkedorder ведёт к сделке)
+    assert set(m._stop_rows_by_tag(store, "9618")) == {
+        "aaaaaaaa01", "aaaaaaaa02", "aaaaaaaa03"}
+    assert m._stop_num(live) == "310501606"

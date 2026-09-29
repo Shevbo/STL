@@ -218,10 +218,10 @@ def _kill_native_by_table(request: Request, so: SmartOrder) -> None:
     ids = {so.so_id} | {c.so_id for c in book.orders if c.parent_id == so.so_id}
     if so.parent_id:
         ids.add(so.parent_id)
-    rows = _stop_rows_by_tag(store, agent)
+    rows = _stop_rows_live(store, agent)
     for sid in ids:
         row = rows.get(sid)
-        num = str((row or {}).get("stop_order_num") or "")
+        num = _stop_num(row or {})
         if not num:
             continue
         srv.enqueue_order(agent, order_msgs.build_kill_stop_order(
@@ -364,9 +364,37 @@ _STOP_FLAG_EXECUTED = 28
 _NATIVE_FILL_WAIT_MS = 60_000
 
 
+def _stop_row_live(row: dict) -> bool:
+    """Жива ли стоп-заявка ПРЯМО СЕЙЧАС.
+
+    Таблица QUIK хранит ВСЕ стоп-заявки торгового дня, включая сработавшие и
+    снятые, поэтому «строка есть» не значит «стережёт». 29.09.2026 сверка на
+    этом сразу же дала ложную тревогу по двум мёртвым записям: одна исполнилась
+    утром, вторую сняли руками часом раньше. Признаки смерти:
+      withdraw_datetime_ms  — снята (её же ставит наш kill);
+      activation_date_time_ms / linkedorder — сработала и породила заявку.
+    """
+    def _num(key: str) -> int:
+        try:
+            return int(str(row.get(key) or "0") or 0)
+        except (TypeError, ValueError):
+            return 0
+    return not (_num("withdraw_datetime_ms") or _num("activation_date_time_ms")
+                or _num("linkedorder"))
+
+
+def _stop_num(row: dict) -> str:
+    """Номер стоп-заявки. QUIK отдаёт его как order_num/ordernum — поля
+    stop_order_num в таблице НЕТ, и чтение несуществующего ключа стоило сверке
+    строки «стоп-заявка ? ЖИВА» в первый же час работы."""
+    return str(row.get("order_num") or row.get("ordernum") or "")
+
+
 def _stop_rows_by_tag(store: Any, agent: str) -> dict[str, dict]:
-    """Таблица стоп-заявок QUIK по нашему тегу (brokerref). Тег ребёнка-держателя
-    наследуется и дочерней заявкой, и сделкой - по нему видно всё."""
+    """ВСЕ стоп-заявки QUIK за день по нашему тегу (brokerref). Тег
+    ребёнка-держателя наследуется и дочерней заявкой, и сделкой - по нему видно
+    всё. Сработавшая строка нужна здесь именно потому, что она мертва: по её
+    linkedorder разбирается, какая нога связки исполнилась."""
     snap = (store.stop_orders(agent) if store is not None else None) or {}
     out: dict[str, dict] = {}
     for row in snap.get("table") or []:
@@ -374,6 +402,15 @@ def _stop_rows_by_tag(store: Any, agent: str) -> dict[str, dict]:
         if tag.startswith("stl-so-"):
             out[tag[len("stl-so-"):]] = row
     return out
+
+
+def _stop_rows_live(store: Any, agent: str) -> dict[str, dict]:
+    """Только те записи, что СТЕРЕГУТ прямо сейчас. Вопрос «кто охраняет» и
+    вопрос «чем закрылась связка» читают одну таблицу, но разные её части:
+    смешав их, сверка в первый же час подняла тревогу по двум мёртвым записям, а
+    сторож замолчал бы поверх них."""
+    return {sid: row for sid, row in _stop_rows_by_tag(store, agent).items()
+            if _stop_row_live(row)}
 
 
 def _handover_to_terminal(book: SmartOrderBook, steps: dict[str, float], ost: Any,
@@ -549,6 +586,7 @@ def _track_native(book: SmartOrderBook, store: Any, agent: str, now: int) -> lis
     watched = [p for p in book.orders
                if p.native_state in ("sent", "live") and not p.parent_id]
     rows = _stop_rows_by_tag(store, agent)
+    live_rows = _stop_rows_live(store, agent)
     # ЗАПИСЬ ПОЯВИЛАСЬ ПОСЛЕ ОТКАЗА. Подтверждение регистрации приходит за секунды
     # на торгах и дольше до них: 29.09.2026 отправленная в 06:45 стоп-заявка не
     # подтвердилась за 20 с, STL объявил «терминал не принял» и взял охрану себе,
@@ -559,7 +597,7 @@ def _track_native(book: SmartOrderBook, store: Any, agent: str, now: int) -> lis
         if p.native_state != "failed" or p.parent_id:
             continue
         ids = {p.so_id} | {c.so_id for c in book.orders if c.parent_id == p.so_id}
-        row = next((rows[i] for i in ids if i in rows), None)
+        row = next((live_rows[i] for i in ids if i in live_rows), None)
         if row is None:
             continue
         p.native_state, p.native_seen_ms = "live", now
@@ -567,13 +605,13 @@ def _track_native(book: SmartOrderBook, store: Any, agent: str, now: int) -> lis
                   else [c for c in book.orders if c.parent_id == p.so_id]):
             if c.status == "armed":
                 c.status = "native"
-                c.native_stop_num = str(row.get("stop_order_num") or "")
+                c.native_stop_num = _stop_num(row)
                 c.note = (c.note + " " if c.note else "") +                     "терминал всё-таки принял: охрана возвращена терминалу"
         so_journal.record("native_live", p, so_journal.TERMINAL,
                           "запись нашлась после отказа: охрана снова у терминала",
                           now_ms=now)
         log.warning("smart_order.native_late_confirm", so_id=p.so_id,
-                    stop_num=row.get("stop_order_num"))
+                    stop_num=_stop_num(row))
     if not watched:
         return []
     failed: list[SmartOrder] = []
@@ -923,7 +961,7 @@ def _audit_book_vs_terminal(book: SmartOrderBook, rows: dict[str, dict]) -> list
     out: list[str] = []
     for sid, row in rows.items():
         so = by_id.get(sid)
-        num = str(row.get("stop_order_num") or "?")
+        num = _stop_num(row) or "?"
         if so is None:
             out.append(f"в терминале живёт стоп-заявка {num} ({row.get('sec_code') or '?'}), "
                        "а в книге такой заявки нет вовсе")
@@ -968,7 +1006,7 @@ async def _watch_once(state: Any) -> None:
         return  # no/ambiguous agent -> nothing to fire against
     # Осиротевших ищем ДАЖЕ когда взведённых нет: сработавшая заявка может
     # потерять ребёнка уже после того, как книга опустела.
-    native_rows = _stop_rows_by_tag(store, agent)
+    native_rows = _stop_rows_live(store, agent)
     dirty_meta = _mark_orphans(book, ost, agent, so_mod.now_ms())
     dirty_meta = _track_fills(book, ost, store, agent) or dirty_meta
     dirty_meta = _revive_false_orphans(book) or dirty_meta
@@ -983,7 +1021,7 @@ async def _watch_once(state: Any) -> None:
                                       so_mod.now_ms()) or dirty_meta
     # Сверка книги с терминалом — после всех переводов статусов этого прохода,
     # иначе она ругалась бы на промежуточные состояния.
-    await _report_audit(srv, agent, book, _stop_rows_by_tag(store, agent))
+    await _report_audit(srv, agent, book, _stop_rows_live(store, agent))
     for parent in _track_native(book, store, agent, so_mod.now_ms()):
         dirty_meta = True
         # Причины разные, и оператору важно ИМЕННО какая: не принял терминал,
