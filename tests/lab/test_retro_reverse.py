@@ -5,11 +5,12 @@
 нормировка: «нет умения» должно быть нулём, а не 55 или 80 процентами.
 """
 import random
+import statistics
 
 from trader.lab.retro_reverse import (DOWN, FLAT, UP, Markov, accuracy,
-                                      apply_threshold, fit, quantize, score,
-                                      split_segments, survival,
-                                      survival_segmented, walk)
+                                      apply_threshold, fit, noise_floor,
+                                      quantize, score, split_segments,
+                                      survival, survival_segmented, walk)
 
 
 def test_quantize_threshold_comes_from_the_window():
@@ -82,7 +83,25 @@ def test_survival_reports_noise_floor():
     assert rows and all("noise_p95" in r for r in rows if r.get("n")), rows
     for r in rows:
         if r.get("n"):
+            assert "noise_median" in r and "noise_median_max" in r, r
             assert r["verdict"] == "в пределах шума", r
+
+
+def test_sign_mode_noise_floor_exceeds_shuffle_under_vol_clustering():
+    """Кластеризация волатильности видна цепи без всякого знания направления:
+    после блока крупных шагов следующий шаг редко «на месте», и mode="sign"
+    (сохраняет |приращения|, знак случаен) обязан давать более высокий уровень
+    шума, чем mode="shuffle" (рушит и порядок величин)."""
+    rng = random.Random(13)
+    px = [100.0]
+    for i in range(6000):
+        sigma = 20.0 if (i // 200) % 2 == 0 else 1.0   # блоки высокой/низкой волатильности
+        px.append(px[-1] + rng.gauss(0, sigma))
+    sign_floor = noise_floor(px, 400, 150, k=3, draws=5, seed=1, mode="sign")
+    shuffle_floor = noise_floor(px, 400, 150, k=3, draws=5, seed=1, mode="shuffle")
+    sign_med = statistics.median(x for draw in sign_floor for x in draw)
+    shuffle_med = statistics.median(x for draw in shuffle_floor for x in draw)
+    assert sign_med > shuffle_med, (sign_med, shuffle_med)
 
 
 def test_split_segments_cuts_on_gap_over_threshold():

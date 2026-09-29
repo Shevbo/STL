@@ -10,8 +10,13 @@
   растущей неделе 55-60%, «на месте» при широком пороге — долю флэтов.
 - Порог квантования и база берутся ИЗ ОКНА ПОДГОНКИ. Взять их из всей истории —
   заглядывание в будущее.
-- Любая оценка сравнивается с оценкой на ПЕРЕМЕШАННОМ ряде той же длины.
-  Содержательной считается только та, что выше 95-го процентиля шума.
+- Любая оценка сравнивается с оценкой на ряде БЕЗ НАПРАВЛЕНИЯ: знаки
+  приращений переставлены случайно, |приращения| на своих местах. Полная
+  перетасовка приращений (первый прогон 29.09) рушит и кластеризацию
+  волатильности, а она одна даёт трёхсимвольной цепи медиану ~2 из 100 на RI
+  (после большого шага следующий редко «на месте»): p95 такого шума ~0.4, и
+  всё выглядело содержательным. Честный ноль на том же ряде: медиана ~2,
+  p95 ~10. Содержательна медиана, которая выше медианы КАЖДОГО розыгрыша.
 """
 from __future__ import annotations
 
@@ -120,41 +125,60 @@ def walk(closes: list[float], fit_len: int, test_len: int, k: int,
 
 def noise_floor(closes: list[float], fit_len: int, test_len: int, k: int,
                 thr_frac: float = 0.5, draws: int = 20,
-                seed: int = 20260929) -> list[float]:
-    """Уровень шума: то же самое на ПЕРЕМЕШАННЫХ приращениях.
+                seed: int = 20260929, mode: str = "sign") -> list[list[float]]:
+    """Уровень шума: та же процедура на ряде без закономерности, по розыгрышам.
 
-    Распределение шагов сохранено, порядок разрушен — значит любая оценка здесь
-    получена без закономерности. Её 95-й процентиль и есть порог, выше которого
-    настоящая оценка становится содержательной.
+    mode="sign" — у каждого приращения случайный знак, |приращение| на своём
+    месте: кластеризация волатильности (и доля флэтов по времени) сохранена,
+    направление разрушено. Это ноль для вопроса «предсказуемо ли направление».
+    mode="shuffle" — полная перетасовка приращений (старый контроль): рушит и
+    волатильность, поэтому занижает шум (см. докстринг модуля); оставлен для
+    сравнения. Возвращает список по розыгрышам, чтобы сравнивать медиану
+    настоящего ряда с медианой каждого розыгрыша, а не с одиночными окнами.
     """
     d = [b - a for a, b in zip(closes, closes[1:])]
     rng = random.Random(seed)
-    out: list[float] = []
+    out: list[list[float]] = []
     for _ in range(draws):
-        rng.shuffle(d)
+        if mode == "shuffle":
+            rng.shuffle(d)
+            dd = d
+        else:
+            dd = [x if rng.random() < 0.5 else -x for x in d]
         px, cur = [closes[0]], closes[0]
-        for x in d:
+        for x in dd:
             cur += x
             px.append(cur)
-        out.extend(walk(px, fit_len, test_len, k, thr_frac))
+        out.append(walk(px, fit_len, test_len, k, thr_frac))
     return out
 
 
-def _survival_row(weeks: int, real: list[float], floor: list[float]) -> dict:
+def _survival_row(weeks: int, real: list[float], floor: list[list[float]]) -> dict:
     """Свёртка распределения real/floor в одну строку отчёта. Вынесена из
     survival(), чтобы survival_segmented() мог объединить оценки НЕСКОЛЬКИХ
     сегментов (после дыры экспирации) до подсчёта медианы/перцентиля — иначе
-    каждый сегмент считался бы отдельной строкой и терял сравнимость."""
+    каждый сегмент считался бы отдельной строкой и терял сравнимость.
+
+    Вердикт — перестановочный тест по медиане: медиана настоящего ряда выше
+    медианы КАЖДОГО розыгрыша шума (10 розыгрышей = p<0.1, 20 = p<0.05).
+    Сравнивать медиану 58 окон с 95-м процентилем ОДИНОЧНЫХ окон шума нельзя:
+    при честном нуле p95 ~10, и слабая, но повторяющаяся закономерность
+    (медиана 4-5 при шуме ~2) была бы отброшена; при старом нуле p95 ~0.4 и
+    above_noise считал просто окна с оценкой больше нуля."""
     if not real:
         return {"weeks": weeks, "n": 0}
     real_s = sorted(real)
-    floor_s = sorted(floor) if floor else [0.0]
+    draws = [sorted(f) for f in floor if f] or [[0.0]]
+    floor_s = sorted(x for f in draws for x in f)
     p95 = floor_s[min(len(floor_s) - 1, int(0.95 * len(floor_s)))]
     med = real_s[len(real_s) // 2]
+    noise_meds = [f[len(f) // 2] for f in draws]
     return {"weeks": weeks, "n": len(real), "median": med,
             "best": real_s[-1], "noise_p95": p95,
+            "noise_median": sorted(noise_meds)[len(noise_meds) // 2],
+            "noise_median_max": max(noise_meds),
             "above_noise": sum(1 for x in real if x > p95),
-            "verdict": "содержательно" if med > p95 else "в пределах шума"}
+            "verdict": "содержательно" if med > max(noise_meds) else "в пределах шума"}
 
 
 def survival(closes: list[float], weeks: tuple[int, ...] = (1, 2, 4, 8, 16),
@@ -189,12 +213,13 @@ def survival_segmented(segments: list[list[float]], weeks: tuple[int, ...] = (1,
     for w in weeks:
         fit_len = w * bars_per_week
         real: list[float] = []
-        floor: list[float] = []
+        floor: list[list[float]] = [[] for _ in range(draws)]
         for closes in segments:
             r = walk(closes, fit_len, test_len, k, thr_frac)
             if r:
                 real.extend(r)
-                floor.extend(noise_floor(closes, fit_len, test_len, k, thr_frac, draws=draws))
+                for acc, f in zip(floor, noise_floor(closes, fit_len, test_len, k, thr_frac, draws=draws)):
+                    acc.extend(f)        # розыгрыш i объединяется по сегментам с розыгрышем i
         out.append(_survival_row(w, real, floor))
     return out
 
