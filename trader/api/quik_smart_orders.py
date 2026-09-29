@@ -899,6 +899,61 @@ async def _alert_reject(srv: Any, agent: str, so: SmartOrder, reason: str) -> No
     )
 
 
+# ── Регулярная сверка книги с терминалом ──────────────────────────────────────
+# Что стережёт QUIK и что думает STL — две разные картины, и до 29.09.2026 их
+# никто не сравнивал. Рекон агента сверяет с QUIK позиции, заявки и сделки
+# РОБОТОВ; умные заявки оператора и таблица стоп-заявок в него не входят вовсе.
+# Цена пробела известна: книга писала «отменена», терминал держал заявку живой и
+# готовой продать 40 контрактов, а раньше в тот же день двойная охрана уже продала
+# 40 лишних. Сверка молчит, пока картины сходятся, и говорит один раз на каждое
+# новое расхождение — повторять каждые пять секунд значит приучить не читать.
+_AUDIT_SEEN: set[str] = set()
+
+
+def _audit_book_vs_terminal(book: SmartOrderBook, rows: dict[str, dict]) -> list[str]:
+    """Расхождения между книгой умных заявок и таблицей стоп-заявок QUIK.
+
+    Обе стороны важны и означают разное:
+      • запись в терминале есть, а книга её не стережёт (снята, исполнена, нет
+        вовсе) — заявка выстрелит сама по себе, и это ровно случай 29.09;
+      • книга числит заявку под охраной терминала, а записи нет — позиция голая,
+        сторожа нет ни там, ни здесь.
+    """
+    by_id = {o.so_id: o for o in book.orders}
+    out: list[str] = []
+    for sid, row in rows.items():
+        so = by_id.get(sid)
+        num = str(row.get("stop_order_num") or "?")
+        if so is None:
+            out.append(f"в терминале живёт стоп-заявка {num} ({row.get('sec_code') or '?'}), "
+                       "а в книге такой заявки нет вовсе")
+        elif so.status not in ("native", "armed"):
+            out.append(f"книга считает заявку {sid} «{so.status}», "
+                       f"а в терминале стоп-заявка {num} ЖИВА")
+    for o in book.orders:
+        if o.status == "native" and o.so_id not in rows and not any(
+                c.parent_id == o.so_id and c.so_id in rows for c in book.orders):
+            out.append(f"заявка {o.so_id} числится под охраной терминала, "
+                       "а записи в таблице стоп-заявок нет: позиция без сторожа")
+    return out
+
+
+async def _report_audit(srv: Any, agent: str, book: SmartOrderBook,
+                        rows: dict[str, dict]) -> None:
+    for msg in _audit_book_vs_terminal(book, rows):
+        if msg in _AUDIT_SEEN:
+            continue
+        _AUDIT_SEEN.add(msg)
+        log.error("smart_order.audit_mismatch", detail=msg)
+        fwd = getattr(srv, "alert_forwarder", None)
+        if fwd is None:
+            continue
+        await fwd.forward({"severity": SEVERITY_CRITICAL,
+                           "code": "smart_order_audit",
+                           "message": f"Сверка умных заявок с QUIK: {msg}",
+                           "raised_at_unix_ms": so_mod.now_ms()}, agent)
+
+
 async def _watch_once(state: Any) -> None:
     book: SmartOrderBook = state.smart_orders
     active = book.active()
@@ -926,6 +981,9 @@ async def _watch_once(state: Any) -> None:
     # Одиночный стоп или тейк оператора на уже открытую позицию - туда же.
     dirty_meta = _handover_standalone(book, steps_all, store, ost, srv, agent,
                                       so_mod.now_ms()) or dirty_meta
+    # Сверка книги с терминалом — после всех переводов статусов этого прохода,
+    # иначе она ругалась бы на промежуточные состояния.
+    await _report_audit(srv, agent, book, _stop_rows_by_tag(store, agent))
     for parent in _track_native(book, store, agent, so_mod.now_ms()):
         dirty_meta = True
         # Причины разные, и оператору важно ИМЕННО какая: не принял терминал,

@@ -73,3 +73,24 @@ def test_fire_is_blocked_while_our_native_row_is_alive(tmp_path):
     # чужая запись не блокирует
     other = m._stop_rows_by_tag(FakeStore([_row("deadbeef01")]), "9618")
     assert (so.so_id in other) is False
+
+
+def test_audit_sees_both_directions(tmp_path):
+    """Сверка книги с терминалом: обе стороны расхождения и молчание, когда сходится."""
+    from trader.api.quik_smart_orders import _audit_book_vs_terminal
+    book, so = _standalone(tmp_path, status="armed", native_state="")
+    # 1. сходится: записи нет, книга стережёт сама — молчим
+    assert _audit_book_vs_terminal(book, {}) == []
+    # 2. книга сняла заявку, а в терминале она жива — случай 29.09
+    so.status = "cancelled"
+    msgs = _audit_book_vs_terminal(book, {so.so_id: _row(so.so_id)})
+    assert len(msgs) == 1 and "ЖИВА" in msgs[0] and "310501606" in msgs[0]
+    # 3. запись под чужим тегом: книга о ней не знает вовсе
+    msgs = _audit_book_vs_terminal(book, {"deadbeef01": _row("deadbeef01", "999")})
+    assert any("в книге такой заявки нет" in m for m in msgs)
+    # 4. книга думает, что охраняет терминал, а записи нет — позиция без сторожа
+    so.status = "native"
+    msgs = _audit_book_vs_terminal(book, {})
+    assert len(msgs) == 1 and "без сторожа" in msgs[0]
+    # 5. та же заявка и живая запись — расхождения нет
+    assert _audit_book_vs_terminal(book, {so.so_id: _row(so.so_id)}) == []
