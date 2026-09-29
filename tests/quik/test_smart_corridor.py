@@ -80,3 +80,49 @@ def test_validation_guards_the_geometry():
     assert _corr(c_p1=0).validate() is not None             # нет верхней границы
     assert _corr(c_low=0).validate() is not None            # нет нижней
     assert _corr().validate() is None
+
+
+# ── ТРЕУГОЛЬНИК ──────────────────────────────────────────────────────────────
+# То же поведение, но у нижней границы СВОЙ угол: канал сужается (клин сходится
+# в апекс) или расширяется. Заказ оператора 29.09.2026, следом за коридором.
+
+def _tri(**kw):
+    base = dict(kind="triangle", c_p1=85000.0, c_p2=84500.0,
+                c_low=84000.0, c_low2=84400.0)   # сужающийся
+    base.update(kw)
+    return _corr(**base)
+
+
+def test_narrowing_and_widening_walls():
+    narrow = _tri()
+    assert corridor_bounds(narrow, T0) == (84000.0, 85000.0)          # ширина 1000
+    low, top = corridor_bounds(narrow, T0 + HOUR)
+    assert (low, top) == (84400.0, 84500.0)                            # ширина 100
+    wide = _tri(c_p2=86000.0, c_low2=83000.0)
+    low, top = corridor_bounds(wide, T0 + HOUR)
+    assert (low, top) == (83000.0, 86000.0)                            # ширина 3000
+    # обе линии продолжаются за вторую точку
+    low, top = corridor_bounds(_tri(), T0 + 2 * HOUR)
+    assert (low, top) == (84800.0, 84000.0)
+
+
+def test_apex_closes_the_position_and_ends_the_order():
+    so = _tri(c_pos=-10)
+    # до апекса торгуем как обычно
+    assert corridor_action(so, 85000, T0)[:2] == (0, 0)                # уже в шорте
+    assert corridor_action(so, 84000, T0)[:2] == (1, 20)               # переворот у низа
+    # за апексом (стенки сошлись) — закрыть и закончить
+    side, qty, why = corridor_action(so, 84500, T0 + 2 * HOUR)
+    assert (side, qty) == (1, 10) and why.startswith("апекс")
+    so_mod.corridor_after_fire(so, side, qty, True)
+    assert so.c_pos == 0 and so.c_done is True
+    # вне позиции апекс просто заканчивает заявку
+    flat = _tri()
+    assert corridor_action(flat, 84500, T0 + 2 * HOUR)[:2] == (0, 0)
+    assert flat.c_done is True
+
+
+def test_triangle_validation():
+    assert _tri(c_low2=0).validate() is not None        # нет второй точки низа
+    assert _tri(c_low2=84600.0).validate() is not None  # низ выше верха во 2-й точке
+    assert _tri().validate() is None

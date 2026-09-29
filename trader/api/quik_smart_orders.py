@@ -109,6 +109,7 @@ class SmartOrderBody(BaseModel):
     c_t2_ms: int = 0
     c_p2: float = 0.0
     c_low: float = 0.0
+    c_low2: float = 0.0            # треугольник: нижняя граница в момент c_t2_ms
     c_stop_pts: float = 0.0
     c_flips_max: int = 0
     note: str = ""
@@ -132,7 +133,8 @@ async def create(body: SmartOrderBody, request: Request):
         esc_chase_every_sec=int(body.esc_chase_every_sec),
         c_t1_ms=int(body.c_t1_ms), c_p1=float(body.c_p1),
         c_t2_ms=int(body.c_t2_ms), c_p2=float(body.c_p2),
-        c_low=float(body.c_low), c_stop_pts=float(body.c_stop_pts),
+        c_low=float(body.c_low), c_low2=float(body.c_low2),
+        c_stop_pts=float(body.c_stop_pts),
         c_flips_max=int(body.c_flips_max), c_qty=int(body.qty),
         note=body.note, created_ms=so_mod.now_ms(),
     )
@@ -1037,7 +1039,7 @@ def _escalate_protection(book: SmartOrderBook, store: Any, ost: Any, srv: Any,
         # Коридор наравне со стопом: оператор просил «с гарантией входа» — вход,
         # который не налился, оставляет коридор без позиции у самой стенки, то
         # есть ровно там, где он должен был встать.
-        if so.kind not in ("sl", "corridor") or not so.fired_client_id:
+        if so.kind not in ("sl", "corridor", "triangle") or not so.fired_client_id:
             continue
         if so.kind == "sl" and so.status != "fired":
             continue
@@ -1284,8 +1286,8 @@ async def _watch_once(state: Any) -> None:
                 so.status = "fired"
                 so.fired_ms = now
                 so.fired_client_id = client_id
-                if so.kind == "corridor":
-                    # Коридор — заявка МНОГОРАЗОВАЯ: отстреляв от стенки, он ждёт
+                if so.kind in ("corridor", "triangle"):
+                    # Коридор и треугольник — заявки МНОГОРАЗОВЫЕ: отстреляв от стенки, он ждёт
                     # противоположную. Поэтому статус возвращается в armed, а
                     # «fired» остаётся только следом для эскалации, которая
                     # доводит этот вход до исполнения.

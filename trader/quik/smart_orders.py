@@ -50,7 +50,7 @@ import time
 import uuid
 from dataclasses import asdict, dataclass
 
-KINDS = ("sl", "tp", "trail_tp", "on_fill", "trail_sl", "corridor")
+KINDS = ("sl", "tp", "trail_tp", "on_fill", "trail_sl", "corridor", "triangle")
 # Типы, которые ведут уровень за экстремумом (храповик). Список общий, чтобы
 # новый вид не пришлось дописывать в трёх местах и один из них не забыть.
 _TRAILING = ("trail_tp", "trail_sl")
@@ -137,6 +137,10 @@ class SmartOrder:
     c_t2_ms: int = 0
     c_p2: float = 0.0
     c_low: float = 0.0           # цена нижней границы в момент c_t1_ms
+    # ТРЕУГОЛЬНИК (kind="triangle"): у нижней границы СВОЙ угол, поэтому нужна её
+    # вторая точка. Ширина канала меняется — сужается (клин сходится) или
+    # расширяется. У коридора это поле пустое: там нижняя параллельна верхней.
+    c_low2: float = 0.0          # цена нижней границы в момент c_t2_ms
     c_stop_pts: float = 0.0      # выход за стенку в пунктах (0 = без стопа)
     c_flips_max: int = 0         # сколько переворотов разрешено (0 = без предела)
     c_flips: int = 0             # сколько уже сделано
@@ -159,7 +163,11 @@ class SmartOrder:
             return "code обязателен"
         if self.kind in ("sl", "tp") and self.trigger_price <= 0:
             return "trigger_price обязателен для sl/tp"
-        if self.kind == "corridor":
+        if self.kind in ("corridor", "triangle"):
+            if self.kind == "triangle" and self.c_low2 <= 0:
+                return "треугольник: нужна вторая точка нижней границы (c_low2)"
+            if self.kind == "triangle" and self.c_low2 >= self.c_p2:
+                return "треугольник: во второй точке нижняя граница не ниже верхней"
             if self.c_p1 <= 0 or self.c_p2 <= 0:
                 return "коридор: обе точки верхней границы обязательны"
             if self.c_low <= 0:
@@ -293,8 +301,13 @@ def corridor_bounds(so: SmartOrder, now_ms: int) -> tuple[float, float]:
     ВСЕМУ коридору, иначе канал незаметно превращался бы в клин.
     """
     dt = so.c_t2_ms - so.c_t1_ms
-    slope = (so.c_p2 - so.c_p1) / dt if dt else 0.0
-    top = so.c_p1 + slope * (now_ms - so.c_t1_ms)
+    k = (now_ms - so.c_t1_ms) / dt if dt else 0.0
+    top = so.c_p1 + (so.c_p2 - so.c_p1) * k
+    if so.c_low2 > 0:
+        # Треугольник: у нижней границы свой угол. Сужающийся сходится в апекс,
+        # расширяющийся расходится; обе линии продолжаются за вторую точку, как и
+        # у коридора, поэтому апекс может оказаться в будущем.
+        return so.c_low + (so.c_low2 - so.c_low) * k, top
     return top - (so.c_p1 - so.c_low), top
 
 
@@ -308,6 +321,14 @@ def corridor_action(so: SmartOrder, price: float, now_ms: int) -> tuple[int, int
     if so.c_done or price <= 0:
         return 0, 0, ""
     low, top = corridor_bounds(so, now_ms)
+    if low >= top:
+        # АПЕКС сужающегося треугольника: стенки сошлись, «от какой стенки» смысла
+        # больше не имеет. Закрываем позицию и заканчиваем — держать её здесь
+        # значит торговать фигуру, которой уже нет.
+        if so.c_pos != 0:
+            return (-1 if so.c_pos > 0 else 1), abs(so.c_pos), "апекс: стенки сошлись"
+        so.c_done = True
+        return 0, 0, ""
     stop = float(so.c_stop_pts or 0)
     # СТОП ПЕРВЫМ: цена уже за стенкой дальше допуска — коридор кончился, и
     # спорить с рынком нечем. Проверяется раньше входов, иначе на проколе вверх
@@ -428,7 +449,7 @@ def evaluate(orders: list[SmartOrder], code: str, *, last: float, bid: float,
         if not fresh or price <= 0:
             continue  # never act on a dead/stale feed
 
-        if so.kind == "corridor":
+        if so.kind in ("corridor", "triangle"):
             if so.c_done and so.c_pos != 0:
                 side, qty = corridor_closeout(so)
                 why = "переворты исчерпаны: закрываем позицию"
