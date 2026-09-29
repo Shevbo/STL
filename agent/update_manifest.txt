@@ -45,3 +45,8 @@ trader/lab/footprints/e1_lead_lag.py
 trader/lab/footprints/c1_book_imbalance.py
 trader/lab/footprints/c3_spoofing.py
 trader/lab/footprints/d23_tape_flow.py
+trader/lab/footprints/a3_momentum_ignition.py
+trader/lab/footprints/b2_vwap_reversion.py
+trader/lab/footprints/c2_iceberg.py
+trader/lab/footprints/c4_liquidity_pull.py
+trader/lab/footprints/d1_execution_periodicity.py
