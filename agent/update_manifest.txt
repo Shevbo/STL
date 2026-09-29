@@ -34,7 +34,14 @@ trader/lab/ai46/backtest.py
 trader/lab/ai46/sweep_task.py
 trader/lab/book_replay.py
 trader/lab/impulse_news.py
-
 trader/lab/footprints/__init__.py
 trader/lab/footprints/common.py
 trader/lab/footprints/a4_bar_boundary.py
+trader/lab/footprints/a2_channel_breakout.py
+trader/lab/footprints/a5_time_of_day.py
+trader/lab/footprints/b3_round_levels.py
+trader/lab/footprints/c6_stop_hunt.py
+trader/lab/footprints/e1_lead_lag.py
+trader/lab/footprints/c1_book_imbalance.py
+trader/lab/footprints/c3_spoofing.py
+trader/lab/footprints/d23_tape_flow.py
