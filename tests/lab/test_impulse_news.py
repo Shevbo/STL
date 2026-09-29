@@ -61,3 +61,11 @@ def test_continuation_is_signed_by_direction():
 def test_crosses_direction():
     gap = [None, -1.0, -0.5, 0.0, 0.3, 0.2, -0.1]
     assert im.crosses(gap) == [(4, 1), (6, -1)]
+
+
+def test_m15_bars_close_on_last_minute_of_quarter():
+    base = 1_750_000_500 - 1_750_000_500 % 900          # начало часа кратно 15 минутам
+    times = [base + 60 * i for i in range(40)]
+    # последние минуты четвертей: 14 и 29; хвост 30..39 незавершён и не берётся
+    assert im.tf_ends(times, 15) == [14, 29]
+    assert im.tf_ends(times[:3], 1) == [0, 1, 2]

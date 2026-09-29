@@ -21,14 +21,17 @@
 - Продолжение: знаковый ход в направлении события от конца через 5, 15 и 60 минут,
   в единицах медианного 5-барного хода на баре конца. Цена «через N минут» =
   close последнего бара с временем <= конец + N минут (через перерыв цена стоит).
-- Пересечение: бар, на котором сменился знак SMA50 - SMA200 по close. Направление
-  +1, если SMA50 ушла выше. Ход вперёд 5/15/60 минут и назад за 30 минут, доля
-  пересечений, после которых в течение 30 минут начинается импульс.
-- «Ложные» точки: локальный минимум |SMA50 - SMA200| в окне +-30 баров без смены
-  знака в том же окне; берутся самые близкие (по |разрыву| в медианах хода), столько
-  же, сколько пересечений. Направление = знак разрыва на этом баре.
-- Случайные минуты (контроль): равномерно по барам окна, фиксированное зерно.
-  Для обоих слоёв отдаётся сырой знаковый ход; направление подставляет отчёт.
+- Пересечение (параметры таймфрейм, быстрая, медленная; CROSS_CONFIGS): бар, на
+  котором сменился знак SMA(fast) - SMA(slow) по close. Направление +1, если быстрая
+  ушла выше. Конфигурации: M1 50/200 (ходы 5/15/60, «до» 30 минут) и M15 10/50
+  (ходы 5/15/60/240, «до» 120 минут). M15 склеивается из M1 от начала часа, close =
+  close последней минуты; ходы в минутных барах от минуты закрытия бара
+  пересечения. Плюс доля точек, после которых в течение 30 минут начинается импульс.
+- «Ложные» точки: локальный минимум |SMA(fast) - SMA(slow)| в окне +-30 баров своего
+  таймфрейма без смены знака там же; берутся самые близкие (по |разрыву| в медианах
+  хода), столько же, сколько пересечений. Направление = знак разрыва на этом баре.
+- Случайные точки (контроль): для слоя 1 случайные минуты, для пересечений случайные
+  завершённые бары своего таймфрейма; фиксированное зерно.
 
 ОГОВОРКА, которую нельзя терять: «тихий фон» = ноль заголовков Интерфакса в окне.
 Это прокси, а не факт: иностранные провода, слухи, блочные сделки в ленту не
@@ -206,16 +209,67 @@ def near_misses(gap: list, med_m: list, cross_idx: list[int], w: int = NEAR_W) -
     return [(i, s) for _, i, s in cand]
 
 
-def _point_row(times, closes, med_m, starts: list[int], i: int, direction: int) -> dict:
-    """Ход вперёд/назад и «импульс начался в ближайшие 30 минут» для точки i."""
+def _point_row(times, closes, med_m, starts: list[int], i: int, direction: int,
+               horizons=HORIZONS, back_min: int = BACK_MIN) -> dict:
+    """Ход вперёд/назад в минутных барах от бара i и «импульс начался в ближайшие 30 минут»."""
     med = med_m[i]
-    fwd = continuation(times, closes, i, direction, med)
-    back = price_at(times, closes, times[i] - BACK_MIN * 60)
+    row = {"time": times[i], "dir": direction, "med": round(med, 4)}
+    for h, v in continuation(times, closes, i, direction, med, horizons).items():
+        row[f"f{h}"] = v
+    back = price_at(times, closes, times[i] - back_min * 60)
+    row["b"] = None if back is None else round(direction * (closes[i] - back) / med, 4)
     j = bisect.bisect_left(starts, times[i])
-    return {"time": times[i], "dir": direction, "med": round(med, 4),
-            "f5": fwd[5], "f15": fwd[15], "f60": fwd[60],
-            "b30": None if back is None else round(direction * (closes[i] - back) / med, 4),
-            "imp30": int(j < len(starts) and starts[j] <= times[i] + IMPULSE_AFTER_SEC)}
+    row["imp30"] = int(j < len(starts) and starts[j] <= times[i] + IMPULSE_AFTER_SEC)
+    return row
+
+
+def tf_ends(times: list[int], tf_min: int) -> list[int]:
+    """Индексы последней минуты каждого tf-минутного бара (склейка от начала часа).
+
+    Close такого бара = close этой минуты, поэтому пересечение на нём известно ровно
+    в момент закрытия этой минуты: ходы после отсчитываются от неё, без заглядывания.
+    Последний бар ряда не берётся, он может быть незавершённым.
+    """
+    if tf_min == 1:
+        return list(range(len(times)))
+    step = tf_min * 60
+    out = [i for i in range(len(times) - 1) if times[i] // step != times[i + 1] // step]
+    return out
+
+
+def cross_layer(times, closes, med_m, starts, lo, hi, tf_min: int, fast: int, slow: int,
+                horizons, back_min: int, n_random: int = 3000, seed: int = 20260929) -> dict:
+    """Пересечения SMA(fast)/SMA(slow) на tf-минутных барах, ложные сближения, случайные бары.
+
+    Средние считаются по close ЗАВЕРШЁННЫХ tf-баров; все ходы в минутных барах от
+    минуты закрытия бара. Окно ложных точек = +-30 tf-баров. Случайные точки берутся
+    из тех же завершённых tf-баров (для tf=1 это случайные минуты), направление =
+    знак разрыва средних на них.
+    """
+    ends = tf_ends(times, tf_min)
+    gap = sma_gap([closes[i] for i in ends], fast, slow)
+    med_tf = [med_m[i] for i in ends]
+    ok = [lo <= times[i] <= hi and med_m[i] for i in ends]
+
+    def rows(pts):
+        return [_point_row(times, closes, med_m, starts, ends[k], s, horizons, back_min)
+                for k, s in sorted(pts)]
+
+    all_x = crosses(gap)
+    xs = [(k, s) for k, s in all_x if ok[k]]
+    nm = [(k, s) for k, s in near_misses(gap, med_tf, [k for k, _ in all_x]) if ok[k]][:len(xs)]
+    pool = [k for k in range(len(ends)) if ok[k] and gap[k]]
+    rnd = random.Random(seed).sample(pool, min(n_random, len(pool)))
+    return {"tf": tf_min, "fast": fast, "slow": slow, "horizons": list(horizons),
+            "back_min": back_min, "crosses": rows(xs), "near": rows(nm),
+            "random": rows([(k, _sign(gap[k])) for k in rnd])}
+
+
+CROSS_CONFIGS = (
+    # (таймфрейм мин, быстрая, медленная, горизонты мин, окно «до» мин)
+    (1, 50, 200, (5, 15, 60), 30),
+    (15, 10, 50, (5, 15, 60, 240), 120),
+)
 
 
 def analyze(bars: list, lo: int, hi: int, n_random: int = 3000, seed: int = 20260929) -> dict:
@@ -229,33 +283,27 @@ def analyze(bars: list, lo: int, hi: int, n_random: int = 3000, seed: int = 2026
                  med=round(e["med"], 4))
     starts = [e["start_time"] for e in events]
 
-    gap = sma_gap(closes)
-    all_x = crosses(gap)
-    xs = [(i, s) for i, s in all_x if lo <= times[i] <= hi and med_m[i]]
-    nm = [(i, s) for i, s in near_misses(gap, med_m, [i for i, _ in all_x])
-          if lo <= times[i] <= hi][:len(xs)]
-    near = [_point_row(times, closes, med_m, starts, i, s) for i, s in sorted(nm)]
-
-    rng = random.Random(seed)
-    pool = [i for i in range(len(times)) if lo <= times[i] <= hi and med_m[i]
-            and gap[i] is not None and i >= 5]
+    # Контроль слоя 1: случайные минуты с сырым ходом (направление d5 ставит отчёт)
+    # и меткой «внутри импульса +-10 минут», такие отчёт выбрасывает.
+    pool = [i for i in range(5, len(times)) if lo <= times[i] <= hi and med_m[i]]
     spans = sorted((e["start_time"] - MERGE_SEC, e["end_time"] + MERGE_SEC) for e in events)
     span_lo = [a for a, _ in spans]
     rand = []
-    for i in sorted(rng.sample(pool, min(n_random, len(pool)))):
-        r = _point_row(times, closes, med_m, starts, i, 1)   # сырой ход, направление в отчёте
+    for i in sorted(random.Random(seed).sample(pool, min(n_random, len(pool)))):
+        c = continuation(times, closes, i, 1, med_m[i])
         k = bisect.bisect_right(span_lo, times[i]) - 1
-        r.update(d5=_sign(closes[i] - closes[i - 5]), dsma=_sign(gap[i]),
-                 in_imp=int(k >= 0 and times[i] <= spans[k][1]))
-        del r["dir"]
-        rand.append(r)
+        rand.append({"time": times[i], "med": round(med_m[i], 4), "f5": c[5], "f15": c[15],
+                     "f60": c[60], "d5": _sign(closes[i] - closes[i - 5]),
+                     "in_imp": int(k >= 0 and times[i] <= spans[k][1])})
 
+    layers = {f"m{tf}_{f}_{s}": cross_layer(times, closes, med_m, starts, lo, hi, tf, f, s,
+                                            hz, bk, n_random, seed)
+              for tf, f, s, hz, bk in CROSS_CONFIGS}
     return {"n_bars": len(times), "bars_from": times[0], "bars_to": times[-1],
             "lo": lo, "hi": hi,
             "events": [{k: v for k, v in e.items() if k not in ("start_idx", "end_idx")}
                        for e in events],
-            "crosses": [_point_row(times, closes, med_m, starts, i, s) for i, s in xs],
-            "near": near, "random": rand}
+            "random": rand, "cross_layers": layers}
 
 
 def _load_bars(symbol: str) -> list:
