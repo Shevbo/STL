@@ -23,6 +23,7 @@
   import ExpiryScreen from './components/ExpiryScreen.svelte';
   import ManualJournal from './components/ManualJournal.svelte';
   import RobotQuality from './components/RobotQuality.svelte';
+  import ExecProfiles from './components/ExecProfiles.svelte';
   import StrategyPage from './components/lab/StrategyPage.svelte';
   import { WsClient } from '$lib/ws';
   import { robotsStore } from '$lib/stores/robots.svelte';
@@ -69,6 +70,10 @@
   // Дип-линк ?quality=1 — качество роботов: win rate и recovery factor с
   // историей. Список по КАЧЕСТВУ, а не по деньгам (заказ оператора 25.09.2026).
   let showQuality = $state(_qs.has('quality'));
+  // Дип-линк ?execprofiles=1 — профили доведения заявки до исполнения: сколько
+  // стоять у цены, сколько догонять, добивать ли по рынку. Оператор правит
+  // секунды сам (заказ 29.09.2026), поэтому это экран, а не константы в коде.
+  let showExecProfiles = $state(_qs.has('execprofiles'));
   // OrderViz: default = auto (self-shows on active orders). Operator can pin it
   // open or hide it; "pin" forces it visible even with no active orders.
   let orderVizPinned = $state(false);
@@ -466,6 +471,15 @@
   {#if showQuality}
     <div class="quik-tables-wrap" style="height:{labH}px">
       <RobotQuality onClose={() => showQuality = false} />
+    </div>
+    <div class="dh dh-h" title="Высота фрейма: потяните вниз — выше"
+         onpointerdown={(e) => onPointerDown('labBottom', e, labH)}>
+      <div class="dh-dot"></div>
+    </div>
+  {/if}
+  {#if showExecProfiles}
+    <div class="quik-tables-wrap" style="height:{labH}px">
+      <ExecProfiles onClose={() => showExecProfiles = false} />
     </div>
     <div class="dh dh-h" title="Высота фрейма: потяните вниз — выше"
          onpointerdown={(e) => onPointerDown('labBottom', e, labH)}>

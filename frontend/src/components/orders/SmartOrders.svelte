@@ -20,6 +20,10 @@
   } from '$lib/smart-order-help';
   import { candlesStore } from '$lib/stores/candles.svelte';
   import { eventRu, eventTone, type JournalRow } from '$lib/manual-journal';
+  import {
+    DEFAULT_PROFILE, guaranteeText, longWaitWarn, profileNames, profileOf,
+    type ExecProfiles,
+  } from '$lib/exec-profiles';
   import { corridorDraw } from '$lib/stores/corridor-draw.svelte';
 
   let { symbol = '' }: { symbol?: string } = $props();
@@ -66,6 +70,27 @@
   let cStopPts = $state('');
   let cFlipsMax = $state('');
   let cErr = $state('');
+  // ПРОФИЛЬ ИСПОЛНЕНИЯ — один селект вместо трёх полей секунд (решение оператора
+  // 29.09.2026). Секунды остались в API как разовое перекрытие и живут под
+  // раскрытием: на рядовом пути они только мешают.
+  let profiles = $state<ExecProfiles>({});
+  let escProfile = $state(DEFAULT_PROFILE);
+  let escTune = $state(false);
+  let escHold = $state('');
+  let escChase = $state('');
+  let escEvery = $state('');
+
+  async function loadProfiles() {
+    try {
+      const r = await fetchWithAuth('/api/v1/quik/smart-orders/exec-profiles');
+      if (!r.ok) return;
+      const d = await r.json();
+      profiles = (d?.profiles ?? {}) as ExecProfiles;
+      if (d?.default && !(escProfile in profiles)) escProfile = String(d.default);
+    } catch { /* профилей нет — форма работает, движок возьмёт штатный */ }
+  }
+
+  const curProfile = $derived(profileOf(profiles, escProfile));
   // Лента событий ОДНОЙ заявки прямо в карточке (real-trade 29.09.2026):
   // карточка говорит, что БУДЕТ, лента — что БЫЛО, и разбирать потом придётся
   // второе. Тянем по требованию: у книги бывает два десятка заявок, и грузить
@@ -406,6 +431,16 @@
       c_low: only('c_low', num(cLow)),
       c_low2: only('c_low2', num(cLow2)),
       c_stop_pts: only('c_stop_pts', num(cStopPts)),
+      // Профиль относится к ЛЮБОМУ типу заявки, а не только к защитной: не
+      // исполнившийся ВХОД врёт человеку так же, как выход — он видит
+      // «сработала», а в рынке ничего нет.
+      esc_profile: escProfile,
+      // Секунды уезжают ТОЛЬКО из раскрытой тонкой настройки. Иначе форма
+      // молча перекрывала бы профиль его же числами, и правка профиля на
+      // экране настроек перестала бы влиять на новые заявки.
+      esc_hold_sec: escTune ? num(escHold) : undefined,
+      esc_chase_sec: escTune ? num(escChase) : undefined,
+      esc_chase_every_sec: escTune ? num(escEvery) : undefined,
       c_flips_max: only('c_flips_max', num(cFlipsMax)),
       oco_group: tr(ocoGroup),
       good_till_ms: goodTillMs,
@@ -499,6 +534,7 @@
     timers = [setInterval(loadTick, 2000), setInterval(loadPositions, 5000),
               setInterval(loadStopOrders, 5000)];
     loadPointValue();   // и без выбранного кода: наполняет подсказки инструментов
+    loadProfiles();
     loadPositions();
     loadStopOrders();
   });
@@ -710,6 +746,68 @@
             <div class="so-draw-w">стенки сойдутся {fmtWhen(apex)} — там заявка закроет позицию и закончится</div>
           {/if}
         </div>
+        {/if}
+      </div>
+
+      <!-- ГРУППА 2.5: КАК ДОВОДИМ ДО ИСПОЛНЕНИЯ. Заявка ставит лимит, и на
+           быстром движении его не наливают: 29.09.2026 стоп на 70 RIZ6
+           сработал и умер с нулём исполнения, позиция осталась открытой.
+           Профиль относится и ко входу, и к выходу — не исполнившийся вход
+           врёт человеку так же: он видит «сработала», а в рынке ничего нет. -->
+      <div class="so-group">
+        <div class="so-g-h">Как доводим до исполнения</div>
+        <div class="so-fields">
+          <div class="so-f">
+            <span>Профиль исполнения</span>
+            <select class="so-in text" bind:value={escProfile} aria-label="Профиль исполнения">
+              {#each profileNames(profiles) as n}
+                <option value={n}>{profiles[n]?.title ?? n}</option>
+              {/each}
+              {#if !profileNames(profiles).length}<option value={DEFAULT_PROFILE}>штатный</option>{/if}
+            </select>
+            <em>{guaranteeText(curProfile) || 'профили не загрузились — движок возьмёт штатный'}</em>
+          </div>
+        </div>
+        {#if longWaitWarn(curProfile)}
+          <div class="so-prof-warn">{longWaitWarn(curProfile)}</div>
+        {/if}
+        <!-- Тонкая настройка ПОД РАСКРЫТИЕМ: на рядовом пути три поля секунд
+             только мешают, но разовое перекрытие профиля движок принимает. -->
+        <button type="button" class="so-draw-b" onclick={() => escTune = !escTune}>
+          {escTune ? 'скрыть тонкую настройку' : 'тонкая настройка — секунды этой заявки'}
+        </button>
+        {#if escTune}
+          <div class="so-fields">
+            <div class="so-f">
+              <span>Ждать у цены заявки</span>
+              <div class="so-unit-wrap">
+                <input class="so-in pts" type="number" step="1" min="0" bind:value={escHold}
+                       placeholder="0" aria-label="Ждать у цены заявки" />
+                <span class="so-unit">с</span>
+              </div>
+              <em>0 — фазу пропускаем</em>
+            </div>
+            <div class="so-f">
+              <span>Догонять цену</span>
+              <div class="so-unit-wrap">
+                <input class="so-in pts" type="number" step="1" min="0" bind:value={escChase}
+                       placeholder="0" aria-label="Догонять цену" />
+                <span class="so-unit">с</span>
+              </div>
+              <em>0 — фазу пропускаем</em>
+            </div>
+            <div class="so-f">
+              <span>Переставлять раз в</span>
+              <div class="so-unit-wrap">
+                <input class="so-in pts" type="number" step="1" min="0" bind:value={escEvery}
+                       placeholder="0" aria-label="Переставлять раз в" />
+                <span class="so-unit">с</span>
+              </div>
+              <em>шаг перестановки в фазе погони</em>
+            </div>
+          </div>
+          <div class="so-prof-warn">эти секунды перекрывают профиль ТОЛЬКО у этой заявки; оба нуля
+            означают «сразу по рынку», а не «нормальный» — «нормальный» не идёт по рынку никогда</div>
         {/if}
       </div>
 
@@ -957,6 +1055,11 @@
             {/if}
             {#if o.c_stop_pts}<span class="so-c-corr-w">стоп за стенкой {fmtPts(o.c_stop_pts)}</span>{/if}
           </div>
+        {/if}
+        <!-- Следствие выбора длинных фаз: это его решение, но видеть его он
+             обязан (просьба real-trade 29.09.2026). -->
+        {#if longWaitWarn(profileOf(profiles, o.esc_profile))}
+          <div class="so-prof-warn">{longWaitWarn(profileOf(profiles, o.esc_profile))}</div>
         {/if}
         {#if feedFor === o.so_id}
           <div class="so-feed">
@@ -1222,6 +1325,7 @@
   .so-feed-ev.warn { color: #e0a35c; }
   .so-feed-ev.market { color: #ff6b6b; font-weight: 700; }
   .so-feed-d { color: #9aa0b4; }
+  .so-prof-warn { margin: 5px 8px 0; font-size: 11px; color: #e0a35c; }
   .so-kind.on { background: #1b1b34; border-color: var(--accent); color: #e8e8f0; }
   .so-kind-tag { font: 600 10px/1 Consolas, monospace; letter-spacing: .1em; color: var(--accent); }
   .so-kind-name { font-size: 14px; color: #e8e8f0; }
