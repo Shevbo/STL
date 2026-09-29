@@ -408,6 +408,11 @@ def _price_steps(store: Any, agent: str) -> dict[str, float]:
 # Помечаем такие как orphaned — интерфейс предлагает перевзвести. Автоматически
 # НЕ перевзводим: цена наутро другая, решение за человеком.
 _ORPHAN_GRACE_MS = 5 * 60 * 1000
+# Через сколько повторить попытку отдать защиту терминалу после его отказа.
+# Пять минут: достаточно редко, чтобы не долбить транзакциями, и достаточно
+# часто, чтобы заявка, отвергнутая до открытия торгов, попала под охрану
+# терминала в первые же минуты сессии.
+_NATIVE_RETRY_MS = 5 * 60 * 1000
 _DEAD_STATES = ("cancelled", "rejected")
 # OrderStore живёт в памяти: рестарт STL стирает записи. Сработавшая ДО старта
 # процесса заявка отсутствует в сторе не потому, что умерла — судить о ней нельзя
@@ -552,7 +557,18 @@ def _handover_standalone(book: SmartOrderBook, steps: dict[str, float], store: A
     dirty = False
     positions = _open_positions(store, agent)
     for so in book.orders:
-        if so.status != "armed" or so.parent_id or so.native_state:
+        if so.status != "armed" or so.parent_id:
+            continue
+        # ОТКАЗ ТЕРМИНАЛА НЕ НАВСЕГДА. Раньше любой непустой native_state
+        # закрывал заявке дорогу к терминалу до конца её жизни: один мнимый отказ
+        # (29.09.2026 подтверждение не пришло за 20 с, потому что в 06:45 торги
+        # ещё не шли) — и защита навсегда оставалась только у STL, то есть
+        # умирала вместе с падением STL. Пробуем снова, но не чаще, чем раз в
+        # _NATIVE_RETRY_MS, иначе отвергающий терминал получал бы транзакцию
+        # каждые пять секунд.
+        if so.native_state and not (
+                so.native_state == "failed"
+                and now - (so.native_ms or 0) >= _NATIVE_RETRY_MS):
             continue
         plan = native_protect.build_native_standalone(
             so, steps.get(so.code, 0.0), positions.get(so.code, 0))
@@ -1181,6 +1197,80 @@ def _escalate_protection(book: SmartOrderBook, store: Any, ost: Any, srv: Any,
     return dirty
 
 
+def _escalate_native_child(book: SmartOrderBook, store: Any, srv: Any, lim: Any,
+                           agent: str, rows: dict[str, dict], now: int) -> bool:
+    """Добить заявку, которую породила СРАБОТАВШАЯ нативная стоп-заявка.
+
+    Дыра, найденная вопросом оператора 29.09.2026: отдавая защиту терминалу, мы
+    получали живучесть (стоп переживает падение STL) и ТЕРЯЛИ гарантию
+    исполнения. Нативный стоп QUIK выставляет лимит с запасом в два шага цены —
+    на быстром движении его не наливают, и ровно это случилось с его же родным
+    стопом на 70 контрактов: сработал в 14:50:06 и умер с нулём исполнения, пока
+    рынок шёл 690 пунктов за минуту. Сторож при этом молчал: заявка «под охраной
+    терминала», значит не его забота.
+
+    Теперь его: как только запись активировалась и её заявка висит неисполненной
+    дольше профиля, остаток снимается и добивается рыночной. Без этого «передать
+    терминалу» означало бы «отказаться от гарантии», а выбирать между живучестью
+    и исполнением оператор не должен.
+    """
+    quik = (store.agent_status(agent) or {}).get("quik") or {} if store is not None else {}
+    orders = {str(o.get("num") or ""): o for o in (quik.get("orders") or [])}
+    dirty = False
+    for so in book.orders:
+        if so.status not in ("native", "armed") or so.esc_market:
+            continue
+        sid = so.so_id if so.so_id in rows else next(
+            (c.so_id for c in book.orders
+             if c.parent_id == so.so_id and c.so_id in rows), "")
+        row = rows.get(sid) if sid else None
+        if row is None:
+            continue
+        acted = int(str(row.get("activation_date_time_ms") or "0") or 0)
+        child = str(row.get("linkedorder") or "")
+        if not acted or not child or child == "0":
+            continue                      # ещё не срабатывала — стережёт, и хорошо
+        rec = orders.get(child) or {}
+        rest = int(rec.get("balance") or 0)
+        if rest <= 0 or rec.get("active") is False and rest <= 0:
+            continue                      # налилась
+        prof = exec_profiles.resolve(so.esc_profile)
+        if not prof.get("market", True):
+            continue                      # профиль «нормальный»: не вмешиваемся
+        wait = (int(so.esc_hold_sec or prof["hold_sec"])
+                + int(so.esc_chase_sec or prof["chase_sec"])) * 1000
+        if now - acted < wait:
+            continue
+        try:
+            srv.enqueue_order(agent, order_msgs.build_cancel_order(
+                client_id=f"so:{so.so_id}:nat", order_id=child))
+            validate_place(lim, code=so.code, quantity=rest, collar=0.0,
+                           current_working=0, placed_today=0)
+            srv.enqueue_order(agent, order_msgs.build_place_order(
+                client_id=f"so:{so.so_id}:nat", code=so.code, side=so.side,
+                price=0.0, quantity=rest, collar=0.0, market=True))
+        except LimitError as exc:
+            log.error("smart_order.native_market_refused", so_id=so.so_id, error=str(exc))
+            so_journal.record("error", so, so_journal.LIMITS,
+                              f"рыночное добивание нативного стопа отклонено: {exc}",
+                              now_ms=now)
+            so.esc_market = True
+            return True
+        except Exception as exc:  # noqa: BLE001
+            log.warning("smart_order.native_escalate_failed", so_id=so.so_id, error=str(exc))
+            continue
+        so.esc_market = True
+        so.status = "fired"
+        so.fired_ms = so.fired_ms or acted
+        dirty = True
+        so_journal.record("escalated", so, so_journal.WATCHER,
+                          f"стоп терминала сработал {int((now - acted) / 1000)}с назад и "
+                          f"не налился: остаток {rest} выводим рыночной заявкой", now_ms=now)
+        log.warning("smart_order.native_child_escalated", so_id=so.so_id,
+                    stop_num=_stop_num(row), child=child, qty=rest)
+    return dirty
+
+
 async def _watch_once(state: Any) -> None:
     book: SmartOrderBook = state.smart_orders
     active = book.active()
@@ -1234,6 +1324,11 @@ async def _watch_once(state: Any) -> None:
     # Незалившаяся защита — раньше новых срабатываний: открытая позиция без
     # исполненного стопа опаснее пропущенного входа.
     if _escalate_protection(book, store, ost, srv, lim, agent, steps, so_mod.now_ms()):
+        book.save()
+    # ...и то же самое для стопа, отданного ТЕРМИНАЛУ: он тоже выставляет лимит,
+    # и его тоже могут не налить.
+    if _escalate_native_child(book, store, srv, lim, agent,
+                              _stop_rows_by_tag(store, agent), so_mod.now_ms()):
         book.save()
     filled = {d["client_id"] for d in ost.working_orders(agent)
               if d.get("state") == "filled"}
