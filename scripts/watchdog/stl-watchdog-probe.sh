@@ -24,12 +24,13 @@ CFG_DEFAULTS = {
                  "cap_near": True, "cap_full": True, "tape_lag": True,
                  "bars": True, "hb": True, "ord": True,
                  "paused": True, "pausefail": True, "backtest_stuck": True,
-                 "vds_mem": True, "vds_mem_crit": True, "quik_state": True},
+                 "vds_mem": True, "vds_mem_crit": True, "quik_state": True,
+                 "so_stuck": True, "so_refused": True, "so_audit": True},
     "autopause_tape_lag": True,
     "autopause_bars": True,
     "thresholds": {"tape_lag_sec": 120, "cap_warn_pct": 85, "hb_sec": 150,
                    "order_recheck_sec": 15, "bars_atr_mult": 3.0, "bars_pct": 0.5,
-                   "backtest_stuck_sec": 3600},
+                   "backtest_stuck_sec": 3600, "so_stuck_sec": 90},
 }
 cfg = dict(CFG_DEFAULTS)
 try:
@@ -48,6 +49,12 @@ def esc_on(key):
     """Escalation toggle by problem-key CATEGORY (bars_x/hb_x/ord_x -> family)."""
     if key.startswith("barsfresh") or key.startswith("tapelagquiet"):
         return False  # informational (quiet market / fresh tape): log-only, never SMS
+    # У умных заявок семейство из ДВУХ сегментов (so_stuck_<id>): иначе тумблер
+    # оператора пришлось бы заводить на каждую заявку отдельно, а он про
+    # КАТЕГОРИЮ событий.
+    if key.startswith("so_"):
+        fam = "_".join(key.split("_")[:2])
+        return bool(cfg["escalate"].get(fam, True))
     fam = key.split("_")[0]
     if fam not in ("bars", "hb", "ord", "paused", "pausefail"):
         fam = key
@@ -348,6 +355,77 @@ try:
                          f"Бэктест {_r['id']} считается дольше {_bt_n} секунд."))
 except Exception:
     pass  # эндпоинт недоступен -> прочие проверки не роняем
+
+# ── УМНЫЕ ЗАЯВКИ ОПЕРАТОРА ───────────────────────────────────────────────────
+# Три случая, каждый означает «человек думает, что защищён, а он нет». Ни один не
+# виден в проверках роботов: те сверяют книги РОБОТОВ с QUIK.
+#   so_stuck   — заявка сработала, а дочерняя не налилась и доведение не добило.
+#                29.09.2026 родной стоп оператора на 70 RIZ6 так и умер с нулём
+#                исполнения, пока рынок шёл 690 пунктов за минуту;
+#   so_refused — рыночный выход отклонён лимитами: выходить нечем, и молчать об
+#                этом нельзя ни секунды;
+#   so_audit   — книга и таблица стоп-заявок QUIK разошлись. В тот же день книга
+#                писала «отменена», а терминал держал заявку живой и готовой
+#                продать 40 контрактов.
+_so_n = int(THR.get("so_stuck_sec", 90))
+checked.append(f"умные заявки (доведение >{_so_n}с, сверка с терминалом)")
+try:
+    _sos = get("/api/v1/quik/smart-orders").get("orders") or []
+    _work = {d.get("client_id"): d for d in
+             (get("/api/v1/quik/orders/working").get("orders") or [])}
+    for _so in _sos:
+        _cid = _so.get("fired_client_id") or ""
+        if _so.get("status") != "fired" or not _cid:
+            continue
+        _rec = _work.get(_cid) or {}
+        _rest = int(_rec.get("remaining") or 0)
+        _age = (now - int(_so.get("fired_ms") or now)) / 1000
+        if _rest > 0 and _age > _so_n:
+            problems.append((f"so_stuck_{_so.get('so_id','?')[:8]}",
+                             f"умная заявка {_so.get('so_id','?')[:8]} ({_so.get('kind')} "
+                             f"{_so.get('side')} {_so.get('qty')} {_so.get('code')}) сработала "
+                             f"{int(_age)}с назад и НЕ ИСПОЛНЕНА: осталось {_rest}."))
+    # Сверка с таблицей стоп-заявок терминала — по ЖИВЫМ записям.
+    _by_id = {o.get("so_id"): o for o in _sos}
+    for _row in (get("/api/v1/quik/orders/stop-orders").get("table") or []):
+        _tag = str(_row.get("brokerref") or "")
+        if not _tag.startswith("stl-so-"):
+            continue
+        _dead = any(int(str(_row.get(k) or "0") or 0) for k in
+                    ("withdraw_datetime_ms", "activation_date_time_ms", "linkedorder"))
+        if _dead:
+            continue
+        _sid = _tag[len("stl-so-"):]
+        _o = _by_id.get(_sid)
+        if _o is None or _o.get("status") not in ("armed", "native"):
+            _num = _row.get("order_num") or _row.get("ordernum") or "?"
+            problems.append((f"so_audit_{_sid[:8]}",
+                             f"стоп-заявка {_num} ЖИВА в терминале, а книга её не стережёт "
+                             f"({'нет в книге' if _o is None else _o.get('status')}) — "
+                             "выстрелит сама по себе."))
+except Exception as e:
+    problems.append(("so_audit", f"не смог проверить умные заявки ({type(e).__name__})."))
+
+# Отказ лимитов на рыночном выходе — из журнала событий заявок за последний час.
+try:
+    _day = time.strftime("%Y-%m-%d")
+    _p = os.path.expanduser(f"~/apps/shectory-trader/data/so_events/{_day}.jsonl")
+    if os.path.exists(_p):
+        with open(_p, encoding="utf-8") as _f:
+            for _line in _f:
+                try:
+                    _ev = json.loads(_line)
+                except ValueError:
+                    continue
+                if _ev.get("event") != "error":
+                    continue
+                if (now - int(_ev.get("ts_ms") or 0)) / 1000 > 3600:
+                    continue
+                problems.append((f"so_refused_{str(_ev.get('so_id',''))[:8]}",
+                                 f"умная заявка {str(_ev.get('so_id',''))[:8]}: "
+                                 f"{str(_ev.get('note') or 'отказ')[:120]}"))
+except Exception:
+    pass
 
 # Escalation filter: a category the operator muted is NOT printed (smain never
 # SMSes it) but IS logged below, marked, so the page still shows the finding.
