@@ -50,7 +50,7 @@ import time
 import uuid
 from dataclasses import asdict, dataclass
 
-KINDS = ("sl", "tp", "trail_tp", "on_fill", "trail_sl")
+KINDS = ("sl", "tp", "trail_tp", "on_fill", "trail_sl", "corridor")
 # Типы, которые ведут уровень за экстремумом (храповик). Список общий, чтобы
 # новый вид не пришлось дописывать в трёх местах и один из них не забыть.
 _TRAILING = ("trail_tp", "trail_sl")
@@ -125,6 +125,24 @@ class SmartOrder:
     esc_chase_every_sec: int = 2
     esc_last_ms: int = 0         # когда последний раз переставляли
     esc_market: bool = False     # фаза 3 уже отработала: больше не трогаем
+    # ── КОРИДОР (kind="corridor", заказ оператора 29.09.2026) ──────────────────
+    # Торговля от стенок наклонного канала: продаём у верхней, покупаем у нижней,
+    # каждое касание противоположной стенки = ПЕРЕВОРОТ (сделка вдвое: закрыть и
+    # открыть). Верхняя граница — прямая через две точки (время, цена); нижняя ей
+    # ПАРАЛЛЕЛЬНА и проходит через c_low в момент c_t1_ms. Равные цены точек =
+    # горизонтальный коридор. Уход за стенку дальше c_stop_pts — выход, и выход
+    # гарантированный: коридор пользуется той же трёхфазной эскалацией, что стоп.
+    c_t1_ms: int = 0
+    c_p1: float = 0.0
+    c_t2_ms: int = 0
+    c_p2: float = 0.0
+    c_low: float = 0.0           # цена нижней границы в момент c_t1_ms
+    c_stop_pts: float = 0.0      # выход за стенку в пунктах (0 = без стопа)
+    c_flips_max: int = 0         # сколько переворотов разрешено (0 = без предела)
+    c_flips: int = 0             # сколько уже сделано
+    c_pos: int = 0               # позиция коридора: + лонг, − шорт, 0 вне рынка
+    c_qty: int = 0               # БАЗОВЫЙ объём стороны (qty мутируется под заявку)
+    c_done: bool = False         # переворты исчерпаны или стоп сработал
 
     def validate(self, reference_price: float = 0.0) -> str | None:
         """Returns a human error or None. Kept dumb and explicit.
@@ -141,6 +159,17 @@ class SmartOrder:
             return "code обязателен"
         if self.kind in ("sl", "tp") and self.trigger_price <= 0:
             return "trigger_price обязателен для sl/tp"
+        if self.kind == "corridor":
+            if self.c_p1 <= 0 or self.c_p2 <= 0:
+                return "коридор: обе точки верхней границы обязательны"
+            if self.c_low <= 0:
+                return "коридор: уровень нижней границы обязателен"
+            if self.c_t2_ms <= self.c_t1_ms:
+                return "коридор: вторая точка должна быть ПОЗЖЕ первой"
+            if self.c_low >= min(self.c_p1, self.c_p2):
+                return "коридор: нижняя граница должна быть ниже верхней"
+            if self.c_flips_max < 0:
+                return "коридор: число переворотов не может быть отрицательным"
         if self.kind in _TRAILING and self.trail_offset <= 0:
             return f"trail_offset (пункты) обязателен для {self.kind}"
         if self.kind == "trail_sl":
@@ -254,6 +283,77 @@ def market_price(side: str, bid: float, ask: float, last: float, step: float,
     return quantize(raw, step, side)
 
 
+
+def corridor_bounds(so: SmartOrder, now_ms: int) -> tuple[float, float]:
+    """Где стенки коридора ПРЯМО СЕЙЧАС: (нижняя, верхняя).
+
+    Верхняя — прямая через (c_t1_ms, c_p1) и (c_t2_ms, c_p2), продолженная за
+    вторую точку. Нижняя параллельна ей и отстоит на ту же ширину, что была
+    задана в первой точке (c_p1 − c_low): угол задаётся один раз и относится ко
+    ВСЕМУ коридору, иначе канал незаметно превращался бы в клин.
+    """
+    dt = so.c_t2_ms - so.c_t1_ms
+    slope = (so.c_p2 - so.c_p1) / dt if dt else 0.0
+    top = so.c_p1 + slope * (now_ms - so.c_t1_ms)
+    return top - (so.c_p1 - so.c_low), top
+
+
+def corridor_action(so: SmartOrder, price: float, now_ms: int) -> tuple[int, int, str]:
+    """Что коридор делает на этой цене: (сторона, объём, причина).
+
+    Сторона +1 покупка, −1 продажа, 0 ничего. Объём УЖЕ с учётом переворота:
+    из шорта в лонг это 2×qty одной сделкой, потому что заявка должна и закрыть,
+    и открыть. Выход по стопу закрывает ровно текущую позицию.
+    """
+    if so.c_done or price <= 0:
+        return 0, 0, ""
+    low, top = corridor_bounds(so, now_ms)
+    stop = float(so.c_stop_pts or 0)
+    # СТОП ПЕРВЫМ: цена уже за стенкой дальше допуска — коридор кончился, и
+    # спорить с рынком нечем. Проверяется раньше входов, иначе на проколе вверх
+    # робот сначала продал бы «от стенки», а потом закрывался бы с убытком.
+    if stop > 0 and so.c_pos != 0:
+        if so.c_pos < 0 and price >= top + stop:
+            return 1, -so.c_pos, "стоп: цена ушла за верхнюю стенку"
+        if so.c_pos > 0 and price <= low - stop:
+            return -1, so.c_pos, "стоп: цена ушла за нижнюю стенку"
+    if price >= top:
+        if so.c_pos < 0:
+            return 0, 0, ""                    # уже в шорте от этой стенки
+        return -1, (so.c_qty or so.qty) + abs(so.c_pos), "продажа от верхней стенки"
+    if price <= low:
+        if so.c_pos > 0:
+            return 0, 0, ""                    # уже в лонге от этой стенки
+        return 1, (so.c_qty or so.qty) + abs(so.c_pos), "покупка от нижней стенки"
+    return 0, 0, ""
+
+
+def corridor_after_fire(so: SmartOrder, side: int, qty: int, stop_exit: bool) -> None:
+    """Учесть исполненный ход коридора: новая позиция, счётчик переворотов, конец.
+
+    Переворотом считается смена стороны из позиции, а не любой вход: первый вход
+    от стенки — это ещё не переворот, иначе лимит в один переворот кончался бы
+    сразу после открытия.
+    """
+    base = so.c_qty or 0
+    if stop_exit:
+        so.c_pos = 0
+        so.c_done = True
+        return
+    if so.c_pos != 0 and (so.c_pos > 0) != (side > 0):
+        so.c_flips += 1
+    so.c_pos = side * base
+    if so.c_flips_max and so.c_flips >= so.c_flips_max:
+        so.c_done = True          # лимит выбран: закрываемся следующим касанием
+
+
+def corridor_closeout(so: SmartOrder) -> tuple[int, int]:
+    """Чем закрыть позицию коридора, когда он объявлен законченным: (сторона, объём)."""
+    if so.c_pos == 0:
+        return 0, 0
+    return (-1 if so.c_pos > 0 else 1), abs(so.c_pos)
+
+
 def _trigger_hit(so: SmartOrder, price: float) -> bool:
     if so.kind == "sl":
         return price <= so.trigger_price if so.side == "sell" else price >= so.trigger_price
@@ -327,6 +427,21 @@ def evaluate(orders: list[SmartOrder], code: str, *, last: float, bid: float,
 
         if not fresh or price <= 0:
             continue  # never act on a dead/stale feed
+
+        if so.kind == "corridor":
+            if so.c_done and so.c_pos != 0:
+                side, qty = corridor_closeout(so)
+                why = "переворты исчерпаны: закрываем позицию"
+            else:
+                side, qty, why = corridor_action(so, price, now_ms)
+            if side and qty > 0:
+                px = marketable_price("buy" if side > 0 else "sell", bid, ask, price, step)
+                if px > 0:
+                    actions.append(Fire(so, px))
+                    so.side = "buy" if side > 0 else "sell"
+                    so.qty = qty
+                    so.note = why
+            continue
 
         hit = _trail_step(so, price) if so.kind in _TRAILING else _trigger_hit(so, price)
         if hit:

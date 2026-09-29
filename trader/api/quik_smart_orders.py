@@ -101,6 +101,16 @@ class SmartOrderBody(BaseModel):
     esc_hold_sec: int = 10
     esc_chase_sec: int = 10
     esc_chase_every_sec: int = 2
+    # Коридор: верхняя граница двумя точками (время в мс, цена), нижняя параллельна
+    # ей и проходит через c_low в момент c_t1_ms; выход за стенку на c_stop_pts —
+    # закрытие; c_flips_max = сколько переворотов разрешено (0 — без предела).
+    c_t1_ms: int = 0
+    c_p1: float = 0.0
+    c_t2_ms: int = 0
+    c_p2: float = 0.0
+    c_low: float = 0.0
+    c_stop_pts: float = 0.0
+    c_flips_max: int = 0
     note: str = ""
 
 
@@ -120,6 +130,10 @@ async def create(body: SmartOrderBody, request: Request):
         oco_group=body.oco_group, good_till_ms=int(body.good_till_ms),
         esc_hold_sec=int(body.esc_hold_sec), esc_chase_sec=int(body.esc_chase_sec),
         esc_chase_every_sec=int(body.esc_chase_every_sec),
+        c_t1_ms=int(body.c_t1_ms), c_p1=float(body.c_p1),
+        c_t2_ms=int(body.c_t2_ms), c_p2=float(body.c_p2),
+        c_low=float(body.c_low), c_stop_pts=float(body.c_stop_pts),
+        c_flips_max=int(body.c_flips_max), c_qty=int(body.qty),
         note=body.note, created_ms=so_mod.now_ms(),
     )
     # Рыночная цена инструмента даёт валидации точку отсчёта: без неё ЦЕНУ,
@@ -1020,7 +1034,12 @@ def _escalate_protection(book: SmartOrderBook, store: Any, ost: Any, srv: Any,
     by_cid = {d["client_id"]: d for d in ost.working_orders(agent)}
     dirty = False
     for so in book.orders:
-        if so.status != "fired" or so.kind != "sl" or not so.fired_client_id:
+        # Коридор наравне со стопом: оператор просил «с гарантией входа» — вход,
+        # который не налился, оставляет коридор без позиции у самой стенки, то
+        # есть ровно там, где он должен был встать.
+        if so.kind not in ("sl", "corridor") or not so.fired_client_id:
+            continue
+        if so.kind == "sl" and so.status != "fired":
             continue
         rec = by_cid.get(so.fired_client_id)
         if rec is None or rec.get("state") in _DEAD_STATES:
@@ -1265,6 +1284,22 @@ async def _watch_once(state: Any) -> None:
                 so.status = "fired"
                 so.fired_ms = now
                 so.fired_client_id = client_id
+                if so.kind == "corridor":
+                    # Коридор — заявка МНОГОРАЗОВАЯ: отстреляв от стенки, он ждёт
+                    # противоположную. Поэтому статус возвращается в armed, а
+                    # «fired» остаётся только следом для эскалации, которая
+                    # доводит этот вход до исполнения.
+                    stop_exit = (so.note or "").startswith("стоп")
+                    closing = so.c_done and not stop_exit and so.c_pos != 0
+                    so_mod.corridor_after_fire(
+                        so, 1 if so.side == "buy" else -1, so.qty, stop_exit or closing)
+                    so.status = "cancelled" if so.c_done and so.c_pos == 0 else "armed"
+                    so_journal.record(
+                        "corridor", so, so_journal.WATCHER,
+                        f"{so.note or 'ход коридора'}: {so.side} {so.qty} по {act.price:g}; "
+                        f"позиция {so.c_pos:+d}, переворотов {so.c_flips}"
+                        + (f"/{so.c_flips_max}" if so.c_flips_max else ""),
+                        now_ms=now)
                 log.info("smart_order.fired", so_id=so.so_id, kind=so.kind,
                          code=so.code, side=so.side, qty=so.qty, price=act.price)
                 so_journal.record("fired", so, so_journal.WATCHER,
