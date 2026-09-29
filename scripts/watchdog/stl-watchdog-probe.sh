@@ -427,10 +427,27 @@ try:
 except Exception:
     pass
 
+# НОЧНОЙ ФИЛЬТР. Гейт окна снят на стороне smain (29.09.2026): вотчдог работает
+# круглосуточно, потому что ночная смерть агента, VDS или связи обнаруживалась
+# только утром, когда чинить уже поздно. Но ночью торговые проверки ложны по
+# построению — лента молчит, бары не растут, заявки не наливаются, — поэтому вне
+# торгового окна наружу идут ТОЛЬКО инфраструктурные ключи. Разбудить человека
+# ради «лента отстаёт» в три часа ночи значит научить его не читать SMS.
+NIGHT_KEYS = ("api_down", "link_down", "quik_state", "runner_sick", "hb",
+              "vds_mem", "vds_mem_crit", "so_audit", "so_refused")
+_hm = int(time.strftime("%H")) * 60 + int(time.strftime("%M"))
+_night = not (415 <= _hm <= 1435)
+
+def night_ok(key):
+    if not _night:
+        return True
+    fam = "_".join(key.split("_")[:2]) if key.startswith("so_") else key.split("_")[0]
+    return fam in NIGHT_KEYS or key in NIGHT_KEYS
+
 # Escalation filter: a category the operator muted is NOT printed (smain never
 # SMSes it) but IS logged below, marked, so the page still shows the finding.
 for key, text in problems:
-    if esc_on(key):
+    if esc_on(key) and night_ok(key):
         print(f"{key}|{text}")
 
 # Activation log for the STL watchdog-log page: one JSONL record per probe run.
