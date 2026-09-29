@@ -537,7 +537,8 @@
   function corridorSpan(o: any, bars: { time: number }[]):
       { low: Array<{ time: number; value: number }>; top: Array<{ time: number; value: number }> } | null {
     if (!bars.length) return null;
-    const geom = { c_t1_ms: o.c_t1_ms, c_p1: o.c_p1, c_t2_ms: o.c_t2_ms, c_p2: o.c_p2, c_low: o.c_low };
+    const geom = { c_t1_ms: o.c_t1_ms, c_p1: o.c_p1, c_t2_ms: o.c_t2_ms, c_p2: o.c_p2,
+                   c_low: o.c_low, c_low2: o.c_low2 };
     if (!(geom.c_p1 > 0) || !(geom.c_p2 > 0) || !(geom.c_low > 0)) return null;
     const edges = [bars[0].time, bars[bars.length - 1].time];
     const low = [], top = [];
@@ -557,7 +558,7 @@
     if (!tvChart || !tvCandle) return;
     const want = new Set<string>();
     for (const o of smartArmed) {
-      if (o.kind !== 'corridor') continue;
+      if (o.kind !== 'corridor' && o.kind !== 'triangle') continue;
       const span = corridorSpan(o, bars as any);
       if (!span) continue;
       for (const side of ['top', 'low'] as const) {
@@ -566,7 +567,7 @@
         let ser = corridorLines.get(key);
         if (!ser) {
           ser = tvChart.addLineSeries({
-            color: softColor(KIND_BY_ID.corridor.color, 0.08, 1),
+            color: softColor(KIND_BY_ID[o.kind].color, 0.08, 1),
             lineWidth: 2, priceLineVisible: false, lastValueVisible: false,
             crosshairMarkerVisible: false,
           });

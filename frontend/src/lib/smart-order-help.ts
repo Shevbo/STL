@@ -7,7 +7,7 @@
 // Все формулировки сверены с движком (trader/quik/smart_orders.py). Меняется
 // движок — правится и текст, иначе интерфейс начнёт обещать не то, что будет.
 
-export type Kind = 'sl' | 'tp' | 'trail_tp' | 'on_fill' | 'trail_sl' | 'corridor';
+export type Kind = 'sl' | 'tp' | 'trail_tp' | 'on_fill' | 'trail_sl' | 'corridor' | 'triangle';
 export type Side = 'buy' | 'sell';
 
 export interface KindMeta {
@@ -188,6 +188,37 @@ export const KINDS: KindMeta[] = [
     color: '#5ecfb1',
     lineStyle: 0,
     legend: 'коридор: стенки канала',
+  },
+  {
+    id: 'triangle',
+    name: 'Треугольник',
+    short: 'ТРЕУГ',
+    essence: 'То же, что коридор, но у нижней границы СВОЙ угол: фигура сужается или расширяется.',
+    algorithm: [
+      'Обе границы — прямые, каждая по своим двум точкам, обе продолжаются за вторую точку.',
+      'Касание верхней стенки продаёт, касание нижней покупает — позиция открывается ОТ стенки.',
+      'Касание противоположной стенки — ПЕРЕВОРОТ: одна сделка вдвое, она и закрывает, и открывает.',
+      'Уход за стенку дальше стопа закрывает позицию и заканчивает заявку.',
+      'АПЕКС: у сужающегося треугольника стенки сходятся, и там фигура кончается — движок закрывает позицию.',
+      'Вход и выход доводятся до исполнения теми же тремя фазами, что у стопа.',
+    ],
+    fields: [
+      { key: 'c_p1', label: 'Верхняя: цена в первой точке',
+        hint: 'ЦЕНА верхней границы в первой точке. Ставится мышкой: первый клик' },
+      { key: 'c_p2', label: 'Верхняя: цена во второй точке',
+        hint: 'ЦЕНА верхней границы во второй точке — она задаёт угол ВЕРХНЕЙ линии. Второй клик' },
+      { key: 'c_low', label: 'Нижняя: цена в первой точке',
+        hint: 'ЦЕНА нижней границы в момент ПЕРВОЙ точки. Третий клик' },
+      { key: 'c_low2', label: 'Нижняя: цена во второй точке',
+        hint: 'ЦЕНА нижней границы в момент ВТОРОЙ точки — она задаёт свой, отдельный угол НИЖНЕЙ линии. Четвёртый клик. Этим треугольник и отличается от коридора' },
+      { key: 'c_stop_pts', label: 'Стоп за стенкой, пункты',
+        hint: 'ПУНКТЫ за стенку, после которых позиция закрывается, а заявка заканчивается. 0 — без стопа' },
+      { key: 'c_flips_max', label: 'Переворотов максимум',
+        hint: 'Сколько раз разрешено перевернуться. 0 — без предела' },
+    ],
+    color: '#e0a35c',
+    lineStyle: 0,
+    legend: 'треугольник: стенки фигуры',
   },
 ];
 
@@ -1150,6 +1181,9 @@ export interface CorridorGeom {
   c_t1_ms: number; c_p1: number;
   c_t2_ms: number; c_p2: number;
   c_low: number;
+  /** ТРЕУГОЛЬНИК: цена нижней границы во ВТОРОЙ точке — у неё свой угол.
+   *  Пусто или 0 — коридор, нижняя параллельна верхней. */
+  c_low2?: number;
 }
 
 /** Наклон верхней границы, пунктов за миллисекунду. Точки в одном времени
@@ -1166,14 +1200,45 @@ export function corridorSlope(g: Pick<CorridorGeom, 'c_t1_ms' | 'c_p1' | 'c_t2_m
  *  моменте значило бы превратить канал в клин. */
 export function corridorBounds(g: CorridorGeom, ms: number): { low: number; top: number } {
   const top = g.c_p1 + corridorSlope(g) * (ms - g.c_t1_ms);
+  if (g.c_low2 && g.c_low2 > 0) {
+    // Треугольник: у нижней линии свой угол, и ширина от времени ЗАВИСИТ.
+    const dt = g.c_t2_ms - g.c_t1_ms;
+    const k = dt ? (ms - g.c_t1_ms) / dt : 0;
+    return { low: g.c_low + (g.c_low2 - g.c_low) * k, top };
+  }
   return { low: top - (g.c_p1 - g.c_low), top };
+}
+
+/** Время АПЕКСА: момент, когда стенки сойдутся и фигуры не станет.
+ *
+ *  Нужен оператору прямо при постановке: по нему видно, сколько живёт заявка.
+ *  Там движок закрывает позицию («апекс: стенки сошлись»), потому что торговать
+ *  фигуру, которой уже нет, нельзя.
+ *
+ *  null — сходиться нечему: коридор (ширина постоянна), расширяющийся
+ *  треугольник, или апекс уже позади. «Уже позади» отличаем от «нет апекса»
+ *  честно: заявку с апексом в прошлом ставить бессмысленно, и выдать такое
+ *  время значило бы показать оператору момент, который никогда не наступит. */
+export function apexMs(g: CorridorGeom): number | null {
+  if (!g.c_low2 || g.c_low2 <= 0) return null;          // коридор: не сходится
+  const dt = g.c_t2_ms - g.c_t1_ms;
+  if (!dt) return null;
+  const w1 = g.c_p1 - g.c_low;                          // ширина в первой точке
+  const w2 = g.c_p2 - g.c_low2;                         // ширина во второй
+  const dw = w2 - w1;
+  if (dw >= 0) return null;                             // не сужается
+  if (w1 <= 0) return null;                             // вырожденная фигура: стенки уже пересеклись
+  return g.c_t1_ms + (-w1 / dw) * dt;                   // где ширина обращается в ноль
 }
 
 /** Ширина канала: в пунктах и, если известна цена пункта, в рублях на контракт.
  *  ₽/пункт не знаем — рубли НЕ выдумываем, возвращаем null. */
-export function corridorWidth(g: CorridorGeom, pointValue = 0):
+export function corridorWidth(g: CorridorGeom, pointValue = 0, ms?: number):
   { pts: number; rub: number | null } {
-  const pts = g.c_p1 - g.c_low;
+  // У треугольника ширина от времени ЗАВИСИТ, поэтому момент можно задать. Без
+  // него берём первую точку — ту, где оператор её и видел, ставя фигуру.
+  const b = ms != null ? corridorBounds(g, ms) : null;
+  const pts = b ? b.top - b.low : g.c_p1 - g.c_low;
   return { pts, rub: pointValue > 0 ? pts * pointValue : null };
 }
 
@@ -1224,18 +1289,43 @@ export interface CorridorClick { ms: number; price: number }
  *  требует c_t2_ms > c_t1_ms и иначе откажет — а переставить их за него
  *  безопасно: прямая от порядка точек не зависит. */
 export function corridorFromClicks(
-  clicks: CorridorClick[], step = 0, barTimesMs: number[] = [],
+  clicks: CorridorClick[], step = 0, barTimesMs: number[] = [], kind: Kind = 'corridor',
 ): { geom: CorridorGeom; error: null } | { geom: null; error: string } {
-  if (!clicks || clicks.length < 3) return { geom: null, error: 'нужно три клика: две точки верхней границы и уровень нижней' };
+  // Треугольник задаётся ЧЕТЫРЬМЯ кликами: у нижней линии свой угол, и
+  // пересчитывать её к первой точке не надо — это была особенность коридора с
+  // его параллельностью (real-trade 29.09.2026).
+  const need = kind === 'triangle' ? 4 : 3;
+  if (!clicks || clicks.length < need) {
+    return { geom: null, error: kind === 'triangle'
+      ? 'нужно четыре клика: по две точки на каждую границу'
+      : 'нужно три клика: две точки верхней границы и уровень нижней' };
+  }
   const snap = (c: CorridorClick): CorridorClick => ({
     ms: snapToBar(c.ms, barTimesMs), price: snapPrice(c.price, step),
   });
-  const [a, b, c] = [snap(clicks[0]), snap(clicks[1]), snap(clicks[2])];
+  const [a, b] = [snap(clicks[0]), snap(clicks[1])];
   const [first, second] = a.ms <= b.ms ? [a, b] : [b, a];
   if (second.ms === first.ms) {
     return { geom: null, error: 'обе точки верхней границы попали в один бар — разведите их по времени' };
   }
   const base = { c_t1_ms: first.ms, c_p1: first.price, c_t2_ms: second.ms, c_p2: second.price };
+  if (kind === 'triangle') {
+    // Обе точки нижней линии приводим К ТЕМ ЖЕ моментам, что у верхней: движок
+    // хранит нижнюю не своими временами, а ценами в c_t1_ms и c_t2_ms.
+    const [c, d] = [snap(clicks[2]), snap(clicks[3])];
+    const [lf, ls] = c.ms <= d.ms ? [c, d] : [d, c];
+    if (ls.ms === lf.ms) {
+      return { geom: null, error: 'обе точки нижней границы попали в один бар — разведите их по времени' };
+    }
+    const lowSlope = (ls.price - lf.price) / (ls.ms - lf.ms);
+    const at = (ms: number) => snapPrice(lf.price + lowSlope * (ms - lf.ms), step);
+    const low = at(base.c_t1_ms), low2 = at(base.c_t2_ms);
+    if (low >= base.c_p1 || low2 >= base.c_p2) {
+      return { geom: null, error: 'нижняя граница должна быть НИЖЕ верхней в ОБЕИХ точках' };
+    }
+    return { geom: { ...base, c_low: low, c_low2: low2 }, error: null };
+  }
+  const c = snap(clicks[2]);
   // Цена третьего клика, приведённая к моменту ПЕРВОЙ точки: нижняя параллельна.
   const low = snapPrice(c.price - corridorSlope(base) * (c.ms - base.c_t1_ms), step);
   if (low >= Math.min(base.c_p1, base.c_p2)) {

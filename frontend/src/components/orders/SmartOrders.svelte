@@ -16,7 +16,7 @@
     ocoFact, ocoNameOf, stopOrderRow, stopOrderWhy,
     preview, protectionPair,
     shortCodes, sortBySideAndPrice, tillFact, type Kind, type OpenPos, type Side,
-    corridorFromClicks, corridorState, corridorWidth,
+    apexMs, corridorFromClicks, corridorState, corridorWidth,
   } from '$lib/smart-order-help';
   import { candlesStore } from '$lib/stores/candles.svelte';
   import { corridorDraw } from '$lib/stores/corridor-draw.svelte';
@@ -59,6 +59,9 @@
   let cT2 = $state(0);
   let cP2 = $state('');
   let cLow = $state('');
+  // ТРЕУГОЛЬНИК: у нижней границы свой угол, и ей нужна вторая точка. Пусто —
+  // это коридор, нижняя параллельна верхней.
+  let cLow2 = $state('');
   let cStopPts = $state('');
   let cFlipsMax = $state('');
   let cErr = $state('');
@@ -311,19 +314,23 @@
   // после сделки. Одной плоской сеткой уровень срабатывания и защитная пара
   // читались одинаково, хотя это разные моменты времени.
   const TRIGGER_KEYS = ['trigger_price', 'trail_offset', 'watch_client_id', 'child_price',
-                        'c_p1', 'c_p2', 'c_low', 'c_stop_pts', 'c_flips_max'];
+                        'c_p1', 'c_p2', 'c_low', 'c_low2', 'c_stop_pts', 'c_flips_max'];
   // Три клика по графику собрались — переводим их в параметры. Сам перевод
   // (бар вместо пикселя, шаг цены, приведение нижней к первой точке) живёт в
   // corridorFromClicks и покрыт тестами; здесь только подстановка в форму.
+  const isFigure = $derived(kind === 'corridor' || kind === 'triangle');
+  const clicksNeeded = $derived(kind === 'triangle' ? 4 : 3);
+
   $effect(() => {
-    if (corridorDraw.clicks.length < 3) return;
+    if (!isFigure || corridorDraw.clicks.length < clicksNeeded) return;
     const bars = candlesStore.get(symbol).map((b) => b.time * 1000);
-    const r = corridorFromClicks(corridorDraw.clicks, priceStep, bars);
+    const r = corridorFromClicks(corridorDraw.clicks, priceStep, bars, kind);
     if (r.error) { cErr = r.error; corridorDraw.undo(); return; }
     cErr = '';
     cT1 = r.geom.c_t1_ms; cP1 = String(r.geom.c_p1);
     cT2 = r.geom.c_t2_ms; cP2 = String(r.geom.c_p2);
     cLow = String(r.geom.c_low);
+    cLow2 = r.geom.c_low2 ? String(r.geom.c_low2) : '';
     corridorDraw.stop();
   });
 
@@ -331,9 +338,17 @@
   // ₽/пункт не знаем — печатаем пункты и молчим про рубли.
   const corridorGeom = $derived(
     pos(cP1) && pos(cP2) && pos(cLow) && cT2 > cT1
-      ? { c_t1_ms: cT1, c_p1: num(cP1), c_t2_ms: cT2, c_p2: num(cP2), c_low: num(cLow) }
+      ? { c_t1_ms: cT1, c_p1: num(cP1), c_t2_ms: cT2, c_p2: num(cP2), c_low: num(cLow),
+          c_low2: kind === 'triangle' ? num(cLow2) : 0 }
       : null);
   const corridorW = $derived(corridorGeom ? corridorWidth(corridorGeom, pointValue) : null);
+  // Ширина во ВТОРОЙ точке: у треугольника она другая, и по паре чисел видно,
+  // сходится фигура или расходится. У коридора вторая равна первой — не печатаем.
+  const corridorW2 = $derived(
+    corridorGeom && kind === 'triangle' ? corridorWidth(corridorGeom, pointValue, cT2) : null);
+  // Апекс сужающегося треугольника: там движок закроет позицию и закончит
+  // заявку. Оператор по нему видит, сколько она живёт.
+  const apex = $derived(corridorGeom ? apexMs(corridorGeom) : null);
 
   const triggerFields = $derived(meta.fields.filter((f) => TRIGGER_KEYS.includes(f.key)));
   const afterFields = $derived(meta.fields.filter((f) => !TRIGGER_KEYS.includes(f.key)));
@@ -366,6 +381,7 @@
       c_t2_ms: mine.has('c_p2') ? cT2 : 0,
       c_p2: only('c_p2', num(cP2)),
       c_low: only('c_low', num(cLow)),
+      c_low2: only('c_low2', num(cLow2)),
       c_stop_pts: only('c_stop_pts', num(cStopPts)),
       c_flips_max: only('c_flips_max', num(cFlipsMax)),
       oco_group: tr(ocoGroup),
@@ -387,7 +403,7 @@
       trigger = ''; trailOffset = ''; slOffset = ''; tpOffset = ''; trailAfter = ''; tpTrail = ''; tpMode = 'fixed';
       slPrice = ''; tpPrice = '';
       watchId = ''; childPrice = '';
-      cT1 = 0; cP1 = ''; cT2 = 0; cP2 = ''; cLow = ''; cStopPts = ''; cFlipsMax = '';
+      cT1 = 0; cP1 = ''; cT2 = 0; cP2 = ''; cLow = ''; cLow2 = ''; cStopPts = ''; cFlipsMax = '';
       cErr = ''; corridorDraw.reset();
       confirming = false;
       await smartOrdersStore.refresh();
@@ -616,6 +632,9 @@
             {:else if f.key === 'c_low'}
               <input class="so-in" type="number" step="any" bind:value={cLow} placeholder="0"
                      aria-label={f.label} />
+            {:else if f.key === 'c_low2'}
+              <input class="so-in" type="number" step="any" bind:value={cLow2} placeholder="0"
+                     aria-label={f.label} />
             {:else if f.key === 'c_stop_pts'}
               <div class="so-unit-wrap">
                 <input class="so-in pts" type="number" step="any" min="0" bind:value={cStopPts}
@@ -637,11 +656,11 @@
         <!-- ПОСТАНОВКА МЫШКОЙ — главная просьба оператора (29.09.2026): канал
              задаётся линиями по графику, а не цифрами. Поля выше остаются: по
              ним видно, ЧТО именно уедет в движок, и их можно поправить руками. -->
-        {#if kind === 'corridor'}
+        {#if isFigure}
         <div class="so-draw">
           <div class="so-draw-row">
             <button type="button" class="so-draw-b" class:on={corridorDraw.active}
-                    onclick={() => corridorDraw.active ? corridorDraw.reset() : corridorDraw.start()}>
+                    onclick={() => corridorDraw.active ? corridorDraw.reset() : corridorDraw.start(clicksNeeded)}>
               {corridorDraw.active ? 'отменить постановку' : 'поставить мышкой по графику'}
             </button>
             {#if corridorDraw.active && corridorDraw.clicks.length}
@@ -649,13 +668,23 @@
             {/if}
           </div>
           {#if corridorDraw.hint}
-            <div class="so-draw-hint">клик {corridorDraw.clicks.length + 1} из 3 — {corridorDraw.hint}</div>
+            <div class="so-draw-hint">клик {corridorDraw.clicks.length + 1} из {clicksNeeded} — {corridorDraw.hint}</div>
           {/if}
           {#if cErr}<div class="so-draw-err">{cErr}</div>{/if}
           {#if corridorW}
-            <div class="so-draw-w">ширина канала {fmtPts(corridorW.pts)}{corridorW.rub != null
+            <div class="so-draw-w">ширина {kind === 'triangle' ? 'в первой точке ' : 'канала '}{fmtPts(corridorW.pts)}{corridorW.rub != null
               ? ` = ${fmtRub(corridorW.rub)} на контракт${qty > 1 ? `, ${fmtRub(corridorW.rub * qty)} на ${qty}` : ''}`
               : ' (₽/пункт инструмента неизвестна)'}</div>
+          {/if}
+          {#if corridorW2 && corridorW}
+            <div class="so-draw-w">во второй точке {fmtPts(corridorW2.pts)} — фигура {corridorW2.pts < corridorW.pts
+              ? 'сужается' : corridorW2.pts > corridorW.pts ? 'расширяется' : 'постоянной ширины'}</div>
+          {/if}
+          <!-- АПЕКС. Там движок закрывает позицию и заканчивает заявку: торговать
+               фигуру, которой уже нет, нельзя. По времени апекса оператор видит,
+               сколько заявка живёт. Расширяющейся фигуре его НЕ рисуем — его нет. -->
+          {#if apex != null}
+            <div class="so-draw-w">стенки сойдутся {fmtWhen(apex)} — там заявка закроет позицию и закончится</div>
           {/if}
         </div>
         {/if}
@@ -889,7 +918,7 @@
         <!-- КОРИДОР: позиция важнее самого факта заявки (real-trade 29.09.2026).
              Он многоразовый, статус у него в норме «взведена», и по статусу не
              понять ни где он в рынке, ни сколько переворотов осталось. -->
-        {#if o.kind === 'corridor'}
+        {#if o.kind === 'corridor' || o.kind === 'triangle'}
           <div class="so-c-corr">
             <b>{corridorState(o)}</b>
             {#if o.c_p1 && o.c_low}

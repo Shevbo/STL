@@ -2,7 +2,7 @@
 // параметры собирает форма — это разные компоненты, и стор между ними обязан
 // быть предсказуемым: лишний клик не имеет права сдвинуть уже заданный канал.
 import { describe, it, expect, beforeEach } from 'vitest';
-import { corridorDraw, CORRIDOR_STEPS } from './stores/corridor-draw.svelte';
+import { corridorDraw, CORRIDOR_STEPS, TRIANGLE_STEPS } from './stores/corridor-draw.svelte';
 
 const c = (n: number) => ({ ms: n, price: 80_000 + n });
 
@@ -50,5 +50,29 @@ describe('постановка коридора мышкой', () => {
     expect(corridorDraw.clicks).toHaveLength(1);
     corridorDraw.reset();
     expect(corridorDraw.clicks).toHaveLength(0);
+  });
+
+  // Треугольнику нужны ОБЕ точки нижней линии: у неё свой угол, и одним кликом
+  // её не задать (real-trade 29.09.2026).
+  it('треугольник ждёт четыре клика и свои подсказки', () => {
+    corridorDraw.start(4);
+    expect(corridorDraw.need).toBe(4);
+    expect(corridorDraw.hint).toBe(TRIANGLE_STEPS[0]);
+    for (const n of [1, 2, 3]) corridorDraw.push(c(n));
+    expect(corridorDraw.left).toBe(1);
+    expect(corridorDraw.hint).toBe(TRIANGLE_STEPS[3]);
+    corridorDraw.push(c(4));
+    expect(corridorDraw.left).toBe(0);
+    corridorDraw.push(c(5));
+    expect(corridorDraw.clicks).toHaveLength(4);
+  });
+
+  // Перевели тип с треугольника на коридор — счёт кликов обязан вернуться к трём,
+  // иначе форма ждала бы четвёртый клик, которого оператор уже не сделает.
+  it('новый заход задаёт своё число кликов', () => {
+    corridorDraw.start(4);
+    corridorDraw.start(3);
+    expect(corridorDraw.need).toBe(3);
+    expect(corridorDraw.hint).toBe(CORRIDOR_STEPS[0]);
   });
 });

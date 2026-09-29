@@ -145,13 +145,15 @@ describe('блоки «после сделки»', () => {
   // Подтягивающая выходит из позиции, блоки после сделки в неё входят, и движок
   // отвечает 422 (smart_orders.py:135, аудит 18.09.2026).
   //
-  // Коридор (29.09.2026) — многоразовый: он сам держит позицию, сам переворачивает
-  // её у противоположной стенки и сам выходит по c_stop_pts. Дочерний стоп после
-  // КАЖДОГО касания закрыл бы позицию мимо него, и c_pos в книге разошёлся бы с
-  // рынком — у коридора это не «лишний стоп», а потеря счёта позиции.
+  // ФИГУРЫ — коридор и треугольник (29.09.2026) — многоразовые: они сами держат
+  // позицию, сами переворачивают её у противоположной стенки и сами выходят по
+  // c_stop_pts. Дочерний стоп после КАЖДОГО касания закрыл бы позицию мимо них, и
+  // c_pos в книге разошёлся бы с рынком — это не «лишний стоп», а потеря счёта
+  // позиции.
+  const FIGURES = new Set(['corridor', 'triangle']);
   it('every ENTERING kind offers the SL/TP-after-fill pair', async () => {
     const { KINDS } = await import('./smart-order-help');
-    for (const k of KINDS.filter((x) => x.id !== 'trail_sl' && x.id !== 'corridor')) {
+    for (const k of KINDS.filter((x) => x.id !== 'trail_sl' && !FIGURES.has(x.id))) {
       const keys = k.fields.map((f) => f.key);
       expect(keys, k.id).toContain('sl_offset');
       expect(keys, k.id).toContain('tp_offset');

@@ -45,6 +45,7 @@ export interface SmartOrder {
   c_t1_ms?: number; c_p1?: number;
   c_t2_ms?: number; c_p2?: number;
   c_low?: number;
+  c_low2?: number;         // ТРЕУГОЛЬНИК: нижняя граница в момент c_t2_ms (свой угол)
   c_stop_pts?: number;
   c_flips_max?: number;
   c_flips?: number;

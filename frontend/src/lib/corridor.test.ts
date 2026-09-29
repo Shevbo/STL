@@ -6,7 +6,7 @@
 // ловушек перевода.
 import { describe, it, expect } from 'vitest';
 import {
-  corridorBounds, corridorFromClicks, corridorSlope, corridorState,
+  apexMs, corridorBounds, corridorFromClicks, corridorSlope, corridorState,
   corridorWidth, snapPrice, snapToBar,
 } from './smart-order-help';
 
@@ -144,5 +144,84 @@ describe('коридор: что показать оператору', () => {
     expect(corridorState({ c_pos: -2, c_flips: 1, c_flips_max: 5 })).toBe('шорт 2 · переворотов 1 из 5');
     expect(corridorState({ c_pos: 3, c_flips: 0, c_flips_max: 0 })).toBe('лонг 3 · переворотов 0 (без предела)');
     expect(corridorState({ c_pos: 0, c_done: true })).toContain('коридор закончен');
+  });
+});
+
+// ── ТРЕУГОЛЬНИК (real-trade 29.09.2026) ────────────────────────────────────
+// Отличие от коридора одно и только в геометрии: у нижней границы СВОЙ угол,
+// поэтому нужна её вторая точка, канал перестаёт быть постоянной ширины, и у
+// сужающейся фигуры появляется апекс — момент, где её больше нет.
+describe('треугольник: своя нижняя линия', () => {
+  const bars = Array.from({ length: 600 }, (_, i) => T0 + i * MIN);
+
+  it('ширина МЕНЯЕТСЯ со временем, в отличие от коридора', () => {
+    const g = { c_t1_ms: T0, c_p1: 83_600, c_t2_ms: T0 + 60 * MIN, c_p2: 83_400,
+                c_low: 82_400, c_low2: 82_800 };
+    expect(corridorBounds(g, T0).top - corridorBounds(g, T0).low).toBeCloseTo(1_200, 6);
+    expect(corridorBounds(g, T0 + 60 * MIN).top - corridorBounds(g, T0 + 60 * MIN).low)
+      .toBeCloseTo(600, 6);
+  });
+
+  it('апекс: где ширина обращается в ноль', () => {
+    // 1200 пунктов сходятся до 600 за час — ещё час, и ноль.
+    const g = { c_t1_ms: T0, c_p1: 83_600, c_t2_ms: T0 + 60 * MIN, c_p2: 83_400,
+                c_low: 82_400, c_low2: 82_800 };
+    const ms = apexMs(g)!;
+    expect(ms).toBeCloseTo(T0 + 120 * MIN, -3);
+    const b = corridorBounds(g, ms);
+    expect(b.top - b.low).toBeCloseTo(0, 6);
+  });
+
+  it('расширяющийся треугольник апекса НЕ имеет', () => {
+    expect(apexMs({ c_t1_ms: T0, c_p1: 83_400, c_t2_ms: T0 + 60 * MIN, c_p2: 83_600,
+                    c_low: 82_800, c_low2: 82_400 })).toBeNull();
+  });
+
+  it('у коридора апекса нет: ширина постоянна', () => {
+    expect(apexMs({ c_t1_ms: T0, c_p1: 83_000, c_t2_ms: T0 + 60 * MIN, c_p2: 83_600,
+                    c_low: 82_400 })).toBeNull();
+  });
+
+  it('четыре клика: нижняя линия приводится к временам ВЕРХНЕЙ', () => {
+    // Движок хранит нижнюю не своими временами, а ценами в c_t1_ms и c_t2_ms.
+    // Кликнули по ней на 30-й и 90-й минутах — цены обязаны пересчитаться на
+    // 0-ю и 60-ю, иначе фигура окажется не той, что нарисовал оператор.
+    const r = corridorFromClicks([
+      { ms: T0, price: 83_600 },
+      { ms: T0 + 60 * MIN, price: 83_400 },
+      { ms: T0 + 30 * MIN, price: 82_600 },     // нижняя, наклон +200/час
+      { ms: T0 + 90 * MIN, price: 83_000 },
+    ], 10, bars, 'triangle');
+    expect(r.error).toBeNull();
+    expect(r.geom!.c_low).toBe(82_400);
+    expect(r.geom!.c_low2).toBe(82_800);
+  });
+
+  it('треугольнику трёх кликов мало', () => {
+    const r = corridorFromClicks([
+      { ms: T0, price: 83_600 }, { ms: T0 + 60 * MIN, price: 83_400 },
+      { ms: T0, price: 82_400 },
+    ], 10, bars, 'triangle');
+    expect(r.geom).toBeNull();
+    expect(r.error).toContain('четыре клика');
+  });
+
+  // Вырождение ловим при постановке, а не на живых деньгах (real-trade).
+  it('нижняя выше верхней ВО ВТОРОЙ точке — отказ', () => {
+    const r = corridorFromClicks([
+      { ms: T0, price: 83_600 },
+      { ms: T0 + 60 * MIN, price: 82_600 },     // верхняя падает
+      { ms: T0, price: 82_400 },
+      { ms: T0 + 60 * MIN, price: 83_000 },     // нижняя растёт и обгоняет
+    ], 10, bars, 'triangle');
+    expect(r.geom).toBeNull();
+    expect(r.error).toContain('ОБЕИХ точках');
+  });
+
+  it('ширина в заданный момент, а не только в первой точке', () => {
+    const g = { c_t1_ms: T0, c_p1: 83_600, c_t2_ms: T0 + 60 * MIN, c_p2: 83_400,
+                c_low: 82_400, c_low2: 82_800 };
+    expect(corridorWidth(g, 0).pts).toBeCloseTo(1_200, 6);
+    expect(corridorWidth(g, 0, T0 + 60 * MIN).pts).toBeCloseTo(600, 6);
   });
 });

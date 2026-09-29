@@ -9,27 +9,44 @@
 
 import type { CorridorClick } from '$lib/smart-order-help';
 
-/** Что сейчас просим кликнуть. Порядок — как объяснено оператору. */
+/** Что сейчас просим кликнуть. Порядок — как объяснено оператору.
+ *
+ *  У коридора нижняя ПАРАЛЛЕЛЬНА верхней, поэтому ей хватает одного клика в
+ *  любом месте. У треугольника свой угол — нужны обе её точки. */
 export const CORRIDOR_STEPS = [
   'первая точка ВЕРХНЕЙ границы',
   'вторая точка ВЕРХНЕЙ границы (она задаёт наклон)',
   'уровень НИЖНЕЙ границы — в любом месте, наклон уже известен',
 ];
 
+export const TRIANGLE_STEPS = [
+  'первая точка ВЕРХНЕЙ границы',
+  'вторая точка ВЕРХНЕЙ границы (угол верхней линии)',
+  'первая точка НИЖНЕЙ границы',
+  'вторая точка НИЖНЕЙ границы (свой, отдельный угол)',
+];
+
 let _active = $state(false);
 let _clicks = $state<CorridorClick[]>([]);
+let _need = $state(3);
 
 export const corridorDraw = {
   get active() { return _active; },
   get clicks() { return _clicks; },
-  /** Сколько кликов ещё ждём; 0 — коридор задан. */
-  get left() { return Math.max(0, 3 - _clicks.length); },
+  /** Сколько кликов нужно всего: 3 у коридора, 4 у треугольника. */
+  get need() { return _need; },
+  /** Сколько кликов ещё ждём; 0 — фигура задана. */
+  get left() { return Math.max(0, _need - _clicks.length); },
   /** Подсказка на текущий шаг; пусто — режим выключен или клики собраны. */
-  get hint() { return _active && _clicks.length < 3 ? CORRIDOR_STEPS[_clicks.length] : ''; },
+  get hint() {
+    if (!_active || _clicks.length >= _need) return '';
+    return (_need === 4 ? TRIANGLE_STEPS : CORRIDOR_STEPS)[_clicks.length];
+  },
 
-  start() { _clicks = []; _active = true; },
-  /** Лишний клик игнорируем: три точки заданы, четвёртая молча сдвинула бы канал. */
-  push(c: CorridorClick) { if (_active && _clicks.length < 3) _clicks = [..._clicks, c]; },
+  /** `need` задаёт тип фигуры: 3 клика коридору, 4 треугольнику. */
+  start(need = 3) { _clicks = []; _need = need; _active = true; },
+  /** Лишний клик игнорируем: фигура задана, следующий молча сдвинул бы стенку. */
+  push(c: CorridorClick) { if (_active && _clicks.length < _need) _clicks = [..._clicks, c]; },
   /** Отменить последний клик — промахнуться мышкой по свече проще, чем кажется. */
   undo() { _clicks = _clicks.slice(0, -1); },
   stop() { _active = false; },
