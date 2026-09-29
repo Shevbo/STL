@@ -30,6 +30,10 @@
 - «Ложные» точки: локальный минимум |SMA(fast) - SMA(slow)| в окне +-30 баров своего
   таймфрейма без смены знака там же; берутся самые близкие (по |разрыву| в медианах
   хода), столько же, сколько пересечений. Направление = знак разрыва на этом баре.
+  ВНИМАНИЕ: «сближение без пересечения» по построению смотрит на 30 баров вперёд
+  (минимум и отсутствие пересечения известны только задним числом), поэтому ход
+  ПОСЛЕ ложной точки смещён в сторону разрыва самим отбором. Честное сравнение с
+  пересечениями у этой группы только по ходу ДО точки.
 - Случайные точки (контроль): для слоя 1 случайные минуты, для пересечений случайные
   завершённые бары своего таймфрейма; фиксированное зерно.
 
@@ -114,6 +118,7 @@ def _detect(times, closes, vols, k_move=K_MOVE, k_vol=K_VOL, lookback=LOOKBACK,
                 e["_last_start"] = times[s]
                 e["end_idx"], e["end_time"] = t, times[t]
                 e["n_det"] += 1
+                e["vol_x"] = max(e["vol_x"], v5[t] / mv)
                 size = abs(move[t]) / mm
                 if size > e["size"]:
                     e.update(size=size, dir=1 if move[t] > 0 else -1, move_pts=move[t])
@@ -121,10 +126,16 @@ def _detect(times, closes, vols, k_move=K_MOVE, k_vol=K_VOL, lookback=LOOKBACK,
                 events.append({"start_idx": s, "start_time": times[s], "end_idx": t,
                                "end_time": times[t], "dir": 1 if move[t] > 0 else -1,
                                "size": abs(move[t]) / mm, "move_pts": move[t],
-                               "n_det": 1, "_last_start": times[s]})
+                               "n_det": 1, "vol_x": v5[t] / mv, "_last_start": times[s]})
     for e in events:
         e.pop("_last_start")
         e["med"] = med_m[e["end_idx"]]
+        # Разрез отчёта (не часть определения): самая крупная минута импульса в
+        # медианах минутного объёма за те же 1440 баров до начала.
+        s0, t1 = e["start_idx"], e["end_idx"]
+        mv1 = _median(sorted(vols[max(0, s0 - lookback):s0]))
+        e["max_min_vol_x"] = round(max(vols[s0 + 1:t1 + 1]) / mv1, 2) if mv1 else None
+        e["vol_x"] = round(e["vol_x"], 2)
     return events, med_m
 
 

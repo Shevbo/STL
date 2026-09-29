@@ -69,3 +69,11 @@ def test_m15_bars_close_on_last_minute_of_quarter():
     # последние минуты четвертей: 14 и 29; хвост 30..39 незавершён и не берётся
     assert im.tf_ends(times, 15) == [14, 29]
     assert im.tf_ends(times[:3], 1) == [0, 1, 2]
+
+
+def test_event_volume_multiples():
+    c, v = _noise(3000), [100.0] * 3000
+    _jump(c, v, 2000, 50)
+    e = im.detect(_bars(c, v))[0]
+    assert e["max_min_vol_x"] == 50.0            # 5000 против медианы 100
+    assert e["vol_x"] == 10.8                    # 5400 против медианы 5-барных сумм 500
