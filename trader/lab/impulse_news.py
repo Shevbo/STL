@@ -15,12 +15,21 @@
   по предыдущим 1440 барам, И сумма volume за t-4..t >= 3 x медиана 5-барных сумм
   по тем же 1440 барам. Начало импульса = бар t-5.
 - Срабатывания, начавшиеся в пределах 10 минут друг от друга (цепочкой), склеиваются
-  в одно событие: начало первое, размер и направление по максимальному |ходу|,
-  конец = последний бар срабатывания в цепочке (продолжение считается ПОСЛЕ него,
-  чтобы не засчитать сам импульс).
-- Продолжение: знаковый ход в направлении события от конца через 5, 15 и 60 минут,
-  в единицах медианного 5-барного хода на баре конца. Цена «через N минут» =
-  close последнего бара с временем <= конец + N минут (через перерыв цена стоит).
+  в одно событие ТОЛЬКО для подсчёта числа событий (n_det) и для размера/|хода|
+  (size, move_pts берутся по максимальному срабатыванию в цепочке). Направление
+  (dir) и медиана (med) события - от ПЕРВОГО срабатывания и больше НЕ переписываются
+  при склейке (bugfix 29.09.2026, независимая проверка).
+- Продолжение: знаковый ход в направлении ПЕРВОГО срабатывания цепочки (dir, мед. med
+  берутся на его баре t0 = start_idx + 5), через 5, 15 и 60 минут. НЕ от конца
+  цепочки: конец известен только через 5 баров после последнего срабатывания, то есть
+  в момент первого срабатывания цепочка ещё могла продолжиться дальше - отсчёт от
+  конца задним числом подглядывает в будущее относительно точки принятия решения.
+  73% событий - цепочки (n_det>1), поэтому это не краевой случай. Цена «через N минут»
+  = close последнего бара с временем <= t0 + N минут (через перерыв цена стоит).
+- Разрыв ленты у первого срабатывания: gap0 = секунд между баром t0-5 и баром t0. В
+  норме 300 (5 минутных баров подряд); больше - в этом окне дыра (ночной перерыв,
+  выходной, ролл). Число здесь сырое, порог и разбор причин - дело отчёта
+  (scripts/impulse_news_report.py), не этого модуля.
 - Пересечение (параметры таймфрейм, быстрая, медленная; CROSS_CONFIGS): бар, на
   котором сменился знак SMA(fast) - SMA(slow) по close. Направление +1, если быстрая
   ушла выше. Конфигурации: M1 50/200 (ходы 5/15/60, «до» 30 минут) и M15 10/50
@@ -104,8 +113,8 @@ def medians(closes: list[float], vols: list[float], lookback: int = LOOKBACK):
 
 
 def _detect(times, closes, vols, k_move=K_MOVE, k_vol=K_VOL, lookback=LOOKBACK,
-            merge_sec=MERGE_SEC):
-    move, v5, med_m, med_v = medians(closes, vols, lookback)
+            merge_sec=MERGE_SEC, precomputed=None):
+    move, v5, med_m, med_v = precomputed or medians(closes, vols, lookback)
     events: list[dict] = []
     for t in range(len(closes)):
         mm, mv = med_m[t], med_v[t]
@@ -118,10 +127,12 @@ def _detect(times, closes, vols, k_move=K_MOVE, k_vol=K_VOL, lookback=LOOKBACK,
                 e["_last_start"] = times[s]
                 e["end_idx"], e["end_time"] = t, times[t]
                 e["n_det"] += 1
-                e["vol_x"] = max(e["vol_x"], v5[t] / mv)
+                # dir/vol_x НЕ трогаем здесь: они характеристики ПЕРВОГО срабатывания
+                # (см. докстринг), от него отсчитывается продолжение. size/move_pts
+                # по-прежнему берут максимум по цепочке - это только размер события.
                 size = abs(move[t]) / mm
                 if size > e["size"]:
-                    e.update(size=size, dir=1 if move[t] > 0 else -1, move_pts=move[t])
+                    e.update(size=size, move_pts=move[t])
             else:
                 events.append({"start_idx": s, "start_time": times[s], "end_idx": t,
                                "end_time": times[t], "dir": 1 if move[t] > 0 else -1,
@@ -129,13 +140,15 @@ def _detect(times, closes, vols, k_move=K_MOVE, k_vol=K_VOL, lookback=LOOKBACK,
                                "n_det": 1, "vol_x": v5[t] / mv, "_last_start": times[s]})
     for e in events:
         e.pop("_last_start")
-        e["med"] = med_m[e["end_idx"]]
+        t0 = e["start_idx"] + 5
+        e["med"] = med_m[t0]                        # медиана ПЕРВОГО срабатывания
+        e["gap0"] = times[t0] - e["start_time"]      # разрыв ленты у первого срабатывания
         # Разрез отчёта (не часть определения): самая крупная минута импульса в
         # медианах минутного объёма за те же 1440 баров до начала.
         s0, t1 = e["start_idx"], e["end_idx"]
         mv1 = _median(sorted(vols[max(0, s0 - lookback):s0]))
         e["max_min_vol_x"] = round(max(vols[s0 + 1:t1 + 1]) / mv1, 2) if mv1 else None
-        e["vol_x"] = round(e["vol_x"], 2)
+        e["vol_x"] = round(e["vol_x"], 2)            # кратность объёма ПЕРВОГО срабатывания
     return events, med_m
 
 
@@ -283,37 +296,61 @@ CROSS_CONFIGS = (
 )
 
 
+def _finish(evs: list[dict], times, closes) -> None:
+    """Досчитывает продолжение (f5/f15/f60) от ПЕРВОГО срабатывания каждого события,
+    на месте. dir/med в событии уже относятся к первому срабатыванию (_detect их не
+    переписывает при склейке), поэтому только точка отсчёта времени меняется."""
+    for e in evs:
+        c = continuation(times, closes, e["start_idx"] + 5, e["dir"], e["med"])
+        e.update(f5=c[5], f15=c[15], f60=c[60], size=round(e["size"], 3),
+                 med=round(e["med"], 4))
+
+
+def _strip(evs: list[dict]) -> list[dict]:
+    return [{k: v for k, v in e.items() if k not in ("start_idx", "end_idx")} for e in evs]
+
+
 def analyze(bars: list, lo: int, hi: int, n_random: int = 3000, seed: int = 20260929) -> dict:
     """Все бары нужны целиком (прогрев медиан); точки отбираются по времени [lo, hi]."""
     times, closes, vols = _cols(bars)
-    events, med_m = _detect(times, closes, vols)
+    precomputed = medians(closes, vols)
+    events, med_m = _detect(times, closes, vols, precomputed=precomputed)
     events = [e for e in events if lo <= e["start_time"] <= hi]
-    for e in events:
-        c = continuation(times, closes, e["end_idx"], e["dir"], e["med"])
-        e.update(f5=c[5], f15=c[15], f60=c[60], size=round(e["size"], 3),
-                 med=round(e["med"], 4))
+    _finish(events, times, closes)
     starts = [e["start_time"] for e in events]
+
+    spans = sorted((e["start_time"] - MERGE_SEC, e["end_time"] + MERGE_SEC) for e in events)
+    span_lo = [a for a, _ in spans]
+
+    def _in_imp(t: int) -> bool:
+        k = bisect.bisect_right(span_lo, t) - 1
+        return k >= 0 and t <= spans[k][1]
 
     # Контроль слоя 1: случайные минуты с сырым ходом (направление d5 ставит отчёт)
     # и меткой «внутри импульса +-10 минут», такие отчёт выбрасывает.
     pool = [i for i in range(5, len(times)) if lo <= times[i] <= hi and med_m[i]]
-    spans = sorted((e["start_time"] - MERGE_SEC, e["end_time"] + MERGE_SEC) for e in events)
-    span_lo = [a for a, _ in spans]
     rand = []
     for i in sorted(random.Random(seed).sample(pool, min(n_random, len(pool)))):
         c = continuation(times, closes, i, 1, med_m[i])
-        k = bisect.bisect_right(span_lo, times[i]) - 1
         rand.append({"time": times[i], "med": round(med_m[i], 4), "f5": c[5], "f15": c[15],
                      "f60": c[60], "d5": _sign(closes[i] - closes[i - 5]),
-                     "in_imp": int(k >= 0 and times[i] <= spans[k][1])})
+                     "in_imp": int(_in_imp(times[i]))})
+
+    # Ценовые импульсы БЕЗ объёмного подтверждения: та же детекция с k_vol=0 (объём
+    # не проверяется), минус пересечения по времени с обычными (цена+объём) событиями
+    # выше, чтобы не задвоить одни и те же импульсы. Отдельная группа отчёта: проверка
+    # показала, что они ведут себя так же, как события с объёмом.
+    novol, _ = _detect(times, closes, vols, k_vol=0.0, precomputed=precomputed)
+    novol = [e for e in novol if lo <= e["start_time"] <= hi
+             and not _in_imp(e["start_time"]) and not _in_imp(e["end_time"])]
+    _finish(novol, times, closes)
 
     layers = {f"m{tf}_{f}_{s}": cross_layer(times, closes, med_m, starts, lo, hi, tf, f, s,
                                             hz, bk, n_random, seed)
               for tf, f, s, hz, bk in CROSS_CONFIGS}
     return {"n_bars": len(times), "bars_from": times[0], "bars_to": times[-1],
             "lo": lo, "hi": hi,
-            "events": [{k: v for k, v in e.items() if k not in ("start_idx", "end_idx")}
-                       for e in events],
+            "events": _strip(events), "events_novol": _strip(novol),
             "random": rand, "cross_layers": layers}
 
 
