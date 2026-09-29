@@ -67,6 +67,9 @@ class Lim:
 
 
 def _book(tmp_path, **kw):
+    kw.setdefault("esc_hold_sec", 10)
+    kw.setdefault("esc_chase_sec", 10)
+    kw.setdefault("esc_chase_every_sec", 2)
     book = SmartOrderBook(str(tmp_path / "b.json"))
     so = SmartOrder(so_id=new_id(), kind="sl", code="RIZ6", side="sell", qty=70,
                     trigger_price=83700, status="fired", fired_client_id="so:x",
@@ -124,12 +127,16 @@ def test_every_kind_is_driven_to_a_fill(tmp_path):
         assert srv.sent[-1].place_order.market is True, kind
 
 
-def test_phases_are_configurable_and_zero_means_straight_to_market(tmp_path):
-    book, so = _book(tmp_path, esc_hold_sec=0, esc_chase_sec=0)
+def test_explicit_seconds_override_the_profile(tmp_path):
+    """Разовая заявка не должна требовать правки общей настройки: секунды в
+    заявке сильнее профиля. Ноль в поле означает «взять из профиля» — иначе
+    профиль нельзя было бы применить вовсе."""
+    # профиль активный (3 мин), но заявка просит одну секунду — слушаем заявку
+    book, so = _book(tmp_path, esc_hold_sec=1, esc_chase_sec=1,
+                     esc_chase_every_sec=1, esc_profile="active")
     srv = FakeSrv()
-    assert _run(book, FakeStore(), FakeOst(), srv, NOW + 100) is True
-    assert so.esc_market is True
-    assert srv.sent[-1].place_order.market is True
+    assert _run(book, FakeStore(), FakeOst(), srv, NOW + 2_500) is True
+    assert so.esc_market is True and srv.sent[-1].place_order.market is True
 
 
 def test_no_quote_blocks_chase_but_not_the_market_exit(tmp_path):
@@ -141,3 +148,19 @@ def test_no_quote_blocks_chase_but_not_the_market_exit(tmp_path):
     assert srv.sent == []
     assert _run(book, FakeStore(0.0, 0.0), FakeOst(), srv, NOW + 30_000) is True
     assert srv.sent[-1].place_order.market is True
+
+
+def test_profile_drives_the_phases_and_normal_never_rushes(tmp_path):
+    """Профиль задаёт секунды, «нормальный» не доводит вовсе — как было до 29.09."""
+    # активный: три минуты у планки, значит на 30-й секунде ещё стоим
+    book, so = _book(tmp_path, esc_hold_sec=0, esc_chase_sec=0,
+                     esc_chase_every_sec=0, esc_profile="active")
+    srv = FakeSrv()
+    assert _run(book, FakeStore(), FakeOst(), srv, NOW + 30_000) is False
+    assert _run(book, FakeStore(), FakeOst(), srv, NOW + 200_000) is True   # пошла погоня
+    # нормальный: не трогаем НИКОГДА, сколько ни жди
+    book2, _ = _book(tmp_path, esc_hold_sec=0, esc_chase_sec=0,
+                     esc_chase_every_sec=0, esc_profile="normal")
+    srv2 = FakeSrv()
+    assert _run(book2, FakeStore(), FakeOst(), srv2, NOW + 3_600_000) is False
+    assert srv2.sent == []

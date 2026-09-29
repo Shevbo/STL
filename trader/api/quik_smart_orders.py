@@ -23,6 +23,7 @@ from pydantic import BaseModel
 from trader.auth.guard import require_auth
 from trader.quik import native_protect
 from trader.quik import blind_quarantine as bq
+from trader.quik import exec_profiles
 from trader.quik import so_journal
 from trader.quik import orders as order_msgs
 from trader.quik import smart_orders as so_mod
@@ -98,9 +99,12 @@ class SmartOrderBody(BaseModel):
     tp_price: float = 0.0          # тейк после входа ЦЕНОЙ уровня (вместо пунктов)
     # Гарантированный выход стопа: сколько стоим у планки, сколько идём за ценой
     # и с каким шагом переставляем. Дефолты 10/10/2 с — выход за 20 секунд.
-    esc_hold_sec: int = 10
-    esc_chase_sec: int = 10
-    esc_chase_every_sec: int = 2
+    # Профиль исполнения (вход и выход): aggressive | active | normal.
+    # Пустой = штатный. Секунды ниже, если заданы, перекрывают профиль.
+    esc_profile: str = ""
+    esc_hold_sec: int = 0
+    esc_chase_sec: int = 0
+    esc_chase_every_sec: int = 0
     # Коридор: верхняя граница двумя точками (время в мс, цена), нижняя параллельна
     # ей и проходит через c_low в момент c_t1_ms; выход за стенку на c_stop_pts —
     # закрытие; c_flips_max = сколько переворотов разрешено (0 — без предела).
@@ -129,6 +133,7 @@ async def create(body: SmartOrderBody, request: Request):
         tp_price=float(body.tp_price),
         watch_client_id=body.watch_client_id, child_price=float(body.child_price),
         oco_group=body.oco_group, good_till_ms=int(body.good_till_ms),
+        esc_profile=str(body.esc_profile or ""),
         esc_hold_sec=int(body.esc_hold_sec), esc_chase_sec=int(body.esc_chase_sec),
         esc_chase_every_sec=int(body.esc_chase_every_sec),
         c_t1_ms=int(body.c_t1_ms), c_p1=float(body.c_p1),
@@ -204,6 +209,34 @@ async def list_orders(request: Request):
         out.append(d)
     return {"orders": out,
             "session": {"open": sess.get("open"), "phase": sess.get("phase", "")}}
+
+
+@router.get("/exec-profiles")
+async def exec_profiles_list(request: Request):
+    """Профили исполнения: три штатных плюс правки оператора с диска."""
+    _auth(request)
+    return {"profiles": exec_profiles.load(), "default": exec_profiles.DEFAULT_PROFILE}
+
+
+class ExecProfilesBody(BaseModel):
+    profiles: dict
+
+
+@router.put("/exec-profiles")
+async def exec_profiles_save(body: ExecProfilesBody, request: Request):
+    """Сохранить профили. Штатные три не удаляются: заявка, сославшаяся на
+    исчезнувший профиль, осталась бы без доведения молча."""
+    _auth(request)
+    merged = exec_profiles.load()
+    for name, cfg in (body.profiles or {}).items():
+        if isinstance(cfg, dict):
+            merged[name] = cfg
+    for name in exec_profiles.DEFAULTS:
+        merged.setdefault(name, exec_profiles.DEFAULTS[name])
+    exec_profiles.save(merged)
+    saved = exec_profiles.load()
+    log.info("exec_profiles.saved", names=sorted(saved))
+    return {"ok": True, "profiles": saved}
 
 
 @router.delete("/{so_id}")
@@ -1069,9 +1102,15 @@ def _escalate_protection(book: SmartOrderBook, store: Any, ost: Any, srv: Any,
         if not order_id:
             continue                       # QUIK ещё не ответил номером
         age = now - (so.fired_ms or now)
-        hold = max(0, int(so.esc_hold_sec)) * 1000
-        chase = max(0, int(so.esc_chase_sec)) * 1000
-        every = max(1, int(so.esc_chase_every_sec)) * 1000
+        prof = exec_profiles.resolve(so.esc_profile)
+        # Явные секунды заявки перекрывают профиль: разовая заявка не должна
+        # требовать правки общей настройки. Ноль в поле = «брать из профиля»,
+        # иначе профиль нельзя было бы применить вовсе.
+        hold = max(0, int(so.esc_hold_sec or prof["hold_sec"])) * 1000
+        chase = max(0, int(so.esc_chase_sec or prof["chase_sec"])) * 1000
+        every = max(1, int(so.esc_chase_every_sec or prof["chase_every_sec"] or 1)) * 1000
+        if not prof.get("market", True) and not (hold or chase):
+            continue          # профиль «нормальный»: доведения нет, заявка стоит лимитом
         if age < hold:
             continue                       # фаза 1: стоим у планки
         t = store.tick(so.code, agent) or {}
@@ -1083,7 +1122,7 @@ def _escalate_protection(book: SmartOrderBook, store: Any, ost: Any, srv: Any,
                 continue
             px = so_mod.marketable_price(so.side, bid, ask, last, step)
             phase = "преследование"
-        elif not so.esc_market:            # фаза 3: РЫНОЧНОЙ заявкой, один раз
+        elif not so.esc_market and prof.get("market", True):  # фаза 3: РЫНОЧНОЙ, один раз
             # Переставить лимит в рыночную нельзя — MOVE_ORDERS меняет цену, а не
             # тип. Поэтому снимаем остаток и шлём отдельную рыночную: это
             # единственный способ выйти при любом движении. Коллар к ней не
