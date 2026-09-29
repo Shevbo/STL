@@ -1048,12 +1048,17 @@ def _escalate_protection(book: SmartOrderBook, store: Any, ost: Any, srv: Any,
     by_cid = {d["client_id"]: d for d in ost.working_orders(agent)}
     dirty = False
     for so in book.orders:
-        # Коридор наравне со стопом: оператор просил «с гарантией входа» — вход,
-        # который не налился, оставляет коридор без позиции у самой стенки, то
-        # есть ровно там, где он должен был встать.
-        if so.kind not in ("sl", "corridor", "triangle") or not so.fired_client_id:
+        # ГАРАНТИЯ ИСПОЛНЕНИЯ — У ВСЕХ ТИПОВ (решение оператора 29.09.2026).
+        # Сначала эскалация стояла только на защитном стопе: опоздавший тейк это
+        # упущенная прибыль, а опоздавший стоп — открытый убыток. Оператор
+        # рассудил иначе и он прав: заявка, которая сработала и не исполнилась,
+        # врёт человеку одинаково независимо от типа. Он видит «сработала», а в
+        # рынке ничего не изменилось — и узнаёт об этом в худший момент.
+        # Секунды фаз у каждой заявки свои, так что осторожность настраивается,
+        # а не зашита в тип.
+        if not so.fired_client_id:
             continue
-        if so.kind == "sl" and so.status != "fired":
+        if so.kind not in ("corridor", "triangle") and so.status != "fired":
             continue
         rec = by_cid.get(so.fired_client_id)
         if rec is None or rec.get("state") in _DEAD_STATES:

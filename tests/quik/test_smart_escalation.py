@@ -109,14 +109,19 @@ def test_filled_or_dead_order_is_left_alone(tmp_path):
         assert srv.sent == []
 
 
-def test_take_profit_and_entries_are_never_rushed(tmp_path):
-    """Опоздавший тейк — упущенная прибыль, опоздавший стоп — открытый убыток."""
-    for kind in ("tp", "trail_tp", "on_fill"):
+def test_every_kind_is_driven_to_a_fill(tmp_path):
+    """Гарантия исполнения у ВСЕХ типов (решение оператора 29.09.2026).
+
+    Сначала эскалация стояла только на защитном стопе. Но заявка, которая
+    сработала и не исполнилась, врёт человеку одинаково независимо от типа: он
+    видит «сработала», а в рынке ничего не изменилось.
+    """
+    for kind in ("sl", "tp", "trail_tp", "trail_sl", "on_fill"):
         book, so = _book(tmp_path)
         so.kind = kind
         srv = FakeSrv()
-        assert _run(book, FakeStore(), FakeOst(), srv, NOW + 30_000) is False
-        assert srv.sent == []
+        assert _run(book, FakeStore(), FakeOst(), srv, NOW + 30_000) is True, kind
+        assert srv.sent[-1].place_order.market is True, kind
 
 
 def test_phases_are_configurable_and_zero_means_straight_to_market(tmp_path):
