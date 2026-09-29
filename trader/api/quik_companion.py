@@ -1126,6 +1126,33 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
                     _robot_net_by_sec.get(_rob["symbol"], 0.0) + float(_rob.get("position") or 0))
             except (TypeError, ValueError):
                 pass
+    # Средняя цена КАЖДОЙ из двух половин, а не одна на всю позицию: роботы и руки
+    # ходят в РАЗНЫЕ стороны (сегодня роботы +5, руками −40), и общая средняя QUIK
+    # в этом случае не цена входа ни одного из них, а точка безубытка нетто.
+    # Роботов считаем по их собственным ценам входа (те же, из которых раннер
+    # считает свою ВМ): Σ(поз×вход) / Σпоз — безубыток роботной половины.
+    _robot_cash_by_sec: dict[str, float] = {}
+    _robot_priced_by_sec: dict[str, float] = {}   # позиция, у которой вход ИЗВЕСТЕН
+    for _rid in ids:
+        _rob = mirror_by_id.get(_rid) or {}
+        if _rob.get("mode") != "real" or not _rob.get("symbol"):
+            continue
+        try:
+            _pos, _avg = float(_rob.get("position") or 0), float(_rob.get("avg_price") or 0)
+        except (TypeError, ValueError):
+            continue
+        if not _pos or not _avg:
+            continue        # флэт или входа не знаем — в среднюю не тянем
+        _sym = _rob["symbol"]
+        _robot_cash_by_sec[_sym] = _robot_cash_by_sec.get(_sym, 0.0) + _pos * _avg
+        _robot_priced_by_sec[_sym] = _robot_priced_by_sec.get(_sym, 0.0) + _pos
+    # Ручная половина: средняя уже посчитана журналом ручной торговли (manual_pnl),
+    # и там же стоит её честный сторож — остаток окна противоположного знака даёт
+    # None, а не среднюю ЧУЖОЙ позиции. Свой второй расчёт здесь был бы третьей
+    # версией одной цифры: журнал и панель обязаны показывать одно число.
+    manual_block = _manual_block(store)
+    _manual_avg_by_sec = {str(r.get("symbol")): r.get("avg_price")
+                          for r in (manual_block.get("open") or []) if r.get("symbol")}
     for p in positions:
         rn = _robot_net_by_sec.get(p["sec"], 0.0)
         p["robot_net"] = rn
@@ -1133,6 +1160,13 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
             p["manual_net"] = float(p["net"]) - rn   # ручное = факт QUIK минус роботы
         except (TypeError, ValueError):
             p["manual_net"] = None
+        # Безубыток роботной половины. Знаменатель — позиция С ИЗВЕСТНЫМ входом:
+        # делить на полную сумму, когда у части роботов входа нет, значит занизить
+        # цену ровно на долю молчащих.
+        _priced = _robot_priced_by_sec.get(p["sec"], 0.0)
+        p["robot_avg"] = (_robot_cash_by_sec[p["sec"]] / _priced) if _priced else None
+        # Не знаем среднюю — говорим None. Ноль на экране читается как «вошли по нулю».
+        p["manual_avg"] = _manual_avg_by_sec.get(p["sec"]) or None
 
     # 3.5 Ручные заявки (#6): простые — из таблицы заявок QUIK (без тега = ручной
     # класс, включая детей умных заявок so:), умные — из книги STL. Только чтение.
@@ -1540,7 +1574,7 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
         "orders": orders_block,
         # Ручная торговля за день + хвост ленты журнала: токен компаньона открывает
         # только снапшот, поэтому телефон берёт журнал отсюда (просьба ui-ux 24.09).
-        "manual": _manual_block(store),
+        "manual": manual_block,
         "watch": {"runner": watch_runner, "backtests": bt, "platform": platform},
         "trading_block": _trading_block(store),
         "alerts": alerts, "market": market_out,

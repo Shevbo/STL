@@ -587,6 +587,14 @@ function px(v) {
     : Number(v).toLocaleString('ru-RU', { maximumFractionDigits: 6 });
 }
 
+// Средняя цена одной половины позиции (роботной или ручной) в скобках после её
+// количества. Нет средней — НЕ ПИШЕМ НИЧЕГО: ноль читался бы как «вошли по нулю»,
+// а у ручной половины средняя честно отсутствует, когда журнал окна её не видел.
+function half(avg) {
+  const s = px(avg);
+  return (s == null || !avg) ? '' : ` <span class="q">ср. ${s}</span>`;
+}
+
 function renderPositions(list) {
   if (!list || !list.length) return '<div class="empty">позиций нет</div>';
   const sg = (v) => v == null ? '—' : (v > 0 ? '+' : '') + v;
@@ -598,22 +606,18 @@ function renderPositions(list) {
     const quote = q == null ? '' :
       `<span class="q${stale ? ' q-stale' : ''}" title="последняя сделка${p.bid ? ' · bid ' + px(p.bid) : ''}${p.ask ? ' · ask ' + px(p.ask) : ''}${stale ? ' · котировка не обновлялась > 2 мин' : ''}">${q}</span>`;
     // Разбивка: Роботы (сумма позиций роботов) + Ручные (остаток мимо STL). Сумма = ВМ инстр.
+    // Средняя у КАЖДОЙ половины своя: половины ходят в разные стороны, и одна
+    // средняя на всю позицию не была бы ценой входа ни одной из них.
     const rn = p.robot_net, mn = p.manual_net;
     const breakdown = (rn != null || mn != null)
-      ? `<span class="sub">Роботы <b>${sg(rn)}</b> · Ручные <b>${sg(mn)}</b></span>`
+      ? `<span class="sub">Роботы <b>${sg(rn)}</b>${half(p.robot_avg)} · Ручные <b>${sg(mn)}</b>${half(p.manual_avg)}</span>`
       : `<span class="sub">${sg(p.net)}</span>`;
-    // Средняя цена ВСЕЙ позиции инструмента (роботы + руками) — число QUIK по
-    // нетто-позиции счёта, а не среднее по роботам. Нет её — не рисуем ничего:
-    // ноль здесь читался бы как «вошли по нулю».
-    const avg = px(p.avg);
-    const avgHtml = (avg == null || !p.avg) ? '' :
-      `<span class="sub" title="средняя цена всей позиции по инструменту: роботы + ручные (число QUIK по нетто счёта)">ср. <b>${avg}</b></span>`;
     // ВМ здесь — ЧИСЛО QUIK: вариационная маржа ЗА СЕССИЮ (с последнего клиринга),
     // включая закрытые за сессию сделки; перенесённая позиция считается от
     // клиринговой цены, а не от входа. У робота ниже — ВМ ОТ ВХОДА. Это разные
     // величины, поэтому подписаны по-разному (иначе выглядит как расхождение).
     return `<div class="row ${cls(vm)}" title="Вариационная маржа QUIK за текущую сессию (с последнего клиринга)">` +
-      `<span class="k">${esc(p.sec)}</span>` + quote + breakdown + avgHtml +
+      `<span class="k">${esc(p.sec)}</span>` + quote + breakdown +
       `<span class="sp"></span><span class="sub">ВМ сессии</span>` +
       `${val(rub(vm, { signed: true }), cls(vm))}</div>`;
   }).join('');

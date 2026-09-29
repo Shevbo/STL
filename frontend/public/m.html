@@ -615,22 +615,27 @@ function quoteHtml(p) {
   return `<span class="q${stale ? ' q-stale' : ''}">${q}</span>`;
 }
 
+// Средняя цена одной половины позиции (роботной или ручной) после её количества.
+// Нет средней — НЕ ПИШЕМ НИЧЕГО: ноль читался бы как «вошли по нулю».
+function half(avg) {
+  const s = px(avg);
+  return (s == null || !avg) ? '' : ` <span class="q">ср. ${s}</span>`;
+}
+
 function renderPositions(list) {
   if (!list || !list.length) return '<div class="empty">позиций нет</div>';
   const sg = (v) => v == null ? '—' : (v > 0 ? '+' : '') + v;
   return list.map((p) => {
     // Разбивка: Роботы (сумма позиций роботов) + Ручные (остаток мимо STL).
+    // Средняя у каждой половины своя: половины ходят в разные стороны.
     const bd = (p.robot_net != null || p.manual_net != null)
-      ? `Роботы <b>${sg(p.robot_net)}</b> · Ручные <b>${sg(p.manual_net)}</b>` : sg(p.net);
-    // Средняя цена ВСЕЙ позиции инструмента (роботы + руками) — число QUIK по
-    // нетто-позиции счёта. Нет её — не рисуем: ноль читался бы как «вошли по нулю».
-    const avg = px(p.avg);
-    const avgHtml = (avg == null || !p.avg) ? '' : `<span class="sub">ср. <b>${avg}</b></span>`;
+      ? `Роботы <b>${sg(p.robot_net)}</b>${half(p.robot_avg)} · Ручные <b>${sg(p.manual_net)}</b>${half(p.manual_avg)}`
+      : sg(p.net);
     // ВМ здесь — ЧИСЛО QUIK: вариационная маржа ЗА СЕССИЮ (с последнего клиринга),
     // включая закрытые за сессию сделки. У робота ниже — ВМ ОТ ВХОДА. Это разные
     // величины, поэтому подписаны по-разному (иначе выглядит как расхождение).
     return `<div class="row ${cls(p.varmargin)}"><span class="k">${esc(p.sec)}</span>` +
-      quoteHtml(p) + `<span class="sub">${bd}</span>` + avgHtml + `<span class="sp"></span>` +
+      quoteHtml(p) + `<span class="sub">${bd}</span><span class="sp"></span>` +
       `<span class="sub">ВМ сессии</span>` +
       `${val(rub(p.varmargin, { signed: true }), cls(p.varmargin))}</div>`;
   }).join('');

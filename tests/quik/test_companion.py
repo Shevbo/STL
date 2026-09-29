@@ -14,6 +14,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from trader.api import quik_companion
 from trader.api.quik_companion import _watch_runner, _with_control
 from trader.api.quik_companion import router as companion_router
 from trader.api.quik_robots import router as quik_robots_router
@@ -624,3 +625,94 @@ def test_native_orders_count_as_live_in_the_snapshot(monkeypatch):
     # Номер стоп-заявки QUIK ~1.9e18: строкой, иначе JSON потеряет последние цифры.
     assert nat[0]["native_stop_num"] == "1900000000000000123"
     assert nat[0]["native_state"] == "live"
+
+
+def test_each_half_of_the_position_carries_its_own_average(monkeypatch):
+    """Средняя у роботной и ручной половины РАЗНАЯ, и одна на двоих врёт.
+
+    29.09.2026 на счёте стояло «Роботы +5 · Ручные −40»: половины в разные
+    стороны. Средняя QUIK по нетто (83 007) — точка безубытка всей позиции, а не
+    цена входа ни одной из половин, и печатать её как «среднюю» значит подсунуть
+    оператору число, по которому он не может считать ни ту, ни другую.
+
+    Роботная считается по собственным ценам входа раннеров: Σ(поз×вход)/Σпоз.
+    Ручная берётся ГОТОВОЙ из журнала ручной торговли — второй расчёт был бы
+    третьей версией одной цифры, а журнал и панель обязаны говорить одно.
+    """
+    monkeypatch.delenv("SHECTORY_AUTH_DEV_BYPASS", raising=False)
+    app = FastAPI()
+    app.include_router(companion_router)
+    app.state.settings = _Settings()
+    app.state.db_pool = FakePool()
+    store = QuikAgentStore()
+    store.set_agent_status("A1", json.dumps({
+        "agent": {"version": "x", "link_up": True},
+        "health": {
+            "runner_healthy": True,
+            "money": {"limit": 1.0, "varmargin": -37_663.0, "age_ms": 100},
+            "positions": [{"sec": "RIZ6", "net": -35, "avg": 83_007.0,
+                           "varmargin": -31_163.0}],
+        },
+        "robots": [
+            {"id": "lxk22", "symbol": "RIZ6", "mode": "real", "paused": False,
+             "position": 6, "avg_price": 82_810.0},
+            {"id": "macdshort", "symbol": "RIZ6", "mode": "real", "paused": False,
+             "position": -1, "avg_price": 82_730.0},
+            # Флэт входа не имеет: его ноль не должен ни съехать в числитель,
+            # ни утянуть знаменатель.
+            {"id": "usopen", "symbol": "RIZ6", "mode": "real", "paused": False,
+             "position": 0, "avg_price": 0.0},
+            # Бумажный робот на том же инструменте в реальную среднюю не входит.
+            {"id": "paper", "symbol": "RIZ6", "mode": "paper", "paused": False,
+             "position": 99, "avg_price": 99_999.0},
+        ],
+    }), 0)
+    app.state.quik_store = store
+    monkeypatch.setattr(quik_companion, "_manual_block",
+                        lambda _store: {"open": [{"symbol": "RIZ6", "position": -40,
+                                                  "avg_price": 82_984.4}]})
+    body = TestClient(app).get("/api/v1/quik/companion/snapshot",
+                               headers=_operator_headers()).json()
+
+    pos = next(p for p in body["positions"] if p["sec"] == "RIZ6")
+    assert pos["robot_net"] == 5 and pos["manual_net"] == -40
+    # (6×82810 − 1×82730) / 5 — безубыток роботной половины, а не средняя QUIK.
+    assert pos["robot_avg"] == pytest.approx(82_826.0)
+    assert pos["robot_avg"] != pos["avg"]
+    assert pos["manual_avg"] == pytest.approx(82_984.4)   # как в журнале, без своего счёта
+
+
+def test_a_half_without_a_known_entry_says_none_not_zero(monkeypatch):
+    """Не знаем вход — None. Ноль на экране читается как «вошли по нулю».
+
+    У ручной половины средней может не быть честно: остаток окна журнала бывает
+    противоположного знака, и manual_pnl в этом случае отдаёт None, а не среднюю
+    ЧУЖОЙ позиции. Панель обязана промолчать, а не подставить ноль.
+    """
+    monkeypatch.delenv("SHECTORY_AUTH_DEV_BYPASS", raising=False)
+    app = FastAPI()
+    app.include_router(companion_router)
+    app.state.settings = _Settings()
+    app.state.db_pool = FakePool()
+    store = QuikAgentStore()
+    store.set_agent_status("A1", json.dumps({
+        "agent": {"version": "x", "link_up": True},
+        "health": {
+            "runner_healthy": True,
+            "money": {"limit": 1.0, "varmargin": -1.0, "age_ms": 100},
+            "positions": [{"sec": "RIZ6", "net": -40, "avg": 83_007.0,
+                           "varmargin": -1.0}],
+        },
+        # Роботов на инструменте нет вовсе — роботной средней быть неоткуда.
+        "robots": [],
+    }), 0)
+    app.state.quik_store = store
+    monkeypatch.setattr(quik_companion, "_manual_block",
+                        lambda _store: {"open": [{"symbol": "RIZ6", "position": -40,
+                                                  "avg_price": None}]})
+    body = TestClient(app).get("/api/v1/quik/companion/snapshot",
+                               headers=_operator_headers()).json()
+
+    pos = next(p for p in body["positions"] if p["sec"] == "RIZ6")
+    assert pos["robot_avg"] is None
+    assert pos["manual_avg"] is None
