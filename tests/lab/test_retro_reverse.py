@@ -8,7 +8,8 @@ import random
 
 from trader.lab.retro_reverse import (DOWN, FLAT, UP, Markov, accuracy,
                                       apply_threshold, fit, quantize, score,
-                                      survival, walk)
+                                      split_segments, survival,
+                                      survival_segmented, walk)
 
 
 def test_quantize_threshold_comes_from_the_window():
@@ -82,3 +83,39 @@ def test_survival_reports_noise_floor():
     for r in rows:
         if r.get("n"):
             assert r["verdict"] == "в пределах шума", r
+
+
+def test_split_segments_cuts_on_gap_over_threshold():
+    """Разрыв > 3 суток между соседними барами — граница сегмента: walk() режет
+    окно по числу баров, а не по времени, и иначе перескочит экспирационную дыру."""
+    day = 86400
+    rows = [[i * 60, 1, 1, 1, 1, 1] for i in range(5)]                  # сегмент 1: 5 баров
+    gap_start = rows[-1][0] + 4 * day                                   # разрыв 4 суток > порога
+    rows += [[gap_start + i * 60, 1, 1, 1, 1, 1] for i in range(3)]     # сегмент 2: 3 бара
+    segs = split_segments(rows, gap_days=3.0)
+    assert [len(s) for s in segs] == [5, 3]
+
+
+def test_split_segments_keeps_gap_under_threshold_together():
+    """Разрыв в пределах порога (обычные ночь/выходные) ряд не режет."""
+    day = 86400
+    rows = [[0, 1, 1, 1, 1, 1], [2 * day, 1, 1, 1, 1, 1], [2 * day + 60, 1, 1, 1, 1, 1]]
+    segs = split_segments(rows, gap_days=3.0)
+    assert len(segs) == 1 and len(segs[0]) == 3
+
+
+def test_split_segments_empty_input():
+    assert split_segments([]) == []
+
+
+def test_survival_segmented_merges_distributions_before_stats():
+    """Оценки и шум ДВУХ сегментов объединяются до подсчёта медианы/перцентиля —
+    не считаются как две отдельные строки отчёта."""
+    rng = random.Random(9)
+    seg = [100.0]
+    for _ in range(3000):
+        seg.append(seg[-1] + rng.gauss(0, 10))
+    rows = survival_segmented([seg, seg], weeks=(1,), bars_per_week=500,
+                              test_weeks=1, k=2, draws=3)
+    single = survival(seg, weeks=(1,), bars_per_week=500, test_weeks=1, k=2, draws=3)
+    assert rows[0]["n"] == 2 * single[0]["n"]
