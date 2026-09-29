@@ -126,3 +126,13 @@ def test_triangle_validation():
     assert _tri(c_low2=0).validate() is not None        # нет второй точки низа
     assert _tri(c_low2=84600.0).validate() is not None  # низ выше верха во 2-й точке
     assert _tri().validate() is None
+
+
+def test_after_fill_blocks_are_refused(tmp_path):
+    """Коридор ведёт позицию сам: защитный ребёнок пережил бы переворот и после
+    него открыл бы позицию в обратную сторону — вход в рынок без оператора."""
+    for field in ("sl_offset", "tp_offset", "trail_after", "tp_trail",
+                  "sl_price", "tp_price"):
+        assert _corr(**{field: 100.0}).validate() is not None, field
+        assert _tri(**{field: 100.0}).validate() is not None, field
+    assert _corr().validate() is None

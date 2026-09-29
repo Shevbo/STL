@@ -190,7 +190,19 @@ async def list_orders(request: Request):
     sess = getattr(request.app.state, "market_session", None) or {}
     # Вне торгов сторож намеренно не срабатывает — интерфейс обязан это сказать,
     # иначе взведённая заявка выглядит сломанной.
-    return {"orders": [asdict(o) for o in book.orders],
+    now = so_mod.now_ms()
+    out = []
+    for o in book.orders:
+        d = asdict(o)
+        if o.kind in ("corridor", "triangle"):
+            # ТЕКУЩИЕ стенки считает движок, а не панель. Иначе геометрию
+            # пришлось бы повторять на фронте, и две реализации одной прямой
+            # разъехались бы — вопрос в том, когда, а не случится ли это.
+            low, top = so_mod.corridor_bounds(o, now)
+            d["c_now"] = {"low": round(low, 4), "top": round(top, 4),
+                          "width": round(top - low, 4), "ts_ms": now}
+        out.append(d)
+    return {"orders": out,
             "session": {"open": sess.get("open"), "phase": sess.get("phase", "")}}
 
 
