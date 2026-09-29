@@ -16,7 +16,10 @@
     ocoFact, ocoNameOf, stopOrderRow, stopOrderWhy,
     preview, protectionPair,
     shortCodes, sortBySideAndPrice, tillFact, type Kind, type OpenPos, type Side,
+    corridorFromClicks, corridorState, corridorWidth,
   } from '$lib/smart-order-help';
+  import { candlesStore } from '$lib/stores/candles.svelte';
+  import { corridorDraw } from '$lib/stores/corridor-draw.svelte';
 
   let { symbol = '' }: { symbol?: string } = $props();
 
@@ -48,6 +51,17 @@
   let afterMode = $state<'sl' | 'trail'>('sl');
   let watchId = $state('');
   let childPrice = $state('');
+  // КОРИДОР. Точки держим отдельными полями, а не одной строкой: движок требует
+  // время и цену каждой точки, и собирать их обратно из текста значило бы
+  // завести второй парсер там, где уже есть corridorFromClicks.
+  let cT1 = $state(0);
+  let cP1 = $state('');
+  let cT2 = $state(0);
+  let cP2 = $state('');
+  let cLow = $state('');
+  let cStopPts = $state('');
+  let cFlipsMax = $state('');
+  let cErr = $state('');
   let ocoGroup = $state('');
   // Входы, которыми набрана выбранная позиция: один — связка подставляется сама,
   // несколько — оператор выбирает, к какому входу привязать выход.
@@ -63,6 +77,9 @@
 
   let tick = $state<{ last: number; bid: number; ask: number } | null>(null);
   let pointValue = $state(0);
+  // Шаг цены инструмента: по нему квантуются клики. Без него коридор встанет
+  // между сетками, и касание поймается на полшага раньше или позже.
+  let priceStep = $state(0);
   let feedCodes = $state<string[]>([]);   // все коды из QLua-фида (хвост подсказок)
   // Открытые позиции счёта с выделенной РУЧНОЙ частью. Без них форма спрашивала
   // инструмент, сторону и объём отдельно, и на вопрос «а где выбрать свою
@@ -246,7 +263,8 @@
       const step = Number(row?.price_step || 0), cost = Number(row?.step_cost || 0);
       // ₽ за пункт. Без него считаем в пунктах и рублями НЕ врём.
       pointValue = step > 0 && cost > 0 ? cost / step : 0;
-    } catch { pointValue = 0; }
+      priceStep = step > 0 ? step : 0;
+    } catch { pointValue = 0; priceStep = 0; }
   }
 
   // Подсказки инструмента: частые из книги, затем остальные коды фида.
@@ -292,7 +310,31 @@
   // Поля делятся на две группы по смыслу: ЧЕМ заявка сработает и ЧТО встанет
   // после сделки. Одной плоской сеткой уровень срабатывания и защитная пара
   // читались одинаково, хотя это разные моменты времени.
-  const TRIGGER_KEYS = ['trigger_price', 'trail_offset', 'watch_client_id', 'child_price'];
+  const TRIGGER_KEYS = ['trigger_price', 'trail_offset', 'watch_client_id', 'child_price',
+                        'c_p1', 'c_p2', 'c_low', 'c_stop_pts', 'c_flips_max'];
+  // Три клика по графику собрались — переводим их в параметры. Сам перевод
+  // (бар вместо пикселя, шаг цены, приведение нижней к первой точке) живёт в
+  // corridorFromClicks и покрыт тестами; здесь только подстановка в форму.
+  $effect(() => {
+    if (corridorDraw.clicks.length < 3) return;
+    const bars = candlesStore.get(symbol).map((b) => b.time * 1000);
+    const r = corridorFromClicks(corridorDraw.clicks, priceStep, bars);
+    if (r.error) { cErr = r.error; corridorDraw.undo(); return; }
+    cErr = '';
+    cT1 = r.geom.c_t1_ms; cP1 = String(r.geom.c_p1);
+    cT2 = r.geom.c_t2_ms; cP2 = String(r.geom.c_p2);
+    cLow = String(r.geom.c_low);
+    corridorDraw.stop();
+  });
+
+  // Ширина канала прямо при постановке: оператор ставит объём, глядя на неё.
+  // ₽/пункт не знаем — печатаем пункты и молчим про рубли.
+  const corridorGeom = $derived(
+    pos(cP1) && pos(cP2) && pos(cLow) && cT2 > cT1
+      ? { c_t1_ms: cT1, c_p1: num(cP1), c_t2_ms: cT2, c_p2: num(cP2), c_low: num(cLow) }
+      : null);
+  const corridorW = $derived(corridorGeom ? corridorWidth(corridorGeom, pointValue) : null);
+
   const triggerFields = $derived(meta.fields.filter((f) => TRIGGER_KEYS.includes(f.key)));
   const afterFields = $derived(meta.fields.filter((f) => !TRIGGER_KEYS.includes(f.key)));
 
@@ -317,6 +359,15 @@
       trail_after: only('trail_after', afterMode === 'trail' ? num(trailAfter) : 0),
       watch_client_id: mine.has('watch_client_id') ? tr(watchId) : '',
       child_price: only('child_price', num(childPrice)),
+      // Коридор: точки уезжают ВМЕСТЕ со своим временем. Отправить цены без
+      // времени значит отдать движку прямую без наклона.
+      c_t1_ms: mine.has('c_p1') ? cT1 : 0,
+      c_p1: only('c_p1', num(cP1)),
+      c_t2_ms: mine.has('c_p2') ? cT2 : 0,
+      c_p2: only('c_p2', num(cP2)),
+      c_low: only('c_low', num(cLow)),
+      c_stop_pts: only('c_stop_pts', num(cStopPts)),
+      c_flips_max: only('c_flips_max', num(cFlipsMax)),
       oco_group: tr(ocoGroup),
       good_till_ms: goodTillMs,
     };
@@ -336,6 +387,8 @@
       trigger = ''; trailOffset = ''; slOffset = ''; tpOffset = ''; trailAfter = ''; tpTrail = ''; tpMode = 'fixed';
       slPrice = ''; tpPrice = '';
       watchId = ''; childPrice = '';
+      cT1 = 0; cP1 = ''; cT2 = 0; cP2 = ''; cLow = ''; cStopPts = ''; cFlipsMax = '';
+      cErr = ''; corridorDraw.reset();
       confirming = false;
       await smartOrdersStore.refresh();
     } catch (e: any) { msgKind = 'err'; msg = e?.message || 'ошибка'; }
@@ -554,6 +607,24 @@
             {:else if f.key === 'watch_client_id'}
               <input class="so-in text" bind:value={watchId} placeholder="client_id" spellcheck="false"
                      aria-label={f.label} />
+            {:else if f.key === 'c_p1'}
+              <input class="so-in" type="number" step="any" bind:value={cP1} placeholder="0"
+                     aria-label={f.label} />
+            {:else if f.key === 'c_p2'}
+              <input class="so-in" type="number" step="any" bind:value={cP2} placeholder="0"
+                     aria-label={f.label} />
+            {:else if f.key === 'c_low'}
+              <input class="so-in" type="number" step="any" bind:value={cLow} placeholder="0"
+                     aria-label={f.label} />
+            {:else if f.key === 'c_stop_pts'}
+              <div class="so-unit-wrap">
+                <input class="so-in pts" type="number" step="any" min="0" bind:value={cStopPts}
+                       placeholder="0 — без стопа" aria-label={f.label} />
+                <span class="so-unit">п.</span>
+              </div>
+            {:else if f.key === 'c_flips_max'}
+              <input class="so-in" type="number" step="1" min="0" bind:value={cFlipsMax}
+                     placeholder="0 — без предела" aria-label={f.label} />
             {:else}
               <input class="so-in" type="number" step="any" bind:value={childPrice} placeholder="по рынку"
                      aria-label={f.label} />
@@ -562,6 +633,32 @@
           </div>
         {/each}
         </div>
+
+        <!-- ПОСТАНОВКА МЫШКОЙ — главная просьба оператора (29.09.2026): канал
+             задаётся линиями по графику, а не цифрами. Поля выше остаются: по
+             ним видно, ЧТО именно уедет в движок, и их можно поправить руками. -->
+        {#if kind === 'corridor'}
+        <div class="so-draw">
+          <div class="so-draw-row">
+            <button type="button" class="so-draw-b" class:on={corridorDraw.active}
+                    onclick={() => corridorDraw.active ? corridorDraw.reset() : corridorDraw.start()}>
+              {corridorDraw.active ? 'отменить постановку' : 'поставить мышкой по графику'}
+            </button>
+            {#if corridorDraw.active && corridorDraw.clicks.length}
+              <button type="button" class="so-draw-b" onclick={() => corridorDraw.undo()}>шаг назад</button>
+            {/if}
+          </div>
+          {#if corridorDraw.hint}
+            <div class="so-draw-hint">клик {corridorDraw.clicks.length + 1} из 3 — {corridorDraw.hint}</div>
+          {/if}
+          {#if cErr}<div class="so-draw-err">{cErr}</div>{/if}
+          {#if corridorW}
+            <div class="so-draw-w">ширина канала {fmtPts(corridorW.pts)}{corridorW.rub != null
+              ? ` = ${fmtRub(corridorW.rub)} на контракт${qty > 1 ? `, ${fmtRub(corridorW.rub * qty)} на ${qty}` : ''}`
+              : ' (₽/пункт инструмента неизвестна)'}</div>
+          {/if}
+        </div>
+        {/if}
       </div>
 
       <!-- ГРУППА 3: что встанет ПОСЛЕ сделки. Защита — ОДИН из двух
@@ -789,6 +886,19 @@
                   onclick={() => edit(o)}>Изменить</button>
           <button class="so-btn sm" onclick={() => cancel(o.so_id)}>Снять</button>
         </div>
+        <!-- КОРИДОР: позиция важнее самого факта заявки (real-trade 29.09.2026).
+             Он многоразовый, статус у него в норме «взведена», и по статусу не
+             понять ни где он в рынке, ни сколько переворотов осталось. -->
+        {#if o.kind === 'corridor'}
+          <div class="so-c-corr">
+            <b>{corridorState(o)}</b>
+            {#if o.c_p1 && o.c_low}
+              <span class="so-c-corr-w">ширина {fmtPts(o.c_p1 - o.c_low)}{pointValue && o.code === code
+                ? ` = ${fmtRub((o.c_p1 - o.c_low) * pointValue)} на контракт` : ''}</span>
+            {/if}
+            {#if o.c_stop_pts}<span class="so-c-corr-w">стоп за стенкой {fmtPts(o.c_stop_pts)}</span>{/if}
+          </div>
+        {/if}
         {#if o.kind === 'trail_tp'}
           {@const fire = o.side === 'buy' ? o.peak + o.trail_offset : o.peak - o.trail_offset}
           <div class="so-c-track" class:active={o.activated}>
@@ -1018,6 +1128,20 @@
     padding: 8px 10px; cursor: pointer; color: #b9bfd4; display: grid; gap: 3px;
   }
   .so-kind:hover { background: #1b1b34; }
+  /* Постановка мышкой и состояние коридора */
+  .so-draw { margin-top: 8px; padding-top: 8px; border-top: 1px solid #23233f; }
+  .so-draw-row { display: flex; gap: 6px; flex-wrap: wrap; }
+  .so-draw-b { font-size: 11px; padding: 3px 8px; border-radius: 4px;
+               border: 1px solid #2d2d4a; background: #16162b; color: #d6dbe8; cursor: pointer; }
+  .so-draw-b:hover { background: #1b1b34; }
+  .so-draw-b.on { border-color: #5ecfb1; color: #5ecfb1; }
+  .so-draw-hint { margin-top: 5px; font-size: 11px; color: #5ecfb1; }
+  .so-draw-err { margin-top: 5px; font-size: 11px; color: #ff8fb1; }
+  .so-draw-w { margin-top: 5px; font-size: 11px; color: #9aa0b4; }
+  .so-c-corr { display: flex; gap: 10px; flex-wrap: wrap; align-items: baseline;
+               padding: 4px 8px; font-size: 11px; }
+  .so-c-corr b { color: #5ecfb1; }
+  .so-c-corr-w { color: #9aa0b4; }
   .so-kind.on { background: #1b1b34; border-color: var(--accent); color: #e8e8f0; }
   .so-kind-tag { font: 600 10px/1 Consolas, monospace; letter-spacing: .1em; color: var(--accent); }
   .so-kind-name { font-size: 14px; color: #e8e8f0; }

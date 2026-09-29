@@ -38,6 +38,18 @@ export interface SmartOrder {
   esc_chase_sec?: number;
   esc_chase_every_sec?: number;
   esc_market?: boolean;    // фаза 3 уже отработала
+  // КОРИДОР (kind="corridor", 29.09.2026). Верхняя граница — прямая через две
+  // точки; нижняя ПАРАЛЛЕЛЬНА ей и задана ценой в момент первой точки. Читаем
+  // обратно позицию, счётчик переворотов и признак конца: статус у коридора в
+  // норме «armed», и по нему не видно ни того, ни другого.
+  c_t1_ms?: number; c_p1?: number;
+  c_t2_ms?: number; c_p2?: number;
+  c_low?: number;
+  c_stop_pts?: number;
+  c_flips_max?: number;
+  c_flips?: number;
+  c_pos?: number;          // + лонг, − шорт, 0 вне рынка
+  c_done?: boolean;
   note: string;
   peak: number;
   activated: boolean;

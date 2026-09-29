@@ -10,7 +10,8 @@
   import { orderbookStore } from '$lib/stores/orderbook.svelte';
   import { mskTickFormatter, mskCrosshairFormatter } from '$lib/chart-time';
   import { smartOrdersStore } from '$lib/stores/smart-orders.svelte';
-  import { KIND_BY_ID, LABEL_TEXT_COLOR, shortCodes, smartLegend, smartLevels, softColor } from '$lib/smart-order-help';
+  import { KIND_BY_ID, LABEL_TEXT_COLOR, corridorBounds, shortCodes, smartLegend, smartLevels, softColor } from '$lib/smart-order-help';
+  import { corridorDraw } from '$lib/stores/corridor-draw.svelte';
 
   let {
     symbol,
@@ -141,6 +142,12 @@
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let smartLines = new Map<string, any>();
   let unsubSmart: (() => void) | null = null;
+  // Стенки коридора НАКЛОННЫЕ, а createPriceLine рисует только горизонталь.
+  // Поэтому каждая стенка — своя линейная серия из двух точек. Ключ — so_id и
+  // сторона стенки.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let corridorLines = new Map<string, any>();
+  let unsubClick: (() => void) | null = null;
   const chartCode = $derived((selectedSymbol || '').split('@')[0]);
   // Легенда показывает ТОЛЬКО те типы, что реально на графике: постоянный
   // список стилей превращается в шум, который перестают читать.
@@ -517,11 +524,79 @@
     // The series exist now: let the history-load effect run for the current symbol/tf
     // (and for every later symbol/tf change, incl. prop-driven ones). The REST path is
     // the proven source of the first candles; ws appends live bars on top.
+    tvChart.subscribeClick(onChartClick);
+    unsubClick = () => tvChart?.unsubscribeClick(onChartClick);
     chartReady = true;
   });
 
+  // ── КОРИДОР: наклонные стенки ────────────────────────────────────────────
+  // Линия строится по ДВУМ КРАЙНИМ барам графика, а не по точкам заявки: точки
+  // могут лежать левее видимого окна или обе в одной минуте, и серия из них
+  // была бы отрезком длиной в пиксель. Формула стенок одна на проект
+  // (corridorBounds — зеркало движка), здесь только её края.
+  function corridorSpan(o: any, bars: { time: number }[]):
+      { low: Array<{ time: number; value: number }>; top: Array<{ time: number; value: number }> } | null {
+    if (!bars.length) return null;
+    const geom = { c_t1_ms: o.c_t1_ms, c_p1: o.c_p1, c_t2_ms: o.c_t2_ms, c_p2: o.c_p2, c_low: o.c_low };
+    if (!(geom.c_p1 > 0) || !(geom.c_p2 > 0) || !(geom.c_low > 0)) return null;
+    const edges = [bars[0].time, bars[bars.length - 1].time];
+    const low = [], top = [];
+    for (const t of edges) {
+      // Бары графика в СЕКУНДАХ, коридор в МИЛЛИСЕКУНДАХ. Перепутать тут — это
+      // наклон в тысячу раз не тот, и стенки уедут за экран.
+      const b = corridorBounds(geom, t * 1000);
+      low.push({ time: t, value: b.low });
+      top.push({ time: t, value: b.top });
+    }
+    return { low, top };
+  }
+
+  $effect(() => {
+    const smartArmed = smartOnChart;
+    const bars = candlesStore.get(selectedSymbol);
+    if (!tvChart || !tvCandle) return;
+    const want = new Set<string>();
+    for (const o of smartArmed) {
+      if (o.kind !== 'corridor') continue;
+      const span = corridorSpan(o, bars as any);
+      if (!span) continue;
+      for (const side of ['top', 'low'] as const) {
+        const key = `${o.so_id}:${side}`;
+        want.add(key);
+        let ser = corridorLines.get(key);
+        if (!ser) {
+          ser = tvChart.addLineSeries({
+            color: softColor(KIND_BY_ID.corridor.color, 0.08, 1),
+            lineWidth: 2, priceLineVisible: false, lastValueVisible: false,
+            crosshairMarkerVisible: false,
+          });
+          corridorLines.set(key, ser);
+        }
+        ser.setData(span[side]);
+      }
+    }
+    for (const [key, ser] of corridorLines) {
+      if (!want.has(key)) { tvChart.removeSeries(ser); corridorLines.delete(key); }
+    }
+  });
+
+  // ── КОРИДОР: постановка мышкой ───────────────────────────────────────────
+  // Время берём из param.time — это время БАРА, на который пришёлся клик, а не
+  // пиксель: на графике с пропущенными минутами пиксель отдаёт время, которого
+  // не было (предупреждение real-trade 29.09.2026). Цену переводим из
+  // координаты, квантование по шагу инструмента делает corridorFromClicks.
+  function onChartClick(param: any) {
+    if (!corridorDraw.active || !tvCandle) return;
+    const y = param?.point?.y;
+    if (param?.time == null || y == null) return;      // клик мимо полотна
+    const price = tvCandle.coordinateToPrice(y);
+    if (price == null) return;
+    corridorDraw.push({ ms: (param.time as number) * 1000, price: Number(price) });
+  }
+
   onDestroy(() => {
     unsubSmart?.();
+    unsubClick?.();
     uplotInst?.destroy();
     tvChart?.remove();
   });
