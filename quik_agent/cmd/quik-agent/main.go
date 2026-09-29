@@ -485,6 +485,17 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 			}
 			if len(trades) > 0 {
 				runnerSrvTape(trades, ev.Code)
+				// ...и в STL, для архива рынка: сторона и объём сделки есть
+				// только здесь, тик их не несёт (см. EmitTape).
+				tape := make([]*quikv1.TapeTrade, 0, len(trades))
+				for _, t := range trades {
+					tape = append(tape, &quikv1.TapeTrade{
+						Price: t.GetPrice(), Qty: t.GetQty(),
+						Side: t.GetSide(), TsUnixMs: t.GetTsUnixMs()})
+				}
+				_ = lk.EmitTape(&quikv1.TapeBatch{
+					Code: ev.Code, Trades: tape,
+					ReceivedAtUnixMs: time.Now().UnixMilli()})
 				quikdde.Default.SetLuaLast(ev.Code, lastPx) // /tick + UI follow the tape
 				// NOTE: exchange lag is NOT measured here. Tape rows carry the
 				// agent's OWN receipt stamp (see shectory_trade.lua OnAllTrade),

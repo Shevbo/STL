@@ -97,6 +97,13 @@ class MarketRecorder:
         "order_update": "order",           # жизненный цикл НАШЕЙ заявки
         "trans_reply": "reply",            # отказы QUIK: бэктест исполняет всегда
         "execution_update": "exec",        # частичные заливки
+        # ЛЕНТА ВСЕХ СДЕЛОК. До 29.09.2026 её здесь не было — и не могло быть:
+        # агент отдавал ленту только раннеру на своей машине, в STL она не
+        # приходила вовсе. Единственный день ленты в архиве, 25.09, попал туда
+        # импортом из выгрузки терминала. Обнаружилось, когда понадобилось
+        # разобрать эпизод 29.09 14:29-14:52 по RIZ6 (около 10 000 контрактов за
+        # 15 минут): тик несёт только last, без стороны и размера сделки.
+        "tape": "trade",
     }
 
     def record_frame(self, field: str | None, msg) -> None:
@@ -375,6 +382,9 @@ class MarketRecorder:
             return None
 
     def _write(self, kind: str, payload: dict) -> None:
+        if kind == "trade":
+            self._write_tape(payload)
+            return
         f = self._handle(kind)
         q = self._quality(kind, payload)
         if q:
@@ -388,6 +398,41 @@ class MarketRecorder:
             f.flush()
             n = 0
         self._since_flush[kind] = n
+
+    def _write_tape(self, batch: dict) -> None:
+        """Батч ленты — ПОСТРОЧНО, одна сделка = одна строка.
+
+        Формат совпадает со строкой импортёра (scripts/import_quik_trades.py),
+        которым восстановили 25.09: те же ключи и тот же смысл, иначе прогоны на
+        архиве пришлось бы учить двум форматам одного и того же дня. ts_ms у
+        потока — штамп ПРИЁМА агентом (лента QUIK своего времени сделки в
+        OnAllTrade не даёт), и это честно помечено источником.
+        """
+        f = self._handle("trade")
+        code = batch.get("code") or ""
+        recv = int(batch.get("received_at_unix_ms") or 0)
+        n = 0
+        for t in batch.get("trades") or []:
+            try:
+                row = {"code": code, "price": float(t.get("price") or 0),
+                       "qty": int(t.get("qty") or 0), "side": int(t.get("side") or 0),
+                       "received_at_unix_ms": recv,
+                       "ts_ms": int(t.get("ts_unix_ms") or recv),
+                       "num": "", "source": "agent_stream"}
+            except (TypeError, ValueError):
+                continue
+            if row["price"] <= 0 or row["qty"] <= 0:
+                continue
+            f.write(json.dumps(row, separators=(",", ":"), ensure_ascii=False) + chr(10))
+            n += 1
+        if not n:
+            return
+        self.stats["written"] += n
+        cnt = self._since_flush.get("trade", 0) + n
+        if cnt >= _FLUSH_EVERY:
+            f.flush()
+            cnt = 0
+        self._since_flush["trade"] = cnt
 
     def _close_files(self) -> None:
         for f in self._files.values():

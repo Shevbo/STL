@@ -52,6 +52,23 @@ func (l *Link) EmitOrderUpdate(u *quikv1.OrderUpdate) error {
 	})
 }
 
+// EmitTape sends a batch of all-trades rows to STL.
+//
+// До 29.09.2026 лента доезжала только до раннера на самой QUIK-машине, а в STL
+// не уходила вовсе — поэтому её не было и в архиве рынка, и разобрать эпизод по
+// сторонам и объёмам сделок было нечем: тик несёт только last. Кадр
+// best-effort, как и тик: линк лежит — молчим, историю не копим. Лента
+// восстанавливается из выгрузки терминала, а торговля важнее архива.
+func (l *Link) EmitTape(b *quikv1.TapeBatch) error {
+	stream := l.currentStream()
+	if stream == nil || b == nil || len(b.GetTrades()) == 0 {
+		return nil
+	}
+	return l.sendMsg(stream, &quikv1.AgentMessage{
+		Payload: &quikv1.AgentMessage_Tape{Tape: b},
+	})
+}
+
 // EmitTransReply sends a TransReply frame (trade.Emitter).
 func (l *Link) EmitTransReply(r *quikv1.TransReply) error {
 	stream := l.currentStream()

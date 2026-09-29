@@ -37,7 +37,32 @@ message AgentMessage {
     AgentStatusSnapshot status_snapshot = 16; // local showcase JSON (opaque; STL serves verbatim)
     StopOrderReport stop_order_report = 17;   // QUIK stop orders: OnStopOrder event or stop_orders table
     OpsResult ops_result = 18;                // result of an OS/QUIK maintenance operation
+    TapeBatch tape = 19;                      // лента всех сделок инструмента
   }
+}
+
+// ЛЕНТА ВСЕХ СДЕЛОК (QLua OnAllTrade), батчами по 300 мс.
+//
+// До 29.09.2026 лента доезжала ТОЛЬКО до раннера на самой QUIK-машине, а в STL не
+// уходила вовсе — поэтому её не было и в архиве рынка: писать было нечего. Это
+// обнаружилось, когда понадобилось разобрать эпизод 29.09 14:29-14:52 по RIZ6
+// (около 10 000 контрактов за 15 минут): тики несут только last, без стороны и
+// размера сделки, а нужны были именно они. Единственный день в архиве, 25.09,
+// попал туда импортом из выгрузки терминала, а не потоком.
+//
+// Объём честно большой: 25.09 это 260 424 сделки за день. Батчи 300 мс и тот же
+// канал, что у тиков; в архив ложится около 30 МБ в день.
+message TapeTrade {
+  double price = 1;
+  int64 qty = 2;
+  int32 side = 3;          // 1 = покупка, 2 = продажа (как отдаёт QUIK)
+  int64 ts_unix_ms = 4;    // штамп ПРИЁМА агентом, не время сделки на бирже
+}
+
+message TapeBatch {
+  string code = 1;
+  repeated TapeTrade trades = 2;
+  int64 received_at_unix_ms = 3;
 }
 
 // Generic passthrough of ANY QUIK DDE sheet the user exports (e.g. deals, or any

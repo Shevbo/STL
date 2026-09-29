@@ -104,7 +104,7 @@ def test_only_execution_relevant_frames_are_archived():
     бесполезны — они только раздули бы файлы."""
     kinds = MarketRecorder.KINDS
     assert set(kinds) == {"order_book", "tick", "order_update",
-                          "trans_reply", "execution_update"}
+                          "trans_reply", "execution_update", "tape"}
     assert "heartbeat" not in kinds and "robot_status_report" not in kinds
 
 

@@ -22,20 +22,11 @@ service RunnerBridge {
 }
 
 // One exchange trade from the anonymized all-trades tape (QLua OnAllTrade).
-message TapeTrade {
-  double price = 1;
-  int64 qty = 2;
-  int32 side = 3;        // 1 = sell (aggressor), 2 = buy, 0 = unknown
-  int64 ts_unix_ms = 4;  // exchange/terminal trade time
-}
+// TapeTrade и TapeBatch переехали в quik_agent.proto 29.09.2026: ту же ленту
+// теперь получает не только раннер на VDS, но и STL (архив рынка). Держать
+// два одинаковых типа в одном пакете protoc не даёт, да и незачем.
 
 // A batch of tape trades for one instrument (Lua flushes every ~300ms).
-message TapeBatch {
-  string code = 1;
-  repeated TapeTrade trades = 2;
-  int64 received_at_unix_ms = 3;
-}
-
 message TickFilter { repeated string codes = 1; }         // empty = all whitelisted
 message EventsFilter { string client_prefix = 1; }        // runner's client_id prefix, e.g. "rr:"
 message ControlHello { string runner_version = 1; int32 pid = 2; }

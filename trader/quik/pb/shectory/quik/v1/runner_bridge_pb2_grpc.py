@@ -43,7 +43,7 @@ class RunnerBridgeStub(object):
         self.StreamTape = channel.unary_stream(
                 '/shectory.quik.v1.RunnerBridge/StreamTape',
                 request_serializer=shectory_dot_quik_dot_v1_dot_runner__bridge__pb2.TickFilter.SerializeToString,
-                response_deserializer=shectory_dot_quik_dot_v1_dot_runner__bridge__pb2.TapeBatch.FromString,
+                response_deserializer=shectory_dot_quik_dot_v1_dot_quik__agent__pb2.TapeBatch.FromString,
                 _registered_method=True)
         self.PlaceRunnerOrder = channel.unary_unary(
                 '/shectory.quik.v1.RunnerBridge/PlaceRunnerOrder',
@@ -128,7 +128,7 @@ def add_RunnerBridgeServicer_to_server(servicer, server):
             'StreamTape': grpc.unary_stream_rpc_method_handler(
                     servicer.StreamTape,
                     request_deserializer=shectory_dot_quik_dot_v1_dot_runner__bridge__pb2.TickFilter.FromString,
-                    response_serializer=shectory_dot_quik_dot_v1_dot_runner__bridge__pb2.TapeBatch.SerializeToString,
+                    response_serializer=shectory_dot_quik_dot_v1_dot_quik__agent__pb2.TapeBatch.SerializeToString,
             ),
             'PlaceRunnerOrder': grpc.unary_unary_rpc_method_handler(
                     servicer.PlaceRunnerOrder,
@@ -209,7 +209,7 @@ class RunnerBridge(object):
             target,
             '/shectory.quik.v1.RunnerBridge/StreamTape',
             shectory_dot_quik_dot_v1_dot_runner__bridge__pb2.TickFilter.SerializeToString,
-            shectory_dot_quik_dot_v1_dot_runner__bridge__pb2.TapeBatch.FromString,
+            shectory_dot_quik_dot_v1_dot_quik__agent__pb2.TapeBatch.FromString,
             options,
             channel_credentials,
             insecure,
