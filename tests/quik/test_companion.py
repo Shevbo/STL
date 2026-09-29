@@ -716,3 +716,48 @@ def test_a_half_without_a_known_entry_says_none_not_zero(monkeypatch):
     pos = next(p for p in body["positions"] if p["sec"] == "RIZ6")
     assert pos["robot_avg"] is None
     assert pos["manual_avg"] is None
+
+
+def test_ema_series_is_aligned_to_the_bars_the_panel_gets():
+    """Серия раннера кладётся на ОТДАННЫЕ бары, а не уезжает своей длиной.
+
+    30.09.2026 оператор не видел кривых EMA у MACD-роботов. Причина: раннер
+    считает серию на своём хвосте в 200 баров и шлёт её целиком, панель просит
+    30, и длины не сходились — клиент не рисовал НИЧЕГО и молча. Выравниваем по
+    ВРЕМЕНИ БАРА: позиции после выброса неторговых минут съезжают, а съехавшая
+    EMA — линия, похожая на правду и ею не являющаяся.
+    """
+    raw = [{"t": 100 + i, "c": 1.0} for i in range(200)]
+    series = {"fast": [float(i) for i in range(200)],
+              "slow": [float(i) / 2 for i in range(200)]}
+    out_tail = raw[-30:]
+    got = quik_companion._align_series(raw, series, out_tail)
+    assert len(got["fast"]) == len(out_tail) == 30
+    assert got["fast"][0] == 170.0 and got["fast"][-1] == 199.0
+    assert got["slow"][-1] == 99.5
+
+
+def test_a_restored_bar_gets_no_invented_ema():
+    """Бара, которого раннер не считал, в серии нет — там None.
+
+    Панель разорвёт линию, а не проведёт её через выдуманную точку. Дыры в
+    хвосте закрываются кэшем инструмента (restored), и EMA робота там не
+    существует: он на этих минутах ничего не считал.
+    """
+    raw = [{"t": 100 + i, "c": 1.0} for i in range(5)]
+    series = {"fast": [1.0, 2.0, 3.0, 4.0, 5.0]}
+    out_tail = [{"t": 101}, {"t": 999, "restored": True}, {"t": 104}]
+    got = quik_companion._align_series(raw, series, out_tail)
+    assert got["fast"] == [2.0, None, 5.0]
+
+
+def test_a_series_of_unknown_length_is_dropped_not_guessed():
+    """Длины не сошлись — молчим, а не подгоняем срезом.
+
+    Срез означал бы «какому бару какое значение, мы не знаем, но нарисуем»:
+    кривая сдвинулась бы на неизвестное число минут и выглядела бы настоящей.
+    """
+    raw = [{"t": 100 + i, "c": 1.0} for i in range(10)]
+    assert quik_companion._align_series(raw, {"fast": [1.0, 2.0]}, raw[-3:]) is None
+    assert quik_companion._align_series(raw, None, raw[-3:]) is None
+    assert quik_companion._align_series(raw, {"fast": [1.0] * 10}, []) is None
