@@ -241,3 +241,23 @@ func TestCheckCollar(t *testing.T) {
 		})
 	}
 }
+
+// Рыночная заявка: цена не проверяется, TYPE=M уходит в Lua. Заведена ради
+// последней фазы защитного стопа (29.09.2026): лимит на быстром движении не
+// наливается, а стоп обязан исполниться. Все остальные лимиты остаются.
+func TestMarketOrderSkipsPriceChecksButKeepsLimits(t *testing.T) {
+	g := NewGuard(Limits{TradingEnabled: true, InstrumentWhitelist: []string{"RIZ6"},
+		MaxContractsPerOrder: 100, MaxWorkingContracts: 200, DailyOrderCap: 500})
+	if ok, rsn := g.CheckPlace(PlaceCheck{Code: "RIZ6", Price: 0, Quantity: 70, Market: true}); !ok {
+		t.Fatalf("рыночная без цены обязана пройти, отказ: %s", rsn)
+	}
+	if ok, _ := g.CheckPlace(PlaceCheck{Code: "RIZ6", Price: 0, Quantity: 70}); ok {
+		t.Fatal("лимитная без цены пройти не должна")
+	}
+	if ok, rsn := g.CheckPlace(PlaceCheck{Code: "GZZ6", Price: 0, Quantity: 70, Market: true}); ok || rsn != ReasonNotWhitelisted {
+		t.Fatalf("белый список к рыночной применяется: ok=%v rsn=%s", ok, rsn)
+	}
+	if ok, rsn := g.CheckPlace(PlaceCheck{Code: "RIZ6", Price: 0, Quantity: 500, Market: true}); ok || rsn != ReasonQtyPerOrder {
+		t.Fatalf("кап на заявку к рыночной применяется: ok=%v rsn=%s", ok, rsn)
+	}
+}

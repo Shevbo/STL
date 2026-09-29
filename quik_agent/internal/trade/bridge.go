@@ -59,7 +59,8 @@ type placeCmd struct {
 	Op       string `json:"op"`      // "B" | "S"
 	Price    string `json:"price"`   // limit price as string (QUIK transaction field)
 	Qty      int64  `json:"qty"`     // contracts
-	Type     string `json:"type"`    // "L" (limit)
+	Type     string `json:"type"`    // "L" (limit) | "M" (market)
+	Market   bool   `json:"-"`       // не едет в Lua: он читает только type
 	Account  string `json:"account"` // trade account (from keymaster, never hardcoded)
 	Comment  string `json:"comment"` // owner tag stamped into the QUIK order COMMENT (see ownerTag)
 }
@@ -608,7 +609,16 @@ func (b *Bridge) send(v any) error {
 // assigned the trans_id and passed every hard limit.
 func (b *Bridge) Place(p placeCmd) error {
 	p.Cmd = "place"
-	p.Type = "L"
+	// Рыночная заявка нужна последней фазе защитного стопа: лимит не наливается
+	// на быстром движении, а стоп обязан исполниться (29.09.2026 — стоп на 70
+	// RIZ6 сработал и умер с нулём, рынок прошёл 690 пунктов за минуту). Lua
+	// уже умеет TYPE=M, здесь просто перестаём жёстко слать "L".
+	if p.Market {
+		p.Type = "M"
+		p.Price = "0"
+	} else {
+		p.Type = "L"
+	}
 	return b.send(p)
 }
 

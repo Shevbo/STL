@@ -21,7 +21,8 @@ class FakeSrv:
 
     @property
     def prices(self):
-        return [round(m.replace_order.new_price) for m in self.sent]
+        return [round(m.replace_order.new_price) for m in self.sent
+                if m.WhichOneof("payload") == "replace_order"]
 
 
 class FakeOst:
@@ -29,9 +30,23 @@ class FakeOst:
         self.rec = {"client_id": "so:x", "order_id": "111", "state": "active",
                     "remaining": 70, "filled": 0}
         self.rec.update(rec)
+        self.pending = []
+        self.placements = 0
 
     def working_orders(self, agent=None):
         return [self.rec]
+
+    def working_contracts(self, agent=None):
+        return 0
+
+    def placed_today(self, agent=None):
+        return 0
+
+    def register_pending(self, agent, client_id, code, side, price, qty):
+        self.pending.append((client_id, side, price, qty))
+
+    def record_placement(self, agent):
+        self.placements += 1
 
 
 class FakeStore:
@@ -44,6 +59,11 @@ class FakeStore:
 
 class Lim:
     price_collar_frac = 0.002
+    trading_enabled = True
+    instrument_whitelist = ("RIZ6",)
+    max_contracts_per_order = 100
+    max_working_contracts = 200
+    daily_order_cap = 500
 
 
 def _book(tmp_path, **kw):
@@ -70,14 +90,14 @@ def test_phase1_holds_then_phase2_chases_then_phase3_hits_market(tmp_path):
     # ...но не чаще, чем раз в esc_chase_every_sec
     assert _run(book, store, ost, srv, NOW + 11_500) is False and len(srv.sent) == 1
     assert _run(book, store, ost, srv, NOW + 12_600) is True and len(srv.sent) == 2
-    # фаза 3: по рынку, и ровно один раз
-    assert _run(book, store, ost, srv, NOW + 21_000) is True and len(srv.sent) == 3
-    assert _run(book, store, ost, srv, NOW + 30_000) is False and len(srv.sent) == 3
-    assert so.esc_market is True
-    # рыночная цена агрессивнее догоняющей, но внутри коллара 0.2%
-    chase, market = srv.prices[1], srv.prices[2]
-    assert market < chase, "по рынку продаём хуже, чем догоняя: в этом и смысл"
-    assert market >= 83500 * (1 - 0.002), "и всё же внутри коллара, иначе агент отвергнет"
+    # фаза 3: снимаем лимит и шлём НАСТОЯЩУЮ рыночную — ровно один раз
+    assert _run(book, store, ost, srv, NOW + 21_000) is True
+    kinds = [m.WhichOneof("payload") for m in srv.sent]
+    assert kinds[-2:] == ["cancel_order", "place_order"]
+    mkt = srv.sent[-1].place_order
+    assert mkt.market is True and mkt.price == 0.0 and mkt.quantity == 70
+    assert _run(book, store, ost, srv, NOW + 30_000) is False
+    assert so.esc_market is True and so.fired_client_id.endswith(":mkt")
 
 
 def test_filled_or_dead_order_is_left_alone(tmp_path):
@@ -103,12 +123,16 @@ def test_phases_are_configurable_and_zero_means_straight_to_market(tmp_path):
     book, so = _book(tmp_path, esc_hold_sec=0, esc_chase_sec=0)
     srv = FakeSrv()
     assert _run(book, FakeStore(), FakeOst(), srv, NOW + 100) is True
-    assert so.esc_market is True and len(srv.sent) == 1
+    assert so.esc_market is True
+    assert srv.sent[-1].place_order.market is True
 
 
-def test_no_quote_no_move(tmp_path):
-    """Без котировки не двигаем: цена вслепую хуже, чем стоящая заявка."""
+def test_no_quote_blocks_chase_but_not_the_market_exit(tmp_path):
+    """В преследовании без котировки не двигаем: цена вслепую хуже стоящей заявки.
+    А рыночному выходу котировка не нужна вовсе — в этом весь его смысл."""
     book, _ = _book(tmp_path)
     srv = FakeSrv()
-    assert _run(book, FakeStore(0.0, 0.0), FakeOst(), srv, NOW + 30_000) is False
+    assert _run(book, FakeStore(0.0, 0.0), FakeOst(), srv, NOW + 12_000) is False
     assert srv.sent == []
+    assert _run(book, FakeStore(0.0, 0.0), FakeOst(), srv, NOW + 30_000) is True
+    assert srv.sent[-1].place_order.market is True

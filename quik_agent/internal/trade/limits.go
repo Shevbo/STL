@@ -207,6 +207,11 @@ type PlaceCheck struct {
 	// CurrentWorking is the total resting quantity BEFORE this order (the manager
 	// supplies it from its working-order book).
 	CurrentWorking int64
+	// Market: у рыночной заявки цены нет, поэтому ценовые проверки к ней не
+	// применяются. ВСЕ остальные (мастер-флаг, белый список, объём, рабочий
+	// объём, дневной кап) остаются: рыночная заявка — самая опасная в системе,
+	// и снимать с неё лимиты нельзя.
+	Market bool
 }
 
 // CheckPlace validates a placement against every hard limit WITHOUT mutating any
@@ -230,7 +235,7 @@ func (g *Guard) CheckPlace(p PlaceCheck) (bool, RejectReason) {
 	if lim.MaxWorkingContracts > 0 && p.CurrentWorking+p.Quantity > lim.MaxWorkingContracts {
 		return false, ReasonWorkingCap
 	}
-	if p.Price <= 0 || math.IsNaN(p.Price) || math.IsInf(p.Price, 0) {
+	if !p.Market && (p.Price <= 0 || math.IsNaN(p.Price) || math.IsInf(p.Price, 0)) {
 		return false, ReasonPriceNonPositive
 	}
 	g.mu.Lock()

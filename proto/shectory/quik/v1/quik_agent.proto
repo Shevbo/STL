@@ -383,9 +383,16 @@ message PlaceOrder {
   string client_id = 1;   // STL-generated id to correlate updates
   string code = 2;        // instrument (must be whitelisted)
   Side side = 3;
-  double price = 4;       // limit price
+  double price = 4;       // limit price (ignored when market = true)
   int64 quantity = 5;     // contracts
   double collar = 6;      // max adverse deviation from price (fraction, e.g. 0.002)
+  // РЫНОЧНАЯ ЗАЯВКА (QUIK TYPE=M). Заводится 29.09.2026 ради последней фазы
+  // защитного стопа: лимит у границы коллара (0.2%) на быстром движении тоже не
+  // наливается, а стоп, который не исполнился, защитой не является — в тот день
+  // родной стоп оператора на 70 RIZ6 сработал и умер с нулём исполнения, пока
+  // рынок шёл 690 пунктов за минуту. Цена и коллар при market не проверяются:
+  // их нет. Шлётся ТОЛЬКО из последней фазы защиты, не из обычного пути заявок.
+  bool market = 7;
 }
 
 message CancelOrder {

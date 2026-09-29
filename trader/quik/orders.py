@@ -334,11 +334,16 @@ class OrderStore:
 
 def build_place_order(
     client_id: str, code: str, side: str, price: float, quantity: int, collar: float,
+    market: bool = False,
 ) -> "pb.OrchestratorMessage":
+    """market=True шлёт РЫНОЧНУЮ заявку (QUIK TYPE=M): цена и коллар не
+    действуют, исполнение по любой цене. Заведена 29.09.2026 для последней фазы
+    защитного стопа и только для неё: обычный путь заявок рыночными не торгует."""
     return pb.OrchestratorMessage(
         place_order=pb.PlaceOrder(
             client_id=client_id, code=code, side=side_to_pb(side),
-            price=float(price), quantity=int(quantity), collar=float(collar),
+            price=0.0 if market else float(price), quantity=int(quantity),
+            collar=0.0 if market else float(collar), market=bool(market),
         )
     )
 

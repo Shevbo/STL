@@ -1045,10 +1045,44 @@ def _escalate_protection(book: SmartOrderBook, store: Any, ost: Any, srv: Any,
                 continue
             px = so_mod.marketable_price(so.side, bid, ask, last, step)
             phase = "преследование"
-        elif not so.esc_market:            # фаза 3: по рынку, один раз
-            px = so_mod.market_price(so.side, bid, ask, last, step,
-                                     float(getattr(lim, "price_collar_frac", 0) or 0))
-            phase = "по рынку"
+        elif not so.esc_market:            # фаза 3: РЫНОЧНОЙ заявкой, один раз
+            # Переставить лимит в рыночную нельзя — MOVE_ORDERS меняет цену, а не
+            # тип. Поэтому снимаем остаток и шлём отдельную рыночную: это
+            # единственный способ выйти при любом движении. Коллар к ней не
+            # применяется, цены у неё нет.
+            rest = int(rec.get("remaining") or 0)
+            mkt_cid = f"{so.fired_client_id}:mkt"
+            try:
+                srv.enqueue_order(agent, order_msgs.build_cancel_order(
+                    client_id=so.fired_client_id, order_id=order_id))
+                validate_place(lim, code=so.code, quantity=rest, collar=0.0,
+                               current_working=ost.working_contracts(agent),
+                               placed_today=ost.placed_today(agent))
+                ost.register_pending(agent, mkt_cid, so.code, so.side, 0.0, rest)
+                ost.record_placement(agent)
+                srv.enqueue_order(agent, order_msgs.build_place_order(
+                    client_id=mkt_cid, code=so.code, side=so.side, price=0.0,
+                    quantity=rest, collar=0.0, market=True))
+            except LimitError as exc:
+                log.error("smart_order.market_exit_refused", so_id=so.so_id, error=str(exc))
+                so_journal.record("error", so, so_journal.LIMITS,
+                                  f"рыночный выход отклонён лимитами: {exc}", now_ms=now)
+                so.esc_market = True       # долбить лимиты каждые 5 с бессмысленно
+                dirty = True
+                continue
+            except Exception as exc:  # noqa: BLE001 — связь не должна ронять проход
+                log.warning("smart_order.escalate_failed", so_id=so.so_id, error=str(exc))
+                continue
+            so.esc_market = True
+            so.esc_last_ms = now
+            so.fired_client_id = mkt_cid   # дальше следим за рыночной
+            dirty = True
+            so_journal.record("escalated", so, so_journal.WATCHER,
+                              f"по рынку: лимит не налился за {age // 1000} с, "
+                              f"остаток {rest} выводим рыночной заявкой", now_ms=now)
+            log.warning("smart_order.escalated_market", so_id=so.so_id,
+                        qty=rest, age_ms=age)
+            continue
         else:
             continue
         if px <= 0:
@@ -1060,8 +1094,6 @@ def _escalate_protection(book: SmartOrderBook, store: Any, ost: Any, srv: Any,
             log.warning("smart_order.escalate_failed", so_id=so.so_id, error=str(exc))
             continue
         so.esc_last_ms = now
-        if phase == "по рынку":
-            so.esc_market = True
         dirty = True
         so_journal.record("escalated", so, so_journal.WATCHER,
                           f"{phase}: заявка не налилась за {age // 1000} с, "
