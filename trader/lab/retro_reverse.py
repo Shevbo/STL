@@ -166,7 +166,7 @@ def _survival_row(weeks: int, real: list[float], floor: list[list[float]]) -> di
     (медиана 4-5 при шуме ~2) была бы отброшена; при старом нуле p95 ~0.4 и
     above_noise считал просто окна с оценкой больше нуля."""
     if not real:
-        return {"weeks": weeks, "n": 0}
+        return {"weeks": weeks, "n": 0, "skipped": "мало точек"}   # ни один сегмент не вместил fit+test
     real_s = sorted(real)
     draws = [sorted(f) for f in floor if f] or [[0.0]]
     floor_s = sorted(x for f in draws for x in f)
@@ -255,9 +255,47 @@ def _bars_per_week(rows: list[list]) -> int:
     return counts[len(counts) // 2] if counts else 0
 
 
+def aggregate(pts: list, tf: int) -> list[tuple[int, float]]:
+    """(ts, цена) минутного ряда -> tf-минутные корзины bucket = ts - ts % (tf*60),
+    цена корзины = ПОСЛЕДНЯЯ цена внутри неё (close бара tf). pts отсортированы."""
+    out: list[tuple[int, float]] = []
+    size = tf * 60
+    for ts, px in pts:
+        b = int(ts) - int(ts) % size
+        if out and out[-1][0] == b:
+            out[-1] = (b, px)
+        else:
+            out.append((b, px))
+    return out
+
+
+def mid_series(rows: list[list]) -> list[tuple[int, float]]:
+    """Выжимка стакана -> (ts, (bid1+ask1)/2). Разбор строки — book_replay.load_digest,
+    он же сортирует уровни; снимок без одной из сторон выпадает."""
+    from trader.lab.book_replay import load_digest
+    times, books = load_digest(rows)
+    return [(t, (b[0][0] + a[0][0]) / 2) for t, (b, a) in zip(times, books)
+            if b[0][0] > 0 and a[0][0] > 0]
+
+
+def _epoch(v, end: bool = False) -> int | None:
+    """ISO-дата "2026-09-16" или epoch. Дата в until включается целиком (до конца суток UTC)."""
+    if v in (None, ""):
+        return None
+    if isinstance(v, (int, float)):
+        return int(v)
+    from datetime import datetime, timezone
+    d = datetime.fromisoformat(str(v))
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=timezone.utc)
+    ts = int(d.timestamp())
+    return ts + 86400 if end and len(str(v)) == 10 else ts
+
+
 def _load_bars(symbol_key: str) -> list[list]:
     """Тот же путь, что у агента (opt_agent._bars_for / impulse_news._load_bars):
-    готовая склейка хостера GET /api/v1/agent/bars/<key> = agent_bars/<key>.json."""
+    готовая склейка хостера GET /api/v1/agent/bars/<key> = agent_bars/<key>.json.
+    Выжимка стакана (book<КОД>...) идёт тем же каналом, другим ключом."""
     import os
     import httpx
     api = os.environ.get("STL_API", "https://stl.shectory.ru").rstrip("/")
@@ -271,32 +309,68 @@ def run(symbol_key, ks=(1, 2, 3), thrs=(0.5, 1.0), weeks=(1, 2, 4, 8, 16),
         test_weeks: int = 1, draws: int = 10) -> dict:
     """Точка входа для задачи агента (agent_tasks, kind='task'). Очередь фанит
     args по элементам списка на отдельные вызовы func(a) — один запуск на весь
-    ряд оформляется как args=[[symbol_key, ks, thrs, weeks]], поэтому этот
-    run() принимает и такой упакованный список одним аргументом (как
-    trader/lab/impulse_news.run).
+    ряд оформляется как args=[[symbol_key, ks, thrs, weeks]] (старая форма:
+    tf=1, цена close) или args=[{...}] со словарём:
 
-    Грузит ряд по symbol_key тем же каналом, что агент, режет на непрерывные
-    сегменты (split_segments, дыра > 3 суток), считает bars_per_week как
-    медиану по ряду и прогоняет survival_segmented по сетке (k, thr_frac).
+        {"symbol_key": обязателен, "ks": [1,2,3], "thrs": [0.5,1.0],
+         "weeks": [1,2,4,8,16], "tfs": [1], "price": "close" | "mid",
+         "book_key": None (обязателен при price="mid", напр. "bookRIZ6d0921"),
+         "since": None, "until": None (ISO-дата, until включительно, или epoch),
+         "test_weeks": 1, "draws": 10}
+
+    Ряд (close баров или mid стакана) обрезается окном [since, until] ДО
+    агрегации, агрегируется в tf-минутные корзины, режется на непрерывные
+    сегменты (split_segments, дыра > 3 суток); bars_per_week — медиана по
+    агрегированному ряду; дальше survival_segmented по сетке (k, thr_frac).
     """
-    if isinstance(symbol_key, (list, tuple)):
+    tfs, price, book_key, since, until = (1,), "close", None, None, None
+    if isinstance(symbol_key, dict):
+        a = symbol_key
+        symbol_key = a["symbol_key"]
+        ks, thrs, weeks = a.get("ks", ks), a.get("thrs", thrs), a.get("weeks", weeks)
+        tfs, price = a.get("tfs", tfs), a.get("price", price)
+        book_key, since, until = a.get("book_key"), a.get("since"), a.get("until")
+        test_weeks, draws = a.get("test_weeks", test_weeks), a.get("draws", draws)
+    elif isinstance(symbol_key, (list, tuple)):
         symbol_key, ks, thrs, weeks = symbol_key
-    rows = sorted(_load_bars(symbol_key), key=lambda r: r[0])
-    if not rows:
-        return {"error": f"нет баров для {symbol_key}", "symbol": symbol_key}
-    seg_rows = split_segments(rows)
-    segments = [[r[4] for r in seg] for seg in seg_rows]
-    bpw = _bars_per_week(rows)
-    combos = []
-    for k in ks:
-        for t in thrs:
-            combos.append({"k": k, "thr_frac": t,
-                           "survival": survival_segmented(segments, tuple(weeks), bpw,
-                                                           test_weeks, k, t, draws)})
-    return {"symbol": symbol_key, "n_bars": len(rows), "bars_per_week": bpw,
-            "n_segments": len(segments), "segment_lens": [len(s) for s in segments],
-            "segment_spans": [[seg[0][0], seg[-1][0]] for seg in seg_rows],
-            "combos": combos}
+    if price not in ("close", "mid"):
+        return {"error": f"price={price!r}: только close или mid", "symbol": symbol_key}
+    if price == "mid" and not book_key:
+        return {"error": "price=mid без book_key", "symbol": symbol_key}
+    rows = sorted(_load_bars(book_key if price == "mid" else symbol_key), key=lambda r: r[0])
+    lo, hi = _epoch(since), _epoch(until, end=True)
+    rows = [r for r in rows if (lo is None or r[0] >= lo) and (hi is None or r[0] < hi)]
+    pts = mid_series(rows) if price == "mid" else [(r[0], r[4]) for r in rows]
+    if not pts:
+        return {"error": f"нет {'стакана' if price == 'mid' else 'баров'} для "
+                         f"{book_key if price == 'mid' else symbol_key} в окне",
+                "symbol": symbol_key, "window": [since, until]}
+    series, combos = [], []
+    for tf in tfs:
+        agg = aggregate(pts, int(tf))
+        seg_pts = split_segments(agg)          # режет по r[0]: пары (ts, цена) подходят
+        segments = [[p[1] for p in seg] for seg in seg_pts]
+        bpw = _bars_per_week(agg)              # тоже только r[0]
+        info = {"tf": tf, "n_points": len(agg), "bars_per_week": bpw,
+                "n_segments": len(segments), "segment_lens": [len(s) for s in segments],
+                "segment_spans": [[seg[0][0], seg[-1][0]] for seg in seg_pts]}
+        need = min(weeks) * bpw + test_weeks * bpw + 1
+        if not bpw or max(len(s) for s in segments) < need:
+            info["skipped"] = "мало точек"
+        series.append(info)
+        for k in ks:
+            for t in thrs:
+                c = {"tf": tf, "price": price, "n_points": len(agg), "k": k, "thr_frac": t}
+                if "skipped" in info:
+                    c["skipped"] = "мало точек"
+                else:
+                    c["survival"] = survival_segmented(segments, tuple(weeks), bpw,
+                                                       test_weeks, k, t, draws)
+                combos.append(c)
+    return {"symbol": symbol_key, "price": price, "book_key": book_key,
+            "window": [since, until], "n_bars": len(rows),
+            "n_points": {str(s["tf"]): s["n_points"] for s in series},
+            "series": series, "combos": combos}
 
 
 def demo() -> None:

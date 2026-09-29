@@ -7,10 +7,12 @@
 import random
 import statistics
 
+from trader.lab import retro_reverse
 from trader.lab.retro_reverse import (DOWN, FLAT, UP, Markov, accuracy,
-                                      apply_threshold, fit, noise_floor,
-                                      quantize, score, split_segments,
-                                      survival, survival_segmented, walk)
+                                      aggregate, apply_threshold, fit,
+                                      mid_series, noise_floor, quantize, score,
+                                      split_segments, survival,
+                                      survival_segmented, walk)
 
 
 def test_quantize_threshold_comes_from_the_window():
@@ -138,3 +140,68 @@ def test_survival_segmented_merges_distributions_before_stats():
                               test_weeks=1, k=2, draws=3)
     single = survival(seg, weeks=(1,), bars_per_week=500, test_weeks=1, k=2, draws=3)
     assert rows[0]["n"] == 2 * single[0]["n"]
+
+
+def test_aggregate_takes_last_price_in_bucket():
+    """Корзина = ts - ts % (tf*60), цена = последняя внутри; граница корзины
+    (ts ровно кратно tf*60) открывает новую корзину."""
+    pts = [(0, 1.0), (60, 2.0), (240, 3.0), (300, 4.0), (359, 5.0), (600, 6.0)]
+    assert aggregate(pts, 5) == [(0, 3.0), (300, 5.0), (600, 6.0)]
+    assert aggregate(pts, 1) == [(0, 1.0), (60, 2.0), (240, 3.0), (300, 5.0), (600, 6.0)]
+
+
+def test_mid_series_from_digest():
+    """mid = (лучший bid + лучший ask) / 2; снимок без стороны выпадает."""
+    bids = [100, 5, 99, 1, 98, 1, 97, 1, 96, 1]
+    asks = [102, 3, 103, 1, 104, 1, 105, 1, 106, 1]
+    rows = [[60] + bids + asks, [120] + bids]
+    assert mid_series(rows) == [(60, 101.0)]
+
+
+def _digest_walk(n: int, seed: int) -> list[list]:
+    """Случайное блуждание в выжимке стакана: 300 минут торгов в сутки, чтобы
+    неделя была ~2100 точек и в ряду помещалось много окон проверки."""
+    rng = random.Random(seed)
+    px, rows = 100000.0, []
+    for i in range(n):
+        px += rng.gauss(0, 20)
+        bids = [x for lv in range(5) for x in (px - 10 * (lv + 1), 1)]
+        asks = [x for lv in range(5) for x in (px + 10 * (lv + 1), 1)]
+        rows.append([1789000000 + 86400 * (i // 300) + 60 * (i % 300)] + bids + asks)
+    return rows
+
+
+def test_run_dict_mid_tfs_on_random_walk(monkeypatch):
+    """Словарная форма run(): mid из выжимки, tf 1 и 5, окно since. На случайном
+    блуждании вердикт «в пределах шума» и выдача однозначна (tf, price, окно)."""
+    rows = _digest_walk(30000, seed=4)
+    monkeypatch.setattr(retro_reverse, "_load_bars", lambda key: rows if key == "bookX" else [])
+    since = rows[300][0]
+    res = retro_reverse.run({"symbol_key": "RIZ6", "book_key": "bookX", "price": "mid",
+                             "tfs": [1, 5], "ks": [2], "thrs": [0.5], "weeks": [1],
+                             "since": since, "draws": 10})
+    assert res["window"] == [since, None] and res["n_bars"] == 29700
+    # корзины по часам биржи, а не от первой точки: старт суток не кратен 5 мин
+    assert res["n_points"] == {"1": 29700, "5": len({r[0] - r[0] % 300 for r in rows[300:]})}
+    assert all(c["price"] == "mid" for c in res["combos"])
+    for c in res["combos"]:
+        rows_ = [r for r in c["survival"] if r.get("n")]
+        assert rows_ and all(r["verdict"] == "в пределах шума" for r in rows_), c
+
+
+def test_run_marks_short_series_skipped(monkeypatch):
+    """Окно подгонки не помещается в ряд — tf явно помечен, а не падает и не молчит."""
+    rows = _digest_walk(3000, seed=1)
+    monkeypatch.setattr(retro_reverse, "_load_bars", lambda key: rows)
+    res = retro_reverse.run({"symbol_key": "RIZ6", "book_key": "bookX", "price": "mid",
+                             "tfs": [1, 60], "ks": [2], "thrs": [0.5], "weeks": [8], "draws": 2})
+    assert [c.get("skipped") for c in res["combos"]] == ["мало точек", "мало точек"]
+    assert all(s["skipped"] == "мало точек" for s in res["series"])
+
+
+def test_run_old_packed_form_still_works(monkeypatch):
+    rows = [[r[0], r[1], r[1], r[1], r[1], 1] for r in _digest_walk(6000, seed=2)]
+    monkeypatch.setattr(retro_reverse, "_load_bars", lambda key: rows)
+    res = retro_reverse.run(["RIZ6", [2], [0.5], [1]])
+    assert res["price"] == "close" and [c["tf"] for c in res["combos"]] == [1]
+    assert res["n_points"]["1"] == 6000 and res["combos"][0]["survival"][0]["n"] > 0
