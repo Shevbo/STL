@@ -1,5 +1,6 @@
 scripts/opt_agent.py
 trader/lab/backtest.py
+trader/lab/retro_reverse.py
 trader/lab/splice.py
 trader/lab/window_metrics.py
 trader/lab/trend_detector.py
