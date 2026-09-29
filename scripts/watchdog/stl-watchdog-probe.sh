@@ -25,12 +25,14 @@ CFG_DEFAULTS = {
                  "bars": True, "hb": True, "ord": True,
                  "paused": True, "pausefail": True, "backtest_stuck": True,
                  "vds_mem": True, "vds_mem_crit": True, "quik_state": True,
-                 "so_stuck": True, "so_refused": True, "so_audit": True},
+                 "so_stuck": True, "so_refused": True, "so_audit": True,
+                 "margin_low": True, "margin_crit": True},
     "autopause_tape_lag": True,
     "autopause_bars": True,
     "thresholds": {"tape_lag_sec": 120, "cap_warn_pct": 85, "hb_sec": 150,
                    "order_recheck_sec": 15, "bars_atr_mult": 3.0, "bars_pct": 0.5,
-                   "backtest_stuck_sec": 3600, "so_stuck_sec": 90},
+                   "backtest_stuck_sec": 3600, "so_stuck_sec": 90,
+                   "free_warn_pct": 30, "free_crit_pct": 15},
 }
 cfg = dict(CFG_DEFAULTS)
 try:
@@ -64,19 +66,29 @@ def esc_on(key):
         fam = "paused"
     return bool(cfg["escalate"].get(fam, True))
 
-def get(path):
+def get(path, timeout=25):
     req = urllib.request.Request("http://localhost:8000" + path,
                                  headers={"Authorization": "Bearer " + os.environ["TK"]})
-    with urllib.request.urlopen(req, timeout=12) as r:
+    with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.load(r)
 
 problems = []
-try:
-    als = get("/api/v1/quik/agent-local-status")
-    mir = get("/api/v1/quik/robots-mirror")
-except Exception as e:
-    print(f"api_down|STL: API не отвечает ({type(e).__name__}).")
-    raise SystemExit(0)
+# ДВЕ ПОПЫТКИ, И ТАЙМАУТ ЩЕДРЫЙ. 30.09.2026, первая же ночь без гейта окна:
+# пробник объявил «API не отвечает» и разбудил бы оператора, хотя API отвечал за
+# 5.3 с — просто медленнее двенадцатисекундного таймаута под вечерней нагрузкой.
+# Ложная ночная тревога дороже поздней настоящей: после одной такой SMS перестают
+# читать. Настоящее падение переживёт обе попытки и паузу между ними.
+als = mir = None
+for _try in (1, 2):
+    try:
+        als = get("/api/v1/quik/agent-local-status")
+        mir = get("/api/v1/quik/robots-mirror")
+        break
+    except Exception as e:
+        if _try == 2:
+            print(f"api_down|STL: API не отвечает ({type(e).__name__}), две попытки.")
+            raise SystemExit(0)
+        time.sleep(10)
 
 now = int(time.time() * 1000)
 checked = ["API STL", "линк агента (зеркало)", "runner", "дневной лимит ордеров"]
@@ -356,6 +368,28 @@ try:
 except Exception:
     pass  # эндпоинт недоступен -> прочие проверки не роняем
 
+# ── СВОБОДНЫЕ СРЕДСТВА ───────────────────────────────────────────────────────
+# Просьба оператора 29.09.2026, в день, когда ВМ ушла на −225 тысяч при открытой
+# позиции без стопа. Цену он видит сам; чего не видно с экрана — сколько ГО уже
+# съедено. При движении против шорта ГО растёт И ВМ падает одновременно, и
+# принудительное закрытие приходит от брокера, а не от нас.
+_money = (als.get("health") or {}).get("money") or {}
+_eq = float(_money.get("equity") or 0)
+_free = float(_money.get("planned") or 0)
+if _eq > 0:
+    _pct = _free / _eq * 100
+    checked.append(f"свободные средства ({_pct:.0f}% от счёта)")
+    _crit, _warn = THR.get("free_crit_pct", 15), THR.get("free_warn_pct", 30)
+    if _pct < _crit:
+        problems.append(("margin_crit",
+                         f"СВОБОДНЫХ СРЕДСТВ {_pct:.0f}% ({_free:,.0f} из {_eq:,.0f} руб), "
+                         f"ГО занято {float(_money.get('used') or 0):,.0f}. Ниже {_crit}% — "
+                         "закрытие по требованию брокера ближе, чем кажется."))
+    elif _pct < _warn:
+        problems.append(("margin_low",
+                         f"свободных средств {_pct:.0f}% ({_free:,.0f} руб), "
+                         f"ГО занято {float(_money.get('used') or 0):,.0f}."))
+
 # ── УМНЫЕ ЗАЯВКИ ОПЕРАТОРА ───────────────────────────────────────────────────
 # Три случая, каждый означает «человек думает, что защищён, а он нет». Ни один не
 # виден в проверках роботов: те сверяют книги РОБОТОВ с QUIK.
@@ -434,7 +468,8 @@ except Exception:
 # торгового окна наружу идут ТОЛЬКО инфраструктурные ключи. Разбудить человека
 # ради «лента отстаёт» в три часа ночи значит научить его не читать SMS.
 NIGHT_KEYS = ("api_down", "link_down", "quik_state", "runner_sick", "hb",
-              "vds_mem", "vds_mem_crit", "so_audit", "so_refused")
+              "vds_mem", "vds_mem_crit", "so_audit", "so_refused",
+              "margin_low", "margin_crit")
 _hm = int(time.strftime("%H")) * 60 + int(time.strftime("%M"))
 _night = not (415 <= _hm <= 1435)
 

@@ -325,6 +325,44 @@ def _kill_native(request: Request, so: SmartOrder) -> None:
     log.info("smart_order.native_killed", so_id=so.so_id, stop_num=holder.native_stop_num)
 
 
+class ProfileBody(BaseModel):
+    esc_profile: str
+
+
+@router.post("/{so_id}/profile")
+async def set_profile(so_id: str, body: ProfileBody, request: Request):
+    """Сменить профиль исполнения у ВЗВЕДЁННОЙ заявки.
+
+    Без этой ручки профиль можно было задать только при постановке, а сменить —
+    лишь пересоздав заявку. У следящей это стирает пик и факт активации, то есть
+    ради настройки исполнения пришлось бы терять состояние слежения, набранное
+    за часы.
+    """
+    _auth(request)
+    book = _book(request)
+    so = book.get(so_id)
+    if so is None:
+        raise HTTPException(status_code=404, detail="Нет такой умной заявки.")
+    if so.status not in ("armed", "native"):
+        raise HTTPException(status_code=409, detail=f"Заявка уже {so.status}.")
+    name = (body.esc_profile or "").strip()
+    known = exec_profiles.load()
+    if name and name not in known:
+        raise HTTPException(status_code=422,
+                            detail=f"Нет профиля «{name}». Есть: {', '.join(sorted(known))}.")
+    was = so.esc_profile or "(штатный)"
+    so.esc_profile = name
+    # Явные секунды перекрывали бы профиль — снимаем их, иначе смена профиля
+    # ничего бы не изменила, а человек считал бы, что изменила.
+    so.esc_hold_sec = so.esc_chase_sec = so.esc_chase_every_sec = 0
+    book.save()
+    prof = exec_profiles.resolve(so.esc_profile)
+    so_journal.record("profile", so, so_journal.OPERATOR,
+                      f"профиль исполнения: {was} -> {prof['name']} ({prof['title']})")
+    log.info("smart_order.profile_changed", so_id=so_id, was=was, now=prof["name"])
+    return {"ok": True, "so_id": so_id, "profile": prof}
+
+
 @router.post("/{so_id}/activate")
 async def activate_order(so_id: str, body: dict, request: Request):
     """Ручная активация trail_tp от указанного пика: оператор ставит заявку в режим
