@@ -602,12 +602,18 @@ function renderPositions(list) {
     const breakdown = (rn != null || mn != null)
       ? `<span class="sub">Роботы <b>${sg(rn)}</b> · Ручные <b>${sg(mn)}</b></span>`
       : `<span class="sub">${sg(p.net)}</span>`;
+    // Средняя цена ВСЕЙ позиции инструмента (роботы + руками) — число QUIK по
+    // нетто-позиции счёта, а не среднее по роботам. Нет её — не рисуем ничего:
+    // ноль здесь читался бы как «вошли по нулю».
+    const avg = px(p.avg);
+    const avgHtml = (avg == null || !p.avg) ? '' :
+      `<span class="sub" title="средняя цена всей позиции по инструменту: роботы + ручные (число QUIK по нетто счёта)">ср. <b>${avg}</b></span>`;
     // ВМ здесь — ЧИСЛО QUIK: вариационная маржа ЗА СЕССИЮ (с последнего клиринга),
     // включая закрытые за сессию сделки; перенесённая позиция считается от
     // клиринговой цены, а не от входа. У робота ниже — ВМ ОТ ВХОДА. Это разные
     // величины, поэтому подписаны по-разному (иначе выглядит как расхождение).
     return `<div class="row ${cls(vm)}" title="Вариационная маржа QUIK за текущую сессию (с последнего клиринга)">` +
-      `<span class="k">${esc(p.sec)}</span>` + quote + breakdown +
+      `<span class="k">${esc(p.sec)}</span>` + quote + breakdown + avgHtml +
       `<span class="sp"></span><span class="sub">ВМ сессии</span>` +
       `${val(rub(vm, { signed: true }), cls(vm))}</div>`;
   }).join('');
