@@ -45,9 +45,30 @@ def test_control_catches_own_grid():
 
 
 def test_exclusions_are_noted():
-    days, excl = a4.prepare(_bars(n_days=2))
+    """exclude_clearing по умолчанию False (в реальных данных RI клиринг
+    торгуется) — явно включаем, чтобы проверить сам механизм исключения."""
+    days, excl = a4.prepare(_bars(n_days=2), exclude_clearing=True)
     assert excl["клиринг"] == 2 * 5 and excl["открытие после перерыва"] == 2
     assert all(not (840 <= m < 845) for blk in days.values() for m, _, _ in blk)
+
+
+def test_clearing_kept_by_default():
+    days, excl = a4.prepare(_bars(n_days=2))
+    assert "клиринг" not in excl
+    assert any(840 <= m < 845 for blk in days.values() for m, _, _ in blk)
+
+
+def test_prev_leak_fixed():
+    """09.2026 баг: prev для «открытия после перерыва» двигался и по
+    исключённым (ночь/клиринг) барам — бар 08:55 «спасал» 09:00 от
+    исключения (разрыв всего 60 с). Фикс: prev только от оставленных баров,
+    09:00 должно остаться исключённым даже при наличии бара 08:55."""
+    rows = [[D0 + 535 * 60, 100, 105, 95, 100, 5],   # 08:55, ночь
+            [D0 + 540 * 60, 100, 105, 95, 101, 5]]   # 09:00, открытие после ночи
+    days, excl = a4.prepare(rows)
+    assert days == {}
+    assert excl.get("ночь") == 1
+    assert excl.get("открытие после перерыва") == 1
 
 
 def test_report_json_safe():
