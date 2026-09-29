@@ -31,6 +31,13 @@ export interface SmartOrder {
   status: string;          // armed | native | fired | cancelled | expired | error | orphaned
   native_state?: string;   // sent | live | failed | done — как приняла защиту сторона QUIK
   native_stop_num?: string;// номер нативной стоп-заявки QUIK (строкой: ~1.9e18)
+  // Доведение стопа до исполнения тремя фазами (real-trade 29.09.2026): стоим у
+  // планки, идём за ценой, дальше по рынку. Необязательные: заявка, созданная до
+  // этого релиза, приехала без них, и умолчания движка за неё не подставляем.
+  esc_hold_sec?: number;
+  esc_chase_sec?: number;
+  esc_chase_every_sec?: number;
+  esc_market?: boolean;    // фаза 3 уже отработала
   note: string;
   peak: number;
   activated: boolean;

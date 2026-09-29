@@ -1035,7 +1035,8 @@ export function nativeStopIndex(orders: Array<{ so_id: string; native_stop_num?:
 export function stopOrderWhy(
   r: { dir: Side | null; cond: number | null; price: number | null; ours: string | null },
   so: { kind: Kind; side: Side; sl_offset?: number; tp_offset?: number; tp_trail?: number;
-        sl_price?: number; tp_price?: number } | null,
+        sl_price?: number; tp_price?: number;
+        esc_hold_sec?: number; esc_chase_sec?: number; esc_chase_every_sec?: number } | null,
   price = 0, pointValue = 0,
 ): { waits: string; why: string } {
   const cond = r.cond ?? 0;
@@ -1070,6 +1071,35 @@ export function stopOrderWhy(
   if (so.sl_price) bits.push(`стоп ровно на уровне ${fmtNum(so.sl_price)}, заданном оператором`);
   if (so.tp_trail) bits.push(`тейк следящий: с уровня активации идёт за экстремумом и закрывает на откате ${fmtPts(so.tp_trail)}`);
   else if (so.tp_offset || so.tp_price) bits.push('тейк фиксированный: в терминале это тейк-профит с откатом в ОДИН шаг цены, отката 0 QUIK не принимает');
-  bits.push('лимитная цена ребёнка на 2 шага ХУЖЕ уровня: иначе на быстром движении заявка не нальётся и позиция останется незакрытой');
-  return { waits, why: bits.join('; ') };
+  bits.push('цена заявки, которую поставит стоп — на 2 шага цены за уровнем: ровно по уровню на быстром движении её не нальют, и позиция осталась бы незакрытой');
+  bits.push(escalationWhy(so));
+  return { waits, why: bits.filter(Boolean).join('; ') };
+}
+
+/** Чем стоп доводится до исполнения, если по лимиту не налили.
+ *
+ *  29.09.2026 родной стоп оператора на 70 RIZ6 сработал и НЕ исполнился: лимит
+ *  стоял в 30 пунктах от уровня, а рынок прошёл 690 пунктов за минуту. После
+ *  этого стоп перестал быть «висит лимитом»: стоим у планки, потом идём за
+ *  ценой, потом закрываем по рынку. Экран обязан сказать это вслух — иначе
+ *  оператор считает, что исполнение не гарантировано, хотя оно уже гарантировано.
+ *
+ *  СЕКУНД НЕ ВЫДУМЫВАЕМ. Старая заявка в книге приехала без полей `esc_*` —
+ *  у неё этих фаз нет, и подставлять сюда умолчания движка значит обещать
+ *  поведение, которого у ЭТОЙ заявки не будет.
+ */
+function escalationWhy(so: { esc_hold_sec?: number; esc_chase_sec?: number;
+                             esc_chase_every_sec?: number }): string {
+  const hold = so.esc_hold_sec, chase = so.esc_chase_sec, every = so.esc_chase_every_sec;
+  if (hold == null && chase == null) return '';
+  const sec = (v: number) => `${fmtNum(v)} с`;
+  const phases: string[] = [];
+  if (hold) phases.push(`${sec(hold)} стоит у планки`);
+  if (chase) {
+    phases.push(every ? `${sec(chase)} идёт за ценой, переставляясь раз в ${sec(every)}`
+                      : `${sec(chase)} идёт за ценой`);
+  }
+  return phases.length
+    ? `если не нальют — ${phases.join(', затем ')}, дальше закрывает ПО РЫНКУ`
+    : 'если не нальют — закрывает ПО РЫНКУ сразу, без ожидания';
 }

@@ -906,6 +906,43 @@ describe('дочерняя запись объясняет себя', () => {
     expect(r.waits).not.toContain('ждёт цену');
     expect(r.why).toContain('руками');
   });
+
+  // real-trade 29.09.2026: родной стоп на 70 RIZ6 сработал и НЕ исполнился —
+  // лимит в 30 пунктах от уровня, рынок прошёл 690 пунктов за минуту. Стоп
+  // перестал быть «висит лимитом», и объяснение обязано это говорить.
+  it('стоп называет фазы доведения до исполнения', () => {
+    const so = { kind: 'sl' as Kind, side: 'buy' as Side, sl_offset: 300,
+                 esc_hold_sec: 10, esc_chase_sec: 10, esc_chase_every_sec: 2 };
+    const why = norm(stopOrderWhy(row, so, 84_800).why);
+    expect(why).toContain('10 с стоит у планки');
+    expect(why).toContain('раз в 2 с');
+    expect(why).toContain('ПО РЫНКУ');
+  });
+
+  it('обе фазы по нулю — закрывает по рынку сразу', () => {
+    const so = { kind: 'sl' as Kind, side: 'buy' as Side, sl_offset: 300,
+                 esc_hold_sec: 0, esc_chase_sec: 0, esc_chase_every_sec: 2 };
+    expect(stopOrderWhy(row, so).why).toContain('ПО РЫНКУ сразу');
+  });
+
+  // Старая заявка в книге приехала без esc_*: у неё этих фаз нет. Подставить
+  // умолчания движка значит обещать поведение, которого у НЕЁ не будет.
+  it('полей нет — про фазы молчим, а не берём умолчания', () => {
+    const so = { kind: 'sl' as Kind, side: 'buy' as Side, sl_offset: 300 };
+    const why = stopOrderWhy(row, so).why;
+    expect(why).not.toContain('ПО РЫНКУ');
+    expect(why).not.toContain(' с ');
+  });
+
+  // Жаргон: оператор споткнулся о «лимитная цена ребёнка на 2 шага ХУЖЕ уровня»
+  // и спросил, что это значит (real-trade 29.09.2026). Он был прав.
+  it('подушка лимита объяснена по-человечески, без «ребёнка» и «хуже»', () => {
+    const so = { kind: 'sl' as Kind, side: 'buy' as Side, sl_offset: 300 };
+    const why = stopOrderWhy(row, so).why;
+    expect(why).toContain('цена заявки, которую поставит стоп');
+    expect(why).not.toContain('ребёнк');
+    expect(why).not.toContain('ХУЖЕ');
+  });
 });
 
 // real-trade 22.09.2026 (коммит 7760133): у `orphaned` появился ВТОРОЙ смысл —
