@@ -7,7 +7,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   apexMs, corridorBounds, corridorFromClicks, corridorSlope, corridorState,
-  corridorWidth, snapPrice, snapToBar,
+  corridorTimeError, corridorWidth, msToMskInput, mskInputToMs, snapPrice, snapToBar,
 } from './smart-order-help';
 
 const T0 = 1_790_600_000_000;
@@ -223,5 +223,52 @@ describe('треугольник: своя нижняя линия', () => {
                 c_low: 82_400, c_low2: 82_800 };
     expect(corridorWidth(g, 0).pts).toBeCloseTo(1_200, 6);
     expect(corridorWidth(g, 0, T0 + 60 * MIN).pts).toBeCloseTo(600, 6);
+  });
+});
+
+// Время точек в поле ввода. Форма показывала только цены, времена жили скрытым
+// состоянием и заполнялись лишь мышкой: набрав цены руками, оператор получал
+// фигуру без наклона и без данных для построения (30.09.2026).
+describe('время точек: МСК в поле и обратно', () => {
+  // 30.09.2026 12:00 МСК = 09:00 UTC. Берём локальную зону браузера — и у
+  // машины не в MSK поле разошлось бы с осью графика на часы, выглядя верным.
+  const MS = Date.UTC(2026, 8, 30, 9, 0, 0);
+
+  it('epoch → поле: московские настенные часы', () => {
+    expect(msToMskInput(MS)).toBe('2026-09-30T12:00');
+  });
+
+  it('поле → epoch: читаем как МСК, а не как зону машины', () => {
+    expect(mskInputToMs('2026-09-30T12:00')).toBe(MS);
+  });
+
+  it('туда-обратно без потерь', () => {
+    expect(mskInputToMs(msToMskInput(MS))).toBe(MS);
+  });
+
+  it('пусто и мусор — ноль, а не NaN и не «сейчас»', () => {
+    expect(msToMskInput(0)).toBe('');
+    expect(msToMskInput(null)).toBe('');
+    expect(mskInputToMs('')).toBe(0);
+    expect(mskInputToMs('не дата')).toBe(0);
+  });
+});
+
+describe('проверка времён точек', () => {
+  const T = Date.UTC(2026, 8, 30, 9, 0, 0);
+
+  it('обе точки заданы и вторая позже — годится', () => {
+    expect(corridorTimeError(T, T + 60_000)).toBe('');
+  });
+
+  it('без времени говорим, ЧЕГО не хватает, а не «ошибка»', () => {
+    expect(corridorTimeError(0, T)).toContain('нет наклона');
+    expect(corridorTimeError(T, 0)).toContain('нет наклона');
+  });
+
+  // Теми же словами, что и движок: экран и сторож обязаны отказывать одинаково.
+  it('вторая точка не позже первой — отказ словами движка', () => {
+    expect(corridorTimeError(T, T)).toContain('ПОЗЖЕ первой');
+    expect(corridorTimeError(T, T - 1)).toContain('ПОЗЖЕ первой');
   });
 });

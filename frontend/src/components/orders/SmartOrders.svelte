@@ -16,7 +16,8 @@
     ocoFact, ocoNameOf, stopOrderRow, stopOrderWhy,
     preview, protectionPair,
     shortCodes, sortBySideAndPrice, tillFact, type Kind, type OpenPos, type Side,
-    apexMs, corridorFromClicks, corridorState, corridorWidth,
+    apexMs, corridorFromClicks, corridorState, corridorTimeError, corridorWidth,
+    msToMskInput, mskInputToMs,
   } from '$lib/smart-order-help';
   import { candlesStore } from '$lib/stores/candles.svelte';
   import { instrumentStore } from '$lib/stores/instrument.svelte';
@@ -364,7 +365,8 @@
   // после сделки. Одной плоской сеткой уровень срабатывания и защитная пара
   // читались одинаково, хотя это разные моменты времени.
   const TRIGGER_KEYS = ['trigger_price', 'trail_offset', 'watch_client_id', 'child_price',
-                        'c_p1', 'c_p2', 'c_low', 'c_low2', 'c_stop_pts', 'c_flips_max'];
+                        'c_t1_ms', 'c_p1', 'c_t2_ms', 'c_p2', 'c_low', 'c_low2',
+                        'c_stop_pts', 'c_flips_max'];
   // Три клика по графику собрались — переводим их в параметры. Сам перевод
   // (бар вместо пикселя, шаг цены, приведение нижней к первой точке) живёт в
   // corridorFromClicks и покрыт тестами; здесь только подстановка в форму.
@@ -428,6 +430,10 @@
   // Апекс сужающегося треугольника: там движок закроет позицию и закончит
   // заявку. Оператор по нему видит, сколько она живёт.
   const apex = $derived(corridorGeom ? apexMs(corridorGeom) : null);
+  // Времена точек проверяем ОТДЕЛЬНО от цен: без них фигуры нет вовсе, и молчать
+  // до ответа движка значит дать оператору дособрать заявку, которую он всё
+  // равно не поставит.
+  const cTimeErr = $derived(isFigure && (pos(cP1) || cT1) ? corridorTimeError(cT1, cT2) : '');
 
   const triggerFields = $derived(meta.fields.filter((f) => TRIGGER_KEYS.includes(f.key)));
   const afterFields = $derived(meta.fields.filter((f) => !TRIGGER_KEYS.includes(f.key)));
@@ -740,6 +746,14 @@
             {:else if f.key === 'watch_client_id'}
               <input class="so-in text" bind:value={watchId} placeholder="client_id" spellcheck="false"
                      aria-label={f.label} />
+            {:else if f.key === 'c_t1_ms'}
+              <input class="so-in text" type="datetime-local" aria-label={f.label}
+                     value={msToMskInput(cT1)}
+                     oninput={(e) => cT1 = mskInputToMs((e.target as HTMLInputElement).value)} />
+            {:else if f.key === 'c_t2_ms'}
+              <input class="so-in text" type="datetime-local" aria-label={f.label}
+                     value={msToMskInput(cT2)}
+                     oninput={(e) => cT2 = mskInputToMs((e.target as HTMLInputElement).value)} />
             {:else if f.key === 'c_p1'}
               <input class="so-in" type="number" step="any" bind:value={cP1} placeholder="0"
                      aria-label={f.label} />
@@ -792,6 +806,7 @@
               Esc — отменить.</div>
           {/if}
           {#if cErr}<div class="so-draw-err">{cErr}</div>{/if}
+          {#if cTimeErr}<div class="so-draw-err">{cTimeErr}</div>{/if}
           {#if corridorW}
             <div class="so-draw-w">ширина {kind === 'triangle' ? 'в первой точке ' : 'канала '}{fmtPts(corridorW.pts)}{corridorW.rub != null
               ? ` = ${fmtRub(corridorW.rub)} на контракт${qty > 1 ? `, ${fmtRub(corridorW.rub * qty)} на ${qty}` : ''}`
