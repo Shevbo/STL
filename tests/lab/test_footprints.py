@@ -129,3 +129,15 @@ def test_session_window():
     kept, notes = common.session_rows(rows)
     assert [r[0] for r in kept] == [D0 + 420 * 60]
     assert notes == ["исключено до сессии: 1 баров", "исключено после сессии: 1 баров"]
+
+
+def test_ri_round_trip_is_two_fills(monkeypatch):
+    """Круг RI = 2 x (полспреда 5 + комиссия филла). Без цены комиссия
+    оценочно 2 пт -> 14; с ценой — commission.taker_points со скальперской
+    скидкой 0.5 (заглушка 4 -> 2 -> 14)."""
+    from trader.lab import commission
+    assert common.round_trip_cost_pts("RIZ6") == 14.0
+    monkeypatch.setattr(commission, "taker_points", lambda *a, **k: 4.0)
+    assert common.round_trip_cost_pts("RIZ6", 100000.0) == 14.0
+    rep = common.report("A4", "RIZ6", [None, None], [], [], n_days=0, cost_pts=14.0)
+    assert any("круг = 2 филла" in n for n in rep["notes"])

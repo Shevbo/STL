@@ -21,6 +21,11 @@
 скачком» в бытовом смысле — так и должно быть, раз мы мерим глубину «в начале
 импульса», а не «прямо перед импульсом».
 
+ГЛУБИНА = сумма объёмов уровней depth_levels=(lo, hi) включительно, по
+умолчанию (2, 5): L1 исключён. Проверка 30.09: с L1 «отвод» (ratio<=0.4) =
+съеденный L1, а истощение L1 сдвигает mid механически, predict ловил
+механику, а не намерение. Старое поведение: depth_levels=(1, 5).
+
 Тест 2 (предсказательный) НЕ зависит от этого механизма: событие «отвод» —
 собственное, по порогу глубины (`_pull_events`), и его момент определяется
 только тем, когда сторона реально истончилась.
@@ -45,6 +50,7 @@ MERGE_WINDOW_S = 60  # слияние соседних импульсных t; c
 DEFAULT_IMPULSE_Q = 0.99
 DEFAULT_PULL_FRAC = 0.4
 DEFAULT_HORIZONS_S = (15, 60, 300)
+DEFAULT_DEPTH_LEVELS = (2, 5)  # уровни стакана включительно, L1 исключён (см. докстринг)
 
 
 # --------------------------------------------------------------------------
@@ -75,13 +81,14 @@ def _rolling_median(ts: list[int], vals: list[float], window_ms: int) -> list[fl
     return out
 
 
-def _prep(rows: list[tuple]) -> dict:
+def _prep(rows: list[tuple], depth_levels=DEFAULT_DEPTH_LEVELS) -> dict:
     """rows -> {день: {ts, mid, spread, depth, median, ratio, block_end,
     hour_idx, hour_idx_all}}. depth/median/ratio — отдельно по bid и ask."""
     days: dict = defaultdict(list)
     for r in rows:
         days[common.day_of(r[0] / 1000)].append(r)
     window_ms = MEDIAN_WINDOW_S * 1000
+    lo, hi = int(depth_levels[0]) - 1, int(depth_levels[1])
     out = {}
     for d, drows in days.items():
         ts, mid, spread = [], [], []
@@ -91,8 +98,8 @@ def _prep(rows: list[tuple]) -> dict:
             ts.append(ts_ms)
             mid.append((bid1 + ask1) / 2)
             spread.append(ask1 - bid1)
-            depth["bid"].append(sum(q for _, q in bids))
-            depth["ask"].append(sum(q for _, q in asks))
+            depth["bid"].append(sum(q for _, q in bids[lo:hi]))
+            depth["ask"].append(sum(q for _, q in asks[lo:hi]))
         median = {s: _rolling_median(ts, depth[s], window_ms) for s in ("bid", "ask")}
         ratio = {s: [(depth[s][i] / median[s][i]) if median[s][i] else None
                      for i in range(len(ts))] for s in ("bid", "ask")}
@@ -273,11 +280,11 @@ def _predict_test(days_data: dict, pull_events_by_day: dict, h: int, pull_frac: 
 
 def analyze(rows: list[tuple], *, impulse_q: float = DEFAULT_IMPULSE_Q,
            pull_frac: float = DEFAULT_PULL_FRAC, horizons_s=DEFAULT_HORIZONS_S,
-           draws: int = 200, seed: int = 0) -> dict:
+           draws: int = 200, seed: int = 0, depth_levels=DEFAULT_DEPTH_LEVELS) -> dict:
     """rows = [(ts_ms, bids, asks), ...] (см. c1._load_full_book) ->
     {"rows", "n_days", "notes"}. rows: 2 строки retro (hit/opposite) +
     по одной predict-строке на горизонт."""
-    days_data = _prep(rows)
+    days_data = _prep(rows, depth_levels)
     events_by_day = {d: _impulse_events(dd, impulse_q) for d, dd in days_data.items()}
     pull_events_by_day = {
         d: sorted(
@@ -295,12 +302,15 @@ def analyze(rows: list[tuple], *, impulse_q: float = DEFAULT_IMPULSE_Q,
         rng_h = random.Random(f"{seed}:predict:{h}")
         out_rows.append(_predict_test(days_data, pull_events_by_day, int(h), pull_frac, draws, rng_h))
 
-    return {"rows": out_rows, "n_days": len(days_data), "notes": []}
+    notes = [f"глубина: уровни {depth_levels[0]}-{depth_levels[1]} включительно"]
+    if int(depth_levels[0]) > 1:
+        notes.append("L1 исключён: истощение L1 сдвигает mid механически")
+    return {"rows": out_rows, "n_days": len(days_data), "notes": notes}
 
 
 def run(arg: dict) -> dict:
     """Задача агента: arg = {"symbol_key", "book_key" (обязателен), "since",
-    "until", "impulse_q", "pull_frac", "horizons_s", "draws", "seed"}."""
+    "until", "impulse_q", "pull_frac", "horizons_s", "depth_levels", "draws", "seed"}."""
     book_key = arg.get("book_key")
     if not book_key:
         return {"id": "C4", "error": "book_key обязателен"}
@@ -316,17 +326,18 @@ def run(arg: dict) -> dict:
     horizons = tuple(int(x) for x in arg.get("horizons_s", DEFAULT_HORIZONS_S))
     draws = int(arg.get("draws", 200))
     seed = int(arg.get("seed", 0))
+    depth_levels = tuple(int(x) for x in arg.get("depth_levels", DEFAULT_DEPTH_LEVELS))
 
     res = analyze(rows, impulse_q=impulse_q, pull_frac=pull_frac, horizons_s=horizons,
-                 draws=draws, seed=seed)
+                 draws=draws, seed=seed, depth_levels=depth_levels)
     first_rows, second_rows = _halves_book(rows)
     halves = {
         "first": analyze(first_rows, impulse_q=impulse_q, pull_frac=pull_frac, horizons_s=horizons,
-                         draws=draws, seed=seed)["rows"] if len(first_rows) > 1 else [],
+                         draws=draws, seed=seed, depth_levels=depth_levels)["rows"] if len(first_rows) > 1 else [],
         "second": analyze(second_rows, impulse_q=impulse_q, pull_frac=pull_frac, horizons_s=horizons,
-                          draws=draws, seed=seed)["rows"] if len(second_rows) > 1 else [],
+                          draws=draws, seed=seed, depth_levels=depth_levels)["rows"] if len(second_rows) > 1 else [],
     }
-    notes = [f"снимков отброшено (нет обеих сторон / цена<=0): {dropped}",
+    notes = res["notes"] + [f"снимков отброшено (нет обеих сторон / цена<=0): {dropped}",
              "halves — свой разрез _halves_book (common.halves ждёт секунды, здесь ts_ms)"]
     last_bid1, last_ask1 = rows[-1][1][0][0], rows[-1][2][0][0]
     last_mid = (last_bid1 + last_ask1) / 2

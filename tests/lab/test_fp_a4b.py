@@ -128,3 +128,54 @@ def test_exclude_clearing_default_off():
     days2, excl2 = a4b.prepare(_bars(n_days=2, seed=1), exclude_clearing=True)
     assert excl2["клиринг"] == 2 * (5 + 20)  # 14:00-14:05 и 18:45-19:05
     assert sum(len(v) for v in days2.values()) < sum(len(v) for v in days.values())
+
+
+def test_follow_excludes_event_minutes():
+    """Объём удвоен и ход продолжается ТОЛЬКО в 10:00/17:00: без исключения
+    top_vol ловит «открытие», с исключением (по умолчанию) эффекта нет, и
+    событийных минут в дампе нет."""
+    ev = {600, 1020}
+    bars = _bars(seed=3, boost_minutes=ev, boost_mult=2.0, follow_pts=30.0, follow_h=3)
+    kw = {"grids": (60,), "horizons": (3,), "draws": 120, "seed": 0}
+
+    on = a4b.analyze(bars, exclude_events_in_follow=False, **kw)
+    top_on = _rows(on, "follow", grid=60, h=3, subgroup="top_vol")[0]
+    assert top_on["null"]["p_two"] < 0.05 and top_on["median"] > 0, top_on  # пол p_two = 2/121
+    assert {"10:00", "17:00"} <= set(on["events_by_minute"]["60"])
+
+    off = a4b.analyze(bars, **kw)
+    top_off = _rows(off, "follow", grid=60, h=3, subgroup="top_vol")[0]
+    assert top_off["n"] == 0 or top_off["null"]["p_two"] > 0.05, top_off
+    assert not {"10:00", "17:00"} & set(off["events_by_minute"]["60"])
+    assert all(e["minute"] not in ev for e in off["events"])
+
+    # by_minute_follow считается на полном дне: 10:00 виден и помечен событием
+    bm = {r["hhmm"]: r for r in off["by_minute_follow"] if r["grid"] == 60}
+    assert bm["10:00"]["event"] and bm["10:00"]["all"]["h3"] > 50
+    assert not bm["12:00"]["event"] and abs(bm["12:00"]["all"]["h3"]) < 50
+
+
+def test_vol_threshold_past_days_ignores_current_day():
+    """Порог past_days = квартиль граничных минут ПРОШЛЫХ дней: аномально
+    объёмный текущий день целиком попадает в top_vol и не сдвигает порог."""
+    from datetime import date, timedelta
+    d0 = date(2026, 9, 1)
+    on = {d0 + timedelta(days=i): [(600 + 60 * k, 1.0, 2.0, float(10 + k)) for k in range(8)]
+          for i in range(6)}
+    big = d0 + timedelta(days=6)
+    on[big] = [(600 + 60 * k, 1.0, 2.0, 1000.0 + k) for k in range(8)]
+
+    refs = a4b._vol_refs(on, "past_days", 5)
+    assert d0 not in refs                      # первый день без истории пропущен
+    assert max(refs[big]) == 17.0              # опора — только прошлые дни
+
+    past, skipped = a4b._select_vol(True, "past_days", 5)(on)
+    assert len(past[big]) == 8 and skipped == 1
+    same, _ = a4b._select_vol(True, "same_day", 5)(on)
+    assert len(same[big]) == 2                 # старый порог видел сам день
+
+
+def test_analyze_rejects_unknown_vol_threshold():
+    import pytest
+    with pytest.raises(ValueError):
+        a4b.analyze(_bars(n_days=2, seed=1), vol_threshold="future", draws=1)

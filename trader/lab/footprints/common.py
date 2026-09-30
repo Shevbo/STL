@@ -23,8 +23,12 @@ from typing import Callable
 
 from trader.lab.retro_reverse import _epoch, _load_bars
 
-# Справка из реестра: цена филла RI по архивному стакану 9-12 пт (project_book_replay).
-RI_BOOK_COST_PTS = 10.0
+# Полспреда RI на ОДИН филл по архивному стакану (project_book_replay: филл
+# стоит 9-12 пт = полспреда ~5 + тейкерская комиссия). Раньше здесь стояла
+# константа 10 «за круг», а это была цена одного филла: круг = 2 филла.
+RI_BOOK_HALF_SPREAD_PTS = 5.0
+# Комиссия филла RI в пунктах, когда цены нет: оценочно, не замер.
+RI_FEE_EST_PTS = 2.0
 
 # Сессия FORTS по факту баров: утренняя с 07:00 (RIZ6 ~15k лотов/час, SiZ6 ~65k
 # в 07:00-09:00 — торгуют, резать с 09:00 нельзя), вечерняя до 23:50.
@@ -181,12 +185,19 @@ def atr_minute(rows: list[list], n: int = 60) -> float | None:
 
 
 def round_trip_cost_pts(symbol: str, price: float | None = None) -> float | None:
-    """Цена круга в пунктах. RI: справка реестра по стакану (10 пт). Прочие:
-    две тейкерские комиссии commission.taker_points при известной цене, БЕЗ
-    спреда (замера стакана по ним нет). Нет цены = None, числа не выдумываем."""
-    from trader.lab.commission import _base_ticker, taker_points
+    """Цена круга в пунктах = 2 филла.
+
+    RI: 2 x (полспреда RI_BOOK_HALF_SPREAD_PTS + тейкерская комиссия филла в
+    пунктах, commission.taker_points со скальперской скидкой: круги отпечатков
+    внутридневные, биржевой сбор такого круга вдвое меньше). Без цены комиссия
+    оценочно RI_FEE_EST_PTS, круг = 14.
+    Прочие: две тейкерские комиссии при известной цене, БЕЗ спреда: шага цены
+    в офлайн-источнике нет (price_step живёт только в market_store/БД), замера
+    стакана тоже. Нет цены = None, числа не выдумываем."""
+    from trader.lab.commission import SCALPER_DISCOUNT, _base_ticker, taker_points
     if _base_ticker(symbol) == "RI":
-        return RI_BOOK_COST_PTS
+        fee = taker_points(symbol, price, 1) * SCALPER_DISCOUNT if price else RI_FEE_EST_PTS
+        return 2 * (RI_BOOK_HALF_SPREAD_PTS + fee)
     if not price:
         return None
     return 2 * taker_points(symbol, price, 1)
@@ -199,8 +210,10 @@ def report(hypothesis_id: str, symbol: str, window, stat_rows: list[dict], notes
     notes = list(notes)
     if cost_pts is None:
         notes.append("цена круга: источника нет (None)")
-    elif not symbol.upper().startswith("RI"):
-        notes.append("цена круга: только комиссия commission.py, без спреда")
+    elif symbol.upper().startswith("RI"):
+        notes.append("цена круга: круг = 2 филла: полспреда + комиссия (без цены комиссия оценочно)")
+    else:
+        notes.append("цена круга: только комиссия commission.py, без спреда (шага цены нет)")
     return {"id": hypothesis_id, "symbol": symbol, "window": list(window),
             "n_days": n_days, "rows": stat_rows, "halves": halves or {},
             "cost_pts": cost_pts, "atr_min_pts": atr_min_pts, "notes": notes}

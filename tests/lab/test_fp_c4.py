@@ -120,3 +120,23 @@ def test_pull_events_not_duplicated_within_window():
     ratio_short = [1.0] * 10 + [0.1] * 20 + [1.0] * 10
     events_short = c4._pull_events(ts[:40], ratio_short, pull_frac=0.4)
     assert events_short == [10]
+
+
+def test_depth_without_l1_ignores_l1_depletion():
+    """L1 аска тяжёлый (500) и периодически съедается до 1: по уровням 1-5
+    это «отвод», по уровням 2-5 (по умолчанию) глубина не меняется вовсе."""
+    rows = []
+    for t in range(1200):
+        l1 = 1 if t % 120 >= 100 else 500
+        bids = [(99999.0 - i, 50) for i in range(5)]
+        asks = [(100001.0 + i, l1 if i == 0 else 10) for i in range(5)]
+        rows.append(((D0 + t) * 1000, bids, asks))
+    dd_new = next(iter(c4._prep(rows).values()))
+    assert set(dd_new["depth"]["ask"]) == {40}
+    assert c4._pull_events(dd_new["ts"], dd_new["ratio"]["ask"], 0.4) == []
+
+    dd_old = next(iter(c4._prep(rows, (1, 5)).values()))
+    assert c4._pull_events(dd_old["ts"], dd_old["ratio"]["ask"], 0.4)
+
+    notes = c4.analyze(rows, draws=5, horizons_s=(15,))["notes"]
+    assert any("L1 исключён" in n for n in notes)

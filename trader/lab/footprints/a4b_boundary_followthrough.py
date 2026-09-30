@@ -30,6 +30,24 @@ A4 нашёл аномальный объём/ход в первую минут�
    subgroup="top_vol"/"low_vol") Тот же тест 2 отдельно для верхнего и
    нижнего квартиля объёма граничных минут дня.
 
+ГЕЙТ FOLLOW ПО ПРОВЕРКЕ 30.09 (RIZ6 top_vol h=3 +40 пт):
+  - событийные минуты (`event_minutes`) исключались только в части 1, а в
+    верхнем квартиле объёма сидят именно они (10:00, 17:00) — кандидат был
+    неотличим от «открытие 10:00 / открытие США». Теперь
+    `exclude_events_in_follow=True`: они убраны из пула граничных минут, из
+    нуля (сдвинутая сетка) и из пула контроля; цены m+h берутся из полного дня;
+  - порог квартиля объёма считался по всем граничным минутам дня, включая
+    будущие. Теперь `vol_threshold="past_days"`: по граничным минутам
+    `vol_lookback_days` ПРЕДЫДУЩИХ дней с данными, реализуемо в момент m; день
+    без истории (< 4 граничных минут в окне) пропускается, счётчик в строке
+    (`vol_days_skipped`). "same_day" — старое поведение;
+  - дамп `events` (top_vol, все горизонты) и `events_by_minute`, а
+    `by_minute_follow` раскладывает медиану хода h=3/h=5 по минутам дня на
+    ПОЛНОМ дне (событийные минуты помечены), чтобы видеть, не сидит ли
+    результат в 1-2 минутах;
+  - h=3 был выбран постфактум из четырёх, знак p — по данным: в сводке
+    читается только `p_two`.
+
 Нуль везде — сдвиг разметки (класса или сетки) на случайную величину, свою у
 каждого дня. Интервал — бутстрап по дням (common.bootstrap_days). p
 односторонний (common.pvalue_and_ci: «нуль >= настоящего»; p=1/(draws+1) —
@@ -66,6 +84,10 @@ DEFAULT_HORIZONS = (1, 3, 5, 15)
 # полуночи. 19:00 (клиринг) не отдельным событием — клиринг уже свой класс
 # исключений (exclude_clearing), дублировать в событиях незачем.
 DEFAULT_EVENT_MINUTES = (600, 930, 990, 1020, 1380)
+DEFAULT_VOL_THRESHOLD = "past_days"  # "same_day" = старое поведение (порог видит будущее дня)
+DEFAULT_VOL_LOOKBACK_DAYS = 5
+BY_MINUTE_HORIZONS = (3, 5)
+BY_MINUTE_MIN_DAYS = 5
 
 CLASSES = ("h:00", "h:30", "h:15,h:45", "остальные кратные 5", "прочие")
 _BASELINE_CLASS = "прочие"
@@ -282,23 +304,38 @@ def _control_outcomes(lookup_by_day: dict, days: dict, exclude_minutes: dict,
     return out
 
 
-def _select_all(on_by_day: dict) -> dict:
-    return on_by_day
+def _select_all(on_by_day: dict) -> tuple[dict, int]:
+    return on_by_day, 0
 
 
-def _select_vol(top: bool):
-    """Подгруппа по квартилю объёма ГРАНИЧНЫХ минут дня (не всех минут)."""
-    def select(on_by_day: dict) -> dict:
+def _vol_refs(on_by_day: dict, mode: str, lookback: int) -> dict:
+    """{день: объёмы, по которым считается квартиль граничных минут дня}.
+    same_day — граничные минуты самого дня (видит будущее дня); past_days —
+    граничные минуты `lookback` предыдущих дней (реализуемо в момент m).
+    День, где опорных объёмов < 4, в ответ не попадает."""
+    refs, past = {}, []
+    for d in sorted(on_by_day):
+        vols = [t[3] for t in on_by_day[d]]
+        ref = vols if mode == "same_day" else [v for blk in past[-lookback:] for v in blk]
+        past.append(vols)
+        if vols and len(ref) >= 4:
+            refs[d] = ref
+    return refs
+
+
+def _select_vol(top: bool, mode: str = DEFAULT_VOL_THRESHOLD,
+                lookback: int = DEFAULT_VOL_LOOKBACK_DAYS):
+    """Подгруппа по квартилю объёма ГРАНИЧНЫХ минут (см. _vol_refs) ->
+    (события по дням, число дней с граничными минутами, но без опоры)."""
+    def select(on_by_day: dict) -> tuple[dict, int]:
+        refs = _vol_refs(on_by_day, mode, lookback)
         out = {}
-        for d, on in on_by_day.items():
-            if len(on) < 4:
-                continue
-            vols = sorted(v for _, _, _, v in on)
-            q1, _, q3 = statistics.quantiles(vols, n=4)
-            chosen = [t for t in on if (t[3] >= q3 if top else t[3] <= q1)]
+        for d, ref in refs.items():
+            q1, _, q3 = statistics.quantiles(ref, n=4)
+            chosen = [t for t in on_by_day[d] if (t[3] >= q3 if top else t[3] <= q1)]
             if chosen:
                 out[d] = chosen
-        return out
+        return out, sum(1 for on in on_by_day.values() if on) - len(refs)
     return select
 
 
@@ -319,8 +356,10 @@ def _null_verdict(real, nulls: list, boots: list) -> dict:
 
 def _row_for(days: dict, lookup_by_day: dict, g: int, h: int, subgroup: str, select,
              draws: int, rng: random.Random) -> dict:
+    """days — пул граничных минут/контроля (событийные уже убраны, если
+    надо); lookup_by_day — полный день, откуда берутся цены m+h."""
     on_full = _boundary_events(days, g, {})
-    real_on = select(on_full)
+    real_on, skipped = select(on_full)
     outcomes = _outcomes_for_events(lookup_by_day, real_on, h)
     flat = [x for v in outcomes.values() for x in v]
     med = statistics.median(flat) if flat else None
@@ -328,7 +367,7 @@ def _row_for(days: dict, lookup_by_day: dict, g: int, h: int, subgroup: str, sel
     null_stats = []
     for _ in range(draws):
         offsets = {d: rng.randint(1, g - 1) for d in days}
-        shifted = select(_boundary_events(days, g, offsets))
+        shifted, _ = select(_boundary_events(days, g, offsets))
         sh_flat = [x for v in _outcomes_for_events(lookup_by_day, shifted, h).values() for x in v]
         null_stats.append(statistics.median(sh_flat) if sh_flat else None)
 
@@ -347,30 +386,124 @@ def _row_for(days: dict, lookup_by_day: dict, g: int, h: int, subgroup: str, sel
         "pos_share": (sum(1 for x in flat if x > 0) / len(flat)) if flat else None,
         "control_median": statistics.median(ctrl) if ctrl else None,
         "null": _null_verdict(med, null_stats, boot),
+        "vol_days_skipped": skipped,
     }
 
 
-def follow_rows(days: dict, grids, horizons, draws: int, seed: int) -> list[dict]:
+def _drop_minutes(days: dict, minutes: set) -> dict:
+    return {d: [t for t in recs if t[0] not in minutes] for d, recs in days.items()}
+
+
+def _hhmm(m: int) -> str:
+    return f"{m // 60:02d}:{m % 60:02d}"
+
+
+def follow_rows(days: dict, grids, horizons, draws: int, seed: int,
+                event_minutes: set = frozenset(), exclude_events: bool = True,
+                vol_threshold: str = DEFAULT_VOL_THRESHOLD,
+                vol_lookback_days: int = DEFAULT_VOL_LOOKBACK_DAYS) -> list[dict]:
     if not days:
         return []
     rng = random.Random(seed)
     lookup_by_day = _lookup_by_day(days)
+    pool = _drop_minutes(days, event_minutes) if exclude_events else days
+    top = _select_vol(True, vol_threshold, vol_lookback_days)
+    low = _select_vol(False, vol_threshold, vol_lookback_days)
     rows = []
     for g in grids:
         g = int(g)
         for h in horizons:
             h = int(h)
-            rows.append(_row_for(days, lookup_by_day, g, h, "all", _select_all, draws, rng))
-            rows.append(_row_for(days, lookup_by_day, g, h, "top_vol", _select_vol(True), draws, rng))
-            rows.append(_row_for(days, lookup_by_day, g, h, "low_vol", _select_vol(False), draws, rng))
+            rows.append(_row_for(pool, lookup_by_day, g, h, "all", _select_all, draws, rng))
+            rows.append(_row_for(pool, lookup_by_day, g, h, "top_vol", top, draws, rng))
+            rows.append(_row_for(pool, lookup_by_day, g, h, "low_vol", low, draws, rng))
     return rows
+
+
+def _signed(lookup: dict, m: int, o: float, c: float, h: int) -> float | None:
+    fut = lookup.get(m + h)
+    return None if fut is None else (1.0 if c > o else -1.0) * (fut[1] - c)
+
+
+def top_vol_events(days: dict, grids, horizons, event_minutes: set = frozenset(),
+                   exclude_events: bool = True, vol_threshold: str = DEFAULT_VOL_THRESHOLD,
+                   vol_lookback_days: int = DEFAULT_VOL_LOOKBACK_DAYS) -> tuple[list, dict]:
+    """Дамп настоящих событий top_vol (ровно тот пул, что в follow) и счётчик
+    по минуте дня {grid: {hhmm: n}}. vol_ratio = объём / медиана опорных
+    объёмов (_vol_refs). Минуты с c == o в follow не входят, здесь тоже."""
+    lookup_by_day = _lookup_by_day(days)
+    pool = _drop_minutes(days, event_minutes) if exclude_events else days
+    events, by_minute = [], {}
+    for g in grids:
+        g = int(g)
+        on_full = _boundary_events(pool, g, {})
+        refs = _vol_refs(on_full, vol_threshold, vol_lookback_days)
+        chosen, _ = _select_vol(True, vol_threshold, vol_lookback_days)(on_full)
+        cnt: dict[str, int] = defaultdict(int)
+        for d in sorted(chosen):
+            med_ref = statistics.median(refs[d])
+            for m, o, c, v in chosen[d]:
+                if c == o:
+                    continue
+                cnt[_hhmm(m)] += 1
+                events.append({
+                    "day": d.isoformat(), "minute": m, "hhmm": _hhmm(m), "grid": g,
+                    "vol_ratio": v / med_ref if med_ref else None,
+                    "sign": 1 if c > o else -1,
+                    "move_h": {str(int(h)): _signed(lookup_by_day[d], m, o, c, int(h))
+                               for h in horizons}})
+        by_minute[str(g)] = dict(sorted(cnt.items()))
+    return events, by_minute
+
+
+def by_minute_follow(days: dict, grids, event_minutes: set = frozenset(),
+                     vol_threshold: str = DEFAULT_VOL_THRESHOLD,
+                     vol_lookback_days: int = DEFAULT_VOL_LOOKBACK_DAYS) -> list[dict]:
+    """Медиана подписанного хода h=3/h=5 по каждой граничной минуте дня на
+    ПОЛНОМ дне (событийные минуты НЕ исключены, помечены "event"), для минут,
+    встретившихся >= BY_MINUTE_MIN_DAYS дней. Отделяет 10:00/17:00 от прочих."""
+    lookup_by_day = _lookup_by_day(days)
+    out = []
+    for g in grids:
+        g = int(g)
+        on_full = _boundary_events(days, g, {})
+        top, _ = _select_vol(True, vol_threshold, vol_lookback_days)(on_full)
+        per: dict = defaultdict(lambda: {"all": defaultdict(list), "top_vol": defaultdict(list),
+                                         "days": set()})
+        for sub, src in (("all", on_full), ("top_vol", top)):
+            for d, on in src.items():
+                for m, o, c, v in on:
+                    if c == o:
+                        continue
+                    if sub == "all":
+                        per[m]["days"].add(d)
+                    for h in BY_MINUTE_HORIZONS:
+                        x = _signed(lookup_by_day[d], m, o, c, h)
+                        if x is not None:
+                            per[m][sub][h].append(x)
+        for m in sorted(per):
+            p = per[m]
+            if len(p["days"]) < BY_MINUTE_MIN_DAYS:
+                continue
+            row = {"grid": g, "minute": m, "hhmm": _hhmm(m), "event": m in event_minutes,
+                   "n_days": len(p["days"])}
+            for sub in ("all", "top_vol"):
+                row[sub] = {"n": len(p[sub][BY_MINUTE_HORIZONS[0]]), **{
+                    f"h{h}": statistics.median(p[sub][h]) if p[sub][h] else None
+                    for h in BY_MINUTE_HORIZONS}}
+            out.append(row)
+    return out
 
 
 # --------------------------------------------------------------- сборка ---
 
 def analyze(rows: list[list], grids=DEFAULT_GRIDS, horizons=DEFAULT_HORIZONS,
             event_minutes=DEFAULT_EVENT_MINUTES, draws: int = 200, seed: int = 0,
-            exclude_clearing: bool = False) -> dict:
+            exclude_clearing: bool = False, exclude_events_in_follow: bool = True,
+            vol_threshold: str = DEFAULT_VOL_THRESHOLD,
+            vol_lookback_days: int = DEFAULT_VOL_LOOKBACK_DAYS) -> dict:
+    if vol_threshold not in ("same_day", "past_days"):
+        raise ValueError(f"vol_threshold: same_day | past_days, не {vol_threshold!r}")
     days, excl = prepare(rows, exclude_clearing)
     ev_set = {int(m) for m in event_minutes}
     wd_days, we_days = _split_weekend(days)
@@ -379,18 +512,24 @@ def analyze(rows: list[list], grids=DEFAULT_GRIDS, horizons=DEFAULT_HORIZONS,
     for group, gdays in (("будни", wd_days), ("выходные", we_days)):
         out_rows.extend(class_rows(gdays, draws, seed, group))
         out_rows.extend(ex_events_rows(_to_a4_format(gdays), grids, ev_set, draws, seed, group))
-    out_rows.extend(follow_rows(days, grids, horizons, draws, seed))
+    fkw = {"event_minutes": ev_set, "exclude_events": exclude_events_in_follow,
+           "vol_threshold": vol_threshold, "vol_lookback_days": vol_lookback_days}
+    out_rows.extend(follow_rows(days, grids, horizons, draws, seed, **fkw))
 
     first, second = common.halves(rows)
     halves_out = {
-        "first": follow_rows(prepare(first, exclude_clearing)[0], grids, horizons, draws, seed),
-        "second": follow_rows(prepare(second, exclude_clearing)[0], grids, horizons, draws, seed),
+        "first": follow_rows(prepare(first, exclude_clearing)[0], grids, horizons, draws, seed, **fkw),
+        "second": follow_rows(prepare(second, exclude_clearing)[0], grids, horizons, draws, seed, **fkw),
     }
+    events, events_by_minute = top_vol_events(days, grids, horizons, **fkw)
 
     return {
         "rows": out_rows,
         "halves": halves_out,
         "n_days": len(days),
+        "events": events,
+        "events_by_minute": events_by_minute,
+        "by_minute_follow": by_minute_follow(days, grids, ev_set, vol_threshold, vol_lookback_days),
         "notes": [f"исключено {why}: {n} мин" for why, n in sorted(excl.items())] + [
             f"клиринг исключён: {exclude_clearing}",
             f"будни: {len(wd_days)} дн., выходные: {len(we_days)} дн.",
@@ -402,15 +541,22 @@ def analyze(rows: list[list], grids=DEFAULT_GRIDS, horizons=DEFAULT_HORIZONS,
             "нет, избыток на границах там — довод за алгоритм по бару, а не расписание",
             "follow: sign(close[m]-open[m])*(close[m+h]-close[m]); контроль — "
             "неграничные минуты того же дня, подобранные по квартилю |ход| дня",
-            "p односторонний; отрицательный стат (откат) тестируется нижним хвостом; "
-            "p=1/(draws+1) — пол разрешения теста, не значение",
+            "в сводке читать p_two (двусторонний); p выбран по знаку данных "
+            "(отрицательный стат = нижний хвост) и сводкой не служит; пол p_two = 2/(draws+1)",
+            f"follow: событийные минуты исключены из пула и контроля: {exclude_events_in_follow}",
+            f"follow: порог квартиля объёма {vol_threshold}"
+            + (f" (граничные минуты {vol_lookback_days} предыдущих дней; "
+               "день без истории пропущен, vol_days_skipped)" if vol_threshold == "past_days"
+               else " (видит будущие граничные минуты дня)"),
+            "горизонты h не пререгистрированы: выбор лучшего h из списка = подгонка",
         ],
     }
 
 
 def run(arg: dict) -> dict:
     """Задача агента: arg = {"symbol_key", "since", "until", "grids", "horizons",
-    "event_minutes", "draws", "seed", "exclude_clearing"}."""
+    "event_minutes", "draws", "seed", "exclude_clearing", "exclude_events_in_follow",
+    "vol_threshold", "vol_lookback_days"}."""
     key, since, until = arg["symbol_key"], arg.get("since"), arg.get("until")
     rows = common.load_bars(key, since, until)
     if not rows:
@@ -419,9 +565,15 @@ def run(arg: dict) -> dict:
                   tuple(arg.get("horizons", DEFAULT_HORIZONS)),
                   tuple(arg.get("event_minutes", DEFAULT_EVENT_MINUTES)),
                   int(arg.get("draws", 200)), int(arg.get("seed", 0)),
-                  bool(arg.get("exclude_clearing", False)))
+                  bool(arg.get("exclude_clearing", False)),
+                  bool(arg.get("exclude_events_in_follow", True)),
+                  str(arg.get("vol_threshold", DEFAULT_VOL_THRESHOLD)),
+                  int(arg.get("vol_lookback_days", DEFAULT_VOL_LOOKBACK_DAYS)))
     price = statistics.median(r[4] for r in rows)
-    return common.report("A4b", key, [since, until], res["rows"], res["notes"],
-                         n_days=res["n_days"], halves=res["halves"],
-                         cost_pts=common.round_trip_cost_pts(key, price),
-                         atr_min_pts=common.atr_minute(rows))
+    rep = common.report("A4b", key, [since, until], res["rows"], res["notes"],
+                        n_days=res["n_days"], halves=res["halves"],
+                        cost_pts=common.round_trip_cost_pts(key, price),
+                        atr_min_pts=common.atr_minute(rows))
+    for k in ("events", "events_by_minute", "by_minute_follow"):
+        rep[k] = res[k]
+    return rep
