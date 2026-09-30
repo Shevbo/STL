@@ -7,7 +7,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   apexMs, corridorBounds, corridorFromClicks, corridorSlope, corridorState,
-  corridorTimeError, corridorWidth, msToMskInput, mskInputToMs, snapPrice, snapToBar,
+  corridorTimeError, corridorWidth, msToMskInput, mskInputToMs, preview, snapPrice,
+  snapToBar, type Kind,
 } from './smart-order-help';
 
 const T0 = 1_790_600_000_000;
@@ -270,5 +271,62 @@ describe('проверка времён точек', () => {
   it('вторая точка не позже первой — отказ словами движка', () => {
     expect(corridorTimeError(T, T)).toContain('ПОЗЖЕ первой');
     expect(corridorTimeError(T, T - 1)).toContain('ПОЗЖЕ первой');
+  });
+});
+
+// «Что произойдёт» для фигуры. До 30.09.2026 последней веткой preview() стоял
+// catch-all `else` для Зависимой: коридор попадал в него и требовал «заявку, за
+// исполнением которой следим» — кнопка взвода не включалась НИКОГДА, а причина
+// на экране была от чужого типа.
+describe('превью фигуры не просит чужих полей', () => {
+  const base = {
+    side: 'sell' as const, qty: 2, code: 'RIZ6',
+    trigger: 0, trailOffset: 0, watchId: '', childPrice: 0, price: 84_800,
+    pointValue: 1.5681,
+    cT1: T0, cP1: 85_060, cT2: T0 + 60 * MIN, cP2: 84_850, cLow: 84_540,
+    cStopPts: 160, cFlipsMax: 10,
+  };
+
+  it('заполненный коридор взводится и объясняет себя', () => {
+    const r = preview({ ...base, kind: 'corridor' as Kind });
+    expect(r.error).toBe('');
+    expect(r.sentence).toContain('от стенок коридора');
+    expect(r.sentence).toContain('переворот');
+    expect(r.sentence).not.toContain('следим');
+  });
+
+  it('треугольник просит вторую точку НИЖНЕЙ границы, а не чужое поле', () => {
+    const r = preview({ ...base, kind: 'triangle' as Kind });
+    expect(r.error).toContain('нижней границы во второй точке');
+    expect(preview({ ...base, kind: 'triangle' as Kind, cLow2: 84_700 }).error).toBe('');
+  });
+
+  it('без времён отказ говорит про наклон, а не про Зависимую', () => {
+    const r = preview({ ...base, kind: 'corridor' as Kind, cT2: 0 });
+    expect(r.error).toContain('нет наклона');
+    expect(r.error).not.toContain('следим');
+  });
+
+  it('нижняя выше верхней — отказ теми же словами, что у движка', () => {
+    const r = preview({ ...base, kind: 'corridor' as Kind, cLow: 86_000 });
+    expect(r.error).toContain('НИЖЕ верхней');
+  });
+
+  it('без стопа за стенкой говорим прямо, что сама она не выйдет', () => {
+    const r = preview({ ...base, kind: 'corridor' as Kind, cStopPts: 0 });
+    expect(r.sentence).toContain('сама не выйдет');
+  });
+
+  // Зависимая своё поле требовать обязана — ветку у неё не отобрали.
+  it('Зависимая по-прежнему просит заявку, за которой следим', () => {
+    const r = preview({ ...base, kind: 'on_fill' as Kind, watchId: '' });
+    expect(r.error).toContain('за исполнением которой следим');
+  });
+
+  // Незнакомый тип не выдаём за Зависимую: именно так и родился этот баг.
+  it('неизвестный тип называет себя, а не чужие поля', () => {
+    const r = preview({ ...base, kind: 'что_то_новое' as unknown as Kind });
+    expect(r.error).toContain('этот экран не умеет');
+    expect(r.error).not.toContain('следим');
   });
 });

@@ -216,6 +216,9 @@
       tpPrice: num(tpPrice),
       tpTrail: tpMode === 'trail' ? num(tpTrail) : 0,
       trailAfter: afterMode === 'trail' ? num(trailAfter) : 0,
+      cT1, cP1: num(cP1), cT2, cP2: num(cP2),
+      cLow: num(cLow), cLow2: kind === 'triangle' ? num(cLow2) : 0,
+      cStopPts: num(cStopPts), cFlipsMax: num(cFlipsMax),
       price, pointValue,
     });
     // «Следящий» выбран, а откат не введён — движок поставит ОБЫЧНЫЙ тейк на
