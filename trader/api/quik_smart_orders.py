@@ -114,6 +114,15 @@ class SmartOrderBody(BaseModel):
     c_p2: float = 0.0
     c_low: float = 0.0
     c_low2: float = 0.0            # треугольник: нижняя граница в момент c_t2_ms
+    # Сетка «радиация»: шаг в пунктах, сколько уровней вниз (покупки) и вверх
+    # (продажи), объём на уровень, стоп за последним уровнем. Цена постановки
+    # берётся из рынка — её не спрашиваем, чтобы сетка не разъехалась с рынком
+    # между вводом и отправкой формы.
+    g_step: float = 0.0
+    g_buys: int = 0
+    g_sells: int = 0
+    g_lot: int = 0
+    g_stop_pts: float = 0.0
     c_stop_pts: float = 0.0
     c_flips_max: int = 0
     note: str = ""
@@ -140,12 +149,19 @@ async def create(body: SmartOrderBody, request: Request):
         c_t2_ms=int(body.c_t2_ms), c_p2=float(body.c_p2),
         c_low=float(body.c_low), c_low2=float(body.c_low2),
         c_stop_pts=float(body.c_stop_pts),
+        g_step=float(body.g_step), g_buys=int(body.g_buys), g_sells=int(body.g_sells),
+        g_lot=int(body.g_lot), g_stop_pts=float(body.g_stop_pts),
         c_flips_max=int(body.c_flips_max), c_qty=int(body.qty),
         note=body.note, created_ms=so_mod.now_ms(),
     )
     # Рыночная цена инструмента даёт валидации точку отсчёта: без неё ЦЕНУ,
     # введённую в поле пунктов, не отличить от больших пунктов (заявка без уровня
     # активации собственного trigger_price не имеет).
+    if so.kind == "grid" and so.g_base <= 0:
+        # База сетки — ЦЕНА РЫНКА в момент постановки, а не поле формы: между
+        # вводом и отправкой цена уходит, и сетка встала бы вокруг устаревшей
+        # точки. Нет цены — нет сетки, гадать тут нечем.
+        so.g_base = _market_price(request, so.code)
     silent = _silent_instrument(request, so.code)
     if silent:
         raise HTTPException(status_code=422, detail=silent)
@@ -421,6 +437,40 @@ def _silent_instrument(request: Request, code: str) -> str | None:
         return so_mod.silent_code(code, ages)
     except Exception:  # noqa: BLE001 - проверка не должна ронять взведение
         return None
+
+
+def _price_limits(store: Any, agent: str) -> dict[str, tuple[float, float]]:
+    """code -> (нижняя планка, верхняя планка) цены дня из параметров QUIK.
+
+    Биржа отвергает заявку за планкой, а MOEX двигает планки по своему
+    расписанию в зависимости от волатильности. Для сетки это половина работы:
+    уровень за планкой нельзя выставить, его ДЕРЖАТ у себя и ждут расширения
+    (оператор, 30.09.2026).
+
+    Нули = границы неизвестны (скрипт старше 2026.09.30 их не отдаёт). Тогда НЕ
+    ограничиваем: молчащий параметр не имеет права останавливать торговлю.
+    """
+    out: dict[str, tuple[float, float]] = {}
+    p = store.params(agent) if store else None
+    for row in (p or {}).get("rows", []) or []:
+        try:
+            lo = float(row.get("price_min") or 0)
+            hi = float(row.get("price_max") or 0)
+        except (TypeError, ValueError):
+            continue
+        if row.get("code") and (lo > 0 or hi > 0):
+            out[str(row["code"])] = (lo, hi)
+    return out
+
+
+def price_within_limits(price: float, limits: tuple[float, float] | None) -> bool:
+    """Пройдёт ли цена планки. Неизвестные границы — пропускаем: см. _price_limits."""
+    if not limits or price <= 0:
+        return True
+    lo, hi = limits
+    if lo > 0 and price < lo:
+        return False
+    return not (hi > 0 and price > hi)
 
 
 def _price_steps(store: Any, agent: str) -> dict[str, float]:
@@ -1309,6 +1359,126 @@ def _escalate_native_child(book: SmartOrderBook, store: Any, srv: Any, lim: Any,
     return dirty
 
 
+
+# ── СЕТКА «РАДИАЦИЯ»: заявки живут В СТАКАНЕ, а не в сторожe ─────────────────
+# Остальные умные заявки сторож стреляет сам, когда цена дошла до уровня. Сетке
+# так нельзя: оператор торгует ликвидность, и заявка, выставленная в момент
+# касания, приходит в очередь последней. Поэтому все уровни сразу уходят в QUIK
+# лимитными заявками и стоят в стакане; сторож лишь ВОССТАНАВЛИВАЕТ исполненный
+# уровень встречной заявкой и следит за стопом.
+_GRID_CID = "so:{so_id}:g{level}"
+
+
+def _grid_cid(so_id: str, level: int) -> str:
+    return _GRID_CID.format(so_id=so_id, level=f"{level:+d}".replace("+", "p").replace("-", "m"))
+
+
+def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
+               agent: str, steps: dict[str, float],
+               price_limits: dict[str, tuple[float, float]], now: int) -> bool:
+    """Держать сетку выставленной: доставить недостающие уровни, перевернуть
+    исполненные, снять всё при стопе."""
+    dirty = False
+    work = {d.get("client_id"): d for d in ost.working_orders(agent)}
+    for so in book.orders:
+        if so.kind != "grid" or so.status not in ("armed", "native") or so.g_done:
+            continue
+        step = steps.get(so.code, 0.0)
+        limits = price_limits.get(so.code)
+        tick = store.tick(so.code, agent) or {}
+        price = float(tick.get("last") or 0)
+        live = dict(so.g_live or {})
+
+        # СТОП ЗА КРАЕМ СЕТКИ: снимаем всё и заканчиваем. Проверяется первым —
+        # доставлять уровни туда, откуда рынок уже ушёл, значит ловить нож.
+        if price > 0 and so_mod.grid_stop_hit(so, price):
+            for lvl_key, cid in live.items():
+                if lvl_key.startswith("flip:"):
+                    continue
+                rec = work.get(cid) or {}
+                if rec.get("order_id"):
+                    srv.enqueue_order(agent, order_msgs.build_cancel_order(
+                        client_id=cid, order_id=str(rec["order_id"])))
+            so.g_live, so.g_done, so.status = {}, True, "cancelled"
+            so.note = (so.note + " " if so.note else "") + "стоп за краем сетки: снята"
+            so_journal.record("grid_stop", so, so_journal.WATCHER,
+                              f"цена {price:g} за последним уровнем: сетка снята, "
+                              f"позиция {so.g_pos:+d} остаётся на операторе", now_ms=now)
+            log.warning("smart_order.grid_stopped", so_id=so.so_id, price=price, pos=so.g_pos)
+            return True
+
+        for level in so_mod.grid_levels(so):
+            key = str(level)
+            cid = live.get(key) or ""
+            rec = work.get(cid) if cid else None
+            if rec is not None and rec.get("state") not in _DEAD_STATES and int(
+                    rec.get("remaining") or 0) > 0:
+                continue                      # стоит в стакане, всё хорошо
+            if rec is not None and int(rec.get("filled") or 0) > 0:
+                # ИСПОЛНИЛАСЬ: позиция изменилась, а уровень ПЕРЕВОРАЧИВАЕТСЯ —
+                # купленное на −2 продаётся там же. Это и есть тейк в шаг сетки.
+                side_was = so_mod.grid_side_for(so, level)
+                so.g_pos += int(rec["filled"]) * (1 if side_was == "buy" else -1)
+                live[f"flip:{level}"] = not bool(live.get(f"flip:{level}"))
+                so_journal.record("grid_fill", so, so_journal.WATCHER,
+                                  f"уровень {level:+d} ({so_mod.grid_price(so, level):g}) "
+                                  f"исполнен {side_was} {rec['filled']}; позиция "
+                                  f"{so.g_pos:+d}, ставлю встречную", now_ms=now)
+                dirty = True
+            side = so_mod.grid_side_for(so, level)
+            px = so_mod.quantize(so_mod.grid_price(so, level), step, side)
+            if not price_within_limits(px, limits):
+                # ЗА ПЛАНКОЙ БИРЖИ. Не выставляем и не считаем это ошибкой:
+                # планки двигает MOEX по своему расписанию, и уровень оживёт сам,
+                # когда границы расширятся — проход сторожа идёт каждые пять
+                # секунд, ждать больше нечего. Говорим оператору ОДИН раз на
+                # уровень, иначе журнал утонет в повторах.
+                if live.get(f"limit:{level}") != 1:
+                    live[f"limit:{level}"] = 1
+                    dirty = True
+                    so_journal.record("grid_limit", so, so_journal.LIMITS,
+                                      f"уровень {level:+d} ({px:g}) за планкой биржи "
+                                      f"{limits}: держу у себя, жду расширения границ",
+                                      now_ms=now)
+                    log.info("smart_order.grid_level_beyond_limit", so_id=so.so_id,
+                             level=level, price=px, limits=limits)
+                continue
+            if live.pop(f"limit:{level}", None):
+                dirty = True
+                so_journal.record("grid_limit", so, so_journal.WATCHER,
+                                  f"уровень {level:+d} ({px:g}) снова внутри планок: "
+                                  "выставляю", now_ms=now)
+            new_cid = _grid_cid(so.so_id, level) + f":{now % 100000}"
+            try:
+                validate_place(lim, code=so.code, quantity=so.g_lot,
+                               collar=lim.price_collar_frac,
+                               current_working=ost.working_contracts(agent),
+                               placed_today=ost.placed_today(agent))
+                ost.register_pending(agent, new_cid, so.code, side, px, so.g_lot)
+                ost.record_placement(agent)
+                srv.enqueue_order(agent, order_msgs.build_place_order(
+                    client_id=new_cid, code=so.code, side=side, price=px,
+                    quantity=so.g_lot, collar=lim.price_collar_frac))
+            except LimitError as exc:
+                # Кап — не повод сносить всю сетку: часть уровней стоит и
+                # работает. Говорим один раз на уровень и идём дальше.
+                log.warning("smart_order.grid_level_refused", so_id=so.so_id,
+                            level=level, error=str(exc))
+                so_journal.record("error", so, so_journal.LIMITS,
+                                  f"уровень {level:+d} не выставлен: {exc}", now_ms=now)
+                continue
+            except Exception as exc:  # noqa: BLE001
+                log.warning("smart_order.grid_place_failed", so_id=so.so_id,
+                            level=level, error=str(exc))
+                continue
+            live[key] = new_cid
+            dirty = True
+        if live != (so.g_live or {}):
+            so.g_live = live
+            dirty = True
+    return dirty
+
+
 async def _watch_once(state: Any) -> None:
     book: SmartOrderBook = state.smart_orders
     active = book.active()
@@ -1367,6 +1537,10 @@ async def _watch_once(state: Any) -> None:
     # и его тоже могут не налить.
     if _escalate_native_child(book, store, srv, lim, agent,
                               _stop_rows_by_tag(store, agent), so_mod.now_ms()):
+        book.save()
+    # Сетка: доставить недостающие уровни, перевернуть исполненные, снять по стопу.
+    if _grid_sync(book, store, ost, srv, lim, agent, steps,
+                  _price_limits(store, agent), so_mod.now_ms()):
         book.save()
     filled = {d["client_id"] for d in ost.working_orders(agent)
               if d.get("state") == "filled"}

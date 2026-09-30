@@ -51,6 +51,8 @@ type ParamRow struct {
 	PriceStep      float64
 	StepCost       float64
 	Margin         float64
+	PriceMax       float64 // планка цены дня сверху (0 = неизвестна)
+	PriceMin       float64 // планка цены дня снизу
 	ReceivedUnixMs int64
 }
 

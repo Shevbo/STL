@@ -16,7 +16,10 @@ type luaTick struct {
 
 type luaParam struct {
 	priceStep, stepCost, margin float64
-	recvMs                      int64
+	// Планки цены дня: биржа отвергает заявку за ними, а MOEX двигает их по
+	// своему расписанию. 0 = скрипт их не отдаёт (сборка старше 2026.09.30).
+	priceMax, priceMin float64
+	recvMs             int64
 }
 
 // SetLuaTick stores the freshest QLua tick for a code (recv-stamped here).
@@ -125,14 +128,15 @@ func (p *Provider) SetLuaLast(code string, price float64) {
 // SetLuaParam stores instrument reference params from the QLua publisher —
 // with these, the DDE params sheet is no longer needed at all. margin is the
 // initial margin (BUYDEPO, ₽/contract), 0 on an old Lua build.
-func (p *Provider) SetLuaParam(code string, priceStep, stepCost, margin float64) {
+func (p *Provider) SetLuaParam(code string, priceStep, stepCost, margin, priceMax, priceMin float64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.luaParams == nil {
 		p.luaParams = map[string]luaParam{}
 	}
 	p.luaParams[code] = luaParam{priceStep: priceStep, stepCost: stepCost,
-		margin: margin, recvMs: time.Now().UnixMilli()}
+		margin: margin, priceMax: priceMax, priceMin: priceMin,
+		recvMs: time.Now().UnixMilli()}
 }
 
 // luaParamsMerged overlays lua params onto the sheet-derived rows (fresher wins,
@@ -149,7 +153,8 @@ func (p *Provider) luaParamsMerged(sheet []ParamRow) []ParamRow {
 	}
 	for code, lp := range p.luaParams {
 		row := ParamRow{Code: code, PriceStep: lp.priceStep, StepCost: lp.stepCost,
-			Margin: lp.margin, ReceivedUnixMs: lp.recvMs}
+			Margin: lp.margin, PriceMax: lp.priceMax, PriceMin: lp.priceMin,
+			ReceivedUnixMs: lp.recvMs}
 		if i, ok := byCode[code]; ok {
 			if sheet[i].ReceivedUnixMs < lp.recvMs {
 				sheet[i] = row

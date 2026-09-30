@@ -70,6 +70,8 @@ func (l *Link) flushParams(stream quikv1.QuikAgentLink_SessionClient) error {
 			PriceStep: r.PriceStep,
 			StepCost:  r.StepCost,
 			Coef:      commission.CoefOrZero(r.PriceStep, r.StepCost),
+			PriceMax:  r.PriceMax,
+			PriceMin:  r.PriceMin,
 		})
 		if r.ReceivedUnixMs > receivedAt {
 			receivedAt = r.ReceivedUnixMs

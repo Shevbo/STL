@@ -48,9 +48,10 @@ import math
 import os
 import time
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 
-KINDS = ("sl", "tp", "trail_tp", "on_fill", "trail_sl", "corridor", "triangle")
+KINDS = ("sl", "tp", "trail_tp", "on_fill", "trail_sl", "corridor", "triangle",
+         "grid")
 # Типы, которые ведут уровень за экстремумом (храповик). Список общий, чтобы
 # новый вид не пришлось дописывать в трёх местах и один из них не забыть.
 _TRAILING = ("trail_tp", "trail_sl")
@@ -146,6 +147,23 @@ class SmartOrder:
     # вторая точка. Ширина канала меняется — сужается (клин сходится) или
     # расширяется. У коридора это поле пустое: там нижняя параллельна верхней.
     c_low2: float = 0.0          # цена нижней границы в момент c_t2_ms
+    # ── СЕТКА («радиация», kind="grid", заказ оператора 30.09.2026) ───────────
+    # Непрерывная самовозобновляемая сетка: g_buys уровней покупки ВНИЗ и g_sells
+    # уровней продажи ВВЕРХ от цены постановки, шаг g_step пунктов, объём g_lot на
+    # уровень. Уровни ФИКСИРОВАНЫ на весь срок: исполнилась заявка — на её место
+    # встаёт встречная, и сетка живёт дальше сама. Заявки выставляются в QUIK
+    # СРАЗУ, чтобы стоять в стакане, а не ждать сторожа: оператор торгует
+    # ликвидность, и опоздание на такт здесь и есть весь проигрыш.
+    # Стоп за последним уровнем (g_stop_pts) закрывает позицию и ЗАВЕРШАЕТ сетку.
+    g_step: float = 0.0          # шаг сетки в пунктах
+    g_buys: int = 0              # сколько уровней покупки вниз
+    g_sells: int = 0             # сколько уровней продажи вверх
+    g_lot: int = 0               # объём на один уровень
+    g_base: float = 0.0          # цена постановки: от неё считаются уровни
+    g_stop_pts: float = 0.0      # стоп за последним уровнем, в пунктах (0 = без стопа)
+    g_live: dict = field(default_factory=dict)   # уровень -> client_id стоящей заявки
+    g_pos: int = 0               # позиция сетки: + лонг, − шорт
+    g_done: bool = False
     c_stop_pts: float = 0.0      # выход за стенку в пунктах (0 = без стопа)
     c_flips_max: int = 0         # сколько переворотов разрешено (0 = без предела)
     c_flips: int = 0             # сколько уже сделано
@@ -181,6 +199,19 @@ class SmartOrder:
                 return "коридор: вторая точка должна быть ПОЗЖЕ первой"
             if self.c_low >= min(self.c_p1, self.c_p2):
                 return "коридор: нижняя граница должна быть ниже верхней"
+        if self.kind == "grid":
+            if self.g_step <= 0:
+                return "сетка: шаг обязателен и должен быть > 0"
+            if self.g_buys < 0 or self.g_sells < 0 or (self.g_buys + self.g_sells) == 0:
+                return "сетка: нужен хотя бы один уровень покупки или продажи"
+            if self.g_lot <= 0:
+                return "сетка: объём на уровень обязателен"
+            if self.g_base <= 0:
+                return "сетка: не известна цена постановки"
+            if (self.sl_offset or self.tp_offset or self.trail_after or self.tp_trail
+                    or self.sl_price or self.tp_price):
+                return ("сетка ведёт позицию сама: блоки после сделки ей не ставятся")
+        if self.kind in ("corridor", "triangle"):
             if self.c_flips_max < 0:
                 return "коридор: число переворотов не может быть отрицательным"
             # Блоки после сделки коридору запрещены (просьба ui-ux 29.09.2026, и
@@ -305,6 +336,59 @@ def market_price(side: str, bid: float, ask: float, last: float, step: float,
     raw = base - cushion if side == "sell" else base + cushion
     return quantize(raw, step, side)
 
+
+
+# ── СЕТКА «РАДИАЦИЯ» ─────────────────────────────────────────────────────────
+# Уровни нумеруются ЦЕЛЫМИ от нуля: −1, −2 … вниз (покупки), +1, +2 … вверх
+# (продажи). Ноль — цена постановки, на нём заявки нет: сетка живёт вокруг него.
+#
+# Правило восстановления, ради которого всё и заводилось: исполнилась заявка на
+# уровне k — на ТОТ ЖЕ уровень встаёт ВСТРЕЧНАЯ. Купили на −2, значит на −2
+# теперь стоит продажа: она и есть тейк в один шаг сетки. Продали на +1 — на +1
+# встаёт покупка. Уровни при этом не двигаются НИКОГДА (решение оператора
+# 30.09.2026): плавающая сетка уехала бы за трендом и превратила бы шаг в
+# случайную величину.
+
+
+def grid_price(so: SmartOrder, level: int) -> float:
+    return so.g_base + level * so.g_step
+
+
+def grid_levels(so: SmartOrder) -> list[int]:
+    """Все уровни сетки: покупки вниз, продажи вверх. Ноль не используется."""
+    return [-i for i in range(1, so.g_buys + 1)] + [i for i in range(1, so.g_sells + 1)]
+
+
+def grid_side_for(so: SmartOrder, level: int) -> str:
+    """Чья заявка стоит на уровне СЕЙЧАС.
+
+    По умолчанию низ покупает, верх продаёт. После исполнения сторона на уровне
+    переворачивается — это и есть «тейк на противоположной заявке»: купленное на
+    −2 продаётся там же, на −2, когда цена вернётся.
+    """
+    flipped = bool((so.g_live or {}).get(f"flip:{level}"))
+    base = "buy" if level < 0 else "sell"
+    if not flipped:
+        return base
+    return "sell" if base == "buy" else "buy"
+
+
+def grid_stop_levels(so: SmartOrder) -> tuple[float, float]:
+    """Где стоп: за последним уровнем сетки, вниз и вверх. (0,0) = без стопа."""
+    if so.g_stop_pts <= 0:
+        return 0.0, 0.0
+    lo = grid_price(so, -so.g_buys) - so.g_stop_pts if so.g_buys else 0.0
+    hi = grid_price(so, so.g_sells) + so.g_stop_pts if so.g_sells else 0.0
+    return lo, hi
+
+
+def grid_stop_hit(so: SmartOrder, price: float) -> bool:
+    """Ушла ли цена за последний уровень дальше стопа. Сторона позиции не важна:
+    сетка двусторонняя, и выход за любой край означает, что рынок ушёл из неё."""
+    if so.g_stop_pts <= 0 or price <= 0:
+        return False
+    lo, hi = grid_stop_levels(so)
+    return bool((lo and price <= lo) or (hi and price >= hi))
 
 
 def corridor_bounds(so: SmartOrder, now_ms: int) -> tuple[float, float]:

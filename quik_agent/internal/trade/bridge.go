@@ -204,6 +204,8 @@ type luaEvent struct {
 	Asks      [][]float64 `json:"asks"`       // book: [[price, qty] ...] best-first
 	Trades    [][]float64 `json:"trades"`     // tape: [[price, qty, side, ts_ms, exch_ms] ...]
 	Nums      []string    `json:"nums"`       // tape: номера сделок, строками (1.9e18 не влезает в float64)
+	PriceMax  float64     `json:"price_max"`  // param: верхняя планка цены дня (0 = неизвестна)
+	PriceMin  float64     `json:"price_min"`  // param: нижняя планка цены дня
 	PriceStep float64     `json:"price_step"` // param
 	StepCost  float64     `json:"step_cost"`  // param
 	Margin    float64     `json:"margin"`     // param: initial margin (BUYDEPO), ₽/contract
@@ -220,6 +222,8 @@ type MDEvent struct {
 	Bids, Asks     [][]float64 // book
 	Trades         [][]float64 // tape: [[price, qty, side, ts_ms, exch_ms] ...]
 	Nums           []string    // tape: номера сделок, строками
+	PriceMax       float64     // param: планки цены дня, 0 = неизвестны
+	PriceMin       float64
 	PriceStep      float64     // param
 	StepCost       float64     // param
 	Margin         float64     // param: initial margin (BUYDEPO), ₽/contract
@@ -505,7 +509,8 @@ func (b *Bridge) dispatch(ev luaEvent) {
 	case "param":
 		if md != nil {
 			md(MDEvent{Code: ev.Code, PriceStep: ev.PriceStep, StepCost: ev.StepCost,
-				Margin: ev.Margin, IsParam: true})
+				Margin: ev.Margin, PriceMax: ev.PriceMax, PriceMin: ev.PriceMin,
+				IsParam: true})
 		}
 		return
 	case "acc_pos":

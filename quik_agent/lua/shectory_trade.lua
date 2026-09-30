@@ -44,7 +44,7 @@
 -- Bump on every change you deliver to the VDS. Logged FIRST on OnInit so the
 -- operator can confirm which version QUIK actually loaded (the running script is
 -- in MEMORY; a file on disk with the same name may be a different build).
-local SCRIPT_VERSION = "2026.09.30-tapenum"
+local SCRIPT_VERSION = "2026.09.30-limits"
 
 local CONFIG = {
   HOST          = "127.0.0.1",
@@ -689,9 +689,17 @@ local function publish_params()
     local step = param_num(code, "SEC_PRICE_STEP")
     local stepcost = param_num(code, "STEPPRICE")
     local go = param_num(code, "BUYDEPO")
+    -- ЦЕНОВЫЕ ГРАНИЦЫ ДНЯ (планки). Биржа отвергает заявку за их пределами, а
+    -- MOEX двигает их по своему расписанию в зависимости от волатильности.
+    -- Заявку за планкой нельзя ни выставить, ни «попробовать ещё раз через
+    -- секунду»: её надо ДЕРЖАТЬ у себя и ждать расширения границ — для сетки
+    -- это половина её работы (оператор, 30.09.2026).
+    local pmax = param_num(code, "PRICEMAX")
+    local pmin = param_num(code, "PRICEMIN")
     if step > 0 or stepcost > 0 then
       emit({ event = "param", code = code, price_step = step,
-             step_cost = stepcost, margin = go })
+             step_cost = stepcost, margin = go,
+             price_max = pmax, price_min = pmin })
     end
   end
 end
