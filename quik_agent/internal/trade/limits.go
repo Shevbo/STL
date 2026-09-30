@@ -52,6 +52,13 @@ const (
 	// Источник заявок замолчал после серии одинаковых отказов брокера: он живёт
 	// в неверной картине мира, а повторы стоят денег (см. loopguard.go).
 	ReasonLoopCooldown    RejectReason = "источник остановлен: серия отказов брокера подряд"
+	// Источник (или весь счёт) слишком быстро сдвинул чистую позицию в эту
+	// сторону: остановлено продолжение разгона, обратная заявка разрешена
+	// (см. exposureguard.go, инцидент 30.09.2026 на 43 контракта).
+	ReasonExposureRate    RejectReason = "остановлено: слишком быстрый набор позиции в эту сторону"
+	// Лимит на постановке пересекает рынок дальше коллара: заявка исполнилась
+	// бы мгновенно и не по той цене, которую имел в виду её источник.
+	ReasonCollarPlace     RejectReason = "цена заявки пересекает рынок дальше коллара"
 	ReasonCollarHit       RejectReason = "price beyond collar"
 	ReasonNoWorkingOrder  RejectReason = "no working order to move (not yet acknowledged by QUIK)"
 	ReasonStalePending    RejectReason = "expired: QUIK gave no order number (timed out); freed from working set"

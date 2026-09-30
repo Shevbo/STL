@@ -1,0 +1,186 @@
+package trade
+
+import (
+	"fmt"
+	"sync"
+)
+
+// Предохранитель по ЧИСТОЙ ЭКСПОЗИЦИИ: сколько контрактов источник заявок
+// набрал или сбросил за последние минуты.
+//
+// 30.09.2026 треугольник оператора выставил за три минуты 43 продажи по одному
+// лоту: расчётная стенка оказалась по ту сторону рынка, каждая заявка была
+// маркетабельной, а сторож каждые десять секунд ставил следующую. Ни один
+// предохранитель не дрогнул, и не мог: КАЖДАЯ заявка была законна — объём 1
+// при лимите 40 на заявку, рабочий объём в норме, дневной кап 43 из 500.
+// Незаконна была СЕРИЯ. Того измерения, в котором серия видна, в агенте не
+// существовало вовсе; здесь оно и заводится.
+//
+// Считаем ФИЛЛЫ, а не постановки. Экспозицию меняет исполнение: заявка
+// коридора, мирно стоящая в стакане весь день, не меняет ничего, и наказывать
+// её не за что. Зато сорок три исполнения подряд видны сразу.
+//
+// ДВА ПРАВИЛА, БЕЗ КОТОРЫХ ЭТОТ ПРЕДОХРАНИТЕЛЬ БЫЛ БЫ ОПАСНЕЕ ТОГО, ОТ ЧЕГО
+// ЗАЩИЩАЕТ:
+//
+//  1. Запрещается только направление РАЗГОНА. Источник, продавший лишнего,
+//     теряет право продавать, но НЕ право купить. 21.07.2026 исчерпанный
+//     дневной кап заморозил роботам выходы на два с половиной часа, и робот
+//     сидел в позиции, не в силах из неё выйти. Дверь выхода не запирается
+//     никогда.
+//  2. Блокировка временная и громкая, а не вечная и тихая. 26.09.2026
+//     kill-switch, который нигде не публиковался и снимался только
+//     перезапуском агента, час отклонял заявки обоих реальных роботов, пока
+//     STL считал торговлю разрешённой. Здесь: остывание + CRITICAL-тревога.
+//
+// Предохранитель ОГРАНИЧИВАЕТ УЩЕРБ до прихода человека, а не заменяет его.
+// В патологии он пропускает expSourceCap контрактов за остывание; смысл в том,
+// что тревога уходит на первых двадцати, а не на сорок третьем.
+//
+// СЛЕПОЕ ПЯТНО, ЗНАТЬ О НЁМ: сюда попадают только филлы заявок, поставленных
+// ЧЕРЕЗ АГЕНТА. Сделка, сделанная рукой в терминале или нативной стоп-заявкой
+// QUIK, приходит из QUIK без стороны (TradeEvent.Side нет), и в счёт не идёт.
+// Двойную охрану 29.09.2026 этот счётчик увидел бы наполовину: ногу STL да,
+// ногу терминала нет.
+const (
+	expWindowMs   = 5 * 60 * 1000  // окно наблюдения за филлами
+	expSourceCap  = 20             // контрактов за окно от ОДНОГО источника
+	expAccountCap = 40             // контрактов за окно по инструменту, все источники
+	expCooldownMs = 15 * 60 * 1000 // на сколько замолкает направление после срабатывания
+)
+
+// expFill — один исполненный контракт-набор: знаковый объём и когда.
+type expFill struct {
+	src  string
+	qty  int64 // + покупка, − продажа
+	atMs int64
+}
+
+// expBlock — сработавший запрет: направление dir в этом ключе молчит до blockTil.
+type expBlock struct {
+	dir      int // +1 запрещены покупки, −1 запрещены продажи
+	blockTil int64
+	reason   string
+}
+
+// ExposureGuard считает знаковые филлы в скользящем окне и запрещает
+// продолжать разгон в ту же сторону.
+type ExposureGuard struct {
+	mu     sync.Mutex
+	fills  map[string][]expFill // по инструменту
+	blocks map[string]*expBlock // ключи "src|code" и "acct|code"
+	nowMs  func() int64
+}
+
+func NewExposureGuard(nowMs func() int64) *ExposureGuard {
+	return &ExposureGuard{
+		fills:  map[string][]expFill{},
+		blocks: map[string]*expBlock{},
+		nowMs:  nowMs,
+	}
+}
+
+func sgn(v int64) int {
+	switch {
+	case v > 0:
+		return 1
+	case v < 0:
+		return -1
+	}
+	return 0
+}
+
+// pruneLocked выбрасывает филлы старше окна. Вызывающий держит mu.
+func (g *ExposureGuard) pruneLocked(code string, now int64) []expFill {
+	kept := g.fills[code][:0]
+	for _, f := range g.fills[code] {
+		if now-f.atMs <= expWindowMs {
+			kept = append(kept, f)
+		}
+	}
+	g.fills[code] = kept
+	return kept
+}
+
+// Observe регистрирует филл. Источник определяется тем же правилом, что и у
+// предохранителя от зацикливания: робот или умная заявка целиком, не client_id.
+func (g *ExposureGuard) Observe(clientID, code string, buy bool, qty int64) {
+	if g == nil || qty <= 0 || code == "" {
+		return
+	}
+	signed := qty
+	if !buy {
+		signed = -qty
+	}
+	now := g.nowMs()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.pruneLocked(code, now)
+	g.fills[code] = append(g.fills[code], expFill{src: loopSource(clientID), qty: signed, atMs: now})
+}
+
+// Check: можно ли ставить заявку этой стороны от этого источника. Возвращает
+// (блокировать ли, человеческий текст причины). Заявка ПРОТИВ разгона проходит
+// всегда — на ней держится возможность выйти из позиции.
+func (g *ExposureGuard) Check(clientID, code string, buy bool) (bool, string) {
+	if g == nil || code == "" {
+		return false, ""
+	}
+	dir := -1
+	if buy {
+		dir = 1
+	}
+	src := loopSource(clientID)
+	now := g.nowMs()
+
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	// Действующее остывание. Снимаем истёкшее, чтобы запрет не жил дольше своего срока.
+	for _, key := range []string{src + "|" + code, "acct|" + code} {
+		b := g.blocks[key]
+		if b == nil {
+			continue
+		}
+		if now >= b.blockTil {
+			delete(g.blocks, key)
+			continue
+		}
+		if b.dir == dir {
+			return true, b.reason
+		}
+	}
+
+	fills := g.pruneLocked(code, now)
+	var srcNet, acctNet int64
+	for _, f := range fills {
+		acctNet += f.qty
+		if f.src == src {
+			srcNet += f.qty
+		}
+	}
+
+	// Разгон засчитывается только в ТУ ЖЕ сторону, куда просится заявка.
+	if abs64(srcNet) >= expSourceCap && sgn(srcNet) == dir {
+		reason := fmt.Sprintf("источник %s сдвинул позицию по %s на %+d контрактов за %d мин: "+
+			"заявки в ту же сторону остановлены на %d мин (обратные разрешены)",
+			src, code, srcNet, expWindowMs/60000, expCooldownMs/60000)
+		g.blocks[src+"|"+code] = &expBlock{dir: dir, blockTil: now + expCooldownMs, reason: reason}
+		return true, reason
+	}
+	if abs64(acctNet) >= expAccountCap && sgn(acctNet) == dir {
+		reason := fmt.Sprintf("по %s все источники вместе сдвинули позицию на %+d контрактов за %d мин: "+
+			"заявки в ту же сторону остановлены на %d мин (обратные разрешены)",
+			code, acctNet, expWindowMs/60000, expCooldownMs/60000)
+		g.blocks["acct|"+code] = &expBlock{dir: dir, blockTil: now + expCooldownMs, reason: reason}
+		return true, reason
+	}
+	return false, ""
+}
+
+func abs64(v int64) int64 {
+	if v < 0 {
+		return -v
+	}
+	return v
+}

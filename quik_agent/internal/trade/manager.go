@@ -112,6 +112,9 @@ type Manager struct {
 	// Предохранитель от зацикливания заявок: N отказов подряд от одного
 	// источника с одной причиной — источник замолкает (см. loopguard.go).
 	loop *LoopGuard
+	// Предохранитель по чистой экспозиции: источник, слишком быстро набравший
+	// позицию, теряет право продолжать в ту же сторону (см. exposureguard.go).
+	exposure *ExposureGuard
 	cfg     ManagerConfig
 	bridge  bridgeAPI
 	guard   *Guard
@@ -167,6 +170,7 @@ func NewManager(cfg ManagerConfig, bridge bridgeAPI, guard *Guard, emit Emitter,
 		logf:       logf,
 		nowMsFn:    func() int64 { return time.Now().UnixMilli() },
 		loop:       NewLoopGuard(func() int64 { return time.Now().UnixMilli() }),
+		exposure:   NewExposureGuard(func() int64 { return time.Now().UnixMilli() }),
 		execTick:   50 * time.Millisecond,
 		byClient:   map[string]*workingOrder{},
 		byTrans:    map[int64]*workingOrder{},
@@ -277,6 +281,21 @@ func (m *Manager) PlaceOrderErr(req *quikv1.PlaceOrder) error {
 		return errors.New(string(ReasonLoopCooldown))
 	}
 
+	// РАЗГОН ПОЗИЦИИ. Источник, сдвинувший чистую позицию слишком быстро,
+	// теряет право продолжать В ТУ ЖЕ сторону (30.09.2026: 43 продажи по
+	// одному лоту за три минуты, каждая по отдельности законная). Обратная
+	// заявка проходит всегда — выход из позиции не запирается.
+	if stop, why := m.exposure.Check(req.GetClientId(), req.GetCode(), isBuy(req.GetSide())); stop {
+		m.logf("trade: exposure guard — %s (client=%q)", why, req.GetClientId())
+		if m.emit != nil {
+			_ = m.emit.EmitAlert(quikv1.AlertSeverity_ALERT_SEVERITY_CRITICAL,
+				"EXPOSURE_RATE", why)
+		}
+		m.rejectPlace(req.GetClientId(), req.GetCode(), req.GetSide(), req.GetPrice(),
+			req.GetQuantity(), ReasonExposureRate)
+		return errors.New(string(ReasonExposureRate))
+	}
+
 	ok, reason := m.guard.CheckPlace(PlaceCheck{
 		Code:           req.GetCode(),
 		Price:          req.GetPrice(),
@@ -287,6 +306,27 @@ func (m *Manager) PlaceOrderErr(req *quikv1.PlaceOrder) error {
 	if !ok {
 		m.rejectPlace(req.GetClientId(), req.GetCode(), req.GetSide(), req.GetPrice(), req.GetQuantity(), reason)
 		return errors.New(string(reason))
+	}
+
+	// КОЛЛАР НА ПОСТАНОВКЕ. Лимит, уходящий за рынок дальше коллара, это не
+	// «ждём свою цену», а вход по рынку прямо сейчас, причём по цене, которой
+	// источник не имел в виду. 30.09.2026 стенка треугольника оказалась на
+	// 0.59% по ту сторону рынка при колларе 0.2%: этой проверки хватило бы,
+	// чтобы отбить все 43 заявки независимо от ошибки в STL. Коллар был
+	// написан и подключён ТОЛЬКО к переносу (sendMove), а главный путь —
+	// постановка — шёл мимо него.
+	//
+	// Агрессивное исполнение не страдает: погоня встаёт на встречную котировку,
+	// то есть в доли процента от неё, и в коллар укладывается. Отсекается
+	// только заведомо бессмысленная цена.
+	if !req.GetMarket() {
+		if ok, reason := m.checkPlaceCollar(req.GetCode(), isBuy(req.GetSide()), req.GetPrice()); !ok {
+			m.logf("trade: place collar — %s %s по %.4f вне коллара от рынка (client=%q)",
+				req.GetCode(), req.GetSide(), req.GetPrice(), req.GetClientId())
+			m.rejectPlace(req.GetClientId(), req.GetCode(), req.GetSide(), req.GetPrice(),
+				req.GetQuantity(), reason)
+			return errors.New(string(reason))
+		}
 	}
 
 	// Reserve the daily-cap slot only now (atomic with the send decision).
@@ -716,6 +756,38 @@ func (m *Manager) StopExecution(req *quikv1.StopExecution) {
 // priceStepFor looks up one price step for code from the local book (smallest gap
 // between adjacent ask levels, else bid levels). Falls back to 0, which disables the
 // re-quote threshold (any move re-quotes). The loop never crosses regardless.
+// staleBookMs: стакан старше этого не годится в опору для коллара. Судить о
+// «пересекает ли рынок» по замершему стакану нельзя: 26.09.2026 лента молчала,
+// а котировка стояла, и по ней рисовались свечи на неработающей бирже.
+const staleBookMs = 30_000
+
+// checkPlaceCollar: не уходит ли лимитная цена за рынок дальше коллара.
+// Опора — ВСТРЕЧНАЯ котировка, то есть та, об которую заявка и исполнится:
+// для покупки лучшее предложение, для продажи лучший спрос.
+//
+// Без стакана и на протухшем стакане проверка ПРОПУСКАЕТСЯ, а не запрещает.
+// Так задумано: запертая защитная заявка опаснее пропущенной проверки, и на
+// этот случай стоит второй рубеж — предохранитель по экспозиции, которому
+// стакан не нужен вовсе.
+func (m *Manager) checkPlaceCollar(code string, buy bool, price float64) (bool, RejectReason) {
+	frac := m.guard.Limits().PriceCollarFrac
+	if frac <= 0 || price <= 0 || m.book == nil {
+		return true, ""
+	}
+	book, ok := m.book.OrderBook(code)
+	if !ok {
+		return true, ""
+	}
+	if book.ReceivedUnixMs > 0 && m.nowMs()-book.ReceivedUnixMs > staleBookMs {
+		return true, ""
+	}
+	ref, ok := bestJoinPrice(book, !buy) // встречная сторона стакана
+	if !ok || ref <= 0 {
+		return true, ""
+	}
+	return CheckCollar(buy, ref, price, frac)
+}
+
 func (m *Manager) priceStepFor(code string) float64 {
 	m.mu.Lock()
 	book := m.book
@@ -1026,7 +1098,17 @@ func (m *Manager) OnTrade(ev TradeEvent) {
 			wo.tradeQty = tot
 		}
 	}
+	var fillCID, fillCode string
+	var fillBuy bool
+	if wo != nil {
+		fillCID, fillCode, fillBuy = wo.clientID, wo.code, isBuy(wo.side)
+	}
 	m.mu.Unlock()
+	// Экспозиция считается ЗДЕСЬ, на филле: позицию двигает исполнение, а не
+	// постановка. Вне m.mu — у предохранителя свой замок, вложенные не нужны.
+	if fillCode != "" && ev.Qty > 0 {
+		m.exposure.Observe(fillCID, fillCode, fillBuy, ev.Qty)
+	}
 	if ex != nil && pxOK {
 		ex.onTrade(ev.Qty, px)
 	}
