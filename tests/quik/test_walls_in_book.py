@@ -231,3 +231,75 @@ def test_no_quote_no_orders(tmp_path):
     srv = FakeSrv()
     assert _walls_sync(book, Blind(), FakeOst(), srv, Lim(), "9618", STEPS, {}, NOW) is False
     assert srv.sent == []
+
+
+# --------------------------------------------------------------------------
+# СВИП ПО ГЕОМЕТРИИ, А НЕ ПРИМЕР.
+#
+# Метод, введённый после 30.09.2026. Тестов на стенки было достаточно, и все
+# они были зелёными, когда код продал оператору 43 контракта. Причина
+# методическая: тесты проверяли ПОВЕДЕНИЕ («заявка переставилась на +100»), а
+# FakeStore всегда отдавал last=84500 при стенках 85000/84000 — рынок ВСЕГДА
+# внутри фигуры. Баг жил ровно в той геометрии, которую фикстура не умела
+# построить.
+#
+# Тест на ожидаемое значение не может поймать состояние, не пришедшее в голову
+# автору. Тест на ИНВАРИАНТ может: он перебирает состояния, а утверждает
+# ЗАПРЕТ. Правило для всего, что порождает заявки: один такой свип на функцию.
+# --------------------------------------------------------------------------
+
+import pytest
+
+
+def _store_at(px):
+    class S(FakeStore):
+        def tick(self, code, agent=None):
+            return {"last": px, "bid": px - 10.0, "ask": px + 10.0}
+    return S()
+
+
+@pytest.mark.parametrize("market", range(82000, 88001, 250))
+@pytest.mark.parametrize("c_pos", [0, 10, -10])
+def test_no_wall_order_ever_crosses_the_market(tmp_path, market, c_pos):
+    """ИНВАРИАНТ: ни при какой цене рынка и ни при какой позиции сторож не
+    выставляет заявку, которая пересекает рынок.
+
+    Продажа обязана стоять ВЫШЕ рынка, покупка НИЖЕ. Нарушение этого и есть
+    инцидент 30.09.2026: маркетабельный лимит исполняется мгновенно, а сторож
+    каждые десять секунд ставит следующий.
+    """
+    book, so = _book(tmp_path, c_pos=c_pos)
+    srv = FakeSrv()
+    _walls_sync(book, _store_at(float(market)), FakeOst(), srv, Lim(), "9618",
+                STEPS, {}, NOW)
+
+    ref_sell = max(market - 10.0, float(market))
+    ref_buy = min(market + 10.0, float(market))
+    for m in srv.sent:
+        if m.WhichOneof("payload") != "place_order":
+            continue
+        p = m.place_order
+        if p.side == 2:      # продажа
+            assert p.price > ref_sell, (
+                f"продажа по {p.price:g} при рынке {market} пересекает рынок")
+        else:                # покупка
+            assert p.price < ref_buy, (
+                f"покупка по {p.price:g} при рынке {market} пересекает рынок")
+
+
+@pytest.mark.parametrize("market", range(82000, 88001, 500))
+def test_wall_order_never_grows_position_against_the_corridor(tmp_path, market):
+    """ИНВАРИАНТ: в позиции сторож не доливает в ту же сторону.
+
+    Коридор в лонге ждёт ВЕРХНЮЮ стенку, чтобы выйти; ещё одна покупка снизу
+    превратила бы фигуру в усреднение, которого оператор не заказывал.
+    """
+    for c_pos, forbidden_side in ((10, 1), (-10, 2)):   # в лонге нельзя покупать
+        book, so = _book(tmp_path, c_pos=c_pos)
+        srv = FakeSrv()
+        _walls_sync(book, _store_at(float(market)), FakeOst(), srv, Lim(),
+                    "9618", STEPS, {}, NOW)
+        sides = [m.place_order.side for m in srv.sent
+                 if m.WhichOneof("payload") == "place_order"]
+        assert forbidden_side not in sides, (
+            f"позиция {c_pos:+d} при рынке {market}: заявка доливает в ту же сторону")
