@@ -1428,6 +1428,12 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
                 dirty = True
             side = so_mod.grid_side_for(so, level)
             px = so_mod.quantize(so_mod.grid_price(so, level), step, side)
+            # Уровень по ту сторону рынка не выставляем по той же причине, что и
+            # стенку коридора (инцидент 30.09.2026): лимит, пересекающий рынок,
+            # исполняется мгновенно, и сетка вместо ожидания начинает лить.
+            if price > 0 and ((side == "sell" and px <= price)
+                              or (side == "buy" and px >= price)):
+                continue
             if not price_within_limits(px, limits):
                 # ЗА ПЛАНКОЙ БИРЖИ. Не выставляем и не считаем это ошибкой:
                 # планки двигает MOEX по своему расписанию, и уровень оживёт сам,
@@ -1512,6 +1518,14 @@ def _walls_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
             continue                      # апекс: стенок больше нет, ведёт сторож
         live = dict(so.c_live or {})
         base = so.c_qty or so.qty
+        tick = store.tick(so.code, agent) or {}
+        last = float(tick.get("last") or 0)
+        bid, ask = float(tick.get("bid") or 0), float(tick.get("ask") or 0)
+        if last <= 0 and not (bid or ask):
+            # Без котировки не понять, по ту или эту сторону рынка стенка.
+            # Выставлять вслепую нельзя: ровно так 30.09.2026 продались 43
+            # контракта. Ждём кадр — он приходит каждые полсекунды.
+            continue
         for wall, px_raw, side in (("top", top, "sell"), ("low", low, "buy")):
             # На стенке, от которой мы уже в позиции, заявки быть не должно:
             # иначе она нарастила бы позицию там, где по правилам коридора мы
@@ -1526,6 +1540,36 @@ def _walls_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
                 continue
             qty = base + abs(so.c_pos)
             px = so_mod.quantize(px_raw, step, side)
+            # ЗАЯВКА НА СТЕНКЕ НЕ ИМЕЕТ ПРАВА ПЕРЕСЕКАТЬ РЫНОК. 30.09.2026 это
+            # стоило оператору 43 контрактов: верхняя стенка треугольника
+            # оказалась НИЖЕ цены, продажа на ней стала маркетабельной и
+            # исполнялась мгновенно — а сторож каждые десять секунд ставил
+            # следующую. Лимит на продажу обязан стоять ВЫШЕ рынка, на покупку
+            # НИЖЕ; иначе это не «ждём касания», а вход по рынку прямо сейчас.
+            # Цена ушла за стенку — значит фигура нарушена, и решает стоп или
+            # оператор, но не молчаливая череда заявок.
+            ref_sell = max(bid, last) or last
+            ref_buy = min(ask, last) if (ask and last) else (ask or last)
+            crosses = (side == "sell" and ref_sell > 0 and px <= ref_sell) or                       (side == "buy" and ref_buy > 0 and px >= ref_buy)
+            if crosses:
+                if live.get(f"cross:{wall}") != 1:
+                    live[f"cross:{wall}"] = 1
+                    dirty = True
+                    so_journal.record("wall_crossed", so, so_journal.WATCHER,
+                                      f"стенка {wall} ({px:g}) по ту сторону рынка "
+                                      f"({last:g}): заявку НЕ ставлю — она исполнилась бы "
+                                      "мгновенно. Цена вне фигуры.", now_ms=now)
+                    log.warning("smart_order.wall_crosses_market", so_id=so.so_id,
+                                wall=wall, wall_price=px, last=last)
+                # висящую заявку на этой стенке снимаем: рынок ушёл за неё
+                cid_old = live.pop(wall, "")
+                rec_old = work.get(cid_old) or {}
+                if rec_old.get("order_id"):
+                    srv.enqueue_order(agent, order_msgs.build_cancel_order(
+                        client_id=cid_old, order_id=str(rec_old["order_id"])))
+                continue
+            if live.pop(f"cross:{wall}", None):
+                dirty = True
             if not price_within_limits(px, limits):
                 continue                  # за планкой биржи: подождём расширения
             cid = live.get(wall) or ""

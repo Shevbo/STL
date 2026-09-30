@@ -95,7 +95,13 @@ def test_moving_wall_is_replaced_not_recreated(tmp_path):
             {"client_id": "so:x:low:1", "order_id": "12", "state": "active",
              "remaining": 10, "price": 84000.0}]
     srv = FakeSrv()
-    assert _run(book, FakeOst(recs), srv, NOW + HOUR // 2) is True
+
+    class Mid(FakeStore):                      # рынок между стенками 84500 и 85500
+        def tick(self, code, agent=None):
+            return {"last": 85000.0, "bid": 84990.0, "ask": 85010.0}
+
+    assert _walls_sync(book, Mid(), FakeOst(recs), srv, Lim(), "9618", STEPS, {},
+                       NOW + HOUR // 2) is True
     assert srv.kinds() == ["replace_order", "replace_order"]
     prices = sorted(round(m.replace_order.new_price) for m in srv.sent)
     assert prices == [84500, 85500], "обе линии сдвинулись на полшага наклона"
@@ -171,3 +177,57 @@ def test_rising_line_creeps_the_order_up(tmp_path):
     moved = {round(m.replace_order.new_price) for m in srv.sent
              if m.WhichOneof("payload") == "replace_order"}
     assert moved == {85100, 84100}, "обе стенки поднялись на сто пунктов"
+
+
+def test_wall_on_the_wrong_side_of_the_market_is_never_placed(tmp_path):
+    """ГЛАВНЫЙ УРОК 30.09.2026, ценой 43 контракта оператора.
+
+    Верхняя стенка треугольника оказалась НИЖЕ цены. Продажа на ней стала
+    маркетабельной и исполнилась мгновенно, а сторож каждые десять секунд ставил
+    следующую — сорок три сделки по одному лоту. Лимит на продажу обязан стоять
+    ВЫШЕ рынка, на покупку НИЖЕ; иначе это не «ждём касания стенки», а вход по
+    рынку прямо сейчас.
+    """
+    # стенки 85000 / 84000, а рынок уже 85500 — обе по ту сторону
+    class HighStore(FakeStore):
+        def tick(self, code, agent=None):
+            return {"last": 85500.0, "bid": 85490.0, "ask": 85510.0}
+
+    book, so = _book(tmp_path)
+    srv = FakeSrv()
+    out = _walls_sync(book, HighStore(), FakeOst(), srv, Lim(), "9618", STEPS, {}, NOW)
+    placed = [m.place_order for m in srv.sent if m.WhichOneof("payload") == "place_order"]
+    # продажа по 85000 при рынке 85500 исполнилась бы мгновенно — её НЕ ставим;
+    # покупка по 84000 ниже рынка законна и остаётся
+    assert [p.side for p in placed] == [1], "только покупка снизу"
+    assert so.c_live.get("cross:top") == 1, "верхняя помечена как пересекающая рынок"
+    assert "cross:low" not in so.c_live
+    assert out is True
+
+
+def test_hanging_wall_is_pulled_when_market_crosses_it(tmp_path):
+    """Рынок ушёл за стенку — висящую заявку снимаем, а не ждём исполнения."""
+    class HighStore(FakeStore):
+        def tick(self, code, agent=None):
+            return {"last": 85500.0, "bid": 85490.0, "ask": 85510.0}
+
+    book, so = _book(tmp_path)
+    so.c_live = {"top": "so:x:top:1"}
+    recs = [{"client_id": "so:x:top:1", "order_id": "11", "state": "active",
+             "remaining": 10, "price": 85000.0}]
+    srv = FakeSrv()
+    _walls_sync(book, HighStore(), FakeOst(recs), srv, Lim(), "9618", STEPS, {}, NOW)
+    assert "cancel_order" in [m.WhichOneof("payload") for m in srv.sent]
+    assert "top" not in so.c_live
+
+
+def test_no_quote_no_orders(tmp_path):
+    """Без котировки не понять, по ту или эту сторону рынка стенка — молчим."""
+    class Blind(FakeStore):
+        def tick(self, code, agent=None):
+            return {}
+
+    book, _ = _book(tmp_path)
+    srv = FakeSrv()
+    assert _walls_sync(book, Blind(), FakeOst(), srv, Lim(), "9618", STEPS, {}, NOW) is False
+    assert srv.sent == []
