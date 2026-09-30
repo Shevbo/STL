@@ -109,6 +109,9 @@ type ManagerConfig struct {
 // OrderUpdate/TransReply emitted to STL. Guard 3: nothing reaches the bridge unless an
 // explicit command passed every limit AND the master flag is on.
 type Manager struct {
+	// Предохранитель от зацикливания заявок: N отказов подряд от одного
+	// источника с одной причиной — источник замолкает (см. loopguard.go).
+	loop *LoopGuard
 	cfg     ManagerConfig
 	bridge  bridgeAPI
 	guard   *Guard
@@ -163,6 +166,7 @@ func NewManager(cfg ManagerConfig, bridge bridgeAPI, guard *Guard, emit Emitter,
 		emit:       emit,
 		logf:       logf,
 		nowMsFn:    func() int64 { return time.Now().UnixMilli() },
+		loop:       NewLoopGuard(func() int64 { return time.Now().UnixMilli() }),
 		execTick:   50 * time.Millisecond,
 		byClient:   map[string]*workingOrder{},
 		byTrans:    map[int64]*workingOrder{},
@@ -258,6 +262,19 @@ func (m *Manager) PlaceOrderErr(req *quikv1.PlaceOrder) error {
 	if blocked {
 		m.rejectPlace(req.GetClientId(), req.GetCode(), req.GetSide(), req.GetPrice(), req.GetQuantity(), ReasonBlocked)
 		return errors.New(string(ReasonBlocked))
+	}
+
+	// ЗАЦИКЛИВАНИЕ. Источник, которому брокер отказал подряд много раз с одной и
+	// той же причиной, молчит до конца остывания: он живёт в неверной картине
+	// мира, а брокер берёт деньги за транзакции сверх лимита частоты
+	// (30.09.2026: 26 одинаковых отказов «Нехватка средств» подряд, по одному в
+	// минуту, полчаса).
+	if stop, until := m.loop.Blocked(req.GetClientId()); stop {
+		m.logf("trade: source in cooldown until %d (%s): %s", until,
+			m.loop.Reason(req.GetClientId()), req.GetClientId())
+		m.rejectPlace(req.GetClientId(), req.GetCode(), req.GetSide(), req.GetPrice(),
+			req.GetQuantity(), ReasonLoopCooldown)
+		return errors.New(string(ReasonLoopCooldown))
 	}
 
 	ok, reason := m.guard.CheckPlace(PlaceCheck{
@@ -892,6 +909,23 @@ func (m *Manager) OnTransReply(ev TransReplyEvent) {
 		wo.cancelRequested = false
 	}
 	m.mu.Unlock()
+
+	// Считаем отказы ПОДРЯД по источнику: одиночный отказ — норма жизни, серия
+	// одинаковых — цикл, который надо оборвать.
+	if clientID != "" {
+		if isTransReject(ev.ResultCode) {
+			if fired, n, reason := m.loop.Reject(clientID, ev.Text); fired {
+				m.logf("trade: LOOP GUARD — %s замолкает: %d отказов подряд (%s)",
+					loopSource(clientID), n, reason)
+				_ = m.emit.EmitAlert(quikv1.AlertSeverity_ALERT_SEVERITY_CRITICAL,
+					"ORDER_LOOP",
+					fmt.Sprintf("%s: %d отказов подряд, заявки остановлены на 15 минут. %s",
+						loopSource(clientID), n, reason))
+			}
+		} else {
+			m.loop.Accept(clientID)
+		}
+	}
 
 	_ = m.emit.EmitTransReply(&quikv1.TransReply{
 		ClientId:   clientID,

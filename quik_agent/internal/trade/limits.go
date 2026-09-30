@@ -49,6 +49,9 @@ const (
 	ReasonPriceNonPositive RejectReason = "price must be positive"
 	ReasonDailyCap        RejectReason = "daily_order_cap reached"
 	ReasonBlocked         RejectReason = "blocked by kill-switch (cleared explicitly)"
+	// Источник заявок замолчал после серии одинаковых отказов брокера: он живёт
+	// в неверной картине мира, а повторы стоят денег (см. loopguard.go).
+	ReasonLoopCooldown    RejectReason = "источник остановлен: серия отказов брокера подряд"
 	ReasonCollarHit       RejectReason = "price beyond collar"
 	ReasonNoWorkingOrder  RejectReason = "no working order to move (not yet acknowledged by QUIK)"
 	ReasonStalePending    RejectReason = "expired: QUIK gave no order number (timed out); freed from working set"
