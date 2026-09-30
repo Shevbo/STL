@@ -51,3 +51,4 @@ trader/lab/footprints/c2_iceberg.py
 trader/lab/footprints/c4_liquidity_pull.py
 trader/lab/footprints/d1_execution_periodicity.py
 trader/lab/footprints/a4b_boundary_followthrough.py
+trader/lab/footprints/a2b_extreme_reversion_mid.py
