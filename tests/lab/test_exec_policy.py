@@ -54,6 +54,21 @@ def _book_rows_flat(minutes: int = 20) -> list[tuple]:
     return rows
 
 
+def _book_rows_slice(recover: bool, gap_s: int = 5) -> list[tuple]:
+    """mid неподвижен (спред 10); L1=3, L2=3 лота. В момент gap_s после старта
+    L1 восстановлен (recover=True) или съеден чужими сделками до нуля
+    (recover=False), L2 не меняется — проверка slice(2, gap_s)."""
+    mid, half_spread, step = 100000.0, 5.0, 1.0
+    bid1, ask1 = mid - half_spread, mid + half_spread
+    rows = []
+    for t in range(gap_s + 2):
+        bids = _ladder(bid1, step, 5, -1)
+        l1_qty = 3 if recover or t != gap_s else 0
+        asks = [(ask1, l1_qty), (ask1 + step, 3)] + _ladder(ask1 + step * 2, step, 3, 1)
+        rows.append(((D0 + t) * 1000, bids, asks))
+    return rows
+
+
 def test_hold_optimistic_fills_on_eaten_level_pessimistic_falls_to_market():
     rows = _book_rows_cycle()
     res = exec_policy.analyze(rows, sizes=(1,), hold_s_list=(30,), chase_s_list=(),
@@ -126,6 +141,78 @@ def test_hold_zero_equals_immediate_market():
 
 
 # --------------------------------------------------------------------------
+# delay(T) и slice(k, s): без пассивной фазы, один рыночный добор/доли.
+# --------------------------------------------------------------------------
+
+def test_delay_on_stationary_mid_equals_market_and_vs_market_mean_zero():
+    """(а) delay(T) на стоящем mid = market. (в) vs_market_mean = 0 у market
+    и у delay на стоящем mid (mid не двигается -> парная разность всегда 0)."""
+    rows = _book_rows_flat()
+    res = exec_policy.analyze(rows, sizes=(1,), hold_s_list=(), chase_s_list=(),
+                              delay_s_list=(30,), slices_list=(), n_samples=100, seed=5)
+    market = {(r["side"], r["minute_class"], r["weekend"]): r
+             for r in res["rows"] if r["policy"] == "market"}
+    delay_rows = [r for r in res["rows"] if r["policy"] == "delay" and r["delay_s"] == 30]
+    assert delay_rows
+    for r in delay_rows:
+        m = market[(r["side"], r["minute_class"], r["weekend"])]
+        assert abs(r["cost_med_opt"] - m["cost_med_opt"]) < 1e-9, (r, m)
+        assert r["cost_med_opt"] == r["cost_med_pess"] == r["cost_mean_opt"] == r["cost_mean_pess"]
+        assert r["fill_share_opt"] == r["fill_share_pess"] == 1.0
+        assert r["adverse_60s_med"] is None
+        assert abs(r["vs_market_mean"]) < 1e-9, r
+        assert abs(m["vs_market_mean"]) < 1e-9, m
+
+
+def test_delay_drift_costs_exactly_one_tick_more_than_market():
+    """(а) дрейф против нас 1 тик (шаг 1.0) за T=10 с (drift_per_sec=0.1) ->
+    delay(10) на продаже дороже market ровно на тик."""
+    rows = _book_rows_drift(hours=1, drift_per_sec=0.1)
+    res = exec_policy.analyze(rows, sizes=(1,), hold_s_list=(), chase_s_list=(),
+                              delay_s_list=(10,), slices_list=(), n_samples=200, seed=6)
+    market = {(r["side"], r["minute_class"], r["weekend"]): r
+             for r in res["rows"] if r["policy"] == "market" and r["side"] == "sell"}
+    delay_rows = [r for r in res["rows"]
+                 if r["policy"] == "delay" and r["delay_s"] == 10 and r["side"] == "sell"]
+    assert delay_rows
+    for r in delay_rows:
+        m = market[(r["side"], r["minute_class"], r["weekend"])]
+        assert abs((r["cost_med_opt"] - m["cost_med_opt"]) - 1.0) < 1e-6, (r, m)
+        assert abs(r["vs_market_mean"] - 1.0) < 1e-6, r
+
+
+def test_slice_no_recovery_matches_market_same_walk_size_below_k_equals_market():
+    """(б) slice(2, 5) без восстановления L1 = market (тот же проход книги);
+    N=1 < k=2 -> без нарезки, тоже = market."""
+    rows = _book_rows_slice(recover=False)
+    anchors = [(rows[0][0], "buy", 6, "r", "filled", None),
+              (rows[0][0], "buy", 1, "r", "filled", None)]
+    res = exec_policy.analyze(rows, anchors=anchors, hold_s_list=(), chase_s_list=(),
+                              delay_s_list=(), slices_list=(2,), slice_every_s_list=(5,))
+    by_size_class = {(r["policy"], r["size_class"]): r for r in res["rows"]}
+    m6, s6 = by_size_class[("market", "6-10")], by_size_class[("slice", "6-10")]
+    assert abs(m6["cost_med_opt"] - 5.5) < 1e-9, m6
+    assert abs(s6["cost_med_opt"] - m6["cost_med_opt"]) < 1e-9, (s6, m6)
+    assert abs(s6["vs_market_mean"]) < 1e-9, s6
+    m1, s1 = by_size_class[("market", "1")], by_size_class[("slice", "1")]
+    assert abs(s1["cost_med_opt"] - m1["cost_med_opt"]) < 1e-9, (s1, m1)
+
+
+def test_slice_with_recovery_cheaper_than_market():
+    """(б) slice(2, 5) с восстановлением L1 между долями дешевле market."""
+    rows = _book_rows_slice(recover=True)
+    anchors = [(rows[0][0], "buy", 6, "r", "filled", None)]
+    res = exec_policy.analyze(rows, anchors=anchors, hold_s_list=(), chase_s_list=(),
+                              delay_s_list=(), slices_list=(2,), slice_every_s_list=(5,))
+    market = next(r for r in res["rows"] if r["policy"] == "market")
+    sliced = next(r for r in res["rows"] if r["policy"] == "slice")
+    assert abs(market["cost_med_opt"] - 5.5) < 1e-9, market
+    assert abs(sliced["cost_med_opt"] - 5.0) < 1e-9, sliced
+    assert sliced["cost_med_opt"] < market["cost_med_opt"]
+    assert sliced["vs_market_mean"] < 0
+
+
+# --------------------------------------------------------------------------
 # anchors_key: точки отсчёта из реальных заявок (scripts/exec_anchors.py),
 # а не случайная выборка.
 # --------------------------------------------------------------------------
@@ -146,9 +233,9 @@ def test_anchor_snapshot_not_later_than_ts():
 
 
 def test_anchors_strata_by_robot_and_actual_matches_fed_cost():
-    """(б) строки несут robot и стратифицированы им; (в) policy="actual"
-    сходится с медианой ПЕРЕДАННЫХ fact_vs_mid — обходит симуляцию целиком,
-    издержка берётся из якоря напрямую."""
+    """(б) строки несут robot и стратифицированы им (и size_class); (в)
+    policy="actual" сходится с медианой ПЕРЕДАННЫХ fact_vs_mid — обходит
+    симуляцию целиком, издержка берётся из якоря напрямую."""
     rows = _book_rows_flat(minutes=2)
     facts = {
         ("robotA", "buy"): [1.0, 2.0, 3.0],
@@ -174,10 +261,16 @@ def test_anchors_strata_by_robot_and_actual_matches_fed_cost():
     assert res["n_used"] == 10
     assert res["dropped_anchors"] == 0
 
-    actual_by_robot_side = {(r["robot"], r["side"]): r for r in res["rows"] if r["policy"] == "actual"}
-    assert set(actual_by_robot_side) == set(facts)
-    for key, fvals in facts.items():
-        r = actual_by_robot_side[key]
+    grouped: dict = {}
+    for (robot, side), fvals in facts.items():
+        for qty, fv in zip(qtys[(robot, side)], fvals):
+            grouped.setdefault((robot, side, exec_policy._size_class(qty)), []).append(fv)
+
+    actual_rows = {(r["robot"], r["side"], r["size_class"]): r
+                  for r in res["rows"] if r["policy"] == "actual"}
+    assert set(actual_rows) == set(grouped)
+    for key, fvals in grouped.items():
+        r = actual_rows[key]
         assert r["n"] == len(fvals)
         assert abs(r["cost_med_pess"] - statistics.median(fvals)) < 1e-9, (key, r, fvals)
 

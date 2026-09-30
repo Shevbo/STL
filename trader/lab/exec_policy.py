@@ -44,11 +44,31 @@ macdshort/usopen входят по ходу) — anchors_key подменяет 
 якоря берётся ближайший снимок НЕ ПОЗЖЕ ts якоря (якорь без снимка не
 дальше MAX_GAP_S до него — дропается, см. dropped_anchors); size = qty
 якоря, сторона = его side — сетка `sizes`/`n_samples` не участвует. Страты
-те же плюс `robot` (у случайных якорей — константа "random"); поле `size`
-в строках якорей — "actual" (qty реальный, не сетка, не стратифицируем по
-нему, иначе n тает). Отдельная строка policy="actual" — фактическая
+те же плюс `robot` (у случайных якорей — константа "random") и `size_class`
+(грубые корзины "1"/"2-5"/"6-10"/"11+" по size; у случайных якорей — класс
+взятого из сетки size). Поле `size` в строках якорей — "actual" (qty
+реальный, не сетка). Отдельная строка policy="actual" — фактическая
 издержка якоря (сам fact_vs_mid), чтобы сравнить с политиками на тех же
 моментах.
+
+DELAY И SLICE (сентябрьский разбор издержек RI: заявки 11+ лотов = 61%
+рублей, граничные минуты = 19%). Без пассивной фазы и без границ opt/pess
+(один рыночный добор — цена известна точно, наливки нет):
+  delay(T) — ждать T секунд, добрать рынком по снимку t+T; издержка =
+    VWAP(t+T) - mid(t), дрейф за ожидание включён целиком.
+  slice(k, s) — N лотов на k равных долей (остаток в последнюю), доли
+    уходят рынком каждые s секунд по снимку СВОЕГО момента; издержка =
+    средневзвешенная цена долей - mid(t). N < k = без нарезки (как market).
+В строках fill_share_* = 1.0 (рыночный добор всегда исполняется),
+cost_med/mean_opt = cost_med/mean_pess, adverse_60s_med = null (нет
+пассивной фазы — некому мериться неблагоприятным отбором после наливки).
+
+VS_MARKET_MEAN. cost_med_pess ранжирует по медиане; хвост редких дорогих
+доборов на этом не виден, а именно он решает, окупает ли рычаг дрейф за
+ожидание. Поэтому у КАЖДОЙ строки (включая market и hold/hold_chase) есть
+vs_market_mean — среднее парной разности с market на тех же якорях — и
+vs_market_mean_ci95, тот же бутстрап по дням, что у vs_market_ci95_pess,
+только статистика — среднее, не медиана блока.
 """
 from __future__ import annotations
 
@@ -66,6 +86,9 @@ DEFAULT_SIZES = (1, 5, 10)
 DEFAULT_HOLD_S = (0, 5, 10, 30, 60, 180)
 DEFAULT_CHASE_S = (0, 10, 180)
 DEFAULT_CHASE_EVERY_S = 10
+DEFAULT_DELAY_S = (15, 30, 60)
+DEFAULT_SLICES = (2, 4)
+DEFAULT_SLICE_EVERY_S = (5, 15)
 DEFAULT_N_SAMPLES = 3000
 DEFAULT_DRAWS = 200
 
@@ -105,6 +128,18 @@ def _minute_class(minute: int) -> str:
 
 def _weekend_label(day) -> str:
     return "выходной" if day.weekday() >= 5 else "будни"
+
+
+def _size_class(n: int) -> str:
+    """Грубая корзина размера: "1" / "2-5" / "6-10" / "11+" (сентябрьский
+    разбор издержек — заявки 11+ лотов дают 61% рублей)."""
+    if n == 1:
+        return "1"
+    if n <= 5:
+        return "2-5"
+    if n <= 10:
+        return "6-10"
+    return "11+"
 
 
 def _sample_anchors(days_data: dict, n_samples: int, seed: int) -> list[tuple]:
@@ -229,6 +264,48 @@ def _adverse_60s(dd: dict, idx: int, side: str, price: float, sign: int) -> floa
     return sign * (price - mid_later)
 
 
+def _eval_delay(dd: dict, i: int, side: str, size: int, delay_s: int, mid0: float) -> float | None:
+    """delay(T): рыночный добор по снимку t+T. Издержка = VWAP(t+T) - mid(t),
+    знаком «хуже для нас»; None = снимка на t+T нет (дыра/конец блока) — анкер
+    для этой политики дропается."""
+    idx = _snapshot_at_or_after(dd, dd["ts"][i] + delay_s * 1000, i)
+    if idx is None:
+        return None
+    sign = 1 if side == "buy" else -1
+    levels = dd["asks"][idx] if side == "buy" else dd["bids"][idx]
+    vwap, _deep = BookRuntime._walk(levels, size)
+    return sign * (vwap - mid0)
+
+
+def _slice_sizes(n: int, k: int) -> list[int]:
+    """n лотов на k равных долей, остаток — в последнюю. n < k = без нарезки
+    (одна доля = n, как market)."""
+    if n < k or k <= 0:
+        return [n]
+    base, rem = divmod(n, k)
+    parts = [base] * k
+    parts[-1] += rem
+    return parts
+
+
+def _eval_slice(dd: dict, i: int, side: str, size: int, slices: int, slice_every_s: int,
+                mid0: float) -> float | None:
+    """slice(k, s): доли рынком каждые s секунд по снимку СВОЕГО момента.
+    Издержка = средневзвешенная цена долей - mid(t); None = снимка для
+    какой-то доли нет — анкер для этой политики дропается целиком."""
+    ts = dd["ts"]
+    sign = 1 if side == "buy" else -1
+    total = 0.0
+    for leg, qty in enumerate(_slice_sizes(size, slices)):
+        idx = i if leg == 0 else _snapshot_at_or_after(dd, ts[i] + leg * slice_every_s * 1000, i)
+        if idx is None:
+            return None
+        levels = dd["asks"][idx] if side == "buy" else dd["bids"][idx]
+        vwap, _deep = BookRuntime._walk(levels, qty)
+        total += vwap * qty
+    return sign * (total / size - mid0)
+
+
 def _eval_policy(dd: dict, i: int, side: str, size: int, hold_s: int, chase_s: int,
                  chase_every_s: int, mid0: float) -> dict | None:
     """Пара (opt, pess) для hold/hold_chase. None = анкер дропнут целиком (нет
@@ -275,20 +352,30 @@ def _median_of_blocks(blocks: list[list[float]]) -> float | None:
     return statistics.median(vals) if vals else None
 
 
+def _mean_of_blocks(blocks: list[list[float]]) -> float | None:
+    vals = [x for blk in blocks for x in blk]
+    return statistics.fmean(vals) if vals else None
+
+
 def _finalize(buckets: dict, seed: int, draws: int) -> list[dict]:
     out_rows = []
-    for (pname, hold_s, chase_s, size, side, mclass, wlabel, robot), b in buckets.items():
+    for key, b in buckets.items():
+        (pname, hold_s, chase_s, delay_s, slices, slice_every_s, size, size_class, side, mclass,
+         wlabel, robot) = key
         if b["n"] == 0:
             continue
-        rng = random.Random(f"{seed}:{pname}:{hold_s}:{chase_s}:{size}:{side}:{mclass}:{wlabel}:{robot}")
+        rng = random.Random(f"{seed}:{key}")
         rows_by_day: dict = defaultdict(list)
         for d, v in zip(b["days"], b["diff_pess"]):
             rows_by_day[d].append(v)
-        boot = common.bootstrap_days(rows_by_day, _median_of_blocks, draws, rng)
-        boot_sorted = sorted(boot)
-        ci = [_pctl(boot_sorted, 0.025), _pctl(boot_sorted, 0.975)] if boot_sorted else [None, None]
+        boot_med = sorted(common.bootstrap_days(rows_by_day, _median_of_blocks, draws, rng))
+        boot_mean = sorted(common.bootstrap_days(rows_by_day, _mean_of_blocks, draws, rng))
+        ci_med = [_pctl(boot_med, 0.025), _pctl(boot_med, 0.975)] if boot_med else [None, None]
+        ci_mean = [_pctl(boot_mean, 0.025), _pctl(boot_mean, 0.975)] if boot_mean else [None, None]
         out_rows.append({
-            "policy": pname, "hold_s": hold_s, "chase_s": chase_s, "size": size, "side": side,
+            "policy": pname, "hold_s": hold_s, "chase_s": chase_s,
+            "delay_s": delay_s, "slices": slices, "slice_every_s": slice_every_s,
+            "size": size, "size_class": size_class, "side": side,
             "minute_class": mclass, "weekend": wlabel, "robot": robot, "n": b["n"],
             "fill_share_opt": b["fill_opt"] / b["n"],
             "fill_share_pess": b["fill_pess"] / b["n"],
@@ -300,7 +387,9 @@ def _finalize(buckets: dict, seed: int, draws: int) -> list[dict]:
             "adverse_60s_med": statistics.median(b["adverse"]) if b["adverse"] else None,
             "vs_market_med_opt": statistics.median(b["diff_opt"]),
             "vs_market_med_pess": statistics.median(b["diff_pess"]),
-            "vs_market_ci95_pess": ci,
+            "vs_market_ci95_pess": ci_med,
+            "vs_market_mean": statistics.fmean(b["diff_pess"]),
+            "vs_market_mean_ci95": ci_mean,
         })
     return out_rows
 
@@ -321,8 +410,9 @@ def _nearest_anchor_snapshot(dd: dict, ts_ms: int) -> int | None:
 
 def analyze(rows: list[tuple], *, anchors: list[tuple] | None = None, sizes=DEFAULT_SIZES,
            hold_s_list=DEFAULT_HOLD_S, chase_s_list=DEFAULT_CHASE_S,
-           chase_every_s: int = DEFAULT_CHASE_EVERY_S, n_samples: int = DEFAULT_N_SAMPLES,
-           draws: int = DEFAULT_DRAWS, seed: int = 0) -> dict:
+           chase_every_s: int = DEFAULT_CHASE_EVERY_S, delay_s_list=DEFAULT_DELAY_S,
+           slices_list=DEFAULT_SLICES, slice_every_s_list=DEFAULT_SLICE_EVERY_S,
+           n_samples: int = DEFAULT_N_SAMPLES, draws: int = DEFAULT_DRAWS, seed: int = 0) -> dict:
     """rows = [(ts_ms, bids, asks), ...] -> {rows, n_days, n_used, dropped,
     dropped_anchors, half_spread_med, notes}. Тестируемое ядро (см.
     c1_book_imbalance.analyze) — без сети, реальные данные грузит только run().
@@ -332,9 +422,11 @@ def analyze(rows: list[tuple], *, anchors: list[tuple] | None = None, sizes=DEFA
     robot, outcome, fact_vs_mid), ...] (см. scripts/exec_anchors.py) — по
     одной точке на якорь, size/side реальные, плюс строка policy="actual"."""
     days_data = _prep_days(rows)
-    policies = [("market", 0, 0)]
-    policies += [("hold", t, 0) for t in hold_s_list]
-    policies += [("hold_chase", t, c) for t in hold_s_list for c in chase_s_list if c > 0]
+    policies = [("market", 0, 0, None, None, None)]
+    policies += [("hold", t, 0, None, None, None) for t in hold_s_list]
+    policies += [("hold_chase", t, c, None, None, None) for t in hold_s_list for c in chase_s_list if c > 0]
+    policies += [("delay", None, None, t, None, None) for t in delay_s_list]
+    policies += [("slice", None, None, None, k, s) for k in slices_list for s in slice_every_s_list]
 
     buckets: dict = defaultdict(lambda: {"n": 0, "fill_opt": 0, "fill_pess": 0,
                                           "cost_opt": [], "cost_pess": [], "adverse": [],
@@ -351,27 +443,48 @@ def analyze(rows: list[tuple], *, anchors: list[tuple] | None = None, sizes=DEFA
         mclass = _minute_class(common.minute_of_day(dd["ts"][i] // 1000))
         wlabel = _weekend_label(day)
         size_field = size if anchors is None else "actual"
+        size_class = _size_class(size)
         sign = 1 if side == "buy" else -1
         vwap, _deep = BookRuntime._walk(asks0 if side == "buy" else bids0, size)
         cost_market = sign * (vwap - mid0)
         nonlocal dropped
-        for pname, hold_s, chase_s in policies:
-            key = (pname, hold_s, chase_s, size_field, side, mclass, wlabel, robot)
+
+        def _record(key, cost):
             b = buckets[key]
+            b["n"] += 1
+            b["days"].append(day)
+            b["fill_opt"] += 1
+            b["fill_pess"] += 1
+            b["cost_opt"].append(cost)
+            b["cost_pess"].append(cost)
+            b["diff_opt"].append(cost - cost_market)
+            b["diff_pess"].append(cost - cost_market)
+
+        for pname, hold_s, chase_s, delay_s, slices, slice_every_s in policies:
+            key = (pname, hold_s, chase_s, delay_s, slices, slice_every_s, size_field, size_class,
+                  side, mclass, wlabel, robot)
             if pname == "market":
-                b["n"] += 1
-                b["fill_opt"] += 1
-                b["fill_pess"] += 1
-                b["cost_opt"].append(cost_market)
-                b["cost_pess"].append(cost_market)
-                b["diff_opt"].append(0.0)
-                b["diff_pess"].append(0.0)
-                b["days"].append(day)
+                _record(key, cost_market)
+                continue
+            if pname == "delay":
+                cost = _eval_delay(dd, i, side, size, delay_s, mid0)
+                if cost is None:
+                    dropped += 1
+                    continue
+                _record(key, cost)
+                continue
+            if pname == "slice":
+                cost = _eval_slice(dd, i, side, size, slices, slice_every_s, mid0)
+                if cost is None:
+                    dropped += 1
+                    continue
+                _record(key, cost)
                 continue
             res = _eval_policy(dd, i, side, size, hold_s, chase_s, chase_every_s, mid0)
             if res is None:
                 dropped += 1
                 continue
+            b = buckets[key]
             b["n"] += 1
             b["days"].append(day)
             b["fill_opt"] += 1 if res["filled_opt"] else 0
@@ -383,16 +496,9 @@ def analyze(rows: list[tuple], *, anchors: list[tuple] | None = None, sizes=DEFA
             if res["adverse_opt"] is not None:
                 b["adverse"].append(res["adverse_opt"])
         if fact_vs_mid is not None:
-            key = ("actual", None, None, size_field, side, mclass, wlabel, robot)
-            b = buckets[key]
-            b["n"] += 1
-            b["days"].append(day)
-            b["fill_opt"] += 1
-            b["fill_pess"] += 1
-            b["cost_opt"].append(fact_vs_mid)
-            b["cost_pess"].append(fact_vs_mid)
-            b["diff_opt"].append(fact_vs_mid - cost_market)
-            b["diff_pess"].append(fact_vs_mid - cost_market)
+            key = ("actual", None, None, None, None, None, size_field, size_class, side, mclass,
+                  wlabel, robot)
+            _record(key, fact_vs_mid)
 
     if anchors is None:
         sampled = _sample_anchors(days_data, n_samples, seed)
@@ -423,7 +529,8 @@ def analyze(rows: list[tuple], *, anchors: list[tuple] | None = None, sizes=DEFA
 def run(arg: dict) -> dict:
     """Задача агента (kind='task', считает только i9): arg = {"symbol_key",
     "book_key" (обязателен), "since", "until", "sizes", "hold_s", "chase_s",
-    "chase_every_s", "n_samples", "draws", "seed", "anchors_key"}.
+    "chase_every_s", "delay_s", "slices", "slice_every_s", "n_samples", "draws",
+    "seed", "anchors_key"}.
 
     anchors_key (необязателен) — ключ агентского канала с реальными якорями
     заявок (scripts/exec_anchors.py, тот же _load_bars, что у агентских
@@ -445,13 +552,17 @@ def run(arg: dict) -> dict:
     hold_s_list = tuple(int(x) for x in arg.get("hold_s", DEFAULT_HOLD_S))
     chase_s_list = tuple(int(x) for x in arg.get("chase_s", DEFAULT_CHASE_S))
     chase_every_s = int(arg.get("chase_every_s", DEFAULT_CHASE_EVERY_S))
+    delay_s_list = tuple(int(x) for x in arg.get("delay_s", DEFAULT_DELAY_S))
+    slices_list = tuple(int(x) for x in arg.get("slices", DEFAULT_SLICES))
+    slice_every_s_list = tuple(int(x) for x in arg.get("slice_every_s", DEFAULT_SLICE_EVERY_S))
     n_samples = int(arg.get("n_samples", DEFAULT_N_SAMPLES))
     draws = int(arg.get("draws", DEFAULT_DRAWS))
     seed = int(arg.get("seed", 0))
     anchors_key = arg.get("anchors_key")
 
     kw = dict(sizes=sizes, hold_s_list=hold_s_list, chase_s_list=chase_s_list,
-             chase_every_s=chase_every_s, n_samples=n_samples, draws=draws, seed=seed)
+             chase_every_s=chase_every_s, delay_s_list=delay_s_list, slices_list=slices_list,
+             slice_every_s_list=slice_every_s_list, n_samples=n_samples, draws=draws, seed=seed)
     anchors = [tuple(r) for r in _load_bars(anchors_key)] if anchors_key else None
     res = analyze(rows, anchors=anchors, **kw)
     if anchors_key:
