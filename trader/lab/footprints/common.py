@@ -26,6 +26,12 @@ from trader.lab.retro_reverse import _epoch, _load_bars
 # Справка из реестра: цена филла RI по архивному стакану 9-12 пт (project_book_replay).
 RI_BOOK_COST_PTS = 10.0
 
+# Сессия FORTS по факту баров: утренняя с 07:00 (RIZ6 ~15k лотов/час, SiZ6 ~65k
+# в 07:00-09:00 — торгуют, резать с 09:00 нельзя), вечерняя до 23:50.
+SESSION_START_MIN = 7 * 60
+SESSION_END_MIN = 23 * 60 + 50
+OUT_OF_SESSION = ("до сессии", "после сессии")
+
 
 def _window(rows: list[list], since=None, until=None) -> list[list]:
     lo, hi = _epoch(since), _epoch(until, end=True)
@@ -51,6 +57,30 @@ def day_of(ts) -> date:
 
 def minute_of_day(ts) -> int:
     return int(ts) % 86400 // 60
+
+
+def in_session(minute: int) -> bool:
+    """Минута дня внутри сессии [07:00, 23:50)."""
+    return SESSION_START_MIN <= minute < SESSION_END_MIN
+
+
+def session_label(minute: int) -> str | None:
+    """None внутри сессии, иначе «до сессии» (< 07:00) или «после сессии» (>= 23:50)."""
+    if in_session(minute):
+        return None
+    return OUT_OF_SESSION[0] if minute < SESSION_START_MIN else OUT_OF_SESSION[1]
+
+
+def session_rows(rows: list[list]) -> tuple[list[list], list[str]]:
+    """Бары вне сессии выброшены; notes-строки со счётчиками (не молча)."""
+    kept, excl = [], {}
+    for r in rows:
+        why = session_label(minute_of_day(r[0]))
+        if why:
+            excl[why] = excl.get(why, 0) + 1
+        else:
+            kept.append(r)
+    return kept, [f"исключено {why}: {n} баров" for why, n in sorted(excl.items())]
 
 
 def by_day(rows: list[list]) -> dict[date, list]:
@@ -105,14 +135,27 @@ def _pct(s: list[float], q: float) -> float:
 
 
 def pvalue_and_ci(real_stat, null_stats: list, boot_stats: list) -> dict:
-    """Односторонний p (доля нулей >= настоящей, с поправкой +1) и 95% бутстрапа."""
+    """p-значения по нулю (поправка +1) и 95% бутстрапа.
+
+    p      — верхний хвост: доля нулей >= настоящего (как было; для
+             пререгистрированного «эффект больше нуля»).
+    p_low  — нижний хвост: доля нулей <= настоящего (откат, отвод, «меньше»).
+    p_two  — двусторонний, по умолчанию в сводках: min(1, 2*min(p, p_low)).
+             Удвоение меньшего хвоста, а не |нуль - центр| >= |настоящее -
+             центр|: нуль здесь часто скошен (медианы отношений, долей), а
+             удвоение корректно при любой форме нуля и не требует, чтобы нуль
+             был центрирован около 0 (у отношений A4 он около 1). Пол p_two =
+             2/(draws+1)."""
     null = [x for x in null_stats if x is not None]
     boot = sorted(x for x in boot_stats if x is not None)
-    p = None
+    p = p_low = p_two = None
     if real_stat is not None and null:
         p = (1 + sum(1 for x in null if x >= real_stat)) / (1 + len(null))
+        p_low = (1 + sum(1 for x in null if x <= real_stat)) / (1 + len(null))
+        p_two = min(1.0, 2 * min(p, p_low))
     ci = [_pct(boot, 0.025), _pct(boot, 0.975)] if boot else [None, None]
-    return {"stat": real_stat, "p": p, "ci95": ci, "n_null": len(null)}
+    return {"stat": real_stat, "p": p, "p_low": p_low, "p_two": p_two, "ci95": ci,
+            "n_null": len(null)}
 
 
 def halves(rows: list[list]) -> tuple[list[list], list[list]]:

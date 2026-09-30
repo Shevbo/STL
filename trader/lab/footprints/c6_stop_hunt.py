@@ -24,6 +24,9 @@ window — поэтому у window=3 сам возврат может случ�
 
 Протокол: docs/algo-footprints-registry.md, каркас — common.py, образец —
 a4_bar_boundary.py.
+
+Сессия: бары вне 07:00-23:50 (common.session_rows) выброшены до разбивки по
+dням, счётчик «до сессии»/«после сессии» в notes.
 """
 from __future__ import annotations
 
@@ -174,9 +177,10 @@ def _rows_for(rows: list[list], lookbacks, deltas, horizons, draws: int,
 
 def analyze(rows: list[list], lookbacks=(30, 60, 120), deltas=(0.0, 0.5),
             horizons=(5, 15, 30, 60), draws: int = 200, seed: int = 0) -> dict:
+    rows, sess_notes = common.session_rows(rows)
     n_days = len(common.by_day(rows))
     first, second = common.halves(rows)
-    notes = [
+    notes = sess_notes + [
         "sign: свип вверх ждёт хода вниз (-1), свип вниз — вверх (+1); "
         "пробой (закрепление) той же стороны меряется тем же знаком",
         "window=3: возврат закрытия за t..t+2 может формально пересекаться с "

@@ -35,13 +35,15 @@ a2/c6). Знак события = знак хода бара. Соседние �
 
 Продолжение тестируется как есть (`common.pvalue_and_ci`, «нуль >=
 настоящего» — ищем ХОД БОЛЬШЕ обычного). Откат ожидается ОТРИЦАТЕЛЬНЫМ,
-поэтому знак инвертируется туда-обратно перед вызовом `pvalue_and_ci`
-(`_pvalue_lower`, тот же приём, что в `c3_spoofing._pvalue_lower`, common.py
-не трогается).
+поэтому `_pvalue_lower` кладёт в p нижний хвост (`p_low` из common).
+Двусторонний `p_two` есть в каждом null-поле.
 
 cost_pts в отчёте — по ПОСЛЕДНЕМУ close окна (`round_trip_cost_pts`), не по
 медиане: разгон датируется последней ценой, а не средней за окно (так задано
 протоколом строки A3, в отличие от a2/c6).
+
+Сессия: бары вне 07:00-23:50 (common.session_rows) выброшены до разбивки по
+dням, счётчик «до сессии»/«после сессии» в notes.
 """
 from __future__ import annotations
 
@@ -140,16 +142,9 @@ def _null_draws(days: dict, real_counts: dict, horizon: int, kind: str,
 
 def _pvalue_lower(real: float | None, nulls: list[float | None],
                    boots: list[float | None]) -> dict:
-    """common.pvalue_and_ci тестирует «нуль >= настоящего»; откат ожидается
-    отрицательным, нужна обратная сторона. Инверсия знака туда-обратно, как в
-    c3_spoofing._pvalue_lower (common.py не трогается)."""
-    nulls = [x for x in nulls if x is not None]
-    boots = [x for x in boots if x is not None]
-    res = common.pvalue_and_ci(-real if real is not None else None,
-                                [-x for x in nulls], [-x for x in boots])
-    res["stat"] = real
-    lo, hi = res["ci95"]
-    res["ci95"] = [-hi if hi is not None else None, -lo if lo is not None else None]
+    """Откат ожидается отрицательным: p = нижний хвост common.pvalue_and_ci."""
+    res = common.pvalue_and_ci(real, nulls, boots)
+    res["p"] = res["p_low"]
     return res
 
 
@@ -230,8 +225,10 @@ def _rows_for(days_: dict, vol_q: float, move_atr: float, cont_horizons, rev_hor
 def analyze(rows: list[list], vol_q: float = 0.99, move_atr: float = 2.0,
             cont_horizons=(1, 3, 5), rev_horizons=(15, 30, 60),
             draws: int = 200, seed: int = 0) -> dict:
+    rows, sess_notes = common.session_rows(rows)
     days = common.by_day(rows)
     real_rows, notes = _rows_for(days, vol_q, move_atr, cont_horizons, rev_horizons, draws, seed)
+    notes = sess_notes + notes
     first, second = common.halves(rows)
     first_rows, _ = _rows_for(common.by_day(first), vol_q, move_atr, cont_horizons,
                                rev_horizons, draws, seed) if first else ([], [])

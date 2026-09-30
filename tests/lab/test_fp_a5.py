@@ -64,6 +64,23 @@ def test_window_beyond_day_end_excluded():
     assert _row(res, 1425, 15) is None
 
 
+def test_top_rows_carry_halves():
+    """Строки топ-10 по p_adj (не только именованные) несут half1/half2."""
+    res = a5.analyze(_bars(n_days=10, seed=5), horizons=(1,), named=(), draws=20, seed=0)
+    assert len(res["rows"]) == 10
+    for row in res["rows"]:
+        assert "half1" in row and "half2" in row
+        assert row["half1"] is not None and set(row["half1"]) == {"n", "mean", "t", "sign"}
+
+
+def test_morning_session_kept():
+    """07:00-09:00 торгуется и остаётся в выборке; 06:5x = «до сессии»."""
+    days, excl = a5.prepare(_bars(n_days=2, seed=6, m_lo=410, m_hi=560))
+    minutes = set(next(iter(days.values()))["pos"])
+    assert 420 in minutes and 480 in minutes and 419 not in minutes
+    assert excl == {"до сессии": 2 * 10}
+
+
 def test_report_json_safe():
     res = a5.analyze(_bars(n_days=4, seed=4), horizons=(1,), named=a5.NAMED_MINUTES, draws=10)
     rep = common.report("A5", "RIZ6", ["2026-09-01", None], res["rows"], res["notes"],

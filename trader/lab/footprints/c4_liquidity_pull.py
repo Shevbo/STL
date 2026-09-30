@@ -165,16 +165,10 @@ def _other_side(side: str) -> str:
 # --------------------------------------------------------------------------
 
 def _one_sided_low(real: float | None, nulls: list, boots: list) -> dict:
-    """p/ci для «стат аномально НИЗКИЙ». `common.pvalue_and_ci` меряет долю
-    нулей >= настоящего (ждёт, что эффект — высокий real); здесь интересен
-    низкий ratio (отвод глубины), поэтому считаем на отрицании и переводим
-    результат обратно в единицы ratio, чтобы отчёт не путал знак."""
-    def neg(x):
-        return None if x is None else -x
-    res = common.pvalue_and_ci(neg(real), [neg(x) for x in nulls], [neg(x) for x in boots])
-    lo, hi = res["ci95"]
-    ci = [neg(hi), neg(lo)] if lo is not None and hi is not None else [None, None]
-    return {"stat": real, "p": res["p"], "ci95": ci, "n_null": res["n_null"]}
+    """p для «стат аномально НИЗКИЙ» (отвод глубины) = нижний хвост common."""
+    res = common.pvalue_and_ci(real, nulls, boots)
+    res["p"] = res["p_low"]
+    return res
 
 
 def _flat_median(blocks: list[list[float]]) -> float | None:

@@ -83,6 +83,25 @@ def test_biased_imbalance_predicts_short_horizon_only():
     assert near["sign_agree"] > 0.5
 
 
+def test_default_depths_l1_only_effect():
+    """Дефолт: "2-5" есть, "micro" нет. Смещение только в L1 -> на глубине без
+    L1 корреляции нет (эффект = очередь L1), наклон и среднее хода положительны."""
+    rows = _book_rows(bias_pts=0.2, mislabel_p=0.2, seed=7)
+    res = c1.analyze(rows, horizons_s=(5,), draws=100, seed=0)
+    assert {r["k"] for r in res["rows"]} == {1, 3, 5, "2-5"}
+    l1, deep = _row(res, 1, 5), _row(res, "2-5", 5)
+    assert l1["slope"] > 0 and l1["mean_signed_move_top_quintile"] > 0
+    assert abs(deep["corr"]) < 0.05 and deep["null_corr"]["p_two"] > 0.05
+    assert l1["zero_share"] == 0.0
+    micro = c1.analyze(rows, depths=("micro",), horizons_s=(5,), draws=5, seed=0)
+    assert [r["k"] for r in micro["rows"]] == ["micro"]
+
+
+def test_sign_agree_ignores_zero_moves():
+    assert c1._sign_agree([1.0, -1.0, 1.0, 1.0], [2.0, 0.0, 0.0, -1.0]) == 0.5
+    assert c1._sign_agree([1.0], [0.0]) is None
+
+
 def test_gap_cuts_forward_window():
     with_gap = c1.analyze(_gap_rows(gap_s=70, seed=5), depths=(1,), horizons_s=(60,), draws=5, seed=0)
     assert _row(with_gap, 1, 60)["n"] == 280

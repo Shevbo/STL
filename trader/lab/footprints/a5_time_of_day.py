@@ -22,8 +22,15 @@ t по всем минутам и взятием max|t| за розыгрыш. p
 поправка на перебор для них не нужна).
 
 halves (первая/вторая половина окна по целым дням, common.halves) даёт ТОЛЬКО
-реальные mean/t именованных минут, без розыгрышей -- нужен лишь знак, не
-p-value, розыгрыши тут были бы тратой счёта i9 впустую.
+реальные mean/t, без розыгрышей -- нужен лишь знак, не p-value, розыгрыши тут
+были бы тратой счёта i9 впустую. Каждая строка результата (топ-10 по p_adj
+на горизонт + именованные) несёт half1/half2 = {n, mean, t, sign} своей
+минуты в половинах (None, если в половине минуты нет); halves-словарь по
+именованным минутам оставлен как был. p_adj монотонно убывает по |t|, топ по
+p_adj = топ по |t|, ничьи на полу p_adj разрешаются по |t|.
+
+Сессия: common.in_session (07:00-23:50 по факту баров, утро 07:00-09:00
+торгуется); бары вне её исключаются со счётчиком «до сессии»/«после сессии».
 """
 from __future__ import annotations
 
@@ -34,8 +41,6 @@ from collections import defaultdict
 
 from trader.lab.footprints import common
 
-MINUTE_LO = 9 * 60              # 540, 09:00
-MINUTE_HI = 23 * 60 + 50        # 1430, 23:50 (граница ночи, исключена)
 NAMED_MINUTES = (600, 840, 845, 990, 1125, 1140, 1425)  # 10:00 14:00 14:05 16:30 18:45 19:00 23:45
 
 
@@ -43,16 +48,17 @@ def _hhmm(m: int) -> str:
     return f"{m // 60:02d}:{m % 60:02d}"
 
 
-def prepare(rows: list[list]) -> tuple[dict, int]:
-    """Бары -> {день: {pos,close,vol,vol_base}} в окне 09:00-23:49; счётчик ночных баров."""
-    days, excl_night = {}, 0
+def prepare(rows: list[list]) -> tuple[dict, dict]:
+    """Бары -> {день: {pos,close,vol,vol_base}} в сессии 07:00-23:49; счётчик исключений."""
+    days, excl = {}, {}
     for d, drows in common.by_day(rows).items():
         drows = sorted(drows, key=lambda r: r[0])
         minutes, closes, vols = [], [], []
         for r in drows:
             m = common.minute_of_day(r[0])
-            if not (MINUTE_LO <= m < MINUTE_HI):
-                excl_night += 1
+            why = common.session_label(m)
+            if why:
+                excl[why] = excl.get(why, 0) + 1
                 continue
             minutes.append(m)
             closes.append(float(r[4]))
@@ -64,7 +70,7 @@ def prepare(rows: list[list]) -> tuple[dict, int]:
                 "vol": vols,
                 "vol_base": statistics.median(vols),
             }
-    return days, excl_night
+    return days, excl
 
 
 def _valid_pairs(days: dict, h: int) -> dict:
@@ -74,7 +80,7 @@ def _valid_pairs(days: dict, h: int) -> dict:
         pos = dd["pos"]
         for m, i in pos.items():
             mh = m + h
-            if mh >= MINUTE_HI:
+            if mh >= common.SESSION_END_MIN:
                 continue
             j = pos.get(mh)
             if j is not None:
@@ -175,46 +181,68 @@ def _grid(days: dict, h: int, draws: int, rng: random.Random) -> dict:
     return rows
 
 
-def _named_signs(rows: list[list], horizons, named) -> list[dict]:
-    """Быстрая проверка знака именованных минут в половине окна, без розыгрышей."""
+def _half_stats(rows: list[list], horizons) -> dict:
+    """{(минута, h): реальная статистика} половины окна, без розыгрышей."""
     days, _ = prepare(rows)
-    out = []
+    out = {}
     for h in horizons:
         pairs = _valid_pairs(days, h)
-        real = _minute_real_stats(days, pairs, _day_absmove_baseline(days, pairs))
+        for m, st in _minute_real_stats(days, pairs, _day_absmove_baseline(days, pairs)).items():
+            out[(m, h)] = st
+    return out
+
+
+def _named_signs(half: dict, horizons, named) -> list[dict]:
+    """Быстрая проверка знака именованных минут в половине окна, без розыгрышей."""
+    out = []
+    for h in horizons:
         for m in named:
-            if m in real:
-                st = real[m]
+            st = half.get((m, h))
+            if st:
                 out.append({"minute": m, "hhmm": _hhmm(m), "h": h, "n": st["n"],
                             "mean": st["mean"], "median": st["median"], "t": st["t"],
                             "pos_share": st["pos_share"]})
     return out
 
 
+def _half_brief(st: dict | None) -> dict | None:
+    if not st:
+        return None
+    return {"n": st["n"], "mean": st["mean"], "t": st["t"],
+            "sign": (st["mean"] > 0) - (st["mean"] < 0)}
+
+
 def analyze(rows: list[list], horizons=(1, 5, 15), named=NAMED_MINUTES,
             draws: int = 200, seed: int = 0) -> dict:
-    days, excl_night = prepare(rows)
+    days, excl = prepare(rows)
     rng = random.Random(seed)
     all_rows, seen = [], set()
     for h in horizons:
         grid = _grid(days, h, draws, rng)
-        top10 = sorted(grid.values(), key=lambda r: -abs(r["t"]))[:10]
+        top10 = sorted(grid.values(), key=lambda r: (1.0 if r["p_adj"] is None else r["p_adj"],
+                                                     -abs(r["t"])))[:10]
         for row in top10 + [grid[m] for m in named if m in grid]:
             key = (row["minute"], row["h"])
             if key not in seen:
                 seen.add(key)
                 all_rows.append(row)
     first, second = common.halves(rows)
+    half1, half2 = _half_stats(first, horizons), _half_stats(second, horizons)
+    for row in all_rows:
+        key = (row["minute"], row["h"])
+        row["half1"], row["half2"] = _half_brief(half1.get(key)), _half_brief(half2.get(key))
     notes = [
-        f"ночь исключена: {excl_night} баров",
+        *(f"исключено {why}: {n} баров" for why, n in sorted(excl.items())),
         "клиринги 14:00-14:05 и 18:45-19:05 НЕ исключены: это предмет проверки A5",
         "p_named: своя минута без поправки; p_adj: max|t| по всем минутам за розыгрыш",
-        "halves: только знак mean/t именованных минут, без розыгрышей (экономия счёта)",
+        "halves: только знак mean/t именованных минут, без розыгрышей (экономия счёта); "
+        "half1/half2 в каждой строке (топ-10 по p_adj и именованные) — то же для её минуты",
+        "p_named/p_adj уже двусторонние по построению (|t| против |t| нуля)",
     ]
     return {
         "rows": all_rows,
-        "halves": {"first": _named_signs(first, horizons, named),
-                   "second": _named_signs(second, horizons, named)},
+        "halves": {"first": _named_signs(half1, horizons, named),
+                   "second": _named_signs(half2, horizons, named)},
         "n_days": len(days),
         "notes": notes,
     }

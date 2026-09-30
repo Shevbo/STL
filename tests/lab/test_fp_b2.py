@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 from trader.lab.footprints import b2_vwap_reversion as b2
 
-D0 = int(datetime(2026, 9, 1, tzinfo=timezone.utc).timestamp())   # метка = МСК-стенка
+D0 = int(datetime(2026, 9, 1, 10, 0, tzinfo=timezone.utc).timestamp())   # 10:00 МСК-стенка, в сессии
 ATR = 4.0  # H-L=4 константа в _row -> common.atr_minute даёт ровно 4.0
 
 

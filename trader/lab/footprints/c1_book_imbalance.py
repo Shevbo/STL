@@ -26,6 +26,14 @@ HALVES. `common.halves` читает `r[0]` как эпоху в СЕКУНДА�
 `(ts_ms, bids, asks)`, поэтому первая/вторая половина считаются своей
 `_halves_book` той же логикой (разрез по целым дням), а не через common.halves.
 
+ГЛУБИНЫ. k целое = дисбаланс L1..k; строка "a-b" = только уровни a..b
+("2-5" = без L1 — если corr там около 0, эффект k=1 это механика очереди L1,
+а не глубина книги); "micro" = I_micro у L1, только если передан явно (почти
+дубль k=1: corr 0.1424 против 0.1411). Поля строки кроме реестровых:
+mean_signed_move_top_quintile (среднее рядом с медианой: медиана хода
+упирается в шаг цены), slope (МНК-наклон хода на I, пункты на единицу I),
+sign_agree только по НЕНУЛЕВЫМ ходам и zero_share (доля нулевых ходов).
+
 ПРОРЕЖИВАНИЕ. Если снимков в окне больше `max_rows`, точки ОТСЧЁТА t берутся
 через шаг (глобально по хронологии), а ход вперёд всё равно ищется по
 ПОЛНОМУ (непрореженному) ряду снимков — иначе ближайший снимок на t+h после
@@ -42,7 +50,7 @@ from trader.lab.footprints import common
 from trader.lab.retro_reverse import _epoch, _load_bars
 
 LEVELS = 5
-DEPTHS = (1, 3, 5)
+DEPTHS = (1, 3, 5, "2-5")
 HORIZONS_S = (5, 15, 60, 300)
 MAX_GAP_S = 60
 MAX_ROWS_DEFAULT = 400_000
@@ -122,6 +130,19 @@ def _segment_ends(ts_ms: list[int]) -> list[int]:
     return block_end
 
 
+def _depth_range(k) -> tuple[int, int]:
+    """k=3 -> срез уровней [0, 3); "2-5" -> [1, 5)."""
+    if isinstance(k, str):
+        a, b = k.split("-")
+        return int(a) - 1, int(b)
+    return 0, int(k)
+
+
+def _depth_key(x):
+    """Аргумент агента -> ключ глубины: "3"/3 -> 3, "2-5"/"micro" как есть."""
+    return int(x) if isinstance(x, int) or str(x).isdigit() else str(x)
+
+
 def _prep(rows: list[tuple], depths) -> dict:
     """rows -> {день: {ts, mid, spread, micro_i, I: {k: [...]}, block_end}}."""
     days: dict = defaultdict(list)
@@ -142,8 +163,11 @@ def _prep(rows: list[tuple], depths) -> dict:
             mp = (bid1 * qa1 + ask1 * qb1) / (qb1 + qa1) if (qb1 + qa1) else None
             micro_i.append((mp - m) / sp if (mp is not None and sp > 0) else None)
             for k in depths:
-                sb = sum(q for _, q in bids[:k])
-                sa = sum(q for _, q in asks[:k])
+                if k == "micro":
+                    continue
+                lo, hi = _depth_range(k)
+                sb = sum(q for _, q in bids[lo:hi])
+                sa = sum(q for _, q in asks[lo:hi])
                 depth_i[k].append((sb - sa) / (sb + sa) if (sb + sa) else None)
         out[d] = {"ts": ts, "mid": mid, "spread": spread, "micro_i": micro_i,
                   "I": depth_i, "block_end": _segment_ends(ts)}
@@ -208,10 +232,21 @@ def _safe_corr(xs: list[float], ys: list[float]) -> float | None:
 
 
 def _sign_agree(Is: list[float], moves: list[float]) -> float | None:
-    if not Is:
+    """Доля совпадения знаков I и хода среди НЕНУЛЕВЫХ ходов (нулевой ход не
+    «не согласен», его долю отдельно несёт zero_share)."""
+    nz = [(iv, mv) for iv, mv in zip(Is, moves) if mv]
+    if not nz:
         return None
-    agree = sum(1 for iv, mv in zip(Is, moves) if (iv > 0 and mv > 0) or (iv < 0 and mv < 0))
-    return agree / len(Is)
+    return sum(1 for iv, mv in nz if (iv > 0) == (mv > 0) and iv) / len(nz)
+
+
+def _slope(xs: list[float], ys: list[float]) -> float | None:
+    if len(xs) < 2:
+        return None
+    try:
+        return statistics.linear_regression(xs, ys).slope
+    except statistics.StatisticsError:
+        return None
 
 
 def _top_quintile_signed_moves(Is: list[float], moves: list[float], dlabels: list) -> list[float]:
@@ -249,15 +284,16 @@ def analyze(rows: list[tuple], *, depths=DEPTHS, horizons_s=HORIZONS_S,
            draws: int = 200, seed: int = 0, max_rows: int = MAX_ROWS_DEFAULT) -> dict:
     """rows = [(ts_ms, bids, asks), ...] (см. _load_full_book) -> {rows, n_days, notes}.
 
-    rows по (k, h): k пробегает depths и отдельно "micro" (I_micro у L1). Поля —
-    как в реестре: n, corr, null_corr (перетасовка I внутри дня + бутстрап по
+    rows по (k, h): k пробегает depths (см. ГЛУБИНЫ в докстринге модуля). Поля —
+    реестровые n, corr, null_corr (перетасовка I внутри дня + бутстрап по
     дням через common.*), median_signed_move_top_quintile, null_move (тот же
-    контроль), sign_agree, half_spread_median."""
+    контроль), sign_agree, half_spread_median; плюс
+    mean_signed_move_top_quintile, slope, zero_share."""
     days_data = _prep(rows, depths)
     total = sum(len(dd["ts"]) for dd in days_data.values())
     step = max(1, -(-total // max_rows)) if max_rows else 1
     out_rows = []
-    for k in list(depths) + ["micro"]:
+    for k in depths:
         for h in horizons_s:
             h = int(h)
             rng = random.Random(f"{seed}:{k}:{h}")
@@ -284,8 +320,11 @@ def analyze(rows: list[tuple], *, depths=DEPTHS, horizons_s=HORIZONS_S,
                 "corr": real_corr,
                 "null_corr": common.pvalue_and_ci(real_corr, null_corr, boot_corr),
                 "median_signed_move_top_quintile": real_med,
+                "mean_signed_move_top_quintile": statistics.fmean(real_med_list) if real_med_list else None,
+                "slope": _slope(Is, moves),
                 "null_move": common.pvalue_and_ci(real_med, null_move, boot_move),
                 "sign_agree": _sign_agree(Is, moves),
+                "zero_share": (sum(1 for mv in moves if not mv) / len(moves)) if moves else None,
                 "half_spread_median": (statistics.median(spreads) / 2) if spreads else None,
             })
     notes = [f"прореживание точек отсчёта: каждый {step}-й снимок (max_rows={max_rows})"] if step > 1 else []
@@ -305,7 +344,7 @@ def run(arg: dict) -> dict:
         return {"id": "C1", "symbol": symbol_key, "window": [since, until],
                 "error": "нет снимков стакана в окне"}
 
-    depths = tuple(int(x) for x in arg.get("depths", DEPTHS))
+    depths = tuple(_depth_key(x) for x in arg.get("depths", DEPTHS))
     horizons = tuple(int(x) for x in arg.get("horizons_s", HORIZONS_S))
     draws = int(arg.get("draws", 200))
     seed = int(arg.get("seed", 0))

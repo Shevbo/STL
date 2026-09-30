@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from trader.lab.footprints import a2_channel_breakout as a2
 from trader.lab.footprints import common
 
-D0 = int(datetime(2026, 9, 1, tzinfo=timezone.utc).timestamp())   # метка = МСК-стенка
+D0 = int(datetime(2026, 9, 1, 10, 0, tzinfo=timezone.utc).timestamp())   # 10:00 МСК-стенка, в сессии
 
 
 def _bars_walk(n_days=15, seed=1, minutes=200):
@@ -90,4 +90,4 @@ def test_events_do_not_cross_day_boundary():
     assert 0 not in {i for i, _ in events}
 
     res = a2.analyze(rows, lookbacks=(20,), horizons=(5,), draws=20, seed=0)
-    assert res["notes"] == [] or all("отброшено" in n for n in res["notes"])
+    assert all("отброшено" in n or "откат после" in n for n in res["notes"]), res["notes"]

@@ -60,14 +60,15 @@ def test_clearing_kept_by_default():
 
 def test_prev_leak_fixed():
     """09.2026 баг: prev для «открытия после перерыва» двигался и по
-    исключённым (ночь/клиринг) барам — бар 08:55 «спасал» 09:00 от
+    исключённым (вне сессии/клиринг) барам — бар 06:55 «спасал» 07:00 от
     исключения (разрыв всего 60 с). Фикс: prev только от оставленных баров,
-    09:00 должно остаться исключённым даже при наличии бара 08:55."""
-    rows = [[D0 + 535 * 60, 100, 105, 95, 100, 5],   # 08:55, ночь
-            [D0 + 540 * 60, 100, 105, 95, 101, 5]]   # 09:00, открытие после ночи
+    07:00 должно остаться исключённым даже при наличии бара 06:55."""
+    rows = [[D0 + 415 * 60, 100, 105, 95, 100, 5],   # 06:55, до сессии
+            [D0 + 420 * 60, 100, 105, 95, 101, 5],   # 07:00, открытие после перерыва
+            [D0 + 421 * 60, 100, 105, 95, 101, 5]]   # 07:01, в сессии (08:00 раньше резалось)
     days, excl = a4.prepare(rows)
-    assert days == {}
-    assert excl.get("ночь") == 1
+    assert [m for blk in days.values() for m, _, _ in blk] == [421]
+    assert excl.get("до сессии") == 1
     assert excl.get("открытие после перерыва") == 1
 
 
@@ -109,3 +110,22 @@ def test_shuffle_within_day_keeps_multiset():
 def test_pvalue_and_ci():
     r = common.pvalue_and_ci(2.0, [1.0] * 99, [1.9, 2.0, 2.1])
     assert r["p"] == 0.01 and r["n_null"] == 99 and r["ci95"][0] <= 2.0 <= r["ci95"][1]
+    assert r["p_low"] == 1.0 and r["p_two"] == 0.02
+
+
+def test_pvalue_two_sided_sees_opposite_sign():
+    """Эффект обратного знака: верхний p ~1 («пусто»), p_low и p_two его видят."""
+    null = [float(x) for x in range(-49, 50)]          # 99 нулей около 0
+    r = common.pvalue_and_ci(-100.0, null, [])
+    assert r["p"] == 1.0 and r["p_low"] == 0.01 and r["p_two"] == 0.02
+    mid = common.pvalue_and_ci(0.0, null, [])
+    assert mid["p_two"] == 1.0
+
+
+def test_session_window():
+    assert not common.in_session(6 * 60 + 59) and common.in_session(7 * 60)
+    assert common.in_session(23 * 60 + 49) and not common.in_session(23 * 60 + 50)
+    rows = [[D0 + m * 60, 1] for m in (419, 420, 1430)]
+    kept, notes = common.session_rows(rows)
+    assert [r[0] for r in kept] == [D0 + 420 * 60]
+    assert notes == ["исключено до сессии: 1 баров", "исключено после сессии: 1 баров"]

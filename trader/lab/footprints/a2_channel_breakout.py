@@ -18,8 +18,8 @@
 p-value (описательно).
 
 Ограничения: окно N не пересекает ночной перерыв — бары берутся только из
-того же дня (common.by_day разрезает по календарной дате МСК-стенки, ночь
-23:50-09:00 сама попадает на смену суток). Событие не считается, если баров
+того же дня (common.by_day разрезает по календарной дате МСК-стенки); бары
+вне сессии 07:00-23:50 (common.session_rows) выброшены со счётчиком в notes. Событие не считается, если баров
 ДО t в дне меньше N (недостаточная история) или бар t+h выходит за пределы
 дня (недостаточный форвард) — число отброшенных по второй причине идёт в
 notes, не выбрасывается молча.
@@ -163,8 +163,13 @@ def _rows_for(days: dict, lookbacks, horizons, draws: int, seed: int) -> tuple[l
 
 def analyze(rows: list[list], lookbacks=(20, 60, 120, 240), horizons=(5, 15, 30, 60),
             draws: int = 200, seed: int = 0) -> dict:
+    rows, sess_notes = common.session_rows(rows)
     days = common.by_day(rows)
     real_rows, notes = _rows_for(days, lookbacks, horizons, draws, seed)
+    notes = sess_notes + notes + [
+        "отрицательная медиана = откат после нового экстремума; сравнивать с near "
+        "(псевдопробой): если откат тот же, это не пробой, а возврат после экстремума",
+    ]
     first, second = common.halves(rows)
     first_rows, _ = _rows_for(common.by_day(first), lookbacks, horizons, draws, seed) \
         if first else ([], [])

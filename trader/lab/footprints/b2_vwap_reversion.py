@@ -37,6 +37,9 @@ WARMUP_MIN минут дня, фиксированное на день в каж
 
 Событие не считается, если бар t+h выходит за пределы дня (недостаточный
 форвард) - число отброшенных идёт в notes, не выбрасывается молча.
+
+Сессия: бары вне 07:00-23:50 (common.session_rows) выброшены до разбивки по
+dням, счётчик «до сессии»/«после сессии» в notes.
 """
 from __future__ import annotations
 
@@ -190,8 +193,10 @@ def _rows_for(days: dict, k_levels, horizons, draws: int, seed: int) -> tuple[li
 
 def analyze(rows: list[list], k_levels=(2, 3, 4), horizons=(15, 30, 60),
             draws: int = 200, seed: int = 0) -> dict:
+    rows, sess_notes = common.session_rows(rows)
     days = common.by_day(rows)
     real_rows, notes = _rows_for(days, k_levels, horizons, draws, seed)
+    notes = sess_notes + notes
     first, second = common.halves(rows)
     first_rows, _ = _rows_for(common.by_day(first), k_levels, horizons, draws, seed) \
         if first else ([], [])

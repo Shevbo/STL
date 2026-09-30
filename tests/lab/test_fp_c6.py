@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from trader.lab.footprints import c6_stop_hunt as c6
 
-D0 = int(datetime(2026, 9, 1, tzinfo=timezone.utc).timestamp())   # метка = МСК-стенка
+D0 = int(datetime(2026, 9, 1, 10, 0, tzinfo=timezone.utc).timestamp())   # 10:00 МСК-стенка, в сессии
 SESSION_MIN = 300
 
 

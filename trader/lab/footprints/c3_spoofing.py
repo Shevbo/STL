@@ -49,10 +49,17 @@ elapsed/T, что у конкретного реального pulled-событ
   а не отдельный проход (одинаковый список появлений тратился бы дважды).
 - move_after ожидается ОТРИЦАТЕЛЬНЫМ (откат) — common.pvalue_and_ci всегда
   тестирует «нуль >= настоящего» (эффект неожиданно ВЫСОКИЙ). Для move_after
-  это неверная сторона, поэтому `_pvalue_lower` инвертирует знак перед
-  вызовом и возвращает результат обратно в исходный масштаб (ci переставляет
-  местами при инверсии). move_during использует common.pvalue_and_ci как есть
+  это неверная сторона, поэтому `_pvalue_lower` кладёт в p нижний хвост
+  (`p_low` из common). move_during использует common.pvalue_and_ci как есть
   — там ожидаемый эффект положителен по построению знака.
+
+Известные дефекты (проверка 30.09): нуль вырожден (пул из draws значений,
+затем бутстрап медианой по n~1000 даёт почти одинаковые нулевые медианы, p
+принимает только 1/(draws+1) или 1); нет базовой доли снятия для обычных
+заявок; цензура окна (стена 5-го уровня при уходе цены выпадает как outlived,
+при подходе остаётся) делает `pulled` выборкой подходов; знак `move_during` в
+модуле (+ = от стены) противоположен формулировке реестра (к стене).
+Переделать контролем с той же цензурой на псевдостенах.
 """
 from __future__ import annotations
 
@@ -235,13 +242,9 @@ def _boot_median(pool: list[float], n: int, draws: int, rng: random.Random) -> l
 
 
 def _pvalue_lower(real, nulls: list[float], boots: list[float]) -> dict:
-    """common.pvalue_and_ci тестирует «нуль >= настоящего»; здесь нужна
-    обратная сторона (см. докстринг модуля). Инверсия знака туда-обратно."""
-    res = common.pvalue_and_ci(-real if real is not None else None,
-                                [-x for x in nulls], [-x for x in boots])
-    res["stat"] = real
-    lo, hi = res["ci95"]
-    res["ci95"] = [-hi if hi is not None else None, -lo if lo is not None else None]
+    """Обратная сторона (см. докстринг модуля): p = нижний хвост common."""
+    res = common.pvalue_and_ci(real, nulls, boots)
+    res["p"] = res["p_low"]
     return res
 
 

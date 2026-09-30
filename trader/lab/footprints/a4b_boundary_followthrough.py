@@ -35,8 +35,8 @@ A4 нашёл аномальный объём/ход в первую минут�
 односторонний (common.pvalue_and_ci: «нуль >= настоящего»; p=1/(draws+1) —
 пол разрешения теста, не измеренное значение). Ожидаемый ход может быть и
 продолжением (положительный stat), и откатом (отрицательный) — для
-отрицательного стата используется обратная сторона тем же приёмом, что
-`_pvalue_lower` в c3_spoofing.py (инверсия знака туда-обратно).
+отрицательного стата p = нижний хвост (`p_low`). Двусторонний `p_two` лежит
+рядом в каждом null-поле и в сводках читается по умолчанию.
 
 absmove на RI/BR упирается в шаг тика (медиана |c-o| берёт только 1/1.5/2/3
 от базы) — `ex_events` рядом с медианной absmove добавляет поле
@@ -45,7 +45,7 @@ absmove на RI/BR упирается в шаг тика (медиана |c-o| �
 знаменатель — конкретный базовый класс, не общий фон, устойчивость к тику
 не так критична, но при желании считать средним минимум тот же принцип).
 
-Исключения (ночь, первая минута после перерыва) — как у A4, `_exclusion`
+Исключения (вне сессии 07:00-23:50, первая минута после перерыва) — как у A4, `_exclusion`
 переиспользуется импортом; клиринг 14:00-14:05/18:45-19:05 по умолчанию НЕ
 исключается (по RIZ6 в эти минуты реальные объёмы, вырезать нельзя) —
 `arg["exclude_clearing"]` включает старое поведение явно.
@@ -87,7 +87,7 @@ def _minute_class(m: int, offset: int = 0) -> str:
 def prepare(rows: list[list], exclude_clearing: bool = False) -> tuple[dict, dict]:
     """Бары -> {день: [(минута, open, close, объём), ...]}; исключения как у
     A4 (a4_bar_boundary._exclusion): prev для «открытия после перерыва» не
-    двигается по барам «ночь» (не маскировать разрыв случайным тиком), но
+    двигается по барам вне сессии (не маскировать разрыв случайным тиком), но
     двигается по любым другим исключённым — иначе первый же исключённый бар
     дня каскадом исключает всё, что после него (баг первой правки A4)."""
     days, excl = {}, {}
@@ -99,7 +99,7 @@ def prepare(rows: list[list], exclude_clearing: bool = False) -> tuple[dict, dic
                 excl[why] = excl.get(why, 0) + 1
             else:
                 keep.append((common.minute_of_day(r[0]), float(r[1]), float(r[4]), float(r[5])))
-            if why != "ночь":
+            if why not in common.OUT_OF_SESSION:
                 prev = r[0]
         if keep:
             days[d] = keep
@@ -303,15 +303,9 @@ def _select_vol(top: bool):
 
 
 def _pvalue_lower(real, nulls: list, boots: list) -> dict:
-    """common.pvalue_and_ci тестирует «нуль >= настоящего»; для ожидаемого
-    ОТРИЦАТЕЛЬНОГО эффекта (откат) нужна обратная сторона — тот же приём, что
-    `_pvalue_lower` в c3_spoofing.py (инверсия знака туда-обратно)."""
-    def neg(xs):
-        return [-x for x in xs if x is not None]
-    res = common.pvalue_and_ci(-real if real is not None else None, neg(nulls), neg(boots))
-    res["stat"] = real
-    lo, hi = res["ci95"]
-    res["ci95"] = [-hi if hi is not None else None, -lo if lo is not None else None]
+    """Откат (отрицательный эффект): p = нижний хвост common.pvalue_and_ci."""
+    res = common.pvalue_and_ci(real, nulls, boots)
+    res["p"] = res["p_low"]
     return res
 
 
