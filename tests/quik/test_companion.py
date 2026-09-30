@@ -825,6 +825,12 @@ def test_manual_average_equals_the_quik_one_when_no_robots_hold_the_symbol(monke
     pos = next(p for p in body["positions"] if p["sec"] == "RIZ6")
     assert pos["manual_avg"] == pytest.approx(84_805.4)
     assert pos["manual_avg_why"] == ""
+    # И ОБЯЗАТЕЛЬНО ПОМЕЧЕНА ИСТОЧНИКОМ. Это средняя счёта, а она пересчитывается
+    # к клиринговой цене: real-trade 30.09.2026 показал позицию RIZ6 −43, которая
+    # не менялась и по которой не было сделок, а средняя за ночь уехала с 83370
+    # на 84920 — 1550 пунктов чистого пересчёта. Подписать её «ценой входа»
+    # значит повторить смешение баз, на котором горели с ВМ.
+    assert pos["manual_avg_src"] == "quik"
 
 
 def test_manual_average_stays_unknown_while_robots_hold_the_same_symbol(monkeypatch):
@@ -858,4 +864,5 @@ def test_manual_average_stays_unknown_while_robots_hold_the_same_symbol(monkeypa
                                headers=_operator_headers()).json()
     pos = next(p for p in body["positions"] if p["sec"] == "RIZ6")
     assert pos["manual_avg"] is None
+    assert pos["manual_avg_src"] == ""
     assert "роботами" in pos["manual_avg_why"]

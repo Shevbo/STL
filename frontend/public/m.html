@@ -634,7 +634,11 @@ function renderPositions(list) {
     // Разбивка: Роботы (сумма позиций роботов) + Ручные (остаток мимо STL).
     // Средняя у каждой половины своя: половины ходят в разные стороны.
     // Средней у ручной половины может честно не быть: «ср. ?» вместо пустоты.
-    const mAvg = p.manual_avg ? half(p.manual_avg)
+    // Подпись по источнику: журнальная это цена входа, средняя счёта — от клиринга.
+    const mAvg = p.manual_avg
+      ? (p.manual_avg_src === 'quik'
+          ? ` <span class="q" title="средняя счёта, отсчитана ОТ КЛИРИНГА, а не от цены входа">ср. с клиринга ${px(p.manual_avg)}</span>`
+          : half(p.manual_avg))
       : (p.manual_net ? ` <span class="q" title="${esc(p.manual_avg_why || 'средняя ручной части неизвестна')}">ср. ?</span>` : '');
     const bd = (p.robot_net != null || p.manual_net != null)
       ? `Роботы <b>${sg(p.robot_net)}</b>${half(p.robot_avg)} · Ручные <b>${sg(p.manual_net)}</b>${mAvg}`
