@@ -135,6 +135,31 @@ async def fetch_schedule(client: httpx.AsyncClient) -> dict:
                           dt.get("data", []), dt.get("columns", []))
 
 
+def trading_ms_between(schedule: dict, a_ms: int, b_ms: int) -> int:
+    """Сколько ТОРГОВЫХ миллисекунд между двумя моментами (знак сохраняется).
+
+    Наклонную линию на графике человек проводит в БАРНОМ времени: ночь, клиринг
+    и выходной на оси X просто отсутствуют. Считая тот же наклон в календарном
+    времени, мы получаем ДРУГУЮ линию — тем более пологую, чем больше перерывов
+    попало между точками, а через ночь ошибка кратная. Оператор поймал это на
+    треугольнике RTS 30.09.2026: его линия и наша расходились на сотни пунктов.
+
+    Поэтому уровень наклонной границы считается по торговому времени, а оно
+    берётся из ОФИЦИАЛЬНОГО расписания биржи (ISS session_schedule) — не из
+    догадки про «07:00-23:50» и не из эвристики по дню недели.
+    """
+    if a_ms == b_ms:
+        return 0
+    sign = 1 if b_ms > a_ms else -1
+    lo, hi = (a_ms, b_ms) if sign > 0 else (b_ms, a_ms)
+    total = 0
+    for f_ms, t_ms, _typ in (schedule or {}).get("sessions") or []:
+        s_from, s_till = max(lo, int(f_ms)), min(hi, int(t_ms))
+        if s_till > s_from:
+            total += s_till - s_from
+    return sign * total
+
+
 def _short_type(typ: str) -> str:
     return {"morning_session": "morning", "main_session": "main",
             "evening_session": "evening", "weekend_session": "weekend"}.get(typ, "")

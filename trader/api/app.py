@@ -1365,6 +1365,11 @@ async def _market_session_poller(app_state) -> None:
                     if _new.get("sessions"):
                         sched = _new
                         sched_at = now_s
+                        # Расписание нужно не только оракулу «торгует ли сейчас»:
+                        # по нему считаются наклонные границы коридора и
+                        # треугольника, где время обязано быть ТОРГОВЫМ
+                        # (оператор, 30.09.2026).
+                        app_state.market_schedule = sched
                         log.info("market_session.schedule",
                                  windows=len(sched["sessions"]), holidays=len(sched["holidays"]))
                 except Exception as exc:  # noqa: BLE001 — держим прошлое расписание

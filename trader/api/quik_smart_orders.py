@@ -212,6 +212,7 @@ async def list_orders(request: Request):
     # Вне торгов сторож намеренно не срабатывает — интерфейс обязан это сказать,
     # иначе взведённая заявка выглядит сломанной.
     now = so_mod.now_ms()
+    sched = getattr(request.app.state, "market_schedule", None)
     out = []
     for o in book.orders:
         d = asdict(o)
@@ -219,7 +220,7 @@ async def list_orders(request: Request):
             # ТЕКУЩИЕ стенки считает движок, а не панель. Иначе геометрию
             # пришлось бы повторять на фронте, и две реализации одной прямой
             # разъехались бы — вопрос в том, когда, а не случится ли это.
-            low, top = so_mod.corridor_bounds(o, now)
+            low, top = so_mod.corridor_bounds(o, now, sched)
             d["c_now"] = {"low": round(low, 4), "top": round(top, 4),
                           "width": round(top - low, 4), "ts_ms": now}
         out.append(d)
@@ -1480,9 +1481,13 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
 
 
 
+_WALL_MOVE_EVERY_MS = 10_000   # как часто двигать заявку вслед за наклоном
+
+
 def _walls_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
                 agent: str, steps: dict[str, float],
-                price_limits: dict[str, tuple[float, float]], now: int) -> bool:
+                price_limits: dict[str, tuple[float, float]], now: int,
+                schedule: dict | None = None) -> bool:
     """Держать заявки коридора и треугольника В СТАКАНЕ, на обеих стенках.
 
     До 30.09.2026 сторож ждал касания и стрелял в тот же миг — то есть вставал в
@@ -1502,7 +1507,7 @@ def _walls_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
             continue
         step = steps.get(so.code, 0.0)
         limits = price_limits.get(so.code)
-        low, top = so_mod.corridor_bounds(so, now)
+        low, top = so_mod.corridor_bounds(so, now, schedule)
         if low >= top:
             continue                      # апекс: стенок больше нет, ведёт сторож
         live = dict(so.c_live or {})
@@ -1532,11 +1537,17 @@ def _walls_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
             if alive and rec.get("order_id"):
                 # Стенка уехала (наклон) или изменился объём — двигаем ОДНОЙ
                 # транзакцией, а не снять-поставить: между двумя действиями есть
-                # тик, в который защита отсутствует.
+                # тик, в который защита отсутствует. Но не чаще раза в
+                # _WALL_MOVE_EVERY_MS: наклонная ползёт непрерывно, и двигать
+                # заявку каждым проходом значит гонять транзакции ради долей
+                # шага (оператор назвал десять секунд, 30.09.2026).
+                if now - int(live.get(f"moved:{wall}") or 0) < _WALL_MOVE_EVERY_MS:
+                    continue
                 try:
                     srv.enqueue_order(agent, order_msgs.build_replace_order(
                         client_id=cid, order_id=str(rec["order_id"]),
                         new_price=px, new_quantity=qty))
+                    live[f"moved:{wall}"] = now
                     dirty = True
                 except Exception as exc:  # noqa: BLE001
                     log.warning("smart_order.wall_move_failed", so_id=so.so_id, error=str(exc))
@@ -1635,8 +1646,8 @@ async def _watch_once(state: Any) -> None:
         book.save()
     # Коридор и треугольник — тоже в стакан: заявка на стенке стоит заранее и
     # переставляется вслед за линией.
-    if _walls_sync(book, store, ost, srv, lim, agent, steps,
-                   _limits_now, so_mod.now_ms()):
+    if _walls_sync(book, store, ost, srv, lim, agent, steps, _limits_now,
+                   so_mod.now_ms(), getattr(state, "market_schedule", None)):
         book.save()
     filled = {d["client_id"] for d in ost.working_orders(agent)
               if d.get("state") == "filled"}
@@ -1672,7 +1683,7 @@ async def _watch_once(state: Any) -> None:
         t = store.tick(code, agent) or {}
         trail_before = [(o.so_id, o.activated, o.peak) for o in book.orders]
         actions = so_mod.evaluate(
-            book.orders, code,
+            book.orders, code, schedule=getattr(state, "market_schedule", None),
             last=float(t.get("last") or 0), bid=float(t.get("bid") or 0),
             ask=float(t.get("ask") or 0),
             tick_ms=int(t.get("received_at_unix_ms") or (now if t else 0)),

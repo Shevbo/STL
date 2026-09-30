@@ -50,6 +50,8 @@ import time
 import uuid
 from dataclasses import asdict, dataclass, field
 
+from trader import market_session
+
 KINDS = ("sl", "tp", "trail_tp", "on_fill", "trail_sl", "corridor", "triangle",
          "grid")
 # Типы, которые ведут уровень за экстремумом (храповик). Список общий, чтобы
@@ -396,16 +398,28 @@ def grid_stop_hit(so: SmartOrder, price: float) -> bool:
     return bool((lo and price <= lo) or (hi and price >= hi))
 
 
-def corridor_bounds(so: SmartOrder, now_ms: int) -> tuple[float, float]:
+def corridor_bounds(so: SmartOrder, now_ms: int, schedule: dict | None = None) -> tuple[float, float]:
     """Где стенки коридора ПРЯМО СЕЙЧАС: (нижняя, верхняя).
 
     Верхняя — прямая через (c_t1_ms, c_p1) и (c_t2_ms, c_p2), продолженная за
     вторую точку. Нижняя параллельна ей и отстоит на ту же ширину, что была
     задана в первой точке (c_p1 − c_low): угол задаётся один раз и относится ко
     ВСЕМУ коридору, иначе канал незаметно превращался бы в клин.
+
+    ВРЕМЯ ЗДЕСЬ ТОРГОВОЕ, а не календарное (поймал оператор 30.09.2026 на
+    треугольнике RTS). Линию он проводит на графике, где ночи, клиринга и
+    выходного на оси X нет вовсе; тот же наклон в календарном времени даёт
+    другую прямую — тем более пологую, чем больше перерывов между точками, а
+    через ночь ошибка кратная. Без расписания (schedule=None) остаётся
+    календарное время: это честный откат, но линия будет мягче.
     """
-    dt = so.c_t2_ms - so.c_t1_ms
-    k = (now_ms - so.c_t1_ms) / dt if dt else 0.0
+    if schedule:
+        dt = market_session.trading_ms_between(schedule, so.c_t1_ms, so.c_t2_ms)
+        passed = market_session.trading_ms_between(schedule, so.c_t1_ms, now_ms)
+    else:
+        dt = so.c_t2_ms - so.c_t1_ms
+        passed = now_ms - so.c_t1_ms
+    k = passed / dt if dt else 0.0
     top = so.c_p1 + (so.c_p2 - so.c_p1) * k
     if so.c_low2 > 0:
         # Треугольник: у нижней границы свой угол. Сужающийся сходится в апекс,
@@ -415,7 +429,8 @@ def corridor_bounds(so: SmartOrder, now_ms: int) -> tuple[float, float]:
     return top - (so.c_p1 - so.c_low), top
 
 
-def corridor_action(so: SmartOrder, price: float, now_ms: int) -> tuple[int, int, str]:
+def corridor_action(so: SmartOrder, price: float, now_ms: int,
+                    schedule: dict | None = None) -> tuple[int, int, str]:
     """Что коридор делает на этой цене: (сторона, объём, причина).
 
     Сторона +1 покупка, −1 продажа, 0 ничего. Объём УЖЕ с учётом переворота:
@@ -509,7 +524,8 @@ def _trail_step(so: SmartOrder, price: float) -> bool:
 def evaluate(orders: list[SmartOrder], code: str, *, last: float, bid: float,
              ask: float, tick_ms: int, now_ms: int,
              filled_client_ids: set[str], step: float,
-             session_open: bool | None) -> list[Fire | Cancel]:
+             session_open: bool | None,
+             schedule: dict | None = None) -> list[Fire | Cancel]:
     """One watcher pass for one instrument. Mutates trailing bookkeeping on the
     orders; returns the actions to execute. Deterministic, no I/O.
 
@@ -558,7 +574,7 @@ def evaluate(orders: list[SmartOrder], code: str, *, last: float, bid: float,
                 side, qty = corridor_closeout(so)
                 why = "переворты исчерпаны: закрываем позицию"
             else:
-                side, qty, why = corridor_action(so, price, now_ms)
+                side, qty, why = corridor_action(so, price, now_ms, schedule)
             if side and qty > 0:
                 px = marketable_price("buy" if side > 0 else "sell", bid, ask, price, step)
                 if px > 0:

@@ -124,3 +124,50 @@ def test_level_beyond_exchange_limit_is_not_placed(tmp_path):
     assert _run(book, FakeOst(), srv, limits={"RIZ6": (83000.0, 84800.0)}) is True
     sides = [m.place_order.side for m in srv.sent]
     assert sides == [1], "только покупка снизу"
+
+
+def test_order_creeps_after_a_falling_line_every_ten_seconds(tmp_path):
+    """Линия нисходящая — заявка сползает вниз вслед за ней, но не чаще чем раз
+    в десять секунд: наклонная ползёт непрерывно, и двигать заявку каждым
+    проходом сторожа значит гонять транзакции ради долей шага."""
+    # крутая линия: 1000 пунктов за 10 минут, то есть 1.67 пункта в секунду
+    book, so = _book(tmp_path, c_t2_ms=NOW + 600_000, c_p2=84000.0)
+    so.c_live = {"top": "so:x:top:1", "low": "so:x:low:1"}
+    rec_top = {"client_id": "so:x:top:1", "order_id": "11", "state": "active",
+               "remaining": 10, "price": 85000.0}
+    rec_low = {"client_id": "so:x:low:1", "order_id": "12", "state": "active",
+               "remaining": 10, "price": 84000.0}
+    ost = FakeOst([rec_top, rec_low])
+
+    srv = FakeSrv()
+    assert _run(book, ost, srv, NOW + 60_000) is True          # минута: −100 пунктов
+    first = [m.replace_order for m in srv.sent
+             if m.WhichOneof("payload") == "replace_order"][0]
+    assert first.new_price < 85000.0, "заявка поехала ВНИЗ за линией"
+    rec_top["price"] = first.new_price                          # QUIK подтвердил перестановку
+
+    srv2 = FakeSrv()
+    assert _run(book, ost, srv2, NOW + 65_000) is False, "пять секунд — рано"
+    assert srv2.sent == []
+
+    srv3 = FakeSrv()
+    assert _run(book, ost, srv3, NOW + 71_000) is True          # прошло 11 секунд
+    second = [m.replace_order for m in srv3.sent
+              if m.WhichOneof("payload") == "replace_order"][0]
+    assert second.new_price < first.new_price, "сползла ещё ниже"
+
+
+def test_rising_line_creeps_the_order_up(tmp_path):
+    """Наклон вверх — заявка ползёт ВВЕРХ. Направление задаёт линия, а не сторона
+    заявки: у восходящего канала и продажа сверху, и покупка снизу поднимаются."""
+    book, so = _book(tmp_path, c_t2_ms=NOW + 600_000, c_p2=86000.0)   # +1000 за 10 мин
+    so.c_live = {"top": "so:x:top:1", "low": "so:x:low:1"}
+    rec_top = {"client_id": "so:x:top:1", "order_id": "11", "state": "active",
+               "remaining": 10, "price": 85000.0}
+    rec_low = {"client_id": "so:x:low:1", "order_id": "12", "state": "active",
+               "remaining": 10, "price": 84000.0}
+    srv = FakeSrv()
+    assert _run(book, FakeOst([rec_top, rec_low]), srv, NOW + 60_000) is True
+    moved = {round(m.replace_order.new_price) for m in srv.sent
+             if m.WhichOneof("payload") == "replace_order"}
+    assert moved == {85100, 84100}, "обе стенки поднялись на сто пунктов"
