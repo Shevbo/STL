@@ -67,6 +67,7 @@ def _iter_order_events(root: str):
                     "filled": int(r.get("filled") or 0),
                     "ts": ts,
                     "text": r.get("text"),
+                    "order_id": r.get("order_id"),   # брокерский ID -> order_num в data/trades/*.jsonl
                 }
 
 
