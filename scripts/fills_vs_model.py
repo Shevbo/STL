@@ -27,13 +27,20 @@ from statistics import median
 from trader.lab.book_replay import MSK_SHIFT, BookRuntime, load_dir
 
 
-def load_orders(root: str, code: str):
-    """(исполненные, всего отправлено): неисполненные заявки тоже нужны — их цена не
-    спред, а упущенная сделка, и в выборке филлов их не видно (выжившие)."""
-    sent, filled = {}, {}
+def _iter_order_events(root: str):
+    """Все строки order-*.jsonl(.gz) (любой код), нормализованные в плоский dict.
+
+    Общий низкоуровневый парсер архива заявок — используется и load_orders() (один
+    код, только пары PENDING/FILLED, для сверки модели), и exec_baseline.py (все
+    коды, весь жизненный цикл заявки: PENDING/ACTIVE/PARTIAL/FILLED/CANCELLED/
+    REJECTED). Строка без ts (ts_unix_ms есть не у всех кадров — у части только
+    метка приёма STL) или без client_id пропускается: без ts заявку никуда не
+    привязать, без client_id не с чем сопоставить отправку и исход.
+    """
     for name in sorted(os.listdir(root)):
         if not name.startswith("order-"):
             continue
+        file_date = name[len("order-"):].split(".")[0].replace("-recovered", "")
         op = gzip.open if name.endswith(".gz") else open
         with op(os.path.join(root, name), "rt", encoding="utf-8", errors="ignore") as f:
             for ln in f:
@@ -41,18 +48,40 @@ def load_orders(root: str, code: str):
                     r = json.loads(ln)
                 except ValueError:
                     continue
-                if r.get("code") != code or not r.get("client_id"):
-                    continue
-                st, cid = r.get("state"), r["client_id"]
-                # ts_unix_ms есть не у всех кадров: у части только метка приёма STL
+                cid = r.get("client_id")
                 raw = r.get("ts_unix_ms") or r.get("stl_recv_ms")
-                if not raw:
+                if not cid or not raw:
                     continue
-                ts = int(raw) // 1000
-                if st == "ORDER_STATE_PENDING" and cid not in sent:
-                    sent[cid] = (ts, r.get("side"), int(r.get("quantity") or 0), float(r.get("price") or 0))
-                elif st == "ORDER_STATE_FILLED" and cid not in filled:
-                    filled[cid] = (ts, float(r.get("price") or 0), int(r.get("filled") or 0))
+                try:
+                    ts = int(raw) // 1000
+                except (TypeError, ValueError):
+                    continue
+                yield {
+                    "file_date": file_date,
+                    "code": r.get("code"),
+                    "client_id": cid,
+                    "state": r.get("state"),
+                    "side": r.get("side"),
+                    "qty": int(r.get("quantity") or 0),
+                    "price": float(r.get("price") or 0),
+                    "filled": int(r.get("filled") or 0),
+                    "ts": ts,
+                    "text": r.get("text"),
+                }
+
+
+def load_orders(root: str, code: str):
+    """(исполненные, всего отправлено): неисполненные заявки тоже нужны — их цена не
+    спред, а упущенная сделка, и в выборке филлов их не видно (выжившие)."""
+    sent, filled = {}, {}
+    for r in _iter_order_events(root):
+        if r["code"] != code:
+            continue
+        st, cid = r["state"], r["client_id"]
+        if st == "ORDER_STATE_PENDING" and cid not in sent:
+            sent[cid] = (r["ts"], r["side"], r["qty"], r["price"])
+        elif st == "ORDER_STATE_FILLED" and cid not in filled:
+            filled[cid] = (r["ts"], r["price"], r["filled"])
     out = []
     for cid, (t_send, side, qty, px_sent) in sent.items():
         if cid in filled:
