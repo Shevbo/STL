@@ -36,6 +36,19 @@ ponytail: видимость — 5 уровней снимка. Если наш�
 Считается только для оптимистичной границы (пессимистичных наливок мало,
 второе поле было бы почти всегда пустым) — см. cost_p90_pess и
 adverse_60s_med в строке отчёта.
+
+ЯКОРЯ РЕАЛЬНЫХ ЗАЯВОК (anchors_key, scripts/exec_anchors.py). Случайные точки
+отсчёта не похожи на моменты заявок робота (lxk22 усредняет против хода,
+macdshort/usopen входят по ходу) — anchors_key подменяет `_sample_anchors`
+на реальные (ts, side, qty, robot, fact_vs_mid) из архива. Для каждого
+якоря берётся ближайший снимок НЕ ПОЗЖЕ ts якоря (якорь без снимка не
+дальше MAX_GAP_S до него — дропается, см. dropped_anchors); size = qty
+якоря, сторона = его side — сетка `sizes`/`n_samples` не участвует. Страты
+те же плюс `robot` (у случайных якорей — константа "random"); поле `size`
+в строках якорей — "actual" (qty реальный, не сетка, не стратифицируем по
+нему, иначе n тает). Отдельная строка policy="actual" — фактическая
+издержка якоря (сам fact_vs_mid), чтобы сравнить с политиками на тех же
+моментах.
 """
 from __future__ import annotations
 
@@ -46,7 +59,8 @@ from collections import defaultdict
 
 from trader.lab.book_replay import BookRuntime
 from trader.lab.footprints import common
-from trader.lab.footprints.c1_book_imbalance import _halves_book, _load_full_book, _segment_ends
+from trader.lab.footprints.c1_book_imbalance import MAX_GAP_S, _halves_book, _load_full_book, _segment_ends
+from trader.lab.retro_reverse import _load_bars
 
 DEFAULT_SIZES = (1, 5, 10)
 DEFAULT_HOLD_S = (0, 5, 10, 30, 60, 180)
@@ -263,10 +277,10 @@ def _median_of_blocks(blocks: list[list[float]]) -> float | None:
 
 def _finalize(buckets: dict, seed: int, draws: int) -> list[dict]:
     out_rows = []
-    for (pname, hold_s, chase_s, size, side, mclass, wlabel), b in buckets.items():
+    for (pname, hold_s, chase_s, size, side, mclass, wlabel, robot), b in buckets.items():
         if b["n"] == 0:
             continue
-        rng = random.Random(f"{seed}:{pname}:{hold_s}:{chase_s}:{size}:{side}:{mclass}:{wlabel}")
+        rng = random.Random(f"{seed}:{pname}:{hold_s}:{chase_s}:{size}:{side}:{mclass}:{wlabel}:{robot}")
         rows_by_day: dict = defaultdict(list)
         for d, v in zip(b["days"], b["diff_pess"]):
             rows_by_day[d].append(v)
@@ -275,7 +289,7 @@ def _finalize(buckets: dict, seed: int, draws: int) -> list[dict]:
         ci = [_pctl(boot_sorted, 0.025), _pctl(boot_sorted, 0.975)] if boot_sorted else [None, None]
         out_rows.append({
             "policy": pname, "hold_s": hold_s, "chase_s": chase_s, "size": size, "side": side,
-            "minute_class": mclass, "weekend": wlabel, "n": b["n"],
+            "minute_class": mclass, "weekend": wlabel, "robot": robot, "n": b["n"],
             "fill_share_opt": b["fill_opt"] / b["n"],
             "fill_share_pess": b["fill_pess"] / b["n"],
             "cost_med_opt": statistics.median(b["cost_opt"]),
@@ -295,15 +309,29 @@ def _finalize(buckets: dict, seed: int, draws: int) -> list[dict]:
 # Точка входа
 # --------------------------------------------------------------------------
 
-def analyze(rows: list[tuple], *, sizes=DEFAULT_SIZES, hold_s_list=DEFAULT_HOLD_S,
-           chase_s_list=DEFAULT_CHASE_S, chase_every_s: int = DEFAULT_CHASE_EVERY_S,
-           n_samples: int = DEFAULT_N_SAMPLES, draws: int = DEFAULT_DRAWS,
-           seed: int = 0) -> dict:
+def _nearest_anchor_snapshot(dd: dict, ts_ms: int) -> int | None:
+    """Индекс снимка НЕ ПОЗЖЕ ts_ms, не дальше MAX_GAP_S до него; None = дырка
+    или якорь раньше первого снимка дня (дропается)."""
+    ts = dd["ts"]
+    idx = bisect.bisect_right(ts, ts_ms) - 1
+    if idx < 0 or ts_ms - ts[idx] > MAX_GAP_S * 1000:
+        return None
+    return idx
+
+
+def analyze(rows: list[tuple], *, anchors: list[tuple] | None = None, sizes=DEFAULT_SIZES,
+           hold_s_list=DEFAULT_HOLD_S, chase_s_list=DEFAULT_CHASE_S,
+           chase_every_s: int = DEFAULT_CHASE_EVERY_S, n_samples: int = DEFAULT_N_SAMPLES,
+           draws: int = DEFAULT_DRAWS, seed: int = 0) -> dict:
     """rows = [(ts_ms, bids, asks), ...] -> {rows, n_days, n_used, dropped,
-    half_spread_med, notes}. Тестируемое ядро (см. c1_book_imbalance.analyze) —
-    без сети, реальные данные грузит только run()."""
+    dropped_anchors, half_spread_med, notes}. Тестируемое ядро (см.
+    c1_book_imbalance.analyze) — без сети, реальные данные грузит только run().
+
+    anchors=None (по умолчанию) — старое поведение, случайные точки отсчёта
+    * сетка sizes * обе стороны, как раньше. anchors = [(ts_ms, side, qty,
+    robot, outcome, fact_vs_mid), ...] (см. scripts/exec_anchors.py) — по
+    одной точке на якорь, size/side реальные, плюс строка policy="actual"."""
     days_data = _prep_days(rows)
-    anchors = _sample_anchors(days_data, n_samples, seed)
     policies = [("market", 0, 0)]
     policies += [("hold", t, 0) for t in hold_s_list]
     policies += [("hold_chase", t, c) for t in hold_s_list for c in chase_s_list if c > 0]
@@ -313,49 +341,81 @@ def analyze(rows: list[tuple], *, sizes=DEFAULT_SIZES, hold_s_list=DEFAULT_HOLD_
                                           "diff_opt": [], "diff_pess": [], "days": []})
     half_spreads = []
     dropped = 0
-    for day, i in anchors:
+    dropped_anchors = 0
+
+    def _process(day, i, side, size, robot, fact_vs_mid):
         dd = days_data[day]
         bids0, asks0 = dd["bids"][i], dd["asks"][i]
         mid0 = (bids0[0][0] + asks0[0][0]) / 2
         half_spreads.append((asks0[0][0] - bids0[0][0]) / 2)
         mclass = _minute_class(common.minute_of_day(dd["ts"][i] // 1000))
         wlabel = _weekend_label(day)
-        for side in ("buy", "sell"):
-            sign = 1 if side == "buy" else -1
-            for size in sizes:
-                vwap, _deep = BookRuntime._walk(asks0 if side == "buy" else bids0, size)
-                cost_market = sign * (vwap - mid0)
-                for pname, hold_s, chase_s in policies:
-                    key = (pname, hold_s, chase_s, size, side, mclass, wlabel)
-                    b = buckets[key]
-                    if pname == "market":
-                        b["n"] += 1
-                        b["fill_opt"] += 1
-                        b["fill_pess"] += 1
-                        b["cost_opt"].append(cost_market)
-                        b["cost_pess"].append(cost_market)
-                        b["diff_opt"].append(0.0)
-                        b["diff_pess"].append(0.0)
-                        b["days"].append(day)
-                        continue
-                    res = _eval_policy(dd, i, side, size, hold_s, chase_s, chase_every_s, mid0)
-                    if res is None:
-                        dropped += 1
-                        continue
-                    b["n"] += 1
-                    b["days"].append(day)
-                    b["fill_opt"] += 1 if res["filled_opt"] else 0
-                    b["fill_pess"] += 1 if res["filled_pess"] else 0
-                    b["cost_opt"].append(res["cost_opt"])
-                    b["cost_pess"].append(res["cost_pess"])
-                    b["diff_opt"].append(res["cost_opt"] - cost_market)
-                    b["diff_pess"].append(res["cost_pess"] - cost_market)
-                    if res["adverse_opt"] is not None:
-                        b["adverse"].append(res["adverse_opt"])
+        size_field = size if anchors is None else "actual"
+        sign = 1 if side == "buy" else -1
+        vwap, _deep = BookRuntime._walk(asks0 if side == "buy" else bids0, size)
+        cost_market = sign * (vwap - mid0)
+        nonlocal dropped
+        for pname, hold_s, chase_s in policies:
+            key = (pname, hold_s, chase_s, size_field, side, mclass, wlabel, robot)
+            b = buckets[key]
+            if pname == "market":
+                b["n"] += 1
+                b["fill_opt"] += 1
+                b["fill_pess"] += 1
+                b["cost_opt"].append(cost_market)
+                b["cost_pess"].append(cost_market)
+                b["diff_opt"].append(0.0)
+                b["diff_pess"].append(0.0)
+                b["days"].append(day)
+                continue
+            res = _eval_policy(dd, i, side, size, hold_s, chase_s, chase_every_s, mid0)
+            if res is None:
+                dropped += 1
+                continue
+            b["n"] += 1
+            b["days"].append(day)
+            b["fill_opt"] += 1 if res["filled_opt"] else 0
+            b["fill_pess"] += 1 if res["filled_pess"] else 0
+            b["cost_opt"].append(res["cost_opt"])
+            b["cost_pess"].append(res["cost_pess"])
+            b["diff_opt"].append(res["cost_opt"] - cost_market)
+            b["diff_pess"].append(res["cost_pess"] - cost_market)
+            if res["adverse_opt"] is not None:
+                b["adverse"].append(res["adverse_opt"])
+        if fact_vs_mid is not None:
+            key = ("actual", None, None, size_field, side, mclass, wlabel, robot)
+            b = buckets[key]
+            b["n"] += 1
+            b["days"].append(day)
+            b["fill_opt"] += 1
+            b["fill_pess"] += 1
+            b["cost_opt"].append(fact_vs_mid)
+            b["cost_pess"].append(fact_vs_mid)
+            b["diff_opt"].append(fact_vs_mid - cost_market)
+            b["diff_pess"].append(fact_vs_mid - cost_market)
+
+    if anchors is None:
+        sampled = _sample_anchors(days_data, n_samples, seed)
+        for day, i in sampled:
+            for side in ("buy", "sell"):
+                for size in sizes:
+                    _process(day, i, side, size, "random", None)
+        n_used = len(sampled)
+    else:
+        n_used = 0
+        for ts_ms, side, qty, robot, _outcome, fact_vs_mid in anchors:
+            day = common.day_of(ts_ms / 1000)
+            dd = days_data.get(day)
+            idx = _nearest_anchor_snapshot(dd, ts_ms) if dd is not None else None
+            if idx is None:
+                dropped_anchors += 1
+                continue
+            n_used += 1
+            _process(day, idx, side, int(qty), robot, fact_vs_mid)
 
     out_rows = _finalize(buckets, seed, draws)
-    return {"rows": out_rows, "n_days": len(days_data), "n_used": len(anchors),
-            "dropped": dropped,
+    return {"rows": out_rows, "n_days": len(days_data), "n_used": n_used,
+            "dropped": dropped, "dropped_anchors": dropped_anchors,
             "half_spread_med": statistics.median(half_spreads) if half_spreads else None,
             "notes": []}
 
@@ -363,7 +423,14 @@ def analyze(rows: list[tuple], *, sizes=DEFAULT_SIZES, hold_s_list=DEFAULT_HOLD_
 def run(arg: dict) -> dict:
     """Задача агента (kind='task', считает только i9): arg = {"symbol_key",
     "book_key" (обязателен), "since", "until", "sizes", "hold_s", "chase_s",
-    "chase_every_s", "n_samples", "draws", "seed"}."""
+    "chase_every_s", "n_samples", "draws", "seed", "anchors_key"}.
+
+    anchors_key (необязателен) — ключ агентского канала с реальными якорями
+    заявок (scripts/exec_anchors.py, тот же _load_bars, что у агентских
+    баров); если задан, точки отсчёта не сэмплируются случайно, а берутся из
+    якорей (см. analyze). halves на якорях не считаем — раздел книги на
+    половины разрежет и так небольшой и нерегулярный набор реальных заявок
+    почти произвольно, первая/вторая половина станут несравнимы."""
     book_key = arg.get("book_key")
     if not book_key:
         return {"id": "EXEC2", "error": "book_key обязателен"}
@@ -381,21 +448,30 @@ def run(arg: dict) -> dict:
     n_samples = int(arg.get("n_samples", DEFAULT_N_SAMPLES))
     draws = int(arg.get("draws", DEFAULT_DRAWS))
     seed = int(arg.get("seed", 0))
+    anchors_key = arg.get("anchors_key")
 
     kw = dict(sizes=sizes, hold_s_list=hold_s_list, chase_s_list=chase_s_list,
              chase_every_s=chase_every_s, n_samples=n_samples, draws=draws, seed=seed)
-    res = analyze(rows, **kw)
-    first_rows, second_rows = _halves_book(rows)
-    halves = {
-        "first": analyze(first_rows, **kw)["rows"] if len(first_rows) > 1 else [],
-        "second": analyze(second_rows, **kw)["rows"] if len(second_rows) > 1 else [],
-    }
+    anchors = [tuple(r) for r in _load_bars(anchors_key)] if anchors_key else None
+    res = analyze(rows, anchors=anchors, **kw)
+    if anchors_key:
+        halves = {"first": [], "second": []}
+    else:
+        first_rows, second_rows = _halves_book(rows)
+        halves = {
+            "first": analyze(first_rows, **kw)["rows"] if len(first_rows) > 1 else [],
+            "second": analyze(second_rows, **kw)["rows"] if len(second_rows) > 1 else [],
+        }
     hs = res["half_spread_med"]
     notes = [f"снимков отброшено при загрузке: {dropped_load}",
             f"n_samples={n_samples}, реально взято точек отсчёта: {res['n_used']}",
             f"анкеров-политик отброшено (нет снимка для рыночного добора): {res['dropped']}",
             f"полспред медианный по отсчётам: {hs:.2f} пт" if hs is not None else "полспред медианный: нет данных",
             "adverse_60s — только по оптимистичной границе (пессимистичных наливок мало)"]
+    if anchors_key:
+        notes.append(f"якорей ({anchors_key}) отброшено без снимка (>{MAX_GAP_S} с до якоря или дыра): "
+                     f"{res['dropped_anchors']}")
+        notes.append("halves не считаются для anchors_key — набор реальных заявок мал и нерегулярен")
     last_bid1, last_ask1 = rows[-1][1][0][0], rows[-1][2][0][0]
     last_mid = (last_bid1 + last_ask1) / 2
     return common.report("EXEC2", symbol_key, [since, until], res["rows"], notes,

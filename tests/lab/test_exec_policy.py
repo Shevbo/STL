@@ -1,5 +1,6 @@
 """Политики доведения заявки (exec_policy) на синтетике — реальных данных
 здесь нет, они считаются только на i9 (STRICT, docs/execution-cost-program.md)."""
+import statistics
 from datetime import datetime, timezone
 
 from trader.lab import exec_policy
@@ -122,3 +123,74 @@ def test_hold_zero_equals_immediate_market():
         m = market[(r["side"], r["minute_class"], r["weekend"])]
         assert abs(r["cost_med_opt"] - m["cost_med_opt"]) < 1e-9, (r, m)
         assert r["fill_share_opt"] == 0.0  # T=0 никогда не "наливается" пассивно
+
+
+# --------------------------------------------------------------------------
+# anchors_key: точки отсчёта из реальных заявок (scripts/exec_anchors.py),
+# а не случайная выборка.
+# --------------------------------------------------------------------------
+
+def test_anchor_snapshot_not_later_than_ts():
+    """(а) индекс снимка для якоря — последний НЕ ПОЗЖЕ ts, не дальше MAX_GAP_S."""
+    rows = _book_rows_flat(minutes=2)
+    days_data = exec_policy._prep_days(rows)
+    dd = next(iter(days_data.values()))
+    # между снимками t=7 и t=8 (полсекунды после t=7) -> берём t=7, не t=8.
+    assert exec_policy._nearest_anchor_snapshot(dd, dd["ts"][7] + 500) == 7
+    # ровно на снимке -> сам снимок.
+    assert exec_policy._nearest_anchor_snapshot(dd, dd["ts"][7]) == 7
+    # раньше первого снимка дня -> снимка нет.
+    assert exec_policy._nearest_anchor_snapshot(dd, dd["ts"][0] - 1) is None
+    # дальше MAX_GAP_S после последнего снимка -> дырка, якорь дропается.
+    assert exec_policy._nearest_anchor_snapshot(dd, dd["ts"][-1] + 61_000) is None
+
+
+def test_anchors_strata_by_robot_and_actual_matches_fed_cost():
+    """(б) строки несут robot и стратифицированы им; (в) policy="actual"
+    сходится с медианой ПЕРЕДАННЫХ fact_vs_mid — обходит симуляцию целиком,
+    издержка берётся из якоря напрямую."""
+    rows = _book_rows_flat(minutes=2)
+    facts = {
+        ("robotA", "buy"): [1.0, 2.0, 3.0],
+        ("robotA", "sell"): [4.0, 6.0],
+        ("robotB", "buy"): [10.0, 20.0],
+        ("robotB", "sell"): [7.0, 8.0, 9.0],
+    }
+    ts_s = {
+        ("robotA", "buy"): [5, 15, 25], ("robotA", "sell"): [35, 45],
+        ("robotB", "buy"): [8, 18], ("robotB", "sell"): [28, 38, 48],
+    }
+    qtys = {
+        ("robotA", "buy"): [1, 2, 1], ("robotA", "sell"): [1, 3],
+        ("robotB", "buy"): [2, 1], ("robotB", "sell"): [1, 1, 2],
+    }
+    anchors = [((D0 + t) * 1000, side, qty, robot, "filled", fv)
+              for (robot, side), fvals in facts.items()
+              for t, qty, fv in zip(ts_s[(robot, side)], qtys[(robot, side)], fvals)]
+    assert len(anchors) == 10  # 10 якорей с известными side/qty, как в задании
+
+    res = exec_policy.analyze(rows, anchors=anchors, sizes=(1,), hold_s_list=(),
+                              chase_s_list=(), n_samples=10, seed=0)
+    assert res["n_used"] == 10
+    assert res["dropped_anchors"] == 0
+
+    actual_by_robot_side = {(r["robot"], r["side"]): r for r in res["rows"] if r["policy"] == "actual"}
+    assert set(actual_by_robot_side) == set(facts)
+    for key, fvals in facts.items():
+        r = actual_by_robot_side[key]
+        assert r["n"] == len(fvals)
+        assert abs(r["cost_med_pess"] - statistics.median(fvals)) < 1e-9, (key, r, fvals)
+
+    # (б) market (и любая другая политика) тоже несёт robot, не константу "random".
+    market_robots = {r["robot"] for r in res["rows"] if r["policy"] == "market"}
+    assert market_robots == {"robotA", "robotB"}
+
+
+def test_anchors_random_path_robot_is_constant():
+    """Старое поведение (без anchors) — robot="random" у всех строк, сетка
+    sizes*sides не меняется этим полем."""
+    rows = _book_rows_flat()
+    res = exec_policy.analyze(rows, sizes=(1,), hold_s_list=(), chase_s_list=(),
+                              n_samples=50, seed=4)
+    assert res["rows"]
+    assert {r["robot"] for r in res["rows"]} == {"random"}
