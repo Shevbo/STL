@@ -55,7 +55,14 @@ message AgentMessage {
 message TapeTrade {
   double price = 1;
   int64 qty = 2;
-  int32 side = 3;          // 1 = покупка, 2 = продажа (как отдаёт QUIK)
+  // 1 = ПРОДАЖА (агрессор продавал), 2 = ПОКУПКА, 0 = неизвестно. Именно так, а
+  // не наоборот: значение выводится из флагов OnAllTrade, где бит 0x1 — sell
+  // aggressor, бит 0x2 — buy aggressor (shectory_trade.lua side_from_flags).
+  // Комментарий при переносе типа из runner_bridge.proto 29.09.2026 был написан
+  // задом наперёд и прожил полдня; поймало окно backtests. Импортёр выгрузки
+  // терминала (scripts/import_quik_trades.py) размечает так же, поэтому в архиве
+  // поток и импорт означают одно и то же — путался только текст.
+  int32 side = 3;
   int64 ts_unix_ms = 4;    // штамп ПРИЁМА агентом, не время сделки на бирже
 }
 
