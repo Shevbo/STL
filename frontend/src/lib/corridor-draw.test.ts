@@ -75,4 +75,14 @@ describe('постановка коридора мышкой', () => {
     expect(corridorDraw.need).toBe(3);
     expect(corridorDraw.hint).toBe(CORRIDOR_STEPS[0]);
   });
+
+  // График на странице ОДИН, а заявку можно набирать на другой код. Клик по
+  // чужим ценам дал бы правдоподобный коридор на уровнях, которых у этого
+  // инструмента не бывает, — поэтому инструмент едет вместе с режимом.
+  it('режим помнит, по какому инструменту ставят', () => {
+    corridorDraw.start(3, 'RIZ6');
+    expect(corridorDraw.code).toBe('RIZ6');
+    corridorDraw.reset();
+    expect(corridorDraw.code).toBe('');
+  });
 });

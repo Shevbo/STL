@@ -588,6 +588,10 @@
   // координаты, квантование по шагу инструмента делает corridorFromClicks.
   function onChartClick(param: any) {
     if (!corridorDraw.active || !tvCandle) return;
+    // ЧУЖОЙ ИНСТРУМЕНТ — НЕ КЛИК. График на странице один, а заявка может
+    // набираться на другой код: принятый клик дал бы правдоподобный коридор на
+    // уровнях, которых у этого инструмента не бывает.
+    if (corridorDraw.code && corridorDraw.code !== chartCode) return;
     const y = param?.point?.y;
     if (param?.time == null || y == null) return;      // клик мимо полотна
     const price = tvCandle.coordinateToPrice(y);
@@ -604,6 +608,22 @@
 </script>
 
 <div class="frame">
+  <!-- ПОСТАНОВКА ФИГУРЫ МЫШКОЙ. Подсказка живёт НА ГРАФИКЕ, а не только в форме:
+       форма стоит отдельным фреймом ниже по странице, и оператор, включив режим,
+       не видел ни куда кликать, ни какой сейчас шаг (30.09.2026). -->
+  {#if corridorDraw.active}
+    <div class="draw-hint" role="status">
+      {#if corridorDraw.code && corridorDraw.code !== chartCode}
+        <b>график показывает {chartCode}, а заявка на {corridorDraw.code}</b>
+        — переключите инструмент, клики по чужим ценам не принимаются
+      {:else if corridorDraw.hint}
+        <b>клик {corridorDraw.clicks.length + 1} из {corridorDraw.need}</b>
+        — {corridorDraw.hint}
+      {:else}
+        <b>точки заданы</b> — параметры подставлены в форму заявки ниже
+      {/if}
+    </div>
+  {/if}
   <div class="frame-header">
     <!-- Task 3: instrument selector -->
     <select
@@ -679,7 +699,13 @@
        looked like a draggable border but had no handle — the real resize handle
        sat at the bottom of that gap. */
     flex: 1; min-height: 320px; border-bottom: 1px solid #2d2d4a;
+    /* Якорь для подсказки постановки фигуры: она лежит поверх графика. */
+    position: relative;
   }
+  .draw-hint { position: absolute; z-index: 5; left: 8px; right: 8px; top: 34px;
+    padding: 4px 8px; border-radius: 4px; font-size: 11px;
+    background: rgba(15, 15, 30, .92); border: 1px solid #5ecfb1; color: #d6dbe8; }
+  .draw-hint b { color: #5ecfb1; }
   .frame-header {
     display: flex; align-items: center; gap: 8px;
     padding: 3px 8px; background: #1a1a2e; border-bottom: 1px solid #2d2d4a;

@@ -29,12 +29,18 @@ export const TRIANGLE_STEPS = [
 let _active = $state(false);
 let _clicks = $state<CorridorClick[]>([]);
 let _need = $state(3);
+// Инструмент, по которому ставим. График на странице один, а заявку можно
+// набирать на другой код: клик по чужим ценам дал бы правдоподобный коридор на
+// уровнях, которых у этого инструмента не бывает.
+let _code = $state('');
 
 export const corridorDraw = {
   get active() { return _active; },
   get clicks() { return _clicks; },
   /** Сколько кликов нужно всего: 3 у коридора, 4 у треугольника. */
   get need() { return _need; },
+  /** Инструмент заявки: график обязан показывать ЕГО, иначе клики врут. */
+  get code() { return _code; },
   /** Сколько кликов ещё ждём; 0 — фигура задана. */
   get left() { return Math.max(0, _need - _clicks.length); },
   /** Подсказка на текущий шаг; пусто — режим выключен или клики собраны. */
@@ -43,12 +49,13 @@ export const corridorDraw = {
     return (_need === 4 ? TRIANGLE_STEPS : CORRIDOR_STEPS)[_clicks.length];
   },
 
-  /** `need` задаёт тип фигуры: 3 клика коридору, 4 треугольнику. */
-  start(need = 3) { _clicks = []; _need = need; _active = true; },
+  /** `need` задаёт тип фигуры: 3 клика коридору, 4 треугольнику;
+   *  `code` — инструмент, по графику которого разрешено кликать. */
+  start(need = 3, code = '') { _clicks = []; _need = need; _code = code; _active = true; },
   /** Лишний клик игнорируем: фигура задана, следующий молча сдвинул бы стенку. */
   push(c: CorridorClick) { if (_active && _clicks.length < _need) _clicks = [..._clicks, c]; },
   /** Отменить последний клик — промахнуться мышкой по свече проще, чем кажется. */
   undo() { _clicks = _clicks.slice(0, -1); },
   stop() { _active = false; },
-  reset() { _active = false; _clicks = []; },
+  reset() { _active = false; _clicks = []; _code = ''; },
 };

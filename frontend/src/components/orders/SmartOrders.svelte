@@ -367,6 +367,23 @@
   // (бар вместо пикселя, шаг цены, приведение нижней к первой точке) живёт в
   // corridorFromClicks и покрыт тестами; здесь только подстановка в форму.
   const isFigure = $derived(kind === 'corridor' || kind === 'triangle');
+
+  /** Включить постановку мышкой и ПОКАЗАТЬ график.
+   *
+   *  Форма заявок — отдельный фрейм НИЖЕ терминала, и главный график в момент
+   *  нажатия обычно за краем экрана: оператор включал режим и не видел ни куда
+   *  кликать, ни какой сейчас шаг (30.09.2026). Поэтому сами прокручиваем к
+   *  графику; подсказка шагов живёт на нём же, а не только здесь.
+   */
+  function startDraw() {
+    corridorDraw.start(clicksNeeded, code);
+    if (typeof document === 'undefined') return;
+    const chart = document.querySelector('main.content');
+    // Графика на странице может не быть вовсе (инструмент не выбран) — тогда
+    // молчать нельзя: режим включён, а кликать некуда.
+    if (chart) chart.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    else cErr = 'на странице нет графика: выберите инструмент в терминале — кликать пока некуда';
+  }
   const clicksNeeded = $derived(kind === 'triangle' ? 4 : 3);
 
   $effect(() => {
@@ -719,7 +736,7 @@
         <div class="so-draw">
           <div class="so-draw-row">
             <button type="button" class="so-draw-b" class:on={corridorDraw.active}
-                    onclick={() => corridorDraw.active ? corridorDraw.reset() : corridorDraw.start(clicksNeeded)}>
+                    onclick={() => corridorDraw.active ? corridorDraw.reset() : startDraw()}>
               {corridorDraw.active ? 'отменить постановку' : 'поставить мышкой по графику'}
             </button>
             {#if corridorDraw.active && corridorDraw.clicks.length}
@@ -727,7 +744,11 @@
             {/if}
           </div>
           {#if corridorDraw.hint}
-            <div class="so-draw-hint">клик {corridorDraw.clicks.length + 1} из {clicksNeeded} — {corridorDraw.hint}</div>
+            <!-- Где кликать — словами. «Поставить мышкой» без места клика это
+                 инструкция без адреса: график в другом фрейме, выше по странице. -->
+            <div class="so-draw-hint">клик {corridorDraw.clicks.length + 1} из {clicksNeeded} —
+              {corridorDraw.hint}. Кликайте по ГЛАВНОМУ ГРАФИКУ терминала (вверху
+              страницы, инструмент {code || '—'}); подсказка шага продублирована на нём.</div>
           {/if}
           {#if cErr}<div class="so-draw-err">{cErr}</div>{/if}
           {#if corridorW}
