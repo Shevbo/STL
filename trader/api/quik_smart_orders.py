@@ -1479,6 +1479,96 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
     return dirty
 
 
+
+def _walls_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
+                agent: str, steps: dict[str, float],
+                price_limits: dict[str, tuple[float, float]], now: int) -> bool:
+    """Держать заявки коридора и треугольника В СТАКАНЕ, на обеих стенках.
+
+    До 30.09.2026 сторож ждал касания и стрелял в тот же миг — то есть вставал в
+    очередь последним ровно там, где важна очередь. Оператор потребовал держать
+    заявки заранее; стенки при этом движутся, поэтому заявка не просто ставится,
+    а ПЕРЕСТАВЛЯЕТСЯ вслед за линией, пока цена до неё не дошла.
+
+    Объём считает та же логика, что вела сторожа: на пустой позиции это базовый
+    объём, в позиции — вдвое (переворот обязан и закрыть, и открыть).
+    """
+    dirty = False
+    work = {d.get("client_id"): d for d in ost.working_orders(agent)}
+    for so in book.orders:
+        if so.kind not in ("corridor", "triangle") or so.status not in ("armed", "native"):
+            continue
+        if so.c_done:
+            continue
+        step = steps.get(so.code, 0.0)
+        limits = price_limits.get(so.code)
+        low, top = so_mod.corridor_bounds(so, now)
+        if low >= top:
+            continue                      # апекс: стенок больше нет, ведёт сторож
+        live = dict(so.c_live or {})
+        base = so.c_qty or so.qty
+        for wall, px_raw, side in (("top", top, "sell"), ("low", low, "buy")):
+            # На стенке, от которой мы уже в позиции, заявки быть не должно:
+            # иначе она нарастила бы позицию там, где по правилам коридора мы
+            # только ждём противоположную стенку.
+            if (wall == "top" and so.c_pos < 0) or (wall == "low" and so.c_pos > 0):
+                cid = live.pop(wall, "")
+                rec = work.get(cid) or {}
+                if rec.get("order_id"):
+                    srv.enqueue_order(agent, order_msgs.build_cancel_order(
+                        client_id=cid, order_id=str(rec["order_id"])))
+                    dirty = True
+                continue
+            qty = base + abs(so.c_pos)
+            px = so_mod.quantize(px_raw, step, side)
+            if not price_within_limits(px, limits):
+                continue                  # за планкой биржи: подождём расширения
+            cid = live.get(wall) or ""
+            rec = work.get(cid) if cid else None
+            alive = rec is not None and rec.get("state") not in _DEAD_STATES and int(
+                rec.get("remaining") or 0) > 0
+            if alive and abs(float(rec.get("price") or 0) - px) < (step or 1) / 2                     and int(rec.get("remaining") or 0) == qty:
+                continue                  # стоит там, где надо, и нужного размера
+            if alive and rec.get("order_id"):
+                # Стенка уехала (наклон) или изменился объём — двигаем ОДНОЙ
+                # транзакцией, а не снять-поставить: между двумя действиями есть
+                # тик, в который защита отсутствует.
+                try:
+                    srv.enqueue_order(agent, order_msgs.build_replace_order(
+                        client_id=cid, order_id=str(rec["order_id"]),
+                        new_price=px, new_quantity=qty))
+                    dirty = True
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("smart_order.wall_move_failed", so_id=so.so_id, error=str(exc))
+                continue
+            new_cid = f"so:{so.so_id}:{wall}:{now % 100000}"
+            try:
+                validate_place(lim, code=so.code, quantity=qty,
+                               collar=lim.price_collar_frac,
+                               current_working=ost.working_contracts(agent),
+                               placed_today=ost.placed_today(agent))
+                ost.register_pending(agent, new_cid, so.code, side, px, qty)
+                ost.record_placement(agent)
+                srv.enqueue_order(agent, order_msgs.build_place_order(
+                    client_id=new_cid, code=so.code, side=side, price=px,
+                    quantity=qty, collar=lim.price_collar_frac))
+            except LimitError as exc:
+                log.warning("smart_order.wall_refused", so_id=so.so_id,
+                            wall=wall, error=str(exc))
+                so_journal.record("error", so, so_journal.LIMITS,
+                                  f"стенка {wall} не выставлена: {exc}", now_ms=now)
+                continue
+            except Exception as exc:  # noqa: BLE001
+                log.warning("smart_order.wall_place_failed", so_id=so.so_id, error=str(exc))
+                continue
+            live[wall] = new_cid
+            dirty = True
+        if live != (so.c_live or {}):
+            so.c_live = live
+            dirty = True
+    return dirty
+
+
 async def _watch_once(state: Any) -> None:
     book: SmartOrderBook = state.smart_orders
     active = book.active()
@@ -1539,8 +1629,14 @@ async def _watch_once(state: Any) -> None:
                               _stop_rows_by_tag(store, agent), so_mod.now_ms()):
         book.save()
     # Сетка: доставить недостающие уровни, перевернуть исполненные, снять по стопу.
+    _limits_now = _price_limits(store, agent)
     if _grid_sync(book, store, ost, srv, lim, agent, steps,
-                  _price_limits(store, agent), so_mod.now_ms()):
+                  _limits_now, so_mod.now_ms()):
+        book.save()
+    # Коридор и треугольник — тоже в стакан: заявка на стенке стоит заранее и
+    # переставляется вслед за линией.
+    if _walls_sync(book, store, ost, srv, lim, agent, steps,
+                   _limits_now, so_mod.now_ms()):
         book.save()
     filled = {d["client_id"] for d in ost.working_orders(agent)
               if d.get("state") == "filled"}
