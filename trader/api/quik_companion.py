@@ -19,6 +19,7 @@ from __future__ import annotations
 import datetime
 import hashlib
 import json
+import math
 import os
 import secrets
 import time
@@ -323,6 +324,27 @@ def _agent_bars_rows_safe(symbol: str) -> list:
         return _agent_bars_rows(os.path.join("agent_bars", f"{symbol}.json")) or []
     except Exception:  # noqa: BLE001 — график не стоит сбоя снапшота
         return []
+
+
+def _snap_price(price: float | None, step: float) -> float | None:
+    """Цену — на сетку инструмента. Просьба оператора 30.09.2026.
+
+    Средняя это результат деления, и на экране она выглядела как 84722.777777778:
+    цены такой не бывает, а глазом её сравнивают с ценами, которые бывают. Шага
+    не знаем — не трогаем: округлить «на всякий случай» к целым испортило бы
+    инструменты с дробным шагом вроде BR (0.01).
+    """
+    if price is None or not price:
+        return price
+    if not step or step <= 0:
+        return price
+    # ПОЛОВИНА — ВВЕРХ, как Math.round на фронте (snapPrice в smart-order-help).
+    # Встроенный round() в Python банковский: round(8472.5) даёт 8472, и на ровно
+    # половине шага панель и сервер назвали бы разные цены.
+    k = math.floor(float(price) / step + 0.5)
+    # Знаков ровно столько, сколько их в шаге: иначе 0.01 вернёт хвост double.
+    digits = len(str(step).split(".")[1]) if "." in str(step) else 0
+    return round(k * step, digits)
 
 
 def _align_series(raw_tail: list[dict], series: dict | None,
@@ -1192,6 +1214,16 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
     manual_block = _manual_block(store)
     _manual_avg_by_sec = {str(r.get("symbol")): r.get("avg_price")
                           for r in (manual_block.get("open") or []) if r.get("symbol")}
+    # Шаг цены инструмента — по нему округляем средние. Берём из того же фида
+    # параметров QLua, что и умные заявки: второй источник разошёлся бы с первым.
+    _steps: dict[str, float] = {}
+    try:
+        for _row in ((store.params(agent_id) if store is not None else None) or {}).get("rows") or []:
+            _st = float(_row.get("price_step") or 0)
+            if _st > 0 and _row.get("code"):
+                _steps[str(_row["code"])] = _st
+    except (AttributeError, TypeError, ValueError):
+        pass
     for p in positions:
         rn = _robot_net_by_sec.get(p["sec"], 0.0)
         p["robot_net"] = rn
@@ -1203,9 +1235,24 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
         # делить на полную сумму, когда у части роботов входа нет, значит занизить
         # цену ровно на долю молчащих.
         _priced = _robot_priced_by_sec.get(p["sec"], 0.0)
-        p["robot_avg"] = (_robot_cash_by_sec[p["sec"]] / _priced) if _priced else None
+        _step = _steps.get(p["sec"], 0.0)
+        p["robot_avg"] = _snap_price(
+            (_robot_cash_by_sec[p["sec"]] / _priced) if _priced else None, _step)
         # Не знаем среднюю — говорим None. Ноль на экране читается как «вошли по нулю».
-        p["manual_avg"] = _manual_avg_by_sec.get(p["sec"]) or None
+        _m = _manual_avg_by_sec.get(p["sec"]) or None
+        # РУЧНАЯ СРЕДНЯЯ БЕЗ РОБОТОВ. Журнал знает её только когда позиция набрана
+        # внутри окна; набранную раньше он не видит и честно отдаёт None. Но если
+        # роботов в инструменте нет вовсе, ручное = вся позиция, и средняя QUIK
+        # ЕСТЬ ручная средняя — тут выдумывать нечего. Смешивать её с ценами входа
+        # раннеров при живых роботах нельзя: у QUIK своя база (см. `avg`).
+        if _m is None and not _priced and not rn:
+            _m = p.get("avg") or None
+        p["manual_avg"] = _snap_price(_m, _step)
+        # Почему ручной средней нет — словами, чтобы пустое место не читалось как
+        # поломка экрана (оператор 30.09.2026).
+        p["manual_avg_why"] = ("" if p["manual_avg"] is not None else
+                               "позиция набрана до начала журнала, а средняя QUIK "
+                               "относится ко ВСЕЙ позиции вместе с роботами")
 
     # 3.5 Ручные заявки (#6): простые — из таблицы заявок QUIK (без тега = ручной
     # класс, включая детей умных заявок so:), умные — из книги STL. Только чтение.

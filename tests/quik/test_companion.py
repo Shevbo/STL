@@ -704,11 +704,15 @@ def test_a_half_without_a_known_entry_says_none_not_zero(monkeypatch):
                            "varmargin": -1.0}],
         },
         # Роботов на инструменте нет вовсе — роботной средней быть неоткуда.
-        "robots": [],
+        # Робот в инструменте ЕСТЬ, но входа своего не знает (avg_price пуст), а
+        # журнал не видел набора позиции. Тогда неизвестны обе средние — и ни
+        # одну нельзя подменить средней QUIK: она про всю позицию целиком.
+        "robots": [{"id": "lxk22", "symbol": "RIZ6", "mode": "real", "paused": False,
+                    "position": -5, "avg_price": 0.0}],
     }), 0)
     app.state.quik_store = store
     monkeypatch.setattr(quik_companion, "_manual_block",
-                        lambda _store: {"open": [{"symbol": "RIZ6", "position": -40,
+                        lambda _store: {"open": [{"symbol": "RIZ6", "position": -35,
                                                   "avg_price": None}]})
     body = TestClient(app).get("/api/v1/quik/companion/snapshot",
                                headers=_operator_headers()).json()
@@ -716,6 +720,7 @@ def test_a_half_without_a_known_entry_says_none_not_zero(monkeypatch):
     pos = next(p for p in body["positions"] if p["sec"] == "RIZ6")
     assert pos["robot_avg"] is None
     assert pos["manual_avg"] is None
+    assert pos["manual_avg_why"]          # молчать нельзя: сказано, ЧЕГО не знаем
 
 
 def test_ema_series_is_aligned_to_the_bars_the_panel_gets():
@@ -761,3 +766,96 @@ def test_a_series_of_unknown_length_is_dropped_not_guessed():
     assert quik_companion._align_series(raw, {"fast": [1.0, 2.0]}, raw[-3:]) is None
     assert quik_companion._align_series(raw, None, raw[-3:]) is None
     assert quik_companion._align_series(raw, {"fast": [1.0] * 10}, []) is None
+
+
+def test_average_price_sits_on_the_instrument_grid():
+    """Средняя округляется до ШАГА ЦЕНЫ инструмента (просьба оператора 30.09.2026).
+
+    Средняя это результат деления, и на экране она выглядела как
+    84722.777777778: цены такой не бывает, а глазом её сравнивают с ценами,
+    которые бывают. Дробный шаг при этом к целым не округляем — у BR он 0.01.
+    """
+    assert quik_companion._snap_price(84_722.7777, 10) == 84_720
+    assert quik_companion._snap_price(84_725.0, 10) == 84_730       # к ближайшему, не вниз
+    assert quik_companion._snap_price(95.174, 0.01) == 95.17
+    assert quik_companion._snap_price(95.176, 0.01) == 95.18
+
+
+def test_an_unknown_step_leaves_the_price_alone():
+    """Шага не знаем — цену НЕ трогаем.
+
+    Округлить «на всякий случай» к целым значило бы испортить инструменты с
+    дробным шагом; а None остаётся None: «не знаю» не превращается в ноль.
+    """
+    assert quik_companion._snap_price(95.174, 0) == 95.174
+    assert quik_companion._snap_price(None, 10) is None
+    assert quik_companion._snap_price(0, 10) == 0
+
+
+def test_manual_average_equals_the_quik_one_when_no_robots_hold_the_symbol(monkeypatch):
+    """Роботов в инструменте нет — ручное это ВСЯ позиция, и средняя QUIK её же.
+
+    Журнал знает среднюю только для позиции, набранной внутри окна; набранную
+    раньше он честно отдаёт как None, и оператор видел пустое место. Но когда
+    роботов нет, выдумывать нечего: средняя счёта И ЕСТЬ ручная средняя.
+    Смешивать её с ценами входа раннеров при живых роботах по-прежнему нельзя —
+    у QUIK своя база.
+    """
+    monkeypatch.delenv("SHECTORY_AUTH_DEV_BYPASS", raising=False)
+    app = FastAPI()
+    app.include_router(companion_router)
+    app.state.settings = _Settings()
+    app.state.db_pool = FakePool()
+    store = QuikAgentStore()
+    store.set_agent_status("A1", json.dumps({
+        "agent": {"version": "x", "link_up": True},
+        "health": {
+            "runner_healthy": True,
+            "money": {"limit": 1.0, "varmargin": -1.0, "age_ms": 100},
+            "positions": [{"sec": "RIZ6", "net": -43, "avg": 84_805.4, "varmargin": -1.0}],
+        },
+        "robots": [],
+    }), 0)
+    app.state.quik_store = store
+    monkeypatch.setattr(quik_companion, "_manual_block",
+                        lambda _store: {"open": [{"symbol": "RIZ6", "position": -43,
+                                                  "avg_price": None}]})
+    body = TestClient(app).get("/api/v1/quik/companion/snapshot",
+                               headers=_operator_headers()).json()
+    pos = next(p for p in body["positions"] if p["sec"] == "RIZ6")
+    assert pos["manual_avg"] == pytest.approx(84_805.4)
+    assert pos["manual_avg_why"] == ""
+
+
+def test_manual_average_stays_unknown_while_robots_hold_the_same_symbol(monkeypatch):
+    """Роботы в инструменте есть — ручную среднюю НЕ выводим вычитанием.
+
+    Средняя QUIK относится ко ВСЕЙ позиции и живёт на своей базе; цены входа
+    раннеров — на своей. Разность двух баз дала бы число, похожее на правду.
+    Вместо него говорим, ЧЕГО не знаем: пустое место читается как поломка.
+    """
+    monkeypatch.delenv("SHECTORY_AUTH_DEV_BYPASS", raising=False)
+    app = FastAPI()
+    app.include_router(companion_router)
+    app.state.settings = _Settings()
+    app.state.db_pool = FakePool()
+    store = QuikAgentStore()
+    store.set_agent_status("A1", json.dumps({
+        "agent": {"version": "x", "link_up": True},
+        "health": {
+            "runner_healthy": True,
+            "money": {"limit": 1.0, "varmargin": -1.0, "age_ms": 100},
+            "positions": [{"sec": "RIZ6", "net": -61, "avg": 84_781.0, "varmargin": -1.0}],
+        },
+        "robots": [{"id": "lxk22", "symbol": "RIZ6", "mode": "real", "paused": False,
+                    "position": -18, "avg_price": 84_722.0}],
+    }), 0)
+    app.state.quik_store = store
+    monkeypatch.setattr(quik_companion, "_manual_block",
+                        lambda _store: {"open": [{"symbol": "RIZ6", "position": -43,
+                                                  "avg_price": None}]})
+    body = TestClient(app).get("/api/v1/quik/companion/snapshot",
+                               headers=_operator_headers()).json()
+    pos = next(p for p in body["positions"] if p["sec"] == "RIZ6")
+    assert pos["manual_avg"] is None
+    assert "роботами" in pos["manual_avg_why"]

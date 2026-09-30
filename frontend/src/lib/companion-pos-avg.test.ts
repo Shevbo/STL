@@ -48,23 +48,40 @@ describe('средние цены половин позиции в панели'
       expect(html.indexOf(nb('82 984'))).toBeGreaterThan(html.indexOf('Ручные'));
     });
 
-    it(`${page}: средней нет — молчим, а не печатаем «ср. 0»`, () => {
+    // Нуля не печатаем НИКОГДА: «ср. 0» читается как «вошли по нулю».
+    it(`${page}: нуля вместо средней не бывает`, () => {
       for (const avg of [0, null, undefined]) {
         const html = posFn(src)([
           { sec: 'RIZ6', net: -35, varmargin: -31163,
             robot_net: 5, robot_avg: avg, manual_net: -40, manual_avg: avg },
         ]);
-        expect(html).not.toContain('ср.');
+        expect(html).not.toContain('ср. 0');
+        expect(html).not.toContain('ср. —');
       }
     });
 
-    it(`${page}: одна половина знает вход, другая нет`, () => {
+    // У РУЧНОЙ половины неизвестная средняя это факт, а не пустота: журнал не
+    // видел набора позиции, а средняя QUIK при живых роботах относится ко ВСЕЙ
+    // позиции. Пустое место оператор читал как поломку экрана (30.09.2026).
+    it(`${page}: неизвестная ручная средняя названа «?», а не спрятана`, () => {
       const html = posFn(src)([
         { sec: 'RIZ6', net: -35, varmargin: -31163,
-          robot_net: 5, robot_avg: 82826, manual_net: -40, manual_avg: null },
+          robot_net: 5, robot_avg: 82826, manual_net: -40, manual_avg: null,
+          manual_avg_why: 'позиция набрана до начала журнала' },
       ]);
-      expect(html.match(/ср\./g)).toHaveLength(1);
-      expect(html).toContain(nb('82 826'));
+      expect(html).toContain(nb('82 826'));       // роботная известна
+      expect(html).toContain('ср. ?');            // ручная — честное «не знаю»
+      expect(html).toContain('до начала журнала');// с причиной в подсказке
+    });
+
+    // Роботной средней может не быть тоже, и вот ей вопросительный знак не
+    // ставим: она либо посчитана по входам раннеров, либо её нет.
+    it(`${page}: флэт руками не просит средней вовсе`, () => {
+      const html = posFn(src)([
+        { sec: 'RIZ6', net: 5, varmargin: 100,
+          robot_net: 5, robot_avg: 82826, manual_net: 0, manual_avg: null },
+      ]);
+      expect(html).not.toContain('ср. ?');
     });
   }
 });

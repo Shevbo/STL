@@ -614,8 +614,13 @@ function renderPositions(list) {
     // Средняя у КАЖДОЙ половины своя: половины ходят в разные стороны, и одна
     // средняя на всю позицию не была бы ценой входа ни одной из них.
     const rn = p.robot_net, mn = p.manual_net;
+    // Средней у половины может честно не быть. Пустое место читается как
+    // поломка экрана, поэтому вместо неё ставим «ср. ?» с объяснением в
+    // подсказке (оператор 30.09.2026).
+    const mAvg = p.manual_avg ? half(p.manual_avg)
+      : (mn ? ` <span class="q" title="${esc(p.manual_avg_why || 'средняя ручной части неизвестна')}">ср. ?</span>` : '');
     const breakdown = (rn != null || mn != null)
-      ? `<span class="sub">Роботы <b>${sg(rn)}</b>${half(p.robot_avg)} · Ручные <b>${sg(mn)}</b>${half(p.manual_avg)}</span>`
+      ? `<span class="sub">Роботы <b>${sg(rn)}</b>${half(p.robot_avg)} · Ручные <b>${sg(mn)}</b>${mAvg}</span>`
       : `<span class="sub">${sg(p.net)}</span>`;
     // ВМ здесь — ЧИСЛО QUIK: вариационная маржа ЗА СЕССИЮ (с последнего клиринга),
     // включая закрытые за сессию сделки; перенесённая позиция считается от

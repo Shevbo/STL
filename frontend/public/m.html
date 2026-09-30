@@ -633,8 +633,11 @@ function renderPositions(list) {
   return list.map((p) => {
     // Разбивка: Роботы (сумма позиций роботов) + Ручные (остаток мимо STL).
     // Средняя у каждой половины своя: половины ходят в разные стороны.
+    // Средней у ручной половины может честно не быть: «ср. ?» вместо пустоты.
+    const mAvg = p.manual_avg ? half(p.manual_avg)
+      : (p.manual_net ? ` <span class="q" title="${esc(p.manual_avg_why || 'средняя ручной части неизвестна')}">ср. ?</span>` : '');
     const bd = (p.robot_net != null || p.manual_net != null)
-      ? `Роботы <b>${sg(p.robot_net)}</b>${half(p.robot_avg)} · Ручные <b>${sg(p.manual_net)}</b>${half(p.manual_avg)}`
+      ? `Роботы <b>${sg(p.robot_net)}</b>${half(p.robot_avg)} · Ручные <b>${sg(p.manual_net)}</b>${mAvg}`
       : sg(p.net);
     // ВМ здесь — ЧИСЛО QUIK: вариационная маржа ЗА СЕССИЮ (с последнего клиринга),
     // включая закрытые за сессию сделки. У робота ниже — ВМ ОТ ВХОДА. Это разные
