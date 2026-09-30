@@ -21,7 +21,9 @@ def test_tape_batch_becomes_one_line_per_trade(tmp_path):
     r = _rec(tmp_path)
     r._write("trade", {"code": "RIZ6", "received_at_unix_ms": 1790700000000,
                        "trades": [{"price": 84000.0, "qty": 3, "side": 1,
-                                   "ts_unix_ms": 1790700000100},
+                                   "ts_unix_ms": 1790700000100,
+                                   "exch_ts_unix_ms": 1790700000087,
+                                   "num": "1925040256583733982"},
                                   {"price": 84010.0, "qty": 7, "side": 2,
                                    "ts_unix_ms": 1790700000200}]})
     r._close_files()
@@ -33,7 +35,11 @@ def test_tape_batch_becomes_one_line_per_trade(tmp_path):
     assert set(rows[0]) == {"code", "price", "qty", "side", "received_at_unix_ms",
                             "ts_ms", "num", "source"}
     assert rows[0]["code"] == "RIZ6" and rows[0]["qty"] == 3 and rows[0]["side"] == 1
+    # биржевые миллисекунды сильнее штампа приёма; номер сделки едет строкой
+    assert rows[0]["ts_ms"] == 1790700000087 and rows[0]["num"] == "1925040256583733982"
+    # без биржевого времени остаётся штамп приёма, номер пуст — так и пишем
     assert rows[1]["price"] == 84010.0 and rows[1]["ts_ms"] == 1790700000200
+    assert rows[1]["num"] == ""
     assert rows[0]["source"] == "agent_stream", "поток и импорт должны быть различимы"
 
 

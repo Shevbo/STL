@@ -202,7 +202,8 @@ type luaEvent struct {
 	Ask       float64     `json:"ask"`        // md
 	Bids      [][]float64 `json:"bids"`       // book: [[price, qty] ...] best-first
 	Asks      [][]float64 `json:"asks"`       // book: [[price, qty] ...] best-first
-	Trades    [][]float64 `json:"trades"`     // tape: [[price, qty, side, ts_ms] ...]
+	Trades    [][]float64 `json:"trades"`     // tape: [[price, qty, side, ts_ms, exch_ms] ...]
+	Nums      []string    `json:"nums"`       // tape: номера сделок, строками (1.9e18 не влезает в float64)
 	PriceStep float64     `json:"price_step"` // param
 	StepCost  float64     `json:"step_cost"`  // param
 	Margin    float64     `json:"margin"`     // param: initial margin (BUYDEPO), ₽/contract
@@ -217,7 +218,8 @@ type MDEvent struct {
 	Code           string
 	Last, Bid, Ask float64
 	Bids, Asks     [][]float64 // book
-	Trades         [][]float64 // tape: [[price, qty, side, ts_ms] ...]
+	Trades         [][]float64 // tape: [[price, qty, side, ts_ms, exch_ms] ...]
+	Nums           []string    // tape: номера сделок, строками
 	PriceStep      float64     // param
 	StepCost       float64     // param
 	Margin         float64     // param: initial margin (BUYDEPO), ₽/contract
@@ -497,7 +499,7 @@ func (b *Bridge) dispatch(ev luaEvent) {
 		return
 	case "tape":
 		if md != nil {
-			md(MDEvent{Code: ev.Code, Trades: ev.Trades, IsTape: true})
+			md(MDEvent{Code: ev.Code, Trades: ev.Trades, Nums: ev.Nums, IsTape: true})
 		}
 		return
 	case "param":

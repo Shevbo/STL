@@ -488,10 +488,23 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 				// ...и в STL, для архива рынка: сторона и объём сделки есть
 				// только здесь, тик их не несёт (см. EmitTape).
 				tape := make([]*quikv1.TapeTrade, 0, len(trades))
-				for _, t := range trades {
+				for i, t := range trades {
+					// Номер сделки и биржевые миллисекунды идут ТОЛЬКО в STL
+					// (архив рынка): раннеру для баров они не нужны, а вот
+					// разбор айсбергов и периодичности дочерних заявок без них
+					// невозможен — в секунде все сделки сливаются в одну точку.
+					num := ""
+					if i < len(ev.Nums) {
+						num = ev.Nums[i]
+					}
+					var exch int64
+					if i < len(ev.Trades) && len(ev.Trades[i]) >= 5 {
+						exch = int64(ev.Trades[i][4])
+					}
 					tape = append(tape, &quikv1.TapeTrade{
 						Price: t.GetPrice(), Qty: t.GetQty(),
-						Side: t.GetSide(), TsUnixMs: t.GetTsUnixMs()})
+						Side: t.GetSide(), TsUnixMs: t.GetTsUnixMs(),
+						Num: num, ExchTsUnixMs: exch})
 				}
 				_ = lk.EmitTape(&quikv1.TapeBatch{
 					Code: ev.Code, Trades: tape,

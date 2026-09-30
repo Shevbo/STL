@@ -414,11 +414,18 @@ class MarketRecorder:
         n = 0
         for t in batch.get("trades") or []:
             try:
+                # ts_ms — БИРЖЕВОЕ время сделки с миллисекундами, когда QUIK его
+                # дал; иначе штамп приёма агентом. Без миллисекунд все сделки
+                # одной секунды слипались в один момент, и ни периодичность
+                # дочерних заявок, ни айсберг по ленте разобрать нельзя
+                # (просьба backtests 30.09.2026). num — номер сделки QUIK,
+                # строкой: он около 1.9e18 и в double уже не помещается.
+                exch = int(t.get("exch_ts_unix_ms") or 0)
                 row = {"code": code, "price": float(t.get("price") or 0),
                        "qty": int(t.get("qty") or 0), "side": int(t.get("side") or 0),
                        "received_at_unix_ms": recv,
-                       "ts_ms": int(t.get("ts_unix_ms") or recv),
-                       "num": "", "source": "agent_stream"}
+                       "ts_ms": exch or int(t.get("ts_unix_ms") or recv),
+                       "num": str(t.get("num") or ""), "source": "agent_stream"}
             except (TypeError, ValueError):
                 continue
             if row["price"] <= 0 or row["qty"] <= 0:

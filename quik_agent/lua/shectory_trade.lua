@@ -44,7 +44,7 @@
 -- Bump on every change you deliver to the VDS. Logged FIRST on OnInit so the
 -- operator can confirm which version QUIK actually loaded (the running script is
 -- in MEMORY; a file on disk with the same name may be a different build).
-local SCRIPT_VERSION = "2026.09.28-luaver"
+local SCRIPT_VERSION = "2026.09.30-tapenum"
 
 local CONFIG = {
   HOST          = "127.0.0.1",
@@ -577,7 +577,7 @@ end
 ----------------------------------------------------------------------
 local md = { codes = {}, code_set = {}, last_tick_ms = 0, last_book_ms = 0,
              last_param_ms = 0, tape = {}, last_tape_ms = 0, last_acc_ms = 0,
-             last_trade_ts_ms = 0 }
+             last_trade_ts_ms = 0, tape_nums = {} }
 for code in string.gmatch(CONFIG.MD_CODES or "", "([^,%s]+)") do
   md.codes[#md.codes + 1] = code
   md.code_set[code] = true
@@ -974,7 +974,11 @@ function OnAllTrade(t)
     local okts, ts = pcall(os.time, { year = dt.year, month = dt.month, day = dt.day,
       hour = dt.hour or 0, min = dt.min or 0, sec = dt.sec or 0 })
     if okts and ts then
-      exch_ms = ts * 1000
+      -- МИЛЛИСЕКУНДЫ БИРЖЕВОГО ВРЕМЕНИ (просьба backtests 30.09.2026): без них
+      -- все сделки одной секунды слипаются в один момент, и ни периодичность
+      -- дочерних заявок, ни айсберг по ленте не разобрать. QUIK отдаёт их в
+      -- datetime.ms; нет поля — остаётся прежняя секундная точность.
+      exch_ms = ts * 1000 + (tonumber(dt.ms) or 0)
       md.last_trade_ts_ms = exch_ms   -- lag metric sees ALL trades, replayed included
     end
   end
@@ -991,13 +995,22 @@ function OnAllTrade(t)
   -- 5th element = the trade's exchange epoch-ms (0 when QUIK gave no datetime): lets
   -- the Go agent run its own backstop gate. Older agents read only rows[0..3] — safe.
   buf[#buf + 1] = { tonumber(t.price) or 0, tonumber(t.qty) or 0, side, now_ms(), exch_ms }
+  -- НОМЕР СДЕЛКИ идёт ОТДЕЛЬНЫМ массивом строк, а не шестым числом строки: он
+  -- около 1.9e18, а строка ленты — массив чисел, и float64 такую величину уже
+  -- округляет. Плюс QLua 32-битная: "%d" его обрежет, поэтому формат "%.0f"
+  -- (то же правило, что для epoch-ms по всему скрипту).
+  local nums = md.tape_nums[t.sec_code]
+  if nums == nil then nums = {}; md.tape_nums[t.sec_code] = nums end
+  nums[#nums + 1] = string.format("%.0f", tonumber(t.trade_num) or 0)
 end
 
 local function publish_tape()
   for code, buf in pairs(md.tape) do
     if #buf > 0 then
-      emit({ event = "tape", code = code, trades = buf })
+      emit({ event = "tape", code = code, trades = buf,
+             nums = md.tape_nums[code] or {} })
       md.tape[code] = {}
+      md.tape_nums[code] = {}
     end
   end
 end
