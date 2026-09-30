@@ -69,3 +69,107 @@ def test_validation_demands_the_whole_grid():
     assert _grid().validate() is None
     # односторонняя сетка законна: только покупки или только продажи
     assert _grid(g_sells=0).validate() is None
+
+
+# --------------------------------------------------------------------------
+# СВИП ПО ГЕОМЕТРИИ для сторожа сетки.
+#
+# Уровни сетки считались чистыми функциями и были покрыты, а САМ СТОРОЖ
+# (_grid_sync) — тот, кто превращает уровень в заявку, — не был покрыт ничем.
+# Проверка «уровень по ту сторону рынка» жила там без единого теста, хотя
+# добавлена она была тем же фиксом, что и у стенок, и по той же причине:
+# 30.09.2026, 43 проданных контракта.
+# --------------------------------------------------------------------------
+
+import pytest
+
+from trader.api.quik_smart_orders import _grid_sync
+from trader.quik.smart_orders import SmartOrderBook
+
+GNOW = 1_790_800_000_000
+GSTEPS = {"RIZ6": 10.0}
+
+
+class GSrv:
+    def __init__(self):
+        self.sent = []
+
+    def enqueue_order(self, agent, msg):
+        self.sent.append(msg)
+
+
+class GOst:
+    def working_orders(self, agent=None):
+        return []
+
+    def working_contracts(self, agent=None):
+        return 0
+
+    def placed_today(self, agent=None):
+        return 0
+
+    def register_pending(self, *a):
+        pass
+
+    def record_placement(self, agent):
+        pass
+
+
+class GLim:
+    price_collar_frac = 0.002
+    trading_enabled = True
+    instrument_whitelist = ("RIZ6",)
+    max_contracts_per_order = 100
+    max_working_contracts = 500
+    daily_order_cap = 500
+
+
+def _gstore(px):
+    class S:
+        def tick(self, code, agent=None):
+            return {"last": px, "bid": px - 10.0, "ask": px + 10.0}
+    return S()
+
+
+def _gbook(tmp_path):
+    b = SmartOrderBook(str(tmp_path / "g.json"))
+    so = SmartOrder(so_id=new_id(), kind="grid", code="RIZ6", side="buy", qty=1,
+                    g_step=100.0, g_buys=5, g_sells=5, g_lot=1, g_base=85000.0,
+                    g_stop_pts=0.0, created_ms=GNOW, status="armed")
+    b.orders.append(so)
+    return b, so
+
+
+@pytest.mark.parametrize("market", range(84000, 86001, 100))
+def test_no_grid_order_ever_crosses_the_market(tmp_path, market):
+    """ИНВАРИАНТ: ни при какой цене рынка сетка не ставит заявку, пересекающую
+    рынок. Уровни сетки ФИКСИРОВАНЫ, поэтому при любом сдвиге цены часть из них
+    неизбежно оказывается по ту сторону — и именно они не имеют права стрелять.
+    """
+    book, so = _gbook(tmp_path)
+    srv = GSrv()
+    _grid_sync(book, _gstore(float(market)), GOst(), srv, GLim(), "9618",
+               GSTEPS, {}, GNOW)
+    for m in srv.sent:
+        if m.WhichOneof("payload") != "place_order":
+            continue
+        p = m.place_order
+        if p.side == 2:
+            assert p.price > market, (
+                f"продажа по {p.price:g} при рынке {market} пересекает рынок")
+        else:
+            assert p.price < market, (
+                f"покупка по {p.price:g} при рынке {market} пересекает рынок")
+
+
+def test_grid_places_nothing_without_a_quote(tmp_path):
+    """Без котировки не понять, по какую сторону рынка уровень: не стреляем."""
+    class Blind:
+        def tick(self, code, agent=None):
+            return {}
+
+    book, _ = _gbook(tmp_path)
+    srv = GSrv()
+    _grid_sync(book, Blind(), GOst(), srv, GLim(), "9618", GSTEPS, {}, GNOW)
+    placed = [m for m in srv.sent if m.WhichOneof("payload") == "place_order"]
+    assert placed == [], "вслепую сетка не выставляется"
