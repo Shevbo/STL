@@ -376,13 +376,11 @@
    *  графику; подсказка шагов живёт на нём же, а не только здесь.
    */
   function startDraw() {
-    corridorDraw.start(clicksNeeded, code);
-    if (typeof document === 'undefined') return;
-    const chart = document.querySelector('main.content');
-    // Графика на странице может не быть вовсе (инструмент не выбран) — тогда
-    // молчать нельзя: режим включён, а кликать некуда.
-    if (chart) chart.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    else cErr = 'на странице нет графика: выберите инструмент в терминале — кликать пока некуда';
+    // Инструмент обязателен: подокно открывается ИМЕННО на нём, и без кода
+    // показывать было бы нечего, а клики легли бы неизвестно на какие цены.
+    if (!code.trim()) { cErr = 'сначала выберите инструмент заявки — подокно открывается на нём'; return; }
+    cErr = '';
+    corridorDraw.start(clicksNeeded, code.trim());
   }
   const clicksNeeded = $derived(kind === 'triangle' ? 4 : 3);
 
@@ -747,8 +745,8 @@
             <!-- Где кликать — словами. «Поставить мышкой» без места клика это
                  инструкция без адреса: график в другом фрейме, выше по странице. -->
             <div class="so-draw-hint">клик {corridorDraw.clicks.length + 1} из {clicksNeeded} —
-              {corridorDraw.hint}. Кликайте по ГЛАВНОМУ ГРАФИКУ терминала (вверху
-              страницы, инструмент {code || '—'}); подсказка шага продублирована на нём.</div>
+              {corridorDraw.hint}. Кликайте в открывшемся подокне с графиком {code || '—'};
+              Esc — отменить.</div>
           {/if}
           {#if cErr}<div class="so-draw-err">{cErr}</div>{/if}
           {#if corridorW}
