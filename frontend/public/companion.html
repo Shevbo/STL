@@ -263,10 +263,15 @@
   .mchart .olbl.r-sl { fill: #c01515; font-weight: 700; }
   /* EMA стратегии: тонкие сплошные, быстрая ярче медленной. Не пунктир — это не
      план, а факт индикатора на текущей минуте. */
+  /* Две средние робота: БЫСТРАЯ голубая, ДЛИННАЯ тёмно-синяя (оператор
+     30.09.2026). Обе тонкие — это фон для чтения сигнала, а не сам сигнал;
+     заявки и уровни обязаны оставаться заметнее. Тон отличается светлотой, а
+     не только оттенком: на распечатке и в оттенках серого пара всё равно
+     различима. Средняя третья (у 3EMA) держится между ними. */
   .mchart .ema { stroke-width: 1; opacity: .85; }
-  .mchart .ema.ef { stroke: #b06a00; }
-  .mchart .ema.em { stroke: #8a7a3a; }
-  .mchart .ema.es { stroke: #5a6a8a; }
+  .mchart .ema.ef { stroke: #4fb0e8; }
+  .mchart .ema.em { stroke: #2f6fb0; }
+  .mchart .ema.es { stroke: #1b3a78; }
   /* Коридор долины смерти — заливка, разножка — пунктирные уровни. */
   .mchart .dvband { fill: #8a7a3a; opacity: .13; }
   .mchart .gapl { stroke: #8a5a12; stroke-width: 1; stroke-dasharray: 2 3; opacity: .8; }
@@ -760,6 +765,9 @@ function miniChart(ch) {
   // бару, где прогрева не хватило — null. Линию через null НЕ проводим: разрыв
   // честнее прямой через точку, которой не было.
   if (eser) {
+    // Роль линии словом: по цвету пару различают, но какая из них длинная —
+    // из цвета не следует, а вопрос возникает первым (оператор 30.09.2026).
+    const EROLE = { fast: 'быстрая', mid: 'средняя', slow: 'длинная' };
     for (const [key, cls2] of [['fast', 'ef'], ['mid', 'em'], ['slow', 'es']]) {
       const arr = eser[key];
       if (!Array.isArray(arr) || arr.length !== bars.length) continue;
@@ -771,7 +779,7 @@ function miniChart(ch) {
         pen = true;
       }
       if (d) s += `<path class="ema ${cls2}" d="${d.trim()}" fill="none"><title>`
-        + `EMA(${esc((ema && ema[key + '_n']) || '?')})</title></path>`;
+        + `EMA(${esc((ema && ema[key + '_n']) || '?')}) — ${EROLE[key]}</title></path>`;
     }
   } else if (ema && ema.fast && ema.slow) {
     // Серии нет (старый раннер) — остаётся срез «сейчас» горизонталями.
