@@ -19,6 +19,8 @@
     apexMs, corridorFromClicks, corridorState, corridorWidth,
   } from '$lib/smart-order-help';
   import { candlesStore } from '$lib/stores/candles.svelte';
+  import { instrumentStore } from '$lib/stores/instrument.svelte';
+  import ChartFrame from '../ChartFrame.svelte';
   import { eventRu, eventTone, type JournalRow } from '$lib/manual-journal';
   import {
     DEFAULT_PROFILE, guaranteeText, longWaitWarn, profileNames, profileOf,
@@ -375,6 +377,20 @@
    *  кликать, ни какой сейчас шаг (30.09.2026). Поэтому сами прокручиваем к
    *  графику; подсказка шагов живёт на нём же, а не только здесь.
    */
+  /** Символ графика для подокна: инструмент ЗАЯВКИ, а не тот, что открыт в
+   *  терминале. Подставить текущий символ терминала нельзя — клики легли бы на
+   *  чужие цены, а выглядело бы это правильно. */
+  const drawSymbol = $derived.by(() => {
+    const c = corridorDraw.code;
+    if (!c) return '';
+    if (String(symbol).split('@')[0] === c) return symbol;
+    const hit = instrumentStore.list.find(
+      (i) => i.ticker === c || String(i.symbol).split('@')[0] === c);
+    // Инструмента нет в списке — берём код как есть: график сам скажет, что
+    // данных нет. Это честнее, чем молча открыть чужой.
+    return hit ? hit.symbol : c;
+  });
+
   function startDraw() {
     // Инструмент обязателен: подокно открывается ИМЕННО на нём, и без кода
     // показывать было бы нечего, а клики легли бы неизвестно на какие цены.
@@ -555,6 +571,33 @@
   });
   onDestroy(() => { unsub?.(); for (const t of timers) clearInterval(t); });
 </script>
+<!-- ПОДОКНО ПОСТАНОВКИ. Живёт В ЭТОМ ЖЕ компоненте, что и кнопка: раскладка
+     страницы вокруг, режим разворота и то, какой инструмент открыт в терминале,
+     на него больше не влияют (жалобы оператора 30.09.2026 — сначала «не работает
+     в развороте», потом «подокно не возникает»). Размер от окна браузера. -->
+{#if corridorDraw.active}
+  <div class="draw-modal" role="dialog" aria-label="Постановка фигуры по графику">
+    <div class="draw-modal-head">
+      <b>{corridorDraw.code || '—'}</b>
+      <span>{corridorDraw.hint
+        ? `клик ${corridorDraw.clicks.length + 1} из ${corridorDraw.need} — ${corridorDraw.hint}`
+        : 'точки заданы — параметры уехали в форму'}</span>
+      <span class="draw-modal-sp"></span>
+      {#if corridorDraw.clicks.length}
+        <button type="button" onclick={() => corridorDraw.undo()}>шаг назад</button>
+      {/if}
+      <button type="button" onclick={() => corridorDraw.reset()}>отменить (Esc)</button>
+    </div>
+    <div class="draw-modal-body">
+      {#if drawSymbol}
+        <ChartFrame symbol={drawSymbol} />
+      {:else}
+        <p class="draw-modal-empty">инструмент заявки не выбран — кликать не по чему</p>
+      {/if}
+    </div>
+  </div>
+{/if}
+
 
 <div class="so">
   <!-- 1. Тип заявки -->
@@ -1345,6 +1388,25 @@
   .so-feed-ev.market { color: #ff6b6b; font-weight: 700; }
   .so-feed-d { color: #9aa0b4; }
   .so-prof-warn { margin: 5px 8px 0; font-size: 11px; color: #e0a35c; }
+  /* Поверх всего и своим размером: геометрия фреймов на подокно не влияет. */
+  .draw-modal {
+    position: fixed; inset: 4vh 4vw; z-index: 1200; display: flex; flex-direction: column;
+    background: #0f0f1e; border: 1px solid #5ecfb1; border-radius: 6px;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, .6);
+  }
+  .draw-modal-head {
+    display: flex; gap: 8px; align-items: center; padding: 4px 8px; font-size: 12px;
+    background: #1a1a2e; border-bottom: 1px solid #2d2d4a; color: #d6dbe8;
+  }
+  .draw-modal-head b { color: #5ecfb1; }
+  .draw-modal-sp { flex: 1; }
+  .draw-modal-head button {
+    font-size: 11px; padding: 2px 8px; border-radius: 4px; cursor: pointer;
+    border: 1px solid #2d2d4a; background: #16162b; color: #d6dbe8;
+  }
+  .draw-modal-head button:hover { background: #1b1b34; }
+  .draw-modal-body { flex: 1; min-height: 0; display: flex; }
+  .draw-modal-empty { margin: auto; color: #9aa0b4; font-size: 12px; }
   .so-kind.on { background: #1b1b34; border-color: var(--accent); color: #e8e8f0; }
   .so-kind-tag { font: 600 10px/1 Consolas, monospace; letter-spacing: .1em; color: var(--accent); }
   .so-kind-name { font-size: 14px; color: #e8e8f0; }

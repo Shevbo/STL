@@ -75,21 +75,6 @@
   // стоять у цены, сколько догонять, добивать ли по рынку. Оператор правит
   // секунды сам (заказ 29.09.2026), поэтому это экран, а не константы в коде.
   let showExecProfiles = $state(_qs.has('execprofiles'));
-  // ПОСТАНОВКА ФИГУРЫ — СВОИМ ПОДОКНОМ. Раньше кликали по главному графику, и
-  // это ломалось от раскладки: в развороте на весь экран форма заявок закрывает
-  // терминал, и кликать физически негде (оператор 30.09.2026). Подокно не
-  // зависит ни от режима экрана, ни от того, какой инструмент открыт в
-  // терминале, — оно всегда показывает инструмент ЗАЯВКИ.
-  const drawSymbol = $derived.by(() => {
-    const code = corridorDraw.code;
-    if (!code) return '';
-    const hit = instrumentStore.list.find(
-      (i) => i.ticker === code || String(i.symbol).split('@')[0] === code);
-    // Инструмента нет в списке — берём код как есть: график сам скажет, что
-    // данных нет. Подставлять вместо него ТЕКУЩИЙ символ терминала нельзя:
-    // клики легли бы на чужие цены, а выглядело бы это правильно.
-    return hit ? hit.symbol : code;
-  });
   // OrderViz: default = auto (self-shows on active orders). Operator can pin it
   // open or hide it; "pin" forces it visible even with no active orders.
   let orderVizPinned = $state(false);
@@ -497,24 +482,6 @@
       <div class="dh-dot"></div>
     </div>
   {/if}
-  {#if corridorDraw.active}
-    <!-- Подокно постановки: график инструмента заявки поверх всего. Закрывается
-         само, когда точки собраны (corridorDraw.stop), и по Esc. -->
-    <div class="draw-modal" role="dialog" aria-label="Постановка фигуры по графику">
-      <div class="draw-modal-head">
-        <b>{corridorDraw.code || '—'}</b>
-        <span>клик {corridorDraw.clicks.length + 1} из {corridorDraw.need} — {corridorDraw.hint}</span>
-        <span class="draw-modal-sp"></span>
-        {#if corridorDraw.clicks.length}
-          <button onclick={() => corridorDraw.undo()}>шаг назад</button>
-        {/if}
-        <button onclick={() => corridorDraw.reset()}>отменить</button>
-      </div>
-      <div class="draw-modal-body">
-        <ChartFrame symbol={drawSymbol} />
-      </div>
-    </div>
-  {/if}
   {#if showExecProfiles}
     <div class="quik-tables-wrap" style="height:{labH}px">
       <ExecProfiles onClose={() => showExecProfiles = false} />
@@ -670,24 +637,4 @@
     pointer-events: none;
   }
   .dh:hover .dh-dot { background: #6aa8ff; width: 36px; }
-  /* Подокно постановки фигуры. Поверх ВСЕГО и своим размером: раскладка
-     терминала и разворот фреймов на его геометрию влиять не должны — именно
-     это и ломало постановку кликами по главному графику. */
-  .draw-modal {
-    position: fixed; inset: 4vh 4vw; z-index: 60; display: flex; flex-direction: column;
-    background: #0f0f1e; border: 1px solid #5ecfb1; border-radius: 6px;
-    box-shadow: 0 10px 40px rgba(0, 0, 0, .6);
-  }
-  .draw-modal-head {
-    display: flex; gap: 8px; align-items: center; padding: 4px 8px;
-    background: #1a1a2e; border-bottom: 1px solid #2d2d4a; font-size: 12px; color: #d6dbe8;
-  }
-  .draw-modal-head b { color: #5ecfb1; }
-  .draw-modal-sp { flex: 1; }
-  .draw-modal-head button {
-    font-size: 11px; padding: 2px 8px; border-radius: 4px; cursor: pointer;
-    border: 1px solid #2d2d4a; background: #16162b; color: #d6dbe8;
-  }
-  .draw-modal-head button:hover { background: #1b1b34; }
-  .draw-modal-body { flex: 1; min-height: 0; display: flex; }
 </style>
