@@ -274,3 +274,26 @@ def test_level_filled_this_pass_is_not_replaced_in_the_same_pass(tmp_path):
         f"на только что исполнившийся уровень {lvl_price:g} поставлена новая заявка — "
         "это и есть второй контракт вместо одного")
     assert so.g_live.get("flip:1") is True, "уровень обязан погаснуть"
+
+
+def test_fill_side_comes_from_the_order_not_from_the_current_price(tmp_path):
+    """ПОЗИЦИЯ СЕТКИ СЧИТАЛАСЬ С НЕВЕРНЫМ ЗНАКОМ, 01.10.2026.
+
+    Сторону исполнения я выводил заново через grid_side_for по ТЕКУЩЕЙ цене, а
+    она с момента постановки уезжает. Журнал записал «уровень +0 (85580)
+    исполнен buy 1; позиция +1», тогда как сделка была ПРОДАЖА. От позиции сетки
+    считаются объём и стоп, поэтому неверный знак тянет за собой всё остальное.
+
+    Что исполнилось — знает запись заявки, и только она.
+    """
+    book, so = _gbook(tmp_path)                     # база 85000
+    so.g_live = {"1": "so:x:gp1"}
+    srv = GSrv()
+    ost = GOst()
+    ost.working_orders = lambda agent=None: [
+        {"client_id": "so:x:gp1", "order_id": "11", "state": "filled",
+         "side": "sell", "filled": 1, "remaining": 0, "price": 85100.0}]
+    # рынок УШЁЛ ВЫШЕ уровня: по текущей цене уровень выглядел бы покупкой
+    _grid_sync(book, _gstore(85300.0), ost, srv, GLim(), "9618", GSTEPS, {}, GNOW)
+    assert so.g_pos == -1, (
+        f"позиция {so.g_pos:+d}: сторона взята из рынка, а не из исполненной заявки")

@@ -1638,7 +1638,20 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
                 # любого, хоть ниже, хоть выше. Прежняя конструкция ставила
                 # встречную заявку НА ТУ ЖЕ ЦЕНУ: круг с нулевой прибылью и
                 # двойной комиссией, уровень −1 так отработал трижды по 86080.
-                side_was = so_mod.grid_side_for(so, level, price)
+                # СТОРОНУ БЕРЁМ ИЗ ФАКТА ИСПОЛНЕНИЯ, а не выводим заново.
+                # 01.10.2026 я пересчитывал её через grid_side_for по ТЕКУЩЕЙ
+                # цене — а цена с момента постановки уезжает, и сторона
+                # переворачивается вместе с ней. Журнал записал «уровень +0
+                # исполнен buy 1; позиция +1», тогда как сделка была ПРОДАЖА:
+                # позиция сетки получила неверный знак, а от неё считаются и
+                # объём, и стоп. Что исполнилось — знает запись заявки, и только
+                # она; выводить это из рынка значит гадать о прошлом по
+                # настоящему.
+                side_was = str(rec.get("side") or "").lower()
+                if side_was not in ("buy", "sell"):
+                    side_was = so_mod.grid_side_for(so, level, price)
+                    log.warning("smart_order.grid_fill_side_unknown", so_id=so.so_id,
+                                level=level, guessed=side_was)
                 so.g_pos += int(rec["filled"]) * (1 if side_was == "buy" else -1)
                 live[f"flip:{level}"] = True              # этот уровень погас
                 woke = [n for n in (level - 1, level + 1)
