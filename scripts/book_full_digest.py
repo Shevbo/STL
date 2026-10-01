@@ -28,6 +28,7 @@
 from __future__ import annotations
 
 import argparse
+from bisect import bisect_right
 import glob
 import gzip
 import json
@@ -39,8 +40,27 @@ LEVELS = 5
 DEFAULT_ARCHIVE = "~/market-archive"
 
 
-def _rows(archive: str, code: str, d_from: str | None, d_to: str | None, thin: int):
-    """Генератор валидных строк-снимков в хронологическом порядке файлов."""
+def merge_windows(anchors_path: str, before_s: float, after_s: float) -> tuple[list[list[int]], int]:
+    """Слитые окна [t-before, t+after] в мс шкалы выжимки (ts якорей уже в ней)."""
+    with open(anchors_path, encoding="utf-8") as f:
+        ts = sorted(r[0] for r in json.load(f)["rows"])
+    wins: list[list[int]] = []
+    for t in ts:
+        lo, hi = t - int(before_s * 1000), t + int(after_s * 1000)
+        if wins and lo <= wins[-1][1]:
+            wins[-1][1] = max(wins[-1][1], hi)
+        else:
+            wins.append([lo, hi])
+    return wins, len(ts)
+
+
+def _rows(archive: str, code: str, d_from: str | None, d_to: str | None, thin: int,
+          wins: list[list[int]] | None = None):
+    """Генератор валидных строк-снимков в хронологическом порядке файлов.
+
+    wins: слитые отсортированные окна, память O(окон).
+    """
+    starts = [w[0] for w in wins] if wins else []
     files = sorted(glob.glob(os.path.join(archive, "book-*.jsonl*")))
     needle = f'"{code}"'
     kept = 0
@@ -64,6 +84,11 @@ def _rows(archive: str, code: str, d_from: str | None, d_to: str | None, thin: i
                     ts_ms = int(r["received_at_unix_ms"]) + MSK_SHIFT_MS
                 except (KeyError, TypeError, ValueError):
                     continue
+                if wins is not None:
+                    # bisect, а не курсор: -recovered и основной файл дня могут перекрываться по времени
+                    i = bisect_right(starts, ts_ms) - 1
+                    if i < 0 or ts_ms > wins[i][1]:
+                        continue
                 kept += 1
                 if (kept - 1) % thin:
                     continue
@@ -80,22 +105,28 @@ def _rows(archive: str, code: str, d_from: str | None, d_to: str | None, thin: i
 
 
 def build(archive: str, code: str, d_from: str | None, d_to: str | None,
-          out_path: str, thin: int) -> tuple[int, int | None, int | None]:
+          out_path: str, thin: int, around: dict | None = None) -> tuple[int, int | None, int | None]:
     """Пишет результат потоково в out_path (во временный файл, атомарная замена).
 
     Возвращает (число строк, первый ts_ms, последний ts_ms).
     """
     tmp = out_path + ".tmp"
+    wins = None
+    extra = ""
+    if around:
+        wins, na = merge_windows(around["path"], around["before_s"], around["after_s"])
+        extra = '"around":{"anchors":%d,"before_s":%s,"after_s":%s},' % (
+            na, around["before_s"], around["after_s"])
     n = 0
     first_ts = last_ts = None
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     with open(tmp, "w", encoding="utf-8") as out:
         out.write(
             '{"key":"book%s","code":"%s","levels":%d,"ts_unit":"ms","built":"%s",'
-            '"time_base":"bars (+3h от UTC архива)","rows":[' % (
+            '"time_base":"bars (+3h от UTC архива)",%s"rows":[' % (
                 code, code, LEVELS,
-                datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")))
-        for row in _rows(archive, code, d_from, d_to, thin):
+                datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), extra))
+        for row in _rows(archive, code, d_from, d_to, thin, wins):
             if n:
                 out.write(",")
             out.write(json.dumps(row, separators=(",", ":")))
@@ -120,11 +151,15 @@ def main() -> None:
     ap.add_argument("--archive", default=DEFAULT_ARCHIVE)
     ap.add_argument("--thin", type=int, default=1,
                      help="оставить каждый N-й снимок (2 = прореженный вдвое)")
+    ap.add_argument("--around", help="anchors.json: только снимки в окнах вокруг якорей")
+    ap.add_argument("--before-s", type=float, default=10)
+    ap.add_argument("--after-s", type=float, default=420)
     a = ap.parse_args()
+    around = {"path": a.around, "before_s": a.before_s, "after_s": a.after_s} if a.around else None
 
     out = os.path.expanduser(a.out)
     n, first_ts, last_ts = build(os.path.expanduser(a.archive), a.code,
-                                  a.d_from, a.d_to, out, max(1, a.thin))
+                                  a.d_from, a.d_to, out, max(1, a.thin), around)
     size = os.path.getsize(out) / 1e6
     print(f"{a.code}: снимков {n}, файл {size:.1f} МБ -> {out} (thin={a.thin})")
     # ВЕРСИЯ В ИМЕНИ ОБЯЗАТЕЛЬНА — см. book_digest.py: агент кэширует выжимку по

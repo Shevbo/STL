@@ -34,7 +34,9 @@ from trader.lab.book_replay import MSK_SHIFT
 SIDE_MAP = {"SIDE_BUY": "buy", "SIDE_SELL": "sell"}
 
 
-def build_anchors(csv_path: str, code: str, since: str | None, until: str | None) -> list[list]:
+def build_anchors(csv_path: str, code: str, since: str | None, until: str | None,
+                  min_qty: int = 0, robots: list[str] | None = None) -> list[list]:
+    """robots: префиксы имён (lxk22 берёт lxk22*); None = все."""
     rows = []
     with open(csv_path, encoding="utf-8") as f:
         for r in csv.DictReader(f):
@@ -45,6 +47,10 @@ def build_anchors(csv_path: str, code: str, since: str | None, until: str | None
             if until and r["file_date"] > until:
                 continue
             if not r["mid"]:
+                continue
+            if robots and not r["robot"].startswith(tuple(robots)):
+                continue
+            if int(float(r["qty"])) < min_qty:
                 continue
             side = SIDE_MAP.get(r["side"])
             if side is None:
@@ -62,15 +68,21 @@ def main() -> None:
     ap.add_argument("--code", required=True)
     ap.add_argument("--since")
     ap.add_argument("--until")
+    ap.add_argument("--min-qty", type=int, default=0)
+    ap.add_argument("--robots", help="префиксы через запятую, по умолчанию все")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
 
-    rows = build_anchors(a.csv, a.code, a.since, a.until)
+    rows = build_anchors(a.csv, a.code, a.since, a.until, a.min_qty,
+                         a.robots.split(",") if a.robots else None)
     with open(a.out, "w", encoding="utf-8") as f:
         json.dump({"ts_unit": "ms", "code": a.code, "rows": rows}, f, ensure_ascii=False, separators=(",", ":"))
 
     by_robot_side = Counter((r[3], r[1]) for r in rows)
     print(f"якорей: {len(rows)} -> {a.out}")
+    by_cls = Counter((r[3], r[1], "6-10" if r[2] <= 10 else "11+") for r in rows)
+    for (robot, side, cls), n in sorted(by_cls.items()):
+        print(f"  класс {robot:24s} {side:4s} {cls:5s} {n}")
     for (robot, side), n in sorted(by_robot_side.items()):
         print(f"  {robot:28s} {side:4s} {n}")
 
