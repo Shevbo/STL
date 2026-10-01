@@ -21,21 +21,53 @@ def _grid(**kw):
 
 def test_levels_and_prices_are_fixed_around_the_base():
     so = _grid()
-    assert so_mod.grid_levels(so) == [-1, -2, -3, 1, 2]
+    assert sorted(so_mod.grid_levels(so)) == [-3, -2, -1, 1, 2]
     assert so_mod.grid_price(so, -1) == 83900 and so_mod.grid_price(so, 2) == 84200
     # низ покупает, верх продаёт
     assert so_mod.grid_side_for(so, -1) == "buy"
     assert so_mod.grid_side_for(so, 2) == "sell"
 
 
-def test_filled_level_flips_to_the_opposite_side():
-    """Тейк на противоположной заявке: купили на −2 — там же и продаём."""
+def test_filled_level_goes_dark_until_a_neighbour_fills():
+    """МЕХАНИКА «РАДИАЦИИ» СО СЛОВ ОПЕРАТОРА 01.10.2026, после реального
+    сжигания комиссии.
+
+    Тейка в радиации НЕТ, есть уровни. Уровень, на котором произошёл филл,
+    ИСЧЕЗАЕТ и возвращается только после филла СОСЕДНЕГО уровня — любого, хоть
+    ниже, хоть выше.
+
+    Прежняя моя конструкция ставила встречную заявку НА ТУ ЖЕ ЦЕНУ: купил по
+    86080 — туда же продажа по 86080. Круг с нулевой прибылью и двойной
+    комиссией; в этот день уровень −1 так отработал трижды подряд.
+    """
     so = _grid()
     so.g_live = {"flip:-2": True}
-    assert so_mod.grid_side_for(so, -2) == "sell"
-    assert so_mod.grid_side_for(so, -1) == "buy", "соседние уровни не трогаются"
-    so.g_live["flip:2"] = True
-    assert so_mod.grid_side_for(so, 2) == "buy"
+    assert so_mod.grid_places_here(so, -2) is False, "погасший уровень не выставляется"
+    assert so_mod.grid_places_here(so, -1) is True, "соседний живёт своей жизнью"
+    assert so_mod.grid_places_here(so, -3) is True
+
+
+def test_side_follows_the_market_not_the_ladder():
+    """Сторона уровня определяется тем, по какую сторону РЫНКА он оказался:
+    выше рынка продаём, ниже покупаем. Это же правило не даёт заявке пересечь
+    рынок — лимит по ту сторону исполнился бы мгновенно (30.09, 43 контракта)."""
+    so = _grid()                                   # база 84000, шаг 100
+    assert so_mod.grid_price(so, -1) == 83900
+    # рынок УПАЛ ниже уровня −1: теперь это продажа, а не покупка
+    assert so_mod.grid_side_for(so, -1, 83800) == "sell"
+    # рынок выше уровня −1: покупка, как в исходной лестнице
+    assert so_mod.grid_side_for(so, -1, 84050) == "buy"
+    # без цены остаётся лестница от базы
+    assert so_mod.grid_side_for(so, -1) == "buy"
+    assert so_mod.grid_side_for(so, 2) == "sell"
+
+
+def test_level_zero_is_not_a_level():
+    """Ноль — цена постановки, своей заявки у него нет ни до, ни после филлов."""
+    so = _grid()
+    assert 0 not in so_mod.grid_levels(so)
+    so.g_live = {"flip:-1": True}
+    assert 0 not in so_mod.grid_levels(so)
 
 
 def test_stop_sits_beyond_the_last_level_on_both_sides():
@@ -173,3 +205,24 @@ def test_grid_places_nothing_without_a_quote(tmp_path):
     _grid_sync(book, Blind(), GOst(), srv, GLim(), "9618", GSTEPS, {}, GNOW)
     placed = [m for m in srv.sent if m.WhichOneof("payload") == "place_order"]
     assert placed == [], "вслепую сетка не выставляется"
+
+
+def test_fill_extinguishes_its_level_and_revives_the_neighbour(tmp_path):
+    """ПРОВОДКА, а не чистая функция: прогон сторожа с исполненным уровнем.
+
+    Филл на уровне −1 обязан (1) погасить сам уровень −1 и (2) ВЕРНУТЬ соседей,
+    если они были погашены раньше. Без второго сетка угасала бы уровень за
+    уровнем и переставала работать после первого прохода цены.
+    """
+    book, so = _gbook(tmp_path)
+    so.g_live = {"-1": "so:x:gm1", "flip:-2": True}      # сосед −2 погашен ранее
+    srv = GSrv()
+    ost = GOst()
+    ost.working_orders = lambda agent=None: [
+        {"client_id": "so:x:gm1", "order_id": "11", "state": "filled",
+         "filled": 1, "remaining": 0, "price": 85000.0}]
+    _grid_sync(book, _gstore(85000.0), ost, srv, GLim(), "9618", GSTEPS, {}, GNOW)
+
+    assert so.g_live.get("flip:-1") is True, "исполненный уровень обязан погаснуть"
+    assert "flip:-2" not in so.g_live, "сосед обязан вернуться после филла рядом"
+    assert so.g_pos != 0, "позиция сетки должна измениться на филле"

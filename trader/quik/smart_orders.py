@@ -368,22 +368,39 @@ def grid_price(so: SmartOrder, level: int) -> float:
 
 
 def grid_levels(so: SmartOrder) -> list[int]:
-    """Все уровни сетки: покупки вниз, продажи вверх. Ноль не используется."""
+    """Все уровни сетки: покупки вниз, продажи вверх. Ноль не используется —
+    там рынок в момент постановки, и своей заявки у него нет."""
     return [-i for i in range(1, so.g_buys + 1)] + [i for i in range(1, so.g_sells + 1)]
 
 
-def grid_side_for(so: SmartOrder, level: int) -> str:
+def grid_consumed(so: SmartOrder, level: int) -> bool:
+    """Уровень уже отработал: на нём вошли, и лот от него сидит в позиции."""
+    return bool((so.g_live or {}).get(f"flip:{level}"))
+
+
+def grid_side_for(so: SmartOrder, level: int, price: float = 0.0) -> str:
     """Чья заявка стоит на уровне СЕЙЧАС.
 
-    По умолчанию низ покупает, верх продаёт. После исполнения сторона на уровне
-    переворачивается — это и есть «тейк на противоположной заявке»: купленное на
-    −2 продаётся там же, на −2, когда цена вернётся.
+    В «радиации» НЕТ ПОНЯТИЯ ТЕЙКА, есть уровни (оператор, 01.10.2026). Сторона
+    определяется только тем, по какую сторону РЫНКА уровень оказался: выше рынка
+    продаём, ниже покупаем. Это же правило держит заявку от пересечения рынка —
+    лимит по ту сторону исполнился бы мгновенно (30.09.2026, 43 контракта).
+
+    Без цены (её не всегда передают) остаётся исходная лестница от базы: низ
+    покупает, верх продаёт. Сторож без котировки заявок всё равно не ставит.
     """
-    flipped = bool((so.g_live or {}).get(f"flip:{level}"))
-    base = "buy" if level < 0 else "sell"
-    if not flipped:
-        return base
-    return "sell" if base == "buy" else "buy"
+    if price > 0:
+        return "sell" if grid_price(so, level) > price else "buy"
+    return "buy" if level < 0 else "sell"
+
+
+def grid_places_here(so: SmartOrder, level: int) -> bool:
+    """Нужна ли заявка на этом уровне прямо сейчас.
+
+    На отработавшем уровне заявки быть не должно: его лот уже в позиции, и ждёт
+    он не повтора входа, а закрытия ступенью ближе к базе.
+    """
+    return not grid_consumed(so, level)
 
 
 def grid_stop_levels(so: SmartOrder) -> tuple[float, float]:

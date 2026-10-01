@@ -1573,17 +1573,35 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
                     rec.get("remaining") or 0) > 0:
                 continue                      # стоит в стакане, всё хорошо
             if rec is not None and int(rec.get("filled") or 0) > 0:
-                # ИСПОЛНИЛАСЬ: позиция изменилась, а уровень ПЕРЕВОРАЧИВАЕТСЯ —
-                # купленное на −2 продаётся там же. Это и есть тейк в шаг сетки.
-                side_was = so_mod.grid_side_for(so, level)
+                # ИСПОЛНИЛАСЬ. В «радиации» НЕТ ПОНЯТИЯ ТЕЙКА, есть уровни
+                # (формулировка оператора 01.10.2026). Исполненный уровень
+                # ИСЧЕЗАЕТ и возвращается только после филла СОСЕДНЕГО уровня —
+                # любого, хоть ниже, хоть выше. Прежняя конструкция ставила
+                # встречную заявку НА ТУ ЖЕ ЦЕНУ: круг с нулевой прибылью и
+                # двойной комиссией, уровень −1 так отработал трижды по 86080.
+                side_was = so_mod.grid_side_for(so, level, price)
                 so.g_pos += int(rec["filled"]) * (1 if side_was == "buy" else -1)
-                live[f"flip:{level}"] = not bool(live.get(f"flip:{level}"))
+                live[f"flip:{level}"] = True              # этот уровень погас
+                woke = [n for n in (level - 1, level + 1)
+                        if live.pop(f"flip:{n}", None)]   # соседи ожили
                 so_journal.record("grid_fill", so, so_journal.WATCHER,
                                   f"уровень {level:+d} ({so_mod.grid_price(so, level):g}) "
                                   f"исполнен {side_was} {rec['filled']}; позиция "
-                                  f"{so.g_pos:+d}, ставлю встречную", now_ms=now)
+                                  f"{so.g_pos:+d}; уровень погас"
+                                  + (f", вернулись соседние {woke}" if woke else ""),
+                                  now_ms=now)
                 dirty = True
-            side = so_mod.grid_side_for(so, level)
+            # Погасший уровень не выставляем: он ждёт филла соседа, а не повтора
+            # входа по своей же цене.
+            if not so_mod.grid_places_here(so, level):
+                cid_old = live.pop(key, "")
+                rec_old = work.get(cid_old) or {}
+                if rec_old.get("order_id"):
+                    srv.enqueue_order(agent, order_msgs.build_cancel_order(
+                        client_id=cid_old, order_id=str(rec_old["order_id"])))
+                    dirty = True
+                continue
+            side = so_mod.grid_side_for(so, level, price)
             px = so_mod.quantize(so_mod.grid_price(so, level), step, side)
             # Уровень по ту сторону рынка не выставляем по той же причине, что и
             # стенку коридора (инцидент 30.09.2026): лимит, пересекающий рынок,
