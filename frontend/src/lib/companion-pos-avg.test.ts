@@ -109,3 +109,32 @@ describe('средние цены половин позиции в панели'
     });
   }
 });
+
+// Разорванное переносом число — ДРУГОЕ число. 01.10.2026 строка «умные заявки
+// STL RIZ6 −12 784 ₽» перенеслась внутри числа: на экране осталось «−12», и
+// оператор сравнил это с «Ручные +7» из блока позиций, то есть рубли с
+// контрактами. Деньги и количества обязаны быть неразрывными.
+describe('числа не рвутся переносом', () => {
+  for (const [page, src] of Object.entries(PAGES)) {
+    it(`${page}: половины позиции склеены со своими числами`, () => {
+      const html = posFn(src)([
+        { sec: 'RIZ6', net: 7, varmargin: 4880,
+          robot_net: 0, robot_avg: null, manual_net: 7, manual_avg: 85580,
+          manual_avg_src: 'journal' },
+      ]);
+      // Каждая половина — свой неразрывный кусок.
+      expect(html).toMatch(/class="nw"[^>]*>Роботы/);
+      expect(html).toMatch(/class="nw"[^>]*>Ручные/);
+    });
+
+    it(`${page}: правило неразрывности объявлено в стилях`, () => {
+      expect(src).toContain('.nw { white-space: nowrap; }');
+    });
+
+    // Деньги участников ручной торговли — там же, где всё сломалось.
+    it(`${page}: суммы по каналам обёрнуты в неразрывные`, () => {
+      expect(src).toMatch(/<span class="nw" title="\$\{esc\(manualRowWhy\(r\)\)\}"/);
+      expect(src).toContain('<b class="nw">${rub(r.vm_rub, { signed: true })}</b>');
+    });
+  }
+});

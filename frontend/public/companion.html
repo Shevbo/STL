@@ -152,6 +152,10 @@
   .q { color: var(--ink); font-size: 11px; font-weight: 600; }
   .q-stale { color: var(--faint); font-weight: 400; text-decoration: line-through; }
   .sub { color: var(--faint); font-size: 10px; }
+  /* Деньги и количества не переносим НИКОГДА: разорванное число читается как
+     другое число (оператор 01.10.2026 — «−12 784 ₽» распалось на «−12» и
+     «784 ₽», и он сравнил его с контрактами). */
+  .nw { white-space: nowrap; }
   /* Итоговая строка по роботам: жирнее рамка, чтобы читалась как сумма. */
   .row.total { border-left-width: 3px; margin-top: 2px; padding-top: 2px; }
   .row.total .k { color: var(--ink); }
@@ -597,7 +601,9 @@ function px(v) {
 // а у ручной половины средняя честно отсутствует, когда журнал окна её не видел.
 function half(avg) {
   const s = px(avg);
-  return (s == null || !avg) ? '' : ` <span class="q">ср. ${s}</span>`;
+  // Цена и слово «ср.» — один неразрывный кусок: перенос между ними оставляет
+  // на строке «ср.» без числа, а число уезжает к следующей половине.
+  return (s == null || !avg) ? '' : ` <span class="q nw">ср. ${s}</span>`;
 }
 
 function renderPositions(list) {
@@ -628,7 +634,8 @@ function renderPositions(list) {
           : half(p.manual_avg))
       : (mn ? ` <span class="q" title="${esc(p.manual_avg_why || 'средняя ручной части неизвестна')}">ср. ?</span>` : '');
     const breakdown = (rn != null || mn != null)
-      ? `<span class="sub">Роботы <b>${sg(rn)}</b>${half(p.robot_avg)} · Ручные <b>${sg(mn)}</b>${mAvg}</span>`
+      ? `<span class="sub"><span class="nw">Роботы <b>${sg(rn)}</b>${half(p.robot_avg)}</span>`
+        + ` · <span class="nw">Ручные <b>${sg(mn)}</b>${mAvg}</span></span>`
       : `<span class="sub">${sg(p.net)}</span>`;
     // ВМ здесь — ЧИСЛО QUIK: вариационная маржа ЗА СЕССИЮ (с последнего клиринга),
     // включая закрытые за сессию сделки; перенесённая позиция считается от
@@ -1193,9 +1200,14 @@ function manualRowWhy(r) {
 }
 function manualTotal(t) {
   if (!t || t.rows == null) return '';
+  // КАЖДЫЙ УЧАСТНИК — ОДНИМ НЕРАЗРЫВНЫМ КУСКОМ. 01.10.2026 строка переносилась
+  // прямо внутри числа: «умные заявки STL RIZ6 −12» на одной строке, «784 ₽» на
+  // следующей. Оператор прочитал −12 и сравнил с «Ручные +7» из блока позиций —
+  // то есть рубли с контрактами. Разорванное число это не теснота вёрстки, а
+  // другое число.
   const sub = (t.rows || []).filter((r) => r.vm_rub)
-    .map((r) => `<span title="${esc(manualRowWhy(r))}">${esc(manualRowName(r))} `
-               + `${rub(r.vm_rub, { signed: true })}</span>`).join(' · ')
+    .map((r) => `<span class="nw" title="${esc(manualRowWhy(r))}">${esc(manualRowName(r))} `
+               + `<b class="nw">${rub(r.vm_rub, { signed: true })}</b></span>`).join(' · ')
     || 'своих сделок сегодня не было';
   return `<div class="row total ${cls(t.total)}" title="Результат ЗА СЕГОДНЯ по вашим собственным сделкам: заявки из терминала QUIK, дети умных заявок и заявки выравнивания. Роботы сюда не входят.">` +
     `<span class="k">ВМ ручных за день</span><span class="sp"></span>` +

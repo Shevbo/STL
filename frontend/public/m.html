@@ -102,6 +102,10 @@
   .row .v { font-weight: 600; font-size: 17px; white-space: nowrap; }
   .v.up { color: var(--up); } .v.down { color: var(--down); } .v.nil { color: var(--faint); font-weight: 400; }
   .sub { color: var(--faint); font-size: 12px; }
+  /* Деньги и количества не переносим НИКОГДА: разорванное число читается как
+     другое число (оператор 01.10.2026 — «−12 784 ₽» распалось на «−12» и
+     «784 ₽», и он сравнил его с контрактами). */
+  .nw { white-space: nowrap; }
   .row.total { border-left-width: 4px; }
   .row.total .k { color: var(--ink); font-weight: 600; }
   /* Живая котировка рядом с кодом инструмента (как на Windows-панели). */
@@ -602,9 +606,11 @@ function manualDay(m) {
 }
 function manualTotal(t) {
   if (!t || t.rows == null) return '';
+  // Каждый участник одним НЕРАЗРЫВНЫМ куском: перенос внутри числа превращает
+  // −12 784 ₽ в −12 (оператор 01.10.2026).
   const sub = (t.rows || []).filter((r) => r.vm_rub)
-    .map((r) => `<span title="${esc(manualRowWhy(r))}">${esc(manualRowName(r))} `
-               + `${rub(r.vm_rub, { signed: true })}</span>`).join(' · ')
+    .map((r) => `<span class="nw" title="${esc(manualRowWhy(r))}">${esc(manualRowName(r))} `
+               + `<b class="nw">${rub(r.vm_rub, { signed: true })}</b></span>`).join(' · ')
     || 'своих сделок сегодня не было';
   return `<div class="row total ${cls(t.total)}">` +
     `<span class="k">ВМ ручных за день</span><span class="sp"></span>` +
@@ -624,7 +630,9 @@ function quoteHtml(p) {
 // Нет средней — НЕ ПИШЕМ НИЧЕГО: ноль читался бы как «вошли по нулю».
 function half(avg) {
   const s = px(avg);
-  return (s == null || !avg) ? '' : ` <span class="q">ср. ${s}</span>`;
+  // Цена и слово «ср.» — один неразрывный кусок: перенос между ними оставляет
+  // на строке «ср.» без числа, а число уезжает к следующей половине.
+  return (s == null || !avg) ? '' : ` <span class="q nw">ср. ${s}</span>`;
 }
 
 function renderPositions(list) {
@@ -641,7 +649,8 @@ function renderPositions(list) {
           : half(p.manual_avg))
       : (p.manual_net ? ` <span class="q" title="${esc(p.manual_avg_why || 'средняя ручной части неизвестна')}">ср. ?</span>` : '');
     const bd = (p.robot_net != null || p.manual_net != null)
-      ? `Роботы <b>${sg(p.robot_net)}</b>${half(p.robot_avg)} · Ручные <b>${sg(p.manual_net)}</b>${mAvg}`
+      ? `<span class="nw">Роботы <b>${sg(p.robot_net)}</b>${half(p.robot_avg)}</span>`
+        + ` · <span class="nw">Ручные <b>${sg(p.manual_net)}</b>${mAvg}</span>`
       : sg(p.net);
     // ВМ здесь — ЧИСЛО QUIK: вариационная маржа ЗА СЕССИЮ (с последнего клиринга),
     // включая закрытые за сессию сделки. У робота ниже — ВМ ОТ ВХОДА. Это разные
