@@ -1252,7 +1252,7 @@
              понять ни где он в рынке, ни сколько переворотов осталось. -->
         {#if o.kind === 'grid'}
           <div class="so-c-corr">
-            <b>{gridState(o)}</b>
+            <b>{gridState(o, o.code === code ? price : 0)}</b>
             {#if o.g_base && o.g_step}
               <span class="so-c-corr-w">шаг {fmtPts(o.g_step)} · от {fmtPrice(o.g_base)}
                 · вниз {o.g_buys ?? 0} · вверх {o.g_sells ?? 0} · по {o.g_lot ?? 0}</span>

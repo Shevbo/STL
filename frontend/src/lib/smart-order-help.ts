@@ -240,8 +240,9 @@ export const KINDS: KindMeta[] = [
       'Уровни считаются от цены ПОСТАНОВКИ и дальше не двигаются никогда.',
       'Ниже цены стоят покупки, выше — продажи, шагом в заданное число пунктов.',
       'Заявки выставляются в стакан СРАЗУ, а не ждут сторожа: тут торгуют ликвидность, и опоздание на такт и есть весь проигрыш.',
-      'Исполнилась заявка — на её месте встаёт ВСТРЕЧНАЯ. Купленное на уровне там же и продаётся, когда цена вернётся.',
-      'Это и есть тейк: ровно один шаг сетки, брать его больше неоткуда.',
+      'Филл ГАСИТ свой уровень: заявка оттуда снимается. Он же ВОЗВРАЩАЕТ соседние уровни, если они были погашены раньше.',
+      'Сторона уровня — по какую сторону РЫНКА он сейчас: выше рынка продажа, ниже покупка. Постоянной лестницы сторон нет.',
+      'Уровень бывает в трёх состояниях: стоит в стакане, погашен (ждёт филла соседа), не выставлен (за планкой биржи или по ту сторону рынка).',
       'Уход за крайний уровень дальше стопа закрывает позицию и заканчивает сетку.',
     ],
     fields: [
@@ -791,11 +792,18 @@ export function smartLevels(
     //
     // Потолок на всякий случай: сетку на сотню ступеней нарисовать можно, но
     // читать уже нельзя, а линии стоят процессорного времени на каждом кадре.
-    const levels = gridLevels(o).slice(0, 40);
+    // Сторону берём ОТ РЫНКА (постоянной лестницы сторон у сетки нет), поэтому
+    // нужна цена: без неё стрелку не рисуем вовсе, а не придумываем.
+    const mkt = Number(o.last_price || o.market_price || 0);
+    const levels = gridLevels(o, mkt).slice(0, 40);
     const out: Array<{ key: string; price: number; title: string; dim?: boolean; color?: string }> =
       levels.map((lv) => ({
         key: `${o.so_id}:g${lv.level}`, price: lv.price,
-        title: `${lv.side === 'buy' ? '▲' : '▼'} ${o.g_lot ?? ''} к`,
+        // Погашенный уровень ПРИГЛУШАЕМ, но не прячем: он есть и вернётся, когда
+        // отработает сосед. Пустое место читалось бы как «уровня нет».
+        dim: lv.state !== 'live',
+        title: `${lv.side === 'buy' ? '▲' : lv.side === 'sell' ? '▼' : '·'} ${o.g_lot ?? ''} к`
+          + (lv.state === 'spent' ? ' · погашен' : lv.state === 'off' ? ' · не выставлен' : ''),
       }));
     const st = gridStopLevels(o);
     // Стоп рисуем ярче прочего: он единственный уровень, на котором сетка
@@ -1559,19 +1567,59 @@ export interface GridGeom {
   g_pos?: number; g_done?: boolean;
 }
 
-/** Цены всех уровней сетки, снизу вверх. Пусто — сетка не задана. */
-export function gridLevels(g: GridGeom): Array<{ level: number; price: number; side: Side }> {
+/** Состояние уровня сетки.
+ *
+ *  `live`  — заявка стоит в стакане;
+ *  `spent` — уровень ПОГАШЕН своим филлом и ждёт филла соседа, чтобы вернуться;
+ *  `off`   — не выставлен: за планкой биржи или по ту сторону рынка.
+ *
+ *  Погашенный нельзя рисовать пустым местом: пустота читается как «уровня нет»,
+ *  а он есть и вернётся (исправление real-trade 01.10.2026). «Не выставлен» —
+ *  тоже состояние, а не ошибка.
+ */
+export type GridLevelState = 'live' | 'spent' | 'off';
+
+export interface GridLevel {
+  level: number;
+  price: number;
+  state: GridLevelState;
+  /** Сторона — по какую сторону РЫНКА уровень сейчас. Рынок неизвестен — null:
+   *  постоянной лестницы сторон у сетки НЕТ, и выдумывать её нельзя. */
+  side: Side | null;
+}
+
+/** Все уровни сетки снизу вверх, с состоянием и стороной. Пусто — не задана.
+ *
+ *  `marketPrice` нужен ровно для стороны: 0 оставит её неизвестной.
+ *  Ноль (цена постановки) уровнем НЕ является ни до филлов, ни после.
+ */
+export function gridLevels(g: GridGeom, marketPrice = 0): GridLevel[] {
   const base = g.g_base ?? 0, step = g.g_step ?? 0;
   if (!(base > 0) || !(step > 0)) return [];
-  const out: Array<{ level: number; price: number; side: Side }> = [];
-  for (let i = Math.max(0, g.g_buys ?? 0); i >= 1; i--) out.push({ level: -i, price: base - i * step, side: 'buy' });
-  for (let i = 1; i <= Math.max(0, g.g_sells ?? 0); i++) out.push({ level: i, price: base + i * step, side: 'sell' });
-  // Сторона на уровне ПЕРЕВОРАЧИВАЕТСЯ после исполнения — это и есть тейк на
-  // встречной заявке. Показываем, что стоит сейчас, а не что стояло сначала.
-  return out.map((x) => {
-    const flipped = !!(g.g_live ?? {})[`flip:${x.level}`];
-    return flipped ? { ...x, side: (x.side === 'buy' ? 'sell' : 'buy') as Side } : x;
-  });
+  const live = g.g_live ?? {};
+  const mk = (level: number): GridLevel => {
+    const price = base + level * step;
+    const state: GridLevelState = live[String(level)] ? 'live'
+      : live[`flip:${level}`] ? 'spent' : 'off';
+    return {
+      level, price, state,
+      side: marketPrice > 0 ? (price > marketPrice ? 'sell' : 'buy') : null,
+    };
+  };
+  const out: GridLevel[] = [];
+  for (let i = Math.max(0, g.g_buys ?? 0); i >= 1; i--) out.push(mk(-i));
+  for (let i = 1; i <= Math.max(0, g.g_sells ?? 0); i++) out.push(mk(i));
+  return out;
+}
+
+/** Сводка по состояниям — для карточки: «4 стоят · 2 погашены · 1 не выставлен». */
+export function gridLevelsSummary(levels: GridLevel[]): string {
+  const n = (st: GridLevelState) => levels.filter((x) => x.state === st).length;
+  const parts: string[] = [];
+  if (n('live')) parts.push(`${n('live')} ${plural(n('live'), 'стоит', 'стоят', 'стоят')}`);
+  if (n('spent')) parts.push(`${n('spent')} ${plural(n('spent'), 'погашен', 'погашены', 'погашены')}`);
+  if (n('off')) parts.push(`${n('off')} не выставлен${n('off') === 1 ? '' : 'ы'}`);
+  return parts.join(' · ');
 }
 
 /** Границы стопа сетки: (низ, верх). 0 — с этой стороны стопа нет. */
@@ -1605,10 +1653,10 @@ export function gridWorstCase(g: GridGeom, pointValue = 0):
 }
 
 /** Состояние сетки словами — для карточки заявки. */
-export function gridState(g: GridGeom): string {
+export function gridState(g: GridGeom, marketPrice = 0): string {
   const pos = g.g_pos ?? 0;
   const where = pos > 0 ? `лонг ${pos}` : pos < 0 ? `шорт ${Math.abs(pos)}` : 'вне рынка';
-  const live = Object.keys(g.g_live ?? {}).filter((k) => !k.startsWith('flip:')).length;
-  const tail = `${live} ${plural(live, 'заявка', 'заявки', 'заявок')} в стакане`;
-  return g.g_done ? `${where} · ${tail} · сетка закончена` : `${where} · ${tail}`;
+  const tail = gridLevelsSummary(gridLevels(g, marketPrice));
+  const body = tail ? `${where} · ${tail}` : where;
+  return g.g_done ? `${body} · сетка закончена` : body;
 }

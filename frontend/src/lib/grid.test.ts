@@ -4,26 +4,53 @@
 // покажут оператору одни уровни, пока заявки стоят на других.
 import { describe, it, expect } from 'vitest';
 import {
-  gridLevels, gridState, gridStopLevels, gridWorstCase, isTwoSided, preview,
-  type Kind,
+  gridLevels, gridLevelsSummary, gridState, gridStopLevels, gridWorstCase,
+  isTwoSided, preview, type Kind,
 } from './smart-order-help';
 
 const G = { g_base: 84_000, g_step: 50, g_buys: 3, g_sells: 2, g_lot: 2, g_stop_pts: 100 };
 
 describe('уровни сетки', () => {
-  it('покупки вниз, продажи вверх, от цены постановки', () => {
-    expect(gridLevels(G).map((x) => [x.price, x.side])).toEqual([
-      [83_850, 'buy'], [83_900, 'buy'], [83_950, 'buy'],
-      [84_050, 'sell'], [84_100, 'sell'],
+  // ИСПРАВЛЕНИЕ real-trade 01.10.2026: первая версия механики была ошибкой
+  // КОНСТРУКЦИИ, а не описания. Встречная заявка вставала на ТОЙ ЖЕ цене —
+  // круг с нулевой прибылью и двойной комиссией; уровень −1 отработал так
+  // трижды подряд, и заметил это оператор, а не тесты: тесты закрепляли ту же
+  // ошибку. Поэтому здесь проверяется ИСПРАВЛЕННАЯ модель.
+
+  it('цены считаются от базы, ноль уровнем не является', () => {
+    expect(gridLevels(G).map((x) => x.price)).toEqual([
+      83_850, 83_900, 83_950, 84_050, 84_100,
     ]);
+    expect(gridLevels(G).some((x) => x.level === 0)).toBe(false);
   });
 
-  // Исполнилась покупка — на её месте встаёт продажа: это и есть тейк в один
-  // шаг сетки. Экран обязан показывать, что стоит СЕЙЧАС.
-  it('сторона на уровне переворачивается после исполнения', () => {
-    const got = gridLevels({ ...G, g_live: { 'flip:-2': true } });
-    expect(got.find((x) => x.level === -2)!.side).toBe('sell');
-    expect(got.find((x) => x.level === -1)!.side).toBe('buy');
+  // Сторона — по какую сторону РЫНКА уровень сейчас. Постоянной лестницы
+  // сторон у сетки нет, и это главное, что было описано неверно.
+  it('сторона определяется рынком, а не номером уровня', () => {
+    const atTop = gridLevels(G, 84_090);          // рынок выше трёх уровней
+    expect(atTop.find((x) => x.price === 83_850)!.side).toBe('buy');
+    expect(atTop.find((x) => x.price === 84_050)!.side).toBe('buy');
+    expect(atTop.find((x) => x.price === 84_100)!.side).toBe('sell');
+  });
+
+  it('рынок неизвестен — стороны НЕ выдумываем', () => {
+    expect(gridLevels(G).every((x) => x.side === null)).toBe(true);
+  });
+
+  // Три состояния, и погашенный нельзя путать с несуществующим: он вернётся,
+  // когда отработает сосед.
+  it('состояние уровня читается из g_live', () => {
+    const got = gridLevels({ ...G, g_live: { '-1': 'cid', 'flip:-2': true } });
+    expect(got.find((x) => x.level === -1)!.state).toBe('live');
+    expect(got.find((x) => x.level === -2)!.state).toBe('spent');
+    expect(got.find((x) => x.level === 2)!.state).toBe('off');
+  });
+
+  it('сводка называет каждое состояние своим словом', () => {
+    const sum = gridLevelsSummary(gridLevels({ ...G, g_live: { '-1': 'c', 'flip:-2': true } }));
+    expect(sum).toContain('1 стоит');
+    expect(sum).toContain('1 погашен');
+    expect(sum).toContain('не выставлен');
   });
 
   it('нет цены постановки или шага — уровней нет, а не ноль', () => {
@@ -32,7 +59,7 @@ describe('уровни сетки', () => {
   });
 
   it('односторонняя сетка законна', () => {
-    expect(gridLevels({ ...G, g_sells: 0 }).every((x) => x.side === 'buy')).toBe(true);
+    expect(gridLevels({ ...G, g_sells: 0 })).toHaveLength(3);
   });
 });
 
@@ -71,9 +98,14 @@ describe('худший случай сетки', () => {
 });
 
 describe('состояние сетки словами', () => {
-  it('позиция и сколько заявок стоит в стакане', () => {
-    expect(gridState({ ...G, g_pos: -4, g_live: { '-1': 'a', '2': 'b', 'flip:-1': true } }))
-      .toBe('шорт 4 · 2 заявки в стакане');
+  it('позиция и разбор уровней по состояниям', () => {
+    const t = gridState({ ...G, g_pos: -4, g_live: { '-1': 'a', '2': 'b', 'flip:-3': true } });
+    expect(t).toContain('шорт 4');
+    expect(t).toContain('2 стоят');
+    expect(t).toContain('1 погашен');
+    // Слова «тейк» у сетки нет как понятия: встречная заявка на той же цене —
+    // это и была ошибка конструкции, которую чинили 01.10.2026.
+    expect(t).not.toContain('тейк');
   });
 
   it('законченная сетка говорит об этом', () => {
