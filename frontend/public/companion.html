@@ -156,6 +156,12 @@
      другое число (оператор 01.10.2026 — «−12 784 ₽» распалось на «−12» и
      «784 ₽», и он сравнил его с контрактами). */
   .nw { white-space: nowrap; }
+  .pnlbox { font-size: 10px; color: var(--faint); }
+  .pnlbox.up { color: var(--up); }
+  .pnlbox.down { color: var(--down); }
+  /* ID заявки: оператор называет его в разборе, значит он должен быть на
+     экране, а не только в ленте журнала. */
+  .soid { font-size: 10px; color: var(--faint); margin-right: 6px; white-space: nowrap; }
   /* Итоговая строка по роботам: жирнее рамка, чтобы читалась как сумма. */
   .row.total { border-left-width: 3px; margin-top: 2px; padding-top: 2px; }
   .row.total .k { color: var(--ink); }
@@ -1236,6 +1242,37 @@ function manualTotal(t) {
     `<span class="sub">${sub}</span>${val(rub(t.total, { signed: true }), cls(t.total))}</div>`;
 }
 
+// P&L ОДНОЙ ЗАЯВКИ в квадратных скобках (заказ оператора 01.10.2026): её фикс по
+// собственным кругам и живая переоценка оставшейся позиции. Показываем и у
+// СНЯТОЙ: сделки у неё были, и их результат никуда не делся.
+//
+// Считает СЕРВЕР: у него журнал филлов и ₽/пункт. Панель только печатает — свой
+// расчёт здесь означал бы вторую версию денег рядом с первой.
+//
+// Нет ₽/пункт — печатаем ПУНКТЫ и слово «п.»: пункт не рубль, и выдать одно за
+// другое нельзя (на этом в проекте уже горели).
+function pnlBox(p) {
+  if (!p) return '';
+  const parts = [];
+  const money = (rubv, ptsv) => (p.priced && rubv != null)
+    ? rub(rubv, { signed: true })
+    : (ptsv == null ? null : `${ptsv > 0 ? '+' : ''}${Number(ptsv).toLocaleString('ru-RU',
+        { maximumFractionDigits: 0 })} п.`);
+  const fix = money(p.fix_rub, p.fix_pts);
+  if (fix != null) parts.push(`фикс ${fix}`);
+  const vm = money(p.vm_rub, p.vm_pts);
+  // ВМ показываем только у ЖИВОЙ позиции: у закрытой её нет, а ноль читался бы
+  // как «переоценка нулевая», то есть как факт.
+  if (vm != null && p.pos) parts.push(`ВМ ${vm}`);
+  if (!parts.length) return '';
+  const sign = (p.fix_rub ?? p.fix_pts ?? 0) + (p.pos ? (p.vm_rub ?? p.vm_pts ?? 0) : 0);
+  return ` <span class="pnlbox nw ${sign > 0 ? 'up' : sign < 0 ? 'down' : ''}"` +
+    ` title="результат ЭТОЙ заявки: фикс по её собственным кругам` +
+    `${p.pos ? ', ВМ — переоценка её оставшейся позиции от средней входа' : ''}` +
+    `${p.avg ? ', средняя ' + px(p.avg) : ''}` +
+    ` · сделок ${p.fills || 0}, объём ${p.lots || 0} контр.">[${parts.join(' · ')}]</span>`;
+}
+
 function renderOrders(o, d) {
   if (!o) return '<div class="empty">ручных заявок нет</div>';
   const sideRu = (s) => s === 'buy' ? 'покупка' : 'продажа';
@@ -1262,7 +1299,9 @@ function renderOrders(o, d) {
       // приложения брокера: оператору важно, каким каналом он торговал.
       `${m.tag ? ` <span style="opacity:.6">${esc(m.tag)}</span>` : ''}</span>` +
       `<span class="sub">@ ${num(m.price)}${m.active && m.balance < m.qty ? ` · осталось ${m.balance}` : ''}</span>` +
-      `<span class="sp"></span><span class="v ${m.active ? 'up' : 'nil'}">${esc(m.state)}</span></div>` });
+      `${pnlBox(m.pnl)}<span class="sp"></span>` +
+      `<span class="soid" title="номер заявки в QUIK">${esc(String(m.num || ''))}</span>` +
+      `<span class="v ${m.active ? 'up' : 'nil'}">${esc(m.state)}</span></div>` });
   }
   // native — защиту держит сам терминал QUIK: она переживёт падение STL.
   const ST = { armed: 'взведена', native: 'под охраной терминала',
@@ -1313,7 +1352,8 @@ function renderOrders(o, d) {
     (rowsBy[s.kind] || rowsBy.other).push({ ts: Number(s.created_ms || s.fired_ms || 0),
       done: ORD_DONE_ST.has(s.status), side: s.side, px: soPx(s), html:
       `<div class="row"><span class="k">${esc(s.code)} ${twoSided ? 'в обе' : sideRu(s.side)} ${s.qty}</span>` +
-      `<span class="sub">${esc(sub)}</span><span class="sp"></span>` +
+      `<span class="sub">${esc(sub)}</span>${pnlBox(s.pnl)}<span class="sp"></span>` +
+      `<span class="soid" title="идентификатор умной заявки STL">${esc(String(s.so_id || ''))}</span>` +
       `<span class="v ${natBad ? 'down' : (live ? (s.activated ? 'up' : '') : 'nil')}">${esc(ST[s.status] || s.status)}</span></div>` });
   }
 

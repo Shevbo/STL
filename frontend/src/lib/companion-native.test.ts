@@ -17,6 +17,9 @@ function renderOrdersOf(html: string) {
   const deps = {
     esc: (x: unknown) => String(x ?? ''), px: (x: unknown) => String(x), todayLo: () => 0,
     ORD_DONE_ST: new Set(['fired', 'cancelled', 'expired']),
+    // pnlBox рисует коробку [фикс · ВМ] и к предмету этих тестов не относится:
+    // заглушаем, чтобы они проверяли своё, а не наличие p&l.
+    pnlBox: () => '',
     ordOpen: new Set(['sl']), ordDone: true, ordFull: false,
   };
   return new Function('d', `with (d) { ${groups}${m[0]}; return renderOrders; }`)(deps);

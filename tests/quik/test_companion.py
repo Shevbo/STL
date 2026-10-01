@@ -992,3 +992,91 @@ def test_figure_and_grid_carry_their_own_fields_to_the_panel(monkeypatch):
     grid = smart["grid"]
     assert grid["g_step"] == 50 and grid["g_buys"] == 3 and grid["g_lot"] == 2
     assert grid["g_stop_pts"] == 100 and grid["g_pos"] == 4
+
+
+def test_each_order_gets_its_own_pnl():
+    """P&L СВОЕЙ заявки: фикс по её кругам и переоценка её остатка.
+
+    Заказ оператора 01.10.2026. Многоразовая заявка (коридор, сетка) за свою
+    жизнь и покупает, и продаёт — её фикс определён полностью. У одноразовой
+    закрывать нечего, и фикс честно ноль: приписать ей чужое закрытие было бы
+    выдумкой.
+    """
+    from trader.api.order_pnl import pnl_by_order
+
+    t0 = 1_790_000_000_000
+    fills = [
+        # Коридор: купил 2 по 84 000, продал 2 по 84 100 — круг закрыт.
+        {"tag": "stl-so-aaa", "sec": "RIZ6", "side": "buy", "qty": 2,
+         "price": 84_000, "ts_ms": t0},
+        {"tag": "stl-so-aaa", "sec": "RIZ6", "side": "sell", "qty": 2,
+         "price": 84_100, "ts_ms": t0 + 1000},
+        # И снова купил 1 — позиция открыта, её переоценим по рынку.
+        {"tag": "stl-so-aaa", "sec": "RIZ6", "side": "buy", "qty": 1,
+         "price": 84_050, "ts_ms": t0 + 2000},
+        # Одноразовая: только продала, закрывать нечего.
+        {"tag": "stl-so-bbb", "sec": "RIZ6", "side": "sell", "qty": 3,
+         "price": 84_200, "ts_ms": t0 + 3000},
+    ]
+    out = pnl_by_order(fills, {"RIZ6": 84_300.0}, {"RIZ6": 2.0})
+
+    a = out["aaa"]
+    assert a["fix_pts"] == pytest.approx(200.0)      # 2 × 100 пунктов
+    assert a["fix_rub"] == pytest.approx(400.0)      # ×2 ₽/пункт
+    assert a["pos"] == 1 and a["avg"] == pytest.approx(84_050.0)
+    assert a["vm_pts"] == pytest.approx(250.0)       # (84 300 − 84 050) × 1
+    assert a["priced"] is True
+
+    b = out["bbb"]
+    assert b["fix_pts"] == 0.0                       # закрывать было нечего
+    assert b["pos"] == -3
+    assert b["vm_pts"] == pytest.approx(-300.0)      # шорт против себя
+
+
+def test_child_legs_belong_to_their_parent_order():
+    """Суффикс ноги не делает новую заявку.
+
+    Тег ребёнка бывает `stl-so-<id>:lo` / `:gm` — это та же заявка, другая её
+    нога. Не отрезав суффикс, одна заявка распалась бы на несколько строк, и
+    каждая показала бы кусок её же результата.
+    """
+    from trader.api.order_pnl import order_key, pnl_by_order
+
+    assert order_key({"tag": "stl-so-4e99b8c5ef:lo"}) == "4e99b8c5ef"
+    assert order_key({"tag": "stl-so-4e99b8c5ef"}) == "4e99b8c5ef"
+    # Терминальная заявка опознаётся своим номером.
+    assert order_key({"tag": "", "order_num": "19250402"}) == "19250402"
+
+    t0 = 1_790_000_000_000
+    out = pnl_by_order([
+        {"tag": "stl-so-x", "sec": "RIZ6", "side": "buy", "qty": 1, "price": 100, "ts_ms": t0},
+        {"tag": "stl-so-x:lo", "sec": "RIZ6", "side": "sell", "qty": 1, "price": 110,
+         "ts_ms": t0 + 1},
+    ], {"RIZ6": 110.0}, {"RIZ6": 1.0})
+    assert list(out) == ["x"]
+    assert out["x"]["fix_pts"] == pytest.approx(10.0)
+
+
+def test_points_are_not_rubles_when_the_coefficient_is_unknown():
+    """Нет ₽/пункт — рублей НЕТ, а не ноль рублей."""
+    from trader.api.order_pnl import pnl_by_order
+
+    out = pnl_by_order(
+        [{"tag": "stl-so-z", "sec": "XXZ9", "side": "buy", "qty": 1, "price": 100,
+          "ts_ms": 1},
+         {"tag": "stl-so-z", "sec": "XXZ9", "side": "sell", "qty": 1, "price": 120,
+          "ts_ms": 2}],
+        {"XXZ9": 120.0}, {})
+    z = out["z"]
+    assert z["fix_pts"] == pytest.approx(20.0)
+    assert z["fix_rub"] is None and z["priced"] is False
+
+
+def test_an_unknown_price_leaves_the_mark_to_market_unknown():
+    """Цены нет — переоценки нет. Ноль читался бы как «в нуле»."""
+    from trader.api.order_pnl import pnl_by_order
+
+    out = pnl_by_order(
+        [{"tag": "stl-so-q", "sec": "RIZ6", "side": "buy", "qty": 1, "price": 100, "ts_ms": 1}],
+        {}, {"RIZ6": 1.0})
+    assert out["q"]["vm_pts"] is None and out["q"]["vm_rub"] is None

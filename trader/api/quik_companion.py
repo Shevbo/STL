@@ -767,6 +767,39 @@ def _trading_block(store) -> dict:
     }
 
 
+def _orders_pnl(store, now_ms: int, cache: dict | None) -> dict:
+    """P&L каждой заявки по отдельности, с кэшем.
+
+    Окно НЕДЕЛЯ, а не день: заявка живёт дольше суток (коридор стоит днями), и
+    посчитанный по одному дню «её» результат был бы куском без начала. Журнал
+    при этом читается с диска, а панель опрашивает снапшот каждые несколько
+    секунд — поэтому кэш на 10 с: p&l заявки меняется со сделкой, а не с кадром.
+
+    Ошибка здесь не имеет права ронять снапшот: без p&l панель живёт, без
+    панели — нет.
+    """
+    if cache and now_ms - cache[0] < 10_000:
+        return cache[1]
+    try:
+        import datetime as _dt
+
+        from trader.api.order_pnl import pnl_by_order
+        from trader.quik import manual_pnl
+        from trader.quik.algo_ledger import point_values
+        from trader.quik.truth import load_robot_ids
+
+        status = (store.agent_status(None) or {}) if store is not None else {}
+        ids = load_robot_ids() | {str(r.get("id")) for r in status.get("robots") or [] if r.get("id")}
+        days = manual_pnl.period_days("week", _dt.datetime.now(tz=_MSK).date())
+        fills = manual_pnl.read_trades(days, robot_ids=ids)
+        feed = {f.get("code"): f for f in (status.get("health") or {}).get("feed") or []}
+        last = {c: float((v or {}).get("last") or 0) for c, v in feed.items()}
+        pv = point_values(store.params(None) if store is not None else None)
+        return pnl_by_order(fills, last, pv)
+    except Exception:  # noqa: BLE001 — p&l не роняет панель
+        return {}
+
+
 def _manual_block(store) -> dict:
     """Блок ручной торговли для снапшота. Ошибка здесь не имеет права ронять
     снапшот целиком: панель нужнее, чем один её блок."""
@@ -1214,6 +1247,12 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
     # None, а не среднюю ЧУЖОЙ позиции. Свой второй расчёт здесь был бы третьей
     # версией одной цифры: журнал и панель обязаны показывать одно число.
     manual_block = _manual_block(store)
+    # P&L КАЖДОЙ ЗАЯВКИ (заказ оператора 01.10.2026): свой фикс и своя живая
+    # переоценка, в том числе у снятой. Считаем ОДИН раз на снапшот и раздаём
+    # и умным заявкам, и терминальным: два прохода по одному журналу разошлись
+    # бы между собой.
+    _pnl = _orders_pnl(store, now_ms, getattr(request.app.state, "_order_pnl_cache", None))
+    request.app.state._order_pnl_cache = (now_ms, _pnl)
     _manual_avg_by_sec = {str(r.get("symbol")): r.get("avg_price")
                           for r in (manual_block.get("open") or []) if r.get("symbol")}
     # Шаг цены инструмента — по нему округляем средние. Берём из того же фида
@@ -1294,6 +1333,7 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
         else:
             st = "снята" + (f", исполнено {qty - bal}" if qty > bal else "")
         manual_orders.append({"num": o.get("num"), "sec": o.get("sec"),
+                              "pnl": _pnl.get(str(o.get("num") or "")),
                               "side": o.get("side"), "price": o.get("price"),
                               "qty": qty, "balance": bal, "state": st,
                               "active": bool(o.get("active")),
@@ -1326,7 +1366,10 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
             # защита под нативной стоп-заявкой QUIK (real-trade 17.09)
             "native_state": getattr(so, "native_state", ""),
             "native_stop_num": str(getattr(so, "native_stop_num", "") or ""),
-            "parent_id": so.parent_id})
+            "parent_id": so.parent_id,
+            # Свой результат заявки: фикс по её собственным кругам и переоценка
+            # её оставшейся позиции. У снятой он тоже есть — сделки были.
+            "pnl": _pnl.get(so.so_id)})
         # ФИГУРЫ И СЕТКА. Без этих полей панель знает их имя и не знает НИЧЕГО о
         # том, где они стоят: уровень срабатывания у них не один, и строка
         # «уровень —» про них не сообщает ничего. Стенки считает ДВИЖОК (c_now),
