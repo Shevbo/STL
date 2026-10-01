@@ -56,3 +56,4 @@ trader/lab/exec_cost.py
 trader/lab/exec_policy.py
 trader/lab/footprints/r1_retest.py
 trader/lab/strategies/retest.py
+trader/lab/strategies/scale_in.py
