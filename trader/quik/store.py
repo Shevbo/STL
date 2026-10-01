@@ -210,11 +210,25 @@ class QuikAgentStore:
                     st.securities[code] = sec
 
     def set_tick(self, agent_id: str, tick: dict[str, Any]) -> None:
+        """Последняя котировка инструмента + ВРЕМЯ ПРИЁМА ПО ЧАСАМ STL.
+
+        `received_at_unix_ms` в кадре ставит агент на VDS, и при расхождении
+        часов кадр кажется вечно свежим или вечно старым: гейт «не старше 10 с»
+        у честной бумажной наливки тогда либо не срабатывает никогда, либо
+        срабатывает всегда (просьба backtests 01.10.2026, читатель —
+        `_fresh_quote` в trader/lab/runtime.py). `stl_received_ms` ставим своими
+        часами — теми же, которыми потом считается возраст.
+
+        Кладём РЯДОМ, не вместо: старое поле остаётся на месте, чтобы читатели,
+        которые ещё на нём, не замолчали в момент выката.
+        """
         code = tick.get("code")
         if not code:
             return
         with self._lock:
-            self._agents.setdefault(agent_id, AgentState(agent_id=agent_id)).ticks[code] = tick
+            self._agents.setdefault(agent_id, AgentState(agent_id=agent_id)).ticks[code] = {
+                **tick, "stl_received_ms": _now_ms(),
+            }
 
     def set_order_book(self, agent_id: str, ob: dict[str, Any]) -> None:
         code = ob.get("code")

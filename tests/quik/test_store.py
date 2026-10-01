@@ -90,3 +90,33 @@ def test_tick_ages_ms_reports_lag_per_instrument():
     ages = store.tick_ages_ms(1_000_500, "9618")
     assert ages == {"RIZ6": 500, "RIU6": 100_500}
     assert store.tick_ages_ms(1_000_500, "нет-такого-агента") == {}
+
+
+def test_tick_carries_an_stl_side_receive_stamp():
+    """Возраст котировки считаем ЧАСАМИ STL, а не часами VDS.
+
+    `received_at_unix_ms` в кадре ставит агент на VDS. При расхождении часов
+    гейт «не старше 10 с» у честной бумажной наливки либо не срабатывает
+    никогда, либо срабатывает всегда — и бумага наливается по встречному best
+    в момент, когда котировка давно мертва (просьба backtests 01.10.2026).
+    """
+    store = QuikAgentStore()
+    before = int(time.time() * 1000)
+    store.set_tick("a1", {"code": "RIZ6", "bid": 84_000.0, "ask": 84_010.0,
+                          "received_at_unix_ms": 1})      # заведомо «древние» часы VDS
+    after = int(time.time() * 1000)
+
+    t = store.tick("RIZ6", "a1")
+    assert before <= t["stl_received_ms"] <= after
+    # Старое поле остаётся НА МЕСТЕ: читатели, которые ещё на нём, не должны
+    # замолчать в момент выката.
+    assert t["received_at_unix_ms"] == 1
+    assert t["bid"] == 84_000.0
+
+
+def test_set_tick_does_not_mutate_the_frame_it_was_given():
+    """Кадр агента не правим на месте: его может читать кто-то ещё."""
+    store = QuikAgentStore()
+    frame = {"code": "RIZ6", "bid": 1.0}
+    store.set_tick("a1", frame)
+    assert "stl_received_ms" not in frame
