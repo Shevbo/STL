@@ -17,6 +17,7 @@ _BARS_CACHE: dict[tuple, tuple[float, list]] = {}
 _BARS_INFLIGHT: dict[tuple, "asyncio.Future"] = {}
 # Настенное время (UTC epoch) выкачки, по которому судим, какие бары уже ЗАКРЫТЫ.
 _BARS_FETCHED_AT: dict[tuple, float] = {}
+_CLOSED_BAR_MARGIN_S = 3.0  # запас на отставание свечей ISS от часов хостера
 
 # ЧЕСТНАЯ БУМАЖНАЯ НАЛИВКА (honest_v1, 01.10.2026). Аудит бумажных роботов
 # (docs/execution-cost-program.md, «Бумажные роботы»): STL наливал мгновенно по
@@ -99,6 +100,10 @@ async def _load_bars_shared(symbol: str, days: int, interval: int) -> list:
     inflight = _BARS_INFLIGHT.get(key)
     if inflight is not None:
         return await inflight
+    # Момент НАЧАЛА выкачки минус запас на отставание свечей ISS: по нему судим,
+    # какой бар закрыт. Метка после await считала бы закрытым бар, снятый за доли
+    # секунды до границы минуты с неполным close (ревью bb5f16f, находка 3).
+    fetch_started = _time.time() - _CLOSED_BAR_MARGIN_S
     loop = asyncio.get_event_loop()
     fut: asyncio.Future = loop.create_future()
     _BARS_INFLIGHT[key] = fut
@@ -112,7 +117,7 @@ async def _load_bars_shared(symbol: str, days: int, interval: int) -> list:
             bars = []
         if bars:  # don't cache an empty/failed fetch — let the next tick retry
             _BARS_CACHE[key] = (now, bars)
-            _BARS_FETCHED_AT[key] = _time.time()
+            _BARS_FETCHED_AT[key] = fetch_started
         if not fut.done():
             fut.set_result(bars)
         return bars
@@ -428,6 +433,10 @@ class LiveRuntime:
                     oid += f";{COST_TAG};{src};c={comm:.2f}"
                 except Exception as exc:  # noqa: BLE001 - издержки не роняют филл
                     self.log(f"[PAPER] honest fill failed, old price: {exc!r}", level="warning")
+            # Запись филла обязательна в обоих положениях выключателя: без неё
+            # _paper_position читает замороженную историю, робот «входит» каждый бар,
+            # витрина молча замирает (блокер ревью bb5f16f, 01.10.2026).
+            await self._record_trade(symbol, side, qty, price, oid, "paper")
             self.log(f"[PAPER] {side} {qty} {symbol} @ {price:.0f}")
             return Order(order_id=oid, symbol=symbol, side=side, qty=qty,
                          price=price, status="paper", fill_price=price)

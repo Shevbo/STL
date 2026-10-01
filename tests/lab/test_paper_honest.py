@@ -123,3 +123,59 @@ def test_forming_bar_not_passed(monkeypatch):
 
     monkeypatch.setenv("LAB_PAPER_HONEST", "0")
     assert asyncio.run(LiveRuntime("r1", None, paper=True).get_bars("RIZ6", 1, 10))[-1].close == 3
+
+
+class _Conn:
+    def __init__(self, log):
+        self.log = log
+
+    async def execute(self, sql, *args):
+        self.log.append((sql, args))
+
+    async def fetch(self, sql, *args):
+        return []
+
+    async def fetchrow(self, sql, *args):
+        return None
+
+
+class _Pool:
+    """Фейковый пул: считает INSERT в live_trades (ревью bb5f16f: бумажный филл
+    перестал писаться в БД, а тесты с pool=None этого не видели)."""
+
+    def __init__(self):
+        self.log = []
+
+    def acquire(self):
+        pool = self
+
+        class _Ctx:
+            async def __aenter__(self_inner):
+                return _Conn(pool.log)
+
+            async def __aexit__(self_inner, *exc):
+                return False
+        return _Ctx()
+
+
+@pytest.mark.parametrize("flag", ["1", "0"])
+def test_paper_fill_is_recorded_once(monkeypatch, flag):
+    monkeypatch.setenv("LAB_PAPER_HONEST", flag)
+    pool = _Pool()
+    rt = LiveRuntime("r1", pool, paper=True)
+
+    async def _meta(_sym):
+        return RI_META
+    rt._meta = _meta
+    order = asyncio.run(rt.place_order("RIZ6", "buy", 2, 85000.0))
+    inserts = [a for s, a in pool.log if "INSERT INTO live_trades" in s]
+    assert len(inserts) == 1
+    args = inserts[0]
+    # (id, robot_id, symbol, side, qty, price, order_id, status)
+    assert args[1:5] == ("r1", "RIZ6", "buy", 2)
+    assert float(args[5]) == order.price
+    assert args[6] == order.order_id and args[7] == "paper"
+    if flag == "1":
+        assert ";honest_v1;" in args[6] and order.price == 85007.0
+    else:
+        assert ";honest_v1;" not in args[6] and order.price == 85000.0
