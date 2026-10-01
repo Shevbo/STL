@@ -340,11 +340,14 @@ async def test_real_order_prices_marketable_from_host_quote(tmp_path):
 
     # STALE quote -> CROSS the (stale) bid so an EXIT still crosses the live market and
     # never rests at the bar-close (the stuck-exit bug 2026-07-20).
-    from robot_runner.runtime import _STALE_CROSS_FRAC
+    # Проскок = СПРЕД x _STALE_CROSS_SPREADS (здесь 20 x 3 = 60 пт), а доля цены
+    # 0.3% (267 пт) осталась лишь потолком: она не знает ни шага, ни густоты бумаги.
+    from robot_runner.runtime import _STALE_CROSS_FRAC, _STALE_CROSS_SPREADS
     host.quotes["RIU6"] = (88_990.0, 89_010.0, now_ms - 60_000)
     f = await r.runtime.place_order("RIU6", "sell", 1, 89_100.0)
-    assert bridge.placed[-1]["price"] == pytest.approx(88_990.0 * (1 - _STALE_CROSS_FRAC))
+    assert bridge.placed[-1]["price"] == pytest.approx(88_990.0 - 20.0 * _STALE_CROSS_SPREADS)
     assert f.price < 88_990.0        # crosses below the stale bid → marketable
+    assert f.price > 88_990.0 * (1 - _STALE_CROSS_FRAC)   # уже, чем прежняя доля
 
 
 @pytest.mark.asyncio

@@ -35,6 +35,19 @@ _QUOTE_FRESH_MS = 10_000   # a quote younger than this prices at the exchange to
 # price collar. The stuck-exit bug (2026-07-20) fell back to bars[-1].close = a resting
 # limit above the market that never filled while the robot sat long +11.
 _STALE_CROSS_FRAC = 0.003
+# Доля цены — грубая мера: она не знает ни шага инструмента, ни его спреда. На RI
+# это ~25 шагов, и в сентябре 12 заявок ушли больше чем на 10 шагов за лучшую цену
+# (сверка backtests по 46 дням, ~3.4 тыс ₽/мес). Проскакиваем СПРЕДОМ: он и есть
+# мера того, насколько густо стоит этот инструмент, и раннеру он уже известен.
+# Доля остаётся ПОТОЛКОМ — на редком широком спреде (предторговый RI бывает 44
+# шага) она держит заявку от ухода в пустоту.
+#
+# ЦЕНА ЭТОГО ОБМЕНА, ЗНАТЬ О НЕЙ: чем уже проскок, тем выше шанс, что заявка
+# ляжет в стакан вместо исполнения. По данным backtests заявки с оффсетом 2-10
+# шагов исполняются в 98% случаев — то есть 2% остаются, а неисполненный ВЫХОД
+# это тот самый баг 20.07.2026, когда робот сидел в лонге +11, а его лимит стоял
+# над рынком. Отсюда три спреда, а не один.
+_STALE_CROSS_SPREADS = 3.0
 # Переворот сигнала уходит ДВУМЯ заявками подряд (library.py: сначала выход всей
 # позицией, следом вход в новую сторону). В бэктесте обе исполняются в одном баре,
 # вживую выход ещё висит на рынке, когда приходит вход, и QUIK бьёт по нему
@@ -163,7 +176,9 @@ class AgentRuntime:
         # inside the agent's price collar by construction. Stale/absent quote
         # falls back to the strategy price (old behaviour).
         send_price = price
-        ref, fresh = 0.0, False
+        # bid/ask инициализируются ЗДЕСЬ, а не только внутри ветки с котировкой:
+        # без неё ветка несвежей цены читала бы несуществующие имена.
+        ref, fresh, bid, ask = 0.0, False, 0.0, 0.0
         if self._quote_fn is not None:
             try:
                 q = self._quote_fn()
@@ -180,7 +195,11 @@ class AgentRuntime:
             # live market (an EXIT must not rest). Prefer the (possibly-stale) exchange
             # touch over the strategy bar-close, which drifts furthest on a fast tape.
             base = ref if ref > 0 else price
-            collar = base * _STALE_CROSS_FRAC
+            spread = (ask - bid) if (bid and ask and ask > bid) else 0.0
+            cap = base * _STALE_CROSS_FRAC
+            # Спред знает густоту инструмента, доля цены — нет. Без годного спреда
+            # (нет котировки вовсе) остаётся прежнее поведение по доле.
+            collar = min(spread * _STALE_CROSS_SPREADS, cap) if spread > 0 else cap
             send_price = base - collar if side == "sell" else base + collar
         try:
             await self._bridge.place_order(client_id=client_id, code=symbol,

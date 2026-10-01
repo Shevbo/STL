@@ -4,7 +4,8 @@ import pytest
 
 from robot_runner import runtime as rt_mod
 from robot_runner.bars import BarBuilder
-from robot_runner.runtime import AgentRuntime, _STALE_CROSS_FRAC
+from robot_runner.runtime import (AgentRuntime, _STALE_CROSS_FRAC,
+                                 _STALE_CROSS_SPREADS)
 
 
 @pytest.fixture(autouse=True)
@@ -129,16 +130,50 @@ async def test_real_order_marketable_never_rests():
     assert rt._bridge.placed[-1]["price"] == 80010.0   # BUY at the ask (touch)
 
     # STALE quote: a SELL must cross BELOW the (stale) bid, never rest at the bar close.
-    box["q"] = (80000.0, 80010.0, now - 30_000)        # 30s old
+    # Проскок считается СПРЕДОМ (10 пт здесь), а доля цены остаётся потолком:
+    # 0.3% от 80000 это 240 пт, то есть 24 шага RI, и в сентябре такие заявки
+    # уходили больше чем на 10 шагов за лучшую цену без нужды.
+    box["q"] = (80000.0, 80010.0, now - 30_000)        # 30s old, спред 10
     await rt.place_order("RIU6", "sell", 1, 85000.0)   # bar-close 85000 (above mkt) NOT used
-    assert rt._bridge.placed[-1]["price"] == pytest.approx(80000.0 * (1 - _STALE_CROSS_FRAC))
-    assert rt._bridge.placed[-1]["price"] < 80000.0    # crosses down → marketable
+    px = rt._bridge.placed[-1]["price"]
+    assert px == pytest.approx(80000.0 - 10.0 * _STALE_CROSS_SPREADS)
+    assert px < 80000.0                                # crosses down → marketable
+    assert px > 80000.0 * (1 - _STALE_CROSS_FRAC), "доля цены была ВШИРЕ спреда — в этом и смысл"
 
     # No quote at all: cross the strategy price (last resort) so it still crosses.
     rt2 = AgentRuntime("r2", FakeBridge(), BarBuilder(), max_position=5, paper=False,
                        quote_fn=lambda: None)
     await rt2.place_order("RIU6", "buy", 1, 80000.0)
     assert rt2._bridge.placed[-1]["price"] == pytest.approx(80000.0 * (1 + _STALE_CROSS_FRAC))
+
+
+@pytest.mark.asyncio
+async def test_stale_cross_is_capped_on_a_wide_spread():
+    """Широкий спред не уводит заявку в пустоту: доля цены остаётся потолком.
+
+    Предторговый RI бывает со спредом в 44 шага (01.10.2026: 85690/86130).
+    Три таких спреда это 1320 пунктов — дальше, чем прежние 0.3%. Потолок держит.
+    """
+    now = time.time() * 1000
+    rt = AgentRuntime("r1", FakeBridge(), BarBuilder(), max_position=5, paper=False,
+                      quote_fn=lambda: (85690.0, 86130.0, now - 30_000))
+    await rt.place_order("RIZ6", "sell", 1, 85700.0)
+    px = rt._bridge.placed[-1]["price"]
+    assert px == pytest.approx(85690.0 * (1 - _STALE_CROSS_FRAC))
+    assert px < 85690.0
+
+
+@pytest.mark.asyncio
+async def test_stale_cross_without_any_quote_does_not_crash():
+    """Без котировки ветка несвежей цены не имеет права читать bid/ask.
+
+    Они инициализируются вместе с ref; иначе здесь был бы NameError на РЕАЛЬНОЙ
+    заявке, то есть робот не смог бы выйти из позиции вовсе.
+    """
+    rt = AgentRuntime("r1", FakeBridge(), BarBuilder(), max_position=5, paper=False,
+                      quote_fn=lambda: None)
+    await rt.place_order("RIZ6", "sell", 1, 85000.0)
+    assert rt._bridge.placed[-1]["price"] == pytest.approx(85000.0 * (1 - _STALE_CROSS_FRAC))
 
 
 @pytest.mark.asyncio
