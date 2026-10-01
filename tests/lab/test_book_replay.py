@@ -130,3 +130,20 @@ def test_touch_unfilled_cancel_or_market():
     rt.advance()
     assert rt._orders[-1].qty == 7 and rt._orders[-1].fill_price == 102.0
     assert rt._positions["RIU6"]["qty"] == 10 and rt.stats["touch_market"] == 7
+
+
+def test_touch_quote_lag_rests_then_fills_or_crosses_better():
+    """quote_lag_s: лимит по best снимка t - lag. Рынок ушёл вверх — заявка встаёт
+    целиком (сразу ничего), доливается на возврате; ушёл вниз — сразу по уровням
+    не хуже лимита (лучше него)."""
+    up = [(-5, [(101.0, 5)]), (0, [(103.0, 10)]), (10, [(101.0, 5)])]
+    rt = _touch_rt("touch", up, quote_lag_s=5)
+    o = asyncio.run(rt.place_order("RIU6", "buy", 3, 0))
+    assert o.status == "submitted" and o.price == 101.0 and rt._orders == []
+    rt.advance()
+    assert rt._positions["RIU6"] == {"side": "long", "qty": 3, "avg": 101.0}
+
+    down = [(-5, [(103.0, 5)]), (0, [(101.0, 2), (102.0, 5), (104.0, 10)])]
+    rt = _touch_rt("touch", down, quote_lag_s=5)
+    o = asyncio.run(rt.place_order("RIU6", "buy", 5, 0))
+    assert abs(o.fill_price - (2 * 101 + 3 * 102) / 5) < 1e-9 and rt._pending == []

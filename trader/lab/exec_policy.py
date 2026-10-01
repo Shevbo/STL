@@ -88,6 +88,24 @@ TOUCH И TOUCH_MKT (01.10, калибровка под живой раннер).
     с ценой прохода всего N — объёмы разные, читать вместе с долями.
   touch_mkt(T) — то же, но неисполненный остаток добирается рынком (проход
     стакана) по снимку t+T; издержка на весь N.
+ЗАДЕРЖКА КОТИРОВКИ quote_lag_s (01.10, калибровка на i9: touch_mkt(60) факт не
+воспроизвёл — lxk22 6-10 лотов факт 1.72 пт/лот против 10.8-12.4 модели,
+неисполненных у факта ~10% даже у 1 лота, у модели 0). Раннер берёт best из
+СВОЕЙ котировки, которая отстаёт от стакана; по архиву заявок относительно
+снимка на момент отправки 72% маркетабельны, 11% на своём best, 7% внутри
+спреда, 10% глубже. Модель: цена лимита = встречный best последнего снимка НЕ
+ПОЗЖЕ t - lag (в том же непрерывном сегменте, иначе якорь для этого lag
+пропускается, счётчик dropped_lag). В t заявка встречает текущий стакан: если
+пересекает встречный best — сразу исполняется по уровням встречной стороны не
+хуже лимита в пределах видимого объёма (по ценам уровней), остаток стоит по
+нашей цене; не пересекает — стоит целиком. Доливка и добор как выше. Класс
+размещения в t (placement_marketable/own_best/inside/deeper, доли заявок) —
+для калибровки lag по фактическому 72/11/7/10. lag=0 = прежний touch.
+Издержка — по исполненной части; заявка без единого исполненного лота в
+cost_*/vs_market_* этой границы не входит (у touch; у touch_mkt её добирает
+рынок). ponytail: снимки идут ~1 раз в 1.2 с, лаг 1 с и 2 с могут попасть на
+один и тот же снимок; разрешение лага не точнее шага снимков.
+
 Поля долей во всех строках: fill_share_qty_* — доля объёма, исполненная по
 нашей лимитной цене (market/delay/slice/actual = 1; hold = 1 или 0 по
 пассивной наливке); unfilled_share_* — доля заявок, у которых по лимиту
@@ -113,6 +131,7 @@ DEFAULT_DELAY_S = (15, 30, 60)
 DEFAULT_SLICES = (2, 4)
 DEFAULT_SLICE_EVERY_S = (5, 15)
 DEFAULT_TOUCH_S = (15, 60, 180)
+DEFAULT_QUOTE_LAG_S = (0, 1, 2, 3, 5)
 DEFAULT_N_SAMPLES = 3000
 DEFAULT_DRAWS = 200
 
@@ -358,14 +377,47 @@ def _eval_policy(dd: dict, i: int, side: str, size: int, hold_s: int, chase_s: i
     return out
 
 
+def _lag_snapshot(dd: dict, i: int, lag_s: float) -> int | None:
+    """Последний снимок НЕ ПОЗЖЕ ts[i] - lag в том же непрерывном сегменте."""
+    if lag_s <= 0:
+        return i
+    ts = dd["ts"]
+    k = bisect.bisect_right(ts, ts[i] - lag_s * 1000, 0, i + 1) - 1
+    if k < 0 or dd["block_end"][k] != dd["block_end"][i]:
+        return None
+    return k
+
+
+def _placement(side: str, price: float, bids: list[tuple], asks: list[tuple]) -> str:
+    """Класс лимита относительно стакана: marketable / own_best / inside / deeper."""
+    sign = 1 if side == "buy" else -1
+    opp, own = (asks[0][0], bids[0][0]) if side == "buy" else (bids[0][0], asks[0][0])
+    if sign * (price - opp) >= -_PRICE_EPS:
+        return "marketable"
+    if abs(price - own) < _PRICE_EPS:
+        return "own_best"
+    return "inside" if sign * (price - own) > 0 else "deeper"
+
+
 def _eval_touch(dd: dict, i: int, side: str, size: int, touch_s: int, mid0: float,
-                with_market: bool) -> dict | None:
-    """touch(T) / touch_mkt(T), см. докстринг модуля. -> {filled_qty_opt/pess,
-    cost_opt/pess} или None (touch_mkt без снимка на t+T для добора остатка)."""
+                with_market: bool, lag_s: float = 0) -> dict | None:
+    """touch(T) / touch_mkt(T), см. докстринг модуля. -> {placement,
+    filled_qty_opt/pess, cost_opt/pess (None = ничего не исполнено)}; None =
+    нет снимка t - lag (поле "lag_missing") или touch_mkt без снимка на t+T."""
     sign = 1 if side == "buy" else -1
     book = dd["asks"] if side == "buy" else dd["bids"]
-    price, vol0 = book[i][0]
-    q0 = min(size, vol0)
+    k = _lag_snapshot(dd, i, lag_s)
+    if k is None:
+        return {"lag_missing": True}
+    price = book[k][0][0]
+    placement = _placement(side, price, dd["bids"][i], dd["asks"][i])
+    q0, value0 = 0, 0.0                  # немедленное исполнение по уровням не хуже лимита
+    for p, q in book[i]:
+        if sign * (p - price) > _PRICE_EPS or q0 >= size:
+            break
+        take = min(size - q0, q)
+        q0 += take
+        value0 += take * p
     ts = dd["ts"]
     target_ms = ts[i] + touch_s * 1000
     hi = min(bisect.bisect_right(ts, target_ms, i) - 1, dd["block_end"][i])
@@ -376,7 +428,7 @@ def _eval_touch(dd: dict, i: int, side: str, size: int, touch_s: int, mid0: floa
     def _through(p: float) -> bool:     # встречный best прошёл нашу цену насквозь
         return p < price - _PRICE_EPS if side == "buy" else p > price + _PRICE_EPS
 
-    out: dict = {}
+    out: dict = {"placement": placement}
     for mode in ("opt", "pess"):
         left = size - q0
         for j in range(i + 1, hi + 1):
@@ -389,13 +441,14 @@ def _eval_touch(dd: dict, i: int, side: str, size: int, touch_s: int, mid0: floa
             elif _through(levels[0][0]):
                 left = 0
         filled = size - left
-        cost = sign * (price - mid0)
+        value = value0 + (filled - q0) * price
+        cost = sign * (value / filled - mid0) if filled else None
         if with_market and left > 0:
             idx = _snapshot_at_or_after(dd, target_ms, i)
             if idx is None:
                 return None
             vwap, _deep = BookRuntime._walk(book[idx], left)
-            cost = sign * ((filled * price + left * vwap) / size - mid0)
+            cost = sign * ((value + left * vwap) / size - mid0)
         out[f"filled_qty_{mode}"] = filled
         out[f"cost_{mode}"] = cost
     return out
@@ -424,25 +477,35 @@ def _mean_of_blocks(blocks: list[list[float]]) -> float | None:
     return statistics.fmean(vals) if vals else None
 
 
+def _med(vals: list[float]) -> float | None:
+    return statistics.median(vals) if vals else None
+
+
+def _mean(vals: list[float]) -> float | None:
+    return statistics.fmean(vals) if vals else None
+
+
 def _finalize(buckets: dict, seed: int, draws: int) -> list[dict]:
     out_rows = []
     for key, b in buckets.items():
-        (pname, hold_s, chase_s, delay_s, slices, slice_every_s, touch_s, size, size_class, side,
-         mclass, wlabel, robot) = key
+        (pname, hold_s, chase_s, delay_s, slices, slice_every_s, touch_s, quote_lag_s, size,
+         size_class, side, mclass, wlabel, robot) = key
         if b["n"] == 0:
             continue
         rng = random.Random(f"{seed}:{key}")
         rows_by_day: dict = defaultdict(list)
-        for d, v in zip(b["days"], b["diff_pess"]):
+        for d, v in zip(b["days_pess"], b["diff_pess"]):
             rows_by_day[d].append(v)
         boot_med = sorted(common.bootstrap_days(rows_by_day, _median_of_blocks, draws, rng))
         boot_mean = sorted(common.bootstrap_days(rows_by_day, _mean_of_blocks, draws, rng))
         ci_med = [_pctl(boot_med, 0.025), _pctl(boot_med, 0.975)] if boot_med else [None, None]
         ci_mean = [_pctl(boot_mean, 0.025), _pctl(boot_mean, 0.975)] if boot_mean else [None, None]
+        pl = b["placement"]
+        npl = sum(pl.values())
         out_rows.append({
             "policy": pname, "hold_s": hold_s, "chase_s": chase_s,
             "delay_s": delay_s, "slices": slices, "slice_every_s": slice_every_s,
-            "touch_s": touch_s, "size": size, "size_class": size_class, "side": side,
+            "touch_s": touch_s, "quote_lag_s": quote_lag_s, "size": size, "size_class": size_class, "side": side,
             "minute_class": mclass, "weekend": wlabel, "robot": robot, "n": b["n"],
             "fill_share_opt": b["fill_opt"] / b["n"],
             "fill_share_pess": b["fill_pess"] / b["n"],
@@ -450,16 +513,18 @@ def _finalize(buckets: dict, seed: int, draws: int) -> list[dict]:
             "fill_share_qty_pess": b["qty_pess"] / b["qty_total"],
             "unfilled_share_opt": b["unf_opt"] / b["n"],
             "unfilled_share_pess": b["unf_pess"] / b["n"],
-            "cost_med_opt": statistics.median(b["cost_opt"]),
-            "cost_med_pess": statistics.median(b["cost_pess"]),
-            "cost_mean_opt": statistics.fmean(b["cost_opt"]),
-            "cost_mean_pess": statistics.fmean(b["cost_pess"]),
-            "cost_p90_pess": _pctl(sorted(b["cost_pess"]), 0.9),
-            "adverse_60s_med": statistics.median(b["adverse"]) if b["adverse"] else None,
-            "vs_market_med_opt": statistics.median(b["diff_opt"]),
-            "vs_market_med_pess": statistics.median(b["diff_pess"]),
+            **{f"placement_{c}": (pl.get(c, 0) / npl if npl else None)
+               for c in ("marketable", "own_best", "inside", "deeper")},
+            "cost_med_opt": _med(b["cost_opt"]),
+            "cost_med_pess": _med(b["cost_pess"]),
+            "cost_mean_opt": _mean(b["cost_opt"]),
+            "cost_mean_pess": _mean(b["cost_pess"]),
+            "cost_p90_pess": _pctl(sorted(b["cost_pess"]), 0.9) if b["cost_pess"] else None,
+            "adverse_60s_med": _med(b["adverse"]),
+            "vs_market_med_opt": _med(b["diff_opt"]),
+            "vs_market_med_pess": _med(b["diff_pess"]),
             "vs_market_ci95_pess": ci_med,
-            "vs_market_mean": statistics.fmean(b["diff_pess"]),
+            "vs_market_mean": _mean(b["diff_pess"]),
             "vs_market_mean_ci95": ci_mean,
         })
     return out_rows
@@ -483,7 +548,8 @@ def analyze(rows: list[tuple], *, anchors: list[tuple] | None = None, sizes=DEFA
            hold_s_list=DEFAULT_HOLD_S, chase_s_list=DEFAULT_CHASE_S,
            chase_every_s: int = DEFAULT_CHASE_EVERY_S, delay_s_list=DEFAULT_DELAY_S,
            slices_list=DEFAULT_SLICES, slice_every_s_list=DEFAULT_SLICE_EVERY_S,
-           touch_s_list=DEFAULT_TOUCH_S, n_samples: int = DEFAULT_N_SAMPLES, draws: int = DEFAULT_DRAWS, seed: int = 0) -> dict:
+           touch_s_list=DEFAULT_TOUCH_S, quote_lag_s_list=DEFAULT_QUOTE_LAG_S,
+           n_samples: int = DEFAULT_N_SAMPLES, draws: int = DEFAULT_DRAWS, seed: int = 0) -> dict:
     """rows = [(ts_ms, bids, asks), ...] -> {rows, n_days, n_used, dropped,
     dropped_anchors, half_spread_med, notes}. Тестируемое ядро (см.
     c1_book_imbalance.analyze) — без сети, реальные данные грузит только run().
@@ -493,22 +559,26 @@ def analyze(rows: list[tuple], *, anchors: list[tuple] | None = None, sizes=DEFA
     robot, outcome, fact_vs_mid), ...] (см. scripts/exec_anchors.py) — по
     одной точке на якорь, size/side реальные, плюс строка policy="actual"."""
     days_data = _prep_days(rows)
-    policies = [("market", 0, 0, None, None, None, None)]
-    policies += [("hold", t, 0, None, None, None, None) for t in hold_s_list]
-    policies += [("hold_chase", t, c, None, None, None, None)
+    policies = [("market", 0, 0, None, None, None, None, None)]
+    policies += [("hold", t, 0, None, None, None, None, None) for t in hold_s_list]
+    policies += [("hold_chase", t, c, None, None, None, None, None)
                  for t in hold_s_list for c in chase_s_list if c > 0]
-    policies += [("delay", None, None, t, None, None, None) for t in delay_s_list]
-    policies += [("slice", None, None, None, k, s, None) for k in slices_list for s in slice_every_s_list]
-    policies += [(p, None, None, None, None, None, t) for p in ("touch", "touch_mkt") for t in touch_s_list]
+    policies += [("delay", None, None, t, None, None, None, None) for t in delay_s_list]
+    policies += [("slice", None, None, None, k, s, None, None)
+                 for k in slices_list for s in slice_every_s_list]
+    policies += [(p, None, None, None, None, None, t, lag) for p in ("touch", "touch_mkt")
+                 for t in touch_s_list for lag in quote_lag_s_list]
 
     buckets: dict = defaultdict(lambda: {"n": 0, "fill_opt": 0, "fill_pess": 0,
                                           "cost_opt": [], "cost_pess": [], "adverse": [],
                                           "diff_opt": [], "diff_pess": [], "days": [],
                                           "qty_opt": 0, "qty_pess": 0, "qty_total": 0,
-                                          "unf_opt": 0, "unf_pess": 0})
+                                          "unf_opt": 0, "unf_pess": 0, "days_pess": [],
+                                          "placement": defaultdict(int)})
     half_spreads = []
     dropped = 0
     dropped_anchors = 0
+    dropped_lag = 0
 
     def _process(day, i, side, size, robot, fact_vs_mid):
         dd = days_data[day]
@@ -522,7 +592,7 @@ def analyze(rows: list[tuple], *, anchors: list[tuple] | None = None, sizes=DEFA
         sign = 1 if side == "buy" else -1
         vwap, _deep = BookRuntime._walk(asks0 if side == "buy" else bids0, size)
         cost_market = sign * (vwap - mid0)
-        nonlocal dropped
+        nonlocal dropped, dropped_lag
 
         def _record(key, cost):
             b = buckets[key]
@@ -534,12 +604,13 @@ def analyze(rows: list[tuple], *, anchors: list[tuple] | None = None, sizes=DEFA
             b["cost_pess"].append(cost)
             b["diff_opt"].append(cost - cost_market)
             b["diff_pess"].append(cost - cost_market)
+            b["days_pess"].append(day)
             b["qty_opt"] += size
             b["qty_pess"] += size
             b["qty_total"] += size
 
-        for pname, hold_s, chase_s, delay_s, slices, slice_every_s, touch_s in policies:
-            key = (pname, hold_s, chase_s, delay_s, slices, slice_every_s, touch_s, size_field,
+        for pname, hold_s, chase_s, delay_s, slices, slice_every_s, touch_s, lag in policies:
+            key = (pname, hold_s, chase_s, delay_s, slices, slice_every_s, touch_s, lag, size_field,
                   size_class, side, mclass, wlabel, robot)
             if pname == "market":
                 _record(key, cost_market)
@@ -559,21 +630,29 @@ def analyze(rows: list[tuple], *, anchors: list[tuple] | None = None, sizes=DEFA
                 _record(key, cost)
                 continue
             if pname in ("touch", "touch_mkt"):
-                res = _eval_touch(dd, i, side, size, touch_s, mid0, pname == "touch_mkt")
-                if res is None:
-                    dropped += 1
+                res = _eval_touch(dd, i, side, size, touch_s, mid0, pname == "touch_mkt", lag)
+                if res is None or res.get("lag_missing"):
+                    if res is None:
+                        dropped += 1
+                    else:
+                        dropped_lag += 1
                     continue
                 b = buckets[key]
                 b["n"] += 1
                 b["days"].append(day)
                 b["qty_total"] += size
+                b["placement"][res["placement"]] += 1
                 for mode in ("opt", "pess"):
                     fq = res[f"filled_qty_{mode}"]
                     b[f"fill_{mode}"] += 1 if fq == size else 0
                     b[f"qty_{mode}"] += fq
                     b[f"unf_{mode}"] += 1 if fq < size else 0
+                    if res[f"cost_{mode}"] is None:      # ничего не исполнено — цены нет
+                        continue
                     b[f"cost_{mode}"].append(res[f"cost_{mode}"])
                     b[f"diff_{mode}"].append(res[f"cost_{mode}"] - cost_market)
+                    if mode == "pess":
+                        b["days_pess"].append(day)
                 continue
             res = _eval_policy(dd, i, side, size, hold_s, chase_s, chase_every_s, mid0)
             if res is None:
@@ -592,11 +671,12 @@ def analyze(rows: list[tuple], *, anchors: list[tuple] | None = None, sizes=DEFA
             b["cost_pess"].append(res["cost_pess"])
             b["diff_opt"].append(res["cost_opt"] - cost_market)
             b["diff_pess"].append(res["cost_pess"] - cost_market)
+            b["days_pess"].append(day)
             if res["adverse_opt"] is not None:
                 b["adverse"].append(res["adverse_opt"])
         if fact_vs_mid is not None:
-            key = ("actual", None, None, None, None, None, None, size_field, size_class, side,
-                  mclass, wlabel, robot)
+            key = ("actual", None, None, None, None, None, None, None, size_field, size_class,
+                  side, mclass, wlabel, robot)
             _record(key, fact_vs_mid)
 
     if anchors is None:
@@ -620,7 +700,7 @@ def analyze(rows: list[tuple], *, anchors: list[tuple] | None = None, sizes=DEFA
 
     out_rows = _finalize(buckets, seed, draws)
     return {"rows": out_rows, "n_days": len(days_data), "n_used": n_used,
-            "dropped": dropped, "dropped_anchors": dropped_anchors,
+            "dropped": dropped, "dropped_anchors": dropped_anchors, "dropped_lag": dropped_lag,
             "half_spread_med": statistics.median(half_spreads) if half_spreads else None,
             "notes": []}
 
@@ -628,7 +708,7 @@ def analyze(rows: list[tuple], *, anchors: list[tuple] | None = None, sizes=DEFA
 def run(arg: dict) -> dict:
     """Задача агента (kind='task', считает только i9): arg = {"symbol_key",
     "book_key" (обязателен), "since", "until", "sizes", "hold_s", "chase_s",
-    "chase_every_s", "delay_s", "slices", "slice_every_s", "touch_s", "n_samples",
+    "chase_every_s", "delay_s", "slices", "slice_every_s", "touch_s", "quote_lag_s", "n_samples",
     "draws", "seed", "anchors_key"}.
 
     anchors_key (необязателен) — ключ агентского канала с реальными якорями
@@ -655,6 +735,7 @@ def run(arg: dict) -> dict:
     slices_list = tuple(int(x) for x in arg.get("slices", DEFAULT_SLICES))
     slice_every_s_list = tuple(int(x) for x in arg.get("slice_every_s", DEFAULT_SLICE_EVERY_S))
     touch_s_list = tuple(int(x) for x in arg.get("touch_s", DEFAULT_TOUCH_S))
+    quote_lag_s_list = tuple(float(x) for x in arg.get("quote_lag_s", DEFAULT_QUOTE_LAG_S))
     n_samples = int(arg.get("n_samples", DEFAULT_N_SAMPLES))
     draws = int(arg.get("draws", DEFAULT_DRAWS))
     seed = int(arg.get("seed", 0))
@@ -662,7 +743,8 @@ def run(arg: dict) -> dict:
 
     kw = dict(sizes=sizes, hold_s_list=hold_s_list, chase_s_list=chase_s_list,
              chase_every_s=chase_every_s, delay_s_list=delay_s_list, slices_list=slices_list,
-             slice_every_s_list=slice_every_s_list, touch_s_list=touch_s_list, n_samples=n_samples, draws=draws, seed=seed)
+             slice_every_s_list=slice_every_s_list, touch_s_list=touch_s_list,
+             quote_lag_s_list=quote_lag_s_list, n_samples=n_samples, draws=draws, seed=seed)
     anchors = [tuple(r) for r in _load_bars(anchors_key)] if anchors_key else None
     res = analyze(rows, anchors=anchors, **kw)
     if anchors_key:
@@ -677,6 +759,7 @@ def run(arg: dict) -> dict:
     notes = [f"снимков отброшено при загрузке: {dropped_load}",
             f"n_samples={n_samples}, реально взято точек отсчёта: {res['n_used']}",
             f"анкеров-политик отброшено (нет снимка для рыночного добора): {res['dropped']}",
+            f"touch-анкеров отброшено без снимка t - quote_lag_s в сегменте: {res['dropped_lag']}",
             f"полспред медианный по отсчётам: {hs:.2f} пт" if hs is not None else "полспред медианный: нет данных",
             "adverse_60s — только по оптимистичной границе (пессимистичных наливок мало)"]
     if anchors_key:

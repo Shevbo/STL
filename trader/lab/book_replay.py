@@ -20,8 +20,9 @@ import bisect
 import gzip
 import json
 import os
+from uuid import uuid4
 
-from trader.lab.runtime import BacktestRuntime
+from trader.lab.runtime import BacktestRuntime, Order
 
 MSK_SHIFT = 3 * 3600
 
@@ -115,14 +116,19 @@ class BookRuntime(BacktestRuntime):
         _positions и сделки из get_orders(), мгновенного полного исполнения он не
         требует; стратегии библиотеки вживую уже живут с недоливом, и бэктест с
         "market" был бы не той же механикой, что раннер.
-        Ограничения: stats spread/slip/drift считаются только по немедленной части
-        (по best); доливки и добор в stats["touch_*"]. Остаток на последнем баре
+        quote_lag_s (умолчание 0): цена лимита = встречный best снимка на
+        t - lag (котировка раннера отстаёт от стакана, на якорях только 72% заявок
+        маркетабельны). В t заявка встречает текущий стакан: сразу берёт уровни не
+        хуже лимита (по их ценам), остаток стоит по лимиту; не пересекает — стоит
+        целиком, place_order вернёт Order со status="submitted" без филла.
+        Ограничения: stats spread/slip/drift считаются только по немедленной части; доливки и добор в stats["touch_*"]. Остаток на последнем баре
         прогона не доливается (advance() вернул False — дальше снимков не берём).
     """
 
     def __init__(self, *a, book: tuple[list[int], list[tuple]] | None = None,
                  max_gap_s: int = 60, exec_mode: str = "walk", touch_fill: str = "opt",
-                 touch_ttl_s: int = 60, touch_ttl_action: str = "cancel", **kw) -> None:
+                 touch_ttl_s: int = 60, touch_ttl_action: str = "cancel",
+                 quote_lag_s: float = 0, **kw) -> None:
         super().__init__(*a, **kw)
         if exec_mode not in ("walk", "touch") or touch_fill not in ("opt", "pess") \
                 or touch_ttl_action not in ("cancel", "market"):
@@ -130,6 +136,7 @@ class BookRuntime(BacktestRuntime):
                              f"touch_ttl_action={touch_ttl_action}")
         self._exec_mode, self._touch_fill = exec_mode, touch_fill
         self._touch_ttl, self._touch_action = touch_ttl_s, touch_ttl_action
+        self._quote_lag = quote_lag_s
         self._pending: list[dict] = []
         self._bt, self._bb = book or ([], [])
         # ПОРОГ СВЕЖЕСТИ. В архиве есть провалы (рестарт STL, молчание агента): без
@@ -147,7 +154,8 @@ class BookRuntime(BacktestRuntime):
                       "spread_each": [], "hour_each": [], "drift_each": [],
                       # exec_mode="touch": лотов встало остатком / долито по лимиту /
                       # снято / добито рынком.
-                      "touch_rest": 0, "touch_late": 0, "touch_unfilled": 0, "touch_market": 0}
+                      "touch_rest": 0, "touch_late": 0, "touch_unfilled": 0, "touch_market": 0,
+                      "touch_no_lag": 0}
 
     def _snapshot(self, ts: int):
         i = bisect.bisect_left(self._bt, ts)
@@ -185,14 +193,29 @@ class BookRuntime(BacktestRuntime):
         (bids, asks), gap = got
         levels = asks if side == "buy" else bids
         rest = 0
+        sign = 1 if side == "buy" else -1              # знак «хуже для нас»
         if self._exec_mode == "touch":
-            fill, deep = levels[0][0], False
-            rest = qty - min(qty, levels[0][1])
-            qty -= rest
+            t0 = nxt.time + gap                        # время снимка исполнения
+            limit = self._lagged_best(t0, side, levels[0][0])
+            took, value = 0, 0.0                       # сразу: уровни не хуже лимита
+            for p, q in levels:
+                if sign * (p - limit) > 1e-9 or took >= qty:
+                    break
+                take = min(qty - took, q)
+                took, value = took + take, value + take * p
+            rest = qty - took
+            if rest:
+                self._pending.append({"symbol": symbol, "side": side, "left": rest,
+                                      "price": limit, "t0": t0,
+                                      "deadline": t0 + self._touch_ttl})
+                self.stats["touch_rest"] += rest
+            if not took:                               # встала целиком, сразу ничего
+                return Order(order_id=uuid4().hex[:12], symbol=symbol, side=side, qty=qty,
+                             price=limit, status="submitted")
+            qty, fill, deep = took, value / took, False
         else:
             fill, deep = self._walk(levels, qty)
         mid = (bids[0][0] + asks[0][0]) / 2
-        sign = 1 if side == "buy" else -1              # знак «хуже для нас»
         self.stats["book"] += 1
         self.stats["deep"] += deep
         self.stats["slip_pts"] += sign * (fill - nxt.open)
@@ -203,12 +226,20 @@ class BookRuntime(BacktestRuntime):
         self.stats["hour_each"].append(nxt.time % 86400 // 3600)   # бары в шкале МСК
         self.stats["drift_each"].append(sign * (mid - nxt.open))
         self.stats["gap_max_s"] = max(self.stats["gap_max_s"], gap)
-        if rest:
-            t0 = nxt.time + gap                          # время снимка немедленной части
-            self._pending.append({"symbol": symbol, "side": side, "left": rest, "price": fill,
-                                  "t0": t0, "deadline": t0 + self._touch_ttl})
-            self.stats["touch_rest"] += rest
         return self._apply_fill(symbol, side, qty, fill, nxt.time)
+
+    def _lagged_best(self, t0: int, side: str, best_now: float) -> float:
+        """Встречный best последнего снимка НЕ ПОЗЖЕ t0 - quote_lag_s (котировка
+        раннера отстаёт от стакана). Нет такого снимка в пределах max_gap_s —
+        берём текущий best и считаем в stats["touch_no_lag"]."""
+        if self._quote_lag <= 0:
+            return best_now
+        k = bisect.bisect_right(self._bt, t0 - self._quote_lag) - 1
+        if k < 0 or t0 - self._quote_lag - self._bt[k] > self._max_gap:
+            self.stats["touch_no_lag"] += 1
+            return best_now
+        bids, asks = self._bb[k]
+        return (asks if side == "buy" else bids)[0][0]
 
     def advance(self) -> bool:
         ok = super().advance()

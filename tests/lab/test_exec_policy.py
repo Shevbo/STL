@@ -293,10 +293,11 @@ def test_anchors_random_path_robot_is_constant():
 # touch(T) / touch_mkt(T): лимит по встречному best, остаток стоит (живой раннер)
 # --------------------------------------------------------------------------
 
-def _touch_rows(rows, qty, touch_s=15):
+def _touch_rows(rows, qty, touch_s=15, lag=0):
     anchors = [(rows[60][0], "buy", qty, "r", "filled", None)]
     res = exec_policy.analyze(rows, anchors=anchors, hold_s_list=(), chase_s_list=(),
-                              delay_s_list=(), slices_list=(), touch_s_list=(touch_s,))
+                              delay_s_list=(), slices_list=(), touch_s_list=(touch_s,),
+                              quote_lag_s_list=(lag,))
     return {r["policy"]: r for r in res["rows"]}
 
 
@@ -346,3 +347,60 @@ def test_touch_mkt_standing_book_remainder_by_market_at_t_plus_T():
     assert abs(tm["cost_mean_pess"] - 62 / 12) < 1e-9, tm
     assert abs(tm["cost_mean_opt"] - 5.0) < 1e-9, tm
     assert abs(tm["fill_share_qty_pess"] - 5 / 12) < 1e-9 and tm["unfilled_share_pess"] == 1.0
+
+
+# --------------------------------------------------------------------------
+# quote_lag_s: цена лимита из снимка t - lag (котировка раннера отстаёт)
+# --------------------------------------------------------------------------
+
+def _tick_rows(shift_at_t: int, back_at: int | None = None) -> list[tuple]:
+    """Спред = 1 тик (10 пт), 5 лотов на 5 уровнях. До t=60 bid/ask 99995/100005,
+    с t=60 рынок сдвинут на shift_at_t тиков, с back_at — вернулся."""
+    rows = []
+    for t in range(120):
+        sh = shift_at_t if 60 <= t and (back_at is None or t < back_at) else 0
+        bid1, ask1 = 99995.0 + 10 * sh, 100005.0 + 10 * sh
+        rows.append(((D0 + t) * 1000, _ladder(bid1, 10.0, 5, -1), _ladder(ask1, 10.0, 5, 1)))
+    return rows
+
+
+def test_touch_lag_zero_is_old_touch():
+    """(а) lag=0 на сдвинутом рынке = touch по текущему best (маркетабельна)."""
+    t = _touch_rows(_tick_rows(1), qty=3, lag=0)["touch"]
+    assert t["quote_lag_s"] == 0 and t["placement_marketable"] == 1.0
+    assert abs(t["cost_mean_opt"] - 5.0) < 1e-9 and t["fill_share_qty_pess"] == 1.0
+
+
+def test_touch_lag_market_up_rests_on_own_best_then_fills_below_mid():
+    """(б) рынок вырос на тик за lag: старый ask = текущий bid, заявка на своём
+    best, сразу ничего; возврат на тик вниз — opt доливает по нашей цене,
+    издержка -5 (лучше mid(t)=100010); pess (насквозь не прошли) не налилась."""
+    by = _touch_rows(_tick_rows(1, back_at=65), qty=3, lag=1)
+    t = by["touch"]
+    assert t["placement_own_best"] == 1.0 and t["placement_marketable"] == 0.0
+    assert t["fill_share_qty_opt"] == 1.0 and abs(t["cost_mean_opt"] + 5.0) < 1e-9, t
+    assert t["fill_share_qty_pess"] == 0.0 and t["unfilled_share_pess"] == 1.0
+    assert t["cost_mean_pess"] is None                 # цены у неисполненной заявки нет
+    # без возврата opt тоже не налилась: стоит весь T
+    stuck = _touch_rows(_tick_rows(1), qty=3, lag=1)["touch"]
+    assert stuck["fill_share_qty_opt"] == 0.0 and stuck["unfilled_share_opt"] == 1.0
+
+
+def test_touch_lag_market_down_fills_at_once_better_than_limit():
+    """(в) рынок упал на тик за lag: лимит 100005 выше текущего ask 99995 —
+    исполнение сразу по текущему ask (лучше лимита), маркетабельна."""
+    t = _touch_rows(_tick_rows(-1), qty=3, lag=1)["touch"]
+    assert t["placement_marketable"] == 1.0
+    for mode in ("opt", "pess"):
+        assert t[f"fill_share_qty_{mode}"] == 1.0
+        assert abs(t[f"cost_mean_{mode}"] - 5.0) < 1e-9, t    # 99995 - mid 99990
+
+
+def test_touch_lag_without_snapshot_dropped():
+    rows = _tick_rows(0)
+    anchors = [(rows[0][0], "buy", 1, "r", "filled", None)]
+    res = exec_policy.analyze(rows, anchors=anchors, hold_s_list=(), chase_s_list=(),
+                              delay_s_list=(), slices_list=(), touch_s_list=(15,),
+                              quote_lag_s_list=(0, 2))
+    assert res["dropped_lag"] == 2                    # touch и touch_mkt при lag=2
+    assert {r["quote_lag_s"] for r in res["rows"] if r["policy"] == "touch"} == {0}
