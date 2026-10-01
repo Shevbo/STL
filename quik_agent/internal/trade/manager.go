@@ -432,7 +432,23 @@ func (m *Manager) CancelOrder(req *quikv1.CancelOrder) {
 	}
 	wo := m.resolveForCancel(req.GetClientId(), req.GetOrderId())
 	if wo == nil {
+		// ОТКАЗ СНЯТИЯ ОБЯЗАН БЫТЬ ГРОМКИМ. 01.10.2026 после перезапуска агента
+		// он потерял карту своих заявок, и 24 заявки сетки стали неснимаемыми:
+		// STL слал отмену, агент молча выходил с одной строкой в лог, книга
+		// писала «снято», а заявки продолжали ТОРГОВАТЬ и набрали оператору
+		// лишние контракты. Час ушёл на то, чтобы понять, что отмены вообще не
+		// доходят. Молчание здесь стоит дороже любого лишнего алерта.
 		m.logf("trade: cancel for unknown order (client=%q order=%q)", req.GetClientId(), req.GetOrderId())
+		m.rejectPlace(req.GetClientId(), "", quikv1.Side_SIDE_UNSPECIFIED, 0, 0,
+			ReasonCancelUnknown)
+		if m.emit != nil {
+			_ = m.emit.EmitAlert(quikv1.AlertSeverity_ALERT_SEVERITY_CRITICAL,
+				"CANCEL_UNKNOWN",
+				fmt.Sprintf("снятие не выполнено: агент не знает заявку %s (%s). "+
+					"Она может ЖИТЬ и торговать в QUIK — проверьте таблицу заявок "+
+					"терминала и снимите вручную.",
+					req.GetOrderId(), req.GetClientId()))
+		}
 		return
 	}
 	m.sendCancel(wo)

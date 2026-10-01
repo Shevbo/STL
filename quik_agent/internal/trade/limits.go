@@ -62,6 +62,9 @@ const (
 	ReasonCollarHit       RejectReason = "price beyond collar"
 	ReasonNoWorkingOrder  RejectReason = "no working order to move (not yet acknowledged by QUIK)"
 	ReasonStalePending    RejectReason = "expired: QUIK gave no order number (timed out); freed from working set"
+	// Снятие пришло на заявку, которой агент не знает (чаще всего он
+	// перезапускался и потерял карту). Заявка при этом может ЖИТЬ в QUIK.
+	ReasonCancelUnknown   RejectReason = "снятие не выполнено: агент не знает эту заявку, проверьте терминал"
 )
 
 // Guard tracks per-day placement counts and resting quantity so the cap and the
