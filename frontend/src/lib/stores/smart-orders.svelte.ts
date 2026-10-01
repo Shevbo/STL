@@ -58,6 +58,18 @@ export interface SmartOrder {
   // Панель их не пересчитывает: две реализации одной прямой расходятся, вопрос
   // только когда. width сразу в пунктах.
   c_now?: { low: number; top: number; width: number; ts_ms: number };
+  // РАДИАЦИЯ (kind="grid", 30.09.2026): сетка от цены постановки g_base, уровни
+  // не двигаются. g_live — что стоит в стакане сейчас, ключи flip:<уровень>
+  // означают перевёрнутую сторону (исполнилось — встала встречная).
+  g_step?: number;
+  g_buys?: number;
+  g_sells?: number;
+  g_lot?: number;
+  g_base?: number;
+  g_stop_pts?: number;
+  g_live?: Record<string, unknown>;
+  g_pos?: number;
+  g_done?: boolean;
   note: string;
   peak: number;
   activated: boolean;

@@ -17,6 +17,7 @@
     preview, protectionPair,
     shortCodes, sortBySideAndPrice, tillFact, type Kind, type OpenPos, type Side,
     apexMs, corridorFromClicks, corridorState, corridorTimeError, corridorWidth,
+    gridState, gridWorstCase,
     msToMskInput, mskInputToMs,
   } from '$lib/smart-order-help';
   import { candlesStore } from '$lib/stores/candles.svelte';
@@ -73,6 +74,13 @@
   let cStopPts = $state('');
   let cFlipsMax = $state('');
   let cErr = $state('');
+  // РАДИАЦИЯ. Цену постановки (g_base) НЕ спрашиваем: её берёт сервер по рынку в
+  // момент приёма, иначе сетка разъедется с рынком между вводом и отправкой.
+  let gStep = $state('');
+  let gBuys = $state('');
+  let gSells = $state('');
+  let gLot = $state('');
+  let gStopPts = $state('');
   // ПРОФИЛЬ ИСПОЛНЕНИЯ — один селект вместо трёх полей секунд (решение оператора
   // 29.09.2026). Секунды остались в API как разовое перекрытие и живут под
   // раскрытием: на рядовом пути они только мешают.
@@ -219,6 +227,8 @@
       cT1, cP1: num(cP1), cT2, cP2: num(cP2),
       cLow: num(cLow), cLow2: kind === 'triangle' ? num(cLow2) : 0,
       cStopPts: num(cStopPts), cFlipsMax: num(cFlipsMax),
+      gStep: num(gStep), gBuys: num(gBuys), gSells: num(gSells),
+      gLot: num(gLot), gStopPts: num(gStopPts),
       price, pointValue,
     });
     // «Следящий» выбран, а откат не введён — движок поставит ОБЫЧНЫЙ тейк на
@@ -369,7 +379,8 @@
   // читались одинаково, хотя это разные моменты времени.
   const TRIGGER_KEYS = ['trigger_price', 'trail_offset', 'watch_client_id', 'child_price',
                         'c_t1_ms', 'c_p1', 'c_t2_ms', 'c_p2', 'c_low', 'c_low2',
-                        'c_stop_pts', 'c_flips_max'];
+                        'c_stop_pts', 'c_flips_max',
+                        'g_step', 'g_buys', 'g_sells', 'g_lot', 'g_stop_pts'];
   // Три клика по графику собрались — переводим их в параметры. Сам перевод
   // (бар вместо пикселя, шаг цены, приведение нижней к первой точке) живёт в
   // corridorFromClicks и покрыт тестами; здесь только подстановка в форму.
@@ -433,6 +444,9 @@
   // Апекс сужающегося треугольника: там движок закроет позицию и закончит
   // заявку. Оператор по нему видит, сколько она живёт.
   const apex = $derived(corridorGeom ? apexMs(corridorGeom) : null);
+  const gridWorst = $derived(gridWorstCase(
+    { g_step: num(gStep), g_buys: num(gBuys), g_sells: num(gSells), g_lot: num(gLot) },
+    pointValue));
   // Времена точек проверяем ОТДЕЛЬНО от цен: без них фигуры нет вовсе, и молчать
   // до ответа движка значит дать оператору дособрать заявку, которую он всё
   // равно не поставит.
@@ -471,6 +485,12 @@
       c_low: only('c_low', num(cLow)),
       c_low2: only('c_low2', num(cLow2)),
       c_stop_pts: only('c_stop_pts', num(cStopPts)),
+      // Радиация. g_base не шлём: сервер ставит её по рынку в момент приёма.
+      g_step: only('g_step', num(gStep)),
+      g_buys: only('g_buys', num(gBuys)),
+      g_sells: only('g_sells', num(gSells)),
+      g_lot: only('g_lot', num(gLot)),
+      g_stop_pts: only('g_stop_pts', num(gStopPts)),
       // Профиль относится к ЛЮБОМУ типу заявки, а не только к защитной: не
       // исполнившийся ВХОД врёт человеку так же, как выход — он видит
       // «сработала», а в рынке ничего нет.
@@ -502,6 +522,7 @@
       slPrice = ''; tpPrice = '';
       watchId = ''; childPrice = '';
       cT1 = 0; cP1 = ''; cT2 = 0; cP2 = ''; cLow = ''; cLow2 = ''; cStopPts = ''; cFlipsMax = '';
+      gStep = ''; gBuys = ''; gSells = ''; gLot = ''; gStopPts = '';
       cErr = ''; corridorDraw.reset();
       confirming = false;
       await smartOrdersStore.refresh();
@@ -769,6 +790,27 @@
             {:else if f.key === 'c_low2'}
               <input class="so-in" type="number" step="any" bind:value={cLow2} placeholder="0"
                      aria-label={f.label} />
+            {:else if f.key === 'g_step'}
+              <div class="so-unit-wrap">
+                <input class="so-in pts" type="number" step="any" min="0" bind:value={gStep}
+                       placeholder="0" aria-label={f.label} />
+                <span class="so-unit">п.</span>
+              </div>
+            {:else if f.key === 'g_buys'}
+              <input class="so-in" type="number" step="1" min="0" bind:value={gBuys}
+                     placeholder="0" aria-label={f.label} />
+            {:else if f.key === 'g_sells'}
+              <input class="so-in" type="number" step="1" min="0" bind:value={gSells}
+                     placeholder="0" aria-label={f.label} />
+            {:else if f.key === 'g_lot'}
+              <input class="so-in" type="number" step="1" min="0" bind:value={gLot}
+                     placeholder="0" aria-label={f.label} />
+            {:else if f.key === 'g_stop_pts'}
+              <div class="so-unit-wrap">
+                <input class="so-in pts" type="number" step="any" min="0" bind:value={gStopPts}
+                       placeholder="0 — без стопа" aria-label={f.label} />
+                <span class="so-unit">п.</span>
+              </div>
             {:else if f.key === 'c_stop_pts'}
               <div class="so-unit-wrap">
                 <input class="so-in pts" type="number" step="any" min="0" bind:value={cStopPts}
@@ -790,6 +832,17 @@
         <!-- ПОСТАНОВКА МЫШКОЙ — главная просьба оператора (29.09.2026): канал
              задаётся линиями по графику, а не цифрами. Поля выше остаются: по
              ним видно, ЧТО именно уедет в движок, и их можно поправить руками. -->
+        <!-- ХУДШИЙ СЛУЧАЙ СЕТКИ. Объём вводится НА УРОВЕНЬ, а в рынке окажется
+             объём × число ступеней: без этой строки оператор недооценит позицию
+             в разы. -->
+        {#if kind === 'grid' && gridWorst.contracts > 0}
+          <div class="so-draw-w">если выберут всю сторону: {gridWorst.contracts} контр.
+            {gridWorst.side === 'buy' ? 'в лонг' : 'в шорт'}{gridWorst.riskRub != null
+              ? `, ход против позиции по мере набора ${fmtRub(gridWorst.riskRub)}` : ''}</div>
+          {#if !pos(gStopPts)}
+            <div class="so-prof-warn">стопа за краем нет: из сетки заявка сама не выйдет</div>
+          {/if}
+        {/if}
         {#if isFigure}
         <div class="so-draw">
           <div class="so-draw-row">
@@ -1121,6 +1174,16 @@
         <!-- КОРИДОР: позиция важнее самого факта заявки (real-trade 29.09.2026).
              Он многоразовый, статус у него в норме «взведена», и по статусу не
              понять ни где он в рынке, ни сколько переворотов осталось. -->
+        {#if o.kind === 'grid'}
+          <div class="so-c-corr">
+            <b>{gridState(o)}</b>
+            {#if o.g_base && o.g_step}
+              <span class="so-c-corr-w">шаг {fmtPts(o.g_step)} · от {fmtPrice(o.g_base)}
+                · вниз {o.g_buys ?? 0} · вверх {o.g_sells ?? 0} · по {o.g_lot ?? 0}</span>
+            {/if}
+            {#if o.g_stop_pts}<span class="so-c-corr-w">стоп за краем {fmtPts(o.g_stop_pts)}</span>{/if}
+          </div>
+        {/if}
         {#if o.kind === 'corridor' || o.kind === 'triangle'}
           <div class="so-c-corr">
             <b>{corridorState(o)}</b>

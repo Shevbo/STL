@@ -7,7 +7,8 @@
 // Все формулировки сверены с движком (trader/quik/smart_orders.py). Меняется
 // движок — правится и текст, иначе интерфейс начнёт обещать не то, что будет.
 
-export type Kind = 'sl' | 'tp' | 'trail_tp' | 'on_fill' | 'trail_sl' | 'corridor' | 'triangle';
+export type Kind = 'sl' | 'tp' | 'trail_tp' | 'on_fill' | 'trail_sl' | 'corridor'
+  | 'triangle' | 'grid';
 export type Side = 'buy' | 'sell';
 
 export interface KindMeta {
@@ -166,6 +167,7 @@ export const KINDS: KindMeta[] = [
     algorithm: [
       'Верхняя граница — прямая через две точки (время, цена), продолженная и за вторую точку.',
       'Нижняя ПАРАЛЛЕЛЬНА верхней: угол задаётся один раз, иначе канал превратился бы в клин.',
+      'Заявки СТОЯТ В СТАКАНЕ на обеих стенках и переставляются вслед за линией: к моменту касания заявка должна быть уже в очереди.',
       'Касание верхней стенки продаёт, касание нижней покупает — позиция открывается ОТ стенки.',
       'Касание противоположной стенки — ПЕРЕВОРОТ: одна сделка вдвое, она и закрывает, и открывает.',
       'Повторное касание той же стенки позицию НЕ наращивает.',
@@ -200,6 +202,7 @@ export const KINDS: KindMeta[] = [
     essence: 'То же, что коридор, но у нижней границы СВОЙ угол: фигура сужается или расширяется.',
     algorithm: [
       'Обе границы — прямые, каждая по своим двум точкам, обе продолжаются за вторую точку.',
+      'Заявки СТОЯТ В СТАКАНЕ на обеих стенках и переставляются вслед за линией: к моменту касания заявка должна быть уже в очереди.',
       'Касание верхней стенки продаёт, касание нижней покупает — позиция открывается ОТ стенки.',
       'Касание противоположной стенки — ПЕРЕВОРОТ: одна сделка вдвое, она и закрывает, и открывает.',
       'Уход за стенку дальше стопа закрывает позицию и заканчивает заявку.',
@@ -227,6 +230,35 @@ export const KINDS: KindMeta[] = [
     color: '#e0a35c',
     lineStyle: 0,
     legend: 'треугольник: стенки фигуры',
+  },
+  {
+    id: 'grid',
+    name: 'Радиация',
+    short: 'РАД',
+    essence: 'Сетка заявок вокруг цены: внизу покупки, вверху продажи, и она сама себя возобновляет.',
+    algorithm: [
+      'Уровни считаются от цены ПОСТАНОВКИ и дальше не двигаются никогда.',
+      'Ниже цены стоят покупки, выше — продажи, шагом в заданное число пунктов.',
+      'Заявки выставляются в стакан СРАЗУ, а не ждут сторожа: тут торгуют ликвидность, и опоздание на такт и есть весь проигрыш.',
+      'Исполнилась заявка — на её месте встаёт ВСТРЕЧНАЯ. Купленное на уровне там же и продаётся, когда цена вернётся.',
+      'Это и есть тейк: ровно один шаг сетки, брать его больше неоткуда.',
+      'Уход за крайний уровень дальше стопа закрывает позицию и заканчивает сетку.',
+    ],
+    fields: [
+      { key: 'g_step', label: 'Шаг сетки, пункты',
+        hint: 'ПУНКТЫ между соседними уровнями. Он же — прибыль одного круга: купили на уровне, продали на нём же шагом выше' },
+      { key: 'g_buys', label: 'Уровней покупки вниз',
+        hint: 'Сколько ступеней ниже цены постановки. 0 — вниз не торгуем' },
+      { key: 'g_sells', label: 'Уровней продажи вверх',
+        hint: 'Сколько ступеней выше цены постановки. 0 — вверх не торгуем' },
+      { key: 'g_lot', label: 'Объём на уровень',
+        hint: 'Контрактов в заявке КАЖДОГО уровня. Полная позиция в худшем случае — объём × число уровней одной стороны' },
+      { key: 'g_stop_pts', label: 'Стоп за крайним уровнем, пункты',
+        hint: 'ПУНКТЫ за последнюю ступень, после которых позиция закрывается, а сетка заканчивается. 0 — без стопа, и тогда из сетки она сама не выйдет' },
+    ],
+    color: '#c58cf0',
+    lineStyle: 2,
+    legend: 'радиация: уровни сетки',
   },
 ];
 
@@ -372,6 +404,12 @@ export interface PreviewInput {
   cLow2?: number;
   cStopPts?: number;
   cFlipsMax?: number;
+  /** РАДИАЦИЯ: шаг, число уровней вниз/вверх, объём на уровень, стоп за краем. */
+  gStep?: number;
+  gBuys?: number;
+  gSells?: number;
+  gLot?: number;
+  gStopPts?: number;
   /** Текущая цена инструмента, 0 если неизвестна. */
   price: number;
   /** ₽ за пункт цены, 0/undefined — считать в пунктах. */
@@ -476,6 +514,35 @@ export function preview(p: PreviewInput): Preview {
         + (p.pointValue ? ` = ${fmtRub(wide * p.pointValue * qty)} по ${qty} `
             + plural(qty, 'контракту', 'контрактам', 'контрактам') : '')
         + (tri && low2 > 0 ? `; во второй ${fmtPts(p2 - low2)}.` : '.');
+    }
+  } else if (p.kind === 'grid') {
+    // СВОЯ ВЕТКА. Без неё новый вид падает в общий разбор и просит чужие поля —
+    // ровно так 30.09.2026 коридор требовал «заявку, за исполнением которой
+    // следим», и взвести его было нельзя вообще.
+    const step = p.gStep || 0, buys = p.gBuys || 0, sells = p.gSells || 0;
+    const lot = p.gLot || 0, stop = p.gStopPts || 0;
+    if (!error && !(step > 0)) error = 'Шаг сетки обязателен: без него уровней нет.';
+    if (!error && buys + sells <= 0) error = 'Нужен хотя бы один уровень — вниз или вверх.';
+    if (!error && !(lot > 0)) error = 'Объём на уровень обязателен.';
+    const worst = gridWorstCase({ g_step: step, g_buys: buys, g_sells: sells, g_lot: lot },
+                                p.pointValue || 0);
+    sentence = `Сторож поставит в стакан ${buys + sells} `
+      + `${plural(buys + sells, 'заявку', 'заявки', 'заявок')} сеткой вокруг текущей цены: `
+      + `${buys} вниз на покупку, ${sells} вверх на продажу, шагом ${fmtPts(step)}, `
+      + `по ${lot} ${plural(lot, 'контракту', 'контракта', 'контрактов')} на уровень. `
+      + 'Исполнится заявка — на её месте встанет встречная, и шаг сетки станет прибылью круга. '
+      + (stop > 0
+          ? `Уход за крайний уровень дальше ${fmtPts(stop)} закроет позицию и закончит сетку.`
+          : 'Стопа за краем нет: из сетки она сама не выйдет.');
+    if (worst.contracts > 0) {
+      // ХУДШИЙ СЛУЧАЙ, А НЕ ОБЪЁМ ЗАЯВКИ. Оператор вводит объём на уровень, а в
+      // рынке окажется объём × число ступеней — разница в разы.
+      distance = `Если выберут всю сторону целиком: ${worst.contracts} `
+        + `${plural(worst.contracts, 'контракт', 'контракта', 'контрактов')} `
+        + `${worst.side === 'buy' ? 'в лонг' : 'в шорт'}`
+        + (worst.riskRub != null
+            ? `, ход против позиции по мере набора ${fmtRub(worst.riskRub)}` : '')
+        + '.';
     }
   } else if (p.kind === 'on_fill') {
     if (!error && !p.watchId) error = 'Укажите заявку, за исполнением которой следим.';
@@ -702,6 +769,27 @@ export function smartLevels(
   const out0 = protectiveLevels(o);
   if (o.kind === 'sl' || o.kind === 'tp') {
     return [{ key: o.so_id, price: o.trigger_price, title: who }, ...out0];
+  }
+  if (o.kind === 'grid') {
+    // СЕТКА ЦЕЛИКОМ. Это единственный тип, у которого уровней много, и смысл
+    // его в том, где они стоят: сетка без картинки — список чисел. Подписываем
+    // СТОРОНОЙ, которая стоит на уровне СЕЙЧАС (после исполнения она
+    // переворачивается), иначе рисунок разойдётся со стаканом.
+    //
+    // Потолок на всякий случай: сетку на сотню ступеней нарисовать можно, но
+    // читать уже нельзя, а линии стоят процессорного времени на каждом кадре.
+    const levels = gridLevels(o).slice(0, 40);
+    const out: Array<{ key: string; price: number; title: string; dim?: boolean; color?: string }> =
+      levels.map((lv) => ({
+        key: `${o.so_id}:g${lv.level}`, price: lv.price,
+        title: `${lv.side === 'buy' ? '▲' : '▼'} ${o.g_lot ?? ''} к`,
+      }));
+    const st = gridStopLevels(o);
+    // Стоп рисуем ярче прочего: он единственный уровень, на котором сетка
+    // КОНЧАЕТСЯ, а остальные она переживает.
+    if (st.lo) out.push({ key: `${o.so_id}:glo`, price: st.lo, title: 'стоп сетки', dim: true });
+    if (st.hi) out.push({ key: `${o.so_id}:ghi`, price: st.hi, title: 'стоп сетки', dim: true });
+    return [...out, ...out0];
   }
   if (o.kind === 'trail_sl') {
     // Уровня активации нет по устройству типа, поэтому рисуем только рабочий
@@ -1437,4 +1525,77 @@ export function corridorTimeError(t1: number, t2: number): string {
   if (!t1 || !t2) return 'время обеих точек обязательно: без него у фигуры нет наклона';
   if (t2 <= t1) return 'вторая точка должна быть ПОЗЖЕ первой';
   return '';
+}
+
+/* ─────────────────────── РАДИАЦИЯ: уровни сетки ───────────────────────────
+ *  Сетка считается от цены ПОСТАНОВКИ (g_base, её ставит сервер по рынку) и
+ *  дальше не двигается никогда: плавающая сетка уехала бы за трендом и
+ *  превратила шаг в случайную величину (решение оператора 30.09.2026).
+ *
+ *  Зеркало grid_price / grid_levels / grid_stop_levels из
+ *  trader/quik/smart_orders.py. Расхождение означало бы, что оператор смотрит
+ *  на одни уровни, а заявки стоят на других.
+ */
+
+export interface GridGeom {
+  g_base?: number; g_step?: number;
+  g_buys?: number; g_sells?: number;
+  g_lot?: number; g_stop_pts?: number;
+  /** Чей ордер стоит на уровне сейчас: ключи вида `flip:<уровень>` от движка. */
+  g_live?: Record<string, unknown>;
+  g_pos?: number; g_done?: boolean;
+}
+
+/** Цены всех уровней сетки, снизу вверх. Пусто — сетка не задана. */
+export function gridLevels(g: GridGeom): Array<{ level: number; price: number; side: Side }> {
+  const base = g.g_base ?? 0, step = g.g_step ?? 0;
+  if (!(base > 0) || !(step > 0)) return [];
+  const out: Array<{ level: number; price: number; side: Side }> = [];
+  for (let i = Math.max(0, g.g_buys ?? 0); i >= 1; i--) out.push({ level: -i, price: base - i * step, side: 'buy' });
+  for (let i = 1; i <= Math.max(0, g.g_sells ?? 0); i++) out.push({ level: i, price: base + i * step, side: 'sell' });
+  // Сторона на уровне ПЕРЕВОРАЧИВАЕТСЯ после исполнения — это и есть тейк на
+  // встречной заявке. Показываем, что стоит сейчас, а не что стояло сначала.
+  return out.map((x) => {
+    const flipped = !!(g.g_live ?? {})[`flip:${x.level}`];
+    return flipped ? { ...x, side: (x.side === 'buy' ? 'sell' : 'buy') as Side } : x;
+  });
+}
+
+/** Границы стопа сетки: (низ, верх). 0 — с этой стороны стопа нет. */
+export function gridStopLevels(g: GridGeom): { lo: number; hi: number } {
+  const base = g.g_base ?? 0, step = g.g_step ?? 0, pts = g.g_stop_pts ?? 0;
+  if (!(base > 0) || !(step > 0) || !(pts > 0)) return { lo: 0, hi: 0 };
+  return {
+    lo: g.g_buys ? base - (g.g_buys * step) - pts : 0,
+    hi: g.g_sells ? base + (g.g_sells * step) + pts : 0,
+  };
+}
+
+/** Худший случай: сколько контрактов наберётся, если выберут всю одну сторону.
+ *
+ *  Оператор ставит объём на УРОВЕНЬ, а в рынке окажется объём × число уровней.
+ *  Не сказать это значит дать ему недооценить позицию в разы — у сетки на 10
+ *  ступеней по 2 контракта в худшем случае 20, а не 2.
+ */
+export function gridWorstCase(g: GridGeom, pointValue = 0):
+  { contracts: number; side: Side | null; riskPts: number; riskRub: number | null } {
+  const lot = Math.max(0, g.g_lot ?? 0), step = g.g_step ?? 0;
+  const buys = Math.max(0, g.g_buys ?? 0), sells = Math.max(0, g.g_sells ?? 0);
+  const deep = Math.max(buys, sells);
+  const contracts = lot * deep;
+  const side: Side | null = !deep ? null : (buys >= sells ? 'buy' : 'sell');
+  // Ход от первого выбранного уровня до последнего — то, что позиция пройдёт
+  // против себя, пока сетка набирается.
+  let riskPts = 0;
+  for (let i = 1; i <= deep; i++) riskPts += (deep - i) * step * lot;
+  return { contracts, side, riskPts, riskRub: pointValue > 0 ? riskPts * pointValue : null };
+}
+
+/** Состояние сетки словами — для карточки заявки. */
+export function gridState(g: GridGeom): string {
+  const pos = g.g_pos ?? 0;
+  const where = pos > 0 ? `лонг ${pos}` : pos < 0 ? `шорт ${Math.abs(pos)}` : 'вне рынка';
+  const live = Object.keys(g.g_live ?? {}).filter((k) => !k.startsWith('flip:')).length;
+  const tail = `${live} ${plural(live, 'заявка', 'заявки', 'заявок')} в стакане`;
+  return g.g_done ? `${where} · ${tail} · сетка закончена` : `${where} · ${tail}`;
 }

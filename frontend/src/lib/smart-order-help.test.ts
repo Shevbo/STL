@@ -150,7 +150,10 @@ describe('блоки «после сделки»', () => {
   // c_stop_pts. Дочерний стоп после КАЖДОГО касания закрыл бы позицию мимо них, и
   // c_pos в книге разошёлся бы с рынком — это не «лишний стоп», а потеря счёта
   // позиции.
-  const FIGURES = new Set(['corridor', 'triangle']);
+  // Радиация (30.09.2026) в том же списке и по той же причине: сетка ведёт
+  // позицию сама — исполнилась заявка, на её месте встаёт встречная. Движок
+  // отвечает «сетка ведёт позицию сама: блоки после сделки ей не ставятся».
+  const FIGURES = new Set(['corridor', 'triangle', 'grid']);
   it('every ENTERING kind offers the SL/TP-after-fill pair', async () => {
     const { KINDS } = await import('./smart-order-help');
     for (const k of KINDS.filter((x) => x.id !== 'trail_sl' && !FIGURES.has(x.id))) {
