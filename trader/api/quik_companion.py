@@ -771,7 +771,7 @@ def _trading_block(store) -> dict:
     }
 
 
-def _orders_pnl(store, now_ms: int, cache: dict | None) -> dict:
+def _orders_pnl(store, now_ms: int, cache: dict | None, params: dict | None) -> dict:
     """P&L каждой заявки по отдельности, с кэшем.
 
     Окно НЕДЕЛЯ, а не день: заявка живёт дольше суток (коридор стоит днями), и
@@ -798,7 +798,12 @@ def _orders_pnl(store, now_ms: int, cache: dict | None) -> dict:
         fills = manual_pnl.read_trades(days, robot_ids=ids)
         feed = {f.get("code"): f for f in (status.get("health") or {}).get("feed") or []}
         last = {c: float((v or {}).get("last") or 0) for c, v in feed.items()}
-        pv = point_values(store.params(None) if store is not None else None)
+        # ПАРАМЕТРЫ ПРИХОДЯТ СНАРУЖИ, одним чтением на запрос. Свой вызов
+        # store.params() здесь давал ПУСТО, пока соседний блок в том же запросе
+        # получал те же строки и округлял по ним средние: два чтения одного фида
+        # разошлись между собой (01.10.2026). Чем бы ни была причина — лишний
+        # источник не нужен, рубли от него зависят.
+        pv = point_values(params)
         return pnl_by_order(fills, last, pv)
     except Exception:  # noqa: BLE001 — p&l не роняет панель
         return {}
@@ -1255,7 +1260,11 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
     # переоценка, в том числе у снятой. Считаем ОДИН раз на снапшот и раздаём
     # и умным заявкам, и терминальным: два прохода по одному журналу разошлись
     # бы между собой.
-    _pnl = _orders_pnl(store, now_ms, getattr(request.app.state, "_order_pnl_cache", None))
+    # Фид параметров читаем ОДИН раз на запрос: по нему и ₽/пункт в p&l, и шаг
+    # цены для округления средних. Два чтения — два ответа, и это уже случалось.
+    _params = (store.params(agent_id) if store is not None else None) or {}
+    _pnl = _orders_pnl(store, now_ms, getattr(request.app.state, "_order_pnl_cache", None),
+                       _params)
     request.app.state._order_pnl_cache = (now_ms, _pnl)
     _manual_avg_by_sec = {str(r.get("symbol")): r.get("avg_price")
                           for r in (manual_block.get("open") or []) if r.get("symbol")}
@@ -1263,7 +1272,7 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
     # параметров QLua, что и умные заявки: второй источник разошёлся бы с первым.
     _steps: dict[str, float] = {}
     try:
-        for _row in ((store.params(agent_id) if store is not None else None) or {}).get("rows") or []:
+        for _row in _params.get("rows") or []:
             _st = float(_row.get("price_step") or 0)
             if _st > 0 and _row.get("code"):
                 _steps[str(_row["code"])] = _st

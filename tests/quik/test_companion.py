@@ -1080,3 +1080,39 @@ def test_an_unknown_price_leaves_the_mark_to_market_unknown():
         [{"tag": "stl-so-q", "sec": "RIZ6", "side": "buy", "qty": 1, "price": 100, "ts_ms": 1}],
         {}, {"RIZ6": 1.0})
     assert out["q"]["vm_pts"] is None and out["q"]["vm_rub"] is None
+
+
+def test_order_pnl_uses_the_params_handed_to_it(monkeypatch):
+    """₽/пункт берётся из фида, прочитанного ОДИН раз на запрос.
+
+    01.10.2026 p&l заявок приезжал с priced=false, пока соседний блок в том же
+    запросе получал те же строки и округлял по ним средние: два чтения одного
+    фида разошлись между собой. Теперь источник один и передаётся явно — чем бы
+    ни была причина расхождения, второго источника больше нет.
+    """
+    called = {}
+
+    def _fake(fills, last, pv):
+        called["pv"] = pv
+        return {"x": {"fix_rub": 1.0}}
+
+    import trader.api.order_pnl as _op
+    monkeypatch.setattr(_op, "pnl_by_order", _fake)
+    monkeypatch.setattr("trader.quik.manual_pnl.read_trades", lambda *a, **k: [])
+
+    out = quik_companion._orders_pnl(
+        None, 0, None,
+        {"rows": [{"code": "RIZ6", "price_step": 10.0, "step_cost": 16.71176}]})
+    assert out == {"x": {"fix_rub": 1.0}}
+    assert called["pv"]["RIZ6"] == pytest.approx(1.671176)
+
+
+def test_order_pnl_survives_a_missing_params_feed(monkeypatch):
+    """Фида нет — считаем в пунктах, а не падаем и не выдаём рубли."""
+    monkeypatch.setattr("trader.quik.manual_pnl.read_trades", lambda *a, **k: [
+        {"tag": "stl-so-a", "sec": "RIZ6", "side": "buy", "qty": 1, "price": 100, "ts_ms": 1},
+        {"tag": "stl-so-a", "sec": "RIZ6", "side": "sell", "qty": 1, "price": 110, "ts_ms": 2},
+    ])
+    out = quik_companion._orders_pnl(None, 0, None, {})
+    assert out["a"]["fix_pts"] == pytest.approx(10.0)
+    assert out["a"]["fix_rub"] is None and out["a"]["priced"] is False
