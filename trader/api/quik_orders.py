@@ -382,7 +382,12 @@ async def terminal_orders(request: Request, agent_id: str | None = None,
     store = getattr(request.app.state, "quik_store", None)
     agent = _resolve_agent(request, agent_id)
     ids = load_robot_ids()
-    rows = terminal.rows(store, agent, ids)
+    # ДВЕ ТАБЛИЦЫ, ОДИН ОТВЕТ. Нативные стоп-заявки живут в своей таблице QUIK и
+    # едут от агента отдельным сообщением, но для оператора это такая же живая
+    # заявка в терминале — и ровно она стережёт позицию. Показывать одну таблицу
+    # и звать это «что стоит в QUIK» значит снова обещать больше, чем отдаёшь.
+    rows = terminal.rows(store, agent, ids) + terminal.stop_rows(store, agent, ids)
+    rows.sort(key=lambda d: (not d["active"], -(d.get("ts_ms") or 0)))
     if active_only:
         rows = [r for r in rows if r["active"]]
     return {"agent_id": agent, "orders": rows, "total": len(rows),
@@ -413,6 +418,11 @@ async def terminal_cancel(body: TerminalCancelBody, request: Request):
     # Инструмент берём ИЗ ТАБЛИЦЫ, а не от вызывающего: KILL_ORDER с чужим
     # инструментом молча не снимет ничего, и это выглядело бы как успех.
     rows = {r["num"]: r for r in terminal.rows(store, agent)}
+    # Стоп-заявки в тот же индекс: снимаются ДРУГОЙ командой QUIK (KILL_STOP_ORDER
+    # против KILL_ORDER), и перепутав команду, получишь тихий неуспех — заявка
+    # останется стеречь, а ручка отчитается об успехе. Вид несёт поле kind.
+    for r in terminal.stop_rows(store, agent):
+        rows.setdefault(r["num"], r)
     wanted = [n for n in (body.order_nums or []) if n]
     if not wanted:
         raise HTTPException(status_code=422, detail="order_nums пуст")
@@ -420,16 +430,20 @@ async def terminal_cancel(body: TerminalCancelBody, request: Request):
     for num in wanted:
         row = rows.get(str(num))
         if row is None:
-            skipped.append({"num": num, "why": "нет в таблице заявок терминала"})
+            skipped.append({"num": num, "why": "нет в таблицах заявок терминала"})
             continue
         if not row["active"]:
             skipped.append({"num": num, "why": f"уже не активна ({row['state']})"})
             continue
-        srv.enqueue_order(agent, order_msgs.build_cancel_order(
-            client_id=f"op:kill:{num}", order_id=str(num), code=row["sec"]))
+        if row.get("kind") == "stop":
+            srv.enqueue_order(agent, order_msgs.build_kill_stop_order(
+                client_id=f"op:kill:{num}", stop_order_num=str(num), code=row["sec"]))
+        else:
+            srv.enqueue_order(agent, order_msgs.build_cancel_order(
+                client_id=f"op:kill:{num}", order_id=str(num), code=row["sec"]))
         sent.append({"num": num, "sec": row["sec"], "side": row["side"],
                      "price": row["price"], "balance": row["balance"],
-                     "origin": row["origin"]})
+                     "origin": row["origin"], "kind": row.get("kind", "order")})
     log.info("quik.terminal_cancel", agent=agent, sent=len(sent), skipped=len(skipped))
     return {"ok": True, "agent_id": agent, "sent": sent, "skipped": skipped}
 

@@ -171,6 +171,83 @@ def by_smart_order(store: Any, agent: str | None = None) -> dict[str, list[dict[
     return out
 
 
+def stop_rows(store: Any, agent: str | None = None,
+              robot_ids: set[str] | None = None) -> list[dict[str, Any]]:
+    """НАТИВНЫЕ СТОП-ЗАЯВКИ QUIK — тоже активные заявки в терминале.
+
+    Живут они в ДРУГОЙ таблице (`stop_orders`), едут от агента отдельным
+    сообщением (StopOrderReport, не в блоке `quik` зеркала) и в оператором
+    терминале видны своим окном. Пропустить их значило бы обещать «вижу всё, что
+    стоит в QUIK» и не показывать защиту позиции — а ровно она 29.09.2026
+    сработала и умерла с нулём исполнения, пока рынок шёл 690 пунктов за минуту.
+
+    Форма строки — сырые поля QUIK текстом (имена на НАШЕМ терминале не
+    совпадают с документацией: номер лежит в order_num/ordernum, поля
+    stop_order_num в таблице НЕТ). Здесь они приводятся к тем же ключам, что у
+    обычной заявки, чтобы экран и снятие не разбирали два формата.
+    """
+    snap = (getattr(store, "stop_orders", lambda _a=None: None)(agent)
+            if store is not None else None) or {}
+    out = []
+    for row in snap.get("table") or []:
+        if not isinstance(row, dict):
+            continue
+        tag = str(row.get("brokerref") or "")
+        out.append({
+            "num": str(row.get("order_num") or row.get("ordernum") or ""),
+            "sec": str(row.get("sec_code") or row.get("seccode") or ""),
+            "side": _stop_side(row),
+            "price": _num(row.get("condition_price") or row.get("price")),
+            "qty": int(_num(row.get("qty") or row.get("quantity"))),
+            "balance": int(_num(row.get("balance") or row.get("qty"))),
+            "filled": 0,
+            "active": _stop_alive(row),
+            "state": "стережёт" if _stop_alive(row) else _stop_dead_why(row),
+            "ts_ms": int(_num(row.get("order_date_time_ms") or row.get("ts_ms"))),
+            "tag": tag,
+            "origin": owner(tag, robot_ids),
+            "so_id": so_id_of(tag),
+            "kind": "stop",          # ярлык вида: снимается ДРУГОЙ командой QUIK
+        })
+    out.sort(key=lambda d: (not d["active"], -d["ts_ms"]))
+    return out
+
+
+def _num(v: Any) -> float:
+    try:
+        return float(str(v or 0) or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _stop_side(row: dict[str, Any]) -> str:
+    """Сторона стоп-заявки. На нашем терминале имена полей не выверены целиком,
+    поэтому читаем несколько и честно отдаём пустое, когда не знаем."""
+    raw = str(row.get("operation") or row.get("side") or "").strip().upper()
+    if raw.startswith("B") or raw == "BUY":
+        return "buy"
+    if raw.startswith("S") or raw == "SELL":
+        return "sell"
+    return ""
+
+
+def _stop_alive(row: dict[str, Any]) -> bool:
+    """Стережёт ли ПРЯМО СЕЙЧАС. Таблица QUIK хранит ВСЕ стоп-заявки дня, включая
+    сработавшие и снятые, поэтому «строка есть» не значит «стережёт» — 29.09.2026
+    на этом сразу же выросла ложная тревога по двум мёртвым записям."""
+    return not (_num(row.get("withdraw_datetime_ms"))
+                or _num(row.get("activation_date_time_ms"))
+                or _num(row.get("linkedorder")))
+
+
+def _stop_dead_why(row: dict[str, Any]) -> str:
+    if _num(row.get("withdraw_datetime_ms")):
+        return "снята"
+    if _num(row.get("activation_date_time_ms")) or _num(row.get("linkedorder")):
+        return "сработала"
+    return "не стережёт"
+
+
 def by_num(store: Any, agent: str | None = None) -> dict[str, dict[str, Any]]:
     """num -> строка таблицы, ВСЕ строки, не только живые.
 

@@ -1320,7 +1320,10 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
     # trader/quik/terminal.py. Дубль успел разойтись с оригиналом: компаньон звал
     # ручным и пустой тег, и чужой тег приложения брокера, тогда как truth.owner()
     # различает их (manual / external) — а по этому различию считается канал.
+    # Обычные заявки И нативные стоп-заявки: для оператора это одно «что стоит
+    # в QUIK», а таблицы в терминале разные (см. terminal.stop_rows).
     _term = terminal.rows(store, agent_id, ids)
+    _stops = terminal.stop_rows(store, agent_id, ids)
     manual_orders = [
         dict(r, pnl=_pnl.get(r["num"]))
         for r in _term
@@ -1424,10 +1427,11 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
     # ОТСУТСТВИЯ зеркала: первое значит «в терминале ничего», второе «не знаю».
     orders_block = {"manual": manual_orders[:20], "smart": smart_list[:20],
                     "counts": counts, "counts_active": counts_active,
-                    "terminal": [r for r in _term if r["active"]][:40],
-                    "terminal_done": [r for r in _term if not r["active"]][:20],
-                    "terminal_total": len(_term),
-                    "terminal_active": sum(1 for r in _term if r["active"]),
+                    "terminal": [r for r in _term + _stops if r["active"]][:40],
+                    "terminal_done": [r for r in _term + _stops
+                                      if not r["active"]][:20],
+                    "terminal_total": len(_term) + len(_stops),
+                    "terminal_active": sum(1 for r in _term + _stops if r["active"]),
                     "terminal_stale": not terminal.fresh(store, agent_id)}
     # «СЕГОДНЯ» РУЧНОЙ ТОРГОВЛИ — та же величина, что у робота, и в том же виде.
     # Без неё ВМ счёта не с чем сводить: заявки оператора из терминала, дети

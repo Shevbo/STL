@@ -15,6 +15,83 @@ NOW = 1_790_800_000_000
 MIN = 60_000
 
 
+class StopStore:
+    """Зеркало со таблицей НАТИВНЫХ СТОП-ЗАЯВОК: она отдельная и едет от агента
+    другим сообщением (StopOrderReport), не в блоке quik."""
+
+    def __init__(self, table=()):
+        self._table = list(table)
+
+    def agent_status(self, agent=None):
+        return {"_received_at_ms": NOW, "health": {"ord_age_ms": 1200},
+                "quik": {"orders": []}}
+
+    def stop_orders(self, agent=None):
+        return {"table": self._table, "table_received_ms": NOW, "events": []}
+
+
+def _stop_row(num="500", sec="RIZ6", operation="S", price="85000", qty="11",
+              brokerref="", withdraw=0, activation=0, linked=0):
+    """Сырая строка QUIK: ВСЕ поля текстом, имена — как на нашем терминале."""
+    return {"order_num": num, "sec_code": sec, "operation": operation,
+            "condition_price": price, "qty": qty, "balance": qty,
+            "brokerref": brokerref, "order_date_time_ms": str(NOW),
+            "withdraw_datetime_ms": str(withdraw),
+            "activation_date_time_ms": str(activation),
+            "linkedorder": str(linked)}
+
+
+# ---- нативные стоп-заявки: другая таблица, та же природа вопроса ------------
+
+def test_native_stop_orders_are_part_of_what_stands_in_quik():
+    """НАТИВНАЯ СТОП-ЗАЯВКА — ТОЖЕ ЖИВАЯ ЗАЯВКА В ТЕРМИНАЛЕ.
+
+    Живёт она в ДРУГОЙ таблице QUIK и едет от агента отдельным сообщением, а в
+    терминале оператора видна своим окном. Показывать одну таблицу и звать это
+    «что стоит в QUIK» значит не показывать защиту позиции — а ровно она
+    29.09.2026 сработала и умерла с нулём исполнения, пока рынок шёл 690 пунктов
+    за минуту.
+    """
+    store = StopStore([_stop_row(num="500", operation="S", qty="11",
+                                 brokerref="stl-so-41bf3af0dd")])
+    rows = terminal.stop_rows(store)
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["num"] == "500" and r["sec"] == "RIZ6" and r["side"] == "sell"
+    assert r["qty"] == 11 and r["active"] is True and r["state"] == "стережёт"
+    assert r["origin"] == "smart" and r["so_id"] == "41bf3af0dd"
+    # ВИД ОБЯЗАТЕЛЕН: стоп снимается ДРУГОЙ командой QUIK (KILL_STOP_ORDER), и
+    # перепутав команду, получишь тихий неуспех — заявка останется стеречь.
+    assert r["kind"] == "stop"
+
+
+def test_a_dead_stop_row_is_not_guarding():
+    """Таблица QUIK хранит ВСЕ стоп-заявки дня, включая сработавшие и снятые:
+    «строка есть» не значит «стережёт». 29.09.2026 на этом сразу выросла ложная
+    тревога по двум мёртвым записям."""
+    store = StopStore([
+        _stop_row(num="1", withdraw=NOW),              # снята
+        _stop_row(num="2", activation=NOW),            # сработала
+        _stop_row(num="3", linked=777),                # породила заявку
+        _stop_row(num="4"),                            # стережёт
+    ])
+    got = {r["num"]: (r["active"], r["state"]) for r in terminal.stop_rows(store)}
+    assert got["1"] == (False, "снята")
+    assert got["2"] == (False, "сработала")
+    assert got["3"] == (False, "сработала")
+    assert got["4"] == (True, "стережёт")
+
+
+def test_stop_rows_survive_a_store_without_the_table():
+    """Старое зеркало без стоп-таблицы и объект без метода — пустой список, а не
+    падение: ослепнуть там, где слепота стоит денег, нельзя."""
+    assert terminal.stop_rows(None) == []
+    assert terminal.stop_rows(object()) == []
+    assert terminal.stop_rows(StopStore()) == []
+    # мусорная строка не роняет разбор: не-словари отбрасываются, пустая остаётся
+    assert len(terminal.stop_rows(StopStore([None, "мусор", {}]))) == 1
+
+
 class Store:
     def __init__(self, orders=None, age_ms=0, has_quik=True, status=True,
                  ord_age_ms=1200, health=True):
