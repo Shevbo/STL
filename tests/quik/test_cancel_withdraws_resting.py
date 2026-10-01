@@ -161,3 +161,27 @@ async def test_cancel_endpoint_withdraws_the_walls(tmp_path, monkeypatch):
     assert srv.cancelled_cids() == ["so:x:low:1", "so:x:top:1"], (
         "ручка отмены не сняла заявки из стакана — значит вызов _withdraw_resting потерян")
     assert so.c_live == {}
+
+
+def test_bookkeeping_values_that_are_numbers_do_not_break_the_cancel(monkeypatch):
+    """ОТМЕНА ОПЕРАТОРА УПАЛА 01.10.2026 С TypeError, и заявка осталась в QUIK.
+
+    В c_live, кроме идентификаторов заявок, лежат служебные значения: moved:<стенка>
+    это ВРЕМЯ последней перестановки, число. Я отбирал заявки по именам ключей и
+    moved: не перечислил — число попало в список «заявок», sorted() сравнил его со
+    строкой, DELETE упал, а человек считал, что заявку снял.
+
+    Отбор идёт по ЗНАЧЕНИЮ: идентификатор это строка. Иначе каждый новый служебный
+    ключ снова ломал бы отмену.
+    """
+    monkeypatch.setattr("trader.api.quik_smart_orders.resolve_agent",
+                        lambda *a, **k: "9618")
+    so = _corridor(c_live={
+        "top": "so:x:top:1",
+        "moved:low": 1790846601833,     # время, не заявка
+        "cross:low": 1,                 # признак, не заявка
+    })
+    srv = _Srv()
+    ost = _Ost([{"client_id": "so:x:top:1", "order_id": "11", "state": "active"}])
+    assert _withdraw_resting(_request(srv, ost), so) == 1
+    assert srv.cancelled_cids() == ["so:x:top:1"]

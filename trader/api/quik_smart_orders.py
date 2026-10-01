@@ -317,10 +317,18 @@ def _withdraw_resting(request: Request, so: SmartOrder) -> int:
         agent = resolve_agent(store, None)
     except Exception:  # noqa: BLE001 — нет агента, снимать нечем
         return 0
+    # ОТБИРАЕМ ПО ЗНАЧЕНИЮ, А НЕ ПО ИМЕНИ КЛЮЧА. Сначала я исключал служебные
+    # ключи по префиксам (flip:, cross:) — и пропустил moved:<стенка>, где лежит
+    # ВРЕМЯ последней перестановки, то есть число. Оно попало в список «заявок»,
+    # и sorted() сравнил число со строкой: 01.10.2026 отмена коридора оператором
+    # упала с TypeError, заявка осталась жить в QUIK, а человек думал, что снял.
+    # Признак заявки — её идентификатор, то есть СТРОКА; перечислять служебные
+    # префиксы значит обещать помнить про каждый новый, а этого обещания я уже
+    # не сдержал.
     live_cids = {
         cid for book_field in (so.c_live or {}, so.g_live or {})
-        for key, cid in book_field.items()
-        if cid and not str(key).startswith(("flip:", "cross:"))
+        for cid in book_field.values()
+        if isinstance(cid, str) and cid
     }
     if not live_cids:
         return 0
