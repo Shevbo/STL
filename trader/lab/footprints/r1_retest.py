@@ -131,8 +131,36 @@ def evaluate(blk: list[list], ev: dict, params: dict | None = None) -> dict:
             break
     if ex is None:
         ex = T[last + 1][1] if last + 1 < n else T[last][4]
-    return {"kind": kind, "bars_to_retest": btr, "outcome": ex - T[c + 1][1],
-            "crossed": end_w > n - 1}
+    # безусловные доли: касание P и касание M в окне tp+wait_min..tp+wait_max, порознь
+    w0 = max(c + 1, tp + p["wait_min"])
+    touch_p = any(T[j][2] >= P for j in range(w0, last + 1))
+    touch_m = any(T[j][3] <= M for j in range(w0, last + 1))
+    early = c == tp + 1 and tp + 2 < n and T[tp + 2][2] >= P
+    ent = T[c + 1][1]
+    # исход без стопа к пику и к M (ent - выход для зеркала); MAE по барам, пока сделка открыта
+    ns = _nostop(T, c, last, ent, lambda b: b[4] > P)
+    mn = _nostop(T, c, last, ent, lambda b: b[4] < M)
+    return {"kind": kind, "bars_to_retest": btr, "outcome": ex - ent,
+            "crossed": end_w > n - 1, "touch_p": touch_p, "touch_m": touch_m, "early": early,
+            "ns_out": ns[0] - ent, "ns_mae": max(0.0, ent - ns[1]),
+            "mn_out": ent - mn[0], "mn_mae": max(0.0, mn[2] - ent)}
+
+
+def _nostop(T, c, last, ent, hit):
+    """Сделка без стопа от open бара c+1: (цена выхода, min low, max high) за время владения."""
+    n = len(T)
+    jb = last
+    for j in range(c + 1, last + 1):
+        if hit(T[j]):
+            jb = j
+            break
+    ex = T[jb + 1][1] if jb + 1 < n else T[jb][4]
+    held = T[c + 1:jb + 1]
+    return ex, min(r[3] for r in held), max(r[2] for r in held)
+
+
+def _q90(xs: list[float]) -> float:
+    return sorted(xs)[int(0.9 * (len(xs) - 1))]
 
 
 def _bucket(v, table):
@@ -167,6 +195,18 @@ def _stat_row(cut: str, bucket: str, evs: list[dict], cost, draws: int, rng: ran
                outcome_pos_share=sum(1 for x in out if x > 0) / n,
                outcome_mean_net=None if cost is None else mean - cost,
                bars_to_retest_median=statistics.median(btr) if btr else None)
+    ns, mn = [e["ns_out"] for e in evs], [e["mn_out"] for e in evs]
+    nmae = [e["ns_mae"] for e in evs]
+    row.update(p_touch_peak=sum(e["touch_p"] for e in evs) / n,
+               p_touch_mirror=sum(e["touch_m"] for e in evs) / n,
+               p_early_peak=sum(e["early"] for e in evs) / n,
+               nostop_mean=statistics.fmean(ns), nostop_median=statistics.median(ns),
+               nostop_pos_share=sum(1 for x in ns if x > 0) / n,
+               nostop_mean_net=None if cost is None else statistics.fmean(ns) - cost,
+               nostop_mae_median=statistics.median(nmae), nostop_mae_p90=_q90(nmae),
+               mirror_nostop_mean=statistics.fmean(mn),
+               mirror_nostop_pos_share=sum(1 for x in mn if x > 0) / n,
+               mirror_nostop_mae_p90=_q90([e["mn_mae"] for e in evs]))
     return row
 
 
@@ -201,7 +241,9 @@ def analyze(rows: list[list], params: dict | None = None, draws: int = 200, seed
             evs.append({"day": d, "side": e["side"], "strength": e["strength"],
                         "length": e["length"], "hour": common.minute_of_day(blk[e["i_conf"]][0]) // 60,
                         "kind": r["kind"], "bars_to_retest": r["bars_to_retest"],
-                        "outcome": r["outcome"], "crossed": r["crossed"]})
+                        "outcome": r["outcome"], "crossed": r["crossed"],
+                        **{k: r[k] for k in ("touch_p", "touch_m", "early", "ns_out", "ns_mae",
+                                             "mn_out", "mn_mae")}})
     crossed = sum(1 for e in evs if e["crossed"])
     nohist = sum(min(p["atr_n"], len(b)) for b in days.values())
     notes = sess_notes + [

@@ -52,6 +52,7 @@ def test_random_walk_no_effect():
     assert abs(row["diff"]["stat"]) < 0.2, row["diff"]
     assert row["diff"]["p_two"] > 0.05, row["diff"]
     assert abs(row["outcome_mean"]) < 2.0, row["outcome_mean"]
+    assert abs(row["p_touch_peak"] - row["p_touch_mirror"]) < 0.05, row
 
 
 def test_inserted_retests():
@@ -67,6 +68,8 @@ def test_inserted_retests():
     assert row["n"] >= 25, row["n"]
     assert row["p_retest"] > 0.8, row
     assert row["diff"]["stat"] > 0.7 and row["diff"]["p_two"] < 0.05, row["diff"]
+    assert row["p_touch_peak"] > 0.8, row["p_touch_peak"]
+    assert row["nostop_mae_median"] >= 0 and row["nostop_mae_p90"] >= row["nostop_mae_median"]
     assert 15 <= row["bars_to_retest_median"] <= 22, row["bars_to_retest_median"]
 
 
@@ -114,3 +117,13 @@ def test_down_side_mirrors_up():
     assert any(e["side"] == 1 for e in eu)
     assert [e["i_conf"] for e in ed if e["side"] == -1] == [e["i_conf"] for e in eu if e["side"] == 1]
     assert common.day_of(down[0][0]) == common.day_of(up[0][0])
+
+
+def test_nostop_mae_zero_when_straight_to_peak():
+    c = _flat(40) + [101.2, 102.4, 103.6, 102.6, 104.0, 104.0, 104.0]
+    rows = _bars(c, hl={44: (104.5, 102.6)})        # low бара входа = open входа
+    p = {"atr_n": 30, "wait_min": 1, "wait_max": 30}
+    ev = next(e for e in r1.find_impulses(rows, p) if e["side"] == 1)
+    r = r1.evaluate(rows, ev, p)
+    assert r["ns_mae"] == 0 and r["ns_out"] > 0 and r["early"] is True, r
+    assert r["mn_mae"] > 0 and r["mn_out"] < 0, r
