@@ -16,6 +16,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
+from trader.api.leaderboard_scope import SQL_NOT_SERVICE
 from trader.api.ws_hub import WsHub
 from trader.auth.client import AsyncAuthClient
 from trader.auth.guard import require_auth, ws_auth_ok
@@ -2361,8 +2362,15 @@ def create_app() -> FastAPI:
                            o.date_from, o.date_to, o.created_at
                       FROM optimization_leaderboard o
                      WHERE o.strategy = p.strategy AND o.symbol = p.symbol
+                       -- Служебные прогоны (плацебо-гейт, калибровка издержек)
+                       -- лидерами витрины быть не могут: случайный вектор,
+                       -- выигравший в лотерею, выглядит ровно как находка.
+                       -- Предикат общий с лампой компаньона, чтобы два
+                       -- одинаковых условия в двух запросах не разъехались.
+                       AND {NOT_SERVICE}
                      ORDER BY o.score DESC NULLS LAST LIMIT 1) b
-            """, timeout=_BOTSTORE_SQL_TIMEOUT)
+            """.replace("{NOT_SERVICE}", SQL_NOT_SERVICE.replace("campaign_run", "o.campaign_run")),
+                timeout=_BOTSTORE_SQL_TIMEOUT)
             counts = await pool.fetch("""
                 SELECT strategy, count(*) AS variants, max(created_at) AS last_run
                 FROM optimization_leaderboard GROUP BY strategy

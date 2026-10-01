@@ -27,6 +27,7 @@ import time
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from trader.api.leaderboard_scope import SQL_NOT_SERVICE
 from trader.auth.guard import auth_ok, require_auth
 from trader.util import i9_hb_view
 
@@ -1557,6 +1558,11 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
             "         AND (params->>'fast')::numeric >= (params->>'slow')::numeric) "
             "AND NOT (params ? 'ema1' AND params ? 'ema2' "
             "         AND (params->>'ema1')::numeric = (params->>'ema2')::numeric) "
+            # СЛУЖЕБНЫЕ ПРОГОНЫ НЕ ПРЕДЛАГАЕМ. Плацебо-гейт это 50 случайных
+            # векторов, и выигравший в лотерею выглядит ровно как находка:
+            # 01.10.2026 оператор увидел в лампе «supertrend RIU6 +63 740 руб,
+            # RF 4.8» из camp-20261001-gatekelt... (письмо backtests).
+            f"AND {SQL_NOT_SERVICE} "
             "ORDER BY net_profit DESC LIMIT 20")
         # РАЗМЕР ПОЗИЦИИ — НЕ ЗАСЛУГА. Лампа сортировала по net, а net линейно
         # растёт с числом контрактов: 15.08.2026 наверх вышла строка triple_sma
