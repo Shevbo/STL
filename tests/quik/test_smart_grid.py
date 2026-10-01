@@ -21,7 +21,7 @@ def _grid(**kw):
 
 def test_levels_and_prices_are_fixed_around_the_base():
     so = _grid()
-    assert sorted(so_mod.grid_levels(so)) == [-3, -2, -1, 1, 2]
+    assert sorted(so_mod.grid_levels(so)) == [-3, -2, -1, 0, 1, 2]
     assert so_mod.grid_price(so, -1) == 83900 and so_mod.grid_price(so, 2) == 84200
     # низ покупает, верх продаёт
     assert so_mod.grid_side_for(so, -1) == "buy"
@@ -61,12 +61,17 @@ def test_side_follows_the_market_not_the_ladder():
     assert so_mod.grid_side_for(so, 2) == "sell"
 
 
-def test_level_zero_is_not_a_level():
-    """Ноль — цена постановки, своей заявки у него нет ни до, ни после филлов."""
-    so = _grid()
-    assert 0 not in so_mod.grid_levels(so)
-    so.g_live = {"flip:-1": True}
-    assert 0 not in so_mod.grid_levels(so)
+def test_base_level_is_a_level_too():
+    """ДЫРА, УВИДЕННАЯ ОПЕРАТОРОМ 01.10.2026 в живой сетке: база 85460, вокруг
+    стоят 85360 и 85560, а на самой 85460 пусто. Я исключил ноль из лестницы,
+    решив, что на цене постановки заявки быть не должно. Это такой же уровень:
+    рынок с него уходит, и тогда там обязана стоять заявка."""
+    so = _grid()                                    # база 84000
+    assert 0 in so_mod.grid_levels(so)
+    assert so_mod.grid_price(so, 0) == so.g_base
+    # сторона по рынку, как у любого уровня
+    assert so_mod.grid_side_for(so, 0, 84050) == "buy"
+    assert so_mod.grid_side_for(so, 0, 83950) == "sell"
 
 
 def test_stop_sits_beyond_the_last_level_on_both_sides():

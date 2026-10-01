@@ -302,6 +302,9 @@ type Bridge struct {
 	accSink  func(AccEvent)
 	stopSink func(StopEvent)
 	logf     func(string, ...any)
+	// Ограничитель частоты транзакций к QUIK (см. pacer.go). Один на мост,
+	// то есть общий для всех источников заявок.
+	pacer *txPacer
 
 	ln net.Listener
 
@@ -332,6 +335,7 @@ func NewBridge(port int, handler BridgeHandler, logf func(string, ...any)) *Brid
 		addr:    fmt.Sprintf("127.0.0.1:%d", port),
 		handler: handler,
 		logf:    logf,
+		pacer:   newTxPacer(quikMaxTxPerSec),
 	}
 }
 
@@ -584,6 +588,16 @@ var errNoLua = fmt.Errorf("trade bridge: no Lua client connected")
 // send writes one JSON object + newline to the current Lua client. It fails fast if
 // no client is attached so the manager can reject the command instead of blocking.
 func (b *Bridge) send(v any) error {
+	// НЕ БОЛЬШЕ 15 ТРАНЗАКЦИЙ В СЕКУНДУ В QUIK (требование оператора 01.10.2026):
+	// сверх этого брокер берёт 5 рублей за КАЖДУЮ. Ограничитель стоит здесь, на
+	// единственном выходе, потому что источников много (роботы, умные заявки,
+	// сверка), выход один, и только тут видна их СУММА. Сетка «радиация» на 25
+	// уровней выставляется одной пачкой — поодиночке безобидно, вместе всплеск.
+	// Заявки не отбрасываются, а ждут своего слота: потерянная транзакция это
+	// потерянная заявка, а у защитной — незакрытая позиция.
+	if waited := b.pacer.wait(); waited > 200*time.Millisecond {
+		b.logf("trade: очередь транзакций — ждали %v (лимит %d/с)", waited, quikMaxTxPerSec)
+	}
 	if b.queueDir != "" {
 		return b.appendCmd(v)
 	}
