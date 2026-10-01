@@ -54,3 +54,5 @@ trader/lab/footprints/a4b_boundary_followthrough.py
 trader/lab/footprints/a2b_extreme_reversion_mid.py
 trader/lab/exec_cost.py
 trader/lab/exec_policy.py
+trader/lab/footprints/r1_retest.py
+trader/lab/strategies/retest.py
