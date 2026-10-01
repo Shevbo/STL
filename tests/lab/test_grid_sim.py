@@ -124,3 +124,82 @@ def test_quiet_bar_skip_does_not_change_fills():
         rows.append((o, max(o, px) + rnd.choice((0, 5)), min(o, px) - rnd.choice((0, 5)), px))
     for kw in ({}, {"stop_pts": 100}, {"stop_pts": 100, "stop_mode": 1}, {"stop_pts": 100, "restart": "after_stop"}):
         assert _sim(rows, **kw)["fills"] == _sim(rows, noskip=1, **kw)["fills"]
+
+
+# ── режим с фильтром ─────────────────────────────────────────────────────────────────────────────
+import random  # noqa: E402
+
+
+def _day(closes, start=420):
+    """Бары от 07:00 по списку close; open = прошлый close, фитили +-1."""
+    out, prev = [], closes[0]
+    for i, c in enumerate(closes):
+        out.append([DAY0 + (start + i) * 60, prev, max(prev, c) + 1, min(prev, c) - 1, c, 1])
+        prev = c
+    return out
+
+
+def _split(rows):
+    body = [r for r in rows if 600 <= (r[0] % 86400) // 60 < 1420]
+    return body, [r for r in rows if (r[0] % 86400) // 60 >= 1420]
+
+
+PR = {**gs.DEFAULTS, **P, "stop_pts": 0}
+CFG = {"on_th": 0.3, "off_th": 0.6, "dev_k": 99, "pos_k": 0, "cool": 15}
+
+
+def test_signals_do_not_look_ahead():
+    rnd = random.Random(3)
+    px, cl = 1000, []
+    for _ in range(900):
+        px += rnd.gauss(0, 8)
+        cl.append(round(px))
+    rows = _day(cl)
+    full = gs.signals(rows)
+    for k in (200, 333, 500, 777):
+        part = gs.signals(rows[:k + 1])
+        for name in gs.SIGS:
+            assert part[name][k] == full[name][k], (name, k)
+    assert full["adx"][-1] is not None and full["er60"][400] is not None
+
+
+def test_regime_removes_grid_on_trend_and_flattens():
+    zig = [1000 + (15 if i % 2 else -15) for i in range(300)]          # 07:00-12:00 боковик
+    trend = [1000 - 12 * j for j in range(1, 300)]                      # затем падение 12 пт/мин
+    rows = _day(zig + trend)
+    body, tail = _split(rows)
+    sig = gs.signals(rows)
+    ix = [k for k, r in enumerate(rows) if r in body]
+    s = [sig["er30"][k] for k in ix]
+    r = gs.simulate_regime(body, tail, PR, s, CFG)
+    assert r["n_launch"] >= 1 and r["n_removals"] >= 1
+    assert r["fills"][-1][4] == "regime" or r["fills"][-1][4] == "level"
+    assert sum((1 if f[1] == "buy" else -1) * f[3] for f in r["fills"]) == 0     # позиция закрыта
+    base = gs.simulate_day(rows, {**P, "stop_pts": 0})
+    assert r["pnl_pts"] > base["pnl_pts"]                                       # без фильтра сетка тонет в тренде
+
+
+def test_regime_on_sideways_matches_plain_grid():
+    zig = [1000] * 181 + [1000 + (30 if i % 2 else -30) for i in range(700)]   # 10:00 бар плоский
+    rows = _day(zig)
+    rows[180] = [rows[180][0], 1000, 1000, 1000, 1000, 1]                 # бар 10:00 плоский: база 1000
+    body, tail = _split(rows)
+    sig = gs.signals(rows)
+    ix = [k for k, r in enumerate(rows) if r in body]
+    s = [sig["er30"][k] for k in ix]
+    cfg = {**CFG, "on_th": 9, "off_th": 99}
+    r = gs.simulate_regime(body, tail, PR, s, cfg)
+    base = gs.simulate_day(rows, {**P, "stop_pts": 0})
+    assert r["n_launch"] == 1 and r["n_removals"] == 0
+    assert r["fills"] == base["fills"] and r["pnl_pts"] == base["pnl_pts"]
+
+
+def test_random_control_keeps_time_share():
+    rows = _day([1000 + (5 if i % 2 else -5) for i in range(900)])
+    body, tail = _split(rows)
+    durs = [40, 25, 60]
+    cfg = {**CFG, "dev_k": 1e9}
+    for seed in range(10):
+        sch = gs._random_schedule(random.Random(seed), body, durs)
+        r = gs.simulate_regime(body, tail, PR, [None] * len(body), cfg, schedule=sch)
+        assert r["work"] == sum(d for s, d in sch) and len(sch) >= 2

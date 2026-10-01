@@ -292,6 +292,337 @@ def analyze(rows_by_contract: dict, params_list: list, instrument: str | None = 
     return out
 
 
+
+# ── режим с фильтром «боковик / тренд» (docs/grid-regime-filter-2026.md) ─────────────────────────
+SIGS = ("er30", "er60", "er120", "dir30", "dir60", "dir120", "adx")
+
+
+def signals(rows: list) -> dict:
+    """Сигналы тренда на закрытии каждого бара дня; rows отсортированы. Значение на баре i использует
+    ТОЛЬКО бары <= i (окно w минут: бары с ts > ts_i - w*60, опорный close = последний бар с ts <= ts_i - w*60).
+    Высокое значение = тренд. None, пока окно не покрыто данными дня.
+    er*: |c_i - c_ref| / sum|dc|; dir*: |c_i - c_ref| / (max high - min low окна);
+    adx: ADX(14) Вайлдера по закрытым M5 (бары M5 строго до M5 текущего бара)."""
+    from collections import deque
+    n = len(rows)
+    ts = [r[0] for r in rows]
+    c = [r[4] for r in rows]
+    d = [0.0] * n
+    for j in range(1, n):
+        d[j] = d[j - 1] + abs(c[j] - c[j - 1])
+    out = {}
+    for w in (30, 60, 120):
+        er, dr = [None] * n, [None] * n
+        ref, qh, ql = -1, deque(), deque()
+        for i in range(n):
+            lim = ts[i] - w * 60
+            while ref + 1 <= i and ts[ref + 1] <= lim:
+                ref += 1
+            while qh and rows[qh[-1]][2] <= rows[i][2]:
+                qh.pop()
+            qh.append(i)
+            while ql and rows[ql[-1]][3] >= rows[i][3]:
+                ql.pop()
+            ql.append(i)
+            while qh and qh[0] <= ref:
+                qh.popleft()
+            while ql and ql[0] <= ref:
+                ql.popleft()
+            if ref < 0:
+                continue
+            num = abs(c[i] - c[ref])
+            den = d[i] - d[ref]
+            rng = rows[qh[0]][2] - rows[ql[0]][3]
+            er[i] = num / den if den > 0 else 0.0
+            dr[i] = num / rng if rng > 0 else 0.0
+        out[f"er{w}"], out[f"dir{w}"] = er, dr
+    out["adx"] = _adx(rows)
+    return out
+
+
+def _adx(rows: list, n: int = 14) -> list:
+    res = [None] * len(rows)
+    cur, curb = None, None
+    prev = None                  # прошлый закрытый M5: (h, l, c)
+    cnt, trs, pdm, mdm, dxs, adx, val = 0, 0.0, 0.0, 0.0, [], None, None
+    for i, r in enumerate(rows):
+        b = r[0] // 300
+        if curb is not None and b != curb:
+            h, lo, cl = cur
+            if prev is not None:
+                tr = max(h - lo, abs(h - prev[2]), abs(lo - prev[2]))
+                up, dn = h - prev[0], prev[1] - lo
+                p_, m_ = (up if up > dn and up > 0 else 0.0), (dn if dn > up and dn > 0 else 0.0)
+                cnt += 1
+                if cnt <= n:
+                    trs, pdm, mdm = trs + tr, pdm + p_, mdm + m_
+                else:
+                    trs, pdm, mdm = trs - trs / n + tr, pdm - pdm / n + p_, mdm - mdm / n + m_
+                if cnt >= n and trs > 0:
+                    dip, dim = 100 * pdm / trs, 100 * mdm / trs
+                    dx = 100 * abs(dip - dim) / (dip + dim) if dip + dim > 0 else 0.0
+                    if adx is None:
+                        dxs.append(dx)
+                        if len(dxs) == n:
+                            adx = sum(dxs) / n
+                    else:
+                        adx = (adx * (n - 1) + dx) / n
+                    val = adx
+            prev = cur
+            cur = None
+        if cur is None:
+            cur, curb = (r[2], r[3], r[4]), b
+        else:
+            cur = (max(cur[0], r[2]), min(cur[1], r[3]), r[4])
+        res[i] = val
+    return res
+
+
+def simulate_regime(body: list, tail: list, p: dict, sig: list, cfg: dict, schedule: list | None = None) -> dict:
+    """Один день с фильтром. body = бары [start_min, end_min), sig = сигнал на закрытии каждого бара body.
+    cfg: on_th, off_th, dev_k (шагов), pos_k (0 = выкл), cool (минут).
+    Запуск на закрытии бара i-1 при sig < on_th (10:00-21:00, не раньше cool после снятия), база = close бара i-1.
+    Снятие на закрытии бара i при sig > off_th, DEV >= dev_k, |pos| >= pos_k или собственном стопе сетки:
+    позиция закрывается по open бара i+1 плюс полспреда против себя. Флэт в end_min по close.
+    schedule [(i, длина в барах)] вместо сигнала: контроль со случайным запуском (снятие по DEV/POS/стопу/длине)."""
+    n, hs = len(body), p["half"]
+    st = _new_state()
+    sched = dict(schedule) if schedule is not None else None
+    g, last, cool_until, plan_end, ep0 = None, None, -1, None, 0
+    eps, work, nl = [], 0, 0
+    for i in range(n):
+        ts, o, h, lw, c = body[i][:5]
+        if g is None:
+            if i == 0 or (sched is None and ts < cool_until):
+                continue
+            if sched is not None:
+                go = i in sched
+            else:
+                s, m = sig[i - 1], _minute(body[i - 1][0])
+                go = s is not None and s < cfg["on_th"] and 600 <= m <= 1260
+            if not go:
+                continue
+            base = body[i - 1][4]
+            g, last, ep0, nl = _Grid(base, p), base, i, nl + 1
+            plan_end = i + sched[i] if sched is not None else None
+        if g.pending:
+            g.place(last)
+        if not (not g.pending and h < (g.sell_t[0] if g.sell_t else math.inf)
+                and lw > (g.buy_t[-1] if g.buy_t else -math.inf)):
+            path = [o, lw, h, c] if c >= o else [o, h, lw, c]
+            a = last
+            for b in [o] + path[1:]:
+                _segment(g, st, a, b, ts)
+                a = b
+        last = c
+        work += 1
+        why = None
+        if sched is None and sig[i] is not None and sig[i] > cfg["off_th"]:
+            why = "sig"
+        elif abs(c - g.so.g_base) >= cfg["dev_k"] * p["step"]:
+            why = "dev"
+        elif cfg["pos_k"] and abs(st["pos"]) >= cfg["pos_k"]:
+            why = "pos"
+        elif plan_end is not None and i + 1 >= plan_end:
+            why = "plan"
+        elif g.so.g_stop_pts > 0 and ((g.lo and c <= g.lo) or (g.hi and c >= g.hi)):
+            why = "stop"
+        if why:
+            if i + 1 < n:
+                _flat(st, body[i + 1][1] - hs if st["pos"] > 0 else body[i + 1][1] + hs, body[i + 1][0], "regime")
+            else:
+                _flat(st, c, ts, "regime")
+            eps.append((ep0, i, why))
+            g, cool_until = None, ts + 60 + cfg["cool"] * 60
+    if g is not None:
+        eps.append((ep0, n - 1, "eod"))
+    if st["pos"]:
+        end_bar = tail[0] if tail else body[-1]
+        _flat(st, end_bar[4], end_bar[0], "eod")
+    return {"fills": st["fills"], "pnl_pts": sum(st["trades_pnl"]) * 1.0, "max_pos": st["max_pos"],
+            "n_contracts": sum(f[3] for f in st["fills"]), "episodes": eps, "work": work, "n_launch": nl,
+            "n_removals": sum(1 for e in eps if e[2] != "eod"), "n_body": n}
+
+
+def _quant(xs: list, q: float) -> float:
+    return xs[min(len(xs) - 1, max(0, int(q * (len(xs) - 1))))]
+
+
+def prep_days(rows: list, p0: dict | None = None) -> list:
+    """Годные дни контракта: описатели, body/tail, сигналы по body (сигнал считается по всем барам дня)."""
+    p = {**DEFAULTS, **(p0 or {})}
+    out = []
+    for _d, b in sorted(_by_day(rows).items()):
+        b = sorted(b, key=lambda r: r[0])
+        st = day_stats(b)
+        ix = [k for k, r in enumerate(b) if p["start_min"] <= _minute(r[0]) < p["end_min"]]
+        if not st or not ix or _minute(b[ix[0]][0]) > p["start_min"] + p["late_start_min"]:
+            continue
+        sg = signals(b)
+        out.append({"stats": st, "body": [b[k] for k in ix], "tail": [r for r in b if _minute(r[0]) >= p["end_min"]],
+                    "sig": {k: [v[j] for j in ix] for k, v in sg.items()}})
+    return out
+
+
+_TH_CACHE: dict = {}
+
+
+def thresholds(days: list, sig: str, on_q: float, off_q: float, ntrain: int) -> tuple[float, float]:
+    """Пороги по квантилям сигнала на первых ntrain днях (бары 10:00-21:00)."""
+    k = (days[0]["body"][0][:5].__repr__(), days[-1]["body"][0][:5].__repr__(), len(days), sig, ntrain)
+    if k not in _TH_CACHE:
+        if len(_TH_CACHE) > 64:
+            _TH_CACHE.clear()
+        _TH_CACHE[k] = sorted(v for d in days[:ntrain] for r, v in zip(d["body"], d["sig"][sig])
+                              if v is not None and _minute(r[0]) <= 1260)
+    xs = _TH_CACHE[k]
+    return _quant(xs, on_q / 100), _quant(xs, off_q / 100)
+
+
+def build_regime_configs(spec: dict) -> list:
+    """Декартово произведение сетки документа; off_q > on_q."""
+    out = []
+    for p in spec["params"]:
+        for sg in spec["sigs"]:
+            for on in spec["on_qs"]:
+                for off in spec["off_qs"]:
+                    if off <= on:
+                        continue
+                    for dk in spec["dev_ks"]:
+                        for pk in spec["pos_ks"]:
+                            for cl in spec["cools"]:
+                                out.append({"p": p, "sig": sg, "on_q": on, "off_q": off, "dev_k": dk,
+                                            "pos_k": pk, "cool": cl})
+    return out
+
+
+def cfg_id(c: dict) -> str:
+    return (f"{variant_id({**DEFAULTS, **c['p']})}|{c['sig']}|on{c['on_q']}|off{c['off_q']}"
+            f"|dev{c['dev_k']}|pos{c['pos_k']}|cool{c['cool']}")
+
+
+def _regime_days(days, c, ntrain, inst, day_ix):
+    p = {**DEFAULTS, **inst, **c["p"]}
+    on_th, off_th = thresholds(days, c["sig"], c["on_q"], c["off_q"], ntrain)
+    cfg = {"on_th": on_th, "off_th": off_th, "dev_k": c["dev_k"], "pos_k": c["pos_k"], "cool": c["cool"]}
+    res = [simulate_regime(days[k]["body"], days[k]["tail"], p, days[k]["sig"][c["sig"]], cfg) for k in day_ix]
+    return p, cfg, res
+
+
+def _cols(res, key, inst, p):
+    cols = {"gross": [], "fee_m": [], "fee_t": [], "nf": [], "work": [], "nl": [], "nr": [], "mp": []}
+    for r in res:
+        fm, ft = costs(r["fills"], key, inst["pv"])
+        cols["gross"].append(round(r["pnl_pts"] * inst["pv"] * p["lot"], 2))
+        cols["fee_m"].append(round(fm, 2))
+        cols["fee_t"].append(round(ft, 2))
+        cols["nf"].append(r["n_contracts"])
+        cols["work"].append(r["work"])
+        cols["nl"].append(r["n_launch"])
+        cols["nr"].append(r["n_removals"])
+        cols["mp"].append(r["max_pos"])
+    return cols
+
+
+def _random_schedule(rng, body, durs):
+    """Контроль: те же длины эпизодов, старты случайные без перекрытия (индексы запуска i >= 1, минута
+    предыдущего бара 10:00-21:00)."""
+    ok = [i for i in range(1, len(body)) if _minute(body[i - 1][0]) <= 1260]
+    taken, out = [], []
+    for dur in durs:
+        for _ in range(30):
+            s = rng.choice(ok)
+            e = min(len(body), s + dur)
+            if all(e <= a or s >= b for a, b in taken):
+                taken.append((s, e))
+                out.append((s, dur))
+                break
+    return out
+
+
+def _sum_net(cl):
+    return (round(sum(cl["gross"]) - sum(cl["fee_m"]), 1), round(sum(cl["gross"]) - sum(cl["fee_t"]), 1))
+
+
+def run_regime(arg: dict) -> dict:
+    """mode=regime_scan: configs = [{"p", "sig", "on_q", "off_q", "dev_k", "pos_k", "cool"}], только первые 2/3
+    дней (отбор), сводка обучения. mode=regime_days: те же configs, дневные ряды по всем дням + база без
+    фильтра + контроль (arg["draws"] розыгрышей на отложенной трети). mode=regime_info: информативность:
+    запуск каждые 30 минут на 120 баров без фильтра, сигнал на запуске и net эпизода (arg["params"]).
+    arg["chunk"] = [i, n] берёт configs[i::n]."""
+    import random
+    from trader.lab.footprints import common
+    key = arg["symbol_key"]
+    rows = common.load_bars(key, arg.get("since"), arg.get("until"))
+    if not rows:
+        return {"id": "REGIME", "symbol": key, "error": "нет баров в окне"}
+    inst = INST["Si" if key[:2].lower() == "si" else "RI"]
+    days = prep_days(rows)
+    nt = len(days) * 2 // 3
+    configs = arg.get("configs") or (build_regime_configs(arg["spec"]) if arg.get("spec") else [])
+    if arg.get("chunk"):
+        i, n = arg["chunk"]
+        configs = configs[i::n]
+    out = {"id": "REGIME", "mode": arg["mode"], "symbol": key, "n_days": len(days), "n_train": nt}
+    if arg["mode"] == "regime_scan":
+        res = []
+        for c in configs:
+            p, cfg, rr = _regime_days(days, c, nt, inst, range(nt))
+            cl = _cols(rr, key, inst, p)
+            nm, nt_ = _sum_net(cl)
+            res.append({"cid": cfg_id(c), "net_m": nm, "net_t": nt_, "work": sum(cl["work"]),
+                        "bars": sum(r["n_body"] for r in rr), "days_work": sum(1 for x in cl["nl"] if x),
+                        "nl": sum(cl["nl"]), "nr": sum(cl["nr"]),
+                        "worst": min(g - m for g, m in zip(cl["gross"], cl["fee_t"])), "th": [cfg["on_th"], cfg["off_th"]]})
+        out["configs"] = res
+    elif arg["mode"] == "regime_days":
+        out["days"] = [d["stats"] for d in days]
+        base = {}
+        for c in configs:
+            pk = variant_id({**DEFAULTS, **c["p"]})
+            if pk not in base:
+                p = {**DEFAULTS, **inst, **c["p"]}
+                rr = [simulate_day(d["body"] + d["tail"], p) for d in days]
+                for r in rr:
+                    r["work"], r["n_launch"], r["n_removals"] = 1, 1, 0
+                base[pk] = _cols(rr, key, inst, p)
+        out["base"] = base
+        out["configs"] = []
+        for c in configs:
+            p, cfg, rr = _regime_days(days, c, nt, inst, range(len(days)))
+            item = {"cid": cfg_id(c), "c": c, "th": [cfg["on_th"], cfg["off_th"]], **_cols(rr, key, inst, p),
+                    "eps": [[(e[1] - e[0] + 1, e[2]) for e in r["episodes"]] for r in rr]}
+            ctrl = []
+            for dd in range(arg.get("draws", 0)):
+                rng = random.Random(1000 + dd)
+                rc = []
+                for k in range(nt, len(days)):
+                    d = days[k]
+                    sch = _random_schedule(rng, d["body"], [e[0] for e in item["eps"][k]])
+                    rc.append(simulate_regime(d["body"], d["tail"], p, d["sig"][c["sig"]], cfg, schedule=sch))
+                cl = _cols(rc, key, inst, p)
+                nm, nt_ = _sum_net(cl)
+                ctrl.append({"net_m": nm, "net_t": nt_, "work": sum(cl["work"])})
+            item["ctrl"] = ctrl
+            out["configs"].append(item)
+    elif arg["mode"] == "regime_info":
+        out["episodes"] = []
+        cfg = {"on_th": 0, "off_th": 0, "dev_k": 1e9, "pos_k": 0, "cool": 0}
+        for pi, p0 in enumerate(arg["params"]):
+            p = {**DEFAULTS, **inst, **p0}
+            for k, d in enumerate(days):
+                body = d["body"]
+                for i in range(1, len(body)):
+                    m = _minute(body[i - 1][0])
+                    if m % 30 or m > 1230:
+                        continue
+                    r = simulate_regime(body, d["tail"], p, d["sig"]["er30"], cfg, schedule=[(i, 120)])
+                    fm, ft = costs(r["fills"], key, inst["pv"])
+                    g = r["pnl_pts"] * inst["pv"]
+                    out["episodes"].append({"p": pi, "day": k, "m": m, "net_m": round(g - fm, 1), "net_t": round(g - ft, 1),
+                                            "sig": {s: d["sig"][s][i - 1] for s in SIGS}})
+    return out
+
 # ── сетка документа и живой набор ────────────────────────────────────────────
 STEPS = (50, 100, 150, 200, 300, 400, 600)
 LEVELS = (2, 3, 5, 8, 12)
@@ -331,6 +662,8 @@ def build_variants(preset: str = "grid") -> list[dict]:
 def run(arg: dict) -> dict:
     """Задача агента (kind=task): arg = {"symbol_key", "since", "until", "preset": "grid"|"live",
     "variants": [...] (вместо preset), "chunk": [i, n] (берутся варианты i::n)}."""
+    if str(arg.get("mode", "")).startswith("regime"):
+        return run_regime(arg)
     from trader.lab.footprints import common
     key = arg["symbol_key"]
     rows = common.load_bars(key, arg.get("since"), arg.get("until"))
