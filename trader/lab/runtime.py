@@ -15,6 +15,79 @@ from trader.pos.models import AccountSummary, Position
 _BARS_TTL = 55.0  # seconds; just under the 60s robot tick so each tick fetches once
 _BARS_CACHE: dict[tuple, tuple[float, list]] = {}
 _BARS_INFLIGHT: dict[tuple, "asyncio.Future"] = {}
+# Настенное время (UTC epoch) выкачки, по которому судим, какие бары уже ЗАКРЫТЫ.
+_BARS_FETCHED_AT: dict[tuple, float] = {}
+
+# ЧЕСТНАЯ БУМАЖНАЯ НАЛИВКА (honest_v1, 01.10.2026). Аудит бумажных роботов
+# (docs/execution-cost-program.md, «Бумажные роботы»): STL наливал мгновенно по
+# close ЕЩЁ ФОРМИРУЮЩЕГОСЯ бара ISS, без спреда и без комиссии; 22 работающих
+# робота показывали +275 тыс ₽, при реальных издержках было бы −1.04..−1.42 млн.
+# Теперь: решения по закрытому бару, цена = встречная котировка (если свежая) или
+# цена стратегии ± k шагов цены, комиссия тейкера пишется в order_id филла.
+# LAB_PAPER_HONEST=0 возвращает старое поведение целиком.
+_MSK_OFFSET = 3 * 3600          # бары ISS — московская стенка, проштампованная как UTC
+_QUOTE_MAX_AGE_MS = 10_000
+# Полспреда в ШАГАХ цены, когда свежей котировки нет. 0.5 = полтика, нижняя граница;
+# RI 0.7 шага = 7 пт — среднее полспреда, измеренное аудитом.
+HALF_SPREAD_STEPS = {"RI": 0.7}
+HALF_SPREAD_STEPS_DEFAULT = 0.5
+COST_TAG = "honest_v1"
+
+# Источник котировок bid/ask: QuikAgentStore процесса STL (метод tick(code) ->
+# {"bid","ask","received_at_unix_ms"}). Подключается одной строкой из lifespan
+# приложения (зона ui-ux): set_quote_source(quik_store). Пока не подключён —
+# работает запасное правило k × шаг.
+_QUOTE_SOURCE: Any = None
+
+
+def set_quote_source(store: Any) -> None:
+    global _QUOTE_SOURCE
+    _QUOTE_SOURCE = store
+
+
+def _closed_bars(bars: list, fetched_utc: float | None) -> list:
+    """Только бары, чья минута кончилась к моменту выкачки (последний у ISS — формирующийся)."""
+    if not bars or fetched_utc is None:
+        return bars
+    edge = fetched_utc + _MSK_OFFSET
+    i = len(bars)
+    while i and bars[i - 1].time + 60 > edge:
+        i -= 1
+    return bars[:i]
+
+
+def paper_commission(symbol: str, history: list[tuple], side: str, qty: int,
+                     price: float, point_value: float, ts_msk: float) -> float:
+    """Комиссия тейкера (₽) за НОВЫЙ бумажный филл с учётом прошлых филлов робота.
+
+    Учёт тот же, что в backtest.compute_metrics: круг, закрытый в ту же сессию,
+    платит бирже половину ПО ОБЕИМ НОГАМ. Нога входа уже записана с полным сбором,
+    поэтому её скидка возвращается на закрывающем филле. history:
+    [(side, qty, price, ts_msk), ...] по времени.
+    """
+    from trader.lab.commission import SCALPER_DISCOUNT, commission_for, exchange_part
+    pos, entry_ts, exch = 0, 0.0, 0.0      # позиция, взвешенное время входа, биржевая часть входа
+    for s, q, p, ts in history:
+        d = q if s == "buy" else -q
+        new = pos + d
+        if pos == 0:
+            entry_ts, exch = ts, exchange_part(symbol, p, q, point_value, ts)
+        elif (pos > 0) == (d > 0):
+            entry_ts = (entry_ts * abs(pos) + ts * q) / (abs(pos) + q)
+            exch += exchange_part(symbol, p, q, point_value, ts)
+        elif new == 0:
+            exch = 0.0
+        elif (new > 0) == (pos > 0):
+            exch *= abs(new) / abs(pos)
+        else:
+            entry_ts, exch = ts, exchange_part(symbol, p, abs(new), point_value, ts)
+        pos = new
+    d = qty if side == "buy" else -qty
+    if pos and (pos > 0) != (d > 0) and int(ts_msk // 86400) == int(entry_ts // 86400):
+        closed = min(qty, abs(pos))
+        return (commission_for(symbol, price, qty, point_value, taker=True, scalper=True, ts=ts_msk)
+                - exch * closed / abs(pos) * (1 - SCALPER_DISCOUNT))
+    return commission_for(symbol, price, qty, point_value, taker=True, ts=ts_msk)
 
 
 async def _load_bars_shared(symbol: str, days: int, interval: int) -> list:
@@ -39,6 +112,7 @@ async def _load_bars_shared(symbol: str, days: int, interval: int) -> list:
             bars = []
         if bars:  # don't cache an empty/failed fetch — let the next tick retry
             _BARS_CACHE[key] = (now, bars)
+            _BARS_FETCHED_AT[key] = _time.time()
         if not fut.done():
             fut.set_result(bars)
         return bars
@@ -270,6 +344,10 @@ class LiveRuntime:
         # по устаревшему бару — см. _bar_is_stale.
         self._acted_bar = acted_bar
         self.newest_bar: int | None = None
+        # Честная бумажная наливка (см. COST_TAG). Читается один раз на рантайм;
+        # реальный путь не трогает.
+        import os
+        self._honest = paper and os.environ.get("LAB_PAPER_HONEST", "1") != "0"
 
     async def get_bars(self, symbol: str, tf: int, n: int) -> list[Bar]:
         # Within one on_bar, reuse the instance slice; across robots/ticks, the
@@ -279,6 +357,10 @@ class LiveRuntime:
         # ~900 trading minutes/day; cover n minutes + buffer, min 3 calendar days
         days = max(3, (n // 800) + 3)
         bars = await _load_bars_shared(symbol, days, interval=1)
+        if self._honest:
+            # Стратегия видит только ЗАКРЫТЫЕ бары: последний бар ISS ещё формируется,
+            # его close — не цена закрытия (аудит: совпадала в 31% филлов).
+            bars = _closed_bars(bars, _BARS_FETCHED_AT.get((symbol, days, 1)))
         self._bars_cache = bars
         self._bars_symbol = symbol
         if bars:
@@ -338,7 +420,14 @@ class LiveRuntime:
         if self._paper:
             # Virtual fill — record, do NOT touch the broker.
             oid = "paper-" + uuid4().hex[:10]
-            await self._record_trade(symbol, side, qty, price, oid, "paper")
+            if self._honest:
+                try:
+                    price, comm, src = await self._honest_fill(symbol, side, qty, price)
+                    # Пометка в order_id (отдельного поля нет): старые оптимистичные
+                    # филлы отличимы от новых, комиссия видна построчно.
+                    oid += f";{COST_TAG};{src};c={comm:.2f}"
+                except Exception as exc:  # noqa: BLE001 - издержки не роняют филл
+                    self.log(f"[PAPER] honest fill failed, old price: {exc!r}", level="warning")
             self.log(f"[PAPER] {side} {qty} {symbol} @ {price:.0f}")
             return Order(order_id=oid, symbol=symbol, side=side, qty=qty,
                          price=price, status="paper", fill_price=price)
@@ -378,6 +467,59 @@ class LiveRuntime:
         self.log(f"[LIVE] {side} {qty} {fin_sym} @ {price:.0f} -> {resp.status}")
         return Order(order_id=resp.order_id, symbol=symbol, side=side,
                      qty=qty, price=price, status=resp.status)
+
+    async def _honest_fill(self, symbol: str, side: str, qty: int,
+                           price: float) -> tuple[float, float, str]:
+        """(цена исполнения, комиссия ₽, источник спреда 'quote'|'est')."""
+        meta = await self._meta(symbol)
+        step = float(meta["price_step"])
+        pv = float(meta.get("point_value") or 0) or float(meta["price_step_value"]) / step
+        q = self._fresh_quote(symbol)
+        if q is not None:
+            fill, src = (q[1] if side == "buy" else q[0]), "quote"
+        else:
+            from trader.lab.commission import _base_ticker
+            k = HALF_SPREAD_STEPS.get(_base_ticker(symbol), HALF_SPREAD_STEPS_DEFAULT)
+            fill, src = price + (k * step if side == "buy" else -k * step), "est"
+        now_msk = _time.time() + _MSK_OFFSET
+        history = [(r["side"], int(r["qty"]), float(r["price"]),
+                    r["timestamp"].timestamp() + _MSK_OFFSET)
+                   for r in await self._paper_rows(symbol)]
+        comm = paper_commission(symbol, history, side, qty, fill, pv, now_msk)
+        return fill, comm, src
+
+    async def _meta(self, symbol: str) -> dict:
+        """Шаг цены и ₽/пункт из instrument_meta; нет строки — один раз тянем спеку с ISS."""
+        from trader.lab.market_store import get_instrument_meta, refresh_instrument_spec
+        meta = await get_instrument_meta(self._pool, symbol)
+        if not meta or not meta.get("price_step"):
+            meta = await refresh_instrument_spec(self._pool, symbol)
+        if not meta:
+            raise LookupError(f"no instrument_meta for {symbol}")
+        return meta
+
+    @staticmethod
+    def _fresh_quote(symbol: str) -> tuple[float, float] | None:
+        """(bid, ask) из котировок агента QUIK, если не старше 10 с; иначе None."""
+        if _QUOTE_SOURCE is None:
+            return None
+        t = _QUOTE_SOURCE.tick(symbol) or {}
+        bid, ask = float(t.get("bid") or 0), float(t.get("ask") or 0)
+        age = _time.time() * 1000 - float(t.get("received_at_unix_ms") or 0)
+        if bid > 0 and ask >= bid and age <= _QUOTE_MAX_AGE_MS:
+            return bid, ask
+        return None
+
+    async def _paper_rows(self, symbol: str) -> list:
+        if self._pool is None:
+            return []
+        async with self._pool.acquire() as conn:
+            return await conn.fetch(
+                """SELECT side, qty, price, timestamp FROM live_trades
+                   WHERE robot_id=$1 AND symbol=$2 AND status='paper'
+                   ORDER BY timestamp""",
+                self._robot_id, symbol,
+            )
 
     async def _shortable(self, fin_sym: str) -> bool:
         """
@@ -454,13 +596,7 @@ class LiveRuntime:
         """
         signed, avg = 0, 0.0
         if self._pool is not None:
-            async with self._pool.acquire() as conn:
-                rows = await conn.fetch(
-                    """SELECT side, qty, price FROM live_trades
-                       WHERE robot_id=$1 AND symbol=$2 AND status='paper'
-                       ORDER BY timestamp""",
-                    self._robot_id, symbol,
-                )
+            rows = await self._paper_rows(symbol)
             for r in rows:
                 qty = int(r["qty"])
                 px = float(r["price"])
