@@ -40,11 +40,10 @@ def test_filled_level_goes_dark_until_a_neighbour_fills():
     86080 — туда же продажа по 86080. Круг с нулевой прибылью и двойной
     комиссией; в этот день уровень −1 так отработал трижды подряд.
     """
-    so = _grid()
-    so.g_live = {"flip:-2": True}
-    assert so_mod.grid_places_here(so, -2) is False, "погасший уровень не выставляется"
-    assert so_mod.grid_places_here(so, -1) is True, "соседний живёт своей жизнью"
-    assert so_mod.grid_places_here(so, -3) is True
+    live = {"flip:-2": True}
+    assert so_mod.grid_places_here(live, -2) is False, "погасший уровень не выставляется"
+    assert so_mod.grid_places_here(live, -1) is True, "соседний живёт своей жизнью"
+    assert so_mod.grid_places_here(live, -3) is True
 
 
 def test_side_follows_the_market_not_the_ladder():
@@ -163,6 +162,17 @@ def _gstore(px):
     return S()
 
 
+import pytest as _pytest
+
+
+@_pytest.fixture(autouse=True)
+def _store_is_warm(monkeypatch):
+    """Замок прогрева склада заявок (после рестарта STL он пуст) к этим тестам
+    не относится: они проверяют геометрию, а не момент после перезапуска.
+    Отдельная проверка самого замка — test_nothing_is_placed_while_the_store_warms_up."""
+    monkeypatch.setattr("trader.api.quik_smart_orders._PROC_START_MS", 0)
+
+
 def _gbook(tmp_path):
     b = SmartOrderBook(str(tmp_path / "g.json"))
     so = SmartOrder(so_id=new_id(), kind="grid", code="RIZ6", side="buy", qty=1,
@@ -226,3 +236,36 @@ def test_fill_extinguishes_its_level_and_revives_the_neighbour(tmp_path):
     assert so.g_live.get("flip:-1") is True, "исполненный уровень обязан погаснуть"
     assert "flip:-2" not in so.g_live, "сосед обязан вернуться после филла рядом"
     assert so.g_pos != 0, "позиция сетки должна измениться на филле"
+
+
+def test_level_filled_this_pass_is_not_replaced_in_the_same_pass(tmp_path):
+    """ТОТ САМЫЙ БАГ, 01.10.2026: уровень продал ДВА контракта вместо одного.
+
+    Филл пишет пометку «уровень погас» в ЛОКАЛЬНУЮ копию состояния, а обратно в
+    заявку она ложится только в конце прохода. Проверка «ставить ли здесь»
+    читала СОХРАНЁННОЕ состояние — и в пределах того же прохода уровень выглядел
+    пустым. Сторож ставил новую заявку в ту же секунду, она тоже наливалась:
+    so:bf61895ca3:gp1:68221 налилась 13:29:51, :91790 выставлена в ту же секунду
+    и налилась 13:29:52.
+
+    Проверяем проход целиком: пока филл и проверка читают разные копии, чистые
+    функции этого не видят.
+    """
+    book, so = _gbook(tmp_path)                    # база 85000, шаг 100
+    lvl_price = so_mod.grid_price(so, 1)           # уровень +1 = 85100
+    so.g_live = {"1": "so:x:gp1"}
+    srv = GSrv()
+    ost = GOst()
+    ost.working_orders = lambda agent=None: [
+        {"client_id": "so:x:gp1", "order_id": "11", "state": "filled",
+         "filled": 1, "remaining": 0, "price": lvl_price}]
+    # рынок НИЖЕ уровня: продажа на нём законна и ничего другого её не блокирует
+    _grid_sync(book, _gstore(lvl_price - 50), ost, srv, GLim(), "9618", GSTEPS, {}, GNOW)
+
+    again = [m.place_order for m in srv.sent
+             if m.WhichOneof("payload") == "place_order"
+             and abs(m.place_order.price - lvl_price) < 1e-6]
+    assert again == [], (
+        f"на только что исполнившийся уровень {lvl_price:g} поставлена новая заявка — "
+        "это и есть второй контракт вместо одного")
+    assert so.g_live.get("flip:1") is True, "уровень обязан погаснуть"

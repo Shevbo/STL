@@ -373,9 +373,18 @@ def grid_levels(so: SmartOrder) -> list[int]:
     return [-i for i in range(1, so.g_buys + 1)] + [i for i in range(1, so.g_sells + 1)]
 
 
-def grid_consumed(so: SmartOrder, level: int) -> bool:
-    """Уровень уже отработал: на нём вошли, и лот от него сидит в позиции."""
-    return bool((so.g_live or {}).get(f"flip:{level}"))
+def grid_consumed(live: dict, level: int) -> bool:
+    """Уровень уже отработал: на нём вошли, и лот от него сидит в позиции.
+
+    Принимает САМ СЛОВАРЬ состояния, а не заявку. 01.10.2026 я написал эту
+    проверку читающей so.g_live, тогда как филл внутри прохода сторожа пишет в
+    ЛОКАЛЬНУЮ копию, а обратно она ложится только в конце цикла. В пределах
+    одного прохода пометка была не видна, уровень выглядел пустым — и сторож
+    ставил на него новую заявку в ту же секунду. Уровень 85560 так продал два
+    контракта вместо одного. Один источник истины вместо двух: кто пишет, тот и
+    читает.
+    """
+    return bool((live or {}).get(f"flip:{level}"))
 
 
 def grid_side_for(so: SmartOrder, level: int, price: float = 0.0) -> str:
@@ -394,13 +403,10 @@ def grid_side_for(so: SmartOrder, level: int, price: float = 0.0) -> str:
     return "buy" if level < 0 else "sell"
 
 
-def grid_places_here(so: SmartOrder, level: int) -> bool:
-    """Нужна ли заявка на этом уровне прямо сейчас.
-
-    На отработавшем уровне заявки быть не должно: его лот уже в позиции, и ждёт
-    он не повтора входа, а закрытия ступенью ближе к базе.
-    """
-    return not grid_consumed(so, level)
+def grid_places_here(live: dict, level: int) -> bool:
+    """Нужна ли заявка на этом уровне прямо сейчас. Погасший уровень ждёт филла
+    соседа, а не повтора входа по своей же цене."""
+    return not grid_consumed(live, level)
 
 
 def grid_stop_levels(so: SmartOrder) -> tuple[float, float]:
@@ -736,12 +742,32 @@ def protective_trail(parent: SmartOrder, entry_price: float, now: int) -> SmartO
     return _protective(parent, entry_price, now, "trail_sl")
 
 
+#: Дочерняя заявка создана, но ЕЩЁ НЕ ВЗВЕДЕНА: филл основной не подтверждён.
+#: active() берёт только "armed", поэтому спящая инертна по построению.
+WAITING = "waiting"
+
+
 def protective_children(parent: SmartOrder, entry_price: float, now: int) -> list[SmartOrder]:
     """Все заявки «после сделки» одной связкой. Стоп и подтягивающая взаимно
-    исключены валидацией, поэтому здесь их можно собирать не разбираясь."""
-    return [c for c in (protective_sl(parent, entry_price, now),
+    исключены валидацией, поэтому здесь их можно собирать не разбираясь.
+
+    РОЖДАЮТСЯ СПЯЩИМИ. 01.10.2026 основную заявку оператора на продажу 10
+    отверг коллар агента («price beyond collar», филл ноль) — а дочерняя защита
+    об этом не знала, была взведена сразу и через секунду КУПИЛА 10 контрактов:
+    чистая позиция, которой никто не заказывал. Уровни при этом считались от
+    предполагаемой цены входа 86060, которой в рынке не было, поэтому стоп
+    оказался позади рынка и сработал мгновенно.
+
+    Защита имеет смысл только для позиции, которая ОТКРЫЛАСЬ. Пока филл основной
+    не подтверждён фактом (таблицей сделок, а не фактом отправки заявки),
+    дочерняя спит; основная умерла без филла — дочерние снимаются вместе с ней.
+    """
+    kids = [c for c in (protective_sl(parent, entry_price, now),
                         protective_tp(parent, entry_price, now),
                         protective_trail(parent, entry_price, now)) if c is not None]
+    for c in kids:
+        c.status = WAITING
+    return kids
 
 
 def superseded_stops(book: list[SmartOrder], fresh: SmartOrder) -> list[SmartOrder]:
@@ -774,7 +800,11 @@ def rebase_protective(children: list[SmartOrder], parent: SmartOrder,
         return False
     moved = False
     for c in children:
-        if c.status != "armed" or c.parent_id != parent.so_id:
+        # СПЯЩИЕ ПЕРЕСЧИТЫВАЮТСЯ ТОЖЕ, и ради них всё и затевалось: дочерняя
+        # заявка ждёт подтверждения филла именно для того, чтобы встать от
+        # ФАКТИЧЕСКОЙ цены входа. Пропустить её здесь значило бы взвести потом
+        # по предполагаемой цене — той самой ошибке, от которой уходим.
+        if c.status not in ("armed", WAITING) or c.parent_id != parent.so_id:
             continue
         kind = c.kind
         if kind == "trail_tp":

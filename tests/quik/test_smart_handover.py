@@ -48,7 +48,13 @@ def _book_with_bracket(tmp_path, **kw):
                         trail_offset=50, status="fired", fired_price=87000, fired_qty=1,
                         fired_ms=NOW, created_ms=NOW, **kw)
     book.orders.append(parent)
-    book.orders.extend(protective_children(parent, 87000, NOW))
+    # Дочерние рождаются СПЯЩИМИ (01.10.2026): защита имеет смысл только для
+    # открывшейся позиции. Здесь филл основной считаем подтверждённым, поэтому
+    # взводим их сразу — как это делает сторож по факту таблицы сделок.
+    kids = protective_children(parent, 87000, NOW)
+    for k in kids:
+        k.status = "armed"
+    book.orders.extend(kids)
     return book, parent
 
 

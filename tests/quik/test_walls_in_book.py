@@ -70,6 +70,17 @@ def _book(tmp_path, **kw):
     return b, so
 
 
+import pytest as _pytest
+
+
+@_pytest.fixture(autouse=True)
+def _store_is_warm(monkeypatch):
+    """Замок прогрева склада заявок (после рестарта STL он пуст) к этим тестам
+    не относится: они проверяют геометрию, а не момент после перезапуска.
+    Отдельная проверка самого замка — test_nothing_is_placed_while_the_store_warms_up."""
+    monkeypatch.setattr("trader.api.quik_smart_orders._PROC_START_MS", 0)
+
+
 def _run(book, ost, srv, now=NOW, limits=None):
     return _walls_sync(book, FakeStore(), ost, srv, Lim(), "9618", STEPS,
                        limits or {}, now)
@@ -303,3 +314,31 @@ def test_wall_order_never_grows_position_against_the_corridor(tmp_path, market):
                  if m.WhichOneof("payload") == "place_order"]
         assert forbidden_side not in sides, (
             f"позиция {c_pos:+d} при рынке {market}: заявка доливает в ту же сторону")
+
+
+def test_nothing_is_placed_while_the_store_warms_up(tmp_path, monkeypatch):
+    """ЗАМОК ПРОГРЕВА СКЛАДА ЗАЯВОК, ценой шести контрактов вместо одного.
+
+    01.10.2026: склад заявок STL живёт в памяти и после рестарта пуст. Заявка
+    коридора, стоявшая в QUIK с до-рестартного времени, для STL перестала
+    существовать — и сторож поставил поверх живой ещё две (so:...:low:48830 и
+    :low:5891, обе налились по 2), а сверху выстрелил сам. Один коридор на объём
+    1 купил 6 контрактов.
+
+    Мирно стоящая заявка не порождает обновлений, поэтому «подождём, агент
+    пришлёт» не работает само: нужен явный запрет ставить, пока склад не прогрет.
+    """
+    import trader.api.quik_smart_orders as mod
+    monkeypatch.setattr(mod, "_PROC_START_MS", NOW - 1000)   # процесс только что встал
+    book, so = _book(tmp_path)
+    srv = FakeSrv()
+    _walls_sync(book, FakeStore(), FakeOst(), srv, Lim(), "9618", STEPS, {}, NOW)
+    placed = [m for m in srv.sent if m.WhichOneof("payload") == "place_order"]
+    assert placed == [], "пока склад не прогрет, в стакан не ставим"
+
+    # прогрелись — ставим как обычно
+    monkeypatch.setattr(mod, "_PROC_START_MS", NOW - mod._ORDER_STORE_WARMUP_MS - 1)
+    srv2 = FakeSrv()
+    _walls_sync(book, FakeStore(), FakeOst(), srv2, Lim(), "9618", STEPS, {}, NOW)
+    assert [m for m in srv2.sent if m.WhichOneof("payload") == "place_order"], \
+        "после прогрева стенки обязаны встать"

@@ -262,6 +262,8 @@ def test_conditional_kind_spawns_the_after_fill_pair():
     parent = so(kind="sl", side="buy", trigger_price=88000, qty=3,
                 sl_offset=300, tp_offset=500)
     kids = protective_children(parent, entry_price=89000, now=NOW)
+    for k in kids:                      # филл основной подтверждён — взводим
+        k.status = "armed"
     assert [(k.kind, k.side, k.trigger_price) for k in kids] == [
         ("sl", "sell", 88700), ("tp", "sell", 89500)]
     assert kids[0].oco_group == kids[1].oco_group != ""       # одна связка
@@ -348,6 +350,8 @@ def test_protective_pair_shares_one_oco_group():
     p = so(kind="trail_tp", side="buy", trail_offset=350, qty=14,
            sl_offset=300, tp_offset=500)
     kids = protective_children(p, entry_price=89_000, now=NOW)
+    for k in kids:                      # филл основной подтверждён — взводим
+        k.status = "armed"
     assert [k.kind for k in kids] == ["sl", "tp"]
     assert kids[0].oco_group and kids[0].oco_group == kids[1].oco_group
     assert kids[0].trigger_price == 88_700 and kids[1].trigger_price == 89_500
@@ -472,6 +476,7 @@ def test_trailing_take_after_long_entry_is_trail_tp():
 
 def test_trailing_take_rides_the_move_and_exits_on_retrace():
     (tp,) = protective_children(_long_parent(), entry_price=87000, now=NOW)
+    tp.status = "armed"                 # филл основной подтверждён — дочерняя взведена
     assert run([tp], last=87300) == [] and not tp.activated
     assert run([tp], last=87600) == [] and tp.activated
     assert run([tp], last=87800) == [] and tp.peak == 87800
@@ -571,3 +576,31 @@ def test_silent_instrument_is_named_by_its_lag_not_by_the_clock():
     assert silent_code("RIZ6", night) is None
     # Инструмента нет в кадре вовсе.
     assert silent_code("SRZ6", day)
+
+
+def test_protective_children_are_born_asleep():
+    """ДОЧЕРНЯЯ ЗАЯВКА РОЖДАЕТСЯ СПЯЩЕЙ.
+
+    01.10.2026 основную заявку оператора на продажу 10 отверг коллар агента
+    («price beyond collar», филл ноль), а взведённая сразу дочерняя защита через
+    секунду КУПИЛА 10 контрактов — чистая позиция, которой никто не заказывал.
+    Защита имеет смысл только для позиции, которая открылась.
+    """
+    from trader.quik.smart_orders import WAITING, protective_children
+    kids = protective_children(_long_parent(), entry_price=87000, now=NOW)
+    assert kids, "защита должна быть создана"
+    assert all(k.status == WAITING for k in kids)
+    # спящая невидима для сторожа: он берёт только взведённые
+    assert run(kids, last=99_000) == [], "спящая дочерняя не имеет права стрелять"
+
+
+def test_sleeping_child_levels_are_rebased_before_arming():
+    """Спящая пересчитывается на ФАКТИЧЕСКУЮ цену входа — ради этого она и ждёт.
+    Пропустить её в пересчёте значило бы взвести по предполагаемой цене, то есть
+    повторить ту же ошибку с другого конца."""
+    from trader.quik.smart_orders import protective_children, rebase_protective
+    parent = _long_parent()
+    kids = protective_children(parent, entry_price=87000, now=NOW)
+    before = [k.trigger_price for k in kids]
+    assert rebase_protective(kids, parent, 87100) is True
+    assert [k.trigger_price for k in kids] != before

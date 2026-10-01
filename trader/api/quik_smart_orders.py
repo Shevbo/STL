@@ -569,6 +569,24 @@ _PROC_START_MS = so_mod.now_ms()
 # там, где QUIK налил все 19 (06.08.2026). Дальше суток смотреть незачем —
 # неисполненный остаток снимает граница сессии, это ловит _mark_orphans.
 _FILL_TRACK_MS = 24 * 3600 * 1000
+# СКЛАД ЗАЯВОК ЖИВЁТ В ПАМЯТИ И ПУСТ ПОСЛЕ РЕСТАРТА. Заявка, стоящая в QUIK с
+# до-рестартного времени, для STL не существует, пока агент не пришлёт по ней
+# обновление, — а мирно стоящая заявка обновлений не порождает ВООБЩЕ.
+#
+# 01.10.2026 это стоило оператору шести контрактов вместо одного: после моего
+# рестарта в 12:43 сторож не увидел живую стенку коридора и поставил поверх неё
+# новую (so:4e99b8c5ef:low:48830 и :low:5891 — обе налились по 2), а сверху
+# выстрелил сам. Один коридор на объём 1 купил 6.
+#
+# Пока склад не прогрелся, НОВЫЕ заявки в стакан не ставим: пропущенная минута
+# стояния дешевле дубля на живых деньгах. Снятие и перестановка известных заявок
+# при этом работают — они опираются на то, что в складе уже есть.
+#
+# ПОТОЛОК ЭТОГО ЗАМКА, ЗНАТЬ О НЁМ: он закрывает окно после рестарта, но не
+# случай, когда агент молчал дольше прогрева. Структурно правильно, чтобы STL
+# восстанавливал склад из агента при переподключении (у менеджера агента есть
+# SnapshotWorking) — это отдельная работа по протоколу.
+_ORDER_STORE_WARMUP_MS = 90_000
 # Передача защиты под охрану терминала. Столько ждём регистрации стоп-заявки в
 # QUIK; не дождались - возвращаем защиту сторожу STL и будим оператора. Ждать
 # долго нельзя: всё это время позиция защищена только нашими заявками, а они
@@ -1114,6 +1132,23 @@ def _mark_orphans(book: SmartOrderBook, ost: Any, agent: str, now: int) -> bool:
             so.status = "orphaned"
             so.note = "дочерняя заявка не найдена: снята на границе сессии"
             dirty = True
+    # ОСНОВНАЯ УМЕРЛА БЕЗ ФИЛЛА — спящие дочерние снимаются вместе с ней. Иначе
+    # они дождались бы своего часа и открыли позицию под защиту, которой нет
+    # (01.10.2026: отвергнутая коллaром продажа 10 и купившая 10 дочерняя).
+    for so in book.orders:
+        if so.status not in ("orphaned", "cancelled", "error", "expired"):
+            continue
+        if so.fired_qty > 0:
+            continue                       # филл был: дочерние законны
+        for kid in book.orders:
+            if kid.parent_id == so.so_id and kid.status == so_mod.WAITING:
+                kid.status = "cancelled"
+                kid.note = (f"основная заявка {so.so_id} завершилась без филла "
+                            f"({so.status}): защищать нечего")
+                dirty = True
+                so_journal.record("cancelled", kid, so_journal.WATCHER, kid.note, now_ms=now)
+                log.info("smart_order.child_dropped", child=kid.so_id, parent=so.so_id,
+                         parent_status=so.status)
     return dirty
 
 
@@ -1203,6 +1238,22 @@ def _track_fills(book: SmartOrderBook, ost: Any, store: Any, agent: str) -> bool
             # заявки ещё взведены.
             if so_mod.rebase_protective(book.orders, so, px):
                 log.info("smart_order.protective_rebased", parent=so.so_id, entry=px)
+            # ФИЛЛ ПОДТВЕРЖДЁН ФАКТОМ — только теперь дочерние защитные заявки
+            # имеют смысл и взводятся. До этого они спят: 01.10.2026 основную
+            # заявку на продажу 10 отверг коллар, филла не было ни одного, а
+            # взведённая сразу дочерняя купила 10 контрактов. Уровни к этому
+            # моменту уже пересчитаны на ФАКТИЧЕСКУЮ цену входа (строкой выше),
+            # поэтому взводим после rebase, а не до.
+            for kid in book.orders:
+                if kid.parent_id == so.so_id and kid.status == so_mod.WAITING:
+                    kid.status = "armed"
+                    dirty = True
+                    so_journal.record("armed", kid, so_journal.WATCHER,
+                                      f"филл основной подтверждён ({vol} по {px:g}): "
+                                      f"дочерняя защита взведена, уровень "
+                                      f"{kid.trigger_price:g}", now_ms=so_mod.now_ms())
+                    log.info("smart_order.child_armed", child=kid.so_id,
+                             parent=so.so_id, entry=px, trigger=kid.trigger_price)
     return dirty
 
 
@@ -1593,7 +1644,7 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
                 dirty = True
             # Погасший уровень не выставляем: он ждёт филла соседа, а не повтора
             # входа по своей же цене.
-            if not so_mod.grid_places_here(so, level):
+            if not so_mod.grid_places_here(live, level):
                 cid_old = live.pop(key, "")
                 rec_old = work.get(cid_old) or {}
                 if rec_old.get("order_id"):
@@ -1608,6 +1659,10 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
             # исполняется мгновенно, и сетка вместо ожидания начинает лить.
             if price > 0 and ((side == "sell" and px <= price)
                               or (side == "buy" and px >= price)):
+                continue
+            if now - _PROC_START_MS < _ORDER_STORE_WARMUP_MS:
+                # Склад заявок пуст после рестарта — см. _ORDER_STORE_WARMUP_MS.
+                # Уровень сетки в QUIK может стоять живым и невидимым для STL.
                 continue
             if not price_within_limits(px, limits):
                 # ЗА ПЛАНКОЙ БИРЖИ. Не выставляем и не считаем это ошибкой:
@@ -1771,6 +1826,24 @@ def _walls_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
                 except Exception as exc:  # noqa: BLE001
                     log.warning("smart_order.wall_move_failed", so_id=so.so_id, error=str(exc))
                 continue
+            # Пока склад заявок не прогрелся после рестарта — не ставим.
+            if now - _PROC_START_MS < _ORDER_STORE_WARMUP_MS:
+                if live.get(f"warm:{wall}") != 1:
+                    live[f"warm:{wall}"] = 1
+                    dirty = True
+                    so_journal.record(
+                        "held", so, so_journal.WATCHER,
+                        f"стенка {wall} не выставлена: склад заявок прогревается после "
+                        f"рестарта ({(now - _PROC_START_MS) // 1000} с из "
+                        f"{_ORDER_STORE_WARMUP_MS // 1000}). Ставить вслепую нельзя — "
+                        "в QUIK может стоять своя же заявка.", now_ms=now)
+                continue
+            live.pop(f"warm:{wall}", None)
+            # Хвост остаётся СЛУЧАЙНЫМ намеренно. Детерминированное имя выглядит
+            # аккуратнее, но менять схему имён, пока в рынке живут заявки со
+            # старой, значит ровно воспроизвести чинимый баг: сторож счёл бы их
+            # чужими и поставил бы дубли (01.10.2026, 26 живых заявок у
+            # оператора в момент правки).
             new_cid = f"so:{so.so_id}:{wall}:{now % 100000}"
             try:
                 validate_place(lim, code=so.code, quantity=qty,
