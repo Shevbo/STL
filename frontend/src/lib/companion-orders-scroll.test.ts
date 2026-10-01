@@ -68,6 +68,9 @@ describe('перерисовка возвращает прокрутку зая�
       renderPositions: stub, renderRobots: stub, robotsTotal: stub,
       manualTotal: stub, renderWatch: stub, renderAlerts: stub, alertsToggle: stub, renderFlash: stub, renderExpiry: stub,
       renderOrders: () => '<div class="ord-box">много строк</div>',
+      // Таблица заявок терминала рисуется рядом с группами и к прокрутке
+      // отношения не имеет: заглушаем, чтобы тест проверял своё.
+      renderTerminal: () => '',
     });
     expect(scrollSurvives(paint)).toBe(42);
   });

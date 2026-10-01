@@ -111,6 +111,9 @@
   .pnlbox.down { color: var(--down); }
   /* ID заявки: оператор называет его в разборе, значит он должен быть на
      экране, а не только в ленте журнала. */
+  .otag { font-size: 10px; color: var(--faint); margin-right: 6px;
+          border: 1px solid currentColor; border-radius: 3px; padding: 0 3px; }
+  .row.dim { opacity: .55; }
   .soid { font-size: 10px; color: var(--faint); margin-right: 6px; white-space: nowrap; }
   .row.total { border-left-width: 4px; }
   .row.total .k { color: var(--ink); font-weight: 600; }
@@ -1269,6 +1272,59 @@ function pnlBox(p) {
     ` · сделок ${p.fills || 0}, объём ${p.lots || 0} контр.">[${parts.join(' · ')}]</span>`;
 }
 
+// Природа заявки в таблице терминала — ЯРЛЫК, а не фильтр. До 01.10.2026 панель
+// выбрасывала роботные, recon и stl-so* строки ДО показа, и живых заявок в QUIK
+// у неё не бывало в принципе. Жалоба оператора дословно: «не вижу активные
+// заявки в квике вне зависимости от их природы, не могу их снять». Заявка стоит
+// в рынке и торгует деньгами — она обязана быть на экране, кто бы её ни ставил.
+const ORIGIN_RU = {
+  manual: 'руками',
+  smart: 'умная STL',
+  robot: 'робот',
+  recon: 'выравнивание',
+  external: 'приложение брокера',
+};
+function originTag(r) {
+  // Незнакомую природу показываем КАК ЕСТЬ: новый вид источника не должен
+  // исчезнуть с экрана только потому, что панель о нём не слышала.
+  const name = ORIGIN_RU[r.origin] || r.origin || '—';
+  return `<span class="otag nw" title="кто поставил эту заявку${r.so_id ? ' · умная заявка ' + r.so_id : ''}">${esc(name)}</span>`;
+}
+// Таблица заявок терминала целиком. Пустой список при terminal_stale означает
+// НЕ ЗНАЮ, а не «заявок нет»: зеркала агента нет или оно встало. Это ровно та
+// ложь пустотой, из-за которой пустое поле читается как ноль.
+function renderTerminal(o) {
+  if (!o || o.terminal == null) return '';     // старый сервер — блока нет вовсе
+  const live = o.terminal || [], done = o.terminal_done || [];
+  const rows = (ordDone ? live.concat(done) : live);
+  const n = ordDone ? (o.terminal_total ?? rows.length) : (o.terminal_active ?? live.length);
+  let body = '';
+  if (o.terminal_stale) {
+    body = '<div class="empty">таблица заявок терминала недоступна: зеркало агента не отвечает. ' +
+      'Это значит «не знаю», а НЕ «в терминале пусто».</div>';
+  } else if (!rows.length) {
+    body = '<div class="empty">в терминале заявок нет</div>';
+  } else {
+    body = rows.map((r) =>
+      `<div class="row${r.active ? '' : ' dim'}">` +
+      `<span class="k">${esc(r.sec)} ${r.side === 'buy' ? 'покупка' : 'продажа'} ${esc(String(r.qty))}</span>` +
+      `<span class="sub">по ${px(r.price)}${r.filled ? ' · исполнено ' + r.filled : ''}` +
+      `${r.balance && r.active ? ' · остаток ' + r.balance : ''}</span>` +
+      `${originTag(r)}${pnlBox(r.pnl)}<span class="sp"></span>` +
+      `<span class="soid" title="номер заявки в QUIK">${esc(String(r.num || ''))}</span>` +
+      `<span class="v ${r.active ? 'up' : 'nil'}">${esc(r.state || (r.active ? 'активна' : 'снята'))}</span></div>`
+    ).join('');
+  }
+  // Разметка и поведение группы — те же, что у остальных: раскрытие живёт в
+  // ordOpen, заголовок кликается по data-ord. Своя вёрстка здесь означала бы
+  // группу, которая выглядит и ведёт себя иначе без всякой причины.
+  const open = ordOpen.has('terminal');
+  return `<div class="ord-g" data-ord="terminal">` +
+    `<span class="ord-chev">${open ? '▴' : '▾'}</span>` +
+    `<span class="k">Заявки терминала QUIK — ВСЕ</span><span class="sp"></span>` +
+    `<span class="ord-n">${n}</span></div>` + (open ? body : '');
+}
+
 function renderOrders(o, d) {
   if (!o) return '<div class="empty">ручных заявок нет</div>';
   const sideRu = (s) => s === 'buy' ? 'покупка' : 'продажа';
@@ -1531,7 +1587,7 @@ function paintPanel(d) {
       `</span></div>
       ${robotsTotal(d.robots)}${renderRobots(d.robots)}
     <div class="sec">заявки ручные <a href="#/orders">подробно ↗</a>
-      <a href="#/journal">журнал ↗</a></div>${manualTotal((d.orders || {}).today)}${manualDay(d.manual)}${renderOrders(d.orders, d)}
+      <a href="#/journal">журнал ↗</a></div>${manualTotal((d.orders || {}).today)}${manualDay(d.manual)}${renderTerminal(d.orders)}${renderOrders(d.orders, d)}
     <div class="sec">вотчер <a href="#/watch">подробно ↗</a></div>${renderWatch(d.watch, d.trading_block)}
     <div class="sec">уведомления <a href="#/watch">детали ↗</a>
       <span class="sp" style="flex:1"></span><span class="copy" id="copyAlerts">копировать</span>
@@ -1596,7 +1652,7 @@ function paintOrders(d) {
     <div class="h1">Ручные заявки</div>
     <div class="hint">Только чтение: заявки оператора (без тега робота) из таблицы QUIK
       и умные заявки из книги STL. Пока STL лежит, умные заявки не срабатывают.</div>
-    <div class="sec">заявки</div>${renderOrders(d.orders, d)}
+    <div class="sec">заявки</div>${renderTerminal(d.orders)}${renderOrders(d.orders, d)}
     <div class="sec">позиции</div>${renderPositions(d.positions)}
     <div class="sec">счёт</div>${renderAccount(d.account)}`;
 }
