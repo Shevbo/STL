@@ -101,4 +101,7 @@ export type WsIncoming =
   | { type: 'ohlc_update'; symbol: string; time: number; open: number; high: number; low: number; close: number; volume: number }
   | { type: 'orderbook'; symbol: string; bids: OrderBookLevel[]; asks: OrderBookLevel[] }
   | { type: 'order_update'; orders: OpenOrder[] }
-  | { type: 'trade_update'; trades: TradeFill[] };
+  | { type: 'trade_update'; trades: TradeFill[] }
+  // Источник позиций и счёта запаркован (Finam отдаёт 500/503 с 28.09.2026,
+  // оператор парковал его до востребования). Пустой reason = паузу сняли.
+  | { type: 'exchange_paused'; interface: string; reason: string };

@@ -674,3 +674,43 @@ export function groupByOrder<T extends LedgerFill>(rows: T[]): Array<{
                    price: o.qty ? o.notional / o.qty : 0, order_id: o.order_id, pos_after: o.pos_after }))
     .sort((a, b) => a.time - b.time);
 }
+
+/* ── Честная бумажная наливка (backtests, 01.10.2026) ──────────────────────
+ *  Бумажные филлы, посчитанные с издержками (полспреда + комиссия тейкера +
+ *  решения по закрытому бару), помечены `;honest_v1;` в order_id. До этого
+ *  бумага наливалась по цене бара без спреда и выглядела лучше, чем была бы.
+ *
+ *  Подпись обязана быть, потому что в одном списке теперь соседствуют числа
+ *  ДВУХ разных методик, и без пометки читатель сравнивает несравнимое.
+ */
+
+const HONEST_TAG = ';honest_v1;';
+
+export function isHonestPaperFill(fill: { order_id?: string; id?: string } | null | undefined): boolean {
+  const id = String(fill?.order_id ?? fill?.id ?? '');
+  return id.includes(HONEST_TAG);
+}
+
+/** Подпись для витрины: с какой даты сделки робота посчитаны с издержками.
+ *
+ *  Дату берём из САМОГО РАННЕГО помеченного филла, а не из календаря: написать
+ *  «с 01.10» у робота, который начал считаться честно позже, значит объявить
+ *  честными числа, которые ими не были. Помеченных филлов нет — подписи нет.
+ *
+ *  `time` у филлов — unix-секунды, как во всей аналитике.
+ */
+export function honestPaperNote(
+  fills: Array<{ order_id?: string; id?: string; time?: number }> | null | undefined,
+): string {
+  let from = 0;
+  for (const f of fills ?? []) {
+    if (!isHonestPaperFill(f)) continue;
+    const t = Number(f.time) || 0;
+    if (t > 0 && (from === 0 || t < from)) from = t;
+  }
+  if (!from) return '';
+  const d = new Date(from * 1000).toLocaleDateString('ru-RU', {
+    timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit',
+  });
+  return `бумага с издержками с ${d}`;
+}

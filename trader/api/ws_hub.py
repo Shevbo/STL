@@ -53,6 +53,7 @@ class WsHub:
         get_token: Callable[[], Awaitable[str]] | None = None,
         account_id: str = "",
         timeframe: int = 5,
+        interface: Callable[[], str] | None = None,
     ) -> None:
         self._feed = feed
         self._pos_client = pos_client
@@ -63,6 +64,18 @@ class WsHub:
         self._get_token = get_token
         self._account_id = account_id
         self._timeframe = timeframe
+        # ПАРКОВКА FINAM. Опрос позиций ходит в Finam REST, который с 28.09.2026
+        # отдаёт 500/503 тысячами в сутки (29.09 — 1235, 30.09 — 1053). Оператор
+        # решил парковать Finam до востребования, и гейт взят СУЩЕСТВУЮЩИЙ —
+        # settings.exchange_interface, который он и так переключает на лету
+        # (письмо real-trade 01.10.2026). Новый флаг означал бы два выключателя
+        # на одну лампочку: переключили интерфейс, а опрос всё сыплет.
+        #
+        # Читаем через функцию, а не значением: переключатель мутирует Settings
+        # прямо в процессе, и снятая на старте копия заморозила бы выбор до
+        # рестарта — то есть ровно лишила бы парковку смысла «одним щелчком».
+        self._interface = interface or (lambda: "finam")
+        self._paused_sent = False
         self._clients: dict[object, asyncio.Queue] = {}
         self._broadcast_tasks: list[asyncio.Task] = []
         self._pos_poll_task: asyncio.Task | None = None
@@ -257,6 +270,25 @@ class WsHub:
             # client connects. No point polling positions/orders into the void.
             if not self._clients:
                 continue
+            # FINAM ЗАПАРКОВАН — в сеть не ходим вовсе. И говорим об этом экрану:
+            # молча замолчавшие позиции читаются как «позиций нет», а пустое поле
+            # не ноль. Сообщение шлём ОДИН раз на смену состояния, а не каждые
+            # пять секунд: повторяющаяся плашка перестаёт читаться.
+            if self._interface() != "finam":
+                if not self._paused_sent:
+                    self._paused_sent = True
+                    await self._broadcast({
+                        "type": "exchange_paused",
+                        "interface": self._interface(),
+                        "reason": "Finam на паузе: источник данных переключён. "
+                                  "Позиции и счёт берутся из QUIK, эти поля не обновляются.",
+                    })
+                continue
+            if self._paused_sent:
+                # Вернулись на Finam — снимаем плашку тем же каналом.
+                self._paused_sent = False
+                await self._broadcast({"type": "exchange_paused", "interface": "finam",
+                                       "reason": ""})
             try:
                 # Portfolio + account summary are independent — fetch concurrently.
                 positions, summary = await asyncio.gather(

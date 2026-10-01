@@ -108,6 +108,10 @@ async def lifespan(app: FastAPI):
         base_url=settings.finam_api_base_url,
         get_token=auth.get_token,
         account_id=account_id,
+        # Тот же переключатель, что выбирает брокер-адаптер. Он операторский и
+        # меняется на лету, поэтому и парковка Finam, и расконсервация — один
+        # щелчок, без рестарта и без второго флага.
+        interface=lambda: getattr(settings, "exchange_interface", "finam"),
     )
     tx = TxClient(
         base_url=settings.finam_api_base_url,
@@ -355,6 +359,16 @@ async def lifespan(app: FastAPI):
     app.state.quik_store = quik_store
     app.state.quik_server = quik_server
     app.state.quik_order_store = quik_order_store
+    # ЧЕСТНАЯ БУМАЖНАЯ НАЛИВКА берёт встречный best из котировок агента (просьба
+    # backtests 01.10.2026, коммит 91f592c). Без источника все бумажные филлы
+    # идут по ОЦЕНКЕ — цена закрытого бара со сдвигом в долю шага, — и бумага
+    # выглядит лучше, чем была бы. Отдаём тот же store, что читают экраны: два
+    # источника котировок разошлись бы между собой.
+    try:
+        from trader.lab.runtime import set_quote_source
+        set_quote_source(quik_store)
+    except Exception as exc:  # noqa: BLE001 — наливка не имеет права ронять старт
+        log.warning("paper.quote_source_failed", error=str(exc))
     # Форвардер тревог кладём в state ЯВНО: он нужен не только gRPC-серверу, но и
     # фоновым сторожам. 20.08 сторож молчания агента искал его в state, не находил
     # и молча ничего не делал — агент лежал 73 минуты при открытой бирже, тревоги

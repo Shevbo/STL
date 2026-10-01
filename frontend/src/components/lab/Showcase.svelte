@@ -6,7 +6,8 @@
   import { onMount, onDestroy } from 'svelte';
   import { fetchWithAuth } from '../../lib/fetch-auth';
   import RobotIdentity from './RobotIdentity.svelte';
-  import { toFills, rolledPnl, openVm, annualizedPct, exitShort, exitIsProfit } from '../../lib/lab-analytics';
+  import { toFills, rolledPnl, openVm, annualizedPct, exitShort, exitIsProfit,
+           honestPaperNote } from '../../lib/lab-analytics';
   import { fetchAgentRobots, openAgentRobot, type AgentRobotRow } from '../../lib/agent-robots';
   import RobotWindow from './RobotWindow.svelte';
 
@@ -52,6 +53,11 @@
       : (robot.deployed_at ? Date.parse(robot.deployed_at) : 0);
     return {
       net, fix: r.net, vm,
+      // ДВЕ МЕТОДИКИ В ОДНОМ СПИСКЕ. С 01.10.2026 бумажные филлы считаются с
+      // издержками (полспреда + комиссия тейкера), и помечены ;honest_v1; в
+      // order_id. Раньше бумага наливалась по цене бара и выглядела лучше, чем
+      // была бы; без подписи соседние строки сравнивают несравнимое.
+      honestNote: honestPaperNote(fills),
       retPct: margin > 0 ? (net / margin) * 100 : 0,
       position: r.position,
       trades: r.closes,
@@ -323,6 +329,13 @@
                   {#if r.retire_comment}
                     <span class="retire-note" title={r.retire_comment}>📝</span>
                   {/if}
+                  <!-- Подпись методики. Соседние строки могут быть посчитаны
+                       по-разному, и об этом надо сказать в строке, а не в
+                       легенде: легенду к моменту сравнения уже не читают. -->
+                  {#if s.honestNote}
+                    <span class="honest-note"
+                          title="полспреда + комиссия тейкера + решения по закрытому бару; до этой даты бумага наливалась по цене бара и выглядела лучше">{s.honestNote}</span>
+                  {/if}
                 </td>
                 <td class="sc-sym">{r.symbol || '—'}</td>
                 <td class="num sc-pnl" class:pos={s.net > 0} class:neg={s.net < 0}
@@ -510,6 +523,7 @@
     white-space: nowrap; font-size: 10px; color: #ff9800; background: #1a1000;
     border: 1px solid #ff980033; border-radius: 10px; padding: 2px 8px;
   }
+  .honest-note { margin-left: 6px; font-size: 10px; color: #e0a35c; white-space: nowrap; }
   .retire-note { font-size: 11px; cursor: help; }
 
   /* Modal */

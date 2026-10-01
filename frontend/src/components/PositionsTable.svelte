@@ -1,6 +1,7 @@
 <!-- frontend/src/components/PositionsTable.svelte -->
 <script lang="ts">
   import type { Position } from '$lib/types';
+  import { feedPauseStore } from '$lib/stores/feed-pause.svelte';
 
   let { positions }: { positions: Position[] } = $props();
 
@@ -30,7 +31,12 @@
 
 <section class="positions-panel">
   <div class="panel-title">Позиции</div>
-  {#if positions.length === 0}
+  <!-- ПАУЗА ИСТОЧНИКА — СОСТОЯНИЕ, А НЕ ПУСТОТА. «Нет открытых позиций» при
+       запаркованном Finam это ложь: позиции есть, их просто некому обновить
+       (предупреждение real-trade 01.10.2026 — пустое поле не ноль). -->
+  {#if feedPauseStore.paused}
+    <div class="paused">{feedPauseStore.reason}</div>
+  {:else if positions.length === 0}
     <div class="empty">Нет открытых позиций</div>
   {:else}
     <div class="table-wrap">
@@ -75,6 +81,7 @@
     margin-bottom: 6px;
   }
   .empty { color: #444; font-size: 11px; padding: 4px 0; }
+  .paused { color: #e0a35c; font-size: 11px; padding: 4px 0; }
   .table-wrap { overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; }
   th {

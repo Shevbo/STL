@@ -9,6 +9,7 @@ import { candlesStore } from './stores/candles.svelte';
 import { orderbookStore } from './stores/orderbook.svelte';
 import { ordersStore } from './stores/orders.svelte';
 import { tradesStore } from './stores/trades.svelte';
+import { feedPauseStore } from './stores/feed-pause.svelte';
 
 export class WsClient {
   private ws: WebSocket | null = null;
@@ -95,6 +96,11 @@ export class WsClient {
         ordersStore.set(msg.orders);
       } else if (msg.type === 'trade_update') {
         tradesStore.set(msg.trades);
+      } else if (msg.type === 'exchange_paused') {
+        // Замолчавшие позиции без подписи читаются как «позиций нет», а пустое
+        // поле не ноль (предупреждение real-trade 01.10.2026). Поэтому пауза —
+        // состояние экрана, а не отсутствие сообщений.
+        feedPauseStore.set(msg.reason || '');
       }
     }
   }

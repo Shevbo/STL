@@ -186,6 +186,83 @@ async def test_pos_poll_broadcasts_position_update():
     assert msg["positions"][0]["symbol"] == "GZM6@RTSX"
 
 
+# --- парковка Finam ---
+#
+# Finam REST отдаёт 500/503 четвёртые сутки (29.09.2026 — 1235 раз, 30.09 — 1053),
+# оператор решил парковать его до востребования. Гейт взят СУЩЕСТВУЮЩИЙ —
+# settings.exchange_interface: новый флаг означал бы два выключателя на одну
+# лампочку, и переключённый интерфейс оставлял бы опрос сыпать (real-trade 01.10).
+
+async def test_poll_does_not_touch_finam_while_parked():
+    """Интерфейс не finam — в сеть не ходим ВОВСЕ, а не глотаем ошибки."""
+    feed = make_mock_feed()
+    pos_client = AsyncMock()
+    hub = WsHub(feed, pos_client=pos_client, interface=lambda: "quik")
+    hub._clients[MagicMock()] = asyncio.Queue(maxsize=50)
+
+    task = asyncio.create_task(hub._pos_poll_loop(poll_interval=0.05))
+    await asyncio.sleep(0.16)
+    task.cancel()
+    with pytest.raises((asyncio.CancelledError, Exception)):
+        await task
+
+    pos_client.get_portfolio.assert_not_awaited()
+    pos_client.get_account_summary.assert_not_awaited()
+
+
+async def test_parked_poll_says_so_once_not_every_round():
+    """Экран узнаёт о паузе словами, и ровно один раз на смену состояния.
+
+    Молча замолчавшие позиции читаются как «позиций нет», а пустое поле не ноль.
+    Повторяющаяся каждые пять секунд плашка перестаёт читаться — это тот же вред
+    с другой стороны."""
+    feed = make_mock_feed()
+    hub = WsHub(feed, pos_client=AsyncMock(), interface=lambda: "quik")
+    q: asyncio.Queue = asyncio.Queue(maxsize=50)
+    hub._clients[MagicMock()] = q
+
+    task = asyncio.create_task(hub._pos_poll_loop(poll_interval=0.05))
+    await asyncio.sleep(0.26)
+    task.cancel()
+    with pytest.raises((asyncio.CancelledError, Exception)):
+        await task
+
+    msgs = [q.get_nowait() for _ in range(q.qsize())]
+    paused = [m for m in msgs if m["type"] == "exchange_paused"]
+    assert len(paused) == 1
+    assert "пауз" in paused[0]["reason"].lower()
+
+
+async def test_unparking_is_announced_and_polling_resumes():
+    """Вернули finam — плашка снимается тем же каналом, опрос оживает."""
+    feed = make_mock_feed()
+    pos_client = AsyncMock()
+    pos_client.get_portfolio.return_value = []
+    pos_client.get_account_summary.return_value = AccountSummary(
+        deposit=Decimal("1"), free=Decimal("1"), in_position=Decimal("0"),
+        variation_margin=Decimal("0"),
+    )
+    iface = {"v": "quik"}
+    hub = WsHub(feed, pos_client=pos_client, interface=lambda: iface["v"])
+    q: asyncio.Queue = asyncio.Queue(maxsize=50)
+    hub._clients[MagicMock()] = q
+
+    task = asyncio.create_task(hub._pos_poll_loop(poll_interval=0.05))
+    await asyncio.sleep(0.12)
+    iface["v"] = "finam"
+    await asyncio.sleep(0.12)
+    task.cancel()
+    with pytest.raises((asyncio.CancelledError, Exception)):
+        await task
+
+    msgs = [q.get_nowait() for _ in range(q.qsize())]
+    kinds = [m["type"] for m in msgs]
+    assert kinds.count("exchange_paused") == 2       # встала и снялась
+    assert msgs[-1 if kinds[-1] != "exchange_paused" else 0]["type"] in (
+        "position_update", "account", "exchange_paused")
+    pos_client.get_portfolio.assert_awaited()
+
+
 # --- connect / disconnect ---
 
 async def test_connect_accepts_websocket():
