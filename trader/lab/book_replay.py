@@ -91,11 +91,46 @@ class BookRuntime(BacktestRuntime):
     исполняет обычный рантайм, но по реальной встречной стороне. Снимка нет (дыра в
     архиве, ночь, рестарт STL) — падаем на поведение базового класса, и такие филлы
     считаются в stats['no_book']: смешивать их с измерением нельзя.
+
+    РЕЖИМ ИСПОЛНЕНИЯ exec_mode (01.10, docs/execution-cost-program.md):
+      "walk" (умолчание) — рыночная заявка проходит стакан на весь объём (VWAP).
+        На 516 якорях lxk22 (RIU6) завышает: 15.4 пт/лот на 11+ при факте 6.55.
+      "touch" — как живой раннер (robot_runner/runtime.py:165-177): лимит по
+        встречному best. Сразу исполняется min(qty, объём на best) по best,
+        остаток встаёт в очередь отложенных лимиток по той же цене. Доливка в
+        advance() по снимкам между моментом заявки и следующим баром, правило
+        touch_fill: "opt" — встречный best не хуже нашей цены, долив = видимый
+        объём на уровнях не хуже нашей цены; "pess" — best прошёл нашу цену
+        насквозь, долив всего остатка. Окно доливки = min(touch_ttl_s, до
+        следующего on_bar): вживую host.py:476-490 снимает рабочие заявки перед
+        КАЖДЫМ баром, поэтому остаток дольше бара не живёт ни там, ни здесь (и
+        стратегия не настакивает повторы поверх висящего остатка).
+        Не долилось: touch_ttl_action="cancel" (умолчание) — остаток снят,
+        стратегия на следующем баре видит фактическую позицию и сама решает,
+        переслать ли заявку (ровно как вживую); "market" — остаток добивается
+        проходом стакана по снимку конца окна, позиция всегда сходится с
+        намерением (для стратегий, которые ведут свою позицию в state и не
+        переживают недолив).
+        Выбран "cancel": движок бэктеста (backtest.py) берёт позицию из
+        _positions и сделки из get_orders(), мгновенного полного исполнения он не
+        требует; стратегии библиотеки вживую уже живут с недоливом, и бэктест с
+        "market" был бы не той же механикой, что раннер.
+        Ограничения: stats spread/slip/drift считаются только по немедленной части
+        (по best); доливки и добор в stats["touch_*"]. Остаток на последнем баре
+        прогона не доливается (advance() вернул False — дальше снимков не берём).
     """
 
     def __init__(self, *a, book: tuple[list[int], list[tuple]] | None = None,
-                 max_gap_s: int = 60, **kw) -> None:
+                 max_gap_s: int = 60, exec_mode: str = "walk", touch_fill: str = "opt",
+                 touch_ttl_s: int = 60, touch_ttl_action: str = "cancel", **kw) -> None:
         super().__init__(*a, **kw)
+        if exec_mode not in ("walk", "touch") or touch_fill not in ("opt", "pess") \
+                or touch_ttl_action not in ("cancel", "market"):
+            raise ValueError(f"exec_mode={exec_mode} touch_fill={touch_fill} "
+                             f"touch_ttl_action={touch_ttl_action}")
+        self._exec_mode, self._touch_fill = exec_mode, touch_fill
+        self._touch_ttl, self._touch_action = touch_ttl_s, touch_ttl_action
+        self._pending: list[dict] = []
         self._bt, self._bb = book or ([], [])
         # ПОРОГ СВЕЖЕСТИ. В архиве есть провалы (рестарт STL, молчание агента): без
         # порога заявка находила «ближайший» снимок трёхсуточной давности и замер мерил
@@ -109,7 +144,10 @@ class BookRuntime(BacktestRuntime):
                       # СРЕДНЕЕ ПО СПРЕДУ ВРЁТ: медиана полспреда RIU6 = 5 пт, а среднее
                       # 7.8 — хвост делают ночь и предоткрытие (03:00 медиана 180 пт).
                       # Поэтому храним пофилловые значения и час МСК каждого филла.
-                      "spread_each": [], "hour_each": [], "drift_each": []}
+                      "spread_each": [], "hour_each": [], "drift_each": [],
+                      # exec_mode="touch": лотов встало остатком / долито по лимиту /
+                      # снято / добито рынком.
+                      "touch_rest": 0, "touch_late": 0, "touch_unfilled": 0, "touch_market": 0}
 
     def _snapshot(self, ts: int):
         i = bisect.bisect_left(self._bt, ts)
@@ -145,7 +183,14 @@ class BookRuntime(BacktestRuntime):
             self.stats["no_book"] += 1
             return await super().place_order(symbol, side, qty, price)
         (bids, asks), gap = got
-        fill, deep = self._walk(asks if side == "buy" else bids, qty)
+        levels = asks if side == "buy" else bids
+        rest = 0
+        if self._exec_mode == "touch":
+            fill, deep = levels[0][0], False
+            rest = qty - min(qty, levels[0][1])
+            qty -= rest
+        else:
+            fill, deep = self._walk(levels, qty)
         mid = (bids[0][0] + asks[0][0]) / 2
         sign = 1 if side == "buy" else -1              # знак «хуже для нас»
         self.stats["book"] += 1
@@ -158,4 +203,56 @@ class BookRuntime(BacktestRuntime):
         self.stats["hour_each"].append(nxt.time % 86400 // 3600)   # бары в шкале МСК
         self.stats["drift_each"].append(sign * (mid - nxt.open))
         self.stats["gap_max_s"] = max(self.stats["gap_max_s"], gap)
+        if rest:
+            t0 = nxt.time + gap                          # время снимка немедленной части
+            self._pending.append({"symbol": symbol, "side": side, "left": rest, "price": fill,
+                                  "t0": t0, "deadline": t0 + self._touch_ttl})
+            self.stats["touch_rest"] += rest
         return self._apply_fill(symbol, side, qty, fill, nxt.time)
+
+    def advance(self) -> bool:
+        ok = super().advance()
+        if ok and self._pending:
+            self._drain(self._bars[self._cursor + 1].time)
+        return ok
+
+    def _drain(self, now: int) -> None:
+        """Доливка отложенных лимиток по снимкам (t0, min(deadline, now)], затем
+        остаток снимается или добивается рынком (см. докстринг класса)."""
+        for o in self._pending:
+            buy = o["side"] == "buy"
+            price = o["price"]
+            end = min(o["deadline"], now)
+            lo = bisect.bisect_right(self._bt, o["t0"])
+            hi = bisect.bisect_right(self._bt, end)
+            for j in range(lo, hi):
+                if o["left"] == 0:
+                    break
+                bids, asks = self._bb[j]
+                levels = asks if buy else bids
+                best = levels[0][0]
+                if self._touch_fill == "pess":
+                    take = o["left"] if (best < price if buy else best > price) else 0
+                elif best <= price if buy else best >= price:
+                    take = min(o["left"], sum(q for p, q in levels if (p <= price if buy else p >= price)))
+                else:
+                    take = 0
+                if take:
+                    o["left"] -= take
+                    self.stats["touch_late"] += take
+                    self._apply_fill(o["symbol"], o["side"], take, price, self._bt[j])
+            if not o["left"]:
+                continue
+            if self._touch_action == "cancel":
+                self.stats["touch_unfilled"] += o["left"]
+                continue
+            self.stats["touch_market"] += o["left"]
+            got = self._snapshot(end)
+            if got is None:
+                self.stats["no_book"] += 1
+                px = self._bars[self._cursor].open
+            else:
+                (bids, asks), _gap = got
+                px, _deep = self._walk(asks if buy else bids, o["left"])
+            self._apply_fill(o["symbol"], o["side"], o["left"], px, end)
+        self._pending = []

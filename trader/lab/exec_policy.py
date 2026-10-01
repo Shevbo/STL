@@ -69,6 +69,29 @@ VS_MARKET_MEAN. cost_med_pess ранжирует по медиане; хвост
 vs_market_mean — среднее парной разности с market на тех же якорях — и
 vs_market_mean_ci95, тот же бутстрап по дням, что у vs_market_ci95_pess,
 только статистика — среднее, не медиана блока.
+
+TOUCH И TOUCH_MKT (01.10, калибровка под живой раннер). Живой раннер шлёт не
+рыночную заявку, а лимит по встречному best (robot_runner/runtime.py:165-177:
+свежая котировка -> цена = ask для покупки / bid для продажи), остаток стоит
+лимитом до следующего бара: host.py:476-490 перед каждым on_bar снимает все
+рабочие заявки робота, стратегия пересчитывает намерение от ИСПОЛНЕННОЙ позиции
+и при нужде шлёт новую заявку по новому best. Модель:
+  touch(T) — в t сразу min(N, объём на встречном best) по best; остаток стоит
+    лимитом по той же цене. Доливка по снимкам (t, t+T] (границы, как у hold):
+    оптимистично — встречный best не хуже нашей цены, долив = видимый объём на
+    уровнях не хуже нашей цены на этом снимке, по частям со снимков подряд;
+    пессимистично — встречный best прошёл нашу цену насквозь, долив всего
+    остатка. Не долилось за T — остаток НЕИСПОЛНЕН (не добивается).
+    Все наливки по нашей цене, поэтому cost_* = полспреда в t на исполненный
+    лот при любой границе; разница границ — в fill_share_qty_* и
+    unfilled_share_*. vs_market_mean у touch сравнивает цену ИСПОЛНЕННОЙ части
+    с ценой прохода всего N — объёмы разные, читать вместе с долями.
+  touch_mkt(T) — то же, но неисполненный остаток добирается рынком (проход
+    стакана) по снимку t+T; издержка на весь N.
+Поля долей во всех строках: fill_share_qty_* — доля объёма, исполненная по
+нашей лимитной цене (market/delay/slice/actual = 1; hold = 1 или 0 по
+пассивной наливке); unfilled_share_* — доля заявок, у которых по лимиту
+осталось неисполненное (у touch_mkt — добранное рынком).
 """
 from __future__ import annotations
 
@@ -89,6 +112,7 @@ DEFAULT_CHASE_EVERY_S = 10
 DEFAULT_DELAY_S = (15, 30, 60)
 DEFAULT_SLICES = (2, 4)
 DEFAULT_SLICE_EVERY_S = (5, 15)
+DEFAULT_TOUCH_S = (15, 60, 180)
 DEFAULT_N_SAMPLES = 3000
 DEFAULT_DRAWS = 200
 
@@ -334,6 +358,49 @@ def _eval_policy(dd: dict, i: int, side: str, size: int, hold_s: int, chase_s: i
     return out
 
 
+def _eval_touch(dd: dict, i: int, side: str, size: int, touch_s: int, mid0: float,
+                with_market: bool) -> dict | None:
+    """touch(T) / touch_mkt(T), см. докстринг модуля. -> {filled_qty_opt/pess,
+    cost_opt/pess} или None (touch_mkt без снимка на t+T для добора остатка)."""
+    sign = 1 if side == "buy" else -1
+    book = dd["asks"] if side == "buy" else dd["bids"]
+    price, vol0 = book[i][0]
+    q0 = min(size, vol0)
+    ts = dd["ts"]
+    target_ms = ts[i] + touch_s * 1000
+    hi = min(bisect.bisect_right(ts, target_ms, i) - 1, dd["block_end"][i])
+
+    def _ok(p: float) -> bool:          # уровень встречной стороны не хуже нашей цены
+        return p <= price + _PRICE_EPS if side == "buy" else p >= price - _PRICE_EPS
+
+    def _through(p: float) -> bool:     # встречный best прошёл нашу цену насквозь
+        return p < price - _PRICE_EPS if side == "buy" else p > price + _PRICE_EPS
+
+    out: dict = {}
+    for mode in ("opt", "pess"):
+        left = size - q0
+        for j in range(i + 1, hi + 1):
+            if left <= 0:
+                break
+            levels = book[j]
+            if mode == "opt":
+                if _ok(levels[0][0]):
+                    left -= min(left, sum(q for p, q in levels if _ok(p)))
+            elif _through(levels[0][0]):
+                left = 0
+        filled = size - left
+        cost = sign * (price - mid0)
+        if with_market and left > 0:
+            idx = _snapshot_at_or_after(dd, target_ms, i)
+            if idx is None:
+                return None
+            vwap, _deep = BookRuntime._walk(book[idx], left)
+            cost = sign * ((filled * price + left * vwap) / size - mid0)
+        out[f"filled_qty_{mode}"] = filled
+        out[f"cost_{mode}"] = cost
+    return out
+
+
 # --------------------------------------------------------------------------
 # Статистика по строкам
 # --------------------------------------------------------------------------
@@ -360,8 +427,8 @@ def _mean_of_blocks(blocks: list[list[float]]) -> float | None:
 def _finalize(buckets: dict, seed: int, draws: int) -> list[dict]:
     out_rows = []
     for key, b in buckets.items():
-        (pname, hold_s, chase_s, delay_s, slices, slice_every_s, size, size_class, side, mclass,
-         wlabel, robot) = key
+        (pname, hold_s, chase_s, delay_s, slices, slice_every_s, touch_s, size, size_class, side,
+         mclass, wlabel, robot) = key
         if b["n"] == 0:
             continue
         rng = random.Random(f"{seed}:{key}")
@@ -375,10 +442,14 @@ def _finalize(buckets: dict, seed: int, draws: int) -> list[dict]:
         out_rows.append({
             "policy": pname, "hold_s": hold_s, "chase_s": chase_s,
             "delay_s": delay_s, "slices": slices, "slice_every_s": slice_every_s,
-            "size": size, "size_class": size_class, "side": side,
+            "touch_s": touch_s, "size": size, "size_class": size_class, "side": side,
             "minute_class": mclass, "weekend": wlabel, "robot": robot, "n": b["n"],
             "fill_share_opt": b["fill_opt"] / b["n"],
             "fill_share_pess": b["fill_pess"] / b["n"],
+            "fill_share_qty_opt": b["qty_opt"] / b["qty_total"],
+            "fill_share_qty_pess": b["qty_pess"] / b["qty_total"],
+            "unfilled_share_opt": b["unf_opt"] / b["n"],
+            "unfilled_share_pess": b["unf_pess"] / b["n"],
             "cost_med_opt": statistics.median(b["cost_opt"]),
             "cost_med_pess": statistics.median(b["cost_pess"]),
             "cost_mean_opt": statistics.fmean(b["cost_opt"]),
@@ -412,7 +483,7 @@ def analyze(rows: list[tuple], *, anchors: list[tuple] | None = None, sizes=DEFA
            hold_s_list=DEFAULT_HOLD_S, chase_s_list=DEFAULT_CHASE_S,
            chase_every_s: int = DEFAULT_CHASE_EVERY_S, delay_s_list=DEFAULT_DELAY_S,
            slices_list=DEFAULT_SLICES, slice_every_s_list=DEFAULT_SLICE_EVERY_S,
-           n_samples: int = DEFAULT_N_SAMPLES, draws: int = DEFAULT_DRAWS, seed: int = 0) -> dict:
+           touch_s_list=DEFAULT_TOUCH_S, n_samples: int = DEFAULT_N_SAMPLES, draws: int = DEFAULT_DRAWS, seed: int = 0) -> dict:
     """rows = [(ts_ms, bids, asks), ...] -> {rows, n_days, n_used, dropped,
     dropped_anchors, half_spread_med, notes}. Тестируемое ядро (см.
     c1_book_imbalance.analyze) — без сети, реальные данные грузит только run().
@@ -422,15 +493,19 @@ def analyze(rows: list[tuple], *, anchors: list[tuple] | None = None, sizes=DEFA
     robot, outcome, fact_vs_mid), ...] (см. scripts/exec_anchors.py) — по
     одной точке на якорь, size/side реальные, плюс строка policy="actual"."""
     days_data = _prep_days(rows)
-    policies = [("market", 0, 0, None, None, None)]
-    policies += [("hold", t, 0, None, None, None) for t in hold_s_list]
-    policies += [("hold_chase", t, c, None, None, None) for t in hold_s_list for c in chase_s_list if c > 0]
-    policies += [("delay", None, None, t, None, None) for t in delay_s_list]
-    policies += [("slice", None, None, None, k, s) for k in slices_list for s in slice_every_s_list]
+    policies = [("market", 0, 0, None, None, None, None)]
+    policies += [("hold", t, 0, None, None, None, None) for t in hold_s_list]
+    policies += [("hold_chase", t, c, None, None, None, None)
+                 for t in hold_s_list for c in chase_s_list if c > 0]
+    policies += [("delay", None, None, t, None, None, None) for t in delay_s_list]
+    policies += [("slice", None, None, None, k, s, None) for k in slices_list for s in slice_every_s_list]
+    policies += [(p, None, None, None, None, None, t) for p in ("touch", "touch_mkt") for t in touch_s_list]
 
     buckets: dict = defaultdict(lambda: {"n": 0, "fill_opt": 0, "fill_pess": 0,
                                           "cost_opt": [], "cost_pess": [], "adverse": [],
-                                          "diff_opt": [], "diff_pess": [], "days": []})
+                                          "diff_opt": [], "diff_pess": [], "days": [],
+                                          "qty_opt": 0, "qty_pess": 0, "qty_total": 0,
+                                          "unf_opt": 0, "unf_pess": 0})
     half_spreads = []
     dropped = 0
     dropped_anchors = 0
@@ -459,10 +534,13 @@ def analyze(rows: list[tuple], *, anchors: list[tuple] | None = None, sizes=DEFA
             b["cost_pess"].append(cost)
             b["diff_opt"].append(cost - cost_market)
             b["diff_pess"].append(cost - cost_market)
+            b["qty_opt"] += size
+            b["qty_pess"] += size
+            b["qty_total"] += size
 
-        for pname, hold_s, chase_s, delay_s, slices, slice_every_s in policies:
-            key = (pname, hold_s, chase_s, delay_s, slices, slice_every_s, size_field, size_class,
-                  side, mclass, wlabel, robot)
+        for pname, hold_s, chase_s, delay_s, slices, slice_every_s, touch_s in policies:
+            key = (pname, hold_s, chase_s, delay_s, slices, slice_every_s, touch_s, size_field,
+                  size_class, side, mclass, wlabel, robot)
             if pname == "market":
                 _record(key, cost_market)
                 continue
@@ -480,11 +558,32 @@ def analyze(rows: list[tuple], *, anchors: list[tuple] | None = None, sizes=DEFA
                     continue
                 _record(key, cost)
                 continue
+            if pname in ("touch", "touch_mkt"):
+                res = _eval_touch(dd, i, side, size, touch_s, mid0, pname == "touch_mkt")
+                if res is None:
+                    dropped += 1
+                    continue
+                b = buckets[key]
+                b["n"] += 1
+                b["days"].append(day)
+                b["qty_total"] += size
+                for mode in ("opt", "pess"):
+                    fq = res[f"filled_qty_{mode}"]
+                    b[f"fill_{mode}"] += 1 if fq == size else 0
+                    b[f"qty_{mode}"] += fq
+                    b[f"unf_{mode}"] += 1 if fq < size else 0
+                    b[f"cost_{mode}"].append(res[f"cost_{mode}"])
+                    b[f"diff_{mode}"].append(res[f"cost_{mode}"] - cost_market)
+                continue
             res = _eval_policy(dd, i, side, size, hold_s, chase_s, chase_every_s, mid0)
             if res is None:
                 dropped += 1
                 continue
             b = buckets[key]
+            b["qty_total"] += size
+            for mode in ("opt", "pess"):
+                b[f"qty_{mode}"] += size if res[f"filled_{mode}"] else 0
+                b[f"unf_{mode}"] += 0 if res[f"filled_{mode}"] else 1
             b["n"] += 1
             b["days"].append(day)
             b["fill_opt"] += 1 if res["filled_opt"] else 0
@@ -496,8 +595,8 @@ def analyze(rows: list[tuple], *, anchors: list[tuple] | None = None, sizes=DEFA
             if res["adverse_opt"] is not None:
                 b["adverse"].append(res["adverse_opt"])
         if fact_vs_mid is not None:
-            key = ("actual", None, None, None, None, None, size_field, size_class, side, mclass,
-                  wlabel, robot)
+            key = ("actual", None, None, None, None, None, None, size_field, size_class, side,
+                  mclass, wlabel, robot)
             _record(key, fact_vs_mid)
 
     if anchors is None:
@@ -529,8 +628,8 @@ def analyze(rows: list[tuple], *, anchors: list[tuple] | None = None, sizes=DEFA
 def run(arg: dict) -> dict:
     """Задача агента (kind='task', считает только i9): arg = {"symbol_key",
     "book_key" (обязателен), "since", "until", "sizes", "hold_s", "chase_s",
-    "chase_every_s", "delay_s", "slices", "slice_every_s", "n_samples", "draws",
-    "seed", "anchors_key"}.
+    "chase_every_s", "delay_s", "slices", "slice_every_s", "touch_s", "n_samples",
+    "draws", "seed", "anchors_key"}.
 
     anchors_key (необязателен) — ключ агентского канала с реальными якорями
     заявок (scripts/exec_anchors.py, тот же _load_bars, что у агентских
@@ -555,6 +654,7 @@ def run(arg: dict) -> dict:
     delay_s_list = tuple(int(x) for x in arg.get("delay_s", DEFAULT_DELAY_S))
     slices_list = tuple(int(x) for x in arg.get("slices", DEFAULT_SLICES))
     slice_every_s_list = tuple(int(x) for x in arg.get("slice_every_s", DEFAULT_SLICE_EVERY_S))
+    touch_s_list = tuple(int(x) for x in arg.get("touch_s", DEFAULT_TOUCH_S))
     n_samples = int(arg.get("n_samples", DEFAULT_N_SAMPLES))
     draws = int(arg.get("draws", DEFAULT_DRAWS))
     seed = int(arg.get("seed", 0))
@@ -562,7 +662,7 @@ def run(arg: dict) -> dict:
 
     kw = dict(sizes=sizes, hold_s_list=hold_s_list, chase_s_list=chase_s_list,
              chase_every_s=chase_every_s, delay_s_list=delay_s_list, slices_list=slices_list,
-             slice_every_s_list=slice_every_s_list, n_samples=n_samples, draws=draws, seed=seed)
+             slice_every_s_list=slice_every_s_list, touch_s_list=touch_s_list, n_samples=n_samples, draws=draws, seed=seed)
     anchors = [tuple(r) for r in _load_bars(anchors_key)] if anchors_key else None
     res = analyze(rows, anchors=anchors, **kw)
     if anchors_key:

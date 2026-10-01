@@ -287,3 +287,62 @@ def test_anchors_random_path_robot_is_constant():
                               n_samples=50, seed=4)
     assert res["rows"]
     assert {r["robot"] for r in res["rows"]} == {"random"}
+
+
+# --------------------------------------------------------------------------
+# touch(T) / touch_mkt(T): лимит по встречному best, остаток стоит (живой раннер)
+# --------------------------------------------------------------------------
+
+def _touch_rows(rows, qty, touch_s=15):
+    anchors = [(rows[60][0], "buy", qty, "r", "filled", None)]
+    res = exec_policy.analyze(rows, anchors=anchors, hold_s_list=(), chase_s_list=(),
+                              delay_s_list=(), slices_list=(), touch_s_list=(touch_s,))
+    return {r["policy"]: r for r in res["rows"]}
+
+
+def test_touch_within_best_fills_at_once_half_spread():
+    """(а) N <= объём на best: touch целиком сразу по best, издержка = полспреда,
+    как market при N=1."""
+    by = _touch_rows(_book_rows_flat(), qty=3)
+    t = by["touch"]
+    for mode in ("opt", "pess"):
+        assert abs(t[f"cost_mean_{mode}"] - 5.0) < 1e-9, t
+        assert t[f"fill_share_qty_{mode}"] == 1.0 and t[f"unfilled_share_{mode}"] == 0.0
+    assert abs(by["market"]["cost_mean_opt"] - 5.0) < 1e-9
+    assert t["touch_s"] == 15 and by["market"]["fill_share_qty_opt"] == 1.0
+
+
+def test_touch_standing_book_opt_refills_pess_does_not():
+    """(б) N=12 при 5 на best, стакан стоит: opt доливает по 5 со снимков подряд,
+    pess не доливает: fill_share_qty_pess = 5/12."""
+    t = _touch_rows(_book_rows_flat(), qty=12)["touch"]
+    assert t["fill_share_qty_opt"] == 1.0 and t["unfilled_share_opt"] == 0.0
+    assert abs(t["fill_share_qty_pess"] - 5 / 12) < 1e-9, t
+    assert t["unfilled_share_pess"] == 1.0
+    assert abs(t["cost_mean_opt"] - 5.0) < 1e-9 and abs(t["cost_mean_pess"] - 5.0) < 1e-9
+
+
+def test_touch_market_passes_level_both_bounds_fill_at_our_price():
+    """(в) рынок прошёл наш уровень: обе границы долили весь остаток по нашей цене."""
+    rows = []
+    for t in range(120):
+        if t < 65:
+            bids = _ladder(99995.0, 1.0, 5, -1)
+            asks = [(100005.0, 2)] + _ladder(100006.0, 1.0, 5, 1, 4)
+        else:
+            bids = _ladder(99993.0, 1.0, 5, -1)
+            asks = _ladder(100003.0, 1.0, 5, 1)
+        rows.append(((D0 + t) * 1000, bids, asks))
+    t = _touch_rows(rows, qty=10)["touch"]
+    for mode in ("opt", "pess"):
+        assert t[f"fill_share_qty_{mode}"] == 1.0, t
+        assert abs(t[f"cost_mean_{mode}"] - 5.0) < 1e-9, t
+
+
+def test_touch_mkt_standing_book_remainder_by_market_at_t_plus_T():
+    """(г) touch_mkt при стоящем стакане (pess): 5 по best + 7 проходом в t+T
+    (5 по 100005, 2 по 100006): издержка (10*5 + 2*6)/12; opt долил по лимиту = 5."""
+    tm = _touch_rows(_book_rows_flat(), qty=12)["touch_mkt"]
+    assert abs(tm["cost_mean_pess"] - 62 / 12) < 1e-9, tm
+    assert abs(tm["cost_mean_opt"] - 5.0) < 1e-9, tm
+    assert abs(tm["fill_share_qty_pess"] - 5 / 12) < 1e-9 and tm["unfilled_share_pess"] == 1.0

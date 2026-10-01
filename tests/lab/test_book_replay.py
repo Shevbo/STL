@@ -80,3 +80,53 @@ def test_stale_snapshot_counts_as_no_book():
     rt2 = BookRuntime(bars=bars, symbol="RIU6", initial_equity=0.0, book=book, max_gap_s=7200)
     rt2._cursor = 5
     assert asyncio.run(rt2.place_order("RIU6", "buy", 1, 0)).fill_price == 101.0
+
+
+def _touch_rt(mode, snaps, **kw):
+    """Курсор 5, заявка исполняется в t = открытие бара 6; snaps = [(dt, asks)]."""
+    bars = _bars()
+    t = bars[6].time
+    book = ([t + dt for dt, _a in snaps], [([(99.0, 10)], asks) for _dt, asks in snaps])
+    rt = BookRuntime(bars=bars, symbol="RIU6", initial_equity=0.0, book=book, exec_mode=mode, **kw)
+    rt._cursor = 5
+    return rt
+
+
+def test_touch_vs_walk_qty_above_best():
+    """qty 10 при 3 на best: walk = VWAP прохода; touch = 3 по best сразу, остаток
+    доливается по правилу touch_fill до следующего бара."""
+    snaps = [(0, [(101.0, 3), (103.0, 10)]),
+             (10, [(101.0, 4), (103.0, 10)]),          # best восстановился на нашей цене
+             (20, [(100.0, 5), (102.0, 10)])]          # рынок прошёл наш уровень
+    walk = _touch_rt("walk", snaps)
+    assert abs(asyncio.run(walk.place_order("RIU6", "buy", 10, 0)).fill_price
+               - (3 * 101 + 7 * 103) / 10) < 1e-9
+
+    for fill, late_fills in (("opt", [4, 3]), ("pess", [7])):
+        rt = _touch_rt("touch", snaps, touch_fill=fill)
+        first = asyncio.run(rt.place_order("RIU6", "buy", 10, 0))
+        assert first.fill_price == 101.0 and first.qty == 3
+        assert rt._positions["RIU6"]["qty"] == 3          # до следующего бара висит остаток
+        assert rt.advance()
+        assert [o.qty for o in rt._orders[1:]] == late_fills, fill
+        assert all(o.fill_price == 101.0 for o in rt._orders)
+        assert rt._positions["RIU6"] == {"side": "long", "qty": 10, "avg": 101.0}
+        assert rt.stats["touch_rest"] == 7 and rt.stats["touch_late"] == 7
+
+
+def test_touch_unfilled_cancel_or_market():
+    """Стакан стоит, pess не доливает: cancel оставляет 3 лота, market добивает 7
+    проходом по снимку конца окна (ttl 60 с)."""
+    snaps = [(0, [(101.0, 3), (103.0, 10)]), (30, [(101.0, 3), (103.0, 10)]),
+             (60, [(102.0, 10)])]
+    rt = _touch_rt("touch", snaps, touch_fill="pess")
+    asyncio.run(rt.place_order("RIU6", "buy", 10, 0))
+    rt.advance()
+    assert rt._positions["RIU6"]["qty"] == 3 and rt.stats["touch_unfilled"] == 7
+    assert rt._pending == []
+
+    rt = _touch_rt("touch", snaps, touch_fill="pess", touch_ttl_action="market")
+    asyncio.run(rt.place_order("RIU6", "buy", 10, 0))
+    rt.advance()
+    assert rt._orders[-1].qty == 7 and rt._orders[-1].fill_price == 102.0
+    assert rt._positions["RIU6"]["qty"] == 10 and rt.stats["touch_market"] == 7
