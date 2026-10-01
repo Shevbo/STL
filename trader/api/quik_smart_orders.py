@@ -942,6 +942,97 @@ def _track_native(book: SmartOrderBook, store: Any, agent: str, now: int) -> lis
 
 
 
+# Защитные типы: их смысл — закрыть УЖЕ ОТКРЫТУЮ позицию. Коридор, треугольник,
+# сетка и вход по факту сделки сюда не входят: у них позиции может не быть по
+# замыслу.
+_PROTECTIVE_KINDS = frozenset({"sl", "tp", "trail_tp", "trail_sl"})
+
+
+def _nothing_to_protect(so: SmartOrder, position: int) -> bool:
+    """Нет ли в рынке позиции, которую эта заявка закрывает.
+
+    Заявка на ПОКУПКУ закрывает шорт, на ПРОДАЖУ — лонг. Если позиции нужного
+    знака нет, закрывать нечего: сработав, такая заявка не защитит, а ОТКРОЕТ
+    позицию, которой никто не просил.
+    """
+    if position == 0:
+        return True
+    closing = "sell" if position > 0 else "buy"
+    return so.side != closing
+
+
+def _retire_unprotecting(book: SmartOrderBook, store: Any, agent: str,
+                         now: int) -> bool:
+    """Снять взведённую защитную заявку, которой больше нечего охранять.
+
+    ИНЦИДЕНТ 01.10.2026. Два стопа оператора на покупку 40 и 13 по уровню 85850
+    простояли взведёнными 34 минуты после того, как охраняемый шорт на 53
+    контракта исчез (30.09 в 16:32). До уровня оставалось 230 пунктов, а 29.09
+    RIZ6 проходил 690 пунктов за минуту: сработав, они открыли бы ЛОНГ на 53
+    контракта с нуля, без решения человека.
+
+    Механизм, который это допустил, знал о проблеме и молчал. Передача защиты
+    терминалу (`build_native_standalone`) при нулевой позиции возвращает None —
+    то есть система ВИДИТ, что охранять нечего, — но заявка от этого лишь
+    остаётся в статусе `armed`, а `armed` означает «стережёт сторож STL». Отказ
+    отдать защиту терминалу не отменял самой защиты. Рестарт STL довершал дело:
+    он заново принимал запись книги и пробовал регистрацию, терминал отказывал,
+    и запись окончательно становилась взведённым курком.
+
+    Не отменяем, а помечаем `orphaned` — как и остальные осиротевшие: цена уже
+    другая, перевзводить за человека нельзя. Нативную ногу здесь не трогаем: мы
+    списываем только `armed`, а `armed` и означает, что терминал заявку НЕ
+    держит. Расхождение книги с таблицей терминала — отдельная забота сверки
+    (`_audit_book_vs_terminal`), и подменять её здесь нельзя: 29.09.2026 книга
+    уже один раз судила о терминале по своему мнению, и это стоило 40 контрактов.
+
+    ДВЕ ОСТОРОЖНОСТИ, БЕЗ КОТОРЫХ ЭТО ОПАСНЕЕ БОЛЕЗНИ:
+
+    1. ТОЛЬКО ПО СВЕЖЕМУ СНИМКУ. Пустой снимок позиций значит «не знаю», а не
+       «позиций нет». Судить по слепоте — значит снять ЖИВУЮ защиту у открытой
+       позиции, а это потеря дороже той, от которой защищаемся.
+    2. С ВЫДЕРЖКОЙ. Между филлами позиция мелькает нулём, а переворот проходит
+       через ноль по построению. Списываем только то, что стоит без охраняемой
+       позиции дольше выдержки.
+    """
+    status = (store.agent_status(agent) if store is not None else None) or {}
+    health = status.get("health")
+    if not isinstance(health, dict) or health.get("positions") is None:
+        return False                      # снимка нет: молчим, это не «ноль»
+    positions = _open_positions(store, agent)
+    dirty = False
+    for so in book.orders:
+        if so.status != "armed" or so.parent_id or so.kind not in _PROTECTIVE_KINDS:
+            continue
+        # Вход с блоками после сделки — не защита: позиции у него и не должно быть.
+        if (so.sl_offset or so.tp_offset or so.trail_after or so.tp_trail
+                or so.sl_price or so.tp_price):
+            continue
+        if not _nothing_to_protect(so, positions.get(so.code, 0)):
+            if so.flat_since_ms:
+                so.flat_since_ms = 0      # позиция вернулась: счётчик сбрасываем
+                dirty = True
+            continue
+        if not so.flat_since_ms:
+            so.flat_since_ms = now
+            dirty = True
+            continue
+        if now - so.flat_since_ms < _ORPHAN_GRACE_MS:
+            continue
+        so.status = "orphaned"
+        so.note = ((so.note + " " if so.note else "")
+                   + "охранять нечего: позиции, которую она закрывает, в рынке нет")
+        dirty = True
+        so_journal.record(
+            "orphaned", so, so_journal.WATCHER,
+            f"позиции по {so.code} нет {(now - so.flat_since_ms) // 60000} мин: "
+            f"{so.side} {so.qty} не защитит, а ОТКРЫЛА бы позицию. Снята со взвода.",
+            now_ms=now)
+        log.warning("smart_order.nothing_to_protect", so_id=so.so_id, kind=so.kind,
+                    code=so.code, side=so.side, qty=so.qty)
+    return dirty
+
+
 def _mark_orphans(book: SmartOrderBook, ost: Any, agent: str, now: int) -> bool:
     fired = [o for o in book.orders
              if o.status == "fired" and o.fired_client_id and o.fired_ms]
@@ -1651,6 +1742,11 @@ async def _watch_once(state: Any) -> None:
     dirty_meta = _mark_orphans(book, ost, agent, so_mod.now_ms())
     dirty_meta = _track_fills(book, ost, store, agent) or dirty_meta
     dirty_meta = _revive_false_orphans(book) or dirty_meta
+    # Защитная заявка обязана умирать вместе с позицией, которую охраняет
+    # (инцидент 01.10.2026: стопы на 53 контракта простояли взведёнными после
+    # исчезновения шорта и открыли бы лонг с нуля).
+    dirty_meta = _retire_unprotecting(book, store, agent,
+                                      so_mod.now_ms()) or dirty_meta
     steps_all = _price_steps(store, agent)
     dirty_meta = _snap_entries_to_grid(book, steps_all) or dirty_meta
     # Защита открытой позиции переезжает в терминал: он держит стоп-заявку сам и
