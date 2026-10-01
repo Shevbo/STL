@@ -74,6 +74,8 @@
   let cStopPts = $state('');
   let cFlipsMax = $state('');
   let cErr = $state('');
+  // Заявка, которую заменяем следующим взводом. Пусто — обычная постановка.
+  let replacing = $state('');
   // РАДИАЦИЯ. Цену постановки (g_base) НЕ спрашиваем: её берёт сервер по рынку в
   // момент приёма, иначе сетка разъедется с рынком между вводом и отправкой.
   let gStep = $state('');
@@ -513,10 +515,21 @@
       const d = await res.json().catch(() => ({}));
       if (!res.ok) { msgKind = 'err'; msg = d?.detail || `HTTP ${res.status}`; return; }
       msgKind = 'ok';
+      // ЗАМЕНА: старую снимаем ТОЛЬКО ТЕПЕРЬ, когда новая принята сервером.
+      // Снять раньше значит оставить оператора без защиты в тот момент, когда
+      // что-то пойдёт не так, — ровно это с ним и случилось 01.10.2026.
+      let replaced = '';
+      if (replacing) {
+        const old = replacing;
+        replacing = '';
+        replaced = (await cancel(old))
+          ? ` Прежняя ${old} снята.`
+          : ` ВНИМАНИЕ: прежняя ${old} снять не удалось — в рынке теперь ДВЕ заявки, снимите лишнюю руками.`;
+      }
       // Снятые чужие стопы называем ПОИМЁННО: молча снять защиту с позиции
       // оператора нельзя, он должен видеть, что именно исчезло.
       const gone = (d.superseded || []).length;
-      msg = `Заявка ${d.so_id} взведена. Сторож следит.`
+      msg = `Заявка ${d.so_id} взведена. Сторож следит.` + replaced
         + (gone ? ` Сняты прежние стопы этой позиции: ${d.superseded.join(', ')}.` : '');
       trigger = ''; trailOffset = ''; slOffset = ''; tpOffset = ''; trailAfter = ''; tpTrail = ''; tpMode = 'fixed';
       slPrice = ''; tpPrice = '';
@@ -555,6 +568,32 @@
     watchId = o.watch_client_id || '';
     childPrice = o.child_price ? String(o.child_price) : '';
     ocoGroup = o.oco_group || '';
+    // ФИГУРЫ И СЕТКА. Их полей здесь не было вовсе: 01.10.2026 оператор нажал
+    // «изменить» на живом коридоре и получил ПУСТУЮ форму — фигуры лишился, а
+    // отредактировать не смог. Сервер отдаёт все эти поля в GET, подставлять
+    // нечего было только потому, что их никто не читал.
+    cT1 = (o as any).c_t1_ms || 0;
+    cP1 = (o as any).c_p1 ? String((o as any).c_p1) : '';
+    cT2 = (o as any).c_t2_ms || 0;
+    cP2 = (o as any).c_p2 ? String((o as any).c_p2) : '';
+    cLow = (o as any).c_low ? String((o as any).c_low) : '';
+    cLow2 = (o as any).c_low2 ? String((o as any).c_low2) : '';
+    cStopPts = (o as any).c_stop_pts ? String((o as any).c_stop_pts) : '';
+    cFlipsMax = (o as any).c_flips_max ? String((o as any).c_flips_max) : '';
+    // Объём фигуры — БАЗОВЫЙ (c_qty), а не qty: у коридора qty мутируется под
+    // текущую заявку и на перевороте равен удвоенному. Подставив его, оператор
+    // взвёл бы сетку вдвое крупнее, сам того не заметив.
+    if ((o as any).c_qty) qty = (o as any).c_qty;
+    gStep = (o as any).g_step ? String((o as any).g_step) : '';
+    gBuys = (o as any).g_buys ? String((o as any).g_buys) : '';
+    gSells = (o as any).g_sells ? String((o as any).g_sells) : '';
+    gLot = (o as any).g_lot ? String((o as any).g_lot) : '';
+    gStopPts = (o as any).g_stop_pts ? String((o as any).g_stop_pts) : '';
+    // g_base НЕ подставляем сознательно: базу сетки сервер берёт с рынка в
+    // момент приёма, и присланное значение он УВАЖИТ — заявка встала бы вокруг
+    // устаревшей точки (предупреждение real-trade 01.10.2026).
+    escProfile = (o as any).esc_profile || escProfile;
+    cErr = '';
     // Срок тоже восстанавливаем: «до конца сессии» — часть смысла заявки.
     tillLocal = o.good_till_ms
       ? new Date(o.good_till_ms - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)
@@ -565,13 +604,21 @@
     document.querySelector('.so-form')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
 
-  // «Изменить» = снять + подставить в форму + взвести заново РУКАМИ. Никакого
-  // редактирования взведённой заявки на месте: пока оператор думает, сторож
-  // ничего не сторожит, и это видно по статусу (заявка ушла в «снятые»).
-  async function edit(o: SmartOrder) {
-    if (!(await cancel(o.so_id))) return;   // не снялась — форму не трогаем
+  // «Изменить» = подставить в форму и ЗАМЕНИТЬ при следующем взводе. Старая
+  // заявка остаётся в рынке, пока новая не принята сервером.
+  //
+  // Было наоборот: экран снимал заявку ПЕРВОЙ и на этом останавливался, если
+  // что-то шло не так. 01.10.2026 оператор нажал «изменить» на живом коридоре
+  // 106fbdeca7 и остался без фигуры на боевом рынке: заявка снята, форма пустая
+  // (её полей rearm не знал). Любая ошибка в середине обходилась ему позицией,
+  // а не неудобством — поэтому порядок перевёрнут: сначала создаём, потом
+  // снимаем (просьба real-trade, и она верна).
+  function edit(o: SmartOrder) {
     rearm(o);
-    msg = `Заявка ${o.so_id} СНЯТА, сторож её больше не ждёт. Поправьте параметры и взведите заново.`;
+    replacing = o.so_id;
+    msgKind = 'ok';
+    msg = `Параметры заявки ${o.so_id} в форме. Она ОСТАЁТСЯ в рынке и будет снята `
+        + 'только после того, как новая встанет. Передумали — нажмите «не заменять».';
   }
 
   $effect(() => { if (code) { loadTick(); loadPointValue(); } });
@@ -882,6 +929,19 @@
         {/if}
       </div>
 
+      <!-- РЕЖИМ ЗАМЕНЫ. Пока он включён, в рынке стоит СТАРАЯ заявка: оператор
+           обязан видеть это, иначе решит, что её уже нет, и уйдёт с экрана. -->
+      {#if replacing}
+        <div class="so-replacing">
+          Заменяем заявку <b>{replacing}</b>: она стоит в рынке и будет снята только
+          после того, как новая встанет.
+          <button type="button" class="so-draw-b"
+                  onclick={() => { replacing = ''; msgKind = 'ok'; msg = 'Замена отменена — прежняя заявка остаётся как была.'; }}>
+            не заменять
+          </button>
+        </div>
+      {/if}
+
       <!-- ГРУППА 2.5: КАК ДОВОДИМ ДО ИСПОЛНЕНИЯ. Заявка ставит лимит, и на
            быстром движении его не наливают: 29.09.2026 стоп на 70 RIZ6
            сработал и умер с нулём исполнения, позиция осталась открытой.
@@ -1165,7 +1225,8 @@
                   : 'защиту ведёт сторож STL: пока STL лежит, заявка не сработает'}>
             {o.status === 'native' ? '🛡' : '⏱'} {STATUS_RU[o.status] ?? o.status}
           </span>
-          <button class="so-btn sm" title="снять заявку, подставить её параметры в форму и взвести заново"
+          <button class="so-btn sm"
+                  title="подставить параметры в форму; эта заявка останется в рынке и снимется только после того, как встанет новая"
                   onclick={() => edit(o)}>Изменить</button>
           <button class="so-btn sm" title="что с этой заявкой уже произошло: ходы фигуры, доведение до исполнения, отказы"
                   onclick={() => toggleFeed(o.so_id)}>{feedFor === o.so_id ? 'Скрыть ленту' : 'Лента'}</button>
@@ -1469,6 +1530,10 @@
   .so-feed-ev.market { color: #ff6b6b; font-weight: 700; }
   .so-feed-d { color: #9aa0b4; }
   .so-prof-warn { margin: 5px 8px 0; font-size: 11px; color: #e0a35c; }
+  .so-replacing { margin: 6px 0; padding: 5px 8px; border-radius: 4px; font-size: 11px;
+                  border: 1px solid #e0a35c; background: #1b1b34; color: #e0a35c;
+                  display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .so-replacing b { color: #d6dbe8; }
   /* Поверх всего и своим размером: геометрия фреймов на подокно не влияет. */
   .draw-modal {
     position: fixed; inset: 4vh 4vw; z-index: 1200; display: flex; flex-direction: column;
