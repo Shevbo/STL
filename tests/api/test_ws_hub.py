@@ -6,7 +6,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from starlette.websockets import WebSocketDisconnect
 
-from trader.api.ws_hub import WsHub, _TF_HISTORY_DAYS, _TIMEFRAME_NAMES
+import httpx
+
+from trader.api.ws_hub import WsHub, _TF_HISTORY_DAYS, _TIMEFRAME_NAMES, _exc_fields
 from trader.md.feed import MarketDataFeed
 from trader.md.models import Quote
 from trader.pos.models import AccountSummary, Position
@@ -184,6 +186,38 @@ async def test_pos_poll_broadcasts_position_update():
     assert msg["type"] == "position_update"
     assert isinstance(msg["positions"], list)
     assert msg["positions"][0]["symbol"] == "GZM6@RTSX"
+
+
+# --- чем именно упал запрос ---
+#
+# str(exc) у транспортных ошибок httpx ПУСТ, и запись «exc=» не отличает свой
+# сбой от чужого. Это стоило четырёх суток неверного диагноза: по тексту
+# «Server error 500 for url …» оператору доложили «авария на стороне Finam», а
+# причина была наша — гонка за токеном; тело ответа никто не видел, его не
+# писали (разбор real-trade 01.10.2026).
+
+def test_transport_error_is_identifiable_even_without_a_message():
+    exc = httpx.RemoteProtocolError("")
+    f = _exc_fields(exc)
+    assert f["exc_type"] == "RemoteProtocolError"
+    assert "RemoteProtocolError" in f["exc"]
+    assert "status" not in f          # это не ответ сервера, кода у него нет
+
+
+def test_status_error_carries_the_code_and_the_body():
+    """Код и ТЕЛО: по одному коду не отличить отказ сервера от своего запроса."""
+    req = httpx.Request("GET", "https://api.example/v1/accounts/1")
+    resp = httpx.Response(500, text="upstream session was evicted", request=req)
+    f = _exc_fields(httpx.HTTPStatusError("boom", request=req, response=resp))
+    assert f["status"] == 500
+    assert "evicted" in f["body"]
+
+
+def test_a_huge_body_is_cut_not_dumped_whole():
+    """Лог не место для мегабайта HTML: режем, но оставляем начало."""
+    req = httpx.Request("GET", "https://api.example/x")
+    resp = httpx.Response(503, text="x" * 5000, request=req)
+    assert len(_exc_fields(httpx.HTTPStatusError("b", request=req, response=resp))["body"]) == 300
 
 
 # --- парковка Finam ---

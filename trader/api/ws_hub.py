@@ -41,6 +41,31 @@ def _dec_field(obj) -> float:
     return unwrap_decimal(obj, as_float=True)
 
 
+def _exc_fields(exc: BaseException) -> dict:
+    """Чем именно упал запрос — так, чтобы по записи можно было ставить диагноз.
+
+    str(exc) у транспортных ошибок httpx ПУСТ (RemoteProtocolError, ReadError),
+    и запись «exc=» не отличает свой сбой от чужого. Это стоило четырёх суток
+    неверного диагноза: в логе стояло «Server error 500 for url …», по нему
+    real-trade доложил оператору «авария на стороне Finam», а причина была наша
+    — гонка за токеном без замка; их API всё это время отдавал 200 на пробу
+    (разбор 01.10.2026). Тело ответа не видел никто, потому что его не писали.
+
+    Поэтому: тип и repr ВСЕГДА, а у статусных ошибок ещё код и начало тела.
+    Запись, по которой нельзя отличить свой сбой от чужого, хуже отсутствующей —
+    она создаёт уверенность, что причина известна.
+    """
+    out = {"exc_type": type(exc).__name__, "exc": repr(exc)}
+    resp = getattr(exc, "response", None)
+    if resp is not None:
+        out["status"] = getattr(resp, "status_code", None)
+        try:
+            out["body"] = (resp.text or "")[:300]
+        except Exception:  # noqa: BLE001 — тело бывает недочитанным
+            out["body"] = "<не прочитано>"
+    return out
+
+
 class WsHub:
     def __init__(
         self,
@@ -309,7 +334,7 @@ class WsHub:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                log.warning("ws_hub.pos_poll_error", exc=str(exc))
+                log.warning("ws_hub.pos_poll_error", **_exc_fields(exc))
 
             if self._base_url and self._get_token and self._account_id:
                 try:
@@ -320,7 +345,7 @@ class WsHub:
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
-                    log.warning("ws_hub.orders_poll_error", exc=str(exc))
+                    log.warning("ws_hub.orders_poll_error", **_exc_fields(exc))
 
     async def _bars_broadcast_loop(self, symbol: str) -> None:
         try:
@@ -448,7 +473,7 @@ class WsHub:
                 })
             return result
         except Exception as exc:
-            log.warning("ws_hub.fetch_orders_error", exc=str(exc))
+            log.warning("ws_hub.fetch_orders_error", **_exc_fields(exc))
             return []
 
     async def _fetch_recent_trades(self) -> list[dict]:
@@ -487,7 +512,7 @@ class WsHub:
                 })
             return result
         except Exception as exc:
-            log.warning("ws_hub.fetch_trades_error", exc=str(exc))
+            log.warning("ws_hub.fetch_trades_error", **_exc_fields(exc))
             return []
 
     async def _sender(self, websocket, queue: asyncio.Queue) -> None:
