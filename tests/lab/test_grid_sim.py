@@ -203,3 +203,69 @@ def test_random_control_keeps_time_share():
         sch = gs._random_schedule(random.Random(seed), body, durs)
         r = gs.simulate_regime(body, tail, PR, [None] * len(body), cfg, schedule=sch)
         assert r["work"] == sum(d for s, d in sch) and len(sch) >= 2
+
+
+# ── третья редакция: опоздание ───────────────────────────────────────────────────────────────────
+def _dbody(rows):
+    b = _bars(rows)
+    return b, []
+
+
+def test_delay_sideways_enters_late_at_close_minus_half_spread():
+    # бар 1 пересёк уровень +1 (1100) и закрылся 1105: вход продажей по close - полспреда = 1100, тейкер
+    body, tail = _dbody([FLAT, (1000, 1101, 1000, 1105), (1105, 1105, 1105, 1105)])
+    r = gs.simulate_delay(body, tail, PR, z=1, k=1)
+    assert [(f[1], f[2], f[4]) for f in r["fills"][:1]] == [("sell", 1100, "delay")]
+    m, t = gs.costs_delay(r["fills"], "RIU6", gs.PV_RI)
+    assert m == t and t > 0.45 * len(r["fills"])
+
+
+def test_delay_impulse_moves_base_without_entry():
+    # проход +1 и закрытие 1300 (дальше K=1 шага от 1100): входа нет, база перенесена, позиции нет
+    body, tail = _dbody([FLAT, (1000, 1301, 1000, 1300), (1300, 1300, 1300, 1300)])
+    r = gs.simulate_delay(body, tail, PR, z=1, k=1)
+    assert r["fills"] == [] and r["stat"]["skip"] >= 1 and r["stat"]["entries"] == 0
+    r2 = gs.simulate_delay(body, tail, PR, z=1, k=None)         # без переноса: входит
+    assert r2["stat"]["entries"] >= 1
+
+
+def test_delay_does_not_look_ahead():
+    rnd = random.Random(11)
+    px, rows = 1000, []
+    for _ in range(300):
+        o = px
+        px = round(px + rnd.gauss(0, 35))
+        rows.append((o, max(o, px) + 3, min(o, px) - 3, px))
+    body, _t = _dbody([FLAT] + rows)
+    full = gs.simulate_delay(body, [], PR, z=3, k=2)
+    for m in (60, 140, 220):
+        part = gs.simulate_delay(body[:m + 1], [], PR, z=3, k=2)
+        ts_m = body[m][0]
+        assert [f for f in part["fills"] if f[4] == "delay"] == [f for f in full["fills"] if f[4] == "delay" and f[0] <= ts_m]
+
+
+def test_delay_random_skip_share_and_zero_one():
+    rnd = random.Random(5)
+    px, rows = 1000, []
+    for _ in range(600):
+        o = px
+        px = round(px + rnd.gauss(0, 30))
+        rows.append((o, max(o, px) + 2, min(o, px) - 2, px))
+    body, _t = _dbody([FLAT] + rows)
+    PRk = {**PR, "buys": 12, "sells": 12}
+    lo = gs.simulate_delay(body, [], PRk, 1, None, skip_p=0.0, rng=random.Random(1))["stat"]
+    hi = gs.simulate_delay(body, [], PRk, 1, None, skip_p=1.0, rng=random.Random(1))["stat"]
+    mid = gs.simulate_delay(body, [], PRk, 1, None, skip_p=0.5, rng=random.Random(1))["stat"]
+    assert lo["skip"] == 0 and hi["entries"] == 0 and hi["skip"] == hi["dec"] > 0
+    assert 0.25 < mid["skip"] / mid["dec"] < 0.75
+
+
+def test_delay_own_side_needs_next_bar_to_pass_tick():
+    miss = _dbody([FLAT, (1000, 1101, 1000, 1105), (1105, 1105, 1090, 1095), (1095, 1095, 1095, 1095)])
+    r = gs.simulate_delay(*miss, PR, z=1, k=None, own=True)
+    assert r["stat"]["miss"] >= 1 and not [f for f in r["fills"] if f[4] == "own"]   # лимит 1110, next high 1105
+    hit = _dbody([FLAT, (1000, 1101, 1000, 1105), (1105, 1111, 1090, 1095), (1095, 1095, 1095, 1095)])
+    r = gs.simulate_delay(*hit, PR, z=1, k=None, own=True)
+    assert r["fills"][0][1:5] == ("sell", 1110, 1, "own")                             # прошёл на тик: 1111
+    m, t = gs.costs_delay(r["fills"], "RIU6", gs.PV_RI)
+    assert m < t

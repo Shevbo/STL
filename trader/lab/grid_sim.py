@@ -624,6 +624,170 @@ def run_regime(arg: dict) -> dict:
                                             "sig": {s: d["sig"][s][i - 1] for s in SIGS}})
     return out
 
+
+# ── третья редакция: опоздание на Z баров (docs/grid-regime-filter-2026.md, «Третья редакция») ───
+def _segment_wait(g: _Grid, pend: list, a: float, b: float, i: int, z: int) -> None:
+    """Как _segment, но прохождение уровня не исполняет заявку: уровень уходит в ожидание до закрытия
+    бара i+z-1 (z=1: закрытие бара прохода). Заявки сетки держатся на стороне STL, не в стакане."""
+    if g.pending:
+        g.place(a)
+    if b == a:
+        return
+    if b > a:
+        cand = [k for t, k in g.sells if a < t <= b]
+    else:
+        cand = [k for t, k in reversed(g.buys) if b <= t < a]
+    for k in cand:
+        pend.append({"k": k, "side": g.side[k], "px": g.px[k], "due": i + z - 1})
+        g.side[k] = "wait"
+    if cand:
+        g._rebuild()
+
+
+def simulate_delay(body: list, tail: list, p: dict, z: int, k: int | None, own: bool = False,
+                   skip_p: float | None = None, rng=None) -> dict:
+    """День по третьей редакции. Сетка от open бара 10:00, до стопа или флэта в конце дня.
+    На закрытии бара due: импульс (цена ушла от уровня дальше k шагов в сторону прохода; k=None = без
+    переноса) -> входа нет, база переносится к close (новая сетка, гашения сброшены, позиция остаётся);
+    иначе вход «от планки»: покупка по close + полспреда, продажа по close - полспреда (весь вход тейкер).
+    own=True (справочно): «своя сторона»: покупка по close - полспреда, продажа по close + полспреда,
+    исполняется, если СЛЕДУЮЩИЙ бар прошёл цену на 1 тик; иначе уровень снова в работе.
+    skip_p: контроль, вместо проверки импульса пропуск входа с вероятностью skip_p (rng.random())."""
+    n, hs, tick = len(body), p["half"], p["tick"]
+    st = _new_state()
+    g, last = _Grid(body[0][1], p), body[0][1]
+    pend: list = []
+    stat = {"dec": 0, "skip": 0, "entries": 0, "miss": 0}
+    stopped = False
+    for i in range(n):
+        ts, o, h, lw, c = body[i][:5]
+        if g.pending:
+            g.place(last)
+        quiet = (not g.pending and h < (g.sell_t[0] if g.sell_t else math.inf)
+                 and lw > (g.buy_t[-1] if g.buy_t else -math.inf))
+        if not quiet:
+            path = [o, lw, h, c] if c >= o else [o, h, lw, c]
+            a = last
+            for b in [o] + path[1:]:
+                _segment_wait(g, pend, a, b, i, z)
+                a = b
+        last = c
+        due = [e for e in pend if e["due"] <= i]
+        if due:
+            pend = [e for e in pend if e["due"] > i]
+            for e in due:
+                stat["dec"] += 1
+                lvl, side, L = e["k"], e["side"], e["px"]
+                if skip_p is not None:
+                    imp = rng.random() < skip_p
+                elif k is None:
+                    imp = False
+                else:
+                    imp = (c - L > k * p["step"]) if side == "sell" else (L - c > k * p["step"])
+                if imp:
+                    stat["skip"] += 1
+                    g, last, pend = _Grid(c, p), c, []
+                    break
+                if not own:
+                    _apply(st, side, c + hs if side == "buy" else c - hs, p["lot"], ts, "delay")
+                    g.fill(lvl)
+                    stat["entries"] += 1
+                else:
+                    lim = c - hs if side == "buy" else c + hs
+                    nb = body[i + 1] if i + 1 < n else None
+                    if nb is not None and ((side == "buy" and nb[3] <= lim - tick)
+                                           or (side == "sell" and nb[2] >= lim + tick)):
+                        _apply(st, side, lim, p["lot"], nb[0], "own")
+                        g.fill(lvl)
+                        stat["entries"] += 1
+                    else:
+                        g.side[lvl] = None            # не исполнилась: уровень снова в работе по рынку
+                        g.pending = True
+                        stat["miss"] += 1
+            g._rebuild()
+        if g.so.g_stop_pts > 0 and ((g.lo and c <= g.lo) or (g.hi and c >= g.hi)):
+            if i + 1 < n:
+                _flat(st, body[i + 1][1] - hs if st["pos"] > 0 else body[i + 1][1] + hs, body[i + 1][0], "stop")
+            else:
+                _flat(st, c, ts, "stop")
+            stopped = True
+            break
+    if st["pos"]:
+        end_bar = tail[0] if tail else body[-1]
+        _flat(st, end_bar[4], end_bar[0], "eod")
+    return {"fills": st["fills"], "pnl_pts": sum(st["trades_pnl"]) * 1.0, "max_pos": st["max_pos"],
+            "n_contracts": sum(f[3] for f in st["fills"]), "stat": stat, "stopped": stopped}
+
+
+def costs_delay(fills: list, symbol: str, pv: float) -> tuple[float, float]:
+    """(по видам, полный тейкер): вход «от планки», стоп и флэт тейкер; «своя сторона» мейкер.
+    Вторая граница: все филлы тейкер."""
+    from trader.lab.commission import commission_for
+    a = b = 0.0
+    for ts, _side, price, qty, kind in fills:
+        t = commission_for(symbol, price, qty, pv, taker=True, ts=ts)
+        a += commission_for(symbol, price, qty, pv, taker=False, ts=ts) if kind == "own" else t
+        b += t
+    return a, b
+
+
+def run_delay(arg: dict) -> dict:
+    """mode=delay_days: params, zs, ks (null = без переноса), owns ([false, true]), draws (контроль случайным
+    пропуском той же доли входов на отложенной трети, только own=false), chunk [i, n] по списку конфигураций."""
+    import random
+    from trader.lab.footprints import common
+    key = arg["symbol_key"]
+    rows = common.load_bars(key, arg.get("since"), arg.get("until"))
+    if not rows:
+        return {"id": "DELAY", "symbol": key, "error": "нет баров в окне"}
+    inst = INST["Si" if key[:2].lower() == "si" else "RI"]
+    days = prep_days(rows)
+    nt = len(days) * 2 // 3
+    cfgs = [(pi, z, k, ow) for pi in range(len(arg["params"])) for z in arg["zs"] for k in arg["ks"]
+            for ow in arg.get("owns", [False])]
+    if arg.get("chunk"):
+        i, n = arg["chunk"]
+        cfgs = cfgs[i::n]
+    out = {"id": "DELAY", "symbol": key, "n_days": len(days), "n_train": nt, "days": [d["stats"] for d in days],
+           "base": {}, "configs": []}
+
+    def cols(rs, pk):
+        c = {"gross": [], "fee_m": [], "fee_t": [], "nf": [], "dec": [], "skip": [], "ent": [], "mp": []}
+        for r in rs:
+            fm, ft = costs_delay(r["fills"], key, inst["pv"]) if "stat" in r else costs(r["fills"], key, inst["pv"])
+            c["gross"].append(round(r["pnl_pts"] * inst["pv"] * pk["lot"], 2))
+            c["fee_m"].append(round(fm, 2))
+            c["fee_t"].append(round(ft, 2))
+            c["nf"].append(r["n_contracts"])
+            c["mp"].append(r["max_pos"])
+            s = r.get("stat") or {"dec": 0, "skip": 0, "entries": 0}
+            c["dec"].append(s["dec"])
+            c["skip"].append(s["skip"])
+            c["ent"].append(s["entries"])
+        return c
+
+    for pi in sorted({c[0] for c in cfgs}):
+        p = {**DEFAULTS, **inst, **arg["params"][pi]}
+        out["base"][str(pi)] = cols([simulate_day(d["body"] + d["tail"], p) for d in days], p)
+    for pi, z, k, ow in cfgs:
+        p = {**DEFAULTS, **inst, **arg["params"][pi]}
+        rs = [simulate_delay(d["body"], d["tail"], p, z, k, own=ow) for d in days]
+        item = {"pi": pi, "z": z, "k": k, "own": ow, **cols(rs, p)}
+        if arg.get("draws") and not ow:
+            dec = sum(item["dec"][nt:])
+            share = sum(item["skip"][nt:]) / dec if dec else 0.0
+            item["share"] = share
+            ctrl = []
+            for dd in range(arg["draws"]):
+                rng = random.Random(1000 + dd)
+                rc = cols([simulate_delay(days[j]["body"], days[j]["tail"], p, z, k, skip_p=share, rng=rng)
+                           for j in range(nt, len(days))], p)
+                ctrl.append({"net_t": round(sum(rc["gross"]) - sum(rc["fee_t"]), 1),
+                             "daily_t": [round(g - f, 1) for g, f in zip(rc["gross"], rc["fee_t"])]})
+            item["ctrl"] = ctrl
+        out["configs"].append(item)
+    return out
+
 # ── сетка документа и живой набор ────────────────────────────────────────────
 STEPS = (50, 100, 150, 200, 300, 400, 600)
 LEVELS = (2, 3, 5, 8, 12)
@@ -665,6 +829,8 @@ def run(arg: dict) -> dict:
     "variants": [...] (вместо preset), "chunk": [i, n] (берутся варианты i::n)}."""
     if str(arg.get("mode", "")).startswith("regime"):
         return run_regime(arg)
+    if str(arg.get("mode", "")).startswith("delay"):
+        return run_delay(arg)
     from trader.lab.footprints import common
     key = arg["symbol_key"]
     rows = common.load_bars(key, arg.get("since"), arg.get("until"))
