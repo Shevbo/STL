@@ -1407,10 +1407,27 @@ def _audit_book_vs_terminal(book: SmartOrderBook, rows: dict[str, dict]) -> list
             out.append(f"книга считает заявку {sid} «{so.status}», "
                        f"а в терминале стоп-заявка {num} ЖИВА")
     for o in book.orders:
-        if o.status == "native" and o.so_id not in rows and not any(
-                c.parent_id == o.so_id and c.so_id in rows for c in book.orders):
-            out.append(f"заявка {o.so_id} числится под охраной терминала, "
-                       "а записи в таблице стоп-заявок нет: позиция без сторожа")
+        if o.status != "native" or o.so_id in rows:
+            continue
+        if any(c.parent_id == o.so_id and c.so_id in rows for c in book.orders):
+            continue
+        # СВЯЗКА OCO ОХРАНЯЕТСЯ ОДНОЙ СТОП-ЗАЯВКОЙ QUIK, и тег у неё — одной из ног.
+        #
+        # Ложная тревога 01.10.2026 сразу после рестарта: «c21c114afa числится под
+        # охраной терминала, а записи в таблице стоп-заявок нет: позиция без
+        # сторожа». На деле стоп и следящий тейк от входа 34593ce9df это связка
+        # (oco_group br:34593ce9df), и терминал держит её ОДНОЙ строкой
+        # 1012532699 под тегом stl-so-ae6731eec7 — что прямо написано в примечании
+        # самого тейка. Проверка знала про дочерние заявки и не знала про сиблингов,
+        # поэтому вторая нога всегда выглядела беззащитной.
+        #
+        # Цена такой ошибки — не ноль: ложная тревога про ОТСУТСТВИЕ защиты учит
+        # не верить тревогам, а 01.10 ложный SMS-алерт по умной заявке уже был.
+        if o.oco_group and any(c.oco_group == o.oco_group and c.so_id in rows
+                               for c in book.orders):
+            continue
+        out.append(f"заявка {o.so_id} числится под охраной терминала, "
+                   "а записи в таблице стоп-заявок нет: позиция без сторожа")
     return out
 
 

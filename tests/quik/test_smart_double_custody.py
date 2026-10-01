@@ -117,3 +117,46 @@ def test_dead_rows_are_not_custody(tmp_path):
     assert set(m._stop_rows_by_tag(store, "9618")) == {
         "aaaaaaaa01", "aaaaaaaa02", "aaaaaaaa03"}
     assert m._stop_num(live) == "310501606"
+
+
+def test_an_oco_pair_is_guarded_by_one_stop_order(tmp_path):
+    """СВЯЗКА OCO ОХРАНЯЕТСЯ ОДНОЙ СТОП-ЗАЯВКОЙ QUIK, и тег у неё — одной из ног.
+
+    Ложная тревога 01.10.2026 сразу после рестарта: «c21c114afa числится под охраной
+    терминала, а записи в таблице стоп-заявок нет: позиция без сторожа». На деле стоп
+    и следящий тейк от входа 34593ce9df — связка (oco_group br:34593ce9df), и терминал
+    держал её ОДНОЙ строкой 1012532699 под тегом stl-so-ae6731eec7, что прямо написано
+    в примечании самого тейка. Проверка знала про дочерние заявки и не знала про
+    сиблингов, поэтому вторая нога всегда выглядела беззащитной.
+
+    Ложная тревога про ОТСУТСТВИЕ защиты учит не верить тревогам — а ложный SMS по
+    умной заявке 01.10 уже был.
+    """
+    from trader.api.quik_smart_orders import _audit_book_vs_terminal
+    book = SmartOrderBook(str(tmp_path / "oco.json"))
+    sl = SmartOrder(so_id="aae6731ee7", kind="sl", code="RIZ6", side="sell", qty=1,
+                    trigger_price=85100, created_ms=NOW, status="native",
+                    parent_id="34593ce9df", oco_group="br:34593ce9df")
+    tp = SmartOrder(so_id="c21c114afa", kind="trail_tp", code="RIZ6", side="sell", qty=1,
+                    trigger_price=86500, created_ms=NOW, status="native",
+                    parent_id="34593ce9df", oco_group="br:34593ce9df")
+    book.orders += [sl, tp]
+
+    # терминал держит связку ОДНОЙ строкой под тегом первой ноги
+    rows = {sl.so_id: _row(sl.so_id)}
+    assert _audit_book_vs_terminal(book, rows) == [], (
+        "вторая нога связки охраняется той же строкой — тревоги быть не должно")
+
+    # а вот когда строки нет ВООБЩЕ — обе ноги действительно без сторожа
+    msgs = _audit_book_vs_terminal(book, {})
+    assert len(msgs) == 2 and all("без сторожа" in m for m in msgs)
+
+
+def test_a_lone_native_order_without_a_row_still_screams(tmp_path):
+    """Послабление не должно глушить настоящий случай: заявка БЕЗ связки и без
+    строки в терминале — это позиция без сторожа, и молчать нельзя."""
+    from trader.api.quik_smart_orders import _audit_book_vs_terminal
+    book, so = _standalone(tmp_path, status="native", native_state="")
+    assert so.oco_group == ""
+    msgs = _audit_book_vs_terminal(book, {})
+    assert len(msgs) == 1 and "без сторожа" in msgs[0]
