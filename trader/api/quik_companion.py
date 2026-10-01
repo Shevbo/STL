@@ -30,6 +30,7 @@ from pydantic import BaseModel
 from trader.api.leaderboard_scope import SQL_NOT_SERVICE
 from trader.auth.guard import auth_ok, require_auth
 from trader.quik import smart_orders as so_mod
+from trader.quik import terminal
 from trader.util import i9_hb_view
 
 router = APIRouter(prefix="/api/v1/quik/companion", tags=["quik-companion"])
@@ -1428,8 +1429,22 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
                                   if x.get("kind") == kind and x.get("status") in _SO_LIVE)
     # Потолок поднят с 8 до 20: списки теперь раскрываются, и обрезать их на
     # восьми значило бы прятать половину раскрытой группы.
+    # ТАБЛИЦА ЗАЯВОК ТЕРМИНАЛА ЦЕЛИКОМ — вне зависимости от природы заявки.
+    # `manual` выше фильтрует: роботные, recon и stl-so* строки выбрасываются ещё
+    # до показа, и «активных заявок в QUIK» у панели не бывало в принципе. Жалоба
+    # оператора 01.10.2026 дословно: «не вижу активные заявки в квике вне
+    # зависимости от их природы, не могу их снять». Природа здесь ЯРЛЫК (origin),
+    # а не фильтр: заявка стоит в рынке и торгует деньгами — она обязана быть на
+    # экране, кто бы её ни поставил. `terminal_stale` отличает ПУСТУЮ таблицу от
+    # ОТСУТСТВИЯ зеркала: первое значит «в терминале ничего», второе «не знаю».
+    _term = terminal.rows(store, agent_id, ids)
     orders_block = {"manual": manual_orders[:20], "smart": smart_list[:20],
-                    "counts": counts, "counts_active": counts_active}
+                    "counts": counts, "counts_active": counts_active,
+                    "terminal": [r for r in _term if r["active"]][:40],
+                    "terminal_done": [r for r in _term if not r["active"]][:20],
+                    "terminal_total": len(_term),
+                    "terminal_active": sum(1 for r in _term if r["active"]),
+                    "terminal_stale": not terminal.fresh(store, agent_id)}
     # «СЕГОДНЯ» РУЧНОЙ ТОРГОВЛИ — та же величина, что у робота, и в том же виде.
     # Без неё ВМ счёта не с чем сводить: заявки оператора из терминала, дети
     # умных заявок и align-заявки recon делают свой результат, а показать его

@@ -438,6 +438,21 @@ func (m *Manager) CancelOrder(req *quikv1.CancelOrder) {
 		// писала «снято», а заявки продолжали ТОРГОВАТЬ и набрали оператору
 		// лишние контракты. Час ушёл на то, чтобы понять, что отмены вообще не
 		// доходят. Молчание здесь стоит дороже любого лишнего алерта.
+		//
+		// СНАЧАЛА ПОПЫТКА СНЯТЬ, и только потом крик. KILL_ORDER в QUIK нужны лишь
+		// номер заявки, класс и инструмент — своя карта для этого не требуется, и
+		// CancelOrphan ровно это и делает (см. выше). Не хватало только инструмента:
+		// в CancelOrder его не было, поэтому «не знаю заявку» означало «не могу
+		// снять». Теперь STL присылает code из таблицы заявок терминала, и заявка
+		// снимается независимо от того, помнит ли её агент.
+		if code := req.GetCode(); code != "" && req.GetOrderId() != "" {
+			if err := m.CancelOrphan(req.GetOrderId(), code); err == nil {
+				m.logf("trade: unknown order %s (%s) cancelled by order_num+sec=%s",
+					req.GetOrderId(), req.GetClientId(), code)
+				return
+			}
+			// Не ушло в QUIK — это уже настоящий отказ, он идёт вниз и кричит.
+		}
 		m.logf("trade: cancel for unknown order (client=%q order=%q)", req.GetClientId(), req.GetOrderId())
 		m.rejectPlace(req.GetClientId(), "", quikv1.Side_SIDE_UNSPECIFIED, 0, 0,
 			ReasonCancelUnknown)

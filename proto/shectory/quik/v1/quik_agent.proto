@@ -446,6 +446,15 @@ message PlaceOrder {
 message CancelOrder {
   string client_id = 1;
   string order_id = 2;    // QUIK order id (or empty to use client_id mapping)
+  // ИНСТРУМЕНТ — чтобы снимать заявку, которой агент НЕ ЗНАЕТ. Без него снятие
+  // работало только по карте агента, а карта живёт в памяти процесса: 01.10.2026
+  // после перезапуска агента 24 заявки сетки стали неснимаемыми — STL слал
+  // отмену, агент не находил заявку и выходил, а заявки продолжали торговать.
+  // KILL_ORDER в QUIK требует CLASSCODE+SECCODE, взять их из своей карты агент в
+  // этом случае не может — значит их обязан прислать STL, у которого есть
+  // таблица заявок терминала (trader/quik/terminal.py). С этим полем агент падает
+  // на CancelOrphan. Пусто = прежнее поведение (снятие по карте).
+  string code = 3;
 }
 
 // Native atomic move: change a resting order's price (and optionally qty) in ONE QUIK

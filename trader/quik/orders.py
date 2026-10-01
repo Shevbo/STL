@@ -348,9 +348,16 @@ def build_place_order(
     )
 
 
-def build_cancel_order(client_id: str, order_id: str = "") -> "pb.OrchestratorMessage":
+def build_cancel_order(client_id: str, order_id: str = "",
+                       code: str = "") -> "pb.OrchestratorMessage":
+    """Снятие заявки. `code` — инструмент, и его стоит передавать ВСЕГДА, когда он
+    известен: без него агент может снять заявку только по своей карте в памяти, а
+    карта умирает с процессом. 01.10.2026 после перезапуска агента 24 заявки сетки
+    стали неснимаемыми именно так. С инструментом агент снимает по номеру заявки
+    (KILL_ORDER требует CLASSCODE+SECCODE) независимо от того, помнит ли он её."""
     return pb.OrchestratorMessage(
-        cancel_order=pb.CancelOrder(client_id=client_id, order_id=order_id or "")
+        cancel_order=pb.CancelOrder(client_id=client_id, order_id=order_id or "",
+                                    code=code or "")
     )
 
 

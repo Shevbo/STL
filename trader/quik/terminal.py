@@ -1,0 +1,150 @@
+"""Таблица заявок QUIK — единственный правдивый ответ «что живо в терминале».
+
+Три косяка, названные оператором одним письмом 01.10.2026 («не видишь активные
+заявки в квике вне зависимости от их природы, не можешь их снять, пугаешь
+амнезией при перезагрузке»), оказались одним корнем: STL судил о живых заявках
+по своему складу в ПАМЯТИ, а не по таблице терминала. Склад знает только то,
+что ставил сам, пустеет при рестарте и слеп к заявкам, поставленным руками или
+переживившим перезапуск. Отсюда все три: экран не показывал чужое, снимать было
+нечем, а после рестарта сторож ставил дубли к живым и невидимым заявкам — ровно
+так 01.10.2026 сетка удвоилась на 24 заявках.
+
+Таблица приезжает от агента в зеркале (`agent_status()["quik"]["orders"]`,
+публикует QLua `publish_acc_orders`) и несёт всё нужное: номер, инструмент,
+сторону, цену, объём, остаток, активность и brokerref.
+
+Два правила, за которые и написан модуль:
+
+* **Природа заявки — ЯРЛЫК, а не фильтр.** Экран обязан показать живую заявку,
+  кто бы её ни поставил. Компаньон до этого дня выбрасывал роботные, `recon` и
+  `stl-so*` строки ещё до показа, и «активных заявок в QUIK» у него не бывало
+  в принципе.
+* **Пустая таблица и отсутствие таблицы — разные ответы.** `rows()` вернёт `[]`
+  в обоих случаях, поэтому решения о ПОСТАНОВКЕ заявки принимаются только через
+  `fresh()`: нет зеркала — «не знаю», и ставить вслепую нельзя.
+"""
+
+from __future__ import annotations
+
+import time
+from typing import Any
+
+from trader.quik.truth import MIRROR_MAX_MS, SMART_TAG, owner
+
+# Цена уровня/стенки совпадает с ценой строки в QUIK с точностью до шага цены.
+# Сравнение идёт по шагу, а не по «равно»: QUIK отдаёт double, а шаг RIZ6 = 10.
+_PRICE_EPS_STEPS = 0.5
+
+
+def snapshot(store: Any, agent: str | None = None) -> dict[str, Any]:
+    """Блок `quik` зеркала агента. Пустой словарь — зеркала нет."""
+    if store is None:
+        return {}
+    status = store.agent_status(agent) or {}
+    return (status.get("quik") or {}) if isinstance(status, dict) else {}
+
+
+def fresh(store: Any, agent: str | None = None, now_ms: int | None = None) -> bool:
+    """Можно ли опираться на таблицу при РЕШЕНИИ поставить заявку.
+
+    False = «не знаю, что в терминале»: зеркала нет или оно встало. Отличать от
+    пустой таблицы обязательно — иначе STL примет собственную слепоту за флэт и
+    поставит дубль к живой заявке (инцидент 01.10.2026)."""
+    if store is None:
+        return False
+    status = store.agent_status(agent) or {}
+    if not isinstance(status, dict) or not status:
+        return False
+    quik = status.get("quik")
+    if not isinstance(quik, dict) or "orders" not in quik:
+        return False          # старая сборка агента: таблицы в зеркале нет вовсе
+    # Возраст зеркала у store ОДИН: `_received_at_ms` (см. store.set_agent_status —
+    # generated_at агента там принимается и намеренно не используется).
+    got = int(status.get("_received_at_ms") or 0)
+    if got <= 0:
+        return True           # возраст не заявлен — зеркало есть, судим по нему
+    now = now_ms if now_ms is not None else int(time.time() * 1000)
+    return (now - got) <= MIRROR_MAX_MS
+
+
+def rows(store: Any, agent: str | None = None,
+         robot_ids: set[str] | None = None) -> list[dict[str, Any]]:
+    """Все строки таблицы заявок QUIK с ЯРЛЫКОМ природы. Ничего не фильтруется.
+
+    `origin` — `manual` (руками в терминале) | `smart` | `robot` | `recon` |
+    `external` (приложение брокера). `so_id` заполнен только у умных заявок."""
+    out = []
+    for o in snapshot(store, agent).get("orders") or []:
+        if not isinstance(o, dict):
+            continue
+        tag = str(o.get("tag") or "")
+        try:
+            qty, bal = int(o.get("qty") or 0), int(o.get("balance") or 0)
+        except (TypeError, ValueError):
+            qty, bal = 0, 0
+        out.append({
+            "num": str(o.get("num") or ""),
+            "sec": str(o.get("sec") or ""),
+            "side": str(o.get("side") or ""),
+            "price": float(o.get("price") or 0),
+            "qty": qty,
+            "balance": bal,
+            "filled": max(qty - bal, 0),
+            "active": bool(o.get("active")),
+            "ts_ms": int(o.get("ts_ms") or 0),
+            "tag": tag,
+            "origin": owner(tag, robot_ids),
+            "so_id": so_id_of(tag),
+        })
+    out.sort(key=lambda d: (not d["active"], -d["ts_ms"]))
+    return out
+
+
+def active(store: Any, agent: str | None = None,
+           robot_ids: set[str] | None = None) -> list[dict[str, Any]]:
+    """Только живые строки: то, что ПРЯМО СЕЙЧАС стоит в рынке."""
+    return [r for r in rows(store, agent, robot_ids) if r["active"]]
+
+
+def so_id_of(tag: str) -> str:
+    """so_id из brokerref `stl-so-<so_id>[:<хвост client_id>]`.
+
+    В brokerref QUIK ровно 20 символов, а client_id уровня сетки выглядит как
+    `so:<so_id>:<стенка>:<соль>` — в тег влезает so_id и огрызок стенки. Поэтому
+    режем по первому двоеточию: so_id (10 hex) влезает всегда, огрызок никому не
+    нужен. Уровень опознаётся по ЦЕНЕ строки (`matches_price`), она в таблице и
+    детерминирована."""
+    tag = (tag or "").strip()
+    if not tag.startswith(SMART_TAG):
+        return ""
+    return tag[len(SMART_TAG):].split(":", 1)[0]
+
+
+def by_smart_order(store: Any, agent: str | None = None) -> dict[str, list[dict[str, Any]]]:
+    """so_id -> ЖИВЫЕ строки QUIK этой умной заявки.
+
+    Основа лечения амнезии: перед постановкой уровня сторож спрашивает не свой
+    склад, а терминал."""
+    out: dict[str, list[dict[str, Any]]] = {}
+    for r in active(store, agent):
+        if r["so_id"]:
+            out.setdefault(r["so_id"], []).append(r)
+    return out
+
+
+def matches_price(row_price: float, want: float, step: float) -> bool:
+    """Это ли строка того самого уровня/стенки. Допуск — половина шага цены."""
+    if step <= 0:
+        return abs(row_price - want) < 1e-9
+    return abs(row_price - want) <= step * _PRICE_EPS_STEPS
+
+
+def find_level(live: list[dict[str, Any]], price: float, step: float,
+               side: str = "") -> dict[str, Any] | None:
+    """Живая заявка этого уровня среди строк умной заявки, иначе None."""
+    for r in live:
+        if side and r["side"] and r["side"] != side:
+            continue
+        if matches_price(r["price"], price, step):
+            return r
+    return None
