@@ -44,7 +44,7 @@
 -- Bump on every change you deliver to the VDS. Logged FIRST on OnInit so the
 -- operator can confirm which version QUIK actually loaded (the running script is
 -- in MEMORY; a file on disk with the same name may be a different build).
-local SCRIPT_VERSION = "2026.09.30-limits"
+local SCRIPT_VERSION = "2026.10.01-trade-facts"
 
 local CONFIG = {
   HOST          = "127.0.0.1",
@@ -560,14 +560,59 @@ local function emit_order(order_num, trans_id, state, balance, qty, price, text)
   })
 end
 
-local function emit_trade(order_num, qty, price, ts)
-  emit({
+-- Сторона сделки из flags таблицы QUIK: бит 0x4 = продажа. Определена ЗДЕСЬ, а
+-- не ниже по файлу: в Lua локальная функция видна только после своего
+-- объявления, и emit_trade, объявленный выше, не нашёл бы её вовсе — вызов упал
+-- бы на живом терминале при первой же сделке.
+local function side_from_flags(flags)
+  if (math.floor((tonumber(flags) or 0) / 4) % 2) == 1 then return "S" end
+  return "B"
+end
+
+-- Число из таблицы QUIK или nil, если поля нет. nil ВАЖЕН: пустое поле должно
+-- доехать как «данных нет», а не как ноль. Ноль у мейкера — факт (комиссии нет),
+-- пусто — отсутствие данных, и склеивать их значит потерять единственный признак,
+-- по которому видно, что терминал поля вообще не отдаёт (просьба backtests 01.10).
+local function num_or_nil(v)
+  local n = tonumber(v)
+  if n == nil then return nil end
+  return n
+end
+
+-- ФАКТЫ О СДЕЛКЕ, А НЕ ТОЛЬКО ОБЪЁМ И ЦЕНА.
+--
+-- 01.10.2026. Чего не хватало и чего это стоило:
+--   • СТОРОНА. OnTrade её не слал, поэтому закрытие позиции нативной стоп-заявкой
+--     QUIK не попадало НИ В ОДИН журнал: в этот день не удалось установить, чем
+--     закрылся ручной шорт на 53 контракта. По той же причине предохранитель по
+--     экспозиции на агенте видел только половину филлов.
+--   • КОМИССИЯ. Модель расходится с фактом вдвое (9.45 против ~3.6 ₽/лот
+--     биржевой части), и без построчного факта причину назвать нечем.
+--   • НОМЕР СДЕЛКИ — чтобы сверка с расчётом была построчной.
+--
+-- Сторону берём тем же side_from_flags, что и таблица заявок счёта: бит 0x4 =
+-- продажа. Это уже проверенное правило. Сырые flags шлём РЯДОМ намеренно: если
+-- трактовка окажется неверной, её можно исправить в агенте, не заставляя
+-- оператора заново грузить скрипт руками в QUIK.
+local function emit_trade(order_num, qty, price, ts, t)
+  local ev = {
     event = "trade",
     order_num = order_num or "",
     qty = qty or 0,
     price = price or "",
     ts = ts or 0,
-  })
+  }
+  if t then
+    ev.side  = side_from_flags(t.flags)          -- "B" | "S"
+    ev.flags = tonumber(t.flags) or 0            -- сырые, на случай иной трактовки
+    -- Номер сделки — через %.0f: QLua 32-битная, "%d" режет большие числа.
+    if t.trade_num then ev.trade_num = string.format("%.0f", tonumber(t.trade_num) or 0) end
+    ev.exchange_comission   = num_or_nil(t.exchange_comission)
+    ev.clearing_comission   = num_or_nil(t.clearing_comission)
+    ev.tech_center_comission = num_or_nil(t.tech_center_comission)
+    ev.broker_comission     = num_or_nil(t.broker_comission)
+  end
+  emit(ev)
 end
 
 ----------------------------------------------------------------------
@@ -730,10 +775,6 @@ local function dt_to_ms(dt)
 end
 
 -- flags bit2 (4) = SELL, same bit for both the orders and trades tables.
-local function side_from_flags(flags)
-  if (math.floor((tonumber(flags) or 0) / 4) % 2) == 1 then return "S" end
-  return "B"
-end
 
 -- acc_resync: forget what we already sent so the FULL account picture is
 -- re-published. Called when the agent (re)appears: a restarted agent has an
@@ -1404,7 +1445,7 @@ function OnTrade(trade)
   end
   if ts == 0 then ts = os.time() end
 
-  emit_trade(order_num, qty, price_to_str(price), ts)
+  emit_trade(order_num, qty, price_to_str(price), ts, trade)
 end
 
 -- OnStopOrder: stop-order lifecycle (placed, activated -> child order, killed,
