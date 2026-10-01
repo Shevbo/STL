@@ -1,11 +1,14 @@
 # Recent
 
-## 2026-09-20 | main
-Deployed orderbook pipeline infra (book_digest.py, book_replay.py, opt_agent.py·437 tests) to i9 with 60 orderbook jobs (run ID collision fixed). Leaderboard script ranked top strategies (Bollinger M1, 2EMA, MACD, SuperTrend) but identified data corruption (dupes, martingale patterns). Harm-filter refined, reg_n gate built, grid-search queued.
+## 2026-09-29
+Deployed L2 resub (4x load reduction); fixed double-guard smart orders (1256 tests) + guaranteed execution impl; SMS monitoring 24/7; critical QUIK fixes; rev 1790712787 (1319 tests).
 
-## 2026-09-18 | main
-Walk-forward 2EMA methodology disputed (4-yr vs 6m data); 2EMA closed (spread costs 4%, frequent exits analyzed). Extracted 830k-bar RI backtest (2022–26, tests green); RI "stop-only" variant pairwise better but statistically null (t=0.30 without 2026). Registered 3EMA (all pairs BR/GD/Si); Si 2EMA yields +92.6k₽ but placebo-gate null (p=0.117). Fixed si_portfolio_ten.py (8ed5df7); 10-robot portfolio leverage 0.93 corr; cost-filter (ATR=0) in progress.
+## 2026-09-28
+Real-trade rev 1790586989 deployed (pong/book_codes, usopen params); tracked lxk22 stop escalation (1%→83896); flip_close_loss ban −25.3k gain.
+
+## 2026-09-27
+Debug entry_reasons loss (_EXTRA_KEYS); fixed Lua subscriptions (once per lifetime); rev 1790457130 L2 resub w/ auto-catch deployment.
 
 ## Identity Candidates
-- IDENTITY CANDIDATE: Triangular arbitrage design (144 params) reveals multi-instrument coordination sophistication
-- IDENTITY CANDIDATE: Email hook automation (scripts/mail_hook.py) over devmail_install shows infrastructure reliability obsession
+- IDENTITY CANDIDATE: Building state-tracking infrastructure (truth.py, pos.py) to diagnose and prevent production issues (STL stops, silent restarts).
+- IDENTITY CANDIDATE: Handling production incidents pragmatically (manual closes + data recovery) while building preventive infrastructure (archive watchdog, stream persistence).
