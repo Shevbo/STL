@@ -124,6 +124,11 @@ def test_random_anchor_does_not_enter_on_impulse_and_flat_has_none():
     assert _run(_bars(_flat(200)), random_anchor=1) == []   # нет импульса -> нет якоря
 
 
+def _is_wk():
+    from trader.lab.commission import is_weekend
+    return is_weekend(DAY0 + 700 * 60)
+
+
 def test_reason_counters_for_extra():
     async def go():
         rt = BacktestRuntime(bars=_series([B74, (102.6, 102.9, 102.5), (101.5, 102.6, 101.4),
@@ -133,4 +138,4 @@ def test_reason_counters_for_extra():
             if not rt.advance():
                 break
         return {k: v for k, v in rt._state.items() if k.startswith(("why_", "exit_"))}
-    assert asyncio.run(go()) == {"why_e1": 1, "why_e2": 1, "exit_stop": 1}
+    assert asyncio.run(go()) == {"why_e1": 1, "why_e2": 1, "exit_stop": 1, "why_fq": 4, "why_fqw": 4 + (4 if _is_wk() else 0)}

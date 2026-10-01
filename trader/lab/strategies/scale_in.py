@@ -31,6 +31,7 @@ E1 = SMA(close, N) на закрытии прошлого бара (плывёт
 import math
 import random
 
+from trader.lab.commission import is_weekend
 from trader.lab.footprints.common import minute_of_day
 from trader.lab.runtime import STLRuntime
 from trader.lab.strategies.retest import _FLAT_MIN, _NO_ENTRY_MIN, find_impulse
@@ -88,13 +89,21 @@ async def on_start(stl: STLRuntime, params: dict) -> None:
             f"S={params.get('S')} Y={params.get('Y')} random_anchor={params.get('random_anchor', 0)}")
 
 
-def _inc(stl, key: str) -> None:
+def _inc(stl, key: str, n: int = 1) -> None:
     """Счётчики why_*/exit_* бэктест кладёт в extra результата (entry_reasons/exit_reasons)."""
-    stl.set_state(key, int(stl.get_state(key, 0) or 0) + 1)
+    stl.set_state(key, int(stl.get_state(key, 0) or 0) + n)
+
+
+def _fill(stl, ts, qty: int) -> None:
+    """Контракты по филлам (why_fq) и с удвоением выходных (why_fqw): по ним сборщик пересчитывает
+    брокерскую часть комиссии, когда движок считал RIH6 с ценой пункта 1.0."""
+    _inc(stl, "why_fq", qty)
+    _inc(stl, "why_fqw", qty * (2 if is_weekend(ts) else 1))
 
 
 async def _market_exit(stl, symbol, st, price, ts, half, qty_leg, why):
     _inc(stl, "exit_" + why)
+    _fill(stl, ts, st["qin"] * qty_leg)
     side = "sell" if st["sgn"] > 0 else "buy"
     await stl.place_order_at(symbol, side, st["qin"] * qty_leg, price - st["sgn"] * half, ts)
 
@@ -138,6 +147,7 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
         if st["qin"] == 0:                                   # ждём E1
             if minute < _NO_ENTRY_MIN and st["e1"] is not None and sgn * (st["e1"] - worst) >= pen:
                 _inc(stl, "why_e1")
+                _fill(stl, cur.time, leg)
                 await stl.place_order_at(symbol, side, leg, st["e1"], cur.time)
                 st.update(qin=1, kf=k, e1p=st["e1"], stop=st["e2"] - sgn * S)
                 filled = True
@@ -150,6 +160,7 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
         if st and st["qin"]:
             if st["qin"] == 1 and sgn * (st["e2"] - worst) >= pen:
                 _inc(stl, "why_e2")
+                _fill(stl, cur.time, leg)
                 await stl.place_order_at(symbol, side, leg, st["e2"], cur.time)
                 st["qin"] = 2
                 filled = True
@@ -159,6 +170,7 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
                 st = None
             elif not filled and sgn * (best - st["tp"]) >= pen:
                 _inc(stl, "exit_tp_both" if st["qin"] == 2 else "exit_tp_one")
+                _fill(stl, cur.time, st["qin"] * leg)
                 await stl.place_order_at(symbol, exit_side, st["qin"] * leg, st["tp"], cur.time)
                 st = None
             elif minute >= _FLAT_MIN:
