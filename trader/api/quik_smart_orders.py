@@ -1775,7 +1775,10 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
             # после рестарта заявке STL не возвращает её client_id — и филл такой
             # заявки учитывается не записью склада, а исчезновением строки из
             # таблицы. Полный учёт филлов по журналу сделок — отдельная работа.
-            standing = terminal.find_level(term_live, px, step, side)
+            # СТОРОНУ НЕ ПЕРЕДАЁМ — см. terminal.find_level: сторона уровня следует
+            # рынку, и при его смещении сверка по стороне разрешила бы поставить
+            # вторую заявку на ту же цену, в противоположную сторону.
+            standing = terminal.find_level(term_live, px, step)
             if standing is not None:
                 # Значение здесь ЧИСЛО, а не номер заявки строкой: _withdraw_resting
                 # считает любую строку в live идентификатором заявки (и уже один раз
@@ -2016,7 +2019,7 @@ def _walls_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
             live.pop(f"warm:{wall}", None)
             # ponytail: стенка опознаётся по ЦЕНЕ — client_id в brokerref QUIK не
             # влезает (20 символов, см. terminal.so_id_of).
-            standing = terminal.find_level(term_live, px, step, side)
+            standing = terminal.find_level(term_live, px, step)   # без стороны, см. выше
             if standing is not None:
                 if live.get(f"adopt:{wall}") != 1:
                     live[f"adopt:{wall}"] = 1
