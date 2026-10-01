@@ -46,8 +46,28 @@ class FakeOst:
 
 
 class FakeStore:
+    """Зеркало агента, включая ТАБЛИЦУ ЗАЯВОК ТЕРМИНАЛА.
+
+    Таблица обязательна: сторож решает, ставить ли заявку, по ней, а не по своему
+    складу в памяти (trader/quik/terminal.py). Нет таблицы вовсе = «не знаю, что в
+    QUIK», и тогда не ставится НИЧЕГО — это проверяет
+    test_nothing_is_placed_when_the_terminal_table_is_unknown."""
+
+    def __init__(self, terminal_orders=()):
+        self._orders = list(terminal_orders)
+
     def tick(self, code, agent=None):
         return {"last": 84500.0, "bid": 84490.0, "ask": 84510.0}
+
+    def agent_status(self, agent=None):
+        return {"_received_at_ms": NOW, "quik": {"orders": self._orders}}
+
+
+def _term_row(num, sec, side, price, qty=10, balance=None, tag="", active=True):
+    """Строка таблицы заявок QUIK в том виде, в каком её отдаёт зеркало агента."""
+    return {"num": num, "sec": sec, "side": side, "price": price, "qty": qty,
+            "balance": qty if balance is None else balance, "active": active,
+            "tag": tag, "ts_ms": NOW}
 
 
 class Lim:
@@ -70,15 +90,6 @@ def _book(tmp_path, **kw):
     return b, so
 
 
-import pytest as _pytest
-
-
-@_pytest.fixture(autouse=True)
-def _store_is_warm(monkeypatch):
-    """Замок прогрева склада заявок (после рестарта STL он пуст) к этим тестам
-    не относится: они проверяют геометрию, а не момент после перезапуска.
-    Отдельная проверка самого замка — test_nothing_is_placed_while_the_store_warms_up."""
-    monkeypatch.setattr("trader.api.quik_smart_orders._PROC_START_MS", 0)
 
 
 def _run(book, ost, srv, now=NOW, limits=None):
@@ -316,8 +327,8 @@ def test_wall_order_never_grows_position_against_the_corridor(tmp_path, market):
             f"позиция {c_pos:+d} при рынке {market}: заявка доливает в ту же сторону")
 
 
-def test_nothing_is_placed_while_the_store_warms_up(tmp_path, monkeypatch):
-    """ЗАМОК ПРОГРЕВА СКЛАДА ЗАЯВОК, ценой шести контрактов вместо одного.
+def test_nothing_is_placed_when_the_terminal_table_is_unknown(tmp_path):
+    """НЕ ЗНАЮ, ЧТО В QUIK — НЕ СТАВЛЮ. Ценой шести контрактов вместо одного.
 
     01.10.2026: склад заявок STL живёт в памяти и после рестарта пуст. Заявка
     коридора, стоявшая в QUIK с до-рестартного времени, для STL перестала
@@ -325,20 +336,163 @@ def test_nothing_is_placed_while_the_store_warms_up(tmp_path, monkeypatch):
     :low:5891, обе налились по 2), а сверху выстрелил сам. Один коридор на объём
     1 купил 6 контрактов.
 
-    Мирно стоящая заявка не порождает обновлений, поэтому «подождём, агент
-    пришлёт» не работает само: нужен явный запрет ставить, пока склад не прогрет.
-    """
-    import trader.api.quik_smart_orders as mod
-    monkeypatch.setattr(mod, "_PROC_START_MS", NOW - 1000)   # процесс только что встал
-    book, so = _book(tmp_path)
-    srv = FakeSrv()
-    _walls_sync(book, FakeStore(), FakeOst(), srv, Lim(), "9618", STEPS, {}, NOW)
-    placed = [m for m in srv.sent if m.WhichOneof("payload") == "place_order"]
-    assert placed == [], "пока склад не прогрет, в стакан не ставим"
+    Здесь стоял замок по ЧАСАМ: 90 секунд после старта процесса не ставим. Он
+    лечил не причину — заявка в QUIK живёт сутками, пережить полторы минуты ей
+    ничего не стоит. Теперь решение принимается по таблице заявок терминала, и
+    отсутствие таблицы (молчащее зеркало агента) запрещает ставить БЕССРОЧНО, а
+    не на минуту с половиной.
 
-    # прогрелись — ставим как обычно
-    monkeypatch.setattr(mod, "_PROC_START_MS", NOW - mod._ORDER_STORE_WARMUP_MS - 1)
+    ПУСТАЯ таблица и ОТСУТСТВИЕ таблицы — разные ответы; этот тест про второй.
+    """
+    class NoMirror(FakeStore):
+        def agent_status(self, agent=None):
+            return None
+
+    book, _ = _book(tmp_path)
+    srv = FakeSrv()
+    _walls_sync(book, NoMirror(), FakeOst(), srv, Lim(), "9618", STEPS, {}, NOW)
+    assert [m for m in srv.sent if m.WhichOneof("payload") == "place_order"] == [],         "зеркала нет — что стоит в QUIK неизвестно, ставить вслепую нельзя"
+
+    # зеркало встало (возраст больше MIRROR_MAX_MS) — тот же запрет
+    class StaleMirror(FakeStore):
+        def agent_status(self, agent=None):
+            return {"_received_at_ms": NOW - 10 * 60 * 1000,
+                    "quik": {"orders": []}}
+
     srv2 = FakeSrv()
-    _walls_sync(book, FakeStore(), FakeOst(), srv2, Lim(), "9618", STEPS, {}, NOW)
-    assert [m for m in srv2.sent if m.WhichOneof("payload") == "place_order"], \
-        "после прогрева стенки обязаны встать"
+    _walls_sync(book, StaleMirror(), FakeOst(), srv2, Lim(), "9618", STEPS, {}, NOW)
+    assert [m for m in srv2.sent if m.WhichOneof("payload") == "place_order"] == [],         "зеркало встало — таблица устарела, ставить по ней нельзя"
+
+    # таблица есть и ПУСТА — это законный ответ «в терминале ничего», ставим
+    srv3 = FakeSrv()
+    _walls_sync(book, FakeStore(), FakeOst(), srv3, Lim(), "9618", STEPS, {}, NOW)
+    assert [m for m in srv3.sent if m.WhichOneof("payload") == "place_order"],         "пустая таблица — не слепота: стенки обязаны встать"
+
+
+def test_standing_wall_in_the_terminal_is_adopted_not_duplicated(tmp_path):
+    """ГЛАВНЫЙ СЛУЧАЙ АМНЕЗИИ, и он стоил денег дважды за один день.
+
+    Склад заявок STL пуст (рестарт), книга умной заявки не помнит client_id — а в
+    терминале стенка СТОИТ. Раньше сторож видел «записи нет» и ставил вторую: один
+    коридор на объём 1 набрал 6 контрактов. Теперь он спрашивает таблицу QUIK, и
+    стенка опознаётся по ЦЕНЕ (client_id в brokerref QUIK не влезает: там 20
+    символов, см. terminal.so_id_of).
+
+    Тест падает на старом коде: там второй заявке ничто не мешало.
+    """
+    book, so = _book(tmp_path)
+    # низ 84000 УЖЕ стоит в терминале под тегом этой умной заявки; верха нет
+    store = FakeStore([_term_row("991", "RIZ6", "buy", 84000.0,
+                                 tag=f"stl-so-{so.so_id}")])
+    srv = FakeSrv()
+    # склад заявок ПУСТ, книга пуста — ровно состояние после рестарта
+    _walls_sync(book, store, FakeOst(), srv, Lim(), "9618", STEPS, {}, NOW)
+    placed = [m.place_order for m in srv.sent
+              if m.WhichOneof("payload") == "place_order"]
+    assert [p.side for p in placed] == [2],         "низ уже стоит в терминале — ставится только верх (продажа)"
+    assert round(placed[0].price) == 85000
+    assert so.c_live.get("adopt:low") == 1, "подхват отмечен в книге"
+    assert "low" not in so.c_live, "своего client_id у подхваченной заявки нет"
+
+
+def test_a_standing_order_of_another_smart_order_is_not_adopted(tmp_path):
+    """Подхват идёт ТОЛЬКО по своему тегу. Заявка соседней умной заявки или
+    оператора на той же цене своей не является: приняв её за свою, сторож
+    перестал бы держать собственную стенку вовсе."""
+    book, so = _book(tmp_path)
+    store = FakeStore([
+        _term_row("992", "RIZ6", "buy", 84000.0, tag="stl-so-деадбееф01"),
+        _term_row("993", "RIZ6", "buy", 84000.0, tag=""),          # руками оператора
+    ])
+    srv = FakeSrv()
+    _walls_sync(book, store, FakeOst(), srv, Lim(), "9618", STEPS, {}, NOW)
+    sides = sorted(m.place_order.side for m in srv.sent
+                   if m.WhichOneof("payload") == "place_order")
+    assert sides == [1, 2], "чужие заявки на той же цене не отменяют наших стенок"
+    assert not any(k.startswith("adopt:") for k in so.c_live)
+
+
+# --------------------------------------------------------------------------
+# ИСПОЛНЕНИЕ СТЕНКИ: вторая половина той же болезни, что у сетки.
+# --------------------------------------------------------------------------
+
+
+def test_a_filled_wall_is_counted_and_not_placed_again(tmp_path):
+    """КАЖДОЕ КАСАНИЕ СТЕНКИ УДВАИВАЛО ОБЪЁМ.
+
+    30.09.2026 стенки научились СТОЯТЬ в стакане, а учёт их исполнения остался на
+    старом пути «выстрел по касанию»: позицию коридора двигал только он. У стоящей
+    стенки c_pos оставался нулём, а запрет «на стенке, от которой мы уже в позиции,
+    заявки быть не должно» гейтится именно c_pos. Стенка наливалась, сторож видел
+    ноль и ставил её заново — и так по кругу.
+
+    Падает на старом коде: там ветки исполнения не было вовсе.
+    """
+    book, so = _book(tmp_path)                       # верх 85000, низ 84000, объём 10
+    so.c_live = {"top": "so:x:top:1"}
+    srv = FakeSrv()
+    ost = FakeOst([{"client_id": "so:x:top:1", "order_id": "11", "state": "filled",
+                    "side": "sell", "filled": 10, "remaining": 0, "price": 85000.0}])
+    _run(book, ost, srv)
+
+    assert so.c_pos == -10, (
+        f"позиция {so.c_pos:+d}: исполнение стенки не учтено — сторож поставит её заново")
+    assert "top" not in so.c_live, "заявки на этой стенке больше нет"
+    again = [m.place_order for m in srv.sent
+             if m.WhichOneof("payload") == "place_order"
+             and m.place_order.side == 2]
+    assert again == [], "на только что исполнившуюся стенку поставлена новая заявка"
+    # а внизу встаёт заявка НА ПЕРЕВОРОТ: закрыть шорт и открыть лонг
+    low = [m.place_order for m in srv.sent
+           if m.WhichOneof("payload") == "place_order" and m.place_order.side == 1]
+    assert low and low[0].quantity == 20
+
+
+def test_a_partial_wall_fill_is_counted_by_the_fact(tmp_path):
+    """Частичный налив учитывается по ФАКТУ. corridor_after_fire ставит позицию
+    равной базовому объёму целиком и на половине налива соврал бы — а от c_pos
+    считается объём встречной заявки."""
+    book, so = _book(tmp_path)
+    so.c_live = {"top": "so:x:top:1"}
+    srv = FakeSrv()
+    ost = FakeOst([{"client_id": "so:x:top:1", "order_id": "11", "state": "filled",
+                    "side": "sell", "filled": 4, "remaining": 0, "price": 85000.0}])
+    _run(book, ost, srv)
+    assert so.c_pos == -4, f"налилось 4, позиция {so.c_pos:+d}"
+    low = [m.place_order for m in srv.sent
+           if m.WhichOneof("payload") == "place_order" and m.place_order.side == 1]
+    assert low and low[0].quantity == 14, "переворот = база 10 плюс открытые 4"
+
+
+def test_wall_fill_side_comes_from_the_order_not_the_market(tmp_path):
+    """Сторона исполнения берётся ИЗ ЗАПИСИ ЗАЯВКИ. Цена с момента постановки
+    уезжает, и выведенная заново сторона переворачивает знак позиции — ровно эта
+    ошибка стоила сетке неверного знака 01.10.2026, а от знака считаются и объём
+    встречной заявки, и стоп."""
+    book, so = _book(tmp_path)
+    so.c_live = {"low": "so:x:low:1"}
+    srv = FakeSrv()
+    ost = FakeOst([{"client_id": "so:x:low:1", "order_id": "12", "state": "filled",
+                    "side": "buy", "filled": 10, "remaining": 0, "price": 84000.0}])
+    _run(book, ost, srv)
+    assert so.c_pos == 10, f"покупка снизу даёт ЛОНГ, получили {so.c_pos:+d}"
+
+
+def test_a_flip_is_counted_only_when_the_side_actually_changes(tmp_path):
+    """Переворот — смена стороны ИЗ ПОЗИЦИИ, а не любой вход. Первый вход от стенки
+    переворотом не является, иначе лимит в один переворот кончался бы сразу после
+    открытия."""
+    book, so = _book(tmp_path)
+    so.c_live = {"top": "so:x:top:1"}
+    ost = FakeOst([{"client_id": "so:x:top:1", "order_id": "11", "state": "filled",
+                    "side": "sell", "filled": 10, "remaining": 0, "price": 85000.0}])
+    _run(book, ost, FakeSrv())
+    assert so.c_pos == -10 and so.c_flips == 0, "первый вход — не переворот"
+
+    # теперь налилась нижняя стенка на 20: закрыла шорт и открыла лонг
+    so.c_live = {"low": "so:x:low:2"}
+    ost2 = FakeOst([{"client_id": "so:x:low:2", "order_id": "12", "state": "filled",
+                     "side": "buy", "filled": 20, "remaining": 0, "price": 84000.0}])
+    _run(book, ost2, FakeSrv())
+    assert so.c_pos == 10, f"позиция {so.c_pos:+d}"
+    assert so.c_flips == 1, "смена знака из позиции — это переворот"

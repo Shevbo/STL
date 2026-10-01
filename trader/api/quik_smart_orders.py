@@ -22,6 +22,7 @@ from pydantic import BaseModel
 
 from trader.auth.guard import require_auth
 from trader.quik import native_protect
+from trader.quik import terminal
 from trader.quik import blind_quarantine as bq
 from trader.quik import exec_profiles
 from trader.quik import so_journal
@@ -290,6 +291,51 @@ async def cancel_order(so_id: str, request: Request):
     return {"ok": True, "so_id": so_id}
 
 
+def _cancel_resting(srv: Any, store: Any, agent: str, so: SmartOrder,
+                    cids: set[str], work: dict[str, dict]) -> tuple[int, list[dict]]:
+    """Снять ВСЁ, что эта умная заявка держит в стакане. ЕДИНСТВЕННЫЙ путь снятия.
+
+    Два прохода, и второй важнее первого:
+
+    1. по своим записям (client_id) — работает, пока целы склад заявок STL и карта
+       агента, то есть пока не перезапускали ни один из двух процессов;
+    2. по ТАБЛИЦЕ ЗАЯВОК ТЕРМИНАЛА — работает всегда, потому что таблица живёт в
+       QUIK. Снятие по номеру заявки и инструменту не требует ничьей памяти.
+
+    Второй проход написан после 01.10.2026: перезапуск агента обнулил его карту, 24
+    заявки сетки стали неснимаемыми, STL слал отмену, агент не находил заявку, книга
+    писала «снято», а заявки продолжали ТОРГОВАТЬ и набрали оператору лишние
+    контракты. Любой путь, объявляющий умную заявку снятой, обязан идти ЧЕРЕЗ ЭТУ
+    ФУНКЦИЮ: раньше их было два (отмена оператором и стоп за краем сетки), и второй
+    снимал только известное складу, после чего ставил g_done и забывал остальное
+    навсегда.
+
+    Возвращает (сколько отправлено снятий, строки терминала, о которых записей не было).
+    """
+    killed, sent, extra = 0, set(), []
+    for cid in sorted(cids):
+        rec = work.get(cid) or {}
+        # Снимаем и ту, которой ещё нет в складе: номер мог не прийти, но заявка уже
+        # в пути. Пустой order_id агент разрешит по client_id сам.
+        if rec.get("state") in ("cancelled", "filled", "rejected"):
+            continue
+        num = str(rec.get("order_id") or "")
+        srv.enqueue_order(agent, order_msgs.build_cancel_order(
+            client_id=cid, order_id=num, code=so.code))
+        if num:
+            sent.add(num)
+        killed += 1
+    for row in terminal.by_smart_order(store, agent).get(so.so_id, []):
+        if row["num"] in sent:
+            continue
+        srv.enqueue_order(agent, order_msgs.build_cancel_order(
+            client_id=f"so:{so.so_id}", order_id=row["num"], code=row["sec"]))
+        sent.add(row["num"])
+        killed += 1
+        extra.append(row)
+    return killed, extra
+
+
 def _withdraw_resting(request: Request, so: SmartOrder) -> int:
     """Снять из QUIK заявки, которые эта умная заявка ДЕРЖИТ В СТАКАНЕ.
 
@@ -330,19 +376,15 @@ def _withdraw_resting(request: Request, so: SmartOrder) -> int:
         for cid in book_field.values()
         if isinstance(cid, str) and cid
     }
-    if not live_cids:
+    work = {d.get("client_id"): d for d in ost.working_orders(agent)}
+    killed, extra = _cancel_resting(srv, store, agent, so, live_cids, work)
+    for row in extra:
+        so_journal.record("resting_withdrawn", so, so_journal.WATCHER,
+                          f"снята заявка {row['num']} из ТАБЛИЦЫ ТЕРМИНАЛА "
+                          f"({row['side']} {row['balance']} по {row['price']:g}): "
+                          "своих записей о ней не было")
+    if not killed:
         return 0
-    by_cid = {d.get("client_id"): d for d in ost.working_orders(agent)}
-    killed = 0
-    for cid in sorted(live_cids):
-        rec = by_cid.get(cid) or {}
-        # Снимаем и ту, которой ещё нет в сторе: номер мог не прийти, но заявка
-        # уже в пути. Пустой order_id агент разрешит по client_id сам.
-        if rec.get("state") in ("cancelled", "filled", "rejected"):
-            continue
-        srv.enqueue_order(agent, order_msgs.build_cancel_order(
-            client_id=cid, order_id=str(rec.get("order_id") or "")))
-        killed += 1
     if killed:
         so_journal.record("resting_withdrawn", so, so_journal.OPERATOR,
                           f"снято заявок из стакана: {killed} ({', '.join(sorted(live_cids))})")
@@ -584,17 +626,19 @@ _FILL_TRACK_MS = 24 * 3600 * 1000
 # 01.10.2026 это стоило оператору шести контрактов вместо одного: после моего
 # рестарта в 12:43 сторож не увидел живую стенку коридора и поставил поверх неё
 # новую (so:4e99b8c5ef:low:48830 и :low:5891 — обе налились по 2), а сверху
-# выстрелил сам. Один коридор на объём 1 купил 6.
+# выстрелил сам. Один коридор на объём 1 купил 6. В тот же день перезапуск агента
+# обнулил ЕГО карту заявок, и 24 заявки сетки стали вдобавок НЕСНИМАЕМЫМИ.
 #
-# Пока склад не прогрелся, НОВЫЕ заявки в стакан не ставим: пропущенная минута
-# стояния дешевле дубля на живых деньгах. Снятие и перестановка известных заявок
-# при этом работают — они опираются на то, что в складе уже есть.
+# Здесь стояла задержка `_ORDER_STORE_WARMUP_MS = 90_000`: минуту с половиной
+# после старта процесса новых заявок не ставим. Она УДАЛЕНА, и её собственный
+# комментарий объяснял почему — замок закрывал окно после рестарта, но не случай,
+# когда агент молчал дольше прогрева. Это лечение часов, а не причины: заявке в
+# QUIK пережить 90 с ничего не стоит, она живёт сутками.
 #
-# ПОТОЛОК ЭТОГО ЗАМКА, ЗНАТЬ О НЁМ: он закрывает окно после рестарта, но не
-# случай, когда агент молчал дольше прогрева. Структурно правильно, чтобы STL
-# восстанавливал склад из агента при переподключении (у менеджера агента есть
-# SnapshotWorking) — это отдельная работа по протоколу.
-_ORDER_STORE_WARMUP_MS = 90_000
+# Причина в том, ЧЬЕГО ОТВЕТА мы спрашивали: своего склада в памяти вместо
+# терминала. Теперь решение о постановке принимает `trader/quik/terminal.py` по
+# таблице заявок QUIK — она живёт в терминале и переживает рестарт и STL, и
+# агента, — и там же различаются «таблица пуста» и «таблицы нет».
 # Передача защиты под охрану терминала. Столько ждём регистрации стоп-заявки в
 # QUIK; не дождались - возвращаем защиту сторожу STL и будим оператора. Ждать
 # долго нельзя: всё это время позиция защищена только нашими заявками, а они
@@ -1451,7 +1495,7 @@ def _escalate_protection(book: SmartOrderBook, store: Any, ost: Any, srv: Any,
             mkt_cid = f"{so.fired_client_id}:mkt"
             try:
                 srv.enqueue_order(agent, order_msgs.build_cancel_order(
-                    client_id=so.fired_client_id, order_id=order_id))
+                    client_id=so.fired_client_id, order_id=order_id, code=so.code))
                 validate_place(lim, code=so.code, quantity=rest, collar=0.0,
                                current_working=ost.working_contracts(agent),
                                placed_today=ost.placed_today(agent))
@@ -1547,7 +1591,7 @@ def _escalate_native_child(book: SmartOrderBook, store: Any, srv: Any, lim: Any,
             continue
         try:
             srv.enqueue_order(agent, order_msgs.build_cancel_order(
-                client_id=f"so:{so.so_id}:nat", order_id=child))
+                client_id=f"so:{so.so_id}:nat", order_id=child, code=so.code))
             validate_place(lim, code=so.code, quantity=rest, collar=0.0,
                            current_working=0, placed_today=0)
             srv.enqueue_order(agent, order_msgs.build_place_order(
@@ -1596,9 +1640,15 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
     исполненные, снять всё при стопе."""
     dirty = False
     work = {d.get("client_id"): d for d in ost.working_orders(agent)}
+    # ЧТО СТОИТ В ТЕРМИНАЛЕ — один запрос на проход. None = зеркала агента нет или
+    # оно встало: это «НЕ ЗНАЮ», а не «ничего не стоит», и ставить при нём нельзя.
+    # Пустой список — законный ответ «в терминале этой заявки нет».
+    term_all = (terminal.by_smart_order(store, agent)
+                if terminal.fresh(store, agent, now) else None)
     for so in book.orders:
         if so.kind != "grid" or so.status not in ("armed", "native") or so.g_done:
             continue
+        term_live = None if term_all is None else term_all.get(so.so_id, [])
         step = steps.get(so.code, 0.0)
         limits = price_limits.get(so.code)
         tick = store.tick(so.code, agent) or {}
@@ -1617,13 +1667,19 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
         # СТОП ЗА КРАЕМ СЕТКИ: снимаем всё и заканчиваем. Проверяется первым —
         # доставлять уровни туда, откуда рынок уже ушёл, значит ловить нож.
         if price > 0 and so_mod.grid_stop_hit(so, price):
-            for lvl_key, cid in live.items():
-                if lvl_key.startswith("flip:"):
-                    continue
-                rec = work.get(cid) or {}
-                if rec.get("order_id"):
-                    srv.enqueue_order(agent, order_msgs.build_cancel_order(
-                        client_id=cid, order_id=str(rec["order_id"])))
+            # СНЯТИЕ — ЧЕРЕЗ ОБЩИЙ ПУТЬ. Здесь стоял свой проход по своим записям,
+            # и он снимал только то, что знал склад: после рестарта — ничего, а
+            # следующей строкой выставлялся g_done, то есть сетка объявлялась снятой
+            # и забывала живые заявки НАВСЕГДА. Признак заявки — строковое значение
+            # (в live лежит и бухгалтерия: flip:, adopt:, blind:, moved:).
+            stop_cids = {c for c in live.values() if isinstance(c, str) and c}
+            killed, extra = _cancel_resting(srv, store, agent, so, stop_cids, work)
+            for row in extra:
+                so_journal.record("resting_withdrawn", so, so_journal.WATCHER,
+                                  f"стоп сетки: снята заявка {row['num']} из ТАБЛИЦЫ "
+                                  f"ТЕРМИНАЛА ({row['side']} {row['balance']} по "
+                                  f"{row['price']:g}): своих записей о ней не было",
+                                  now_ms=now)
             so.g_live, so.g_done, so.status = {}, True, "cancelled"
             so.note = (so.note + " " if so.note else "") + "стоп за краем сетки: снята"
             so_journal.record("grid_stop", so, so_journal.WATCHER,
@@ -1678,7 +1734,7 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
                 rec_old = work.get(cid_old) or {}
                 if rec_old.get("order_id"):
                     srv.enqueue_order(agent, order_msgs.build_cancel_order(
-                        client_id=cid_old, order_id=str(rec_old["order_id"])))
+                        client_id=cid_old, order_id=str(rec_old["order_id"]), code=so.code))
                     dirty = True
                 continue
             side = so_mod.grid_side_for(so, level, price)
@@ -1689,10 +1745,51 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
             if price > 0 and ((side == "sell" and px <= price)
                               or (side == "buy" and px >= price)):
                 continue
-            if now - _PROC_START_MS < _ORDER_STORE_WARMUP_MS:
-                # Склад заявок пуст после рестарта — см. _ORDER_STORE_WARMUP_MS.
-                # Уровень сетки в QUIK может стоять живым и невидимым для STL.
+            # ПЕРЕД ПОСТАНОВКОЙ СПРАШИВАЕМ ТЕРМИНАЛ, А НЕ СВОЙ СКЛАД.
+            #
+            # Здесь стояла задержка на 90 с после старта процесса — и это было
+            # лечение часов, а не причины. Причина: `work` (склад заявок STL) живёт
+            # в ПАМЯТИ и пустеет при рестарте, поэтому уровень, живой в QUIK,
+            # выглядел неподставленным и ставился ВТОРЫМ. 01.10.2026 так удвоилась
+            # сетка из 24 заявок, и оператор получил лишние контракты. Задержка
+            # лишь отодвигала тот же выстрел на минуту с половиной, а заявка в
+            # QUIK живёт сутками: пережить 90 с ей ничего не стоит.
+            #
+            # Таблица заявок терминала живёт в QUIK и переживает рестарт и STL, и
+            # агента. Нет живой строки на этой цене — ставим; есть — уровень уже
+            # стоит, и второй не нужен. Зеркала нет вовсе — это «НЕ ЗНАЮ», и
+            # ставить вслепую нельзя (отличать от пустой таблицы обязательно).
+            if term_live is None:
+                if live.get(f"blind:{level}") != 1:
+                    live[f"blind:{level}"] = 1
+                    dirty = True
+                    so_journal.record(
+                        "held", so, so_journal.WATCHER,
+                        f"уровень {level:+d} не выставлен: таблицы заявок терминала "
+                        "нет (зеркало агента молчит). Что стоит в QUIK — неизвестно, "
+                        "ставить вслепую нельзя.", now_ms=now)
                 continue
+            live.pop(f"blind:{level}", None)
+            # ponytail: опознание уровня по ЦЕНЕ. client_id в brokerref QUIK не
+            # влезает (20 символов, см. terminal.so_id_of), поэтому подхваченной
+            # после рестарта заявке STL не возвращает её client_id — и филл такой
+            # заявки учитывается не записью склада, а исчезновением строки из
+            # таблицы. Полный учёт филлов по журналу сделок — отдельная работа.
+            standing = terminal.find_level(term_live, px, step, side)
+            if standing is not None:
+                # Значение здесь ЧИСЛО, а не номер заявки строкой: _withdraw_resting
+                # считает любую строку в live идентификатором заявки (и уже один раз
+                # поперхнулся числом в moved:). Номер уходит в журнал, где он и нужен.
+                if live.get(f"adopt:{level}") != 1:
+                    live[f"adopt:{level}"] = 1
+                    dirty = True
+                    so_journal.record(
+                        "adopted", so, so_journal.WATCHER,
+                        f"уровень {level:+d} ({px:g}) уже СТОИТ в терминале заявкой "
+                        f"{standing['num']} ({standing['side']} "
+                        f"{standing['balance']}): второй не ставим", now_ms=now)
+                continue
+            live.pop(f"adopt:{level}", None)
             if not price_within_limits(px, limits):
                 # ЗА ПЛАНКОЙ БИРЖИ. Не выставляем и не считаем это ошибкой:
                 # планки двигает MOEX по своему расписанию, и уровень оживёт сам,
@@ -1765,11 +1862,15 @@ def _walls_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
     """
     dirty = False
     work = {d.get("client_id"): d for d in ost.working_orders(agent)}
+    # Что стоит в терминале — один запрос на проход; None = «не знаю» (см. _grid_sync).
+    term_all = (terminal.by_smart_order(store, agent)
+                if terminal.fresh(store, agent, now) else None)
     for so in book.orders:
         if so.kind not in ("corridor", "triangle") or so.status not in ("armed", "native"):
             continue
         if so.c_done:
             continue
+        term_live = None if term_all is None else term_all.get(so.so_id, [])
         step = steps.get(so.code, 0.0)
         limits = price_limits.get(so.code)
         low, top = so_mod.corridor_bounds(so, now, schedule)
@@ -1786,6 +1887,47 @@ def _walls_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
             # контракта. Ждём кадр — он приходит каждые полсекунды.
             continue
         for wall, px_raw, side in (("top", top, "sell"), ("low", low, "buy")):
+            # СТЕНКА ИСПОЛНИЛАСЬ — УЧЕСТЬ И ОТПУСТИТЬ. Этой ветки не было вовсе, и
+            # это второй случай той же болезни, что у сетки: 30.09.2026 стенки
+            # научились СТОЯТЬ в стакане, а учёт их исполнения остался на старом
+            # пути «выстрел по касанию» (corridor_after_fire в блоке status=fired).
+            # Позиция коридора c_pos двигалась только там, поэтому у стоящей стенки
+            # она оставалась нулём — а запрет ниже («на стенке, от которой мы уже в
+            # позиции, заявки быть не должно») гейтится именно c_pos. Стенка
+            # наливалась, сторож видел ноль и ставил её заново, та наливалась опять:
+            # каждое касание удваивало объём, и остановить это было нечем.
+            #
+            # Считаем ФАКТИЧЕСКИ исполненное и сторону ИЗ ЗАПИСИ ЗАЯВКИ, а не из
+            # рынка: цена с момента постановки уезжает, и выведенная заново сторона
+            # переворачивает знак позиции (та же ошибка стоила сетке неверного
+            # знака 01.10.2026). Частичное исполнение тоже учитываем по факту —
+            # corridor_after_fire ставит позицию равной базовому объёму целиком и
+            # на половине налива соврал бы.
+            cid_f = live.get(wall) or ""
+            rec_f = work.get(cid_f) if cid_f else None
+            if rec_f is not None and int(rec_f.get("filled") or 0) > 0:
+                got = int(rec_f["filled"])
+                side_was = str(rec_f.get("side") or "").lower()
+                if side_was not in ("buy", "sell"):
+                    side_was = side
+                    log.warning("smart_order.wall_fill_side_unknown",
+                                so_id=so.so_id, wall=wall, assumed=side)
+                was = so.c_pos
+                so.c_pos += got * (1 if side_was == "buy" else -1)
+                if was != 0 and (was > 0) != (so.c_pos > 0) and so.c_pos != 0:
+                    so.c_flips += 1
+                    if so.c_flips_max and so.c_flips >= so.c_flips_max:
+                        so.c_done = True   # лимит переворотов выбран
+                live.pop(wall, None)       # заявки на этой стенке больше нет
+                live.pop(f"moved:{wall}", None)
+                dirty = True
+                so_journal.record(
+                    "corridor", so, so_journal.WATCHER,
+                    f"стенка {wall} исполнена {side_was} {got} по "
+                    f"{float(rec_f.get('price') or 0):g}; позиция {so.c_pos:+d}, "
+                    f"переворотов {so.c_flips}"
+                    + (f"/{so.c_flips_max}" if so.c_flips_max else ""), now_ms=now)
+                continue
             # На стенке, от которой мы уже в позиции, заявки быть не должно:
             # иначе она нарастила бы позицию там, где по правилам коридора мы
             # только ждём противоположную стенку.
@@ -1794,7 +1936,7 @@ def _walls_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
                 rec = work.get(cid) or {}
                 if rec.get("order_id"):
                     srv.enqueue_order(agent, order_msgs.build_cancel_order(
-                        client_id=cid, order_id=str(rec["order_id"])))
+                        client_id=cid, order_id=str(rec["order_id"]), code=so.code))
                     dirty = True
                 continue
             qty = base + abs(so.c_pos)
@@ -1825,7 +1967,7 @@ def _walls_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
                 rec_old = work.get(cid_old) or {}
                 if rec_old.get("order_id"):
                     srv.enqueue_order(agent, order_msgs.build_cancel_order(
-                        client_id=cid_old, order_id=str(rec_old["order_id"])))
+                        client_id=cid_old, order_id=str(rec_old["order_id"]), code=so.code))
                 continue
             if live.pop(f"cross:{wall}", None):
                 dirty = True
@@ -1855,19 +1997,37 @@ def _walls_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
                 except Exception as exc:  # noqa: BLE001
                     log.warning("smart_order.wall_move_failed", so_id=so.so_id, error=str(exc))
                 continue
-            # Пока склад заявок не прогрелся после рестарта — не ставим.
-            if now - _PROC_START_MS < _ORDER_STORE_WARMUP_MS:
+            # ПЕРЕД ПОСТАНОВКОЙ СПРАШИВАЕМ ТЕРМИНАЛ, А НЕ СВОЙ СКЛАД. Здесь стояла
+            # задержка на 90 с после старта процесса — лечение часов, а не причины:
+            # склад заявок живёт в ПАМЯТИ и пустеет при рестарте, поэтому своя же
+            # живая заявка выглядела отсутствующей и ставилась ВТОРОЙ. Заявке в QUIK
+            # пережить 90 с ничего не стоит — она живёт сутками. Таблица заявок
+            # терминала живёт в QUIK и переживает рестарт и STL, и агента.
+            if term_live is None:
                 if live.get(f"warm:{wall}") != 1:
                     live[f"warm:{wall}"] = 1
                     dirty = True
                     so_journal.record(
                         "held", so, so_journal.WATCHER,
-                        f"стенка {wall} не выставлена: склад заявок прогревается после "
-                        f"рестарта ({(now - _PROC_START_MS) // 1000} с из "
-                        f"{_ORDER_STORE_WARMUP_MS // 1000}). Ставить вслепую нельзя — "
-                        "в QUIK может стоять своя же заявка.", now_ms=now)
+                        f"стенка {wall} не выставлена: таблицы заявок терминала нет "
+                        "(зеркало агента молчит). Что стоит в QUIK — неизвестно, "
+                        "ставить вслепую нельзя.", now_ms=now)
                 continue
             live.pop(f"warm:{wall}", None)
+            # ponytail: стенка опознаётся по ЦЕНЕ — client_id в brokerref QUIK не
+            # влезает (20 символов, см. terminal.so_id_of).
+            standing = terminal.find_level(term_live, px, step, side)
+            if standing is not None:
+                if live.get(f"adopt:{wall}") != 1:
+                    live[f"adopt:{wall}"] = 1
+                    dirty = True
+                    so_journal.record(
+                        "adopted", so, so_journal.WATCHER,
+                        f"стенка {wall} ({px:g}) уже СТОИТ в терминале заявкой "
+                        f"{standing['num']} ({standing['side']} "
+                        f"{standing['balance']}): вторую не ставим", now_ms=now)
+                continue
+            live.pop(f"adopt:{wall}", None)
             # Хвост остаётся СЛУЧАЙНЫМ намеренно. Детерминированное имя выглядит
             # аккуратнее, но менять схему имён, пока в рынке живут заявки со
             # старой, значит ровно воспроизвести чинимый баг: сторож счёл бы их

@@ -160,22 +160,29 @@ class GLim:
     daily_order_cap = 500
 
 
-def _gstore(px):
+def _gstore(px, terminal_orders=()):
+    """Зеркало агента: котировка И таблица заявок терминала.
+
+    Таблица обязательна. Сторож решает, ставить ли уровень, по ней (её отсутствие
+    = «не знаю, что в QUIK» = не ставим), поэтому фейк БЕЗ таблицы делает любой
+    тест «сетка не поставила ничего лишнего» зелёным ВХОЛОСТУЮ. Этот файл уже
+    получал такой урок: тесты на стенки были зелёными, когда код продал оператору
+    43 контракта, — потому что фикстура не умела построить нужную геометрию.
+    Поэтому свип ниже отдельно требует, чтобы заявки ВООБЩЕ ставились."""
+    rows = list(terminal_orders)
+
     class S:
         def tick(self, code, agent=None):
             return {"last": px, "bid": px - 10.0, "ask": px + 10.0}
+
+        def agent_status(self, agent=None):
+            return {"_received_at_ms": GNOW, "quik": {"orders": rows}}
     return S()
 
 
-import pytest as _pytest
-
-
-@_pytest.fixture(autouse=True)
-def _store_is_warm(monkeypatch):
-    """Замок прогрева склада заявок (после рестарта STL он пуст) к этим тестам
-    не относится: они проверяют геометрию, а не момент после перезапуска.
-    Отдельная проверка самого замка — test_nothing_is_placed_while_the_store_warms_up."""
-    monkeypatch.setattr("trader.api.quik_smart_orders._PROC_START_MS", 0)
+def _gterm_row(num, side, price, qty=1, tag="", active=True):
+    return {"num": num, "sec": "RIZ6", "side": side, "price": price, "qty": qty,
+            "balance": qty, "active": active, "tag": tag, "ts_ms": GNOW}
 
 
 def _gbook(tmp_path):
@@ -197,6 +204,12 @@ def test_no_grid_order_ever_crosses_the_market(tmp_path, market):
     srv = GSrv()
     _grid_sync(book, _gstore(float(market)), GOst(), srv, GLim(), "9618",
                GSTEPS, {}, GNOW)
+    placed = [m.place_order for m in srv.sent
+              if m.WhichOneof("payload") == "place_order"]
+    # ИНВАРИАНТ, ВЫПОЛНЕННЫЙ ПУСТОТОЙ, НИЧЕГО НЕ ДОКАЗЫВАЕТ. Уровни сетки покрывают
+    # 85000±500, и при любом рынке внутри прогона часть из них законна — если не
+    # поставлено НИ ОДНОЙ заявки, значит сломался сам прогон, а не геометрия.
+    assert placed, f"при рынке {market} сетка не поставила ни одной заявки"
     for m in srv.sent:
         if m.WhichOneof("payload") != "place_order":
             continue
@@ -297,3 +310,95 @@ def test_fill_side_comes_from_the_order_not_from_the_current_price(tmp_path):
     _grid_sync(book, _gstore(85300.0), ost, srv, GLim(), "9618", GSTEPS, {}, GNOW)
     assert so.g_pos == -1, (
         f"позиция {so.g_pos:+d}: сторона взята из рынка, а не из исполненной заявки")
+
+
+# --------------------------------------------------------------------------
+# АМНЕЗИЯ: уровень, живой в QUIK и невидимый для STL.
+# --------------------------------------------------------------------------
+
+
+def test_level_standing_in_the_terminal_is_not_placed_twice(tmp_path):
+    """ТОТ САМЫЙ УЩЕРБ 01.10.2026: сетка из 24 заявок УДВОИЛАСЬ после рестарта.
+
+    Склад заявок STL живёт в памяти и пустеет при перезапуске, а мирно стоящая
+    заявка обновлений не порождает — значит сама о себе не напомнит никогда.
+    Сторож видел «записи нет» и ставил второй уровень поверх живого.
+
+    Лечится вопросом к таблице заявок ТЕРМИНАЛА: она живёт в QUIK. Уровень
+    опознаётся по ЦЕНЕ — client_id в brokerref не влезает (20 символов).
+    """
+    book, so = _gbook(tmp_path)                       # база 85000, шаг 100
+    px = so_mod.grid_price(so, -1)                    # 84900, ниже рынка = покупка
+    store = _gstore(85000.0, [
+        _gterm_row("701", "buy", px, tag=f"stl-so-{so.so_id}")])
+    srv = GSrv()
+    # ни книга, ни склад заявок о заявке не знают — состояние после рестарта
+    _grid_sync(book, store, GOst(), srv, GLim(), "9618", GSTEPS, {}, GNOW)
+
+    dup = [m.place_order for m in srv.sent
+           if m.WhichOneof("payload") == "place_order"
+           and abs(m.place_order.price - px) < 1e-6]
+    assert dup == [], (
+        f"на уровень {px:g}, где в терминале УЖЕ стоит заявка 701, поставлена "
+        "вторая — это и есть удвоение сетки после рестарта")
+    assert so.g_live.get("adopt:-1") == 1, "подхват отмечен в книге"
+    # остальные уровни при этом обязаны встать: подхват одного не глушит сетку
+    assert [m for m in srv.sent if m.WhichOneof("payload") == "place_order"]
+
+
+def test_grid_places_nothing_when_the_terminal_table_is_unknown(tmp_path):
+    """Зеркало агента молчит — что стоит в QUIK неизвестно. Прежний замок ждал
+    90 секунд от старта процесса; заявке в QUIK пережить их ничего не стоит, она
+    живёт сутками. Запрет теперь держится, пока таблицы нет."""
+    class NoMirror:
+        def tick(self, code, agent=None):
+            return {"last": 85000.0, "bid": 84990.0, "ask": 85010.0}
+
+    book, _ = _gbook(tmp_path)
+    srv = GSrv()
+    _grid_sync(book, NoMirror(), GOst(), srv, GLim(), "9618", GSTEPS, {}, GNOW)
+    assert [m for m in srv.sent if m.WhichOneof("payload") == "place_order"] == [],         "без таблицы заявок терминала сетка не ставит ничего"
+
+
+def test_another_smart_orders_level_at_the_same_price_is_not_adopted(tmp_path):
+    """Подхват только по СВОЕМУ тегу: заявка соседней умной заявки или оператора
+    на той же цене своей не является. Иначе сетка перестала бы держать уровень,
+    решив, что он уже стоит."""
+    book, so = _gbook(tmp_path)
+    px = so_mod.grid_price(so, -1)
+    store = _gstore(85000.0, [
+        _gterm_row("702", "buy", px, tag="stl-so-ffffffff01"),
+        _gterm_row("703", "buy", px, tag=""),
+    ])
+    srv = GSrv()
+    _grid_sync(book, store, GOst(), srv, GLim(), "9618", GSTEPS, {}, GNOW)
+    mine = [m.place_order for m in srv.sent
+            if m.WhichOneof("payload") == "place_order"
+            and abs(m.place_order.price - px) < 1e-6]
+    assert len(mine) == 1, "чужая заявка на той же цене не отменяет нашего уровня"
+    assert not any(k.startswith("adopt:") for k in so.g_live)
+
+
+def test_grid_stop_withdraws_orders_nobody_remembers(tmp_path):
+    """СТОП СЕТКИ НЕ ВПРАВЕ ЗАБЫТЬ ЖИВЫЕ ЗАЯВКИ.
+
+    Здесь был свой проход по своим записям: снимал только известное складу, а
+    следующей строкой ставил g_done — то есть объявлял сетку снятой и забывал
+    остальное НАВСЕГДА. После рестарта складу не известно ничего, и 24 заявки
+    остались бы торговать без присмотра.
+    """
+    book, so = _gbook(tmp_path)
+    so.g_stop_pts = 150.0                             # стоп за краем сетки включён
+    store = _gstore(84000.0, [                        # рынок ушёл далеко вниз
+        _gterm_row("801", "buy", 84900.0, tag=f"stl-so-{so.so_id}"),
+        _gterm_row("802", "buy", 84800.0, tag=f"stl-so-{so.so_id}"),
+        _gterm_row("803", "sell", 85100.0, tag=""),   # чужая: не трогаем
+    ])
+    srv = GSrv()
+    _grid_sync(book, store, GOst(), srv, GLim(), "9618", GSTEPS, {}, GNOW)
+    assert so.g_done is True and so.status == "cancelled"
+    nums = sorted(m.cancel_order.order_id for m in srv.sent
+                  if m.WhichOneof("payload") == "cancel_order")
+    assert nums == ["801", "802"], "стоп обязан снять ВСЕ свои заявки из терминала"
+    assert all(m.cancel_order.code == "RIZ6" for m in srv.sent
+               if m.WhichOneof("payload") == "cancel_order")

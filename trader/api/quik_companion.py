@@ -1311,36 +1311,21 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
     # Свой тег агент ставит только роботу, выравниванию (recon) и детям умных
     # заявок; последние показаны отдельным списком. Всё остальное — торговля
     # оператора мимо агента: терминал QUIK или мобильное приложение брокера.
-    # Приложение вправе поставить СВОЙ brokerref, поэтому фильтруем не «есть
-    # тег», а «тег наш»: иначе сделка из мобильного молча пропадала из списка.
-    # Сверяем по ОБРЕЗАННОМУ имени: QUIK хранит brokerref шириной 20 символов,
-    # и длинный ID приезжает кусочком (lxk22tsffsxiiotb8kmpsato -> ...b8kmp).
-    # Сравнение целиком не совпадает никогда, и заявки роботов уехали бы в
-    # ручные.
-    _our_tags = {rid[:20] for rid, rob in mirror_by_id.items() if rob.get("mode") == "real"}
-    manual_orders = []
-    for o in (status.get("quik") or {}).get("orders") or []:
-        _tag = str(o.get("tag") or "")
-        if _tag and (_tag in _our_tags or _tag == "recon" or _tag.startswith("stl-so")):
-            continue  # роботные / выравнивание / дети умных заявок — не ручные
-        try:
-            qty, bal = int(o.get("qty") or 0), int(o.get("balance") or 0)
-        except (TypeError, ValueError):
-            qty, bal = 0, 0
-        if o.get("active"):
-            st = "активна"
-        elif bal == 0 and qty > 0:
-            st = "исполнена"
-        else:
-            st = "снята" + (f", исполнено {qty - bal}" if qty > bal else "")
-        manual_orders.append({"num": o.get("num"), "sec": o.get("sec"),
-                              "pnl": _pnl.get(str(o.get("num") or "")),
-                              "side": o.get("side"), "price": o.get("price"),
-                              "qty": qty, "balance": bal, "state": st,
-                              "active": bool(o.get("active")),
-                              "tag": _tag,   # непустой = приложение брокера, а не терминал
-                              "ts_ms": o.get("ts_ms")})
-    manual_orders.sort(key=lambda d: (not d["active"], -(d.get("ts_ms") or 0)))
+    # Приложение вправе поставить СВОЙ brokerref, поэтому фильтруем не «есть тег», а
+    # «тег наш»: иначе сделка из мобильного молча пропадала из списка. Сверка идёт по
+    # ОБРЕЗАННОМУ имени (QUIK хранит brokerref шириной 20 символов, и длинный ID
+    # приезжает кусочком), и живёт она в truth.owner() — здесь был её дубль.
+    #
+    # Разбор строки таблицы (состояние словами, природа, so_id) теперь в ОДНОМ месте,
+    # trader/quik/terminal.py. Дубль успел разойтись с оригиналом: компаньон звал
+    # ручным и пустой тег, и чужой тег приложения брокера, тогда как truth.owner()
+    # различает их (manual / external) — а по этому различию считается канал.
+    _term = terminal.rows(store, agent_id, ids)
+    manual_orders = [
+        dict(r, pnl=_pnl.get(r["num"]))
+        for r in _term
+        if r["origin"] not in ("robot", "recon", "smart")
+    ]
     smart_list = []
     so_book = getattr(request.app.state, "smart_orders", None)
     for so in (so_book.orders if so_book else []):
@@ -1437,7 +1422,6 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
     # а не фильтр: заявка стоит в рынке и торгует деньгами — она обязана быть на
     # экране, кто бы её ни поставил. `terminal_stale` отличает ПУСТУЮ таблицу от
     # ОТСУТСТВИЯ зеркала: первое значит «в терминале ничего», второе «не знаю».
-    _term = terminal.rows(store, agent_id, ids)
     orders_block = {"manual": manual_orders[:20], "smart": smart_list[:20],
                     "counts": counts, "counts_active": counts_active,
                     "terminal": [r for r in _term if r["active"]][:40],

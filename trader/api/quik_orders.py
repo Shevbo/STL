@@ -16,11 +16,14 @@ from __future__ import annotations
 import re
 import secrets
 
+import structlog
+
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from trader.auth.guard import require_auth
 from trader.quik import orders as order_msgs
+from trader.quik import terminal
 from trader.quik.limits import (
     LimitError,
     OrderLimits,
@@ -33,6 +36,9 @@ from trader.quik.limits import (
     validate_start_execution,
 )
 from trader.quik.store import resolve_agent
+from trader.quik.truth import load_robot_ids
+
+log = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/api/v1/quik/orders", tags=["quik-orders"])
 
@@ -84,6 +90,18 @@ class PlaceBody(BaseModel):
 class CancelBody(BaseModel):
     client_id: str
     order_id: str | None = None
+    agent_id: str | None = None
+    # Инструмент: с ним агент снимает заявку по НОМЕРУ, не заглядывая в свою карту
+    # (см. trader/quik/orders.build_cancel_order). Без него снятие работает только
+    # пока карта агента цела, то есть пока агент не перезапускали.
+    code: str | None = None
+
+
+class TerminalCancelBody(BaseModel):
+    """Снятие по НОМЕРАМ заявок из таблицы терминала. Инструмент не принимаем: он
+    берётся из той же таблицы, иначе ошибка в нём выглядела бы успешным снятием."""
+
+    order_nums: list[str]
     agent_id: str | None = None
 
 
@@ -337,9 +355,83 @@ async def cancel(body: CancelBody, request: Request):
         check_master_flag(lim)
     except LimitError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    msg = order_msgs.build_cancel_order(body.client_id, body.order_id or "")
+    msg = order_msgs.build_cancel_order(body.client_id, body.order_id or "",
+                                        body.code or "")
     srv.enqueue_order(agent, msg)
     return {"ok": True, "agent_id": agent, "client_id": body.client_id}
+
+
+@router.get("/terminal")
+async def terminal_orders(request: Request, agent_id: str | None = None,
+                          active_only: bool = False):
+    """ЧТО ПРЯМО СЕЙЧАС СТОИТ В QUIK — вся таблица заявок терминала.
+
+    Единственный ответ на вопрос «что в рынке», который не зависит от памяти STL.
+    Остальные экраны показывали заявки по своей бухгалтерии: склад заявок (память
+    процесса STL), карта агента (память процесса агента) или книга умных заявок. Все
+    три не знают о заявке, поставленной руками в терминале, и все три пустеют при
+    рестарте — поэтому 01.10.2026 оператор видел в QUIK живые заявки, которых STL
+    «не видел ни одной».
+
+    Природа заявки здесь ЯРЛЫК (`origin`: manual | smart | robot | recon | external),
+    а не фильтр: заявка стоит в рынке и торгует деньгами — она обязана быть видна,
+    кто бы её ни поставил. `stale: true` = зеркала агента нет или оно встало, и тогда
+    пустой список означает «НЕ ЗНАЮ», а не «в терминале ничего».
+    """
+    _auth(request)
+    store = getattr(request.app.state, "quik_store", None)
+    agent = _resolve_agent(request, agent_id)
+    ids = load_robot_ids()
+    rows = terminal.rows(store, agent, ids)
+    if active_only:
+        rows = [r for r in rows if r["active"]]
+    return {"agent_id": agent, "orders": rows, "total": len(rows),
+            "active": sum(1 for r in rows if r["active"]),
+            "stale": not terminal.fresh(store, agent)}
+
+
+@router.post("/terminal/cancel")
+async def terminal_cancel(body: TerminalCancelBody, request: Request):
+    """Снять ЛЮБУЮ заявку из таблицы терминала — по номеру, чьей бы она ни была.
+
+    Работает без чьей-либо памяти: KILL_ORDER в QUIK нужны только номер заявки,
+    класс и инструмент, а инструмент берётся из той же таблицы. Поэтому ручка
+    снимает и заявку, поставленную руками, и заявку, пережившую перезапуск агента
+    (01.10.2026: 24 заявки сетки, которые STL слал снимать, а агент не находил).
+
+    Снятие УМЕНЬШАЕТ экспозицию, поэтому гейт один — мастер-флаг, как у /cancel.
+    """
+    _auth(request)
+    _ost, srv = _require_wired(request)
+    lim = _limits(request)
+    store = getattr(request.app.state, "quik_store", None)
+    agent = _resolve_agent(request, body.agent_id)
+    try:
+        check_master_flag(lim)
+    except LimitError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    # Инструмент берём ИЗ ТАБЛИЦЫ, а не от вызывающего: KILL_ORDER с чужим
+    # инструментом молча не снимет ничего, и это выглядело бы как успех.
+    rows = {r["num"]: r for r in terminal.rows(store, agent)}
+    wanted = [n for n in (body.order_nums or []) if n]
+    if not wanted:
+        raise HTTPException(status_code=422, detail="order_nums пуст")
+    sent, skipped = [], []
+    for num in wanted:
+        row = rows.get(str(num))
+        if row is None:
+            skipped.append({"num": num, "why": "нет в таблице заявок терминала"})
+            continue
+        if not row["active"]:
+            skipped.append({"num": num, "why": f"уже не активна ({row['state']})"})
+            continue
+        srv.enqueue_order(agent, order_msgs.build_cancel_order(
+            client_id=f"op:kill:{num}", order_id=str(num), code=row["sec"]))
+        sent.append({"num": num, "sec": row["sec"], "side": row["side"],
+                     "price": row["price"], "balance": row["balance"],
+                     "origin": row["origin"]})
+    log.info("quik.terminal_cancel", agent=agent, sent=len(sent), skipped=len(skipped))
+    return {"ok": True, "agent_id": agent, "sent": sent, "skipped": skipped}
 
 
 @router.post("/replace")

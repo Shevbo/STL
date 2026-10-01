@@ -36,12 +36,27 @@ class _Ost:
 
 
 class _Store:
+    """Зеркало агента с ТАБЛИЦЕЙ ЗАЯВОК ТЕРМИНАЛА — вторым путём снятия."""
+
+    def __init__(self, terminal_orders=()):
+        self._orders = list(terminal_orders)
+
     def agents(self):
         return ["9618"]
 
+    def agent_status(self, agent=None):
+        return {"_received_at_ms": 1_790_800_000_000, "quik": {"orders": self._orders}}
 
-def _request(srv, ost):
-    state = SimpleNamespace(quik_server=srv, quik_order_store=ost, quik_store=_Store())
+
+def _term_row(num, side, price, qty=1, tag="", active=True):
+    return {"num": num, "sec": "RIZ6", "side": side, "price": price, "qty": qty,
+            "balance": qty, "active": active, "tag": tag,
+            "ts_ms": 1_790_800_000_000}
+
+
+def _request(srv, ost, store=None):
+    state = SimpleNamespace(quik_server=srv, quik_order_store=ost,
+                            quik_store=store or _Store())
     return SimpleNamespace(app=SimpleNamespace(state=state))
 
 
@@ -185,3 +200,66 @@ def test_bookkeeping_values_that_are_numbers_do_not_break_the_cancel(monkeypatch
     ost = _Ost([{"client_id": "so:x:top:1", "order_id": "11", "state": "active"}])
     assert _withdraw_resting(_request(srv, ost), so) == 1
     assert srv.cancelled_cids() == ["so:x:top:1"]
+
+
+# --------------------------------------------------------------------------
+# СНЯТИЕ БЕЗ ЧЬЕЙ-ЛИБО ПАМЯТИ.
+#
+# Тесты выше снимают по client_id, и это работает, пока целы ДВЕ карты в памяти:
+# склад заявок STL и карта заявок агента. 01.10.2026 перезапуск агента обнулил
+# его карту, и 24 заявки сетки стали НЕСНИМАЕМЫМИ: STL слал отмену, агент не
+# находил заявку и выходил, книга писала «снято», а заявки продолжали торговать и
+# набрали оператору лишние контракты. Жалоба дословно: «не можешь их снять и
+# пугаешь меня амнезией если будет перезагрузка».
+#
+# Лечится тем, что снятие опирается на таблицу заявок ТЕРМИНАЛА: она живёт в QUIK
+# и переживает перезапуск обоих процессов. KILL_ORDER нужны только номер заявки,
+# класс и инструмент — ничьей памяти для этого не требуется.
+# --------------------------------------------------------------------------
+
+
+def test_orders_are_withdrawn_from_the_terminal_table_when_nobody_remembers_them(monkeypatch):
+    """ГЛАВНЫЙ СЛУЧАЙ: книга и склад пусты, а заявки СТОЯТ. Падает на старом коде."""
+    monkeypatch.setattr("trader.api.quik_smart_orders.resolve_agent",
+                        lambda *a, **k: "9618")
+    so = _corridor(kind="grid", g_live={})            # книга ничего не помнит
+    store = _Store([
+        _term_row("701", "buy", 85400.0, tag=f"stl-so-{so.so_id}"),
+        _term_row("702", "sell", 85600.0, tag=f"stl-so-{so.so_id}"),
+        _term_row("703", "buy", 85300.0, tag="stl-so-ffffffff01"),   # чужая умная
+        _term_row("704", "sell", 85700.0, tag=""),                   # руками оператора
+    ])
+    srv = _Srv()
+    assert _withdraw_resting(_request(srv, _Ost([]), store), so) == 2
+    nums = sorted(m.cancel_order.order_id for m in srv.sent
+                  if m.WhichOneof("payload") == "cancel_order")
+    assert nums == ["701", "702"], "снимаем ТОЛЬКО свои, чужие не трогаем"
+    assert all(m.cancel_order.code == "RIZ6" for m in srv.sent),         "инструмент обязателен: без него агент не снимет заявку, которой не знает"
+
+
+def test_a_known_order_is_not_cancelled_twice(monkeypatch):
+    """Заявка, известная складу, снимается один раз, а не дважды — таблица
+    терминала её уже не повторяет."""
+    monkeypatch.setattr("trader.api.quik_smart_orders.resolve_agent",
+                        lambda *a, **k: "9618")
+    so = _corridor(c_live={"top": "so:x:top:1"})
+    store = _Store([_term_row("111", "sell", 86000.0, tag=f"stl-so-{so.so_id}")])
+    srv = _Srv()
+    ost = _Ost([{"client_id": "so:x:top:1", "order_id": "111", "state": "active"}])
+    assert _withdraw_resting(_request(srv, ost, store), so) == 1
+    assert len([m for m in srv.sent if m.WhichOneof("payload") == "cancel_order"]) == 1
+
+
+def test_instrument_travels_with_every_smart_order_cancel(monkeypatch):
+    """Инструмент уходит В КАЖДОМ снятии, даже когда заявка известна складу: иначе
+    снятие осталось бы зависимым от памяти агента, которая умирает с процессом."""
+    monkeypatch.setattr("trader.api.quik_smart_orders.resolve_agent",
+                        lambda *a, **k: "9618")
+    so = _corridor(c_live={"top": "so:x:top:1", "low": "so:x:low:1"})
+    srv = _Srv()
+    ost = _Ost([
+        {"client_id": "so:x:top:1", "order_id": "111", "state": "active"},
+        {"client_id": "so:x:low:1", "order_id": "222", "state": "active"},
+    ])
+    _withdraw_resting(_request(srv, ost), so)
+    assert [m.cancel_order.code for m in srv.sent] == ["RIZ6", "RIZ6"]

@@ -36,12 +36,21 @@ from trader.quik.truth import MIRROR_MAX_MS, SMART_TAG, owner
 _PRICE_EPS_STEPS = 0.5
 
 
+def _status(store: Any, agent: str | None) -> dict[str, Any]:
+    """Зеркало агента или пустой словарь. `store` здесь Any (так во всём модуле
+    quik): к нему приходят и None, и объекты без зеркала вовсе — отсутствие метода
+    это «зеркала нет», и дальше всё ведёт себя как при молчащем агенте, то есть
+    запрещает ставить заявки, а не разрешает."""
+    getter = getattr(store, "agent_status", None) if store is not None else None
+    if getter is None:
+        return {}
+    status = getter(agent) or {}
+    return status if isinstance(status, dict) else {}
+
+
 def snapshot(store: Any, agent: str | None = None) -> dict[str, Any]:
     """Блок `quik` зеркала агента. Пустой словарь — зеркала нет."""
-    if store is None:
-        return {}
-    status = store.agent_status(agent) or {}
-    return (status.get("quik") or {}) if isinstance(status, dict) else {}
+    return _status(store, agent).get("quik") or {}
 
 
 def fresh(store: Any, agent: str | None = None, now_ms: int | None = None) -> bool:
@@ -50,10 +59,8 @@ def fresh(store: Any, agent: str | None = None, now_ms: int | None = None) -> bo
     False = «не знаю, что в терминале»: зеркала нет или оно встало. Отличать от
     пустой таблицы обязательно — иначе STL примет собственную слепоту за флэт и
     поставит дубль к живой заявке (инцидент 01.10.2026)."""
-    if store is None:
-        return False
-    status = store.agent_status(agent) or {}
-    if not isinstance(status, dict) or not status:
+    status = _status(store, agent)
+    if not status:
         return False
     quik = status.get("quik")
     if not isinstance(quik, dict) or "orders" not in quik:
@@ -91,6 +98,7 @@ def rows(store: Any, agent: str | None = None,
             "balance": bal,
             "filled": max(qty - bal, 0),
             "active": bool(o.get("active")),
+            "state": _state(bool(o.get("active")), qty, bal),
             "ts_ms": int(o.get("ts_ms") or 0),
             "tag": tag,
             "origin": owner(tag, robot_ids),
@@ -98,6 +106,15 @@ def rows(store: Any, agent: str | None = None,
         })
     out.sort(key=lambda d: (not d["active"], -d["ts_ms"]))
     return out
+
+
+def _state(is_active: bool, qty: int, bal: int) -> str:
+    """Состояние строки словами оператора."""
+    if is_active:
+        return "активна"
+    if bal == 0 and qty > 0:
+        return "исполнена"
+    return "снята" + (f", исполнено {qty - bal}" if qty > bal else "")
 
 
 def active(store: Any, agent: str | None = None,
