@@ -619,6 +619,19 @@ function plural(n: number, one: string, few: string, many: string): string {
 /** ЖИВАЯ заявка — та, что ещё может сработать: сторож STL (armed) или нативная
  *  стоп-заявка терминала (native). Делить список по одному `armed` нельзя: заявки
  *  под охраной терминала уехали бы в историю, хотя именно они и защищают позицию. */
+/** Типы, которые торгуют в ОБЕ стороны и выбирают сторону каждой сделки сами.
+ *
+ *  Коридор продаёт у верхней стенки и покупает у нижней, треугольник так же,
+ *  сетка стоит покупками вниз и продажами вверх. Спрашивать у оператора
+ *  «Купить или Продать» здесь не просто лишнее — это обещание выбора, которого
+ *  нет, и он вправе решить, что направление выбрал (оператор 01.10.2026).
+ *  Поле side в заявке остаётся служебным: движок ставит своё. */
+const TWO_SIDED = new Set<Kind>(['corridor', 'triangle', 'grid']);
+
+export function isTwoSided(kind: Kind | string | null | undefined): boolean {
+  return TWO_SIDED.has(String(kind ?? '') as Kind);
+}
+
 export const LIVE_STATUSES = new Set(['armed', 'native']);
 export function isLive(status: string | null | undefined): boolean {
   return LIVE_STATUSES.has(String(status || ''));

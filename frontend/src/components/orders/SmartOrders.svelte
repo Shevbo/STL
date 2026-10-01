@@ -15,7 +15,7 @@
     closingSide, entryOrders, fmtWhen, fmtPts, fmtRub, manualPositions, nativeStopIndex,
     ocoFact, ocoNameOf, stopOrderRow, stopOrderWhy,
     preview, protectionPair,
-    shortCodes, sortBySideAndPrice, tillFact, type Kind, type OpenPos, type Side,
+    shortCodes, sortBySideAndPrice, tillFact, isTwoSided, type Kind, type OpenPos, type Side,
     apexMs, corridorFromClicks, corridorState, corridorTimeError, corridorWidth,
     gridState, gridWorstCase,
     msToMskInput, mskInputToMs,
@@ -387,6 +387,8 @@
   // (бар вместо пикселя, шаг цены, приведение нижней к первой точке) живёт в
   // corridorFromClicks и покрыт тестами; здесь только подстановка в форму.
   const isFigure = $derived(kind === 'corridor' || kind === 'triangle');
+  // Типы, которые торгуют в ОБЕ стороны и выбирают её сами.
+  const twoSided = $derived(isTwoSided(kind));
 
   /** Включить постановку мышкой и ПОКАЗАТЬ график.
    *
@@ -750,10 +752,23 @@
            «какая сделка», и стоят они вместе. -->
       <div class="so-group">
         <div class="so-g-h">Сделка</div>
-        <div class="so-sides">
-          <button class="so-side buy" class:on={side === 'buy'} onclick={() => side = 'buy'}>Купить</button>
-          <button class="so-side sell" class:on={side === 'sell'} onclick={() => side = 'sell'}>Продать</button>
-        </div>
+        <!-- СТОРОНУ СПРАШИВАЕМ НЕ У ВСЕХ. У коридора, треугольника и радиации
+             заявка ДВУСТОРОННЯЯ по устройству: коридор продаёт у верхней стенки
+             и покупает у нижней, сетка стоит покупками вниз и продажами вверх.
+             Движок ставит сторону каждой сделки сам. Кнопка «Купить/Продать»
+             здесь не просто лишняя — она обещает выбор, которого нет, и
+             оператор вправе решить, что выбрал направление (01.10.2026). -->
+        {#if twoSided}
+          <div class="so-sided-note">Сторону выбирать не нужно: {meta.name.toLowerCase()}
+            торгует в обе стороны — {kind === 'grid'
+              ? 'покупки стоят ниже цены, продажи выше'
+              : 'у нижней стенки покупает, у верхней продаёт'}.</div>
+        {:else}
+          <div class="so-sides">
+            <button class="so-side buy" class:on={side === 'buy'} onclick={() => side = 'buy'}>Купить</button>
+            <button class="so-side sell" class:on={side === 'sell'} onclick={() => side = 'sell'}>Продать</button>
+          </div>
+        {/if}
 
         <div class="so-fields">
         <!-- Здесь и ниже поля обёрнуты в div, а НЕ в label: внутри стоят кнопки
@@ -1211,7 +1226,7 @@
           <span class="so-c-num" title="номер связки: этим же номером заявка подписана на графике">{codes[o.so_id]}</span>
           <span class="so-c-tag">{KIND_BY_ID[o.kind].short}</span>
           <b class="so-c-code">{o.code}</b>
-          <span class="so-c-dir" class:buy={o.side === 'buy'}>{o.side === 'buy' ? 'ПОКУПКА' : 'ПРОДАЖА'}</span>
+          {#if isTwoSided(o.kind)}<span class="so-c-dir two" title="торгует в обе стороны: сторону каждой сделки ставит движок">В ОБЕ</span>{:else}<span class="so-c-dir" class:buy={o.side === 'buy'}>{o.side === 'buy' ? 'ПОКУПКА' : 'ПРОДАЖА'}</span>{/if}
           <span class="so-c-qty" title="объём, контрактов">{o.qty}</span>
           <span class="so-c-px" title={keyPrice(o).label}><small>{keyPrice(o).label}</small>{keyPrice(o).price != null ? fmtPrice(keyPrice(o).price) : '—'}</span>
           <span class="so-c-cond">{conditionText(o)}</span>
@@ -1461,7 +1476,7 @@
             <div class="so-c-head">
               <span class="so-c-tag">{KIND_BY_ID[o.kind].short}</span>
               <b class="so-c-code">{o.code}</b>
-              <span class="so-c-dir" class:buy={o.side === 'buy'}>{o.side === 'buy' ? 'ПОКУПКА' : 'ПРОДАЖА'}</span>
+              {#if isTwoSided(o.kind)}<span class="so-c-dir two" title="торгует в обе стороны: сторону каждой сделки ставит движок">В ОБЕ</span>{:else}<span class="so-c-dir" class:buy={o.side === 'buy'}>{o.side === 'buy' ? 'ПОКУПКА' : 'ПРОДАЖА'}</span>{/if}
               <span class="so-c-qty" title="объём, контрактов">{o.qty}</span>
               <span class="so-c-px" title={keyPrice(o).label}><small>{keyPrice(o).label}</small>{keyPrice(o).price != null ? fmtPrice(keyPrice(o).price) : '—'}</span>
               <span class="so-c-cond">{conditionText(o)}</span>
@@ -1530,6 +1545,8 @@
   .so-feed-ev.market { color: #ff6b6b; font-weight: 700; }
   .so-feed-d { color: #9aa0b4; }
   .so-prof-warn { margin: 5px 8px 0; font-size: 11px; color: #e0a35c; }
+  .so-sided-note { padding: 5px 8px; font-size: 11px; color: #9aa0b4; }
+  .so-c-dir.two { color: #9aa0b4; font-size: 13px; }
   .so-replacing { margin: 6px 0; padding: 5px 8px; border-radius: 4px; font-size: 11px;
                   border: 1px solid #e0a35c; background: #1b1b34; color: #e0a35c;
                   display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }

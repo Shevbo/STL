@@ -4,7 +4,8 @@
 // покажут оператору одни уровни, пока заявки стоят на других.
 import { describe, it, expect } from 'vitest';
 import {
-  gridLevels, gridState, gridStopLevels, gridWorstCase, preview, type Kind,
+  gridLevels, gridState, gridStopLevels, gridWorstCase, isTwoSided, preview,
+  type Kind,
 } from './smart-order-help';
 
 const G = { g_base: 84_000, g_step: 50, g_buys: 3, g_sells: 2, g_lot: 2, g_stop_pts: 100 };
@@ -112,5 +113,29 @@ describe('превью радиации', () => {
 
   it('без стопа предупреждает, что сама сетка не выйдет', () => {
     expect(preview({ ...base, gStopPts: 0 }).sentence).toContain('сама не выйдет');
+  });
+});
+
+// Сторона у двусторонних типов — служебная: движок ставит её под каждую сделку
+// сам. «Купить/Продать» на форме обещает выбор, которого нет, и оператор вправе
+// решить, что направление выбрал (01.10.2026).
+describe('кто выбирает сторону', () => {
+  it('фигуры и сетка торгуют в обе стороны', () => {
+    for (const k of ['corridor', 'triangle', 'grid'] as Kind[]) {
+      expect(isTwoSided(k), k).toBe(true);
+    }
+  });
+
+  it('у односторонних типов выбор стороны остаётся', () => {
+    for (const k of ['sl', 'tp', 'trail_tp', 'trail_sl', 'on_fill'] as Kind[]) {
+      expect(isTwoSided(k), k).toBe(false);
+    }
+  });
+
+  // Правило живёт в одном месте и для формы, и для карточки: разойдясь, экран
+  // спрятал бы кнопки, но подписал заявку «ПРОДАЖА» — хуже обоих вариантов.
+  it('список покрывает ровно те типы, что ведут позицию сами', () => {
+    expect(isTwoSided('')).toBe(false);
+    expect(isTwoSided(null)).toBe(false);
   });
 });
