@@ -451,3 +451,117 @@ def test_an_adopted_level_row_gone_from_the_table_is_reported(tmp_path):
     _grid_sync(book, _gstore(85000.0), GOst(), srv, GLim(), "9618", GSTEPS, {}, GNOW)
     assert so.g_pos == 0, "сколько налилось — неизвестно, не выдумываем"
     assert "adopt:-1" not in so.g_live
+
+
+# --------------------------------------------------------------------------
+# СТОП СЕТКИ ЗАКРЫВАЕТ ПОЗИЦИЮ (решение оператора 01.10.2026 по разбору
+# бэктестов: стоп срабатывает в половине дней, и почти все убыточные дни — с
+# выходом за последний уровень; прежнее поведение оставляло 10-15 лотов БЕЗ
+# ЗАЩИТЫ ровно в трендовый день).
+# --------------------------------------------------------------------------
+
+
+def _stopped_grid(tmp_path, pos):
+    book, so = _gbook(tmp_path)
+    so.g_stop_pts = 150.0
+    so.g_pos = pos
+    return book, so
+
+
+def test_grid_stop_closes_the_position_at_market(tmp_path):
+    book, so = _stopped_grid(tmp_path, pos=-3)
+    srv = GSrv()
+    _grid_sync(book, _gstore(84000.0), GOst(), srv, GLim(), "9618", GSTEPS, {}, GNOW)
+
+    mkt = [m.place_order for m in srv.sent
+           if m.WhichOneof("payload") == "place_order" and m.place_order.market]
+    assert len(mkt) == 1, "позиция обязана закрываться рыночной, а не оставаться"
+    assert mkt[0].side == 1 and mkt[0].quantity == 3, "шорт −3 закрывается покупкой 3"
+    assert so.g_done is True, "уровни больше не выставляем"
+    assert so.status == "closing", (
+        "«снята» до исполнения означало бы «заявку отправили» — а это разные события")
+    assert so.g_pos == -3, "позиция обнуляется ПО ФАКТУ исполнения, не по отправке"
+    assert so.g_close_cid
+
+
+def test_grid_stop_closes_a_long_by_selling(tmp_path):
+    book, so = _stopped_grid(tmp_path, pos=4)
+    srv = GSrv()
+    _grid_sync(book, _gstore(84000.0), GOst(), srv, GLim(), "9618", GSTEPS, {}, GNOW)
+    mkt = [m.place_order for m in srv.sent
+           if m.WhichOneof("payload") == "place_order" and m.place_order.market]
+    assert mkt and mkt[0].side == 2 and mkt[0].quantity == 4
+
+
+def test_grid_stop_with_no_position_just_finishes(tmp_path):
+    book, so = _stopped_grid(tmp_path, pos=0)
+    srv = GSrv()
+    _grid_sync(book, _gstore(84000.0), GOst(), srv, GLim(), "9618", GSTEPS, {}, GNOW)
+    assert [m for m in srv.sent if m.WhichOneof("payload") == "place_order"] == []
+    assert so.status == "cancelled" and so.g_done is True
+
+
+def test_the_close_is_confirmed_by_the_fill_not_by_the_send(tmp_path):
+    """Позиция обнуляется по ФАКТУ. Отправка и исполнение — разные события."""
+    book, so = _stopped_grid(tmp_path, pos=-3)
+    so.g_done, so.status, so.g_close_cid = True, "closing", "so:x:stopclose:1"
+    ost = GOst()
+    ost.working_orders = lambda agent=None: [
+        {"client_id": "so:x:stopclose:1", "order_id": "9", "state": "filled",
+         "side": "buy", "filled": 3, "remaining": 0, "price": 84010.0}]
+    _grid_sync(book, _gstore(84000.0), ost, GSrv(), GLim(), "9618", GSTEPS, {}, GNOW)
+    assert so.g_pos == 0 and so.status == "cancelled"
+
+
+def test_a_close_that_fills_nothing_screams_instead_of_saying_cancelled(tmp_path):
+    """ГЛАВНЫЙ СЛУЧАЙ, ценой 29.09.2026: рыночная заявка нативного стопа на 70
+    контрактов СРАБОТАЛА И УМЕРЛА С НУЛЁМ ИСПОЛНЕНИЯ, пока рынок шёл 690 пунктов
+    за минуту. Назвать такую сетку «снятой» значит соврать в самый дорогой момент:
+    в рынке остался незащищённый объём.
+    """
+    book, so = _stopped_grid(tmp_path, pos=-3)
+    so.g_done, so.status, so.g_close_cid = True, "closing", "so:x:stopclose:1"
+    ost = GOst()
+    ost.working_orders = lambda agent=None: [
+        {"client_id": "so:x:stopclose:1", "order_id": "9", "state": "cancelled",
+         "side": "buy", "filled": 0, "remaining": 0, "price": 0.0}]
+    _grid_sync(book, _gstore(84000.0), ost, GSrv(), GLim(), "9618", GSTEPS, {}, GNOW)
+    assert so.status == "error", "сетка с незакрытой позицией не «снята», а ошибка"
+    assert so.g_pos == -3, "ничего не выдумываем: исполнения не было"
+    assert "БЕЗ ЗАЩИТЫ" in so.note
+
+
+def test_a_partial_close_keeps_screaming_about_the_remainder(tmp_path):
+    """Налилось 2 из 3 — остаток в рынке и без защиты. Это тоже не «снята»."""
+    book, so = _stopped_grid(tmp_path, pos=-3)
+    so.g_done, so.status, so.g_close_cid = True, "closing", "so:x:stopclose:1"
+    ost = GOst()
+    ost.working_orders = lambda agent=None: [
+        {"client_id": "so:x:stopclose:1", "order_id": "9", "state": "cancelled",
+         "side": "buy", "filled": 2, "remaining": 0, "price": 84010.0}]
+    _grid_sync(book, _gstore(84000.0), ost, GSrv(), GLim(), "9618", GSTEPS, {}, GNOW)
+    assert so.g_pos == -1 and so.status == "error"
+
+
+def test_a_close_still_working_is_left_alone(tmp_path):
+    """Пока заявка наливается — не трогаем и не объявляем ничего."""
+    book, so = _stopped_grid(tmp_path, pos=-3)
+    so.g_done, so.status, so.g_close_cid = True, "closing", "so:x:stopclose:1"
+    ost = GOst()
+    ost.working_orders = lambda agent=None: [
+        {"client_id": "so:x:stopclose:1", "order_id": "9", "state": "partial",
+         "side": "buy", "filled": 1, "remaining": 2, "price": 84010.0}]
+    _grid_sync(book, _gstore(84000.0), ost, GSrv(), GLim(), "9618", GSTEPS, {}, GNOW)
+    assert so.status == "closing", "ещё наливается — вердикта нет"
+
+
+def test_the_grid_closes_only_its_own_position(tmp_path):
+    """Закрывается РОВНО g_pos. Нетто счёта включает ручную торговлю оператора
+    (01.10.2026: нетто RIZ6 −7 при позиции сетки −3), и закрыть «по счёту» значило
+    бы закрыть чужое."""
+    book, so = _stopped_grid(tmp_path, pos=-3)
+    srv = GSrv()
+    _grid_sync(book, _gstore(84000.0), GOst(), srv, GLim(), "9618", GSTEPS, {}, GNOW)
+    mkt = [m.place_order for m in srv.sent
+           if m.WhichOneof("payload") == "place_order" and m.place_order.market]
+    assert mkt[0].quantity == 3, "ровно позиция сетки, а не нетто счёта"

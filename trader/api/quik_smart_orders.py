@@ -1679,6 +1679,48 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
     # ВСЕ строки по номеру, не только живые: по ним догоняется филл ПОДХВАЧЕННОЙ
     # заявки — своего client_id у неё нет, и склад о её исполнении не узнает.
     term_num = terminal.by_num(store, agent) if _term_ok else {}
+    # ЗАКРЫТИЕ ПО СТОПУ ЖДЁТ ПОДТВЕРЖДЕНИЯ. «Отправили рыночную» и «позиция
+    # закрыта» — разные события: 29.09.2026 рыночная заявка нативного стопа на 70
+    # контрактов сработала и умерла с НУЛЁМ исполнения, пока рынок шёл 690 пунктов
+    # за минуту. Поэтому сетка в статусе closing ещё жива, и позиция обнуляется
+    # только по ФАКТУ исполнения, а не по факту отправки.
+    for so in book.orders:
+        if so.kind != "grid" or so.status != "closing" or not so.g_close_cid:
+            continue
+        rec = work.get(so.g_close_cid) or {}
+        got = int(rec.get("filled") or 0)
+        rest = int(rec.get("remaining") or 0)
+        if got:
+            # Знак филла из записи заявки, а не из нашего намерения.
+            side_was = str(rec.get("side") or "").lower()
+            if side_was not in ("buy", "sell"):
+                side_was = "sell" if so.g_pos > 0 else "buy"
+            so.g_pos += got * (1 if side_was == "buy" else -1)
+            dirty = True
+        if not rec:
+            continue                       # заявка ещё не доехала до склада
+        if rest > 0 and rec.get("state") not in _DEAD_STATES:
+            continue                       # ещё наливается
+        if so.g_pos == 0:
+            so.status = "cancelled"
+            so.note = (so.note + " " if so.note else "") + "позиция закрыта"
+            so_journal.record("grid_stop", so, so_journal.WATCHER,
+                              f"закрытие по стопу исполнено: {got} по "
+                              f"{float(rec.get('price') or 0):g}; позиция 0, "
+                              "сетка завершена", now_ms=now)
+            dirty = True
+            continue
+        # ЗАЯВКА КОНЧИЛАСЬ, А ПОЗИЦИЯ НЕТ. Именно этот случай 29.09 стоил дорого.
+        so.status = "error"
+        so.note = (so.note + " " if so.note else "") + (
+            f"закрытие по стопу НЕ ДОВЕДЕНО: осталось {so.g_pos:+d} БЕЗ ЗАЩИТЫ")
+        so_journal.record("error", so, so_journal.WATCHER,
+                          f"закрытие по стопу кончилось с остатком: исполнено {got}, "
+                          f"позиция {so.g_pos:+d} ОСТАЛАСЬ БЕЗ ЗАЩИТЫ — закройте "
+                          "вручную", now_ms=now)
+        log.error("smart_order.grid_close_incomplete", so_id=so.so_id, pos=so.g_pos,
+                  filled=got)
+        dirty = True
     for so in book.orders:
         if so.kind != "grid" or so.status not in ("armed", "native") or so.g_done:
             continue
@@ -1714,12 +1756,61 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
                                   f"ТЕРМИНАЛА ({row['side']} {row['balance']} по "
                                   f"{row['price']:g}): своих записей о ней не было",
                                   now_ms=now)
-            so.g_live, so.g_done, so.status = {}, True, "cancelled"
+            so.g_live, so.g_done = {}, True
+            # ПОЗИЦИЯ ЗАКРЫВАЕТСЯ, А НЕ ОСТАЁТСЯ НА ОПЕРАТОРЕ. Решение оператора
+            # 01.10.2026 по разбору бэктестов: стоп срабатывает в половине дней, и
+            # почти все убыточные дни — с выходом за последний уровень. Прежнее
+            # поведение оставляло в такой день 10-15 лотов БЕЗ ЗАЩИТЫ ровно тогда,
+            # когда рынок идёт в одну сторону.
+            #
+            # Закрываем РОВНО g_pos и только его: нетто счёта включает ручную
+            # торговлю оператора (01.10 нетто RIZ6 −7 при позиции сетки −3), и
+            # закрыть «по счёту» значило бы закрыть чужое.
+            if so.g_pos:
+                close_side = "sell" if so.g_pos > 0 else "buy"
+                close_qty = abs(so.g_pos)
+                cid = f"so:{so.so_id}:stopclose:{now % 100000}"
+                try:
+                    validate_place(lim, code=so.code, quantity=close_qty, collar=0.0,
+                                   current_working=ost.working_contracts(agent),
+                                   placed_today=ost.placed_today(agent))
+                    ost.register_pending(agent, cid, so.code, close_side, 0.0, close_qty)
+                    ost.record_placement(agent)
+                    srv.enqueue_order(agent, order_msgs.build_place_order(
+                        client_id=cid, code=so.code, side=close_side, price=0.0,
+                        quantity=close_qty, collar=0.0, market=True))
+                except LimitError as exc:
+                    # ОТКАЗ ЗАКРЫТИЯ КРИЧИТ. Молча оставить позицию без защиты и
+                    # написать «снята» значит соврать в самый дорогой момент.
+                    so.status = "error"
+                    so.note = (so.note + " " if so.note else "") + (
+                        f"стоп сетки: ЗАКРЫТИЕ ОТКЛОНЕНО ({exc}), позиция "
+                        f"{so.g_pos:+d} БЕЗ ЗАЩИТЫ")
+                    so_journal.record("error", so, so_journal.LIMITS,
+                                      f"стоп за краем сетки: закрытие позиции "
+                                      f"{so.g_pos:+d} отклонено лимитами: {exc}. "
+                                      "ПОЗИЦИЯ ОСТАЛАСЬ БЕЗ ЗАЩИТЫ", now_ms=now)
+                    log.error("smart_order.grid_stop_close_refused", so_id=so.so_id,
+                              pos=so.g_pos, error=str(exc))
+                    return True
+                so.g_close_cid = cid
+                so.status = "closing"
+                so.note = (so.note + " " if so.note else "") + (
+                    f"стоп за краем сетки: закрываю {close_side} {close_qty} рыночной")
+                so_journal.record(
+                    "grid_stop", so, so_journal.WATCHER,
+                    f"цена {price:g} за последним уровнем: сетка снята, позиция "
+                    f"{so.g_pos:+d} ЗАКРЫВАЕТСЯ рыночной {close_side} {close_qty} "
+                    f"({cid})", now_ms=now)
+                log.warning("smart_order.grid_stopped", so_id=so.so_id, price=price,
+                            pos=so.g_pos, close=cid)
+                return True
+            so.status = "cancelled"
             so.note = (so.note + " " if so.note else "") + "стоп за краем сетки: снята"
             so_journal.record("grid_stop", so, so_journal.WATCHER,
                               f"цена {price:g} за последним уровнем: сетка снята, "
-                              f"позиция {so.g_pos:+d} остаётся на операторе", now_ms=now)
-            log.warning("smart_order.grid_stopped", so_id=so.so_id, price=price, pos=so.g_pos)
+                              f"позиции не было", now_ms=now)
+            log.warning("smart_order.grid_stopped", so_id=so.so_id, price=price, pos=0)
             return True
 
         for level in so_mod.grid_levels(so):
