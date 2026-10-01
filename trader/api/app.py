@@ -108,10 +108,6 @@ async def lifespan(app: FastAPI):
         base_url=settings.finam_api_base_url,
         get_token=auth.get_token,
         account_id=account_id,
-        # Тот же переключатель, что выбирает брокер-адаптер. Он операторский и
-        # меняется на лету, поэтому и парковка Finam, и расконсервация — один
-        # щелчок, без рестарта и без второго флага.
-        interface=lambda: getattr(settings, "exchange_interface", "finam"),
     )
     tx = TxClient(
         base_url=settings.finam_api_base_url,
@@ -269,6 +265,11 @@ async def lifespan(app: FastAPI):
         base_url=settings.finam_api_base_url,
         get_token=auth.get_token,
         account_id=account_id,
+        # Тот же переключатель, что выбирает брокер-адаптер. Он операторский и
+        # меняется на лету, поэтому и парковка Finam, и расконсервация — один
+        # щелчок, без рестарта и без второго флага. Принимает его ИМЕННО WsHub:
+        # опрос позиций живёт в нём, а PositionsClient такого параметра не знает.
+        interface=lambda: getattr(settings, "exchange_interface", "finam"),
     )
 
     try:
