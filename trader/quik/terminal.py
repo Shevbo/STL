@@ -65,8 +65,30 @@ def fresh(store: Any, agent: str | None = None, now_ms: int | None = None) -> bo
     quik = status.get("quik")
     if not isinstance(quik, dict) or "orders" not in quik:
         return False          # старая сборка агента: таблицы в зеркале нет вовсе
-    # Возраст зеркала у store ОДИН: `_received_at_ms` (см. store.set_agent_status —
-    # generated_at агента там принимается и намеренно не используется).
+    # ПУСТОЙ СПИСОК «orders» ЕСТЬ В СНИМКЕ ВСЕГДА, даже до первого кадра от QLua:
+    # агент инициализирует поле пустым срезом (buildQuikJSON). Значит наличия ключа
+    # мало — по нему слепота сразу после рестарта АГЕНТА выглядела бы флэтом, и все
+    # уровни сетки встали бы заново (окно до 15 с: столько Lua держит keepalive).
+    #
+    # Правду про саму таблицу говорит health.ord_age_ms: −1 = не публиковалась НИ
+    # РАЗУ (accounts.Snapshot, «never an epoch-sized number»), иначе возраст
+    # таблицы в мс. Это ответ именно про ТАБЛИЦУ, а не про зеркало, поэтому он
+    # главный — зеркало может быть свежим, а таблицы в нём ещё не быть.
+    health = status.get("health")
+    ord_age = (health or {}).get("ord_age_ms") if isinstance(health, dict) else None
+    if ord_age is None:
+        return False          # сборка агента без ord_age_ms: судить не на чем
+    try:
+        ord_age = int(ord_age)
+    except (TypeError, ValueError):
+        return False
+    if ord_age < 0:
+        return False          # таблица не публиковалась ни разу — «НЕ ЗНАЮ»
+    if ord_age > MIRROR_MAX_MS:
+        return False          # публикации встали: таблица описывает прошлое
+    # Возраст самого зеркала у store ОДИН: `_received_at_ms` (см.
+    # store.set_agent_status — generated_at агента там принимается и намеренно не
+    # используется). Таблица может быть свежей у агента, а до нас не доезжать.
     got = int(status.get("_received_at_ms") or 0)
     if got <= 0:
         return True           # возраст не заявлен — зеркало есть, судим по нему
@@ -147,6 +169,17 @@ def by_smart_order(store: Any, agent: str | None = None) -> dict[str, list[dict[
         if r["so_id"]:
             out.setdefault(r["so_id"], []).append(r)
     return out
+
+
+def by_num(store: Any, agent: str | None = None) -> dict[str, dict[str, Any]]:
+    """num -> строка таблицы, ВСЕ строки, не только живые.
+
+    Нужна, чтобы догнать филл ПОДХВАЧЕННОЙ заявки. Подхваченной заявке STL не
+    возвращает client_id (в brokerref QUIK 20 символов, он туда не влезает), поэтому
+    о её исполнении нельзя узнать из склада заявок — склад про неё не знает. Зато
+    исполнившаяся строка не исчезает из таблицы: она становится неактивной, и
+    `qty - balance` говорит, сколько налилось."""
+    return {r["num"]: r for r in rows(store, agent) if r["num"]}
 
 
 def matches_price(row_price: float, want: float, step: float) -> bool:

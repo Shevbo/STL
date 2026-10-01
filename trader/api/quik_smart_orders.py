@@ -328,8 +328,14 @@ def _cancel_resting(srv: Any, store: Any, agent: str, so: SmartOrder,
     for row in terminal.by_smart_order(store, agent).get(so.so_id, []):
         if row["num"] in sent:
             continue
+        # CLIENT_ID ЗДЕСЬ НЕ ДОЛЖЕН НИ С ЧЕМ СОВПАДАТЬ. Сначала стояло
+        # f"so:{so.so_id}" — а это client_id ВЫСТРЕЛИВШЕЙ заявки этой же умной
+        # заявки (см. :2374). Агент при неизвестном номере ищет по карте client_id
+        # (resolveForCancel: сначала byOrder, потом byClient) и снял бы ВЫСТРЕЛ
+        # вместо той строки, о которой речь: нужная заявка осталась бы торговать, а
+        # посторонняя умерла. Номер заявки в имени делает совпадение невозможным.
         srv.enqueue_order(agent, order_msgs.build_cancel_order(
-            client_id=f"so:{so.so_id}", order_id=row["num"], code=row["sec"]))
+            client_id=f"op:kill:{row['num']}", order_id=row["num"], code=row["sec"]))
         sent.add(row["num"])
         killed += 1
         extra.append(row)
@@ -1633,6 +1639,31 @@ def _grid_cid(so_id: str, level: int) -> str:
     return _GRID_CID.format(so_id=so_id, level=f"{level:+d}".replace("+", "p").replace("-", "m"))
 
 
+def _grid_count_fill(so: SmartOrder, live: dict, level: int, side_was: str,
+                     got: int, now: int, how: str = "") -> None:
+    """Провести филл уровня сетки: позиция, гашение уровня, пробуждение соседей.
+
+    ЕДИНСТВЕННЫЙ путь учёта филла в сетке. Таких путей теперь два источника — запись
+    склада заявок и исчезновение строки из таблицы терминала (подхваченная после
+    рестарта заявка своего client_id не имеет, см. terminal.by_num), и считать они
+    обязаны ОДИНАКОВО: от позиции сетки зависят и объём, и стоп.
+
+    Механика «радиации» со слов оператора: тейка нет, есть уровни. Исполненный
+    уровень ИСЧЕЗАЕТ и возвращается только после филла СОСЕДНЕГО — любого, хоть
+    ниже, хоть выше.
+    """
+    so.g_pos += got * (1 if side_was == "buy" else -1)
+    live[f"flip:{level}"] = True                  # этот уровень погас
+    woke = [n for n in (level - 1, level + 1)
+            if live.pop(f"flip:{n}", None)]       # соседи ожили
+    so_journal.record("grid_fill", so, so_journal.WATCHER,
+                      f"уровень {level:+d} ({so_mod.grid_price(so, level):g}) "
+                      f"исполнен {side_was} {got}; позиция {so.g_pos:+d}; "
+                      "уровень погас"
+                      + (f", вернулись соседние {woke}" if woke else "")
+                      + how, now_ms=now)
+
+
 def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
                agent: str, steps: dict[str, float],
                price_limits: dict[str, tuple[float, float]], now: int) -> bool:
@@ -1643,8 +1674,11 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
     # ЧТО СТОИТ В ТЕРМИНАЛЕ — один запрос на проход. None = зеркала агента нет или
     # оно встало: это «НЕ ЗНАЮ», а не «ничего не стоит», и ставить при нём нельзя.
     # Пустой список — законный ответ «в терминале этой заявки нет».
-    term_all = (terminal.by_smart_order(store, agent)
-                if terminal.fresh(store, agent, now) else None)
+    _term_ok = terminal.fresh(store, agent, now)
+    term_all = terminal.by_smart_order(store, agent) if _term_ok else None
+    # ВСЕ строки по номеру, не только живые: по ним догоняется филл ПОДХВАЧЕННОЙ
+    # заявки — своего client_id у неё нет, и склад о её исполнении не узнает.
+    term_num = terminal.by_num(store, agent) if _term_ok else {}
     for so in book.orders:
         if so.kind != "grid" or so.status not in ("armed", "native") or so.g_done:
             continue
@@ -1716,17 +1750,56 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
                     side_was = so_mod.grid_side_for(so, level, price)
                     log.warning("smart_order.grid_fill_side_unknown", so_id=so.so_id,
                                 level=level, guessed=side_was)
-                so.g_pos += int(rec["filled"]) * (1 if side_was == "buy" else -1)
-                live[f"flip:{level}"] = True              # этот уровень погас
-                woke = [n for n in (level - 1, level + 1)
-                        if live.pop(f"flip:{n}", None)]   # соседи ожили
-                so_journal.record("grid_fill", so, so_journal.WATCHER,
-                                  f"уровень {level:+d} ({so_mod.grid_price(so, level):g}) "
-                                  f"исполнен {side_was} {rec['filled']}; позиция "
-                                  f"{so.g_pos:+d}; уровень погас"
-                                  + (f", вернулись соседние {woke}" if woke else ""),
-                                  now_ms=now)
+                _grid_count_fill(so, live, level, side_was, int(rec["filled"]), now)
                 dirty = True
+            # ВСТАВЛЕНО ДО ГЕЙТА «погасший уровень не выставляем» НАМЕРЕННО. Сначала
+            # эта ветка стояла после него — и гейт успевал пропустить уровень, для
+            # которого филл обнаруживался строкой ниже: уровень гас, а заявка на него
+            # всё равно уходила. Та же ошибка, что 01.10.2026 заставила уровень
+            # продать два контракта вместо одного: запись в локальную копию состояния
+            # после того, как её уже прочитали (docs — «устаревшее состояние в своём
+            # же проходе»).
+            # ФИЛЛ ПОДХВАЧЕННОЙ ЗАЯВКИ — ДОГНАТЬ ПО ТАБЛИЦЕ.
+            #
+            # Подхваченной после рестарта заявке STL не возвращает client_id: в
+            # brokerref QUIK 20 символов, он туда не влезает. Значит склад заявок о
+            # её исполнении не узнает НИКОГДА, и без этой ветки уровень после филла
+            # просто переставлялся на ту же цену: круг с нулевой прибылью и двойной
+            # комиссией, который механика «радиации» прямо запрещает, плюс g_pos
+            # оставался ложным, а от него считаются и объём, и стоп. Сегодня так
+            # повели бы себя все 25 живых заявок сетки после рестарта STL.
+            #
+            # Исполнившаяся строка из таблицы не исчезает — она становится
+            # НЕАКТИВНОЙ, и qty - balance говорит, сколько налилось.
+            adopted = live.get(f"adopt:{level}")
+            if isinstance(adopted, dict) and adopted.get("num"):
+                row = term_num.get(str(adopted["num"]))
+                if row is not None and not row["active"]:
+                    live.pop(f"adopt:{level}", None)
+                    dirty = True
+                    if row["filled"] > 0:
+                        side_was = (row["side"] if row["side"] in ("buy", "sell")
+                                    else so_mod.grid_side_for(so, level, price))
+                        _grid_count_fill(so, live, level, side_was, row["filled"], now,
+                                         f" (подхваченная заявка {row['num']}, "
+                                         "узнали из таблицы терминала)")
+                    else:
+                        so_journal.record(
+                            "adopted", so, so_journal.WATCHER,
+                            f"подхваченная заявка {row['num']} уровня {level:+d} снята "
+                            "без исполнения — уровень снова свободен", now_ms=now)
+                elif row is None and term_live is not None:
+                    # Строки нет в таблице ВОВСЕ: за капом истории или день сменился.
+                    # Молча забыть нельзя — сделаем это громко, уровень освободим.
+                    live.pop(f"adopt:{level}", None)
+                    dirty = True
+                    so_journal.record(
+                        "adopted", so, so_journal.WATCHER,
+                        f"подхваченная заявка {adopted['num']} уровня {level:+d} "
+                        "пропала из таблицы терминала: исполнение по ней НЕ учтено, "
+                        "сверьте позицию", now_ms=now)
+                    log.warning("smart_order.adopted_row_vanished", so_id=so.so_id,
+                                level=level, num=adopted["num"])
             # Погасший уровень не выставляем: он ждёт филла соседа, а не повтора
             # входа по своей же цене.
             if not so_mod.grid_places_here(live, level):
@@ -1780,11 +1853,13 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
             # вторую заявку на ту же цену, в противоположную сторону.
             standing = terminal.find_level(term_live, px, step)
             if standing is not None:
-                # Значение здесь ЧИСЛО, а не номер заявки строкой: _withdraw_resting
-                # считает любую строку в live идентификатором заявки (и уже один раз
-                # поперхнулся числом в moved:). Номер уходит в журнал, где он и нужен.
-                if live.get(f"adopt:{level}") != 1:
-                    live[f"adopt:{level}"] = 1
+                # ЗНАЧЕНИЕ — СЛОВАРЬ, а не строка: _withdraw_resting считает любую
+                # строку в live идентификатором заявки (и уже один раз поперхнулся
+                # числом в moved:). Номер здесь нужен, чтобы догнать филл этой заявки
+                # по таблице, — словарь и несёт его, не притворяясь client_id.
+                prev = live.get(f"adopt:{level}")
+                if not isinstance(prev, dict) or prev.get("num") != standing["num"]:
+                    live[f"adopt:{level}"] = {"num": standing["num"]}
                     dirty = True
                     so_journal.record(
                         "adopted", so, so_journal.WATCHER,
@@ -1792,7 +1867,6 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
                         f"{standing['num']} ({standing['side']} "
                         f"{standing['balance']}): второй не ставим", now_ms=now)
                 continue
-            live.pop(f"adopt:{level}", None)
             if not price_within_limits(px, limits):
                 # ЗА ПЛАНКОЙ БИРЖИ. Не выставляем и не считаем это ошибкой:
                 # планки двигает MOEX по своему расписанию, и уровень оживёт сам,
@@ -1849,6 +1923,34 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
 _WALL_MOVE_EVERY_MS = 10_000   # как часто двигать заявку вслед за наклоном
 
 
+def _wall_count_fill(so: SmartOrder, live: dict, wall: str, side_was: str,
+                     got: int, price: float, now: int, how: str = "") -> None:
+    """Провести исполнение стенки коридора: позиция, счётчик переворотов, конец.
+
+    ЕДИНСТВЕННЫЙ путь учёта, и источников у него два: запись склада заявок и
+    исчезновение строки из таблицы терминала (подхваченная после рестарта заявка
+    своего client_id не имеет). Считать они обязаны одинаково — от c_pos зависят и
+    объём встречной заявки, и гейт «на стенке, от которой мы уже в позиции, заявки
+    быть не должно».
+
+    Считаем ФАКТИЧЕСКИ налитое, а не базовый объём: corridor_after_fire ставит
+    позицию равной базе целиком и на неполном наливе соврал бы.
+    """
+    was = so.c_pos
+    so.c_pos += got * (1 if side_was == "buy" else -1)
+    if was != 0 and (was > 0) != (so.c_pos > 0) and so.c_pos != 0:
+        so.c_flips += 1
+        if so.c_flips_max and so.c_flips >= so.c_flips_max:
+            so.c_done = True              # лимит переворотов выбран
+    live.pop(wall, None)                  # заявки на этой стенке больше нет
+    live.pop(f"moved:{wall}", None)
+    so_journal.record(
+        "corridor", so, so_journal.WATCHER,
+        f"стенка {wall} исполнена {side_was} {got} по {price:g}; "
+        f"позиция {so.c_pos:+d}, переворотов {so.c_flips}"
+        + (f"/{so.c_flips_max}" if so.c_flips_max else "") + how, now_ms=now)
+
+
 def _walls_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
                 agent: str, steps: dict[str, float],
                 price_limits: dict[str, tuple[float, float]], now: int,
@@ -1866,8 +1968,9 @@ def _walls_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
     dirty = False
     work = {d.get("client_id"): d for d in ost.working_orders(agent)}
     # Что стоит в терминале — один запрос на проход; None = «не знаю» (см. _grid_sync).
-    term_all = (terminal.by_smart_order(store, agent)
-                if terminal.fresh(store, agent, now) else None)
+    _term_ok = terminal.fresh(store, agent, now)
+    term_all = terminal.by_smart_order(store, agent) if _term_ok else None
+    term_num = terminal.by_num(store, agent) if _term_ok else {}
     for so in book.orders:
         if so.kind not in ("corridor", "triangle") or so.status not in ("armed", "native"):
             continue
@@ -1908,28 +2011,27 @@ def _walls_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
             # на половине налива соврал бы.
             cid_f = live.get(wall) or ""
             rec_f = work.get(cid_f) if cid_f else None
-            if rec_f is not None and int(rec_f.get("filled") or 0) > 0:
+            # ЧАСТИЧНЫЙ НАЛИВ НЕ ЗАКРЫВАЕТ ЗАЯВКУ. Проверка шла по filled > 0 без
+            # оглядки на остаток: продажа 10, налилось 4 — ветка писала позицию −4 и
+            # ЗАБЫВАЛА cid, а остальные 6 продолжали стоять в рынке уже никому не
+            # известные. Снять их было нечем (гейт c_pos ниже хочет снять верх, а
+            # идентификатора у него больше нет), и когда они наливались, позиция
+            # оставалась −4 вместо −10: от неё считаются и объём встречной заявки, и
+            # стоп. Образец — сетка (_grid_sync): там сначала «стоит в стакане»,
+            # и только потом учёт филла. Здесь порядок был обратный.
+            still_working = (rec_f is not None
+                             and rec_f.get("state") not in _DEAD_STATES
+                             and int(rec_f.get("remaining") or 0) > 0)
+            if rec_f is not None and not still_working and int(rec_f.get("filled") or 0) > 0:
                 got = int(rec_f["filled"])
                 side_was = str(rec_f.get("side") or "").lower()
                 if side_was not in ("buy", "sell"):
                     side_was = side
                     log.warning("smart_order.wall_fill_side_unknown",
                                 so_id=so.so_id, wall=wall, assumed=side)
-                was = so.c_pos
-                so.c_pos += got * (1 if side_was == "buy" else -1)
-                if was != 0 and (was > 0) != (so.c_pos > 0) and so.c_pos != 0:
-                    so.c_flips += 1
-                    if so.c_flips_max and so.c_flips >= so.c_flips_max:
-                        so.c_done = True   # лимит переворотов выбран
-                live.pop(wall, None)       # заявки на этой стенке больше нет
-                live.pop(f"moved:{wall}", None)
+                _wall_count_fill(so, live, wall, side_was, got,
+                                 float(rec_f.get("price") or 0), now)
                 dirty = True
-                so_journal.record(
-                    "corridor", so, so_journal.WATCHER,
-                    f"стенка {wall} исполнена {side_was} {got} по "
-                    f"{float(rec_f.get('price') or 0):g}; позиция {so.c_pos:+d}, "
-                    f"переворотов {so.c_flips}"
-                    + (f"/{so.c_flips_max}" if so.c_flips_max else ""), now_ms=now)
                 continue
             # На стенке, от которой мы уже в позиции, заявки быть не должно:
             # иначе она нарастила бы позицию там, где по правилам коридора мы
@@ -2000,6 +2102,37 @@ def _walls_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
                 except Exception as exc:  # noqa: BLE001
                     log.warning("smart_order.wall_move_failed", so_id=so.so_id, error=str(exc))
                 continue
+            # ИСПОЛНЕНИЕ ПОДХВАЧЕННОЙ СТЕНКИ — ДОГНАТЬ ПО ТАБЛИЦЕ. Без этого стенка,
+            # подхваченная после рестарта, после налива переставлялась бы заново, а
+            # c_pos оставался нулём: тот самый механизм, которым каждое касание
+            # удваивало объём, только зашедший через подхват.
+            adopted = live.get(f"adopt:{wall}")
+            if isinstance(adopted, dict) and adopted.get("num"):
+                row = term_num.get(str(adopted["num"]))
+                if row is not None and not row["active"]:
+                    live.pop(f"adopt:{wall}", None)
+                    dirty = True
+                    if row["filled"] > 0:
+                        side_was = row["side"] if row["side"] in ("buy", "sell") else side
+                        _wall_count_fill(so, live, wall, side_was, row["filled"],
+                                         row["price"], now,
+                                         f" (подхваченная заявка {row['num']}, "
+                                         "узнали из таблицы терминала)")
+                        continue
+                    so_journal.record(
+                        "adopted", so, so_journal.WATCHER,
+                        f"подхваченная заявка {row['num']} стенки {wall} снята без "
+                        "исполнения — стенка снова свободна", now_ms=now)
+                elif row is None:
+                    live.pop(f"adopt:{wall}", None)
+                    dirty = True
+                    so_journal.record(
+                        "adopted", so, so_journal.WATCHER,
+                        f"подхваченная заявка {adopted['num']} стенки {wall} пропала "
+                        "из таблицы терминала: исполнение по ней НЕ учтено, сверьте "
+                        "позицию", now_ms=now)
+                    log.warning("smart_order.adopted_row_vanished", so_id=so.so_id,
+                                wall=wall, num=adopted["num"])
             # ПЕРЕД ПОСТАНОВКОЙ СПРАШИВАЕМ ТЕРМИНАЛ, А НЕ СВОЙ СКЛАД. Здесь стояла
             # задержка на 90 с после старта процесса — лечение часов, а не причины:
             # склад заявок живёт в ПАМЯТИ и пустеет при рестарте, поэтому своя же
@@ -2021,8 +2154,13 @@ def _walls_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
             # влезает (20 символов, см. terminal.so_id_of).
             standing = terminal.find_level(term_live, px, step)   # без стороны, см. выше
             if standing is not None:
-                if live.get(f"adopt:{wall}") != 1:
-                    live[f"adopt:{wall}"] = 1
+                # Номер, а не единица: по нему догоняется исполнение этой заявки —
+                # своего client_id у подхваченной нет (brokerref QUIK, 20 символов),
+                # и склад заявок о её филле не узнает никогда. Словарь, а не строка:
+                # строку в live считают идентификатором заявки.
+                prev = live.get(f"adopt:{wall}")
+                if not isinstance(prev, dict) or prev.get("num") != standing["num"]:
+                    live[f"adopt:{wall}"] = {"num": standing["num"]}
                     dirty = True
                     so_journal.record(
                         "adopted", so, so_journal.WATCHER,
@@ -2030,7 +2168,32 @@ def _walls_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
                         f"{standing['num']} ({standing['side']} "
                         f"{standing['balance']}): вторую не ставим", now_ms=now)
                 continue
-            live.pop(f"adopt:{wall}", None)
+            # СВОЯ ЗАЯВКА НЕ НА ЭТОЙ ЦЕНЕ — СНЯТЬ, А НЕ ОСТАВИТЬ СИРОТОЙ.
+            #
+            # У наклонного коридора и треугольника стенка ползёт, и после рестарта
+            # цена уехала от той, по которой заявка стоит. Подхват по цене её не
+            # узнаёт, и дальше ставилась ВТОРАЯ стенка, а первая оставалась жить
+            # никому не известной: налиться могли обе. Своих заявок на стенке
+            # положено ноль или одна, поэтому всё своё не на текущей цене снимаем —
+            # по номеру и инструменту, без чьей-либо памяти.
+            #
+            # Что считать «своим»: только строки этой умной заявки (тег stl-so-<id>),
+            # и только по ЭТУ сторону — чужую стенку и заявку оператора не трогаем.
+            for _orphan in term_live:
+                if terminal.matches_price(_orphan["price"], px, step):
+                    continue                      # эта и есть наша, её уже искали
+                if _orphan["side"] and _orphan["side"] != side:
+                    continue                      # заявка другой стенки, не этой
+                srv.enqueue_order(agent, order_msgs.build_cancel_order(
+                    client_id=f"op:kill:{_orphan['num']}", order_id=_orphan["num"],
+                    code=_orphan["sec"]))
+                dirty = True
+                so_journal.record(
+                    "resting_withdrawn", so, so_journal.WATCHER,
+                    f"снята своя заявка {_orphan['num']} ({_orphan['side']} "
+                    f"{_orphan['balance']} по {_orphan['price']:g}): стенка {wall} "
+                    f"уехала на {px:g}, двух заявок на одной стенке быть не должно",
+                    now_ms=now)
             # Хвост остаётся СЛУЧАЙНЫМ намеренно. Детерминированное имя выглядит
             # аккуратнее, но менять схему имён, пока в рынке живут заявки со
             # старой, значит ровно воспроизвести чинимый баг: сторож счёл бы их

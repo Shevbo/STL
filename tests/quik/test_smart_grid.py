@@ -176,7 +176,10 @@ def _gstore(px, terminal_orders=()):
             return {"last": px, "bid": px - 10.0, "ask": px + 10.0}
 
         def agent_status(self, agent=None):
-            return {"_received_at_ms": GNOW, "quik": {"orders": rows}}
+            # health.ord_age_ms обязателен — см. terminal.fresh: пустой orders есть
+            # в снимке агента всегда, даже до первого кадра от QLua.
+            return {"_received_at_ms": GNOW, "health": {"ord_age_ms": 1200},
+                    "quik": {"orders": rows}}
     return S()
 
 
@@ -341,7 +344,9 @@ def test_level_standing_in_the_terminal_is_not_placed_twice(tmp_path):
     assert dup == [], (
         f"на уровень {px:g}, где в терминале УЖЕ стоит заявка 701, поставлена "
         "вторая — это и есть удвоение сетки после рестарта")
-    assert so.g_live.get("adopt:-1") == 1, "подхват отмечен в книге"
+    # Отмечен НОМЕРОМ: по нему догоняется филл этой заявки — своего client_id у
+    # подхваченной нет, и склад заявок о её исполнении не узнает никогда.
+    assert so.g_live.get("adopt:-1") == {"num": "701"}, "подхват отмечен номером заявки"
     # остальные уровни при этом обязаны встать: подхват одного не глушит сетку
     assert [m for m in srv.sent if m.WhichOneof("payload") == "place_order"]
 
@@ -402,3 +407,47 @@ def test_grid_stop_withdraws_orders_nobody_remembers(tmp_path):
     assert nums == ["801", "802"], "стоп обязан снять ВСЕ свои заявки из терминала"
     assert all(m.cancel_order.code == "RIZ6" for m in srv.sent
                if m.WhichOneof("payload") == "cancel_order")
+
+
+def test_a_fill_of_an_adopted_level_is_caught_up_from_the_table(tmp_path):
+    """ПОДХВАЧЕННЫЙ УРОВЕНЬ ПОСЛЕ ФИЛЛА ОБЯЗАН ПОГАСНУТЬ, а не встать заново.
+
+    Подхваченной после рестарта заявке STL не возвращает client_id (brokerref QUIK,
+    20 символов), значит склад заявок о её исполнении не узнает НИКОГДА. Без догона
+    по таблице уровень переставлялся на ТУ ЖЕ ЦЕНУ: круг с нулевой прибылью и
+    двойной комиссией, который механика радиации прямо запрещает, а g_pos оставался
+    ложным — от него считаются и объём, и стоп. Сегодня так повели бы себя все 25
+    живых заявок сетки после рестарта STL.
+
+    Исполнившаяся строка из таблицы не исчезает: становится НЕАКТИВНОЙ, и
+    qty - balance говорит, сколько налилось.
+    """
+    book, so = _gbook(tmp_path)                       # база 85000, шаг 100
+    px = so_mod.grid_price(so, -1)                    # 84900
+    so.g_live = {"adopt:-1": {"num": "701"}}
+    store = _gstore(85000.0, [
+        _gterm_row("701", "buy", px, qty=1, tag="stl-so-" + so.so_id, active=False)])
+    store_rows = store.agent_status()["quik"]["orders"]
+    store_rows[0]["balance"] = 0                      # налилась целиком
+    srv = GSrv()
+    _grid_sync(book, store, GOst(), srv, GLim(), "9618", GSTEPS, {}, GNOW)
+
+    assert so.g_pos == 1, f"позиция {so.g_pos:+d}: филл подхваченного уровня не учтён"
+    assert so.g_live.get("flip:-1") is True, "исполненный уровень обязан погаснуть"
+    again = [m.place_order for m in srv.sent
+             if m.WhichOneof("payload") == "place_order"
+             and abs(m.place_order.price - px) < 1e-6]
+    assert again == [], (
+        f"на только что исполнившийся уровень {px:g} поставлена новая заявка — "
+        "это круг с нулевой прибылью и двойной комиссией")
+
+
+def test_an_adopted_level_row_gone_from_the_table_is_reported(tmp_path):
+    """Строки нет в таблице вовсе (за капом истории, сменился день): исполнение не
+    учтено, и молчать об этом нельзя. Уровень при этом освобождается."""
+    book, so = _gbook(tmp_path)
+    so.g_live = {"adopt:-1": {"num": "999"}}
+    srv = GSrv()
+    _grid_sync(book, _gstore(85000.0), GOst(), srv, GLim(), "9618", GSTEPS, {}, GNOW)
+    assert so.g_pos == 0, "сколько налилось — неизвестно, не выдумываем"
+    assert "adopt:-1" not in so.g_live

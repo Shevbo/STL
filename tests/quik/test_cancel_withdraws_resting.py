@@ -45,7 +45,9 @@ class _Store:
         return ["9618"]
 
     def agent_status(self, agent=None):
-        return {"_received_at_ms": 1_790_800_000_000, "quik": {"orders": self._orders}}
+        return {"_received_at_ms": 1_790_800_000_000,
+                "health": {"ord_age_ms": 1200},
+                "quik": {"orders": self._orders}}
 
 
 def _term_row(num, side, price, qty=1, tag="", active=True):
@@ -263,3 +265,24 @@ def test_instrument_travels_with_every_smart_order_cancel(monkeypatch):
     ])
     _withdraw_resting(_request(srv, ost), so)
     assert [m.cancel_order.code for m in srv.sent] == ["RIZ6", "RIZ6"]
+
+
+def test_the_cancel_client_id_cannot_collide_with_the_fired_order(monkeypatch):
+    """CLIENT_ID СНЯТИЯ ПО ТАБЛИЦЕ НЕ ДОЛЖЕН НИ С ЧЕМ СОВПАДАТЬ.
+
+    Сначала здесь стояло f"so:{so_id}" — а это client_id ВЫСТРЕЛИВШЕЙ заявки той же
+    умной заявки. Агент при неизвестном номере ищет по карте client_id
+    (resolveForCancel: сначала byOrder, потом byClient) и снял бы ВЫСТРЕЛ вместо той
+    строки, о которой речь: нужная заявка осталась бы торговать, а посторонняя умерла.
+    """
+    monkeypatch.setattr("trader.api.quik_smart_orders.resolve_agent",
+                        lambda *a, **k: "9618")
+    so = _corridor(kind="grid", g_live={})
+    store = _Store([_term_row("701", "buy", 85400.0, tag=f"stl-so-{so.so_id}")])
+    srv = _Srv()
+    _withdraw_resting(_request(srv, _Ost([]), store), so)
+    cids = [m.cancel_order.client_id for m in srv.sent
+            if m.WhichOneof("payload") == "cancel_order"]
+    assert cids == ["op:kill:701"]
+    assert f"so:{so.so_id}" not in cids, (
+        "это client_id выстрелившей заявки — агент снял бы её, а не ту, что в таблице")

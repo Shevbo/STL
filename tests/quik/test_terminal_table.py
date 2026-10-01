@@ -16,14 +16,19 @@ MIN = 60_000
 
 
 class Store:
-    def __init__(self, orders=None, age_ms=0, has_quik=True, status=True):
+    def __init__(self, orders=None, age_ms=0, has_quik=True, status=True,
+                 ord_age_ms=1200, health=True):
         self._orders, self._age = orders, age_ms
         self._has_quik, self._status = has_quik, status
+        self._ord_age, self._health = ord_age_ms, health
 
     def agent_status(self, agent=None):
         if not self._status:
             return None
         st = {"_received_at_ms": NOW - self._age}
+        if self._health:
+            st["health"] = ({} if self._ord_age is None
+                            else {"ord_age_ms": self._ord_age})
         if self._has_quik:
             st["quik"] = {"orders": self._orders if self._orders is not None else []}
         return st
@@ -51,6 +56,24 @@ def test_empty_table_is_an_answer_but_a_missing_mirror_is_not():
     assert terminal.fresh(Store(has_quik=False), now_ms=NOW) is False
     # все они отдают ПУСТОЙ список — поэтому судить по нему о рынке запрещено
     assert terminal.rows(None) == [] and terminal.rows(Store(status=False)) == []
+
+
+def test_an_unpublished_table_is_not_an_empty_one():
+    """ПУСТОЙ СПИСОК «orders» ЕСТЬ В СНИМКЕ АГЕНТА ВСЕГДА — он инициализирует поле
+    пустым срезом ещё до первого кадра от QLua (buildQuikJSON). Значит наличия ключа
+    мало: по нему слепота сразу после рестарта АГЕНТА выглядела бы флэтом, и все
+    уровни сетки встали бы заново. Окно до 15 с — столько Lua держит keepalive.
+
+    Правду про таблицу говорит health.ord_age_ms: −1 = не публиковалась ни разу."""
+    assert terminal.fresh(Store([], ord_age_ms=-1), now_ms=NOW) is False
+    assert terminal.fresh(Store([], ord_age_ms=1200), now_ms=NOW) is True
+    # публикации встали: таблица описывает прошлое
+    assert terminal.fresh(Store([], ord_age_ms=10 * MIN), now_ms=NOW) is False
+    # сборка агента без поля вовсе — судить не на чем
+    assert terminal.fresh(Store([], ord_age_ms=None), now_ms=NOW) is False
+    assert terminal.fresh(Store([], health=False), now_ms=NOW) is False
+    # и ни в одном из этих случаев пустой список не выдаёт себя за ответ
+    assert terminal.rows(Store([], ord_age_ms=-1)) == []
 
 
 def test_a_frozen_mirror_is_not_fresh():

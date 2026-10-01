@@ -688,6 +688,9 @@ type quikJSON struct {
 // Caps keep the mirrored status_json payload bounded (flush discipline: this
 // JSON is pushed to STL on every content change).
 const (
+	// Кап на НЕАКТИВНУЮ историю заявок. Активные уходят все без исключения —
+	// обрезанная живая заявка продолжает торговать, а для STL не существует
+	// (разбор в buildQuikJSON ниже).
 	quikOrdersCap = 100
 	// СДЕЛКИ СЧЁТА — ЕДИНСТВЕННЫЙ путь, которым факт торговли доезжает до STL:
 	// журнал алготорговли, суточный журнал сделок и сверка ВМ строятся на них.
@@ -719,13 +722,36 @@ func buildQuikJSON(acc accounts.Snapshot) quikJSON {
 	q := quikJSON{Dir: acc.QuikFolder,
 		ScriptVersion: acc.LuaVersion, BookCodes: acc.LuaBooks,
 		Orders: []quikOrderJSON{}, Trades: []quikTradeJSON{}, Trans: []quikTransJSON{}}
-	// Lua publishes tables in QUIK's own (chronological) order: take the tail, newest first.
+	// ЖИВЫЕ ЗАЯВКИ НЕ РЕЖЕМ НИКОГДА — режем только историю.
+	//
+	// Здесь брался просто хвост в quikOrdersCap строк, newest first. Для СДЕЛОК
+	// такой же хвост уже стоил урока (см. quikTradesCap выше, поднят до 5000 после
+	// 25.09.2026), и к заявкам тот же вывод не применили. А у заявок срез опаснее:
+	// сделка, не попавшая в хвост, портит УЧЁТ, а заявка, не попавшая в хвост,
+	// продолжает ТОРГОВАТЬ — и для STL её не существует.
+	//
+	// Таблица заявок QUIK это весь день целиком: исполненные, снятые, перестановки,
+	// роботные, ручные. 01.10.2026 она отдавала РОВНО 100 строк, то есть кап уже
+	// был достигнут, и 25 живых заявок сетки держались в выдаче случайно — они
+	// оказались среди новейших. На оборотистом дне (24.09 — 265 сделок) утренние
+	// заявки уехали бы за кап, и STL по решению из trader/quik/terminal.py поставил
+	// бы второй уровень поверх живого, а снять первый было бы нечем: его нет ни в
+	// одной таблице, которую STL видит. Это ровно инцидент 01.10, зашедший с другой
+	// стороны.
+	//
+	// Поэтому активные строки уходят ВСЕ, сколько бы их ни было (их столько, сколько
+	// оператор держит в рынке — десятки, не тысячи), а кап остаётся только для
+	// неактивной истории.
 	ords := acc.Orders
-	if len(ords) > quikOrdersCap {
-		ords = ords[len(ords)-quikOrdersCap:]
-	}
+	inactive := 0
 	for i := len(ords) - 1; i >= 0; i-- {
 		o := ords[i]
+		if !o.Active {
+			if inactive >= quikOrdersCap {
+				continue
+			}
+			inactive++
+		}
 		q.Orders = append(q.Orders, quikOrderJSON{
 			Num: o.Num, TsMs: o.TsMs, Sec: o.Sec, Side: sideRu(o.Side),
 			Price: o.Price, Qty: o.Qty, Balance: o.Balance, Active: o.Active, Tag: o.Tag,

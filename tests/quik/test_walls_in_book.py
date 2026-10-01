@@ -60,7 +60,11 @@ class FakeStore:
         return {"last": 84500.0, "bid": 84490.0, "ask": 84510.0}
 
     def agent_status(self, agent=None):
-        return {"_received_at_ms": NOW, "quik": {"orders": self._orders}}
+        # health.ord_age_ms ОБЯЗАТЕЛЕН: пустой список orders есть в снимке агента
+        # всегда, даже до первого кадра от QLua, и без возраста таблицы слепота
+        # после рестарта АГЕНТА выглядела бы флэтом (см. terminal.fresh).
+        return {"_received_at_ms": NOW, "health": {"ord_age_ms": 1200},
+                "quik": {"orders": self._orders}}
 
 
 def _term_row(num, sec, side, price, qty=10, balance=None, tag="", active=True):
@@ -391,7 +395,9 @@ def test_standing_wall_in_the_terminal_is_adopted_not_duplicated(tmp_path):
               if m.WhichOneof("payload") == "place_order"]
     assert [p.side for p in placed] == [2],         "низ уже стоит в терминале — ставится только верх (продажа)"
     assert round(placed[0].price) == 85000
-    assert so.c_live.get("adopt:low") == 1, "подхват отмечен в книге"
+    # Отмечен НОМЕРОМ: по нему догоняется исполнение этой заявки — своего client_id
+    # у подхваченной нет, и склад заявок о её филле не узнает никогда.
+    assert so.c_live.get("adopt:low") == {"num": "991"}, "подхват отмечен номером"
     assert "low" not in so.c_live, "своего client_id у подхваченной заявки нет"
 
 
@@ -449,19 +455,49 @@ def test_a_filled_wall_is_counted_and_not_placed_again(tmp_path):
 
 
 def test_a_partial_wall_fill_is_counted_by_the_fact(tmp_path):
-    """Частичный налив учитывается по ФАКТУ. corridor_after_fire ставит позицию
-    равной базовому объёму целиком и на половине налива соврал бы — а от c_pos
-    считается объём встречной заявки."""
+    """Налив НЕ ЦЕЛИКОМ, но заявка закончена (снята с остатком): учитываем факт.
+
+    corridor_after_fire ставит позицию равной базовому объёму целиком и здесь
+    соврал бы — а от c_pos считается объём встречной заявки."""
     book, so = _book(tmp_path)
     so.c_live = {"top": "so:x:top:1"}
     srv = FakeSrv()
-    ost = FakeOst([{"client_id": "so:x:top:1", "order_id": "11", "state": "filled",
+    ost = FakeOst([{"client_id": "so:x:top:1", "order_id": "11", "state": "cancelled",
                     "side": "sell", "filled": 4, "remaining": 0, "price": 85000.0}])
     _run(book, ost, srv)
     assert so.c_pos == -4, f"налилось 4, позиция {so.c_pos:+d}"
     low = [m.place_order for m in srv.sent
            if m.WhichOneof("payload") == "place_order" and m.place_order.side == 1]
     assert low and low[0].quantity == 14, "переворот = база 10 плюс открытые 4"
+
+
+def test_a_partly_filled_wall_still_working_keeps_its_remainder(tmp_path):
+    """ОСТАТОК НЕ ТЕРЯЕМ. Продажа 10, налилось 4, шесть ЕЩЁ СТОЯТ.
+
+    Проверка шла по filled > 0 без оглядки на остаток: ветка писала позицию −4 и
+    забывала cid, а шесть контрактов продолжали стоять в рынке уже никому не
+    известные. Снять их было нечем — гейт c_pos хочет снять верх, а идентификатора
+    у него больше нет; когда они наливались, позиция оставалась −4 вместо −10, и от
+    неё считались объём встречной заявки и стоп.
+
+    Пока заявка работает, филл не учитываем: его посчитает тот проход, на котором
+    остаток станет нулём. Так же устроена сетка.
+    """
+    book, so = _book(tmp_path)
+    so.c_live = {"top": "so:x:top:1"}
+    srv = FakeSrv()
+    ost = FakeOst([{"client_id": "so:x:top:1", "order_id": "11", "state": "partial",
+                    "side": "sell", "filled": 4, "remaining": 6, "price": 85000.0}])
+    _run(book, ost, srv)
+    assert so.c_pos == 0, (
+        f"позиция {so.c_pos:+d}: филл учтён до конца заявки, остаток 6 стал ничьим")
+    assert so.c_live.get("top") == "so:x:top:1", "идентификатор заявки обязан остаться"
+
+    # заявка дошла до конца — вот теперь учитываем ВСЁ налитое
+    ost2 = FakeOst([{"client_id": "so:x:top:1", "order_id": "11", "state": "filled",
+                     "side": "sell", "filled": 10, "remaining": 0, "price": 85000.0}])
+    _run(book, ost2, FakeSrv())
+    assert so.c_pos == -10, f"позиция {so.c_pos:+d}: после закрытия заявки налито 10"
 
 
 def test_wall_fill_side_comes_from_the_order_not_the_market(tmp_path):
@@ -496,3 +532,147 @@ def test_a_flip_is_counted_only_when_the_side_actually_changes(tmp_path):
     _run(book, ost2, FakeSrv())
     assert so.c_pos == 10, f"позиция {so.c_pos:+d}"
     assert so.c_flips == 1, "смена знака из позиции — это переворот"
+
+
+def test_blindness_after_an_agent_restart_is_not_mistaken_for_flat(tmp_path):
+    """ПУСТОЙ СПИСОК ЗАЯВОК ЕСТЬ В СНИМКЕ ВСЕГДА — даже до первого кадра от QLua.
+
+    Агент инициализирует поле пустым срезом (buildQuikJSON), поэтому проверка «ключ
+    orders на месте» разрешала ставить сразу после перезапуска АГЕНТА: окно до 15 с,
+    столько Lua держит keepalive таблицы. За это окно сторож успел бы выставить
+    заново все уровни, стоящие в QUIK.
+
+    Правду про саму таблицу говорит health.ord_age_ms: −1 = не публиковалась ни разу.
+    """
+    class AgentJustRestarted(FakeStore):
+        def agent_status(self, agent=None):
+            return {"_received_at_ms": NOW,
+                    "health": {"ord_age_ms": -1},      # таблицы ещё не было
+                    "quik": {"orders": []}}            # а поле уже пустое
+
+    book, _ = _book(tmp_path)
+    srv = FakeSrv()
+    _walls_sync(book, AgentJustRestarted(), FakeOst(), srv, Lim(), "9618", STEPS, {}, NOW)
+    assert [m for m in srv.sent if m.WhichOneof("payload") == "place_order"] == [],         "пустая таблица до первой публикации — это «не знаю», а не «в QUIK ничего»"
+
+    # публикации встали (возраст таблицы больше MIRROR_MAX_MS) — тот же запрет
+    class OrdFrozen(FakeStore):
+        def agent_status(self, agent=None):
+            return {"_received_at_ms": NOW,
+                    "health": {"ord_age_ms": 10 * 60 * 1000},
+                    "quik": {"orders": []}}
+
+    srv2 = FakeSrv()
+    _walls_sync(book, OrdFrozen(), FakeOst(), srv2, Lim(), "9618", STEPS, {}, NOW)
+    assert [m for m in srv2.sent if m.WhichOneof("payload") == "place_order"] == [],         "таблица не публикуется — она описывает прошлое, ставить по ней нельзя"
+
+    # сборка агента БЕЗ ord_age_ms — судить не на чем, тоже запрет
+    class NoAgeField(FakeStore):
+        def agent_status(self, agent=None):
+            return {"_received_at_ms": NOW, "health": {}, "quik": {"orders": []}}
+
+    srv3 = FakeSrv()
+    _walls_sync(book, NoAgeField(), FakeOst(), srv3, Lim(), "9618", STEPS, {}, NOW)
+    assert [m for m in srv3.sent if m.WhichOneof("payload") == "place_order"] == []
+
+
+def test_a_fill_of_an_adopted_wall_is_caught_up_from_the_table(tmp_path):
+    """ИСПОЛНЕНИЕ ПОДХВАЧЕННОЙ СТЕНКИ ДОГОНЯЕМ ПО ТАБЛИЦЕ.
+
+    Подхваченной после рестарта заявке STL не возвращает client_id: в brokerref QUIK
+    20 символов, он туда не влезает. Значит склад заявок о её исполнении не узнает
+    НИКОГДА — и без этой ветки стенка после налива переставлялась бы заново, а c_pos
+    оставался нулём. Тот же механизм удвоения объёма, только зашедший через подхват.
+
+    Исполнившаяся строка из таблицы не исчезает: она становится НЕАКТИВНОЙ, и
+    qty - balance говорит, сколько налилось.
+    """
+    book, so = _book(tmp_path)                       # верх 85000, низ 84000, объём 10
+    so.c_live = {"adopt:top": {"num": "991"}}        # стенка была подхвачена
+    # в таблице она уже НЕ активна и налилась целиком
+    store = FakeStore([_term_row("991", "RIZ6", "sell", 85000.0, qty=10, balance=0,
+                                 tag=f"stl-so-{so.so_id}", active=False)])
+    srv = FakeSrv()
+    _walls_sync(book, store, FakeOst(), srv, Lim(), "9618", STEPS, {}, NOW)
+
+    assert so.c_pos == -10, (
+        f"позиция {so.c_pos:+d}: филл подхваченной стенки не учтён — сторож поставит её заново")
+    assert "adopt:top" not in so.c_live
+    assert [m for m in srv.sent if m.WhichOneof("payload") == "place_order"
+            and m.place_order.side == 2] == [], "верх только что отторговал, вторую не ставим"
+
+
+def test_an_adopted_wall_cancelled_without_a_fill_frees_the_wall(tmp_path):
+    """Подхваченную заявку сняли, не налив: позиция не меняется, стенка свободна."""
+    book, so = _book(tmp_path)
+    so.c_live = {"adopt:top": {"num": "992"}}
+    store = FakeStore([_term_row("992", "RIZ6", "sell", 85000.0, qty=10, balance=10,
+                                 tag=f"stl-so-{so.so_id}", active=False)])
+    srv = FakeSrv()
+    _walls_sync(book, store, FakeOst(), srv, Lim(), "9618", STEPS, {}, NOW)
+    assert so.c_pos == 0, "исполнения не было — позиции нет"
+    assert "adopt:top" not in so.c_live
+    assert [m.place_order for m in srv.sent
+            if m.WhichOneof("payload") == "place_order"
+            and m.place_order.side == 2], "стенка свободна, её обязаны выставить"
+
+
+def test_an_adopted_row_gone_from_the_table_is_reported_not_swallowed(tmp_path):
+    """Строки нет в таблице ВОВСЕ — за капом истории или сменился день. Молча забыть
+    нельзя: исполнение по ней не учтено, и оператор обязан об этом узнать."""
+    book, so = _book(tmp_path)
+    so.c_live = {"adopt:top": {"num": "993"}}
+    srv = FakeSrv()
+    _walls_sync(book, FakeStore(), FakeOst(), srv, Lim(), "9618", STEPS, {}, NOW)
+    assert so.c_pos == 0, "ничего не выдумываем: сколько налилось — неизвестно"
+    assert "adopt:top" not in so.c_live, "стенка освобождена"
+
+
+def test_a_sloped_wall_leaves_no_orphan_behind(tmp_path):
+    """НАКЛОННАЯ СТЕНКА ПОСЛЕ РЕСТАРТА: сирота плюс вторая рядом.
+
+    У наклонного коридора стенка ползёт, и после рестарта цена уехала от той, по
+    которой заявка стоит. Подхват по цене её не узнаёт — и ставилась ВТОРАЯ стенка,
+    а первая оставалась жить никому не известной. Налиться могли обе.
+
+    Своих заявок на стенке положено ноль или одна.
+    """
+    book, so = _book(tmp_path, c_t2_ms=NOW + 600_000, c_p2=84000.0)   # верх ползёт вниз
+    # в терминале стоит НАША старая заявка верха по 85000, а стенка уже уехала
+    store = FakeStore([_term_row("991", "RIZ6", "sell", 85000.0,
+                                 tag=f"stl-so-{so.so_id}")])
+    srv = FakeSrv()
+    # минута прошла: верх уже не 85000
+    _walls_sync(book, store, FakeOst(), srv, Lim(), "9618", STEPS, {}, NOW + 60_000)
+
+    killed = [m.cancel_order for m in srv.sent
+              if m.WhichOneof("payload") == "cancel_order"]
+    assert [c.order_id for c in killed] == ["991"], (
+        "старая заявка верха осталась сиротой — рядом встанет вторая, нальются обе")
+    assert all(c.code == "RIZ6" for c in killed), "снятие по номеру требует инструмент"
+    placed = [m.place_order for m in srv.sent
+              if m.WhichOneof("payload") == "place_order" and m.place_order.side == 2]
+    assert placed and round(placed[0].price) != 85000, "новая стенка — на новой цене"
+
+
+def test_the_other_walls_order_is_not_touched(tmp_path):
+    """Уборка сироты идёт ПО СТОРОНЕ и ПО ЦЕНЕ: заявка, стоящая на своей стенке, не
+    трогается при разборе другой — иначе коридор снимал бы сам себя каждым проходом.
+
+    Канал здесь ровный (обе линии на месте): у наклонного ползут ОБЕ, и заявка на
+    старой цене низа сиротой как раз является.
+    """
+    book, so = _book(tmp_path)                 # ровный: верх 85000, низ 84000
+    store = FakeStore([
+        _term_row("992", "RIZ6", "buy", 84000.0, tag=f"stl-so-{so.so_id}"),   # низ, на месте
+        _term_row("993", "RIZ6", "sell", 85300.0, tag=f"stl-so-{so.so_id}"),  # верх, устарела
+    ])
+    srv = FakeSrv()
+    # store передаём ЯВНО: _run подставляет свой FakeStore без строк терминала, и
+    # тест молча проверял бы пустую таблицу вместо подготовленной.
+    _walls_sync(book, store, FakeOst(), srv, Lim(), "9618", STEPS, {}, NOW)
+    killed = [m.cancel_order.order_id for m in srv.sent
+              if m.WhichOneof("payload") == "cancel_order"]
+    assert "992" not in killed, "заявка НИЖНЕЙ стенки стоит на своей цене и законна"
+    assert killed == ["993"], "снимается только та, что не на текущей цене своей стенки"
+    assert so.c_live.get("adopt:low") == {"num": "992"}, "низ подхвачен, не продублирован"
