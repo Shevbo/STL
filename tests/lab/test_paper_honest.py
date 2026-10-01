@@ -179,3 +179,28 @@ def test_paper_fill_is_recorded_once(monkeypatch, flag):
         assert ";honest_v1;" in args[6] and order.price == 85007.0
     else:
         assert ";honest_v1;" not in args[6] and order.price == 85000.0
+
+
+def test_quote_age_prefers_stl_clock():
+    """Свежесть по часам хостера: кадр с убежавшими вперёд часами VDS не считается
+    свежим, если по stl_received_ms он старый; отрицательный возраст отвергается."""
+    now_ms = time.time() * 1000
+
+    class _Q:
+        def __init__(self, tick):
+            self._t = tick
+
+        def tick(self, code, agent_id=None):
+            return self._t
+
+    stale_by_stl = {"bid": 100.0, "ask": 110.0,
+                    "received_at_unix_ms": now_ms + 60_000, "stl_received_ms": now_ms - 30_000}
+    rtmod.set_quote_source(_Q(stale_by_stl))
+    assert LiveRuntime._fresh_quote("SiZ6") is None
+    fresh_by_stl = {"bid": 100.0, "ask": 110.0,
+                    "received_at_unix_ms": now_ms - 600_000, "stl_received_ms": now_ms - 1_000}
+    rtmod.set_quote_source(_Q(fresh_by_stl))
+    assert LiveRuntime._fresh_quote("SiZ6") == (100.0, 110.0)
+    future_only_vds = {"bid": 100.0, "ask": 110.0, "received_at_unix_ms": now_ms + 60_000}
+    rtmod.set_quote_source(_Q(future_only_vds))
+    assert LiveRuntime._fresh_quote("SiZ6") is None

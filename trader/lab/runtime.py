@@ -514,8 +514,12 @@ class LiveRuntime:
             return None
         t = _QUOTE_SOURCE.tick(symbol) or {}
         bid, ask = float(t.get("bid") or 0), float(t.get("ask") or 0)
-        age = _time.time() * 1000 - float(t.get("received_at_unix_ms") or 0)
-        if bid > 0 and ask >= bid and age <= _QUOTE_MAX_AGE_MS:
+        # Возраст меряем часами ХОСТЕРА (stl_received_ms ставит store.set_tick, ui-ux
+        # aeb68a6); received_at_unix_ms с часов VDS оставлен запасным: при расхождении
+        # часов кадр казался бы вечно свежим или вечно старым (ревью bb5f16f, находка 4).
+        stamp = float(t.get("stl_received_ms") or t.get("received_at_unix_ms") or 0)
+        age = _time.time() * 1000 - stamp
+        if bid > 0 and ask >= bid and 0 <= age <= _QUOTE_MAX_AGE_MS:
             return bid, ask
         return None
 
