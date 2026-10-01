@@ -19,11 +19,33 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 
 import httpx
 
 BOOK_CHUNK = 150      # см. --chunk: крупное задание по стакану теряется молча
+# Полная выжимка (ключ book<КОД>f<ММДД>, ~390k снимков, 48 МБ JSON) или режим
+# «касание» (ему нужна именно она): стакан в памяти каждого воркера в разы тяжелее
+# поминутного, а «касание» дольше считает каждую заявку. Задание держим мелким,
+# чтобы не повторить молча пустой результат 22.09 (см. --chunk).
+BOOK_FULL_CHUNK = 20
+# Флаги --book-* = ключи base_params, которые opt_agent снимает с набора (BOOK_EXEC_KEYS)
+BOOK_EXEC_FLAGS = ("book_exec_mode", "book_touch_fill", "book_quote_lag_s",
+                   "book_touch_ttl_action")
+
+
+def apply_book_args(base: dict, a: argparse.Namespace) -> int | None:
+    """Ключи стакана в base; вернуть потолок наборов на задание (None = без потолка)."""
+    if not a.book_key:
+        return None
+    base["book_key"] = a.book_key
+    for key in BOOK_EXEC_FLAGS:
+        if getattr(a, key, None) is not None:
+            base[key] = getattr(a, key)
+    if re.search(r"f\d{4}$", a.book_key) or a.book_exec_mode == "touch":
+        return BOOK_FULL_CHUNK
+    return BOOK_CHUNK
 
 def script_code(strategy: str, module: str | None) -> str:
     """Тело прогона. Стратегии живут двумя способами, и это надо различать:
@@ -46,6 +68,13 @@ def main() -> None:
     ap.add_argument("--module", help="модуль trader/lab/strategies/<имя>.py со своим "
                                      "on_bar; отменяет --strategy")
     ap.add_argument("--book-key")
+    # Исполнение по стакану (BookRuntime). Калиброванный режим 01.10:
+    # --book-exec-mode touch --book-touch-fill opt --book-quote-lag-s 5
+    # --book-touch-ttl-action cancel, только с f-ключом (полная частота).
+    ap.add_argument("--book-exec-mode", choices=["walk", "touch"])
+    ap.add_argument("--book-touch-fill", choices=["opt", "pess"])
+    ap.add_argument("--book-quote-lag-s", type=float)
+    ap.add_argument("--book-touch-ttl-action", choices=["cancel", "market"])
     ap.add_argument("--campaign", required=True)
     ap.add_argument("--date-from", required=True)
     ap.add_argument("--date-to", required=True)
@@ -66,13 +95,12 @@ def main() -> None:
     payload = json.load(open(a.file, encoding="utf-8"))
     sets, base = payload["sets"], dict(payload.get("base") or {})
     base["symbol"] = a.symbol
-    if a.book_key:
-        base["book_key"] = a.book_key
+    cap = apply_book_args(base, a)
 
     h = {"X-Agent-Token": tok, "Content-Type": "application/json"}
     chunk = a.chunk
-    if a.book_key and chunk > BOOK_CHUNK:
-        chunk = BOOK_CHUNK
+    if cap and chunk > cap:
+        chunk = cap
         print(f"исполнение по стакану: размер задания срезан до {chunk} наборов")
     chunks = [sets[i:i + chunk] for i in range(0, len(sets), chunk)]
     ok = 0

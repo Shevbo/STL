@@ -60,18 +60,25 @@ def load_dir(root: str, code: str) -> tuple[list[int], list[tuple]]:
     return load_book(files, code)
 
 
-def load_digest(rows: list[list], levels: int = 5) -> tuple[list[int], list[tuple]]:
+def load_digest(rows: list[list], levels: int = 5,
+                ts_unit: str = "s") -> tuple[list[int], list[tuple]]:
     """Выжимка стакана (scripts/book_digest.py) -> тот же вид, что даёт load_book.
 
     Сырой архив весит сотню мегабайт и лежит только на хостере; i9 получает вместо
     него один снимок на минуту в файле `agent_bars/book<КОД>.json`. Строка:
     [ts, bid1,qty1 ... bid5,qty5, ask1,qty1 ... ask5,qty5], время УЖЕ в шкале баров
     (сдвиг +3 ч сделан при сборке), поэтому здесь ничего не сдвигаем.
+
+    ts_unit="ms" — выжимка на полной частоте (scripts/book_full_digest.py, ключи
+    book<КОД>f<ММДД>, ~1 снимок/1.2 с): метка переводится в ДРОБНЫЕ секунды.
+    BookRuntime работает в секундах через bisect и арифметику, дроби ему не мешают,
+    а округление до секунды сливало бы соседние снимки и сдвигало quote_lag_s.
     """
     times: list[int] = []
     books: list[tuple] = []
+    ms = ts_unit == "ms"
     for r in rows:
-        ts = int(r[0])
+        ts = r[0] / 1000 if ms else int(r[0])
         vals = r[1:]
         bids = [(float(vals[2 * i]), int(vals[2 * i + 1]))
                 for i in range(levels) if 2 * i + 1 < len(vals)]
@@ -271,7 +278,9 @@ class BookRuntime(BacktestRuntime):
                 if take:
                     o["left"] -= take
                     self.stats["touch_late"] += take
-                    self._apply_fill(o["symbol"], o["side"], take, price, self._bt[j])
+                    # int: fill_time у Order целые секунды; у мс-выжимки метка дробная
+                    self._apply_fill(o["symbol"], o["side"], take, price,
+                                     int(self._bt[j]))
             if not o["left"]:
                 continue
             if self._touch_action == "cancel":
@@ -285,5 +294,5 @@ class BookRuntime(BacktestRuntime):
             else:
                 (bids, asks), _gap = got
                 px, _deep = self._walk(asks if buy else bids, o["left"])
-            self._apply_fill(o["symbol"], o["side"], o["left"], px, end)
+            self._apply_fill(o["symbol"], o["side"], o["left"], px, int(end))
         self._pending = []

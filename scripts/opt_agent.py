@@ -402,6 +402,34 @@ def _patch_httpx_insecure() -> None:
         pass
 
 
+# Параметры исполнения по стакану в наборе: ключ набора -> аргумент BookRuntime.
+# Едут рядом с book_key в base_params и снимаются с набора так же, как он.
+BOOK_EXEC_KEYS = {"book_exec_mode": "exec_mode", "book_touch_fill": "touch_fill",
+                  "book_quote_lag_s": "quote_lag_s", "book_touch_ttl_s": "touch_ttl_s",
+                  "book_touch_ttl_action": "touch_ttl_action"}
+
+
+def _pop_book_params(param_sets: list[dict]) -> tuple[str | None, dict]:
+    """Снять book_key и BOOK_EXEC_KEYS с КАЖДОГО набора (в стратегию им нельзя).
+    Возвращает (ключ стакана, аргументы BookRuntime). Без новых ключей opts пуст."""
+    book_key, opts = None, {}
+    for ps in param_sets:
+        k = ps.pop("book_key", None)
+        book_key = book_key or k
+        for k, arg in BOOK_EXEC_KEYS.items():
+            v = ps.pop(k, None)
+            if v is not None:
+                opts.setdefault(arg, v)
+    return book_key, opts
+
+
+def _book_runtime_kw(book: dict) -> dict:
+    """runtime_kw для BookRuntime из {"rows", "ts_unit", "opts"} (см. _book_for)."""
+    from trader.lab.book_replay import load_digest
+    return {"book": load_digest(book["rows"], ts_unit=book.get("ts_unit") or "s"),
+            "max_gap_s": 60, **book.get("opts", {})}
+
+
 # ── worker (separate process) ─────────────────────────────────────────────────
 def _run_chunk(args: tuple) -> list[dict]:
     """Run a chunk of param-sets in a worker process. Self-contained: rebuilds the
@@ -415,7 +443,7 @@ def _run_chunk(args: tuple) -> list[dict]:
     if os.environ.get("OPT_AGENT_INSECURE"):
         _patch_httpx_insecure()
     (script_code, bars_data, symbol, param_sets, point_value, initial_margin, publish,
-     book_rows) = args
+     book) = args
     _demote_to_background()  # be a polite background citizen on the shared host too
     from trader.lab.script_guard import validate_script
     validate_script(script_code)
@@ -449,14 +477,14 @@ def _run_chunk(args: tuple) -> list[dict]:
         except Exception:  # noqa: BLE001
             pass
 
-    # ИСПОЛНЕНИЕ ПО СТАКАНУ. book_rows — выжимка архива (один снимок на минуту,
-    # 5 уровней), приехавшая тем же каналом, что бары: /api/v1/agent/bars/book<КОД>.
-    # Без неё всё как раньше: заявка по открытию следующего бара, без спреда.
+    # ИСПОЛНЕНИЕ ПО СТАКАНУ. book = {"rows", "ts_unit", "opts"}: выжимка архива
+    # (поминутная d-ключ или полная f-ключ, 5 уровней), приехавшая тем же каналом,
+    # что бары: /api/v1/agent/bars/book<КОД>. Без неё всё как раньше: заявка по
+    # открытию следующего бара, без спреда.
     run_kw: dict = {}
-    if book_rows:
-        from trader.lab.book_replay import BookRuntime, load_digest
-        run_kw = {"runtime_cls": BookRuntime,
-                  "runtime_kw": {"book": load_digest(book_rows), "max_gap_s": 60}}
+    if book and book.get("rows"):
+        from trader.lab.book_replay import BookRuntime
+        run_kw = {"runtime_cls": BookRuntime, "runtime_kw": _book_runtime_kw(book)}
 
     async def _all():
         out = []
@@ -547,7 +575,7 @@ class Agent:
         # Последняя выкачанная история (symbol, rows): сетку гонят десятками заданий
         # по одному символу, качать склейку на каждое — впустую.
         self._bars_cache: tuple | None = None
-        self._book_cache: tuple | None = None    # (ключ, строки выжимки стакана)
+        self._book_cache: tuple | None = None    # (ключ, (строки, ts_unit) выжимки стакана)
         self._started = time.time()
         if psutil is not None:
             try:
@@ -987,12 +1015,16 @@ class Agent:
         return [{"time": b.time, "open": b.open, "high": b.high,
                  "low": b.low, "close": b.close, "volume": b.volume} for b in bars]
 
-    async def _book_for(self, client: httpx.AsyncClient, key: str) -> list | None:
+    async def _book_for(self, client: httpx.AsyncClient, key: str) -> tuple | None:
         """Выжимка стакана по ключу — тем же каналом, что бары (agent_bars/<key>.json).
 
         Кэш на один ключ: сетку гонят десятками заданий по одному инструменту, а
         файл весит мегабайты. Нет файла или сеть легла — возвращаем None, и задание
         считается по барам; молча подменять исполнение нельзя, поэтому пишем в лог.
+
+        Возвращает (rows, ts_unit). Ручка отдаёт файл ЦЕЛИКОМ (app.py agent_bars:
+        json.load без среза), поэтому единицы берём из метки "ts_unit" файла:
+        "ms" у полной выжимки (book_full_digest.py), нет метки = секунды (поминутная).
         """
         if self._book_cache and self._book_cache[0] == key:
             return self._book_cache[1]
@@ -1002,10 +1034,11 @@ class Agent:
             if r.status_code != 200:
                 _log(f"стакан: {key} не отдан ({r.status_code}) — считаю по барам")
                 return None
-            rows = (r.json() or {}).get("rows") or []
-            self._book_cache = (key, rows)
-            _log(f"стакан: {key} — {len(rows)} минут")
-            return rows
+            data = r.json() or {}
+            got = (data.get("rows") or [], data.get("ts_unit") or "s")
+            self._book_cache = (key, got)
+            _log(f"стакан: {key} — {len(got[0])} снимков, ts_unit={got[1]}")
+            return got
         except Exception as exc:  # noqa: BLE001
             _log(f"стакан: {key} недоступен ({exc}) — считаю по барам")
             return None
@@ -1055,16 +1088,14 @@ class Agent:
             # набор полей и своих ключей задания не пропускает, а base_params —
             # пропускает как есть. Здесь он снимается с КАЖДОГО набора, чтобы не
             # уехать в параметры стратегии.
-            book_key = None
-            for ps in param_sets:
-                k = ps.pop("book_key", None)
-                book_key = book_key or k
-            book_rows = await self._book_for(client, book_key) if book_key else None
+            book_key, book_opts = _pop_book_params(param_sets)
+            got = await self._book_for(client, book_key) if book_key else None
+            book = {"rows": got[0], "ts_unit": got[1], "opts": book_opts} if got else None
 
             chunks = _chunked(param_sets, 1 if side else self.workers)
             im = job.get("initial_margin", 0) or 0
             args = [(job["script_code"], bars_data, symbol, ch, job["point_value"], im,
-                     not side, book_rows) for ch in chunks]
+                     not side, book) for ch in chunks]
             loop = asyncio.get_event_loop()
             t0 = time.time()
             futs = [loop.run_in_executor(pool, _run_chunk, a) for a in args]
