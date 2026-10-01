@@ -34,7 +34,7 @@ import random
 from trader.lab.commission import is_weekend
 from trader.lab.footprints.common import minute_of_day
 from trader.lab.runtime import STLRuntime
-from trader.lab.strategies.retest import _FLAT_MIN, _NO_ENTRY_MIN, find_impulse
+from trader.lab.strategies.retest import _FLAT_MIN, _NO_ENTRY_MIN, _WK_FLAT_MIN, _WK_NO_ENTRY_MIN, find_impulse
 
 
 def _snap(x: float, step: float, up: bool) -> float:
@@ -122,7 +122,14 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
     stl.set_state("k", k)
     minute = minute_of_day(cur.time)
     day = cur.time // 86400
+    wk = is_weekend(cur.time)
+    flat_min = _WK_FLAT_MIN if wk else _FLAT_MIN
+    noent_min = _WK_NO_ENTRY_MIN if wk else _NO_ENTRY_MIN
     if stl.get_state("day") != day:
+        old = stl.get_state("st")
+        if old and old["qin"]:       # страховка: позиция не переходит через границу дня (короткая сессия)
+            await _market_exit(stl, params["symbol"], old, cur.open, cur.time,
+                               float(params.get("half_spread_pts", 5)), max(1, int(params.get("qty_per_leg", 1))), "gap")
         stl.set_state("day", day)
         stl.set_state("st", None)
         stl.set_state("rnd", None)
@@ -145,13 +152,13 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
         side = "buy" if sgn > 0 else "sell"
         filled = False
         if st["qin"] == 0:                                   # ждём E1
-            if minute < _NO_ENTRY_MIN and st["e1"] is not None and sgn * (st["e1"] - worst) >= pen:
+            if minute < noent_min and st["e1"] is not None and sgn * (st["e1"] - worst) >= pen:
                 _inc(stl, "why_e1")
                 _fill(stl, cur.time, leg)
                 await stl.place_order_at(symbol, side, leg, st["e1"], cur.time)
                 st.update(qin=1, kf=k, e1p=st["e1"], stop=st["e2"] - sgn * S)
                 filled = True
-            elif k - st["k0"] >= int(params.get("wait_bars", 60)) or minute >= _NO_ENTRY_MIN:
+            elif k - st["k0"] >= int(params.get("wait_bars", 60)) or minute >= noent_min:
                 st = None
             else:                                            # пик плывёт, уровни на следующий бар
                 if sgn * (cur.high if sgn > 0 else cur.low) > sgn * st["P"]:
@@ -173,7 +180,7 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
                 _fill(stl, cur.time, st["qin"] * leg)
                 await stl.place_order_at(symbol, exit_side, st["qin"] * leg, st["tp"], cur.time)
                 st = None
-            elif minute >= _FLAT_MIN:
+            elif minute >= flat_min:
                 await _market_exit(stl, symbol, st, cur.close, cur.time, half, leg, "eod")
                 st = None
             elif (stop_mode == 0 and sgn * (cur.close - st["stop"]) < 0) \
@@ -181,7 +188,7 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
                 st["exit"] = "stop" if (stop_mode == 0 and sgn * (cur.close - st["stop"]) < 0) else "time"
 
     # ── поиск импульса / случайного якоря ──
-    if st is None and minute < _NO_ENTRY_MIN:
+    if st is None and minute < noent_min:
         allowed = [s for s in (1, -1) if int(params.get("allow_long" if s > 0 else "allow_short", 1))]
         if int(params.get("random_anchor", 0)):
             rnd = stl.get_state("rnd")
@@ -190,9 +197,9 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
                     if find_impulse(bars, i, params, s):
                         cnt = int(stl.get_state("rn", 0) or 0)
                         stl.set_state("rn", cnt + 1)
-                        if minute + 1 < _NO_ENTRY_MIN:
+                        if minute + 1 < noent_min:
                             r = random.Random(f"{params.get('seed', 0)}:{day}:{cnt}")
-                            stl.set_state("rnd", {"min": r.randint(minute + 1, _NO_ENTRY_MIN - 1), "sgn": s})
+                            stl.set_state("rnd", {"min": r.randint(minute + 1, noent_min - 1), "sgn": s})
                         break
             elif minute >= rnd["min"]:
                 stl.set_state("rnd", None)

@@ -47,11 +47,14 @@ tp_mode=1 (справочный): лимит на уровне тейка сто
   8. Пик, по которому был вход или снятие, повторно не торгуется: трекеры сбрасываются, а
      трекинг во время позиции и ожидания не ведётся.
 """
+from trader.lab.commission import is_weekend
 from trader.lab.footprints.common import SESSION_END_MIN, minute_of_day
 from trader.lab.runtime import STLRuntime
 
 _FLAT_MIN = SESSION_END_MIN - 10      # 23:40, закрытие по факту баров
 _NO_ENTRY_MIN = 23 * 60               # входы с 23:00 запрещены
+_WK_FLAT_MIN = 18 * 60 + 50           # выходная сессия 10:00-19:00: флэт за 10 минут до конца
+_WK_NO_ENTRY_MIN = 18 * 60 + 30
 
 
 def _hl(bars, k: int, sgn: int):
@@ -127,9 +130,13 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
     stl.set_state("k", k)
     minute = minute_of_day(cur.time)
     day = cur.time // 86400
-    if stl.get_state("day") != day:
+    new_day = stl.get_state("day") != day
+    if new_day:
         stl.set_state("day", day)
         _clear(stl)
+    wk = is_weekend(cur.time)
+    flat_min = _WK_FLAT_MIN if wk else _FLAT_MIN
+    noent_min = _WK_NO_ENTRY_MIN if wk else _NO_ENTRY_MIN
     qty = max(1, int(params.get("qty", 1)))
     wait_min = int(params.get("wait_min", 3))
     wait_max = int(params.get("wait_max", 120))
@@ -145,7 +152,11 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
     if pos.quantity != 0:
         dirn = 1 if pos.side == "long" else -1
         exit_side = "sell" if dirn > 0 else "buy"
-        if trade is None or minute >= _FLAT_MIN:        # без записи о сделке или конец дня
+        if new_day:                                     # короткая сессия: позиция не живёт через границу дня
+            await stl.place_order_at(symbol, exit_side, pos.quantity, cur.open, cur.time)
+            stl.set_state("trade", None)
+            return
+        if trade is None or minute >= flat_min:        # без записи о сделке или конец дня
             await stl.place_order_at(symbol, exit_side, pos.quantity, cur.close, cur.time)
             stl.set_state("trade", None)
             return
@@ -188,7 +199,7 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
             _clear(stl)
             return
     waited = k + 1 - pend["kp"]
-    if waited >= wait_max or minute >= _NO_ENTRY_MIN:
+    if waited >= wait_max or minute >= noent_min:
         _clear(stl)
         return
     if waited < wait_min:

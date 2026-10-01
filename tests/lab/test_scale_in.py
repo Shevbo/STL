@@ -139,3 +139,38 @@ def test_reason_counters_for_extra():
                 break
         return {k: v for k, v in rt._state.items() if k.startswith(("why_", "exit_"))}
     assert asyncio.run(go()) == {"why_e1": 1, "why_e2": 1, "exit_stop": 1, "why_fq": 4, "why_fqw": 4 + (4 if _is_wk() else 0)}
+
+
+# ── граница дня: позиция не переходит через неё ──
+def _two_days(day_a_off_min, rows_a_tail, rows_b, last_min_a=18 * 60 + 59):
+    """День A: 70 плоских + импульс + хвост, последний бар в last_min_a; день B через сутки с 10:00."""
+    rows_a = _flat(70) + IMPULSE + rows_a_tail
+    a = _bars(rows_a, start_min=day_a_off_min * 1440 + last_min_a - len(rows_a) + 1)
+    b = _bars(rows_b, start_min=(day_a_off_min + 1) * 1440 + 600)
+    return a + b
+
+
+def _net(orders):
+    return sum(q if side == "buy" else -q for side, _, q, _ in orders)
+
+
+def test_short_session_open_position_closed_on_next_day_first_bar():
+    bars = _two_days(0, [B74] + [(103.0, 103.3, 102.8)] * 25, _flat(5, 103.0))   # день кончается 18:59 с позицией
+    o = _run(bars, hold_bars=9999)
+    assert o[0][0] == "buy" and o[-1][0] == "sell" and _net(o) == 0, o
+    assert (o[-1][3] + 600) == 1440 + 600, o                # первый бар нового дня 10:00
+    assert o[-1][1] == 99.8 and o[-1][2] == 1, o            # open (_bars: 100.0) минус полуспред 0.2
+
+
+def test_weekend_flat_before_session_end_position_zero_at_day_end():
+    bars = _two_days(3, [B74] + [(103.0, 103.3, 102.8)] * 45, _flat(5, 103.0))   # день A = суббота
+    o = _run(bars, hold_bars=9999)
+    sells = [x for x in o if x[0] == "sell"]
+    assert sells and (sells[0][3] + 600) == 3 * 1440 + 18 * 60 + 50, o   # 18:50 субботы, не на смене дня
+    assert _net(o) == 0
+
+
+def test_pending_stop_exit_not_orphaned_at_day_boundary():
+    bars = _two_days(0, [B74, (102.6, 102.9, 102.5), (101.5, 102.0, 101.4)], _flat(5, 101.5))   # стоп-флаг на последнем баре дня
+    o = _run(bars)
+    assert _net(o) == 0 and (o[-1][3] + 600) == 1440 + 600, o

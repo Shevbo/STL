@@ -121,3 +121,19 @@ def test_find_impulse_pure():
     imp = find_impulse(bars, len(bars) - 1, {})
     assert imp["P"] == 103.5 and abs(imp["move"] / imp["atr"] - 4.0) < 1e-9
     assert find_impulse(bars, len(bars) - 2, {})["P"] == 103.0     # вторая половина: пик ещё не 103.5
+
+
+def test_weekend_session_flat_before_end_and_no_overnight():
+    rows = _flat(70) + IMPULSE + CONFIRM + HOLD * 80
+    bars = _bars(3 * 1440 + 1140 - len(rows) + 1, rows)        # суббота, последний бар 18:59
+    o = _run(bars, wait_max=480)
+    assert o[0][0] == "buy" and o[-1][0] == "sell" and o[-1][1] == 102.3, o
+    assert (o[-1][2] + 600) % 1440 == 18 * 60 + 50, o          # закрыто на баре 18:50, не перенесено
+
+
+def test_open_position_closed_at_next_day_open_if_session_ended_early():
+    rows = _flat(70) + IMPULSE + CONFIRM + HOLD * 20
+    a = _bars(1140 - len(rows) + 1, rows)                       # среда, последний бар 18:59, позиция открыта
+    b = _bars(1440 + 600, HOLD * 3)
+    o = _run(a + b, wait_max=480)
+    assert o[-1][0] == "sell" and (o[-1][2] + 600) == 1440 + 600, o
