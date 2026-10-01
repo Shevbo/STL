@@ -114,6 +114,9 @@
   .otag { font-size: 10px; color: var(--faint); margin-right: 6px;
           border: 1px solid currentColor; border-radius: 3px; padding: 0 3px; }
   .row.dim { opacity: .55; }
+  .xbtn { font-size: 10px; padding: 0 5px; margin-right: 6px; cursor: pointer;
+          border: 1px solid var(--down); border-radius: 3px;
+          background: transparent; color: var(--down); }
   .soid { font-size: 10px; color: var(--faint); margin-right: 6px; white-space: nowrap; }
   .row.total { border-left-width: 4px; }
   .row.total .k { color: var(--ink); font-weight: 600; }
@@ -1277,6 +1280,52 @@ function pnlBox(p) {
 // у неё не бывало в принципе. Жалоба оператора дословно: «не вижу активные
 // заявки в квике вне зависимости от их природы, не могу их снять». Заявка стоит
 // в рынке и торгует деньгами — она обязана быть на экране, кто бы её ни ставил.
+// Кто поставил заявку — ЧЕЛОВЕЧЕСКИМ ИМЕНЕМ, для подтверждения снятия.
+// Решение real-trade 01.10.2026: кнопка на ВСЕХ строках, а защита в
+// подтверждении, а не в её отсутствии. Довод сильный: ручка написана ради
+// ОСИРОТЕВШЕЙ заявки, чей владелец её уже не помнит (карта агента умирает с
+// процессом), и дать кнопку только ручным значило бы оставить ровно тот тупик,
+// из которого оператор выходил руками в терминале.
+const CAN_CANCEL = true;
+
+function ownerOf(r) {
+  if (r.origin === 'robot') return `робот ${r.tag || '—'}`;
+  if (r.origin === 'smart') return `умная заявка ${r.so_id || '—'}`;
+  if (r.origin === 'recon') return 'выравнивание';
+  if (r.origin === 'external') return 'приложение брокера';
+  return 'вы, руками в терминале';
+}
+
+// Текст подтверждения. У чужой заявки он обязан сказать ТРИ вещи: чья она, что
+// владелец об этом НЕ УЗНАЕТ, и что штатный путь другой.
+function cancelAsk(r) {
+  const who = ownerOf(r);
+  const base = `Снять заявку ${r.num}? Её поставил${r.origin === 'smart' ? 'а' : ''} ${who}.`;
+  if (r.origin === 'robot' || r.origin === 'smart' || r.origin === 'recon') {
+    return base + ' Он об этом НЕ УЗНАЕТ: штатно снимают паузой робота или'
+      + ' отменой умной заявки. Снимайте здесь, только если заявка осиротела.';
+  }
+  return base;
+}
+
+// СНЯТИЕ ДОСТУПНО НЕ ВЕЗДЕ. Токен компаньона открывает РОВНО ОДИН эндпоинт
+// (/snapshot) — так и задумано: утёкший токен утекает ЧТЕНИЕ. В трее кнопка
+// поэтому не работала бы молча, и вместо неё честная подпись.
+async function cancelOrder(num, ask) {
+  if (!confirm(ask)) return;
+  try {
+    const r = await fetch('/api/v1/quik/orders/terminal/cancel', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ order_nums: [String(num)] }),
+    });
+    const d = await r.json().catch(() => ({}));
+    alert(r.ok ? `Снятие отправлено: ${num}.`
+               : `Не снялась: ${(d && d.detail) || ('HTTP ' + r.status)}`);
+  } catch (e) {
+    alert('Не снялась: ' + (e && e.message ? e.message : 'сеть'));
+  }
+}
+
 const ORIGIN_RU = {
   manual: 'руками',
   smart: 'умная STL',
@@ -1305,15 +1354,31 @@ function renderTerminal(o) {
   } else if (!rows.length) {
     body = '<div class="empty">в терминале заявок нет</div>';
   } else {
-    body = rows.map((r) =>
-      `<div class="row${r.active ? '' : ' dim'}">` +
-      `<span class="k">${esc(r.sec)} ${r.side === 'buy' ? 'покупка' : 'продажа'} ${esc(String(r.qty))}</span>` +
-      `<span class="sub">по ${px(r.price)}${r.filled ? ' · исполнено ' + r.filled : ''}` +
-      `${r.balance && r.active ? ' · остаток ' + r.balance : ''}</span>` +
-      `${originTag(r)}${pnlBox(r.pnl)}<span class="sp"></span>` +
+    body = rows.map((r) => {
+      // СТОРОНУ НЕ УГАДЫВАЕМ. У нативных стоп-заявок она берётся из флагов, и
+      // механика выверена не полностью (real-trade 01.10.2026): пустая сторона
+      // печатается пустой, а не превращается в «продажу».
+      const side = r.side === 'buy' ? 'покупка' : r.side === 'sell' ? 'продажа' : '';
+      // У СТОП-ЗАЯВКИ ДВЕ ЦЕНЫ, и их РАЗРЫВ — причина, по которой 29.09 стоп
+      // сработал и не исполнился: price это уровень СРАБАТЫВАНИЯ, limit_price —
+      // цена самой заявки. Показывать одну из них значит прятать половину риска.
+      let sub = r.kind === 'stop'
+        ? `срабатывание ${px(r.price)}${r.limit_price ? ' · заявка по ' + px(r.limit_price) : ''}`
+        : `по ${px(r.price)}`;
+      if (r.kind === 'stop' && r.offset) sub += ` · отступ ${r.offset}`;
+      if (r.filled) sub += ` · исполнено ${r.filled}`;
+      if (r.balance && r.active) sub += ` · остаток ${r.balance}`;
+      const stop = r.kind === 'stop' ? '<span class="otag nw">стоп</span>' : '';
+      return `<div class="row${r.active ? '' : ' dim'}">` +
+      `<span class="k">${esc(r.sec)}${side ? ' ' + side : ''} ${esc(String(r.qty))}</span>` +
+      `<span class="sub">${sub}</span>` +
+      `${stop}${originTag(r)}${pnlBox(r.pnl)}<span class="sp"></span>` +
       `<span class="soid" title="номер заявки в QUIK">${esc(String(r.num || ''))}</span>` +
-      `<span class="v ${r.active ? 'up' : 'nil'}">${esc(r.state || (r.active ? 'активна' : 'снята'))}</span></div>`
-    ).join('');
+      (r.active ? (CAN_CANCEL
+        ? `<button class="xbtn" data-cancel="${esc(String(r.num))}" data-ask="${esc(cancelAsk(r))}" title="снять эту заявку в QUIK">снять</button>`
+        : `<span class="otag nw" title="токен компаньона открывает только чтение — снимайте из веб-версии панели">снятие в вебе</span>`) : '') +
+      `<span class="v ${r.active ? 'up' : 'nil'}">${esc(r.state || (r.active ? 'активна' : 'снята'))}</span></div>`;
+    }).join('');
   }
   // Разметка и поведение группы — те же, что у остальных: раскрытие живёт в
   // ordOpen, заголовок кликается по data-ord. Своя вёрстка здесь означала бы
@@ -1784,6 +1849,11 @@ document.addEventListener('click', (e) => {
     return;
   }
   if (e.target.closest('.more')) { alertsOpen = !alertsOpen; if (lastData) paint(lastData); return; }
+  // Снятие заявки ловим ДО раскрытия группы: кнопка лежит внутри строки,
+  // а строка внутри группы, и без этого клик по «снять» просто свернул бы
+  // список у оператора под рукой.
+  const xb = e.target.closest('[data-cancel]');
+  if (xb) { e.stopPropagation(); cancelOrder(xb.dataset.cancel, xb.dataset.ask); return; }
   if (e.target.closest('[data-ordfull]')) { toggleOrdFull(); return; }
   if (e.target.closest('[data-ordf]')) { toggleOrdDone(); return; }
   const og = e.target.closest('[data-ord]');

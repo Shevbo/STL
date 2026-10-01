@@ -12,7 +12,7 @@ import { describe, it, expect } from 'vitest';
 const read = (f: string) => fs.readFileSync(path.resolve('public', f), 'utf8').replace(/\r\n/g, '\n');
 const PAGES = { 'companion.html': read('companion.html'), 'm.html': read('m.html') };
 
-function termFn(src: string, ordDone = true, open = true) {
+function termFn(src: string, ordDone = true, open = true, canCancel = true) {
   const pick = (re: RegExp, what: string) => {
     const m = src.match(re);
     if (!m) throw new Error(`${what} не найдена`);
@@ -24,6 +24,10 @@ function termFn(src: string, ordDone = true, open = true) {
     pnlBox: () => '',
     ordOpen: new Set(open ? ['terminal'] : []),
     ordDone,
+    // В трее панель ходит через локальный шелл с токеном компаньона, а тот
+    // открывает РОВНО ОДИН эндпоинт — снятия оттуда быть не может.
+    CAN_CANCEL: canCancel,
+    cancelAsk: (r: any) => `снять ${r.num}?`,
   };
   const src2 = pick(/const ORIGIN_RU = \{[\s\S]*?\n\};\n/, 'ORIGIN_RU')
     + pick(/function originTag\(r\) \{[\s\S]*?\n\}\n/, 'originTag')
@@ -89,6 +93,89 @@ describe('таблица заявок терминала', () => {
                                  terminal_done: [], terminal_total: 1,
                                  terminal_active: 1, terminal_stale: false });
       expect(html).toContain('что_то_новое');
+    });
+  }
+});
+
+// Снятие заявки прямо из панели. Решение real-trade 01.10.2026: кнопка на ВСЕХ
+// строках, а защита — в подтверждении, а не в её отсутствии. Ручка написана
+// ради ОСИРОТЕВШЕЙ заявки, чей владелец её уже не помнит; дать кнопку только
+// ручным значило бы оставить ровно тот тупик, из которого оператор выходил
+// руками в терминале.
+describe('снятие заявки из панели', () => {
+  for (const [page, src] of Object.entries(PAGES)) {
+    const ask = (() => {
+      const m = src.match(/function cancelAsk\(r\) \{[\s\S]*?\n\}\n/);
+      const o = src.match(/function ownerOf\(r\) \{[\s\S]*?\n\}\n/);
+      return new Function(`${o![0]}${m![0]}; return cancelAsk;`)() as (r: any) => string;
+    })();
+
+    it(`${page}: у чужой заявки подтверждение называет владельца и последствие`, () => {
+      const t = ask({ num: '77', origin: 'robot', tag: 'lxk22tsffsx' });
+      expect(t).toContain('77');
+      expect(t).toContain('lxk22tsffsx');
+      expect(t).toContain('НЕ УЗНАЕТ');
+      expect(t).toContain('осиротела');
+    });
+
+    it(`${page}: у умной заявки подтверждение называет её so_id`, () => {
+      expect(ask({ num: '9', origin: 'smart', so_id: '41bf3af0dd' })).toContain('41bf3af0dd');
+    });
+
+    // Своя заявка не требует лекции: лишний текст в подтверждении, которое
+    // читают каждый раз, перестают читать вовсе.
+    it(`${page}: у своей ручной заявки подтверждение короткое`, () => {
+      const t = ask({ num: '5', origin: 'manual' });
+      expect(t).not.toContain('НЕ УЗНАЕТ');
+    });
+
+    it(`${page}: кнопка есть у активной и отсутствует у снятой`, () => {
+      const html = termFn(src)({
+        terminal: [ROW({ num: '1' })],
+        terminal_done: [ROW({ num: '2', active: false, state: 'снята' })],
+        terminal_total: 2, terminal_active: 1, terminal_stale: false,
+      });
+      expect(html.match(/data-cancel="1"/g)).toHaveLength(1);
+      expect(html).not.toContain('data-cancel="2"');
+    });
+
+    // Токен компаньона открывает РОВНО ОДИН эндпоинт — так и задумано: утёкший
+    // токен утекает ЧТЕНИЕ. В трее кнопка молча не работала бы.
+    it(`${page}: где снятие недоступно, об этом сказано, а не кнопка-обманка`, () => {
+      const html = termFn(src, true, true, false)({
+        terminal: [ROW()], terminal_done: [], terminal_total: 1,
+        terminal_active: 1, terminal_stale: false,
+      });
+      expect(html).not.toContain('data-cancel');
+      expect(html).toContain('снятие в вебе');
+    });
+  }
+});
+
+// У стоп-заявки ДВЕ цены, и их разрыв — причина, по которой 29.09.2026 стоп
+// сработал и не исполнился. Показать одну значит спрятать половину риска.
+describe('строки стоп-заявок', () => {
+  for (const [page, src] of Object.entries(PAGES)) {
+    it(`${page}: показываются и уровень срабатывания, и цена заявки`, () => {
+      const html = termFn(src)({
+        terminal: [ROW({ kind: 'stop', price: 84_000, limit_price: 83_970, offset: 30 })],
+        terminal_done: [], terminal_total: 1, terminal_active: 1, terminal_stale: false,
+      });
+      expect(html).toContain('срабатывание');
+      expect(html).toContain('84000');
+      expect(html).toContain('83970');
+      expect(html).toContain('стоп');
+    });
+
+    // Механика нативных стопов выверена не полностью: пустую сторону печатаем
+    // пустой, а не превращаем в «продажу» (предупреждение real-trade).
+    it(`${page}: пустая сторона остаётся пустой, а не становится продажей`, () => {
+      const html = termFn(src)({
+        terminal: [ROW({ kind: 'stop', side: '' })],
+        terminal_done: [], terminal_total: 1, terminal_active: 1, terminal_stale: false,
+      });
+      expect(html).not.toContain('продажа');
+      expect(html).not.toContain('покупка');
     });
   }
 });
