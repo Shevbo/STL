@@ -548,7 +548,7 @@ def run_regime(arg: dict) -> dict:
     """mode=regime_scan: configs = [{"p", "sig", "on_q", "off_q", "dev_k", "pos_k", "cool"}], только первые 2/3
     дней (отбор), сводка обучения. mode=regime_days: те же configs, дневные ряды по всем дням + база без
     фильтра + контроль (arg["draws"] розыгрышей на отложенной трети). mode=regime_info: информативность:
-    запуск каждые 30 минут на 120 баров без фильтра, сигнал на запуске и net эпизода (arg["params"]).
+    запуск каждые 30 минут на 120 минут без фильтра, сигнал на запуске и net эпизода (arg["params"]).
     arg["chunk"] = [i, n] берёт configs[i::n]."""
     import random
     from trader.lab.footprints import common
@@ -616,7 +616,8 @@ def run_regime(arg: dict) -> dict:
                     m = _minute(body[i - 1][0])
                     if m % 30 or m > 1230:
                         continue
-                    r = simulate_regime(body, d["tail"], p, d["sig"]["er30"], cfg, schedule=[(i, 120)])
+                    dur = sum(1 for b in body[i:] if b[0] < body[i][0] + 7200)        # 120 минут, бары разрежены
+                    r = simulate_regime(body, d["tail"], p, d["sig"]["er30"], cfg, schedule=[(i, dur)])
                     fm, ft = costs(r["fills"], key, inst["pv"])
                     g = r["pnl_pts"] * inst["pv"]
                     out["episodes"].append({"p": pi, "day": k, "m": m, "net_m": round(g - fm, 1), "net_t": round(g - ft, 1),
