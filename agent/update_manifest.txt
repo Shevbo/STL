@@ -57,3 +57,7 @@ trader/lab/exec_policy.py
 trader/lab/footprints/r1_retest.py
 trader/lab/strategies/retest.py
 trader/lab/strategies/scale_in.py
+trader/lab/grid_sim.py
+trader/quik/__init__.py
+trader/quik/smart_orders.py
+trader/market_session.py
