@@ -277,6 +277,10 @@ async def cancel_order(so_id: str, request: Request):
         _kill_native(request, so)
     else:
         _kill_native_by_table(request, so)
+    # Коридор, треугольник и сетка ДЕРЖАТ заявки в стакане QUIK — снять умную
+    # заявку, не сняв их, значит оставить в рынке то, что оператор отменил
+    # (инцидент 01.10.2026: две заявки коридора пережили его отмену).
+    _withdraw_resting(request, so)
     so.status = "cancelled"
     so.note = (so.note + " " if so.note else "") + "отменена оператором"
     book.save()
@@ -284,6 +288,59 @@ async def cancel_order(so_id: str, request: Request):
     log.info("smart_order.cancelled", so_id=so_id, kind=so.kind, code=so.code,
              side=so.side, qty=so.qty)
     return {"ok": True, "so_id": so_id}
+
+
+def _withdraw_resting(request: Request, so: SmartOrder) -> int:
+    """Снять из QUIK заявки, которые эта умная заявка ДЕРЖИТ В СТАКАНЕ.
+
+    ИНЦИДЕНТ 01.10.2026. Оператор нажал «изменить» на коридоре, интерфейс снял
+    умную заявку — а две её заявки остались ЖИТЬ В ТЕРМИНАЛЕ: покупка 1 по 85450 и
+    продажа 1 по 86210 при рынке 85700. Книга писала «отменена», QUIK держал обе.
+    Снял руками по номерам, налиться не успело.
+
+    Корень мой: 30.09 я научил коридор, треугольник и сетку СТОЯТЬ В СТАКАНЕ
+    заранее, а путь отмены не расширил. Он снимал только НАТИВНЫЕ СТОП-ЗАЯВКИ
+    (_kill_native/_kill_native_by_table), потому что до 30.09 ничего другого
+    умная заявка в терминале и не держала. Новая возможность молча обошла старую
+    уборку — и отмена перестала быть отменой.
+
+    Ключи `flip:` и `cross:` в c_live/g_live это БУХГАЛТЕРИЯ состояния, а не
+    client_id: снимать по ним нечего, и трогать их нельзя.
+    """
+    state = request.app.state
+    srv = getattr(state, "quik_server", None)
+    ost = getattr(state, "quik_order_store", None)
+    store = getattr(state, "quik_store", None)
+    if srv is None or ost is None or store is None:
+        return 0
+    try:
+        agent = resolve_agent(store, None)
+    except Exception:  # noqa: BLE001 — нет агента, снимать нечем
+        return 0
+    live_cids = {
+        cid for book_field in (so.c_live or {}, so.g_live or {})
+        for key, cid in book_field.items()
+        if cid and not str(key).startswith(("flip:", "cross:"))
+    }
+    if not live_cids:
+        return 0
+    by_cid = {d.get("client_id"): d for d in ost.working_orders(agent)}
+    killed = 0
+    for cid in sorted(live_cids):
+        rec = by_cid.get(cid) or {}
+        # Снимаем и ту, которой ещё нет в сторе: номер мог не прийти, но заявка
+        # уже в пути. Пустой order_id агент разрешит по client_id сам.
+        if rec.get("state") in ("cancelled", "filled", "rejected"):
+            continue
+        srv.enqueue_order(agent, order_msgs.build_cancel_order(
+            client_id=cid, order_id=str(rec.get("order_id") or "")))
+        killed += 1
+    if killed:
+        so_journal.record("resting_withdrawn", so, so_journal.OPERATOR,
+                          f"снято заявок из стакана: {killed} ({', '.join(sorted(live_cids))})")
+        log.info("smart_order.resting_withdrawn", so_id=so.so_id, killed=killed)
+    so.c_live, so.g_live = {}, {}
+    return killed
 
 
 def _kill_native_by_table(request: Request, so: SmartOrder) -> None:
