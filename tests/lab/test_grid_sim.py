@@ -112,3 +112,15 @@ def test_costs_two_bounds():
     r = _sim([FLAT, (1000, 1101, 899, 1050)])
     m, t = gs.costs(r["fills"], "RIU6", gs.PV_RI)
     assert abs(m - 0.45 * 4) < 1e-9 and t > m
+
+
+def test_quiet_bar_skip_does_not_change_fills():
+    import random
+    rnd = random.Random(7)
+    px, rows = 1000.0, []
+    for _ in range(400):
+        o = px
+        px = round(px + rnd.gauss(0, 40))
+        rows.append((o, max(o, px) + rnd.choice((0, 5)), min(o, px) - rnd.choice((0, 5)), px))
+    for kw in ({}, {"stop_pts": 100}, {"stop_pts": 100, "stop_mode": 1}, {"stop_pts": 100, "restart": "after_stop"}):
+        assert _sim(rows, **kw)["fills"] == _sim(rows, noskip=1, **kw)["fills"]

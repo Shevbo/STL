@@ -173,7 +173,7 @@ def simulate_day(bars_day: list, params: dict) -> dict | None:
         # быстрый пропуск: стоящие продажи выше рынка, покупки ниже, поэтому без пересечения порогов филлов нет
         quiet = (not g.pending and h < (g.sell_t[0] if g.sell_t else math.inf)
                  and lw > (g.buy_t[-1] if g.buy_t else -math.inf))
-        if mode == 1 and (g.lo and lw <= g.lo or g.hi and h >= g.hi):
+        if p.get("noskip") or mode == 1 and (g.lo and lw <= g.lo or g.hi and h >= g.hi):
             quiet = False
         if not quiet:
             a = last
