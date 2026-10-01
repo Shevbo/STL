@@ -1,55 +1,13 @@
 # Archive
 
+## Week of 2026-09-22
+Deployed runner rev 1790020334 (P&L desync fix, 1151 tests, live) + state-tracking infra (truth.py/pos.py). QUIK L2 overload crash 25.09 fixed (260k trades recovered); deployed kill-switch, smart-orders quarantine, stubs regen, L2 resub. Resolved entry_reasons loss & Lua subscription issues (rev 1790410029, 1790457130).
+
 ## Week of 2026-09-15
-Tested cost_atr filter (1.1–1.4₽ edge negated by 20₽ costs, ineffective). 2EMA analysis showed 44k₽ spread impact (4%). Walk-forward test (6m opt→3m trade) pending; cross-period instability and grid-edge optimization remain validation blockers.
+S2-S5 series launched (S3-S4 done, S5 QUIK error); agent-si2ema-SiZ6-v1 paper-robot deployed (11 live). Critical price/points bug fixed & UI deployed; trailing-take/smart-orders ready; native-protect at 1048 green. Runner/agent/9 robots released; paper-lxk22 tested. Bar compression, warmup opt, RIU6/RIZ6 done; warehouse loss under investigation; blocked route/GZ.
 
 ## Week of 2026-09-08
-Deployed shectory-trader 1787379836 (6 fixes: Lua GC 9.1h stable, order cap, fixation alert, mem metrics, hourly guard, journal healing); <1m downtime, 9.3h uptime (+147.6k fin). Tested 10+ strategy variants (rich_fool, impulse_fade, 2EMA, MACD, valley_spike) with high rejection velocity; OOS failures from gap-at-open and lookahead. Ported TSLab 2EMA (ladder configs, 498 OOS tests, 1090 positions, bid-ask stops); expanded RI.txt to 2022–2026 (589K). Designed regime-switch protocol (Steps 0-3); Step 0 closure all 15 strategies net-negative (304 backtests); initiated regime_tf_gate.py. Implemented DeskBot layers; optimized rich_fool sweep; i9 to 217 runs/min.
+Email cron (7d retention, session-only) + shectory-trader restart; backtest tracking (cross_only, sl_pct_l/sl_pct_s) + leaderboard verification (RIU6/RIM6).
 
-## Week of 2026-09-02
-Root causes identified in commission tracking (2x overstated: 9.9 vs 5.8 /lot); account ВМ excludes manual orders; daypnl.go/_test.go written; commission.py & companion.html fixes pending (add manual block); email pending.
-
-## Week of 2026-08-19
-Deployed shectory-trader `1787379836` 6 fixes (Lua GC, order cap, fixation alert, abs mem metrics, hourly strategy guard, journal healing); immediate vs 03:00; <1m downtime; feed stalled, manual QUIK Trades reopen pending; mem "our share" 0 for agent/runner (OpenProcess perms incomplete); Lua GC verified: 9.1h stable (0 vs prior 870 MB/h); 9.3h uptime; fin 147,689 +124; remaining: Lua heap read incomplete (Go); mem-share 0 (observational; next release); UNI-3sma ongoing; report Wed.
-
-## Week of 2026-08-12
-Deployed archive recorder & proto refinements (TapeTrade/TapeBatch); gzip incident fixed (recovered 2538 stack/1993 ticks), SMS hardening, inbox dedup. Fixed devmail_hook.py (STL_WINDOW, 3-window sync), deployed devchat.html (280 tests), completed trail_sl enhancements. Wrote devmail_autopilot.py watchdog, fixed 403 lineman proxy (ANTHROPIC_BASE_URL). Deployed autonomous mail autoresponder (fedbot/fedmail; token burn, disabled). Fixed lxk22 schedule bug (bar_offset_min=180) preventing ~28k loss; token diagnostics (dev-spare ~95M).
-
-## Week of 2026-08-05
-Deployed min_gap_atr & inter-window msg API; completed first opt campaign (272 combos RIU6) with k_avg as main driver. Fixed chart coordinates, deployed UI refresh (price scale, time axis, height, curve-switcher, candles). Queued verification (144 combos) and stop-loss sweep (112 combos). UI fixes: companion panel (DPI/monitor), ORDERS frame (type-grouping, gesture controls), robot-card labels, order-xfer settings, lamp filter.
-
-## Week of 2026-07-29
-Refactored AgentRobotScreen (3-frame redesign, Lineman agent); fixed position-sizing (16→34 via 2.4×), chart-table mismatch. Fixed 10+ bugs (param panel, filter calc, VM); exit-only mode (soft exits, cross-order alerts), stop-loss (½TP, dd 19.9k→2.2k). Enhanced runner diag, lab-analytics integ, 5 revisions (660 tests). Fixed taker/maker commission (253k); Williams %R sweep (4 inst., 88–90%); archive tracker UI.
-
-## Week of 2026-07-21
-Deployed Companion.exe (Windows tray, WebView2, DPAPI auth) with live portfolio/robot/watchdog display; rebuilt smart-orders UI (SL/TP/Trail/OCO, 2-click arm, orphan autoheal) and fixed 3 commission bugs. Integrated MOEX ISS oracle for session gating, watchdog SMS; optimized STL cache (8.3→0.012s) and tuned i9 workers. Completed 28-robot rename with live quotes, fixed 8+ logic bugs (phantom VM, SMS gateway, routing), resolved 11.7-load CPU spike, hardened SMS-watchdog with Telegram failover. UI polish: collapsible alerts, position display, header; audited 175 commits, cleaned 72 temp screens + 8 branches.
-
-## Week of 2026-07-14
-Armed live trading (Bollinger M1·RIU6, OrderBlock·BRU6) and fixed critical bugs (UTF-8/cp1251, QUIK journal sync, fills recovery). Deployed auto-heal, bar persistence, watchdog (RAM/RTT), restart immunity; cleaned 33 dead-code (5.8k LoC). Added per-robot logging, strategy pages, P&L reconciliation (commission tracking UI); hardened agent control (pause/arming/set-position, phantom recovery). Shipped TP/SL-by-depth backtest UI with per-level metrics; deployed auto-updater; flagged critical issues (SetPosition, v2 divergence, VDS RAM).
-
-## Week of 2026-07-07
-Fixed symbol KeyError and DDE watchdog infrastructure bugs. Deployed per-robot event logging and strategy pages. Swept counter-strategies (macd +419k RF 4.27); hardened runner UTF-8 crashes; us_open_fvg live with orphan-guard; backfilled top-3 campaigns.
-
-## Week of 2026-07-06
-Swept 100k FVG params (17/21 profitable, macd_cross +670k RF 4.27); deployed param-editor UI, agent panel, backtest-sweep UI, run-history table (sort/filter/12 cols); fixed Lua crash (desync → 6 missed fills), symbol KeyError, DDE watchdog (892→0), UnicodeError, partial-close P&L, i9 queue/zombies. Built showcase layer (campaign-result DB, top-3 ranking); hardened zero-downtime deployment; 54 tests passing.
-
-## Week of 2026-06-29
-Fixed robot_runner order re-emit (backtest/paper/real distinction); deployed live dashboard + showcase UI (auth OK). Fixed Lua DDE bypass, orphaned orders snap, P&L calculations. FVG-RIU6 live: +880pts SELL, position limits 3/6 effective. Purged DDE legacy code; queued 234 backtest explorer jobs.
-
-## Week of 2026-06-22
-Deployed AI46 backtester (6m/1m OFI proxy, commission-aware, 566→145ms HMM opt). Ran 160-backtest sweep (76 passing, −0.62–1.65% net returns). Phase 7b live (20 tickers, paper trading). Fixed i9 infra (bars cache, dropdown API for 60-contract opt), ollama overload. Chart improvements (zoom, panning). Paused 160-unit sweep pending stabilization.
-
-## Week of 2026-06-15
-Completed M6→U6 robot migration (21 robots, pool 12→50) and ported AI46 feature-engine to Go (11 tests). Graphified codebase (4.7k nodes, 18 security/perf findings). Deployed enhanced Showcase (live robots, P&L metrics, trades feed, gRPC Bearer auth). Completed team-46 Ph1-4 (36 tests, 27pg whitepaper, GH token). Queued 420 backtests (557k combos).
-
-## Week of 2026-06-08
-Shipped agent control infra (pause/resume/stop/start) and BacktestLab redesign (equity metrics, leaderboard, grid-sweep). Added 3 strategies (FVG/Order Block/Pivot); deployed FVG paper trading (BRN6: RF 3.88, 305 trades). Fixed state amnesia via scheduler persistence, 413/500 errors, i9 KeyError. User feedback drove Russian i18n; optimized VDS; resolved post-deploy issues (self-update, param sync).
-
-## Week of 2026-06-01
-Fixed QUIK archive bug (gzip append); completed 24h+ P&L divergence diag (companion vs. main VM); root cause: commission 2x overstated (9.9 vs 5.8 /lot); account ВМ excludes manual orders; daypnl.go/_test.go written; commission.py & companion.html fixes pending (add manual block); email pending.
-
-## Week of 2026-05-25
-Deployed archive gzip fix (JSONL writes correct); recovering corrupt .gz files; fixed dup key settings.json; merged branches (prod unblocked); archive fix confirmed 19:52+; data lost 10:22-19:52; preserved Claude devmail svc on feat/devmail-live-session; mail delivery pending restart.
-
-## Week of 2026-05-18
-Deployed devmail_hook.py STL_WINDOW fix (silent→board print); extended sync 3 windows (real-trade/backtests/ui-ux); live-verified; blocked manual restart backtests/ui-ux config load. Deployed devchat.html prod (stl.s).
+## Week of 2026-09-04
+Identified commission root causes: 2× overstated (9.9 vs 5.8 /lot), account ВМ excludes manual orders; daypnl.go written, commission.py fixes pending; 24h+ P&L divergence diagnosis ongoing. Investigated trading bot stop-loss loss: MACD whipsaw (not bug); amplitude filter backtest (1750pts RIU6) submitted. Updated quik_smart_orders.py with test coverage.
