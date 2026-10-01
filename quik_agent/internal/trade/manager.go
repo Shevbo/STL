@@ -285,7 +285,13 @@ func (m *Manager) PlaceOrderErr(req *quikv1.PlaceOrder) error {
 	// теряет право продолжать В ТУ ЖЕ сторону (30.09.2026: 43 продажи по
 	// одному лоту за три минуты, каждая по отдельности законная). Обратная
 	// заявка проходит всегда — выход из позиции не запирается.
-	if stop, why := m.exposure.Check(req.GetClientId(), req.GetCode(), isBuy(req.GetSide())); stop {
+	// Check возвращает причину и БЕЗ блокировки — это счётное предупреждение:
+	// кричим оператору, но заявку пропускаем (см. exposureguard.go).
+	stop, why := m.exposure.Check(req.GetClientId(), req.GetCode(), isBuy(req.GetSide()))
+	if !stop && why != "" && m.emit != nil {
+		_ = m.emit.EmitAlert(quikv1.AlertSeverity_ALERT_SEVERITY_CRITICAL, "EXPOSURE_RATE", why)
+	}
+	if stop {
 		m.logf("trade: exposure guard — %s (client=%q)", why, req.GetClientId())
 		if m.emit != nil {
 			_ = m.emit.EmitAlert(quikv1.AlertSeverity_ALERT_SEVERITY_CRITICAL,

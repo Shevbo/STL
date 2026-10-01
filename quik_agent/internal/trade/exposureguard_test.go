@@ -67,23 +67,27 @@ func TestOtherSourceKeepsTrading(t *testing.T) {
 	}
 }
 
-// Счёт целиком: несколько источников вместе тоже разгоняют позицию.
-func TestAccountCapCatchesSeveralSourcesTogether(t *testing.T) {
+// Счёт целиком: несколько источников вместе ПРЕДУПРЕЖДАЮТ, но не запирают.
+func TestAccountCapWarnsButNeverBlocks(t *testing.T) {
 	now := int64(1_790_800_000_000)
 	g := newExpAt(&now)
 	for i := 0; i < expAccountCap/2; i++ {
 		g.Observe(fmt.Sprintf("rr:robot-a:%d", i), "RIZ6", false, 1)
 		g.Observe(fmt.Sprintf("rr:robot-b:%d", i), "RIZ6", false, 1)
 	}
-	// ни один источник поодиночке не дошёл до своего порога? дошёл — возьмём третий,
-	// который не торговал вовсе: его останавливает именно счётный порог
-	if stop, why := g.Check("rr:robot-c:x", "RIZ6", false); !stop {
-		t.Fatal("счётный порог не сработал")
-	} else if why == "" {
-		t.Fatal("причина пуста")
+	// Третий источник вовсе не торговал. Счётный порог обязан его ПРЕДУПРЕДИТЬ
+	// и ПРОПУСТИТЬ: запирать по счёту нельзя, иначе робот, которому надо купить,
+	// чтобы закрыть свой шорт, не сможет этого сделать пятнадцать минут — а это
+	// ровно то, что 21.07.2026 уже заморозило роботам выходы (ревью 01.10.2026).
+	stop, why := g.Check("rr:robot-c:x", "RIZ6", false)
+	if stop {
+		t.Fatal("счётный порог ЗАПЕР заявку — он не вправе: это закроет чужой выход")
+	}
+	if why == "" {
+		t.Fatal("счётный порог обязан хотя бы предупредить")
 	}
 	if stop, _ := g.Check("rr:robot-c:x", "RIZ6", true); stop {
-		t.Fatal("покупка против разгона обязана проходить")
+		t.Fatal("обратная заявка обязана проходить тем более")
 	}
 }
 
@@ -171,5 +175,22 @@ func TestManySmallOrdersAreARunawayAtTheSameVolume(t *testing.T) {
 	}
 	if stop, _ := g.Check(rid+":next", "RIZ6", true); !stop {
 		t.Fatal("пять заявок на тот же объём обязаны считаться разгоном")
+	}
+}
+
+// ЧУЖОЙ ВЫХОД НЕ ЗАПИРАЕТСЯ СЧЁТНЫМ ПОРОГОМ. Сетка набрала позицию множеством
+// заявок, а робот в шорте хочет купить, чтобы закрыться. По счёту это «в ту же
+// сторону», и прежняя версия отказывала ему пятнадцать минут — то есть делала
+// ровно то, от чего предохранитель должен защищать (ревью 01.10.2026).
+func TestAccountThresholdNeverLocksAnotherSourcesExit(t *testing.T) {
+	now := int64(1_790_800_000_000)
+	g := newExpAt(&now)
+	for i := 0; i < expAccountCap+5; i++ { // сетка набрала ЛОНГ множеством заявок
+		g.Observe(fmt.Sprintf("so:grid:%d", i), "RIZ6", true, 1)
+		now += 1_000
+	}
+	// робот в ШОРТЕ закрывается покупкой — по счёту это «в ту же сторону»
+	if stop, why := g.Check("rr:lxk22:1", "RIZ6", true); stop {
+		t.Fatalf("выход робота заперт счётным порогом: %s", why)
 	}
 }

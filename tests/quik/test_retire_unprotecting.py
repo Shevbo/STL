@@ -30,8 +30,12 @@ class Store:
 
 def _book(tmp_path, **kw):
     b = SmartOrderBook(str(tmp_path / "b.json"))
+    # guarded_seen=True — это ЗАЩИТА: позиция, которую она закрывает, уже была
+    # в рынке. Без этого признака заявка неотличима от ВХОДА, и списывать её
+    # нельзя (ревью 01.10.2026).
     args = dict(so_id=new_id(), kind="sl", code="RIZ6", side="buy", qty=40,
-                trigger_price=85850.0, status="armed", created_ms=NOW)
+                trigger_price=85850.0, status="armed", created_ms=NOW,
+                guarded_seen=True)
     args.update(kw)
     b.orders.append(SmartOrder(**args))
     return b, b.orders[0]
@@ -261,3 +265,33 @@ async def test_watcher_pass_keeps_a_stop_that_guards_a_real_short(tmp_path, monk
     # одно: осиротить заявку, которой есть что охранять.
     assert so.status in ("armed", "native"), so.status
     assert so.flat_since_ms == 0, "позиция на месте — выдержка сброшена"
+
+
+def test_entry_that_never_had_a_position_is_never_retired(tmp_path):
+    """ВХОД ОПЕРАТОРА НЕ ЕСТЬ ОСИРОТЕВШАЯ ЗАЩИТА, и списывать его нельзя.
+
+    Голый tp/sl/trail_tp без блоков после сделки при флэте по инструменту
+    выглядит неотличимо от защиты, пережившей свою позицию. Разница ровно одна:
+    у защиты позиция БЫЛА, у входа её не было никогда. Без этой проверки
+    списание молча снимало бы взведённые входы — найдено ревью 01.10.2026, уже
+    на бою.
+    """
+    book, so = _book(tmp_path, guarded_seen=False)       # позиции не было никогда
+    store = Store({})                                     # счёт плоский
+    assert _run(book, store, NOW) is False
+    assert _run(book, store, NOW + _ORPHAN_GRACE_MS * 10) is False
+    assert so.status == "armed", "вход обязан остаться взведённым"
+    assert so.flat_since_ms == 0, "часы списания не должны даже запускаться"
+
+
+def test_position_seen_once_makes_it_a_guard_forever(tmp_path):
+    """Увидели охраняемую позицию — заявка признана защитой, и дальше правило
+    списания к ней применяется, даже когда позиция снова исчезла."""
+    book, so = _book(tmp_path, guarded_seen=False)
+    assert _run(book, Store({"RIZ6": -53}), NOW) is True
+    assert so.guarded_seen is True
+    later = NOW + 60_000
+    assert _run(book, Store({}), later) is True          # позиция ушла
+    assert so.flat_since_ms == later
+    assert _run(book, Store({}), later + _ORPHAN_GRACE_MS + 1) is True
+    assert so.status == "orphaned"

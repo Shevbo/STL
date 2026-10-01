@@ -1092,9 +1092,17 @@ def _retire_unprotecting(book: SmartOrderBook, store: Any, agent: str,
                 or so.sl_price or so.tp_price):
             continue
         if not _nothing_to_protect(so, positions.get(so.code, 0)):
-            if so.flat_since_ms:
+            if so.flat_since_ms or not so.guarded_seen:
                 so.flat_since_ms = 0      # позиция вернулась: счётчик сбрасываем
+                so.guarded_seen = True    # и теперь знаем: охранять БЫЛО что
                 dirty = True
+            continue
+        # НИ РАЗУ НЕ ВИДЕЛИ ОХРАНЯЕМОЙ ПОЗИЦИИ — это ВХОД, а не осиротевшая
+        # защита, и трогать его нельзя. Голый tp/sl/trail_tp без блоков после
+        # сделки выглядит неотличимо от защиты, пережившей свою позицию;
+        # разница одна — у защиты позиция БЫЛА. Без этой проверки списание
+        # молча снимало бы взведённые входы оператора (ревью 01.10.2026).
+        if not so.guarded_seen:
             continue
         if not so.flat_since_ms:
             so.flat_since_ms = now
