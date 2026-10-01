@@ -1813,9 +1813,24 @@ async def _watch_once(state: Any) -> None:
     quar = getattr(state, "blind_quarantine", None)
     if quar is None:
         quar = state.blind_quarantine = bq.BlindQuarantine()
-    fresh_now = any(
+    # ПУСТАЯ КНИГА — ЭТО «НЕЧЕГО ПРОВЕРЯТЬ», А НЕ «ДАННЫХ НЕТ».
+    #
+    # 01.10.2026: в 08:01 оператор снял две последние живые заявки, книга
+    # опустела, и `book.codes()` стал пустым множеством. `any(... for c in ())`
+    # это False, поэтому карантин каждую секунду считал, что рынка не видно, и
+    # не двигал отметку «последний раз видели». Данные при этом шли непрерывно.
+    # Через два часа оператор создал тейк на RIZ6 — свежесть «вернулась», разрыв
+    # посчитался в 7601 секунду, и ВХОД был задержан на полные три минуты
+    # карантина. Залилось по 86090 вместо 86100 тремя минутами ранее.
+    #
+    # Карантин защищает от исполнения намерения, УСТАРЕВШЕГО за время слепоты.
+    # Пока в книге нет ни одной живой заявки, устаревать нечему — значит и
+    # разрыв копить не из чего. Нет кодов, за которыми следим: считаем, что
+    # рынок видим, и отметка идёт дальше.
+    codes_now = book.codes()
+    fresh_now = (not codes_now) or any(
         (now - int((store.tick(c, agent) or {}).get("received_at_unix_ms") or 0))
-        <= so_mod._STALE_TICK_MS for c in book.codes())
+        <= so_mod._STALE_TICK_MS for c in codes_now)
     was_active = quar.active(now)
     quar.observe(fresh_now, now)
     if quar.active(now) and not was_active:
