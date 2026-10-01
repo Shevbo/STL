@@ -65,7 +65,7 @@ def _levels(st: dict, bars, params: dict) -> None:
 
 def _arm(sgn: int, P: float, atr: float, k: int, bars, params: dict):
     st = {"sgn": sgn, "P": P, "atr": atr, "k0": k, "qin": 0, "kf": None, "e1": None, "e2": None,
-          "tp": None, "stop": None, "exit": False}
+          "tp": None, "stop": None, "exit": ""}
     _levels(st, bars, params)
     return st if st["e1"] is not None else None       # на баре импульса E1 ниже close или сетап снят
 
@@ -88,7 +88,13 @@ async def on_start(stl: STLRuntime, params: dict) -> None:
             f"S={params.get('S')} Y={params.get('Y')} random_anchor={params.get('random_anchor', 0)}")
 
 
-async def _market_exit(stl, symbol, st, price, ts, half, qty_leg):
+def _inc(stl, key: str) -> None:
+    """Счётчики why_*/exit_* бэктест кладёт в extra результата (entry_reasons/exit_reasons)."""
+    stl.set_state(key, int(stl.get_state(key, 0) or 0) + 1)
+
+
+async def _market_exit(stl, symbol, st, price, ts, half, qty_leg, why):
+    _inc(stl, "exit_" + why)
     side = "sell" if st["sgn"] > 0 else "buy"
     await stl.place_order_at(symbol, side, st["qin"] * qty_leg, price - st["sgn"] * half, ts)
 
@@ -121,7 +127,7 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
 
     # ── отложенный рыночный выход: по open этого бара ──
     if st and st["qin"] and st["exit"]:
-        await _market_exit(stl, symbol, st, cur.open, cur.time, half, leg)
+        await _market_exit(stl, symbol, st, cur.open, cur.time, half, leg, st["exit"])
         st = None
 
     if st:
@@ -131,6 +137,7 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
         filled = False
         if st["qin"] == 0:                                   # ждём E1
             if minute < _NO_ENTRY_MIN and st["e1"] is not None and sgn * (st["e1"] - worst) >= pen:
+                _inc(stl, "why_e1")
                 await stl.place_order_at(symbol, side, leg, st["e1"], cur.time)
                 st.update(qin=1, kf=k, e1p=st["e1"], stop=st["e2"] - sgn * S)
                 filled = True
@@ -142,22 +149,24 @@ async def on_bar(stl: STLRuntime, params: dict) -> None:
                 _levels(st, bars, params)
         if st and st["qin"]:
             if st["qin"] == 1 and sgn * (st["e2"] - worst) >= pen:
+                _inc(stl, "why_e2")
                 await stl.place_order_at(symbol, side, leg, st["e2"], cur.time)
                 st["qin"] = 2
                 filled = True
             exit_side = "sell" if sgn > 0 else "buy"
             if stop_mode == 1 and sgn * (worst - st["stop"]) <= 0:
-                await _market_exit(stl, symbol, st, st["stop"], cur.time, half, leg)
+                await _market_exit(stl, symbol, st, st["stop"], cur.time, half, leg, "stop")
                 st = None
             elif not filled and sgn * (best - st["tp"]) >= pen:
+                _inc(stl, "exit_tp_both" if st["qin"] == 2 else "exit_tp_one")
                 await stl.place_order_at(symbol, exit_side, st["qin"] * leg, st["tp"], cur.time)
                 st = None
             elif minute >= _FLAT_MIN:
-                await _market_exit(stl, symbol, st, cur.close, cur.time, half, leg)
+                await _market_exit(stl, symbol, st, cur.close, cur.time, half, leg, "eod")
                 st = None
             elif (stop_mode == 0 and sgn * (cur.close - st["stop"]) < 0) \
                     or k - st["kf"] >= int(params.get("hold_bars", 240)):
-                st["exit"] = True
+                st["exit"] = "stop" if (stop_mode == 0 and sgn * (cur.close - st["stop"]) < 0) else "time"
 
     # ── поиск импульса / случайного якоря ──
     if st is None and minute < _NO_ENTRY_MIN:
