@@ -47,12 +47,25 @@ const (
 	expSourceCap  = 20             // контрактов за окно от ОДНОГО источника
 	expAccountCap = 40             // контрактов за окно по инструменту, все источники
 	expCooldownMs = 15 * 60 * 1000 // на сколько замолкает направление после срабатывания
+	// Сколько РАЗНЫХ заявок должно быть в окне, чтобы считать это разгоном.
+	//
+	// Разгон отличается от законного действия не объёмом, а ПОВТОРЯЕМОСТЬЮ: 43
+	// контракта 30.09.2026 были 43 заявками по одному лоту, а переворот робота —
+	// это ДВЕ заявки (выход всей позицией, следом вход в новую сторону). У lxk22
+	// max_position=24, то есть переворот даёт чистый сдвиг 48 за секунды, и без
+	// этого условия его вход отклонялся бы как разгон, оставляя робота в флэте
+	// вместо новой стороны — ровно тот отказ, что уже стоил денег на кросс-заявках.
+	//
+	// Считаем РАЗНЫЕ client_id, а не события филла: заявка на 24 лота наливается
+	// многими филлами и по событиям выглядела бы как серия.
+	expMinOrders = 5
 )
 
 // expFill — один исполненный контракт-набор: знаковый объём и когда.
 type expFill struct {
 	src  string
-	qty  int64 // + покупка, − продажа
+	cid  string // ЗАЯВКА, породившая филл: разгон считается по разным заявкам
+	qty  int64  // + покупка, − продажа
 	atMs int64
 }
 
@@ -116,7 +129,8 @@ func (g *ExposureGuard) Observe(clientID, code string, buy bool, qty int64) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.pruneLocked(code, now)
-	g.fills[code] = append(g.fills[code], expFill{src: loopSource(clientID), qty: signed, atMs: now})
+	g.fills[code] = append(g.fills[code],
+		expFill{src: loopSource(clientID), cid: clientID, qty: signed, atMs: now})
 }
 
 // Check: можно ли ставить заявку этой стороны от этого источника. Возвращает
@@ -153,25 +167,31 @@ func (g *ExposureGuard) Check(clientID, code string, buy bool) (bool, string) {
 
 	fills := g.pruneLocked(code, now)
 	var srcNet, acctNet int64
+	srcOrders, acctOrders := map[string]struct{}{}, map[string]struct{}{}
 	for _, f := range fills {
 		acctNet += f.qty
+		acctOrders[f.cid] = struct{}{}
 		if f.src == src {
 			srcNet += f.qty
+			srcOrders[f.cid] = struct{}{}
 		}
 	}
 
-	// Разгон засчитывается только в ТУ ЖЕ сторону, куда просится заявка.
-	if abs64(srcNet) >= expSourceCap && sgn(srcNet) == dir {
-		reason := fmt.Sprintf("источник %s сдвинул позицию по %s на %+d контрактов за %d мин: "+
-			"заявки в ту же сторону остановлены на %d мин (обратные разрешены)",
-			src, code, srcNet, expWindowMs/60000, expCooldownMs/60000)
+	// Разгон засчитывается только в ТУ ЖЕ сторону, куда просится заявка, и только
+	// если он собран МНОГИМИ заявками: две крупные — это переворот, не разгон.
+	if abs64(srcNet) >= expSourceCap && sgn(srcNet) == dir && len(srcOrders) >= expMinOrders {
+		reason := fmt.Sprintf("источник %s сдвинул позицию по %s на %+d контрактов "+
+			"%d заявками за %d мин: заявки в ту же сторону остановлены на %d мин "+
+			"(обратные разрешены)",
+			src, code, srcNet, len(srcOrders), expWindowMs/60000, expCooldownMs/60000)
 		g.blocks[src+"|"+code] = &expBlock{dir: dir, blockTil: now + expCooldownMs, reason: reason}
 		return true, reason
 	}
-	if abs64(acctNet) >= expAccountCap && sgn(acctNet) == dir {
-		reason := fmt.Sprintf("по %s все источники вместе сдвинули позицию на %+d контрактов за %d мин: "+
-			"заявки в ту же сторону остановлены на %d мин (обратные разрешены)",
-			code, acctNet, expWindowMs/60000, expCooldownMs/60000)
+	if abs64(acctNet) >= expAccountCap && sgn(acctNet) == dir && len(acctOrders) >= expMinOrders {
+		reason := fmt.Sprintf("по %s все источники вместе сдвинули позицию на %+d контрактов "+
+			"%d заявками за %d мин: заявки в ту же сторону остановлены на %d мин "+
+			"(обратные разрешены)",
+			code, acctNet, len(acctOrders), expWindowMs/60000, expCooldownMs/60000)
 		g.blocks["acct|"+code] = &expBlock{dir: dir, blockTil: now + expCooldownMs, reason: reason}
 		return true, reason
 	}
