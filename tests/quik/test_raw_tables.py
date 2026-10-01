@@ -177,3 +177,34 @@ def test_routes_tables_list_and_get(monkeypatch):
 
     r3 = client.get("/api/v1/quik/tables/nope")
     assert r3.status_code == 404
+
+
+def test_params_carry_the_day_price_limits():
+    """ПЛАНКИ ЦЕНЫ ДНЯ ТЕРЯЛИСЬ ПРИ РАЗБОРЕ, 01.10.2026.
+
+    Lua читает PRICEMAX/PRICEMIN с 30.09, агент их передаёт, поле есть в
+    протоколе — а _params_to_dict клал в стор только шаг, стоимость шага и
+    коэффициент. _price_limits всегда видел пусто, и защита «за планкой биржи» у
+    коридора и сетки не работала ни разу, причём МОЛЧА: нули там означают
+    «границы неизвестны», то есть не ограничиваем.
+
+    Диагноз был обманчив: отсутствие планок выглядело как незагруженный скрипт в
+    QUIK, и оператора чуть не отправили перезагружать терминал второй раз.
+    """
+    from trader.quik.server import _params_to_dict
+
+    class _Row:
+        code = "RIZ6"
+        price_step = 10.0
+        step_cost = 16.71176
+        coef = 1.0
+        price_max = 88000.0
+        price_min = 83000.0
+
+    class _P:
+        rows = [_Row()]
+        received_at_unix_ms = 1790858000000
+
+    row = _params_to_dict(_P())["rows"][0]
+    assert row["price_max"] == 88000.0, "верхняя планка обязана доехать до стора"
+    assert row["price_min"] == 83000.0, "нижняя планка обязана доехать до стора"
