@@ -1191,6 +1191,15 @@ const ORD_GROUPS = [
   { id: 'trail_tp', name: 'Следящие' },
   { id: 'trail_sl', name: 'Подтягивающие' },
   { id: 'on_fill', name: 'Зависимые' },
+  // Типы, заведённые 29.09–30.09.2026. Пока их здесь не было, их заявки молча
+  // падали в «Условные» — оператор 01.10: «новых умных заявок в компаньоне
+  // нет». Они там были, просто не под своим именем.
+  { id: 'corridor', name: 'Коридоры' },
+  { id: 'triangle', name: 'Треугольники' },
+  { id: 'grid', name: 'Радиация' },
+  // Вид, которого панель не знает. Своя группа вместо чужой: заявка нового типа
+  // обязана быть ВИДНА как незнакомая, а не прикинуться условной.
+  { id: 'other', name: 'Прочие' },
 ];
 
 // Раскрытые группы живут ВНЕ разметки: панель перерисовывается каждые 5 секунд,
@@ -1227,7 +1236,8 @@ function renderOrders(o, d) {
   if (!o) return '<div class="empty">ручных заявок нет</div>';
   const sideRu = (s) => s === 'buy' ? 'покупка' : 'продажа';
   const num = (v) => v == null ? '—' : Number(v).toLocaleString('ru-RU');
-  const rowsBy = { quik: [], sl: [], tp: [], trail_tp: [], trail_sl: [], on_fill: [] };
+  const rowsBy = {};
+  for (const g of ORD_GROUPS) rowsBy[g.id] = [];
   // ЦЕНА, ПО КОТОРОЙ ЗАЯВКА СРАБОТАЕТ. У следящей в слежении это уровень выхода от
   // пика, а не уровень активации: активация уже пройдена. По ней строки и стоят
   // лестницей внутри стороны (просьба оператора 17.09).
@@ -1279,9 +1289,26 @@ function renderOrders(o, d) {
     if (s.status === 'native') sub += natBad
       ? ' · терминал НЕ принял, защиту ведёт STL'
       : (s.native_stop_num ? ` · стоп-заявка QUIK ${esc(s.native_stop_num)}` : '');
-    (rowsBy[s.kind] || rowsBy.sl).push({ ts: Number(s.created_ms || s.fired_ms || 0),
+    // ФИГУРЫ И СЕТКА говорят о себе своим языком: уровень срабатывания у них
+    // не единственный, и строка «уровень —» про них не сообщает ничего.
+    if (s.kind === 'corridor' || s.kind === 'triangle') {
+      sub = s.c_now
+        ? `стенки ${px(s.c_now.low)} … ${px(s.c_now.top)} · ширина ${num(s.c_now.width)} п.`
+        : 'стенки считает сервер — ждём кадр';
+      if (s.c_stop_pts) sub += ` · стоп за стенкой ${num(s.c_stop_pts)} п.`;
+      if (s.c_pos) sub += ` · позиция ${s.c_pos > 0 ? '+' : ''}${s.c_pos}`;
+    } else if (s.kind === 'grid') {
+      sub = s.g_step
+        ? `шаг ${num(s.g_step)} п. · вниз ${s.g_buys || 0} · вверх ${s.g_sells || 0} · по ${s.g_lot || 0}`
+        : 'сетка не задана';
+      if (s.g_stop_pts) sub += ` · стоп за краем ${num(s.g_stop_pts)} п.`;
+      if (s.g_pos) sub += ` · позиция ${s.g_pos > 0 ? '+' : ''}${s.g_pos}`;
+    }
+    // У ДВУСТОРОННИХ сторона служебная: её ставит движок под каждую сделку.
+    const twoSided = s.kind === 'corridor' || s.kind === 'triangle' || s.kind === 'grid';
+    (rowsBy[s.kind] || rowsBy.other).push({ ts: Number(s.created_ms || s.fired_ms || 0),
       done: ORD_DONE_ST.has(s.status), side: s.side, px: soPx(s), html:
-      `<div class="row"><span class="k">${esc(s.code)} ${sideRu(s.side)} ${s.qty}</span>` +
+      `<div class="row"><span class="k">${esc(s.code)} ${twoSided ? 'в обе' : sideRu(s.side)} ${s.qty}</span>` +
       `<span class="sub">${esc(sub)}</span><span class="sp"></span>` +
       `<span class="v ${natBad ? 'down' : (live ? (s.activated ? 'up' : '') : 'nil')}">${esc(ST[s.status] || s.status)}</span></div>` });
   }

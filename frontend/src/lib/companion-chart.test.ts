@@ -447,13 +447,20 @@ describe('группы ручных заявок в панели', () => {
   const pages = ['public/companion.html', 'public/m.html'];
   const read = (f: string) => readFileSync(resolve(process.cwd(), f), 'utf8');
 
-  it('шесть групп в постоянном порядке: QUIK и пять типов умных', () => {
+  // ПОРЯДОК ПОСТОЯННЫЙ — оператор запоминает МЕСТО группы, а не читает заголовки
+  // заново. Но список не литерал: он обязан покрывать КАЖДЫЙ вид заявки, иначе
+  // новый тип молча падает в чужую группу. Так уже было дважды: подтягивающие
+  // 17.09.2026 и сразу три вида (коридор, треугольник, радиация) 01.10.2026 —
+  // «новых умных заявок в компаньоне нет», а они были, просто не под своим именем.
+  it('у каждого вида заявки своя группа, порядок постоянный', async () => {
+    const { KINDS } = await import('./smart-order-help');
     for (const f of pages) {
       const g = read(f).match(/const ORD_GROUPS = \[([\s\S]*?)\];/)![1];
-      // Подтягивающие (trail_sl) добавлены 17.09.2026: до этого их заявки падали
-      // в чужую группу «Условные» и не считались сервером вовсе.
-      expect([...g.matchAll(/id: '(\w+)'/g)].map((m) => m[1]), f)
-        .toEqual(['quik', 'sl', 'tp', 'trail_tp', 'trail_sl', 'on_fill']);
+      const ids = [...g.matchAll(/id: '(\w+)'/g)].map((m) => m[1]);
+      expect(ids[0], f).toBe('quik');            // заявки терминала всегда первыми
+      expect(ids[ids.length - 1], f).toBe('other');   // незнакомое — последним
+      for (const k of KINDS) expect(ids, `${f}: нет группы для ${k.id}`).toContain(k.id);
+      expect(new Set(ids).size, f).toBe(ids.length);  // без повторов
     }
   });
 

@@ -63,3 +63,33 @@ describe.each(['companion.html', 'm.html'])('%s — счётчик заявок'
     expect(out).toMatch(/Следящие<\/span><span class="sp"><\/span><span class="ord-n">2</);
   });
 });
+
+// Новые виды умных заявок в панели. 29.09–30.09.2026 завели коридор,
+// треугольник и радиацию, а список групп в панели остался прежним: их заявки
+// падали в «Условные» и выглядели как отсутствующие. Оператор 01.10: «новых
+// умных заявок в компаньоне нет».
+describe('группы новых видов заявок', () => {
+  const PAGES = ['companion.html', 'm.html'];
+  const read = (f: string) => readFileSync(resolve('public', f), 'utf8');
+
+  for (const page of PAGES) {
+    const src = read(page);
+
+    it(`${page}: у коридора, треугольника и радиации своя группа`, () => {
+      for (const id of ['corridor', 'triangle', 'grid']) {
+        expect(src, id).toContain(`id: '${id}'`);
+      }
+    });
+
+    // Незнакомый вид обязан быть ВИДЕН как незнакомый, а не прикинуться
+    // условной заявкой: именно так три новых типа и пропали с экрана.
+    it(`${page}: неизвестный вид уходит в «Прочие», а не в «Условные»`, () => {
+      expect(src).toContain("rowsBy.other");
+      expect(src).not.toContain("rowsBy[s.kind] || rowsBy.sl");
+    });
+
+    it(`${page}: корзины строятся из списка групп, а не из второго перечня`, () => {
+      expect(src).toContain('for (const g of ORD_GROUPS) rowsBy[g.id] = [];');
+    });
+  }
+});

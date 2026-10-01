@@ -866,3 +866,129 @@ def test_manual_average_stays_unknown_while_robots_hold_the_same_symbol(monkeypa
     assert pos["manual_avg"] is None
     assert pos["manual_avg_src"] == ""
     assert "роботами" in pos["manual_avg_why"]
+
+
+def test_every_order_kind_in_the_book_gets_counted(monkeypatch):
+    """Счётчики видов берутся ИЗ КНИГИ, а не из списка в коде.
+
+    Коридор, треугольник и радиацию завели 29.09–30.09.2026, а перечисление
+    видов в снапшоте осталось прежним: их заявки не считались вовсе, и на панели
+    они молча падали в чужую группу. Оператор 01.10: «новых умных заявок в
+    компаньоне нет» — они были, просто не под своим именем.
+    """
+    monkeypatch.delenv("SHECTORY_AUTH_DEV_BYPASS", raising=False)
+    app = FastAPI()
+    app.include_router(companion_router)
+    app.state.settings = _Settings()
+    app.state.db_pool = FakePool()
+    store = QuikAgentStore()
+    store.set_agent_status("A1", json.dumps({
+        "agent": {"version": "x", "link_up": True},
+        "health": {"runner_healthy": True,
+                   "money": {"limit": 1.0, "varmargin": 0.0, "age_ms": 100},
+                   "positions": []},
+        "robots": [],
+    }), 0)
+    app.state.quik_store = store
+
+    now = int(time.time() * 1000)
+
+    class _SO:
+        def __init__(self, kind, **kw):
+            self.so_id = f"id-{kind}"
+            self.kind, self.code, self.side, self.qty = kind, "RIZ6", "sell", 1
+            self.status, self.created_ms, self.fired_ms = "armed", now, 0
+            self.trigger_price = self.trail_offset = 0.0
+            self.activated, self.peak = False, 0.0
+            self.fired_price = self.fired_qty = 0
+            self.sl_offset = self.tp_offset = self.tp_trail = 0.0
+            self.parent_id = ""
+            self.c_t1_ms = self.c_t2_ms = 0
+            self.c_p1 = self.c_p2 = self.c_low = self.c_low2 = 0.0
+            self.c_stop_pts = self.c_flips = self.c_flips_max = self.c_pos = 0
+            self.c_done = self.g_done = False
+            self.g_step = self.g_buys = self.g_sells = self.g_lot = 0
+            self.g_base = self.g_stop_pts = self.g_pos = 0
+            for k, v in kw.items():
+                setattr(self, k, v)
+
+    class _Book:
+        orders = [_SO("corridor", c_t1_ms=now - 60_000, c_p1=84_000.0,
+                      c_t2_ms=now, c_p2=84_100.0, c_low=83_000.0, c_stop_pts=50),
+                  _SO("triangle", c_t1_ms=now - 60_000, c_p1=84_000.0,
+                      c_t2_ms=now, c_p2=84_100.0, c_low=83_000.0, c_low2=83_500.0),
+                  _SO("grid", g_step=50, g_buys=3, g_sells=2, g_lot=2, g_base=84_000.0)]
+
+    app.state.smart_orders = _Book()
+    body = TestClient(app).get("/api/v1/quik/companion/snapshot",
+                               headers=_operator_headers()).json()
+    counts = body["orders"]["counts"]
+    for kind in ("corridor", "triangle", "grid"):
+        assert counts.get(kind) == 1, (kind, counts)
+    # И старые виды не исчезли из счётчиков, даже когда их нет в книге: группа с
+    # нулём должна оставаться на экране, оператор помнит её МЕСТО.
+    for kind in ("sl", "tp", "trail_tp", "trail_sl", "on_fill"):
+        assert kind in counts
+
+
+def test_figure_and_grid_carry_their_own_fields_to_the_panel(monkeypatch):
+    """У фигуры и сетки уровень срабатывания не один — панели нужны их поля.
+
+    Без них строка про коридор сообщает ровно ничего: «уровень —». Стенки
+    считает ДВИЖОК (c_now), как и для SPA: повторять геометрию на панели нельзя,
+    две реализации одной прямой расходятся.
+    """
+    monkeypatch.delenv("SHECTORY_AUTH_DEV_BYPASS", raising=False)
+    app = FastAPI()
+    app.include_router(companion_router)
+    app.state.settings = _Settings()
+    app.state.db_pool = FakePool()
+    store = QuikAgentStore()
+    store.set_agent_status("A1", json.dumps({
+        "agent": {"version": "x", "link_up": True},
+        "health": {"runner_healthy": True,
+                   "money": {"limit": 1.0, "varmargin": 0.0, "age_ms": 100},
+                   "positions": []},
+        "robots": [],
+    }), 0)
+    app.state.quik_store = store
+    now = int(time.time() * 1000)
+
+    class _SO:
+        def __init__(self, kind, **kw):
+            self.so_id, self.kind, self.code = f"id-{kind}", kind, "RIZ6"
+            self.side, self.qty, self.status = "sell", 1, "armed"
+            self.created_ms, self.fired_ms = now, 0
+            self.trigger_price = self.trail_offset = 0.0
+            self.activated, self.peak = False, 0.0
+            self.fired_price = self.fired_qty = 0
+            self.sl_offset = self.tp_offset = self.tp_trail = 0.0
+            self.parent_id = ""
+            self.c_t1_ms = now - 3_600_000
+            self.c_t2_ms = now
+            self.c_p1, self.c_p2, self.c_low, self.c_low2 = 84_000.0, 84_600.0, 83_000.0, 0.0
+            self.c_stop_pts, self.c_flips, self.c_flips_max, self.c_pos = 40, 0, 0, -2
+            self.c_done = self.g_done = False
+            self.g_step = self.g_buys = self.g_sells = self.g_lot = 0
+            self.g_base = self.g_stop_pts = self.g_pos = 0
+            for k, v in kw.items():
+                setattr(self, k, v)
+
+    class _Book:
+        orders = [_SO("corridor"),
+                  _SO("grid", g_step=50, g_buys=3, g_sells=2, g_lot=2,
+                      g_base=84_000.0, g_stop_pts=100, g_pos=4)]
+
+    app.state.smart_orders = _Book()
+    body = TestClient(app).get("/api/v1/quik/companion/snapshot",
+                               headers=_operator_headers()).json()
+    smart = {o["kind"]: o for o in body["orders"]["smart"]}
+
+    corr = smart["corridor"]
+    assert corr["c_now"]["top"] > corr["c_now"]["low"]
+    assert corr["c_now"]["width"] == pytest.approx(1000.0)   # ширина в первой точке
+    assert corr["c_stop_pts"] == 40 and corr["c_pos"] == -2
+
+    grid = smart["grid"]
+    assert grid["g_step"] == 50 and grid["g_buys"] == 3 and grid["g_lot"] == 2
+    assert grid["g_stop_pts"] == 100 and grid["g_pos"] == 4

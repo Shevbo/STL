@@ -29,6 +29,7 @@ from pydantic import BaseModel
 
 from trader.api.leaderboard_scope import SQL_NOT_SERVICE
 from trader.auth.guard import auth_ok, require_auth
+from trader.quik import smart_orders as so_mod
 from trader.util import i9_hb_view
 
 router = APIRouter(prefix="/api/v1/quik/companion", tags=["quik-companion"])
@@ -1326,6 +1327,32 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
             "native_state": getattr(so, "native_state", ""),
             "native_stop_num": str(getattr(so, "native_stop_num", "") or ""),
             "parent_id": so.parent_id})
+        # ФИГУРЫ И СЕТКА. Без этих полей панель знает их имя и не знает НИЧЕГО о
+        # том, где они стоят: уровень срабатывания у них не один, и строка
+        # «уровень —» про них не сообщает ничего. Стенки считает ДВИЖОК (c_now),
+        # как и для SPA: повторять геометрию на панели нельзя, две реализации
+        # одной прямой расходятся.
+        if so.kind in ("corridor", "triangle"):
+            try:
+                _low, _top = so_mod.corridor_bounds(so, now_ms)
+                smart_list[-1]["c_now"] = {"low": round(_low, 4), "top": round(_top, 4),
+                                           "width": round(_top - _low, 4)}
+            except Exception:  # noqa: BLE001 — геометрия не роняет панель
+                pass
+            smart_list[-1].update({
+                "c_stop_pts": getattr(so, "c_stop_pts", 0),
+                "c_flips": getattr(so, "c_flips", 0),
+                "c_flips_max": getattr(so, "c_flips_max", 0),
+                "c_pos": getattr(so, "c_pos", 0),
+                "c_done": bool(getattr(so, "c_done", False))})
+        elif so.kind == "grid":
+            smart_list[-1].update({
+                "g_step": getattr(so, "g_step", 0), "g_buys": getattr(so, "g_buys", 0),
+                "g_sells": getattr(so, "g_sells", 0), "g_lot": getattr(so, "g_lot", 0),
+                "g_base": getattr(so, "g_base", 0),
+                "g_stop_pts": getattr(so, "g_stop_pts", 0),
+                "g_pos": getattr(so, "g_pos", 0),
+                "g_done": bool(getattr(so, "g_done", False))})
     # ВЗВЕДЁННЫЕ ЗАЯВКИ НЕ РЕЖЕМ. Список уходил в панель в порядке книги, и
     # сегодняшняя история (сработавшие и снятые) вытесняла живые заявки за
     # двадцатую строку: 17.09.2026 в книге было 4 взведённые следящие, а панель
@@ -1343,7 +1370,16 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
     counts_active = {"quik": sum(1 for o in manual_orders if o.get("active"))}
     # trail_sl (подтягивающая) в списке видов ОТСУТСТВОВАЛ: её заявки не попадали
     # ни в один счётчик, а в панели падали в чужую группу «Условные».
-    for kind in ("sl", "tp", "trail_tp", "trail_sl", "on_fill"):
+    # СПИСОК ТИПОВ — ИЗ КНИГИ, А НЕ ИЗ ПАМЯТИ. Перечисление вручную уже стоило
+    # того, что коридор, треугольник и радиация не считались вовсе: типы завели
+    # 29.09–30.09.2026, а эта строка осталась прежней (оператор 01.10: «новых
+    # умных заявок в компаньоне нет»). Берём все виды, что реально есть в книге,
+    # плюс известные — чтобы группа с нулём не исчезала с экрана.
+    for kind in sorted({str(x.get("kind") or "") for x in smart_list}
+                       | {"sl", "tp", "trail_tp", "trail_sl", "on_fill",
+                          "corridor", "triangle", "grid"}):
+        if not kind:
+            continue
         counts[kind] = sum(1 for x in smart_list if x.get("kind") == kind)
         counts_active[kind] = sum(1 for x in smart_list
                                   if x.get("kind") == kind and x.get("status") in _SO_LIVE)
