@@ -1,5 +1,32 @@
 # AGENTS.md — operating + harness doc
 
+<!-- fedrag BEGIN — блок обновляется Клодом, правки внутри затрутся -->
+> ## Канон федерации: спрашивай индекс, не читай файлы целиком
+>
+> Прежде чем искать ответ по файлам или писать Клоду — спроси индекс:
+>
+> ```bash
+> curl -sS -m 60 -X POST http://10.66.0.1:9090/api/fedrag/search \
+>   -H 'X-Agent-Name: shectory-trader' -H 'Content-Type: application/json' \
+>   -d '{"query":"свой вопрос обычными словами"}' | jq -r .text
+> ```
+>
+> Узел без WireGuard (Windows, IoT) — тот же запрос через ssh-jump на Pi:
+> `echo '{"query":"..."}' | KLOD_AGENT=<ваш agent_id> ~/.claude/skills/onboarding/bin/klod_http.sh POST /api/fedrag/search - application/json`
+>
+> В индексе: канон онбординга, контракты всех агентов федерации, карта узлов, реестр
+> компонентов, журналы инцидентов, проектная память. Ответ приходит с путём файла и
+> номерами строк — первоисточник потом читается точечно, а не целиком.
+>
+> - `"source":"ragkit"` или `"cache"` — нормальный ответ.
+> - `"source":"stale"` — индекс недоступен, ответ из кэша, возраст в `age_s`.
+>   Для чтения годится; для необратимого действия сверься с первоисточником.
+> - `"source":"fallback"` — индекса нет: действуй по `.onboarding/AGENT.md`,
+>   чего там нет — спроси Клода. **Не выдумывай.**
+>
+> Лимит 20 запросов в минуту на агента: демон один на всю федерацию.
+<!-- fedrag END -->
+
 Ground truth for any coding agent / orchestrator (Cursor, Codex, portal
 `pm-harness-runner`) working in this repo. Architecture + conventions live in `CLAUDE.md`;
 this file is the **operate / verify / guardrails** contract. **This is a LIVE trading
