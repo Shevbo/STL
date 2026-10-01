@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime
 
 import httpx
@@ -17,17 +18,44 @@ class AsyncAuthClient:
         self._secret_token = secret_token
         self._refresh_before_secs = refresh_before_secs
         self._cached_token: TokenResponse | None = None
+        # ЗАМОК НА ОБНОВЛЕНИЕ СЕССИИ. Без него N одновременных вызовов создавали N
+        # сессий в Finam: каждый уходил в _fetch_token, и в кэш попадала та, что
+        # присвоилась последней. Finam вытесняет предыдущую сессию, поэтому
+        # кэшированный токен не обязан быть живым — а запросы с вытесненным
+        # токеном Finam отбивает 500 на счёте и 503 на заявках, НЕ 401, и по
+        # статусу это читалось как авария на их стороне.
+        #
+        # Гонка была гарантированной, а не случайной: WsHub._pos_poll_loop берёт
+        # токен ДВАЖДЫ за круг через asyncio.gather (портфель и счёт), плюс тот же
+        # клиент делят tx, лента и замеры задержки. В журнале 01.10.2026 видно три
+        # auth.fetch_token в одну секунду (05:16:29) и два в 05:02:19, после чего
+        # опрос падал 100% времени, раз в пять секунд, сутками.
+        self._refresh_lock = asyncio.Lock()
         self._http = httpx.AsyncClient(http2=True, base_url=base_url)
 
-    async def get_token(self, force_refresh: bool = False) -> str:
-        if (
-            not force_refresh
-            and self._cached_token
+    def _token_fresh(self) -> bool:
+        return bool(
+            self._cached_token
             and not self._cached_token.is_expired(self._refresh_before_secs)
-        ):
+        )
+
+    async def get_token(self, force_refresh: bool = False) -> str:
+        if not force_refresh and self._token_fresh():
             return self._cached_token.token
-        self._cached_token = await self._fetch_token()
-        return self._cached_token.token
+        seen = self._cached_token          # что лежало в кэше ДО очереди за замком
+        async with self._refresh_lock:
+            # Пока мы ждали очереди, сосед мог обновить сессию — тогда своя не
+            # нужна, иначе замок лишь выстроил бы те же лишние сессии в ряд.
+            #
+            # Сравниваем ОБЪЕКТ, а не свежесть. По свежести force_refresh вернул
+            # бы ровно тот токен, который вызывающий и отверг: он просит новую
+            # сессию именно потому, что знает — этот мёртв, хотя по часам ещё
+            # «свежий». Вытесненный токен Finam отбивает 500/503, а не 401, так
+            # что срока жизни тут недостаточно, чтобы судить о годности.
+            if self._cached_token is not seen and self._token_fresh():
+                return self._cached_token.token
+            self._cached_token = await self._fetch_token()
+            return self._cached_token.token
 
     @property
     def account_id(self) -> str:
