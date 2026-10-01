@@ -50,6 +50,34 @@ def day_path(ts_ms: int, directory: str | None = None) -> str:
     return os.path.join(directory, f"{day}.jsonl")
 
 
+# ПОВТОР ОДНОГО И ТОГО ЖЕ СОБЫТИЯ ПИШЕТСЯ РАЗ В МИНУТУ, А НЕ КАЖДУЮ СЕКУНДУ.
+#
+# 01.10.2026: задержанный карантином вход написал 120 одинаковых строк `held` за
+# три минуты, и единственное, что в них было важного — ПРИЧИНА в поле detail, —
+# оказалось погребено под сотней своих же копий. Журнал, в котором тонет причина,
+# работает против того, ради чего он ведётся. Сторож ходит раз в секунду, и любое
+# его «ничего не изменилось» умножается на 60 в минуту.
+#
+# Давим ТОЛЬКО полное совпадение (заявка, событие, текст): меняется причина —
+# строка пишется немедленно. Раз в минуту повтор всё же пишем: совсем замолчавший
+# журнал неотличим от прекратившегося события, а это ровно та ошибка, которую
+# сегодня уже совершили с «СТАРО» и с пустым exc=.
+_REPEAT_MS = 60_000
+_last_seen: dict[tuple[str, str, str], int] = {}
+
+
+def _is_repeat(key: tuple[str, str, str], ts: int) -> bool:
+    prev = _last_seen.get(key)
+    if prev is not None and ts - prev < _REPEAT_MS:
+        return True
+    _last_seen[key] = ts
+    if len(_last_seen) > 2000:            # не растём бесконечно за сутки
+        for k, v in list(_last_seen.items()):
+            if ts - v > _REPEAT_MS * 10:
+                _last_seen.pop(k, None)
+    return False
+
+
 def record(event: str, so: Any, source: str, detail: str = "",
            now_ms: int | None = None, directory: str | None = None) -> None:
     """Одна строка в суточный журнал. Никогда не бросает.
@@ -65,6 +93,8 @@ def record(event: str, so: Any, source: str, detail: str = "",
         "qty": getattr(so, "qty", 0), "status": getattr(so, "status", ""),
         "parent_id": getattr(so, "parent_id", ""), "detail": detail,
     }
+    if _is_repeat((row["so_id"], event, detail), ts):
+        return
     try:
         os.makedirs(directory, exist_ok=True)
         with open(day_path(ts, directory), "a", encoding="utf-8") as fh:
