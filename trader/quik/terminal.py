@@ -197,10 +197,20 @@ def stop_rows(store: Any, agent: str | None = None,
             "num": str(row.get("order_num") or row.get("ordernum") or ""),
             "sec": str(row.get("sec_code") or row.get("seccode") or ""),
             "side": _stop_side(row),
+            # ЦЕНА СРАБАТЫВАНИЯ, а не цена лимита: для стопа оператор смотрит на
+            # уровень, по которому тот стрельнет. Цена самой заявки идёт рядом —
+            # именно её разрыв с рынком 29.09.2026 оставил стоп неисполненным.
             "price": _num(row.get("condition_price") or row.get("price")),
+            "limit_price": _num(row.get("price")),
+            "offset": _num(row.get("offset")),
+            "spread": _num(row.get("spread")),
             "qty": int(_num(row.get("qty") or row.get("quantity"))),
-            "balance": int(_num(row.get("balance") or row.get("qty"))),
-            "filled": 0,
+            # Остаток у ЖИВОЙ стопы = весь объём: она ещё ничего не исполняла.
+            # В таблице balance сработавшей строки уже ноль, и подставив его
+            # живой, экран показал бы «осталось 0» у стерегущей заявки.
+            "balance": (int(_num(row.get("qty")))
+                        if _stop_alive(row) else int(_num(row.get("balance")))),
+            "filled": int(_num(row.get("filled_qty"))),
             "active": _stop_alive(row),
             "state": "стережёт" if _stop_alive(row) else _stop_dead_why(row),
             "ts_ms": int(_num(row.get("order_date_time_ms") or row.get("ts_ms"))),
@@ -221,14 +231,30 @@ def _num(v: Any) -> float:
 
 
 def _stop_side(row: dict[str, Any]) -> str:
-    """Сторона стоп-заявки. На нашем терминале имена полей не выверены целиком,
-    поэтому читаем несколько и честно отдаём пустое, когда не знаем."""
-    raw = str(row.get("operation") or row.get("side") or "").strip().upper()
-    if raw.startswith("B") or raw == "BUY":
-        return "buy"
-    if raw.startswith("S") or raw == "SELL":
-        return "sell"
-    return ""
+    """Сторона стоп-заявки — ИЗ FLAGS, бит 0x4: стоит = продажа, снят = покупка.
+
+    Поля `operation` в таблице стоп-заявок НАШЕГО терминала нет вовсе (выгрузка
+    живой строки 01.10.2026: account, activation_date_time_ms, alltrade_num,
+    brokerref, class_code, condition*, expiry, filled_qty, firmid, flags,
+    linkedorder, offset, order_*, price, qty, sec_code, spread, stop_order_type,
+    stopflags, trans_id, uid — и ни одного поля со стороной).
+
+    Соглашение то же, что в таблицах заявок и сделок (бит 0x4 = SELL), и это
+    ПРОВЕРЕНО ФАКТОМ, а не выведено по аналогии: у сработавшей стопы 1012527937
+    flags=24, бит 0x4 снят, а породила она ПОКУПКИ (три сделки buy по 86210 на
+    её linkedorder). У живой 1012532699 flags=29, бит стоит — продажа. Пара
+    одна, поэтому при расхождении с терминалом верить терминалу: механика
+    нативных стопов у нас выверена не полностью.
+
+    `stopflags` для стороны не годится: у обеих строк он равен 32.
+    """
+    try:
+        flags = int(str(row.get("flags") or 0) or 0)
+    except (TypeError, ValueError):
+        return ""
+    if "flags" not in row:
+        return ""
+    return "sell" if flags & 0x4 else "buy"
 
 
 def _stop_alive(row: dict[str, Any]) -> bool:

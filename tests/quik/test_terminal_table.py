@@ -30,11 +30,18 @@ class StopStore:
         return {"table": self._table, "table_received_ms": NOW, "events": []}
 
 
-def _stop_row(num="500", sec="RIZ6", operation="S", price="85000", qty="11",
-              brokerref="", withdraw=0, activation=0, linked=0):
-    """Сырая строка QUIK: ВСЕ поля текстом, имена — как на нашем терминале."""
-    return {"order_num": num, "sec_code": sec, "operation": operation,
-            "condition_price": price, "qty": qty, "balance": qty,
+def _stop_row(num="500", sec="RIZ6", flags=29, price="85000", qty="11",
+              brokerref="", withdraw=0, activation=0, linked=0, balance=None,
+              filled=0, limit="85200"):
+    """Сырая строка QUIK, поля КАК НА НАШЕМ ТЕРМИНАЛЕ (выгрузка 01.10.2026).
+
+    Поля `operation` здесь НЕТ вовсе — сторона живёт в flags, бит 0x4."""
+    return {"order_num": num, "ordernum": num, "sec_code": sec, "seccode": sec,
+            "flags": str(flags), "stopflags": "32",
+            "condition_price": price, "price": limit,
+            "offset": "30", "spread": "20",
+            "qty": qty, "balance": qty if balance is None else balance,
+            "filled_qty": str(filled),
             "brokerref": brokerref, "order_date_time_ms": str(NOW),
             "withdraw_datetime_ms": str(withdraw),
             "activation_date_time_ms": str(activation),
@@ -52,7 +59,7 @@ def test_native_stop_orders_are_part_of_what_stands_in_quik():
     29.09.2026 сработала и умерла с нулём исполнения, пока рынок шёл 690 пунктов
     за минуту.
     """
-    store = StopStore([_stop_row(num="500", operation="S", qty="11",
+    store = StopStore([_stop_row(num="500", flags=29, qty="11",
                                  brokerref="stl-so-41bf3af0dd")])
     rows = terminal.stop_rows(store)
     assert len(rows) == 1
@@ -63,6 +70,47 @@ def test_native_stop_orders_are_part_of_what_stands_in_quik():
     # ВИД ОБЯЗАТЕЛЕН: стоп снимается ДРУГОЙ командой QUIK (KILL_STOP_ORDER), и
     # перепутав команду, получишь тихий неуспех — заявка останется стеречь.
     assert r["kind"] == "stop"
+
+
+def test_the_stop_side_comes_from_flags_bit_four():
+    """СТОРОНА СТОП-ЗАЯВКИ — ИЗ FLAGS, и это проверено фактом, а не аналогией.
+
+    Поля `operation` в таблице стоп-заявок нашего терминала нет вовсе. У
+    сработавшей стопы 1012527937 flags=24 (бит 0x4 снят), и породила она ПОКУПКИ —
+    три сделки buy по 86210 на её linkedorder. У живой 1012532699 flags=29, бит
+    стоит: продажа. stopflags для стороны не годится, у обеих он равен 32.
+    """
+    rows = terminal.stop_rows(StopStore([
+        _stop_row(num="24", flags=24),          # живой случай с терминала
+        _stop_row(num="29", flags=29),
+    ]))
+    got = {r["num"]: r["side"] for r in rows}
+    assert got == {"24": "buy", "29": "sell"}
+    # нет поля flags — честно пусто, а не выдуманная сторона
+    bare = terminal.stop_rows(StopStore([{"order_num": "x", "sec_code": "RIZ6"}]))
+    assert bare[0]["side"] == ""
+
+
+def test_a_live_stop_shows_its_whole_volume_as_remaining():
+    """У ЖИВОЙ стопы остаток = весь объём: она ещё ничего не исполняла. В таблице
+    balance сработавшей строки уже ноль, и подставив его живой, экран написал бы
+    «осталось 0» у заявки, которая стережёт позицию."""
+    rows = terminal.stop_rows(StopStore([
+        _stop_row(num="live", qty="11", balance="0"),              # QUIK отдал 0
+        _stop_row(num="fired", qty="5", balance="0", filled=5, activation=NOW),
+    ]))
+    got = {r["num"]: (r["balance"], r["filled"], r["active"]) for r in rows}
+    assert got["live"] == (11, 0, True), "стерегущая заявка держит весь объём"
+    assert got["fired"] == (0, 5, False)
+
+
+def test_the_trigger_price_and_the_limit_price_are_both_kept():
+    """Для стопа оператор смотрит на уровень срабатывания, но разрыв между ним и
+    ценой самой заявки — это и есть причина, по которой 29.09.2026 стоп сработал и
+    не исполнился. Прячем одно из двух — прячем причину."""
+    r = terminal.stop_rows(StopStore([_stop_row(price="85790", limit="86210")]))[0]
+    assert r["price"] == 85790 and r["limit_price"] == 86210
+    assert r["offset"] == 30 and r["spread"] == 20
 
 
 def test_a_dead_stop_row_is_not_guarding():
