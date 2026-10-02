@@ -1525,8 +1525,8 @@ def run_trigger(arg: dict) -> dict:
     inst = INST["Si" if key[:2].lower() == "si" else "RI"]
     days = prep_days(rows, with_sig=False)
     nt = len(days) * 2 // 3
-    modes = [("T1", x, None) for x in arg["xs"]] + [("T2", None, k) for k in arg["ks"]] + \
-            [("T3", x, k) for x in arg["xs"] for k in arg["ks"]]
+    modes = [("T1", x, None) for x in arg.get("xs", [])] + [("T2", None, k) for k in arg.get("ks", [])] + \
+            [("T3", x, k) for x in arg.get("xs", []) for k in arg.get("ks", [])]
     if arg.get("combos"):
         modes = [("C", x, k) for x, k in arg["combos"]]
     modes = [(m, x, k, rs, km) for m, x, k in modes for rs in arg.get("resumes", ["none"]) for km in arg.get("k_modes", ["fills"])]
