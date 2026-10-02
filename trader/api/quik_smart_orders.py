@@ -1813,7 +1813,34 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
     # за минуту. Поэтому сетка в статусе closing ещё жива, и позиция обнуляется
     # только по ФАКТУ исполнения, а не по факту отправки.
     for so in book.orders:
-        if so.kind != "grid" or so.status != "closing" or not so.g_close_cid:
+        if so.kind != "grid" or so.status != "closing":
+            continue
+        if not so.g_close_cid:
+            # ЗАКРЫТИЕ НЕ УШЛО (отбили лимиты) — пробуем снова, пока позиция жива.
+            # Сетка уже g_done, уровни не ставятся; здесь только выход.
+            if not so.g_pos:
+                so.status = "cancelled"
+                dirty = True
+                continue
+            close_side = "sell" if so.g_pos > 0 else "buy"
+            close_qty = abs(so.g_pos)
+            cid = f"so:{so.so_id}:stopclose:{now % 100000}"
+            try:
+                validate_place(lim, code=so.code, quantity=close_qty, collar=0.0,
+                               current_working=ost.working_contracts(agent),
+                               placed_today=ost.placed_today(agent), reducing=True)
+                ost.register_pending(agent, cid, so.code, close_side, 0.0, close_qty)
+                ost.record_placement(agent)
+                srv.enqueue_order(agent, order_msgs.build_place_order(
+                    client_id=cid, code=so.code, side=close_side, price=0.0,
+                    quantity=close_qty, collar=0.0, market=True))
+                so.g_close_cid = cid
+                dirty = True
+                so_journal.record("grid_stop", so, so_journal.WATCHER,
+                                  f"повторная попытка закрытия: {close_side} "
+                                  f"{close_qty} рыночной ({cid})", now_ms=now)
+            except LimitError:
+                pass          # причина уже записана, молчим до успеха
             continue
         rec = work.get(so.g_close_cid) or {}
         got = int(rec.get("filled") or 0)
@@ -1901,25 +1928,38 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
                 try:
                     validate_place(lim, code=so.code, quantity=close_qty, collar=0.0,
                                    current_working=ost.working_contracts(agent),
-                                   placed_today=ost.placed_today(agent))
+                                   placed_today=ost.placed_today(agent),
+                                   reducing=True)
                     ost.register_pending(agent, cid, so.code, close_side, 0.0, close_qty)
                     ost.record_placement(agent)
                     srv.enqueue_order(agent, order_msgs.build_place_order(
                         client_id=cid, code=so.code, side=close_side, price=0.0,
                         quantity=close_qty, collar=0.0, market=True))
                 except LimitError as exc:
-                    # ОТКАЗ ЗАКРЫТИЯ КРИЧИТ. Молча оставить позицию без защиты и
-                    # написать «снята» значит соврать в самый дорогой момент.
-                    so.status = "error"
-                    so.note = (so.note + " " if so.note else "") + (
-                        f"стоп сетки: ЗАКРЫТИЕ ОТКЛОНЕНО ({exc}), позиция "
-                        f"{so.g_pos:+d} БЕЗ ЗАЩИТЫ")
-                    so_journal.record("error", so, so_journal.LIMITS,
-                                      f"стоп за краем сетки: закрытие позиции "
-                                      f"{so.g_pos:+d} отклонено лимитами: {exc}. "
-                                      "ПОЗИЦИЯ ОСТАЛАСЬ БЕЗ ЗАЩИТЫ", now_ms=now)
-                    log.error("smart_order.grid_stop_close_refused", so_id=so.so_id,
-                              pos=so.g_pos, error=str(exc))
+                    # ОТКАЗ ЗАКРЫТИЯ КРИЧИТ И ПРОБУЕТ СНОВА.
+                    #
+                    # Раньше заявка уходила в status=error и БОЛЬШЕ НИЧЕГО НЕ
+                    # ДЕЛАЛА: g_done уже выставлен, а проход пропускает законченные.
+                    # 02.10.2026 так и вышло — дневной кап отбил закрытие, сетка
+                    # написала «позиция +30 БЕЗ ЗАЩИТЫ» и замолчала навсегда, а
+                    # рынок ушёл на −9 423 ₽. Крик без повтора это не защита.
+                    #
+                    # Теперь статус остаётся "closing" без client_id: следующий
+                    # проход попробует закрыть снова, и так до успеха. Причина
+                    # отказа пишется ОДИН раз, чтобы не залить журнал.
+                    so.status = "closing"
+                    so.g_close_cid = ""
+                    if "ЗАКРЫТИЕ ОТКЛОНЕНО" not in (so.note or ""):
+                        so.note = (so.note + " " if so.note else "") + (
+                            f"стоп сетки: ЗАКРЫТИЕ ОТКЛОНЕНО ({exc}), позиция "
+                            f"{so.g_pos:+d} БЕЗ ЗАЩИТЫ, пробую снова")
+                        so_journal.record("error", so, so_journal.LIMITS,
+                                          f"стоп за краем сетки: закрытие позиции "
+                                          f"{so.g_pos:+d} отклонено лимитами: {exc}. "
+                                          "ПОЗИЦИЯ БЕЗ ЗАЩИТЫ, повторяю каждый проход",
+                                          now_ms=now)
+                        log.error("smart_order.grid_stop_close_refused",
+                                  so_id=so.so_id, pos=so.g_pos, error=str(exc))
                     return True
                 so.g_close_cid = cid
                 so.status = "closing"

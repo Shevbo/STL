@@ -119,16 +119,37 @@ def validate_place(
     collar: float,
     current_working: int,
     placed_today: int,
+    reducing: bool = False,
 ) -> None:
     """Run EVERY hard limit for a place request. Raises LimitError on the first fail.
 
     Order is master flag → whitelist → quantity → working total → collar → daily cap.
+
+    `reducing=True` — заявка УМЕНЬШАЕТ экспозицию (закрытие позиции, выход по
+    стопу, режим «только на выход»). Для неё НЕ проверяются дневной кап и объём в
+    работе.
+
+    ПОЧЕМУ ТАК, ценой живых денег 02.10.2026. Дневной кап считал любые заявки
+    одинаково, кап был выбран (500/500), и сетка 67c52ac651 не смогла закрыть
+    позицию по своему же стопу: «ЗАКРЫТИЕ ОТКЛОНЕНО, позиция +30 БЕЗ ЗАЩИТЫ», а
+    рынок к тому моменту ушёл на −9 423 ₽. Это второй раз: 2026 ранее кап 50 так
+    же молча заморозил ВСЕ заявки робота, включая выходы.
+
+    Смысл обоих пределов — ограничивать НАБОР позиции и частоту транзакций, а не
+    запирать в ней. Запертый выход опаснее любого превышения: превышение стоит
+    комиссии, незакрытая позиция стоит рынка. По той же причине снятие заявки
+    проходит при выключенном мастер-флаге.
+
+    Мастер-флаг, белый список, объём на заявку и коллар проверяются ВСЕГДА, в том
+    числе на выходе: они защищают от заявки-ошибки, а не от направления.
     """
     check_master_flag(limits)
     check_whitelist(limits, code)
     check_quantity(limits, quantity)
-    check_working(limits, current_working, quantity)
     check_collar(limits, collar)
+    if reducing:
+        return
+    check_working(limits, current_working, quantity)
     check_daily_cap(limits, placed_today)
 
 
