@@ -269,3 +269,86 @@ def test_after_the_guard_only_the_closing_side_at_no_loss_is_placed(tmp_path):
               if m.WhichOneof("payload") == "place_order"]:
         assert p.side == 1, "шорт закрывается покупкой"
         assert p.price <= 85100.0, "и только не выше средней"
+
+
+# --------------------------------------------------------------------------
+# ПЕРЕВЗВЕДЕНИЕ ПОСЛЕ ЧИСТОГО ВЫХОДА. Требование оператора 02.10.2026: выйдя по
+# защите без убытка, та же сетка через заданный срок встаёт снова. Защита убирает
+# сетку из ТРЕНДА, а не из рынка.
+# --------------------------------------------------------------------------
+
+
+def test_rearm_is_scheduled_only_after_a_clean_exit(tmp_path):
+    """Срок назначается, когда позиция ДЕЙСТВИТЕЛЬНО вышла в ноль, а не когда
+    защита просто включилась: иначе сетка встала бы снова поверх незакрытой."""
+    book, so = _guarded(tmp_path, g_rearm_min=30, g_pos=-2, g_avg=85100.0,
+                        exit_only=True, g_trig_ms=GNOW - 1000)
+    _grid_sync(book, _gstore(85000.0), GOst(), GSrv(), GLim(), "9618", GSTEPS, {},
+               GNOW, True)
+    assert so.g_rearm_at_ms == 0, "позиция не закрыта — перевзведение не назначаем"
+    so.g_pos = 0
+    _grid_sync(book, _gstore(85000.0), GOst(), GSrv(), GLim(), "9618", GSTEPS, {},
+               GNOW + 1000, True)
+    assert so.g_rearm_at_ms == GNOW + 1000 + 30 * 60_000
+
+
+def test_rearm_rebases_on_the_current_price(tmp_path):
+    """База берётся ТЕКУЩАЯ. Сетку выключило тем, что рынок ушёл от базы; вернуть
+    уровни туда, где рынка нет, значит выставить половину по ту сторону цены и
+    мгновенно налиться — это уже стоило 43 контрактов 30.09.2026."""
+    book, so = _guarded(tmp_path, g_rearm_min=1, g_pos=0, g_avg=0.0,
+                        exit_only=True, g_trig_ms=GNOW - 1000,
+                        g_rearm_at_ms=GNOW - 1, g_fills_done=7, g_base=85000.0)
+    so.g_live = {"flip:2": True, "adopt:3": {"num": "1"}}
+    _grid_sync(book, _gstore(84300.0), GOst(), GSrv(), GLim(), "9618", GSTEPS, {},
+               GNOW, True)
+    assert so.g_base == 84300.0, "база обязана переехать на текущую цену"
+    assert so.exit_only is False and so.g_trig_ms == 0
+    assert so.g_fills_done == 0, "счётчик филлов обнулён, иначе защита сработает сразу"
+    assert so.g_rearms == 1 and so.g_rearm_at_ms == 0
+    # Бухгалтерия ПРОШЛОЙ базы ушла. Пустым g_live не будет: перевзведённая сетка
+    # в том же проходе выставляет уровни от новой базы — это и есть её работа.
+    assert "flip:2" not in so.g_live and "adopt:3" not in so.g_live, (
+        "погасшие уровни и подхваты прошлой базы к новой отношения не имеют")
+
+
+def test_rearm_waits_for_its_time(tmp_path):
+    book, so = _guarded(tmp_path, g_rearm_min=30, g_pos=0, exit_only=True,
+                        g_trig_ms=GNOW - 1000, g_rearm_at_ms=GNOW + 600_000)
+    _grid_sync(book, _gstore(84300.0), GOst(), GSrv(), GLim(), "9618", GSTEPS, {},
+               GNOW, True)
+    assert so.exit_only is True and so.g_rearms == 0, "срок не вышел — ждём"
+
+
+def test_zero_means_the_exit_is_final(tmp_path):
+    book, so = _guarded(tmp_path, g_rearm_min=0.0, g_pos=0, exit_only=True,
+                        g_trig_ms=GNOW - 1000)
+    _grid_sync(book, _gstore(84300.0), GOst(), GSrv(), GLim(), "9618", GSTEPS, {},
+               GNOW, True)
+    assert so.g_rearm_at_ms == 0 and so.exit_only is True, "0 = не перевзводить"
+
+
+def test_rearm_does_not_happen_without_a_price(tmp_path):
+    """Цены нет — базу взять неоткуда, вслепую сетку не ставим."""
+    class Blind:
+        def tick(self, code, agent=None):
+            return {}
+
+        def agent_status(self, agent=None):
+            return {"_received_at_ms": GNOW, "health": {"ord_age_ms": 1200},
+                    "quik": {"orders": []}}
+
+    book, so = _guarded(tmp_path, g_rearm_min=1, g_pos=0, exit_only=True,
+                        g_trig_ms=GNOW - 1000, g_rearm_at_ms=GNOW - 1)
+    _grid_sync(book, Blind(), GOst(), GSrv(), GLim(), "9618", GSTEPS, {}, GNOW, True)
+    assert so.g_rearms == 0 and so.exit_only is True
+
+
+def test_a_manual_exit_only_is_not_rearmed(tmp_path):
+    """Режим, включённый ОПЕРАТОРОМ (без срабатывания защиты, g_trig_ms=0), сам не
+    снимается: он выключил сетку намеренно, и возвращать её за него нельзя."""
+    book, so = _guarded(tmp_path, g_rearm_min=1, g_pos=0, exit_only=True,
+                        g_trig_ms=0)
+    _grid_sync(book, _gstore(84300.0), GOst(), GSrv(), GLim(), "9618", GSTEPS, {},
+               GNOW, True)
+    assert so.g_rearm_at_ms == 0 and so.exit_only is True

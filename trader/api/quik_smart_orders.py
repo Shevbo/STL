@@ -128,6 +128,8 @@ class SmartOrderBody(BaseModel):
     # три исполненных уровня ИЛИ уход цены от базы на 0.25%. 0 выключает условие.
     g_trig_fills: int = 3
     g_trig_move_pct: float = 0.25
+    # Перевзведение после выхода по защите, минуты. 0 = выход окончателен.
+    g_rearm_min: float = 0.0
     c_stop_pts: float = 0.0
     c_flips_max: int = 0
     note: str = ""
@@ -155,6 +157,7 @@ async def create(body: SmartOrderBody, request: Request):
         c_low=float(body.c_low), c_low2=float(body.c_low2),
         c_stop_pts=float(body.c_stop_pts),
         g_trig_fills=int(body.g_trig_fills), g_trig_move_pct=float(body.g_trig_move_pct),
+        g_rearm_min=float(body.g_rearm_min),
         g_step=float(body.g_step), g_buys=int(body.g_buys), g_sells=int(body.g_sells),
         g_lot=int(body.g_lot), g_stop_pts=float(body.g_stop_pts),
         c_flips_max=int(body.c_flips_max), c_qty=int(body.qty),
@@ -1900,6 +1903,42 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
             # Кадр приходит каждые полсекунды, ждать нечего.
             continue
         live = dict(so.g_live or {})
+
+        # ПЕРЕВЗВЕДЕНИЕ ПОСЛЕ ЧИСТОГО ВЫХОДА, две половины: назначить срок и
+        # дождаться его. Проверяется ПЕРВЫМ, иначе защита на том же проходе снова
+        # увидит старый счётчик филлов и выключит только что взведённую сетку.
+        if so.exit_only and so.g_trig_ms and so.g_rearm_min > 0:
+            if so.g_pos == 0 and not so.g_rearm_at_ms:
+                # Вышли в ноль по защите — назначаем возвращение.
+                so.g_rearm_at_ms = now + int(so.g_rearm_min * 60_000)
+                dirty = True
+                so_journal.record(
+                    "guard", so, so_journal.WATCHER,
+                    f"выход по защите завершён, позиция 0; перевзведение через "
+                    f"{so.g_rearm_min:g} мин", now_ms=now)
+            elif so.g_rearm_at_ms and now >= so.g_rearm_at_ms:
+                base = so_mod.grid_rearm_base(so, price)
+                if base > 0:
+                    was = so.g_base
+                    so.g_base = base
+                    so.exit_only = False
+                    so.g_trig_ms = 0
+                    so.g_fills_done = 0
+                    so.g_rearm_at_ms = 0
+                    so.g_rearms += 1
+                    so.g_avg = 0.0
+                    # Бухгалтерию уровней обнуляем целиком: погасшие уровни и
+                    # подхваты относились к ПРОШЛОЙ базе и к новой отношения не
+                    # имеют. Оставить их значило бы не выставить часть сетки молча.
+                    live = {}
+                    dirty = True
+                    so_journal.record(
+                        "guard", so, so_journal.WATCHER,
+                        f"ПЕРЕВЗВЕДЕНА (раз {so.g_rearms}): база {was:g} -> {base:g} "
+                        f"по текущей цене, счётчики обнулены, набор разрешён",
+                        now_ms=now)
+                    log.warning("smart_order.grid_rearmed", so_id=so.so_id,
+                                base_was=was, base=base, times=so.g_rearms)
 
         # ЗАЩИТА СЕТКИ: сама переводит её в режим «только на выход».
         #
