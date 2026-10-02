@@ -565,3 +565,57 @@ def test_the_grid_closes_only_its_own_position(tmp_path):
     mkt = [m.place_order for m in srv.sent
            if m.WhichOneof("payload") == "place_order" and m.place_order.market]
     assert mkt[0].quantity == 3, "ровно позиция сетки, а не нетто счёта"
+
+
+def test_an_adopted_level_is_accounted_by_exactly_one_path(tmp_path):
+    """ОДИН ФИЛЛ, ПОСЧИТАННЫЙ ДВАЖДЫ — мой баг, найден на живых деньгах 02.10.2026.
+
+    Книга лежит на диске и переживает рестарт, поэтому у подхваченного уровня рядом
+    с меткой adopt оставался СТАРЫЙ client_id. Запись о филле приходит и в склад
+    заявок (агент не перезапускали, его карта цела), и в таблицу терминала — и филл
+    учли оба пути: «уровень +3 (85840) исполнен buy 1» в 23:40:56 и ещё раз в
+    23:41:06, тогда как в рынке была ОДНА сделка 23:40:55.
+
+    Итог: книга записала 27 филлов против 26 настоящих, g_pos −1 против −2 по
+    журналу. От g_pos считаются объём встречной заявки и объём закрытия по стопу —
+    ошибка уходит в рыночную заявку на живые деньги.
+    """
+    book, so = _gbook(tmp_path)
+    px = so_mod.grid_price(so, -1)                     # 84900, ниже рынка
+    # состояние ровно после рестарта: старый client_id ЖИВ в книге, заявка стоит
+    so.g_live = {"-1": "so:x:gm1:777"}
+    store = _gstore(85000.0, [
+        _gterm_row("701", "buy", px, qty=1, tag="stl-so-" + so.so_id)])
+    _grid_sync(book, store, GOst(), GSrv(), GLim(), "9618", GSTEPS, {}, GNOW)
+    assert so.g_live.get("adopt:-1") == {"num": "701"}, "уровень подхвачен"
+    assert "-1" not in so.g_live, (
+        "устаревший client_id обязан уйти: иначе филл посчитают И склад, И таблица")
+
+    # теперь заявка налилась. Склад ЗНАЕТ её по старому client_id, а строка в
+    # таблице стала неактивной — то есть оба источника видят один и тот же филл.
+    rows = store.agent_status()["quik"]["orders"]
+    rows[0]["active"], rows[0]["balance"] = False, 0
+    ost = GOst()
+    ost.working_orders = lambda agent=None: [
+        {"client_id": "so:x:gm1:777", "order_id": "701", "state": "filled",
+         "side": "buy", "filled": 1, "remaining": 0, "price": px}]
+    _grid_sync(book, store, ost, GSrv(), GLim(), "9618", GSTEPS, {}, GNOW + 5000)
+    assert so.g_pos == 1, (
+        f"позиция {so.g_pos:+d}: филл посчитан дважды — ровно баг 02.10")
+    assert so.g_live.get("flip:-1") is True, "уровень обязан погаснуть один раз"
+
+
+def test_an_adopted_wall_is_accounted_by_exactly_one_path(tmp_path):
+    """То же у стенок коридора: один филл — один учёт."""
+    from tests.quik.test_walls_in_book import (FakeOst, FakeSrv, FakeStore, Lim,
+                                               _book, _term_row)
+    from trader.api.quik_smart_orders import _walls_sync
+    NOW = 1_790_800_000_000
+    book, so = _book(tmp_path)                         # верх 85000, низ 84000
+    so.c_live = {"top": "so:x:top:1"}
+    store = FakeStore([_term_row("991", "RIZ6", "sell", 85000.0, qty=10,
+                                 tag=f"stl-so-{so.so_id}")])
+    _walls_sync(book, store, FakeOst(), FakeSrv(), Lim(), "9618", {"RIZ6": 10.0},
+                {}, NOW)
+    assert so.c_live.get("adopt:top") == {"num": "991"}
+    assert "top" not in so.c_live, "устаревший client_id обязан уйти"
