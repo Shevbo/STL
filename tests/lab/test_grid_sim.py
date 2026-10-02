@@ -546,3 +546,25 @@ def test_window_metrics_and_random_windows_same_total_time_no_overlap():
         ws = gs.random_windows(_r.Random(seed), pool, 180)
         assert sum(b - a for a, b in ws) >= 180 and all(ws[i][1] <= ws[j][0] or ws[j][1] <= ws[i][0]
                                                          for i in range(len(ws)) for j in range(i + 1, len(ws)))
+
+
+def test_trigger_k_mode_net_ignores_alternation_but_trend_triggers():
+    alt = [FLAT, (1000, 1000, 899, 950), (950, 1001, 950, 1001), (1001, 1101, 1001, 1101), (1101, 1101, 999, 999)] + [(999, 999, 999, 999)] * 4
+    body, tail = _dbody(alt)
+    assert gs.simulate_trigger(body, tail, TP, None, 3, k_mode="fills")["trig_i"] is not None     # 3 исполненных уровня подряд
+    assert gs.simulate_trigger(body, tail, TP, None, 3, k_mode="net")["trig_i"] is None           # позиция никогда не набрала 3 в одну сторону
+    trend = [FLAT, (1000, 1000, 899, 905), (905, 905, 799, 805), (805, 910, 805, 900), (900, 900, 699, 705)] + [(705, 705, 705, 705)] * 3
+    body, tail = _dbody(trend)
+    assert gs.simulate_trigger(body, tail, TP, None, 3, k_mode="net")["trig_i"] == 4             # откат 805 -> 910 закрыл часть, потом набрали снова
+
+
+def test_trigger_rearm_by_time_after_clean_exit_only():
+    rows = TRIG_ROWS + [(1095, 1095, 1095, 1095)] * 30
+    body, tail = _dbody(rows)
+    r = gs.simulate_trigger(body, tail, TP, None, 1, resume="time", rearm_min=15)
+    assert r["resumes"] == 1                                       # безубыток закрыт на баре 3, перевзвод не раньше чем через 15 минут
+    r0 = gs.simulate_trigger(body, tail, TP, None, 1, resume="time", rearm_min=500)
+    assert r0["resumes"] == 0                                       # окно ожидания длиннее дня
+    body, tail = _dbody([FLAT, (1000, 1101, 1000, 1105), (1105, 1105, 1105, 1105), (1105, 1305, 1105, 1305)] + [(1305, 1305, 1305, 1305)] * 20)
+    r2 = gs.simulate_trigger(body, tail, {**TP, "buys": 2, "sells": 2, "stop_pts": 100}, None, 1, resume="time", rearm_min=1)
+    assert r2["kinds"]["stop"] == 1 and r2["resumes"] == 0         # после стопа боевая защита не перевзводится

@@ -1413,24 +1413,29 @@ def run_short(arg: dict) -> dict:
 
 # ── пятая редакция: «триггерная радиация» (docs/grid-regime-filter-2026.md) ─────────────────────
 def simulate_trigger(body: list, tail: list, p: dict, x_pct: float | None, k_lv: int | None,
-                     force_i: int | None = None, resume: str | None = None, imp: list | None = None) -> dict:
+                     force_i: int | None = None, resume: str | None = None, imp: list | None = None,
+                     k_mode: str = "fills", rearm_min: int | None = None) -> dict:
     """Дневная сетка (от open бара 10:00, флэт в конце дня, стоп сетки закрывает позицию). До триггера как simulate_day.
     Триггер на закрытии бара: T1 |close - база| >= x_pct% базы, T2 число исполненных уровней (с начала сетки) >= k_lv
     (оба = T3, любой из двух); force_i = индекс бара принудительного включения (контроль). После триггера входов нет,
     позиция закрывается ТОЛЬКО лимитом на средней входа (проход 1 тик, мейкер) или лучше (если на триггере цена уже
     лучше средней, закрытие по open следующего бара с полспреда, тейкер); стоп сетки и флэт остаются.
     resume: None = после закрытия день окончен; 'flat' = сетка заново сразу (база = close бара закрытия);
-    'imp' = заново на первом импульсе imp[j] (на закрытии бара j > бара закрытия), база = close бара j.
+    'imp' = заново на первом импульсе imp[j] (на закрытии бара j > бара закрытия), база = close бара j;
+    'time' = как в бою: через rearm_min минут после ЧИСТОГО выхода (безубыток) сетка заново с базой по текущей цене
+    (после стопа не перевзводится). k_mode 'fills' = K считает все исполненные уровни, 'net' = боевая трактовка:
+    набор в одну сторону |позиция|/лот >= K (чередование вокруг базы защиту не включает).
     Возобновлённая сетка снова работает до триггера. -> fills, pnl_pts, trig_i, kinds, eod_loss, resumes."""
     n, hs, tick = len(body), p["half"], p["tick"]
     st = _new_state()
     g = _Grid(body[0][1], p)
     base, last = body[0][1], body[0][1]
-    phase, trig_i, lev0, resumes, closed_i = "grid", None, 0, 0, None
+    phase, trig_i, lev0, resumes, closed_i, wait_until = "grid", None, 0, 0, None, 0
     for i in range(n):
         ts, o, h, lw, c = body[i][:5]
         if phase == "wait":
-            if (resume == "flat" and i == closed_i) or (resume == "imp" and imp and i > closed_i and imp[i] and i + 1 < n):
+            if ((resume == "flat" and i == closed_i) or (resume == "imp" and imp and i > closed_i and imp[i] and i + 1 < n)
+                    or (resume == "time" and i > closed_i and ts >= wait_until and i + 1 < n)):
                 g, base, last, phase = _Grid(c, p), c, c, "grid"
                 lev0, resumes = sum(1 for f in st["fills"] if f[4] == "level"), resumes + 1
             continue
@@ -1470,7 +1475,7 @@ def simulate_trigger(body: list, tail: list, p: dict, x_pct: float | None, k_lv:
         if phase == "grid":
             if not st["pos"] and g.so.g_stop_pts > 0 and ((g.lo and c <= g.lo) or (g.hi and c >= g.hi)):
                 break
-            nlev = sum(1 for f in st["fills"] if f[4] == "level") - lev0
+            nlev = abs(st["pos"]) if k_mode == "net" else sum(1 for f in st["fills"] if f[4] == "level") - lev0
             fire = (i == force_i) if force_i is not None else bool(
                 (x_pct and abs(c - base) >= x_pct / 100 * base) or (k_lv and nlev >= k_lv))
             if fire and i + 1 < n:
@@ -1483,8 +1488,11 @@ def simulate_trigger(body: list, tail: list, p: dict, x_pct: float | None, k_lv:
                 elif not pos:
                     closed_at = i
         if phase == "exit" and not st["pos"]:
+            if resume == "time" and st["tk"] and st["tk"][-1] == "stop":
+                break                                               # после стопа боевая защита не перевзводится
             if resume:
                 phase, closed_i = "wait", closed_at if closed_at is not None else i
+                wait_until = body[closed_i][0] + (rearm_min or 0) * 60
                 if resume == "flat" and closed_i == i:
                     g, base, last, phase = _Grid(c, p), c, c, "grid"
                     lev0, resumes = sum(1 for f in st["fills"] if f[4] == "level"), resumes + 1
@@ -1519,7 +1527,9 @@ def run_trigger(arg: dict) -> dict:
     nt = len(days) * 2 // 3
     modes = [("T1", x, None) for x in arg["xs"]] + [("T2", None, k) for k in arg["ks"]] + \
             [("T3", x, k) for x in arg["xs"] for k in arg["ks"]]
-    modes = [(m, x, k, rs) for m, x, k in modes for rs in arg.get("resumes", ["none"])]
+    if arg.get("combos"):
+        modes = [("C", x, k) for x, k in arg["combos"]]
+    modes = [(m, x, k, rs, km) for m, x, k in modes for rs in arg.get("resumes", ["none"]) for km in arg.get("k_modes", ["fills"])]
     if arg.get("chunk"):
         i, n = arg["chunk"]
         modes = modes[i::n]
@@ -1561,16 +1571,19 @@ def run_trigger(arg: dict) -> dict:
             rr.append({**r, "kinds": kinds, "eod_loss": sum(x for x, kd in zip(r["trades_pnl"], r["tk"]) if kd == "eod"),
                        "trig_i": None})
         out["base"][str(pi)] = cols(rr, p)
-        for md, x, kk, rsm in modes:
+        for md, x, kk, rsm, km in modes:
             if rsm.startswith("imp"):
                 if rsm not in impflags:
                     impflags[rsm] = [impulse_flags(d["full"], d["body"], int(rsm[3:]) * 10, 10) for d in days]
                 imps, kw = impflags[rsm], {"resume": "imp"}
+            elif rsm.startswith("time"):
+                imps, kw = None, {"resume": "time", "rearm_min": int(rsm[4:])}
             else:
                 imps, kw = None, ({"resume": "flat"} if rsm == "flat" else {})
+            kw = {**kw, "k_mode": km}
             rs = [simulate_trigger(d["body"], d["tail"], p, x, kk, imp=imps[j] if imps else None, **kw)
                   for j, d in enumerate(days)]
-            item = {"pi": pi, "mode": md, "x": x, "k": kk, "resume": rsm, **cols(rs, p)}
+            item = {"pi": pi, "mode": md, "x": x, "k": kk, "resume": rsm, "k_mode": km, **cols(rs, p)}
             ctrl = []
             tdays = [(j, rs[j]["trig_i"]) for j in range(nt, len(days)) if rs[j]["trig_i"] is not None]
             for dd in range(arg.get("draws", 0)):
