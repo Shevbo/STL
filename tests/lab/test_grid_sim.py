@@ -449,3 +449,50 @@ def test_tf_atr_only_at_bucket_close_and_life_in_tf_time():
     life = [f for f in r["fills"] if f[4] == "life"]
     assert r["grids"] == 1 and len(life) == 1 and life[0][0] == b[12][0]         # старт на баре 1: жизнь до ts+60+600 -> бар 11, выход по open бара 12
     assert tfp["agg"][0][6] <= tfp["agg"][1][0] + 299
+
+
+# ── пятая редакция: триггерная радиация ──────────────────────────────────────────────────────────
+TP = {**gs.DEFAULTS, **P, "stop_pts": 0, "tick": 1.0}
+TRIG_ROWS = [FLAT, (1000, 1101, 1000, 1105), (1105, 1250, 1105, 1240), (1240, 1240, 1090, 1095)] + [(1095, 1095, 1095, 1095)] * 6
+
+
+def test_trigger_no_entries_after_and_exit_only_at_average():
+    body, tail = _dbody(TRIG_ROWS)
+    r = gs.simulate_trigger(body, tail, TP, None, 1)                       # триггер: 1 исполненный уровень
+    assert [(f[1], f[2], f[4]) for f in r["fills"]] == [("sell", 1100, "level"), ("buy", 1100, "be")]   # рост до 1250 новых входов не дал
+    assert r["pnl_pts"] == 0 and r["kinds"]["be"] == 1 and r["trig_i"] == 1
+
+
+def test_trigger_stop_and_session_flat_still_work():
+    body, tail = _dbody([FLAT, (1000, 1101, 1000, 1105), (1105, 1105, 1105, 1105), (1105, 1305, 1105, 1305), (1305, 1305, 1305, 1305)])
+    r = gs.simulate_trigger(body, tail, {**TP, "buys": 2, "sells": 2, "stop_pts": 100}, None, 1)
+    assert r["kinds"]["stop"] == 1 and r["fills"][-1][4] == "stop" and r["pnl_pts"] < 0      # лимита на средней не дождались
+    body, tail = _dbody([FLAT, (1000, 1101, 1000, 1105)] + [(1150, 1150, 1150, 1150)] * 6)
+    r = gs.simulate_trigger(body, tail, TP, None, 1)
+    assert r["kinds"]["eod"] == 1 and r["fills"][-1][4] == "eod" and r["eod_loss"] < 0
+
+
+def test_trigger_in_profit_closes_at_next_open():
+    body, tail = _dbody([FLAT, (1000, 1101, 1000, 1050), (1050, 1050, 1050, 1050), (1050, 1050, 1050, 1050)])
+    r = gs.simulate_trigger(body, tail, TP, None, 1)
+    assert [(f[1], f[2]) for f in r["fills"]] == [("sell", 1100), ("buy", 1055)] and r["pnl_pts"] == 45 and r["kinds"]["be"] == 1
+
+
+def test_trigger_x_percent_and_forced_control():
+    body, tail = _dbody([FLAT, (1000, 1030, 1000, 1030), (1030, 1030, 1030, 1030)] * 1 + [(1030, 1030, 1030, 1030)] * 3)
+    assert gs.simulate_trigger(body, tail, TP, 2.0, None)["trig_i"] == 1               # 3% >= 2% на закрытии бара 1
+    assert gs.simulate_trigger(body, tail, TP, 5.0, None)["trig_i"] is None
+    assert gs.simulate_trigger(body, tail, TP, None, None, force_i=3)["trig_i"] == 3
+
+
+def test_trigger_resume_flat_and_only_on_impulse_after_close():
+    imp = [False, False, True, False, False, False, True, False, False, False]    # импульс на баре 2 раньше закрытия
+    rows = TRIG_ROWS + [(1095, 1095, 1095, 1095)] * 0
+    rows = rows[:4] + [(1095, 1095, 1095, 1095), (1095, 1095, 1095, 1095), (1095, 1296, 1095, 1296), (1296, 1296, 1296, 1296)] + [(1296, 1296, 1296, 1296)] * 2
+    body, tail = _dbody(rows)
+    r = gs.simulate_trigger(body, tail, TP, None, 1, resume="imp", imp=imp)
+    assert r["resumes"] == 1                                                           # BE закрыт на баре 3; импульс на баре 2 не считается, на баре 6 да
+    r2 = gs.simulate_trigger(body, tail, TP, None, 1, resume="flat")
+    assert r2["resumes"] >= 1
+    r0 = gs.simulate_trigger(body, tail, TP, None, 1)
+    assert r0["resumes"] == 0

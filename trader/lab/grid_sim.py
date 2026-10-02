@@ -1410,6 +1410,181 @@ def run_short(arg: dict) -> dict:
                     out["configs"].append(item)
     return out
 
+
+# ── пятая редакция: «триггерная радиация» (docs/grid-regime-filter-2026.md) ─────────────────────
+def simulate_trigger(body: list, tail: list, p: dict, x_pct: float | None, k_lv: int | None,
+                     force_i: int | None = None, resume: str | None = None, imp: list | None = None) -> dict:
+    """Дневная сетка (от open бара 10:00, флэт в конце дня, стоп сетки закрывает позицию). До триггера как simulate_day.
+    Триггер на закрытии бара: T1 |close - база| >= x_pct% базы, T2 число исполненных уровней (с начала сетки) >= k_lv
+    (оба = T3, любой из двух); force_i = индекс бара принудительного включения (контроль). После триггера входов нет,
+    позиция закрывается ТОЛЬКО лимитом на средней входа (проход 1 тик, мейкер) или лучше (если на триггере цена уже
+    лучше средней, закрытие по open следующего бара с полспреда, тейкер); стоп сетки и флэт остаются.
+    resume: None = после закрытия день окончен; 'flat' = сетка заново сразу (база = close бара закрытия);
+    'imp' = заново на первом импульсе imp[j] (на закрытии бара j > бара закрытия), база = close бара j.
+    Возобновлённая сетка снова работает до триггера. -> fills, pnl_pts, trig_i, kinds, eod_loss, resumes."""
+    n, hs, tick = len(body), p["half"], p["tick"]
+    st = _new_state()
+    g = _Grid(body[0][1], p)
+    base, last = body[0][1], body[0][1]
+    phase, trig_i, lev0, resumes, closed_i = "grid", None, 0, 0, None
+    for i in range(n):
+        ts, o, h, lw, c = body[i][:5]
+        if phase == "wait":
+            if (resume == "flat" and i == closed_i) or (resume == "imp" and imp and i > closed_i and imp[i] and i + 1 < n):
+                g, base, last, phase = _Grid(c, p), c, c, "grid"
+                lev0, resumes = sum(1 for f in st["fills"] if f[4] == "level"), resumes + 1
+            continue
+        if phase == "grid":
+            if g.pending:
+                g.place(last)
+            if not (not g.pending and h < (g.sell_t[0] if g.sell_t else math.inf)
+                    and lw > (g.buy_t[-1] if g.buy_t else -math.inf)):
+                path = [o, lw, h, c] if c >= o else [o, h, lw, c]
+                a = last
+                for b in [o] + path[1:]:
+                    _segment(g, st, a, b, ts)
+                    a = b
+        else:
+            pos, avg = st["pos"], st["avg"]
+            if pos:
+                path = [o, lw, h, c] if c >= o else [o, h, lw, c]
+                a = last
+                for b in [o] + path[1:]:
+                    hit = (max(a, b) >= avg + tick) if pos > 0 else (min(a, b) <= avg - tick)
+                    if hit:
+                        px = a if ((pos > 0 and a >= avg + tick) or (pos < 0 and a <= avg - tick)) else avg
+                        _flat(st, px, ts, "be")
+                        break
+                    a = b
+        last = c
+        closed_at = i if not st["pos"] else None
+        if st["pos"] and g.so.g_stop_pts > 0 and ((g.lo and c <= g.lo) or (g.hi and c >= g.hi)):
+            if i + 1 < n:
+                _flat(st, body[i + 1][1] - hs if st["pos"] > 0 else body[i + 1][1] + hs, body[i + 1][0], "stop")
+                closed_at = i + 1
+            else:
+                _flat(st, c, ts, "stop")
+                closed_at = i
+            if phase == "grid":
+                break                                               # стоп до триггера: сетка завершена
+        if phase == "grid":
+            if not st["pos"] and g.so.g_stop_pts > 0 and ((g.lo and c <= g.lo) or (g.hi and c >= g.hi)):
+                break
+            nlev = sum(1 for f in st["fills"] if f[4] == "level") - lev0
+            fire = (i == force_i) if force_i is not None else bool(
+                (x_pct and abs(c - base) >= x_pct / 100 * base) or (k_lv and nlev >= k_lv))
+            if fire and i + 1 < n:
+                phase = "exit"
+                trig_i = i if trig_i is None else trig_i
+                pos, avg = st["pos"], st["avg"]
+                if pos and ((pos > 0 and c > avg + tick) or (pos < 0 and c < avg - tick)):
+                    _flat(st, body[i + 1][1] - hs if pos > 0 else body[i + 1][1] + hs, body[i + 1][0], "be")
+                    closed_at = i + 1
+                elif not pos:
+                    closed_at = i
+        if phase == "exit" and not st["pos"]:
+            if resume:
+                phase, closed_i = "wait", closed_at if closed_at is not None else i
+                if resume == "flat" and closed_i == i:
+                    g, base, last, phase = _Grid(c, p), c, c, "grid"
+                    lev0, resumes = sum(1 for f in st["fills"] if f[4] == "level"), resumes + 1
+            else:
+                break
+    pre_eod = len(st["trades_pnl"])
+    if st["pos"]:
+        end_bar = tail[0] if tail else body[-1]
+        _flat(st, end_bar[4], end_bar[0], "eod")
+    kinds = {"be": 0, "stop": 0, "eod": 0}
+    for kd in st["tk"]:
+        if kd in kinds:
+            kinds[kd] += 1
+    eod_loss = sum(x for x, kd in zip(st["trades_pnl"], st["tk"]) if kd == "eod")
+    return {"fills": st["fills"], "pnl_pts": sum(st["trades_pnl"]) * 1.0, "max_pos": st["max_pos"], "trig_i": trig_i,
+            "kinds": kinds, "eod_loss": eod_loss, "n_contracts": sum(f[3] for f in st["fills"]), "closed": pre_eod,
+            "resumes": resumes}
+
+
+def run_trigger(arg: dict) -> dict:
+    """mode=trigger_days: params, xs, ks, resumes ['none','flat','imp3','imp5','imp8'], draws, chunk [i, n] по режимам.
+    Режимы: T1 (x), T2 (k), T3 (x, k). Дневные ряды и контроль (случайное включение в те же дни, одно на день)."""
+    import random
+    from trader.lab.commission import commission_for
+    from trader.lab.footprints import common
+    key = arg["symbol_key"]
+    rows = common.load_bars(key, arg.get("since"), arg.get("until"))
+    if not rows:
+        return {"id": "TRIG", "symbol": key, "error": "нет баров в окне"}
+    inst = INST["Si" if key[:2].lower() == "si" else "RI"]
+    days = prep_days(rows, with_sig=False)
+    nt = len(days) * 2 // 3
+    modes = [("T1", x, None) for x in arg["xs"]] + [("T2", None, k) for k in arg["ks"]] + \
+            [("T3", x, k) for x in arg["xs"] for k in arg["ks"]]
+    modes = [(m, x, k, rs) for m, x, k in modes for rs in arg.get("resumes", ["none"])]
+    if arg.get("chunk"):
+        i, n = arg["chunk"]
+        modes = modes[i::n]
+    out = {"id": "TRIG", "symbol": key, "n_days": len(days), "n_train": nt, "days": [d["stats"] for d in days],
+           "base": {}, "configs": []}
+    pv = inst["pv"]
+    impflags: dict = {}
+
+    def be_fee(fills):
+        m = t = 0.0
+        for ts, _s, price, qty, kind in fills:
+            tk = commission_for(key, price, qty, pv, taker=True, ts=ts)
+            m += commission_for(key, price, qty, pv, taker=False, ts=ts) if kind in ("level", "be") else tk
+            t += tk
+        return m, t
+
+    def cols(rs, p):
+        c = {"gross": [], "fee_m": [], "fee_t": [], "trig": [], "be": [], "stop": [], "eod": [], "eodl": [], "res": []}
+        for r in rs:
+            fm, ft = be_fee(r["fills"])
+            c["gross"].append(round(r["pnl_pts"] * pv * p["lot"], 2))
+            c["fee_m"].append(round(fm, 2))
+            c["fee_t"].append(round(ft, 2))
+            c["trig"].append(0 if r.get("trig_i") is None else 1)
+            kd = r.get("kinds") or {"be": 0, "stop": 0, "eod": 0}
+            c["be"].append(kd["be"])
+            c["stop"].append(kd["stop"])
+            c["eod"].append(kd["eod"])
+            c["eodl"].append(round(r.get("eod_loss", 0.0) * pv * p["lot"], 2))
+            c["res"].append(r.get("resumes", 0))
+        return c
+
+    for pi in range(len(arg["params"])):
+        p = {**DEFAULTS, **inst, **arg["params"][pi], "lot": 1, "fill_pen": 1}
+        rr = []
+        for d in days:
+            r = simulate_day(d["body"] + d["tail"], p)
+            kinds = {"be": 0, "stop": sum(1 for kd in r["tk"] if kd == "stop"), "eod": sum(1 for kd in r["tk"] if kd == "eod")}
+            rr.append({**r, "kinds": kinds, "eod_loss": sum(x for x, kd in zip(r["trades_pnl"], r["tk"]) if kd == "eod"),
+                       "trig_i": None})
+        out["base"][str(pi)] = cols(rr, p)
+        for md, x, kk, rsm in modes:
+            if rsm.startswith("imp"):
+                if rsm not in impflags:
+                    impflags[rsm] = [impulse_flags(d["full"], d["body"], int(rsm[3:]) * 10, 10) for d in days]
+                imps, kw = impflags[rsm], {"resume": "imp"}
+            else:
+                imps, kw = None, ({"resume": "flat"} if rsm == "flat" else {})
+            rs = [simulate_trigger(d["body"], d["tail"], p, x, kk, imp=imps[j] if imps else None, **kw)
+                  for j, d in enumerate(days)]
+            item = {"pi": pi, "mode": md, "x": x, "k": kk, "resume": rsm, **cols(rs, p)}
+            ctrl = []
+            tdays = [(j, rs[j]["trig_i"]) for j in range(nt, len(days)) if rs[j]["trig_i"] is not None]
+            for dd in range(arg.get("draws", 0)):
+                rng = random.Random(6000 + dd)
+                rc = [simulate_trigger(days[j]["body"], days[j]["tail"], p, None, None,
+                                       force_i=rng.randrange(0, max(1, len(days[j]["body"]) - 1)),
+                                       imp=imps[j] if imps else None, **kw) for j, _ti in tdays]
+                cl = cols(rc, p)
+                ctrl.append(round(sum(cl["gross"]) - sum(cl["fee_t"]), 1))
+            item["ctrl_days"] = [j for j, _ in tdays]
+            item["ctrl"] = ctrl
+            out["configs"].append(item)
+    return out
+
 # ── сетка документа и живой набор ────────────────────────────────────────────
 STEPS = (50, 100, 150, 200, 300, 400, 600)
 LEVELS = (2, 3, 5, 8, 12)
@@ -1459,6 +1634,8 @@ def run(arg: dict) -> dict:
         return run_reset(arg)
     if str(arg.get("mode", "")).startswith("short"):
         return run_short(arg)
+    if str(arg.get("mode", "")).startswith("trigger"):
+        return run_trigger(arg)
     from trader.lab.footprints import common
     key = arg["symbol_key"]
     rows = common.load_bars(key, arg.get("since"), arg.get("until"))
