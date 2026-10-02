@@ -345,8 +345,13 @@ async def lifespan(app: FastAPI):
                 from trader.quik import terminal
                 if not terminal.fresh(quik_store, agent_id):
                     return None
+                # Реестр роботов из зеркала агента: без него незнакомый тег
+                # (приложение брокера) звался бы роботом и съедал наш предел.
+                rep = quik_store.robot_report(agent_id) or {}
+                rids = {str(r.get("robot_id")) for r in rep.get("robots") or []
+                        if r.get("robot_id")}
                 return [(r["num"], int(r.get("balance") or 0))
-                        for r in terminal.active(quik_store, agent_id)
+                        for r in terminal.active(quik_store, agent_id, rids or None)
                         if r.get("origin") in ("smart", "robot", "recon")]
             quik_order_store.set_resting_provider(_resting)
             # Книга тревог для экранов и флэша компаньона (исполнительный модуль,

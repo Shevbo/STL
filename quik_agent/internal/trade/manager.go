@@ -109,6 +109,8 @@ type ManagerConfig struct {
 // OrderUpdate/TransReply emitted to STL. Guard 3: nothing reaches the bridge unless an
 // explicit command passed every limit AND the master flag is on.
 type Manager struct {
+	// Живые наши заявки из таблицы терминала (см. SetRestingSource).
+	resting func() []RestingRow
 	// Предохранитель от зацикливания заявок: N отказов подряд от одного
 	// источника с одной причиной — источник замолкает (см. loopguard.go).
 	loop *LoopGuard
@@ -1182,9 +1184,44 @@ func (m *Manager) lookupLocked(orderNum string, transID int64) *workingOrder {
 
 // totalWorkingLocked sums resting quantity across all non-terminal orders. Caller
 // holds m.mu.
+// RestingRow — живая НАША заявка из таблицы заявок терминала: номер и остаток.
+type RestingRow struct {
+	Num     string
+	Balance int64
+}
+
+// SetRestingSource подключает таблицу терминала к счёту объёма в работе. nil от
+// источника = таблица неизвестна (не пришла или устарела) — считаем по своей карте.
+func (m *Manager) SetRestingSource(fn func() []RestingRow) {
+	m.mu.Lock()
+	m.resting = fn
+	m.mu.Unlock()
+}
+
+// totalWorkingLocked — объём в работе. ОБЪЕДИНЕНИЕ по номеру заявки: строки
+// таблицы терминала (живут в QUIK и переживают перезапуск агента) плюс заявки
+// своей карты, которых в таблице ещё нет (в пути). Только карта — после
+// перезапуска ноль при стоящих заявках (02.10.2026: «рестарт не должен обнулять
+// лимиты»); только таблица — не видна заявка в пути.
 func (m *Manager) totalWorkingLocked() int64 {
+	var rows []RestingRow
+	if m.resting != nil {
+		rows = m.resting()
+	}
 	var sum int64
+	nums := make(map[string]bool, len(rows))
+	for _, r := range rows {
+		if r.Balance > 0 {
+			sum += r.Balance
+		}
+		if r.Num != "" {
+			nums[r.Num] = true
+		}
+	}
 	for _, wo := range m.byClient {
+		if wo.orderNum != "" && nums[wo.orderNum] {
+			continue
+		}
 		sum += wo.restingQty()
 	}
 	return sum

@@ -1,8 +1,10 @@
 package trade
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -82,6 +84,10 @@ type Guard struct {
 	mu          sync.Mutex
 	day         string // YYYY-MM-DD of the current count window
 	placedToday int
+	// Файл счётчика (пусто = только память). РЕСТАРТ НЕ ОБНУЛЯЕТ ПРЕДЕЛЫ
+	// (оператор, 02.10.2026): счётчик жил в памяти процесса, и каждый перезапуск
+	// агента заново открывал весь дневной кап.
+	counterPath string
 	// nowFn is injectable for tests.
 	nowFn func() time.Time
 }
@@ -192,6 +198,43 @@ func (g *Guard) now() time.Time {
 	return time.Now()
 }
 
+type dayCounter struct {
+	Day    string `json:"day"`
+	Placed int    `json:"placed"`
+}
+
+// SetCounterStore включает хранение дневного счётчика в файле и подхватывает
+// сегодняшнее значение. Вызывается при старте, до первой заявки.
+func (g *Guard) SetCounterStore(path string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.counterPath = path
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	var c dayCounter
+	if json.Unmarshal(raw, &c) == nil && c.Day == g.now().Format("2006-01-02") && c.Placed > g.placedToday {
+		g.day, g.placedToday = c.Day, c.Placed
+	}
+}
+
+// saveCounterLocked пишет счётчик атомарно (tmp + rename). Ошибку не
+// возвращает: не записали — в памяти счётчик верен, следующая заявка попробует снова.
+func (g *Guard) saveCounterLocked() {
+	if g.counterPath == "" {
+		return
+	}
+	buf, err := json.Marshal(dayCounter{Day: g.day, Placed: g.placedToday})
+	if err != nil {
+		return
+	}
+	tmp := g.counterPath + ".tmp"
+	if os.WriteFile(tmp, buf, 0o644) == nil {
+		_ = os.Rename(tmp, g.counterPath)
+	}
+}
+
 // rollDay resets the daily counter when the calendar day changes. Caller holds mu.
 func (g *Guard) rollDay() {
 	d := g.now().Format("2006-01-02")
@@ -279,6 +322,7 @@ func (g *Guard) CommitPlace() (bool, RejectReason) {
 		return false, ReasonDailyCap
 	}
 	g.placedToday++
+	g.saveCounterLocked()
 	return true, ""
 }
 

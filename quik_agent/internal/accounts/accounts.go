@@ -115,6 +115,25 @@ const dayMs = 24 * 3600 * 1000
 
 // Snapshot is the point-in-time read of the store, computed against the injected
 // clock at the moment Snapshot() is called (ages are NOT frozen at write time).
+// TradeFee — комиссии ОДНОЙ сделки, как их отдал терминал (поля таблицы
+// сделок QUIK). Нужны, чтобы ответить фактом на вопрос «сколько на самом деле
+// стоит оборот»: поле «ТС комиссия» портфеля внутри дня текущей суммой сборов НЕ
+// является (02.10.2026: за 22 минуты 34 лота, а поле выросло ровно на сбор
+// одного лота), и модель расходится с ним вдвое.
+type TradeFee struct {
+	Qty                               int64
+	Exchange, Clearing, Tech, Broker  float64
+}
+
+// FeeTotals — суммы комиссий по сделкам за день с момента, когда агент начал их
+// видеть (SinceMs): сделки до старта процесса OnTrade повторно не приходят.
+type FeeTotals struct {
+	SinceMs                          int64
+	Trades                           int
+	Lots                             int64
+	Exchange, Clearing, Tech, Broker float64
+}
+
 type Snapshot struct {
 	Positions []Position
 	Orders    []Order
@@ -138,6 +157,9 @@ type Snapshot struct {
 	// frame arrives (old Lua build publishes none). MoneyAgeMs is -1 then.
 	Money      *Money
 	MoneyAgeMs int64
+
+	// Fees — комиссии по сделкам за день (nil, пока не пришло ни одной).
+	Fees *FeeTotals
 
 	// PosAgeMs/OrdAgeMs are -1 when the corresponding table has NEVER been
 	// published (SetPositions/SetOrders not yet called) — never an
@@ -179,6 +201,14 @@ type Store struct {
 
 	trades     []Trade
 	seenTrades map[string]struct{} // every accepted Trade.Num (survives ring eviction)
+
+	// Комиссии по сделкам из OnTrade (см. TradeFee). Ключ — сделка; значение —
+	// ПОСЛЕДНЕЕ пришедшее: QUIK зовёт OnTrade по одной сделке не раз, и поля
+	// комиссии могут дозаполниться позже. Сумма по последним значениям, а не по
+	// всем вызовам, — иначе повторный вызов удвоил бы сбор.
+	fees    map[string]TradeFee
+	feesDay string // МСК-дата, к которой относится fees
+	feesSinceMs int64
 
 	transReplies []TransReply
 	quikFolder   string
@@ -406,6 +436,7 @@ func (s *Store) Snapshot() Snapshot {
 
 		Money:      money,
 		MoneyAgeMs: moneyAge,
+		Fees:       s.feeTotalsLocked(),
 
 		PosAgeMs: posAge,
 		OrdAgeMs: ordAge,
@@ -665,3 +696,41 @@ func asBool01(v any) (bool, bool) {
 	}
 	return f != 0, true
 }
+
+// SetTradeFee запоминает комиссии сделки (последнее значение по ключу побеждает).
+// День — по МСК: смена даты начинает учёт заново.
+// ponytail: суммы за календарный день МСК, а не за торговый (тот начинается в
+// 19:05 накануне); переходить на торговый, если понадобится сверка с отчётом
+// брокера построчно по дням.
+func (s *Store) SetTradeFee(key string, f TradeFee) {
+	if key == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	nowMs := s.now()
+	day := time.UnixMilli(nowMs).In(mskZone).Format("2006-01-02")
+	if s.fees == nil || s.feesDay != day {
+		s.fees = map[string]TradeFee{}
+		s.feesDay = day
+		s.feesSinceMs = nowMs
+	}
+	s.fees[key] = f
+}
+
+func (s *Store) feeTotalsLocked() *FeeTotals {
+	if len(s.fees) == 0 {
+		return nil
+	}
+	t := &FeeTotals{SinceMs: s.feesSinceMs, Trades: len(s.fees)}
+	for _, f := range s.fees {
+		t.Lots += f.Qty
+		t.Exchange += f.Exchange
+		t.Clearing += f.Clearing
+		t.Tech += f.Tech
+		t.Broker += f.Broker
+	}
+	return t
+}
+
+var mskZone = time.FixedZone("MSK", 3*3600)

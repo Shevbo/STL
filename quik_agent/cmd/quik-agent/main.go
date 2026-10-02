@@ -428,6 +428,8 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 	}, bridge, guard, lk, func(f string, a ...any) {
 		fmt.Printf("trade: "+f+"\n", a...)
 	})
+	// Рестарт не обнуляет пределы: дневной счётчик в файле рядом с exe.
+	guard.SetCounterStore(filepath.Join(opt.exeDir, "daily_orders.json"))
 	bridge.SetHandler(mgr)              // Lua events -> manager
 	bridge.SetStopSink(mgr.OnStopEvent) // OnStopOrder / stop_orders -> StopOrderReport to STL
 	// acc_pos/acc_ord/acc_trd/pong -> accStore: the account-snapshot half of
@@ -620,6 +622,37 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 	if rsErr != nil {
 		fmt.Println("robots: store error:", rsErr)
 	}
+	// ОБЪЁМ В РАБОТЕ ПО ТАБЛИЦЕ ТЕРМИНАЛА: после перезапуска своя карта заявок
+	// пуста, а заявки в QUIK стоят (02.10.2026: «рестарт не должен обнулять
+	// лимиты»). Считаются только НАШИ строки — умные заявки, выравнивание и
+	// известные роботы; ручная торговля оператора (пустой тег, приложение
+	// брокера) в предел агента не входит. Таблица старше минуты — «не знаю».
+	mgr.SetRestingSource(func() []trade.RestingRow {
+		snap := accStore.Snapshot()
+		if snap.OrdAgeMs < 0 || snap.OrdAgeMs > 60_000 {
+			return nil
+		}
+		ours := map[string]bool{}
+		if robotStore != nil {
+			for _, sp := range robotStore.All() {
+				id := sp.GetRobotId()
+				if len(id) > 20 {
+					id = id[:20] // brokerref в QUIK — 20 символов
+				}
+				ours[id] = true
+			}
+		}
+		out := []trade.RestingRow{}
+		for _, o := range snap.Orders {
+			if !o.Active || o.Balance <= 0 {
+				continue
+			}
+			if strings.HasPrefix(o.Tag, "stl-so-") || o.Tag == "recon" || ours[o.Tag] {
+				out = append(out, trade.RestingRow{Num: o.Num, Balance: o.Balance})
+			}
+		}
+		return out
+	})
 	// Hoisted so the Task 9 status/recon block below (which needs Runner too)
 	// can see it after this if-block closes; nil when robot hosting is off.
 	var runnerSrv *runner.Server
