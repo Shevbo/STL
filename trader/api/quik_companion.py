@@ -771,7 +771,8 @@ def _trading_block(store) -> dict:
     }
 
 
-def _orders_pnl(store, now_ms: int, cache: dict | None, params: dict | None) -> dict:
+def _orders_pnl(store, now_ms: int, cache: dict | None, params: dict | None,
+                status: dict | None = None) -> dict:
     """P&L каждой заявки по отдельности, с кэшем.
 
     Окно НЕДЕЛЯ, а не день: заявка живёт дольше суток (коридор стоит днями), и
@@ -792,7 +793,14 @@ def _orders_pnl(store, now_ms: int, cache: dict | None, params: dict | None) -> 
         from trader.quik.algo_ledger import point_values
         from trader.quik.truth import load_robot_ids
 
-        status = (store.agent_status(None) or {}) if store is not None else {}
+        # ЗЕРКАЛО ТОЖЕ ПРИХОДИТ СНАРУЖИ. store.x(None) мигает: в сторе живут ДВЕ
+        # записи агента (служебная до Register и настоящая), и _pick(None) отдаёт
+        # агента, только пока ровно один из них ЗЕЛЁНЫЙ. На переподключении
+        # зелёных ноль, и тот же вызов возвращает None — разбор real-trade
+        # 02.10.2026. Повторное чтение внутри запроса даёт другой ответ, чем
+        # первое; корень чинит real-trade, а у себя я лишние чтения убираю.
+        status = status if status is not None else (
+            (store.agent_status(None) or {}) if store is not None else {})
         ids = load_robot_ids() | {str(r.get("id")) for r in status.get("robots") or [] if r.get("id")}
         days = manual_pnl.period_days("week", _dt.datetime.now(tz=_MSK).date())
         fills = manual_pnl.read_trades(days, robot_ids=ids)
@@ -1264,7 +1272,7 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
     # цены для округления средних. Два чтения — два ответа, и это уже случалось.
     _params = (store.params(agent_id) if store is not None else None) or {}
     _pnl = _orders_pnl(store, now_ms, getattr(request.app.state, "_order_pnl_cache", None),
-                       _params)
+                       _params, status)
     request.app.state._order_pnl_cache = (now_ms, _pnl)
     _manual_avg_by_sec = {str(r.get("symbol")): r.get("avg_price")
                           for r in (manual_block.get("open") or []) if r.get("symbol")}

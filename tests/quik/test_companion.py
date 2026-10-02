@@ -1116,3 +1116,34 @@ def test_order_pnl_survives_a_missing_params_feed(monkeypatch):
     out = quik_companion._orders_pnl(None, 0, None, {})
     assert out["a"]["fix_pts"] == pytest.approx(10.0)
     assert out["a"]["fix_rub"] is None and out["a"]["priced"] is False
+
+
+def test_order_pnl_takes_the_mirror_from_the_caller(monkeypatch):
+    """Зеркало читается ОДИН раз на запрос, а не ещё раз внутри помощника.
+
+    store.x(None) мигает: в сторе живут ДВЕ записи агента — служебная, созданная
+    до Register, и настоящая под host_name. _pick(None) отдаёт агента, только
+    пока РОВНО ОДИН из них зелёный; на переподключении зелёных ноль, и тот же
+    вызов возвращает None (разбор real-trade 02.10.2026). Поэтому повторное
+    чтение внутри обработчика может ответить иначе, чем первое, и ответ разъедется
+    сам с собой.
+    """
+    seen = {}
+
+    def _boom():
+        seen["reread"] = True
+        raise AssertionError("помощник не должен читать зеркало сам")
+
+    class _Store:
+        def agent_status(self, _a=None):
+            _boom()
+
+        def params(self, _a=None):
+            return {}
+
+    monkeypatch.setattr("trader.quik.manual_pnl.read_trades", lambda *a, **k: [])
+    out = quik_companion._orders_pnl(
+        _Store(), 0, None, {"rows": []},
+        {"robots": [{"id": "lxk22"}]})          # зеркало передано снаружи
+    assert out == {}
+    assert "reread" not in seen
