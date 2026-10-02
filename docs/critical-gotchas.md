@@ -163,3 +163,30 @@ you touch anything are reproduced inline in `CLAUDE.md`.
   apps — server admin is the operator's call, report and let them decide. Related: publishing
   the agent rebuilds the WHOLE agent from `~/quik_build` (a loose scp tree, NOT git) — any
   uncommitted change there ships, so publish only from a verified-clean tree.
+- **An agent RECONNECT without an STL restart sent every order into a dead queue (has bitten
+  prod, 02.10.2026, 45 minutes of zero orders).** The outbound queue is one per agent name; a
+  session starts under the provisional id and on Register bound "9618" via `setdefault`, which
+  does NOT replace an existing queue — so after ANY agent reconnect STL kept enqueuing into the
+  previous, dead session's queue. Everything looked healthy: green lamp, tables and fills
+  flowing, Lua answering pings, SetLimits applied (it goes straight into the session's own
+  queue). Each order died «не зарегистрирована в QUIK (нет ответа)». **First check, before
+  QUIK/Lua theories: `health.daily_orders_used` in the agent status — zero while STL is
+  placing means nothing reaches the agent.** I spent an hour on a wrong TRANS_ID theory and
+  made the operator restart the agent and the Lua script for nothing. Fixed in `server.py`
+  (bind the name to THIS session's queue, drop stale contents — the order store already
+  expired them); in the moment, an STL restart heals it (first connect is always healthy).
+- **`/agent/{id}/restart` was an OFF switch before agent rev 1790944923.** The handler was a
+  bare `os.Exit(0)` «for the service manager» and the QUIK VDS has none: the agent left and
+  did not come back until the operator started it at the console. From rev 1790944923 the
+  agent schedules its own relaunch (`selfupdate.SpawnRelaunch`) and does NOT exit if it cannot.
+  Self-update also needs a release URL: `release_url` in `agent_config.json` or env
+  `SHECTORY_AGENT_RELEASE_URL` = `https://stl.shectory.ru/api/v1/quik` (`shectory.ru` serves the
+  portal and returns 404). Without it self-update is silently OFF — the agent now prints that
+  at startup.
+- **The watchdog probe jammed itself on its own run log (02.10.2026, 3.5 hours).** It read the
+  last 4 KB of `~/stl-watchdog-runs.jsonl` to get the run number; one 21 KB record made the
+  last line a fragment, `json.loads` failed inside the write block, and no record was ever
+  written again — the companion said «вотчер молчит» while cron and the probe ran fine. And
+  during the 45-minute outage above the probe answered «ok»: it does not see «orders leave
+  and die without a reply».
+
