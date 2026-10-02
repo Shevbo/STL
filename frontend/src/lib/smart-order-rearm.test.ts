@@ -37,7 +37,7 @@ const VAR_BY_FIELD: Record<string, string> = {
   g_step: 'gStep', g_buys: 'gBuys', g_sells: 'gSells', g_lot: 'gLot',
   g_stop_pts: 'gStopPts',
   g_trig_fills: 'gTrigFills', g_trig_move_pct: 'gTrigMovePct',
-  g_trig_touches: 'gTrigTouches', g_rearm_min: 'gRearmMin',
+  g_trig_touches: 'gTrigTouches', g_rearm_min: 'gRearmMin', g_tp_rub: 'gTpRub',
 };
 
 describe('подстановка параметров в форму', () => {

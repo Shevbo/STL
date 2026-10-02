@@ -4,7 +4,7 @@
 // переводит её в «только на выход» по безубытку. Экран обязан сказать, при
 // каком условии это случится, и сказать вслух, когда защиты НЕТ.
 import { describe, it, expect } from 'vitest';
-import { gridProtectionText, preview } from './smart-order-help';
+import { gridProtectionText, gridTargetText, preview } from './smart-order-help';
 
 describe('формулировка защиты', () => {
   it('оба условия: филлы ИЛИ уход цены', () => {
@@ -66,5 +66,37 @@ describe('фраза перед кнопкой взвода', () => {
   it('поля защиты не ломают проверку обязательных', () => {
     const p = preview({ ...base, gStep: 0, gTrigFills: 3 });
     expect(p.error).toContain('Шаг сетки');
+  });
+});
+
+describe('цель прибыли на карточке', () => {
+  it('без ₽/пункт не печатает ни рубля набранного', () => {
+    // Пункт не рубль: на этом карточка робота уже показывала −11 ₽ вместо
+    // −5585 ₽. Нет коэффициента — нет ответа, и цель не сработает.
+    const t = gridTargetText({ g_tp_rub: 50000, g_cash_pts: 400, g_pos: 0 }, 85000, 0);
+    expect(t).toContain('₽ за пункт неизвестен');
+    expect(t).not.toMatch(/набрано/);
+  });
+
+  it('считает поток плюс открытую позицию по рынку', () => {
+    // поток −85000 пунктов (купили 1 по 85000), позиция +1 по 85400 => +400 п.
+    const t = gridTargetText({ g_tp_rub: 1000, g_cash_pts: -85000, g_pos: 1, g_cash_on: true },
+                             85400, 1.3);
+    expect(t).toContain('цель');
+    expect(t).toContain('520');          // 400 п. × 1.3 ₽
+  });
+
+  it('поток не заведён — говорим, что счёт не со взвода', () => {
+    const t = gridTargetText({ g_tp_rub: 1000, g_cash_pts: 0, g_pos: 0, g_cash_on: false },
+                             85000, 1.3);
+    expect(t).toContain('с начала учёта');
+  });
+
+  it('без цели — пусто, лишней строки на карточке нет', () => {
+    expect(gridTargetText({ g_tp_rub: 0 }, 85000, 1.3)).toBe('');
+  });
+
+  it('нет цены — не выдумываем прибыль', () => {
+    expect(gridTargetText({ g_tp_rub: 1000, g_cash_pts: 10 }, 0, 1.3)).toContain('цены инструмента нет');
   });
 });

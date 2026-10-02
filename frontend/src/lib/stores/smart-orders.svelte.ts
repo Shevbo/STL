@@ -92,6 +92,12 @@ export interface SmartOrder {
   g_rearm_min?: number;
   g_rearms?: number;
   g_fills_done?: number;
+  // ЦЕЛЬ ПРИБЫЛИ в рублях и денежный поток сетки в ПУНКТАХ (продажи плюс,
+  // покупки минус). g_cash_on=false — поток ещё не заведён: сетка взведена до
+  // этой механики, и счёт идёт не со взвода.
+  g_tp_rub?: number;
+  g_cash_pts?: number;
+  g_cash_on?: boolean;
   c_avg?: number;
   exit_only?: boolean;
   note: string;

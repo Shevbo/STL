@@ -17,7 +17,7 @@
     preview, protectionPair,
     shortCodes, sortBySideAndPrice, tillFact, isTwoSided, type Kind, type OpenPos, type Side,
     apexMs, corridorFromClicks, corridorState, corridorTimeError, corridorWidth,
-    gridState, gridWorstCase, gridProtectionText,
+    gridState, gridWorstCase, gridProtectionText, gridTargetText,
     canExitOnly, exitOnlyFact, exitOnlyHeld, ownPosition,
     msToMskInput, mskInputToMs,
   } from '$lib/smart-order-help';
@@ -93,6 +93,7 @@
   let gTrigMovePct = $state(G_TRIG_MOVE_PCT);
   let gTrigTouches = $state(G_TRIG_TOUCHES);
   let gRearmMin = $state('');
+  let gTpRub = $state('');
   // ПРОФИЛЬ ИСПОЛНЕНИЯ — один селект вместо трёх полей секунд (решение оператора
   // 29.09.2026). Секунды остались в API как разовое перекрытие и живут под
   // раскрытием: на рядовом пути они только мешают.
@@ -284,7 +285,7 @@
       gStep: num(gStep), gBuys: num(gBuys), gSells: num(gSells),
       gLot: num(gLot), gStopPts: num(gStopPts),
       gTrigFills: num(gTrigFills), gTrigMovePct: num(gTrigMovePct),
-      gTrigTouches: num(gTrigTouches), gRearmMin: num(gRearmMin),
+      gTrigTouches: num(gTrigTouches), gRearmMin: num(gRearmMin), gTpRub: num(gTpRub),
       price, pointValue,
     });
     // «Следящий» выбран, а откат не введён — движок поставит ОБЫЧНЫЙ тейк на
@@ -437,7 +438,8 @@
                         'c_t1_ms', 'c_p1', 'c_t2_ms', 'c_p2', 'c_low', 'c_low2',
                         'c_stop_pts', 'c_flips_max',
                         'g_step', 'g_buys', 'g_sells', 'g_lot', 'g_stop_pts',
-                        'g_trig_fills', 'g_trig_move_pct', 'g_trig_touches', 'g_rearm_min'];
+                        'g_trig_fills', 'g_trig_move_pct', 'g_trig_touches', 'g_rearm_min',
+                        'g_tp_rub'];
   // Три клика по графику собрались — переводим их в параметры. Сам перевод
   // (бар вместо пикселя, шаг цены, приведение нижней к первой точке) живёт в
   // corridorFromClicks и покрыт тестами; здесь только подстановка в форму.
@@ -554,6 +556,7 @@
       g_trig_move_pct: only('g_trig_move_pct', num(gTrigMovePct)),
       g_trig_touches: only('g_trig_touches', num(gTrigTouches)),
       g_rearm_min: only('g_rearm_min', num(gRearmMin)),
+      g_tp_rub: only('g_tp_rub', num(gTpRub)),
       // Профиль относится к ЛЮБОМУ типу заявки, а не только к защитной: не
       // исполнившийся ВХОД врёт человеку так же, как выход — он видит
       // «сработала», а в рынке ничего нет.
@@ -598,7 +601,7 @@
       cT1 = 0; cP1 = ''; cT2 = 0; cP2 = ''; cLow = ''; cLow2 = ''; cStopPts = ''; cFlipsMax = '';
       gStep = ''; gBuys = ''; gSells = ''; gLot = ''; gStopPts = '';
       gTrigFills = G_TRIG_FILLS; gTrigMovePct = G_TRIG_MOVE_PCT;
-      gTrigTouches = G_TRIG_TOUCHES; gRearmMin = '';
+      gTrigTouches = G_TRIG_TOUCHES; gRearmMin = ''; gTpRub = '';
       cErr = ''; corridorDraw.reset();
       confirming = false;
       await smartOrdersStore.refresh();
@@ -660,6 +663,7 @@
     gTrigMovePct = gnum((o as any).g_trig_move_pct);
     gTrigTouches = gnum((o as any).g_trig_touches);
     gRearmMin = (o as any).g_rearm_min ? String((o as any).g_rearm_min) : '';
+    gTpRub = (o as any).g_tp_rub ? String((o as any).g_tp_rub) : '';
     // g_base НЕ подставляем сознательно: базу сетки сервер берёт с рынка в
     // момент приёма, и присланное значение он УВАЖИТ — заявка встала бы вокруг
     // устаревшей точки (предупреждение real-trade 01.10.2026).
@@ -954,6 +958,12 @@
             {:else if f.key === 'g_trig_touches'}
               <input class="so-in" type="number" step="1" min="1" bind:value={gTrigTouches}
                      placeholder="1" aria-label={f.label} />
+            {:else if f.key === 'g_tp_rub'}
+              <div class="so-unit-wrap">
+                <input class="so-in pts" type="number" step="any" min="0" bind:value={gTpRub}
+                       placeholder="0 — без цели" aria-label={f.label} />
+                <span class="so-unit">₽</span>
+              </div>
             {:else if f.key === 'g_rearm_min'}
               <div class="so-unit-wrap">
                 <input class="so-in pts" type="number" step="any" min="0" bind:value={gRearmMin}
@@ -1374,6 +1384,9 @@
                  открывать новое, и по уровням этого не видно: карточка обязана
                  сказать, при каком условии она это сделает и сделала ли уже. -->
             <span class="so-c-corr-w">{gridProtectionText(o as any)}</span>
+            {#if gridTargetText(o as any, o.code === code ? price : 0, o.code === code ? pointValue : 0)}
+              <span class="so-c-corr-w">{gridTargetText(o as any, o.code === code ? price : 0, o.code === code ? pointValue : 0)}</span>
+            {/if}
             {#if (o as any).g_trig_ms}
               <span class="so-c-corr-w">защита включилась {fmtWhen((o as any).g_trig_ms)}</span>
             {/if}
