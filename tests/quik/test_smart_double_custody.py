@@ -213,3 +213,43 @@ def test_a_genuinely_missing_row_still_returns_custody(tmp_path):
     failed = _track_native(book, FakeStore([]), "9618", NOW)
     assert sl.status == "armed", "записи нет нигде — защиту ведёт STL"
     assert parent in failed
+
+
+def test_a_live_row_wins_over_a_dead_one_with_the_same_tag(tmp_path):
+    """ЖИВАЯ ЗАЩИТА, ПОХОРОНЕННАЯ СЛОВАРЁМ, 02.10.2026.
+
+    Словарь по тегу сворачивал строки «последняя побеждает». В QUIK оказались две
+    строки с одним тегом stl-so-ae6731eec7 (дубль), я снял одну, у снятой flags стал
+    30 — бит живости снят, — и словарь оставил ИМЕННО ЕЁ. Код прочитал «стоп-заявка
+    снята в терминале» (журнал 08:02:47, flags=30), пометил обе ноги cancelled, а
+    выжившая 310530617 продолжила стеречь уже никем не управляемой. Сверка этого не
+    увидела: она читает тот же словарь.
+
+    Живая строка отвечает на вопрос «что в терминале», мёртвая — только когда живых
+    нет (по её linkedorder разбирается, какая нога исполнилась).
+    """
+    import trader.api.quik_smart_orders as m
+    dead = _row("ae6731eec7", num="310530756", flags="30",
+                withdraw_datetime_ms="1790917367000")
+    live = _row("ae6731eec7", num="310530617", flags="29")
+
+    # мёртвая идёт ПОСЛЕ живой — порядок, при котором «последняя побеждает» врёт
+    got = m._stop_rows_by_tag(FakeStore([live, dead]), "9618")
+    assert got["ae6731eec7"]["order_num"] == "310530617", (
+        "словарь оставил снятую строку — живая защита объявлена снятой")
+    # и обратный порядок даёт тот же ответ
+    got = m._stop_rows_by_tag(FakeStore([dead, live]), "9618")
+    assert got["ae6731eec7"]["order_num"] == "310530617"
+    # живых нет — мёртвая остаётся, по ней разбирают, какая нога исполнилась
+    only_dead = m._stop_rows_by_tag(FakeStore([dead]), "9618")
+    assert only_dead["ae6731eec7"]["order_num"] == "310530756"
+
+
+def test_the_audit_sees_a_live_row_the_book_calls_cancelled(tmp_path):
+    """Сверка обязана кричать, когда книга считает заявку снятой, а в терминале она
+    ЖИВА: именно такой орфан 02.10 стерёг позицию, которой уже не было, и при
+    срабатывании ОТКРЫЛ бы шорт вместо закрытия лонга."""
+    from trader.api.quik_smart_orders import _audit_book_vs_terminal
+    book, so = _standalone(tmp_path, status="cancelled", native_state="")
+    msgs = _audit_book_vs_terminal(book, {so.so_id: _row(so.so_id, flags="29")})
+    assert len(msgs) == 1 and "ЖИВА" in msgs[0] and "cancelled" in msgs[0]
