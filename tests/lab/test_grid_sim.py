@@ -354,3 +354,68 @@ def test_reset_random_control_keeps_reset_count():
     sch = {10, 80, 200}
     r = gs.simulate_reset(body, tail, PR, [False] * len(body), cool=0, schedule=sch)
     assert r["resets"] == 3
+
+
+# ── часть 2б: короткая сетка после импульса ──────────────────────────────────────────────────────
+def _sbody(rows):
+    return _bars(rows), []
+
+
+SP = {**gs.DEFAULTS, "tick": 1.0, "half": 0.0, "lot": 1, "fill_pen": 1}
+
+
+def test_short_atr_does_not_look_ahead():
+    rnd = random.Random(9)
+    cl = [1000 + rnd.gauss(0, 5) for _ in range(700)]
+    full = _day([round(c) for c in cl])
+    body = [r for r in full if 600 <= (r[0] % 86400) // 60 < 1420]
+    a = gs.atr10_of(full, body)
+    full2 = full[:301] + [[r[0], 1, 999, 0, 1, 1] for r in full[301:]]
+    body2 = [r for r in full2 if 600 <= (r[0] % 86400) // 60 < 1420]
+    a2 = gs.atr10_of(full2, body2)
+    k = next(i for i, r in enumerate(body) if r[0] == full[300][0])
+    assert a[:k + 1] == a2[:k + 1] and a[0] is not None
+
+
+def test_short_grid_removed_after_T_bars_and_flattens():
+    # старт на баре 1 (close 1000), шаг 100 (atr 100, s=1), цена идёт вниз к 899: покупка 900, дальше тихо
+    rows = [(1000, 1000, 1000, 1000), (1000, 1000, 1000, 1000), (1000, 1000, 899, 950)] + [(950, 950, 950, 950)] * 8
+    body, tail = _sbody(rows)
+    atr = [100.0] * len(body)
+    r = gs.simulate_short(body, tail, SP, {1: 5.0, 3: 6.0}, atr, 1.0, 3, 4)       # T=4: жизнь баров 2..5; событие на баре 3 пропущено
+    kinds = [f[4] for f in r["fills"]]
+    assert r["grids"] == 1 and kinds == ["level", "life"]
+    assert r["fills"][0][1:3] == ("buy", 900) and r["fills"][1][1] == "sell" and r["fills"][1][0] == body[6][0]   # open бара 6 (i=5 + 1)
+
+
+def test_short_stop_beyond_one_step():
+    rows = [(1000, 1000, 1000, 1000), (1000, 1000, 1000, 1000), (1000, 1000, 590, 600), (600, 600, 600, 600)] + [(600, 600, 600, 600)] * 6
+    body, tail = _sbody(rows)
+    r = gs.simulate_short(body, tail, SP, {1: 5.0}, [100.0] * len(body), 1.0, 2, 40)   # низ 800, стоп 700: close 600 <= 700
+    assert r["stops"] == 1 and [f[4] for f in r["fills"]][-1] == "stop"
+
+
+def test_short_control_matches_hour_and_volatility_decile():
+    days = []
+    for k in range(4):
+        body = [[DAY0 + k * 86400 + (600 + i) * 60, 0, 0, 0, 0, 1] for i in range(120)]
+        atr = [float(1 + (i * 7 + k * 13) % 50) for i in range(120)]
+        days.append({"body": body, "atr": atr})
+    edges, pm, ph = gs.short_pools(days)
+    rng = random.Random(3)
+    evs = {0: [30, 31, 32]}
+    h0 = gs._hour(days[0], 30)
+    for i in evs[0]:
+        q0 = gs._decile(edges[gs._hour(days[0], i)], days[0]["atr"][i])
+        for _ in range(20):
+            sch = gs.draw_starts(days, edges, pm, ph, rng, {0: [i]}, True)
+            (ck, d), = [(k_, list(v)[0]) for k_, v in sch.items()]
+            assert gs._hour(days[ck], d) == gs._hour(days[0], i)
+            assert gs._decile(edges[h0], days[ck]["atr"][d]) == q0 or gs._hour(days[ck], d) != h0
+
+
+def test_short_reversion_stats():
+    body, _ = _sbody([(1000, 1000, 1000, 1000), (1000, 1010, 990, 1010), (1010, 1010, 990, 990), (990, 1010, 990, 1010), (1010, 1010, 1010, 1010)])
+    cross, eff = gs.reversion_stats(body, 0, 3)
+    assert cross == 2 and abs(eff - 10 / (10 + 20 + 20)) < 1e-9
+    assert gs.reversion_stats(body, 3, 3) is None

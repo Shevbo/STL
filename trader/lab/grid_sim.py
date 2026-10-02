@@ -1136,6 +1136,228 @@ def run_reset(arg: dict) -> dict:
                 out["configs"].append(item)
     return out
 
+
+# ── часть 2б flex-radiation: короткая сетка на волатильности после импульса ──────────────────────
+def atr10_of(full: list, body: list) -> list:
+    """Текущая волатильность на закрытии каждого бара body: средний размах 10 баров, оканчивающихся этим баром
+    (бары дня с 07:00 включая утро; None пока меньше 10 баров)."""
+    pos = {r[0]: k for k, r in enumerate(full)}
+    out = []
+    for r in body:
+        k = pos[r[0]]
+        out.append(sum(x[2] - x[3] for x in full[k - 9:k + 1]) / 10 if k >= 9 else None)
+    return out
+
+
+def short_events(full: list, body: list, imp_min: float) -> dict:
+    """События r1.find_impulses (imp_min..250 ATR за <= 20 баров) -> {'conf': {i: H}, 'peak': {i: H}} по индексам body.
+    Старт 'conf' на закрытии бара подтверждения (причинно), 'peak' на закрытии бара пика (известно только
+    постфактум: справочно)."""
+    from trader.lab.footprints.r1_retest import find_impulses
+    pos = {r[0]: k for k, r in enumerate(body)}
+    out: dict = {"conf": {}, "peak": {}}
+    for e in find_impulses(full, {"atr_n": 60, "imp_bars": 20, "imp_min": imp_min, "imp_max": 250, "pb": 10}):
+        for key, fi in (("conf", e["i_conf"]), ("peak", e["t_p"])):
+            k = pos.get(full[fi][0])
+            if k is not None and k < len(body) - 1 and k not in out[key]:
+                out[key][k] = e["strength"]
+    return out
+
+
+def simulate_short(body: list, tail: list, p: dict, starts: dict, atr: list, s: float, n_lv: int, T: int) -> dict:
+    """Короткие сетки после событий. starts = {индекс бара body: H}: на закрытии бара ставится сетка (база = close,
+    шаг = s x ATR_тек, n_lv уровней в каждую сторону), живёт T баров, затем снимается с закрытием позиции
+    рыночно по open следующего бара + полспреда; стоп за краем на 1 шаг (закрытие позиции, конец сетки);
+    одна сетка за раз; события внутри жизни сетки пропускаются."""
+    n, hs, tick = len(body), p["half"], p["tick"]
+    st = _new_state()
+    g, last, end_i, grids, stops = None, None, -1, 0, 0
+    for i in range(n):
+        ts, o, h, lw, c = body[i][:5]
+        if g is not None:
+            if g.pending:
+                g.place(last)
+            if not (not g.pending and h < (g.sell_t[0] if g.sell_t else math.inf)
+                    and lw > (g.buy_t[-1] if g.buy_t else -math.inf)):
+                path = [o, lw, h, c] if c >= o else [o, h, lw, c]
+                a = last
+                for b in [o] + path[1:]:
+                    _segment(g, st, a, b, ts)
+                    a = b
+            last = c
+            why = None
+            if (g.lo and c <= g.lo) or (g.hi and c >= g.hi):
+                why = "stop"
+            elif i >= end_i:
+                why = "life"
+            if why:
+                if st["pos"]:
+                    if i + 1 < n:
+                        _flat(st, body[i + 1][1] - hs if st["pos"] > 0 else body[i + 1][1] + hs, body[i + 1][0], why)
+                    else:
+                        _flat(st, c, ts, why)
+                stops += why == "stop"
+                g = None
+            continue
+        if i in starts and atr[i]:
+            step = max(s * atr[i], tick)
+            q = {**p, "step": step, "buys": n_lv, "sells": n_lv, "stop_pts": step}
+            g = _Grid(c, q)
+            g.px = {k: round(v / tick) * tick for k, v in g.px.items()}
+            g.side = {k: None for k in g.levels}
+            g.pending = True
+            last, end_i, grids = c, i + T, grids + 1
+    if st["pos"]:
+        end_bar = tail[0] if tail else body[-1]
+        _flat(st, end_bar[4], end_bar[0], "eod")
+    return {"fills": st["fills"], "pnl_pts": sum(st["trades_pnl"]) * 1.0, "max_pos": st["max_pos"],
+            "n_contracts": sum(f[3] for f in st["fills"]), "grids": grids, "stops": stops}
+
+
+def reversion_stats(body: list, i0: int, T: int) -> tuple | None:
+    """(пересечения базы close[i0], чистый ход / путь) за T баров после бара i0 по закрытым барам."""
+    if i0 + T >= len(body):
+        return None
+    base = body[i0][4]
+    prev, cross, path = 0, 0, 0.0
+    for j in range(i0 + 1, i0 + T + 1):
+        d = body[j][4] - base
+        sg = (d > 0) - (d < 0)
+        if sg and prev and sg != prev:
+            cross += 1
+        if sg:
+            prev = sg
+        path += abs(body[j][4] - body[j - 1][4])
+    return cross, (abs(body[i0 + T][4] - base) / path if path else 0.0)
+
+
+def _decile_edges(vals: list) -> list:
+    xs = sorted(vals)
+    return [xs[min(len(xs) - 1, int(q * len(xs) / 10))] for q in range(1, 10)]
+
+
+def _decile(edges: list, v: float) -> int:
+    from bisect import bisect_right
+    return bisect_right(edges, v)
+
+
+def _hour(d: dict, i: int) -> int:
+    return (d["body"][i][0] % 86400) // 3600
+
+
+def short_pools(days: list) -> tuple:
+    """Пулы случайных моментов (день, бар): час x дециль ATR_тек (подбор волатильности) и час (без подбора)."""
+    byh: dict = {}
+    for k, d in enumerate(days):
+        for i in range(10, len(d["body"]) - 41):
+            if d["atr"][i]:
+                byh.setdefault(_hour(d, i), []).append((k, i, d["atr"][i]))
+    edges = {h: _decile_edges([x[2] for x in v]) for h, v in byh.items()}
+    pool_m: dict = {}
+    for h, v in byh.items():
+        for k, i, a in v:
+            pool_m.setdefault((h, _decile(edges[h], a)), []).append((k, i))
+    return edges, pool_m, {h: [(k, i) for k, i, _a in v] for h, v in byh.items()}
+
+
+def draw_starts(days, edges, pool_m, pool_h, rng, evs_by_day, matched):
+    """Для каждого реального события случайный момент: тот же час и (при подборе) тот же дециль ATR_тек."""
+    sch: dict = {}
+    for k, evs in evs_by_day.items():
+        d = days[k]
+        for i in evs:
+            h = _hour(d, i)
+            if matched and d["atr"][i]:
+                cand = pool_m.get((h, _decile(edges[h], d["atr"][i]))) or pool_h.get(h)
+            else:
+                cand = pool_h.get(h)
+            if cand:
+                ck, ci = rng.choice(cand)
+                sch.setdefault(ck, {})[ci] = 1.0
+    return sch
+
+
+def run_short(arg: dict) -> dict:
+    """mode=short_days: params-база (tick/half из инструмента), starts ['conf','peak'], imp_mins, ss, ns, Ts, draws,
+    chunk [i, n] по парам (start, imp_min). mode=short_diag: диагностика возвратности (события против случайных
+    моментов с подбором ATR_тек по децилю в тот же час и без подбора)."""
+    import random
+    from trader.lab.footprints import common
+    key = arg["symbol_key"]
+    rows = common.load_bars(key, arg.get("since"), arg.get("until"))
+    if not rows:
+        return {"id": "SHORT", "symbol": key, "error": "нет баров в окне"}
+    inst = INST["Si" if key[:2].lower() == "si" else "RI"]
+    days = prep_days(rows, with_sig=False)
+    nt = len(days) * 2 // 3
+    for d in days:
+        d["atr"] = atr10_of(d["full"], d["body"])
+    edges, pool_m, pool_h = short_pools(days)
+    out = {"id": "SHORT", "mode": arg["mode"], "symbol": key, "n_days": len(days), "n_train": nt,
+           "days": [d["stats"] for d in days]}
+    pv = inst["pv"]
+    p0 = {**DEFAULTS, **inst, "lot": 1, "fill_pen": 1}
+
+    if arg["mode"] == "short_diag":
+        res: dict = {}
+        for im in arg["imp_mins"]:
+            evs = [short_events(d["full"], d["body"], im)["conf"] for d in days]
+            evd = {k: list(e) for k, e in enumerate(evs) if e}
+            for T in arg["Ts"]:
+                real = [reversion_stats(days[k]["body"], i, T) for k, il in evd.items() for i in il]
+                real = [x for x in real if x]
+                r = {"n": len(real), "cross": sum(x[0] for x in real) / max(1, len(real)),
+                     "eff": sum(x[1] for x in real) / max(1, len(real)), "m": [], "u": []}
+                for kind, matched in (("m", True), ("u", False)):
+                    for dd in range(arg.get("draws", 20)):
+                        rng = random.Random(3000 + dd)
+                        sch = draw_starts(days, edges, pool_m, pool_h, rng, evd, matched)
+                        st = [reversion_stats(days[k]["body"], i, T) for k, dct in sch.items() for i in dct]
+                        st = [x for x in st if x]
+                        r[kind].append([sum(x[0] for x in st) / max(1, len(st)), sum(x[1] for x in st) / max(1, len(st))])
+                res[f"{im}|{T}"] = r
+        out["diag"] = res
+        return out
+    pairs = [(a, b) for a in arg["starts"] for b in arg["imp_mins"]]
+    if arg.get("chunk"):
+        i, n = arg["chunk"]
+        pairs = pairs[i::n]
+    out["configs"] = []
+    for stype, im in pairs:
+        evs = [short_events(d["full"], d["body"], im)[stype] for d in days]
+        for s in arg["ss"]:
+            for nn in arg["ns"]:
+                for T in arg["Ts"]:
+                    def run_days(starts_by_day, ix):
+                        rs = []
+                        for k in ix:
+                            d = days[k]
+                            rs.append(simulate_short(d["body"], d["tail"], p0, starts_by_day.get(k, {}), d["atr"], s, nn, T))
+                        return rs
+
+                    rs = run_days({k: {i: 1.0 for i in e} for k, e in enumerate(evs)}, range(len(days)))
+                    fee = [_fee_rows(r["fills"], key, pv) for r in rs]
+                    item = {"start": stype, "imp_min": im, "s": s, "n": nn, "T": T,
+                            "gross": [round(r["pnl_pts"] * pv, 2) for r in rs],
+                            "fee_m": [round(sum(x[1] for x in f), 2) for f in fee],
+                            "fee_t": [round(sum(x[2] for x in f), 2) for f in fee],
+                            "grids": [r["grids"] for r in rs], "ev": [len(e) for e in evs], "stops": [r["stops"] for r in rs],
+                            "mp": max([r["max_pos"] for r in rs] or [0])}
+                    test_evs = {k: list(e) for k, e in enumerate(evs) if e and k >= nt}
+                    for kind, matched in (("ca", True), ("cb", False)):
+                        lst = []
+                        for dd in range(arg.get("draws", 0)):
+                            rng = random.Random(4000 + dd)
+                            sch = draw_starts(days, edges, pool_m, pool_h, rng, test_evs, matched)
+                            rc = run_days(sch, list(sch))
+                            fc = [_fee_rows(r["fills"], key, pv) for r in rc]
+                            g = sum(r["pnl_pts"] for r in rc) * pv
+                            lst.append({"net_t": round(g - sum(x[2] for f in fc for x in f), 1),
+                                        "grids": sum(r["grids"] for r in rc)})
+                        item[kind] = lst
+                    out["configs"].append(item)
+    return out
+
 # ── сетка документа и живой набор ────────────────────────────────────────────
 STEPS = (50, 100, 150, 200, 300, 400, 600)
 LEVELS = (2, 3, 5, 8, 12)
@@ -1183,6 +1405,8 @@ def run(arg: dict) -> dict:
         return run_wide(arg)
     if str(arg.get("mode", "")).startswith("reset"):
         return run_reset(arg)
+    if str(arg.get("mode", "")).startswith("short"):
+        return run_short(arg)
     from trader.lab.footprints import common
     key = arg["symbol_key"]
     rows = common.load_bars(key, arg.get("since"), arg.get("until"))
