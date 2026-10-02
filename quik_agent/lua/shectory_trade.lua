@@ -44,7 +44,7 @@
 -- Bump on every change you deliver to the VDS. Logged FIRST on OnInit so the
 -- operator can confirm which version QUIK actually loaded (the running script is
 -- in MEMORY; a file on disk with the same name may be a different build).
-local SCRIPT_VERSION = "2026.10.01-trade-facts"
+local SCRIPT_VERSION = "2026.10.02-md-codes-z6"
 
 local CONFIG = {
   HOST          = "127.0.0.1",
@@ -67,7 +67,22 @@ local CONFIG = {
   -- Market-data publisher (QLua getParamEx/getQuoteLevel2 -> agent). This makes the
   -- agent INDEPENDENT of the fragile DDE export: no "Начать вывод", survives agent
   -- restarts, auto-resumes with the transport. Empty MD_CODES disables it.
-  MD_CODES         = "RIU6,GZU6,SiU6,SRU6",  -- comma-separated instrument codes
+  -- КОДЫ ЖИВЫХ КОНТРАКТОВ. 02.10.2026 здесь стояли СЕНТЯБРЬСКИЕ (RIU6, GZU6, SiU6,
+  -- SRU6), истёкшие 18.09, тогда как терминал всё это время публиковал декабрьские:
+  -- кто-то поправил MD_CODES прямо на VDS и НЕ ТРОНУЛ SCRIPT_VERSION, поэтому
+  -- снаружи расхождение было невидимо — тот же номер версии при другой
+  -- конфигурации (см. docs: «версия QLua не видна снаружи», правка стакана жила
+  -- незамеченной три дня).
+  --
+  -- Чем это грозило: релиз агента кладёт этот файл рядом с агентом, и первый же
+  -- Stop/Start скрипта в QUIK загрузил бы сентябрьские коды. Фида не стало бы
+  -- совсем — сетки замирают, роботы слепнут. Поэтому список здесь обязан
+  -- совпадать с тем, что реально торгуется, а версия — меняться вместе с ним.
+  --
+  -- GZZ6 добавлен по требованию оператора 02.10.2026: он в белом списке лимитов
+  -- был, а котировок по нему не шло, и умная заявка честно отказывалась взводиться
+  -- («по GZZ6 нет ни одной котировки: инструмент не подключён к торговле»).
+  MD_CODES         = "RIZ6,SiZ6,GDZ6,BRZ6,GZZ6",  -- comma-separated instrument codes
   MD_CLASS         = "SPBFUT",               -- QUIK class code for the instruments
   MD_INTERVAL_MS   = 500,                    -- tick snapshot cadence
   MD_BOOK_INTERVAL_MS = 5000,                -- order-book (L2) snapshot cadence
@@ -81,7 +96,11 @@ local CONFIG = {
   -- Теперь подписка включается ПОИМЕННО и осознанно: пусто = не подписываемся
   -- ни на что, стаканы не публикуются вовсе. Архиву рынка это стоит данных, но
   -- архив не стоит разорванной торговой сессии.
-  MD_BOOK_CODES    = "",                     -- напр. "RIZ6"; пусто = стаканы выключены
+  -- На VDS сейчас включены именно эти четыре (agent_status.quik.book_codes), и
+  -- файл обязан это повторять, иначе релиз молча выключит стаканы. GZZ6 сюда НЕ
+  -- добавлен намеренно: стакан это отдельный поток внутри терминала, а именно их
+  -- число 25.09.2026 рвало сессию QUIK. Для торговли сетки хватает тиков.
+  MD_BOOK_CODES    = "RIZ6,GDZ6,SiZ6,BRZ6",  -- пусто = стаканы выключены
 
   -- Account tables (positions/orders/trades) publish cadence for the agent showcase (ms).
   ACC_INTERVAL_MS  = 2000,
