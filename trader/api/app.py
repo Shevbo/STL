@@ -539,9 +539,17 @@ async def lifespan(app: FastAPI):
     # оператору строился по книге НАМЕРЕНИЙ и назвал закрытый шорт открытым.
     from trader.quik.truth import run as _truth_dump
     truth_task = asyncio.create_task(_truth_dump(app.state))
+    # Моменты, когда инструмент был РОВНО в нуле. Без них окно журнала сделок
+    # нечем начать: сумма журнала сходится с позицией только от флэта, а его не
+    # хранил никто — 02.10.2026 расхождение «журнал +3» не удалось ни доказать,
+    # ни опровергнуть. Пишет только из свежего кадра с зелёным линком и только
+    # на ПЕРЕХОД в ноль (условия real-trade 02.10.2026).
+    from trader.api.flat_marks import run as _flat_marks
+    flat_marks_task = asyncio.create_task(_flat_marks(app.state))
 
     yield
 
+    flat_marks_task.cancel()
     truth_task.cancel()
     stuck_robot_task.cancel()
     archive_watch_task.cancel()
