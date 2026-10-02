@@ -971,13 +971,16 @@ def test_figure_and_grid_carry_their_own_fields_to_the_panel(monkeypatch):
             self.c_done = self.g_done = False
             self.g_step = self.g_buys = self.g_sells = self.g_lot = 0
             self.g_base = self.g_stop_pts = self.g_pos = 0
+            self.g_avg = self.c_avg = 0.0
+            self.exit_only = False
             for k, v in kw.items():
                 setattr(self, k, v)
 
     class _Book:
         orders = [_SO("corridor"),
                   _SO("grid", g_step=50, g_buys=3, g_sells=2, g_lot=2,
-                      g_base=84_000.0, g_stop_pts=100, g_pos=4)]
+                      g_base=84_000.0, g_stop_pts=100, g_pos=4,
+                      g_avg=85_510.0, exit_only=True)]
 
     app.state.smart_orders = _Book()
     body = TestClient(app).get("/api/v1/quik/companion/snapshot",
@@ -992,6 +995,13 @@ def test_figure_and_grid_carry_their_own_fields_to_the_panel(monkeypatch):
     grid = smart["grid"]
     assert grid["g_step"] == 50 and grid["g_buys"] == 3 and grid["g_lot"] == 2
     assert grid["g_stop_pts"] == 100 and grid["g_pos"] == 4
+    # РЕЖИМ «ТОЛЬКО НА ВЫХОД» и средняя его позиции (real-trade 02.10.2026). В
+    # этом режиме фигура намеренно ничего не ставит, пока цена хуже средней; без
+    # этих полей панель рисует её так же, как рабочую — «взведена» и тишина, то
+    # есть ровно как сломанную.
+    assert grid["exit_only"] is True
+    assert grid["g_avg"] == pytest.approx(85_510.0)
+    assert smart["corridor"]["exit_only"] is False
 
 
 def test_each_order_gets_its_own_pnl():
@@ -1252,3 +1262,79 @@ def test_an_empty_robot_list_is_a_real_answer(monkeypatch):
     pos = next(p for p in body["positions"] if p["sec"] == "RIZ6")
     assert pos["robot_net"] == 0
     assert pos["manual_net"] == -17
+
+
+def test_journal_average_is_dropped_when_the_journal_misses_fills(monkeypatch):
+    """Журнал разошёлся со счётом по инструменту — его средняя НЕ показывается.
+
+    02.10.2026 оператор сверил два экрана: компаньон писал ручную среднюю
+    85 480, QUIK по той же позиции — 85 690. Журнал в тот момент насчитал по
+    RIZ6 38 контрактов против 35 на счёте: трёх сделок он не видел, и его
+    средняя была ценой ДРУГОЙ позиции — похожей, но не этой. Обе цифры
+    выглядели одинаково уверенно, и в этом был весь вред.
+
+    Расхождение в контрактах — это недоверие к ЦЕНЕ, а не к количеству:
+    количество и так берётся у счёта. Поэтому журнальную среднюю гасим и
+    уходим на среднюю счёта (роботов в инструменте нет), подписав источник.
+    """
+    monkeypatch.delenv("SHECTORY_AUTH_DEV_BYPASS", raising=False)
+    app = FastAPI()
+    app.include_router(companion_router)
+    app.state.settings = _Settings()
+    app.state.db_pool = FakePool()
+    store = QuikAgentStore()
+    store.set_agent_status("A1", json.dumps({
+        "agent": {"version": "x", "link_up": True},
+        "health": {
+            "runner_healthy": True,
+            "money": {"limit": 1.0, "varmargin": -1.0, "age_ms": 100},
+            "positions": [{"sec": "RIZ6", "net": 35, "avg": 85_690.0, "varmargin": 1.0}],
+        },
+        "robots": [],
+    }), 0)
+    app.state.quik_store = store
+    monkeypatch.setattr(quik_companion, "_manual_block",
+                        lambda _store: {"open": [{"symbol": "RIZ6", "position": 35,
+                                                  "avg_price": 85_480.0}],
+                                        "open_vs_account": {"RIZ6": 3}})
+    body = TestClient(app).get("/api/v1/quik/companion/snapshot",
+                               headers=_operator_headers()).json()
+    pos = next(p for p in body["positions"] if p["sec"] == "RIZ6")
+    assert pos["manual_avg"] == pytest.approx(85_690.0)   # цифра счёта, не журнала
+    assert pos["manual_avg_src"] == "quik"
+    assert pos["manual_journal_div"] == 3                 # и расхождение названо
+    assert pos["manual_avg_why"] == ""
+
+
+def test_journal_average_survives_when_the_journal_agrees_with_the_account(monkeypatch):
+    """Сошёлся по количеству — журнальную среднюю показываем как раньше.
+
+    Правило бьёт по НЕДОВЕРИЮ, а не по журналу вообще: цена входа оператора
+    однородна с роботной и нужна ровно там, где журналу можно верить.
+    """
+    monkeypatch.delenv("SHECTORY_AUTH_DEV_BYPASS", raising=False)
+    app = FastAPI()
+    app.include_router(companion_router)
+    app.state.settings = _Settings()
+    app.state.db_pool = FakePool()
+    store = QuikAgentStore()
+    store.set_agent_status("A1", json.dumps({
+        "agent": {"version": "x", "link_up": True},
+        "health": {
+            "runner_healthy": True,
+            "money": {"limit": 1.0, "varmargin": -1.0, "age_ms": 100},
+            "positions": [{"sec": "RIZ6", "net": 35, "avg": 85_690.0, "varmargin": 1.0}],
+        },
+        "robots": [],
+    }), 0)
+    app.state.quik_store = store
+    monkeypatch.setattr(quik_companion, "_manual_block",
+                        lambda _store: {"open": [{"symbol": "RIZ6", "position": 35,
+                                                  "avg_price": 85_480.0}],
+                                        "open_vs_account": {}})
+    body = TestClient(app).get("/api/v1/quik/companion/snapshot",
+                               headers=_operator_headers()).json()
+    pos = next(p for p in body["positions"] if p["sec"] == "RIZ6")
+    assert pos["manual_avg"] == pytest.approx(85_480.0)
+    assert pos["manual_avg_src"] == "journal"
+    assert pos["manual_journal_div"] == 0

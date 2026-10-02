@@ -7,6 +7,8 @@
 // Все формулировки сверены с движком (trader/quik/smart_orders.py). Меняется
 // движок — правится и текст, иначе интерфейс начнёт обещать не то, что будет.
 
+import { fmtPrice } from '$lib/format';
+
 export type Kind = 'sl' | 'tp' | 'trail_tp' | 'on_fill' | 'trail_sl' | 'corridor'
   | 'triangle' | 'grid';
 export type Side = 'buy' | 'sell';
@@ -1659,4 +1661,71 @@ export function gridState(g: GridGeom, marketPrice = 0): string {
   const tail = gridLevelsSummary(gridLevels(g, marketPrice));
   const body = tail ? `${where} · ${tail}` : where;
   return g.g_done ? `${body} · сетка закончена` : body;
+}
+
+// ── РЕЖИМ «ТОЛЬКО НА ВЫХОД» (оператор 02.10.2026) ───────────────────────────
+//
+// Его слова: «кнопка „только на выход“ — это значит выход БЕЗ УБЫТКА». Движок
+// (trader/api/quik_smart_orders.py) ставит в этом режиме лишь то, что сокращает
+// позицию, и лишь по цене не хуже средней.
+//
+// Перечисляем ЗАЩИТНЫЕ виды, а не фигуры. У защитной заявки режима нет по
+// смыслу: она и так только закрывает, и ручка отвечает ей 422. Фигуры же
+// заводятся и дальше — коридор и треугольник появились 29.09, сетка 30.09, — и
+// перечень фигур уже дважды прятал новые виды с экрана молча. Незнакомый вид
+// получает кнопку: ошиблись — движок ответит 422 с объяснением, и это ВИДНО, а
+// молча спрятанной кнопки не видно никак.
+const PROTECTIVE_KINDS = new Set<Kind>(['sl', 'tp', 'trail_tp', 'trail_sl', 'on_fill']);
+
+export function canExitOnly(kind: Kind | string | null | undefined): boolean {
+  const k = String(kind ?? '');
+  return k !== '' && !PROTECTIVE_KINDS.has(k as Kind);
+}
+
+/** Своя позиция фигуры и её средняя: у сетки g_*, у коридора и треугольника c_*.
+ *  Имена разные, смысл один, и карточке незачем знать, какой вид перед ней. */
+export function ownPosition(o: any): { pos: number; avg: number } {
+  return { pos: Number(o?.g_pos ?? o?.c_pos ?? 0) || 0,
+           avg: Number(o?.g_avg ?? o?.c_avg ?? 0) || 0 };
+}
+
+/** Что режим делает с этой заявкой ПРЯМО СЕЙЧАС, одной фразой.
+ *
+ *  Включённый режим выглядит как «заявка ничего не делает», и это главная
+ *  опасность: оператор включит его, увидит тишину и решит, что сломалось
+ *  (просьба real-trade 02.10.2026 — тот же случай, что с terminal_stale).
+ *  Поэтому фраза всегда говорит, ЧЕГО ждать: выхода по такой-то цене или что
+ *  закрывать нечего.
+ *
+ *  КОМИССИЯ НЕ УЧТЕНА, и мы пишем об этом прямо: равенство средней — это ноль
+ *  ДО сборов, то есть с ними небольшой минус (оговорка real-trade). */
+export function exitOnlyFact(o: any): string {
+  if (!o?.exit_only) return '';
+  const { pos, avg } = ownPosition(o);
+  if (!pos) return 'только на выход: позиции нет — закрывать нечего, новых не откроет';
+  const side = pos > 0 ? 'лонг' : 'шорт';
+  const close = pos > 0 ? 'продажей' : 'покупкой';
+  const cmp = pos > 0 ? 'не ниже' : 'не выше';
+  const where = avg ? ` ${cmp} средней ${fmtPrice(avg)}` : '';
+  return `только на выход: ${side} ${Math.abs(pos)} закроется ${close}${where}`
+    + ' · комиссия в этом сравнении НЕ учтена: по средней выйдет ноль до сборов';
+}
+
+/** Последняя причина, по которой режим ничего не поставил, по каждой заявке.
+ *
+ *  Движок пишет её событием `held` с текстом «только на выход: …» и повторно не
+ *  дублирует (дедуп по метке уровня), поэтому свежайшая строка и есть
+ *  актуальная причина. Строки идут НОВЫМИ СВЕРХУ — берём первую на заявку. */
+export function exitOnlyHeld(rows: Array<{ ts_ms?: number; event?: string; so_id?: string; detail?: string }>):
+    Record<string, { ts_ms: number; detail: string }> {
+  const out: Record<string, { ts_ms: number; detail: string }> = {};
+  for (const r of rows || []) {
+    if (String(r?.event ?? '') !== 'held') continue;
+    const d = String(r?.detail ?? '');
+    if (!d.startsWith('только на выход')) continue;
+    const id = String(r?.so_id ?? '');
+    if (!id || out[id]) continue;
+    out[id] = { ts_ms: Number(r.ts_ms ?? 0) || 0, detail: d };
+  }
+  return out;
 }

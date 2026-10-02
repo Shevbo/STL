@@ -18,6 +18,7 @@
     shortCodes, sortBySideAndPrice, tillFact, isTwoSided, type Kind, type OpenPos, type Side,
     apexMs, corridorFromClicks, corridorState, corridorTimeError, corridorWidth,
     gridState, gridWorstCase,
+    canExitOnly, exitOnlyFact, exitOnlyHeld, ownPosition,
     msToMskInput, mskInputToMs,
   } from '$lib/smart-order-help';
   import { candlesStore } from '$lib/stores/candles.svelte';
@@ -126,6 +127,48 @@
       if (!feedRows.length) feedErr = `за сегодня событий нет (журнал с ${d?.events_from ?? '—'})`;
     } catch (e: any) { feedErr = e?.message || 'ошибка'; }
   }
+  // ТОЛЬКО НА ВЫХОД. Режим выглядит как «заявка ничего не делает», и причин у
+  // этого три разных (позиции нет / уровень доливает / цена хуже средней).
+  // Движок пишет их событием held; без них оператор включит режим, увидит
+  // тишину и решит, что сломалось (просьба real-trade 02.10.2026).
+  //
+  // Тянем ОДНИМ запросом на все заявки, а не по одной: журнал и так отдаёт
+  // ленту дня новыми сверху, а N запросов на N карточек — это тот же ответ за
+  // N раз. Опрашиваем только когда режим где-то включён.
+  let heldWhy = $state<Record<string, { ts_ms: number; detail: string }>>({});
+  let exitBusy = $state('');
+  let exitErr = $state('');
+
+  async function loadHeld() {
+    if (!orders.some((o) => o.exit_only && isLive(o.status))) {
+      if (Object.keys(heldWhy).length) heldWhy = {};
+      return;
+    }
+    try {
+      const r = await fetchWithAuth('/api/v1/quik/manual/journal?period=day&limit=500');
+      if (!r.ok) return;
+      const d = await r.json();
+      heldWhy = exitOnlyHeld((d?.rows ?? []) as JournalRow[]);
+    } catch { /* причина не приехала — карточка скажет сам режим, но не причину */ }
+  }
+
+  async function toggleExitOnly(o: SmartOrder) {
+    exitBusy = o.so_id; exitErr = '';
+    try {
+      const r = await fetchWithAuth(
+        `/api/v1/quik/smart-orders/${encodeURIComponent(o.so_id)}/exit-only`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ on: !o.exit_only }) });
+      const d = await r.json().catch(() => null);
+      // 422 у защитной заявки — это объяснение движка, а не поломка: показываем
+      // его текстом. Своей догадки вместо него не пишем.
+      if (!r.ok) { exitErr = `${o.so_id}: ${d?.detail ?? 'HTTP ' + r.status}`; return; }
+      await smartOrdersStore.refresh();
+      await loadHeld();
+    } catch (e: any) { exitErr = `${o.so_id}: ${e?.message || 'ошибка'}`; }
+    finally { exitBusy = ''; }
+  }
+
   let ocoGroup = $state('');
   // Входы, которыми набрана выбранная позиция: один — связка подставляется сама,
   // несколько — оператор выбирает, к какому входу привязать выход.
@@ -642,7 +685,7 @@
   onMount(() => {
     unsub = smartOrdersStore.subscribe(2000);
     timers = [setInterval(loadTick, 2000), setInterval(loadPositions, 5000),
-              setInterval(loadStopOrders, 5000)];
+              setInterval(loadStopOrders, 5000), setInterval(loadHeld, 10000)];
     loadPointValue();   // и без выбранного кода: наполняет подсказки инструментов
     loadProfiles();
     loadPositions();
@@ -1214,6 +1257,7 @@
     {#if !armed.length}
       <p class="so-empty">Взведённых заявок нет. Сторож ничего не ждёт.</p>
     {/if}
+    {#if exitErr}<div class="so-exit-err">{exitErr}</div>{/if}
     {#each armedSorted as o, i (o.so_id)}
       {#if i === 0 || armedSorted[i - 1].side !== o.side}
         <div class="so-side-h" class:buy={o.side === 'buy'}>
@@ -1245,8 +1289,32 @@
                   onclick={() => edit(o)}>Изменить</button>
           <button class="so-btn sm" title="что с этой заявкой уже произошло: ходы фигуры, доведение до исполнения, отказы"
                   onclick={() => toggleFeed(o.so_id)}>{feedFor === o.so_id ? 'Скрыть ленту' : 'Лента'}</button>
+          {#if canExitOnly(o.kind)}
+            <!-- Состояние КНОПКИ, как у роботов рядом с «Пауза»: надпись
+                 называет то, что произойдёт по нажатию, а не текущий режим.
+                 Иначе включённый режим и кнопка его включения читаются
+                 одинаково (договорённость с real-trade 02.10.2026). -->
+            <button class="so-btn sm" class:on={o.exit_only} disabled={exitBusy === o.so_id}
+                    title={o.exit_only
+                      ? 'вернуть обычный режим: заявка снова сможет открывать позицию'
+                      : 'ставить только то, что закрывает позицию, и только по цене не хуже средней (без убытка до комиссии)'}
+                    onclick={() => toggleExitOnly(o)}>{o.exit_only ? '▶ Обычный режим' : '⏹ Только на выход'}</button>
+          {/if}
           <button class="so-btn sm" onclick={() => cancel(o.so_id)}>Снять</button>
         </div>
+        {#if o.exit_only}
+          <div class="so-c-exit">
+            <b>{exitOnlyFact(o)}</b>
+            <!-- ПОЧЕМУ ТИХО. Последняя причина отказа из журнала движка. Нет её
+                 — так и говорим: «причин в журнале пока нет». Выдумывать
+                 причину тишины нельзя, тишина и есть то, что разбирают. -->
+            {#if heldWhy[o.so_id]}
+              <span class="so-c-exit-w">{fmtWhen(heldWhy[o.so_id].ts_ms)} · {heldWhy[o.so_id].detail}</span>
+            {:else if ownPosition(o).pos}
+              <span class="so-c-exit-w">отказов в журнале за сегодня нет</span>
+            {/if}
+          </div>
+        {/if}
         <!-- КОРИДОР: позиция важнее самого факта заявки (real-trade 29.09.2026).
              Он многоразовый, статус у него в норме «взведена», и по статусу не
              понять ни где он в рынке, ни сколько переворотов осталось. -->
@@ -1545,6 +1613,17 @@
   .so-feed-ev.market { color: #ff6b6b; font-weight: 700; }
   .so-feed-d { color: #9aa0b4; }
   .so-prof-warn { margin: 5px 8px 0; font-size: 11px; color: #e0a35c; }
+  /* РЕЖИМ «ТОЛЬКО НА ВЫХОД» — янтарный, как прочие предупреждения экрана: это
+     не ошибка, но и не штатная работа заявки, и выделить его надо сильнее, чем
+     строку фактов. Полоса слева, чтобы блок читался как состояние карточки. */
+  .so-c-exit { padding: 4px 8px; font-size: 11px; border-left: 3px solid #e0a35c;
+               background: #241f33; display: flex; gap: 10px; flex-wrap: wrap;
+               align-items: baseline; }
+  .so-c-exit b { color: #e0a35c; }
+  .so-c-exit-w { color: #9aa0b4; }
+  .so-exit-err { margin: 6px 0; padding: 5px 8px; border-radius: 4px; font-size: 11px;
+                 border: 1px solid #ff8fb1; color: #ff8fb1; }
+  .so-btn.on { border-color: #e0a35c; color: #e0a35c; }
   .so-sided-note { padding: 5px 8px; font-size: 11px; color: #9aa0b4; }
   .so-c-dir.two { color: #9aa0b4; font-size: 13px; }
   .so-replacing { margin: 6px 0; padding: 5px 8px; border-radius: 4px; font-size: 11px;

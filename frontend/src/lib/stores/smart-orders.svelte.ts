@@ -5,10 +5,15 @@
 // заявки. Один опрос — один ответ у всех.
 
 import { fetchWithAuth } from '$lib/fetch-auth';
+import type { Kind } from '$lib/smart-order-help';
 
 export interface SmartOrder {
   so_id: string;
-  kind: 'sl' | 'tp' | 'trail_tp' | 'on_fill' | 'trail_sl';
+  // Вид берём ИЗ ОДНОГО перечисления с остальным экраном (smart-order-help.Kind):
+  // здесь он отстал на три вида — коридор, треугольник и радиацию, — и карточка
+  // лезла в KIND_BY_ID[o.kind] мимо типа. Второе перечисление видов всегда
+  // отстаёт от первого, вопрос только в том, что именно пропадёт с экрана.
+  kind: Kind;
   code: string;
   side: 'buy' | 'sell';
   qty: number;
@@ -70,6 +75,13 @@ export interface SmartOrder {
   g_live?: Record<string, unknown>;
   g_pos?: number;
   g_done?: boolean;
+  // Средняя ОТКРЫТОЙ позиции фигуры (0 = вне рынка) и режим «только на выход»
+  // (real-trade 02.10.2026): в этом режиме движок ставит лишь то, что сокращает
+  // позицию, и лишь по цене не хуже средней. Имена полей разные у сетки и у
+  // фигур, карточка читает их через ownPosition().
+  g_avg?: number;
+  c_avg?: number;
+  exit_only?: boolean;
   note: string;
   peak: number;
   activated: boolean;

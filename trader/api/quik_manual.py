@@ -205,6 +205,12 @@ def companion_block(store, limit: int = 20) -> dict[str, Any]:
                             account_positions=_account_manual(store))
     rows = feed_rows([rep["to"]], ids)[-max(1, int(limit)):]
     rows.reverse()
+    # РАСХОЖДЕНИЕ ЖУРНАЛА СО СЧЁТОМ — ПОИНСТРУМЕНТНО, а не одним флагом. Средняя
+    # считается по каждому инструменту отдельно, значит и доверие к ней
+    # поинструментное: 02.10.2026 журнал по RIZ6 насчитал 38 контрактов против 35
+    # на счёте и выдал среднюю 85 480 там, где счёт показывал 85 690. Общий флаг
+    # «журнал неполон» об этом молчал, а цифра выглядела точной.
+    _div = _open_vs_account(rep, store)
     return {
         "period": "day", "date": rep["to"],
         "net_rub": rep["net_rub"], "gross_rub": rep["gross_rub"],
@@ -216,6 +222,7 @@ def companion_block(store, limit: int = 20) -> dict[str, Any]:
         "open_source": rep["open_source"],
         # Тот же флаг, что на десктопе: неполный журнал не имеет права выглядеть
         # точным итогом просто потому, что экран маленький.
-        "journal_complete": not _open_vs_account(rep, store),
+        "journal_complete": not _div,
+        "open_vs_account": _div,
         "rows": rows,
     }
