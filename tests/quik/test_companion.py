@@ -1400,6 +1400,10 @@ def test_snapshot_carries_limits_and_their_consumption(monkeypatch, tmp_path):
                                headers=_operator_headers()).json()
     lim = body["limits"]
     assert lim["placed_today"] == 12 and lim["working_contracts"] == 24
+    # Пик объёма одной заявки считается по таблице терминала; зеркала в этом
+    # тесте нет, значит пик НЕИЗВЕСТЕН — и это не ноль: ноль читался бы как
+    # «крупных заявок сегодня не было», то есть как спокойствие.
+    assert lim["peak_order_qty"] is None
     assert lim["daily_order_cap"] > 0 and lim["max_working_contracts"] > 0
     assert lim["counted_since_ms"] > 0            # с какого момента счёт
     assert lim["agent"]["max_contracts_per_order"] == 50

@@ -1689,9 +1689,16 @@ function renderLimits(l) {
   out += `<div class="row"><span class="k">Контрактов в работе</span>` +
     `<span class="sub">в стоящих заявках сейчас</span><span class="sp"></span>` +
     `${used(l.working_contracts, l.max_working_contracts, 'max_working_contracts')}</div>`;
+  // ПОТОЛОК НА ЗАЯВКУ — единственный предел, у которого «израсходовано» не
+  // складывается: заявки не копятся, а соревнуются. Значимо, насколько близко
+  // подходила самая крупная за сегодня (просьба оператора 02.10.2026). Пик
+  // считается по таблице терминала: она переживает рестарт STL и видит все
+  // каналы. Зеркало молчит — пика нет, и это не ноль.
   out += `<div class="row"><span class="k">Контрактов на заявку</span>` +
-    `<span class="sub">потолок одной заявки</span><span class="sp"></span>` +
-    `${used(null, l.max_contracts_per_order, 'max_contracts_per_order')}</div>`;
+    `<span class="sub">${l.peak_order_qty == null
+      ? 'пик за сегодня неизвестен: таблицы терминала нет'
+      : 'пик за сегодня'}</span><span class="sp"></span>` +
+    `${used(l.peak_order_qty, l.max_contracts_per_order, 'max_contracts_per_order')}</div>`;
   if (l.price_collar_frac) {
     out += `<div class="row"><span class="k">Коллар цены</span>` +
       `<span class="sub">дальше от рынка заявку не примут</span><span class="sp"></span>` +

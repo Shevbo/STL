@@ -763,8 +763,13 @@ _BLOCK_SINCE: dict[str, int] = {}
 _PROC_STARTED_MS = int(time.time() * 1000)
 
 
-def _limits_block(request) -> dict:
-    """Пределы, сколько из них израсходовано и чем ограничивает агент."""
+def _limits_block(request, term_rows=None, today_lo: int = 0,
+                  term_stale: bool = True) -> dict:
+    """Пределы, сколько из них израсходовано и чем ограничивает агент.
+
+    `term_rows` — уже прочитанная таблица заявок терминала (её читает вызывающий,
+    второй раз источник не трогаем), `today_lo` — начало торгового дня в мс.
+    """
     try:
         from trader.quik.limits import OrderLimits
         lim = OrderLimits.from_settings(request.app.state.settings)
@@ -781,7 +786,21 @@ def _limits_block(request) -> dict:
         # ноль означал бы «ничего не поставлено», а мы просто не знаем.
         "placed_today": None, "working_contracts": None,
         "counted_since_ms": _PROC_STARTED_MS,
+        # ПИК ОБЪЁМА ОДНОЙ ЗАЯВКИ ЗА СЕГОДНЯ (просьба оператора 02.10.2026).
+        # Потолок на заявку — единственный предел, у которого «израсходовано» не
+        # складывается: заявки не копятся, а соревнуются. Значимо здесь, насколько
+        # близко подходила самая крупная.
+        #
+        # Считаем по ТАБЛИЦЕ ТЕРМИНАЛА, а не по складу STL: она переживает наш
+        # рестарт и видит все каналы — руки, роботов и умные заявки. Зеркало
+        # молчит — пик НЕИЗВЕСТЕН, а не ноль: ноль здесь читается как «крупных
+        # заявок не было», то есть как спокойствие.
+        "peak_order_qty": None,
     }
+    if term_rows is not None and not term_stale:
+        _today = [int(r.get("qty") or 0) for r in term_rows
+                  if int(r.get("ts_ms") or 0) >= today_lo]
+        out["peak_order_qty"] = max(_today) if _today else 0
     ost = getattr(request.app.state, "quik_order_store", None)
     if ost is not None:
         try:
@@ -1905,6 +1924,7 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
         "trading_block": _trading_block(store),
         # Пределы живой торговли и сколько из них израсходовано (оператор
         # 02.10.2026). Предел, которого не видно, замечают в момент отказа.
-        "limits": _limits_block(request),
+        "limits": _limits_block(request, _term, today_lo,
+                                not terminal.fresh(store, agent_id)),
         "alerts": alerts, "market": market_out,
     }
