@@ -1267,7 +1267,7 @@ def draw_starts(days, edges, pool_m, pool_h, rng, evs_by_day, matched):
         d = days[k]
         for i in evs:
             h = _hour(d, i)
-            if matched and d["atr"][i]:
+            if matched and d["atr"][i] and h in edges:
                 cand = pool_m.get((h, _decile(edges[h], d["atr"][i]))) or pool_h.get(h)
             else:
                 cand = pool_h.get(h)
