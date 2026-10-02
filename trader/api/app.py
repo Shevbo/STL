@@ -337,7 +337,18 @@ async def lifespan(app: FastAPI):
             quik_store = QuikAgentStore(link_fresh_sec=settings.quik_agent_link_fresh_sec)
             # Phase 2 order/execution state. The server stores incoming order
             # updates here; the API reads it + re-checks limits before sending.
-            quik_order_store = OrderStore()
+            quik_order_store = OrderStore(counters_path="data/quik_counters.json")
+
+            def _resting(agent_id: str):
+                # Живые НАШИ строки таблицы терминала: ручные заявки оператора в
+                # предел объёма STL не входят — это его торговля, не наша.
+                from trader.quik import terminal
+                if not terminal.fresh(quik_store, agent_id):
+                    return None
+                return [(r["num"], int(r.get("balance") or 0))
+                        for r in terminal.active(quik_store, agent_id)
+                        if r.get("origin") in ("smart", "robot", "recon")]
+            quik_order_store.set_resting_provider(_resting)
             # Книга тревог для экранов и флэша компаньона (исполнительный модуль,
             # раздел 15). Записывающий форвардер: каждая тревога сначала ложится в
             # книгу, затем уходит в Telegram как раньше.

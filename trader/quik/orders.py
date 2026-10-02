@@ -12,11 +12,13 @@ can re-check the limit before sending.
 
 from __future__ import annotations
 
+import json
+import os
 import threading
 import time
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any
+from typing import Any, Callable
 
 # pb is importable because trader.quik.__init__ put pb/ on sys.path.
 import trader.quik  # noqa: F401
@@ -134,9 +136,53 @@ class OrderStore:
     the API when it enqueues a placement; reads come from FastAPI handlers.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, counters_path: str | None = None) -> None:
         self._lock = threading.Lock()
         self._agents: dict[str, _AgentOrders] = {}
+        # РЕСТАРТ НЕ ОБНУЛЯЕТ ПРЕДЕЛЫ (оператор, 02.10.2026). Дневной счётчик
+        # постановок жил только в памяти: каждый рестарт STL заново открывал все
+        # 500 заявок дня, то есть дневной кап переставал быть капом ровно в тот
+        # день, когда рестартов было много (02.10 — девять). Счётчик лежит в
+        # файле и подхватывается при старте; None = без файла (тесты).
+        self._counters_path = counters_path
+        self._load_counters()
+        # Что стоит в терминале по-настоящему: (номер, остаток) живых НАШИХ строк.
+        # Склад заявок после рестарта пуст, а заявки в QUIK стоят, и предел
+        # объёма в работе видел ноль. Источник подключается снаружи (app.py),
+        # чтобы склад не тянул за собой зеркало агента.
+        self._resting_provider: Callable[[str], list[tuple[str, int]] | None] | None = None
+
+    def set_resting_provider(
+            self, fn: Callable[[str], list[tuple[str, int]] | None] | None) -> None:
+        self._resting_provider = fn
+
+    def _load_counters(self) -> None:
+        if not self._counters_path:
+            return
+        try:
+            with open(self._counters_path, encoding="utf-8") as fh:
+                raw = json.load(fh)
+        except (OSError, ValueError):
+            return
+        today = date.today().isoformat()
+        for agent_id, by_day in (raw.get("placed") or {}).items():
+            n = int((by_day or {}).get(today) or 0)
+            if n > 0:
+                self._bucket(agent_id).placed_count[today] = n
+
+    def _save_counters_locked(self) -> None:
+        if not self._counters_path:
+            return
+        today = date.today().isoformat()
+        data = {"placed": {a: {today: b.placed_count.get(today, 0)}
+                           for a, b in self._agents.items() if b.placed_count.get(today)}}
+        tmp = self._counters_path + ".tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(data, fh)
+            os.replace(tmp, self._counters_path)
+        except OSError:
+            pass   # не записали — счётчик в памяти верен, следующая постановка попробует снова
 
     def _bucket(self, agent_id: str) -> _AgentOrders:
         b = self._agents.get(agent_id)
@@ -156,6 +202,7 @@ class OrderStore:
         with self._lock:
             b = self._bucket(agent_id)
             b.placed_count[key] = b.placed_count.get(key, 0) + 1
+            self._save_counters_locked()
 
     def is_blocked(self, agent_id: str) -> bool:
         with self._lock:
@@ -166,14 +213,29 @@ class OrderStore:
             self._bucket(agent_id).blocked = blocked
 
     def working_contracts(self, agent_id: str) -> int:
-        """Total contracts still resting (pending/active/partial), unfilled remainder."""
+        """Total contracts still resting (pending/active/partial), unfilled remainder.
+
+        ОБЪЕДИНЕНИЕ склада и таблицы терминала по номеру заявки: строки терминала
+        (то, что стоит в QUIK, переживает любой рестарт) плюс заявки склада, которых
+        в таблице ещё нет (в пути, номер не пришёл или зеркало отстаёт). Только склад
+        — после рестарта ноль при стоящих заявках; только таблица — заявка в пути
+        не видна. Таблицы нет (зеркало молчит) — как раньше, по складу."""
+        rows = None
+        if self._resting_provider is not None:
+            try:
+                rows = self._resting_provider(agent_id)
+            except Exception:  # noqa: BLE001 — источник упал = считаем по складу
+                rows = None
+        nums = {num for num, _ in (rows or []) if num}
         with self._lock:
             b = self._bucket(agent_id)
-            return sum(
+            mem = sum(
                 max(0, o.quantity - o.filled)
                 for o in b.orders.values()
                 if o.state in _WORKING_STATES
+                and not (o.order_id and str(o.order_id) in nums)
             )
+        return mem + sum(max(0, int(bal)) for _, bal in (rows or []))
 
     def reconcile_pending(
         self, now_ms: int | None = None, expiry_ms: int = PENDING_RECONCILE_MS,
