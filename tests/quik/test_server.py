@@ -248,3 +248,47 @@ def test_verify_agent_token_shapes():
     from trader.auth.portal import make_session_token
     tok = make_session_token("klod-stl", PORTAL_SECRET)
     assert verify_agent_token(tok, AGENT_SECRET, PORTAL_SECRET) == "klod-stl"
+
+
+async def test_reconnected_agent_receives_orders_enqueued_after_reconnect():
+    """ИНВАРИАНТ: заявка, поставленная в очередь ПОСЛЕ переподключения агента, уходит
+    в ЖИВОЕ соединение — сколько бы раз агент ни переподключался.
+
+    02.10.2026: setdefault при регистрации оставлял имя агента на очереди прошлого,
+    мёртвого соединения, и 45 минут ни одна заявка не дошла до QUIK. Первый коннект
+    после рестарта STL этого не показывает, поэтому свип идёт по числу
+    переподключений, а утверждение — запрет: заявка не может потеряться."""
+    store = QuikAgentStore(link_fresh_sec=15)
+    server, port, servicer = await _start_server(store)
+    meta = [("authorization", f"Bearer {AGENT_SECRET}")]
+    try:
+        for attempt in range(1, 4):            # первый коннект и два переподключения
+            got: list[str] = []
+            async with grpc.aio.insecure_channel(f"127.0.0.1:{port}") as channel:
+                stub = pb_grpc.QuikAgentLinkStub(channel)
+                registered = asyncio.Event()
+
+                async def gen():
+                    yield pb.AgentMessage(seq=1, register=pb.Register(host_name="9618"))
+                    await registered.wait()
+                    # Следующий кадр от агента — сервер разгребает очередь после него.
+                    yield pb.AgentMessage(seq=2, heartbeat=pb.Heartbeat(sent_at_unix_ms=1))
+                    await asyncio.sleep(0.5)
+
+                call = stub.Session(gen(), metadata=meta)
+                try:
+                    async for msg in call:
+                        kind = msg.WhichOneof("payload")
+                        if kind == "ack" and msg.ack.ack_seq == 1:
+                            servicer.enqueue_order("9618", pb.OrchestratorMessage(
+                                place_order=pb.PlaceOrder(client_id=f"cid-{attempt}")))
+                            registered.set()
+                        elif kind == "place_order":
+                            got.append(msg.place_order.client_id)
+                            break
+                finally:
+                    call.cancel()
+            assert got == [f"cid-{attempt}"], (
+                f"подключение №{attempt}: заявка не дошла до живого соединения ({got})")
+    finally:
+        await server.stop(0)

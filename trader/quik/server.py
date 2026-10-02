@@ -235,8 +235,32 @@ class QuikAgentLinkServicer(pb_grpc.QuikAgentLinkServicer):
                     reg = msg.register
                     new_id = reg.host_name or agent_id
                     if new_id != agent_id:
-                        # migrate queue + state to the host-named id
-                        self.command_queues.setdefault(new_id, cmd_q)
+                        # ИМЯ АГЕНТА ПРИВЯЗЫВАЕТСЯ К ОЧЕРЕДИ ЭТОГО СОЕДИНЕНИЯ — ВСЕГДА.
+                        #
+                        # Здесь стоял setdefault, и он НЕ ЗАМЕНЯЕТ существующую
+                        # очередь. Первый коннект после рестарта STL был здоров
+                        # (очереди под "9618" ещё нет), а любой ПЕРЕКОННЕКТ агента
+                        # оставлял имя на очереди прошлого, уже мёртвого
+                        # соединения: STL клал заявки туда, а живое соединение
+                        # разгребало пустую. 02.10.2026 так 45 минут не прошла ни
+                        # одна заявка (15:08-15:53): данные от агента шли, лимиты
+                        # дошли (они кладутся прямо в cmd_q), лампа зелёная — а
+                        # каждая заявка умирала «не зарегистрирована в QUIK».
+                        #
+                        # Содержимое старой очереди ВЫБРАСЫВАЕМ, а не переносим: это
+                        # решения, принятые до обрыва, и склад заявок STL их уже
+                        # списал по таймауту. Доставить их сейчас значило бы
+                        # выставить заявки, которых STL у себя не числит, — сироты
+                        # и дубли. Сторож переставит нужное по свежему состоянию.
+                        stale_q = self.command_queues.get(new_id)
+                        if stale_q is not None and stale_q is not cmd_q:
+                            dropped = 0
+                            while not stale_q.empty():
+                                stale_q.get_nowait()
+                                dropped += 1
+                            log.warning("quik.session.stale_queue_replaced",
+                                        agent=new_id, dropped=dropped)
+                        self.command_queues[new_id] = cmd_q
                         # ЗАПИСЬ ДО РЕГИСТРАЦИИ ОБЯЗАНА ИСЧЕЗНУТЬ.
                         #
                         # Раньше она оставалась навсегда, и на ОДИН физический агент
