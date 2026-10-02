@@ -85,3 +85,49 @@ func spawnRestart(exeDir, restartName, stage, stageExe string) error {
 	_ = cmd.Process.Release()
 	return nil
 }
+
+// SpawnRelaunch планирует ПОДЪЁМ того же самого exe после выхода процесса: пишет
+// отдельный .bat, который ждёт, добивает осиротевшего раннера и запускает агента
+// снова. Ничего не копирует — это не обновление, а перезапуск.
+//
+// ЗАЧЕМ. Команда RESTART раньше была просто os.Exit(0) «для service manager».
+// Service manager на боевом VDS никто не ставил: 02.10.2026 агент вышел по этой
+// команде и НЕ ВЕРНУЛСЯ, живая торговля осталась без моста, а поднять его мог
+// только оператор с консоли. Выключатель, выданный за перезапуск.
+//
+// Ошибку возвращаем, а не глотаем: вызывающий обязан НЕ выходить, если подъём не
+// запланирован. Лучше остаться на старой сборке, чем лечь насовсем.
+func SpawnRelaunch(exeDir string) error {
+	exePath, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	destExe := exePath
+	if exeDir != "" {
+		destExe = filepath.Join(exeDir, filepath.Base(exePath))
+	}
+	batPath := filepath.Join(os.TempDir(), fmt.Sprintf("quik-agent-relaunch-%d.bat", time.Now().UnixNano()))
+	lines := []string{
+		"@echo off",
+		"setlocal",
+		"rem Shectory QUIK agent: перезапуск по команде RESTART",
+		"ping -n 5 127.0.0.1 >nul",
+		// Тот же сирота, что и при самообновлении: агент выходит через os.Exit,
+		// раннер остаётся с мёртвой трубой. Новый агент поднимет его сам, бары и
+		// книга переживают перезапуск (runner_state.json).
+		"taskkill /IM robot-runner.exe /F >nul 2>&1",
+		fmt.Sprintf(`start "" /D "%s" "%s"`, exeDir, destExe),
+		`del "%~f0"`,
+	}
+	body := strings.Join(lines, "\r\n") + "\r\n"
+	if err := os.WriteFile(batPath, []byte(body), 0o644); err != nil {
+		return err
+	}
+	cmd := exec.Command("cmd", "/C", "start", "/MIN", "Shectory QUIK Agent", "cmd", "/C", batPath)
+	if err := cmd.Start(); err != nil {
+		_ = os.Remove(batPath)
+		return err
+	}
+	_ = cmd.Process.Release()
+	return nil
+}

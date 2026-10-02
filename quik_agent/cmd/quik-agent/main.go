@@ -345,7 +345,16 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 			return selfupdate.MaybeSelfUpdate(updSrc, opt.exeDir, buildRev(), true)
 		},
 		OnRestart: func() {
-			fmt.Println("agent: RESTART command received — exiting for the service manager to restart")
+			// ВЫХОДИМ ТОЛЬКО ПОСЛЕ ТОГО, КАК ПОДЪЁМ ЗАПЛАНИРОВАН. Раньше здесь был
+			// голый os.Exit(0) «for the service manager»; service manager'а на
+			// боевом VDS нет, и 02.10.2026 агент по этой команде вышел и не
+			// вернулся — живая торговля осталась без моста до прихода оператора.
+			// Не смогли запланировать подъём — остаёмся работать и говорим об этом.
+			if err := selfupdate.SpawnRelaunch(opt.exeDir); err != nil {
+				fmt.Println("agent: RESTART: подъём не запланирован:", err, "— НЕ выхожу")
+				return
+			}
+			fmt.Println("agent: RESTART command received — подъём запланирован, выхожу")
 			os.Exit(0)
 		},
 	})
