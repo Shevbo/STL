@@ -2098,6 +2098,51 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
             log.warning("smart_order.grid_stopped", so_id=so.so_id, price=price, pos=0)
             return True
 
+        # ТОЛЬКО НА ВЫХОД — СУММОЙ, А НЕ ПОШТУЧНО. 02.10.2026 на GZZ6 защита
+        # сработала при позиции +5, и сетка оставила ВСЕ продажи выше средней:
+        # 22 уровня по 5 = 110 контрактов против позиции +5. Каждый уровень по
+        # отдельности был законен (закрывающая сторона, цена не хуже средней), а
+        # их сумма на росте закрыла бы +5 и открыла шорт −105 — «только на выход»
+        # превращался в разворот. Незаконна серия, а не заявка.
+        #
+        # Выход стоит РОВНО на позицию: ближайшие к рынку закрывающие заявки
+        # сетки, пока их сумма в неё влезает; остальное и всё с открывающей
+        # стороны снимается. Правда о том, что стоит, — таблица терминала: склад
+        # заявок пустеет при рестарте, а подхваченные строки своих записей нет.
+        exit_room = None
+        if so.exit_only and term_all is not None:
+            _xs0, _xq0 = so_mod.exit_side_qty(so.g_pos)
+            mine = list(term_all.get(so.so_id, []))
+            _alive = {r["num"] for r in mine}
+            for _k in [k for k in live if k.startswith("xkill:") and k[6:] not in _alive]:
+                live.pop(_k, None)
+            closing = sorted((r for r in mine if _xq0 and r.get("side") == _xs0),
+                             key=lambda r: abs(float(r.get("price") or 0) - price))
+            exit_room, drop = _xq0, [r for r in mine if not (_xq0 and r.get("side") == _xs0)]
+            for r in closing:
+                bal = int(r.get("balance") or 0)
+                if bal <= exit_room:
+                    exit_room -= bal
+                else:
+                    drop.append(r)
+            for r in drop:
+                # Одно снятие на строку раз в 30 с: строка висит в таблице, пока
+                # отмена в пути, а каждая повторная транзакция стоит денег.
+                k = f"xkill:{r['num']}"
+                if now - int(live.get(k) or 0) < 30_000:
+                    continue
+                live[k] = now
+                srv.enqueue_order(agent, order_msgs.build_cancel_order(
+                    client_id=f"op:kill:{r['num']}", order_id=r["num"], code=r["sec"]))
+                dirty = True
+                so_journal.record(
+                    "resting_withdrawn", so, so_journal.WATCHER,
+                    f"только на выход: снята заявка {r['num']} ({r.get('side')} "
+                    f"{r.get('balance')} по {r.get('price')}) — выход на позицию "
+                    f"{so.g_pos:+d} уже стоит, больше было бы разворотом", now_ms=now)
+                log.warning("smart_order.exit_only_excess_cancelled", so_id=so.so_id,
+                            num=r["num"], pos=so.g_pos)
+
         for level in so_mod.grid_levels(so):
             key = str(level)
             cid = live.get(key) or ""
@@ -2229,6 +2274,11 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
                 elif not so_mod.exit_without_loss(so.g_pos, so.g_avg, px):
                     why = (f"цена {px:g} хуже средней {so.g_avg:g}: закрытие здесь "
                            "дало бы убыток")
+                elif exit_room is not None and so.g_lot > exit_room:
+                    why = (f"выход на позицию {so.g_pos:+d} уже стоит (свободно "
+                           f"{exit_room}), больше было бы разворотом")
+                elif exit_room is None:
+                    why = "таблица терминала неизвестна — сколько выхода уже стоит, не знаю"
                 if why:
                     if live.get(f"exit:{level}") != 1:
                         live[f"exit:{level}"] = 1
@@ -2341,6 +2391,8 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
                                   "выставляю", now_ms=now)
             new_cid = _grid_cid(so.so_id, level) + f":{now % 100000}"
             try:
+                if exit_room is not None and so.exit_only:
+                    exit_room -= so.g_lot
                 validate_place(lim, code=so.code, quantity=so.g_lot,
                                collar=lim.price_collar_frac,
                                current_working=ost.working_contracts(agent),
