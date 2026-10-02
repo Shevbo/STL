@@ -103,3 +103,4 @@
 - [Пределы живой торговли](project_live_limits_screen.md) — data/quik_limits.json правится с экрана вотчера без рестарта; PUT только изменённого, pushed_to_agent, бэкстоп агента
 - [Рестарт агента = выключатель](reference_agent_restart_is_offswitch.md) — до rev 1790944923 /agent/{id}/restart гасил агента насовсем; с неё поднимается сам; сверять rev перед командой
 - [Заявки в мёртвую очередь](reference_reconnect_stale_queue.md) — переконнект агента без рестарта STL: 45 мин ни одной заявки при зелёной лампе; признак daily_orders_used=0
+- [Таблица отстаёт от склада](reference_terminal_table_lags_order_store.md) — «нет строки в таблице» ≠ «заявки нет»: семь дублей выхода 02.10; заявка жива, пока не известно, что мертва
