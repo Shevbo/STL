@@ -158,3 +158,19 @@ def test_a_zero_price_fill_never_poisons_the_average():
     # выход в ноль обнуляет среднюю даже без цены
     pos, avg = so_mod.blend_avg(pos, avg, 20, 0.0, False)
     assert (pos, avg) == (0, 0.0)
+
+
+def test_a_position_without_a_known_average_is_not_weighted_against_zero():
+    """ПОЗИЦИЯ ЕСТЬ, СРЕДНЕЙ НЕТ — ноль это не цена, а отсутствие знания.
+
+    02.10.2026 сетка 41bf3af0dd пришла с позицией +3 и средней 0 (её завели до
+    того, как средняя вообще появилась). Каждый филл по 84840-84940 взвешивался
+    против нуля, и средняя уехала к 56476 при реальных ~84900. С такой средней
+    режим «только на выход» либо не выпустит никогда, либо выпустит в убыток.
+    """
+    pos, avg = so_mod.blend_avg(3, 0.0, 1, 84900.0, True)
+    assert pos == 4
+    assert avg == 84900.0, f"средняя {avg}: взвесили против нуля"
+    # дальше считается уже нормально
+    pos, avg = so_mod.blend_avg(pos, avg, 4, 85100.0, True)
+    assert pos == 8 and avg == 85000.0
