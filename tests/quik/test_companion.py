@@ -1147,3 +1147,49 @@ def test_order_pnl_takes_the_mirror_from_the_caller(monkeypatch):
         {"robots": [{"id": "lxk22"}]})          # зеркало передано снаружи
     assert out == {}
     assert "reread" not in seen
+
+
+def test_pnl_cache_does_not_renew_itself(monkeypatch):
+    """Кэш p&l живёт 10 с ОТ РАСЧЁТА, а не от последнего обращения.
+
+    02.10.2026: метка времени переписывалась на каждом запросе, в том числе
+    когда отдавалось старое значение. Первый расчёт после рестарта попал на ещё
+    пустой фид параметров — и p&l всех заявок навсегда остался в ПУНКТАХ вместо
+    рублей, хотя ₽/пункт появился через секунды. Самопродлевающийся кэш не
+    устаревает никогда, то есть это не кэш, а запись набело.
+    """
+    monkeypatch.delenv("SHECTORY_AUTH_DEV_BYPASS", raising=False)
+    app = FastAPI()
+    app.include_router(companion_router)
+    app.state.settings = _Settings()
+    app.state.db_pool = FakePool()
+    store = QuikAgentStore()
+    store.set_agent_status("A1", json.dumps({
+        "agent": {"version": "x", "link_up": True},
+        "health": {"runner_healthy": True,
+                   "money": {"limit": 1.0, "varmargin": 0.0, "age_ms": 100},
+                   "positions": []},
+        "robots": [],
+    }), 0)
+    app.state.quik_store = store
+
+    calls = {"n": 0}
+    real = quik_companion._orders_pnl
+
+    def _counting(*a, **k):
+        calls["n"] += 1
+        return real(*a, **k)
+
+    monkeypatch.setattr(quik_companion, "_orders_pnl", _counting)
+    monkeypatch.setattr("trader.quik.manual_pnl.read_trades", lambda *a, **k: [])
+
+    client = TestClient(app)
+    for _ in range(3):
+        client.get("/api/v1/quik/companion/snapshot", headers=_operator_headers())
+    assert calls["n"] == 3                      # помощник зовётся каждый раз
+
+    # А вот МЕТКА кэша после второго и третьего запроса не должна сдвинуться:
+    # иначе значение, посчитанное в первый раз, не устареет никогда.
+    first = app.state._order_pnl_cache[0]
+    client.get("/api/v1/quik/companion/snapshot", headers=_operator_headers())
+    assert app.state._order_pnl_cache[0] == first

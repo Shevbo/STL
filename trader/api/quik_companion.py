@@ -783,6 +783,11 @@ def _orders_pnl(store, now_ms: int, cache: dict | None, params: dict | None,
     Ошибка здесь не имеет права ронять снапшот: без p&l панель живёт, без
     панели — нет.
     """
+    # КЭШ НЕ ПРОДЛЕВАЕТ САМ СЕБЯ. Вызывающий переписывал метку времени на КАЖДОМ
+    # запросе, в том числе когда отдавал старое значение, — и расчёт, сделанный
+    # один раз при пустом фиде (сразу после рестарта, пока агент не подключился),
+    # жил вечно: p&l всех заявок навсегда остался в пунктах вместо рублей
+    # (02.10.2026). Поэтому метку ставим ТОЛЬКО при пересчёте, здесь же.
     if cache and now_ms - cache[0] < 10_000:
         return cache[1]
     try:
@@ -1271,9 +1276,13 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
     # Фид параметров читаем ОДИН раз на запрос: по нему и ₽/пункт в p&l, и шаг
     # цены для округления средних. Два чтения — два ответа, и это уже случалось.
     _params = (store.params(agent_id) if store is not None else None) or {}
-    _pnl = _orders_pnl(store, now_ms, getattr(request.app.state, "_order_pnl_cache", None),
-                       _params, status)
-    request.app.state._order_pnl_cache = (now_ms, _pnl)
+    _pnl_cache = getattr(request.app.state, "_order_pnl_cache", None)
+    _pnl = _orders_pnl(store, now_ms, _pnl_cache, _params, status)
+    # Метку времени двигаем ТОЛЬКО когда посчитали заново. Обновляя её на каждом
+    # запросе, кэш продлевал сам себя: первый расчёт после рестарта попадал на
+    # ещё пустой фид параметров, и рубли не появлялись уже никогда.
+    if _pnl_cache is None or _pnl is not _pnl_cache[1]:
+        request.app.state._order_pnl_cache = (now_ms, _pnl)
     _manual_avg_by_sec = {str(r.get("symbol")): r.get("avg_price")
                           for r in (manual_block.get("open") or []) if r.get("symbol")}
     # Шаг цены инструмента — по нему округляем средние. Берём из того же фида
