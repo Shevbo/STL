@@ -44,7 +44,7 @@
 -- Bump on every change you deliver to the VDS. Logged FIRST on OnInit so the
 -- operator can confirm which version QUIK actually loaded (the running script is
 -- in MEMORY; a file on disk with the same name may be a different build).
-local SCRIPT_VERSION = "2026.10.02-md-codes-z6"
+local SCRIPT_VERSION = "2026.10.02-md-runtime"
 
 local CONFIG = {
   HOST          = "127.0.0.1",
@@ -67,21 +67,16 @@ local CONFIG = {
   -- Market-data publisher (QLua getParamEx/getQuoteLevel2 -> agent). This makes the
   -- agent INDEPENDENT of the fragile DDE export: no "Начать вывод", survives agent
   -- restarts, auto-resumes with the transport. Empty MD_CODES disables it.
-  -- КОДЫ ЖИВЫХ КОНТРАКТОВ. 02.10.2026 здесь стояли СЕНТЯБРЬСКИЕ (RIU6, GZU6, SiU6,
-  -- SRU6), истёкшие 18.09, тогда как терминал всё это время публиковал декабрьские:
-  -- кто-то поправил MD_CODES прямо на VDS и НЕ ТРОНУЛ SCRIPT_VERSION, поэтому
-  -- снаружи расхождение было невидимо — тот же номер версии при другой
-  -- конфигурации (см. docs: «версия QLua не видна снаружи», правка стакана жила
-  -- незамеченной три дня).
+  -- ЗНАЧЕНИЕ ПО УМОЛЧАНИЮ, а не рабочая настройка: реальный список оператор держит
+  -- в своём shectory_trade_config.lua рядом со скриптом (sidecar не в git,
+  -- накладывается поверх CONFIG при старте и переживает замену скрипта). Поэтому
+  -- добавление инструмента — это ОДНА СТРОКА В SIDECAR, а не правка кода.
   --
-  -- Чем это грозило: релиз агента кладёт этот файл рядом с агентом, и первый же
-  -- Stop/Start скрипта в QUIK загрузил бы сентябрьские коды. Фида не стало бы
-  -- совсем — сетки замирают, роботы слепнут. Поэтому список здесь обязан
-  -- совпадать с тем, что реально торгуется, а версия — меняться вместе с ним.
-  --
-  -- GZZ6 добавлен по требованию оператора 02.10.2026: он в белом списке лимитов
-  -- был, а котировок по нему не шло, и умная заявка честно отказывалась взводиться
-  -- («по GZZ6 нет ни одной котировки: инструмент не подключён к торговле»).
+  -- Здесь до 02.10.2026 стояли сентябрьские контракты, истёкшие 18.09, и я принял
+  -- это за мину: решил, что релиз подложит их живому терминалу. НЕВЕРНО — sidecar
+  -- оператора их перекрывает, что и показывал живой фид (декабрьские Z6 при
+  -- сентябрьском списке в файле). Умолчание всё же обновлено: протухшие коды в
+  -- репозитории сбивают с толку и меня, и следующего.
   MD_CODES         = "RIZ6,SiZ6,GDZ6,BRZ6,GZZ6",  -- comma-separated instrument codes
   MD_CLASS         = "SPBFUT",               -- QUIK class code for the instruments
   MD_INTERVAL_MS   = 500,                    -- tick snapshot cadence
@@ -96,11 +91,13 @@ local CONFIG = {
   -- Теперь подписка включается ПОИМЕННО и осознанно: пусто = не подписываемся
   -- ни на что, стаканы не публикуются вовсе. Архиву рынка это стоит данных, но
   -- архив не стоит разорванной торговой сессии.
-  -- На VDS сейчас включены именно эти четыре (agent_status.quik.book_codes), и
-  -- файл обязан это повторять, иначе релиз молча выключит стаканы. GZZ6 сюда НЕ
-  -- добавлен намеренно: стакан это отдельный поток внутри терминала, а именно их
-  -- число 25.09.2026 рвало сессию QUIK. Для торговли сетки хватает тиков.
-  MD_BOOK_CODES    = "RIZ6,GDZ6,SiZ6,BRZ6",  -- пусто = стаканы выключены
+  -- ПУСТО ПО УМОЛЧАНИЮ — ЭТО ЗАЩИТА, А НЕ НЕДОСМОТР (см. длинный разбор выше про
+  -- 25.09.2026). Включает стаканы ОПЕРАТОР в своём shectory_trade_config.lua, и
+  -- там же они сейчас включены на четыре инструмента. 02.10.2026 я на час поставил
+  -- сюда живой список, решив, что релиз иначе «молча выключит стаканы», — это было
+  -- неверно: sidecar накладывается ПОВЕРХ CONFIG и переживает замену скрипта.
+  -- Непустое значение здесь означало бы, что стаканы включаются у всех и сами.
+  MD_BOOK_CODES    = "",                     -- напр. "RIZ6"; пусто = стаканы выключены
 
   -- Account tables (positions/orders/trades) publish cadence for the agent showcase (ms).
   ACC_INTERVAL_MS  = 2000,
@@ -1319,6 +1316,58 @@ local function handle_stop_tx(cmd)
   end
 end
 
+-- СПИСОК ИНСТРУМЕНТОВ НА ХОДУ, БЕЗ ПРАВКИ СКРИПТА.
+--
+-- Требование оператора 02.10.2026, дословно: «неприемлемо, что добавить новый
+-- инструмент требует кодирования». И он прав: до этой команды список жил
+-- константой CONFIG.MD_CODES, поэтому добавление инструмента означало правку
+-- файла, релиз агента и Stop/Start скрипта в QUIK — три действия и простой, ради
+-- одной строки конфигурации.
+--
+-- Теперь список присылает агент (он берёт его из белого списка лимитов STL), а
+-- CONFIG.MD_CODES остаётся лишь ЗАГРУЗОЧНЫМ значением на случай, если агента ещё
+-- нет. Применяется немедленно: тики начинают идти со следующего же такта, стаканы
+-- переподписываются тут же (subscribe_books идемпотентен и сам отписывается от
+-- лишних — именно лишние подписки 25.09.2026 рвали сессию QUIK).
+--
+-- Активный список уходит в pong, чтобы его было ВИДНО СНАРУЖИ: конфигурация,
+-- которую не видно, расходится с файлом молча — так 02.10 в репозитории months
+-- лежали сентябрьские коды под номером версии живого скрипта.
+local function handle_md_codes(cmd)
+  local function parse(v)
+    local list, set = {}, {}
+    if type(v) == "table" then
+      for _, c in ipairs(v) do
+        c = tostring(c)
+        if c ~= "" and not set[c] then list[#list + 1] = c; set[c] = true end
+      end
+    elseif type(v) == "string" then
+      for c in string.gmatch(v, "([^,%s]+)") do
+        if not set[c] then list[#list + 1] = c; set[c] = true end
+      end
+    end
+    return list, set
+  end
+  if cmd.codes ~= nil then
+    local list, set = parse(cmd.codes)
+    -- ПУСТОЙ СПИСОК НЕ ПРИНИМАЕМ. Пустой MD_CODES выключает рынок целиком, и
+    -- прислать его по ошибке (пустой белый список, сбой разбора) значит ослепить
+    -- торговлю одной командой. Чтобы выключить — есть остановка скрипта.
+    if #list > 0 then
+      md.codes, md.code_set = list, set
+      log("MD_CODES принят от агента: " .. table.concat(list, ","))
+    else
+      log("MD_CODES пустой — ОТКЛОНЁН, оставляю " .. table.concat(md.codes, ","))
+    end
+  end
+  if cmd.book_codes ~= nil then
+    local list, set = parse(cmd.book_codes)
+    md.book_codes, md.book_code_set = list, set
+    log("MD_BOOK_CODES принят от агента: " .. table.concat(list, ","))
+  end
+  pcall(subscribe_books)
+end
+
 local function dispatch_command(line)
   local cmd = json.decode(line)
   if type(cmd) ~= "table" then
@@ -1333,6 +1382,8 @@ local function dispatch_command(line)
     handle_move(cmd)
   elseif cmd.cmd == "stop_tx" then
     handle_stop_tx(cmd)
+  elseif cmd.cmd == "md_codes" then
+    handle_md_codes(cmd)
   elseif cmd.cmd == "ping" then
     local st = ""
     local ok, v = pcall(getInfoParam, "SERVERTIME")
@@ -1355,7 +1406,8 @@ local function dispatch_command(line)
     emit({ event = "pong", t0 = cmd.t0 or 0, ts = now_ms(), server_time = st,
            last_trade_ts_ms = md.last_trade_ts_ms or 0, wf = wf,
            lua_kb = lua_kb, lua_peak_kb = lua_peak,
-           lua_ver = SCRIPT_VERSION, books = table.concat(md.book_codes, ",") })
+           lua_ver = SCRIPT_VERSION, books = table.concat(md.book_codes, ","),
+           codes = table.concat(md.codes, ",") })
   else
     log("unknown cmd '" .. tostring(cmd.cmd) .. "' (dropped)")
   end
