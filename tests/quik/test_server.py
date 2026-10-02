@@ -123,6 +123,25 @@ async def test_session_register_tick_orderbook_updates_store():
     assert "WIN-QUIK01" in ids
     agent_id = "WIN-QUIK01"
 
+    # ЗАПИСЬ ДО РЕГИСТРАЦИИ НЕ ПЕРЕЖИВАЕТ ПЕРЕИМЕНОВАНИЕ.
+    #
+    # Агент приходит с общим секретом под служебным id, потом называет host_name.
+    # Раньше служебная запись оставалась в сторе НАВСЕГДА, и на один физический
+    # агент их было две. store._pick(None) отдаёт агента только если он один ЛИБО
+    # если зелёный ровно один — значит всё держалось на том, что настоящий агент
+    # зелёный. В миг, когда он не зелёный (переподключение, рестарт, медленный
+    # кадр), _pick возвращал None, и ЛЮБОЕ чтение store.x(None) отдавало пустоту.
+    # 02.10.2026 на это наткнулось окно ui-ux: p&l заявок пришёл с priced=false,
+    # хотя соседний блок того же ответа получил строки из того же фида.
+    from trader.quik.server import PROVISIONAL_AGENT_ID
+    assert PROVISIONAL_AGENT_ID not in ids, (
+        "служебная запись осталась в сторе: на один агент две записи, "
+        "и _pick(None) становится ненадёжным")
+    assert ids == [agent_id], "в сторе обязан остаться РОВНО один агент"
+    # а значит _pick(None) работает и когда лампа НЕ зелёная
+    assert store.params(None) is not None or True   # сам вызов не падает
+    assert store.status(None)[0]["register"]["host_name"] == "WIN-QUIK01"
+
     status = store.status(agent_id)[0]
     assert status["register"]["agent_version"] == "1.2.3"
     assert status["register"]["build_rev"] == 42

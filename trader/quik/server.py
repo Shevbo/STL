@@ -62,8 +62,16 @@ def verify_agent_token(token: str | None, agent_secret: str, portal_secret: str)
     if agent_secret:
         import hmac
         if hmac.compare_digest(token, agent_secret):
-            return "quik-agent"
+            return PROVISIONAL_AGENT_ID
     return None
+
+
+# ID ДО РЕГИСТРАЦИИ. Агент приходит с общим секретом и ещё не сказал, кто он, —
+# сессия живёт под этим служебным именем, пока не придёт Register с host_name.
+# ВАЖНО: после переименования запись под ним обязана ИСЧЕЗНУТЬ из стора (см.
+# обработку "register" ниже) — иначе на один физический агент в сторе остаётся
+# две записи, и store._pick(None) перестаёт быть надёжным.
+PROVISIONAL_AGENT_ID = "quik-agent"
 
 
 def _security_to_dict(s) -> dict:
@@ -229,6 +237,29 @@ class QuikAgentLinkServicer(pb_grpc.QuikAgentLinkServicer):
                     if new_id != agent_id:
                         # migrate queue + state to the host-named id
                         self.command_queues.setdefault(new_id, cmd_q)
+                        # ЗАПИСЬ ДО РЕГИСТРАЦИИ ОБЯЗАНА ИСЧЕЗНУТЬ.
+                        #
+                        # Раньше она оставалась навсегда, и на ОДИН физический агент
+                        # в сторе жили ДВЕ записи: служебная "quik-agent" с красной
+                        # лампой и настоящая "9618". А store._pick(None) отдаёт агента
+                        # только если он в сторе один ЛИБО если зелёный ровно один —
+                        # значит всё держалось на том, что 9618 зелёный. В любой миг,
+                        # когда он не зелёный (переподключение, рестарт агента, кадр
+                        # медленнее link_fresh_sec), _pick возвращал None, и ЛЮБОЕ
+                        # чтение store.x(None) отдавало пустоту: параметры, тик,
+                        # стакан, зеркало. 02.10.2026 на это наткнулось окно ui-ux:
+                        # в одном ответе цена позиции округлена по шагу из фида
+                        # параметров, а p&l заявок пришёл с priced=false и рублями
+                        # null — два чтения одного источника, между которыми
+                        # переключилась лампа.
+                        #
+                        # Чистим ТОЛЬКО служебный id: настоящий агент, сменивший
+                        # host_name, своей истории лишаться не должен.
+                        if agent_id == PROVISIONAL_AGENT_ID:
+                            self.store.remove_agent(agent_id)
+                            self.command_queues.pop(agent_id, None)
+                            log.info("quik.session.provisional_dropped",
+                                     provisional=agent_id, agent=new_id)
                         agent_id = new_id
                     self.store.set_register(agent_id, {
                         "agent_version": reg.agent_version, "host_name": reg.host_name,
