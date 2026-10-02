@@ -5,10 +5,14 @@
 боя, не обрывая сделку. Отличие: там выход по сигналу стратегии и цена не
 проверяется, здесь выход уровнями — цену проверяем.
 """
+import pathlib
+import random
+
+import pytest
 
 from trader.quik import smart_orders as so_mod
 from trader.quik.smart_orders import SmartOrder, SmartOrderBook, new_id
-from trader.api.quik_smart_orders import _grid_sync, _walls_sync
+from trader.api.quik_smart_orders import _grid_count_fill, _grid_sync, _walls_sync
 from tests.quik.test_smart_grid import GLim, GOst, GSrv, GSTEPS, GNOW, _gstore
 
 
@@ -202,15 +206,16 @@ def test_guard_fires_on_the_third_filled_level(tmp_path):
     _grid_sync(book, _gstore(85000.0), GOst(), GSrv(), GLim(), "9618", GSTEPS, {},
                GNOW, True)
     assert so.exit_only is False, "на двух филлах защита молчит"
-    so.g_fills_done = 3
+    so.g_fills_done, so.g_pos = 3, -3
     _grid_sync(book, _gstore(85000.0), GOst(), GSrv(), GLim(), "9618", GSTEPS, {},
                GNOW + 1000, True)
     assert so.exit_only is True and so.g_trig_ms, "третий филл обязан включить защиту"
 
 
 def test_guard_fires_on_price_move_from_base(tmp_path):
-    """0.25% от 85000 это 212 пунктов. 84700 — ушли на 0.35%."""
-    book, so = _guarded(tmp_path, g_pos=4, g_avg=85100.0)
+    """0.25% от 85000 это 212 пунктов. 84700 — ушли на 0.35%. Порог по уровням
+    выключен, чтобы проверялось только условие по цене."""
+    book, so = _guarded(tmp_path, g_trig_fills=0, g_pos=4, g_avg=85100.0)
     _grid_sync(book, _gstore(84900.0), GOst(), GSrv(), GLim(), "9618", GSTEPS, {},
                GNOW, True)
     assert so.exit_only is False, "0.12% — порог не достигнут"
@@ -230,7 +235,7 @@ def test_zero_switches_each_condition_off(tmp_path):
 def test_guard_cancels_standing_entry_orders(tmp_path):
     """Стоящие заявки — это входные уровни. Оставить их значило бы продолжать
     набор, против которого защита и заведена."""
-    book, so = _guarded(tmp_path, g_fills_done=3, g_pos=-2, g_avg=85100.0)
+    book, so = _guarded(tmp_path, g_fills_done=3, g_pos=-3, g_avg=85100.0)
     so.g_live = {"-1": "so:x:gm1", "2": "so:x:gp2", "flip:3": True}
     ost = GOst()
     ost.working_orders = lambda agent=None: [
@@ -249,8 +254,8 @@ def test_guard_cancels_standing_entry_orders(tmp_path):
 
 def test_guard_reports_which_condition_fired(tmp_path):
     """Оператор, увидев остановку набора, обязан прочитать ПРИЧИНУ и число."""
-    so1 = _guarded(tmp_path / "a", g_fills_done=5)[1]
-    assert "исполнено уровней 5" in so_mod.grid_guard_hit(so1, 85000.0)
+    so1 = _guarded(tmp_path / "a", g_fills_done=5, g_pos=5)[1]
+    assert "в одну сторону 5" in so_mod.grid_guard_hit(so1, 85000.0)
     so2 = _guarded(tmp_path / "b", g_trig_fills=0)[1]
     why = so_mod.grid_guard_hit(so2, 84000.0)
     assert "ушла от базы" in why and "%" in why
@@ -415,3 +420,39 @@ def test_rearm_resets_the_touch_counter(tmp_path):
     _grid_sync(book, _gstore(84300.0), GOst(), GSrv(), GLim(), "9618", GSTEPS, {},
                GNOW, True)
     assert so.g_touch_up == 0 and so.g_touch_down == 0 and so.g_zone_side == ""
+
+
+# --------------------------------------------------------------------------
+# УРОВНИ — В ОДНУ СТОРОНУ. Оператор 02.10.2026: «кол-во касаний в том числе и
+# уровней!». На GZZ6 защита сработала на трёх филлах при позиции в ОДИН уровень:
+# сетка отрабатывала боковик, а сочла его трендом и сняла все покупки.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("n", [3, 4, 7, 20, 101])
+def test_pure_alternation_never_fires_the_guard(n):
+    """ЗАПРЕТ: сколько бы раз сетка ни гасила уровни попеременно вниз-вверх,
+    защита по уровням не срабатывает — это её рабочий режим, а не тренд."""
+    so = _guarded(pathlib.Path("."), g_trig_move_pct=0.0)[1]
+    live: dict = {}
+    for i in range(n):
+        side = "buy" if i % 2 == 0 else "sell"
+        _grid_count_fill(so, live, -1 if side == "buy" else 0, side, 1, GNOW + i,
+                         price=85000.0)
+        assert so_mod.grid_guard_hit(so, 85000.0) == "", (
+            f"чередование на {i + 1}-м филле включило защиту (позиция {so.g_pos:+d})")
+
+
+@pytest.mark.parametrize("seed", range(30))
+def test_guard_fires_exactly_when_net_levels_reach_the_threshold(seed):
+    """Тренд с откатами ловится: защита включается ровно тогда, когда набранная
+    в одну сторону позиция дошла до порога, сколько бы откатов ни было между."""
+    rnd = random.Random(seed)
+    so = _guarded(pathlib.Path("."), g_trig_move_pct=0.0, g_lot=2)[1]
+    live: dict = {}
+    for i in range(60):
+        side = "buy" if rnd.random() < 0.6 else "sell"
+        _grid_count_fill(so, live, 0, side, 2, GNOW + i, price=85000.0)
+        fired = so_mod.grid_guard_hit(so, 85000.0) != ""
+        assert fired == (abs(so.g_pos) / 2 >= 3), (
+            f"seed {seed}, филл {i + 1}: позиция {so.g_pos:+d}, защита {fired}")
