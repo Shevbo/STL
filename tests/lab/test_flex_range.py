@@ -79,4 +79,3 @@ def test_analyze_tf_smoke_and_aggregation_axis():
         rows += [[r[0] + 86400 * d] + r[1:] for r in day]
     res = fr.analyze_tf(rows, 5, draws=2)
     assert res["tf"] == 5 and "variants" in res
-    assert fr.run({"symbol_key": "X", "tf": 5}) if False else True
