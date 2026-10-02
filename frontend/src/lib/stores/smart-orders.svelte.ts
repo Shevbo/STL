@@ -98,6 +98,9 @@ export interface SmartOrder {
   g_tp_rub?: number;
   g_cash_pts?: number;
   g_cash_on?: boolean;
+  // Сколько уровней реально стоит в стакане с каждой стороны (0 = все сразу);
+  // снимается стоящее только дальше окна + 2, поэтому их бывает на две больше.
+  g_window?: number;
   c_avg?: number;
   exit_only?: boolean;
   note: string;

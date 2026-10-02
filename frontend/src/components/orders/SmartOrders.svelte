@@ -17,7 +17,7 @@
     preview, protectionPair,
     shortCodes, sortBySideAndPrice, tillFact, isTwoSided, type Kind, type OpenPos, type Side,
     apexMs, corridorFromClicks, corridorState, corridorTimeError, corridorWidth,
-    gridState, gridWorstCase, gridProtectionText, gridTargetText,
+    gridState, gridWorstCase, gridProtectionText, gridTargetText, gridSideLevels,
     canExitOnly, exitOnlyFact, exitOnlyHeld, ownPosition,
     msToMskInput, mskInputToMs,
   } from '$lib/smart-order-help';
@@ -94,6 +94,9 @@
   let gTrigTouches = $state(G_TRIG_TOUCHES);
   let gRearmMin = $state('');
   let gTpRub = $state('');
+  // Окно выставления: умолчание движка — пять уровней с каждой стороны.
+  const G_WINDOW = '5';
+  let gWindow = $state(G_WINDOW);
   // ПРОФИЛЬ ИСПОЛНЕНИЯ — один селект вместо трёх полей секунд (решение оператора
   // 29.09.2026). Секунды остались в API как разовое перекрытие и живут под
   // раскрытием: на рядовом пути они только мешают.
@@ -286,6 +289,7 @@
       gLot: num(gLot), gStopPts: num(gStopPts),
       gTrigFills: num(gTrigFills), gTrigMovePct: num(gTrigMovePct),
       gTrigTouches: num(gTrigTouches), gRearmMin: num(gRearmMin), gTpRub: num(gTpRub),
+      gWindow: num(gWindow),
       price, pointValue,
     });
     // «Следящий» выбран, а откат не введён — движок поставит ОБЫЧНЫЙ тейк на
@@ -439,7 +443,7 @@
                         'c_stop_pts', 'c_flips_max',
                         'g_step', 'g_buys', 'g_sells', 'g_lot', 'g_stop_pts',
                         'g_trig_fills', 'g_trig_move_pct', 'g_trig_touches', 'g_rearm_min',
-                        'g_tp_rub'];
+                        'g_tp_rub', 'g_window'];
   // Три клика по графику собрались — переводим их в параметры. Сам перевод
   // (бар вместо пикселя, шаг цены, приведение нижней к первой точке) живёт в
   // corridorFromClicks и покрыт тестами; здесь только подстановка в форму.
@@ -557,6 +561,7 @@
       g_trig_touches: only('g_trig_touches', num(gTrigTouches)),
       g_rearm_min: only('g_rearm_min', num(gRearmMin)),
       g_tp_rub: only('g_tp_rub', num(gTpRub)),
+      g_window: only('g_window', num(gWindow)),
       // Профиль относится к ЛЮБОМУ типу заявки, а не только к защитной: не
       // исполнившийся ВХОД врёт человеку так же, как выход — он видит
       // «сработала», а в рынке ничего нет.
@@ -601,7 +606,7 @@
       cT1 = 0; cP1 = ''; cT2 = 0; cP2 = ''; cLow = ''; cLow2 = ''; cStopPts = ''; cFlipsMax = '';
       gStep = ''; gBuys = ''; gSells = ''; gLot = ''; gStopPts = '';
       gTrigFills = G_TRIG_FILLS; gTrigMovePct = G_TRIG_MOVE_PCT;
-      gTrigTouches = G_TRIG_TOUCHES; gRearmMin = ''; gTpRub = '';
+      gTrigTouches = G_TRIG_TOUCHES; gRearmMin = ''; gTpRub = ''; gWindow = G_WINDOW;
       cErr = ''; corridorDraw.reset();
       confirming = false;
       await smartOrdersStore.refresh();
@@ -664,6 +669,7 @@
     gTrigTouches = gnum((o as any).g_trig_touches);
     gRearmMin = (o as any).g_rearm_min ? String((o as any).g_rearm_min) : '';
     gTpRub = (o as any).g_tp_rub ? String((o as any).g_tp_rub) : '';
+    gWindow = gnum((o as any).g_window);
     // g_base НЕ подставляем сознательно: базу сетки сервер берёт с рынка в
     // момент приёма, и присланное значение он УВАЖИТ — заявка встала бы вокруг
     // устаревшей точки (предупреждение real-trade 01.10.2026).
@@ -958,6 +964,9 @@
             {:else if f.key === 'g_trig_touches'}
               <input class="so-in" type="number" step="1" min="1" bind:value={gTrigTouches}
                      placeholder="1" aria-label={f.label} />
+            {:else if f.key === 'g_window'}
+              <input class="so-in" type="number" step="1" min="0" bind:value={gWindow}
+                     placeholder="0 — все сразу" aria-label={f.label} />
             {:else if f.key === 'g_tp_rub'}
               <div class="so-unit-wrap">
                 <input class="so-in pts" type="number" step="any" min="0" bind:value={gTpRub}
@@ -1386,6 +1395,11 @@
             <!-- Пороги защиты — ЦЕНОЙ: у взведённой сетки база известна точно
                  (g_base), и процент незачем держать процентом. -->
             <span class="so-c-corr-w">{gridProtectionText(o as any, o.g_base ?? 0)}</span>
+            <!-- ЧИСЛО, ПО КОТОРОМУ ВКЛЮЧИТСЯ ЗАЩИТА: набор в одну сторону, а не
+                 счёт филлов. Без него порог на карточке не с чем сравнить. -->
+            {#if gridSideLevels(o as any) != null && (o.g_trig_fills ?? 0) > 0}
+              <span class="so-c-corr-w">набрано в одну сторону {gridSideLevels(o as any)} из {o.g_trig_fills}</span>
+            {/if}
             {#if gridTargetText(o as any, o.code === code ? price : 0, o.code === code ? pointValue : 0)}
               <span class="so-c-corr-w">{gridTargetText(o as any, o.code === code ? price : 0, o.code === code ? pointValue : 0)}</span>
             {/if}

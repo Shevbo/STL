@@ -4,12 +4,12 @@
 // переводит её в «только на выход» по безубытку. Экран обязан сказать, при
 // каком условии это случится, и сказать вслух, когда защиты НЕТ.
 import { describe, it, expect } from 'vitest';
-import { gridProtectionText, gridTargetText, preview } from './smart-order-help';
+import { gridProtectionText, gridSideLevels, gridTargetText, preview } from './smart-order-help';
 
 describe('формулировка защиты', () => {
   it('оба условия: филлы ИЛИ уход цены', () => {
     const t = gridProtectionText({ g_trig_fills: 3, g_trig_move_pct: 0.25, g_trig_touches: 1 });
-    expect(t).toContain('3 уровня исполнено');
+    expect(t).toContain('набрано 3 уровня в одну сторону');
     expect(t).toContain('или');
     expect(t).toContain('0.25%');
     expect(t).toContain('без убытка');
@@ -130,5 +130,50 @@ describe('порог защиты ценой, а не процентом', () =>
       price: 85_000,
     });
     expect(p.sentence).toMatch(/ниже 84\s?787/);
+  });
+});
+
+describe('защита по уровням меряет НАБОР В ОДНУ СТОРОНУ', () => {
+  it('позиция ÷ объём уровня, а не счёт филлов', () => {
+    // real-trade 02.10.2026: на GZZ6 старое правило включило защиту на трёх
+    // филлах при позиции в один уровень. Чередование вверх-вниз позицию не
+    // наращивает, тренд с откатами — наращивает.
+    expect(gridSideLevels({ g_pos: 15, g_lot: 5 })).toBe(3);
+    expect(gridSideLevels({ g_pos: -15, g_lot: 5 })).toBe(3);   // шорт считается так же
+    expect(gridSideLevels({ g_pos: 5, g_lot: 5 })).toBe(1);
+    expect(gridSideLevels({ g_pos: 0, g_lot: 5 })).toBe(0);
+  });
+
+  it('без объёма уровня числа нет — делить не на что', () => {
+    expect(gridSideLevels({ g_pos: 15, g_lot: 0 })).toBeNull();
+    expect(gridSideLevels({})).toBeNull();
+  });
+
+  it('формулировка говорит «набрано в одну сторону», а не «исполнено»', () => {
+    const t = gridProtectionText({ g_trig_fills: 3 });
+    expect(t).toContain('в одну сторону');
+    expect(t).not.toContain('исполнено');
+  });
+});
+
+describe('окно выставления', () => {
+  it('фраза называет и окно, и запас снятия', () => {
+    const p = preview({
+      kind: 'grid', side: 'buy', qty: 3, code: 'RIZ6', trigger: 0, trailOffset: 0,
+      watchId: '', childPrice: 0, gStep: 90, gBuys: 8, gSells: 8, gLot: 3,
+      gStopPts: 260, gWindow: 5, price: 85_000,
+    });
+    expect(p.sentence).toContain('по 5 ближайших');
+    expect(p.sentence).toContain('до 7');     // край окна снимается с запасом
+    expect(p.sentence).toContain('ждут в STL');
+  });
+
+  it('окна нет — про него молчим', () => {
+    const p = preview({
+      kind: 'grid', side: 'buy', qty: 3, code: 'RIZ6', trigger: 0, trailOffset: 0,
+      watchId: '', childPrice: 0, gStep: 90, gBuys: 8, gSells: 8, gLot: 3,
+      gStopPts: 260, gWindow: 0, price: 85_000,
+    });
+    expect(p.sentence).not.toContain('ждут в STL');
   });
 });
