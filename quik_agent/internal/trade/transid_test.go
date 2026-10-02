@@ -3,6 +3,7 @@ package trade
 import (
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // ИНВАРИАНТ: номер транзакции НИКОГДА не повторяется в пределах сеанса QUIK, как
@@ -40,19 +41,18 @@ func TestTransIDNeverRepeatsAcrossRestarts(t *testing.T) {
 	}
 }
 
-// Файл потерян (переезд, чистка каталога) — нумерация всё равно обязана уйти
-// вверх: стартуем от unix-секунд, а прошлый агент стартовал раньше и от
-// МЕНЬШЕГО основания.
-func TestTransIDClimbsWhenStoreIsLost(t *testing.T) {
-	dir := t.TempDir()
-	first := NewBridge(0, nil, nil)
-	first.SetTransIDStore(filepath.Join(dir, "trans_id.txt"))
-	last := first.NextTransID()
-
-	second := NewBridge(0, nil, nil)
-	second.SetTransIDStore(filepath.Join(t.TempDir(), "trans_id.txt")) // файла нет
-	if next := second.NextTransID(); next <= last {
-		t.Fatalf("без файла номер %d не выше прежнего %d", next, last)
+// Файл потерян (переезд, чистка каталога, первый запуск) — гарантия слабее, и
+// честно сказать, в чём именно она состоит: номер НЕ возвращается в низкий
+// диапазон, который терминал уже израсходовал. Строгого «выше прошлого» тут
+// обещать нельзя: два старта в одну и ту же секунду дадут одно основание. Это
+// приемлемо потому, что как только агент выдал хоть один номер, файл уже есть, и
+// работает гарантия из теста выше.
+func TestTransIDWithoutStoreStartsAboveConsumedRange(t *testing.T) {
+	before := time.Now().Unix()
+	b := NewBridge(0, nil, nil)
+	b.SetTransIDStore(filepath.Join(t.TempDir(), "trans_id.txt")) // файла нет
+	if v := b.NextTransID(); v <= before {
+		t.Fatalf("без файла номер %d не выше unix-секунд %d — такой уже мог быть выдан сегодня", v, before)
 	}
 }
 
