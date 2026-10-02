@@ -163,3 +163,12 @@ def test_reversed_closed_on_day_change_if_session_ended_early():
     on, rt = _orders(day1 + nxt, **dict(REV, rev_tp=9, rev_sl=9, rev_hold=900))
     assert rt._state.get("exit_reod") == 1 and rt._state.get("rev") is None, on
     assert _rev_exit_minute(on) == 1440 + 601
+
+
+def test_count_fills_does_not_change_trades_and_counts_contracts():
+    for name, (rid, p) in CASES.items():
+        bars = walk(1)
+        o, rt = run(rid, bars, {**p, "count_fills": 1})
+        assert [list(x) for x in o] == GOLDEN[f"{name}/1"], name
+        assert rt._state["why_fq"] == sum(x[1] for x in o), name
+        assert rt._state["why_fqw"] >= rt._state["why_fq"]

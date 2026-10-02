@@ -97,6 +97,23 @@ def in_death_valley(closes: list, window: int, thr: float) -> bool:
     return (max(tail) - min(tail)) < thr
 
 
+class _FillCounter:
+    """Прокси рантайма для count_fills=1: считает контракты по заявкам (why_fq) и с удвоением
+    выходных (why_fqw) в состоянии; бэктест кладёт why_* в extra результата. Сделок не меняет."""
+
+    def __init__(self, stl):
+        object.__setattr__(self, "_stl", stl)
+        object.__setattr__(self, "ts", 0)
+
+    def __getattr__(self, name):
+        return getattr(self._stl, name)
+
+    async def place_order(self, symbol, side, qty, price):
+        for key, w in (("why_fq", 1), ("why_fqw", 2 if is_weekend(self.ts) else 1)):
+            self._stl.set_state(key, int(self._stl.get_state(key, 0) or 0) + int(qty) * w)
+        return await self._stl.place_order(symbol, side, qty, price)
+
+
 def make_on_bar(rid: str):
     """Build a STL on_bar(stl, params) from a registered signal function.
 
@@ -114,6 +131,9 @@ def make_on_bar(rid: str):
 
     async def on_bar(stl: STLRuntime, params: dict) -> None:
         symbol = params["symbol"]
+        counting = int(params.get("count_fills", 0) or 0)
+        if counting:
+            stl = _FillCounter(stl)
         base_unit = max(1, int(params.get("qty", 1)))
         # Betting system (+N after a loss, reset on a win): the entry size grows by
         # bet_step contracts after each losing CLOSED trade and resets to base after a
@@ -314,6 +334,8 @@ def make_on_bar(rid: str):
         bars = await stl.get_bars(symbol, tf=1, n=fetch_n)
         if len(bars) < need:
             return
+        if counting:
+            stl.ts = bars[-1].time + int(params.get("bar_offset_min", 0) or 0) * 60
         # Долина гейтит только входы/доборы НИЖЕ; сигнал — по сырому ОКНУ в need
         # баров, не по всему хвосту (урок explain 05.08.2026). Выходы (разворот,
         # тейк, стоп) живут в долине всегда — см. комментарий у in_death_valley.
