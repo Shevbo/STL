@@ -81,6 +81,27 @@
       <button id="cfgSave" style="margin-top:12px">Сохранить настройки</button>
       <span id="cfgMsg" class="muted"></span>
     </div>
+    <div class="cfg-col" id="limBox">
+      <!-- ПРЕДЕЛЫ ЖИВОЙ ТОРГОВЛИ. До 02.10.2026 они жили в переменных окружения
+           хостера и читались РАЗ при старте: поднять предел можно было только
+           рестартом боевого процесса. Это уже стоило простоя — сетка на GZZ6
+           уткнулась в потолок посреди торгов. Теперь один файл, и правка
+           действует сразу. -->
+      <div class="cfg-h">Пределы живой торговли</div>
+      <div class="muted">правка действует СРАЗУ — файл перечитывается по времени
+        изменения, рестарт STL не нужен</div>
+      <label style="margin:6px 0"><input type="checkbox" id="lim_enabled"> торговля разрешена (мастер-флаг)</label>
+      <div class="thr-row"><span>контрактов в одной заявке</span><input type="number" id="lim_per_order"></div>
+      <div class="thr-row"><span>контрактов в стоящих заявках</span><input type="number" id="lim_working"></div>
+      <div class="thr-row"><span>заявок за день</span><input type="number" id="lim_daily"></div>
+      <div class="thr-row"><span>коллар, доля <span id="lim_collar_pct" class="muted"></span></span>
+        <input type="number" step="any" id="lim_collar"></div>
+      <div style="margin-top:4px">белый список инструментов, через запятую</div>
+      <input type="text" id="lim_wl" style="width:100%">
+      <button id="limSave" style="margin-top:8px">Сохранить пределы</button>
+      <span id="limMsg" class="muted"></span>
+      <div class="muted" id="limNote" style="margin-top:6px">…</div>
+    </div>
     <div class="cfg-col">
       <div class="cfg-h">Компаньоны (панель в трее)</div>
       <div class="muted">Учётная запись Windows, например WIN10-HYPERV\admin. Код
@@ -263,6 +284,107 @@ async function saveConfig() {
 }
 $('cfgSave').onclick = saveConfig;
 loadConfig();
+
+// ── Пределы живой торговли: один файл, правка без рестарта ───────────────────
+//
+// ПОЛЕ НЕ ПРИСЛАНО — ЗНАЧЕНИЕ ОСТАЁТСЯ ПРЕЖНИМ (так устроена ручка PUT).
+// Поэтому шлём только ИЗМЕНЁННОЕ: отправив форму целиком, мы переписали бы
+// чужую правку, сделанную в другом окне, пока эта страница была открыта. На
+// умных заявках это уже стоило живого робота — посланный целиком набор
+// параметров стёр ключи, о которых отправитель не думал.
+let limCur = {};
+
+function limitsPatch(form, cur) {
+  const out = {};
+  const num = (v) => (v === '' || v === null || v === undefined) ? null : Number(v);
+  for (const [key, raw] of [['max_contracts_per_order', form.per_order],
+                            ['max_working_contracts', form.working],
+                            ['daily_order_cap', form.daily],
+                            ['price_collar_frac', form.collar]]) {
+    const v = num(raw);
+    // NaN и пустое — это «не трогать», а не «ноль». Ноль здесь запрещает
+    // торговлю молча, и движок за это отвечает 422.
+    if (v === null || Number.isNaN(v)) continue;
+    if (v !== cur[key]) out[key] = v;
+  }
+  const wl = String(form.whitelist ?? '').split(',').map((c) => c.trim()).filter(Boolean);
+  const curWl = Array.isArray(cur.instrument_whitelist) ? cur.instrument_whitelist : [];
+  if (wl.length && wl.join(',') !== curWl.join(',')) out.instrument_whitelist = wl;
+  if (typeof form.enabled === 'boolean' && form.enabled !== cur.trading_enabled) {
+    out.trading_enabled = form.enabled;
+  }
+  return out;
+}
+
+function limitsPaint(v) {
+  limCur = v || {};
+  $('lim_enabled').checked = !!v.trading_enabled;
+  $('lim_per_order').value = v.max_contracts_per_order ?? '';
+  $('lim_working').value = v.max_working_contracts ?? '';
+  $('lim_daily').value = v.daily_order_cap ?? '';
+  $('lim_collar').value = v.price_collar_frac ?? '';
+  limCollarEcho();
+}
+
+// Доля и проценты — разные числа, и перепутать их тут значит разрешить заявку
+// в сто раз дальше от рынка. Поэтому НЕ конвертируем, а показываем проценты
+// рядом как подпись: правится всегда доля.
+function limCollarEcho() {
+  const v = Number($('lim_collar').value);
+  $('lim_collar_pct').textContent = Number.isFinite(v) && v
+    ? `(= ${(v * 100).toFixed(3).replace(/0+$/, '').replace(/\.$/, '')} % от цены)` : '';
+}
+
+async function loadLimits() {
+  try {
+    const res = await fetch('/api/v1/quik/orders/settings', { credentials: 'include' });
+    if (!res.ok) { $('limMsg').textContent = 'не прочитаны: HTTP ' + res.status; return; }
+    const d = await res.json();
+    limitsPaint(d.settings || {});
+    $('lim_wl').value = (d.settings?.instrument_whitelist || []).join(', ');
+    // ЧЕГО В ЭТОМ ФАЙЛЕ НЕТ. Агентский конфиг и список QLua живут на машине
+    // QUIK и остаются БЭКСТОПОМ: STL умеет только ужесточать его. Поставив
+    // здесь предел шире агентского, оператор получит агентский — экран не
+    // имеет права обещать обратное.
+    $('limNote').textContent = (d.note || '') + (d.path ? ' · файл: ' + d.path : '');
+  } catch (e) { $('limMsg').textContent = 'не прочитаны: ' + e; }
+}
+
+async function saveLimits() {
+  const patch = limitsPatch({
+    per_order: $('lim_per_order').value, working: $('lim_working').value,
+    daily: $('lim_daily').value, collar: $('lim_collar').value,
+    whitelist: $('lim_wl').value, enabled: $('lim_enabled').checked,
+  }, limCur);
+  if (!Object.keys(patch).length) { $('limMsg').textContent = 'менять нечего'; return; }
+  $('limMsg').textContent = '…';
+  try {
+    const res = await fetch('/api/v1/quik/orders/settings', {
+      method: 'PUT', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch),
+    });
+    const d = await res.json().catch(() => ({}));
+    // Отказ показываем ТЕКСТОМ ДВИЖКА: он объясняет, почему ноль и пустой
+    // список запрещены, лучше любой нашей формулировки.
+    if (!res.ok) { $('limMsg').textContent = 'отказ: ' + (d.detail || res.status); return; }
+    limitsPaint(d.settings || {});
+    $('lim_wl').value = (d.settings?.instrument_whitelist || []).join(', ');
+    // ЗАПИСАНО ≠ ПРИМЕНЕНО У АГЕНТА. Пока агент не получил пределы, он живёт со
+    // старыми, и заявка, законная по STL, умрёт у него без следа в QUIK.
+    $('limMsg').textContent = d.pushed_to_agent
+      ? 'сохранено и отправлено агенту — действует сразу'
+      : 'сохранено, НО агент ещё не получил: до переподключения он с прежними пределами';
+  } catch (e) { $('limMsg').textContent = 'ошибка: ' + e; }
+}
+// У ДЕЙСТВИЯ ДОЛЖЕН БЫТЬ АДРЕС: ссылка из меню ведёт сразу сюда, а не на
+// страницу, где пределы ещё надо найти под свёрнутым «Настройки вотчера».
+if (location.hash === '#limits') {
+  $('cfgBox').open = true;
+  setTimeout(() => $('limBox').scrollIntoView({ block: 'center' }), 0);
+}
+$('limSave').onclick = saveLimits;
+$('lim_collar').oninput = limCollarEcho;
+loadLimits();
 
 // ── Компаньоны: выдать код сопряжения, посмотреть и отозвать устройства ──────
 const CMP = '/api/v1/quik/companion';
