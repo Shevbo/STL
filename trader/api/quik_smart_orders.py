@@ -130,6 +130,9 @@ class SmartOrderBody(BaseModel):
     g_trig_move_pct: float = 0.25
     # Перевзведение после выхода по защите, минуты. 0 = выход окончателен.
     g_rearm_min: float = 0.0
+    # Сколько касаний триггерной цены С ОДНОЙ СТОРОНЫ нужно, чтобы защита
+    # сработала. 1 = на первом же; больше — одиночный выброс сетку не снимет.
+    g_trig_touches: int = 1
     c_stop_pts: float = 0.0
     c_flips_max: int = 0
     note: str = ""
@@ -157,7 +160,7 @@ async def create(body: SmartOrderBody, request: Request):
         c_low=float(body.c_low), c_low2=float(body.c_low2),
         c_stop_pts=float(body.c_stop_pts),
         g_trig_fills=int(body.g_trig_fills), g_trig_move_pct=float(body.g_trig_move_pct),
-        g_rearm_min=float(body.g_rearm_min),
+        g_rearm_min=float(body.g_rearm_min), g_trig_touches=int(body.g_trig_touches),
         g_step=float(body.g_step), g_buys=int(body.g_buys), g_sells=int(body.g_sells),
         g_lot=int(body.g_lot), g_stop_pts=float(body.g_stop_pts),
         c_flips_max=int(body.c_flips_max), c_qty=int(body.qty),
@@ -1924,6 +1927,9 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
                     so.exit_only = False
                     so.g_trig_ms = 0
                     so.g_fills_done = 0
+                    so.g_touch_up = 0
+                    so.g_touch_down = 0
+                    so.g_zone_side = ""
                     so.g_rearm_at_ms = 0
                     so.g_rearms += 1
                     so.g_avg = 0.0

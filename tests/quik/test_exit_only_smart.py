@@ -352,3 +352,66 @@ def test_a_manual_exit_only_is_not_rearmed(tmp_path):
     _grid_sync(book, _gstore(84300.0), GOst(), GSrv(), GLim(), "9618", GSTEPS, {},
                GNOW, True)
     assert so.g_rearm_at_ms == 0 and so.exit_only is True
+
+
+# --------------------------------------------------------------------------
+# КАСАНИЯ ТРИГГЕРНОЙ ЦЕНЫ — отдельный параметр (оператор 02.10.2026, напоминание
+# об исходной постановке). Одиночный выброс не должен снимать сетку.
+# --------------------------------------------------------------------------
+
+
+def test_a_touch_is_entering_the_zone_not_a_tick_inside_it(tmp_path):
+    """Сторож ходит раз в секунду: без этого различия минута за порогом дала бы
+    шестьдесят «касаний» и защита сработала бы при любом пороге касаний."""
+    _, so = _guarded(tmp_path, g_trig_fills=0, g_trig_move_pct=0.25,
+                     g_trig_touches=3, g_base=85000.0)
+    for _ in range(10):                       # десять тиков ВНУТРИ зоны
+        so_mod.grid_guard_hit(so, 84700.0)
+    assert so.g_touch_down == 1, "это одно касание, а не десять"
+    so_mod.grid_guard_hit(so, 85000.0)        # вернулись к базе
+    assert so.g_zone_side == ""
+    so_mod.grid_guard_hit(so, 84700.0)        # вошли снова
+    assert so.g_touch_down == 2
+
+
+def test_guard_waits_for_the_required_number_of_touches(tmp_path):
+    _, so = _guarded(tmp_path, g_trig_fills=0, g_trig_move_pct=0.25,
+                     g_trig_touches=3, g_base=85000.0)
+    for i in (1, 2):
+        assert so_mod.grid_guard_hit(so, 84700.0) == "", f"касание {i} — рано"
+        so_mod.grid_guard_hit(so, 85000.0)
+    why = so_mod.grid_guard_hit(so, 84700.0)
+    assert why and "касаний с этой стороны 3 из 3" in why, why
+
+
+def test_one_touch_keeps_the_previous_behaviour(tmp_path):
+    _, so = _guarded(tmp_path, g_trig_fills=0, g_trig_move_pct=0.25,
+                     g_trig_touches=1, g_base=85000.0)
+    assert so_mod.grid_guard_hit(so, 84700.0), "порог 1 — срабатывает сразу"
+
+
+def test_touches_are_counted_PER_SIDE_not_summed(tmp_path):
+    """УТОЧНЕНИЕ ОПЕРАТОРА 02.10.2026: касания считаются С ОДНОЙ стороны.
+
+    Снимать сетку должен ОДНОСТОРОННИЙ уход. Касание вверх и касание вниз — это
+    колебание вокруг базы, то есть ровно то, ради чего сетка и стоит; суммировать
+    их значило бы выключать сетку в её рабочем режиме."""
+    _, so = _guarded(tmp_path, g_trig_fills=0, g_trig_move_pct=0.25,
+                     g_trig_touches=2, g_base=85000.0)
+    assert so_mod.grid_guard_hit(so, 84700.0) == ""       # касание вниз
+    so_mod.grid_guard_hit(so, 85000.0)
+    assert so_mod.grid_guard_hit(so, 85300.0) == "", (
+        "касание вверх не складывается с касанием вниз")
+    so_mod.grid_guard_hit(so, 85000.0)
+    assert so_mod.grid_guard_hit(so, 85300.0), "ВТОРОЕ касание вверх — тренд, снимаем"
+    assert so.g_touch_up == 2 and so.g_touch_down == 1
+
+
+def test_rearm_resets_the_touch_counter(tmp_path):
+    """Иначе перевзведённая сетка снялась бы первым же касанием новой базы."""
+    book, so = _guarded(tmp_path, g_rearm_min=1, g_pos=0, exit_only=True,
+                        g_trig_ms=GNOW - 1000, g_rearm_at_ms=GNOW - 1,
+                        g_touch_up=5, g_zone_side="up")
+    _grid_sync(book, _gstore(84300.0), GOst(), GSrv(), GLim(), "9618", GSTEPS, {},
+               GNOW, True)
+    assert so.g_touch_up == 0 and so.g_touch_down == 0 and so.g_zone_side == ""
