@@ -174,3 +174,98 @@ def test_a_position_without_a_known_average_is_not_weighted_against_zero():
     # дальше считается уже нормально
     pos, avg = so_mod.blend_avg(pos, avg, 4, 85100.0, True)
     assert pos == 8 and avg == 85000.0
+
+
+# --------------------------------------------------------------------------
+# ЗАЩИТА СЕТКИ: сама переводит в «только на выход» после N филлов или ухода цены.
+# Спецификация окна backtests, решение оператора 02.10.2026. Числа бэктеста:
+# убыток на отложенной трети в 11-15 раз меньше (−288/−399/−366 -> −23/−27/−27
+# тыс ₽, уже с комиссией), 81% закрытий по безубытку. Это ограничитель ущерба,
+# прибыльной сетку он не делает.
+# --------------------------------------------------------------------------
+
+
+def _guarded(tmp_path, **kw):
+    b = SmartOrderBook(str(tmp_path / "gg.json"))
+    args = dict(so_id=new_id(), kind="grid", code="RIZ6", side="buy", qty=1,
+                g_step=100.0, g_buys=5, g_sells=5, g_lot=1, g_base=85000.0,
+                g_stop_pts=0.0, created_ms=GNOW, status="armed",
+                g_trig_fills=3, g_trig_move_pct=0.25)
+    args.update(kw)
+    so = SmartOrder(**args)
+    b.orders.append(so)
+    return b, so
+
+
+def test_guard_fires_on_the_third_filled_level(tmp_path):
+    book, so = _guarded(tmp_path, g_fills_done=2, g_pos=-2, g_avg=85100.0)
+    _grid_sync(book, _gstore(85000.0), GOst(), GSrv(), GLim(), "9618", GSTEPS, {},
+               GNOW, True)
+    assert so.exit_only is False, "на двух филлах защита молчит"
+    so.g_fills_done = 3
+    _grid_sync(book, _gstore(85000.0), GOst(), GSrv(), GLim(), "9618", GSTEPS, {},
+               GNOW + 1000, True)
+    assert so.exit_only is True and so.g_trig_ms, "третий филл обязан включить защиту"
+
+
+def test_guard_fires_on_price_move_from_base(tmp_path):
+    """0.25% от 85000 это 212 пунктов. 84700 — ушли на 0.35%."""
+    book, so = _guarded(tmp_path, g_pos=4, g_avg=85100.0)
+    _grid_sync(book, _gstore(84900.0), GOst(), GSrv(), GLim(), "9618", GSTEPS, {},
+               GNOW, True)
+    assert so.exit_only is False, "0.12% — порог не достигнут"
+    _grid_sync(book, _gstore(84700.0), GOst(), GSrv(), GLim(), "9618", GSTEPS, {},
+               GNOW + 1000, True)
+    assert so.exit_only is True, "0.35% — защита обязана включиться"
+
+
+def test_zero_switches_each_condition_off(tmp_path):
+    book, so = _guarded(tmp_path, g_trig_fills=0, g_trig_move_pct=0.0,
+                        g_fills_done=99, g_pos=5, g_avg=85100.0)
+    _grid_sync(book, _gstore(80000.0), GOst(), GSrv(), GLim(), "9618", GSTEPS, {},
+               GNOW, True)
+    assert so.exit_only is False, "оба условия выключены нулём"
+
+
+def test_guard_cancels_standing_entry_orders(tmp_path):
+    """Стоящие заявки — это входные уровни. Оставить их значило бы продолжать
+    набор, против которого защита и заведена."""
+    book, so = _guarded(tmp_path, g_fills_done=3, g_pos=-2, g_avg=85100.0)
+    so.g_live = {"-1": "so:x:gm1", "2": "so:x:gp2", "flip:3": True}
+    ost = GOst()
+    ost.working_orders = lambda agent=None: [
+        {"client_id": "so:x:gm1", "order_id": "11", "state": "active",
+         "remaining": 1, "filled": 0, "price": 84900.0},
+        {"client_id": "so:x:gp2", "order_id": "12", "state": "active",
+         "remaining": 1, "filled": 0, "price": 85200.0}]
+    srv = GSrv()
+    _grid_sync(book, _gstore(85000.0), ost, srv, GLim(), "9618", GSTEPS, {},
+               GNOW, True)
+    killed = [m.cancel_order.order_id for m in srv.sent
+              if m.WhichOneof("payload") == "cancel_order"]
+    assert sorted(killed) == ["11", "12"], "входные уровни обязаны быть сняты"
+    assert so.g_live.get("flip:3") is True, "бухгалтерию погасших уровней не трогаем"
+
+
+def test_guard_reports_which_condition_fired(tmp_path):
+    """Оператор, увидев остановку набора, обязан прочитать ПРИЧИНУ и число."""
+    so1 = _guarded(tmp_path / "a", g_fills_done=5)[1]
+    assert "исполнено уровней 5" in so_mod.grid_guard_hit(so1, 85000.0)
+    so2 = _guarded(tmp_path / "b", g_trig_fills=0)[1]
+    why = so_mod.grid_guard_hit(so2, 84000.0)
+    assert "ушла от базы" in why and "%" in why
+
+
+def test_after_the_guard_only_the_closing_side_at_no_loss_is_placed(tmp_path):
+    """Защита включилась — дальше работают правила «только на выход»."""
+    book, so = _guarded(tmp_path, g_fills_done=3, g_pos=-3, g_avg=85100.0)
+    _grid_sync(book, _gstore(85000.0), GOst(), GSrv(), GLim(), "9618", GSTEPS, {},
+               GNOW, True)
+    assert so.exit_only is True
+    srv = GSrv()
+    _grid_sync(book, _gstore(85000.0), GOst(), srv, GLim(), "9618", GSTEPS, {},
+               GNOW + 2000, True)
+    for p in [m.place_order for m in srv.sent
+              if m.WhichOneof("payload") == "place_order"]:
+        assert p.side == 1, "шорт закрывается покупкой"
+        assert p.price <= 85100.0, "и только не выше средней"

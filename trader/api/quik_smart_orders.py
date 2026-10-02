@@ -124,6 +124,10 @@ class SmartOrderBody(BaseModel):
     g_sells: int = 0
     g_lot: int = 0
     g_stop_pts: float = 0.0
+    # Защита сетки. Умолчания из бэктеста (решение оператора 02.10.2026):
+    # три исполненных уровня ИЛИ уход цены от базы на 0.25%. 0 выключает условие.
+    g_trig_fills: int = 3
+    g_trig_move_pct: float = 0.25
     c_stop_pts: float = 0.0
     c_flips_max: int = 0
     note: str = ""
@@ -150,6 +154,7 @@ async def create(body: SmartOrderBody, request: Request):
         c_t2_ms=int(body.c_t2_ms), c_p2=float(body.c_p2),
         c_low=float(body.c_low), c_low2=float(body.c_low2),
         c_stop_pts=float(body.c_stop_pts),
+        g_trig_fills=int(body.g_trig_fills), g_trig_move_pct=float(body.g_trig_move_pct),
         g_step=float(body.g_step), g_buys=int(body.g_buys), g_sells=int(body.g_sells),
         g_lot=int(body.g_lot), g_stop_pts=float(body.g_stop_pts),
         c_flips_max=int(body.c_flips_max), c_qty=int(body.qty),
@@ -1779,6 +1784,7 @@ def _grid_count_fill(so: SmartOrder, live: dict, level: int, side_was: str,
     """
     so.g_pos, so.g_avg = so_mod.blend_avg(
         so.g_pos, so.g_avg, got, price, side_was == "buy")
+    so.g_fills_done += 1                          # для защиты «N уровней подряд»
     live[f"flip:{level}"] = True                  # этот уровень погас
     woke = [n for n in (level - 1, level + 1)
             if live.pop(f"flip:{n}", None)]       # соседи ожили
@@ -1894,6 +1900,34 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
             # Кадр приходит каждые полсекунды, ждать нечего.
             continue
         live = dict(so.g_live or {})
+
+        # ЗАЩИТА СЕТКИ: сама переводит её в режим «только на выход».
+        #
+        # Проверяется ДО стопа, но ПОСЛЕ учёта филлов: стоп закрывает позицию
+        # рыночной и завершает сетку, а защита лишь прекращает НАБОР и выпускает
+        # по безубытку. Включать защиту после стопа было бы поздно, а до учёта
+        # филлов — на устаревшем счётчике.
+        #
+        # Стоящие заявки снимаем сразу: это всё входные уровни, и оставить их
+        # значило бы продолжать набор, против которого защита и заведена. Выход
+        # поставит следующий проход, уже по правилам «только на выход».
+        if not so.exit_only:
+            why = so_mod.grid_guard_hit(so, price)
+            if why:
+                so.exit_only = True
+                so.g_trig_ms = now
+                cids = {c for c in live.values() if isinstance(c, str) and c}
+                killed, _extra = _cancel_resting(srv, store, agent, so, cids, work)
+                for k in [k for k in live if not k.startswith(("flip:", "adopt:"))]:
+                    live.pop(k, None)
+                dirty = True
+                so_journal.record(
+                    "guard", so, so_journal.WATCHER,
+                    f"ЗАЩИТА СЕТКИ: {why}. Набор прекращён, снято заявок {killed}, "
+                    f"позиция {so.g_pos:+d} по средней {so.g_avg:g} выводится "
+                    "только без убытка", now_ms=now)
+                log.warning("smart_order.grid_guard", so_id=so.so_id, why=why,
+                            pos=so.g_pos, avg=so.g_avg, killed=killed)
 
         # СТОП ЗА КРАЕМ СЕТКИ: снимаем всё и заканчиваем. Проверяется первым —
         # доставлять уровни туда, откуда рынок уже ушёл, значит ловить нож.
