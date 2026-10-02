@@ -1585,6 +1585,122 @@ def run_trigger(arg: dict) -> dict:
             out["configs"].append(item)
     return out
 
+
+# ── шестая редакция: «радиация» по расписанию дня ────────────────────────────────────────────────
+D3_WINDOWS = ((420, 600), (600, 840), (840, 1140), (1140, 1430))
+D5_WINDOWS = ((420, 540), (540, 660), (660, 840), (840, 1020), (1020, 1140), (1140, 1430))
+DAY_WINDOW = (600, 1420)
+
+
+def sched_windows() -> list:
+    """Все окна (минуты дня МСК): разбиения D3, D5, скользящие 60 и 120 минут с шагом 30, и DAY (исходная дневная сетка)."""
+    out = list(D3_WINDOWS) + list(D5_WINDOWS) + [DAY_WINDOW]
+    for w in (60, 120):
+        out += [(s, s + w) for s in range(420, 1430 - w + 1, 30)]
+    seen, uniq = set(), []
+    for x in out:
+        if x not in seen:
+            seen.add(x)
+            uniq.append(x)
+    return uniq
+
+
+def window_metrics(full: list, a: int, b: int, atr_day: float) -> tuple | None:
+    """(направленность |close-open|/(high-low), размах в ATR дня, пересечения open окна по close, число баров) по барам окна."""
+    bars = [r for r in full if a <= _minute(r[0]) < b]
+    if len(bars) < 5:
+        return None
+    o, c = bars[0][1], bars[-1][4]
+    hi, lo = max(r[2] for r in bars), min(r[3] for r in bars)
+    prev = cross = 0
+    for r in bars:
+        d = r[4] - o
+        sg = (d > 0) - (d < 0)
+        if sg and prev and sg != prev:
+            cross += 1
+        if sg:
+            prev = sg
+    return (abs(c - o) / (hi - lo) if hi > lo else 0.0, (hi - lo) / atr_day if atr_day else 0.0, cross, len(bars))
+
+
+def window_sim(full: list, a: int, b: int, p: dict, trig: tuple | None) -> dict | None:
+    """Сетка только в окне [a, b): база = open первого бара окна (не позже a+10 минут), в конце окна позиция закрывается
+    по close первого бара после окна (как флэт дня); стоп сетки закрывает позицию и завершает сетку; trig = (x%, k) триггер
+    пятой редакции или None."""
+    q = {**p, "start_min": a, "end_min": b}
+    if trig is None:
+        r = simulate_day(full, q)
+        return None if r is None else {"fills": r["fills"], "pnl_pts": r["pnl_pts"]}
+    body = [r for r in full if a <= _minute(r[0]) < b]
+    if not body or _minute(body[0][0]) > a + p.get("late_start_min", 10):
+        return None
+    tail = [r for r in full if _minute(r[0]) >= b][:1]
+    r = simulate_trigger(body, tail, q, trig[0], trig[1])
+    return {"fills": r["fills"], "pnl_pts": r["pnl_pts"]}
+
+
+def random_windows(rng, pool: list, minutes: int) -> list:
+    """Случайные непересекающиеся окна из пула (a, b) с суммарной длиной >= minutes (контроль S2)."""
+    chosen, total = [], 0
+    cand = list(pool)
+    rng.shuffle(cand)
+    for a, b in cand:
+        if total >= minutes:
+            break
+        if all(b <= x or a >= y for x, y in chosen):
+            chosen.append((a, b))
+            total += b - a
+    return chosen
+
+
+def run_sched(arg: dict) -> dict:
+    """mode=sched_diag: метрики окон по дням. mode=sched_days: по каждому окну, набору сетки и варианту триггера дневные
+    нетто-ряды (gross, fee_m, fee_t). chunk [i, n] по окнам."""
+    from trader.lab.footprints import common
+    key = arg["symbol_key"]
+    rows = common.load_bars(key, arg.get("since"), arg.get("until"))
+    if not rows:
+        return {"id": "SCHED", "symbol": key, "error": "нет баров в окне"}
+    inst = INST["Si" if key[:2].lower() == "si" else "RI"]
+    days = prep_days(rows, with_sig=False)
+    nt = len(days) * 2 // 3
+    wins = sched_windows()
+    if arg.get("chunk"):
+        i, n = arg["chunk"]
+        wins = wins[i::n]
+    out = {"id": "SCHED", "mode": arg["mode"], "symbol": key, "n_days": len(days), "n_train": nt,
+           "days": [{"date": d["stats"]["date"], "dow": d["stats"]["dow"]} for d in days], "windows": {}}
+    if arg["mode"] == "sched_diag":
+        for a, b in wins:
+            col = []
+            for d in days:
+                atr_day = sum(r[2] - r[3] for r in d["full"]) / len(d["full"])
+                m = window_metrics(d["full"], a, b, atr_day)
+                col.append(None if m is None else [round(m[0], 4), round(m[1], 3), m[2], m[3]])
+            out["windows"][f"{a}-{b}"] = col
+        return out
+    pv = inst["pv"]
+    for a, b in wins:
+        res = {}
+        for pi, p0 in enumerate(arg["params"]):
+            p = {**DEFAULTS, **inst, **p0, "lot": 1, "fill_pen": 1}
+            for tname, trig in (("none", None), ("t", (0.25, 3))):
+                g_, m_, t_ = [], [], []
+                for d in days:
+                    r = window_sim(d["full"], a, b, p, trig)
+                    if r is None:
+                        g_.append(None)
+                        m_.append(0)
+                        t_.append(0)
+                        continue
+                    fee = _fee_rows(r["fills"], key, pv)
+                    g_.append(round(r["pnl_pts"] * pv, 1))
+                    m_.append(round(sum(x[1] for x in fee), 1))
+                    t_.append(round(sum(x[2] for x in fee), 1))
+                res[f"{pi}|{tname}"] = {"g": g_, "fm": m_, "ft": t_}
+        out["windows"][f"{a}-{b}"] = res
+    return out
+
 # ── сетка документа и живой набор ────────────────────────────────────────────
 STEPS = (50, 100, 150, 200, 300, 400, 600)
 LEVELS = (2, 3, 5, 8, 12)
@@ -1636,6 +1752,8 @@ def run(arg: dict) -> dict:
         return run_short(arg)
     if str(arg.get("mode", "")).startswith("trigger"):
         return run_trigger(arg)
+    if str(arg.get("mode", "")).startswith("sched"):
+        return run_sched(arg)
     from trader.lab.footprints import common
     key = arg["symbol_key"]
     rows = common.load_bars(key, arg.get("since"), arg.get("until"))

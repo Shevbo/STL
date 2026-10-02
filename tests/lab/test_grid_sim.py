@@ -496,3 +496,53 @@ def test_trigger_resume_flat_and_only_on_impulse_after_close():
     assert r2["resumes"] >= 1
     r0 = gs.simulate_trigger(body, tail, TP, None, 1)
     assert r0["resumes"] == 0
+
+
+# ── шестая редакция: окна дня ────────────────────────────────────────────────────────────────────
+def _fullday(spec_by_min):
+    """Бары каждую минуту 07:00-23:50: цена из словаря {минута: (o,h,l,c)}, иначе плоско 1000."""
+    out = []
+    for m in range(420, 1430):
+        o, h, lo, c = spec_by_min.get(m, (1000, 1000, 1000, 1000))
+        out.append([DAY0 + m * 60, o, h, lo, c, 1])
+    return out
+
+
+WPAR = {**gs.DEFAULTS, **P, "stop_pts": 0, "tick": 1.0, "half": 0.0, "lot": 1, "fill_pen": 1}
+
+
+def test_windows_cover_day_and_sliding_step():
+    w = gs.sched_windows()
+    assert (600, 1420) in w and (420, 600) in w and (1140, 1430) in w
+    assert (420, 480) in w and (450, 510) in w and (420, 540) in w and (450, 570) in w
+    assert max(b for _a, b in gs.D3_WINDOWS) == 1430 and sorted(gs.D5_WINDOWS)[0][0] == 420
+
+
+def test_window_grid_only_inside_window_and_flat_at_window_end():
+    spec = {}
+    spec[650] = (1000, 1101, 1000, 1105)                    # внутри окна 10:00-12:00: продажа 1100
+    spec[700] = (1105, 1105, 1105, 1105)
+    spec[900] = (1105, 1400, 1105, 1400)                    # вне окна (15:00): сделок нет
+    full = _fullday(spec)
+    r = gs.window_sim(full, 600, 720, WPAR, None)
+    assert [f[4] for f in r["fills"]] == ["level", "eod"] and r["fills"][-1][0] == full[720 - 420][0]    # закрыта в конце окна
+    assert r["pnl_pts"] == 1100 - 1000                      # шорт 1100, флэт по close бара 12:00 (1105 -> до него цена 1105 держалась: close 1000 бара 720)
+
+
+def test_window_trigger_variant_and_late_start_skipped():
+    full = _fullday({650: (1000, 1101, 1000, 1105)})
+    r = gs.window_sim(full, 600, 720, WPAR, (0.25, 1))
+    assert r is not None and r["fills"] and r["fills"][0][4] == "level"
+    assert gs.window_sim([x for x in full if not (600 <= (x[0] % 86400) // 60 < 620)], 600, 720, WPAR, None) is None
+
+
+def test_window_metrics_and_random_windows_same_total_time_no_overlap():
+    full = _fullday({610: (1000, 1010, 995, 1010), 620: (1010, 1010, 990, 990), 630: (990, 1010, 990, 1010)})
+    m = gs.window_metrics(full, 600, 660, 5.0)
+    assert m == (0.0, 4.0, 2, 60)                               # open = close окна, размах 20 при ATR 5, два пересечения open
+    import random as _r
+    pool = [(s, s + 60) for s in range(420, 1430 - 60 + 1, 30)]
+    for seed in range(20):
+        ws = gs.random_windows(_r.Random(seed), pool, 180)
+        assert sum(b - a for a, b in ws) >= 180 and all(ws[i][1] <= ws[j][0] or ws[j][1] <= ws[i][0]
+                                                         for i in range(len(ws)) for j in range(i + 1, len(ws)))
