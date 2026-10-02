@@ -101,7 +101,6 @@
 - [Журнал ведётся не с флэта](reference_journal_window_not_from_flat.md) — сумма журнала не обязана равняться позиции; «расхождение +3» не доказывает потерю сделок, причину на экране не называть
 - [Только на выход у фигур](project_exit_only_smart_orders.md) — кнопка + причина тишины из held; прячем только защитные виды, незнакомый получает кнопку
 - [Пределы живой торговли](project_live_limits_screen.md) — data/quik_limits.json правится с экрана вотчера без рестарта; PUT только изменённого, pushed_to_agent, бэкстоп агента
-- [Рестарт агента = выключатель](reference_agent_restart_is_offswitch.md) — до rev 1790944923 /agent/{id}/restart гасил агента насовсем; с неё поднимается сам; сверять rev перед командой
-- [Заявки в мёртвую очередь](reference_reconnect_stale_queue.md) — переконнект агента без рестарта STL: 45 мин ни одной заявки при зелёной лампе; признак daily_orders_used=0
-- [Таблица отстаёт от склада](reference_terminal_table_lags_order_store.md) — «нет строки в таблице» ≠ «заявки нет»: семь дублей выхода 02.10; заявка жива, пока не известно, что мертва
-- [Топ-5 STL на агенте](project_stl_top5_on_agent.md) — stl5-* бумагой с 02.10, разбор в среду 07.10; срез STL на момент переноса; max_position не для реала
+- [Флекс-строка уезжает за экран](reference_flex_row_overflow_mobile.md) — min-width:auto у флекс-детей; сетка minmax(0,1fr)+fit-content, подписи отдельным рядом, overflow-x:hidden запрещён
+- [Деплой без сборки возит старое](feedback_deploy_needs_rebuild.md) — STRICT: vite build перед deploy_dist.sh, после деплоя curl|grep по выложенной странице
+- [Радиация: защита, окно, цель](project_grid_protection_window.md) — порог по НАБОРУ в одну сторону, g_window=5 (в стакане до N+2), g_tp_rub без ₽/пункт не срабатывает
