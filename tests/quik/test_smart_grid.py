@@ -619,3 +619,64 @@ def test_an_adopted_wall_is_accounted_by_exactly_one_path(tmp_path):
                 {}, NOW)
     assert so.c_live.get("adopt:top") == {"num": "991"}
     assert "top" not in so.c_live, "устаревший client_id обязан уйти"
+
+
+def test_an_expired_record_does_not_count_as_a_standing_level(tmp_path):
+    """СЕТКА МОЛЧАЛА ВОСЕМЬ ЧАСОВ, 02.10.2026, и это стоило открытия.
+
+    Ночью после закрытия вечерней сессии брокер отбил постановки («[GW][3] Сейчас
+    эта сессия не идёт»), записи уровней ушли в `expired` — «QUIK заявку не
+    зарегистрировал, в работе её нет». Чёрный список мёртвых состояний знал только
+    cancelled и rejected, поэтому проверка «уровень стоит в стакане» видела expired
+    с остатком 1 и отвечала ДА. Сетка считала все 25 уровней стоящими и не ставила
+    ничего с 00:05 до самого вопроса оператора «где радиация».
+
+    Вопрос «работает ли заявка» задаётся перечислением РАБОЧИХ состояний: чёрный
+    список забывает новое состояние молча, и это уже второй такой случай.
+    """
+    book, so = _gbook(tmp_path)
+    px = so_mod.grid_price(so, -1)
+    so.g_live = {"-1": "so:x:gm1:1"}
+    ost = GOst()
+    ost.working_orders = lambda agent=None: [
+        {"client_id": "so:x:gm1:1", "order_id": "", "state": "expired",
+         "remaining": 1, "filled": 0, "price": px}]
+    srv = GSrv()
+    _grid_sync(book, _gstore(85000.0), ost, srv, GLim(), "9618", GSTEPS, {}, GNOW)
+    placed = [m.place_order for m in srv.sent
+              if m.WhichOneof("payload") == "place_order"
+              and abs(m.place_order.price - px) < 1e-6]
+    assert placed, (
+        f"уровень {px:g} с записью expired не выставлен — ровно простой 02.10")
+
+
+def test_every_non_working_state_frees_the_level(tmp_path):
+    """ИНВАРИАНТ: уровень считается занятым ТОЛЬКО при рабочем состоянии записи.
+    Любое другое — заявки в рынке нет, уровень обязан встать заново."""
+    for state in ("expired", "cancelled", "rejected", "unspecified", ""):
+        book, so = _gbook(tmp_path / state if state else tmp_path / "empty")
+        px = so_mod.grid_price(so, -1)
+        so.g_live = {"-1": "so:x:gm1:1"}
+        ost = GOst()
+        ost.working_orders = lambda agent=None, _s=state: [
+            {"client_id": "so:x:gm1:1", "order_id": "", "state": _s,
+             "remaining": 1, "filled": 0, "price": px}]
+        srv = GSrv()
+        _grid_sync(book, _gstore(85000.0), ost, srv, GLim(), "9618", GSTEPS, {}, GNOW)
+        got = [m for m in srv.sent if m.WhichOneof("payload") == "place_order"
+               and abs(m.place_order.price - px) < 1e-6]
+        assert got, f"состояние {state!r}: заявки в рынке нет, а уровень не выставлен"
+    # а рабочее состояние уровень занимает
+    for state in ("pending", "active", "partial"):
+        book, so = _gbook(tmp_path / ("w" + state))
+        px = so_mod.grid_price(so, -1)
+        so.g_live = {"-1": "so:x:gm1:1"}
+        ost = GOst()
+        ost.working_orders = lambda agent=None, _s=state: [
+            {"client_id": "so:x:gm1:1", "order_id": "11", "state": _s,
+             "remaining": 1, "filled": 0, "price": px}]
+        srv = GSrv()
+        _grid_sync(book, _gstore(85000.0), ost, srv, GLim(), "9618", GSTEPS, {}, GNOW)
+        got = [m for m in srv.sent if m.WhichOneof("payload") == "place_order"
+               and abs(m.place_order.price - px) < 1e-6]
+        assert not got, f"состояние {state!r}: заявка работает, второй быть не должно"

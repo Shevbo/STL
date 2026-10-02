@@ -615,7 +615,28 @@ _ORPHAN_GRACE_MS = 5 * 60 * 1000
 # часто, чтобы заявка, отвергнутая до открытия торгов, попала под охрану
 # терминала в первые же минуты сессии.
 _NATIVE_RETRY_MS = 5 * 60 * 1000
-_DEAD_STATES = ("cancelled", "rejected")
+# СОСТОЯНИЕ ЗАЯВКИ ПРОВЕРЯЕМ БЕЛЫМ СПИСКОМ, А НЕ ЧЁРНЫМ.
+#
+# 02.10.2026 сетка «радиация» не выставила на открытии НИ ОДНОГО уровня и молчала,
+# пока оператор не спросил. Причина: ночью, после закрытия вечерней сессии, брокер
+# отбил постановки («[GW][3] Сейчас эта сессия не идёт»), записи уровней ушли в
+# состояние `expired` — «QUIK заявку не зарегистрировал, в работе её нет» (см.
+# trader/quik/orders.PENDING_RECONCILE_MS). А чёрный список мёртвых состояний знал
+# только cancelled и rejected, поэтому проверка «уровень стоит в стакане» видела
+# `expired` с остатком 1 и отвечала ДА. Сетка считала, что все 25 уровней стоят, и
+# не ставила ничего — восемь часов, с 00:05 до открытия.
+#
+# Чёрный список забывает новое состояние молча, и это второй раз: сначала он забыл
+# служебный ключ в live, теперь состояние заявки. Поэтому вопрос «работает ли
+# заявка» задаём перечислением РАБОЧИХ состояний — их ровно три, и они те же, что
+# в складе заявок (orders._WORKING_STATES).
+_WORKING_STATES = ("pending", "active", "partial")
+_DEAD_STATES = ("cancelled", "rejected", "expired")
+
+
+def _is_working(rec: dict | None) -> bool:
+    """Заявка РАБОТАЕТ: QUIK её принял и она ещё не кончилась."""
+    return bool(rec) and str(rec.get("state") or "") in _WORKING_STATES
 # OrderStore живёт в памяти: рестарт STL стирает записи. Сработавшая ДО старта
 # процесса заявка отсутствует в сторе не потому, что умерла — судить о ней нельзя
 # (26.07 ложный orphaned звал оператора перевзвести УЖЕ исполненный выкуп 14 конт.).
@@ -1716,7 +1737,7 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
             dirty = True
         if not rec:
             continue                       # заявка ещё не доехала до склада
-        if rest > 0 and rec.get("state") not in _DEAD_STATES:
+        if rest > 0 and _is_working(rec):
             continue                       # ещё наливается
         if so.g_pos == 0:
             so.status = "cancelled"
@@ -1834,8 +1855,7 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
             key = str(level)
             cid = live.get(key) or ""
             rec = work.get(cid) if cid else None
-            if rec is not None and rec.get("state") not in _DEAD_STATES and int(
-                    rec.get("remaining") or 0) > 0:
+            if _is_working(rec) and int(rec.get("remaining") or 0) > 0:
                 continue                      # стоит в стакане, всё хорошо
             if rec is not None and int(rec.get("filled") or 0) > 0:
                 # ИСПОЛНИЛАСЬ. В «радиации» НЕТ ПОНЯТИЯ ТЕЙКА, есть уровни
@@ -2143,9 +2163,7 @@ def _walls_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
             # оставалась −4 вместо −10: от неё считаются и объём встречной заявки, и
             # стоп. Образец — сетка (_grid_sync): там сначала «стоит в стакане»,
             # и только потом учёт филла. Здесь порядок был обратный.
-            still_working = (rec_f is not None
-                             and rec_f.get("state") not in _DEAD_STATES
-                             and int(rec_f.get("remaining") or 0) > 0)
+            still_working = _is_working(rec_f) and int(rec_f.get("remaining") or 0) > 0
             if rec_f is not None and not still_working and int(rec_f.get("filled") or 0) > 0:
                 got = int(rec_f["filled"])
                 side_was = str(rec_f.get("side") or "").lower()
@@ -2204,8 +2222,7 @@ def _walls_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
                 continue                  # за планкой биржи: подождём расширения
             cid = live.get(wall) or ""
             rec = work.get(cid) if cid else None
-            alive = rec is not None and rec.get("state") not in _DEAD_STATES and int(
-                rec.get("remaining") or 0) > 0
+            alive = _is_working(rec) and int(rec.get("remaining") or 0) > 0
             if alive and abs(float(rec.get("price") or 0) - px) < (step or 1) / 2                     and int(rec.get("remaining") or 0) == qty:
                 continue                  # стоит там, где надо, и нужного размера
             if alive and rec.get("order_id"):
