@@ -1193,3 +1193,62 @@ def test_pnl_cache_does_not_renew_itself(monkeypatch):
     first = app.state._order_pnl_cache[0]
     client.get("/api/v1/quik/companion/snapshot", headers=_operator_headers())
     assert app.state._order_pnl_cache[0] == first
+
+
+def test_an_unknown_split_is_not_reported_as_all_manual(monkeypatch):
+    """Зеркало не принесло списка роботов — разбивки НЕТ, а не «роботы 0».
+
+    Сумма роботных позиций равна нулю и когда роботы вне рынка, и когда мы о них
+    ничего не слышали. Во втором случае «Роботы 0 · Ручные −17» объявляет ВСЮ
+    позицию ручной — ложь по умолчанию того же сорта, что пустое поле вместо
+    нуля (правило real-trade, разбор позиции 02.10.2026).
+    """
+    monkeypatch.delenv("SHECTORY_AUTH_DEV_BYPASS", raising=False)
+    app = FastAPI()
+    app.include_router(companion_router)
+    app.state.settings = _Settings()
+    app.state.db_pool = FakePool()
+    store = QuikAgentStore()
+    store.set_agent_status("A1", json.dumps({
+        "agent": {"version": "x", "link_up": True},
+        "health": {"runner_healthy": True,
+                   "money": {"limit": 1.0, "varmargin": 0.0, "age_ms": 100},
+                   "positions": [{"sec": "RIZ6", "net": -17, "avg": 85_858.0,
+                                  "varmargin": 0.0}]},
+        # ключа "robots" НЕТ — зеркало о роботах не рассказало
+    }), 0)
+    app.state.quik_store = store
+    body = TestClient(app).get("/api/v1/quik/companion/snapshot",
+                               headers=_operator_headers()).json()
+    pos = next(p for p in body["positions"] if p["sec"] == "RIZ6")
+    assert pos["net"] == -17                 # нетто знаем всегда
+    assert pos["robot_net"] is None          # а чьё оно — нет
+    assert pos["manual_net"] is None
+
+
+def test_an_empty_robot_list_is_a_real_answer(monkeypatch):
+    """Пустой СПИСОК роботов — это «роботов нет», и разбивка известна.
+
+    Путать его с отсутствием ключа нельзя: иначе честный флэт роботов выглядел
+    бы как потеря связи, и оператор перестал бы верить прочерку.
+    """
+    monkeypatch.delenv("SHECTORY_AUTH_DEV_BYPASS", raising=False)
+    app = FastAPI()
+    app.include_router(companion_router)
+    app.state.settings = _Settings()
+    app.state.db_pool = FakePool()
+    store = QuikAgentStore()
+    store.set_agent_status("A1", json.dumps({
+        "agent": {"version": "x", "link_up": True},
+        "health": {"runner_healthy": True,
+                   "money": {"limit": 1.0, "varmargin": 0.0, "age_ms": 100},
+                   "positions": [{"sec": "RIZ6", "net": -17, "avg": 85_858.0,
+                                  "varmargin": 0.0}]},
+        "robots": [],
+    }), 0)
+    app.state.quik_store = store
+    body = TestClient(app).get("/api/v1/quik/companion/snapshot",
+                               headers=_operator_headers()).json()
+    pos = next(p for p in body["positions"] if p["sec"] == "RIZ6")
+    assert pos["robot_net"] == 0
+    assert pos["manual_net"] == -17

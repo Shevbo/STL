@@ -1235,6 +1235,14 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
 
     # Разбивка позиции инструмента: сколько от РОБОТОВ (сумма их позиций) и сколько
     # РУКАМИ (остаток QUIK-нетто минус роботы — торговля оператора мимо STL).
+    # ЗНАЕМ ЛИ МЫ РАЗБИВКУ ВООБЩЕ. Если зеркало агента не принесло списка роботов
+    # (агент лежит, связь оборвалась), то сумма роботных позиций равна нулю не
+    # потому, что роботы вне рынка, а потому, что мы о них ничего не слышали. В
+    # этом случае «Роботы 0 · Ручные −17» — ложь по умолчанию: вся позиция
+    # объявляется ручной. Пустой СПИСОК роботов это законный ответ «роботов нет»,
+    # а отсутствие ключа — «не знаю», и путать их нельзя (правило real-trade,
+    # подтверждено 02.10.2026 на разборе позиции).
+    _split_known = isinstance(status.get("robots"), list)
     _robot_net_by_sec: dict[str, float] = {}
     for _rid in ids:
         _rob = mirror_by_id.get(_rid) or {}
@@ -1296,10 +1304,11 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
     except (AttributeError, TypeError, ValueError):
         pass
     for p in positions:
-        rn = _robot_net_by_sec.get(p["sec"], 0.0)
+        rn = _robot_net_by_sec.get(p["sec"], 0.0) if _split_known else None
         p["robot_net"] = rn
         try:
-            p["manual_net"] = float(p["net"]) - rn   # ручное = факт QUIK минус роботы
+            # ручное = факт QUIK минус роботы; роботов не знаем — не знаем и ручное
+            p["manual_net"] = (float(p["net"]) - rn) if rn is not None else None
         except (TypeError, ValueError):
             p["manual_net"] = None
         # Безубыток роботной половины. Знаменатель — позиция С ИЗВЕСТНЫМ входом:
