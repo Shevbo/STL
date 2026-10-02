@@ -90,16 +90,52 @@
   .more { cursor: pointer; color: var(--muted); border-bottom: 1px dotted var(--bd);
     text-transform: none; letter-spacing: 0; margin-left: 8px; }
 
+  /* СТРОКА ПАНЕЛИ — СЕТКА ИЗ ДВУХ КОЛОНОК: слева текст, который вправе ужаться
+     и перенестись, справа число, которое не переносится и не сжимается НИКОГДА.
+     Уточнения идут отдельными рядами во ВСЮ ширину карточки.
+
+     Так эта строка выглядит после разбора с fable 02.10.2026. До него она была
+     одной флекс-линией, и на телефоне разъезжалась: у флекс-детей min-width
+     равен auto, поэтому неразрывные куски («Роботы 0 ср. 9 891», «Ручные −23
+     ср. с клиринга 85 300», «журнал +3») и число с nowrap в сумме становились
+     шире 374 px — правый край уезжал ЗА экран, и ВМ позиции оператор видел
+     наполовину. В сетке minmax(0, 1fr) даёт тексту право ужаться до нуля, а
+     колонка числа получает ширину первой.
+
+     Подписи при этом перестали строиться лесенкой по одному слову: уточнение
+     лежит собственным рядом и переносится по всей ширине. */
   .row {
-    display: flex; align-items: baseline; gap: 8px;
-    padding: 5px 14px 5px 12px; margin: 0 8px 2px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) fit-content(45%);
+    column-gap: 10px; row-gap: 2px;
+    align-items: baseline;
+    min-height: 32px;                 /* тач-цель: по строке робота жмут */
+    padding: 6px 12px 6px 10px; margin: 0 8px 2px;
     border-left: 3px solid var(--rail); background: var(--panel); border-radius: 4px;
   }
+  .row > * { min-width: 0; }
   .row.up { border-left-color: var(--up); }
   .row.down { border-left-color: var(--down); }
-  .row .k { color: var(--muted); }
-  .row .sp { flex: 1; }
-  .row .v { font-weight: 600; font-size: 17px; white-space: nowrap; }
+  .row > .k { grid-column: 1; color: var(--muted); font-size: 13px; line-height: 18px;
+              overflow-wrap: anywhere; }
+  /* Распорка флекс-времён. В сетке она не нужна, но живёт в десятке строителей
+     строк — гасим её здесь, а не правим их все: лишний пустой элемент сетки
+     сдвинул бы число в третью колонку. */
+  .row > .sp { display: none; }
+  .row > .v { grid-column: 2; grid-row: 1; text-align: right; white-space: nowrap;
+              font-weight: 600; font-size: 17px; line-height: 18px; }
+  /* Уточнение — отдельным рядом во всю ширину, с нормальным переносом. */
+  .row > .sub { grid-column: 1 / -1; line-height: 16px; overflow-wrap: anywhere; }
+  /* Подпись ПОД числом: что это за число (ВМ сессии, фикс + ВМ). */
+  .row > .v small { display: block; white-space: normal; font-weight: 400;
+                    font-size: 10px; line-height: 12px; color: var(--faint); }
+  /* Второстепенное число: слагаемое итога весит меньше самого итога. */
+  .v.s { font-size: 14px; }
+  /* Число ВНУТРИ текста — атом: оно не имеет права переноситься пополам. */
+  .row > .k b, .row > .sub b { color: var(--ink); font-weight: 600; white-space: nowrap; }
+  /* Слагаемое итога: сдвинуто, правый край общий с заголовком. */
+  .row.nest { margin-left: 28px; border-left-color: var(--bd); }
+  .row.nest > .k { font-size: 12px; line-height: 16px; }
   .v.up { color: var(--up); } .v.down { color: var(--down); } .v.nil { color: var(--faint); font-weight: 400; }
   /* Расход предела: жёлтым с половины, красным с 80%. */
   .v.warn { color: #e0a35c; } .v.neg { color: var(--down); }
@@ -148,12 +184,16 @@
   .row.total { border-left-width: 4px; }
   /* Слагаемые итога: сдвинуты и тише заголовка, чтобы читались как его части, а
      не как самостоятельные строки рядом. */
-  .row.sub2 { padding-left: 16px; border-left-color: transparent; }
-  .row.sub2 .k2 { color: var(--muted); white-space: nowrap; }
-  .row.sub2 .v { font-size: 12px; font-weight: 500; }
+
   .row.total .k { color: var(--ink); font-weight: 600; }
   /* Живая котировка рядом с кодом инструмента (как на Windows-панели). */
   .q { color: var(--ink); font-size: 13px; font-weight: 600; }
+  /* Пометка о СВОЙСТВЕ числа (оценка снизу, источник, расхождение): чип
+     рядом с подписью. Отдельный класс от .q, потому что .q — это ЦЕНА, и
+     пометка, одетая как цена, читается как ещё одно число. */
+  .mark { display: inline-block; white-space: nowrap; font-size: 10px; line-height: 14px;
+          padding: 0 4px; margin-left: 4px; border: 1px solid var(--bd);
+          border-radius: 3px; color: var(--muted); vertical-align: 1px; }
   .q-stale { color: var(--faint); font-weight: 400; text-decoration: line-through; }
 
   /* Биржа: как робот-карточка — статус сверху (переносится, если длинный:
@@ -428,7 +468,9 @@ function rub(v, opts) {
   if (v == null || !isFinite(v)) return null;
   const n = Math.round(v);
   const sign = (opts && opts.signed && n > 0) ? '+' : (n < 0 ? '-' : '');
-  return sign + Math.abs(n).toLocaleString('ru-RU') + ' ₽';
+  // НЕРАЗРЫВНЫЕ ПРОБЕЛЫ — второй замок поверх nowrap: разделитель тысяч и место
+  // перед знаком рубля. Число, разорванное переносом, читается как другое число.
+  return (sign + Math.abs(n).toLocaleString('ru-RU') + ' ₽').replace(/ /g, ' ');
 }
 // Цена инструмента: НИКОГДА не округляем до целого (у BR шаг 0.01) — только
 // гасим float-пыль. Правило поймано дважды, см. lib/format.ts.
@@ -718,10 +760,15 @@ function renderPositions(list) {
     // ВМ здесь — ЧИСЛО QUIK: вариационная маржа ЗА СЕССИЮ (с последнего клиринга),
     // включая закрытые за сессию сделки. У робота ниже — ВМ ОТ ВХОДА. Это разные
     // величины, поэтому подписаны по-разному (иначе выглядит как расхождение).
-    return `<div class="row ${cls(p.varmargin)}"><span class="k">${esc(p.sec)}</span>` +
-      quoteHtml(p) + `<span class="sub">${bd}</span><span class="sp"></span>` +
-      `<span class="sub">ВМ сессии</span>` +
-      `${val(rub(p.varmargin, { signed: true }), cls(p.varmargin))}</div>`;
+    // ЧТО ЭТО ЗА ЧИСЛО — ПОДПИСЬЮ ПОД НИМ, а не отдельным куском той же строки:
+    // «ВМ сессии» сбоку отнимала ширину у разбивки и выталкивала само число за
+    // край экрана (разбор с fable 02.10.2026).
+    const vm = rub(p.varmargin, { signed: true });
+    return `<div class="row ${cls(p.varmargin)}">` +
+      `<span class="k">${esc(p.sec)} ${quoteHtml(p)}</span>` +
+      `<span class="v ${cls(p.varmargin)}">${vm == null ? '—' : esc(vm)}` +
+      `<small>ВМ сессии</small></span>` +
+      `<span class="sub">${bd}</span></div>`;
   }).join('');
 }
 
@@ -1068,20 +1115,21 @@ function renderRobots(all) {
   // Итог складываем, только когда знаем ОБА слагаемых: сумма с неизвестным
   // слагаемым — это не «меньше», это неправда.
   const total = hasN ? rnet + BUGS : null;
+  // «не меньше» — пометкой у заголовка, а не куском той же линии: это свойство
+  // числа (оценка снизу), и место ему рядом с подписью.
   out += `<div class="row total neg">` +
-    `<span class="k">Архив</span>` +
-    `<span class="sub nw">не меньше</span><span class="sp"></span>` +
+    `<span class="k">Архив <span class="mark">не меньше</span></span>` +
     `${val(total == null ? null : rub(total, { signed: true }), 'neg')}</div>` +
     (retired.length
-      ? `<div class="row sub2"><span class="k2">снятые роботы (${retired.length})</span>` +
-        `<span class="sub">их собственная торговля</span><span class="sp"></span>` +
-        `${val(hasN ? rub(rnet, { signed: true }) : null, cls(hasN ? rnet : null))}</div>`
+      ? `<div class="row nest neg"><span class="k">снятые роботы (${retired.length})</span>` +
+        `<span class="v s ${cls(hasN ? rnet : null)}">${hasN ? esc(rub(rnet, { signed: true })) : '—'}</span>` +
+        `<span class="sub">их собственная торговля</span></div>`
       : '') +
-    `<div class="row sub2"><span class="k2">баги REAL TRADE в умных заявках</span>` +
+    `<div class="row nest neg"><span class="k">баги REAL TRADE в умных заявках</span>` +
+    `<span class="v s neg">${esc(rub(BUGS, { signed: true }))}</span>` +
     `<span class="sub" title="двойная охрана 29.09, стенка коридора по ту сторону рынка 30.09, ` +
     `защитный ребёнок против отвергнутой заявки 01.10, плюс комиссия на незаказанные сделки. ` +
-    `Нижняя граница: верхняя оценка 250 000 руб">дефекты кода, не торговля</span>` +
-    `<span class="sp"></span>${val(rub(BUGS, { signed: true }), 'neg')}</div>`;
+    `Нижняя граница: верхняя оценка 250 000 руб">дефекты кода, не торговля</span></div>`;
   return out;
 }
 
