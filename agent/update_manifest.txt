@@ -62,3 +62,4 @@ trader/quik/__init__.py
 trader/quik/smart_orders.py
 trader/market_session.py
 trader/lab/footprints/flex_range.py
+trader/lab/footprints/anti_drama.py
