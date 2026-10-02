@@ -172,3 +172,22 @@ def test_count_fills_does_not_change_trades_and_counts_contracts():
         assert [list(x) for x in o] == GOLDEN[f"{name}/1"], name
         assert rt._state["why_fq"] == sum(x[1] for x in o), name
         assert rt._state["why_fqw"] >= rt._state["why_fq"]
+
+
+def test_rev_mult_volume_and_reversed_trade_pnl_counters():
+    bars = _scenario(lambda j: [j - 15.0 * (i + 1) for i in range(40)])
+    p = dict(REV, qty=1, rev_tp=9, rev_sl=9, rev_hold=7, rev_mult=5)
+    on, rt = _orders(bars, **p)
+    i = next(k for k, o in enumerate(on) if o[0] == "sell")
+    assert on[i][1] == 1 and on[i + 1][1] == 5, on                     # база 1 лот, переворот 5 лотов
+    ent = on[i + 1]
+    ext = [o for o in on if o[0] == "buy" and o[3] > ent[3]][0]
+    assert ext[1] == 5
+    pts = round((ent[2] - ext[2]) * 5 * 10)
+    assert rt._state["why_rn"] == 1 and rt._state["why_rpts"] == pts, (rt._state.get("why_rpts"), pts)
+    day = int(ent[3] // 86400)
+    assert rt._state["why_rd%d" % day] == pts
+    # rev_mult=0 -> прежнее поведение (rev_qty)
+    base, _ = _orders(bars, **dict(p, rev_mult=0))
+    j = next(k for k, o in enumerate(base) if o[0] == "sell")
+    assert base[j + 1][1] == 1

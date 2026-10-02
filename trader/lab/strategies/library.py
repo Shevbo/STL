@@ -693,6 +693,17 @@ def make_on_bar(rid: str):
         # и ФЛЭТ СЕССИИ: будни с 23:40, выходные с 18:50 (короткая сессия 10:00-19:00) либо
         # смена дня, чтобы перевёрнутая позиция не стала сиротой. Сигналы базы игнорируются.
         if sl_rev > 0:
+            # Итог ПЕРЕВЁРНУТОЙ сделки: выход ставился по close прошлого бара и исполнился по open
+            # этого бара, значит open и есть цена выхода. Копим в состоянии (бэктест выносит why_* в
+            # extra): why_rn число сделок, why_rpts пункты x лоты x10, why_rd<день> то же по дням.
+            _rp = stl.get_state("rev_pend", None)
+            if _rp:
+                _pts = int(round((bars[-1].open - float(_rp["avg"])) * int(_rp["d"]) * int(_rp["q"]) * 10))
+                stl.set_state("rev_pend", None)
+                stl.set_state("why_rn", int(stl.get_state("why_rn", 0) or 0) + 1)
+                stl.set_state("why_rpts", int(stl.get_state("why_rpts", 0) or 0) + _pts)
+                _dk = "why_rd%d" % int(bar_time // 86400)
+                stl.set_state(_dk, int(stl.get_state(_dk, 0) or 0) + _pts)
             rv = stl.get_state("rev", None)
             if rv:
                 if cur == 0 or cur_dir != int(rv["d"]):
@@ -715,6 +726,7 @@ def make_on_bar(rid: str):
                     if why:
                         on_exit(price, avg, rd, why)
                         await stl.place_order(symbol, "sell" if rd > 0 else "buy", abs(cur), price)
+                        stl.set_state("rev_pend", {"avg": avg, "d": rd, "q": abs(cur)})
                         stl.set_state("rev", None)
                     else:
                         stl.set_state("rev", rv)
@@ -1010,7 +1022,9 @@ def make_on_bar(rid: str):
                     rside = 1 if random.Random(f"{params.get('seed', 0)}:{_rn}").random() < 0.5 else -1
                 else:
                     rside = -cur_dir
-                rq = abs(cur) if int(params.get("rev_qty", 1) or 1) >= 2 else base_unit
+                _rmult = int(params.get("rev_mult", 0) or 0)       # >0: объём переворота = rev_mult x базовый лот
+                rq = (_rmult * base_unit if _rmult > 0
+                      else (abs(cur) if int(params.get("rev_qty", 1) or 1) >= 2 else base_unit))
                 await stl.place_order(symbol, "buy" if rside > 0 else "sell", rq, price)
                 stl.set_state("rev", {"d": rside, "D": stop_dist, "n": 0, "day": int(bar_time // 86400)})
                 stl.set_state("avg_add", 0)
@@ -1259,6 +1273,7 @@ AVG_PARAMS = [
     # CRAZY STOP (docs/crazy-stop-2026.md): стоп с переворотом. rev_mode (rev|same|rand) и seed - вне схемы.
     P("sl_rev", "Crazy stop: после стопа переворот позиции (0=выкл)", 0, 0, 1),
     P("rev_qty", "Crazy stop: объём (1=базовый лот, 2=весь закрытый)", 1, 1, 2),
+    P("rev_mult", "Crazy stop: объём переворота = N x базовый лот (0=по rev_qty)", 0, 0, 20),
     P("rev_tp", "Crazy stop: тейк перевёрнутой, x D", 1, 0.5, 5),
     P("rev_sl", "Crazy stop: стоп перевёрнутой, x D", 1, 0.25, 5),
     P("rev_hold", "Crazy stop: выход по времени, баров", 240, 10, 960),
@@ -1342,6 +1357,7 @@ AVG_PARAMS_FORCED = [
     # CRAZY STOP (docs/crazy-stop-2026.md): стоп с переворотом. rev_mode (rev|same|rand) и seed - вне схемы.
     P("sl_rev", "Crazy stop: после стопа переворот позиции (0=выкл)", 0, 0, 1),
     P("rev_qty", "Crazy stop: объём (1=базовый лот, 2=весь закрытый)", 1, 1, 2),
+    P("rev_mult", "Crazy stop: объём переворота = N x базовый лот (0=по rev_qty)", 0, 0, 20),
     P("rev_tp", "Crazy stop: тейк перевёрнутой, x D", 1, 0.5, 5),
     P("rev_sl", "Crazy stop: стоп перевёрнутой, x D", 1, 0.25, 5),
     P("rev_hold", "Crazy stop: выход по времени, баров", 240, 10, 960),
