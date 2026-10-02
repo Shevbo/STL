@@ -459,6 +459,52 @@ class ProfileBody(BaseModel):
     esc_profile: str
 
 
+class ExitOnlyBody(BaseModel):
+    on: bool = True
+
+
+@router.post("/{so_id}/exit-only")
+async def set_exit_only(so_id: str, body: ExitOnlyBody, request: Request):
+    """Режим «ТОЛЬКО НА ВЫХОД» для умной заявки: закрыть свою позицию БЕЗ УБЫТКА
+    и больше ничего не открывать. Снимается тем же переключателем.
+
+    Требование оператора 02.10.2026. У роботов такой режим есть с 28.07.2026 и
+    служит тому же: вывести из боя, не обрывая сделку (экспирация, развод
+    встречных заявок, подготовка к остановке). Отмена заявки для этого не годится
+    — она снимает заявки из стакана ВМЕСТЕ с открытой позицией, и выходить будет
+    некому.
+
+    Отличие от роботов: там выход идёт по сигналу стратегии и цена не проверяется,
+    здесь выход идёт уровнями, поэтому цена проверяется — закрываем только не хуже
+    средней входа. КОМИССИЯ В ЭТОМ СРАВНЕНИИ НЕ УЧТЕНА: равенство средней означает
+    ноль ДО сборов. Нужен запас — заведём отступ в пунктах отдельно.
+    """
+    _auth(request)
+    book = _book(request)
+    so = book.get(so_id)
+    if so is None:
+        raise HTTPException(status_code=404, detail="Нет такой умной заявки.")
+    if so.kind not in ("grid", "corridor", "triangle"):
+        raise HTTPException(status_code=422, detail=(
+            f"«Только на выход» имеет смысл лишь у заявок со своей позицией "
+            f"(радиация, коридор, треугольник), а {so.so_id} это {so.kind}: "
+            "защитная заявка и так только закрывает."))
+    so.exit_only = bool(body.on)
+    pos = so.g_pos if so.kind == "grid" else so.c_pos
+    avg = so.g_avg if so.kind == "grid" else so.c_avg
+    book.save()
+    so_journal.record(
+        "exit_only", so, so_journal.OPERATOR,
+        (f"включён режим только на выход: закрываем {pos:+d} по цене не хуже "
+         f"{avg:g}, новых не открываем" if so.exit_only and pos
+         else "включён режим только на выход: позиции нет, открывать не будем"
+         if so.exit_only else "режим только на выход снят: заявка работает как обычно"))
+    log.info("smart_order.exit_only", so_id=so_id, kind=so.kind, on=so.exit_only,
+             pos=pos, avg=avg)
+    return {"ok": True, "so_id": so_id, "exit_only": so.exit_only,
+            "position": pos, "avg": avg}
+
+
 @router.post("/{so_id}/profile")
 async def set_profile(so_id: str, body: ProfileBody, request: Request):
     """Сменить профиль исполнения у ВЗВЕДЁННОЙ заявки.
@@ -1719,7 +1765,7 @@ def _grid_cid(so_id: str, level: int) -> str:
 
 
 def _grid_count_fill(so: SmartOrder, live: dict, level: int, side_was: str,
-                     got: int, now: int, how: str = "") -> None:
+                     got: int, now: int, how: str = "", price: float = 0.0) -> None:
     """Провести филл уровня сетки: позиция, гашение уровня, пробуждение соседей.
 
     ЕДИНСТВЕННЫЙ путь учёта филла в сетке. Таких путей теперь два источника — запись
@@ -1731,14 +1777,16 @@ def _grid_count_fill(so: SmartOrder, live: dict, level: int, side_was: str,
     уровень ИСЧЕЗАЕТ и возвращается только после филла СОСЕДНЕГО — любого, хоть
     ниже, хоть выше.
     """
-    so.g_pos += got * (1 if side_was == "buy" else -1)
+    so.g_pos, so.g_avg = so_mod.blend_avg(
+        so.g_pos, so.g_avg, got, price, side_was == "buy")
     live[f"flip:{level}"] = True                  # этот уровень погас
     woke = [n for n in (level - 1, level + 1)
             if live.pop(f"flip:{n}", None)]       # соседи ожили
     so_journal.record("grid_fill", so, so_journal.WATCHER,
                       f"уровень {level:+d} ({so_mod.grid_price(so, level):g}) "
-                      f"исполнен {side_was} {got}; позиция {so.g_pos:+d}; "
-                      "уровень погас"
+                      f"исполнен {side_was} {got}; позиция {so.g_pos:+d}"
+                      + (f" по средней {so.g_avg:g}" if so.g_avg else "")
+                      + "; уровень погас"
                       + (f", вернулись соседние {woke}" if woke else "")
                       + how, now_ms=now)
 
@@ -1920,7 +1968,8 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
                     side_was = so_mod.grid_side_for(so, level, price)
                     log.warning("smart_order.grid_fill_side_unknown", so_id=so.so_id,
                                 level=level, guessed=side_was)
-                _grid_count_fill(so, live, level, side_was, int(rec["filled"]), now)
+                _grid_count_fill(so, live, level, side_was, int(rec["filled"]), now,
+                                 price=float(rec.get("price") or 0))
                 dirty = True
             # ВСТАВЛЕНО ДО ГЕЙТА «погасший уровень не выставляем» НАМЕРЕННО. Сначала
             # эта ветка стояла после него — и гейт успевал пропустить уровень, для
@@ -1952,7 +2001,8 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
                                     else so_mod.grid_side_for(so, level, price))
                         _grid_count_fill(so, live, level, side_was, row["filled"], now,
                                          f" (подхваченная заявка {row['num']}, "
-                                         "узнали из таблицы терминала)")
+                                         "узнали из таблицы терминала)",
+                                         price=row["price"])
                     else:
                         so_journal.record(
                             "adopted", so, so_journal.WATCHER,
@@ -2002,6 +2052,36 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
             # агента. Нет живой строки на этой цене — ставим; есть — уровень уже
             # стоит, и второй не нужен. Зеркала нет вовсе — это «НЕ ЗНАЮ», и
             # ставить вслепую нельзя (отличать от пустой таблицы обязательно).
+            # ТОЛЬКО НА ВЫХОД: ставим лишь то, что ЗАКРЫВАЕТ позицию, и только по
+            # цене БЕЗ УБЫТКА. Требование оператора 02.10.2026 дословно: «кнопка
+            # „только на выход“ — это значит выход без убытка».
+            #
+            # Три отказа подряд, и каждый по своей причине:
+            #   позиции нет        — закрывать нечего, а открывать запрещено;
+            #   уровень доливает   — он увеличил бы позицию, а не сократил;
+            #   цена хуже средней  — закрытие здесь дало бы убыток.
+            # Молчать нельзя ни в одном: оператор включил режим и ждёт выхода, и
+            # «ничего не происходит» он обязан уметь объяснить сам, по журналу.
+            if so.exit_only:
+                _xs, _xq = so_mod.exit_side_qty(so.g_pos)
+                why = ""
+                if _xq == 0:
+                    why = "позиции нет, открывать нечего"
+                elif side != _xs:
+                    why = f"уровень доливает ({side}), а позиция {so.g_pos:+d} закрывается {_xs}"
+                elif not so_mod.exit_without_loss(so.g_pos, so.g_avg, px):
+                    why = (f"цена {px:g} хуже средней {so.g_avg:g}: закрытие здесь "
+                           "дало бы убыток")
+                if why:
+                    if live.get(f"exit:{level}") != 1:
+                        live[f"exit:{level}"] = 1
+                        dirty = True
+                        so_journal.record(
+                            "held", so, so_journal.WATCHER,
+                            f"только на выход: уровень {level:+d} не выставлен — {why}",
+                            now_ms=now)
+                    continue
+                live.pop(f"exit:{level}", None)
             # БИРЖА НЕ ТОРГУЕТ — НЕ СТАВИМ. Гейт стоит на ПОСТАНОВКЕ и только на
             # ней: учёт филлов и снятие экспозиции запрещать нельзя никогда.
             #
@@ -2151,7 +2231,8 @@ def _wall_count_fill(so: SmartOrder, live: dict, wall: str, side_was: str,
     позицию равной базе целиком и на неполном наливе соврал бы.
     """
     was = so.c_pos
-    so.c_pos += got * (1 if side_was == "buy" else -1)
+    so.c_pos, so.c_avg = so_mod.blend_avg(
+        so.c_pos, so.c_avg, got, price, side_was == "buy")
     if was != 0 and (was > 0) != (so.c_pos > 0) and so.c_pos != 0:
         so.c_flips += 1
         if so.c_flips_max and so.c_flips >= so.c_flips_max:
@@ -2351,6 +2432,29 @@ def _walls_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
             # живая заявка выглядела отсутствующей и ставилась ВТОРОЙ. Заявке в QUIK
             # пережить 90 с ничего не стоит — она живёт сутками. Таблица заявок
             # терминала живёт в QUIK и переживает рестарт и STL, и агента.
+            # Только на выход — см. тот же гейт в сетке: ставим лишь закрывающую
+            # сторону и только по цене не хуже средней входа.
+            if so.exit_only:
+                _xs, _xq = so_mod.exit_side_qty(so.c_pos)
+                why = ""
+                if _xq == 0:
+                    why = "позиции нет, открывать нечего"
+                elif side != _xs:
+                    why = f"стенка открывает ({side}), а позиция {so.c_pos:+d} закрывается {_xs}"
+                elif not so_mod.exit_without_loss(so.c_pos, so.c_avg, px):
+                    why = (f"цена {px:g} хуже средней {so.c_avg:g}: закрытие здесь "
+                           "дало бы убыток")
+                if why:
+                    if live.get(f"exit:{wall}") != 1:
+                        live[f"exit:{wall}"] = 1
+                        dirty = True
+                        so_journal.record(
+                            "held", so, so_journal.WATCHER,
+                            f"только на выход: стенка {wall} не выставлена — {why}",
+                            now_ms=now)
+                    continue
+                live.pop(f"exit:{wall}", None)
+                qty = min(qty, _xq)      # закрываем РОВНО позицию, не больше
             # Биржа не торгует — не ставим; аукцион торгами не является (см. тот же
             # гейт в сетке). None = «не знаю», тоже запрет.
             if session_open is not True:
