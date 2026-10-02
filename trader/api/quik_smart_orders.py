@@ -2119,19 +2119,19 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
         # позиции и цена не хуже безубытка.
         if so.exit_only and term_all is not None:
             mine = list(term_all.get(so.so_id, []))
-            bx_num = str(live.get("bx_num") or "")
-            if not bx_num:
-                rec_bx = work.get(str(live.get("bx") or "")) or {}
-                bx_num = str(rec_bx.get("order_id") or "")
-                if not bx_num:
-                    adopt = [r for r in mine if str(r.get("tag") or "").endswith(":bx")]
-                    if adopt:
-                        bx_num = adopt[0]["num"]
-                if bx_num:
-                    live["bx_num"] = bx_num
-                    dirty = True
-            # Исполнение выхода — по таблице, приращением к уже учтённому.
+            bx_cid = str(live.get("bx") or "")
+            rec_bx = (work.get(bx_cid) or {}) if bx_cid else {}
+            bx_num = str(live.get("bx_num") or "") or str(rec_bx.get("order_id") or "")
+            if not bx_num and not bx_cid:
+                # Подхват после рестарта: своих записей нет, заявка есть в таблице.
+                adopt = [r for r in mine if str(r.get("tag") or "").endswith(":bx")]
+                if adopt:
+                    bx_num = adopt[0]["num"]
+            if bx_num and live.get("bx_num") != bx_num:
+                live["bx_num"] = bx_num
+                dirty = True
             row_bx = term_num.get(bx_num) if bx_num else None
+            # Исполнение выхода — по таблице, приращением к уже учтённому.
             if row_bx is not None:
                 filled_now = int(row_bx.get("qty") or 0) - int(row_bx.get("balance") or 0)
                 delta = filled_now - int(live.get("bx_filled") or 0)
@@ -2150,20 +2150,52 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
                         "grid_fill", so, so_journal.WATCHER,
                         f"выход по безубытку исполнен: {side_was} {delta} по {px_was:g}; "
                         f"позиция {so.g_pos:+d}", now_ms=now)
-                if not row_bx.get("active"):
-                    for k in ("bx", "bx_num", "bx_filled"):
-                        live.pop(k, None)
-                    bx_num, row_bx = "", None
-                    dirty = True
+            # ЖИЗНЬ ЗАЯВКИ ВЫХОДА. Первая версия считала выход отсутствующим, пока
+            # его нет в таблице терминала, — а таблица отстаёт на секунды. Сторож
+            # ходит чаще, и 02.10.2026 за эти секунды поставил СЕМЬ продаж 9 при
+            # позиции +9 (часть брокер отбил нехваткой средств). Правило теперь:
+            # заявка жива, пока о ней не известно, что она мертва. Таблица знает
+            # строку — верим таблице; не знает — верим складу заявок; не знает
+            # никто — мертва (рестарт без строки в QUIK).
+            if row_bx is not None:
+                bx_alive = bool(row_bx.get("active"))
+                bx_dead = not bx_alive
+                bx_state = str(row_bx.get("state") or "")
+            elif rec_bx:
+                bx_alive = _is_working(rec_bx) or rec_bx.get("state") == "filled"
+                bx_dead = not bx_alive
+                bx_state = str(rec_bx.get("state") or "")
+            else:
+                bx_alive = False
+                bx_dead = bool(bx_cid or bx_num)
+                bx_state = "неизвестна"
+            if bx_dead:
+                for k in ("bx", "bx_num", "bx_filled"):
+                    live.pop(k, None)
+                if bx_state in ("rejected", "expired"):
+                    # Отказ или «нет ответа» — повтор не раньше чем через минуту:
+                    # поток одинаковых отказов включает защиту брокера от
+                    # зацикливания (15 минут молчания), и каждая транзакция стоит денег.
+                    live["bx_retry_at"] = now + 60_000
+                    so_journal.record(
+                        "error", so, so_journal.WATCHER,
+                        f"только на выход: заявка выхода {bx_state} "
+                        f"({str(rec_bx.get('text') or '')[:120]}); повтор через минуту",
+                        now_ms=now)
+                bx_num, row_bx = "", None
+                dirty = True
             _xs0, _xq0 = so_mod.exit_side_qty(so.g_pos)
             be = so_mod.breakeven_price(so.g_pos, so.g_avg, step, price,
                                         lim.price_collar_frac)
-            bx_ok = bool(row_bx and row_bx.get("active") and _xq0
+            bx_ok = bool(row_bx is not None and row_bx.get("active") and _xq0
                          and row_bx.get("side") == _xs0
                          and int(row_bx.get("balance") or 0) == _xq0
                          and so_mod.exit_without_loss(so.g_pos, so.g_avg,
                                                       float(row_bx.get("price") or 0)))
-            # Всё, кроме годной заявки выхода, снимается (одно снятие на строку раз в 30 с).
+            # Всё, кроме годной заявки выхода, снимается (одно снятие на строку раз в
+            # 30 с). Негодная заявка выхода (объём или цена разошлись с позицией)
+            # тоже снимается, но остаётся «живой», пока таблица не скажет обратное:
+            # новый выход до её смерти означал бы два выхода сразу.
             for r in mine:
                 if bx_ok and r["num"] == bx_num:
                     continue
@@ -2179,13 +2211,12 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
             _alive = {r["num"] for r in mine}
             for _k in [k for k in live if k.startswith("xkill:") and k[6:] not in _alive]:
                 live.pop(_k, None)
-            # Поставить выход: позиция есть, годного выхода нет, в пути ничего нет,
-            # строки сетки сняты (иначе на миг стояло бы больше позиции), биржа торгует.
-            rec_inflight = work.get(str(live.get("bx") or "")) or {}
-            inflight = bool(live.get("bx")) and not bx_num and (
-                not rec_inflight or _is_working(rec_inflight))
-            others = [r for r in mine if not (bx_ok and r["num"] == bx_num)]
-            if (_xq0 and not bx_ok and not inflight and not others and be > 0
+            # Поставить выход: позиция есть, ЖИВОЙ заявки выхода нет (ни в таблице,
+            # ни в пути), строки сетки сняты (иначе на миг стояло бы больше
+            # позиции), пауза после отказа прошла, биржа торгует.
+            others = [r for r in mine if r["num"] != bx_num]
+            if (_xq0 and not bx_alive and not others and be > 0
+                    and now >= int(live.get("bx_retry_at") or 0)
                     and session_open is True):
                 cid = f"so:{so.so_id}:bx:{now % 100000}"
                 try:
@@ -2207,12 +2238,13 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
                         f"позиции {so.g_pos:+d} (средняя {so.g_avg:g}), уровни сняты",
                         now_ms=now)
                 except LimitError as exc:
+                    live["bx_retry_at"] = now + 60_000
                     if live.get("bx_refused") != str(exc):
                         live["bx_refused"] = str(exc)
-                        dirty = True
                         so_journal.record("error", so, so_journal.LIMITS,
                                           f"только на выход: выход {_xs0} {_xq0} по {be:g} "
                                           f"отклонён лимитами: {exc}", now_ms=now)
+                    dirty = True
 
         # ОКНО: в QUIK только ближайшие уровни, дальние ждут в STL (см. g_window).
         # Стоящее за пределом «держать» снимается по номеру из таблицы терминала —

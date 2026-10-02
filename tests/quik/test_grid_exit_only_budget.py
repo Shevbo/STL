@@ -108,3 +108,51 @@ def test_exit_fills_are_counted_from_the_terminal_once_even_after_restart(tmp_pa
         assert so.g_pos == want, f"остаток {balance}: позиция {so.g_pos}, ждали {want}"
         assert not [m for m in srv.sent if m.WhichOneof("payload") == "cancel_order"
                     and m.cancel_order.order_id == "B1"], "годный выход не снимается"
+
+
+class _Ost(GOst):
+    """Склад заявок, которому тест сам говорит, что знает о заявке выхода."""
+
+    def __init__(self):
+        self.recs = []
+
+    def working_orders(self, agent=None):
+        return list(self.recs)
+
+
+@pytest.mark.parametrize("state,order_id", [("pending", ""), ("active", "N1"),
+                                            ("partial", "N1"), ("filled", "N1")])
+@pytest.mark.parametrize("lag_passes", [1, 3, 10])
+def test_exit_is_placed_once_while_the_terminal_table_lags(tmp_path, state, order_id,
+                                                           lag_passes):
+    """ЗАПРЕТ: пока заявка выхода жива по складу, а таблица терминала её ещё не
+    показала, второй выход не ставится — сколько бы проходов сторож ни сделал.
+    02.10.2026 за секунды отставания таблицы ушло СЕМЬ продаж 9 при позиции +9."""
+    book, so = _book(tmp_path, pos=5, avg=9857.0)
+    ost, total = _Ost(), 0
+    for i in range(lag_passes + 1):
+        srv = GSrv()
+        _grid_sync(book, _store(9851.0, []), ost, srv, GZLim(), "9618", STEPS, {},
+                   GNOW + i * 1000, True)
+        placed = [m.place_order for m in srv.sent if m.WhichOneof("payload") == "place_order"]
+        total += len(placed)
+        for p in placed:
+            ost.recs = [{"client_id": p.client_id, "order_id": order_id, "state": state,
+                         "remaining": 5, "filled": 0, "price": p.price, "side": "sell"}]
+    assert total == 1, f"{state}, {lag_passes} проходов отставания: выходов поставлено {total}"
+
+
+def test_rejected_exit_waits_a_minute_then_retries_once(tmp_path):
+    book, so = _book(tmp_path, pos=5, avg=9857.0)
+    ost = _Ost()
+    srv = GSrv()
+    _grid_sync(book, _store(9851.0, []), ost, srv, GZLim(), "9618", STEPS, {}, GNOW, True)
+    cid = [m.place_order for m in srv.sent if m.WhichOneof("payload") == "place_order"][0].client_id
+    ost.recs = [{"client_id": cid, "order_id": "", "state": "rejected", "remaining": 0,
+                 "filled": 0, "price": 9857.0, "side": "sell", "text": "нехватка средств"}]
+    for dt, want in [(1_000, 0), (30_000, 0), (59_000, 0), (61_000, 1)]:
+        srv = GSrv()
+        _grid_sync(book, _store(9851.0, []), ost, srv, GZLim(), "9618", STEPS, {},
+                   GNOW + dt, True)
+        got = len([m for m in srv.sent if m.WhichOneof("payload") == "place_order"])
+        assert got == want, f"через {dt} мс после отказа поставлено {got}, ждали {want}"
