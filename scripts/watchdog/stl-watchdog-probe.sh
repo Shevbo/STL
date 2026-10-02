@@ -490,16 +490,26 @@ for key, text in problems:
 # минус решённое — то, что ждёт оператора или самолечения.
 try:
     _lp = os.path.expanduser("~/stl-watchdog-runs.jsonl")
+    # НОМЕР ПРОГОНА НЕ ИМЕЕТ ПРАВА ОСТАНОВИТЬ ЗАПИСЬ. Хвост читался окном 4 КБ, а
+    # 02.10.2026 в 12:30 запись прогона вышла длиной 21 КБ: последней строкой окна
+    # оказался обрывок, json.loads падал, и весь блок уходил в except — запись не
+    # делалась, последняя строка не менялась, и так навсегда. Компаньон 3.5 часа
+    # писал «вотчер молчит», а в эти же часы два часа не проходила ни одна заявка.
+    # Окно шире любой разумной записи, и битая строка лишь пропускается.
     _n = 0
     if os.path.exists(_lp):
         with open(_lp, "rb") as _f:
             try:
-                _f.seek(-4096, 2)
+                _f.seek(-262144, 2)
             except OSError:
                 _f.seek(0)
             _lines = _f.read().decode("utf-8", "replace").strip().splitlines()
-        if _lines:
-            _n = json.loads(_lines[-1]).get("n", 0)
+        for _ln in reversed(_lines):
+            try:
+                _n = json.loads(_ln).get("n", 0)
+                break
+            except ValueError:
+                continue
     def _mark(k, t):
         return t if esc_on(k) else t + " [SMS отключена настройкой]"
     _resolved = [_mark(k, t) for k, t in problems if k.startswith("paused_")]
