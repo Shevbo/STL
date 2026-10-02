@@ -164,6 +164,31 @@
   .otag { font-size: 10px; color: var(--faint); margin-right: 6px;
           border: 1px solid currentColor; border-radius: 3px; padding: 0 3px; }
   .row.dim { opacity: .55; }
+  /* СТРОКА ЗАЯВКИ — ДВА ЭТАЖА, а не одна флекс-линия.
+   *
+   * Одной линией описание сжималось в узкую колонку и ехало лесенкой: у сетки
+   * оно длинное («шаг 90 п. · вниз 5 · вверх 5 · по 5 · стоп за краем 100 п.»),
+   * а справа на той же линии стояли id и статус, которым нужна своя ширина.
+   * Оператор 02.10.2026 назвал это кривожопостью, и он прав: заявка — это не
+   * пара «подпись-значение», это объект с заголовком и подробностями.
+   *
+   * Этаж первый: ЧТО и СКОЛЬКО, деньги, id, статус, кнопка — всё, что ищут
+   * глазами. Этаж второй: подробности во всю ширину, с нормальным переносом. */
+  .orow {
+    display: flex; flex-direction: column; gap: 1px;
+    padding: 3px 0 3px 6px;
+    border-left: 2px solid var(--rail-flat);
+  }
+  .orow + .orow { border-top: 1px solid var(--rule); }
+  .orow.dim { opacity: .55; }
+  .orow.buy { border-left-color: var(--up); }
+  .orow.sell { border-left-color: var(--down); }
+  .ohead { display: flex; align-items: baseline; gap: 6px; }
+  /* Инструмент и объём — якорь строки: по ним её находят, значит они главные. */
+  .ohead .k { color: var(--ink); font-weight: 600; white-space: nowrap; }
+  .ohead .sp { flex: 1; }
+  /* Подробности отдельной строкой: переносятся как текст, а не как колонка. */
+  .odet { color: var(--faint); font-size: 10px; line-height: 1.35; }
   .xbtn { font-size: 10px; padding: 0 5px; margin-right: 6px; cursor: pointer;
           border: 1px solid var(--down); border-radius: 3px;
           background: transparent; color: var(--down); }
@@ -1373,15 +1398,16 @@ function renderTerminal(o) {
       if (r.filled) sub += ` · исполнено ${r.filled}`;
       if (r.balance && r.active) sub += ` · остаток ${r.balance}`;
       const stop = r.kind === 'stop' ? '<span class="otag nw">стоп</span>' : '';
-      return `<div class="row${r.active ? '' : ' dim'}">` +
+      return `<div class="orow${r.active ? '' : ' dim'}${r.side === 'buy' ? ' buy' : r.side === 'sell' ? ' sell' : ''}">` +
+      `<div class="ohead">` +
       `<span class="k">${esc(r.sec)}${side ? ' ' + side : ''} ${esc(String(r.qty))}</span>` +
-      `<span class="sub">${sub}</span>` +
-      `${stop}${originTag(r)}${pnlBox(r.pnl)}<span class="sp"></span>` +
+      `${stop}${pnlBox(r.pnl)}<span class="sp"></span>` +
       `<span class="soid" title="номер заявки в QUIK">${esc(String(r.num || ''))}</span>` +
       (r.active ? (CAN_CANCEL
         ? `<button class="xbtn" data-cancel="${esc(String(r.num))}" data-ask="${esc(cancelAsk(r))}" title="снять эту заявку в QUIK">снять</button>`
         : `<span class="otag nw" title="токен компаньона открывает только чтение — снимайте из веб-версии панели">снятие в вебе</span>`) : '') +
-      `<span class="v ${r.active ? 'up' : 'nil'}">${esc(r.state || (r.active ? 'активна' : 'снята'))}</span></div>`;
+      `<span class="v ${r.active ? 'up' : 'nil'}">${esc(r.state || (r.active ? 'активна' : 'снята'))}</span></div>` +
+      `<div class="odet">${sub} · ${originTag(r)}</div></div>`;
     }).join('');
   }
   // Разметка и поведение группы — те же, что у остальных: раскрытие живёт в
@@ -1415,14 +1441,16 @@ function renderOrders(o, d) {
   for (const m of o.manual || []) {
     rowsBy.quik.push({ ts: Number(m.ts_ms || 0), done: !m.active,
       side: m.side, px: m.price == null ? null : Number(m.price), html:
-      `<div class="row"><span class="k">${esc(m.sec)} ${sideRu(m.side)} ${m.qty}` +
-      // Непустой тег у ручной заявки = она пришла не из терминала, а из
-      // приложения брокера: оператору важно, каким каналом он торговал.
-      `${m.tag ? ` <span style="opacity:.6">${esc(m.tag)}</span>` : ''}</span>` +
-      `<span class="sub">@ ${num(m.price)}${m.active && m.balance < m.qty ? ` · осталось ${m.balance}` : ''}</span>` +
+      `<div class="orow${m.active ? '' : ' dim'} ${m.side === 'buy' ? 'buy' : 'sell'}">` +
+      `<div class="ohead"><span class="k">${esc(m.sec)} ${sideRu(m.side)} ${m.qty}</span>` +
       `${pnlBox(m.pnl)}<span class="sp"></span>` +
       `<span class="soid" title="номер заявки в QUIK">${esc(String(m.num || ''))}</span>` +
-      `<span class="v ${m.active ? 'up' : 'nil'}">${esc(m.state)}</span></div>` });
+      `<span class="v ${m.active ? 'up' : 'nil'}">${esc(m.state)}</span></div>` +
+      `<div class="odet">по ${num(m.price)}` +
+      `${m.active && m.balance < m.qty ? ` · осталось ${m.balance}` : ''}` +
+      // Непустой тег у ручной заявки = она пришла не из терминала, а из
+      // приложения брокера: оператору важно, каким каналом он торговал.
+      `${m.tag ? ' · приложение брокера' : ''}</div></div>` });
   }
   // native — защиту держит сам терминал QUIK: она переживёт падение STL.
   const ST = { armed: 'взведена', native: 'под охраной терминала',
@@ -1471,11 +1499,15 @@ function renderOrders(o, d) {
     // У ДВУСТОРОННИХ сторона служебная: её ставит движок под каждую сделку.
     const twoSided = s.kind === 'corridor' || s.kind === 'triangle' || s.kind === 'grid';
     (rowsBy[s.kind] || rowsBy.other).push({ ts: Number(s.created_ms || s.fired_ms || 0),
-      done: ORD_DONE_ST.has(s.status), side: s.side, px: soPx(s), html:
-      `<div class="row"><span class="k">${esc(s.code)} ${twoSided ? 'в обе' : sideRu(s.side)} ${s.qty}</span>` +
-      `<span class="sub">${esc(sub)}</span>${pnlBox(s.pnl)}<span class="sp"></span>` +
+      // У двусторонней заявки стороны НЕТ: ни для сортировки, ни для
+      // разделителя. Оставив её, список разложил бы сетку по «продажам».
+      done: ORD_DONE_ST.has(s.status), side: twoSided ? '' : s.side, px: soPx(s), html:
+      `<div class="orow${live ? '' : ' dim'}${twoSided ? '' : (s.side === 'buy' ? ' buy' : ' sell')}">` +
+      `<div class="ohead"><span class="k">${esc(s.code)} ${twoSided ? 'в обе' : sideRu(s.side)} ${s.qty}</span>` +
+      `${pnlBox(s.pnl)}<span class="sp"></span>` +
       `<span class="soid" title="идентификатор умной заявки STL">${esc(String(s.so_id || ''))}</span>` +
-      `<span class="v ${natBad ? 'down' : (live ? (s.activated ? 'up' : '') : 'nil')}">${esc(ST[s.status] || s.status)}</span></div>` });
+      `<span class="v ${natBad ? 'down' : (live ? (s.activated ? 'up' : '') : 'nil')}">${esc(ST[s.status] || s.status)}</span></div>` +
+      `<div class="odet">${esc(sub)}</div></div>` });
   }
 
   // Счётчик берём У СЕРВЕРА: он считает ДО обрезки списка, а длина массива
@@ -1519,9 +1551,13 @@ function renderOrders(o, d) {
       if (b.px == null) return -1;
       return b.px - a.px;
     });
+    // РАЗДЕЛИТЕЛЬ СТОРОН ставим только там, где сторона есть. У фигур и сетки
+    // заявка ДВУСТОРОННЯЯ: подпись «продажа» над строкой, которая сама говорит
+    // «в обе», — прямая неправда (02.10.2026, вместе с правкой вёрстки строк).
+    const sided = rows.some((r) => r.side === 'buy' || r.side === 'sell');
     let side = null;
     for (const r of rows) {
-      if (r.side !== side) {
+      if (sided && r.side !== side) {
         side = r.side;
         out += `<div class="ord-side${side === 'buy' ? ' buy' : ''}">` +
           `${side === 'buy' ? 'покупка' : 'продажа'}</div>`;

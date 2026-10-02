@@ -43,7 +43,10 @@ describe.each(['companion.html', 'm.html'])('%s — развернуть зая�
     const out = renderOrdersOf(html, true);
     expect(out).toContain('<div class="ord-box full">');
     expect(out).toContain('свернуть');
-    expect(out.match(/class="row"/g)?.length).toBe(12);   // весь список, не окошко
+    // Строка заявки с 02.10.2026 — двухэтажный блок `.orow`, а не флекс-линия
+    // `.row`: длинное описание сетки сжималось в узкую колонку и ехало
+    // лесенкой. Считаем блоки, смысл проверки прежний — виден ВЕСЬ список.
+    expect(out.match(/class="orow[^"]*"/g)?.length).toBe(12);   // весь список, не окошко
   });
 
   it('стиль развёрнутой коробки снимает высоту и прокрутку', () => {

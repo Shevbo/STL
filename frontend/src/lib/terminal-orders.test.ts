@@ -179,3 +179,39 @@ describe('строки стоп-заявок', () => {
     });
   }
 });
+
+// Вёрстка строки заявки. 02.10.2026 оператор прислал снимок: описание сетки
+// («шаг 90 п. · вниз 5 · вверх 5 · по 5 · стоп за краем 100 п.») сжималось в
+// узкую колонку и ехало лесенкой, потому что строка была ОДНОЙ флекс-линией, а
+// справа на той же линии стояли id и статус. Заявка — объект с заголовком и
+// подробностями, а не пара «подпись-значение».
+describe('строка заявки читается, а не ломается', () => {
+  for (const [page, src] of Object.entries(PAGES)) {
+    it(`${page}: заголовок и подробности — разные этажи`, () => {
+      const html = termFn(src)({
+        terminal: [ROW({ num: '7', qty: 5 })],
+        terminal_done: [], terminal_total: 1, terminal_active: 1, terminal_stale: false,
+      });
+      expect(html).toContain('class="orow');
+      expect(html).toContain('class="ohead"');
+      expect(html).toContain('class="odet"');
+      // Подробности идут ПОСЛЕ заголовка: иначе этажи поменяются местами.
+      expect(html.indexOf('class="ohead"')).toBeLessThan(html.indexOf('class="odet"'));
+    });
+
+    it(`${page}: правило двух этажей объявлено в стилях`, () => {
+      expect(src).toMatch(/\.orow \{[\s\S]*?flex-direction: column/);
+      expect(src).toMatch(/\.odet \{[\s\S]*?font-size: 10px/);
+    });
+
+    // Сторона красит рейку строки: лонг и шорт различаются до чтения текста.
+    it(`${page}: сторона видна рейкой`, () => {
+      const buy = termFn(src)({ terminal: [ROW({ side: 'buy' })], terminal_done: [],
+                                terminal_total: 1, terminal_active: 1, terminal_stale: false });
+      expect(buy).toMatch(/class="orow[^"]*\bbuy\b/);
+      const sell = termFn(src)({ terminal: [ROW({ side: 'sell' })], terminal_done: [],
+                                 terminal_total: 1, terminal_active: 1, terminal_stale: false });
+      expect(sell).toMatch(/class="orow[^"]*\bsell\b/);
+    });
+  }
+});
