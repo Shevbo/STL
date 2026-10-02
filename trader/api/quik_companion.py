@@ -743,6 +743,63 @@ def _watch_runner(health: dict, received_ms: int | None, now_ms: int,
 _BLOCK_SINCE: dict[str, int] = {}
 
 
+
+# ── ПОТРЕБЛЕНИЕ ПРЕДЕЛОВ ЖИВОЙ ТОРГОВЛИ ────────────────────────────────────────
+#
+# Заказ оператора 02.10.2026: «выведи в компаньонах потребление заданных
+# лимитов». Предел, которого не видно, замечают только в момент отказа: дневной
+# кап 50 однажды молча заморозил ВСЕ заявки роботов, включая выходы, и это нашли
+# по логу раннера на VDS, а не на экране.
+#
+# ЧТО МЫ МОЖЕМ СЧИТАТЬ ЧЕСТНО. Израсходованное знает склад заявок STL
+# (`quik_order_store`), и знает он это С ПОДЪЁМА СВОЕГО ПРОЦЕССА: счётчики живут
+# в памяти и обнуляются рестартом. 02.10.2026 служба поднималась шесть раз, то
+# есть «12 из 500» в такой день означает «12 с 16:49», а не «12 за день». Панель
+# обязана подписывать это временем, иначе число читается как спокойный запас.
+#
+# АГЕНТСКИЕ ПРЕДЕЛЫ — ОТДЕЛЬНАЯ КОЛОНКА, а не замена нашим: пуш из STL умеет
+# только УЖЕСТОЧАТЬ их, и действует всегда меньший из двух. Показав один наш,
+# экран обещал бы объём, которого агент не пропустит.
+_PROC_STARTED_MS = int(time.time() * 1000)
+
+
+def _limits_block(request) -> dict:
+    """Пределы, сколько из них израсходовано и чем ограничивает агент."""
+    try:
+        from trader.quik.limits import OrderLimits
+        lim = OrderLimits.from_settings(request.app.state.settings)
+    except Exception:  # noqa: BLE001 — без пределов панель живёт, соврать о них нельзя
+        return {}
+    out: dict = {
+        "trading_enabled": bool(lim.trading_enabled),
+        "max_contracts_per_order": lim.max_contracts_per_order,
+        "max_working_contracts": lim.max_working_contracts,
+        "daily_order_cap": lim.daily_order_cap,
+        "price_collar_frac": lim.price_collar_frac,
+        "whitelist": list(lim.instrument_whitelist),
+        # Счётчики ведутся с подъёма процесса. None = склада нет, и это НЕ ноль:
+        # ноль означал бы «ничего не поставлено», а мы просто не знаем.
+        "placed_today": None, "working_contracts": None,
+        "counted_since_ms": _PROC_STARTED_MS,
+    }
+    ost = getattr(request.app.state, "quik_order_store", None)
+    if ost is not None:
+        try:
+            from trader.quik.store import resolve_agent
+            agent = resolve_agent(getattr(request.app.state, "quik_store", None), None)
+            out["placed_today"] = ost.placed_today(agent)
+            out["working_contracts"] = ost.working_contracts(agent)
+        except Exception:  # noqa: BLE001 — агент не опознан: предел знаем, расход нет
+            pass
+    store = getattr(request.app.state, "quik_store", None)
+    if store is not None:
+        try:
+            out["agent"] = store.limits_state(None)
+        except Exception:  # noqa: BLE001
+            out["agent"] = None
+    return out
+
+
 def _trading_block(store) -> dict:
     """Блокировка торговли на стороне АГЕНТА — для шапки панели и карточек роботов.
 
@@ -1846,5 +1903,8 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
         "manual": manual_block,
         "watch": {"runner": watch_runner, "backtests": bt, "platform": platform},
         "trading_block": _trading_block(store),
+        # Пределы живой торговли и сколько из них израсходовано (оператор
+        # 02.10.2026). Предел, которого не видно, замечают в момент отказа.
+        "limits": _limits_block(request),
         "alerts": alerts, "market": market_out,
     }

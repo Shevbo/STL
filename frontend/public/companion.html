@@ -148,6 +148,10 @@
   .v.up { color: var(--up); }
   .v.down { color: var(--down); }
   .v.nil { color: var(--faint); font-weight: 400; }
+  /* Расход предела: жёлтым с половины, красным с 80%. Цвет здесь не
+     украшение — упёршийся предел замечают в момент отказа заявки. */
+  .v.warn { color: #9a6b00; }
+  .v.neg { color: var(--down); }
   /* Живая котировка рядом с кодом инструмента. Мельче значения, но чётче подписи. */
   .q { color: var(--ink); font-size: 11px; font-weight: 600; }
   .q-stale { color: var(--faint); font-weight: 400; text-decoration: line-through; }
@@ -1638,6 +1642,68 @@ function tradingBlockHtml(tb) {
     + (age ? ' · эхо ' + esc(age) : '') + '</span></div>';
 }
 
+// ПРЕДЕЛЫ ЖИВОЙ ТОРГОВЛИ И СКОЛЬКО ИЗ НИХ ИЗРАСХОДОВАНО (оператор 02.10.2026).
+//
+// Предел, которого не видно, замечают в момент отказа: дневной кап 50 однажды
+// молча заморозил ВСЕ заявки роботов, включая выходы, и нашли это по логу
+// раннера на VDS, а не на экране.
+//
+// Две честности, без которых блок врал бы тише, но хуже:
+//   • счётчики живут в памяти процесса STL и обнуляются рестартом. Подписываем
+//     их временем: «12 из 500 с 16:49» и «12 из 500 за день» — разные вещи, а в
+//     день с шестью рестартами разница решает;
+//   • агентские пределы отдельной подписью. Пуш из STL умеет только УЖЕСТОЧАТЬ
+//     их, действует меньший из двух; показав один наш, экран обещал бы объём,
+//     которого агент не пропустит.
+function renderLimits(l) {
+  if (!l || !l.daily_order_cap) return '';
+  const a = l.agent || null;
+  // Предел, по которому заявку реально отрежут: меньший из нашего и агентского.
+  const eff = (mine, key) => {
+    const his = a && a[key] != null ? Number(a[key]) : null;
+    return (his != null && his < mine) ? his : mine;
+  };
+  const since = l.counted_since_ms
+    ? new Date(l.counted_since_ms).toLocaleTimeString('ru-RU',
+        { timeZone: 'Europe/Moscow', hour: '2-digit', minute: '2-digit' })
+    : null;
+  // Строка расхода: «12 из 500». Расхода не знаем (склада нет) — показываем
+  // предел и говорим это словом, а не нулём: ноль читается как «не торговали».
+  const used = (u, cap, key) => {
+    const lim = eff(cap, key);
+    const tight = a && a[key] != null && Number(a[key]) < cap
+      ? ` <span class="q" title="агентский предел жёстче нашего: действует он">агент ${a[key]}</span>` : '';
+    if (u == null) return `${val(String(lim), 'nil')}${tight}`;
+    const pct = lim > 0 ? u / lim : 0;
+    return `${val(`${u} из ${lim}`, pct >= 0.8 ? 'down' : (pct >= 0.5 ? 'warn' : ''))}${tight}`;
+  };
+  let out = '';
+  if (!l.trading_enabled) {
+    out += `<div class="row neg"><span class="k">Торговля запрещена</span>` +
+      `<span class="sub">мастер-флаг выключен: STL не выпустит ни одной заявки</span>` +
+      `<span class="sp"></span>${val('STOP', 'neg')}</div>`;
+  }
+  out += `<div class="row"><span class="k">Заявок за день</span>` +
+    `<span class="sub nw">${since ? 'счёт с ' + since + ' (рестарт обнуляет)' : 'счёт с подъёма службы'}</span>` +
+    `<span class="sp"></span>${used(l.placed_today, l.daily_order_cap, 'daily_order_cap')}</div>`;
+  out += `<div class="row"><span class="k">Контрактов в работе</span>` +
+    `<span class="sub">в стоящих заявках сейчас</span><span class="sp"></span>` +
+    `${used(l.working_contracts, l.max_working_contracts, 'max_working_contracts')}</div>`;
+  out += `<div class="row"><span class="k">Контрактов на заявку</span>` +
+    `<span class="sub">потолок одной заявки</span><span class="sp"></span>` +
+    `${used(null, l.max_contracts_per_order, 'max_contracts_per_order')}</div>`;
+  if (l.price_collar_frac) {
+    out += `<div class="row"><span class="k">Коллар цены</span>` +
+      `<span class="sub">дальше от рынка заявку не примут</span><span class="sp"></span>` +
+      `${val((l.price_collar_frac * 100).toFixed(3).replace(/0+$/, '').replace(/\.$/, '') + ' %')}</div>`;
+  }
+  const wl = l.whitelist || [];
+  out += `<div class="row"><span class="k">Белый список</span>` +
+    `<span class="sub">${wl.length ? esc(wl.join(', ')) : 'пуст — торговля запрещена молча'}</span>` +
+    `<span class="sp"></span>${val(String(wl.length), wl.length ? '' : 'neg')}</div>`;
+  return out;
+}
+
 function renderWatch(w, tb) {
   if (!w) return '<div class="empty">нет данных</div>';
   const bt = w.backtests || {};
@@ -1837,6 +1903,8 @@ function paint(d) {
     // торговли за день/неделю/месяц (просьба оператора 24.09.2026).
     `<a href="${STL}/?journal=1" data-ext>журнал ↗</a></div>` +
       manualTotal((d.orders || {}).today) + renderTerminal(d.orders) + renderOrders(d.orders, d) +
+    `<div class="sec">пределы торговли <a href="${STL}/watchdog-log.html#limits" data-ext>правка ↗</a></div>` +
+      renderLimits(d.limits) +
     `<div class="sec">вотчер <a href="${STL}/?lab=botstore" data-ext>хитпарад ↗</a></div>` +
       renderWatch(d.watch, d.trading_block) +
     `<div class="sec">уведомления <a href="${STL}/watchdog-log.html" data-ext>детали ↗</a>` +

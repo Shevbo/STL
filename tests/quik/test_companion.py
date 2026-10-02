@@ -1343,3 +1343,82 @@ def test_journal_average_survives_when_the_journal_agrees_with_the_account(monke
     assert pos["manual_avg"] == pytest.approx(85_480.0)
     assert pos["manual_avg_src"] == "journal"
     assert pos["manual_journal_div"] == 0
+
+
+class _LimitSettings(_Settings):
+    """Настройки с пределами: файл создаётся из них при первом чтении."""
+
+    quik_trading_enabled = True
+    quik_max_contracts_per_order = 75
+    quik_max_working_contracts = 250
+    quik_price_collar_frac = 0.002
+    quik_daily_order_cap = 500
+    quik_instrument_whitelist = "RIZ6,GZZ6"
+
+
+def _limits_file(monkeypatch, tmp_path):
+    """Пределы в tmp: тест не имеет права править боевой data/quik_limits.json."""
+    from trader.quik import settings_file
+    monkeypatch.setattr(settings_file, "PATH", str(tmp_path / "quik_limits.json"))
+    monkeypatch.setattr(settings_file, "_cache", None, raising=False)
+    monkeypatch.setattr(settings_file, "_cache_mtime", -1.0, raising=False)
+
+
+def test_snapshot_carries_limits_and_their_consumption(monkeypatch, tmp_path):
+    """Пределы живой торговли и сколько из них израсходовано (оператор 02.10.2026).
+
+    Предел, которого не видно, замечают в момент отказа: дневной кап 50 однажды
+    молча заморозил ВСЕ заявки роботов, включая выходы, и нашли это по логу
+    раннера на VDS, а не на экране.
+
+    Счётчики живут в памяти ЭТОГО процесса и обнуляются рестартом, поэтому в
+    снимке едет и время начала счёта: «12 из 500» без него читается как «за
+    день», а в день с шестью рестартами это разные числа.
+    """
+    monkeypatch.delenv("SHECTORY_AUTH_DEV_BYPASS", raising=False)
+    app = FastAPI()
+    app.include_router(companion_router)
+    app.state.settings = _LimitSettings()
+    app.state.db_pool = FakePool()
+    _limits_file(monkeypatch, tmp_path)
+    store = QuikAgentStore()
+    store.set_agent_status("A1", json.dumps({
+        "agent": {"version": "x", "link_up": True},
+        "health": {"runner_healthy": True,
+                   "money": {"limit": 1.0, "varmargin": 0.0, "age_ms": 100},
+                   "positions": []},
+        "robots": [],
+    }), 0)
+    # Агентский бэкстоп жёстче нашего по одному полю: панель обязана показать ЕГО.
+    store.set_limits_state("A1", {"max_contracts_per_order": 50})
+    app.state.quik_store = store
+    from types import SimpleNamespace as _NS
+    app.state.quik_order_store = _NS(
+        placed_today=lambda _a: 12, working_contracts=lambda _a: 24)
+
+    body = TestClient(app).get("/api/v1/quik/companion/snapshot",
+                               headers=_operator_headers()).json()
+    lim = body["limits"]
+    assert lim["placed_today"] == 12 and lim["working_contracts"] == 24
+    assert lim["daily_order_cap"] > 0 and lim["max_working_contracts"] > 0
+    assert lim["counted_since_ms"] > 0            # с какого момента счёт
+    assert lim["agent"]["max_contracts_per_order"] == 50
+
+
+def test_limits_consumption_is_unknown_not_zero_without_the_order_store(monkeypatch, tmp_path):
+    """Склада заявок нет — расход НЕИЗВЕСТЕН, а не ноль.
+
+    Ноль читается как «не торговали», и на упёршемся пределе это ровно та
+    ошибка, которая стоит заявок.
+    """
+    monkeypatch.delenv("SHECTORY_AUTH_DEV_BYPASS", raising=False)
+    app = FastAPI()
+    app.include_router(companion_router)
+    app.state.settings = _LimitSettings()
+    app.state.db_pool = FakePool()
+    _limits_file(monkeypatch, tmp_path)
+    app.state.quik_store = QuikAgentStore()
+    body = TestClient(app).get("/api/v1/quik/companion/snapshot",
+                               headers=_operator_headers()).json()
+    assert body["limits"]["placed_today"] is None
+    assert body["limits"]["working_contracts"] is None
