@@ -310,6 +310,13 @@ async def lifespan(app: FastAPI):
     if settings.quik_agent_enabled:
         try:
             from trader.api.quik_alerts import AlertBook, RecordingForwarder
+            from trader.quik import settings_file
+            # ОДИН ФАЙЛ НАСТРОЕК, создаётся при первом старте из окружения, дальше
+            # правится экраном или рукой и действует БЕЗ рестарта (mtime).
+            try:
+                settings_file.ensure(settings)
+            except Exception:  # noqa: BLE001 — не создали, живём на окружении
+                log.warning("quik.limits.ensure_failed")
             from trader.quik.orders import OrderStore, build_set_limits
             from trader.quik.limits import OrderLimits
             from trader.quik.server import QuikAgentServer

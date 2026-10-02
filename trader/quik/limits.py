@@ -31,18 +31,22 @@ class OrderLimits:
 
     @classmethod
     def from_settings(cls, settings) -> "OrderLimits":
-        wl = tuple(
-            s.strip()
-            for s in (settings.quik_instrument_whitelist or "").split(",")
-            if s.strip()
-        )
+        """Текущие пределы. ИСТОЧНИК — файл data/quik_limits.json, окружение
+        остаётся лишь первоначальным заполнением (см. trader/quik/settings_file).
+
+        Читается на КАЖДУЮ проверку и перечитывает файл по mtime, поэтому правка
+        настроек действует сразу. 02.10.2026 это стоило простоя: сетка уткнулась в
+        предел объёма, и чтобы его поднять, пришлось править окружение и
+        перезапускать боевой процесс посреди торгов."""
+        from trader.quik import settings_file
+        v = settings_file.load(settings)
         return cls(
-            trading_enabled=bool(settings.quik_trading_enabled),
-            max_contracts_per_order=int(settings.quik_max_contracts_per_order),
-            max_working_contracts=int(settings.quik_max_working_contracts),
-            price_collar_frac=float(settings.quik_price_collar_frac),
-            instrument_whitelist=wl,
-            daily_order_cap=int(settings.quik_daily_order_cap),
+            trading_enabled=bool(v["trading_enabled"]),
+            max_contracts_per_order=int(v["max_contracts_per_order"]),
+            max_working_contracts=int(v["max_working_contracts"]),
+            price_collar_frac=float(v["price_collar_frac"]),
+            instrument_whitelist=tuple(v["instrument_whitelist"]),
+            daily_order_cap=int(v["daily_order_cap"]),
         )
 
 

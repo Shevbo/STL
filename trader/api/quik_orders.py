@@ -361,6 +361,94 @@ async def cancel(body: CancelBody, request: Request):
     return {"ok": True, "agent_id": agent, "client_id": body.client_id}
 
 
+class SettingsBody(BaseModel):
+    """Настройки живой торговли. Поле не прислано — значение остаётся прежним:
+    частичная правка не должна обнулять то, о чём вызывающий не думал."""
+
+    instrument_whitelist: list[str] | None = None
+    max_contracts_per_order: int | None = None
+    max_working_contracts: int | None = None
+    daily_order_cap: int | None = None
+    price_collar_frac: float | None = None
+    trading_enabled: bool | None = None
+
+
+@router.get("/settings")
+async def get_settings(request: Request):
+    """ВСЕ операционные настройки живой торговли из ОДНОГО файла.
+
+    Файл: `data/quik_limits.json`. Читается на каждую проверку заявки и
+    перечитывается по mtime, поэтому правка действует СРАЗУ, без рестарта STL.
+
+    Чего здесь НЕТ и почему: агентский `agent_config.json` и `shectory_trade_config.lua`
+    живут на машине QUIK. Это БЭКСТОП — пуш из STL умеет только ужесточать его, но
+    не расширять. Сведя их сюда, мы дали бы расширять предохранитель оттуда же,
+    откуда торгуют. Их текущие значения видно в зеркале агента.
+    """
+    _auth(request)
+    from trader.quik import settings_file
+    v = settings_file.load(request.app.state.settings)
+    return {"settings": v, "path": settings_file.PATH,
+            "note": ("агентские пределы (agent_config.json) и список инструментов "
+                     "QLua (shectory_trade_config.lua) живут на машине QUIK: "
+                     "это бэкстоп, STL умеет только ужесточать его")}
+
+
+@router.put("/settings")
+async def put_settings(body: SettingsBody, request: Request):
+    """Записать настройки и ТУТ ЖЕ протолкнуть их агенту, без рестарта.
+
+    Проверки перед записью — потому что пустые пределы это «разрешить всё»:
+    положительные числа, коллар в разумных границах, непустой белый список.
+    """
+    _auth(request)
+    from trader.quik import settings_file
+    cur = settings_file.load(request.app.state.settings)
+    new = dict(cur)
+    for k in ("max_contracts_per_order", "max_working_contracts", "daily_order_cap"):
+        val = getattr(body, k)
+        if val is not None:
+            if int(val) <= 0:
+                raise HTTPException(status_code=422, detail=(
+                    f"{k} должен быть больше нуля: ноль и отрицательное запрещают "
+                    "торговлю молча, для остановки есть мастер-флаг."))
+            new[k] = int(val)
+    if body.price_collar_frac is not None:
+        if not 0 < float(body.price_collar_frac) <= 0.5:
+            raise HTTPException(status_code=422, detail=(
+                "price_collar_frac вне (0, 0.5]: ноль запретит любую заявку, "
+                "а полтинника достаточно для самого широкого коридора."))
+        new["price_collar_frac"] = float(body.price_collar_frac)
+    if body.instrument_whitelist is not None:
+        wl = [str(c).strip() for c in body.instrument_whitelist if str(c).strip()]
+        if not wl:
+            raise HTTPException(status_code=422, detail=(
+                "Пустой белый список запрещает ВСЮ торговлю молча. "
+                "Для остановки есть мастер-флаг trading_enabled."))
+        new["instrument_whitelist"] = wl
+    if body.trading_enabled is not None:
+        new["trading_enabled"] = bool(body.trading_enabled)
+    settings_file.save(new)
+    # ПРОТАЛКИВАЕМ АГЕНТУ СРАЗУ. Иначе STL и агент разъедутся до ближайшего
+    # переподключения, и заявка, законная по STL, умрёт у агента без следа в QUIK.
+    pushed = False
+    srv = getattr(request.app.state, "quik_server", None)
+    if srv is not None:
+        try:
+            agent = _resolve_agent(request, None)
+            srv.enqueue_order(agent, order_msgs.build_set_limits(
+                instrument_whitelist=new["instrument_whitelist"],
+                max_contracts_per_order=new["max_contracts_per_order"],
+                max_working_contracts=new["max_working_contracts"],
+                price_collar_frac=new["price_collar_frac"],
+                daily_order_cap=new["daily_order_cap"]))
+            pushed = True
+        except Exception as exc:  # noqa: BLE001 — запись состоялась, пуш догонит
+            log.warning("quik.settings.push_failed", error=str(exc))
+    log.info("quik.settings.saved", values=new, pushed=pushed)
+    return {"ok": True, "settings": new, "pushed_to_agent": pushed}
+
+
 @router.get("/terminal")
 async def terminal_orders(request: Request, agent_id: str | None = None,
                           active_only: bool = False):
