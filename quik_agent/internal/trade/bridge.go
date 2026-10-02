@@ -17,6 +17,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -318,7 +320,16 @@ type Bridge struct {
 	cmdMu    sync.Mutex // serializes appends to cmd.jsonl
 	evtOff   int64      // bytes consumed from evt.jsonl
 
-	transSeq atomic.Int64
+	// НУМЕРАЦИЯ ТРАНЗАКЦИЙ ПЕРЕЖИВАЕТ ПЕРЕЗАПУСК АГЕНТА. TRANS_ID обязан быть
+	// уникален в пределах СЕАНСА QUIK, а терминал живёт дольше агента: 02.10.2026
+	// агент перезапустили в середине дня, счётчик пошёл с единицы, и QUIK молча
+	// игнорировал каждую заявку — ни заявки, ни отказа, только тишина и «нет
+	// ответа» по таймауту. Молчание страшнее отказа: отказ виден, а тут торговля
+	// просто перестала существовать.
+	transSeq  atomic.Int64
+	transHigh atomic.Int64 // до какого номера уже зарезервировано на диске
+	transMu   sync.Mutex   // сериализует резервирование нового блока
+	transPath string       // файл с верхней границей (пусто = не персистим)
 }
 
 // SetQueueDir switches the bridge to the file-queue transport (no TCP). Call before
@@ -378,10 +389,62 @@ func (b *Bridge) SetHandler(h BridgeHandler) {
 	b.mu.Unlock()
 }
 
+// transIDBlock — размер блока, резервируемого на диске за одну запись. Блок
+// большой нарочно: запись на диск на КАЖДУЮ заявку стоила бы задержки в самом
+// горячем пути, а потеря блока при падении ничего не ломает — потерянные номера
+// просто не используются. 100000 заявок за сеанс терминала не бывает.
+const transIDBlock = 100000
+
+// SetTransIDStore включает персистентную нумерацию транзакций и задаёт стартовый
+// номер. Вызывается ДО Run; пустой путь оставляет нумерацию с нуля (тесты).
+//
+// Стартовый номер = max(зарезервированное на диске, unix-секунды). Секунды нужны
+// на случай, если файл потерян или агент переехал: номер всё равно окажется выше
+// всего, что терминал видел сегодня, потому что прошлый агент стартовал раньше и
+// от меньшего основания. Файл при этом главнее: он точен, а секунды — оценка.
+func (b *Bridge) SetTransIDStore(path string) {
+	b.transPath = path
+	start := time.Now().Unix()
+	if raw, err := os.ReadFile(path); err == nil {
+		if v, errp := strconv.ParseInt(strings.TrimSpace(string(raw)), 10, 64); errp == nil && v > start {
+			start = v
+		}
+	}
+	b.transSeq.Store(start)
+	b.reserveTransIDs(start)
+}
+
+// reserveTransIDs записывает на диск верхнюю границу выданных номеров.
+func (b *Bridge) reserveTransIDs(from int64) {
+	b.transMu.Lock()
+	defer b.transMu.Unlock()
+	if from < b.transHigh.Load() {
+		return // другой поток уже зарезервировал дальше
+	}
+	high := from + transIDBlock
+	if b.transPath != "" {
+		tmp := b.transPath + ".tmp"
+		if err := os.WriteFile(tmp, []byte(strconv.FormatInt(high, 10)), 0o644); err == nil {
+			if err := os.Rename(tmp, b.transPath); err != nil {
+				b.logf("trans_id: не сохранил границу %d: %v", high, err)
+			}
+		} else {
+			b.logf("trans_id: не записал %s: %v", tmp, err)
+		}
+	}
+	b.transHigh.Store(high)
+}
+
 // NextTransID assigns a fresh, monotonically increasing TRANS_ID. QUIK TRANS_ID is a
 // positive integer; the manager uses it to correlate place/cancel with trans_reply
 // and order events.
-func (b *Bridge) NextTransID() int64 { return b.transSeq.Add(1) }
+func (b *Bridge) NextTransID() int64 {
+	v := b.transSeq.Add(1)
+	if b.transPath != "" && v >= b.transHigh.Load() {
+		b.reserveTransIDs(v)
+	}
+	return v
+}
 
 // Run binds the listener and accepts Lua connections until ctx is cancelled. It only
 // ever serves loopback. A new connection replaces any previous one. Run blocks; start

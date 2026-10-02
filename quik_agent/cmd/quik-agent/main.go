@@ -401,6 +401,10 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 	if cfg.TradeQueueDir != "" {
 		bridge.SetQueueDir(cfg.TradeQueueDir) // file-queue transport (no LuaSocket)
 	}
+	// Нумерация транзакций переживает перезапуск агента: терминал живёт дольше
+	// нас, а повторный TRANS_ID он игнорирует МОЛЧА (02.10.2026 это выключило
+	// торговлю целиком, см. SetTransIDStore).
+	bridge.SetTransIDStore(filepath.Join(opt.exeDir, "trans_id.txt"))
 	mgr := trade.NewManager(trade.ManagerConfig{
 		ClassCode: cfg.TradeClassCode,
 		Account:   tradeAccount,
