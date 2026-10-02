@@ -269,3 +269,44 @@ def test_delay_own_side_needs_next_bar_to_pass_tick():
     assert r["fills"][0][1:5] == ("sell", 1110, 1, "own")                             # прошёл на тик: 1111
     m, t = gs.costs_delay(r["fills"], "RIU6", gs.PV_RI)
     assert m < t
+
+
+# ── широкая многодневная сетка ───────────────────────────────────────────────────────────────────
+def _wbars(days, ci=None):
+    """days = [[(o, h, l, c), ...], ...]; день = DAY0 + 86400*i, бары с 10:00."""
+    out = []
+    for di, rows in enumerate(days):
+        for k, (o, h, lo, c) in enumerate(rows):
+            out.append([DAY0 + di * 86400 + (600 + k) * 60, o, h, lo, c, 1, (ci or [0] * len(days))[di]])
+    return out
+
+
+WSP = [{"key": "RIU6", "pv": 2.0, "margin": 1000.0}, {"key": "RIU6", "pv": 2.0, "margin": 1000.0}]
+WP = {**gs.DEFAULTS, "step": 100, "buys": 3, "sells": 3, "stop_pts": 0, "tick": 1.0, "half": 0.0, "lot": 1, "fill_pen": 1}
+
+
+def test_wide_position_lives_through_the_night():
+    bars = _wbars([[(1000, 1000, 1000, 1000), (1000, 1101, 1000, 1105)], [(1105, 1105, 1105, 1105)] * 2])
+    r = gs.simulate_wide(bars, {}, WSP, WP, 1000)
+    assert r["pos"] == [-1, -1]
+    assert r["last_pos"] == -1 and r["n_fills"] == 1 and r["realized"] == 0       # флэта нет, итог только MTM
+    assert r["eq_g"][0] == r["eq_g"][1] == (1100 - 1105) * 2.0
+
+
+def test_wide_roll_equity_continuous_and_fill_price_shifted():
+    a = [[(1000, 1000, 1000, 1000), (1000, 1101, 1000, 1105)], [(1105, 1105, 1105, 1105)] * 2]
+    b = [[(1205, 1205, 1205, 1205)] * 2, [(1205, 1301, 1205, 1250)] * 2]
+    bars = _wbars(a + b, ci=[0, 0, 1, 1])
+    r = gs.simulate_wide(bars, {4: 100.0}, WSP, WP, 1000)
+    assert r["eq_g"][2] == r["eq_g"][1] == -10.0                     # перенос не меняет P&L до издержек
+    # день 4: сдвинутый уровень 1300 (был 1200) исполняется продажей, а не 1200
+    assert r["n_fills"] == 1 + 2 + 1 and r["pos"][3] == -2
+    assert r["unit"][2] == r["unit"][1]                              # пассивный контроль не прыгает на смене
+
+
+def test_wide_stop_closes_and_ends():
+    bars = _wbars([[(1000, 1000, 1000, 1000), (1000, 1201, 1000, 1305), (1305, 1305, 1305, 1305)],
+                   [(500, 500, 500, 500)] * 3])
+    r = gs.simulate_wide(bars, {}, WSP, {**WP, "buys": 2, "sells": 2, "stop_pts": 100}, 1000)
+    assert r["stop_ts"] is not None and r["last_pos"] == 0 and r["n_fills"] == 3          # 2 продажи + закрытие позиции 2
+    assert r["max_pos"] == 2 and r["eq_g"][1] == r["eq_g"][0]                                  # после стопа сетка не работает

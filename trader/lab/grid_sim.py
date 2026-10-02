@@ -788,6 +788,223 @@ def run_delay(arg: dict) -> dict:
         out["configs"].append(item)
     return out
 
+
+# ── широкая многодневная сетка (docs/grid-radiation-wide-2026.md) ────────────────────────────────
+def _shift_grid(g: _Grid, d: float) -> None:
+    """Смена контракта: уровни и стоп сдвигаются на разницу цен контрактов."""
+    g.px = {k: v + d for k, v in g.px.items()}
+    if g.lo:
+        g.lo += d
+    if g.hi:
+        g.hi += d
+    g.so.g_base += d
+    g._rebuild()
+
+
+def _fee_rows(fills: list, symbol: str, pv: float) -> list:
+    """[(ts, fee_maker, fee_taker)] по филлам: мейкер-граница только на лимитных филлах уровней
+    (брокер), прочие (перенос, стоп) тейкер; тейкер-граница все филлы тейкер."""
+    from trader.lab.commission import commission_for
+    out = []
+    for ts, _s, price, qty, kind in fills:
+        t = commission_for(symbol, price, qty, pv, taker=True, ts=ts)
+        m = commission_for(symbol, price, qty, pv, taker=False, ts=ts) if kind == "level" else t
+        out.append((ts, m, t))
+    return out
+
+
+def simulate_wide(bars: list, rolls: dict, specs: list, p: dict, center: float) -> dict:
+    """Многодневная сетка без дневного флэта. bars = [ts,o,h,l,c,v,cidx] от бара старта до конца окна, rolls =
+    {индекс первого бара нового контракта: разница цен new-old}, specs[cidx] = {key, pv, margin}.
+    p: step (пт), buys, sells, stop_pts, tick, half, fill_pen, lot. Сетка стоит от бара 0 (цена = open) вокруг center.
+    Смена контракта: позиция закрывается в старом по его последней цене и открывается в новом по цене нового
+    контракта с полспреда против (стоимость переноса = полспреда + две комиссии), уровни и стоп сдвигаются на
+    разницу цен. Стоп (close за краем стопа) закрывает позицию по open следующего бара с полспреда и завершает
+    сетку; далее только учёт по дням."""
+    n, hs = len(bars), p["half"]
+    g = _Grid(center, p)
+    g.px = {k: round(v / p["tick"]) * p["tick"] for k, v in g.px.items()}
+    g.side = {k: None for k in g.levels}
+    g.pending = True
+    last = bars[0][1]
+    g.place(last)
+    st = _new_state()
+    segs = [(st, specs[bars[0][6]])]
+    cur, alive, stop_ts = bars[0][6], True, None
+    daily, unit_cum, ref, go_max, sumpos, nb = [], 0.0, last, 0.0, 0.0, 0
+    cur_day = _day_iso(bars[0][0])
+
+    def gross():
+        return sum(sum(s["trades_pnl"]) * sp["pv"] for s, sp in segs) + st["pos"] * (last - st["avg"]) * segs[-1][1]["pv"]
+
+    for j in range(n):
+        ts, o, h, lw, c, _v, ci = bars[j]
+        if ci != cur:
+            basis = rolls[j]
+            pos = st["pos"]
+            last_new = last + basis
+            if alive:
+                st_new = _new_state()
+                if pos:
+                    _apply(st, "sell" if pos > 0 else "buy", last, abs(pos), ts, "roll")
+                    _apply(st_new, "buy" if pos > 0 else "sell", last_new + hs if pos > 0 else last_new - hs,
+                           abs(pos), ts, "roll")
+                st_new["max_pos"] = abs(pos)
+                _shift_grid(g, basis)
+            else:
+                st_new = _new_state()
+            segs.append((st_new, specs[ci]))
+            st, cur, last, ref = st_new, ci, last_new, ref + basis
+        d = _day_iso(ts)
+        if d != cur_day:
+            cur_day, ref = d, last
+        if alive:
+            if g.pending:
+                g.place(last)
+            if not (not g.pending and h < (g.sell_t[0] if g.sell_t else math.inf)
+                    and lw > (g.buy_t[-1] if g.buy_t else -math.inf)):
+                path = [o, lw, h, c] if c >= o else [o, h, lw, c]
+                a = last
+                for b in [o] + path[1:]:
+                    _segment(g, st, a, b, ts)
+                    a = b
+            go_max = max(go_max, st["max_pos"] * segs[-1][1]["margin"])
+            last = c
+            sumpos += abs(st["pos"])
+            nb += 1
+            if g.so.g_stop_pts > 0 and ((g.lo and c <= g.lo) or (g.hi and c >= g.hi)):
+                if st["pos"]:
+                    nxt = bars[j + 1] if j + 1 < n and bars[j + 1][6] == cur else None
+                    px = nxt[1] if nxt else c
+                    _flat(st, px - hs if st["pos"] > 0 else px + hs, nxt[0] if nxt else ts, "stop")
+                alive, stop_ts = False, ts
+        else:
+            last = c
+            nb += 1
+        if j == n - 1 or _day_iso(bars[j + 1][0]) != d:
+            unit_cum += (c - ref) * segs[-1][1]["pv"]
+            daily.append((d, gross(), st["pos"], unit_cum, ts))
+    fills = []
+    fee = []
+    for s, sp in segs:
+        fee += _fee_rows(s["fills"], sp["key"], sp["pv"])
+        fills += s["fills"]
+    cm, ct, di = [], [], 0
+    fee.sort()
+    acc_m = acc_t = 0.0
+    for d, _g, _p, _u, tsd in daily:
+        while di < len(fee) and fee[di][0] <= tsd:
+            acc_m, acc_t, di = acc_m + fee[di][1], acc_t + fee[di][2], di + 1
+        cm.append(round(acc_m, 2))
+        ct.append(round(acc_t, 2))
+    realized = sum(sum(s["trades_pnl"]) * sp["pv"] for s, sp in segs)
+    return {"dates": [x[0] for x in daily], "eq_g": [round(x[1], 2) for x in daily], "pos": [x[2] for x in daily],
+            "unit": [round(x[3], 2) for x in daily], "fee_m": cm, "fee_t": ct,
+            "realized": round(realized, 2), "mtm": round(daily[-1][1], 2), "rounds": sum(len(s["trades_pnl"]) for s, _ in segs),
+            "max_pos": max(s["max_pos"] for s, _ in segs), "go_max": round(go_max, 2), "stop_ts": stop_ts,
+            "mean_pos": sumpos / max(1, nb), "n_fills": len(fills),
+            "roll_fills": sum(1 for f in fills if f[4] == "roll"), "last_pos": st["pos"]}
+
+
+def prep_wide(contracts: list, end_iso: str, load) -> dict:
+    """Загрузка контрактов, расписание активного контракта по дням (монотонно, смена когда следующий не меньше
+    по дневному объёму или у текущего нет баров), разницы цен контрактов на сменах. contracts = [{key, lo, hi, spec}]
+    (lo/hi ISO-даты окна активности псевдоконтракта). load(key) -> бары [ts,o,h,l,c,v]."""
+    from bisect import bisect_right
+    cache, rows = {}, []
+    for c in contracts:
+        if c["key"] not in cache:
+            cache[c["key"]] = load(c["key"])
+        r = [x for x in cache[c["key"]] if _day_iso(x[0]) >= "2026-01-01" and _day_iso(x[0]) <= end_iso
+             and (not c.get("lo") or _day_iso(x[0]) >= c["lo"]) and (not c.get("hi") or _day_iso(x[0]) < c["hi"])]
+        rows.append(sorted(r, key=lambda x: x[0]))
+    byday = []
+    for r in rows:
+        d: dict = {}
+        for x in r:
+            d.setdefault(_day_iso(x[0]), []).append(x)
+        byday.append(d)
+    days = sorted({d for bd in byday for d in bd})
+    a, bars, rolls, notes = 0, [], {}, []
+    prev_last = None
+    for d in days:
+        while a + 1 < len(rows) and d in byday[a + 1] and (d not in byday[a] or
+                                                           sum(x[5] for x in byday[a + 1][d]) >= sum(x[5] for x in byday[a][d])):
+            a += 1
+        if d not in byday[a]:
+            continue
+        day_bars = byday[a][d]
+        if prev_last is not None and prev_last[1] != a:
+            oldts, olda, oldc = prev_last[0], prev_last[1], prev_last[2]
+            full = cache[contracts[a]["key"]]
+            tss = [x[0] for x in full]
+            i = bisect_right(tss, oldts) - 1
+            if i >= 0 and oldts - full[i][0] <= 1800:
+                basis, mode = full[i][4] - oldc, "overlap"
+            else:
+                basis, mode = day_bars[0][1] - oldc, "jump"
+            rolls[len(bars)] = basis
+            notes.append({"date": d, "from": contracts[olda]["key"], "to": contracts[a]["key"], "basis": round(basis, 4), "mode": mode})
+        for x in day_bars:
+            bars.append([x[0], x[1], x[2], x[3], x[4], x[5], a])
+        prev_last = (day_bars[-1][0], a, day_bars[-1][4])
+    return {"bars": bars, "rolls": rolls, "notes": notes}
+
+
+def run_wide(arg: dict) -> dict:
+    """mode=wide: instrument, contracts [{key, lo, hi, spec{key,pv,margin,tick}}], starts [ISO], centers [1,2],
+    ns, stops (доли H), end ISO. Возвращает по каждому старту H, расписание контрактов и конфигурации."""
+    from datetime import date as _d, timedelta
+    from trader.lab.footprints import common
+    end = arg.get("end", "2026-09-30")
+    contracts = arg["contracts"]
+    specs = [c["spec"] for c in contracts]
+    pw = prep_wide(contracts, end, lambda k: common.load_bars(k, "2026-01-01", end))
+    bars, rolls = pw["bars"], pw["rolls"]
+    if not bars:
+        return {"id": "WIDE", "instrument": arg["instrument"], "error": "нет баров"}
+    tick = specs[0]["tick"]
+    out = {"id": "WIDE", "instrument": arg["instrument"], "notes": pw["notes"], "data_first": _day_iso(bars[0][0]),
+           "data_last": _day_iso(bars[-1][0]), "starts": []}
+    for sd in arg["starts"]:
+        s = next((i for i, b in enumerate(bars) if _day_iso(b[0]) >= sd and _minute(b[0]) >= 600), None)
+        item = {"start": sd}
+        if s is None or _d.fromisoformat(_day_iso(bars[s][0])) - _d.fromisoformat(sd) > timedelta(days=5):
+            item["error"] = "нет баров на старте"
+            out["starts"].append(item)
+            continue
+        hist = bars[:s]
+        if len(hist) < 500:
+            item["error"] = "нет истории окна высоты"
+            out["starts"].append(item)
+            continue
+        adj, acc = [0.0] * s, 0.0
+        for j in range(s - 1, -1, -1):
+            if j + 1 in rolls and j + 1 < s:
+                acc += rolls[j + 1]
+            adj[j] = acc
+        # сдвиг контракта на стыке истории и старта (бар s может быть первым нового контракта)
+        if s in rolls:
+            adj = [a + rolls[s] for a in adj]
+        hi_ = max(b[2] + a for b, a in zip(hist, adj))
+        lo_ = min(b[3] + a for b, a in zip(hist, adj))
+        H = hi_ - lo_
+        item.update({"H": H, "hmax": hi_, "hmin": lo_, "hist_first": _day_iso(hist[0][0]), "hist_days": len({_day_iso(b[0]) for b in hist}),
+                     "price0": bars[s][1], "start_bar_day": _day_iso(bars[s][0]), "configs": []})
+        sub = bars[s:]
+        sub_rolls = {j - s: v for j, v in rolls.items() if j > s}
+        for cc in arg["centers"]:
+            ctr = (hi_ + lo_) / 2 if cc == 1 else sub[0][1]
+            for nn in arg["ns"]:
+                for sf in arg["stops"]:
+                    p = {**DEFAULTS, "step": H / (2 * nn), "buys": nn, "sells": nn, "stop_pts": sf * H, "tick": tick,
+                         "half": tick / 2, "lot": 1, "fill_pen": 1}
+                    r = simulate_wide(sub, sub_rolls, specs, p, ctr)
+                    # пассивный контроль: средний объём сетки, цена от старта до конца
+                    item["configs"].append({"c": cc, "n": nn, "s": sf, **r})
+        out["starts"].append(item)
+    return out
+
 # ── сетка документа и живой набор ────────────────────────────────────────────
 STEPS = (50, 100, 150, 200, 300, 400, 600)
 LEVELS = (2, 3, 5, 8, 12)
@@ -831,6 +1048,8 @@ def run(arg: dict) -> dict:
         return run_regime(arg)
     if str(arg.get("mode", "")).startswith("delay"):
         return run_delay(arg)
+    if str(arg.get("mode", "")).startswith("wide"):
+        return run_wide(arg)
     from trader.lab.footprints import common
     key = arg["symbol_key"]
     rows = common.load_bars(key, arg.get("since"), arg.get("until"))
