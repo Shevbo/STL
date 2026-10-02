@@ -1704,7 +1704,8 @@ def _grid_count_fill(so: SmartOrder, live: dict, level: int, side_was: str,
 
 def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
                agent: str, steps: dict[str, float],
-               price_limits: dict[str, tuple[float, float]], now: int) -> bool:
+               price_limits: dict[str, tuple[float, float]], now: int,
+               session_open: bool | None = None) -> bool:
     """Держать сетку выставленной: доставить недостающие уровни, перевернуть
     исполненные, снять всё при стопе."""
     dirty = False
@@ -1960,6 +1961,34 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
             # агента. Нет живой строки на этой цене — ставим; есть — уровень уже
             # стоит, и второй не нужен. Зеркала нет вовсе — это «НЕ ЗНАЮ», и
             # ставить вслепую нельзя (отличать от пустой таблицы обязательно).
+            # БИРЖА НЕ ТОРГУЕТ — НЕ СТАВИМ. Гейт стоит на ПОСТАНОВКЕ и только на
+            # ней: учёт филлов и снятие экспозиции запрещать нельзя никогда.
+            #
+            # 02.10.2026 этого гейта не было, и ночью после закрытия вечерней сессии
+            # сетка молотила постановками в закрытую биржу: восемь отказов брокера
+            # «[GW][3] Сейчас эта сессия не идёт», защита от зацикливания остановила
+            # источник, записи уровней ушли в expired — и сетка простояла до 07:00.
+            # Брокер берёт деньги за транзакции сверх лимита частоты, так что это не
+            # только простой.
+            #
+            # АУКЦИОН ОТКРЫТИЯ ТОРГАМИ НЕ ЯВЛЯЕТСЯ (market_session._TRADING_TYPES), и
+            # это ровно то, что нужно: в аукционе биржа принимает НЕ ВСЁ (оператор,
+            # 02.10: «на этапе аукциона заявки принимаются только лонговые»), поэтому
+            # половина сетки была бы отбита. Не ставим в аукционе ничего — и не надо
+            # разбираться, что именно он примет. Разрешать здесь аукцион нельзя.
+            #
+            # `None` = расписания нет: это «НЕ ЗНАЮ», и оно тоже запрещает.
+            if session_open is not True:
+                if live.get(f"closed:{level}") != 1:
+                    live[f"closed:{level}"] = 1
+                    dirty = True
+                    so_journal.record(
+                        "held", so, so_journal.WATCHER,
+                        f"уровень {level:+d} не выставлен: биржа не торгует "
+                        f"(расписание: {'неизвестно' if session_open is None else 'закрыто'})",
+                        now_ms=now)
+                continue
+            live.pop(f"closed:{level}", None)
             if term_live is None:
                 if live.get(f"blind:{level}") != 1:
                     live[f"blind:{level}"] = 1
@@ -2098,7 +2127,8 @@ def _wall_count_fill(so: SmartOrder, live: dict, wall: str, side_was: str,
 def _walls_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
                 agent: str, steps: dict[str, float],
                 price_limits: dict[str, tuple[float, float]], now: int,
-                schedule: dict | None = None) -> bool:
+                schedule: dict | None = None,
+                session_open: bool | None = None) -> bool:
     """Держать заявки коридора и треугольника В СТАКАНЕ, на обеих стенках.
 
     До 30.09.2026 сторож ждал касания и стрелял в тот же миг — то есть вставал в
@@ -2280,6 +2310,19 @@ def _walls_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
             # живая заявка выглядела отсутствующей и ставилась ВТОРОЙ. Заявке в QUIK
             # пережить 90 с ничего не стоит — она живёт сутками. Таблица заявок
             # терминала живёт в QUIK и переживает рестарт и STL, и агента.
+            # Биржа не торгует — не ставим; аукцион торгами не является (см. тот же
+            # гейт в сетке). None = «не знаю», тоже запрет.
+            if session_open is not True:
+                if live.get(f"closed:{wall}") != 1:
+                    live[f"closed:{wall}"] = 1
+                    dirty = True
+                    so_journal.record(
+                        "held", so, so_journal.WATCHER,
+                        f"стенка {wall} не выставлена: биржа не торгует "
+                        f"(расписание: {'неизвестно' if session_open is None else 'закрыто'})",
+                        now_ms=now)
+                continue
+            live.pop(f"closed:{wall}", None)
             if term_live is None:
                 if live.get(f"warm:{wall}") != 1:
                     live[f"warm:{wall}"] = 1
@@ -2437,23 +2480,24 @@ async def _watch_once(state: Any) -> None:
     if _escalate_native_child(book, store, srv, lim, agent,
                               _stop_rows_by_tag(store, agent), so_mod.now_ms()):
         book.save()
+    # ТОРГУЕТ ЛИ БИРЖА — по оракулу расписания, не по свежести кадра. Считается
+    # ЗДЕСЬ, до проходов: заявки в стакан ставят они, и им это знать обязательно.
+    session_open = (getattr(state, "market_session", None) or {}).get("open")
     # Сетка: доставить недостающие уровни, перевернуть исполненные, снять по стопу.
     _limits_now = _price_limits(store, agent)
     if _grid_sync(book, store, ost, srv, lim, agent, steps,
-                  _limits_now, so_mod.now_ms()):
+                  _limits_now, so_mod.now_ms(), session_open):
         book.save()
     # Коридор и треугольник — тоже в стакан: заявка на стенке стоит заранее и
     # переставляется вслед за линией.
     if _walls_sync(book, store, ost, srv, lim, agent, steps, _limits_now,
-                   so_mod.now_ms(), getattr(state, "market_schedule", None)):
+                   so_mod.now_ms(), getattr(state, "market_schedule", None),
+                   session_open):
         book.save()
     filled = {d["client_id"] for d in ost.working_orders(agent)
               if d.get("state") == "filled"}
     now = so_mod.now_ms()
     dirty = False
-
-    # Торгует ли биржа ПРЯМО СЕЙЧАС — по оракулу расписания, не по свежести кадра.
-    session_open = (getattr(state, "market_session", None) or {}).get("open")
 
     # КАРАНТИН ПОСЛЕ СЛЕПОТЫ. 25.09.2026 связь вернулась после трёх часов тишины,
     # и через одиннадцать минут сторож купил 20 контрактов по уровню, пройденному

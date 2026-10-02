@@ -206,7 +206,7 @@ def test_no_grid_order_ever_crosses_the_market(tmp_path, market):
     book, so = _gbook(tmp_path)
     srv = GSrv()
     _grid_sync(book, _gstore(float(market)), GOst(), srv, GLim(), "9618",
-               GSTEPS, {}, GNOW)
+               GSTEPS, {}, GNOW, True)
     placed = [m.place_order for m in srv.sent
               if m.WhichOneof("payload") == "place_order"]
     # ИНВАРИАНТ, ВЫПОЛНЕННЫЙ ПУСТОТОЙ, НИЧЕГО НЕ ДОКАЗЫВАЕТ. Уровни сетки покрывают
@@ -233,7 +233,7 @@ def test_grid_places_nothing_without_a_quote(tmp_path):
 
     book, _ = _gbook(tmp_path)
     srv = GSrv()
-    _grid_sync(book, Blind(), GOst(), srv, GLim(), "9618", GSTEPS, {}, GNOW)
+    _grid_sync(book, Blind(), GOst(), srv, GLim(), "9618", GSTEPS, {}, GNOW, True)
     placed = [m for m in srv.sent if m.WhichOneof("payload") == "place_order"]
     assert placed == [], "вслепую сетка не выставляется"
 
@@ -252,7 +252,7 @@ def test_fill_extinguishes_its_level_and_revives_the_neighbour(tmp_path):
     ost.working_orders = lambda agent=None: [
         {"client_id": "so:x:gm1", "order_id": "11", "state": "filled",
          "filled": 1, "remaining": 0, "price": 85000.0}]
-    _grid_sync(book, _gstore(85000.0), ost, srv, GLim(), "9618", GSTEPS, {}, GNOW)
+    _grid_sync(book, _gstore(85000.0), ost, srv, GLim(), "9618", GSTEPS, {}, GNOW, True)
 
     assert so.g_live.get("flip:-1") is True, "исполненный уровень обязан погаснуть"
     assert "flip:-2" not in so.g_live, "сосед обязан вернуться после филла рядом"
@@ -281,7 +281,7 @@ def test_level_filled_this_pass_is_not_replaced_in_the_same_pass(tmp_path):
         {"client_id": "so:x:gp1", "order_id": "11", "state": "filled",
          "filled": 1, "remaining": 0, "price": lvl_price}]
     # рынок НИЖЕ уровня: продажа на нём законна и ничего другого её не блокирует
-    _grid_sync(book, _gstore(lvl_price - 50), ost, srv, GLim(), "9618", GSTEPS, {}, GNOW)
+    _grid_sync(book, _gstore(lvl_price - 50), ost, srv, GLim(), "9618", GSTEPS, {}, GNOW, True)
 
     again = [m.place_order for m in srv.sent
              if m.WhichOneof("payload") == "place_order"
@@ -310,7 +310,7 @@ def test_fill_side_comes_from_the_order_not_from_the_current_price(tmp_path):
         {"client_id": "so:x:gp1", "order_id": "11", "state": "filled",
          "side": "sell", "filled": 1, "remaining": 0, "price": 85100.0}]
     # рынок УШЁЛ ВЫШЕ уровня: по текущей цене уровень выглядел бы покупкой
-    _grid_sync(book, _gstore(85300.0), ost, srv, GLim(), "9618", GSTEPS, {}, GNOW)
+    _grid_sync(book, _gstore(85300.0), ost, srv, GLim(), "9618", GSTEPS, {}, GNOW, True)
     assert so.g_pos == -1, (
         f"позиция {so.g_pos:+d}: сторона взята из рынка, а не из исполненной заявки")
 
@@ -336,7 +336,7 @@ def test_level_standing_in_the_terminal_is_not_placed_twice(tmp_path):
         _gterm_row("701", "buy", px, tag=f"stl-so-{so.so_id}")])
     srv = GSrv()
     # ни книга, ни склад заявок о заявке не знают — состояние после рестарта
-    _grid_sync(book, store, GOst(), srv, GLim(), "9618", GSTEPS, {}, GNOW)
+    _grid_sync(book, store, GOst(), srv, GLim(), "9618", GSTEPS, {}, GNOW, True)
 
     dup = [m.place_order for m in srv.sent
            if m.WhichOneof("payload") == "place_order"
@@ -361,7 +361,7 @@ def test_grid_places_nothing_when_the_terminal_table_is_unknown(tmp_path):
 
     book, _ = _gbook(tmp_path)
     srv = GSrv()
-    _grid_sync(book, NoMirror(), GOst(), srv, GLim(), "9618", GSTEPS, {}, GNOW)
+    _grid_sync(book, NoMirror(), GOst(), srv, GLim(), "9618", GSTEPS, {}, GNOW, True)
     assert [m for m in srv.sent if m.WhichOneof("payload") == "place_order"] == [],         "без таблицы заявок терминала сетка не ставит ничего"
 
 
@@ -376,7 +376,7 @@ def test_another_smart_orders_level_at_the_same_price_is_not_adopted(tmp_path):
         _gterm_row("703", "buy", px, tag=""),
     ])
     srv = GSrv()
-    _grid_sync(book, store, GOst(), srv, GLim(), "9618", GSTEPS, {}, GNOW)
+    _grid_sync(book, store, GOst(), srv, GLim(), "9618", GSTEPS, {}, GNOW, True)
     mine = [m.place_order for m in srv.sent
             if m.WhichOneof("payload") == "place_order"
             and abs(m.place_order.price - px) < 1e-6]
@@ -400,7 +400,7 @@ def test_grid_stop_withdraws_orders_nobody_remembers(tmp_path):
         _gterm_row("803", "sell", 85100.0, tag=""),   # чужая: не трогаем
     ])
     srv = GSrv()
-    _grid_sync(book, store, GOst(), srv, GLim(), "9618", GSTEPS, {}, GNOW)
+    _grid_sync(book, store, GOst(), srv, GLim(), "9618", GSTEPS, {}, GNOW, True)
     assert so.g_done is True and so.status == "cancelled"
     nums = sorted(m.cancel_order.order_id for m in srv.sent
                   if m.WhichOneof("payload") == "cancel_order")
@@ -430,7 +430,7 @@ def test_a_fill_of_an_adopted_level_is_caught_up_from_the_table(tmp_path):
     store_rows = store.agent_status()["quik"]["orders"]
     store_rows[0]["balance"] = 0                      # налилась целиком
     srv = GSrv()
-    _grid_sync(book, store, GOst(), srv, GLim(), "9618", GSTEPS, {}, GNOW)
+    _grid_sync(book, store, GOst(), srv, GLim(), "9618", GSTEPS, {}, GNOW, True)
 
     assert so.g_pos == 1, f"позиция {so.g_pos:+d}: филл подхваченного уровня не учтён"
     assert so.g_live.get("flip:-1") is True, "исполненный уровень обязан погаснуть"
@@ -448,7 +448,7 @@ def test_an_adopted_level_row_gone_from_the_table_is_reported(tmp_path):
     book, so = _gbook(tmp_path)
     so.g_live = {"adopt:-1": {"num": "999"}}
     srv = GSrv()
-    _grid_sync(book, _gstore(85000.0), GOst(), srv, GLim(), "9618", GSTEPS, {}, GNOW)
+    _grid_sync(book, _gstore(85000.0), GOst(), srv, GLim(), "9618", GSTEPS, {}, GNOW, True)
     assert so.g_pos == 0, "сколько налилось — неизвестно, не выдумываем"
     assert "adopt:-1" not in so.g_live
 
@@ -471,7 +471,7 @@ def _stopped_grid(tmp_path, pos):
 def test_grid_stop_closes_the_position_at_market(tmp_path):
     book, so = _stopped_grid(tmp_path, pos=-3)
     srv = GSrv()
-    _grid_sync(book, _gstore(84000.0), GOst(), srv, GLim(), "9618", GSTEPS, {}, GNOW)
+    _grid_sync(book, _gstore(84000.0), GOst(), srv, GLim(), "9618", GSTEPS, {}, GNOW, True)
 
     mkt = [m.place_order for m in srv.sent
            if m.WhichOneof("payload") == "place_order" and m.place_order.market]
@@ -487,7 +487,7 @@ def test_grid_stop_closes_the_position_at_market(tmp_path):
 def test_grid_stop_closes_a_long_by_selling(tmp_path):
     book, so = _stopped_grid(tmp_path, pos=4)
     srv = GSrv()
-    _grid_sync(book, _gstore(84000.0), GOst(), srv, GLim(), "9618", GSTEPS, {}, GNOW)
+    _grid_sync(book, _gstore(84000.0), GOst(), srv, GLim(), "9618", GSTEPS, {}, GNOW, True)
     mkt = [m.place_order for m in srv.sent
            if m.WhichOneof("payload") == "place_order" and m.place_order.market]
     assert mkt and mkt[0].side == 2 and mkt[0].quantity == 4
@@ -496,7 +496,7 @@ def test_grid_stop_closes_a_long_by_selling(tmp_path):
 def test_grid_stop_with_no_position_just_finishes(tmp_path):
     book, so = _stopped_grid(tmp_path, pos=0)
     srv = GSrv()
-    _grid_sync(book, _gstore(84000.0), GOst(), srv, GLim(), "9618", GSTEPS, {}, GNOW)
+    _grid_sync(book, _gstore(84000.0), GOst(), srv, GLim(), "9618", GSTEPS, {}, GNOW, True)
     assert [m for m in srv.sent if m.WhichOneof("payload") == "place_order"] == []
     assert so.status == "cancelled" and so.g_done is True
 
@@ -509,7 +509,7 @@ def test_the_close_is_confirmed_by_the_fill_not_by_the_send(tmp_path):
     ost.working_orders = lambda agent=None: [
         {"client_id": "so:x:stopclose:1", "order_id": "9", "state": "filled",
          "side": "buy", "filled": 3, "remaining": 0, "price": 84010.0}]
-    _grid_sync(book, _gstore(84000.0), ost, GSrv(), GLim(), "9618", GSTEPS, {}, GNOW)
+    _grid_sync(book, _gstore(84000.0), ost, GSrv(), GLim(), "9618", GSTEPS, {}, GNOW, True)
     assert so.g_pos == 0 and so.status == "cancelled"
 
 
@@ -525,7 +525,7 @@ def test_a_close_that_fills_nothing_screams_instead_of_saying_cancelled(tmp_path
     ost.working_orders = lambda agent=None: [
         {"client_id": "so:x:stopclose:1", "order_id": "9", "state": "cancelled",
          "side": "buy", "filled": 0, "remaining": 0, "price": 0.0}]
-    _grid_sync(book, _gstore(84000.0), ost, GSrv(), GLim(), "9618", GSTEPS, {}, GNOW)
+    _grid_sync(book, _gstore(84000.0), ost, GSrv(), GLim(), "9618", GSTEPS, {}, GNOW, True)
     assert so.status == "error", "сетка с незакрытой позицией не «снята», а ошибка"
     assert so.g_pos == -3, "ничего не выдумываем: исполнения не было"
     assert "БЕЗ ЗАЩИТЫ" in so.note
@@ -539,7 +539,7 @@ def test_a_partial_close_keeps_screaming_about_the_remainder(tmp_path):
     ost.working_orders = lambda agent=None: [
         {"client_id": "so:x:stopclose:1", "order_id": "9", "state": "cancelled",
          "side": "buy", "filled": 2, "remaining": 0, "price": 84010.0}]
-    _grid_sync(book, _gstore(84000.0), ost, GSrv(), GLim(), "9618", GSTEPS, {}, GNOW)
+    _grid_sync(book, _gstore(84000.0), ost, GSrv(), GLim(), "9618", GSTEPS, {}, GNOW, True)
     assert so.g_pos == -1 and so.status == "error"
 
 
@@ -551,7 +551,7 @@ def test_a_close_still_working_is_left_alone(tmp_path):
     ost.working_orders = lambda agent=None: [
         {"client_id": "so:x:stopclose:1", "order_id": "9", "state": "partial",
          "side": "buy", "filled": 1, "remaining": 2, "price": 84010.0}]
-    _grid_sync(book, _gstore(84000.0), ost, GSrv(), GLim(), "9618", GSTEPS, {}, GNOW)
+    _grid_sync(book, _gstore(84000.0), ost, GSrv(), GLim(), "9618", GSTEPS, {}, GNOW, True)
     assert so.status == "closing", "ещё наливается — вердикта нет"
 
 
@@ -561,7 +561,7 @@ def test_the_grid_closes_only_its_own_position(tmp_path):
     бы закрыть чужое."""
     book, so = _stopped_grid(tmp_path, pos=-3)
     srv = GSrv()
-    _grid_sync(book, _gstore(84000.0), GOst(), srv, GLim(), "9618", GSTEPS, {}, GNOW)
+    _grid_sync(book, _gstore(84000.0), GOst(), srv, GLim(), "9618", GSTEPS, {}, GNOW, True)
     mkt = [m.place_order for m in srv.sent
            if m.WhichOneof("payload") == "place_order" and m.place_order.market]
     assert mkt[0].quantity == 3, "ровно позиция сетки, а не нетто счёта"
@@ -586,7 +586,7 @@ def test_an_adopted_level_is_accounted_by_exactly_one_path(tmp_path):
     so.g_live = {"-1": "so:x:gm1:777"}
     store = _gstore(85000.0, [
         _gterm_row("701", "buy", px, qty=1, tag="stl-so-" + so.so_id)])
-    _grid_sync(book, store, GOst(), GSrv(), GLim(), "9618", GSTEPS, {}, GNOW)
+    _grid_sync(book, store, GOst(), GSrv(), GLim(), "9618", GSTEPS, {}, GNOW, True)
     assert so.g_live.get("adopt:-1") == {"num": "701"}, "уровень подхвачен"
     assert "-1" not in so.g_live, (
         "устаревший client_id обязан уйти: иначе филл посчитают И склад, И таблица")
@@ -599,7 +599,7 @@ def test_an_adopted_level_is_accounted_by_exactly_one_path(tmp_path):
     ost.working_orders = lambda agent=None: [
         {"client_id": "so:x:gm1:777", "order_id": "701", "state": "filled",
          "side": "buy", "filled": 1, "remaining": 0, "price": px}]
-    _grid_sync(book, store, ost, GSrv(), GLim(), "9618", GSTEPS, {}, GNOW + 5000)
+    _grid_sync(book, store, ost, GSrv(), GLim(), "9618", GSTEPS, {}, GNOW + 5000, True)
     assert so.g_pos == 1, (
         f"позиция {so.g_pos:+d}: филл посчитан дважды — ровно баг 02.10")
     assert so.g_live.get("flip:-1") is True, "уровень обязан погаснуть один раз"
@@ -616,7 +616,7 @@ def test_an_adopted_wall_is_accounted_by_exactly_one_path(tmp_path):
     store = FakeStore([_term_row("991", "RIZ6", "sell", 85000.0, qty=10,
                                  tag=f"stl-so-{so.so_id}")])
     _walls_sync(book, store, FakeOst(), FakeSrv(), Lim(), "9618", {"RIZ6": 10.0},
-                {}, NOW)
+                {}, NOW, None, True)
     assert so.c_live.get("adopt:top") == {"num": "991"}
     assert "top" not in so.c_live, "устаревший client_id обязан уйти"
 
@@ -642,7 +642,7 @@ def test_an_expired_record_does_not_count_as_a_standing_level(tmp_path):
         {"client_id": "so:x:gm1:1", "order_id": "", "state": "expired",
          "remaining": 1, "filled": 0, "price": px}]
     srv = GSrv()
-    _grid_sync(book, _gstore(85000.0), ost, srv, GLim(), "9618", GSTEPS, {}, GNOW)
+    _grid_sync(book, _gstore(85000.0), ost, srv, GLim(), "9618", GSTEPS, {}, GNOW, True)
     placed = [m.place_order for m in srv.sent
               if m.WhichOneof("payload") == "place_order"
               and abs(m.place_order.price - px) < 1e-6]
@@ -662,7 +662,7 @@ def test_every_non_working_state_frees_the_level(tmp_path):
             {"client_id": "so:x:gm1:1", "order_id": "", "state": _s,
              "remaining": 1, "filled": 0, "price": px}]
         srv = GSrv()
-        _grid_sync(book, _gstore(85000.0), ost, srv, GLim(), "9618", GSTEPS, {}, GNOW)
+        _grid_sync(book, _gstore(85000.0), ost, srv, GLim(), "9618", GSTEPS, {}, GNOW, True)
         got = [m for m in srv.sent if m.WhichOneof("payload") == "place_order"
                and abs(m.place_order.price - px) < 1e-6]
         assert got, f"состояние {state!r}: заявки в рынке нет, а уровень не выставлен"
@@ -676,7 +676,90 @@ def test_every_non_working_state_frees_the_level(tmp_path):
             {"client_id": "so:x:gm1:1", "order_id": "11", "state": _s,
              "remaining": 1, "filled": 0, "price": px}]
         srv = GSrv()
-        _grid_sync(book, _gstore(85000.0), ost, srv, GLim(), "9618", GSTEPS, {}, GNOW)
+        _grid_sync(book, _gstore(85000.0), ost, srv, GLim(), "9618", GSTEPS, {}, GNOW, True)
         got = [m for m in srv.sent if m.WhichOneof("payload") == "place_order"
                and abs(m.place_order.price - px) < 1e-6]
         assert not got, f"состояние {state!r}: заявка работает, второй быть не должно"
+
+
+# --------------------------------------------------------------------------
+# БИРЖА НЕ ТОРГУЕТ — НЕ СТАВИМ. Требование оператора 02.10.2026: «заявки надо
+# выставлять не в 6:45, а в 7 утра», и отдельно — «на этапе аукциона заявки
+# принимаются только лонговые».
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("session_open", [False, None])
+def test_nothing_is_placed_while_the_exchange_is_not_trading(tmp_path, session_open):
+    """Гейт на ПОСТАНОВКЕ, по оракулу расписания.
+
+    02.10.2026 гейта не было: ночью после закрытия вечерней сессии сетка молотила
+    постановками в закрытую биржу — восемь отказов «[GW][3] Сейчас эта сессия не
+    идёт», защита от зацикливания остановила источник, записи ушли в expired, и
+    сетка простояла до 07:00. Брокер берёт деньги за транзакции сверх лимита
+    частоты, так что это не только простой.
+
+    `False` — закрыто, `None` — расписания нет. Второе тоже запрещает: «не знаю»
+    это не «можно».
+    """
+    book, so = _gbook(tmp_path / f"s{session_open}")
+    srv = GSrv()
+    _grid_sync(book, _gstore(85000.0), GOst(), srv, GLim(), "9618", GSTEPS, {},
+               GNOW, session_open)
+    assert [m for m in srv.sent if m.WhichOneof("payload") == "place_order"] == [],         "биржа не торгует — ни одной заявки уходить не должно"
+    # Проверяем ИНВАРИАНТ, а не конкретный уровень: уровень 0 стоит ровно на цене
+    # и отсекается проверкой пересечения рынка раньше, чем доходит до гейта.
+    assert any(k.startswith("closed:") for k in so.g_live),         "причина обязана попасть в книгу"
+
+
+def test_the_opening_auction_is_not_trading(tmp_path):
+    """АУКЦИОН ОТКРЫТИЯ ТОРГАМИ НЕ ЯВЛЯЕТСЯ, и разрешать его здесь нельзя.
+
+    В аукционе биржа принимает НЕ ВСЁ: оператор 02.10.2026 — «на этапе аукциона
+    заявки принимаются только лонговые». Половину сетки отбило бы. Оракул
+    расписания аукцион в торговые окна не включает (market_session._TRADING_TYPES),
+    поэтому гейт закрывает этот случай сам, и разбираться, что именно примет
+    аукцион, не требуется.
+    """
+    from trader import market_session
+    assert "auction" not in " ".join(market_session._TRADING_TYPES), (
+        "аукцион не должен считаться торговым окном")
+    # фаза pre_open даёт open=False -> ничего не ставим
+    book, so = _gbook(tmp_path)
+    srv = GSrv()
+    _grid_sync(book, _gstore(85000.0), GOst(), srv, GLim(), "9618", GSTEPS, {},
+               GNOW, False)
+    assert [m for m in srv.sent if m.WhichOneof("payload") == "place_order"] == []
+
+
+def test_the_gate_lifts_when_trading_starts(tmp_path):
+    """Биржа открылась — уровни встают, и метка причины уходит из книги."""
+    book, so = _gbook(tmp_path)
+    _grid_sync(book, _gstore(85000.0), GOst(), GSrv(), GLim(), "9618", GSTEPS, {},
+               GNOW, False)
+    assert any(k.startswith("closed:") for k in so.g_live)
+    srv = GSrv()
+    _grid_sync(book, _gstore(85000.0), GOst(), srv, GLim(), "9618", GSTEPS, {},
+               GNOW + 1000, True)
+    assert [m for m in srv.sent if m.WhichOneof("payload") == "place_order"],         "торги идут — сетка обязана выставиться"
+    assert not any(k.startswith("closed:") for k in so.g_live), "метка обязана уйти"
+
+
+def test_closing_exposure_is_never_blocked_by_the_gate(tmp_path):
+    """ГЕЙТ ТОЛЬКО НА ПОСТАНОВКЕ. Снятие и учёт филлов запрещать нельзя никогда:
+    запертая уборка опаснее пропущенного входа."""
+    book, so = _gbook(tmp_path)
+    so.g_stop_pts = 150.0
+    so.g_pos = -3
+    so.g_live = {"-1": "so:x:gm1:1"}
+    ost = GOst()
+    ost.working_orders = lambda agent=None: [
+        {"client_id": "so:x:gm1:1", "order_id": "11", "state": "active",
+         "remaining": 1, "filled": 0, "price": 84900.0}]
+    srv = GSrv()
+    # биржа закрыта, но цена ушла за край сетки: стоп обязан сработать
+    _grid_sync(book, _gstore(84000.0), ost, srv, GLim(), "9618", GSTEPS, {},
+               GNOW, False)
+    kinds = [m.WhichOneof("payload") for m in srv.sent]
+    assert "cancel_order" in kinds, "снятие заявок гейт блокировать не вправе"
+    assert so.g_done is True

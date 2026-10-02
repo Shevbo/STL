@@ -96,9 +96,11 @@ def _book(tmp_path, **kw):
 
 
 
-def _run(book, ost, srv, now=NOW, limits=None):
-    return _walls_sync(book, FakeStore(), ost, srv, Lim(), "9618", STEPS,
-                       limits or {}, now)
+def _run(book, ost, srv, now=NOW, limits=None, store=None):
+    # session_open=True ОБЯЗАТЕЛЕН: без открытой биржи сторож не ставит ничего, и
+    # тест на геометрию зеленел бы пустотой (см. gate в _walls_sync).
+    return _walls_sync(book, store or FakeStore(), ost, srv, Lim(), "9618", STEPS,
+                       limits or {}, now, None, True)
 
 
 def test_both_walls_are_placed_up_front(tmp_path):
@@ -221,7 +223,7 @@ def test_wall_on_the_wrong_side_of_the_market_is_never_placed(tmp_path):
 
     book, so = _book(tmp_path)
     srv = FakeSrv()
-    out = _walls_sync(book, HighStore(), FakeOst(), srv, Lim(), "9618", STEPS, {}, NOW)
+    out = _walls_sync(book, HighStore(), FakeOst(), srv, Lim(), "9618", STEPS, {}, NOW, None, True)
     placed = [m.place_order for m in srv.sent if m.WhichOneof("payload") == "place_order"]
     # продажа по 85000 при рынке 85500 исполнилась бы мгновенно — её НЕ ставим;
     # покупка по 84000 ниже рынка законна и остаётся
@@ -242,7 +244,7 @@ def test_hanging_wall_is_pulled_when_market_crosses_it(tmp_path):
     recs = [{"client_id": "so:x:top:1", "order_id": "11", "state": "active",
              "remaining": 10, "price": 85000.0}]
     srv = FakeSrv()
-    _walls_sync(book, HighStore(), FakeOst(recs), srv, Lim(), "9618", STEPS, {}, NOW)
+    _walls_sync(book, HighStore(), FakeOst(recs), srv, Lim(), "9618", STEPS, {}, NOW, None, True)
     assert "cancel_order" in [m.WhichOneof("payload") for m in srv.sent]
     assert "top" not in so.c_live
 
@@ -255,7 +257,7 @@ def test_no_quote_no_orders(tmp_path):
 
     book, _ = _book(tmp_path)
     srv = FakeSrv()
-    assert _walls_sync(book, Blind(), FakeOst(), srv, Lim(), "9618", STEPS, {}, NOW) is False
+    assert _walls_sync(book, Blind(), FakeOst(), srv, Lim(), "9618", STEPS, {}, NOW, None, True) is False
     assert srv.sent == []
 
 
@@ -354,7 +356,7 @@ def test_nothing_is_placed_when_the_terminal_table_is_unknown(tmp_path):
 
     book, _ = _book(tmp_path)
     srv = FakeSrv()
-    _walls_sync(book, NoMirror(), FakeOst(), srv, Lim(), "9618", STEPS, {}, NOW)
+    _walls_sync(book, NoMirror(), FakeOst(), srv, Lim(), "9618", STEPS, {}, NOW, None, True)
     assert [m for m in srv.sent if m.WhichOneof("payload") == "place_order"] == [],         "зеркала нет — что стоит в QUIK неизвестно, ставить вслепую нельзя"
 
     # зеркало встало (возраст больше MIRROR_MAX_MS) — тот же запрет
@@ -364,12 +366,12 @@ def test_nothing_is_placed_when_the_terminal_table_is_unknown(tmp_path):
                     "quik": {"orders": []}}
 
     srv2 = FakeSrv()
-    _walls_sync(book, StaleMirror(), FakeOst(), srv2, Lim(), "9618", STEPS, {}, NOW)
+    _walls_sync(book, StaleMirror(), FakeOst(), srv2, Lim(), "9618", STEPS, {}, NOW, None, True)
     assert [m for m in srv2.sent if m.WhichOneof("payload") == "place_order"] == [],         "зеркало встало — таблица устарела, ставить по ней нельзя"
 
     # таблица есть и ПУСТА — это законный ответ «в терминале ничего», ставим
     srv3 = FakeSrv()
-    _walls_sync(book, FakeStore(), FakeOst(), srv3, Lim(), "9618", STEPS, {}, NOW)
+    _walls_sync(book, FakeStore(), FakeOst(), srv3, Lim(), "9618", STEPS, {}, NOW, None, True)
     assert [m for m in srv3.sent if m.WhichOneof("payload") == "place_order"],         "пустая таблица — не слепота: стенки обязаны встать"
 
 
@@ -390,7 +392,7 @@ def test_standing_wall_in_the_terminal_is_adopted_not_duplicated(tmp_path):
                                  tag=f"stl-so-{so.so_id}")])
     srv = FakeSrv()
     # склад заявок ПУСТ, книга пуста — ровно состояние после рестарта
-    _walls_sync(book, store, FakeOst(), srv, Lim(), "9618", STEPS, {}, NOW)
+    _walls_sync(book, store, FakeOst(), srv, Lim(), "9618", STEPS, {}, NOW, None, True)
     placed = [m.place_order for m in srv.sent
               if m.WhichOneof("payload") == "place_order"]
     assert [p.side for p in placed] == [2],         "низ уже стоит в терминале — ставится только верх (продажа)"
@@ -411,7 +413,7 @@ def test_a_standing_order_of_another_smart_order_is_not_adopted(tmp_path):
         _term_row("993", "RIZ6", "buy", 84000.0, tag=""),          # руками оператора
     ])
     srv = FakeSrv()
-    _walls_sync(book, store, FakeOst(), srv, Lim(), "9618", STEPS, {}, NOW)
+    _walls_sync(book, store, FakeOst(), srv, Lim(), "9618", STEPS, {}, NOW, None, True)
     sides = sorted(m.place_order.side for m in srv.sent
                    if m.WhichOneof("payload") == "place_order")
     assert sides == [1, 2], "чужие заявки на той же цене не отменяют наших стенок"
@@ -552,7 +554,7 @@ def test_blindness_after_an_agent_restart_is_not_mistaken_for_flat(tmp_path):
 
     book, _ = _book(tmp_path)
     srv = FakeSrv()
-    _walls_sync(book, AgentJustRestarted(), FakeOst(), srv, Lim(), "9618", STEPS, {}, NOW)
+    _walls_sync(book, AgentJustRestarted(), FakeOst(), srv, Lim(), "9618", STEPS, {}, NOW, None, True)
     assert [m for m in srv.sent if m.WhichOneof("payload") == "place_order"] == [],         "пустая таблица до первой публикации — это «не знаю», а не «в QUIK ничего»"
 
     # публикации встали (возраст таблицы больше MIRROR_MAX_MS) — тот же запрет
@@ -563,7 +565,7 @@ def test_blindness_after_an_agent_restart_is_not_mistaken_for_flat(tmp_path):
                     "quik": {"orders": []}}
 
     srv2 = FakeSrv()
-    _walls_sync(book, OrdFrozen(), FakeOst(), srv2, Lim(), "9618", STEPS, {}, NOW)
+    _walls_sync(book, OrdFrozen(), FakeOst(), srv2, Lim(), "9618", STEPS, {}, NOW, None, True)
     assert [m for m in srv2.sent if m.WhichOneof("payload") == "place_order"] == [],         "таблица не публикуется — она описывает прошлое, ставить по ней нельзя"
 
     # сборка агента БЕЗ ord_age_ms — судить не на чем, тоже запрет
@@ -572,7 +574,7 @@ def test_blindness_after_an_agent_restart_is_not_mistaken_for_flat(tmp_path):
             return {"_received_at_ms": NOW, "health": {}, "quik": {"orders": []}}
 
     srv3 = FakeSrv()
-    _walls_sync(book, NoAgeField(), FakeOst(), srv3, Lim(), "9618", STEPS, {}, NOW)
+    _walls_sync(book, NoAgeField(), FakeOst(), srv3, Lim(), "9618", STEPS, {}, NOW, None, True)
     assert [m for m in srv3.sent if m.WhichOneof("payload") == "place_order"] == []
 
 
@@ -593,7 +595,7 @@ def test_a_fill_of_an_adopted_wall_is_caught_up_from_the_table(tmp_path):
     store = FakeStore([_term_row("991", "RIZ6", "sell", 85000.0, qty=10, balance=0,
                                  tag=f"stl-so-{so.so_id}", active=False)])
     srv = FakeSrv()
-    _walls_sync(book, store, FakeOst(), srv, Lim(), "9618", STEPS, {}, NOW)
+    _walls_sync(book, store, FakeOst(), srv, Lim(), "9618", STEPS, {}, NOW, None, True)
 
     assert so.c_pos == -10, (
         f"позиция {so.c_pos:+d}: филл подхваченной стенки не учтён — сторож поставит её заново")
@@ -609,7 +611,7 @@ def test_an_adopted_wall_cancelled_without_a_fill_frees_the_wall(tmp_path):
     store = FakeStore([_term_row("992", "RIZ6", "sell", 85000.0, qty=10, balance=10,
                                  tag=f"stl-so-{so.so_id}", active=False)])
     srv = FakeSrv()
-    _walls_sync(book, store, FakeOst(), srv, Lim(), "9618", STEPS, {}, NOW)
+    _walls_sync(book, store, FakeOst(), srv, Lim(), "9618", STEPS, {}, NOW, None, True)
     assert so.c_pos == 0, "исполнения не было — позиции нет"
     assert "adopt:top" not in so.c_live
     assert [m.place_order for m in srv.sent
@@ -623,7 +625,7 @@ def test_an_adopted_row_gone_from_the_table_is_reported_not_swallowed(tmp_path):
     book, so = _book(tmp_path)
     so.c_live = {"adopt:top": {"num": "993"}}
     srv = FakeSrv()
-    _walls_sync(book, FakeStore(), FakeOst(), srv, Lim(), "9618", STEPS, {}, NOW)
+    _walls_sync(book, FakeStore(), FakeOst(), srv, Lim(), "9618", STEPS, {}, NOW, None, True)
     assert so.c_pos == 0, "ничего не выдумываем: сколько налилось — неизвестно"
     assert "adopt:top" not in so.c_live, "стенка освобождена"
 
@@ -643,7 +645,7 @@ def test_a_sloped_wall_leaves_no_orphan_behind(tmp_path):
                                  tag=f"stl-so-{so.so_id}")])
     srv = FakeSrv()
     # минута прошла: верх уже не 85000
-    _walls_sync(book, store, FakeOst(), srv, Lim(), "9618", STEPS, {}, NOW + 60_000)
+    _walls_sync(book, store, FakeOst(), srv, Lim(), "9618", STEPS, {}, NOW + 60_000, None, True)
 
     killed = [m.cancel_order for m in srv.sent
               if m.WhichOneof("payload") == "cancel_order"]
@@ -670,7 +672,7 @@ def test_the_other_walls_order_is_not_touched(tmp_path):
     srv = FakeSrv()
     # store передаём ЯВНО: _run подставляет свой FakeStore без строк терминала, и
     # тест молча проверял бы пустую таблицу вместо подготовленной.
-    _walls_sync(book, store, FakeOst(), srv, Lim(), "9618", STEPS, {}, NOW)
+    _walls_sync(book, store, FakeOst(), srv, Lim(), "9618", STEPS, {}, NOW, None, True)
     killed = [m.cancel_order.order_id for m in srv.sent
               if m.WhichOneof("payload") == "cancel_order"]
     assert "992" not in killed, "заявка НИЖНЕЙ стенки стоит на своей цене и законна"
