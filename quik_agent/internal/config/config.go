@@ -27,6 +27,16 @@ type Config struct {
 	STLInsecure bool `json:"stl_insecure"`
 	// TokenEnv is the NAME of the env var holding the Bearer token. Never the value.
 	TokenEnv string `json:"token_env"`
+	// ReleaseURL — откуда агент берёт свои сборки (база, без /agent_release).
+	// Пусто = берём из SHECTORY_AGENT_RELEASE_URL.
+	//
+	// В КОНФИГЕ, А НЕ ТОЛЬКО В ОКРУЖЕНИИ. 02.10.2026 агента подняли двойным
+	// кликом по exe, переменной окружения в этом запуске не было — и
+	// самообновление молча выключилось: агент торговал, а новая сборка с
+	// критическим фиксом доехать не могла, пока оператор не перезапустил его из
+	// cmd с нужной переменной. Способ запуска не должен решать, обновляемся мы
+	// или нет; файл лежит рядом с exe и переживает и клик, и автозапуск.
+	ReleaseURL string `json:"release_url"`
 	// QuikDataRoot is where the agent reads QUIK DDE output / writes its queue.
 	QuikDataRoot string `json:"quik_data_root"`
 	// PollIntervalSec drives market-data flush / command poll cadence.

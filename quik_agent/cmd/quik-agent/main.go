@@ -219,7 +219,15 @@ func runAgent(opt agentOptions, stop <-chan struct{}) error {
 	fmt.Println("  token:  ", cfg.TokenEnv, "(value not shown)")
 
 	// Self-update source: same STL host over HTTPS, authenticated with the token.
-	selfUpdateBase := os.Getenv("SHECTORY_AGENT_RELEASE_URL")
+	// Конфиг главнее окружения: он не зависит от того, чем запустили процесс.
+	selfUpdateBase := cfg.ReleaseURL
+	if selfUpdateBase == "" {
+		selfUpdateBase = os.Getenv("SHECTORY_AGENT_RELEASE_URL")
+	}
+	if selfUpdateBase == "" {
+		fmt.Println("  ВНИМАНИЕ: адрес релизов не задан (release_url в конфиге или " +
+			"SHECTORY_AGENT_RELEASE_URL) — САМООБНОВЛЕНИЕ ВЫКЛЮЧЕНО")
+	}
 	var updSrc selfupdate.Source
 	if selfUpdateBase != "" {
 		updSrc = selfupdate.NewHTTPSource(selfUpdateBase, opt.token)
