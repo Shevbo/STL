@@ -133,6 +133,10 @@ class SmartOrderBody(BaseModel):
     # Сколько касаний триггерной цены С ОДНОЙ СТОРОНЫ нужно, чтобы защита
     # сработала. 1 = на первом же; больше — одиночный выброс сетку не снимет.
     g_trig_touches: int = 1
+    # Цель прибыли сетки в рублях: достигнута — уровни сняты, позиция закрыта
+    # рыночной, сетка закончена (перевзведение на неё не распространяется).
+    # 0 = без цели.
+    g_tp_rub: float = 0.0
     c_stop_pts: float = 0.0
     c_flips_max: int = 0
     note: str = ""
@@ -161,6 +165,7 @@ async def create(body: SmartOrderBody, request: Request):
         c_stop_pts=float(body.c_stop_pts),
         g_trig_fills=int(body.g_trig_fills), g_trig_move_pct=float(body.g_trig_move_pct),
         g_rearm_min=float(body.g_rearm_min), g_trig_touches=int(body.g_trig_touches),
+        g_tp_rub=float(body.g_tp_rub), g_cash_on=True,
         g_step=float(body.g_step), g_buys=int(body.g_buys), g_sells=int(body.g_sells),
         g_lot=int(body.g_lot), g_stop_pts=float(body.g_stop_pts),
         c_flips_max=int(body.c_flips_max), c_qty=int(body.qty),
@@ -642,6 +647,20 @@ def price_within_limits(price: float, limits: tuple[float, float] | None) -> boo
     if lo > 0 and price < lo:
         return False
     return not (hi > 0 and price > hi)
+
+
+def _point_coefs(store: Any, agent: str) -> dict[str, float]:
+    """code -> рублей за пункт из фида параметров (coef агента или step_cost/шаг).
+
+    Нет инструмента в фиде — нет и коэффициента, и всё, что считает деньги, обязано
+    молчать, а не подставлять единицу: пункт не рубль (карточка робота уже
+    показывала −11 ₽ вместо −5585 ₽ на чужом коэффициенте)."""
+    from trader.quik.algo_ledger import point_values
+    params = getattr(store, "params", None)
+    try:
+        return point_values(params(agent) if params else None)
+    except Exception:  # noqa: BLE001 — нет фида = нет денег, а не падение сторожа
+        return {}
 
 
 def _price_steps(store: Any, agent: str) -> dict[str, float]:
@@ -1788,6 +1807,10 @@ def _grid_count_fill(so: SmartOrder, live: dict, level: int, side_was: str,
     уровень ИСЧЕЗАЕТ и возвращается только после филла СОСЕДНЕГО — любого, хоть
     ниже, хоть выше.
     """
+    # ПОТОК ДО ПОЗИЦИИ: база заводится из состояния ДО этого филла, иначе филл
+    # посчитался бы дважды — в средней и в потоке.
+    if so_mod.ensure_cash_basis(so) and price > 0:
+        so.g_cash_pts += price * got if side_was == "sell" else -price * got
     so.g_pos, so.g_avg = so_mod.blend_avg(
         so.g_pos, so.g_avg, got, price, side_was == "buy")
     so.g_fills_done += 1                          # для защиты «N уровней подряд»
@@ -1811,6 +1834,7 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
     исполненные, снять всё при стопе."""
     dirty = False
     work = {d.get("client_id"): d for d in ost.working_orders(agent)}
+    coefs = _point_coefs(store, agent)
     # ЧТО СТОИТ В ТЕРМИНАЛЕ — один запрос на проход. None = зеркала агента нет или
     # оно встало: это «НЕ ЗНАЮ», а не «ничего не стоит», и ставить при нём нельзя.
     # Пустой список — законный ответ «в терминале этой заявки нет».
@@ -1974,9 +1998,23 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
                 log.warning("smart_order.grid_guard", so_id=so.so_id, why=why,
                             pos=so.g_pos, avg=so.g_avg, killed=killed)
 
+        # ЦЕЛЬ ПРИБЫЛИ: забрать деньги и закончить. Тот же путь, что у стопа —
+        # снять всё и закрыть позицию рыночной, — потому что механика выхода
+        # одна и та же, отличается только повод. Свой путь закрытия здесь значил
+        # бы второе место, где можно забыть заявку в терминале или отказ лимита.
+        tp_why = ""
+        if so_mod.ensure_cash_basis(so):
+            tp_why = so_mod.grid_tp_hit(so, price, coefs.get(so.code, 0.0))
+            if tp_why:
+                so_journal.record("grid_tp", so, so_journal.WATCHER,
+                                  f"ЦЕЛЬ ПРИБЫЛИ: {tp_why}", now_ms=now)
+                log.warning("smart_order.grid_tp", so_id=so.so_id, why=tp_why)
+
         # СТОП ЗА КРАЕМ СЕТКИ: снимаем всё и заканчиваем. Проверяется первым —
         # доставлять уровни туда, откуда рынок уже ушёл, значит ловить нож.
-        if price > 0 and so_mod.grid_stop_hit(so, price):
+        if price > 0 and (tp_why or so_mod.grid_stop_hit(so, price)):
+            why = "цель прибыли" if tp_why else "стоп за краем сетки"
+            at = "прибыль у цели" if tp_why else "за последним уровнем"
             # СНЯТИЕ — ЧЕРЕЗ ОБЩИЙ ПУТЬ. Здесь стоял свой проход по своим записям,
             # и он снимал только то, что знал склад: после рестарта — ничего, а
             # следующей строкой выставлялся g_done, то есть сетка объявлялась снятой
@@ -1986,7 +2024,7 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
             killed, extra = _cancel_resting(srv, store, agent, so, stop_cids, work)
             for row in extra:
                 so_journal.record("resting_withdrawn", so, so_journal.WATCHER,
-                                  f"стоп сетки: снята заявка {row['num']} из ТАБЛИЦЫ "
+                                  f"{why}: снята заявка {row['num']} из ТАБЛИЦЫ "
                                   f"ТЕРМИНАЛА ({row['side']} {row['balance']} по "
                                   f"{row['price']:g}): своих записей о ней не было",
                                   now_ms=now)
@@ -2030,10 +2068,10 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
                     so.g_close_cid = ""
                     if "ЗАКРЫТИЕ ОТКЛОНЕНО" not in (so.note or ""):
                         so.note = (so.note + " " if so.note else "") + (
-                            f"стоп сетки: ЗАКРЫТИЕ ОТКЛОНЕНО ({exc}), позиция "
+                            f"{why}: ЗАКРЫТИЕ ОТКЛОНЕНО ({exc}), позиция "
                             f"{so.g_pos:+d} БЕЗ ЗАЩИТЫ, пробую снова")
                         so_journal.record("error", so, so_journal.LIMITS,
-                                          f"стоп за краем сетки: закрытие позиции "
+                                          f"{why}: закрытие позиции "
                                           f"{so.g_pos:+d} отклонено лимитами: {exc}. "
                                           "ПОЗИЦИЯ БЕЗ ЗАЩИТЫ, повторяю каждый проход",
                                           now_ms=now)
@@ -2043,19 +2081,19 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
                 so.g_close_cid = cid
                 so.status = "closing"
                 so.note = (so.note + " " if so.note else "") + (
-                    f"стоп за краем сетки: закрываю {close_side} {close_qty} рыночной")
+                    f"{why}: закрываю {close_side} {close_qty} рыночной")
                 so_journal.record(
                     "grid_stop", so, so_journal.WATCHER,
-                    f"цена {price:g} за последним уровнем: сетка снята, позиция "
+                    f"цена {price:g} {at}: сетка снята, позиция "
                     f"{so.g_pos:+d} ЗАКРЫВАЕТСЯ рыночной {close_side} {close_qty} "
                     f"({cid})", now_ms=now)
                 log.warning("smart_order.grid_stopped", so_id=so.so_id, price=price,
                             pos=so.g_pos, close=cid)
                 return True
             so.status = "cancelled"
-            so.note = (so.note + " " if so.note else "") + "стоп за краем сетки: снята"
+            so.note = (so.note + " " if so.note else "") + f"{why}: снята"
             so_journal.record("grid_stop", so, so_journal.WATCHER,
-                              f"цена {price:g} за последним уровнем: сетка снята, "
+                              f"цена {price:g} {at}: сетка снята, "
                               f"позиции не было", now_ms=now)
             log.warning("smart_order.grid_stopped", so_id=so.so_id, price=price, pos=0)
             return True
