@@ -2101,36 +2101,72 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
             log.warning("smart_order.grid_stopped", so_id=so.so_id, price=price, pos=0)
             return True
 
-        # ТОЛЬКО НА ВЫХОД — СУММОЙ, А НЕ ПОШТУЧНО. 02.10.2026 на GZZ6 защита
-        # сработала при позиции +5, и сетка оставила ВСЕ продажи выше средней:
-        # 22 уровня по 5 = 110 контрактов против позиции +5. Каждый уровень по
-        # отдельности был законен (закрывающая сторона, цена не хуже средней), а
-        # их сумма на росте закрыла бы +5 и открыла шорт −105 — «только на выход»
-        # превращался в разворот. Незаконна серия, а не заявка.
+        # ТОЛЬКО НА ВЫХОД = ОДНА ЗАЯВКА НА ВСЮ ТЕКУЩУЮ ПОЗИЦИЮ ПО ЕЁ СРЕДНЕЙ.
         #
-        # Выход стоит РОВНО на позицию: ближайшие к рынку закрывающие заявки
-        # сетки, пока их сумма в неё влезает; остальное и всё с открывающей
-        # стороны снимается. Правда о том, что стоит, — таблица терминала: склад
-        # заявок пустеет при рестарте, а подхваченные строки своих записей нет.
-        exit_room = None
+        # Оператор 02.10.2026: «только на выход — это выход только из текущей
+        # позиции без убытка, а не по накопительному результату». Первая версия
+        # выходила УРОВНЯМИ сетки не хуже средней — и в тот же день на RIZ6 при
+        # позиции +9 по 84930 выход стоял на 85020/85110/85200, то есть ждал прибыли
+        # сверх безубытка. Ещё раньше уровни ставились без счёта суммы: на GZZ6 при
+        # +5 стояло 110 контрактов продаж (шорт −105 на росте).
+        #
+        # Теперь: все уровни сетки снимаются, стоит ровно одна заявка — закрывающая
+        # сторона, объём |g_pos|, цена безубытка текущей позиции (breakeven_price).
+        # Узнаём её по номеру в таблице терминала и метке «:bx» — склад заявок
+        # пустеет при рестарте, а таблица живёт в QUIK. Исполнение считается тоже
+        # по таблице (qty − balance), сколько бы раз ни перезапускались STL и агент.
+        # За ценой не гоняемся: стоящая заявка остаётся, пока её объём равен
+        # позиции и цена не хуже безубытка.
         if so.exit_only and term_all is not None:
-            _xs0, _xq0 = so_mod.exit_side_qty(so.g_pos)
             mine = list(term_all.get(so.so_id, []))
-            _alive = {r["num"] for r in mine}
-            for _k in [k for k in live if k.startswith("xkill:") and k[6:] not in _alive]:
-                live.pop(_k, None)
-            closing = sorted((r for r in mine if _xq0 and r.get("side") == _xs0),
-                             key=lambda r: abs(float(r.get("price") or 0) - price))
-            exit_room, drop = _xq0, [r for r in mine if not (_xq0 and r.get("side") == _xs0)]
-            for r in closing:
-                bal = int(r.get("balance") or 0)
-                if bal <= exit_room:
-                    exit_room -= bal
-                else:
-                    drop.append(r)
-            for r in drop:
-                # Одно снятие на строку раз в 30 с: строка висит в таблице, пока
-                # отмена в пути, а каждая повторная транзакция стоит денег.
+            bx_num = str(live.get("bx_num") or "")
+            if not bx_num:
+                rec_bx = work.get(str(live.get("bx") or "")) or {}
+                bx_num = str(rec_bx.get("order_id") or "")
+                if not bx_num:
+                    adopt = [r for r in mine if str(r.get("tag") or "").endswith(":bx")]
+                    if adopt:
+                        bx_num = adopt[0]["num"]
+                if bx_num:
+                    live["bx_num"] = bx_num
+                    dirty = True
+            # Исполнение выхода — по таблице, приращением к уже учтённому.
+            row_bx = term_num.get(bx_num) if bx_num else None
+            if row_bx is not None:
+                filled_now = int(row_bx.get("qty") or 0) - int(row_bx.get("balance") or 0)
+                delta = filled_now - int(live.get("bx_filled") or 0)
+                if delta > 0:
+                    side_was = str(row_bx.get("side") or "").lower()
+                    px_was = float(row_bx.get("price") or 0)
+                    # ponytail: цена филла = цена заявки; у немедленного выхода
+                    # реальная цена лучше, позиция от этого не зависит.
+                    if so_mod.ensure_cash_basis(so) and px_was > 0:
+                        so.g_cash_pts += px_was * delta if side_was == "sell" else -px_was * delta
+                    so.g_pos, so.g_avg = so_mod.blend_avg(
+                        so.g_pos, so.g_avg, delta, px_was, side_was == "buy")
+                    live["bx_filled"] = filled_now
+                    dirty = True
+                    so_journal.record(
+                        "grid_fill", so, so_journal.WATCHER,
+                        f"выход по безубытку исполнен: {side_was} {delta} по {px_was:g}; "
+                        f"позиция {so.g_pos:+d}", now_ms=now)
+                if not row_bx.get("active"):
+                    for k in ("bx", "bx_num", "bx_filled"):
+                        live.pop(k, None)
+                    bx_num, row_bx = "", None
+                    dirty = True
+            _xs0, _xq0 = so_mod.exit_side_qty(so.g_pos)
+            be = so_mod.breakeven_price(so.g_pos, so.g_avg, step, price,
+                                        lim.price_collar_frac)
+            bx_ok = bool(row_bx and row_bx.get("active") and _xq0
+                         and row_bx.get("side") == _xs0
+                         and int(row_bx.get("balance") or 0) == _xq0
+                         and so_mod.exit_without_loss(so.g_pos, so.g_avg,
+                                                      float(row_bx.get("price") or 0)))
+            # Всё, кроме годной заявки выхода, снимается (одно снятие на строку раз в 30 с).
+            for r in mine:
+                if bx_ok and r["num"] == bx_num:
+                    continue
                 k = f"xkill:{r['num']}"
                 if now - int(live.get(k) or 0) < 30_000:
                     continue
@@ -2138,19 +2174,52 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
                 srv.enqueue_order(agent, order_msgs.build_cancel_order(
                     client_id=f"op:kill:{r['num']}", order_id=r["num"], code=r["sec"]))
                 dirty = True
-                so_journal.record(
-                    "resting_withdrawn", so, so_journal.WATCHER,
-                    f"только на выход: снята заявка {r['num']} ({r.get('side')} "
-                    f"{r.get('balance')} по {r.get('price')}) — выход на позицию "
-                    f"{so.g_pos:+d} уже стоит, больше было бы разворотом", now_ms=now)
-                log.warning("smart_order.exit_only_excess_cancelled", so_id=so.so_id,
-                            num=r["num"], pos=so.g_pos)
+                log.info("smart_order.exit_only_withdrawn", so_id=so.so_id,
+                         num=r["num"], price=r.get("price"))
+            _alive = {r["num"] for r in mine}
+            for _k in [k for k in live if k.startswith("xkill:") and k[6:] not in _alive]:
+                live.pop(_k, None)
+            # Поставить выход: позиция есть, годного выхода нет, в пути ничего нет,
+            # строки сетки сняты (иначе на миг стояло бы больше позиции), биржа торгует.
+            rec_inflight = work.get(str(live.get("bx") or "")) or {}
+            inflight = bool(live.get("bx")) and not bx_num and (
+                not rec_inflight or _is_working(rec_inflight))
+            others = [r for r in mine if not (bx_ok and r["num"] == bx_num)]
+            if (_xq0 and not bx_ok and not inflight and not others and be > 0
+                    and session_open is True):
+                cid = f"so:{so.so_id}:bx:{now % 100000}"
+                try:
+                    validate_place(lim, code=so.code, quantity=_xq0,
+                                   collar=lim.price_collar_frac,
+                                   current_working=ost.working_contracts(agent),
+                                   placed_today=ost.placed_today(agent), reducing=True)
+                    ost.register_pending(agent, cid, so.code, _xs0, be, _xq0)
+                    ost.record_placement(agent)
+                    srv.enqueue_order(agent, order_msgs.build_place_order(
+                        client_id=cid, code=so.code, side=_xs0, price=be,
+                        quantity=_xq0, collar=lim.price_collar_frac))
+                    live.update({"bx": cid, "bx_filled": 0})
+                    live.pop("bx_num", None)
+                    dirty = True
+                    so_journal.record(
+                        "exit_only", so, so_journal.WATCHER,
+                        f"только на выход: {_xs0} {_xq0} по {be:g} — безубыток текущей "
+                        f"позиции {so.g_pos:+d} (средняя {so.g_avg:g}), уровни сняты",
+                        now_ms=now)
+                except LimitError as exc:
+                    if live.get("bx_refused") != str(exc):
+                        live["bx_refused"] = str(exc)
+                        dirty = True
+                        so_journal.record("error", so, so_journal.LIMITS,
+                                          f"только на выход: выход {_xs0} {_xq0} по {be:g} "
+                                          f"отклонён лимитами: {exc}", now_ms=now)
 
         # ОКНО: в QUIK только ближайшие уровни, дальние ждут в STL (см. g_window).
         # Стоящее за пределом «держать» снимается по номеру из таблицы терминала —
         # склад после рестарта пуст, а подхваченные строки записей не имеют.
         win_place, win_keep = so_mod.grid_window(so, live, price)
-        if so.g_window > 0 and price > 0 and term_all is not None and so.g_step > 0:
+        if (so.g_window > 0 and price > 0 and term_all is not None and so.g_step > 0
+                and not so.exit_only):
             for r in term_all.get(so.so_id, []):
                 lvl = round((float(r.get("price") or 0) - so.g_base) / so.g_step)
                 if lvl in win_keep:
@@ -2289,30 +2358,9 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
             if level not in win_place:
                 continue              # дальний уровень ждёт в STL, пока рынок не подойдёт
             if so.exit_only:
-                _xs, _xq = so_mod.exit_side_qty(so.g_pos)
-                why = ""
-                if _xq == 0:
-                    why = "позиции нет, открывать нечего"
-                elif side != _xs:
-                    why = f"уровень доливает ({side}), а позиция {so.g_pos:+d} закрывается {_xs}"
-                elif not so_mod.exit_without_loss(so.g_pos, so.g_avg, px):
-                    why = (f"цена {px:g} хуже средней {so.g_avg:g}: закрытие здесь "
-                           "дало бы убыток")
-                elif exit_room is not None and so.g_lot > exit_room:
-                    why = (f"выход на позицию {so.g_pos:+d} уже стоит (свободно "
-                           f"{exit_room}), больше было бы разворотом")
-                elif exit_room is None:
-                    why = "таблица терминала неизвестна — сколько выхода уже стоит, не знаю"
-                if why:
-                    if live.get(f"exit:{level}") != 1:
-                        live[f"exit:{level}"] = 1
-                        dirty = True
-                        so_journal.record(
-                            "held", so, so_journal.WATCHER,
-                            f"только на выход: уровень {level:+d} не выставлен — {why}",
-                            now_ms=now)
-                    continue
-                live.pop(f"exit:{level}", None)
+                # Уровни в этом режиме не ставятся: выход — одна заявка по средней
+                # (см. блок «только на выход» перед циклом).
+                continue
             # БИРЖА НЕ ТОРГУЕТ — НЕ СТАВИМ. Гейт стоит на ПОСТАНОВКЕ и только на
             # ней: учёт филлов и снятие экспозиции запрещать нельзя никогда.
             #
@@ -2415,8 +2463,6 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
                                   "выставляю", now_ms=now)
             new_cid = _grid_cid(so.so_id, level) + f":{now % 100000}"
             try:
-                if exit_room is not None and so.exit_only:
-                    exit_room -= so.g_lot
                 validate_place(lim, code=so.code, quantity=so.g_lot,
                                collar=lim.price_collar_frac,
                                current_working=ost.working_contracts(agent),

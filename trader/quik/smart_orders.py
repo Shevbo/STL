@@ -785,6 +785,33 @@ def grid_rearm_base(so: SmartOrder, price: float) -> float:
     return price if price > 0 else 0.0
 
 
+def breakeven_price(pos: int, avg: float, step: float, market: float,
+                    collar_frac: float) -> float:
+    """Цена выхода «только на выход» у сетки: БЕЗУБЫТОК ТЕКУЩЕЙ позиции.
+
+    Оператор 02.10.2026: «только на выход — это выход только из текущей позиции
+    без убытка, а не по накопительному результату». Значит цена — средняя
+    ТЕКУЩЕЙ позиции (g_avg: доливка взвешивает, сокращение сохраняет, переворот
+    сбрасывает), округлённая в сторону без убытка: лонг продаём не ниже, шорт
+    покупаем не выше. Никаких уровней сетки выше средней — они ждали прибыли сверх
+    безубытка, а этого не просили.
+
+    Рынок уже лучше средней — выходим сразу, но в пределах коллара: лимит, далеко
+    пересекающий рынок, агент отобьёт. Цена ставится на половину коллара за
+    рынок, то есть исполняется немедленно и не хуже безубытка.
+    """
+    if pos == 0 or avg <= 0:
+        return 0.0
+    be = quantize(avg, step, "buy" if pos > 0 else "sell")   # лонг вверх, шорт вниз
+    if market <= 0:
+        return be
+    if pos > 0 and market > be:
+        return max(be, quantize(market * (1 - collar_frac / 2), step, "buy"))
+    if pos < 0 and market < be:
+        return min(be, quantize(market * (1 + collar_frac / 2), step, "sell"))
+    return be
+
+
 def exit_side_qty(pos: int) -> tuple[str, int]:
     """Чем и сколько закрывать позицию: ('buy'|'sell', объём). Вне рынка — ('', 0)."""
     if pos == 0:

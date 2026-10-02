@@ -69,7 +69,6 @@ def test_with_no_position_exit_only_places_nothing(tmp_path):
     _grid_sync(book, _gstore(85000.0), GOst(), srv, GLim(), "9618", GSTEPS, {},
                GNOW, True)
     assert _placed(srv) == []
-    assert any(k.startswith("exit:") for k in so.g_live), "причина обязана быть в книге"
 
 
 def test_only_the_closing_side_is_placed(tmp_path):
@@ -117,15 +116,17 @@ def test_switching_the_mode_off_restores_normal_work(tmp_path):
     assert _placed(srv2), "режим снят — сетка работает как обычно"
 
 
-def test_the_reason_is_journalled_not_silent(tmp_path):
-    """Оператор включил режим и ждёт выхода: «ничего не происходит» он обязан
-    уметь объяснить по журналу, а не гадать."""
-    book, so = _grid(tmp_path, g_pos=-2, g_avg=84000.0)   # рынок выше средней
+def test_losing_position_waits_at_its_own_average(tmp_path):
+    """Оператор 02.10.2026: «только на выход — это выход только из ТЕКУЩЕЙ позиции
+    без убытка». Шорт −2 по 84000 при рынке 85000 в минусе: выход стоит ОДНОЙ
+    заявкой покупки 2 ровно по средней 84000 и ждёт, а не уровнями и не в убыток."""
+    book, so = _grid(tmp_path, g_pos=-2, g_avg=84000.0)
     srv = GSrv()
     _grid_sync(book, _gstore(85000.0), GOst(), srv, GLim(), "9618", GSTEPS, {},
                GNOW, True)
-    assert _placed(srv) == [], "все уровни дороже средней — не выходим в убыток"
-    assert any(k.startswith("exit:") for k in so.g_live)
+    placed = _placed(srv)
+    assert len(placed) == 1, "выход — одна заявка на всю позицию"
+    assert placed[0].side == 1 and placed[0].quantity == 2 and placed[0].price == 84000.0
 
 
 # ---- коридор -------------------------------------------------------------
