@@ -1426,3 +1426,37 @@ def test_limits_consumption_is_unknown_not_zero_without_the_order_store(monkeypa
                                headers=_operator_headers()).json()
     assert body["limits"]["placed_today"] is None
     assert body["limits"]["working_contracts"] is None
+
+
+def test_peak_order_size_is_unknown_when_the_mirror_contradicts_our_own_counter(monkeypatch, tmp_path):
+    """Ноль пика против собственного счётчика заявок — это дыра, а не спокойный день.
+
+    Пик считается по таблице терминала. Если STL сегодня САМ выпустил заявки, а
+    в таблице за сегодня пусто, мы видим неполную таблицу; ноль здесь читался бы
+    как «крупных заявок не было», то есть как спокойствие.
+    """
+    monkeypatch.delenv("SHECTORY_AUTH_DEV_BYPASS", raising=False)
+    app = FastAPI()
+    app.include_router(companion_router)
+    app.state.settings = _LimitSettings()
+    app.state.db_pool = FakePool()
+    _limits_file(monkeypatch, tmp_path)
+    store = QuikAgentStore()
+    store.set_agent_status("A1", json.dumps({
+        "agent": {"version": "x", "link_up": True},
+        "health": {"runner_healthy": True,
+                   "money": {"limit": 1.0, "varmargin": 0.0, "age_ms": 100},
+                   "positions": []},
+        "robots": [],
+    }), 0)
+    app.state.quik_store = store
+    from types import SimpleNamespace as _NS
+    app.state.quik_order_store = _NS(
+        placed_today=lambda _a: 7, working_contracts=lambda _a: 0)
+    # Таблица терминала свежа и пуста — но наш счётчик говорит, что заявки были.
+    monkeypatch.setattr(quik_companion.terminal, "fresh", lambda *a, **k: True)
+    monkeypatch.setattr(quik_companion.terminal, "rows", lambda *a, **k: [])
+    monkeypatch.setattr(quik_companion.terminal, "stop_rows", lambda *a, **k: [])
+    body = TestClient(app).get("/api/v1/quik/companion/snapshot",
+                               headers=_operator_headers()).json()
+    assert body["limits"]["peak_order_qty"] is None

@@ -810,6 +810,13 @@ def _limits_block(request, term_rows=None, today_lo: int = 0,
             out["working_contracts"] = ost.working_contracts(agent)
         except Exception:  # noqa: BLE001 — агент не опознан: предел знаем, расход нет
             pass
+    # НОЛЬ ПРОТИВ СОБСТВЕННОГО СЧЁТЧИКА — ЭТО НЕ НОЛЬ, А ДЫРА В ЗЕРКАЛЕ. Если
+    # STL сам выпустил сегодня хоть одну заявку, а в таблице терминала за
+    # сегодня пусто, то мы видим не спокойный день, а неполную таблицу. Пик в
+    # этом случае неизвестен; молчаливый ноль здесь читался бы как «крупных
+    # заявок не было».
+    if out["peak_order_qty"] == 0 and (out["placed_today"] or 0) > 0:
+        out["peak_order_qty"] = None
     store = getattr(request.app.state, "quik_store", None)
     if store is not None:
         try:
