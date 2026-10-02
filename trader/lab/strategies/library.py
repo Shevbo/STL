@@ -12,6 +12,7 @@ thousands of concrete robot variants from a compact, auditable code base.
 """
 from __future__ import annotations
 
+import random
 from datetime import datetime, timezone
 from functools import lru_cache
 
@@ -186,6 +187,10 @@ def make_on_bar(rid: str):
         # sl_frac он не зависит ни от тейка, ни от ATR: одна и та же доля цены на любой
         # волатильности. Проверяется вместе с sl_frac ниже — срабатывает ближний.
         sl_pct = float(params.get("sl_pct", 0) or 0) / 100.0
+        # РАЙДЕР «CRAZY STOP» (sl_rev, пререгистрация docs/crazy-stop-2026.md): вместо обычного
+        # стопа полный переворот. 0 = выключен, ни одной записи в состояние и ни одной
+        # заявки сверх прежних: сделки побайтово как до райдера (тест test_crazy_stop).
+        sl_rev = int(params.get("sl_rev", 0) or 0)
         # СЛОИ DESKBOT 2EMA (заказ оператора 13.09.2026). Все выключены по умолчанию.
         # Проценты ×100 (120 = 1.20%), как sl_pct; считаются от СРЕДНЕЙ входа.
         #   tp_pct            тейк долей цены (tp_atr меряет в ATR);
@@ -660,6 +665,38 @@ def make_on_bar(rid: str):
             be = int(stl.get_state("bet_extra", 0) or 0) if bet_step > 0 else 0
             return base_unit + be + lvl * super_y
 
+        # ── CRAZY STOP: пока перевёрнутая позиция жива, всё остальное молчит ──
+        # Тейк rev_tp x D, стоп rev_sl x D (D = дистанция сработавшего стопа), выход по
+        # закрытию бара за уровнем (исполнение по open следующего), по времени rev_hold баров,
+        # и ФЛЭТ СЕССИИ: будни с 23:40, выходные с 18:50 (короткая сессия 10:00-19:00) либо
+        # смена дня, чтобы перевёрнутая позиция не стала сиротой. Сигналы базы игнорируются.
+        if sl_rev > 0:
+            rv = stl.get_state("rev", None)
+            if rv:
+                if cur == 0 or cur_dir != int(rv["d"]):
+                    stl.set_state("rev", None)
+                else:
+                    rv = dict(rv)
+                    rv["n"] = int(rv["n"]) + 1
+                    rd, rD = int(rv["d"]), float(rv["D"])
+                    _rmin = _bar_minute(bar_time, int(params.get("bar_offset_min", 0) or 0))
+                    _rflat = 18 * 60 + 50 if is_weekend(bar_time + _woff) else 23 * 60 + 40
+                    why = None
+                    if (price - avg) * rd >= float(params.get("rev_tp", 1) or 1) * rD:
+                        why = "rtp"
+                    elif (price - avg) * rd <= -float(params.get("rev_sl", 1) or 1) * rD:
+                        why = "rsl"
+                    elif rv["n"] >= int(params.get("rev_hold", 240) or 240):
+                        why = "rtime"
+                    elif _rmin >= _rflat or int(bar_time // 86400) != int(rv["day"]):
+                        why = "reod"
+                    if why:
+                        on_exit(price, avg, rd, why)
+                        await stl.place_order(symbol, "sell" if rd > 0 else "buy", abs(cur), price)
+                        stl.set_state("rev", None)
+                    else:
+                        stl.set_state("rev", rv)
+                    return
         # Амплитудный гейт на РАЗВОРОТ ПО СИГНАЛУ (flip_min_pts). MACD-кроссовер у
         # семейства закрывает всю позицию по рынку на КАЖДОМ пересечении — а на
         # локальном пике пересечение сплошь и рядом ложное (RIU6 09.09.2026:
@@ -939,6 +976,24 @@ def make_on_bar(rid: str):
             stl.set_state("sl_block", cur_dir)
             on_exit(price, avg, cur_dir, "sl")
             await stl.place_order(symbol, "sell" if cur_dir > 0 else "buy", abs(cur), price)
+            if sl_rev > 0:
+                # rev_mode: rev = против стопнувшейся позиции, same = в ту же сторону, rand = случайная
+                # (сид seed, свой розыгрыш на каждый стоп). rev_qty: 1 = базовый лот, 2 = весь закрытый объём.
+                _rm = str(params.get("rev_mode", "rev") or "rev")
+                _rn = int(stl.get_state("rev_cnt", 0) or 0)
+                stl.set_state("rev_cnt", _rn + 1)
+                if _rm == "same":
+                    rside = cur_dir
+                elif _rm == "rand":
+                    rside = 1 if random.Random(f"{params.get('seed', 0)}:{_rn}").random() < 0.5 else -1
+                else:
+                    rside = -cur_dir
+                rq = abs(cur) if int(params.get("rev_qty", 1) or 1) >= 2 else base_unit
+                await stl.place_order(symbol, "buy" if rside > 0 else "sell", rq, price)
+                stl.set_state("rev", {"d": rside, "D": stop_dist, "n": 0, "day": int(bar_time // 86400)})
+                stl.set_state("avg_add", 0)
+                stl.set_state("avg_add_exec", 0)
+                stl.set_state("trail_pk", None)
             return
         # ATR посчитан выше по ХВОСТУ (atr_n*40 баров): pivot тянет 2200 баров ради
         # прошлого дня, а Уайлдеровский ATR экспоненциально забывает старое, поэтому
@@ -1179,6 +1234,12 @@ AVG_PARAMS = [
     P("reg_entry_only", "Гейт режима: 1=только вход, в позиции молчит", 0, 0, 1),
     # ХАОС R (13.09.2026): каждая R-я сделка против сигнала, см. make_on_bar.
     P("r_inv_every", "Хаос: каждая R-я сделка инверсная (0=выкл)", 0, 0, 20),
+    # CRAZY STOP (docs/crazy-stop-2026.md): стоп с переворотом. rev_mode (rev|same|rand) и seed - вне схемы.
+    P("sl_rev", "Crazy stop: после стопа переворот позиции (0=выкл)", 0, 0, 1),
+    P("rev_qty", "Crazy stop: объём (1=базовый лот, 2=весь закрытый)", 1, 1, 2),
+    P("rev_tp", "Crazy stop: тейк перевёрнутой, x D", 1, 0.5, 5),
+    P("rev_sl", "Crazy stop: стоп перевёрнутой, x D", 1, 0.25, 5),
+    P("rev_hold", "Crazy stop: выход по времени, баров", 240, 10, 960),
 ]
 # Модернизация «Shectory1»: разножка от РЕАЛЬНОГО размаха инструмента + мартингейл
 # по объёму доборов. Все три параметра выключены по умолчанию (gap_auto=0, k_avg=1.0),
@@ -1256,6 +1317,12 @@ AVG_PARAMS_FORCED = [
     P("reg_entry_only", "Гейт режима: 1=только вход, в позиции молчит", 0, 0, 1),
     # ХАОС R (13.09.2026): каждая R-я сделка против сигнала, см. make_on_bar.
     P("r_inv_every", "Хаос: каждая R-я сделка инверсная (0=выкл)", 0, 0, 20),
+    # CRAZY STOP (docs/crazy-stop-2026.md): стоп с переворотом. rev_mode (rev|same|rand) и seed - вне схемы.
+    P("sl_rev", "Crazy stop: после стопа переворот позиции (0=выкл)", 0, 0, 1),
+    P("rev_qty", "Crazy stop: объём (1=базовый лот, 2=весь закрытый)", 1, 1, 2),
+    P("rev_tp", "Crazy stop: тейк перевёрнутой, x D", 1, 0.5, 5),
+    P("rev_sl", "Crazy stop: стоп перевёрнутой, x D", 1, 0.25, 5),
+    P("rev_hold", "Crazy stop: выход по времени, баров", 240, 10, 960),
 ]
 
 # ════════════════════════════════════════════════════════════════════════════
