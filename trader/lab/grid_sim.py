@@ -1164,14 +1164,14 @@ def short_events(full: list, body: list, imp_min: float) -> dict:
     return out
 
 
-def simulate_short(body: list, tail: list, p: dict, starts: dict, atr: list, s: float, n_lv: int, T: int) -> dict:
+def simulate_short(body: list, tail: list, p: dict, starts: dict, atr: list, s: float, n_lv: int, T: int, tf: int = 1) -> dict:
     """Короткие сетки после событий. starts = {индекс бара body: H}: на закрытии бара ставится сетка (база = close,
     шаг = s x ATR_тек, n_lv уровней в каждую сторону), живёт T баров, затем снимается с закрытием позиции
     рыночно по open следующего бара + полспреда; стоп за краем на 1 шаг (закрытие позиции, конец сетки);
     одна сетка за раз; события внутри жизни сетки пропускаются."""
     n, hs, tick = len(body), p["half"], p["tick"]
     st = _new_state()
-    g, last, end_i, grids, stops = None, None, -1, 0, 0
+    g, last, end_i, end_ts, grids, stops = None, None, -1, 0, 0, 0
     for i in range(n):
         ts, o, h, lw, c = body[i][:5]
         if g is not None:
@@ -1188,7 +1188,7 @@ def simulate_short(body: list, tail: list, p: dict, starts: dict, atr: list, s: 
             why = None
             if (g.lo and c <= g.lo) or (g.hi and c >= g.hi):
                 why = "stop"
-            elif i >= end_i:
+            elif (i >= end_i) if tf == 1 else (ts + 60 >= end_ts):          # T баров M1 или T баров tf по времени
                 why = "life"
             if why:
                 if st["pos"]:
@@ -1206,7 +1206,7 @@ def simulate_short(body: list, tail: list, p: dict, starts: dict, atr: list, s: 
             g.px = {k: round(v / tick) * tick for k, v in g.px.items()}
             g.side = {k: None for k in g.levels}
             g.pending = True
-            last, end_i, grids = c, i + T, grids + 1
+            last, end_i, end_ts, grids = c, i + T, ts + 60 + T * tf * 60, grids + 1
     if st["pos"]:
         end_bar = tail[0] if tail else body[-1]
         _flat(st, end_bar[4], end_bar[0], "eod")
@@ -1277,10 +1277,44 @@ def draw_starts(days, edges, pool_m, pool_h, rng, evs_by_day, matched):
     return sch
 
 
+def tf_prepare(days: list, rows: list, tf: int) -> dict:
+    """Ось tf: M1 агрегируются в корзины tf (flex_range.aggregate_tf), ATR_тек = средний размах 10 баров tf на
+    закрытии корзины; выставляет days[k]['atr'] только на M1-баре, закрывающем корзину tf (по нему стартуют сетки
+    и берутся случайные моменты). Возвращает {'agg': tf-бары, 'pos': {ts последней M1 корзины: (день, индекс body)}}."""
+    from trader.lab.footprints.flex_range import aggregate_tf
+    agg = aggregate_tf(rows, tf)
+    where = {}
+    for k, d in enumerate(days):
+        d["atr"] = [None] * len(d["body"])
+        for i, r in enumerate(d["body"]):
+            where[r[0]] = (k, i)
+    for j in range(9, len(agg)):
+        w = where.get(agg[j][6])
+        if w:
+            days[w[0]]["atr"][w[1]] = sum(b[2] - b[3] for b in agg[j - 9:j + 1]) / 10
+    return {"agg": agg, "where": where}
+
+
+def tf_events(days: list, tfp: dict, imp_min: float) -> list:
+    """События r1.find_impulses на непрерывном ряду tf-баров (ATR за 60 баров tf переходит через ночь), импульс и
+    подтверждение в одном дне. -> по дням {'conf': {idx body: H}, 'peak': {...}} (idx = M1-бар, закрывающий корзину)."""
+    from trader.lab.footprints.r1_retest import find_impulses
+    agg, where = tfp["agg"], tfp["where"]
+    out = [{"conf": {}, "peak": {}} for _ in days]
+    for e in find_impulses(agg, {"atr_n": 60, "imp_bars": 20, "imp_min": imp_min, "imp_max": 250, "pb": 10}):
+        if agg[e["i_start"]][6] // 86400 != agg[e["i_conf"]][6] // 86400:
+            continue
+        for key, fi in (("conf", e["i_conf"]), ("peak", e["t_p"])):
+            w = where.get(agg[fi][6])
+            if w and w[1] < len(days[w[0]]["body"]) - 1 and w[1] not in out[w[0]][key]:
+                out[w[0]][key][w[1]] = e["strength"]
+    return out
+
+
 def run_short(arg: dict) -> dict:
-    """mode=short_days: params-база (tick/half из инструмента), starts ['conf','peak'], imp_mins, ss, ns, Ts, draws,
-    chunk [i, n] по парам (start, imp_min). mode=short_diag: диагностика возвратности (события против случайных
-    моментов с подбором ATR_тек по децилю в тот же час и без подбора)."""
+    """mode=short_days: starts ['conf','peak'], imp_mins, ss, ns, Ts (или Ts_by_tf {tf: [...]}), tfs [1,5,15,60], draws,
+    chunk [i, n] по парам (tf, start, imp_min). mode=short_diag: диагностика возвратности (события против случайных
+    моментов с подбором ATR_тек по децилю в тот же час и без подбора; горизонт T x tf M1-баров)."""
     import random
     from trader.lab.footprints import common
     key = arg["symbol_key"]
@@ -1290,54 +1324,72 @@ def run_short(arg: dict) -> dict:
     inst = INST["Si" if key[:2].lower() == "si" else "RI"]
     days = prep_days(rows, with_sig=False)
     nt = len(days) * 2 // 3
-    for d in days:
-        d["atr"] = atr10_of(d["full"], d["body"])
-    edges, pool_m, pool_h = short_pools(days)
     out = {"id": "SHORT", "mode": arg["mode"], "symbol": key, "n_days": len(days), "n_train": nt,
            "days": [d["stats"] for d in days]}
     pv = inst["pv"]
     p0 = {**DEFAULTS, **inst, "lot": 1, "fill_pen": 1}
+    tfs = arg.get("tfs", [1])
+
+    def setup(tf):
+        """atr по барам body для оси tf и функция событий."""
+        if tf == 1:
+            for d in days:
+                d["atr"] = atr10_of(d["full"], d["body"])
+            return lambda im: [short_events(d["full"], d["body"], im) for d in days]
+        tfp = tf_prepare(days, rows, tf)
+        return lambda im: tf_events(days, tfp, im)
 
     if arg["mode"] == "short_diag":
         res: dict = {}
-        for im in arg["imp_mins"]:
-            evs = [short_events(d["full"], d["body"], im)["conf"] for d in days]
-            evd = {k: list(e) for k, e in enumerate(evs) if e}
-            for T in arg["Ts"]:
-                real = [reversion_stats(days[k]["body"], i, T) for k, il in evd.items() for i in il]
-                real = [x for x in real if x]
-                r = {"n": len(real), "cross": sum(x[0] for x in real) / max(1, len(real)),
-                     "eff": sum(x[1] for x in real) / max(1, len(real)), "m": [], "u": []}
-                for kind, matched in (("m", True), ("u", False)):
-                    for dd in range(arg.get("draws", 20)):
-                        rng = random.Random(3000 + dd)
-                        sch = draw_starts(days, edges, pool_m, pool_h, rng, evd, matched)
-                        st = [reversion_stats(days[k]["body"], i, T) for k, dct in sch.items() for i in dct]
-                        st = [x for x in st if x]
-                        r[kind].append([sum(x[0] for x in st) / max(1, len(st)), sum(x[1] for x in st) / max(1, len(st))])
-                res[f"{im}|{T}"] = r
+        for tf in tfs:
+            events = setup(tf)
+            edges, pool_m, pool_h = short_pools(days)
+            for im in arg["imp_mins"]:
+                evs = [e["conf"] for e in events(im)]
+                evd = {k: list(e) for k, e in enumerate(evs) if e}
+                for T in arg["Ts"]:
+                    hz = T * tf
+                    real = [reversion_stats(days[k]["body"], i, hz) for k, il in evd.items() for i in il]
+                    real = [x for x in real if x]
+                    r = {"n": len(real), "cross": sum(x[0] for x in real) / max(1, len(real)),
+                         "eff": sum(x[1] for x in real) / max(1, len(real)), "m": [], "u": []}
+                    for kind, matched in (("m", True), ("u", False)):
+                        for dd in range(arg.get("draws", 20)):
+                            rng = random.Random(3000 + dd)
+                            sch = draw_starts(days, edges, pool_m, pool_h, rng, evd, matched)
+                            st = [reversion_stats(days[k]["body"], i, hz) for k, dct in sch.items() for i in dct]
+                            st = [x for x in st if x]
+                            r[kind].append([sum(x[0] for x in st) / max(1, len(st)), sum(x[1] for x in st) / max(1, len(st))])
+                    res[f"{tf}|{im}|{T}"] = r
         out["diag"] = res
         return out
-    pairs = [(a, b) for a in arg["starts"] for b in arg["imp_mins"]]
+    jobs = [(tf, a, b) for tf in tfs for a in arg["starts"] for b in arg["imp_mins"]]
     if arg.get("chunk"):
         i, n = arg["chunk"]
-        pairs = pairs[i::n]
+        jobs = jobs[i::n]
     out["configs"] = []
-    for stype, im in pairs:
-        evs = [short_events(d["full"], d["body"], im)[stype] for d in days]
+    cur_tf = None
+    for tf, stype, im in jobs:
+        if tf != cur_tf:
+            events = setup(tf)
+            edges, pool_m, pool_h = short_pools(days)
+            cur_tf, cache = tf, {}
+        if im not in cache:
+            cache[im] = events(im)
+        evs = [e[stype] for e in cache[im]]
         for s in arg["ss"]:
             for nn in arg["ns"]:
-                for T in arg["Ts"]:
+                for T in (arg.get("Ts_by_tf") or {}).get(str(tf), arg.get("Ts", [5, 10, 20, 40])):
                     def run_days(starts_by_day, ix):
                         rs = []
                         for k in ix:
                             d = days[k]
-                            rs.append(simulate_short(d["body"], d["tail"], p0, starts_by_day.get(k, {}), d["atr"], s, nn, T))
+                            rs.append(simulate_short(d["body"], d["tail"], p0, starts_by_day.get(k, {}), d["atr"], s, nn, T, tf))
                         return rs
 
                     rs = run_days({k: {i: 1.0 for i in e} for k, e in enumerate(evs)}, range(len(days)))
                     fee = [_fee_rows(r["fills"], key, pv) for r in rs]
-                    item = {"start": stype, "imp_min": im, "s": s, "n": nn, "T": T,
+                    item = {"tf": tf, "start": stype, "imp_min": im, "s": s, "n": nn, "T": T,
                             "gross": [round(r["pnl_pts"] * pv, 2) for r in rs],
                             "fee_m": [round(sum(x[1] for x in f), 2) for f in fee],
                             "fee_t": [round(sum(x[2] for x in f), 2) for f in fee],

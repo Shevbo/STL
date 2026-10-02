@@ -419,3 +419,33 @@ def test_short_reversion_stats():
     cross, eff = gs.reversion_stats(body, 0, 3)
     assert cross == 2 and abs(eff - 10 / (10 + 20 + 20)) < 1e-9
     assert gs.reversion_stats(body, 3, 3) is None
+
+
+# ── ось tf ───────────────────────────────────────────────────────────────────────────────────────
+def test_tf_aggregation_buckets_and_no_lookahead():
+    from trader.lab.footprints.flex_range import aggregate_tf
+    rnd = random.Random(4)
+    full = _day([1000 + rnd.gauss(0, 4) for _ in range(120)])
+    agg = aggregate_tf(full, 5)
+    b0 = agg[2]
+    seg = [r for r in full if b0[0] <= r[0] < b0[0] + 300]
+    assert b0[1] == seg[0][1] and b0[2] == max(r[2] for r in seg) and b0[3] == min(r[3] for r in seg) and b0[4] == seg[-1][4]
+    assert b0[6] == seg[-1][0] and b0[6] + 60 <= b0[0] + 300             # корзина закрыта к моменту ts_last + 60
+    cut = [r for r in full if r[0] <= b0[6]]                             # данных после закрытия корзины нет
+    assert aggregate_tf(cut, 5)[:3] == agg[:3]
+
+
+def test_tf_atr_only_at_bucket_close_and_life_in_tf_time():
+    full = _day([1000 + (i % 3) for i in range(400)])
+    body = [r for r in full if 600 <= (r[0] % 86400) // 60 < 1420]
+    days = [{"body": body, "full": full, "tail": []}]
+    tfp = gs.tf_prepare(days, full, 5)
+    a = days[0]["atr"]
+    idx = [i for i, v in enumerate(a) if v]
+    assert idx and all((body[i][0] // 60 + 1) % 5 == 0 for i in idx)      # только на последней минуте корзины
+    rows = [(1000, 1000, 1000, 1000)] * 3 + [(1000, 1000, 899, 950)] + [(950, 950, 950, 950)] * 30
+    b, t = _sbody(rows)
+    r = gs.simulate_short(b, t, SP, {1: 5.0}, [100.0] * len(b), 1.0, 3, 2, 5)   # T=2 корзины x 5 минут = 10 минут жизни
+    life = [f for f in r["fills"] if f[4] == "life"]
+    assert r["grids"] == 1 and len(life) == 1 and life[0][0] == b[12][0]         # старт на баре 1: жизнь до ts+60+600 -> бар 11, выход по open бара 12
+    assert tfp["agg"][0][6] <= tfp["agg"][1][0] + 299

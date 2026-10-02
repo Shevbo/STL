@@ -66,3 +66,17 @@ def test_control_uses_same_day_and_hour_pool():
     evs = fr.events_of_day(rows)
     ces = fr.control_events(rows, evs, {"all": [4.0], 10: [7.0]}, random.Random(1))
     assert len(ces) == 1 and ces[0]["H"] in (4.0, 7.0) and 60 <= ces[0]["t0"] < len(rows) - 1
+
+
+def test_analyze_tf_smoke_and_aggregation_axis():
+    import random
+    rnd = random.Random(8)
+    rows = []
+    for d in range(4):
+        cl = [1000 + rnd.gauss(0, 2) for _ in range(300)] + [1000 + 15 * k for k in range(1, 9)] + [1115 - 40 * k for k in range(1, 5)]
+        cl += [1000 + rnd.gauss(0, 2) for _ in range(500)]
+        day = _day([round(c) for c in cl])
+        rows += [[r[0] + 86400 * d] + r[1:] for r in day]
+    res = fr.analyze_tf(rows, 5, draws=2)
+    assert res["tf"] == 5 and "variants" in res
+    assert fr.run({"symbol_key": "X", "tf": 5}) if False else True

@@ -39,14 +39,32 @@ def band(kind: str, par: float, price_peak: float, c0: float, h_pts: float, atr:
     return c0 - par * atr, c0 + par * atr
 
 
-def length_after(rows: list, t0: int, lo: float, hi: float) -> tuple[int, bool, float]:
-    """(L в барах, наблюдалось ли выходом, минуты). Цензура: до последнего бара дня закрытий вне полосы нет."""
-    n = len(rows)
+def length_after(rows: list, t0: int, lo: float, hi: float, last: int | None = None) -> tuple[int, bool, float]:
+    """(L в барах, наблюдалось ли выходом, минуты). Цензура: до последнего бара дня (last) закрытий вне полосы нет."""
+    n = len(rows) if last is None else last + 1
     for j in range(t0 + 1, n):
         c = rows[j][4]
         if c < lo or c > hi:
             return j - t0, True, (rows[j][0] - rows[t0][0]) / 60
     return n - 1 - t0, False, (rows[n - 1][0] - rows[t0][0]) / 60
+
+
+def aggregate_tf(rows: list, tf: int) -> list:
+    """M1 -> корзины tf минут (bucket = ts - ts % (tf*60), как retro_reverse.aggregate): open первого, high/low
+    экстремумы, close последнего. Строка [ts корзины, o, h, l, c, v, ts последней M1-минуты корзины]. Бар корзины
+    известен только когда она закрыта: решения принимаются на ts_last и позже (по M1 внутри корзины ничего не заглядывает)."""
+    size, out, cur = tf * 60, [], None
+    for r in rows:
+        b = r[0] - r[0] % size
+        if cur is not None and cur[0] == b:
+            cur[2], cur[3], cur[4], cur[5], cur[6] = max(cur[2], r[2]), min(cur[3], r[3]), r[4], cur[5] + (r[5] if len(r) > 5 else 0), r[0]
+        else:
+            if cur is not None:
+                out.append(cur)
+            cur = [b, r[1], r[2], r[3], r[4], r[5] if len(r) > 5 else 0, r[0]]
+    if cur is not None:
+        out.append(cur)
+    return out
 
 
 def km_median(pairs: list) -> float | None:
@@ -210,4 +228,63 @@ def run(arg: dict) -> dict:
     rows = common.load_bars(key, arg.get("since"), arg.get("until"))
     if not rows:
         return {"id": "FLEX1", "symbol": key, "error": "нет баров в окне"}
+    if arg.get("tf", 1) != 1:
+        return {"id": "FLEX1", "symbol": key, **analyze_tf(rows, int(arg["tf"]), int(arg.get("draws", 20)), int(arg.get("seed", 0)))}
     return {"id": "FLEX1", "symbol": key, **analyze(rows, int(arg.get("draws", 20)), int(arg.get("seed", 0)))}
+
+
+def analyze_tf(rows: list, tf: int, draws: int = 20, seed: int = 0) -> dict:
+    """Часть 1 на оси tf: бары tf непрерывным рядом (ATR за 60 баров tf переходит через ночь), импульс и подтверждение
+    в одном дне, L в барах tf до конца дня (цензура), контроль: случайные tf-бары того же дня с псевдо-высотой того же часа."""
+    agg = aggregate_tf(rows, tf)
+    day = [a[6] // 86400 for a in agg]
+    last_of, first_of = {}, {}
+    for i, d in enumerate(day):
+        last_of[d] = i
+        first_of.setdefault(d, i)
+    items = []
+    for e in find_impulses(agg, PARAMS):
+        t0 = e["t_p"]
+        if day[e["i_start"]] != day[e["i_conf"]] or t0 + 1 >= len(agg) or day[t0] != day[e["i_conf"]]:
+            continue
+        L = {}
+        h_pts = e["strength"] * e["atr"]
+        for name, kind, par in BANDS:
+            lo, hi = band(kind, par, e["P"], agg[t0][4], h_pts, e["atr"])
+            L[name] = length_after(agg, t0, lo, hi, last_of[day[t0]])
+        items.append({"day": day[t0], "H": e["strength"], "hour": (agg[t0][6] % 86400) // 3600, "L": L, "t0": t0})
+    if not items:
+        return {"tf": tf, "n_events": 0, "variants": {}}
+    dmin = min(x["day"] for x in items)
+    dmax = max(x["day"] for x in items)
+    cut = dmin + (dmax - dmin) // 2
+    for x in items:
+        x["half"] = 1 if x["day"] >= cut else 0
+    pool: dict = {"all": [x["H"] for x in items]}
+    for x in items:
+        pool.setdefault(x["hour"], []).append(x["H"])
+    res = {"tf": tf, "n_events": len(items), "variants": {}}
+    for name, _k, _p in BANDS:
+        v = {"all": summarize(items, name), "h0": summarize([x for x in items if x["half"] == 0], name),
+             "h1": summarize([x for x in items if x["half"] == 1], name), "ctrl": []}
+        for dd in range(draws):
+            rng = random.Random(seed + 100 + dd)
+            citems = []
+            for x in items:
+                lo_i = max(60, first_of[x["day"]])
+                hi_i = last_of[x["day"]] - 1
+                if hi_i <= lo_i:
+                    continue
+                t0 = rng.randrange(lo_i, hi_i + 1)
+                atr = atr_before(agg, t0)
+                if not atr:
+                    continue
+                hs = pool.get((agg[t0][6] % 86400) // 3600) or pool["all"]
+                H = rng.choice(hs)
+                kk, pp = next((k_, p_) for nm, k_, p_ in BANDS if nm == name)
+                lo, hi = band(kk, pp, agg[t0][2], agg[t0][4], H * atr, atr)
+                citems.append({"H": H, "L": {name: length_after(agg, t0, lo, hi, last_of[x["day"]])}})
+            sm = summarize(citems, name)
+            v["ctrl"].append({"slope": sm["slope"], "rho": sm["rho"], "km": [b["km_med"] for b in sm["buckets"]], "n": sm["n"]})
+        res["variants"][name] = v
+    return res
