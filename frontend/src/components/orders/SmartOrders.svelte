@@ -17,7 +17,7 @@
     preview, protectionPair,
     shortCodes, sortBySideAndPrice, tillFact, isTwoSided, type Kind, type OpenPos, type Side,
     apexMs, corridorFromClicks, corridorState, corridorTimeError, corridorWidth,
-    gridState, gridWorstCase,
+    gridState, gridWorstCase, gridProtectionText,
     canExitOnly, exitOnlyFact, exitOnlyHeld, ownPosition,
     msToMskInput, mskInputToMs,
   } from '$lib/smart-order-help';
@@ -84,6 +84,15 @@
   let gSells = $state('');
   let gLot = $state('');
   let gStopPts = $state('');
+  // ЗАЩИТА СЕТКИ — поля с УМОЛЧАНИЯМИ ДВИЖКА, а не пустые. Пустое поле уедет
+  // нулём, а ноль здесь означает «не следить»: оператор, не трогавший защиту,
+  // получил бы сетку БЕЗ неё, хотя движок по умолчанию её включает (3 филла,
+  // 0.25%, 1 касание). Умолчание на экране — обещание того, что произойдёт.
+  const G_TRIG_FILLS = '3', G_TRIG_MOVE_PCT = '0.25', G_TRIG_TOUCHES = '1';
+  let gTrigFills = $state(G_TRIG_FILLS);
+  let gTrigMovePct = $state(G_TRIG_MOVE_PCT);
+  let gTrigTouches = $state(G_TRIG_TOUCHES);
+  let gRearmMin = $state('');
   // ПРОФИЛЬ ИСПОЛНЕНИЯ — один селект вместо трёх полей секунд (решение оператора
   // 29.09.2026). Секунды остались в API как разовое перекрытие и живут под
   // раскрытием: на рядовом пути они только мешают.
@@ -274,6 +283,8 @@
       cStopPts: num(cStopPts), cFlipsMax: num(cFlipsMax),
       gStep: num(gStep), gBuys: num(gBuys), gSells: num(gSells),
       gLot: num(gLot), gStopPts: num(gStopPts),
+      gTrigFills: num(gTrigFills), gTrigMovePct: num(gTrigMovePct),
+      gTrigTouches: num(gTrigTouches), gRearmMin: num(gRearmMin),
       price, pointValue,
     });
     // «Следящий» выбран, а откат не введён — движок поставит ОБЫЧНЫЙ тейк на
@@ -425,7 +436,8 @@
   const TRIGGER_KEYS = ['trigger_price', 'trail_offset', 'watch_client_id', 'child_price',
                         'c_t1_ms', 'c_p1', 'c_t2_ms', 'c_p2', 'c_low', 'c_low2',
                         'c_stop_pts', 'c_flips_max',
-                        'g_step', 'g_buys', 'g_sells', 'g_lot', 'g_stop_pts'];
+                        'g_step', 'g_buys', 'g_sells', 'g_lot', 'g_stop_pts',
+                        'g_trig_fills', 'g_trig_move_pct', 'g_trig_touches', 'g_rearm_min'];
   // Три клика по графику собрались — переводим их в параметры. Сам перевод
   // (бар вместо пикселя, шаг цены, приведение нижней к первой точке) живёт в
   // corridorFromClicks и покрыт тестами; здесь только подстановка в форму.
@@ -538,6 +550,10 @@
       g_sells: only('g_sells', num(gSells)),
       g_lot: only('g_lot', num(gLot)),
       g_stop_pts: only('g_stop_pts', num(gStopPts)),
+      g_trig_fills: only('g_trig_fills', num(gTrigFills)),
+      g_trig_move_pct: only('g_trig_move_pct', num(gTrigMovePct)),
+      g_trig_touches: only('g_trig_touches', num(gTrigTouches)),
+      g_rearm_min: only('g_rearm_min', num(gRearmMin)),
       // Профиль относится к ЛЮБОМУ типу заявки, а не только к защитной: не
       // исполнившийся ВХОД врёт человеку так же, как выход — он видит
       // «сработала», а в рынке ничего нет.
@@ -581,6 +597,8 @@
       watchId = ''; childPrice = '';
       cT1 = 0; cP1 = ''; cT2 = 0; cP2 = ''; cLow = ''; cLow2 = ''; cStopPts = ''; cFlipsMax = '';
       gStep = ''; gBuys = ''; gSells = ''; gLot = ''; gStopPts = '';
+      gTrigFills = G_TRIG_FILLS; gTrigMovePct = G_TRIG_MOVE_PCT;
+      gTrigTouches = G_TRIG_TOUCHES; gRearmMin = '';
       cErr = ''; corridorDraw.reset();
       confirming = false;
       await smartOrdersStore.refresh();
@@ -634,6 +652,14 @@
     gSells = (o as any).g_sells ? String((o as any).g_sells) : '';
     gLot = (o as any).g_lot ? String((o as any).g_lot) : '';
     gStopPts = (o as any).g_stop_pts ? String((o as any).g_stop_pts) : '';
+    // Защиту переносим ПО ФАКТУ заявки, включая НОЛЬ: ноль означает «не
+    // следить», и подставить вместо него умолчание значило бы включить защиту,
+    // которую оператор сознательно выключил.
+    const gnum = (v: unknown) => (v === undefined || v === null ? '' : String(v));
+    gTrigFills = gnum((o as any).g_trig_fills);
+    gTrigMovePct = gnum((o as any).g_trig_move_pct);
+    gTrigTouches = gnum((o as any).g_trig_touches);
+    gRearmMin = (o as any).g_rearm_min ? String((o as any).g_rearm_min) : '';
     // g_base НЕ подставляем сознательно: базу сетки сервер берёт с рынка в
     // момент приёма, и присланное значение он УВАЖИТ — заявка встала бы вокруг
     // устаревшей точки (предупреждение real-trade 01.10.2026).
@@ -915,6 +941,24 @@
                 <input class="so-in pts" type="number" step="any" min="0" bind:value={gStopPts}
                        placeholder="0 — без стопа" aria-label={f.label} />
                 <span class="so-unit">п.</span>
+              </div>
+            {:else if f.key === 'g_trig_fills'}
+              <input class="so-in" type="number" step="1" min="0" bind:value={gTrigFills}
+                     placeholder="0 — не следить" aria-label={f.label} />
+            {:else if f.key === 'g_trig_move_pct'}
+              <div class="so-unit-wrap">
+                <input class="so-in pts" type="number" step="any" min="0" bind:value={gTrigMovePct}
+                       placeholder="0 — не следить" aria-label={f.label} />
+                <span class="so-unit">%</span>
+              </div>
+            {:else if f.key === 'g_trig_touches'}
+              <input class="so-in" type="number" step="1" min="1" bind:value={gTrigTouches}
+                     placeholder="1" aria-label={f.label} />
+            {:else if f.key === 'g_rearm_min'}
+              <div class="so-unit-wrap">
+                <input class="so-in pts" type="number" step="any" min="0" bind:value={gRearmMin}
+                       placeholder="0 — не перевзводить" aria-label={f.label} />
+                <span class="so-unit">мин</span>
               </div>
             {:else if f.key === 'c_stop_pts'}
               <div class="so-unit-wrap">
@@ -1326,6 +1370,16 @@
                 · вниз {o.g_buys ?? 0} · вверх {o.g_sells ?? 0} · по {o.g_lot ?? 0}</span>
             {/if}
             {#if o.g_stop_pts}<span class="so-c-corr-w">стоп за краем {fmtPts(o.g_stop_pts)}</span>{/if}
+            <!-- ЗАЩИТА — ОДНА ФОРМУЛИРОВКА С ФОРМОЙ. Сетка под защитой перестаёт
+                 открывать новое, и по уровням этого не видно: карточка обязана
+                 сказать, при каком условии она это сделает и сделала ли уже. -->
+            <span class="so-c-corr-w">{gridProtectionText(o as any)}</span>
+            {#if (o as any).g_trig_ms}
+              <span class="so-c-corr-w">защита включилась {fmtWhen((o as any).g_trig_ms)}</span>
+            {/if}
+            {#if (o as any).g_rearms}
+              <span class="so-c-corr-w">перевзводилась {(o as any).g_rearms} раз</span>
+            {/if}
           </div>
         {/if}
         {#if o.kind === 'corridor' || o.kind === 'triangle'}

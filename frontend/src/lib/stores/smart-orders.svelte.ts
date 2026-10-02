@@ -80,6 +80,18 @@ export interface SmartOrder {
   // позицию, и лишь по цене не хуже средней. Имена полей разные у сетки и у
   // фигур, карточка читает их через ownPosition().
   g_avg?: number;
+  // ЗАЩИТА СЕТКИ (real-trade 02.10.2026): после g_trig_fills исполненных уровней
+  // ИЛИ ухода цены от базы на g_trig_move_pct процентов (считая g_trig_touches
+  // касаний С ОДНОЙ стороны) сетка сама переходит в «только на выход» по
+  // безубытку; g_trig_ms — когда это случилось, g_rearm_min — через сколько
+  // минут она встанет снова, g_rearms — сколько раз уже вставала.
+  g_trig_fills?: number;
+  g_trig_move_pct?: number;
+  g_trig_touches?: number;
+  g_trig_ms?: number;
+  g_rearm_min?: number;
+  g_rearms?: number;
+  g_fills_done?: number;
   c_avg?: number;
   exit_only?: boolean;
   note: string;
