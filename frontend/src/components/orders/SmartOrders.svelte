@@ -1383,7 +1383,9 @@
             <!-- ЗАЩИТА — ОДНА ФОРМУЛИРОВКА С ФОРМОЙ. Сетка под защитой перестаёт
                  открывать новое, и по уровням этого не видно: карточка обязана
                  сказать, при каком условии она это сделает и сделала ли уже. -->
-            <span class="so-c-corr-w">{gridProtectionText(o as any)}</span>
+            <!-- Пороги защиты — ЦЕНОЙ: у взведённой сетки база известна точно
+                 (g_base), и процент незачем держать процентом. -->
+            <span class="so-c-corr-w">{gridProtectionText(o as any, o.g_base ?? 0)}</span>
             {#if gridTargetText(o as any, o.code === code ? price : 0, o.code === code ? pointValue : 0)}
               <span class="so-c-corr-w">{gridTargetText(o as any, o.code === code ? price : 0, o.code === code ? pointValue : 0)}</span>
             {/if}

@@ -100,3 +100,35 @@ describe('цель прибыли на карточке', () => {
     expect(gridTargetText({ g_tp_rub: 1000, g_cash_pts: 10 }, 0, 1.3)).toContain('цены инструмента нет');
   });
 });
+
+describe('порог защиты ценой, а не процентом', () => {
+  it('знаем базу — называем оба уровня', () => {
+    // Требование оператора 02.10.2026: «0.25% надо расшифровать в терминах
+    // цены». Процент нечем сверить с графиком, уровень — можно.
+    const t = gridProtectionText({ g_trig_move_pct: 0.25, g_trig_touches: 1 }, 85_000);
+    expect(t).toContain('0.25%');
+    expect(t).toMatch(/ниже 84\s?787/);
+    expect(t).toMatch(/выше 85\s?212/);
+  });
+
+  it('базы нет — процент остаётся процентом, цена не выдумывается', () => {
+    const t = gridProtectionText({ g_trig_move_pct: 0.25 }, 0);
+    expect(t).toContain('0.25%');
+    expect(t).not.toMatch(/ниже|выше/);
+  });
+
+  it('защита только по филлам — порогов цены нет вовсе', () => {
+    expect(gridProtectionText({ g_trig_fills: 3, g_trig_move_pct: 0 }, 85_000))
+      .not.toMatch(/ниже|выше/);
+  });
+
+  it('фраза перед кнопкой берёт порог от текущей цены', () => {
+    const p = preview({
+      kind: 'grid', side: 'buy', qty: 3, code: 'RIZ6', trigger: 0, trailOffset: 0,
+      watchId: '', childPrice: 0, gStep: 10, gBuys: 20, gSells: 20, gLot: 5,
+      gStopPts: 40, gTrigFills: 3, gTrigMovePct: 0.25, gTrigTouches: 2, gRearmMin: 60,
+      price: 85_000,
+    });
+    expect(p.sentence).toMatch(/ниже 84\s?787/);
+  });
+});

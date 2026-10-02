@@ -560,10 +560,13 @@ export function preview(p: PreviewInput): Preview {
     // ЗАЩИТА — ЧАСТЬ ОБЕЩАНИЯ. Фраза перед кнопкой описывает, что произойдёт;
     // умолчания движка включают защиту сами, и промолчать о ней значит дать
     // оператору взвести сетку, которая снимется не тогда, когда он думает.
+    // База сетки — рыночная цена в МОМЕНТ ПРИЁМА, своего поля у неё нет. Для
+    // порогов берём текущую: к моменту взвода она сместится вместе с рынком, но
+    // показать «0.25%» без цены значит не показать ничего.
     const protection = gridProtectionText({
       g_trig_fills: p.gTrigFills ?? 0, g_trig_move_pct: p.gTrigMovePct ?? 0,
       g_trig_touches: p.gTrigTouches ?? 0, g_rearm_min: p.gRearmMin ?? 0,
-    });
+    }, p.price || 0);
     sentence = `Сторож поставит в стакан ${buys + sells} `
       + `${plural(buys + sells, 'заявку', 'заявки', 'заявок')} сеткой вокруг текущей цены: `
       + `${buys} вниз на покупку, ${sells} вверх на продажу, шагом ${fmtPts(step)}, `
@@ -1707,7 +1710,7 @@ export function gridWorstCase(g: GridGeom, pointValue = 0):
 export function gridProtectionText(g: {
   g_trig_fills?: number; g_trig_move_pct?: number;
   g_trig_touches?: number; g_rearm_min?: number;
-}): string {
+}, base = 0): string {
   const fills = Math.max(0, g.g_trig_fills ?? 0);
   const pct = Math.max(0, g.g_trig_move_pct ?? 0);
   const touches = Math.max(0, g.g_trig_touches ?? 0);
@@ -1715,7 +1718,14 @@ export function gridProtectionText(g: {
   const by: string[] = [];
   if (fills > 0) by.push(`${fills} ${plural(fills, 'уровень', 'уровня', 'уровней')} исполнено`);
   if (pct > 0) {
-    by.push(`цена ушла от базы на ${pct}%`
+    // ПРОЦЕНТ — НЕ ЦЕНА. «0.25% от базы» нечем сверить с графиком: оператор
+    // смотрит на уровни, а не на доли (его замечание 02.10.2026). Знаем базу —
+    // называем оба порога ценой; не знаем — процент остаётся процентом, но
+    // выдуманной цены вместо него не появляется.
+    const where = base > 0
+      ? `, то есть ниже ${fmtPrice(base * (1 - pct / 100))} или выше ${fmtPrice(base * (1 + pct / 100))}`
+      : '';
+    by.push(`цена ушла от базы на ${pct}%${where}`
       + (touches > 1 ? ` ${touches} ${plural(touches, 'раз', 'раза', 'раз')} с одной стороны` : ''));
   }
   if (!by.length) return 'Защиты нет: сетка будет добирать против хода, пока хватает денег.';
