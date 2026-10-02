@@ -222,6 +222,13 @@ class SmartOrder:
     # средняя после частичного сокращения уже не описывает заработанное.
     g_cash_pts: float = 0.0
     g_cash_on: bool = False      # поток ведётся (база заведена)
+    # ОКНО ВЫСТАВЛЕННЫХ УРОВНЕЙ (оператор 02.10.2026: «в радиации не надо
+    # выставлять все заявки сразу. только пять сверху и пять снизу. остальные в
+    # STL»). В QUIK стоят N ближайших к рынку уровней с каждой стороны, остальные
+    # ждут в STL и выставляются, когда рынок к ним подходит. Сорок заявок по 3-5
+    # контрактов держали ГО под всю сетку сразу (свободных средств 25%), хотя
+    # дальние уровни часами не исполняются. 0 = выставлять все, как раньше.
+    g_window: int = 5
     g_trig_touches: int = 1      # сколько касаний С ОДНОЙ стороны нужно
     g_touch_up: int = 0          # касаний верхнего порога
     g_touch_down: int = 0        # касаний нижнего порога
@@ -473,6 +480,29 @@ def grid_side_for(so: SmartOrder, level: int, price: float = 0.0) -> str:
     if price > 0:
         return "sell" if grid_price(so, level) > price else "buy"
     return "buy" if level < 0 else "sell"
+
+
+def grid_window(so: SmartOrder, live: dict, price: float) -> tuple[set[int], set[int]]:
+    """(какие уровни ставить, какие держать, если уже стоят).
+
+    Ставим N ближайших к рынку ЖИВЫХ уровней с каждой стороны (погасший ждёт
+    соседа и места в окне не занимает). Держим — N+2: уровень, вышедший из окна на
+    один-два шага, не снимаем. Иначе цена, гуляющая вокруг одного уровня, гоняла
+    бы дальний край окна туда-сюда снятием и постановкой, а каждая транзакция
+    стоит денег (сверх 15 в секунду — 5 ₽ штука).
+    """
+    allv = set(grid_levels(so))
+    if so.g_window <= 0 or price <= 0:
+        return allv, allv
+    lv = [lv_ for lv_ in grid_levels(so) if grid_places_here(live, lv_)]
+    above = sorted((x for x in lv if grid_price(so, x) > price), key=lambda x: grid_price(so, x))
+    below = sorted((x for x in lv if grid_price(so, x) < price), key=lambda x: -grid_price(so, x))
+    # Уровень ровно на цене рынка места в окне не занимает: заявка на нём не
+    # ставится (стояла бы впритык к рынку), и считать его значило бы выставить
+    # четыре вместо пяти. Стоящую там заявку не снимаем.
+    at = [x for x in lv if grid_price(so, x) == price]
+    n = so.g_window
+    return set(above[:n] + below[:n]), set(above[:n + 2] + below[:n + 2] + at)
 
 
 def grid_places_here(live: dict, level: int) -> bool:

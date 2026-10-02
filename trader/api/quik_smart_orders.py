@@ -137,6 +137,9 @@ class SmartOrderBody(BaseModel):
     # рыночной, сетка закончена (перевзведение на неё не распространяется).
     # 0 = без цели.
     g_tp_rub: float = 0.0
+    # Сколько ближайших уровней с каждой стороны стоит в QUIK; остальные ждут в
+    # STL. 0 = выставлять все.
+    g_window: int = 5
     c_stop_pts: float = 0.0
     c_flips_max: int = 0
     note: str = ""
@@ -165,7 +168,7 @@ async def create(body: SmartOrderBody, request: Request):
         c_stop_pts=float(body.c_stop_pts),
         g_trig_fills=int(body.g_trig_fills), g_trig_move_pct=float(body.g_trig_move_pct),
         g_rearm_min=float(body.g_rearm_min), g_trig_touches=int(body.g_trig_touches),
-        g_tp_rub=float(body.g_tp_rub), g_cash_on=True,
+        g_tp_rub=float(body.g_tp_rub), g_cash_on=True, g_window=int(body.g_window),
         g_step=float(body.g_step), g_buys=int(body.g_buys), g_sells=int(body.g_sells),
         g_lot=int(body.g_lot), g_stop_pts=float(body.g_stop_pts),
         c_flips_max=int(body.c_flips_max), c_qty=int(body.qty),
@@ -2143,6 +2146,25 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
                 log.warning("smart_order.exit_only_excess_cancelled", so_id=so.so_id,
                             num=r["num"], pos=so.g_pos)
 
+        # ОКНО: в QUIK только ближайшие уровни, дальние ждут в STL (см. g_window).
+        # Стоящее за пределом «держать» снимается по номеру из таблицы терминала —
+        # склад после рестарта пуст, а подхваченные строки записей не имеют.
+        win_place, win_keep = so_mod.grid_window(so, live, price)
+        if so.g_window > 0 and price > 0 and term_all is not None and so.g_step > 0:
+            for r in term_all.get(so.so_id, []):
+                lvl = round((float(r.get("price") or 0) - so.g_base) / so.g_step)
+                if lvl in win_keep:
+                    continue
+                k = f"xkill:{r['num']}"
+                if now - int(live.get(k) or 0) < 30_000:
+                    continue
+                live[k] = now
+                srv.enqueue_order(agent, order_msgs.build_cancel_order(
+                    client_id=f"op:kill:{r['num']}", order_id=r["num"], code=r["sec"]))
+                dirty = True
+                log.info("smart_order.grid_window_withdrawn", so_id=so.so_id,
+                         num=r["num"], level=lvl, price=r.get("price"))
+
         for level in so_mod.grid_levels(so):
             key = str(level)
             cid = live.get(key) or ""
@@ -2264,6 +2286,8 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
             #   цена хуже средней  — закрытие здесь дало бы убыток.
             # Молчать нельзя ни в одном: оператор включил режим и ждёт выхода, и
             # «ничего не происходит» он обязан уметь объяснить сам, по журналу.
+            if level not in win_place:
+                continue              # дальний уровень ждёт в STL, пока рынок не подойдёт
             if so.exit_only:
                 _xs, _xq = so_mod.exit_side_qty(so.g_pos)
                 why = ""
