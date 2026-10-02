@@ -323,18 +323,36 @@ def append_trades(status: dict[str, Any] | None, seen: set[str], now_ms: int,
     return len(fresh)
 
 
+# Сколько ПРОШЛЫХ дней журнала читать при старте. Кольцо сделок у агента держит
+# 500 последних и тянется через сутки, поэтому «сегодняшнего» файла не хватает:
+# после рестарта в новом дне старые сделки из кольца выглядят новыми и пишутся
+# заново. 02.10.2026 так накопилось 1311 повторов на 1288 уникальных сделок —
+# почти половина журнала; в одном только этом дне 143 повтора на шесть рестартов.
+# Неделя с запасом покрывает любое правдоподобное кольцо, а читать дёшево: весь
+# журнал за девять дней это 1292 строки.
+_SEEN_DAYS_BACK = 7
+
+
 def _load_seen(now_ms: int, directory: str = TRADES_DIR) -> set[str]:
-    """Номера сделок, уже лежащие в сегодняшнем журнале (после рестарта STL)."""
+    """Номера сделок, уже лежащие в журнале за последние дни (после рестарта STL).
+
+    ЧИТАЕМ НЕ ТОЛЬКО СЕГОДНЯ. Кольцо агента переживает смену суток, и дедуп по
+    одному дневному файлу пропускал всё, что случилось до полуночи: тот же филл
+    ложился во второй файл и считался дважды всеми, кто журнал просто суммирует.
+    """
     seen: set[str] = set()
-    path = journal_path(now_ms, directory)
-    if not os.path.exists(path):
-        return seen
-    with open(path, encoding="utf-8") as fh:
-        for line in fh:
-            try:
-                seen.add(str(json.loads(line).get("num")))
-            except Exception:  # noqa: BLE001 — битая строка не повод терять журнал
-                continue
+    # День считаем тем же способом, что journal_path: сдвиг в МСК и gmtime, без
+    # зависимости от часового пояса машины.
+    for back in range(_SEEN_DAYS_BACK + 1):
+        path = journal_path(now_ms - back * 86_400_000, directory)
+        if not os.path.exists(path):
+            continue
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    seen.add(str(json.loads(line).get("num")))
+                except Exception:  # noqa: BLE001 — битая строка не повод терять журнал
+                    continue
     return seen
 
 

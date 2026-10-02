@@ -115,3 +115,45 @@ def test_book_archives_dead_contracts_when_the_service_is_down(tmp_path, monkeyp
     assert cleanup.archive_book(apply=True) == 1
     kept = json.loads(book.read_text(encoding="utf-8"))["orders"]
     assert [o["so_id"] for o in kept] == ["b", "c"]
+
+
+# --------------------------------------------------------------------------
+# КОРЕНЬ дублей: дедуп при старте читал ТОЛЬКО сегодняшний файл.
+# --------------------------------------------------------------------------
+
+
+def test_seen_spans_previous_days_not_only_today(tmp_path, monkeypatch):
+    """ПОЧЕМУ ДУБЛИ ВОЗНИКАЛИ ВООБЩЕ. Кольцо сделок у агента держит 500 последних
+    и переживает смену суток, а `_load_seen` читал только сегодняшний файл. После
+    рестарта в новом дне старые сделки из кольца выглядели новыми и писались
+    заново: 02.10.2026 так накопилось 1311 повторов на 1288 уникальных сделок, в
+    одном этом дне 143 на шесть рестартов.
+    """
+    from trader.quik import truth
+
+    d = tmp_path / "trades"
+    d.mkdir()
+    day_ms = 1790900000000                      # 02.10.2026
+    yesterday = truth.journal_path(day_ms - 86_400_000, str(d))
+    today = truth.journal_path(day_ms, str(d))
+    with open(yesterday, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps({"num": "OLD1"}) + "\n")
+        fh.write(json.dumps({"num": "OLD2"}) + "\n")
+    with open(today, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps({"num": "NEW1"}) + "\n")
+
+    seen = truth._load_seen(day_ms, str(d))
+    assert seen == {"OLD1", "OLD2", "NEW1"}, (
+        "вчерашние номера обязаны попасть в seen, иначе кольцо запишет их заново")
+
+    # и сделка из кольца, уже лежащая во ВЧЕРАШНЕМ файле, второй раз не пишется
+    status = {"quik": {"trades": [
+        {"num": "OLD2", "ts_ms": day_ms - 3600_000, "sec": "RIZ6", "side": "buy",
+         "qty": 1, "price": 85000},
+        {"num": "NEW2", "ts_ms": day_ms, "sec": "RIZ6", "side": "sell",
+         "qty": 1, "price": 85100},
+    ]}}
+    added = truth.append_trades(status, seen, day_ms, str(d))
+    assert added == 1, "повтор из кольца не должен попасть в журнал"
+    rows = [json.loads(x) for x in open(today, encoding="utf-8") if x.strip()]
+    assert [r["num"] for r in rows] == ["NEW1", "NEW2"]
