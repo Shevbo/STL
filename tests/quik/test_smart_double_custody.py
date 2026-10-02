@@ -160,3 +160,56 @@ def test_a_lone_native_order_without_a_row_still_screams(tmp_path):
     assert so.oco_group == ""
     msgs = _audit_book_vs_terminal(book, {})
     assert len(msgs) == 1 and "без сторожа" in msgs[0]
+
+
+def test_the_holder_follows_the_row_not_the_list_order(tmp_path):
+    """ДУБЛЬ ЗАЩИТЫ НА ЖИВЫХ ДЕНЬГАХ, 02.10.2026, рестарт в 08:00.
+
+    Связка OCO охраняется ОДНОЙ стоп-заявкой QUIK, и тег у неё — одной из ног.
+    Держатель же выбирался первым подходящим из kids, то есть по порядку в книге.
+    Не совпало — строка считалась ПРОПАВШЕЙ: в 08:01:15 журнал написал «стоп-заявка
+    снялась по сроку, сделок нет», в 08:01:16 «защита отдана терминалу», и в QUIK
+    оказались ДВЕ записи с одним тегом stl-so-ae6731eec7, одинаковые до копейки:
+    qty 1, срабатывание 86500, заявка по 85080. Сработали бы обе — продали бы 2
+    контракта вместо 1.
+
+    Здесь порядок ног СПЕЦИАЛЬНО обратный тегу записи: тейк идёт первым, а запись
+    принадлежит стопу. Падает на старом коде.
+    """
+    book = SmartOrderBook(str(tmp_path / "oco.json"))
+    parent = SmartOrder(so_id="34593ce9df", kind="trail_tp", code="RIZ6", side="buy",
+                        qty=1, created_ms=NOW, status="fired",
+                        native_state="live", native_seen_ms=NOW - 60_000)
+    tp = SmartOrder(so_id="c21c114afa", kind="trail_tp", code="RIZ6", side="sell", qty=1,
+                    trigger_price=86500, created_ms=NOW, status="native",
+                    parent_id="34593ce9df", oco_group="br:34593ce9df")
+    sl = SmartOrder(so_id="ae6731eec7", kind="sl", code="RIZ6", side="sell", qty=1,
+                    trigger_price=85100, created_ms=NOW, status="native",
+                    parent_id="34593ce9df", oco_group="br:34593ce9df")
+    book.orders += [parent, tp, sl]        # тейк ПЕРВЫМ, запись принадлежит стопу
+
+    # flags=29 — снято с ЖИВОЙ стопы 310530617 02.10.2026: бит 0 = заявка активна.
+    store = FakeStore([_row("ae6731eec7", num="310530617", flags="29")])
+    failed = _track_native(book, store, "9618", NOW)
+
+    assert parent.native_state == "live", (
+        "запись в терминале ЕСТЬ — охрану забирать и передавать заново нельзя")
+    assert [c.status for c in (tp, sl)] == ["native", "native"],         "обе ноги остаются под охраной терминала"
+    assert parent not in failed, "передача заново = вторая стоп-заявка в QUIK"
+
+
+def test_a_genuinely_missing_row_still_returns_custody(tmp_path):
+    """Послабление узкое: записи нет НИ ПО ОДНОЙ ноге — охрана честно возвращается
+    STL. Иначе 23.09.2026 повторится: следящая продажа 30 контрактов пропала в
+    терминале, книга похоронила её в orphaned, и заявки не стало нигде."""
+    book = SmartOrderBook(str(tmp_path / "gone.json"))
+    parent = SmartOrder(so_id="34593ce9df", kind="trail_tp", code="RIZ6", side="buy",
+                        qty=1, created_ms=NOW, status="fired",
+                        native_state="live", native_seen_ms=NOW - 60_000)
+    sl = SmartOrder(so_id="ae6731eec7", kind="sl", code="RIZ6", side="sell", qty=1,
+                    trigger_price=85100, created_ms=NOW, status="native",
+                    parent_id="34593ce9df", oco_group="br:34593ce9df")
+    book.orders += [parent, sl]
+    failed = _track_native(book, FakeStore([]), "9618", NOW)
+    assert sl.status == "armed", "записи нет нигде — защиту ведёт STL"
+    assert parent in failed
