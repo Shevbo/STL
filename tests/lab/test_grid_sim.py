@@ -310,3 +310,47 @@ def test_wide_stop_closes_and_ends():
     r = gs.simulate_wide(bars, {}, WSP, {**WP, "buys": 2, "sells": 2, "stop_pts": 100}, 1000)
     assert r["stop_ts"] is not None and r["last_pos"] == 0 and r["n_fills"] == 3          # 2 продажи + закрытие позиции 2
     assert r["max_pos"] == 2 and r["eq_g"][1] == r["eq_g"][0]                                  # после стопа сетка не работает
+
+
+# ── четвёртая редакция: сброс по импульсу ────────────────────────────────────────────────────────
+def test_reset_closes_position_at_next_open_and_moves_base():
+    # бар 1: продажа +1 (1100), закрытие 1105; импульс зафиксирован на закрытии бара 1
+    body, tail = _dbody([FLAT, (1000, 1101, 1000, 1105), (1105, 1105, 1105, 1105),
+                         (1105, 1206, 1105, 1206), (1206, 1206, 1206, 1206)])
+    imp = [False, True, False, False, False]
+    r = gs.simulate_reset(body, tail, {**PR, "half": 2.0}, imp, cool=0)
+    assert [(f[1], f[2], f[4]) for f in r["fills"][:2]] == [("sell", 1100, "level"), ("buy", 1107, "reset")]  # open бара 2 + 2
+    assert r["resets"] == 1 and r["resets_pos"] == 1 and r["reset_pnl"] == 1100 - 1107
+    # база перенесена к close бара 1 (1105): уровень +1 теперь 1205, бар 3 проходит 1206 и продаёт именно его
+    assert r["fills"][2][1:3] == ("sell", 1205)
+
+
+def test_reset_cool_pauses_grid():
+    body, tail = _dbody([FLAT, (1000, 1101, 1000, 1105), (1105, 1105, 1105, 1105),
+                         (1105, 1306, 1105, 1306), (1306, 1306, 1306, 1306)])
+    imp = [False, True, False, False, False]
+    r = gs.simulate_reset(body, tail, PR, imp, cool=15)
+    assert [f[4] for f in r["fills"]] == ["level", "reset"]          # пауза 15 минут: проход 1205/1305 не торгуется
+
+
+def test_reset_impulse_flags_do_not_look_ahead():
+    rnd = random.Random(2)
+    cl, px = [], 1000.0
+    for i in range(420):                                              # 07:00-14:00 тихо, затем рывок и откат
+        px += rnd.gauss(0, 1.0) if i < 300 else (6 if i < 308 else -3)
+        cl.append(round(px))
+    full = _day(cl)
+    body = [r for r in full if 600 <= (r[0] % 86400) // 60 < 1420]
+    flags = gs.impulse_flags(full, body, 60, 10)
+    assert any(flags)
+    for m in (250, 303, 307, 330):
+        part = gs.impulse_flags(full[:m + 1], [r for r in body if r[0] <= full[m][0]], 60, 10)
+        assert part == flags[:len(part)]
+
+
+def test_reset_random_control_keeps_reset_count():
+    rows = _day([1000 + (5 if i % 2 else -5) for i in range(900)])
+    body, tail = _split(rows)
+    sch = {10, 80, 200}
+    r = gs.simulate_reset(body, tail, PR, [False] * len(body), cool=0, schedule=sch)
+    assert r["resets"] == 3

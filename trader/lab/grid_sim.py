@@ -113,6 +113,7 @@ def _apply(st: dict, side: str, price: float, qty: int, ts: int, kind: str) -> N
     else:
         closed = min(qty, abs(pos))
         st["trades_pnl"].append((price - avg) * closed * (1 if pos > 0 else -1))
+        st["tk"].append(kind)
         if qty > closed:
             st["avg"] = price
     st["pos"] = pos + s * qty
@@ -144,7 +145,7 @@ def _segment(g: _Grid, st: dict, a: float, b: float, ts: int) -> None:
 
 def _new_state() -> dict:
     return {"pos": 0, "avg": 0.0, "fills": [], "trades_pnl": [], "pos_path": [], "max_pos": 0,
-            "stops": []}
+            "stops": [], "tk": []}
 
 
 def simulate_day(bars_day: list, params: dict) -> dict | None:
@@ -206,7 +207,7 @@ def simulate_day(bars_day: list, params: dict) -> dict | None:
         end_bar = tail[0] if tail else body[-1]
         _flat(st, end_bar[4], end_bar[0], "eod")
     # ponytail: pos_path хранит позицию после каждого филла, не по барам
-    return {"fills": st["fills"], "trades_pnl": st["trades_pnl"],
+    return {"fills": st["fills"], "trades_pnl": st["trades_pnl"], "tk": st["tk"],
             "pnl_pts": sum(st["trades_pnl"]) * 1.0, "pos_path": st["pos_path"],
             "max_pos": st["max_pos"], "stop_time": st["stops"][0] if st["stops"] else None,
             "n_stops": len(st["stops"]),
@@ -448,7 +449,7 @@ def _quant(xs: list, q: float) -> float:
     return xs[min(len(xs) - 1, max(0, int(q * (len(xs) - 1))))]
 
 
-def prep_days(rows: list, p0: dict | None = None) -> list:
+def prep_days(rows: list, p0: dict | None = None, with_sig: bool = True) -> list:
     """Годные дни контракта: описатели, body/tail, сигналы по body (сигнал считается по всем барам дня)."""
     p = {**DEFAULTS, **(p0 or {})}
     out = []
@@ -458,9 +459,9 @@ def prep_days(rows: list, p0: dict | None = None) -> list:
         ix = [k for k, r in enumerate(b) if p["start_min"] <= _minute(r[0]) < p["end_min"]]
         if not st or not ix or _minute(b[ix[0]][0]) > p["start_min"] + p["late_start_min"]:
             continue
-        sg = signals(b)
+        sg = signals(b) if with_sig else {}
         out.append({"stats": st, "body": [b[k] for k in ix], "tail": [r for r in b if _minute(r[0]) >= p["end_min"]],
-                    "sig": {k: [v[j] for j in ix] for k, v in sg.items()}})
+                    "sig": {k: [v[j] for j in ix] for k, v in sg.items()}, "full": b})
     return out
 
 
@@ -1005,6 +1006,136 @@ def run_wide(arg: dict) -> dict:
         out["starts"].append(item)
     return out
 
+
+# ── четвёртая редакция: сброс позиции после импульса и перенос базы (docs/grid-regime-filter-2026.md) ─
+def impulse_flags(full: list, body: list, imp_min: float, imp_bars: int, imp_max: float = 250) -> list:
+    """Импульс на закрытии каждого бара body (детектор retest.find_impulse, оба направления; по барам <= i).
+    full = все бары дня (ATR считается за 60 баров до старта импульса внутри дня)."""
+    from trader.lab.runtime import Bar
+    from trader.lab.strategies.retest import find_impulse
+    bars = [Bar(time=r[0], open=r[1], high=r[2], low=r[3], close=r[4], volume=r[5] if len(r) > 5 else 0) for r in full]
+    prm = {"imp_min": imp_min, "imp_max": imp_max, "imp_bars": imp_bars, "atr_n": 60}
+    hit = {bars[i].time for i in range(len(bars)) if find_impulse(bars, i, prm, 1) or find_impulse(bars, i, prm, -1)}
+    return [r[0] in hit for r in body]
+
+
+def simulate_reset(body: list, tail: list, p: dict, imp: list, cool: int, schedule: set | None = None) -> dict:
+    """День с дневной сеткой (от open бара 10:00, флэт в конце дня, стоп закрывает позицию и завершает сетку).
+    На закрытии бара i с импульсом (imp[i], или i in schedule в контроле): заявки сняты, вся позиция закрывается
+    рыночно по open бара i+1 плюс полспреда против (тейкер), база переносится к close бара i, гашения сброшены;
+    сетка работает сразу с бара i+1 (cool=0) или с первого бара не раньше чем через cool минут."""
+    n, hs = len(body), p["half"]
+    st = _new_state()
+    g, last = _Grid(body[0][1], p), body[0][1]
+    pause_until, base = -1, None
+    resets = resets_pos = 0
+    for i in range(n):
+        ts, o, h, lw, c = body[i][:5]
+        if g is None:
+            if ts < pause_until:
+                continue
+            g, last = _Grid(base, p), o
+        if g.pending:
+            g.place(last)
+        if not (not g.pending and h < (g.sell_t[0] if g.sell_t else math.inf)
+                and lw > (g.buy_t[-1] if g.buy_t else -math.inf)):
+            path = [o, lw, h, c] if c >= o else [o, h, lw, c]
+            a = last
+            for b in [o] + path[1:]:
+                _segment(g, st, a, b, ts)
+                a = b
+        last = c
+        if g.so.g_stop_pts > 0 and ((g.lo and c <= g.lo) or (g.hi and c >= g.hi)):
+            if st["pos"]:
+                if i + 1 < n:
+                    _flat(st, body[i + 1][1] - hs if st["pos"] > 0 else body[i + 1][1] + hs, body[i + 1][0], "stop")
+                else:
+                    _flat(st, c, ts, "stop")
+            st["stops"].append(ts)
+            g = None
+            break
+        trig = (i in schedule) if schedule is not None else imp[i]
+        if trig and i + 1 < n:
+            resets += 1
+            if st["pos"]:
+                resets_pos += 1
+                _flat(st, body[i + 1][1] - hs if st["pos"] > 0 else body[i + 1][1] + hs, body[i + 1][0], "reset")
+            g, base, pause_until = None, c, ts + 60 + cool * 60
+    if st["pos"]:
+        end_bar = tail[0] if tail else body[-1]
+        _flat(st, end_bar[4], end_bar[0], "eod")
+    kinds = st["tk"]
+    pn = st["trades_pnl"]
+    return {"fills": st["fills"], "pnl_pts": sum(pn) * 1.0, "max_pos": st["max_pos"],
+            "n_contracts": sum(f[3] for f in st["fills"]), "resets": resets, "resets_pos": resets_pos,
+            "reset_pnl": sum(x for x, k in zip(pn, kinds) if k == "reset"),
+            "stop_pnl": sum(x for x, k in zip(pn, kinds) if k == "stop"), "n_stops": len(st["stops"])}
+
+
+def run_reset(arg: dict) -> dict:
+    """mode=reset_days: params, imp_mins, imp_bars_list, cools, draws; chunk [i, n] по парам (imp_min, imp_bars).
+    Возвращает дневные ряды конфигураций и базу (исходная сетка без сброса) по всем дням контракта."""
+    import random
+    from trader.lab.footprints import common
+    key = arg["symbol_key"]
+    rows = common.load_bars(key, arg.get("since"), arg.get("until"))
+    if not rows:
+        return {"id": "RESET", "symbol": key, "error": "нет баров в окне"}
+    inst = INST["Si" if key[:2].lower() == "si" else "RI"]
+    days = prep_days(rows, with_sig=False)
+    nt = len(days) * 2 // 3
+    pairs = [(a, b) for a in arg["imp_mins"] for b in arg["imp_bars_list"]]
+    if arg.get("chunk"):
+        i, n = arg["chunk"]
+        pairs = pairs[i::n]
+    out = {"id": "RESET", "symbol": key, "n_days": len(days), "n_train": nt, "days": [d["stats"] for d in days],
+           "base": {}, "configs": []}
+    pv = inst["pv"]
+
+    def cols(rs, p):
+        c = {"gross": [], "fee_m": [], "fee_t": [], "rs": [], "rsp": [], "rpnl": [], "spnl": [], "ns": []}
+        for r in rs:
+            fee = _fee_rows(r["fills"], key, pv)
+            c["gross"].append(round(r["pnl_pts"] * pv * p["lot"], 2))
+            c["fee_m"].append(round(sum(x[1] for x in fee), 2))
+            c["fee_t"].append(round(sum(x[2] for x in fee), 2))
+            c["rs"].append(r.get("resets", 0))
+            c["rsp"].append(r.get("resets_pos", 0))
+            c["rpnl"].append(round(r.get("reset_pnl", 0.0) * pv * p["lot"], 2))
+            c["spnl"].append(round(r.get("stop_pnl", 0.0) * pv * p["lot"], 2))
+            c["ns"].append(r.get("n_stops", 0))
+        return c
+
+    for pi in range(len(arg["params"])):
+        p = {**DEFAULTS, **inst, **arg["params"][pi]}
+        rr = []
+        for d in days:
+            r = simulate_day(d["body"] + d["tail"], p)
+            pn, kd = r["trades_pnl"], r["tk"]
+            rr.append({**r, "stop_pnl": sum(x for x, k in zip(pn, kd) if k == "stop")})
+        out["base"][str(pi)] = cols(rr, p)
+    for imp_min, imp_bars in pairs:
+        flags = [impulse_flags(d["full"], d["body"], imp_min, imp_bars) for d in days]
+        for pi in range(len(arg["params"])):
+            p = {**DEFAULTS, **inst, **arg["params"][pi]}
+            for cool in arg["cools"]:
+                rs = [simulate_reset(d["body"], d["tail"], p, flags[k], cool) for k, d in enumerate(days)]
+                item = {"pi": pi, "imp_min": imp_min, "imp_bars": imp_bars, "cool": cool, **cols(rs, p)}
+                ctrl = []
+                for dd in range(arg.get("draws", 0)):
+                    rng = random.Random(2000 + dd)
+                    rc = []
+                    for k in range(nt, len(days)):
+                        d = days[k]
+                        cnt = item["rs"][k]
+                        sch = set(rng.sample(range(0, max(1, len(d["body"]) - 1)), min(cnt, max(1, len(d["body"]) - 1))))
+                        rc.append(simulate_reset(d["body"], d["tail"], p, flags[k], cool, schedule=sch))
+                    cl = cols(rc, p)
+                    ctrl.append({"net_t": round(sum(cl["gross"]) - sum(cl["fee_t"]), 1), "rpnl": round(sum(cl["rpnl"]), 1)})
+                item["ctrl"] = ctrl
+                out["configs"].append(item)
+    return out
+
 # ── сетка документа и живой набор ────────────────────────────────────────────
 STEPS = (50, 100, 150, 200, 300, 400, 600)
 LEVELS = (2, 3, 5, 8, 12)
@@ -1050,6 +1181,8 @@ def run(arg: dict) -> dict:
         return run_delay(arg)
     if str(arg.get("mode", "")).startswith("wide"):
         return run_wide(arg)
+    if str(arg.get("mode", "")).startswith("reset"):
+        return run_reset(arg)
     from trader.lab.footprints import common
     key = arg["symbol_key"]
     rows = common.load_bars(key, arg.get("since"), arg.get("until"))
