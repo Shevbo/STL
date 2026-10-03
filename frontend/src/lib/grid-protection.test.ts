@@ -5,7 +5,7 @@
 // каком условии это случится, и сказать вслух, когда защиты НЕТ.
 import { describe, it, expect } from 'vitest';
 import {
-  fmtLevels, gridProtectionText, gridSideLevels, gridTargetText, preview,
+  fmtLevels, gridProtectionText, gridTargetText, guardLevels, preview,
 } from './smart-order-help';
 
 describe('формулировка защиты', () => {
@@ -135,22 +135,8 @@ describe('порог защиты ценой, а не процентом', () =>
   });
 });
 
-describe('защита по уровням меряет НАБОР В ОДНУ СТОРОНУ', () => {
-  it('позиция ÷ объём уровня, а не счёт филлов', () => {
-    // real-trade 02.10.2026: на GZZ6 старое правило включило защиту на трёх
-    // филлах при позиции в один уровень. Чередование вверх-вниз позицию не
-    // наращивает, тренд с откатами — наращивает.
-    expect(gridSideLevels({ g_pos: 15, g_lot: 5 })).toBe(3);
-    expect(gridSideLevels({ g_pos: -15, g_lot: 5 })).toBe(3);   // шорт считается так же
-    expect(gridSideLevels({ g_pos: 5, g_lot: 5 })).toBe(1);
-    expect(gridSideLevels({ g_pos: 0, g_lot: 5 })).toBe(0);
-  });
-
-  it('без объёма уровня числа нет — делить не на что', () => {
-    expect(gridSideLevels({ g_pos: 15, g_lot: 0 })).toBeNull();
-    expect(gridSideLevels({})).toBeNull();
-  });
-
+// Само число считает движок (см. ниже); здесь — только как мы это ГОВОРИМ.
+describe('защита по уровням: формулировка', () => {
   it('формулировка говорит «набрано в одну сторону», а не «исполнено»', () => {
     const t = gridProtectionText({ g_trig_fills: 3 });
     expect(t).toContain('в одну сторону');
@@ -180,43 +166,23 @@ describe('окно выставления', () => {
   });
 });
 
-describe('точка отсчёта защиты после снятия режима', () => {
-  // 03.10.2026, заявка f2ff2d2029: оператор снимал режим трижды за день, и
-  // защита возвращала его на следующем проходе — условие (позиция −24 при лоте
-  // 7 = 3.43 уровня при пороге 3) оставалось верным. real-trade: снятие
-  // оператором задаёт ТОЧКУ ОТСЧЁТА, защита считает набор заново и сработает,
-  // когда он вырастет ещё на порог. Здесь — правила точки, повторённые для
-  // показа; расходиться с движком (trader/quik/smart_orders.py) они не вправе.
-  it('без точки считается от нуля, и набор НЕ округляется вниз', () => {
-    expect(gridSideLevels({ g_pos: -24, g_lot: 7 })).toBeCloseTo(3.4286, 3);
+describe('набор в одну сторону — готовое число движка', () => {
+  // 03.10.2026: real-trade отдали g_guard_levels и g_guard_from. Мою копию
+  // правил точки отсчёта убрали: вторая реализация чужой логики расходится с
+  // оригиналом вопрос времени. Здесь только чтение и честное «нет поля».
+  it('читает готовое число как есть, без округления', () => {
+    expect(guardLevels({ g_guard_levels: 3.4286 })).toBeCloseTo(3.4286, 3);
     expect(fmtLevels(3.428571)).toBe('3.43');
     expect(fmtLevels(3)).toBe('3');
+    expect(guardLevels({ g_guard_levels: 0 })).toBe(0);     // честный ноль — число
   });
 
-  it('после снятия режима набор считается от позиции в момент снятия', () => {
-    // −24 на лоте 7, точка −24: набрано 0 — защита не вернётся, пока позиция не
-    // вырастет ещё на три уровня, то есть до −45.
-    expect(gridSideLevels({ g_pos: -24, g_lot: 7, g_guard_base: -24 })).toBe(0);
-    expect(gridSideLevels({ g_pos: -45, g_lot: 7, g_guard_base: -24 })).toBe(3);
-    expect(gridSideLevels({ g_pos: -31, g_lot: 7, g_guard_base: -24 })).toBe(1);
-  });
-
-  it('точка едет вслед за сокращением позиции', () => {
-    // Позиция упала с −24 до −10: старая точка слепила бы защиту, пока набор не
-    // обгонит её. Точка встаёт на −10, и набор снова считается от неё.
-    expect(gridSideLevels({ g_pos: -10, g_lot: 7, g_guard_base: -24 })).toBe(0);
-    // Точка, уже поехавшая за позицией (движок сохранил −10), и новый набор +7.
-    expect(gridSideLevels({ g_pos: -17, g_lot: 7, g_guard_base: -10 })).toBe(1);
-    // А вот −17 при ещё не сдвинутой точке −24 — это сокращение, а не набор.
-    expect(gridSideLevels({ g_pos: -17, g_lot: 7, g_guard_base: -24 })).toBe(0);
-  });
-
-  it('разворот или ноль обнуляют точку', () => {
-    expect(gridSideLevels({ g_pos: 14, g_lot: 7, g_guard_base: -24 })).toBe(2);
-    expect(gridSideLevels({ g_pos: 0, g_lot: 7, g_guard_base: -24 })).toBe(0);
-  });
-
-  it('без объёма уровня числа нет — делить не на что', () => {
-    expect(gridSideLevels({ g_pos: -24, g_lot: 0, g_guard_base: -24 })).toBeNull();
+  it('поля нет или null — числа нет: свой пересчёт не подставляем', () => {
+    // Старый движок, выключенный порог по уровням, неизвестный лот. Подстановка
+    // собственного расчёта и была бы той самой второй реализацией.
+    expect(guardLevels({})).toBeNull();
+    expect(guardLevels({ g_guard_levels: null })).toBeNull();
+    expect(guardLevels({ g_guard_levels: NaN })).toBeNull();
+    expect(guardLevels(undefined as any)).toBeNull();
   });
 });

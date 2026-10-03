@@ -17,7 +17,7 @@
     preview, protectionPair,
     shortCodes, sortBySideAndPrice, tillFact, isTwoSided, type Kind, type OpenPos, type Side,
     apexMs, corridorFromClicks, corridorState, corridorTimeError, corridorWidth,
-    gridState, gridWorstCase, gridProtectionText, gridTargetText, gridSideLevels,
+    gridState, gridWorstCase, gridProtectionText, gridTargetText, guardLevels,
     fmtLevels,
     canExitOnly, exitOnlyFact, exitOnlyHeld, ownPosition,
     msToMskInput, mskInputToMs,
@@ -1398,8 +1398,8 @@
             <span class="so-c-corr-w">{gridProtectionText(o as any, o.g_base ?? 0)}</span>
             <!-- ЧИСЛО, ПО КОТОРОМУ ВКЛЮЧИТСЯ ЗАЩИТА: набор в одну сторону, а не
                  счёт филлов. Без него порог на карточке не с чем сравнить. -->
-            {#if gridSideLevels(o as any) != null && (o.g_trig_fills ?? 0) > 0}
-              <span class="so-c-corr-w">набрано в одну сторону {fmtLevels(gridSideLevels(o as any) as number)} из {o.g_trig_fills}{(o as any).g_guard_base ? ` · счёт от позиции ${(o as any).g_guard_base > 0 ? '+' : ''}${(o as any).g_guard_base}: режим снят вручную, защита считает набор заново` : ''}</span>
+            {#if guardLevels(o as any) != null && (o.g_trig_fills ?? 0) > 0}
+              <span class="so-c-corr-w">набрано в одну сторону {fmtLevels(guardLevels(o as any) as number)} из {o.g_trig_fills}{(o as any).g_guard_from ? ` · счёт от позиции ${(o as any).g_guard_from > 0 ? '+' : ''}${(o as any).g_guard_from}: режим снят вручную, защита считает набор заново` : ''}</span>
             {/if}
             {#if gridTargetText(o as any, o.code === code ? price : 0, o.code === code ? pointValue : 0)}
               <span class="so-c-corr-w">{gridTargetText(o as any, o.code === code ? price : 0, o.code === code ? pointValue : 0)}</span>
