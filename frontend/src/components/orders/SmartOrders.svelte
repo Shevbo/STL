@@ -18,7 +18,7 @@
     shortCodes, sortBySideAndPrice, tillFact, isTwoSided, type Kind, type OpenPos, type Side,
     apexMs, corridorFromClicks, corridorState, corridorTimeError, corridorWidth,
     gridState, gridWorstCase, gridProtectionText, gridTargetText, gridSideLevels,
-    fmtLevels, guardReArmNote,
+    fmtLevels,
     canExitOnly, exitOnlyFact, exitOnlyHeld, ownPosition,
     msToMskInput, mskInputToMs,
   } from '$lib/smart-order-help';
@@ -1360,8 +1360,7 @@
                  одинаково (договорённость с real-trade 02.10.2026). -->
             <button class="so-btn sm" class:on={o.exit_only} disabled={exitBusy === o.so_id}
                     title={o.exit_only
-                      ? (guardReArmNote(o as any)
-                          || 'вернуть обычный режим: заявка снова сможет открывать позицию')
+                      ? 'вернуть обычный режим: заявка снова сможет открывать позицию; защита сетки посчитает набор заново от текущей позиции'
                       : 'ставить только то, что закрывает позицию, и только по цене не хуже средней (без убытка до комиссии)'}
                     onclick={() => toggleExitOnly(o)}>{o.exit_only ? '▶ Обычный режим' : '⏹ Только на выход'}</button>
           {/if}
@@ -1377,13 +1376,6 @@
               <span class="so-c-exit-w">{fmtWhen(heldWhy[o.so_id].ts_ms)} · {heldWhy[o.so_id].detail}</span>
             {:else if ownPosition(o).pos}
               <span class="so-c-exit-w">отказов в журнале за сегодня нет</span>
-            {/if}
-            <!-- ПОЧЕМУ КНОПКА «ОБЫЧНЫЙ РЕЖИМ» НЕ ДЕРЖИТСЯ. Она срабатывает, но
-                 сторож возвращает режим на следующем проходе, пока условие
-                 защиты выполнено. Молчать об этом нельзя: кнопка, которую
-                 отменяет сторож, и сломанная кнопка выглядят одинаково. -->
-            {#if guardReArmNote(o as any)}
-              <span class="so-c-exit-w guard">{guardReArmNote(o as any)}</span>
             {/if}
           </div>
         {/if}
@@ -1407,7 +1399,7 @@
             <!-- ЧИСЛО, ПО КОТОРОМУ ВКЛЮЧИТСЯ ЗАЩИТА: набор в одну сторону, а не
                  счёт филлов. Без него порог на карточке не с чем сравнить. -->
             {#if gridSideLevels(o as any) != null && (o.g_trig_fills ?? 0) > 0}
-              <span class="so-c-corr-w">набрано в одну сторону {fmtLevels(gridSideLevels(o as any) as number)} из {o.g_trig_fills}</span>
+              <span class="so-c-corr-w">набрано в одну сторону {fmtLevels(gridSideLevels(o as any) as number)} из {o.g_trig_fills}{(o as any).g_guard_base ? ` · счёт от позиции ${(o as any).g_guard_base > 0 ? '+' : ''}${(o as any).g_guard_base}: режим снят вручную, защита считает набор заново` : ''}</span>
             {/if}
             {#if gridTargetText(o as any, o.code === code ? price : 0, o.code === code ? pointValue : 0)}
               <span class="so-c-corr-w">{gridTargetText(o as any, o.code === code ? price : 0, o.code === code ? pointValue : 0)}</span>
@@ -1713,9 +1705,6 @@
                align-items: baseline; }
   .so-c-exit b { color: #e0a35c; }
   .so-c-exit-w { color: #9aa0b4; }
-  /* Предупреждение о стороже громче прочих уточнений: оно объясняет
-     кнопку, которая на вид не работает. */
-  .so-c-exit-w.guard { color: #e0a35c; }
   .so-exit-err { margin: 6px 0; padding: 5px 8px; border-radius: 4px; font-size: 11px;
                  border: 1px solid #ff8fb1; color: #ff8fb1; }
   .so-btn.on { border-color: #e0a35c; color: #e0a35c; }
