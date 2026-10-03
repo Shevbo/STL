@@ -1992,7 +1992,7 @@ def sweep_vec_params(v: dict, scale: float, tick: float, pvs: list) -> dict:
 
 
 def simulate_sweep(bars: list, rolls: dict, p: dict, L: int = 0, N: int = 1, T: float = 0.0, rearm: str = "nd10",
-                   naked: bool = False, rng=None, ctx: dict | None = None) -> dict:
+                   naked: bool = False, rng=None, ctx: dict | None = None, cuts: list | None = None) -> dict:
     """Непрерывная сетка по склеенным барам части окна [ts,o,h,l,c,v,cidx], rolls = {индекс первого бара нового контракта: ...}.
     p: параметры _Grid + pvs[cidx] (₽/пт). Цикл = сетка от open бара взведения (база), как simulate_nextday: уровни, гэпы
     проходятся отрезком, стоп (close за краем на s уровней, p['stop_pts']) закрывает рынком по open следующего бара с полспреда.
@@ -2002,15 +2002,19 @@ def simulate_sweep(bars: list, rolls: dict, p: dict, L: int = 0, N: int = 1, T: 
     первом баре нового), 'end' (flat по close последнего бара). После be/tp/stop перевзвод rearm: hK = не раньше чем
     через K часов после флэта, ndM = первый бар следующего календарного дня с 06:00 + M мин (день бара решения), база = open
     бара перевзвода; rng != None = случайный бар того же календарного дня не раньше срока. naked: без поклёвки и тейка,
-    после стопа перевзвод nd10. Старт = первый бар части."""
-    from bisect import bisect_left
+    после стопа перевзвод nd10. Старт = первый бар части. cuts = отсортированные индексы баров (первый 0): контроль «случайные
+    моменты в том же числе» - цикл k стартует на cuts[k] и принудительно закрывается (вид 'cut', тейкер) на cuts[k+1], если ещё
+    идёт; перевзвод после любого конца только на ближайшем следующем cut.
+    Тейк по ПАРАМ уровней: открытые уровни по сторонам, филл на встречном уровне закрывает ближайший открытый (для продажи
+    ближайшую снизу открытую покупку, для покупки ближайшую сверху открытую продажу), пара = разница цен уровней x pv - две
+    брокерские комиссии; накопленное с взведения цикла >= T -> тейк. Нереализованное и средняя позиции не участвуют."""
+    from bisect import bisect_left, bisect_right
     ctx = ctx or sweep_ctx(bars)
     tss, didx, dlast, wk = ctx["tss"], ctx["didx"], ctx["dlast"], ctx["wk"]
     n, tick, hs, pvs, step = len(bars), p["tick"], p["half"], p["pvs"], p["step"]
     rk = "nd10" if naked else rearm
     st = _new_state()
-    tp_l = st["trades_pnl"]
-    ends = {"be": 0, "tp": 0, "stop": 0, "roll": 0, "end": 0}
+    ends = {"be": 0, "tp": 0, "stop": 0, "roll": 0, "end": 0, "cut": 0}
     rearms = 0
     g = None
     phase, t_i, i = "wait", 0, 0
@@ -2021,13 +2025,18 @@ def simulate_sweep(bars: list, rolls: dict, p: dict, L: int = 0, N: int = 1, T: 
         durs.append(ts_end - c_start)
         c_end = ts_end
     base = last = prev_close = tacc = 0.0
-    cu = cd = ntp = 0
+    cu = cd = nf = cp = 0
+    opens_b: list = []
+    opens_s: list = []
 
     def schedule(flat_i: int, dec_i: int) -> int:
+        if cuts:
+            k = bisect_right(cuts, flat_i)
+            return cuts[k] if k < len(cuts) else n
         if rk[0] == "h":
             tgt = tss[flat_i] + int(rk[1:]) * 3600
-        else:
-            tgt = (tss[dec_i] // 86400 + 1) * 86400 + 21600 + int(rk[2:]) * 60
+        else:           # первый бар следующего календарного дня (с барами) + M минут
+            tgt = tss[min(bisect_left(tss, (tss[dec_i] // 86400 + 1) * 86400), n - 1)] + int(rk[2:]) * 60
         ti = max(bisect_left(tss, tgt), flat_i + 1)
         if rng is not None and ti < n:
             ti = rng.randint(ti, dlast[didx[ti]])
@@ -2045,6 +2054,12 @@ def simulate_sweep(bars: list, rolls: dict, p: dict, L: int = 0, N: int = 1, T: 
             ends["roll"] += 1
             done(tss[i - 1])
             fresh = True
+        elif cuts and cp < len(cuts) and i == cuts[cp]:
+            if st["pos"]:
+                _flat(st, last, tss[i - 1], "cut")
+            ends["cut"] += 1
+            done(tss[i - 1])
+            fresh = True
         ts, o, h, lw, c, _v, ci = bars[i]
         if fresh:
             if c_end is not None:
@@ -2056,7 +2071,10 @@ def simulate_sweep(bars: list, rolls: dict, p: dict, L: int = 0, N: int = 1, T: 
             g.pending = True
             base = last = prev_close = o
             cu = cd = 0
-            tacc, ntp = 0.0, len(tp_l)
+            tacc, nf = 0.0, len(st["fills"])
+            opens_b, opens_s = [], []
+            if cuts:
+                cp = bisect_right(cuts, i)
             phase = "grid"
             rearms += 1
         if g.pending:
@@ -2096,11 +2114,28 @@ def simulate_sweep(bars: list, rolls: dict, p: dict, L: int = 0, N: int = 1, T: 
             continue
         if phase == "grid":
             if not naked:
-                if len(tp_l) > ntp:
+                if len(st["fills"]) > nf:
                     pv = pvs[ci]
-                    for k in range(ntp, len(tp_l)):
-                        tacc += tp_l[k] * pv - 2 * BROKER_FEE * wk[i]
-                    ntp = len(tp_l)
+                    for fl in st["fills"][nf:]:
+                        px_f = fl[2]
+                        if fl[4] != "level":
+                            continue
+                        if fl[1] == "buy":
+                            if opens_s:
+                                up_s = [x for x in opens_s if x > px_f]
+                                sp = min(up_s) if up_s else min(opens_s, key=lambda x: abs(x - px_f))
+                                opens_s.remove(sp)
+                                tacc += (sp - px_f) * pv - 2 * BROKER_FEE * wk[i]
+                            else:
+                                opens_b.append(px_f)
+                        elif opens_b:
+                            dn_b = [x for x in opens_b if x < px_f]
+                            bp = max(dn_b) if dn_b else min(opens_b, key=lambda x: abs(x - px_f))
+                            opens_b.remove(bp)
+                            tacc += (px_f - bp) * pv - 2 * BROKER_FEE * wk[i]
+                        else:
+                            opens_s.append(px_f)
+                    nf = len(st["fills"])
                 if T and tacc >= T:
                     fi = i
                     if pos and nxt_ok:
@@ -2300,7 +2335,21 @@ def run_sweep(arg: dict) -> dict:
         res = []
         for it in arg["vecs"]:
             mode = it.get("mode", "full")
-            if mode == "rand":
+            if mode == "randk":
+                base_r = _sweep_eval(pr["test"], pr, it["vec"], scale)
+                kk = max(1, base_r["rearms"] - base_r["ends"]["roll"])
+                dr = []
+                for d in range(it.get("draws", 20)):
+                    rg = random.Random(9000 + d)
+                    nb = len(pr["test"]["bars"])
+                    cuts = [0] + sorted(rg.sample(range(1, nb), kk - 1)) if kk > 1 else [0]
+                    p = sweep_vec_params(it["vec"], scale, pr["tick"], pr["pvs"])
+                    r = simulate_sweep(pr["test"]["bars"], pr["test"]["rolls"], p, it["vec"]["L"], it["vec"]["N"],
+                                       float(it["vec"]["T"]), it["vec"]["rearm"], ctx=pr["test"]["ctx"], cuts=cuts)
+                    x = sweep_summary(r, pr["test"]["ctx"], pr["keys"], pr["pvs"])
+                    dr.append({"net_t": x["net_t"], "net_m": x["net_m"], "cycles": x["cycles"], "rearms": x["rearms"]})
+                res.append({"tag": it["tag"], "vec": it["vec"], "mode": mode, "k": kk, "draws": dr})
+            elif mode == "rand":
                 dr = [_sweep_eval(pr["test"], pr, it["vec"], scale, "full", random.Random(8000 + d))
                       for d in range(it.get("draws", 20))]
                 res.append({"tag": it["tag"], "vec": it["vec"], "mode": mode,
@@ -2309,7 +2358,7 @@ def run_sweep(arg: dict) -> dict:
             else:
                 res.append({"tag": it["tag"], "vec": it["vec"], "mode": mode,
                             **_sweep_eval(pr["test"], pr, it["vec"], scale, mode, None, True)})
-        out.update({"scale": scale, "results": res})
+        out.update({"scale": scale, "results": res, "test_days": pr["dates"]["test"]})
     out["secs"] = round(time.time() - t0, 1)
     return out
 

@@ -759,3 +759,42 @@ def test_sweep_durations_cycle_and_gap_in_days():
     ctx = gs.sweep_ctx(_b7(rows))
     s = gs.sweep_summary(r, ctx, ["X", "X"], [1.0, 1.0], daily=True)
     assert abs(s["gap_max"] - 3600 / 86400) < 1e-3 and s["dur_max"] >= s["dur_mean"] > 0
+
+
+def test_sweep_tp_pairs_ladder_with_pullback():
+    # лестница шортов 1100/1200/1300, откат на 1199: покупка уровня 1200 закрывает продажу 1300 = пара +100 (по средней было бы 0)
+    ladder = (1000, 1301, 1000, 1301)
+    pull = (1301, 1301, 1199, 1199)
+    r = _sw([FLAT, ladder, pull, (1199, 1199, 1199, 1199), (1199, 1199, 1199, 1199)], L=3, N=5, T=50, s=5)
+    assert r["ends"]["tp"] == 1 and [f[4] for f in r["st"]["fills"]].count("level") == 4
+    assert r["st"]["trades_pnl"][0] == 0                                               # по средней позиции прибыли нет
+    # без отката нереализованная прибыль тейк не включает
+    r2 = _sw([FLAT, ladder, (1301, 1301, 1250, 1250), (1250, 1250, 1250, 1250)], L=3, N=5, T=1, s=5)
+    assert r2["ends"]["tp"] == 0
+    # порог выше пары (100 - 0.9) не срабатывает
+    r3 = _sw([FLAT, ladder, pull, (1199, 1199, 1199, 1199)], L=3, N=5, T=100, s=5)
+    assert r3["ends"]["tp"] == 0
+
+
+def test_sweep_nd_rearm_first_bar_of_day_plus_minutes():
+    day = 24 * 60
+    rows = [FLAT, (1000, 1000, 500, 500)] + [(500, 500, 500, 500)] * (day + 40)
+    p = {**gs.DEFAULTS, **P, "buys": 3, "sells": 3, "stop_pts": 100, "lot": 1, "fill_pen": 1, "pvs": [1.0, 1.0]}
+    # бары с 00:00 следующих суток: первый бар дня 00:00, nd240 = 04:00 = 240-й бар
+    b = _b7(rows, start=600)
+    r = gs.simulate_sweep(b, {}, p, 3, 5, 0.0, "nd240")
+    day1 = (b[0][0] // 86400 + 1) * 86400
+    firsts = [f for f in r["st"]["fills"] if f[0] >= day1]
+    assert r["rearms"] == 2 and not firsts or all(f[0] >= day1 + 240 * 60 for f in firsts)
+    # перевзвод: сетка встала не раньше 00:00 + 240 мин следующего дня (проверяем через число перевзводов при усечении данных)
+    r2 = gs.simulate_sweep(b[:(day - 600) + 239], {}, p, 3, 5, 0.0, "nd240")
+    assert r2["rearms"] == 1
+    r3 = gs.simulate_sweep(b[:(day - 600) + 241], {}, p, 3, 5, 0.0, "nd240")
+    assert r3["rearms"] == 2
+
+
+def test_sweep_cuts_fixed_number_of_rearms():
+    rows = [FLAT] * 200
+    p = {**gs.DEFAULTS, **P, "buys": 3, "sells": 3, "stop_pts": 100, "lot": 1, "fill_pen": 1, "pvs": [1.0, 1.0]}
+    r = gs.simulate_sweep(_b7(rows), {}, p, 3, 5, 0.0, "h1", cuts=[0, 50, 120])
+    assert r["rearms"] == 3 and r["ends"]["cut"] == 2 and r["ends"]["end"] == 1
