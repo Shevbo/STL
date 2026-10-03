@@ -4,7 +4,9 @@
 // переводит её в «только на выход» по безубытку. Экран обязан сказать, при
 // каком условии это случится, и сказать вслух, когда защиты НЕТ.
 import { describe, it, expect } from 'vitest';
-import { gridProtectionText, gridSideLevels, gridTargetText, preview } from './smart-order-help';
+import {
+  fmtLevels, gridProtectionText, gridSideLevels, gridTargetText, guardReArmNote, preview,
+} from './smart-order-help';
 
 describe('формулировка защиты', () => {
   it('оба условия: филлы ИЛИ уход цены', () => {
@@ -175,5 +177,44 @@ describe('окно выставления', () => {
       gStopPts: 260, gWindow: 0, price: 85_000,
     });
     expect(p.sentence).not.toContain('ждут в STL');
+  });
+});
+
+describe('кнопка «Обычный режим» против сторожа', () => {
+  // 03.10.2026, заявка f2ff2d2029: оператор снял режим в 18:18:08 («режим
+  // только на выход снят» в журнале) — и в ту же секунду «ЗАЩИТА СЕТКИ:
+  // набрано 3.43 из порога 3», в 18:18:14 режим снова включён. Кнопка
+  // работает; её результат отменяет сторож, и это разные поломки.
+  const guarded = { exit_only: true, g_trig_ms: 1791040724816,
+                    g_pos: -24, g_lot: 7, g_trig_fills: 3 };
+
+  it('предупреждает, что сторож вернёт режим', () => {
+    const t = guardReArmNote(guarded);
+    expect(t).toContain('сторож вернёт');
+    expect(t).toContain('3.43 из 3');
+  });
+
+  it('набор НЕ округляем вниз: движок сравнивает сырое отношение', () => {
+    // «3 из 3» читается как «ровно на границе», и тогда возврат режима выглядит
+    // необъяснимым — порог ведь не превышен.
+    expect(gridSideLevels({ g_pos: -24, g_lot: 7 })).toBeCloseTo(3.4286, 3);
+    expect(fmtLevels(3.428571)).toBe('3.43');
+    expect(fmtLevels(3)).toBe('3');
+  });
+
+  it('набор ниже порога — не пугаем: режим снимется и останется снятым', () => {
+    expect(guardReArmNote({ ...guarded, g_pos: -7 })).toBe('');
+  });
+
+  it('режим включил ЧЕЛОВЕК (защита не срабатывала) — предупреждения нет', () => {
+    expect(guardReArmNote({ ...guarded, g_trig_ms: 0 })).toBe('');
+  });
+
+  it('режим выключен — говорить не о чем', () => {
+    expect(guardReArmNote({ ...guarded, exit_only: false })).toBe('');
+  });
+
+  it('без объёма уровня молчим, а не делим на ноль', () => {
+    expect(guardReArmNote({ ...guarded, g_lot: 0 })).toBe('');
   });
 });
