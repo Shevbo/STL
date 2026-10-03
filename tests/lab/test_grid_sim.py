@@ -622,3 +622,29 @@ def test_nextday_gap_fills_levels_at_level_price_and_overnight_counted():
     r = gs.simulate_nextday([d0, d1], {**NP, "buys": 3, "sells": 3}, None, None, 1, "next", 0, "first")
     sells = [f[2] for f in r["st"]["fills"] if f[4] == "level"]
     assert 1100 in sells and 1200 in sells and 1250 not in sells                        # по цене уровня, не по цене гэпа
+
+
+# ── правка: рыночный выход на триггере = тейкер; перевзвод считается от дня фактического закрытия ──
+def test_market_exit_at_trigger_is_taker_and_counted_as_breakeven():
+    body, tail = _dbody([FLAT, (1000, 1101, 1000, 1050), (1050, 1050, 1050, 1050), (1050, 1050, 1050, 1050)])
+    r = gs.simulate_trigger(body, tail, TP, None, 1)                       # в плюсе на триггере: закрытие по open с полспреда
+    assert [f[4] for f in r["fills"]] == ["level", "bem"] and r["kinds"]["be"] == 1
+    m, t = gs._fee_pair(r["fills"], "RIU6", gs.PV_RI)
+    from trader.lab.commission import commission_for
+    # level - мейкер (брокер), bem - тейкер: мейкер-граница дешевле тейкера ровно на комиссию уровня
+    lvl = r["fills"][0]
+    lvl_diff = commission_for("RIU6", lvl[2], 1, gs.PV_RI, taker=True, ts=lvl[0]) - commission_for("RIU6", lvl[2], 1, gs.PV_RI, taker=False, ts=lvl[0])
+    assert abs((t - m) - lvl_diff) < 1e-9
+    d0 = _nday({5: (1000, 1101, 1000, 1050)})
+    rn = gs.simulate_nextday([d0, _nday({}, di=1)], NP, None, 1, 1, "next", 0, "first")
+    assert "bem" in rn["st"]["tk"] or any(f[4] == "bem" for f in rn["st"]["fills"])
+
+
+def test_nextday_rearm_planned_from_day_of_actual_flat():
+    d0 = _nday({5: (1000, 1101, 1000, 1105), 58: (1105, 1105, 1105, 1105), 59: (1105, 1400, 1105, 1400)})
+    mk = lambda nd: [d0] + [_nday({}, di=i) for i in range(1, nd)]                      # noqa: E731
+    p = {**NP, "buys": 2, "sells": 2, "stop_pts": 100}
+    r = gs.simulate_nextday(mk(3), p, None, None, 1, "next", 0, "first")
+    assert [f[4] for f in r["st"]["fills"]][-1] == "stop" and r["st"]["fills"][-1][0] // 86400 == d0[0][0] // 86400 + 1   # флэт на open дня 1
+    assert gs.simulate_nextday(mk(2), p, None, None, 1, "next", 0, "first")["rearms"] == 1    # дня 2 нет: перевзвода нет
+    assert r["rearms"] == 2                                                                  # перевзвод на день 2 = следующий день после дня закрытия

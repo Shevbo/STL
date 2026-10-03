@@ -1413,6 +1413,20 @@ def run_short(arg: dict) -> dict:
 
 
 # ── пятая редакция: «триггерная радиация» (docs/grid-regime-filter-2026.md) ─────────────────────
+_MAKER_KINDS = ("level", "be")          # лимитные филлы: уровни сетки и выход лимитом на средней; рыночный 'bem' = тейкер
+
+
+def _fee_pair(fills: list, key: str, pv: float) -> tuple[float, float]:
+    """(мейкер-граница, тейкер-граница) комиссия по филлам: мейкер только у лимитных видов _MAKER_KINDS."""
+    from trader.lab.commission import commission_for
+    m = t = 0.0
+    for ts, _s, price, qty, kind in fills:
+        tk = commission_for(key, price, qty, pv, taker=True, ts=ts)
+        m += commission_for(key, price, qty, pv, taker=False, ts=ts) if kind in _MAKER_KINDS else tk
+        t += tk
+    return m, t
+
+
 def simulate_trigger(body: list, tail: list, p: dict, x_pct: float | None, k_lv: int | None,
                      force_i: int | None = None, resume: str | None = None, imp: list | None = None,
                      k_mode: str = "fills", rearm_min: int | None = None) -> dict:
@@ -1484,7 +1498,7 @@ def simulate_trigger(body: list, tail: list, p: dict, x_pct: float | None, k_lv:
                 trig_i = i if trig_i is None else trig_i
                 pos, avg = st["pos"], st["avg"]
                 if pos and ((pos > 0 and c > avg + tick) or (pos < 0 and c < avg - tick)):
-                    _flat(st, body[i + 1][1] - hs if pos > 0 else body[i + 1][1] + hs, body[i + 1][0], "be")
+                    _flat(st, body[i + 1][1] - hs if pos > 0 else body[i + 1][1] + hs, body[i + 1][0], "bem")
                     closed_at = i + 1
                 elif not pos:
                     closed_at = i
@@ -1505,6 +1519,7 @@ def simulate_trigger(body: list, tail: list, p: dict, x_pct: float | None, k_lv:
         _flat(st, end_bar[4], end_bar[0], "eod")
     kinds = {"be": 0, "stop": 0, "eod": 0}
     for kd in st["tk"]:
+        kd = "be" if kd == "bem" else kd
         if kd in kinds:
             kinds[kd] += 1
     eod_loss = sum(x for x, kd in zip(st["trades_pnl"], st["tk"]) if kd == "eod")
@@ -1517,7 +1532,6 @@ def run_trigger(arg: dict) -> dict:
     """mode=trigger_days: params, xs, ks, resumes ['none','flat','imp3','imp5','imp8'], draws, chunk [i, n] по режимам.
     Режимы: T1 (x), T2 (k), T3 (x, k). Дневные ряды и контроль (случайное включение в те же дни, одно на день)."""
     import random
-    from trader.lab.commission import commission_for
     from trader.lab.footprints import common
     key = arg["symbol_key"]
     rows = common.load_bars(key, arg.get("since"), arg.get("until"))
@@ -1540,12 +1554,7 @@ def run_trigger(arg: dict) -> dict:
     impflags: dict = {}
 
     def be_fee(fills):
-        m = t = 0.0
-        for ts, _s, price, qty, kind in fills:
-            tk = commission_for(key, price, qty, pv, taker=True, ts=ts)
-            m += commission_for(key, price, qty, pv, taker=False, ts=ts) if kind in ("level", "be") else tk
-            t += tk
-        return m, t
+        return _fee_pair(fills, key, pv)
 
     def cols(rs, p):
         c = {"gross": [], "fee_m": [], "fee_t": [], "trig": [], "be": [], "stop": [], "eod": [], "eodl": [], "res": []}
@@ -1847,7 +1856,7 @@ def simulate_nextday(days_full: list, p: dict, x_pct: float | None, k_lv: int | 
                 S["phase"] = "exit"
                 pos, avg = st["pos"], st["avg"]
                 if pos and ((pos > 0 and c > avg + tick) or (pos < 0 and c < avg - tick)):
-                    _flat(st, bars[i + 1][1] - hs if pos > 0 else bars[i + 1][1] + hs, bars[i + 1][0], "be")
+                    _flat(st, bars[i + 1][1] - hs if pos > 0 else bars[i + 1][1] + hs, bars[i + 1][0], "bem")
                     schedule("be", bars[i + 1][0])
                 elif not pos:
                     schedule("be", ts)
@@ -1890,12 +1899,13 @@ def run_nextday(arg: dict) -> dict:
             g_[dmap[ts]] += x * pv
         for ts, _s, price, qty, kind in st["fills"]:
             tk = commission_for(key, price, qty, pv, taker=True, ts=ts)
-            mk = commission_for(key, price, qty, pv, taker=False, ts=ts) if kind in ("level", "be") else tk
+            mk = commission_for(key, price, qty, pv, taker=False, ts=ts) if kind in _MAKER_KINDS else tk
             d = dmap[ts]
             fm[d] += mk
             ft[d] += tk
         kinds = {"be": 0, "stop": 0, "end": 0}
         for kd in st["tk"]:
+            kd = "be" if kd == "bem" else kd
             if kd in kinds:
                 kinds[kd] += 1
         return {"gross": [round(x, 1) for x in g_], "fee_m": [round(x, 1) for x in fm], "fee_t": [round(x, 1) for x in ft],
