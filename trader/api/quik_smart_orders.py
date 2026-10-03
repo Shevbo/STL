@@ -510,7 +510,12 @@ async def set_exit_only(so_id: str, body: ExitOnlyBody, request: Request):
             f"«Только на выход» имеет смысл лишь у заявок со своей позицией "
             f"(радиация, коридор, треугольник), а {so.so_id} это {so.kind}: "
             "защитная заявка и так только закрывает."))
+    lifted = so.exit_only and not bool(body.on)
     so.exit_only = bool(body.on)
+    if lifted and so.kind == "grid":
+        # Решение оператора выше защиты: она считает набор заново от этой точки,
+        # а не возвращает режим через проход (см. grid_guard_rebase).
+        so_mod.grid_guard_rebase(so, _market_price(request, so.code))
     pos = so.g_pos if so.kind == "grid" else so.c_pos
     avg = so.g_avg if so.kind == "grid" else so.c_avg
     book.save()
@@ -519,7 +524,10 @@ async def set_exit_only(so_id: str, body: ExitOnlyBody, request: Request):
         (f"включён режим только на выход: закрываем {pos:+d} по цене не хуже "
          f"{avg:g}, новых не открываем" if so.exit_only and pos
          else "включён режим только на выход: позиции нет, открывать не будем"
-         if so.exit_only else "режим только на выход снят: заявка работает как обычно"))
+         if so.exit_only else "режим только на выход снят оператором: заявка работает как "
+         "обычно, защита считает набор заново от позиции " + f"{pos:+d}"
+         if lifted and so.kind == "grid"
+         else "режим только на выход снят: заявка работает как обычно"))
     log.info("smart_order.exit_only", so_id=so_id, kind=so.kind, on=so.exit_only,
              pos=pos, avg=avg)
     return {"ok": True, "so_id": so_id, "exit_only": so.exit_only,
