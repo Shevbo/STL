@@ -684,6 +684,30 @@ def blend_avg(pos: int, avg: float, got: int, price: float, side_buy: bool) -> t
     return new_pos, price                             # переворот через ноль
 
 
+def grid_guard_base_now(so: SmartOrder) -> int:
+    """Точка отсчёта защиты с учётом того, как позиция двигалась после снятия режима.
+
+    Точка едет ВСЛЕД за сокращением позиции, разворот и ноль её обнуляют. Чистая
+    функция: ничего не меняет. Её зовут и защита (и записывает результат в заявку),
+    и экран через список заявок — одно правило в одном месте, а не две реализации.
+    """
+    base = so.g_guard_base
+    if not base:
+        return 0
+    if so.g_pos == 0 or (so.g_pos > 0) != (base > 0):
+        return 0
+    return so.g_pos if abs(so.g_pos) < abs(base) else base
+
+
+def grid_guard_levels(so: SmartOrder) -> float | None:
+    """Сколько уровней в одну сторону набрано от точки отсчёта — сырое отношение, то
+    самое число, что стоит в журнале («3.43 из 3»). None — защита по уровням
+    выключена (порог 0) или лот неизвестен: считать нечего."""
+    if not (so.g_trig_fills and so.g_lot > 0):
+        return None
+    return (abs(so.g_pos) - abs(grid_guard_base_now(so))) / so.g_lot
+
+
 def grid_guard_rebase(so: SmartOrder, price: float) -> None:
     """Оператор САМ снял «только на выход»: защита считает набор заново от этой точки.
 
@@ -755,15 +779,8 @@ def grid_guard_hit(so: SmartOrder, price: float) -> str:
         # (см. grid_guard_rebase). Точка едет ВСЛЕД за сокращением позиции: иначе
         # после сброса к нулю и нового набора защита была бы слепа, пока позиция
         # не обгонит старую точку. Разворот или ноль точку обнуляют.
-        base = so.g_guard_base
-        if base:
-            same = so.g_pos != 0 and (so.g_pos > 0) == (base > 0)
-            if not same:
-                so.g_guard_base = base = 0
-            elif abs(so.g_pos) < abs(base):
-                so.g_guard_base = base = so.g_pos
-        net = abs(so.g_pos) - abs(base)
-        levels = net / so.g_lot
+        so.g_guard_base = grid_guard_base_now(so)
+        levels = grid_guard_levels(so) or 0.0
         if levels >= so.g_trig_fills:
             where = "вниз (лонг)" if so.g_pos > 0 else "вверх (шорт)"
             return (f"набрано уровней в одну сторону {levels:g} из порога "

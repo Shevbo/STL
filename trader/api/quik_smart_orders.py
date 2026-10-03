@@ -245,6 +245,13 @@ async def list_orders(request: Request):
             low, top = so_mod.corridor_bounds(o, now, sched)
             d["c_now"] = {"low": round(low, 4), "top": round(top, 4),
                           "width": round(top - low, 4), "ts_ms": now}
+        if o.kind == "grid":
+            # НАБОР ДЛЯ ЗАЩИТЫ СЧИТАЕТ ДВИЖОК, а не панель (просьба ui-ux 03.10.2026,
+            # и она верна): правило точки отсчёта повторять на экране значило бы
+            # завести вторую реализацию, которая разошлась бы с первой. None —
+            # защита по уровням выключена. g_guard_from — точка, от которой идёт счёт.
+            d["g_guard_levels"] = so_mod.grid_guard_levels(o)
+            d["g_guard_from"] = so_mod.grid_guard_base_now(o)
         out.append(d)
     return {"orders": out,
             "session": {"open": sess.get("open"), "phase": sess.get("phase", "")}}

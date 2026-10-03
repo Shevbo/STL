@@ -100,3 +100,38 @@ def test_a_full_pass_does_not_bring_exit_only_back_after_the_operator_lift(tmp_p
         _grid_sync(book, _gstore(85000.0), GOst(), GSrv(), GLim(), "9618", GSTEPS, {},
                    GNOW + i * 1000, True)
         assert so.exit_only is False, f"проход {i}: защита вернула режим"
+
+
+# --------------------------------------------------------------------------
+# ЕДИНЫЙ ИСТОЧНИК ЧИСЛА. Ui-ux просил отдавать готовый набор в заявке: правило точки
+# отсчёта на экране было второй реализацией. Число для списка и число для защиты
+# обязаны быть ОДНИМ, на любом пути, а его чтение — ничего не менять.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("seed", range(30))
+def test_the_screen_number_is_the_number_the_guard_uses(seed):
+    rnd = random.Random(seed)
+    so = _so(g_pos=-7 * rnd.randint(0, 8), g_trig_fills=rnd.choice((2, 3, 4)))
+    if rnd.random() < 0.7:
+        so_mod.grid_guard_rebase(so, 85000.0)
+    for i in range(60):
+        so.g_pos = max(-7 * 30, min(7 * 30, so.g_pos + 7 * rnd.choice((-1, 1))))
+        shown = so_mod.grid_guard_levels(so)
+        snapshot = (so.g_guard_base, so.g_pos)
+        again = so_mod.grid_guard_levels(so)
+        assert shown == again and (so.g_guard_base, so.g_pos) == snapshot, (
+            "чтение числа для экрана изменило заявку")
+        fired = so_mod.grid_guard_hit(so, 85000.0) != ""
+        assert fired == (shown >= so.g_trig_fills), (
+            f"seed {seed}, шаг {i}: экран показывал {shown}, защита сработала {fired}")
+
+
+def test_guard_levels_is_none_when_the_threshold_is_off_or_lot_unknown():
+    assert so_mod.grid_guard_levels(_so(g_trig_fills=0, g_pos=-30)) is None
+    assert so_mod.grid_guard_levels(_so(g_lot=0, g_pos=-30)) is None
+
+
+def test_the_raw_ratio_matches_the_journal_example():
+    so = _so(g_pos=-24)                       # 24 / 7 = 3.43 при пороге 3, как в журнале
+    assert round(so_mod.grid_guard_levels(so), 2) == 3.43
