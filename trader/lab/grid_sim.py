@@ -114,6 +114,7 @@ def _apply(st: dict, side: str, price: float, qty: int, ts: int, kind: str) -> N
         closed = min(qty, abs(pos))
         st["trades_pnl"].append((price - avg) * closed * (1 if pos > 0 else -1))
         st["tk"].append(kind)
+        st["tts"].append(ts)
         if qty > closed:
             st["avg"] = price
     st["pos"] = pos + s * qty
@@ -145,7 +146,7 @@ def _segment(g: _Grid, st: dict, a: float, b: float, ts: int) -> None:
 
 def _new_state() -> dict:
     return {"pos": 0, "avg": 0.0, "fills": [], "trades_pnl": [], "pos_path": [], "max_pos": 0,
-            "stops": [], "tk": []}
+            "stops": [], "tk": [], "tts": []}
 
 
 def simulate_day(bars_day: list, params: dict) -> dict | None:
@@ -1714,6 +1715,215 @@ def run_sched(arg: dict) -> dict:
         out["windows"][f"{a}-{b}"] = res
     return out
 
+
+# ── седьмая редакция: самовзведение на следующий день (docs/grid-regime-filter-2026.md) ─────────
+def simulate_nextday(days_full: list, p: dict, x_pct: float | None, k_lv: int | None, touches: int, rearm: str,
+                     delay_min: int, anchor: str, rng=None, trig_level: float | None = None) -> dict:
+    """НЕПРЕРЫВНАЯ сетка по барам окна (days_full = бары дней подряд), без флэта в 23:40, позиция через ночь и
+    выходные; гэп открытия проходится отрезком от прошлого close к open (пройденные уровни исполняются по цене
+    уровня). Конец окна: flat по close последнего бара (вид 'end').
+    Защита боевая: K = |позиция|/лот >= k_lv (набор в одну сторону, None = выкл); поклёвка: зона = за уровнем trig_level
+    (base +- L*шаг; если L не задан, за x_pct% базы): касание на баре, если high (low) дошёл до границы зоны, а close
+    прошлого бара был вне зоны (<= 1 касание на бар, стороны отдельно, счёт с
+    момента (пере)взведения сетки); срабатывание на закрытии бара при касаниях одной стороны >= touches. После
+    срабатывания входов нет, выход только лимитом на средней (как simulate_trigger), стоп сетки остаётся.
+    rearm: 'none' мертва до конца окна; 'next' после выхода (безубыток) ИЛИ стопа ждать следующего дня с данными, перевзвод
+    на первом баре не раньше начало дня + delay_min (anchor 'first' = первый бар дня, 'main' = 10:00), база = open этого
+    бара; 'rand' то же, но случайный бар следующего дня (rng); 'time15'/'time60' через N минут после безубытка (после
+    стопа не перевзводится). Старт окна по тому же правилу (начало первого дня + delay_min).
+    -> по дням gross/fee_m/fee_t, закрытия be/stop/end, перевзводы, срабатывания, ночёвки с позицией, гэп-MTM."""
+    tick, hs = p["tick"], p["half"]
+    bars, didx = [], []
+    for di, d in enumerate(days_full):
+        for r in d:
+            bars.append(r)
+            didx.append(di)
+    n, nd = len(bars), len(days_full)
+    first_i, last_i = {}, {}
+    for i, di in enumerate(didx):
+        first_i.setdefault(di, i)
+        last_i[di] = i
+    day_of_ts = {r[0]: didx[i] for i, r in enumerate(bars)}
+
+    def start_ts(di):
+        t0 = days_full[di][0][0]
+        return (t0 if anchor == "first" else t0 - t0 % 86400 + 36000) + delay_min * 60
+
+    st = _new_state()
+    S = {"phase": "wait", "t_ts": start_ts(0), "t_i": None}
+    g, last, base, prev_close, cu, cd = None, bars[0][1], 0.0, 0.0, 0, 0
+    rearms = fires = overnight = 0
+    gap_pts = 0.0
+
+    def schedule(kind, closed_ts):
+        di = day_of_ts[closed_ts]
+        S["t_ts"], S["t_i"] = None, None
+        if rearm == "none":
+            S["phase"] = "dead"
+        elif rearm in ("next", "rand"):
+            if di + 1 >= nd:
+                S["phase"] = "dead"
+            elif rearm == "next":
+                S.update(phase="wait", t_ts=start_ts(di + 1))
+            else:
+                S.update(phase="wait", t_i=rng.randint(first_i[di + 1], last_i[di + 1]))
+        elif rearm.startswith("time"):
+            if kind == "stop":
+                S["phase"] = "dead"
+            else:
+                S.update(phase="wait", t_ts=closed_ts + int(rearm[4:]) * 60)
+        else:
+            S["phase"] = "dead"
+
+    for i in range(n):
+        ts, o, h, lw, c = bars[i][:5]
+        ph = S["phase"]
+        if ph == "dead":
+            last = c
+            continue
+        if ph == "wait":
+            if (S["t_ts"] is not None and ts >= S["t_ts"]) or (S["t_i"] is not None and i >= S["t_i"]):
+                g = _Grid(o, p)
+                g.px = {k: round(v / tick) * tick for k, v in g.px.items()}
+                g.side = {k: None for k in g.levels}
+                g.pending = True
+                base, last, prev_close, cu, cd = o, o, o, 0, 0
+                S["phase"] = ph = "grid"
+                rearms += 1
+            else:
+                last = c
+                continue
+        if i > 0 and didx[i] != didx[i - 1] and st["pos"]:
+            overnight += 1
+            gap_pts += st["pos"] * (o - last)
+        if g.pending:
+            g.place(last)
+        pos, avg = st["pos"], st["avg"]
+        if ph == "grid":
+            if not (not g.pending and h < (g.sell_t[0] if g.sell_t else math.inf)
+                    and lw > (g.buy_t[-1] if g.buy_t else -math.inf)):
+                path = [o, lw, h, c] if c >= o else [o, h, lw, c]
+                a = last
+                for b in [o] + path[1:]:
+                    _segment(g, st, a, b, ts)
+                    a = b
+        elif pos:
+            path = [o, lw, h, c] if c >= o else [o, h, lw, c]
+            a = last
+            for b in [o] + path[1:]:
+                hit = (max(a, b) >= avg + tick) if pos > 0 else (min(a, b) <= avg - tick)
+                if hit:
+                    _flat(st, a if ((pos > 0 and a >= avg + tick) or (pos < 0 and a <= avg - tick)) else avg, ts, "be")
+                    break
+                a = b
+        last = c
+        if st["pos"] and g.so.g_stop_pts > 0 and ((g.lo and c <= g.lo) or (g.hi and c >= g.hi)):
+            if i + 1 < n:
+                _flat(st, bars[i + 1][1] - hs if st["pos"] > 0 else bars[i + 1][1] + hs, bars[i + 1][0], "stop")
+                schedule("stop", bars[i + 1][0])
+            else:
+                _flat(st, c, ts, "stop")
+                S["phase"] = "dead"
+            continue
+        if not st["pos"] and g.so.g_stop_pts > 0 and ((g.lo and c <= g.lo) or (g.hi and c >= g.hi)):
+            schedule("stop", ts)                           # цена ушла за край сетки без позиции
+            continue
+        if ph == "grid":
+            fire = bool(k_lv and abs(st["pos"]) >= k_lv)
+            if x_pct or trig_level:
+                if trig_level:
+                    up, dn = base + trig_level * p["step"], base - trig_level * p["step"]
+                else:
+                    up, dn = base * (1 + x_pct / 100), base * (1 - x_pct / 100)
+                if h >= up and prev_close < up:
+                    cu += 1
+                if lw <= dn and prev_close > dn:
+                    cd += 1
+                if cu >= touches or cd >= touches:
+                    fire = True
+            prev_close = c
+            if fire and i + 1 < n:
+                fires += 1
+                S["phase"] = "exit"
+                pos, avg = st["pos"], st["avg"]
+                if pos and ((pos > 0 and c > avg + tick) or (pos < 0 and c < avg - tick)):
+                    _flat(st, bars[i + 1][1] - hs if pos > 0 else bars[i + 1][1] + hs, bars[i + 1][0], "be")
+                    schedule("be", bars[i + 1][0])
+                elif not pos:
+                    schedule("be", ts)
+        elif not st["pos"]:
+            schedule("be", ts)
+    if st["pos"]:
+        _flat(st, bars[-1][4], bars[-1][0], "end")
+    return {"st": st, "day_of_ts": day_of_ts, "nd": nd, "rearms": rearms, "fires": fires, "overnight": overnight,
+            "gap_pts": gap_pts}
+
+
+def run_nextday(arg: dict) -> dict:
+    """mode=nextday_days: params, configs [{name, k, L, x, touches, rearm, delay, anchor, prot}], draws, chunk [i, n] по
+    наборам params. Для каждого контракта два прогона: с первого дня обучения (первые 2/3 дней) и заново с первого дня
+    отложенной трети. rearm 'rand' считается только на тесте (arg draws розыгрышей)."""
+    import random
+    from trader.lab.commission import commission_for
+    from trader.lab.footprints import common
+    key = arg["symbol_key"]
+    rows = common.load_bars(key, arg.get("since"), arg.get("until"))
+    if not rows:
+        return {"id": "NEXT7", "symbol": key, "error": "нет баров в окне"}
+    inst = INST["Si" if key[:2].lower() == "si" else "RI"]
+    days = prep_days(rows, with_sig=False)
+    nt = len(days) * 2 // 3
+    wins = {"train": [d["full"] for d in days[:nt]], "test": [d["full"] for d in days[nt:]]}
+    pv = inst["pv"]
+    pis = arg.get("pis") or list(range(len(arg["params"])))
+    if arg.get("chunk"):
+        i, n = arg["chunk"]
+        pis = pis[i::n]
+    out = {"id": "NEXT7", "symbol": key, "n_days": len(days), "n_train": nt,
+           "dates": {"train": [d["stats"]["date"] for d in days[:nt]], "test": [d["stats"]["date"] for d in days[nt:]]},
+           "configs": []}
+
+    def summarize(res):
+        st, dmap, nd = res["st"], res["day_of_ts"], res["nd"]
+        g_, fm, ft = [0.0] * nd, [0.0] * nd, [0.0] * nd
+        for x, ts in zip(st["trades_pnl"], st["tts"]):
+            g_[dmap[ts]] += x * pv
+        for ts, _s, price, qty, kind in st["fills"]:
+            tk = commission_for(key, price, qty, pv, taker=True, ts=ts)
+            mk = commission_for(key, price, qty, pv, taker=False, ts=ts) if kind in ("level", "be") else tk
+            d = dmap[ts]
+            fm[d] += mk
+            ft[d] += tk
+        kinds = {"be": 0, "stop": 0, "end": 0}
+        for kd in st["tk"]:
+            if kd in kinds:
+                kinds[kd] += 1
+        return {"gross": [round(x, 1) for x in g_], "fee_m": [round(x, 1) for x in fm], "fee_t": [round(x, 1) for x in ft],
+                "be": kinds["be"], "stop": kinds["stop"], "end": kinds["end"], "rearms": res["rearms"],
+                "fires": res["fires"], "overnight": res["overnight"], "gap": round(res["gap_pts"] * pv, 1)}
+
+    for pi in pis:
+        p = {**DEFAULTS, **inst, **arg["params"][pi], "lot": 1, "fill_pen": 1}
+        for cf in arg["configs"]:
+            item = {"pi": pi, **{k: cf.get(k) for k in ("name", "k", "L", "x", "touches", "rearm", "delay", "anchor", "prot")}}
+            kw = {"x_pct": cf.get("x"), "k_lv": cf.get("k"), "touches": cf.get("touches") or 1, "trig_level": cf.get("L")}
+            for part in ("train", "test"):
+                if cf["rearm"] == "rand":
+                    if part == "train":
+                        continue
+                    draws = []
+                    for dd in range(arg.get("draws", 20)):
+                        s = summarize(simulate_nextday(wins[part], p, kw["x_pct"], kw["k_lv"], kw["touches"], "rand",
+                                                       cf["delay"], cf["anchor"], random.Random(8000 + dd), kw["trig_level"]))
+                        draws.append({"net_t": round(sum(s["gross"]) - sum(s["fee_t"]), 1),
+                                      "net_m": round(sum(s["gross"]) - sum(s["fee_m"]), 1), "rearms": s["rearms"]})
+                    item["rand"] = draws
+                    continue
+                item[part] = summarize(simulate_nextday(wins[part], p, kw["x_pct"], kw["k_lv"], kw["touches"], cf["rearm"],
+                                                        cf["delay"], cf["anchor"], None, kw["trig_level"]))
+            out["configs"].append(item)
+    return out
+
 # ── сетка документа и живой набор ────────────────────────────────────────────
 STEPS = (50, 100, 150, 200, 300, 400, 600)
 LEVELS = (2, 3, 5, 8, 12)
@@ -1767,6 +1977,8 @@ def run(arg: dict) -> dict:
         return run_trigger(arg)
     if str(arg.get("mode", "")).startswith("sched"):
         return run_sched(arg)
+    if str(arg.get("mode", "")).startswith("nextday"):
+        return run_nextday(arg)
     from trader.lab.footprints import common
     key = arg["symbol_key"]
     rows = common.load_bars(key, arg.get("since"), arg.get("until"))

@@ -568,3 +568,57 @@ def test_trigger_rearm_by_time_after_clean_exit_only():
     body, tail = _dbody([FLAT, (1000, 1101, 1000, 1105), (1105, 1105, 1105, 1105), (1105, 1305, 1105, 1305)] + [(1305, 1305, 1305, 1305)] * 20)
     r2 = gs.simulate_trigger(body, tail, {**TP, "buys": 2, "sells": 2, "stop_pts": 100}, None, 1, resume="time", rearm_min=1)
     assert r2["kinds"]["stop"] == 1 and r2["resumes"] == 0         # после стопа боевая защита не перевзводится
+
+
+# ── седьмая редакция: непрерывная сетка и самовзведение ───────────────────────────────────────────
+def _nday(spec, di=0, n=60, start=420):
+    """День di: n минутных баров с 07:00, цена 1000 плоско, spec {индекс бара: (o,h,l,c)}; бары без заданий продолжают close."""
+    out, prev = [], 1000.0
+    for k in range(n):
+        o, h, lo, c = spec.get(k, (prev, prev, prev, prev))
+        out.append([DAY0 + di * 86400 + (start + k) * 60, o, h, lo, c, 1])
+        prev = c
+    return out
+
+
+NP = {**gs.DEFAULTS, **P, "stop_pts": 0, "tick": 1.0, "half": 0.0, "lot": 1, "fill_pen": 1}
+
+
+def test_nextday_flat_at_end_and_no_exit_no_rearm():
+    d0 = _nday({5: (1000, 1101, 1000, 1105)})
+    d1 = _nday({}, di=1)
+    r = gs.simulate_nextday([d0, d1], NP, None, None, 1, "next", 0, "first")
+    assert r["st"]["pos"] == 0 and r["st"]["tk"][-1] == "end"            # позиция в конце окна закрыта
+    assert r["rearms"] == 1 and r["overnight"] == 1                       # выхода не было: перевзвода нет, ночёвка с шортом
+
+
+def test_nextday_rearm_only_next_day_after_start_plus_delay():
+    d0 = _nday({15: (1000, 1101, 1000, 1105), 18: (1105, 1105, 1099, 1099), 30: (1099, 1250, 1099, 1250), 31: (1250, 1250, 999, 999)})
+    d1 = _nday({2: (1000, 1000, 800, 800), 14: (800, 1101, 800, 1101)}, di=1)         # движение до start+10 мин (бар 10) и после
+    r = gs.simulate_nextday([d0, d1], NP, None, 1, 1, "next", 10, "first")
+    assert r["fires"] == 2 and r["rearms"] == 2                                       # K=1: защита дня 0, безубыток, перевзвод утром, защита нового набора
+    fills = r["st"]["fills"]
+    day1_start = d1[0][0]
+    assert all(f[0] < d1[0][0] for f in fills if f[4] == "be")                         # выход в день 0
+    after = [f for f in fills if f[0] >= day1_start]
+    assert after and min(f[0] for f in after) >= day1_start + 10 * 60                  # раньше начало + D входов нет
+    assert not [f for f in fills if d0[19][0] <= f[0] < day1_start]                     # внутри дня 0 перевзвода нет
+
+
+def test_nextday_touches_two_separate_vs_consecutive_in_zone():
+    mk = lambda spec: [_nday(spec), _nday({}, di=1)]                                   # noqa: E731
+    sep = mk({15: (1000, 1201, 1000, 1150), 18: (1150, 1210, 1150, 1190)})              # два раздельных касания зоны 1200
+    zone = mk({15: (1000, 1201, 1000, 1205), 18: (1205, 1210, 1205, 1205)})             # второй бар подряд в зоне: касания нет
+    assert gs.simulate_nextday(sep, NP, None, None, 2, "next", 10, "first", trig_level=2)["fires"] == 1
+    assert gs.simulate_nextday(zone, NP, None, None, 2, "next", 10, "first", trig_level=2)["fires"] == 0
+    assert gs.simulate_nextday(zone, NP, None, None, 1, "next", 10, "first", trig_level=2)["fires"] == 1
+    both = mk({15: (1000, 1201, 1000, 1150), 18: (1150, 1150, 799, 850)})                # вверх и вниз: стороны считаются отдельно
+    assert gs.simulate_nextday(both, NP, None, None, 2, "next", 10, "first", trig_level=2)["fires"] == 0
+
+
+def test_nextday_gap_fills_levels_at_level_price_and_overnight_counted():
+    d0 = _nday({})
+    d1 = _nday({0: (1250, 1250, 1250, 1250)}, di=1)                                      # открытие с гэпом через уровни 1100, 1200
+    r = gs.simulate_nextday([d0, d1], {**NP, "buys": 3, "sells": 3}, None, None, 1, "next", 0, "first")
+    sells = [f[2] for f in r["st"]["fills"] if f[4] == "level"]
+    assert 1100 in sells and 1200 in sells and 1250 not in sells                        # по цене уровня, не по цене гэпа
