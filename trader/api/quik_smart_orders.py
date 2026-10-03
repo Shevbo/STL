@@ -1797,8 +1797,51 @@ def _grid_cid(so_id: str, level: int) -> str:
     return _GRID_CID.format(so_id=so_id, level=f"{level:+d}".replace("+", "p").replace("-", "m"))
 
 
+def _grid_position_delta(so: SmartOrder, side_was: str, got: int, price: float) -> None:
+    """Позиция, средняя и денежный поток сетки — без гашения уровней.
+
+    Отдельно от _grid_count_fill, потому что ЧАСТИЧНОЕ исполнение стоящей заявки
+    двигает позицию сразу, а гасит уровень только полное (или снятие остатка).
+    """
+    if got <= 0:
+        return
+    # ПОТОК ДО ПОЗИЦИИ: база заводится из состояния ДО этого филла, иначе филл
+    # посчитался бы дважды — в средней и в потоке.
+    if so_mod.ensure_cash_basis(so) and price > 0:
+        so.g_cash_pts += price * got if side_was == "sell" else -price * got
+    so.g_pos, so.g_avg = so_mod.blend_avg(
+        so.g_pos, so.g_avg, got, price, side_was == "buy")
+
+
+def _grid_count_partial(so: SmartOrder, live: dict, key: str, level: int,
+                        side_was: str, filled_now: int, now: int,
+                        price: float = 0.0) -> bool:
+    """Частичное исполнение СТОЯЩЕЙ заявки уровня — в позицию сразу.
+
+    02.10.2026, GZZ6: заявка уровня «продать 5 по 9914» налилась на 4 и стояла с
+    остатком 1. Сторож видел её «стоящей» и пропускал, а позицию трогал только при
+    полном исполнении. Сетку сняли раньше — 4 контракта так и не попали в её
+    позицию: в книге +10, по сделкам +6. На ложную позицию опираются стоп, защита
+    и выход «только на выход».
+
+    `key` — ключ учтённого объёма этой заявки в live (`pf:<client_id>` или
+    `pf:<номер>` у подхваченной). Возвращает, изменилось ли что-нибудь.
+    """
+    done = int(live.get(key) or 0)
+    if filled_now <= done:
+        return False
+    _grid_position_delta(so, side_was, filled_now - done, price)
+    live[key] = filled_now
+    so_journal.record("grid_fill", so, so_journal.WATCHER,
+                      f"уровень {level:+d} ({so_mod.grid_price(so, level):g}) налился "
+                      f"частично: {side_was} {filled_now - done} (всего {filled_now}); "
+                      f"позиция {so.g_pos:+d}; уровень стоит с остатком", now_ms=now)
+    return True
+
+
 def _grid_count_fill(so: SmartOrder, live: dict, level: int, side_was: str,
-                     got: int, now: int, how: str = "", price: float = 0.0) -> None:
+                     got: int, now: int, how: str = "", price: float = 0.0,
+                     already: int = 0) -> None:
     """Провести филл уровня сетки: позиция, гашение уровня, пробуждение соседей.
 
     ЕДИНСТВЕННЫЙ путь учёта филла в сетке. Таких путей теперь два источника — запись
@@ -1810,12 +1853,8 @@ def _grid_count_fill(so: SmartOrder, live: dict, level: int, side_was: str,
     уровень ИСЧЕЗАЕТ и возвращается только после филла СОСЕДНЕГО — любого, хоть
     ниже, хоть выше.
     """
-    # ПОТОК ДО ПОЗИЦИИ: база заводится из состояния ДО этого филла, иначе филл
-    # посчитался бы дважды — в средней и в потоке.
-    if so_mod.ensure_cash_basis(so) and price > 0:
-        so.g_cash_pts += price * got if side_was == "sell" else -price * got
-    so.g_pos, so.g_avg = so_mod.blend_avg(
-        so.g_pos, so.g_avg, got, price, side_was == "buy")
+    # В позицию — только то, что ещё не учтено частичными исполнениями (`already`).
+    _grid_position_delta(so, side_was, got - already, price)
     so.g_fills_done += 1                          # для защиты «N уровней подряд»
     live[f"flip:{level}"] = True                  # этот уровень погас
     woke = [n for n in (level - 1, level + 1)
@@ -2271,7 +2310,15 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
             cid = live.get(key) or ""
             rec = work.get(cid) if cid else None
             if _is_working(rec) and int(rec.get("remaining") or 0) > 0:
-                continue                      # стоит в стакане, всё хорошо
+                # Стоит в стакане. Налилась частично — в позицию сразу (см.
+                # _grid_count_partial), уровень не гасим: остаток ещё работает.
+                if int(rec.get("filled") or 0) > 0:
+                    sw = str(rec.get("side") or "").lower()
+                    if sw in ("buy", "sell") and _grid_count_partial(
+                            so, live, f"pf:{cid}", level, sw, int(rec["filled"]), now,
+                            price=float(rec.get("price") or 0)):
+                        dirty = True
+                continue
             if rec is not None and int(rec.get("filled") or 0) > 0:
                 # ИСПОЛНИЛАСЬ. В «радиации» НЕТ ПОНЯТИЯ ТЕЙКА, есть уровни
                 # (формулировка оператора 01.10.2026). Исполненный уровень
@@ -2294,7 +2341,8 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
                     log.warning("smart_order.grid_fill_side_unknown", so_id=so.so_id,
                                 level=level, guessed=side_was)
                 _grid_count_fill(so, live, level, side_was, int(rec["filled"]), now,
-                                 price=float(rec.get("price") or 0))
+                                 price=float(rec.get("price") or 0),
+                                 already=int(live.pop(f"pf:{cid}", 0) or 0))
                 dirty = True
             # ВСТАВЛЕНО ДО ГЕЙТА «погасший уровень не выставляем» НАМЕРЕННО. Сначала
             # эта ветка стояла после него — и гейт успевал пропустить уровень, для
@@ -2318,6 +2366,12 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
             adopted = live.get(f"adopt:{level}")
             if isinstance(adopted, dict) and adopted.get("num"):
                 row = term_num.get(str(adopted["num"]))
+                if (row is not None and row["active"] and row["filled"] > 0
+                        and row["side"] in ("buy", "sell")):
+                    if _grid_count_partial(so, live, f"pf:{row['num']}", level,
+                                           row["side"], row["filled"], now,
+                                           price=row["price"]):
+                        dirty = True
                 if row is not None and not row["active"]:
                     live.pop(f"adopt:{level}", None)
                     dirty = True
@@ -2327,7 +2381,8 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
                         _grid_count_fill(so, live, level, side_was, row["filled"], now,
                                          f" (подхваченная заявка {row['num']}, "
                                          "узнали из таблицы терминала)",
-                                         price=row["price"])
+                                         price=row["price"],
+                                         already=int(live.pop(f"pf:{row['num']}", 0) or 0))
                     else:
                         so_journal.record(
                             "adopted", so, so_journal.WATCHER,
