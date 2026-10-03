@@ -1,12 +1,10 @@
 # Recent
 
-## 2026-09-30
-Framework implementation complete (A2/A5/E1/B3/C6/C3/C1/D2+D3/A3/B2/C4/C2/D1); wave 1 (13/13✓) yielded strong correlations (C1 dispersion 0.14@5s→0.02@300s, RIZ6 15/17). Fable verified A4/A4b correctness; Opus impl A4b v2+C4 sans L1; ex-EXEC2a baseline v2 (98% ≤3s FILLED, +5/avg p90 +15pts ≈60k₽).
+## 2026-09-25
+Backtests closed with backtest_results.extra JSONB migration; deployed to 3 channels + mobile. m.html render errors unresolved.
 
-## 2026-09-29
-Retro_reverse (noise-control, tests✓, i9 verified); Interfax news (370 articles, 3 dates); yearly impulse (2038 events); imp-ri-1 blocked (−1.3 median rollback), imp-ri-2 confirmed volume artifact (−60pt ex-post). Trade tape silent since 2026-09-26; retro-reverse results pending.
+## 2026-09-26
+Smart-order UI redesign (collapsible explain, param groups), tp_trail validation fixed, journal screen (?journal=1), m.html manual (20 rows). Network/rendering separated, mobile journal created, exit-row deployed, EMA visualization added. Deployed avg-price fix, started robot-quality screen. Pending real-trade bars & runner update.
 
-## Identity Candidates
-- IDENTITY CANDIDATE: Triangular arbitrage design (144 params) reveals multi-instrument coordination sophistication
-- IDENTITY CANDIDATE: Email hook automation (scripts/mail_hook.py) over devmail_install shows infrastructure reliability obsession
-- IDENTITY CANDIDATE: Framework backtesting (waves/gates/auditing) suggests rigorous validation/verification culture
+## 2026-09-27
+UI deployed: EMA curves, filter levels (spread/valley), lock band, candles restored (2a072fa). Fixed entry_reasons migration (6fea67a); verified real-trade pool. shectory-trader restart active.
