@@ -1936,6 +1936,355 @@ def run_nextday(arg: dict) -> dict:
             out["configs"].append(item)
     return out
 
+# ── восьмая редакция: перебор «радиации» с поклёвкой, тейком и перевзводом (docs/grid-radiation-sweep-2026.md) ──
+def _sp(key: str, pv: float, tick: float) -> dict:
+    return {"key": key, "pv": pv, "margin": 0.0, "tick": tick}
+
+
+# склейки контрактов 2026 белого списка; pv/тик по instrument_meta (RI, Si, GZ, GD, BR как в широкой сетке; у GDZ6, BRK6,
+# BRM6 записи нет: GDZ6 = pv GDU6, BRK6/BRM6 = 10 x USDRUBF на конец апреля / мая; SR, GZ pv 1)
+SWEEP_CONTRACTS = {
+    "RI": [{"key": "RI", "hi": "2026-02-24", "spec": _sp("RIM6", 1.438154, 10.0)},
+           {"key": "RIH6", "spec": _sp("RIH6", 1.438154, 10.0)}, {"key": "RIM6", "spec": _sp("RIM6", 1.438154, 10.0)},
+           {"key": "RIU6", "spec": _sp("RIU6", 1.685138, 10.0)}, {"key": "RIZ6", "spec": _sp("RIZ6", 1.671176, 10.0)}],
+    "Si": [{"key": k, "spec": _sp(k, 1.0, 1.0)} for k in ("SiH6", "SiM6", "SiU6", "SiZ6")],
+    "GZ": [{"key": k, "spec": _sp(k, 1.0, 1.0)} for k in ("GZM6", "GZU6", "GZZ6")],
+    "GD": [{"key": "GDM6", "spec": _sp("GDM6", 73.2644, 0.1)}, {"key": "GDU6", "spec": _sp("GDU6", 84.3508, 0.1)},
+           {"key": "GDZ6", "spec": _sp("GDZ6", 84.3508, 0.1)}],
+    "SR": [{"key": k, "spec": _sp(k, 1.0, 1.0)} for k in ("SRM6", "SRU6", "SRZ6")],
+    "BR": [{"key": "BRK6", "spec": _sp("BRK6", 752.2, 0.01)}, {"key": "BRM6", "spec": _sp("BRM6", 711.7, 0.01)},
+           {"key": "BRN6", "spec": _sp("BRN6", 719.077, 0.01)}, {"key": "BRQ6", "spec": _sp("BRQ6", 798.573, 0.01)},
+           {"key": "BRU6", "spec": _sp("BRU6", 838.058, 0.01)}, {"key": "BRV6", "spec": _sp("BRV6", 835.588, 0.01)},
+           {"key": "BRX6", "spec": _sp("BRX6", 832.454, 0.01)}],
+}
+SWEEP_WINDOWS = {"3m": ("2026-07-01", "2026-09-30"), "6m": ("2026-04-01", "2026-09-30")}
+REARMS = ("h1", "h2", "h3", "nd10", "nd240")
+BROKER_FEE = 0.45                       # ₽ на филл, будни (commission.BROKER_FEE_PER_CONTRACT); выходные x2
+COARSE = {"step": (50, 100, 150, 200, 250, 300, 350, 400), "n": (5, 10, 15, 20, 25), "L": (3, 5, 8, 12, 16, 20),
+          "N": (1, 2, 3, 5), "s": (1, 3, 5), "T": (10, 50, 100, 200, 300, 500), "rearm": REARMS}
+FULL = {"step": tuple(range(50, 401, 50)), "n": tuple(range(5, 26)), "L": tuple(range(3, 21)), "N": tuple(range(1, 6)),
+        "s": tuple(range(1, 6)), "T": tuple(range(10, 501, 10)), "rearm": REARMS}
+PARAMS = ("step", "n", "L", "N", "s", "T", "rearm")
+
+
+def sweep_ctx(bars: list) -> dict:
+    """Предрасчёт по барам части окна: метки, индекс дня, последний бар дня, множитель выходных, карта метка->(день, контракт)."""
+    tss = [b[0] for b in bars]
+    didx, dlast, days = [], [], {}
+    for i, t in enumerate(tss):
+        di = days.setdefault(t // 86400, len(days))
+        didx.append(di)
+        if di == len(dlast):
+            dlast.append(i)
+        else:
+            dlast[di] = i
+    wk = [2.0 if datetime.fromtimestamp(t, tz=timezone.utc).weekday() >= 5 else 1.0 for t in tss]
+    return {"tss": tss, "didx": didx, "dlast": dlast, "wk": wk, "nd": len(days),
+            "tsmap": {b[0]: (didx[i], b[6]) for i, b in enumerate(bars)}}
+
+
+def sweep_vec_params(v: dict, scale: float, tick: float, pvs: list) -> dict:
+    """Параметры _Grid по вектору перебора (step в пунктах RI -> пункты инструмента, не меньше тика)."""
+    step = max(tick, round(v["step"] * scale / tick) * tick)
+    return {**DEFAULTS, "step": step, "buys": v["n"], "sells": v["n"], "stop_pts": v["s"] * step, "tick": tick,
+            "half": tick / 2, "lot": 1, "fill_pen": 1, "pvs": pvs}
+
+
+def simulate_sweep(bars: list, rolls: dict, p: dict, L: int = 0, N: int = 1, T: float = 0.0, rearm: str = "nd10",
+                   naked: bool = False, rng=None, ctx: dict | None = None) -> dict:
+    """Непрерывная сетка по склеенным барам части окна [ts,o,h,l,c,v,cidx], rolls = {индекс первого бара нового контракта: ...}.
+    p: параметры _Grid + pvs[cidx] (₽/пт). Цикл = сетка от open бара взведения (база), как simulate_nextday: уровни, гэпы
+    проходятся отрезком, стоп (close за краем на s уровней, p['stop_pts']) закрывает рынком по open следующего бара с полспреда.
+    Концы цикла: 'be' поклёвка (касание L N раз одной стороной -> входы выключены, выход лимитом по средней или рынком 'bem'
+    если на сигнале уже в плюсе), 'tp' тейк (чистая прибыль закрытых пар уровней за вычетом комиссии двух филлов пары,
+    мейкер, >= T ₽ -> позиция рынком), 'stop', 'roll' (flat по close последнего бара старого контракта, новый цикл сразу на
+    первом баре нового), 'end' (flat по close последнего бара). После be/tp/stop перевзвод rearm: hK = не раньше чем
+    через K часов после флэта, ndM = первый бар следующего календарного дня с 06:00 + M мин (день бара решения), база = open
+    бара перевзвода; rng != None = случайный бар того же календарного дня не раньше срока. naked: без поклёвки и тейка,
+    после стопа перевзвод nd10. Старт = первый бар части."""
+    from bisect import bisect_left
+    ctx = ctx or sweep_ctx(bars)
+    tss, didx, dlast, wk = ctx["tss"], ctx["didx"], ctx["dlast"], ctx["wk"]
+    n, tick, hs, pvs, step = len(bars), p["tick"], p["half"], p["pvs"], p["step"]
+    rk = "nd10" if naked else rearm
+    st = _new_state()
+    tp_l = st["trades_pnl"]
+    ends = {"be": 0, "tp": 0, "stop": 0, "roll": 0, "end": 0}
+    rearms = 0
+    g = None
+    phase, t_i, i = "wait", 0, 0
+    base = last = prev_close = tacc = 0.0
+    cu = cd = ntp = 0
+
+    def schedule(flat_i: int, dec_i: int) -> int:
+        if rk[0] == "h":
+            tgt = tss[flat_i] + int(rk[1:]) * 3600
+        else:
+            tgt = (tss[dec_i] // 86400 + 1) * 86400 + 21600 + int(rk[2:]) * 60
+        ti = max(bisect_left(tss, tgt), flat_i + 1)
+        if rng is not None and ti < n:
+            ti = rng.randint(ti, dlast[didx[ti]])
+        return ti
+
+    while i < n:
+        fresh = False
+        if phase == "wait":
+            if t_i >= n:
+                break
+            i, fresh = t_i, True
+        elif i in rolls:
+            if st["pos"]:
+                _flat(st, last, tss[i - 1], "roll")
+            ends["roll"] += 1
+            fresh = True
+        ts, o, h, lw, c, _v, ci = bars[i]
+        if fresh:
+            g = _Grid(o, p)
+            g.px = {k: round(v / tick) * tick for k, v in g.px.items()}
+            g.side = {k: None for k in g.levels}
+            g.pending = True
+            base = last = prev_close = o
+            cu = cd = 0
+            tacc, ntp = 0.0, len(tp_l)
+            phase = "grid"
+            rearms += 1
+        if g.pending:
+            g.place(last)
+        pos = st["pos"]
+        if phase == "grid":
+            if not (not g.pending and h < (g.sell_t[0] if g.sell_t else math.inf)
+                    and lw > (g.buy_t[-1] if g.buy_t else -math.inf)):
+                path = [o, lw, h, c] if c >= o else [o, h, lw, c]
+                a = last
+                for b in [o] + path[1:]:
+                    _segment(g, st, a, b, ts)
+                    a = b
+        elif pos:
+            avg = st["avg"]
+            path = [o, lw, h, c] if c >= o else [o, h, lw, c]
+            a = last
+            for b in [o] + path[1:]:
+                if (max(a, b) >= avg + tick) if pos > 0 else (min(a, b) <= avg - tick):
+                    _flat(st, a if ((pos > 0 and a >= avg + tick) or (pos < 0 and a <= avg - tick)) else avg, ts, "be")
+                    break
+                a = b
+        last = c
+        pos = st["pos"]
+        nxt_ok = i + 1 < n and (i + 1) not in rolls
+        if (g.lo and c <= g.lo) or (g.hi and c >= g.hi):
+            fi = i
+            if pos:
+                if nxt_ok:
+                    _flat(st, bars[i + 1][1] - hs if pos > 0 else bars[i + 1][1] + hs, tss[i + 1], "stop")
+                    fi = i + 1
+                else:
+                    _flat(st, c, ts, "stop")
+            ends["stop"] += 1
+            t_i, phase, i = schedule(fi, i), "wait", i + 1
+            continue
+        if phase == "grid":
+            if not naked:
+                if len(tp_l) > ntp:
+                    pv = pvs[ci]
+                    for k in range(ntp, len(tp_l)):
+                        tacc += tp_l[k] * pv - 2 * BROKER_FEE * wk[i]
+                    ntp = len(tp_l)
+                if T and tacc >= T:
+                    fi = i
+                    if pos and nxt_ok:
+                        _flat(st, bars[i + 1][1] - hs if pos > 0 else bars[i + 1][1] + hs, tss[i + 1], "tp")
+                        fi = i + 1
+                    elif pos:
+                        _flat(st, c, ts, "tp")
+                    ends["tp"] += 1
+                    t_i, phase, i = schedule(fi, i), "wait", i + 1
+                    continue
+                up, dn = base + L * step, base - L * step
+                if h >= up and prev_close < up:
+                    cu += 1
+                if lw <= dn and prev_close > dn:
+                    cd += 1
+                prev_close = c
+                if (cu >= N or cd >= N) and nxt_ok:
+                    phase = "exit"
+                    avg = st["avg"]
+                    if pos and ((pos > 0 and c > avg + tick) or (pos < 0 and c < avg - tick)):
+                        _flat(st, bars[i + 1][1] - hs if pos > 0 else bars[i + 1][1] + hs, tss[i + 1], "bem")
+                        ends["be"] += 1
+                        t_i, phase, i = schedule(i + 1, i), "wait", i + 1
+                        continue
+                    if not pos:
+                        ends["be"] += 1
+                        t_i, phase, i = schedule(i, i), "wait", i + 1
+                        continue
+        elif not pos:
+            ends["be"] += 1
+            t_i, phase, i = schedule(i, i), "wait", i + 1
+            continue
+        i += 1
+    if phase != "wait":
+        ends["end"] += 1
+        if st["pos"]:
+            _flat(st, bars[-1][4], bars[-1][0], "end")
+    return {"st": st, "ends": ends, "rearms": rearms}
+
+
+def sweep_summary(res: dict, ctx: dict, keys: list, pvs: list, daily: bool = False) -> dict:
+    """net тейкер/мейкер (₽), число циклов, концы циклов; daily = net тейкер по дням части (индекс дня ctx)."""
+    from trader.lab.commission import commission_for
+    st, tsmap = res["st"], ctx["tsmap"]
+    gross = 0.0
+    dg = [0.0] * ctx["nd"] if daily else None
+    for x, ts in zip(st["trades_pnl"], st["tts"]):
+        d, ci = tsmap[ts]
+        gross += x * pvs[ci]
+        if daily:
+            dg[d] += x * pvs[ci]
+    fm = ft = 0.0
+    dt_ = [0.0] * ctx["nd"] if daily else None
+    for ts, _s, price, qty, kind in st["fills"]:
+        d, ci = tsmap[ts]
+        tk = commission_for(keys[ci], price, qty, pvs[ci], taker=True, ts=ts)
+        mk = commission_for(keys[ci], price, qty, pvs[ci], taker=False, ts=ts) if kind in _MAKER_KINDS else tk
+        fm += mk
+        ft += tk
+        if daily:
+            dt_[d] += tk
+    out = {"net_t": round(gross - ft, 1), "net_m": round(gross - fm, 1), "gross": round(gross, 1),
+           "cycles": sum(res["ends"].values()), "ends": res["ends"], "rearms": res["rearms"], "fills": len(st["fills"])}
+    if daily:
+        out["day_net"] = [round(a - b, 1) for a, b in zip(dg, dt_)]
+    return out
+
+
+def sweep_combos(grid: dict) -> list:
+    """Все векторы сетки (L <= n) в фиксированном порядке."""
+    return [{"step": a, "n": n, "L": L, "N": N, "s": s, "T": T, "rearm": r}
+            for a in grid["step"] for n in grid["n"] for L in grid["L"] if L <= n for N in grid["N"]
+            for s in grid["s"] for T in grid["T"] for r in grid["rearm"]]
+
+
+def prep_sweep(instrument: str, window: str, end: str = "2026-09-30") -> dict:
+    """Склейка + окно + деление обучение/проверка (первые 2/3 дней с барами / остальные). Часть = bars, rolls (индексы
+    внутри части), ctx; общие pvs, keys, tick."""
+    from trader.lab.footprints import common
+    contracts = SWEEP_CONTRACTS[instrument]
+    pw = prep_wide(contracts, end, lambda k: common.load_bars(k, "2026-01-01", end))
+    a, b = SWEEP_WINDOWS[window]
+    bars_all = pw["bars"]
+    ix = [j for j, x in enumerate(bars_all) if a <= _day_iso(x[0]) <= b]
+    days = sorted({_day_iso(bars_all[j][0]) for j in ix})
+    nt = len(days) * 2 // 3
+    cut = days[nt]
+    specs = [c["spec"] for c in contracts]
+    out = {"days": days, "n_train": nt, "dates": {"train": days[:nt], "test": days[nt:]},
+           "pvs": [s["pv"] for s in specs], "keys": [s["key"] for s in specs], "tick": specs[0]["tick"]}
+    for part, sel in (("train", [j for j in ix if _day_iso(bars_all[j][0]) < cut]),
+                      ("test", [j for j in ix if _day_iso(bars_all[j][0]) >= cut])):
+        s0 = sel[0]
+        rl = {j - s0: v for j, v in pw["rolls"].items() if s0 < j <= sel[-1]}
+        bars = [bars_all[j] for j in sel]
+        out[part] = {"bars": bars, "rolls": rl, "ctx": sweep_ctx(bars)}
+    return out
+
+
+def _range_median(bars: list) -> float:
+    """Медиана дневного размаха high-low по будням части (для пересчёта шага не-RI инструментов)."""
+    d: dict = {}
+    for x in bars:
+        k = _day_iso(x[0])
+        if datetime.fromisoformat(k).weekday() < 5:
+            r = d.setdefault(k, [x[2], x[3]])
+            r[0], r[1] = max(r[0], x[2]), min(r[1], x[3])
+    v = sorted(a - b for a, b in d.values())
+    return v[len(v) // 2] if len(v) % 2 else (v[len(v) // 2 - 1] + v[len(v) // 2]) / 2
+
+
+def _sweep_eval(part: dict, pr: dict, vec: dict, scale: float, mode: str = "full", rng=None, daily: bool = False) -> dict:
+    p = sweep_vec_params(vec, scale, pr["tick"], pr["pvs"])
+    r = simulate_sweep(part["bars"], part["rolls"], p, vec["L"], vec["N"], float(vec["T"]), vec["rearm"],
+                       naked=(mode == "naked"), rng=rng, ctx=part["ctx"])
+    s = sweep_summary(r, part["ctx"], pr["keys"], pr["pvs"], daily)
+    s["step_pts"] = p["step"]
+    return s
+
+
+def _refine(part: dict, pr: dict, start: dict, scale: float, rounds: int = 2, min_cycles: int = 20) -> dict:
+    """Покоординатный подъём по полной сетке каждого параметра (по одному за раз), net тейкер обучения, >= min_cycles циклов."""
+    cur = dict(start)
+    cache: dict = {}
+
+    def ev(v: dict):
+        k = tuple(v[x] for x in PARAMS)
+        if k not in cache:
+            cache[k] = _sweep_eval(part, pr, v, scale)
+        return cache[k]
+
+    best = ev(cur)
+    hist = [{"round": 0, "vec": dict(cur), "net_t": best["net_t"], "cycles": best["cycles"]}]
+    for rd in range(rounds):
+        changed = False
+        for prm in PARAMS:
+            for val in FULL[prm]:
+                v = {**cur, prm: val}
+                if v["L"] > v["n"]:
+                    continue
+                r = ev(v)
+                if r["cycles"] >= min_cycles and (best["cycles"] < min_cycles or r["net_t"] > best["net_t"]):
+                    best, cur, changed = r, v, True
+        hist.append({"round": rd + 1, "vec": dict(cur), "net_t": best["net_t"], "cycles": best["cycles"]})
+        if not changed:
+            break
+    return {"vec": cur, "train": best, "hist": hist, "evals": len(cache)}
+
+
+def run_sweep(arg: dict) -> dict:
+    """mode=sweep: instrument, window ('3m'|'6m'), phase:
+    'prep'   -> дни, медиана дневного размаха будней обучения (scale = med_инстр / med_RI);
+    'coarse' -> scale, chunk [i, k], T (необязательно: сокращённый набор): net тейкер/мейкер и циклы грубой сетки на обучении;
+    'refine' -> scale, start (вектор): покоординатное уточнение на обучении;
+    'test'   -> scale, vecs [{tag, vec, mode: full|naked|rand, draws}]: прогон заново с первого дня проверочной трети."""
+    import random
+    import time
+    t0 = time.time()
+    ins, win, ph = arg["instrument"], arg["window"], arg["phase"]
+    pr = prep_sweep(ins, win)
+    out = {"id": "SWEEP8", "instrument": ins, "window": win, "phase": ph, "n_days": len(pr["days"]),
+           "n_train": pr["n_train"], "dates": {k: [v[0], v[-1]] for k, v in pr["dates"].items()},
+           "bars": {k: len(pr[k]["bars"]) for k in ("train", "test")}}
+    scale = float(arg.get("scale", 1.0))
+    if ph == "prep":
+        out.update({"med_range_train": _range_median(pr["train"]["bars"]), "tick": pr["tick"]})
+    elif ph == "coarse":
+        grid = {**COARSE, **({"T": tuple(arg["T"])} if arg.get("T") else {})}
+        combos = sweep_combos(grid)
+        k, m = arg.get("chunk") or [0, 1]
+        rows = []
+        for v in combos[k::m]:
+            r = _sweep_eval(pr["train"], pr, v, scale)
+            rows.append([v["step"], v["n"], v["L"], v["N"], v["s"], v["T"], REARMS.index(v["rearm"]),
+                         r["net_t"], r["net_m"], r["cycles"]])
+        out.update({"scale": scale, "combos_total": len(combos), "rows": rows})
+    elif ph == "refine":
+        out.update({"scale": scale, **_refine(pr["train"], pr, arg["start"], scale)})
+    elif ph == "test":
+        res = []
+        for it in arg["vecs"]:
+            mode = it.get("mode", "full")
+            if mode == "rand":
+                dr = [_sweep_eval(pr["test"], pr, it["vec"], scale, "full", random.Random(8000 + d))
+                      for d in range(it.get("draws", 20))]
+                res.append({"tag": it["tag"], "vec": it["vec"], "mode": mode,
+                            "draws": [{"net_t": x["net_t"], "net_m": x["net_m"], "cycles": x["cycles"],
+                                       "rearms": x["rearms"]} for x in dr]})
+            else:
+                res.append({"tag": it["tag"], "vec": it["vec"], "mode": mode,
+                            **_sweep_eval(pr["test"], pr, it["vec"], scale, mode, None, True)})
+        out.update({"scale": scale, "results": res})
+    out["secs"] = round(time.time() - t0, 1)
+    return out
+
+
 # ── сетка документа и живой набор ────────────────────────────────────────────
 STEPS = (50, 100, 150, 200, 300, 400, 600)
 LEVELS = (2, 3, 5, 8, 12)
@@ -1989,6 +2338,8 @@ def run(arg: dict) -> dict:
         return run_trigger(arg)
     if str(arg.get("mode", "")).startswith("sched"):
         return run_sched(arg)
+    if str(arg.get("mode", "")).startswith("sweep"):
+        return run_sweep(arg)
     if str(arg.get("mode", "")).startswith("nextday"):
         return run_nextday(arg)
     from trader.lab.footprints import common

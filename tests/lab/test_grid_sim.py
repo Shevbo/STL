@@ -664,3 +664,70 @@ def test_nextday_rearm_after_breakeven_next_day_midday_goes_to_day_after():
     r = gs.simulate_nextday(mk(3), NP, None, 1, 1, "next", 0, "first")
     be = [f for f in r["st"]["fills"] if f[4] == "be"][0]
     assert be[0] // 86400 == d1[0][0] // 86400 and r["rearms"] == 2                          # безубыток в день 1, перевзвод в день 2
+
+
+# ── восьмая редакция: simulate_sweep ─────────────────────────────────────────────
+def _b7(rows, roll_at=None, start=600):
+    """Бары [ts,o,h,l,c,v,cidx]; roll_at = индекс первого бара второго контракта."""
+    return [[DAY0 + (start + i) * 60, o, h, lo, c, 1, 1 if roll_at is not None and i >= roll_at else 0]
+            for i, (o, h, lo, c) in enumerate(rows)]
+
+
+def _sw(rows, rolls=None, roll_at=None, L=2, N=1, T=0.0, rearm="h1", naked=False, s=1, n=3, **kw):
+    p = {**gs.DEFAULTS, **P, "buys": n, "sells": n, "stop_pts": s * 100, "lot": 1, "fill_pen": 1, "pvs": [1.0, 1.0]}
+    return gs.simulate_sweep(_b7(rows, roll_at), rolls or {}, p, L, N, T, rearm, naked=naked, **kw)
+
+
+def test_sweep_window_end_flat_and_no_cycle_without_levels():
+    r = _sw([FLAT, (1000, 1101, 1000, 1101), (1101, 1101, 1050, 1050)], L=3, N=5)
+    assert r["st"]["pos"] == 0 and r["ends"]["end"] == 1
+    assert r["st"]["fills"][-1][4] == "end" and r["st"]["fills"][-1][2] == 1050   # close последнего бара
+
+
+def test_sweep_rearm_not_before_term():
+    drop = (1000, 1000, 500, 500)
+    rows = [FLAT, drop] + [(500, 500, 500, 500)] * 100 + [(500, 650, 500, 650)] + [(650, 650, 650, 650)] * 5
+    r = _sw(rows, rearm="h1", L=3, N=5, s=1)
+    st = r["st"]
+    stop = [f for f in st["fills"] if f[4] == "stop"]
+    assert stop and r["ends"]["stop"] == 1
+    later = [f for f in st["fills"] if f[0] > stop[0][0]]
+    assert later and all(f[0] >= stop[0][0] + 3600 for f in later)               # новая сетка не раньше чем через час
+    assert r["rearms"] == 2
+
+
+def test_sweep_rearm_nd10_next_calendar_day():
+    day = 24 * 60
+    rows = [FLAT, (1000, 1000, 500, 500)] + [(500, 500, 500, 500)] * (day // 2 + 100)
+    r = _sw(rows, rearm="nd10", L=3, N=5, s=1)
+    assert r["ends"]["stop"] == 1 and r["rearms"] == 1                           # день + 1 06:10 за концом данных: нет баров
+    rows = rows[:2] + [(500, 500, 500, 500)] * 2000
+    r = _sw(rows, rearm="nd10", L=3, N=5, s=1)
+    assert r["rearms"] == 2                                                      # день + 1 в данных есть (цикл взведён на баре)
+
+
+def test_sweep_tp_counts_only_closed_pairs():
+    up, dn = (1000, 1101, 1000, 1101), (1101, 1101, 999, 999)
+    open_only = _sw([FLAT, up, (1101, 1101, 1090, 1090)], L=3, N=5, T=1)
+    assert open_only["ends"]["tp"] == 0                                          # открытая нога без закрытой пары не считается
+    r = _sw([FLAT, up, dn, (999, 999, 999, 999), (999, 999, 999, 999)], L=3, N=5, T=50)
+    assert r["ends"]["tp"] == 1 and r["st"]["pos"] == 0
+    assert [f[4] for f in r["st"]["fills"]].count("level") == 2
+    r2 = _sw([FLAT, up, dn, (999, 999, 999, 999), (999, 999, 999, 999)], L=3, N=5, T=500)
+    assert r2["ends"]["tp"] == 0                                                 # пара принесла 100 - 0.9, до 500 не дотянула
+
+
+def test_sweep_bait_level_and_combos_never_beyond_n():
+    r = _sw([FLAT, (1000, 1150, 1000, 1000), FLAT, FLAT], L=2, N=1, rearm="h3")
+    assert r["ends"]["be"] == 0                                                  # до уровня 2 (1200) не дошли
+    r = _sw([FLAT, (1000, 1201, 1000, 1201), (1201, 1201, 1100, 1100), (1100, 1100, 1100, 1100)], L=2, N=1, rearm="h3")
+    assert r["ends"]["be"] == 1                                                  # шорт 1100/1200, выход лимитом по средней 1150
+    assert all(v["L"] <= v["n"] for v in gs.sweep_combos(gs.COARSE)) and len(gs.sweep_combos(gs.COARSE)) == 60480
+
+
+def test_sweep_roll_closes_position_and_restarts():
+    rows = [FLAT, (1000, 1101, 1000, 1101), (1101, 1101, 1090, 1090), (2000, 2000, 2000, 2000), (2000, 2000, 2000, 2000)]
+    r = _sw(rows, rolls={3: 1000.0}, roll_at=3, L=3, N=5)
+    roll = [f for f in r["st"]["fills"] if f[4] == "roll"]
+    assert len(roll) == 1 and roll[0][2] == 1090 and roll[0][0] == DAY0 + (600 + 2) * 60   # close последнего бара старого
+    assert r["ends"]["roll"] == 1 and r["rearms"] == 2 and r["st"]["pos"] == 0
