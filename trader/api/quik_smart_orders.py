@@ -741,6 +741,31 @@ _WORKING_STATES = ("pending", "active", "partial")
 _DEAD_STATES = ("cancelled", "rejected", "expired")
 
 
+_FIN_KEEP = 400      # сколько засчитанных заявок помнить; дальше стираются самые старые
+
+
+def _mark_counted(live: dict, num: str) -> None:
+    """Запомнить: налив заявки с этим НОМЕРОМ уже засчитан в позицию.
+
+    ТАБЛИЦА ТЕРМИНАЛА ОТСТАЁТ ОТ СКЛАДА НА СЕКУНДЫ, и строка уже исполненной заявки
+    какое-то время выглядит живой. 03.10.2026 на GZZ6 это посчитало ОДИН налив
+    ДВАЖДЫ: заявка уровня исполнилась в 18:55:45 и была учтена складом, а таблица
+    ещё показывала её активной — сторож «подхватил» её как свежую стоящую, и когда
+    строка обновилась на «исполнена», засчитал тот же налив второй раз. Позиция
+    сетки ушла на 7 контрактов (+3 в книге против +10 по сделкам).
+
+    «Склад знает заявку закрытой» тут НЕ ТО ЖЕ, что «налив засчитан»: после рестарта
+    склад знает заявку, а связь сетки с ней уже снята, и посчитать её может только
+    таблица (см. тест «ровно один путь учёта»). Поэтому помечаем именно факт учёта.
+    """
+    if not num:
+        return
+    live[f"fin:{num}"] = 1
+    fin = [k for k in live if k.startswith("fin:")]
+    for k in fin[:max(0, len(fin) - _FIN_KEEP)]:
+        live.pop(k, None)
+
+
 def _is_working(rec: dict | None) -> bool:
     """Заявка РАБОТАЕТ: QUIK её принял и она ещё не кончилась."""
     return bool(rec) and str(rec.get("state") or "") in _WORKING_STATES
@@ -1869,7 +1894,7 @@ def _grid_count_partial(so: SmartOrder, live: dict, key: str, level: int,
 
 def _grid_count_fill(so: SmartOrder, live: dict, level: int, side_was: str,
                      got: int, now: int, how: str = "", price: float = 0.0,
-                     already: int = 0) -> None:
+                     already: int = 0, num: str = "") -> None:
     """Провести филл уровня сетки: позиция, гашение уровня, пробуждение соседей.
 
     ЕДИНСТВЕННЫЙ путь учёта филла в сетке. Таких путей теперь два источника — запись
@@ -1883,6 +1908,7 @@ def _grid_count_fill(so: SmartOrder, live: dict, level: int, side_was: str,
     """
     # В позицию — только то, что ещё не учтено частичными исполнениями (`already`).
     _grid_position_delta(so, side_was, got - already, price)
+    _mark_counted(live, num)
     so.g_fills_done += 1                          # для защиты «N уровней подряд»
     live[f"flip:{level}"] = True                  # этот уровень погас
     woke = [n for n in (level - 1, level + 1)
@@ -2370,7 +2396,8 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
                                 level=level, guessed=side_was)
                 _grid_count_fill(so, live, level, side_was, int(rec["filled"]), now,
                                  price=float(rec.get("price") or 0),
-                                 already=int(live.pop(f"pf:{cid}", 0) or 0))
+                                 already=int(live.pop(f"pf:{cid}", 0) or 0),
+                                 num=str(rec.get("order_id") or ""))
                 dirty = True
             # ВСТАВЛЕНО ДО ГЕЙТА «погасший уровень не выставляем» НАМЕРЕННО. Сначала
             # эта ветка стояла после него — и гейт успевал пропустить уровень, для
@@ -2392,6 +2419,16 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
             # Исполнившаяся строка из таблицы не исчезает — она становится
             # НЕАКТИВНОЙ, и qty - balance говорит, сколько налилось.
             adopted = live.get(f"adopt:{level}")
+            if isinstance(adopted, dict) and live.get(f"fin:{adopted.get('num')}"):
+                # Подхваченная строка оказалась тенью заявки, налив которой уже
+                # засчитан (см. _mark_counted): снимаем подхват, не считая второй раз.
+                live.pop(f"adopt:{level}", None)
+                dirty = True
+                so_journal.record(
+                    "adopted", so, so_journal.WATCHER,
+                    f"подхват уровня {level:+d} снят: налив заявки {adopted['num']} уже "
+                    "засчитан, строка таблицы отстаёт", now_ms=now)
+                adopted = None
             if isinstance(adopted, dict) and adopted.get("num"):
                 row = term_num.get(str(adopted["num"]))
                 if (row is not None and row["active"] and row["filled"] > 0
@@ -2410,7 +2447,8 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
                                          f" (подхваченная заявка {row['num']}, "
                                          "узнали из таблицы терминала)",
                                          price=row["price"],
-                                         already=int(live.pop(f"pf:{row['num']}", 0) or 0))
+                                         already=int(live.pop(f"pf:{row['num']}", 0) or 0),
+                                         num=str(row["num"]))
                     else:
                         so_journal.record(
                             "adopted", so, so_journal.WATCHER,
@@ -2523,7 +2561,8 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
             # СТОРОНУ НЕ ПЕРЕДАЁМ — см. terminal.find_level: сторона уровня следует
             # рынку, и при его смещении сверка по стороне разрешила бы поставить
             # вторую заявку на ту же цену, в противоположную сторону.
-            standing = terminal.find_level(term_live, px, step)
+            standing = terminal.find_level(
+                [r for r in term_live if not live.get(f"fin:{r['num']}")], px, step)
             if standing is not None:
                 # ЗНАЧЕНИЕ — СЛОВАРЬ, а не строка: _withdraw_resting считает любую
                 # строку в live идентификатором заявки (и уже один раз поперхнулся
@@ -2612,7 +2651,8 @@ _WALL_MOVE_EVERY_MS = 10_000   # как часто двигать заявку �
 
 
 def _wall_count_fill(so: SmartOrder, live: dict, wall: str, side_was: str,
-                     got: int, price: float, now: int, how: str = "") -> None:
+                     got: int, price: float, now: int, how: str = "",
+                     num: str = "") -> None:
     """Провести исполнение стенки коридора: позиция, счётчик переворотов, конец.
 
     ЕДИНСТВЕННЫЙ путь учёта, и источников у него два: запись склада заявок и
@@ -2633,6 +2673,7 @@ def _wall_count_fill(so: SmartOrder, live: dict, wall: str, side_was: str,
             so.c_done = True              # лимит переворотов выбран
     live.pop(wall, None)                  # заявки на этой стенке больше нет
     live.pop(f"moved:{wall}", None)
+    _mark_counted(live, num)
     so_journal.record(
         "corridor", so, so_journal.WATCHER,
         f"стенка {wall} исполнена {side_was} {got} по {price:g}; "
@@ -2718,7 +2759,8 @@ def _walls_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
                     log.warning("smart_order.wall_fill_side_unknown",
                                 so_id=so.so_id, wall=wall, assumed=side)
                 _wall_count_fill(so, live, wall, side_was, got,
-                                 float(rec_f.get("price") or 0), now)
+                                 float(rec_f.get("price") or 0), now,
+                                 num=str(rec_f.get("order_id") or ""))
                 dirty = True
                 continue
             # На стенке, от которой мы уже в позиции, заявки быть не должно:
@@ -2794,6 +2836,14 @@ def _walls_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
             # c_pos оставался нулём: тот самый механизм, которым каждое касание
             # удваивало объём, только зашедший через подхват.
             adopted = live.get(f"adopt:{wall}")
+            if isinstance(adopted, dict) and live.get(f"fin:{adopted.get('num')}"):
+                live.pop(f"adopt:{wall}", None)
+                dirty = True
+                so_journal.record(
+                    "adopted", so, so_journal.WATCHER,
+                    f"подхват стенки {wall} снят: налив заявки {adopted['num']} уже "
+                    "засчитан, строка таблицы отстаёт", now_ms=now)
+                adopted = None
             if isinstance(adopted, dict) and adopted.get("num"):
                 row = term_num.get(str(adopted["num"]))
                 if row is not None and not row["active"]:
@@ -2804,7 +2854,8 @@ def _walls_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
                         _wall_count_fill(so, live, wall, side_was, row["filled"],
                                          row["price"], now,
                                          f" (подхваченная заявка {row['num']}, "
-                                         "узнали из таблицы терминала)")
+                                         "узнали из таблицы терминала)",
+                                         num=str(row["num"]))
                         continue
                     so_journal.record(
                         "adopted", so, so_journal.WATCHER,
@@ -2875,7 +2926,8 @@ def _walls_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
             live.pop(f"warm:{wall}", None)
             # ponytail: стенка опознаётся по ЦЕНЕ — client_id в brokerref QUIK не
             # влезает (20 символов, см. terminal.so_id_of).
-            standing = terminal.find_level(term_live, px, step)   # без стороны, см. выше
+            standing = terminal.find_level(                     # без стороны, см. выше
+                [r for r in term_live if not live.get(f"fin:{r['num']}")], px, step)
             if standing is not None:
                 # Номер, а не единица: по нему догоняется исполнение этой заявки —
                 # своего client_id у подхваченной нет (brokerref QUIK, 20 символов),
