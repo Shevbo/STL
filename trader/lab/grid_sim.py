@@ -1764,9 +1764,11 @@ def simulate_nextday(days_full: list, p: dict, x_pct: float | None, k_lv: int | 
     rearms = fires = overnight = 0
     gap_pts = 0.0
 
-    def schedule(kind, closed_ts):
-        di = day_of_ts[closed_ts]
-        S["t_ts"], S["t_i"] = None, None
+    def schedule(kind, closed_ts, decision_ts, closed_i):
+        """День перевзвода = следующий день после дня БАРА РЕШЕНИЯ (стоп/срабатывание или филл безубытка), бар перевзвода
+        строго после бара флэта closed_i (стоп на последнем баре дня d, флэт на open d+1 -> перевзвод на d+1)."""
+        di = day_of_ts[decision_ts]
+        S["t_ts"], S["t_i"], S["min_i"] = None, None, closed_i
         if rearm == "none":
             S["phase"] = "dead"
         elif rearm in ("next", "rand"):
@@ -1775,7 +1777,7 @@ def simulate_nextday(days_full: list, p: dict, x_pct: float | None, k_lv: int | 
             elif rearm == "next":
                 S.update(phase="wait", t_ts=start_ts(di + 1))
             else:
-                S.update(phase="wait", t_i=rng.randint(first_i[di + 1], last_i[di + 1]))
+                S.update(phase="wait", t_i=rng.randint(max(first_i[di + 1], closed_i + 1), last_i[di + 1]))
         elif rearm.startswith("time"):
             if kind == "stop":
                 S["phase"] = "dead"
@@ -1791,7 +1793,7 @@ def simulate_nextday(days_full: list, p: dict, x_pct: float | None, k_lv: int | 
             last = c
             continue
         if ph == "wait":
-            if (S["t_ts"] is not None and ts >= S["t_ts"]) or (S["t_i"] is not None and i >= S["t_i"]):
+            if i > S.get("min_i", -1) and ((S["t_ts"] is not None and ts >= S["t_ts"]) or (S["t_i"] is not None and i >= S["t_i"])):
                 g = _Grid(o, p)
                 g.px = {k: round(v / tick) * tick for k, v in g.px.items()}
                 g.side = {k: None for k in g.levels}
@@ -1829,13 +1831,13 @@ def simulate_nextday(days_full: list, p: dict, x_pct: float | None, k_lv: int | 
         if st["pos"] and g.so.g_stop_pts > 0 and ((g.lo and c <= g.lo) or (g.hi and c >= g.hi)):
             if i + 1 < n:
                 _flat(st, bars[i + 1][1] - hs if st["pos"] > 0 else bars[i + 1][1] + hs, bars[i + 1][0], "stop")
-                schedule("stop", bars[i + 1][0])
+                schedule("stop", bars[i + 1][0], ts, i + 1)
             else:
                 _flat(st, c, ts, "stop")
                 S["phase"] = "dead"
             continue
         if not st["pos"] and g.so.g_stop_pts > 0 and ((g.lo and c <= g.lo) or (g.hi and c >= g.hi)):
-            schedule("stop", ts)                           # цена ушла за край сетки без позиции
+            schedule("stop", ts, ts, i)                        # цена ушла за край сетки без позиции
             continue
         if ph == "grid":
             fire = bool(k_lv and abs(st["pos"]) >= k_lv)
@@ -1857,11 +1859,11 @@ def simulate_nextday(days_full: list, p: dict, x_pct: float | None, k_lv: int | 
                 pos, avg = st["pos"], st["avg"]
                 if pos and ((pos > 0 and c > avg + tick) or (pos < 0 and c < avg - tick)):
                     _flat(st, bars[i + 1][1] - hs if pos > 0 else bars[i + 1][1] + hs, bars[i + 1][0], "bem")
-                    schedule("be", bars[i + 1][0])
+                    schedule("be", bars[i + 1][0], ts, i + 1)
                 elif not pos:
-                    schedule("be", ts)
+                    schedule("be", ts, ts, i)
         elif not st["pos"]:
-            schedule("be", ts)
+            schedule("be", ts, ts, i)
     if st["pos"]:
         _flat(st, bars[-1][4], bars[-1][0], "end")
     return {"st": st, "day_of_ts": day_of_ts, "nd": nd, "rearms": rearms, "fires": fires, "overnight": overnight,

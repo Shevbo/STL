@@ -640,11 +640,27 @@ def test_market_exit_at_trigger_is_taker_and_counted_as_breakeven():
     assert "bem" in rn["st"]["tk"] or any(f[4] == "bem" for f in rn["st"]["fills"])
 
 
-def test_nextday_rearm_planned_from_day_of_actual_flat():
+def test_nextday_rearm_day_is_day_after_decision_bar_stop_on_last_bar():
+    # стоп на последнем баре дня 0, флэт на open дня 1: перевзвод в день 1, не раньше начало + D и строго после бара флэта
     d0 = _nday({5: (1000, 1101, 1000, 1105), 58: (1105, 1105, 1105, 1105), 59: (1105, 1400, 1105, 1400)})
-    mk = lambda nd: [d0] + [_nday({}, di=i) for i in range(1, nd)]                      # noqa: E731
+    d1 = _nday({0: (1400, 1400, 1400, 1400), 3: (1400, 1400, 1400, 1400), 8: (1400, 1501, 1400, 1450)}, di=1)
     p = {**NP, "buys": 2, "sells": 2, "stop_pts": 100}
-    r = gs.simulate_nextday(mk(3), p, None, None, 1, "next", 0, "first")
-    assert [f[4] for f in r["st"]["fills"]][-1] == "stop" and r["st"]["fills"][-1][0] // 86400 == d0[0][0] // 86400 + 1   # флэт на open дня 1
-    assert gs.simulate_nextday(mk(2), p, None, None, 1, "next", 0, "first")["rearms"] == 1    # дня 2 нет: перевзвода нет
-    assert r["rearms"] == 2                                                                  # перевзвод на день 2 = следующий день после дня закрытия
+    r = gs.simulate_nextday([d0, d1], p, None, None, 1, "next", 3, "first")
+    stop = [f for f in r["st"]["fills"] if f[4] == "stop"][0]
+    assert stop[0] == d1[0][0]                                              # флэт на open первого бара дня 1
+    assert r["rearms"] == 2                                                 # перевзвод в день 1 (дня 2 в окне нет)
+    late = [f for f in r["st"]["fills"] if f[4] == "level" and f[0] > stop[0]]
+    assert late and late[0][2] == 1400 + 100 and late[0][0] >= d1[3][0]     # база = open бара start+3 (1400), уровень +1 = 1500
+    r0 = gs.simulate_nextday([d0, d1], p, None, None, 1, "next", 0, "first")
+    assert r0["rearms"] == 2                                                # D=0: бар перевзвода всё равно строго после бара флэта
+
+
+def test_nextday_rearm_after_breakeven_next_day_midday_goes_to_day_after():
+    # шорт набран в день 0, защита K=1, цена остаётся выше средней всю ночь; безубыток исполняется днём дня 1: перевзвод день 2
+    d0 = _nday({15: (1000, 1101, 1000, 1105)})
+    d1 = _nday({0: (1105, 1105, 1105, 1105), 30: (1105, 1105, 1099, 1099)}, di=1)
+    mk = lambda nd: [d0, d1] + [_nday({}, di=i) for i in range(2, nd)]            # noqa: E731
+    assert gs.simulate_nextday(mk(2), NP, None, 1, 1, "next", 0, "first")["rearms"] == 1      # дня 2 нет: перевзвода нет
+    r = gs.simulate_nextday(mk(3), NP, None, 1, 1, "next", 0, "first")
+    be = [f for f in r["st"]["fills"] if f[4] == "be"][0]
+    assert be[0] // 86400 == d1[0][0] // 86400 and r["rearms"] == 2                          # безубыток в день 1, перевзвод в день 2
