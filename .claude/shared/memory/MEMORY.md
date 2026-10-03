@@ -106,3 +106,8 @@
 - [Таблица отстаёт от склада](reference_terminal_table_lags_order_store.md) — «нет строки в таблице» ≠ «заявки нет»: семь дублей выхода 02.10; заявка жива, пока не известно, что мертва
 - [Топ-5 STL на агенте](project_stl_top5_on_agent.md) — stl5-* бумагой с 02.10, разбор в среду 07.10; срез STL на момент переноса; max_position не для реала
 - [Ложные флаги и частичные наливы сетки](reference_grid_stale_flags_and_partial_fills.md) — 85940 не стоял сутки: флаг погасшего уровня не снялся; налив частью не шёл в позицию; проверять по сделкам, не по памяти книги
+- [Снятие режима оператором](project_guard_operator_lift.md) — защита считает набор заново от точки g_guard_base, режим не возвращается; движок отдаёт g_guard_levels и g_guard_from
+- [Поле «ТС комиссия»](reference_ts_comission_field.md) — внутри дня не итог: 02.10 показало 990 ₽ = 105 лотов × 9.43 из ~685; ставки RIZ6 9.43/4.72; построчную комиссию агент выбрасывает
+- [Пределы переживают рестарт](project_limits_survive_restart.md) — счётчики в data/quik_counters.json и daily_orders.json, объём в работе = склад + таблица терминала
+- [Зависающий тест gRPC](reference_flaky_server_session_test.md) — test_session_pushes_set_limits_on_register ~1/60 на Windows, не регрессия; повторять прогон
+- [Перед чисткой проверить kind](feedback_check_kind_before_cleanup.md) — 03.10 назвал следящий тейк оператора пустой сеткой; сначала kind и журнал created
