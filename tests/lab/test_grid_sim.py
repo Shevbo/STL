@@ -737,7 +737,7 @@ def test_sweep_step_is_share_of_weekly_range_and_week_median():
     # 5 будней (пн-пт), дневной размах 100, дни сдвинуты на 10 вверх: недельный размах окна из 5 дней = 100 + 4*10 = 140
     d0 = int(datetime(2026, 9, 7, tzinfo=timezone.utc).timestamp())            # понедельник
     bars = []
-    for k in range(10):
+    for k in range(5):
         t = d0 + k * 86400 + 600 * 60
         bars.append([t, 1000 + 10 * k, 1100 + 10 * k, 1000 + 10 * k, 1050, 1, 0])
     assert gs.week_range_median(bars) == 140
