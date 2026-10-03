@@ -482,6 +482,24 @@ def grid_side_for(so: SmartOrder, level: int, price: float = 0.0) -> str:
     return "buy" if level < 0 else "sell"
 
 
+def grid_step_error(g_step: float, price_step: float) -> str | None:
+    """Отказ, если шаг сетки не кладёт соседние уровни на РАЗНЫЕ цены биржи.
+
+    Шаг меньше шага цены инструмента (5 пунктов на RI, где биржа ходит по 10) или
+    не кратный ему: после округления до сетки цен два уровня встают на одну цену, и
+    на ней стоят две заявки сетки — вырожденная сетка, дубль на каждом исполнении.
+    Шаг цены неизвестен (0) — проверять нечем, не отказываем: молчащий параметр не
+    имеет права останавливать торговлю.
+    """
+    if price_step <= 0 or g_step <= 0:
+        return None
+    n = g_step / price_step
+    if n < 1 - 1e-9 or abs(n - round(n)) > 1e-9:
+        return (f"сетка: шаг {g_step:g} не кратен шагу цены инструмента {price_step:g} "
+                f"— соседние уровни слились бы в одну цену")
+    return None
+
+
 def grid_window(so: SmartOrder, live: dict, price: float) -> tuple[set[int], set[int]]:
     """(какие уровни ставить, какие держать, если уже стоят).
 

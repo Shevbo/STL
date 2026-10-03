@@ -763,3 +763,38 @@ def test_closing_exposure_is_never_blocked_by_the_gate(tmp_path):
     kinds = [m.WhichOneof("payload") for m in srv.sent]
     assert "cancel_order" in kinds, "снятие заявок гейт блокировать не вправе"
     assert so.g_done is True
+
+
+# --------------------------------------------------------------------------
+# ШАГ СЕТКИ И ШАГ ЦЕНЫ БИРЖИ. 03.10.2026, оператор: «пустые сетки не позволяй
+# создаваться». Пустые (нулевая база/шаг/лот, ни одного уровня) отбивались и
+# раньше; незакрытой оставалась вырожденная: шаг сетки меньше шага цены или не
+# кратен ему — уровни схлопываются в одну цену, и на ней стоят две заявки.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("price_step", [1.0, 10.0, 0.01, 0.1])
+@pytest.mark.parametrize("mult", [1, 2, 3, 7, 10, 50])
+def test_grid_step_that_is_a_multiple_of_the_exchange_step_is_accepted(price_step, mult):
+    assert so_mod.grid_step_error(price_step * mult, price_step) is None
+
+
+@pytest.mark.parametrize("price_step,g_step", [(10.0, 5.0), (10.0, 15.0), (10.0, 9.99),
+                                               (1.0, 0.5), (0.01, 0.005), (0.1, 0.15),
+                                               (10.0, 1.0)])
+def test_grid_step_that_would_merge_levels_is_refused(price_step, g_step):
+    """ЗАПРЕТ: шаг не кратен шагу цены — два уровня на одной цене."""
+    assert so_mod.grid_step_error(g_step, price_step), (
+        f"шаг сетки {g_step} при шаге цены {price_step} принят — уровни слились бы")
+
+
+def test_unknown_exchange_step_does_not_block_a_grid():
+    assert so_mod.grid_step_error(100.0, 0.0) is None
+
+
+def test_empty_grids_are_refused_in_every_form():
+    """Пустая сетка в любой форме отклоняется валидацией, а не доходит до книги."""
+    for bad in (dict(g_step=0), dict(g_buys=0, g_sells=0), dict(g_lot=0),
+                dict(g_base=0), dict(g_step=-5), dict(g_buys=-1, g_sells=0),
+                dict(g_lot=-3)):
+        assert _grid(**bad).validate() is not None, f"пустая сетка принята: {bad}"

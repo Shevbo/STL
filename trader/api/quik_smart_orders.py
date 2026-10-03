@@ -186,6 +186,8 @@ async def create(body: SmartOrderBody, request: Request):
     if silent:
         raise HTTPException(status_code=422, detail=silent)
     err = so.validate(_market_price(request, so.code))
+    if not err and so.kind == "grid":
+        err = so_mod.grid_step_error(so.g_step, _exchange_step(request, so.code))
     if err:
         raise HTTPException(status_code=422, detail=err)
     # Отклоняем заведомо невыполнимую заявку ПРИ ВЗВЕДЕНИИ, а не в момент
@@ -600,6 +602,17 @@ def _market_price(request: Request, code: str) -> float:
         tick = store.tick(code, resolve_agent(store, None)) or {}
         return float(tick.get("last") or 0)
     except Exception:  # noqa: BLE001 - валидация не должна падать из-за отсутствия кадра
+        return 0.0
+
+
+def _exchange_step(request: Request, code: str) -> float:
+    """Шаг цены инструмента из фида параметров агента; 0 = неизвестен."""
+    store = getattr(request.app.state, "quik_store", None)
+    if store is None:
+        return 0.0
+    try:
+        return _price_steps(store, resolve_agent(store, None)).get(code, 0.0)
+    except Exception:  # noqa: BLE001 - проверка не должна ронять взведение
         return 0.0
 
 
