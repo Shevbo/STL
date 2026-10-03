@@ -1984,7 +1984,8 @@ def sweep_ctx(bars: list) -> dict:
 
 
 def sweep_vec_params(v: dict, scale: float, tick: float, pvs: list) -> dict:
-    """Параметры _Grid по вектору перебора (step в пунктах RI -> пункты инструмента, не меньше тика)."""
+    """Параметры _Grid по вектору перебора: step = метка в пунктах RI (доля недельного размаха RI на обучении окна) x scale
+    (недельный размах инструмента / RI) -> пункты инструмента, округление до тика, не меньше тика."""
     step = max(tick, round(v["step"] * scale / tick) * tick)
     return {**DEFAULTS, "step": step, "buys": v["n"], "sells": v["n"], "stop_pts": v["s"] * step, "tick": tick,
             "half": tick / 2, "lot": 1, "fill_pen": 1, "pvs": pvs}
@@ -2013,6 +2014,12 @@ def simulate_sweep(bars: list, rolls: dict, p: dict, L: int = 0, N: int = 1, T: 
     rearms = 0
     g = None
     phase, t_i, i = "wait", 0, 0
+    durs, gaps, c_start, c_end = [], [], 0, None            # длительности циклов и интервалов флэт -> перевзвод, сек
+
+    def done(ts_end: int) -> None:
+        nonlocal c_end
+        durs.append(ts_end - c_start)
+        c_end = ts_end
     base = last = prev_close = tacc = 0.0
     cu = cd = ntp = 0
 
@@ -2036,9 +2043,13 @@ def simulate_sweep(bars: list, rolls: dict, p: dict, L: int = 0, N: int = 1, T: 
             if st["pos"]:
                 _flat(st, last, tss[i - 1], "roll")
             ends["roll"] += 1
+            done(tss[i - 1])
             fresh = True
         ts, o, h, lw, c, _v, ci = bars[i]
         if fresh:
+            if c_end is not None:
+                gaps.append(ts - c_end)
+            c_start = ts
             g = _Grid(o, p)
             g.px = {k: round(v / tick) * tick for k, v in g.px.items()}
             g.side = {k: None for k in g.levels}
@@ -2080,6 +2091,7 @@ def simulate_sweep(bars: list, rolls: dict, p: dict, L: int = 0, N: int = 1, T: 
                 else:
                     _flat(st, c, ts, "stop")
             ends["stop"] += 1
+            done(tss[fi])
             t_i, phase, i = schedule(fi, i), "wait", i + 1
             continue
         if phase == "grid":
@@ -2097,6 +2109,7 @@ def simulate_sweep(bars: list, rolls: dict, p: dict, L: int = 0, N: int = 1, T: 
                     elif pos:
                         _flat(st, c, ts, "tp")
                     ends["tp"] += 1
+                    done(tss[fi])
                     t_i, phase, i = schedule(fi, i), "wait", i + 1
                     continue
                 up, dn = base + L * step, base - L * step
@@ -2111,22 +2124,26 @@ def simulate_sweep(bars: list, rolls: dict, p: dict, L: int = 0, N: int = 1, T: 
                     if pos and ((pos > 0 and c > avg + tick) or (pos < 0 and c < avg - tick)):
                         _flat(st, bars[i + 1][1] - hs if pos > 0 else bars[i + 1][1] + hs, tss[i + 1], "bem")
                         ends["be"] += 1
+                        done(tss[i + 1])
                         t_i, phase, i = schedule(i + 1, i), "wait", i + 1
                         continue
                     if not pos:
                         ends["be"] += 1
+                        done(ts)
                         t_i, phase, i = schedule(i, i), "wait", i + 1
                         continue
         elif not pos:
             ends["be"] += 1
+            done(ts)
             t_i, phase, i = schedule(i, i), "wait", i + 1
             continue
         i += 1
     if phase != "wait":
         ends["end"] += 1
+        done(bars[-1][0])
         if st["pos"]:
             _flat(st, bars[-1][4], bars[-1][0], "end")
-    return {"st": st, "ends": ends, "rearms": rearms}
+    return {"st": st, "ends": ends, "rearms": rearms, "durs": durs, "gaps": gaps}
 
 
 def sweep_summary(res: dict, ctx: dict, keys: list, pvs: list, daily: bool = False) -> dict:
@@ -2153,6 +2170,10 @@ def sweep_summary(res: dict, ctx: dict, keys: list, pvs: list, daily: bool = Fal
     out = {"net_t": round(gross - ft, 1), "net_m": round(gross - fm, 1), "gross": round(gross, 1),
            "cycles": sum(res["ends"].values()), "ends": res["ends"], "rearms": res["rearms"], "fills": len(st["fills"])}
     if daily:
+        dd, gg = [x / 86400 for x in res["durs"]], [x / 86400 for x in res["gaps"]]
+        out.update({"dur_mean": round(sum(dd) / len(dd), 3) if dd else 0.0, "dur_max": round(max(dd), 3) if dd else 0.0,
+                    "gap_mean": round(sum(gg) / len(gg), 3) if gg else 0.0, "gap_max": round(max(gg), 3) if gg else 0.0,
+                    "n_gaps": len(gg)})
         out["day_net"] = [round(a - b, 1) for a, b in zip(dg, dt_)]
     return out
 
@@ -2188,15 +2209,22 @@ def prep_sweep(instrument: str, window: str, end: str = "2026-09-30") -> dict:
     return out
 
 
-def _range_median(bars: list) -> float:
-    """Медиана дневного размаха high-low по будням части (для пересчёта шага не-RI инструментов)."""
+def week_range_median(bars: list, rolls: dict | None = None) -> float:
+    """Медиана недельного размаха: high-low за 5 подряд идущих торговых дней (будни с барами, скользящее окно) на обучении;
+    цены склеены по разницам контрактов (rolls = {индекс бара: разница new-old}, если есть)."""
+    adj, acc = [0.0] * len(bars), 0.0
+    for j in range(len(bars) - 1, -1, -1):
+        if rolls and j + 1 in rolls:
+            acc += rolls[j + 1]
+        adj[j] = acc
     d: dict = {}
-    for x in bars:
+    for x, a in zip(bars, adj):
         k = _day_iso(x[0])
         if datetime.fromisoformat(k).weekday() < 5:
-            r = d.setdefault(k, [x[2], x[3]])
-            r[0], r[1] = max(r[0], x[2]), min(r[1], x[3])
-    v = sorted(a - b for a, b in d.values())
+            r = d.setdefault(k, [x[2] + a, x[3] + a])
+            r[0], r[1] = max(r[0], x[2] + a), min(r[1], x[3] + a)
+    ks = sorted(d)
+    v = sorted(max(d[k][0] for k in ks[i:i + 5]) - min(d[k][1] for k in ks[i:i + 5]) for i in range(len(ks) - 4))
     return v[len(v) // 2] if len(v) % 2 else (v[len(v) // 2 - 1] + v[len(v) // 2]) / 2
 
 
@@ -2240,7 +2268,8 @@ def _refine(part: dict, pr: dict, start: dict, scale: float, rounds: int = 2, mi
 
 def run_sweep(arg: dict) -> dict:
     """mode=sweep: instrument, window ('3m'|'6m'), phase:
-    'prep'   -> дни, медиана дневного размаха будней обучения (scale = med_инстр / med_RI);
+    'prep'   -> дни, медиана недельного размаха (5 торговых дней) на обучении; scale = med_инстр / med_RI, шаг = доля
+               недельного размаха RI (метки step 50-400 = пункты RI) x недельный размах инструмента, округление до тика;
     'coarse' -> scale, chunk [i, k], T (необязательно: сокращённый набор): net тейкер/мейкер и циклы грубой сетки на обучении;
     'refine' -> scale, start (вектор): покоординатное уточнение на обучении;
     'test'   -> scale, vecs [{tag, vec, mode: full|naked|rand, draws}]: прогон заново с первого дня проверочной трети."""
@@ -2254,7 +2283,7 @@ def run_sweep(arg: dict) -> dict:
            "bars": {k: len(pr[k]["bars"]) for k in ("train", "test")}}
     scale = float(arg.get("scale", 1.0))
     if ph == "prep":
-        out.update({"med_range_train": _range_median(pr["train"]["bars"]), "tick": pr["tick"]})
+        out.update({"med_week_train": week_range_median(pr["train"]["bars"], pr["train"]["rolls"]), "tick": pr["tick"]})
     elif ph == "coarse":
         grid = {**COARSE, **({"T": tuple(arg["T"])} if arg.get("T") else {})}
         combos = sweep_combos(grid)

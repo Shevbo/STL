@@ -731,3 +731,31 @@ def test_sweep_roll_closes_position_and_restarts():
     roll = [f for f in r["st"]["fills"] if f[4] == "roll"]
     assert len(roll) == 1 and roll[0][2] == 1090 and roll[0][0] == DAY0 + (600 + 2) * 60   # close последнего бара старого
     assert r["ends"]["roll"] == 1 and r["rearms"] == 2 and r["st"]["pos"] == 0
+
+
+def test_sweep_step_is_share_of_weekly_range_and_week_median():
+    # 5 будней (пн-пт), дневной размах 100, дни сдвинуты на 10 вверх: недельный размах окна из 5 дней = 100 + 4*10 = 140
+    d0 = int(datetime(2026, 9, 7, tzinfo=timezone.utc).timestamp())            # понедельник
+    bars = []
+    for k in range(10):
+        t = d0 + k * 86400 + 600 * 60
+        bars.append([t, 1000 + 10 * k, 1100 + 10 * k, 1000 + 10 * k, 1050, 1, 0])
+    assert gs.week_range_median(bars) == 140
+    # RI: метка 140 пт при недельном размахе 1400 = 10%; инструмент с размахом 700 (scale 0.5): шаг 70 пт, тик 10
+    p = gs.sweep_vec_params({"step": 140, "n": 5, "s": 2}, 700 / 1400, 10.0, [1.0])
+    assert p["step"] == 70 and p["stop_pts"] == 140
+    p = gs.sweep_vec_params({"step": 50, "n": 5, "s": 1}, 0.001, 0.01, [1.0])
+    assert abs(p["step"] - 0.05) < 1e-9
+    p = gs.sweep_vec_params({"step": 50, "n": 5, "s": 1}, 0.0001, 1.0, [1.0])
+    assert p["step"] == 1.0                                                      # минимум 1 тик
+
+
+def test_sweep_durations_cycle_and_gap_in_days():
+    drop = (1000, 1000, 500, 500)
+    rows = [FLAT, drop] + [(500, 500, 500, 500)] * 100 + [(500, 650, 500, 650)] + [(650, 650, 650, 650)] * 5
+    r = _sw(rows, rearm="h1", L=3, N=5, s=1)
+    # цикл 1: бар 0 (600) -> флэт стопа на баре 2 (602): 2 мин; интервал до перевзвода через час после флэта: 60 мин
+    assert r["durs"][0] == 2 * 60 and r["gaps"][0] == 3600
+    ctx = gs.sweep_ctx(_b7(rows))
+    s = gs.sweep_summary(r, ctx, ["X", "X"], [1.0, 1.0], daily=True)
+    assert abs(s["gap_max"] - 3600 / 86400) < 1e-3 and s["dur_max"] >= s["dur_mean"] > 0
