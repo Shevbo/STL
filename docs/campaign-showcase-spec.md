@@ -68,6 +68,7 @@
   - null - нет ни кривой, ни окон.
 - `score` = rf x net x l_share; при смеси источников `l_share` score сортирует лидеров, но сопоставим только
   внутри одного `l_share_source`.
+- `headline.comparable`: true, только если `unit` карточки не null (net в известной единице), иначе false.
 
 ## API (делает ui-ux, предложение)
 `GET /api/v1/lab/showcase/campaigns` (index.json), `GET /api/v1/lab/showcase/campaigns/<slug>`; данные из

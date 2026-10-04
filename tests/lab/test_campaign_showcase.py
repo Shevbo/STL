@@ -177,3 +177,11 @@ def test_bf_drift_note():
     assert b.bf_drift_note(ok) is None
     note = b.bf_drift_note([{"net": -300.0, "lb_net": 350000.0}, {"net": 1.0, "lb_net": 1.0}])
     assert "1 из 2" in note and "-300" in note
+
+
+def test_headline_comparable_follows_unit():
+    runs = [_run("camp-20260711-autoq", 5.0)]
+    out = b.build([_entry("r", unit="rub")], runs, [], {}, {}, "now")
+    by = {c["slug"]: c for c, _ in out}
+    assert by["autoq-20260711-s-ri"]["unit"] is None and by["autoq-20260711-s-ri"]["headline"]["comparable"] is False
+    assert by["r"]["unit"] == "rub" and by["r"]["headline"]["comparable"] is True

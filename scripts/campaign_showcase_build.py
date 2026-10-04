@@ -509,6 +509,7 @@ def build_card(c: dict, tasks_all: list, bf: dict, task_results: dict, now_iso: 
         "strategy": e.get("strategy"), "family": e.get("family") or e["slug"], "rev": e.get("rev", 1),
         "status": status, "progress": progress, "updated_at": max(stamps) if stamps else None,
         "headline": {"net": net, "trades": trades, "max_dd": dd, "window": window,
+                     "comparable": unit is not None,  # net в известной единице
                      "contracts_peak": lead.get("contracts_peak") if has_curve else None,
                      "full_cost_rub": lead.get("full_cost_rub") if has_curve else None,
                      "return_pct": lead.get("return_pct") if has_curve else None},
