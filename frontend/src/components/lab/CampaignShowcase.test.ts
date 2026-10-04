@@ -431,3 +431,84 @@ describe('разные единицы у лидеров одной кампан�
     expect(host.textContent).not.toContain('разные единицы');
   });
 });
+
+describe('единица не определена и источник L (данные 04.10.2026)', () => {
+  // backtests опровергли эвристику «единица по point_value» (ошибалась в 47%): единица
+  // теперь только измеренная, у остальных unit = null.
+  const NULLU = {
+    slug: 'nu', title: 'Без единицы', status: 'done', unit: null,
+    leaders: [
+      { rank: 1, unit: null, metrics: { net: 5000, rf: 2 }, curve: [[1_790_000_000, 0], [1_790_100_000, 5000]] },
+      { rank: 2, unit: null, metrics: { net: 9000, rf: 3 }, curve: null },
+    ],
+  };
+  const openRep = async (rep: unknown, slug = 'nu') => {
+    api({ '/api/v1/lab/showcase/campaigns': () => J({ available: true, campaigns: [], built_at_ms: 1, reason: '' }),
+          [`/api/v1/lab/showcase/campaigns/${slug}`]: () => J(rep) });
+    await open(`/backtest/campaigns/${slug}`);
+  };
+
+  it('единица null: число БЕЗ единицы, а не подписанное единицей карточки', async () => {
+    // У карточки unit rub, но у лидера поле есть и равно null: подставлять рубли нельзя.
+    await openRep({ ...NULLU, unit: 'rub' });
+    const row = host.querySelector('tbody tr')!.textContent!;
+    expect(row).not.toContain('₽');
+    expect(row).not.toContain('п.');
+    expect(host.textContent).toContain('Единица не определена');
+  });
+
+  it('единица null: денежные колонки не сортируются, неденежные — да', async () => {
+    await openRep(NULLU);
+    const th = (n: string) => [...host.querySelectorAll('thead th')].find((t) => t.textContent?.startsWith(n)) as HTMLElement;
+    th('Net').click(); await tick();
+    expect(host.querySelector('tbody tr td')!.textContent).toBe('1');
+    th('RF').click(); await tick();
+    expect(host.querySelector('tbody tr td')!.textContent).toBe('2');
+  });
+
+  it('старый сборщик (поля unit у лидера нет) — единица карточки, как раньше', async () => {
+    await openRep({ ...NULLU, unit: 'rub', leaders: NULLU.leaders.map(({ unit: _u, ...l }) => l) });
+    expect(host.querySelector('tbody tr')!.textContent).toContain('₽');
+    expect(host.textContent).not.toContain('Единица не определена');
+  });
+
+  const LS = {
+    slug: 'ls', title: 'Источники L', status: 'done', unit: 'rub',
+    leaders: [
+      { rank: 1, unit: 'rub', l_share_source: 'curve', metrics: { net: 5000, l_share: 0.8, score: 100 },
+        curve: [[1_790_000_000, 0], [1_790_100_000, 5000]] },
+      { rank: 2, unit: 'rub', l_share_source: 'leaderboard_windows', metrics: { net: 4000, l_share: 0.9, score: 300 },
+        curve: null },
+    ],
+  };
+
+  it('смесь источников L: пометка ≈ у оценки и предупреждение', async () => {
+    await openRep(LS, 'ls');
+    const rows = [...host.querySelectorAll('tbody tr')];
+    expect(rows[0].querySelector('.est')).toBeNull();           // измерено — без значка
+    expect(rows[1].querySelector('.est')).not.toBeNull();       // оценка — со значком
+    expect(host.textContent).toContain('получена по-разному');
+  });
+
+  it('смесь источников L: сортировка по score отключена', async () => {
+    await openRep(LS, 'ls');
+    const th = [...host.querySelectorAll('thead th')].find((t) => t.textContent?.startsWith('RF×net×L')) as HTMLElement;
+    th.click(); await tick();
+    expect(host.querySelector('tbody tr td')!.textContent).toBe('1');        // порядок не тронут (score №2 больше)
+  });
+
+  it('один источник — значков и предупреждения нет', async () => {
+    await openRep({ ...LS, leaders: LS.leaders.map((l) => ({ ...l, l_share_source: 'curve' })) }, 'ls');
+    expect(host.querySelector('.est')).toBeNull();
+    expect(host.textContent).not.toContain('получена по-разному');
+  });
+
+  it('карточка витрины: net без единицы помечен вопросом', async () => {
+    const card = { slug: 'k', title: 'K', status: 'done', kind: 'research', unit: null, thumb: null,
+      headline: { net: 1234, trades: 5, max_dd: 10, window: null } };
+    api({ '/api/v1/lab/showcase/campaigns': () => J({ available: true, campaigns: [card], built_at_ms: 1, reason: '' }) });
+    await open('/backtest/campaigns');
+    expect(host.querySelector('a.cs-card sup.unk')).not.toBeNull();
+    expect(host.querySelector('a.cs-card')!.textContent).not.toContain('₽');
+  });
+});

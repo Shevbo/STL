@@ -20,7 +20,8 @@
   import {
     NO_FILTERS, KIND_LABEL, campaignPath, chainOf, cls, diffCurve, fmtPnl, honestVolume, revisionOf,
     routeOf, statusInfo, visibleCards, BASE_PATH, hiddenCount, leaderColumns, leaderValue,
-    fmtLeaderCell, sortLeaders, rerunNote, LEADER_LABEL, type Card, type Filters, type Route,
+    fmtLeaderCell, sortLeaders, rerunNote, LEADER_LABEL, leaderUnit, unitState, isLEstimate,
+    lSourcesMixed, L_SOURCE_LABEL, type Card, type Filters, type Route,
   } from '$lib/campaign-showcase';
   import CurveChart from './CurveChart.svelte';
   import ScreenTag from './ScreenTag.svelte';
@@ -164,16 +165,19 @@
       extra[l.rank] = r.ok ? await r.json() : 'none';
     } catch { extra[l.rank] = 'none'; }
   }
-  // ЕДИНИЦА — У КАЖДОГО ЛИДЕРА СВОЯ. В настоящих отчётах 04.10.2026 у лидеров поле
-  // `unit`, и в десяти кампаниях они разные: у одного рубли, у другого пункты. Форматировать
-  // всё по единице карточки значило бы подписать пункты рублями.
-  const lunit = $derived(leader?.unit ?? unit);
-  const unitsOf = $derived([...new Set((report?.leaders ?? []).map((l: any) => l.unit ?? unit))]);
-  const mixedUnits = $derived(unitsOf.length > 1);
-  // Денежные колонки при смешанных единицах НЕ сортируем: пункты и рубли сравнивать нельзя,
-  // «наибольший net» между ними — это число без смысла.
+  // ЕДИНИЦА — У КАЖДОГО ЛИДЕРА СВОЯ, И ЧАСТО НЕИЗВЕСТНА. 04.10.2026 backtests опровергли
+  // эвристику «единица по point_value» (ошибалась в 47%): единица теперь только ИЗМЕРЕННАЯ
+  // у перепрогнанных лидеров, у остальных unit = null. Для null число не подписываем
+  // единицей и денежные колонки не сортируем. Подстановка единицы карточки на место null
+  // подписала бы пункты рублями — поэтому различаем «поля нет» и «поле равно null».
+  const lunit = $derived(leaderUnit(leader, unit));
+  const us = $derived(unitState(report?.leaders ?? [], unit));
+  const lMixed = $derived(lSourcesMixed(report?.leaders ?? []));
+  // L и score несопоставимы между строками с разным источником L (измерено по кривой /
+  // оценка по окнам лидерборда): сортировать по ним при смеси нельзя.
   const MONEYISH = /(^|_)(net|score|pnl|gross|dd|profit|loss|commission)($|_)/;
-  const sortable = (k: string) => !(mixedUnits && MONEYISH.test(k));
+  const sortable = (k: string) =>
+    !(us.blockMoneySort && MONEYISH.test(k)) && !(lMixed && (k === 'score' || k === 'l_share'));
   const cols = $derived(leaderColumns(report?.leaders ?? []));
   const rows = $derived(sortLeaders(report?.leaders ?? [], sortKey, sortDir));
   const anyRerun = $derived((report?.leaders ?? []).some((l: any) => rerunNote(l)));
@@ -301,7 +305,7 @@
                         emptyText={c.status === 'queued' ? 'ожидает прогона'
                           : (c.no_curve_reason || 'кривой нет')} />
             <dl class="cs-kv">
-              <div><dt>net</dt><dd class={cls(c.headline?.net)}>{fmtPnl(c.headline?.net, c.unit)}</dd></div>
+              <div><dt>net</dt><dd class={cls(c.headline?.net)}>{fmtPnl(c.headline?.net, c.unit)}{#if c.unit == null && c.headline?.net != null}<sup class="unk" title="единица не определена: перепрогон не запускался">?</sup>{/if}</dd></div>
               <div><dt>сделки</dt><dd>{c.headline?.trades == null ? '—' : c.headline.trades.toLocaleString('ru-RU')}</dd></div>
               <div><dt>просадка</dt><dd>{fmtPnl(c.headline?.max_dd, c.unit, false)}</dd></div>
             </dl>
@@ -397,12 +401,20 @@
             <h3>Лидеры</h3>
             <button class="cs-btn" onclick={exportLeaders}>CSV</button>
           </div>
-          {#if mixedUnits}
+          {#if us.mixed}
             <!-- Разные единицы у лидеров одной кампании (отмечено сборщиком в notes). Не
-                 складывать и не сравнивать пункты с рублями: поэтому денежные колонки не
+                 складывать и не сравнивать пункты с рублями: денежные колонки не
                  сортируются, а каждая ячейка подписана СВОЕЙ единицей. -->
-            <div class="cs-note bad" style="margin:0 0 8px">У лидеров этой кампании разные единицы ({unitsOf.map((u) => u).join(', ')}):
+            <div class="cs-note bad" style="margin:0 0 8px">У лидеров этой кампании разные единицы ({us.known.join(', ')}{us.unknown ? ', часть не определена' : ''}):
               пункты и рубли не складываются и не сравниваются, денежные колонки не сортируются.</div>
+          {:else if us.unknown}
+            <div class="cs-note" style="margin:0 0 8px">Единица не определена (перепрогон не запускался): числа без единицы,
+              денежные колонки не сортируются. Метрики лидерборда при этом есть.</div>
+          {/if}
+          {#if lMixed}
+            <div class="cs-note" style="margin:0 0 8px">Доля L у строк получена по-разному: <b>≈</b> — оценка по окнам лидерборда
+              (доля окон, не месяцев), без значка — измерена по месячному net кривой перепрогона. RF×net×L между такими строками
+              несопоставим, сортировка по L и score отключена.</div>
           {/if}
           <div class="cs-scroll">
             <table class="cs-tbl">
@@ -411,7 +423,9 @@
                 {#each cols as k (k)}
                   <th class:sortable={sortable(k)} onclick={() => sortBy(k)}
                       title={sortable(k) ? 'сортировать; пустые значения всегда в конце'
-                        : 'у лидеров разные единицы (пункты и рубли): сравнивать и сортировать нельзя'}>{LEADER_LABEL[k] ?? METRIC_RU[k] ?? k}{arrow(k)}</th>
+                        : (lMixed && (k === 'score' || k === 'l_share')
+                            ? 'доля L у строк получена по-разному (измерена / оценена): сравнивать нельзя'
+                            : 'единицы лидеров разные или не определены: сравнивать и сортировать нельзя')}>{LEADER_LABEL[k] ?? METRIC_RU[k] ?? k}{arrow(k)}</th>
                 {/each}
                 <th>Параметры</th>
               </tr></thead>
@@ -423,7 +437,7 @@
                     <td>{l.rank}</td>
                     {#each cols as k (k)}
                       {@const v = leaderValue(l, k)}
-                      <td class={typeof v === 'number' && (k === 'net' || k === 'return_pct') ? cls(v) : ''}>{fmtLeaderCell(k, v, l.unit ?? unit)}{#if k === 'net' && rr}<sup class="rerun" title={`перепрогон на текущем движке: лидерборд показывал ${fmtPnl(rr.was, l.unit ?? unit)}, кривая даёт ${fmtPnl(rr.now, l.unit ?? unit)}`}>*</sup>{/if}</td>
+                      <td class={typeof v === 'number' && (k === 'net' || k === 'return_pct') ? cls(v) : ''}>{#if k === 'l_share' && isLEstimate(l)}<span class="est" title={L_SOURCE_LABEL.leaderboard_windows}>≈</span>{/if}{fmtLeaderCell(k, v, leaderUnit(l, unit))}{#if k === 'net' && rr}<sup class="rerun" title={`перепрогон на текущем движке: лидерборд показывал ${fmtPnl(rr.was, leaderUnit(l, unit))}, кривая даёт ${fmtPnl(rr.now, leaderUnit(l, unit))}`}>*</sup>{/if}</td>
                     {/each}
                     <td class="p">{params(l.params)}</td>
                   </tr>
@@ -557,6 +571,8 @@
   .cs-tbl th.sortable { cursor: pointer; user-select: none; }
   .cs-tbl th.sortable:hover { color: var(--ink); }
   .rerun { color: var(--warn); margin-left: 2px; cursor: help; }
+  .est { color: var(--warn); margin-right: 2px; cursor: help; }
+  .unk { color: var(--faint); margin-left: 2px; cursor: help; }
   .cs-tbl tbody tr:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
   .cs-tbl tbody tr.on { background: color-mix(in srgb, var(--accent) 14%, transparent); }
   .cs-tbl tr:last-child td { border-bottom: none; }

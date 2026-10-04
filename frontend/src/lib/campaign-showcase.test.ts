@@ -6,8 +6,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   BASE_PATH, NO_FILTERS, campaignPath, chainOf, curveGeometry, diffCurve, fmtLeaderCell, fmtPnl,
-  hiddenCount, honestVolume, leaderColumns, leaderValue, niceTicks, rerunNote, revisionOf, routeOf,
-  sortLeaders, splitAtZero, statusInfo, toMs, visibleCards, type Card,
+  hiddenCount, honestVolume, isLEstimate, leaderColumns, leaderUnit, leaderValue, lSources, lSourcesMixed,
+  niceTicks, rerunNote, revisionOf, routeOf, sortLeaders, splitAtZero, statusInfo, toMs,
+  unitState, visibleCards, type Card,
 } from './campaign-showcase';
 
 describe('маршрут', () => {
@@ -453,5 +454,57 @@ describe('таблица лидеров', () => {
     expect(rerunNote(L[0])).toEqual({ was: 51000, now: 50000 });
     expect(rerunNote({ metrics: { net: 100, lb_net: 100.2 } })).toBeNull();    // в пределах округления
     expect(rerunNote({ metrics: { net: 100 } })).toBeNull();                    // нечего сравнивать
+  });
+});
+
+describe('единица лидера: неизвестна — это ответ', () => {
+  it('поле unit есть и равно null — единица НЕ определена, карточка её не подменяет', () => {
+    // Подстановка единицы карточки на место null подписала бы пункты рублями.
+    expect(leaderUnit({ unit: null }, 'rub')).toBeNull();
+    expect(leaderUnit({ unit: 'points' }, 'rub')).toBe('points');
+  });
+
+  it('поля unit нет вовсе (старый сборщик) — берём единицу карточки', () => {
+    expect(leaderUnit({ rank: 1 }, 'rub')).toBe('rub');
+    expect(leaderUnit({ rank: 1 }, undefined)).toBeNull();
+  });
+
+  it('все известны и одинаковы — сортировать можно', () => {
+    const st = unitState([{ unit: 'rub' }, { unit: 'rub' }], null);
+    expect(st).toEqual({ known: ['rub'], unknown: false, mixed: false, blockMoneySort: false });
+  });
+
+  it('рубли с пунктами — смесь, денежную сортировку блокируем', () => {
+    const st = unitState([{ unit: 'rub' }, { unit: 'points' }], null);
+    expect(st.mixed).toBe(true);
+    expect(st.blockMoneySort).toBe(true);
+  });
+
+  it('известная вперемешку с неопределённой — тоже смесь', () => {
+    const st = unitState([{ unit: 'rub' }, { unit: null }], null);
+    expect(st.mixed).toBe(true);
+    expect(st.unknown).toBe(true);
+  });
+
+  it('ВСЕ неопределены — это не «одна единица», сортировать денежное нельзя', () => {
+    const st = unitState([{ unit: null }, { unit: null }], null);
+    expect(st.mixed).toBe(false);
+    expect(st.unknown).toBe(true);
+    expect(st.blockMoneySort).toBe(true);
+  });
+});
+
+describe('источник доли L', () => {
+  it('оценка по окнам лидерборда отличается от измеренной по кривой', () => {
+    expect(isLEstimate({ l_share_source: 'leaderboard_windows' })).toBe(true);
+    expect(isLEstimate({ l_share_source: 'curve' })).toBe(false);
+    expect(isLEstimate({})).toBe(false);
+  });
+
+  it('смесь источников — сортировать L и score нельзя: они несопоставимы', () => {
+    expect(lSourcesMixed([{ l_share_source: 'curve' }, { l_share_source: 'leaderboard_windows' }])).toBe(true);
+    expect(lSourcesMixed([{ l_share_source: 'curve' }, { l_share_source: 'curve' }])).toBe(false);
+    expect(lSourcesMixed([{}, { l_share_source: 'curve' }])).toBe(false);
+    expect(lSources([{ l_share_source: 'curve' }, { l_share_source: null }, {}])).toEqual(['curve']);
   });
 });

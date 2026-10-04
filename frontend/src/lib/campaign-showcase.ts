@@ -422,3 +422,55 @@ export function rerunNote(l: Record<string, any> | null | undefined): { was: num
   if (typeof was !== 'number' || typeof now !== 'number') return null;
   return Math.round(was) === Math.round(now) ? null : { was, now };
 }
+
+// ── Единица лидера: НЕИЗВЕСТНА — это ответ, а не пробел ─────────────────────
+// 04.10.2026 backtests опровергли эвристику «единица по point_value» (ошибалась
+// в 47% — рубли вместо пунктов): единица теперь только ИЗМЕРЕННАЯ, у перепрогнанных
+// лидеров (328 из ~80 тысяч), у остальных `unit: null`. Для null нельзя ни
+// подписывать число единицей, ни сортировать денежные колонки.
+//
+// Поэтому различаем «поля нет вовсе» (старый сборщик — берём единицу карточки) и
+// «поле есть и равно null» (единица не определена): подстановка единицы карточки
+// на место null подписала бы пункты рублями.
+export function leaderUnit(l: Record<string, any> | null | undefined, cardUnit?: string | null): string | null {
+  if (l && Object.prototype.hasOwnProperty.call(l, 'unit')) return l.unit ?? null;
+  return cardUnit ?? null;
+}
+
+export interface UnitState {
+  /** Известные единицы лидеров (без null). */
+  known: string[];
+  /** Есть лидеры, у которых единица не определена. */
+  unknown: boolean;
+  /** Единицы различаются: известные разные, либо известная вперемешку с неопределённой. */
+  mixed: boolean;
+  /** Денежные колонки сортировать нельзя. */
+  blockMoneySort: boolean;
+}
+export function unitState(leaders: Record<string, any>[], cardUnit?: string | null): UnitState {
+  const all = leaders.map((l) => leaderUnit(l, cardUnit));
+  const known = [...new Set(all.filter((u): u is string => u != null))];
+  const unknown = all.some((u) => u == null);
+  const mixed = known.length > 1 || (known.length > 0 && unknown);
+  // Все единицы неизвестны — числа в одной кампании могут быть чем угодно: денежную
+  // сортировку тоже не даём (ответ backtests: «для null не сортируйте»).
+  return { known, unknown, mixed, blockMoneySort: mixed || unknown };
+}
+
+// ── Источник доли L ─────────────────────────────────────────────────────────
+// curve — ИЗМЕРЕНО по месячному net кривой перепрогона (доля месяцев в плюсе);
+// leaderboard_windows — ОЦЕНКА по windows_profitable / windows_total лидерборда: это
+// доля ОКОН, а не месяцев, и с первой несопоставима. RF×net×L у строк с разным
+// источником сравнивать нельзя (ответ backtests 04.10.2026).
+export const L_SOURCE_LABEL: Record<string, string> = {
+  curve: 'измерено по месячному net кривой перепрогона',
+  leaderboard_windows: 'оценка по окнам лидерборда (доля окон, не месяцев)',
+};
+export const isLEstimate = (l: Record<string, any> | null | undefined) =>
+  l?.l_share_source === 'leaderboard_windows';
+
+export function lSources(leaders: Record<string, any>[]): string[] {
+  return [...new Set(leaders.map((l) => l?.l_share_source).filter((x): x is string => typeof x === 'string'))];
+}
+/** Источники смешаны: сортировать по L и score нельзя, они несопоставимы между строками. */
+export const lSourcesMixed = (leaders: Record<string, any>[]) => lSources(leaders).length > 1;
