@@ -164,10 +164,21 @@
       extra[l.rank] = r.ok ? await r.json() : 'none';
     } catch { extra[l.rank] = 'none'; }
   }
+  // ЕДИНИЦА — У КАЖДОГО ЛИДЕРА СВОЯ. В настоящих отчётах 04.10.2026 у лидеров поле
+  // `unit`, и в десяти кампаниях они разные: у одного рубли, у другого пункты. Форматировать
+  // всё по единице карточки значило бы подписать пункты рублями.
+  const lunit = $derived(leader?.unit ?? unit);
+  const unitsOf = $derived([...new Set((report?.leaders ?? []).map((l: any) => l.unit ?? unit))]);
+  const mixedUnits = $derived(unitsOf.length > 1);
+  // Денежные колонки при смешанных единицах НЕ сортируем: пункты и рубли сравнивать нельзя,
+  // «наибольший net» между ними — это число без смысла.
+  const MONEYISH = /(^|_)(net|score|pnl|gross|dd|profit|loss|commission)($|_)/;
+  const sortable = (k: string) => !(mixedUnits && MONEYISH.test(k));
   const cols = $derived(leaderColumns(report?.leaders ?? []));
   const rows = $derived(sortLeaders(report?.leaders ?? [], sortKey, sortDir));
   const anyRerun = $derived((report?.leaders ?? []).some((l: any) => rerunNote(l)));
   function sortBy(k: string) {
+    if (!sortable(k)) return;
     if (sortKey === k) sortDir = sortDir === 1 ? -1 : 1; else { sortKey = k; sortDir = -1; }
   }
   const arrow = (k: string) => (sortKey === k ? (sortDir === 1 ? ' ▲' : ' ▼') : '');
@@ -332,7 +343,7 @@
         {#if revMissing}
           <div class="cs-note bad" style="margin:8px 0">Редакции {wantRev} в этой линии нет; показана ред. {report.rev}.</div>
         {/if}
-        <CurveChart full points={curve} {unit}
+        <CurveChart full points={curve} unit={lunit}
                     overlay={hold} overlayLabel="купил и держи"
                     emptyText={curveLoading ? 'загружаю кривую лидера…'
                       : curveGone ? 'кривой этого лидера сборщик не оставил'
@@ -344,7 +355,7 @@
         {/if}
         {#if diff}
           <div class="cs-sec"><h3>Стратегия минус «купил и держи»</h3></div>
-          <CurveChart full h={150} points={diff} {unit} emptyText="разности нет" />
+          <CurveChart full h={150} points={diff} unit={lunit} emptyText="разности нет" />
         {/if}
         {#if leader}
           <div class="cs-leadline">лидер №{leader.rank}
@@ -360,7 +371,7 @@
           <dl class="cs-vol">
             <div><dt>контрактов (пик)</dt><dd>{vol.contracts == null ? '—' : vol.contracts.toLocaleString('ru-RU')}</dd></div>
             <div><dt>полная стоимость</dt><dd>{vol.fullCost == null ? '—' : fmtPnl(vol.fullCost, 'rub', false)}</dd></div>
-            <div><dt>net</dt><dd class={cls(vol.net)}>{fmtPnl(vol.net, unit)}</dd></div>
+            <div><dt>net</dt><dd class={cls(vol.net)}>{fmtPnl(vol.net, lunit)}</dd></div>
             <div><dt>доходность</dt><dd class={cls(vol.returnPct)}>{vol.returnPct == null ? '—' : fmtPnl(vol.returnPct, 'pct')}</dd></div>
           </dl>
           {#if vol.missing.length}
@@ -386,13 +397,21 @@
             <h3>Лидеры</h3>
             <button class="cs-btn" onclick={exportLeaders}>CSV</button>
           </div>
+          {#if mixedUnits}
+            <!-- Разные единицы у лидеров одной кампании (отмечено сборщиком в notes). Не
+                 складывать и не сравнивать пункты с рублями: поэтому денежные колонки не
+                 сортируются, а каждая ячейка подписана СВОЕЙ единицей. -->
+            <div class="cs-note bad" style="margin:0 0 8px">У лидеров этой кампании разные единицы ({unitsOf.map((u) => u).join(', ')}):
+              пункты и рубли не складываются и не сравниваются, денежные колонки не сортируются.</div>
+          {/if}
           <div class="cs-scroll">
             <table class="cs-tbl">
               <thead><tr>
                 <th class="sortable" onclick={() => sortBy('rank')}>№{arrow('rank')}</th>
                 {#each cols as k (k)}
-                  <th class="sortable" onclick={() => sortBy(k)}
-                      title="сортировать; пустые значения всегда в конце">{LEADER_LABEL[k] ?? METRIC_RU[k] ?? k}{arrow(k)}</th>
+                  <th class:sortable={sortable(k)} onclick={() => sortBy(k)}
+                      title={sortable(k) ? 'сортировать; пустые значения всегда в конце'
+                        : 'у лидеров разные единицы (пункты и рубли): сравнивать и сортировать нельзя'}>{LEADER_LABEL[k] ?? METRIC_RU[k] ?? k}{arrow(k)}</th>
                 {/each}
                 <th>Параметры</th>
               </tr></thead>
@@ -404,7 +423,7 @@
                     <td>{l.rank}</td>
                     {#each cols as k (k)}
                       {@const v = leaderValue(l, k)}
-                      <td class={typeof v === 'number' && (k === 'net' || k === 'return_pct') ? cls(v) : ''}>{fmtLeaderCell(k, v, unit)}{#if k === 'net' && rr}<sup class="rerun" title={`перепрогон на текущем движке: лидерборд показывал ${fmtPnl(rr.was, unit)}, кривая даёт ${fmtPnl(rr.now, unit)}`}>*</sup>{/if}</td>
+                      <td class={typeof v === 'number' && (k === 'net' || k === 'return_pct') ? cls(v) : ''}>{fmtLeaderCell(k, v, l.unit ?? unit)}{#if k === 'net' && rr}<sup class="rerun" title={`перепрогон на текущем движке: лидерборд показывал ${fmtPnl(rr.was, l.unit ?? unit)}, кривая даёт ${fmtPnl(rr.now, l.unit ?? unit)}`}>*</sup>{/if}</td>
                     {/each}
                     <td class="p">{params(l.params)}</td>
                   </tr>

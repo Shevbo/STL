@@ -384,3 +384,50 @@ describe('данные 04.10.2026: редиректы, ленивые кривы
     expect(titles()).toHaveLength(4);
   });
 });
+
+describe('разные единицы у лидеров одной кампании', () => {
+  // Настоящие отчёты 04.10.2026: у лидера своё поле unit, в десяти кампаниях они
+  // разные. Подписать пункты рублями или отсортировать их вместе — это ложь.
+  const MIX = {
+    slug: 'mix', title: 'Смесь', status: 'done', unit: 'rub',
+    leaders: [
+      { rank: 1, unit: 'rub', metrics: { net: 5000, rf: 2 }, curve: [[1_790_000_000, 0], [1_790_100_000, 5000]] },
+      { rank: 2, unit: 'points', metrics: { net: 90000, rf: 3 },
+        curve: [[1_790_000_000, 0], [1_790_100_000, 90000]] },
+    ],
+  };
+  const openMix = async () => {
+    api({ '/api/v1/lab/showcase/campaigns': () => J({ available: true, campaigns: [], built_at_ms: 1, reason: '' }),
+          '/api/v1/lab/showcase/campaigns/mix': () => J(MIX) });
+    await open('/backtest/campaigns/mix');
+  };
+
+  it('каждая ячейка net подписана СВОЕЙ единицей', async () => {
+    await openMix();
+    const nets = [...host.querySelectorAll('tbody tr')].map((r) => r.textContent);
+    expect(nets[0]).toContain('₽');
+    expect(nets[1]).toContain('п.');
+    expect(nets[1]).not.toContain('₽');
+  });
+
+  it('предупреждение о разных единицах', async () => {
+    await openMix();
+    expect(host.textContent).toContain('разные единицы');
+  });
+
+  it('денежные колонки не сортируются, неденежные — да', async () => {
+    await openMix();
+    const th = (name: string) => [...host.querySelectorAll('thead th')].find((t) => t.textContent?.startsWith(name)) as HTMLElement;
+    th('Net').click(); await tick();
+    expect(host.querySelector('tbody tr td')!.textContent).toBe('1');      // порядок не тронут
+    th('RF').click(); await tick();
+    expect(host.querySelector('tbody tr td')!.textContent).toBe('2');      // rf 3 > 2, сортируется
+  });
+
+  it('единицы одинаковые — предупреждения нет', async () => {
+    api({ '/api/v1/lab/showcase/campaigns': () => J({ available: true, campaigns: [], built_at_ms: 1, reason: '' }),
+          '/api/v1/lab/showcase/campaigns/mix': () => J({ ...MIX, leaders: MIX.leaders.map((l) => ({ ...l, unit: 'rub' })) }) });
+    await open('/backtest/campaigns/mix');
+    expect(host.textContent).not.toContain('разные единицы');
+  });
+});
