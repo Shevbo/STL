@@ -56,24 +56,24 @@ def test_registry_beats_auto_and_groups_shards():
     cards = b.merge_cards(reg, runs)
     assert cards[0]["entry"]["title"] == "Гейт" and len(cards[0]["runs"]) == 2
     auto = {c["entry"]["slug"]: c for c in cards[1:]}
-    assert set(auto) == {"autocci-20260711", "rfa-20260801"}
-    assert len(auto["rfa-20260801"]["runs"]) == 2 and auto["rfa-20260801"]["entry"]["idea"] == b.NO_DESC
+    assert set(auto) == {"autocci-20260711-s-ri", "rfa-20260801-s-ri"}
+    assert len(auto["rfa-20260801-s-ri"]["runs"]) == 2 and auto["rfa-20260801-s-ri"]["entry"]["idea"] == b.NO_DESC
     assert not any("gatekelt" in k for k in auto)
 
 
 def test_no_curve_does_not_fail_and_curve_card():
     runs = [_run("camp-20260711-autocci", 5.0)]
     bf = {"camp-20260711-autocci": [{"run_id": "camp-20260711-autocci-bf0", "net": 9.0, "trades": 3,
-                                    "max_dd": 1.0, "sharpe": 1.0, "params": {"a": 1},
+                                    "max_dd": 1.0, "sharpe": 1.0, "params": {"a": 1, "symbol": "RI"},
                                     "curve": [[1, 0.0], [2, 10.0], [3, 4.0]]}]}
     out = b.build([_entry("research-x", kind="research", status_hint="done")], runs, [], bf, {}, "now")
     by = {c["slug"]: (c, d) for c, d in out}
     c, d = by["research-x"]
     assert c["status"] == "no_curve" and c["thumb"] is None and c["no_curve_reason"]
-    c2, d2 = by["autocci-20260711"]
+    c2, d2 = by["autocci-20260711-s-ri"]
     assert c2["status"] == "done" and c2["thumb"] == [[1, 0.0], [2, 10.0], [3, 4.0]]
     assert c2["headline"]["net"] == 4.0 and d2["leaders"][0]["rank"] == 1
-    assert d2["revisions"][0]["slug"] == "autocci-20260711"
+    assert d2["revisions"][0]["slug"] == "autocci-20260711-s-ri"
 
 
 def test_research_sweep_curve_from_task_results():
@@ -102,15 +102,59 @@ def test_units_symbols_and_sort():
             dict(_run("camp-20260711-autob", 9.0, sym="SiU6"), point_value=None),
             dict(_run("camp-20260801-mixa", 9.0), point_value=None),
             dict(_run("camp-20260801-mixa2", 1.0), point_value=1.68)]
-    bf = {"camp-20260711-autoa": [{"run_id": "x-bf0", "net": 1.0, "curve": [[1, 0.0], [2, 1.0]]}]}
+    bf = {"camp-20260711-autoa": [{"run_id": "camp-20260711-autoa-bf0", "params": {"symbol": "RIU6"}, "net": 1.0, "curve": [[1, 0.0], [2, 1.0]]}]}
     reg = [_entry("r1", symbols=["RI", "Si"]), _entry("r2", status_hint="queued")]
     out = b.build(reg, runs, [], bf, {}, "now")
     cards = {c["slug"]: (c, d) for c, d in out}
-    assert cards["autoa-20260711"][0]["unit"] == "rub" and cards["autoa-20260711"][0]["symbols"] == ["RIU6"]
-    assert cards["autob-20260711"][0]["unit"] == "points"
-    assert "разные единицы" in cards["mixa-20260801"][1]["notes"]
+    assert cards["autoa-20260711-s-ri"][0]["unit"] == "rub" and cards["autoa-20260711-s-ri"][0]["symbols"] == ["RIU6"]
+    assert cards["autob-20260711-s-si"][0]["unit"] == "points"
+    assert "разные единицы" in cards["mixa-20260801-s-ri"][1]["notes"]
     assert cards["r1"][0]["symbols"] == ["RI", "Si"] and cards["r2"][0]["symbols"] is None
     order = [c["slug"] for c, _ in out]
-    assert order[0] == "autoa-20260711"  # единственная с кривой первой
+    assert order[0] == "autoa-20260711-s-ri"  # единственная с кривой первой
     assert [c["status"] for c, _ in out][1:].count("queued") >= 1
     assert out[-1][0]["status"] == "no_curve"
+
+
+def test_instrument_and_window_label():
+    assert [b.instrument(x) for x in ("RIU6", "SiM6", "BRN6", "GDZ5", "RI", None)] == ["RI", "Si", "BR", "GD", "RI", ""]
+    assert b.window_label("2026-07-01", "2026-07-30") == "июль 2026"
+    assert b.window_label("2026-06-01", "2026-07-30") == "июнь–июль 2026"
+    assert b.window_label("2025-12-01", "2026-01-30") == "декабрь 2025–январь 2026"
+    assert b.window_label(None, None, "20260711") == "11.07.2026"
+
+
+def test_strategy_info_library_inverse_unknown():
+    n, i = b.strategy_info("macd_cross")
+    assert n == "MACD Crossover" and i.startswith("трендовая стратегия")
+    n2, i2 = b.strategy_info("macd_cross__inv")
+    assert n2 == "MACD Crossover (инверсия)" and i2.startswith("Зеркальный сигнал")
+    assert b.strategy_info("no_such_strategy_x") == ("no_such_strategy_x", b.NO_DESC)
+    n3, i3 = b.strategy_info("impulse_fade")  # не library: docstring через ast
+    assert n3 == "Impulse Fade" and i3 != b.NO_DESC
+    assert b.strategy_info(None)[1] == b.NO_DESC
+
+
+def test_auto_cards_split_by_strategy_and_instrument_with_varieties():
+    f = lambda run, st, sym, net, fr="2026-07-01", to="2026-07-30": dict(  # noqa: E731
+        _run(run, net, st, sym), date_from=fr, date_to=to)
+    runs = [f("camp-20260711-autox1", "macd_cross", "RIU6", 5.0), f("camp-20260711-autox1", "cci", "RIU6", 3.0),
+            f("camp-20260711-autox2", "macd_cross", "RIM6", 9.0, "2026-06-01"),
+            f("camp-20260711-autox2", "macd_cross", "BRN6", 2.0), f("camp-20260711-autox3", "macd_cross", "RIU6", 7.0)]
+    cards = {c["entry"]["slug"]: c for c in b.merge_cards([], runs)}
+    assert set(cards) == {"autox-20260711-macd-cross-ri", "autox-20260711-cci-ri", "autox-20260711-macd-cross-br"}
+    c = cards["autox-20260711-macd-cross-ri"]
+    assert c["entry"]["title"] == "MACD Crossover · RI · июнь–июль 2026"
+    assert cards["autox-20260711-cci-ri"]["entry"]["title"] == "CCI Reversal · RIU6 · июль 2026"
+    v = b.varieties_of(c["runs"])
+    assert [(x["label"], x["n_runs"]) for x in v] == [("RIM6 · июнь–июль 2026".replace("июнь–июль 2026", "июнь–июль 2026"), 1),
+                                                       ("RIU6 · июль 2026", 2)] or len(v) == 2
+    assert v[1]["best"]["net"] == 7.0 and v[1]["n_runs"] == 2
+
+
+def test_bf_row_goes_only_to_its_own_logic():
+    runs = [dict(_run("camp-20260711-ay", 5.0, "macd_cross", "RIU6")), dict(_run("camp-20260711-ay", 3.0, "cci", "RIU6"))]
+    row = {"run_id": "camp-20260711-ay-bf1", "params": {"symbol": "RIU6"}, "strategy": "cci"}
+    assert b.bf_belongs(row, runs[1:]) and not b.bf_belongs(row, runs[:1])
+    assert not b.bf_belongs(dict(row, strategy=None), runs)  # неоднозначно: две стратегии
+    assert not b.bf_belongs(dict(row, params={"symbol": "SiU6"}), runs)

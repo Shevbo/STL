@@ -83,7 +83,7 @@ def match_any(name: str, patterns: list) -> bool:
 
 
 def auto_key(run: str) -> str:
-    """Группа автозаведённой карточки: дата + буквенный префикс имени (шарды сливаются)."""
+    """Префикс автозаведённой группы: дата + буквенный префикс имени (шарды сливаются)."""
     m = re.match(r"^camp-(\d{8})-(.*)$", run)
     if not m:
         return re.sub(r"\W+", "-", run).strip("-").lower()
@@ -93,10 +93,126 @@ def auto_key(run: str) -> str:
     return f"{(letters.group(0) if letters else 'run').lower()}-{date}"
 
 
+def _slug(x) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", str(x or "").lower()).strip("-")
+
+
+_CONTRACT = re.compile(r"^([A-Za-z0-9]+?)[FGHJKMNQUVXZ]\d$")
+
+
+def instrument(sym: str | None) -> str:
+    """RIU6 -> RI, SiM6 -> Si, BRN6 -> BR; без кода контракта - как есть."""
+    m = _CONTRACT.match(sym or "")
+    return m.group(1) if m else (sym or "")
+
+
+def group_key(r: dict) -> str:
+    """Карточка = одна логика (стратегия) + один инструмент в рамках одной кампании-линии."""
+    return "-".join(x for x in (auto_key(r["campaign_run"]), _slug(r.get("strategy")) or "s",
+                                _slug(instrument(r.get("symbol"))) or "x") if x)
+
+
+_MONTHS = ["январь", "февраль", "март", "апрель", "май", "июнь", "июль", "август", "сентябрь",
+           "октябрь", "ноябрь", "декабрь"]
+
+
+def window_label(frm: str | None, to: str | None, fallback_date: str | None = None) -> str:
+    """'2026-07-01','2026-07-30' -> 'июль 2026'; 'июнь–июль 2026'; нет дат - дата кампании."""
+    try:
+        f, t = dt.date.fromisoformat(frm), dt.date.fromisoformat(to)
+    except (TypeError, ValueError):
+        if fallback_date and re.fullmatch(r"\d{8}", fallback_date):
+            return f"{fallback_date[6:]}.{fallback_date[4:6]}.{fallback_date[:4]}"
+        return "окно не указано"
+    if (f.year, f.month) == (t.year, t.month):
+        return f"{_MONTHS[f.month - 1]} {f.year}"
+    if f.year == t.year:
+        return f"{_MONTHS[f.month - 1]}–{_MONTHS[t.month - 1]} {f.year}"
+    return f"{_MONTHS[f.month - 1]} {f.year}–{_MONTHS[t.month - 1]} {t.year}"
+
+
+def _clip(text: str, n: int = 160) -> str:
+    text = re.split(r"\s\((?![^)]*\))", text.strip())[0].strip(" .;,")
+    return text if len(text) <= n else text[: n - 1].rstrip() + "…"
+
+
+_STRAT_CACHE: dict = {}
+
+
+def strategy_info(sid: str | None) -> tuple[str, str]:
+    """-> (имя, идея в одну строку). Источник: trader/lab/strategies (library: REGISTRY+STRATEGY_DESC,
+    остальные модули: первая строка docstring через ast, без импорта). Неизвестна - id и NO_DESC."""
+    if not sid:
+        return "стратегия не указана", NO_DESC
+    if sid in _STRAT_CACHE:
+        return _STRAT_CACHE[sid]
+    inv = sid.endswith("__inv")
+    base = sid[:-5] if inv else sid
+    name, idea = base, NO_DESC
+    first = None
+    try:
+        from trader.lab.strategies import library as lib
+        if base in lib.REGISTRY:
+            name = lib.REGISTRY[base]["name"]
+            first = (lib.STRATEGY_DESC.get(base) or "").split(chr(10))[0]
+    except Exception:  # noqa: BLE001 - витрина не должна падать из-за импорта движка
+        pass
+    if first is None and re.fullmatch(r"[a-z0-9_]+", base):
+        path = os.path.join(ROOT, "trader", "lab", "strategies", base + ".py")
+        if os.path.exists(path):
+            import ast
+            try:
+                doc = ast.get_docstring(ast.parse(open(path, encoding="utf-8").read())) or ""
+                first = doc.strip().split(chr(10))[0]
+                if " — " not in first:  # нет «Имя — суть»: имя из первой строки, сути нет
+                    name, first = _clip(first, 60) or base, None
+            except (SyntaxError, OSError):
+                first = None
+    if first and " — " in first:
+        n_, i_ = first.split(" — ", 1)
+        if name == base:
+            name = n_.strip()
+        idea = _clip(i_) or NO_DESC
+    if inv:
+        name = f"{name} (инверсия)"
+        idea = "Зеркальный сигнал: " + (idea if idea != NO_DESC else "обратные сделки базовой стратегии")
+    _STRAT_CACHE[sid] = (name, idea)
+    return name, idea
+
+
+def auto_title(rs: list, key: str) -> str:
+    sid = next((r["strategy"] for r in rs if r.get("strategy")), None)
+    syms = sorted({r["symbol"] for r in rs if r.get("symbol")})
+    inst = sorted({instrument(x) for x in syms})
+    where = syms[0] if len(syms) == 1 else (inst[0] if len(inst) == 1 else "/".join(inst[:3]) or "?")
+    frm = min((r["date_from"] for r in rs if r.get("date_from")), default=None)
+    to = max((r["date_to"] for r in rs if r.get("date_to")), default=None)
+    date = re.search(r"-(\d{8})(?:-|$)", "-" + key + "-")
+    return f"{strategy_info(sid)[0]} · {where} · {window_label(frm, to, date.group(1) if date else None)}"
+
+
+def varieties_of(runs: list) -> list:
+    """Разновидности внутри карточки: (контракт, окно) -> прогоны (campaign_run) и лучшая строка."""
+    by: dict = {}
+    for r in runs:
+        k = (r.get("symbol"), r.get("date_from"), r.get("date_to"))
+        by.setdefault(k, []).append(r)
+    out = []
+    for (sym, frm, to), rs in sorted(by.items(), key=lambda kv: tuple(str(x) for x in kv[0])):
+        best = max(rs, key=lambda r: r.get("net") if r.get("net") is not None else -1e18)
+        names = sorted({r["campaign_run"] for r in rs})
+        out.append({"label": f"{sym or '?'} · {window_label(frm, to)}", "n_runs": len(names),
+                    "campaign_runs": names[:200],
+                    "best": {"net": best.get("net"), "trades": best.get("trades"),
+                             "max_dd": best.get("max_dd"), "params": best.get("params"),
+                             "campaign_run": best["campaign_run"]}})
+    return out
+
+
 def merge_cards(registry: list, runs: list) -> list:
     """Реестр приоритетнее автозаведённых: прогоны, занятые реестром, группы не образуют.
 
-    Возвращает список заготовок {entry, runs, auto}; runs - dict campaign_run -> meta.
+    Возвращает список заготовок {entry, runs, auto}; runs - лучшие строки по (campaign_run, стратегия, символ).
     """
     claimed: set = set()
     cards = []
@@ -107,24 +223,19 @@ def merge_cards(registry: list, runs: list) -> list:
     groups: dict = {}
     for r in runs:
         if r["campaign_run"] not in claimed:
-            groups.setdefault(auto_key(r["campaign_run"]), []).append(r)
+            groups.setdefault(group_key(r), []).append(r)
     taken = {c["entry"]["slug"] for c in cards}
     for key in sorted(groups):
         rs = groups[key]
-        best = max(rs, key=lambda r: r.get("net") if r.get("net") is not None else -1e18)
         slug = key if key not in taken else f"{key}-auto"
         taken.add(slug)
-        strategies = sorted({r["strategy"] for r in rs if r.get("strategy")})
-        syms = sorted({r["symbol"] for r in rs if r.get("symbol")})
-        rest = key.rsplit("-", 1)[0]
-        title = f"{rest} {'/'.join(syms[:3])}".strip() + f" ({key.rsplit('-', 1)[-1]})"
+        sid = next((r["strategy"] for r in rs if r.get("strategy")), None)
+        names = sorted({r["campaign_run"] for r in rs})
         cards.append({"entry": {
-            "slug": slug, "title": title, "idea": NO_DESC,
-            "strategy": ", ".join(strategies[:3]) + (" и др." if len(strategies) > 3 else "") or None,
-            "family": slug, "rev": 1, "parent": None, "changes": None,
-            "campaign_runs": [r["campaign_run"] for r in rs] if len(rs) < 50 else [f"*{key.split('-')[0]}*"],
-            "doc": None, "status_hint": "done", "verdict": None, "unit": "rub", "kind": "optimizer",
-            "_best": best["campaign_run"],
+            "slug": slug, "title": auto_title(rs, key), "idea": strategy_info(sid)[1],
+            "strategy": sid, "family": slug, "rev": 1, "parent": None, "changes": None,
+            "campaign_runs": names, "doc": None, "status_hint": "done", "verdict": None,
+            "unit": "rub", "kind": "optimizer",
         }, "runs": rs, "auto": True})
     return cards
 
@@ -207,6 +318,19 @@ def _window(frm, to) -> str | None:
     return f"{frm}..{to}" if frm and to else None
 
 
+def bf_belongs(row: dict, runs: list) -> bool:
+    """bf-строка идёт в карточку своей логики: инструмент (и стратегия, если известна) совпадают с
+    её прогонами. Старые бэкфиллы без стратегии: принимаем, только если у кампании одна стратегия."""
+    mine = [r for r in runs if r["campaign_run"] == row["run_id"].rsplit("-bf", 1)[0]]
+    sym = (row.get("params") or {}).get("symbol") or row.get("symbol")
+    if sym and all(instrument(r.get("symbol")) != instrument(sym) for r in mine):
+        return False
+    st = row.get("strategy")
+    if st:
+        return any(r.get("strategy") == st for r in mine)
+    return len({r.get("strategy") for r in mine}) <= 1
+
+
 def build_card(c: dict, tasks_all: list, bf: dict, task_results: dict, now_iso: str):
     """-> (index_card, detail). bf: run -> [rows]; task_results: task_id -> result."""
     e = c["entry"]
@@ -223,7 +347,8 @@ def build_card(c: dict, tasks_all: list, bf: dict, task_results: dict, now_iso: 
             notes.append(f"в кампании разные единицы ({', '.join(mix)}); карточка по лучшему прогону: {unit}")
 
     # (1) бэктест-кривые лидеров оптимизатора: <campaign_run>-bf<rank>
-    rows = [r for run in runs for r in bf.get(run["campaign_run"], [])]
+    names = sorted({r["campaign_run"] for r in runs})
+    rows = [r for n in names for r in bf.get(n, []) if bf_belongs(r, runs)]
     rows = sorted((r for r in rows if r.get("curve")), key=lambda r: -(r.get("net") or 0))[:LEADERS_N]
     for i, r in enumerate(rows):
         leaders.append({"rank": i + 1, "params": r.get("params"), "metrics": {
@@ -285,11 +410,13 @@ def build_card(c: dict, tasks_all: list, bf: dict, task_results: dict, now_iso: 
         "thumb": thumb, "verdict": e.get("verdict"), "doc": e.get("doc"),
         "unit": unit, "kind": e.get("kind") or "research", "no_curve_reason": reason,
     }
+    varieties = varieties_of(runs)
+    card["n_varieties"] = len(varieties)
     syms = e.get("symbols") or sorted({r["symbol"] for r in runs if r.get("symbol")}) or None
     card["symbols"] = syms
     detail = {
         **card, "leaders": leaders, "changes": e.get("changes"), "parent": e.get("parent"),
-        "runs": [r["campaign_run"] for r in runs] + [t["id"] for t in tasks],
+        "runs": names + [t["id"] for t in tasks], "varieties": varieties,
         "data_window": {"from": window.split("..")[0] if window else None,
                         "to": window.split("..")[1] if window else None, "symbols": syms},
         "notes": "; ".join(notes) or e.get("notes"), "auto": c["auto"],
@@ -357,14 +484,14 @@ async def load_db(registry: list):
     import asyncpg
     c = await asyncpg.connect(os.environ["LAB_DB_URL"].replace("postgresql+asyncpg", "postgresql"))
     try:
+        # лучшая строка на (кампания, стратегия, символ): карточка = одна логика + один инструмент
         rows = await c.fetch("""
-            select r.campaign_run, r.n, t.net_profit, t.total_trades, t.max_drawdown, t.strategy,
-                   t.symbol, t.params, t.point_value, t.date_from, t.date_to, t.created_at
-            from (select campaign_run, count(*) n from optimization_leaderboard group by 1) r
-            cross join lateral (select * from optimization_leaderboard l
-                where l.campaign_run = r.campaign_run
-                order by net_profit desc nulls last limit 1) t""")
-        runs = [{"campaign_run": x["campaign_run"], "n": x["n"], "net": x["net_profit"],
+            select distinct on (campaign_run, strategy, symbol)
+                   campaign_run, net_profit, total_trades, max_drawdown, strategy,
+                   symbol, params, point_value, date_from, date_to, created_at
+            from optimization_leaderboard
+            order by campaign_run, strategy, symbol, net_profit desc nulls last""")
+        runs = [{"campaign_run": x["campaign_run"], "net": x["net_profit"],
                  "trades": x["total_trades"], "max_dd": x["max_drawdown"], "strategy": x["strategy"],
                  "symbol": x["symbol"], "params": _j(x["params"]), "point_value": x["point_value"],
                  "date_from": str(x["date_from"]) if x["date_from"] else None,
@@ -378,26 +505,33 @@ async def load_db(registry: list):
         cards = merge_cards(registry, runs)
         names = sorted({r["campaign_run"] for cd in cards for r in cd["runs"]})
         ids = [f"{n}-bf{i}" for n in names for i in range(BF_MAX)]
-        have = await c.fetch("""select run_id, net_profit, total_trades, max_drawdown, sharpe
-            from backtest_results where run_id = any($1::text[])
-              and jsonb_array_length(equity_curve) > 0""", ids)
+        have = await c.fetch("""select r.run_id, r.net_profit, r.total_trades, r.max_drawdown, r.sharpe,
+                   b.strategy
+            from backtest_results r left join backtest_runs b on b.id = r.run_id
+            where r.run_id = any($1::text[]) and jsonb_array_length(r.equity_curve) > 0""", ids)
         bf: dict = {}
         for x in sorted(have, key=lambda x: -(x["net_profit"] or 0)):
             run = x["run_id"].rsplit("-bf", 1)[0]
             bf.setdefault(run, []).append(dict(run_id=x["run_id"], net=x["net_profit"],
                                                trades=x["total_trades"], max_dd=x["max_drawdown"],
-                                               sharpe=x["sharpe"]))
+                                               sharpe=x["sharpe"], strategy=x["strategy"]))
         # лидеры карточки: топ LEADERS_N по net; кривую читаем только им
+        loaded: dict = {}
         for cd in cards:
-            pool = sorted((r for run in cd["runs"] for r in bf.get(run["campaign_run"], [])),
-                          key=lambda r: -(r["net"] or 0))[:LEADERS_N]
+            cnames = sorted({r["campaign_run"] for r in cd["runs"]})
+            pool = sorted((r for n in cnames for r in bf.get(n, [])),
+                          key=lambda r: -(r["net"] or 0))
             for r in pool:
-                if "curve" in r:
-                    continue
-                x = await c.fetchrow("select equity_curve, params from backtest_results where run_id=$1",
-                                     r["run_id"])
-                r["curve"] = equity_to_curve(_j(x["equity_curve"]))
-                r["params"] = _j(x["params"])
+                if "params" not in r:
+                    x = await c.fetchrow("select params from backtest_results where run_id=$1", r["run_id"])
+                    r["params"] = _j(x["params"])
+            pool = [r for r in pool if bf_belongs(r, cd["runs"])][:LEADERS_N]
+            for r in pool:
+                if r["run_id"] not in loaded:
+                    x = await c.fetchrow("select equity_curve from backtest_results where run_id=$1",
+                                         r["run_id"])
+                    loaded[r["run_id"]] = equity_to_curve(_j(x["equity_curve"]))
+                r["curve"] = loaded[r["run_id"]]
         # результаты i9 для адаптеров кривых
         task_results: dict = {}
         for cd in cards:
