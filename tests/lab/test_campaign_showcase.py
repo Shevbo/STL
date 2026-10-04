@@ -92,7 +92,7 @@ def test_write_all_atomic_and_idempotent(tmp_path):
     first = sorted(os.listdir(tmp_path))
     (tmp_path / "stale.json").write_text("{}")
     b.write_all(out, str(tmp_path))
-    assert first == sorted(os.listdir(tmp_path)) == ["a.json", "index.json"]
+    assert first == sorted(os.listdir(tmp_path)) == ["a.json", "index.json", "slug_redirects.json"]
     assert json.loads((tmp_path / "index.json").read_text(encoding="utf-8"))[0]["slug"] == "a"
 
 

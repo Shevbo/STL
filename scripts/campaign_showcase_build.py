@@ -25,10 +25,13 @@ import sys
 import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
+from scripts import showcase_volume as sv  # noqa: E402
 REGISTRY = os.path.join(ROOT, "docs", "campaigns", "registry.json")
 OUT_DIR = os.path.join(ROOT, "data", "campaign_showcase")
 THUMB_N, CURVE_N, BF_MAX = 200, 1500, 10
 LEADERS_N = 8
+TOP_N, INLINE_N = 100, 10  # лидеров в отчёте / сколько из них с кривыми внутри файла карточки
 NO_DESC = "описание не заполнено"
 UNFINISHED_RUN = ("claimed", "running")
 
@@ -344,7 +347,74 @@ def bf_belongs(row: dict, runs: list) -> bool:
     return len({r.get("strategy") for r in mine}) <= 1
 
 
-def build_card(c: dict, tasks_all: list, bf: dict, task_results: dict, now_iso: str):
+def leader_sort_key(ld: dict):
+    sc, net = ld.get("score"), ld.get("net")
+    return (sc is None, -(sc or 0.0), net is None, -(net or 0.0))
+
+
+def _std(ld: dict) -> dict:
+    for k in ("contracts_peak", "full_cost_rub", "return_pct", "buyhold_curve", "rf", "l_share",
+              "l_share_source", "score", "unit", "curve_url"):
+        ld.setdefault(k, None)
+    ld.setdefault("rev", 1)
+    return ld
+
+
+def make_bf_leader(r: dict, ctx, card_unit: str) -> dict:
+    """Лидер с перепрогоном (бэкфилл): честный объём по сделкам, buyhold из баров, L по кривой."""
+    curve, params = r["curve"], r.get("params") or {}
+    sym = params.get("symbol")
+    peak = r.get("peak")  # (контрактов, цена, время) по сделкам перепрогона
+    n_peak = peak[0] if peak else r.get("peak_col")
+    pv = ctx.pv_at(sym, peak[2] if peak else curve[-1][0]) if ctx else None
+    unit = sv.infer_unit(r.get("net"), r.get("gross_pts"), pv)
+    net = r.get("net")
+    net_rub = net * pv if (unit == "points" and net is not None) else (net if unit == "rub" else None)
+    cost = sv.full_cost_rub(peak[0], peak[1], pv) if peak else None
+    bh = ctx.buyhold(sym, curve[0][0], curve[-1][0], n_peak, unit == "rub", CURVE_N, downsample) \
+        if (ctx and unit and n_peak) else None
+    ls = sv.month_share(curve)
+    rf = r.get("rf")
+    return _std({
+        "params": r.get("params"), "trades_n": r.get("trades"),
+        "metrics": {"net": net, "trades": r.get("trades"), "max_dd_db": r.get("max_dd"),
+                    "sharpe": r.get("sharpe"), "campaign_run": r["run_id"], "lb_net": r.get("lb_net"),
+                    "rerun_note": "перепрогон на текущем движке", "recovery_factor": rf},
+        "curve": downsample(curve, CURVE_N), "buyhold_curve": bh, "contracts_peak": n_peak,
+        "full_cost_rub": cost, "return_pct": sv.return_pct(net_rub, cost), "unit": unit,
+        "rf": rf, "net": net, "l_share": ls, "l_share_source": "curve" if ls is not None else None,
+        "score": sv.score_of(rf, net, ls)})
+
+
+def make_row_leader(r: dict, card_unit: str) -> dict:
+    """Строка лидерборда без перепрогона: объёма и кривой нет (null), L из windows_profitable/windows_total."""
+    wt = r.get("wt")
+    ls = round(r["wp"] / wt, 4) if wt and r.get("wp") is not None else None
+    rf, net = r.get("rf"), r.get("net")
+    return _std({
+        "params": r.get("params"), "trades_n": r.get("trades"),
+        "metrics": {"net": net, "trades": r.get("trades"), "max_dd_db": r.get("max_dd"),
+                    "campaign_run": r["campaign_run"], "recovery_factor": rf},
+        "curve": None, "rf": rf, "net": net, "unit": card_unit, "l_share": ls,
+        "l_share_source": "leaderboard_windows" if ls is not None else None,
+        "score": sv.score_of(rf, net, ls)})
+
+
+def finalize_leaders(slug: str, leaders: list) -> tuple[list, list]:
+    """Сортировка по score, затем net; топ-100; кривые внутри файла только у топ-10, у остальных curve_url.
+    -> (leaders, lazy-файлы {rank, curve, buyhold_curve})."""
+    leaders = sorted((_std(ld) for ld in leaders), key=leader_sort_key)[:TOP_N]
+    lazy = []
+    for i, ld in enumerate(leaders):
+        ld["rank"] = i + 1
+        if i >= INLINE_N and ld.get("curve"):
+            lazy.append({"rank": i + 1, "curve": ld["curve"], "buyhold_curve": ld["buyhold_curve"]})
+            ld["curve"], ld["buyhold_curve"] = None, None
+            ld["curve_url"] = f"{slug}.leader-{i + 1}.json"
+    return leaders, lazy
+
+
+def build_card(c: dict, tasks_all: list, bf: dict, task_results: dict, now_iso: str, ctx=None, tops=None):
     """-> (index_card, detail). bf: run -> [rows]; task_results: task_id -> result."""
     e = c["entry"]
     runs = c["runs"]
@@ -363,11 +433,8 @@ def build_card(c: dict, tasks_all: list, bf: dict, task_results: dict, now_iso: 
     names = sorted({r["campaign_run"] for r in runs})
     rows = [r for n in names for r in bf.get(n, []) if bf_belongs(r, runs)]
     rows = sorted((r for r in rows if r.get("curve")), key=lambda r: -(r.get("net") or 0))[:LEADERS_N]
-    for i, r in enumerate(rows):
-        leaders.append({"rank": i + 1, "params": r.get("params"), "metrics": {
-            "net": r.get("net"), "trades": r.get("trades"), "max_dd_db": r.get("max_dd"),
-            "sharpe": r.get("sharpe"), "campaign_run": r["run_id"], "lb_net": r.get("lb_net")},
-            "curve": downsample(r["curve"], CURVE_N), "trades_n": r.get("trades")})
+    for r in rows:
+        leaders.append(make_bf_leader(r, ctx, unit))
     note = bf_drift_note(rows)
     if note:
         notes.append(note)
@@ -376,20 +443,39 @@ def build_card(c: dict, tasks_all: list, bf: dict, task_results: dict, now_iso: 
     if not leaders and spec and task_results:
         res = {t["id"]: task_results[t["id"]] for t in tasks if t["id"] in task_results}
         ls = curve_sweep(res) if spec["kind"] == "sweep" else curve_nextday(res, spec["config"])
-        for i, ld in enumerate(ls[:LEADERS_N * 2]):
+        for ld in ls[:LEADERS_N * 2]:
             ld.pop("_net", None)
             ld["curve"] = downsample(ld["curve"], CURVE_N)
-            leaders.append({"rank": i + 1, **ld})
+            ld["net"] = (ld.get("metrics") or {}).get("net_taker")
+            ld["l_share"] = sv.month_share(ld["curve"])
+            ld["l_share_source"] = "curve" if ld["l_share"] is not None else None
+            leaders.append(ld)
         if spec.get("note"):
             notes.append(spec["note"])
-    has_curve = bool(leaders and leaders[0].get("curve"))
-    # без кривой: лидеры из лидерборда (метрики без кривой)
-    if not has_curve and runs:
-        top = sorted(runs, key=lambda r: -(r.get("net") if r.get("net") is not None else -1e18))[:3]
-        leaders = [{"rank": i + 1, "params": r.get("params"), "metrics": {
-            "net": r.get("net"), "trades": r.get("trades"), "max_dd_db": r.get("max_dd"),
-            "campaign_run": r["campaign_run"]}, "curve": None, "trades_n": r.get("trades")}
-            for i, r in enumerate(top)]
+    # (3) строки лидерборда без перепрогона (метрики без кривой): топ-100 карточки
+    if runs and e.get("kind") != "research":
+        src = (tops or {}).get(e["slug"])
+        if src is None:  # нет потока из БД (тесты, ручной запуск): лучшие строки по прогонам
+            src = sorted(runs, key=lambda r: -(r.get("net") if r.get("net") is not None else -1e18))[:3]
+        have = {json.dumps(ld.get("params"), sort_keys=True) for ld in leaders}
+        for r in src:
+            if json.dumps(r.get("params"), sort_keys=True) not in have:
+                leaders.append(make_row_leader(r, unit))
+    elif not leaders and runs:
+        for r in sorted(runs, key=lambda r: -(r.get("net") if r.get("net") is not None else -1e18))[:3]:
+            leaders.append(make_row_leader(r, unit))
+    leaders, lazy = finalize_leaders(e["slug"], leaders)
+    lead, lead_full = None, None
+    for ld in leaders:  # лидер с кривой: первый по score; кривая внутри или в lazy-файле
+        if ld.get("curve"):
+            lead, lead_full = ld, ld["curve"]
+            break
+        if ld.get("curve_url"):
+            lead, lead_full = ld, next(z["curve"] for z in lazy if z["rank"] == ld["rank"])
+            break
+    has_curve = lead_full is not None
+    if lead and lead.get("unit"):
+        unit = lead["unit"]
     status, progress = status_of(tasks, has_curve, bool(runs), e.get("status_hint"))
     if status == "no_curve":
         if runs and e.get("kind") == "research":
@@ -400,12 +486,12 @@ def build_card(c: dict, tasks_all: list, bf: dict, task_results: dict, now_iso: 
             reason = "в результатах i9 нет посуточного net выбранной конфигурации; нужен перепрогон"
         else:
             reason = "прогоны кампании в БД и очереди не сопоставлены с записью реестра"
-    thumb = downsample(leaders[0]["curve"], THUMB_N) if has_curve else None
-    lead_curve = leaders[0]["curve"] if has_curve else None
+    thumb = downsample(lead_full, THUMB_N) if has_curve else None
+    lead_curve = lead_full
     top_run = max(runs, key=lambda r: r.get("net") if r.get("net") is not None else -1e18) if runs else None
     if has_curve:
         net = lead_curve[-1][1]
-        trades = leaders[0].get("trades_n")
+        trades = lead.get("trades_n")
         dd = max_drawdown(lead_curve)
         frm = dt.datetime.fromtimestamp(lead_curve[0][0], dt.timezone.utc).date().isoformat()
         to = dt.datetime.fromtimestamp(lead_curve[-1][0], dt.timezone.utc).date().isoformat()
@@ -422,7 +508,10 @@ def build_card(c: dict, tasks_all: list, bf: dict, task_results: dict, now_iso: 
         "slug": e["slug"], "title": e["title"], "idea": e.get("idea") or NO_DESC,
         "strategy": e.get("strategy"), "family": e.get("family") or e["slug"], "rev": e.get("rev", 1),
         "status": status, "progress": progress, "updated_at": max(stamps) if stamps else None,
-        "headline": {"net": net, "trades": trades, "max_dd": dd, "window": window},
+        "headline": {"net": net, "trades": trades, "max_dd": dd, "window": window,
+                     "contracts_peak": lead.get("contracts_peak") if has_curve else None,
+                     "full_cost_rub": lead.get("full_cost_rub") if has_curve else None,
+                     "return_pct": lead.get("return_pct") if has_curve else None},
         "thumb": thumb, "verdict": e.get("verdict"), "doc": e.get("doc"),
         "unit": unit, "kind": e.get("kind") or "research", "no_curve_reason": reason,
     }
@@ -435,7 +524,7 @@ def build_card(c: dict, tasks_all: list, bf: dict, task_results: dict, now_iso: 
         "runs": names + [t["id"] for t in tasks], "varieties": varieties,
         "data_window": {"from": window.split("..")[0] if window else None,
                         "to": window.split("..")[1] if window else None, "symbols": syms},
-        "notes": "; ".join(notes) or e.get("notes"), "auto": c["auto"],
+        "notes": "; ".join(notes) or e.get("notes"), "auto": c["auto"], "_lazy": lazy,
     }
     return card, detail
 
@@ -474,18 +563,61 @@ def sort_cards(out: list) -> list:
     return sorted(out, key=lambda cd: grp(cd[0]))
 
 
-def write_all(cards_details: list, out_dir: str) -> None:
+def write_all(cards_details: list, out_dir: str, redirects: dict | None = None) -> None:
+    keep = {"index.json", "slug_redirects.json"}
     for _, d in cards_details:
-        write_atomic(os.path.join(out_dir, f"{d['slug']}.json"), d)
+        body = {k: v for k, v in d.items() if k != "_lazy"}
+        write_atomic(os.path.join(out_dir, f"{d['slug']}.json"), body)
+        keep.add(f"{d['slug']}.json")
+        for z in d.get("_lazy") or []:  # кривые лидеров за пределами топ-10: ленивый файл
+            name = f"{d['slug']}.leader-{z['rank']}.json"
+            write_atomic(os.path.join(out_dir, name), z)
+            keep.add(name)
     write_atomic(os.path.join(out_dir, "index.json"), [c for c, _ in cards_details])
-    keep = {f"{d['slug']}.json" for _, d in cards_details} | {"index.json"}
+    write_atomic(os.path.join(out_dir, "slug_redirects.json"), redirects or {})
     for f in os.listdir(out_dir):  # убрать карточки, исчезнувшие из реестра
         if f.endswith(".json") and f not in keep:
             os.unlink(os.path.join(out_dir, f))
 
 
-def build(registry: list, runs: list, tasks: list, bf: dict, task_results: dict, now_iso: str) -> list:
-    out = [build_card(c, tasks, bf, task_results, now_iso) for c in merge_cards(registry, runs)]
+def legacy_slug(run: str) -> str:
+    """Slug автозаведённой карточки до резки по логике (то, что могли уже раздать ссылками)."""
+    if re.fullmatch(r"opt-\d{8}-\d+", run):
+        return re.sub(r"\W+", "-", run).strip("-").lower()
+    return auto_key(run)
+
+
+def build_redirects(cards_details: list) -> dict:
+    """{старый slug: новый} для исчезнувших после резки. Одна старая карточка -> лучшая по score из новых
+    (затем по net); остальные части перечислены в notes выбранной карточки."""
+    live = {d["slug"] for _, d in cards_details}
+    parts: dict = {}
+    for _, d in cards_details:
+        if not d.get("auto"):
+            continue
+        ld = d["leaders"][0] if d.get("leaders") else {}
+        key = (ld.get("score") is not None, ld.get("score") or 0.0, d["headline"].get("net") or 0.0)
+        for run in d["runs"]:
+            parts.setdefault(legacy_slug(run), {})[d["slug"]] = key
+    red, by_slug = {}, {d["slug"]: d for _, d in cards_details}
+    for old in sorted(parts):
+        if old in live:
+            continue
+        cand = parts[old]
+        best = max(sorted(cand), key=lambda sl: cand[sl])
+        red[old] = best
+        others = sorted(x for x in cand if x != best)
+        if others:
+            det = by_slug[best]
+            tail = ", ".join(others[:30]) + (f" и ещё {len(others) - 30}" if len(others) > 30 else "")
+            add = f"бывшая карточка {old} разрезана по логике; остальные части: {tail}"
+            det["notes"] = f"{det['notes']}; {add}" if det.get("notes") else add
+    return red
+
+
+def build(registry: list, runs: list, tasks: list, bf: dict, task_results: dict, now_iso: str,
+          ctx=None, tops=None) -> list:
+    out = [build_card(c, tasks, bf, task_results, now_iso, ctx, tops) for c in merge_cards(registry, runs)]
     attach_revisions([d for _, d in out])
     return sort_cards(out)
 
@@ -494,6 +626,61 @@ def build(registry: list, runs: list, tasks: list, bf: dict, task_results: dict,
 
 def _j(v):
     return json.loads(v) if isinstance(v, str) else v
+
+
+async def stream_tops(c, cards: list) -> dict:
+    """Топ-TOP_N строк лидерборда на карточку одним проходом по таблице (курсор, в памяти только кучи).
+    Ключ отбора тот же, что у сортировки лидеров: score = rf*net*L (L из windows_profitable/total), затем net."""
+    import heapq
+    slug_of = {}
+    for cd in cards:
+        if cd["entry"].get("kind") == "research":
+            continue
+        for r in cd["runs"]:
+            slug_of[(r["campaign_run"], r["strategy"], r["symbol"])] = cd["entry"]["slug"]
+    heaps: dict = {}
+    async with c.transaction():
+        async for x in c.cursor("""select id, campaign_run, strategy, symbol, net_profit, total_trades,
+                max_drawdown, recovery_factor, windows_profitable, windows_total
+                from optimization_leaderboard where net_profit is not null"""):
+            slug = slug_of.get((x["campaign_run"], x["strategy"], x["symbol"]))
+            if slug is None:
+                continue
+            net, rf, wt = x["net_profit"], x["recovery_factor"], x["windows_total"]
+            ls = x["windows_profitable"] / wt if wt and x["windows_profitable"] is not None else None
+            sc = sv.score_of(rf, net, ls)
+            key = (1, sc) if sc is not None else (0, net)
+            h = heaps.setdefault(slug, [])
+            item = (key, x["id"], dict(campaign_run=x["campaign_run"], strategy=x["strategy"],
+                                       symbol=x["symbol"], net=net, trades=x["total_trades"],
+                                       max_dd=x["max_drawdown"], rf=rf, wp=x["windows_profitable"], wt=wt))
+            if len(h) < TOP_N * 3:
+                heapq.heappush(h, item)
+            elif key > h[0][0]:
+                heapq.heapreplace(h, item)
+    tops, need = {}, []
+    for slug, h in heaps.items():
+        seen, rows = set(), []
+        for key, rid, row in sorted(h, key=lambda t: t[0], reverse=True):
+            k = (round(row["net"], 2), row["trades"])  # те же net и сделки = те же сделки
+            if k in seen:
+                continue
+            seen.add(k)
+            row["_id"] = rid
+            rows.append(row)
+            need.append(rid)
+            if len(rows) == TOP_N:
+                break
+        tops[slug] = rows
+    params: dict = {}
+    for i in range(0, len(need), 5000):
+        for x in await c.fetch("select id, params from optimization_leaderboard where id = any($1::bigint[])",
+                               need[i:i + 5000]):
+            params[x["id"]] = _j(x["params"])
+    for rows in tops.values():
+        for row in rows:
+            row["params"] = params.get(row.pop("_id"))
+    return tops
 
 
 async def load_db(registry: list):
@@ -545,10 +732,12 @@ async def load_db(registry: list):
             pool = [r for r in pool if bf_belongs(r, cd["runs"])][:LEADERS_N]
             for r in pool:
                 if r["run_id"] not in loaded:
-                    x = await c.fetchrow("select equity_curve from backtest_results where run_id=$1",
-                                         r["run_id"])
-                    loaded[r["run_id"]] = equity_to_curve(_j(x["equity_curve"]))
-                r["curve"] = loaded[r["run_id"]]
+                    x = await c.fetchrow("""select equity_curve, trades, recovery_factor, peak_contracts
+                        from backtest_results where run_id=$1""", r["run_id"])
+                    tr = _j(x["trades"])
+                    loaded[r["run_id"]] = (equity_to_curve(_j(x["equity_curve"])), sv.peak_from_trades(tr),
+                                           sv.gross_points(tr), x["recovery_factor"], x["peak_contracts"])
+                r["curve"], r["peak"], r["gross_pts"], r["rf"], r["peak_col"] = loaded[r["run_id"]]
         # результаты i9 для адаптеров кривых
         task_results: dict = {}
         for cd in cards:
@@ -559,7 +748,14 @@ async def load_db(registry: list):
                 if match_any(t["id"], spec.get("tasks")) and t["id"] not in task_results:
                     task_results[t["id"]] = _j(await c.fetchval(
                         "select result from agent_tasks where id=$1 and status='done'", t["id"]))
-        return runs, tasks, bf, task_results
+        tops = await stream_tops(c, cards)
+        meta = {}
+        for x in await c.fetch("select symbol, point_value, price_step, price_step_value from instrument_meta"):
+            pv = x["point_value"] or (x["price_step_value"] / x["price_step"]
+                                      if x["price_step_value"] and x["price_step"] else None)
+            if pv:
+                meta[x["symbol"]] = float(pv)
+        return runs, tasks, bf, task_results, tops, meta
     finally:
         await c.close()
 
@@ -567,10 +763,12 @@ async def load_db(registry: list):
 def main() -> None:
     with open(REGISTRY, encoding="utf-8") as f:
         registry = json.load(f)["campaigns"]
-    runs, tasks, bf, task_results = asyncio.run(load_db(registry))
+    runs, tasks, bf, task_results, tops, meta = asyncio.run(load_db(registry))
     now = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
-    out = build(registry, runs, tasks, bf, task_results, now)
-    write_all(out, OUT_DIR)
+    ctx = sv.BarsCtx(os.path.join(ROOT, "agent_bars"), meta)
+    out = build(registry, runs, tasks, bf, task_results, now, ctx, tops)
+    red = build_redirects(out)
+    write_all(out, OUT_DIR, red)
     by = {}
     for c, _ in out:
         by[c["status"]] = by.get(c["status"], 0) + 1
@@ -581,6 +779,10 @@ def main() -> None:
     print(f"symbols заполнено у {with_syms}, unit: {units}")
     with_curve = sum(1 for c, _ in out if c["thumb"])
     print(f"карточек {len(out)}: {by}; с кривой {with_curve}, без {len(out) - with_curve}; -> {OUT_DIR}")
+    full = [ld for _, d in out for ld in d["leaders"] if ld.get("full_cost_rub") is not None]
+    bh = [ld for _, d in out for ld in d["leaders"] if ld.get("buyhold_curve")]
+    nl = sum(len(d["leaders"]) for _, d in out)
+    print(f"лидеров {nl}, с full_cost_rub {len(full)}, с buyhold {len(bh)}, редиректов {len(red)}")
     print(f"прогонов в лидерборде {len(runs)}, заданий agent_tasks {len(tasks)}, "
           f"кампаний с бэкфиллом {len(bf)}")
 
