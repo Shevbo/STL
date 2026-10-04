@@ -512,3 +512,64 @@ describe('единица не определена и источник L (дан
     expect(host.querySelector('a.cs-card')!.textContent).not.toContain('₽');
   });
 });
+
+describe('перепрогон не запускался и несравнимый net', () => {
+  // backtests 04.10.2026: перепрогоны сделаны только для 20 отобранных карточек,
+  // у остальных лидеров объёма и кривой нет, и само они не досчитаются. Это не
+  // сбой сборщика — подпись другая.
+  const NR = {
+    slug: 'nr', title: 'Без перепрогона', status: 'done', unit: null,
+    leaders: [
+      { rank: 1, unit: null, unit_source: null, metrics: { net: 5000, rf: 2 }, curve: null },
+    ],
+  };
+  const openRep = async (rep: unknown) => {
+    api({ '/api/v1/lab/showcase/campaigns': () => J({ available: true, campaigns: [], built_at_ms: 1, reason: '' }),
+          '/api/v1/lab/showcase/campaigns/nr': () => J(rep) });
+    await open('/backtest/campaigns/nr');
+  };
+
+  it('у неперепрогнанного лидера причина — «перепрогон не запускался», а не «сборщик не отдал»', async () => {
+    await openRep(NR);
+    expect(host.textContent).toContain('перепрогон не запускался: объёма и кривой нет');
+    expect(host.textContent).not.toContain('Сборщик ещё не отдаёт');
+  });
+
+  it('прочерк в колонке объёма несёт ту же причину в подсказке', async () => {
+    // Колонка объёма видна, когда он есть хотя бы у одного лидера (перепрогнанного);
+    // у неперепрогнанного в ней прочерк с причиной.
+    await openRep({ ...NR, leaders: [
+      { rank: 1, unit: 'rub', unit_source: 'measured', contracts_peak: 3, full_cost_rub: 750000,
+        metrics: { net: 9000 }, curve: null },
+      { ...NR.leaders[0], rank: 2, contracts_peak: null, full_cost_rub: null },
+    ] });
+    const tds = [...host.querySelectorAll('tbody td')].filter((t) => t.getAttribute('title')?.includes('перепрогон не запускался'));
+    expect(tds.length).toBeGreaterThan(0);
+    expect(tds[0].textContent).toBe('—');
+  });
+
+  it('поля unit_source нет вовсе (старый сборщик) — прежняя подпись «сборщик не отдал»', async () => {
+    const { unit_source: _s, ...bare } = NR.leaders[0];
+    await openRep({ ...NR, leaders: [bare] });
+    expect(host.textContent).toContain('Сборщик ещё не отдаёт');
+    expect(host.textContent).not.toContain('перепрогон не запускался: объёма');
+  });
+
+  it('карточка с comparable=false: net без цветового выделения, с вопросом', async () => {
+    const card = { slug: 'c', title: 'C', status: 'done', kind: 'research', unit: 'rub', thumb: null,
+      headline: { net: 9999, trades: 5, max_dd: 10, window: null, comparable: false } };
+    api({ '/api/v1/lab/showcase/campaigns': () => J({ available: true, campaigns: [card], built_at_ms: 1, reason: '' }) });
+    await open('/backtest/campaigns');
+    const dd = host.querySelector('a.cs-card dl dd')!;
+    expect(dd.className).not.toContain('pos');       // положительный net не краснеет и не зеленеет
+    expect(host.querySelector('a.cs-card sup.unk')).not.toBeNull();
+  });
+
+  it('comparable=true: net выделяется как раньше', async () => {
+    const card = { slug: 'c', title: 'C', status: 'done', kind: 'research', unit: 'rub', thumb: null,
+      headline: { net: 9999, trades: 5, max_dd: 10, window: null, comparable: true } };
+    api({ '/api/v1/lab/showcase/campaigns': () => J({ available: true, campaigns: [card], built_at_ms: 1, reason: '' }) });
+    await open('/backtest/campaigns');
+    expect(host.querySelector('a.cs-card dl dd')!.className).toContain('pos');
+  });
+});

@@ -21,7 +21,8 @@
     NO_FILTERS, KIND_LABEL, campaignPath, chainOf, cls, diffCurve, fmtPnl, honestVolume, revisionOf,
     routeOf, statusInfo, visibleCards, BASE_PATH, hiddenCount, leaderColumns, leaderValue,
     fmtLeaderCell, sortLeaders, rerunNote, LEADER_LABEL, leaderUnit, unitState, isLEstimate,
-    lSourcesMixed, L_SOURCE_LABEL, type Card, type Filters, type Route,
+    lSourcesMixed, L_SOURCE_LABEL, notRerun, netComparable, VOLUME_COLS, NOT_RERUN_TEXT,
+    type Card, type Filters, type Route,
   } from '$lib/campaign-showcase';
   import CurveChart from './CurveChart.svelte';
   import ScreenTag from './ScreenTag.svelte';
@@ -305,7 +306,7 @@
                         emptyText={c.status === 'queued' ? 'ожидает прогона'
                           : (c.no_curve_reason || 'кривой нет')} />
             <dl class="cs-kv">
-              <div><dt>net</dt><dd class={cls(c.headline?.net)}>{fmtPnl(c.headline?.net, c.unit)}{#if c.unit == null && c.headline?.net != null}<sup class="unk" title="единица не определена: перепрогон не запускался">?</sup>{/if}</dd></div>
+              <div><dt>net</dt><dd class={netComparable(c) ? cls(c.headline?.net) : ''}>{fmtPnl(c.headline?.net, c.unit)}{#if !netComparable(c) && c.headline?.net != null}<sup class="unk" title="единица не определена: перепрогон не запускался">?</sup>{/if}</dd></div>
               <div><dt>сделки</dt><dd>{c.headline?.trades == null ? '—' : c.headline.trades.toLocaleString('ru-RU')}</dd></div>
               <div><dt>просадка</dt><dd>{fmtPnl(c.headline?.max_dd, c.unit, false)}</dd></div>
             </dl>
@@ -378,7 +379,12 @@
             <div><dt>net</dt><dd class={cls(vol.net)}>{fmtPnl(vol.net, lunit)}</dd></div>
             <div><dt>доходность</dt><dd class={cls(vol.returnPct)}>{vol.returnPct == null ? '—' : fmtPnl(vol.returnPct, 'pct')}</dd></div>
           </dl>
-          {#if vol.missing.length}
+          {#if vol.missing.length && notRerun(leader)}
+            <!-- Перепрогоны сделаны только для отобранных карточек: у остальных объёма и
+                 кривой нет и «досчитываться само не будет» (backtests 04.10.2026). Это не сбой
+                 сборщика, поэтому и подпись другая. -->
+            <div class="cs-sub">У этого лидера {NOT_RERUN_TEXT}. Какие досчитывать, решает оператор по запросу.</div>
+          {:else if vol.missing.length}
             <div class="cs-sub">Сборщик ещё не отдаёт: <code>{vol.missing.join(', ')}</code>. Доходность на экране
               не досчитываю: вторая реализация расчёта разошлась бы с движком.</div>
           {/if}
@@ -437,7 +443,8 @@
                     <td>{l.rank}</td>
                     {#each cols as k (k)}
                       {@const v = leaderValue(l, k)}
-                      <td class={typeof v === 'number' && (k === 'net' || k === 'return_pct') ? cls(v) : ''}>{#if k === 'l_share' && isLEstimate(l)}<span class="est" title={L_SOURCE_LABEL.leaderboard_windows}>≈</span>{/if}{fmtLeaderCell(k, v, leaderUnit(l, unit))}{#if k === 'net' && rr}<sup class="rerun" title={`перепрогон на текущем движке: лидерборд показывал ${fmtPnl(rr.was, leaderUnit(l, unit))}, кривая даёт ${fmtPnl(rr.now, leaderUnit(l, unit))}`}>*</sup>{/if}</td>
+                      <td class={typeof v === 'number' && (k === 'net' || k === 'return_pct') ? cls(v) : ''}
+                          title={v == null && VOLUME_COLS.includes(k) && notRerun(l) ? NOT_RERUN_TEXT : undefined}>{#if k === 'l_share' && isLEstimate(l)}<span class="est" title={L_SOURCE_LABEL.leaderboard_windows}>≈</span>{/if}{fmtLeaderCell(k, v, leaderUnit(l, unit))}{#if k === 'net' && rr}<sup class="rerun" title={`перепрогон на текущем движке: лидерборд показывал ${fmtPnl(rr.was, leaderUnit(l, unit))}, кривая даёт ${fmtPnl(rr.now, leaderUnit(l, unit))}`}>*</sup>{/if}</td>
                     {/each}
                     <td class="p">{params(l.params)}</td>
                   </tr>

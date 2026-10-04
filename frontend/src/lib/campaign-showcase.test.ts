@@ -7,7 +7,7 @@ import { describe, it, expect } from 'vitest';
 import {
   BASE_PATH, NO_FILTERS, campaignPath, chainOf, curveGeometry, diffCurve, fmtLeaderCell, fmtPnl,
   hiddenCount, honestVolume, isLEstimate, leaderColumns, leaderUnit, leaderValue, lSources, lSourcesMixed,
-  niceTicks, rerunNote, revisionOf, routeOf, sortLeaders, splitAtZero, statusInfo, toMs,
+  netComparable, niceTicks, notRerun, rerunNote, revisionOf, routeOf, sortLeaders, splitAtZero, statusInfo, toMs,
   unitState, visibleCards, type Card,
 } from './campaign-showcase';
 
@@ -506,5 +506,31 @@ describe('источник доли L', () => {
     expect(lSourcesMixed([{ l_share_source: 'curve' }, { l_share_source: 'curve' }])).toBe(false);
     expect(lSourcesMixed([{}, { l_share_source: 'curve' }])).toBe(false);
     expect(lSources([{ l_share_source: 'curve' }, { l_share_source: null }, {}])).toEqual(['curve']);
+  });
+});
+
+describe('перепрогон не запускался', () => {
+  it('unit_source есть и равен null — перепрогона не было', () => {
+    expect(notRerun({ unit_source: null })).toBe(true);
+    expect(notRerun({ unit_source: 'measured' })).toBe(false);
+  });
+
+  it('поля unit_source нет вовсе (старый сборщик) — это НЕ «не запускался»', () => {
+    // Иначе подпись про перепрогон врала бы про данные, о которых мы ничего не знаем.
+    expect(notRerun({ rank: 1 })).toBe(false);
+    expect(notRerun(null)).toBe(false);
+  });
+});
+
+describe('net сравним ли', () => {
+  it('явный флаг сборщика главнее всего', () => {
+    expect(netComparable({ unit: 'rub', headline: { comparable: false } as any })).toBe(false);
+    expect(netComparable({ unit: null, headline: { comparable: true } as any })).toBe(true);
+  });
+
+  it('флага нет — выводим из единицы карточки', () => {
+    expect(netComparable({ unit: 'rub', headline: { net: 1 } })).toBe(true);
+    expect(netComparable({ unit: null, headline: { net: 1 } })).toBe(false);
+    expect(netComparable({ headline: null })).toBe(false);
   });
 });

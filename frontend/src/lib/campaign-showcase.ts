@@ -474,3 +474,27 @@ export function lSources(leaders: Record<string, any>[]): string[] {
 }
 /** Источники смешаны: сортировать по L и score нельзя, они несопоставимы между строками. */
 export const lSourcesMixed = (leaders: Record<string, any>[]) => lSources(leaders).length > 1;
+
+// ── Перепрогон не запускался ────────────────────────────────────────────────
+// 04.10.2026 backtests: перепрогоны сделаны только для 20 отобранных карточек, у
+// остальных лидеров объёма и кривой нет, и «досчитываться само не будет». Это не
+// сбой сборщика и не «ещё грузится» — экран говорит именно так, а не «поле не отдано».
+//
+// Признак — `unit_source` ЕСТЬ у лидера и равен null (измеренной единицы нет, потому что
+// не было перепрогона). Поля нет вовсе (старый сборщик) — это другое: тогда честная
+// подпись «сборщик не отдал», и её мы не подменяем.
+export const VOLUME_COLS = ['contracts_peak', 'full_cost_rub', 'return_pct'];
+export const NOT_RERUN_TEXT = 'перепрогон не запускался: объёма и кривой нет (метрики лидерборда есть)';
+
+export function notRerun(l: Record<string, any> | null | undefined): boolean {
+  return !!l && Object.prototype.hasOwnProperty.call(l, 'unit_source') && l.unit_source == null;
+}
+
+/** Карточка: net можно сравнивать с другими. Флаг `headline.comparable` отдаёт
+ *  сборщик (true только при известной единице). Флага нет — выводим из единицы
+ *  карточки, но не наоборот: явное false выигрывает всегда. */
+export function netComparable(c: Pick<Card, 'headline' | 'unit'>): boolean {
+  const f = (c.headline as Record<string, unknown> | null | undefined)?.comparable;
+  if (typeof f === 'boolean') return f;
+  return c.unit != null;
+}
