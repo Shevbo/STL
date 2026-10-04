@@ -198,6 +198,11 @@ def curve_nextday(results: dict, config: str) -> list:
 
 # ---------- сборка карточек ----------
 
+def run_unit(point_value) -> str:
+    """Движок считает pnl = пункты x point_value; без коэффициента (старые кампании) или при 1.0 - пункты."""
+    return "points" if point_value in (None, 1, 1.0) else "rub"
+
+
 def _window(frm, to) -> str | None:
     return f"{frm}..{to}" if frm and to else None
 
@@ -210,6 +215,12 @@ def build_card(c: dict, tasks_all: list, bf: dict, task_results: dict, now_iso: 
              if match_any(t["id"], e.get("task_ids")) or match_any(t["module"], e.get("task_modules"))]
     leaders, notes, reason = [], [], None
     unit = e.get("unit") or "rub"
+    if runs:  # единицы берём из реальных строк, реестр - только когда прогонов нет
+        best = max(runs, key=lambda r: r.get("net") if r.get("net") is not None else -1e18)
+        unit = run_unit(best.get("point_value"))
+        mix = sorted({run_unit(r.get("point_value")) for r in runs})
+        if len(mix) > 1:
+            notes.append(f"в кампании разные единицы ({', '.join(mix)}); карточка по лучшему прогону: {unit}")
 
     # (1) бэктест-кривые лидеров оптимизатора: <campaign_run>-bf<rank>
     rows = [r for run in runs for r in bf.get(run["campaign_run"], [])]
@@ -274,12 +285,13 @@ def build_card(c: dict, tasks_all: list, bf: dict, task_results: dict, now_iso: 
         "thumb": thumb, "verdict": e.get("verdict"), "doc": e.get("doc"),
         "unit": unit, "kind": e.get("kind") or "research", "no_curve_reason": reason,
     }
-    syms = sorted({r["symbol"] for r in runs if r.get("symbol")})
+    syms = e.get("symbols") or sorted({r["symbol"] for r in runs if r.get("symbol")}) or None
+    card["symbols"] = syms
     detail = {
         **card, "leaders": leaders, "changes": e.get("changes"), "parent": e.get("parent"),
         "runs": [r["campaign_run"] for r in runs] + [t["id"] for t in tasks],
         "data_window": {"from": window.split("..")[0] if window else None,
-                        "to": window.split("..")[1] if window else None, "symbols": syms or None},
+                        "to": window.split("..")[1] if window else None, "symbols": syms},
         "notes": "; ".join(notes) or e.get("notes"), "auto": c["auto"],
     }
     return card, detail
@@ -308,6 +320,17 @@ def write_atomic(path: str, obj) -> None:
             os.unlink(tmp)
 
 
+def sort_cards(out: list) -> list:
+    """done/running с кривой, затем queued, затем no_curve; внутри: research раньше optimizer, свежие выше."""
+    def grp(c):
+        if c["thumb"] and c["status"] in ("done", "running"):
+            return 0
+        return 1 if c["status"] == "queued" else 2
+    out = sorted(out, key=lambda cd: cd[0]["updated_at"] or "", reverse=True)
+    out = sorted(out, key=lambda cd: cd[0]["kind"] != "research")
+    return sorted(out, key=lambda cd: grp(cd[0]))
+
+
 def write_all(cards_details: list, out_dir: str) -> None:
     for _, d in cards_details:
         write_atomic(os.path.join(out_dir, f"{d['slug']}.json"), d)
@@ -321,7 +344,7 @@ def write_all(cards_details: list, out_dir: str) -> None:
 def build(registry: list, runs: list, tasks: list, bf: dict, task_results: dict, now_iso: str) -> list:
     out = [build_card(c, tasks, bf, task_results, now_iso) for c in merge_cards(registry, runs)]
     attach_revisions([d for _, d in out])
-    return out
+    return sort_cards(out)
 
 
 # ---------- БД ----------
@@ -336,14 +359,14 @@ async def load_db(registry: list):
     try:
         rows = await c.fetch("""
             select r.campaign_run, r.n, t.net_profit, t.total_trades, t.max_drawdown, t.strategy,
-                   t.symbol, t.params, t.date_from, t.date_to, t.created_at
+                   t.symbol, t.params, t.point_value, t.date_from, t.date_to, t.created_at
             from (select campaign_run, count(*) n from optimization_leaderboard group by 1) r
             cross join lateral (select * from optimization_leaderboard l
                 where l.campaign_run = r.campaign_run
                 order by net_profit desc nulls last limit 1) t""")
         runs = [{"campaign_run": x["campaign_run"], "n": x["n"], "net": x["net_profit"],
                  "trades": x["total_trades"], "max_dd": x["max_drawdown"], "strategy": x["strategy"],
-                 "symbol": x["symbol"], "params": _j(x["params"]),
+                 "symbol": x["symbol"], "params": _j(x["params"]), "point_value": x["point_value"],
                  "date_from": str(x["date_from"]) if x["date_from"] else None,
                  "date_to": str(x["date_to"]) if x["date_to"] else None,
                  "created_at": x["created_at"].isoformat() if x["created_at"] else None} for x in rows]
@@ -400,6 +423,11 @@ def main() -> None:
     by = {}
     for c, _ in out:
         by[c["status"]] = by.get(c["status"], 0) + 1
+    with_syms = sum(1 for c, _ in out if c["symbols"])
+    units = {}
+    for c, _ in out:
+        units[c["unit"]] = units.get(c["unit"], 0) + 1
+    print(f"symbols заполнено у {with_syms}, unit: {units}")
     with_curve = sum(1 for c, _ in out if c["thumb"])
     print(f"карточек {len(out)}: {by}; с кривой {with_curve}, без {len(out) - with_curve}; -> {OUT_DIR}")
     print(f"прогонов в лидерборде {len(runs)}, заданий agent_tasks {len(tasks)}, "

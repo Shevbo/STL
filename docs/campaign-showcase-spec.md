@@ -36,7 +36,12 @@
 (запуск на хостере, результат только чтение для API):
 - `data/campaign_showcase/index.json`: массив карточек `{slug, title, idea, strategy, family, rev,
   status, progress:{finished,total}|null, updated_at, headline:{net, trades, max_dd, window},
-  thumb:[[ts, pnl],...≤200 точек]|null, verdict, doc}`.
+  thumb:[[ts, pnl],...≤200 точек]|null, verdict, doc, kind, unit, symbols, no_curve_reason}`.
+  `kind`: `optimizer`|`research`; `unit`: `rub`|`points`|`pct` (для optimizer по `point_value` лучшего прогона:
+  нет коэффициента или 1.0 = пункты); `symbols`: список инструментов окна данных или `null`;
+  `no_curve_reason`: причина при `thumb: null`. Порядок в index.json: done/running с кривой (research раньше
+  optimizer, свежие выше), затем queued, затем no_curve. Число карточек ≈ 540 (36 research + ≈506 optimizer,
+  из них с кривой 35).
 - `data/campaign_showcase/<slug>.json`: подробный отчёт `{…карточка…, leaders:[{rank, params, metrics,
   curve:[[ts,pnl],...≤1500], trades_n}], revisions:[{slug, rev, changes}], runs:[campaign_run, ...],
   data_window:{from,to,symbols}, notes}`.

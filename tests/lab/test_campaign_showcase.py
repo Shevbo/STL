@@ -94,3 +94,23 @@ def test_write_all_atomic_and_idempotent(tmp_path):
     b.write_all(out, str(tmp_path))
     assert first == sorted(os.listdir(tmp_path)) == ["a.json", "index.json"]
     assert json.loads((tmp_path / "index.json").read_text(encoding="utf-8"))[0]["slug"] == "a"
+
+
+def test_units_symbols_and_sort():
+    assert b.run_unit(None) == "points" and b.run_unit(1.0) == "points" and b.run_unit(1.68) == "rub"
+    runs = [dict(_run("camp-20260711-autoa", 5.0, sym="RIU6"), point_value=1.68),
+            dict(_run("camp-20260711-autob", 9.0, sym="SiU6"), point_value=None),
+            dict(_run("camp-20260801-mixa", 9.0), point_value=None),
+            dict(_run("camp-20260801-mixa2", 1.0), point_value=1.68)]
+    bf = {"camp-20260711-autoa": [{"run_id": "x-bf0", "net": 1.0, "curve": [[1, 0.0], [2, 1.0]]}]}
+    reg = [_entry("r1", symbols=["RI", "Si"]), _entry("r2", status_hint="queued")]
+    out = b.build(reg, runs, [], bf, {}, "now")
+    cards = {c["slug"]: (c, d) for c, d in out}
+    assert cards["autoa-20260711"][0]["unit"] == "rub" and cards["autoa-20260711"][0]["symbols"] == ["RIU6"]
+    assert cards["autob-20260711"][0]["unit"] == "points"
+    assert "разные единицы" in cards["mixa-20260801"][1]["notes"]
+    assert cards["r1"][0]["symbols"] == ["RI", "Si"] and cards["r2"][0]["symbols"] is None
+    order = [c["slug"] for c, _ in out]
+    assert order[0] == "autoa-20260711"  # единственная с кривой первой
+    assert [c["status"] for c, _ in out][1:].count("queued") >= 1
+    assert out[-1][0]["status"] == "no_curve"
