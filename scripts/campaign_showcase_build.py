@@ -84,6 +84,8 @@ def match_any(name: str, patterns: list) -> bool:
 
 def auto_key(run: str) -> str:
     """Префикс автозаведённой группы: дата + буквенный префикс имени (шарды сливаются)."""
+    if re.fullmatch(r"opt-\d{8}-\d+", run):  # широкие ночные перебори: одна линия, прогоны = разновидности
+        return "opt"
     m = re.match(r"^camp-(\d{8})-(.*)$", run)
     if not m:
         return re.sub(r"\W+", "-", run).strip("-").lower()
