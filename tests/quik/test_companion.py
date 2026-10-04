@@ -1460,3 +1460,64 @@ def test_peak_order_size_is_unknown_when_the_mirror_contradicts_our_own_counter(
     body = TestClient(app).get("/api/v1/quik/companion/snapshot",
                                headers=_operator_headers()).json()
     assert body["limits"]["peak_order_qty"] is None
+
+
+def _costs_snapshot(monkeypatch, block):
+    monkeypatch.delenv("SHECTORY_AUTH_DEV_BYPASS", raising=False)
+    app = FastAPI()
+    app.include_router(companion_router)
+    app.state.settings = _Settings()
+    app.state.db_pool = FakePool()
+    store = QuikAgentStore()
+    store.set_agent_status("A1", json.dumps({
+        "agent": {"version": "x", "link_up": True},
+        "health": {"runner_healthy": True,
+                   "money": {"limit": 1.0, "varmargin": 0.0, "age_ms": 100},
+                   "positions": []},
+        "robots": [],
+    }), 0)
+    app.state.quik_store = store
+    monkeypatch.setattr(quik_companion, "_manual_block", lambda _store: block)
+    body = TestClient(app).get("/api/v1/quik/companion/snapshot",
+                               headers=_operator_headers()).json()
+    return body["orders"].get("costs")
+
+
+def test_snapshot_carries_fills_and_commission_of_the_manual_block(monkeypatch):
+    """Блок ручных заявок: сделок за день, комиссия и результат за вычетом неё.
+
+    Заказ оператора 04.10.2026. Комиссия — ОЦЕНКА по модели (QUIK её в таблице
+    сделок не отдаёт), поэтому в данных едет `model` и признак `commission_floor`.
+    """
+    costs = _costs_snapshot(monkeypatch, {
+        "fills": 12, "lots": 30, "orders": 5, "commission_rub": 380.5,
+        "gross_rub": 4_500.0, "net_rub": 4_119.5, "journal_complete": True,
+        "partial": False, "priced": True,
+        "by_channel": [{"channel": "smart", "fills": 10, "commission_rub": 300.0},
+                       {"channel": "quik", "fills": 2, "commission_rub": 80.5}],
+    })
+    assert costs["fills"] == 12 and costs["commission_rub"] == 380.5
+    assert costs["net_rub"] == 4_119.5
+    assert costs["commission_floor"] is False
+    assert costs["model"] == "taker"
+    assert [c["channel"] for c in costs["by_channel"]] == ["smart", "quik"]
+
+
+def test_commission_is_a_floor_when_the_journal_is_incomplete(monkeypatch):
+    """Журнал неполон / окно неполное / нет ₽/пункт — комиссия «не меньше» показанной.
+
+    Заниженная комиссия делает итог лучше, чем он есть: недобор говорим вслух.
+    """
+    base = {"fills": 1, "lots": 1, "orders": 1, "commission_rub": 10.0, "gross_rub": 0.0,
+            "net_rub": -10.0, "by_channel": []}
+    assert _costs_snapshot(monkeypatch, {**base, "journal_complete": False,
+                                         "partial": False, "priced": True})["commission_floor"] is True
+    assert _costs_snapshot(monkeypatch, {**base, "journal_complete": True,
+                                         "partial": True, "priced": True})["commission_floor"] is True
+    assert _costs_snapshot(monkeypatch, {**base, "journal_complete": True,
+                                         "partial": False, "priced": False})["commission_floor"] is True
+
+
+def test_no_manual_block_means_no_costs_not_zero_commission(monkeypatch):
+    """Блока ручной торговли нет — комиссии НЕТ, а не «0 ₽»: ноль читался бы как факт."""
+    assert _costs_snapshot(monkeypatch, {}) is None

@@ -1323,6 +1323,38 @@ function manualRowWhy(r) {
     'равна ВМ счёта в точности, отдельная строка — оценка его доли.');
   return parts.join(String.fromCharCode(10));
 }
+// БЛОК «СДЕЛКИ И КОМИССИЯ ЗА ДЕНЬ» (заказ оператора 04.10.2026): сколько сделок, сколько
+// с них взято и каков результат ручных за вычетом комиссии. Всё считает сервер — тот же
+// журнал и та же функция комиссии, что у каждой заявки по отдельности, поэтому сумма
+// по заявкам сходится с этой строкой; панель только печатает.
+//
+// КОМИССИЯ — ОЦЕНКА СВЕРХУ (модель, тейкерская ставка), а не выписка брокера: слова
+// «удержано» тут нет. `commission_floor` — недобор: журнал неполон, окно неполное или
+// у части инструментов нет ₽/пункт; тогда пишем «не меньше», потому что заниженная
+// комиссия делает итог лучше, чем он есть.
+function manualCosts(c) {
+  if (!c || c.commission_rub == null) return '';
+  const floor = c.commission_floor ? 'не меньше ' : '';
+  const why = 'Расчёт по модели комиссий (биржевой сбор + брокер, тейкерская ставка для ' +
+    'каждой сделки): QUIK комиссию в таблице сделок не отдаёт, поэтому это оценка сверху.' +
+    (c.commission_floor ? ' Журнал неполон или нет ₽/пункт у части инструментов, поэтому реально не меньше.' : '');
+  const byCh = (c.by_channel || []).filter((x) => x.fills)
+    .map((x) => `${esc(x.channel)} ${x.fills}`).join(' · ');
+  let out = `<div class="row"><span class="k">Сделок за день</span>` +
+    `<span class="v">${c.fills == null ? '—' : esc(String(c.fills))}</span>` +
+    `<span class="sub">${c.orders != null ? 'заявок ' + esc(String(c.orders)) + ' · ' : ''}` +
+    `лотов ${c.lots == null ? '—' : esc(String(c.lots))}${byCh ? ' · ' + byCh : ''}</span></div>`;
+  out += `<div class="row" title="${esc(why)}"><span class="k">Комиссия (расч.)</span>` +
+    `<span class="v down">−${esc(rub(c.commission_rub).replace(/^-/, ''))}</span>` +
+    `<span class="sub">${floor}оценка по модели, не выписка брокера</span></div>`;
+  if (c.vm_after_fees_rub != null) {
+    out += `<div class="row total ${cls(c.vm_after_fees_rub)}" title="ВМ ручных за день минус расчётная комиссия.">` +
+      `<span class="k">ВМ ручных после комиссии</span>` +
+      `${val(rub(c.vm_after_fees_rub, { signed: true }), cls(c.vm_after_fees_rub))}</div>`;
+  }
+  return out;
+}
+
 function manualTotal(t) {
   if (!t || t.rows == null) return '';
   // КАЖДЫЙ УЧАСТНИК — ОДНИМ НЕРАЗРЫВНЫМ КУСКОМ. 01.10.2026 строка переносилась
@@ -1355,19 +1387,44 @@ function pnlBox(p) {
     ? rub(rubv, { signed: true })
     : (ptsv == null ? null : `${ptsv > 0 ? '+' : ''}${Number(ptsv).toLocaleString('ru-RU',
         { maximumFractionDigits: 0 })} п.`);
-  const fix = money(p.fix_rub, p.fix_pts);
-  if (fix != null) parts.push(`фикс ${fix}`);
+  // P&L ЗА ВЫЧЕТОМ КОМИССИИ (заказ оператора 04.10.2026). Основное число в скобках —
+  // ЧИСТЫЙ фикс: фикс минус комиссия. Комиссию неизвестной не прячем: нет ₽/пункт
+  // или филла без цены — тогда печатаем ГРЯЗНЫЙ фикс и называем его «фикс», чтобы
+  // он не выдавал себя за чистый (заниженная комиссия делает результат лучше).
+  const hasNet = p.priced && p.net_rub != null;
+  const main = hasNet ? rub(p.net_rub, { signed: true }) : money(p.fix_rub, p.fix_pts);
+  if (main != null) parts.push(`${hasNet ? 'чист.' : 'фикс'} ${main}`);
   const vm = money(p.vm_rub, p.vm_pts);
   // ВМ показываем только у ЖИВОЙ позиции: у закрытой её нет, а ноль читался бы
   // как «переоценка нулевая», то есть как факт.
   if (vm != null && p.pos) parts.push(`ВМ ${vm}`);
   if (!parts.length) return '';
-  const sign = (p.fix_rub ?? p.fix_pts ?? 0) + (p.pos ? (p.vm_rub ?? p.vm_pts ?? 0) : 0);
+  // Цвет — по ИТОГУ, который посчитал сервер (чистый фикс + живая переоценка).
+  // Нет итога (позицию нечем переоценить) — по тому, что есть.
+  const sign = p.total_rub != null ? p.total_rub
+    : (hasNet ? p.net_rub : (p.fix_rub ?? p.fix_pts ?? 0))
+      + (p.pos ? (p.vm_rub ?? p.vm_pts ?? 0) : 0);
   return ` <span class="pnlbox nw ${sign > 0 ? 'up' : sign < 0 ? 'down' : ''}"` +
-    ` title="результат ЭТОЙ заявки: фикс по её собственным кругам` +
+    ` title="результат ЭТОЙ заявки${hasNet ? ' за вычетом комиссии' : ' (комиссию посчитать нечем: нет стоимости пункта)'}: ` +
+    `фикс по её собственным кругам${p.fix_rub != null && p.priced ? ' ' + rub(p.fix_rub, { signed: true }) : ''}` +
+    `${p.commission_rub != null ? ', комиссия −' + rub(p.commission_rub).replace(/^-/, '') + ' (расчёт по модели, оценка сверху)' : ''}` +
     `${p.pos ? ', ВМ — переоценка её оставшейся позиции от средней входа' : ''}` +
     `${p.avg ? ', средняя ' + px(p.avg) : ''}` +
     ` · сделок ${p.fills || 0}, объём ${p.lots || 0} контр.">[${parts.join(' · ')}]</span>`;
+}
+
+// СДЕЛКИ И КОМИССИЯ ЗАЯВКИ второй строкой (заказ оператора 04.10.2026): сколько сделок
+// у неё было и сколько с неё удержано. «Удержано» здесь РАСЧЁТНОЕ: QUIK комиссию в
+// таблице сделок не отдаёт, берётся модель (тейкерская ставка — оценка сверху), и
+// строка так и подписана. Нет сделок — нет строки; нет ₽/пункт — говорим, что
+// комиссию посчитать нечем, а не печатаем ноль.
+function feeNote(p) {
+  if (!p || !p.fills) return '';
+  const n = `сделок ${p.fills}`;
+  if (p.commission_rub != null && p.priced) {
+    return ` · ${n} · комиссия −${rub(p.commission_rub).replace(/^-/, '')} (расч.)`;
+  }
+  return ` · ${n} · комиссия: нет стоимости пункта`;
 }
 
 // Природа заявки в таблице терминала — ЯРЛЫК, а не фильтр. До 01.10.2026 панель
@@ -1473,7 +1530,7 @@ function renderTerminal(o) {
         ? `<button class="xbtn" data-cancel="${esc(String(r.num))}" data-ask="${esc(cancelAsk(r))}" title="снять эту заявку в QUIK">снять</button>`
         : `<span class="otag nw" title="токен компаньона открывает только чтение — снимайте из веб-версии панели">снятие в вебе</span>`) : '') +
       `<span class="v ${r.active ? 'up' : 'nil'}">${esc(r.state || (r.active ? 'активна' : 'снята'))}</span></div>` +
-      `<div class="odet">${sub} · ${originTag(r)}</div></div>`;
+      `<div class="odet">${sub} · ${originTag(r)}${esc(feeNote(r.pnl))}</div></div>`;
     }).join('');
   }
   // Разметка и поведение группы — те же, что у остальных: раскрытие живёт в
@@ -1516,7 +1573,7 @@ function renderOrders(o, d) {
       `${m.active && m.balance < m.qty ? ` · осталось ${m.balance}` : ''}` +
       // Непустой тег у ручной заявки = она пришла не из терминала, а из
       // приложения брокера: оператору важно, каким каналом он торговал.
-      `${m.tag ? ' · приложение брокера' : ''}</div></div>` });
+      `${m.tag ? ' · приложение брокера' : ''}${esc(feeNote(m.pnl))}</div></div>` });
   }
   // native — защиту держит сам терминал QUIK: она переживёт падение STL.
   const ST = { armed: 'взведена', native: 'под охраной терминала',
@@ -1587,7 +1644,7 @@ function renderOrders(o, d) {
       `${pnlBox(s.pnl)}<span class="sp"></span>` +
       `<span class="soid" title="идентификатор умной заявки STL">${esc(String(s.so_id || ''))}</span>` +
       `<span class="v ${natBad ? 'down' : (live ? (s.activated ? 'up' : '') : 'nil')}">${esc(ST[s.status] || s.status)}</span></div>` +
-      `<div class="odet">${esc(sub)}</div></div>` });
+      `<div class="odet">${esc(sub)}${esc(feeNote(s.pnl))}</div></div>` });
   }
 
   // Счётчик берём У СЕРВЕРА: он считает ДО обрезки списка, а длина массива
@@ -1950,7 +2007,7 @@ function paint(d) {
     // Журнал: что происходило с заявками и ПО ЧЬЕЙ ВОЛЕ, плюс итог ручной
     // торговли за день/неделю/месяц (просьба оператора 24.09.2026).
     `<a href="${STL}/?journal=1" data-ext>журнал ↗</a></div>` +
-      manualTotal((d.orders || {}).today) + renderTerminal(d.orders) + renderOrders(d.orders, d) +
+      manualTotal((d.orders || {}).today) + manualCosts((d.orders || {}).costs) + renderTerminal(d.orders) + renderOrders(d.orders, d) +
     `<div class="sec">пределы торговли <a href="${STL}/watchdog-log.html#limits" data-ext>правка ↗</a></div>` +
       renderLimits(d.limits) +
     `<div class="sec">вотчер <a href="${STL}/?lab=botstore" data-ext>хитпарад ↗</a></div>` +

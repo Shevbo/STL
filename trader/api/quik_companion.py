@@ -1661,6 +1661,40 @@ async def snapshot(request: Request, agent_id: str | None = None, bars: int = 30
             "rows": sorted(merged.values(), key=lambda r: -abs(float(r.get("vm_rub") or 0))),
         }
 
+    # СДЕЛКИ И КОМИССИЯ ЗА ДЕНЬ В БЛОКЕ РУЧНЫХ ЗАЯВОК (заказ оператора 04.10.2026:
+    # «показывай кол-во сделок, размер удержанной комиссии и считай P&L за вычетом
+    # комиссии»). Источник — тот же журнал сделок, что у блока ручной торговли, а
+    # комиссия считается ТОЙ ЖЕ функцией, что у каждой заявки по отдельности
+    # (manual_pnl.fill_commission): сумма по заявкам сходится с этим итогом.
+    #
+    # КОМИССИЯ — ОЦЕНКА СВЕРХУ. QUIK в таблице сделок её не отдаёт, берётся модель с
+    # тейкерской ставкой для каждого филла; реальный сбор не больше. «Удержанной» её
+    # на экране не называем, пока это не выписка брокера.
+    #
+    # `commission_floor` — комиссия НЕ МЕНЬШЕ показанной: журнал неполон, окно
+    # неполное либо у части инструментов нет ₽/пункт. Заниженная комиссия делает итог
+    # лучше, чем он есть, поэтому недобор говорим вслух, а не молчим.
+    _mb = manual_block or {}
+    if _mb.get("commission_rub") is not None:
+        _vm_total = (orders_block.get("today") or {}).get("total")
+        _comm = float(_mb["commission_rub"])
+        _floor = (_mb.get("journal_complete") is False or bool(_mb.get("partial"))
+                  or _mb.get("priced") is False)
+        orders_block["costs"] = {
+            "fills": _mb.get("fills"), "lots": _mb.get("lots"), "orders": _mb.get("orders"),
+            "commission_rub": round(_comm, 2),
+            "commission_floor": bool(_floor),
+            "gross_rub": _mb.get("gross_rub"), "net_rub": _mb.get("net_rub"),
+            "by_channel": [{"channel": c.get("channel"), "fills": c.get("fills"),
+                            "commission_rub": c.get("commission_rub")}
+                           for c in (_mb.get("by_channel") or [])],
+            # ВМ ручных за день минус комиссия: тот же результат, но уже «чистый».
+            # Нет ВМ (разбивка агента не пришла) — нет и чистого, нулём не подменяем.
+            "vm_after_fees_rub": (round(float(_vm_total) - _comm, 2)
+                                  if _vm_total is not None else None),
+            "model": "taker",
+        }
+
     # Состояние сессии MOEX (открыта/закрыта по ISS) — нужно и вотчеру раннера
     # (гейт лага ленты), и панели (отдельная строка «биржа»).
     market = getattr(request.app.state, "market_session", None)

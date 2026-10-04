@@ -77,3 +77,82 @@ describe('ID заявки на экране', () => {
     });
   }
 });
+
+// ЧИСТЫЙ P&L И СДЕЛКИ/КОМИССИЯ ЗАЯВКИ (заказ оператора 04.10.2026): «показывай кол-во
+// сделок, размер комиссии и считай P&L за вычетом комиссии». Деньги считает сервер
+// (trader/api/order_pnl), панель печатает — и важно, ЧТО именно она называет чистым.
+function feeFn(src: string): (p: any) => string {
+  const pick = (re: RegExp, what: string) => {
+    const m = src.match(re);
+    if (!m) throw new Error(`${what} не найдена`);
+    return m[0];
+  };
+  return new Function(`
+    ${pick(/function px\(v\) \{[\s\S]*?\n\}/, 'px')}
+    ${pick(/function rub\(v[\s\S]*?\n\}/, 'rub')}
+    ${pick(/function feeNote\(p\) \{[\s\S]*?\n\}/, 'feeNote')}
+    return feeNote;`)() as (p: any) => string;
+}
+
+describe('P&L за вычетом комиссии', () => {
+  for (const [page, src] of Object.entries(PAGES)) {
+    const box = boxFn(src);
+    const fee = feeFn(src);
+
+    it(`${page}: основное число — ЧИСТЫЙ фикс (фикс минус комиссия)`, () => {
+      const h = box({ fix_rub: 4500, commission_rub: 380, net_rub: 4120, total_rub: 4120,
+                      pos: 0, priced: true, fills: 12, lots: 30 });
+      expect(h).toContain('чист.');
+      expect(h.replace(/\s| | /g, '')).toContain('+4120');
+      expect(h).not.toContain('фикс +4');          // грязный фикс в скобках не светится
+      expect(h).toContain('up');
+    });
+
+    it(`${page}: комиссия и грязный фикс — в подсказке`, () => {
+      const h = box({ fix_rub: 4500, commission_rub: 380, net_rub: 4120, total_rub: 4120,
+                      pos: 0, priced: true, fills: 12, lots: 30 });
+      expect(h).toContain('комиссия');
+      expect(h).toContain('оценка сверху');
+    });
+
+    it(`${page}: комиссия больше фикса — результат красный, а не «в плюсе по грязному»`, () => {
+      // Грязный фикс +300 — плюс; чистый −80 — минус. Цвет по ЧИСТОМУ.
+      const h = box({ fix_rub: 300, commission_rub: 380, net_rub: -80, total_rub: -80,
+                      pos: 0, priced: true, fills: 4, lots: 4 });
+      expect(h).toContain('down');
+      expect(h).not.toContain('up');
+    });
+
+    it(`${page}: комиссии нет (комиссию не посчитать) — печатаем грязный «фикс» и не называем его чистым`, () => {
+      // Заниженная комиссия делает результат лучше, чем он есть.
+      const h = box({ fix_rub: 4500, commission_rub: null, net_rub: null, total_rub: null,
+                      pos: 0, priced: true, fills: 3, lots: 3 });
+      expect(h).toContain('фикс');
+      expect(h).not.toContain('чист.');
+    });
+
+    it(`${page}: цвет по итогу сервера с живой переоценкой`, () => {
+      // Чистый фикс +100, ВМ −400 → итог −300: коробка красная.
+      const h = box({ fix_rub: 150, commission_rub: 50, net_rub: 100, vm_rub: -400, total_rub: -300,
+                      pos: 1, priced: true, fills: 2, lots: 2 });
+      expect(h).toContain('down');
+    });
+
+    it(`${page}: строка сделок и комиссии`, () => {
+      const t = fee({ fills: 12, commission_rub: 380, priced: true });
+      expect(t).toContain('сделок 12');
+      expect(t).toContain('комиссия −');
+      expect(t).toContain('(расч.)');                 // не «удержано»: это оценка по модели
+      expect(t.replace(/\s| | /g, '')).toContain('380');
+    });
+
+    it(`${page}: нет сделок — нет строки; нет стоимости пункта — слово, а не ноль`, () => {
+      expect(fee({ fills: 0, commission_rub: 0, priced: true })).toBe('');
+      expect(fee(null)).toBe('');
+      const t = fee({ fills: 3, commission_rub: null, priced: false });
+      expect(t).toContain('сделок 3');
+      expect(t).toContain('нет стоимости пункта');
+      expect(t).not.toMatch(/−0|0 ₽/);
+    });
+  }
+});

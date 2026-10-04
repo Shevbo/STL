@@ -41,6 +41,31 @@ PERIODS = ("day", "week", "month")
 MANUAL_CHANNELS = ("quik", "broker", "smart")
 
 
+def fill_commission(sym: str, price: float, qty: int, pv: float, is_close: bool,
+                    entry_ts: int, ts: int) -> float | None:
+    """Комиссия ОДНОГО филла по модели (рубли) — единственное место, где она считается.
+
+    Раньше то же самое было вписано в цикл `summarize`, а у P&L ОДНОЙ заявки
+    (trader/api/order_pnl) комиссии не было вовсе. Заказ оператора 04.10.2026:
+    показывать у заявки её сделки и комиссию и считать P&L за вычетом комиссии.
+    Если бы заявка считала её вторым способом, сумма комиссий заявок разошлась бы с
+    комиссией блока ручной торговли, и оператор увидел бы два числа про одно и то же.
+
+    ТЕЙКЕРСКАЯ СТАВКА ДЛЯ ВСЕХ ФИЛЛОВ: по таблице сделок не видно, стояла ли заявка в
+    стакане (мейкер, платит только брокеру) или забрала ликвидность (тейкер, плюс
+    биржа). Берём тейкера, то есть ОЦЕНКУ СВЕРХУ: реальный сбор не больше. Скальперская
+    скидка — на закрывающей ноге круга, открытого в тот же торговый день.
+
+    `None` — нет ₽/пункт: комиссию в рублях не посчитать, и нулём её подменять нельзя
+    (ноль читался бы как «комиссии не было»).
+    """
+    if not pv:
+        return None
+    scalper = bool(is_close and entry_ts and msk_date(entry_ts) == msk_date(ts))
+    return commission_for(sym, price, qty, pv, taker=True, scalper=scalper,
+                          ts=(ts + 3 * 3600_000) / 1000.0)
+
+
 def period_days(period: str, today: datetime.date) -> list[str]:
     """Даты МСК, входящие в период. Неделя — последние 7 дней включая сегодня,
     месяц — последние 30: календарные границы («с первого числа») на вопрос
@@ -173,9 +198,9 @@ def summarize(trades: list[dict[str, Any]], point_values: dict[str, float],
                                                               delta, price, ts)
         state[sym] = (new_pos, new_avg, new_entry)
 
-        scalper = bool(is_close and entry_ts and msk_date(entry_ts) == msk_date(ts))
-        comm = commission_for(sym, price, qty, pv, taker=True, scalper=scalper,
-                              ts=(ts + 3 * 3600_000) / 1000.0) if pv else 0.0
+        # Суммарная комиссия блока без ₽/пункт считается нулём — как и раньше: итог
+        # по инструменту без ₽/пункт и так помечен `priced: false`.
+        comm = fill_commission(sym, price, qty, pv, is_close, entry_ts, ts) or 0.0
 
         s = by_symbol.setdefault(sym, {
             "symbol": sym, "point_value": pv, "fills": 0, "lots": 0,

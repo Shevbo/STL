@@ -66,7 +66,7 @@ describe('перерисовка возвращает прокрутку зая�
       density: () => 60, fitWindow: stub,
       renderBrand: stub, renderMarket: stub, renderAccount: stub,
       renderPositions: stub, renderRobots: stub, robotsTotal: stub,
-      manualTotal: stub, renderWatch: stub, renderLimits: stub, renderAlerts: stub, alertsToggle: stub, renderFlash: stub, renderExpiry: stub,
+      manualTotal: stub, manualCosts: stub, feeNote: stub, renderWatch: stub, renderLimits: stub, renderAlerts: stub, alertsToggle: stub, renderFlash: stub, renderExpiry: stub,
       renderOrders: () => '<div class="ord-box">много строк</div>',
       // Таблица заявок терминала рисуется рядом с группами и к прокрутке
       // отношения не имеет: заглушаем, чтобы тест проверял своё.

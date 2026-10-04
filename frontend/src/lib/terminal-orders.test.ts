@@ -22,6 +22,7 @@ function termFn(src: string, ordDone = true, open = true, canCancel = true) {
     esc: (x: unknown) => String(x ?? ''),
     px: (x: unknown) => String(x),
     pnlBox: () => '',
+    feeNote: () => '',
     ordOpen: new Set(open ? ['terminal'] : []),
     ordDone,
     // В трее панель ходит через локальный шелл с токеном компаньона, а тот

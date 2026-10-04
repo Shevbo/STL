@@ -20,6 +20,7 @@ function renderOrdersOf(html: string) {
     // pnlBox рисует коробку [фикс · ВМ] и к предмету этих тестов не относится:
     // заглушаем, чтобы они проверяли своё, а не наличие p&l.
     pnlBox: () => '',
+    feeNote: () => '',
     ordOpen: new Set(['sl']), ordDone: true, ordFull: false,
   };
   return new Function('d', `with (d) { ${groups}${m[0]}; return renderOrders; }`)(deps);

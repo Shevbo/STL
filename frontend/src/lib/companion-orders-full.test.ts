@@ -19,6 +19,7 @@ function renderOrdersOf(html: string, ordFull: boolean) {
     // pnlBox рисует коробку [фикс · ВМ] и к предмету этих тестов не относится:
     // заглушаем, чтобы они проверяли своё, а не наличие p&l.
     pnlBox: () => '',
+    feeNote: () => '',
     ordOpen: new Set(['trail_tp']), ordDone: true, ordFull,
   };
   const fn = new Function('d', `with (d) { ${m[0]}; return renderOrders; }`)(deps);
