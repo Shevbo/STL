@@ -269,8 +269,9 @@ describe('рабочее место: купил и держи, честный о
   it('кнопки движка заблокированы и объясняют ПОЧЕМУ', async () => {
     await open2(base());
     const btns = [...host.querySelectorAll('.cs-actions button')] as HTMLButtonElement[];
+    // «Создать новую редакцию» переехала в панель рабочего места и живёт по состоянию воркера.
     expect(btns.map((b) => b.textContent)).toEqual([
-      'Нормализовать объём до 1 млн', 'Создать новую редакцию', 'Запустить прогон']);
+      'Нормализовать объём до 1 млн', 'Запустить прогон']);
     for (const b of btns) { expect(b.disabled).toBe(true); expect(b.title.length).toBeGreaterThan(20); }
   });
 

@@ -25,6 +25,7 @@
     type Card, type Filters, type Route,
   } from '$lib/campaign-showcase';
   import CurveChart from './CurveChart.svelte';
+  import WorkbenchPanel from './WorkbenchPanel.svelte';
   import ScreenTag from './ScreenTag.svelte';
   import NavMenu from '../NavMenu.svelte';
 
@@ -392,11 +393,14 @@
             <button class="cs-btn" disabled
                     title="Нормализация считается движком backtests; ручки пока нет">Нормализовать объём до 1 млн</button>
             <button class="cs-btn" disabled
-                    title="Редакции как данные, воркер правки кода и доступ к Lineman ещё не готовы (спека, порядок работ, пп. 2-3)">Создать новую редакцию</button>
-            <button class="cs-btn" disabled
                     title="Запуск прогона на i9 из карточки — этап 2 спеки, ручки постановки пока нет">Запустить прогон</button>
           </div>
         {/if}
+
+        <!-- РАБОЧЕЕ МЕСТО: редакции карточки, воркер, лог, diff, приёмка (спека
+             docs/backtest-workbench-spec.md). Отдельный компонент: у него свой опрос и своё
+             состояние, и он не должен перерисовываться вместе с отчётом. -->
+        <WorkbenchPanel card={report.slug} />
 
         {#if report.verdict}
           <div class="cs-verdict"><b>Вердикт.</b> {report.verdict}</div>
