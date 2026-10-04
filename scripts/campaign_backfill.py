@@ -203,7 +203,8 @@ async def cmd_store(a) -> None:
                     continue
                 r = dict(res[0])
                 ok = net_matches(ld["lb_net"], r["net_profit"])
-                extra = {**(_j(r.get("extra")) or {}), "lb_net": ld["lb_net"], "lb_trades": ld["lb_trades"],
+                old_extra = _j(r.get("extra"))
+                extra = {**(old_extra if isinstance(old_extra, dict) else {}), "lb_net": ld["lb_net"], "lb_trades": ld["lb_trades"],
                          "rerun_of": ld["run_id"]}
                 par = await c.fetchrow("select * from backtest_runs where id=$1", ld["run_id"])
                 async with c.transaction():
@@ -212,17 +213,17 @@ async def cmd_store(a) -> None:
                     await c.execute("""insert into backtest_runs (id, robot_id, params_grid, date_from, date_to,
                         status, engine, symbol, job_body, priority, strategy, finished_at)
                         values ($1,$2,$3,$4,$5,'done',$6,$7,$8,0,$9,$10)""",
-                                    name, par["robot_id"], par["params_grid"], par["date_from"], par["date_to"],
-                                    par["engine"], par["symbol"], _j(par["job_body"]), par["strategy"] or it["strategy"],
+                                    name, par["robot_id"], json.dumps(_j(par["params_grid"])), par["date_from"], par["date_to"],
+                                    par["engine"], par["symbol"], json.dumps(_j(par["job_body"])), par["strategy"] or it["strategy"],
                                     par["finished_at"])
                     await c.execute("""insert into backtest_results (id, run_id, params, trades, equity_curve,
                         sharpe, max_drawdown, win_rate, total_return, total_trades, net_profit, point_value,
                         recovery_factor, peak_contracts, extra)
                         values ($1,$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)""",
-                                    name, _j(r["params"]), _j(r["trades"]), _j(r["equity_curve"]), r["sharpe"],
+                                    name, json.dumps(_j(r["params"])), json.dumps(_j(r["trades"])), json.dumps(_j(r["equity_curve"])), r["sharpe"],
                                     r["max_drawdown"], r["win_rate"], r["total_return"], r["total_trades"],
                                     r["net_profit"], r["point_value"], r["recovery_factor"], r["peak_contracts"],
-                                    extra)
+                                    json.dumps(extra))
                 ld["stored"] = True
                 ld["rerun_net"] = r["net_profit"]
                 print(("OK      " if ok else "MISMATCH"), name, "лидерборд", round(ld["lb_net"]),
