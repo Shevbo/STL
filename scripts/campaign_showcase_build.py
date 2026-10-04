@@ -258,7 +258,7 @@ def build_card(c: dict, tasks_all: list, bf: dict, task_results: dict, now_iso: 
         frm = dt.datetime.fromtimestamp(lead_curve[0][0], dt.timezone.utc).date().isoformat()
         to = dt.datetime.fromtimestamp(lead_curve[-1][0], dt.timezone.utc).date().isoformat()
         window = _window(frm, to)
-    elif top_run:
+    elif top_run and e.get("kind") == "optimizer":  # у gate-шардов лучшая строка лидерборда не итог линии
         net, trades, dd = top_run.get("net"), top_run.get("trades"), top_run.get("max_dd")
         window = _window(top_run.get("date_from"), top_run.get("date_to"))
         notes.append("max_dd из лидерборда как в БД (не из кривой)")
