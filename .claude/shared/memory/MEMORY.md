@@ -108,14 +108,5 @@
 - [Монтаж Svelte в vitest](reference_vitest_svelte_mount.md) — conditions browser, заглушка ResizeObserver (ошибка эффекта глотается), ждать макрозадачами
 - [Витрина: unit=null ≠ единица карточки](reference_showcase_unit_null_not_card_unit.md) — эвристика по point_value ошибалась в 47%; null = «не определена», денежную сортировку блокировать, L бывает оценённой (≈)
 - [Рабочее место бэктеста](project_backtest_workbench.md) — этап 1 сделан (купил и держи, честный объём, топ-100), чат с воркером правки кода сознательно НЕ делал, ждёт решения о хосте
-- [Рестарт агента = выключатель](reference_agent_restart_is_offswitch.md) — до rev 1790944923 /agent/{id}/restart гасил агента насовсем; с неё поднимается сам; сверять rev перед командой
-- [Заявки в мёртвую очередь](reference_reconnect_stale_queue.md) — переконнект агента без рестарта STL: 45 мин ни одной заявки при зелёной лампе; признак daily_orders_used=0
-- [Таблица отстаёт от склада](reference_terminal_table_lags_order_store.md) — «нет строки в таблице» ≠ «заявки нет»: семь дублей выхода 02.10; заявка жива, пока не известно, что мертва
-- [Топ-5 STL на агенте](project_stl_top5_on_agent.md) — stl5-* бумагой с 02.10, разбор в среду 07.10; срез STL на момент переноса; max_position не для реала
-- [Ложные флаги и частичные наливы сетки](reference_grid_stale_flags_and_partial_fills.md) — 85940 не стоял сутки: флаг погасшего уровня не снялся; налив частью не шёл в позицию; проверять по сделкам, не по памяти книги
-- [Снятие режима оператором](project_guard_operator_lift.md) — защита считает набор заново от точки g_guard_base, режим не возвращается; движок отдаёт g_guard_levels и g_guard_from
-- [Поле «ТС комиссия»](reference_ts_comission_field.md) — внутри дня не итог: 02.10 показало 990 ₽ = 105 лотов × 9.43 из ~685; ставки RIZ6 9.43/4.72; построчную комиссию агент выбрасывает
-- [Пределы переживают рестарт](project_limits_survive_restart.md) — счётчики в data/quik_counters.json и daily_orders.json, объём в работе = склад + таблица терминала
-- [Зависающий тест gRPC](reference_flaky_server_session_test.md) — test_session_pushes_set_limits_on_register ~1/60 на Windows, не регрессия; повторять прогон
-- [Перед чисткой проверить kind](feedback_check_kind_before_cleanup.md) — 03.10 назвал следящий тейк оператора пустой сеткой; сначала kind и журнал created
-- [Нет повтора той же стороны](project_grid_no_same_side_repeat.md) - 04.10: уровень после продажи не встаёт продажей, пока не было покупки в сетке; причина лаг сторожа 1-2 с; ls/lo/cs в live
+- [Очередь воркера рабочего места](project_workbench_worker_queue.md) — HTTP-токен вместо доступа к БД, heartbeat 30 с, переходы таблицей, приёмка по хешу diff; SQL не проверен на живом Postgres
+- [Комиссия — расчёт, не «удержано»](reference_commission_estimate_not_withheld.md) — тейкерская оценка сверху, одна fill_commission на блок и заявки, None вместо нуля без ₽/пункт, commission_floor
