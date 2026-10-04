@@ -9,6 +9,13 @@ metadata:
 
 # Campaign result backfill (make top-N viewable)
 
+Как досчитать верхние строки кампании, чтобы у них появились сделки и кривая, видимые в
+Ботсторе. Строки лидерборда хранят только метрики, без сделок, поэтому карточка строки
+пустая, пока прогон не повторён и не сохранён под именем с суффиксом bf. Отвечает на
+вопросы вида «почему у строки кампании пустой график», «как посмотреть сделки строки из
+лидерборда», «что такое bf-прогон». Термины: бэкфилл, докат, топ-N, Ботстор, карточка
+строки.
+
 `optimization_leaderboard` rows store METRICS ONLY — `trades=[]`. So a campaign's
 per-rank chart/detail in Botstore is blank until you re-run the top-N and store each
 as `<campaign_run>-bf<rank>`. Endpoint that reads them:
