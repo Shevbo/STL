@@ -44,7 +44,7 @@ def _db_url() -> str:
     return os.environ["LAB_DB_URL"].replace("postgresql+asyncpg", "postgresql")
 
 
-def pick(cards: list, scores: dict, n: int = 20, pool: int = 60) -> list:
+def pick(cards: list, scores: dict, n: int | None = 20, pool: int = 60) -> list:
     """Чистое правило отбора. cards: заготовки merge_cards; scores: slug -> score лучшей строки."""
     cand, used = [], set()
     for c in cards:
@@ -65,9 +65,17 @@ def pick(cards: list, scores: dict, n: int = 20, pool: int = 60) -> list:
             continue
         used.add(best["campaign_run"])
         out.append((slug, best))
-        if len(out) == n:
+        if n and len(out) == n:
             break
     return out
+
+
+def template_code(strategy: str) -> str | None:
+    """Скрипт библиотечной стратегии, когда у кампании нет job_body (старые opt-*). Инверсии не берём."""
+    from trader.lab.strategies import library as lib
+    if strategy in lib.REGISTRY:
+        return f"from trader.lab.strategies.library import make_on_bar; on_bar = make_on_bar('{strategy}')"
+    return None
 
 
 async def cmd_select(a) -> None:
@@ -98,21 +106,29 @@ async def cmd_select(a) -> None:
                 best = max(cd["runs"], key=lambda r: r.get("net") if r.get("net") is not None else -1e18)
                 scores[cd["entry"]["slug"]] = best.get("score")
         sel = []
-        for slug, best in pick(cards, scores, a.n):
+        for slug, best in pick(cards, scores, None):
+            if len(sel) == a.n:
+                break
             cr = best["campaign_run"]
             jb = await c.fetchrow("select id, robot_id, job_body from backtest_runs where id like $1 limit 1",
                                   cr + "-r%")
             body = _j(jb["job_body"]) if jb else None
             if not body or not body.get("scriptCode"):
-                print(f"пропуск {slug}: у {cr} нет job_body с scriptCode")
-                continue
+                code = template_code(best["strategy"])
+                if not code or not best.get("date_from"):
+                    print(f"пропуск {slug}: у {cr} нет job_body и нет шаблона стратегии")
+                    continue
+                body = {"scriptCode": code, "dateFrom": best["date_from"], "dateTo": best["date_to"],
+                        "fallback": True}
+                jb = {"robot_id": None}
             lead = await c.fetch("""select params, net_profit, total_trades from optimization_leaderboard
                 where campaign_run=$1 and strategy=$2 and symbol=$3 order by net_profit desc nulls last
                 limit 40""", cr, best["strategy"], best["symbol"])
             seen, leaders = set(), []
             for x in lead:
                 p = _j(x["params"])
-                k = json.dumps(p, sort_keys=True)
+                # те же net и сделки = те же сделки (ненужные оси): второй раз кривая не нужна
+                k = json.dumps([round(x["net_profit"] or 0, 2), x["total_trades"]])
                 if k in seen:
                     continue
                 seen.add(k)
@@ -121,7 +137,7 @@ async def cmd_select(a) -> None:
                 if len(leaders) == 3:
                     break
             sel.append({"slug": slug, "campaign_run": cr, "strategy": best["strategy"], "symbol": best["symbol"],
-                        "robot_id": jb["robot_id"], "script_code": body["scriptCode"],
+                        "robot_id": jb["robot_id"], "script_code": body["scriptCode"], "fallback": bool(body.get("fallback")),
                         "date_from": body["dateFrom"], "date_to": body["dateTo"], "leaders": leaders})
     finally:
         await c.close()
@@ -135,7 +151,7 @@ def job_of(item: dict, ld: dict) -> dict:
     """Задание перепрогона одной строки: те же скрипт, окно и параметры, одна комбинация."""
     return {"scriptCode": item["script_code"], "baseParams": ld["params"], "paramSets": [{}],
             "symbol": item["symbol"], "dateFrom": item["date_from"], "dateTo": item["date_to"],
-            "engine": "remote", "robotId": item["robot_id"]}
+            "engine": "remote", **({"robotId": item["robot_id"]} if item.get("robot_id") else {})}
 
 
 def bf_name(item: dict, ld: dict) -> str:
