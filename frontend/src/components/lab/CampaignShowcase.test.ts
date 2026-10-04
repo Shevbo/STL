@@ -114,6 +114,46 @@ describe('витрина', () => {
   });
 });
 
+describe('пагинация', () => {
+  // 04.10.2026 в настоящей витрине 542 карточки, у 507 кривой нет. Страница
+  // обязана показывать порциями и честно говорить, сколько осталось.
+  const MANY = Array.from({ length: 120 }, (_, i) =>
+    ({ slug: `c-${i}`, title: `Кампания ${i}`, status: 'no_curve', unit: 'points', thumb: null,
+       headline: { net: null, trades: null, max_dd: null, window: null } }));
+
+  it('первая страница 48, дальше «показать ещё» с честным остатком', async () => {
+    api({ '/api/v1/lab/showcase/campaigns': () => J({ available: true, campaigns: MANY, built_at_ms: 1, reason: '' }) });
+    await open('/backtest/campaigns');
+    expect(host.querySelectorAll('a.cs-card')).toHaveLength(48);
+    expect(host.textContent).toContain('показано 48 из 120');
+    const more = [...host.querySelectorAll('button')].find((b) => b.textContent?.includes('показать ещё'))!;
+    more.click(); await tick();
+    expect(host.querySelectorAll('a.cs-card')).toHaveLength(96);
+    (([...host.querySelectorAll('button')].find((b) => b.textContent?.includes('показать ещё'))) as HTMLElement).click();
+    await tick();
+    expect(host.querySelectorAll('a.cs-card')).toHaveLength(120);
+    expect([...host.querySelectorAll('button')].some((b) => b.textContent?.includes('показать ещё'))).toBe(false);
+  });
+
+  it('смена поиска возвращает на первую страницу', async () => {
+    api({ '/api/v1/lab/showcase/campaigns': () => J({ available: true, campaigns: MANY, built_at_ms: 1, reason: '' }) });
+    await open('/backtest/campaigns');
+    ([...host.querySelectorAll('button')].find((b) => b.textContent?.includes('показать ещё')) as HTMLElement).click();
+    await tick();
+    expect(host.querySelectorAll('a.cs-card')).toHaveLength(96);
+    const q = host.querySelector('input[type=search]') as HTMLInputElement;
+    q.value = 'Кампания 1'; q.dispatchEvent(new Event('input', { bubbles: true })); await tick();
+    // «Кампания 1», 10-19 и 100-119 — 31 штука, все влезают на одну страницу
+    expect(host.querySelectorAll('a.cs-card')).toHaveLength(31);
+  });
+
+  it('мало карточек — кнопки нет', async () => {
+    api({ '/api/v1/lab/showcase/campaigns': () => J({ available: true, campaigns: MANY.slice(0, 10), built_at_ms: 1, reason: '' }) });
+    await open('/backtest/campaigns');
+    expect([...host.querySelectorAll('button')].some((b) => b.textContent?.includes('показать ещё'))).toBe(false);
+  });
+});
+
 describe('отчёт', () => {
   const REPORT = {
     slug: 'grid-r2', title: 'Радиация r2', idea: 'фильтр тренда', status: 'done', unit: 'rub',

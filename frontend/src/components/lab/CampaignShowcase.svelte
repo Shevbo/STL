@@ -39,6 +39,15 @@
   let leaderRank = $state(1);
 
   let filters = $state<Filters>({ ...NO_FILTERS });
+  // ПАГИНАЦИЯ. На 04.10.2026 в витрине 542 карточки (36 исследований + 506 перебора
+  // оптимизатора), из них кривая есть у 35, а у 507 её нет. Сто карточек «кривой
+  // нет» подряд — не витрина, а стена. Порядок файла сборщика уже ставит готовые
+  // с кривой первыми, поэтому первая страница — то, ради чего пришли.
+  const PAGE = 48;
+  let limit = $state(PAGE);
+  // Смена фильтра возвращает на первую страницу: оператор, ушедший на 5-ю страницу
+  // и сузивший поиск, иначе смотрел бы на середину нового списка.
+  $effect(() => { JSON.stringify(filters); limit = PAGE; });
 
   // ── Данные ────────────────────────────────────────────────────────────────
   async function loadList() {
@@ -92,6 +101,7 @@
   // ── Производные ───────────────────────────────────────────────────────────
   const revs = $derived(revisionOf(cards));
   const shown = $derived(visibleCards(cards, filters));
+  const page = $derived(shown.slice(0, limit));
   const statusCodes = $derived([...new Set(cards.map((c) => c.status))]);
   const kinds = $derived([...new Set(cards.map((c) => c.kind ?? 'research'))]);
   const symbols = $derived([...new Set(cards.flatMap((c) => c.symbols ?? []))].sort());
@@ -206,7 +216,7 @@
       {/if}
 
       <div class="cs-grid">
-        {#each shown as c (c.slug)}
+        {#each page as c (c.slug)}
           {@const st = statusInfo(c)}
           {@const rv = revs.get(c.slug)}
           <a class="cs-card" href={campaignPath(c.slug)} onclick={(e) => go(campaignPath(c.slug), e)}>
@@ -229,6 +239,14 @@
           </a>
         {/each}
       </div>
+      {#if shown.length > page.length}
+        <div class="cs-more">
+          <button class="cs-btn" onclick={() => (limit += PAGE)}>
+            показать ещё {Math.min(PAGE, shown.length - page.length)}
+          </button>
+          <span class="cs-count">показано {page.length} из {shown.length}</span>
+        </div>
+      {/if}
     {/if}
 
   {:else}
@@ -387,6 +405,7 @@
   .cs-kv dd { margin: 0; font-size: 12px; font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
   .pos { color: var(--pos); } .neg { color: var(--neg); }
   .cs-win { font-size: 10px; color: var(--faint); }
+  .cs-more { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 0 20px 60px; }
 
   .cs-back { display: inline-block; margin: 14px 20px 0; color: var(--muted); font-size: 12px; text-decoration: none; }
   .cs-back:hover { color: var(--ink); }
