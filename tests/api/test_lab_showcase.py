@@ -99,3 +99,57 @@ def test_requires_auth(client):
     client.headers.pop("Authorization")
     assert client.get("/api/v1/lab/showcase/campaigns").status_code in (401, 403)
     assert client.get("/api/v1/lab/showcase/campaigns/x1").status_code in (401, 403)
+
+
+def test_old_slug_redirects_to_the_new_report(client):
+    """04.10.2026 slug сменились, а ссылка обязана жить вечно."""
+    (client.tmp / "new-slug.json").write_text(json.dumps({"slug": "new-slug"}), encoding="utf-8")
+    (client.tmp / "slug_redirects.json").write_text(json.dumps({"old-slug": "new-slug"}), encoding="utf-8")
+    r = client.get("/api/v1/lab/showcase/campaigns/old-slug").json()
+    assert r["slug"] == "new-slug" and r["redirected_from"] == "old-slug"
+
+
+def test_live_slug_wins_over_a_redirect_with_the_same_name(client):
+    """Существующая карточка не подменяется таблицей: редирект только для мёртвых slug."""
+    (client.tmp / "a.json").write_text(json.dumps({"slug": "a"}), encoding="utf-8")
+    (client.tmp / "b.json").write_text(json.dumps({"slug": "b"}), encoding="utf-8")
+    (client.tmp / "slug_redirects.json").write_text(json.dumps({"a": "b"}), encoding="utf-8")
+    r = client.get("/api/v1/lab/showcase/campaigns/a").json()
+    assert r["slug"] == "a" and "redirected_from" not in r
+
+
+def test_redirect_loop_does_not_hang_and_does_not_invent_a_report(client):
+    (client.tmp / "slug_redirects.json").write_text(
+        json.dumps({"a": "b", "b": "a"}), encoding="utf-8")
+    assert client.get("/api/v1/lab/showcase/campaigns/a").status_code == 404
+
+
+def test_broken_redirect_table_is_ignored(client):
+    (client.tmp / "slug_redirects.json").write_text("{oops", encoding="utf-8")
+    (client.tmp / "ok.json").write_text(json.dumps({"slug": "ok"}), encoding="utf-8")
+    assert client.get("/api/v1/lab/showcase/campaigns/ok").status_code == 200
+    assert client.get("/api/v1/lab/showcase/campaigns/gone").status_code == 404
+
+
+def test_redirect_to_an_unsafe_slug_is_not_followed(client):
+    (client.tmp.parent / "evil.json").write_text('{"leak": true}', encoding="utf-8")
+    (client.tmp / "slug_redirects.json").write_text(
+        json.dumps({"old": "../evil"}), encoding="utf-8")
+    r = client.get("/api/v1/lab/showcase/campaigns/old")
+    assert r.status_code == 404 and "leak" not in r.text
+
+
+def test_leader_curve_file(client):
+    (client.tmp / "c1.leader-17.json").write_text(
+        json.dumps({"rank": 17, "curve": [[1, 2], [3, 4]], "buyhold_curve": None}), encoding="utf-8")
+    r = client.get("/api/v1/lab/showcase/campaigns/c1/leaders/17").json()
+    assert r["rank"] == 17 and r["curve"] == [[1, 2], [3, 4]]
+
+
+def test_missing_leader_curve_is_404(client):
+    assert client.get("/api/v1/lab/showcase/campaigns/c1/leaders/5").status_code == 404
+
+
+@pytest.mark.parametrize("bad", ["0", "10000", "-1"])
+def test_leader_rank_is_bounded(client, bad):
+    assert client.get(f"/api/v1/lab/showcase/campaigns/c1/leaders/{bad}").status_code in (404, 422)

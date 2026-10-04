@@ -19,7 +19,8 @@
   import { setTitle } from '$lib/page-title';
   import {
     NO_FILTERS, KIND_LABEL, campaignPath, chainOf, cls, diffCurve, fmtPnl, honestVolume, revisionOf,
-    routeOf, statusInfo, visibleCards, BASE_PATH, type Card, type Filters, type Route,
+    routeOf, statusInfo, visibleCards, BASE_PATH, hiddenCount, leaderColumns, leaderValue,
+    fmtLeaderCell, sortLeaders, rerunNote, LEADER_LABEL, type Card, type Filters, type Route,
   } from '$lib/campaign-showcase';
   import CurveChart from './CurveChart.svelte';
   import ScreenTag from './ScreenTag.svelte';
@@ -37,6 +38,12 @@
   let reportErr = $state('');
   let reportFor = '';
   let leaderRank = $state(1);
+  // Кривые лидеров ВНЕ топ-10 сборщик кладёт отдельными файлами (curve_url): отчёт на
+  // сто строк не тащит сто кривых, из которых откроют одну. Подгружаем по клику.
+  type Extra = { curve: [number, number][] | null; buyhold_curve: [number, number][] | null };
+  let extra = $state<Record<number, Extra | 'loading' | 'none'>>({});
+  let sortKey = $state<string | null>(null);
+  let sortDir = $state<1 | -1>(-1);
 
   let filters = $state<Filters>({ ...NO_FILTERS });
   // ПАГИНАЦИЯ. На 04.10.2026 в витрине 542 карточки (36 исследований + 506 перебора
@@ -64,13 +71,20 @@
   }
 
   async function loadReport(slug: string) {
-    reportFor = slug; report = null; reportErr = ''; leaderRank = 1;
+    reportFor = slug; report = null; reportErr = ''; leaderRank = 1; extra = {}; sortKey = null;
     try {
       const r = await fetchWithAuth(`/api/v1/lab/showcase/campaigns/${encodeURIComponent(slug)}`);
       if (reportFor !== slug) return;          // пока грузили, ушли на другую
       if (r.status === 404) { reportErr = 'Такой кампании нет: slug мог измениться или сборщик её ещё не выдал.'; return; }
       if (!r.ok) { const d = await r.json().catch(() => null); reportErr = d?.detail ?? `HTTP ${r.status}`; return; }
       report = await r.json();
+      // Старый slug: API отдал отчёт по таблице редиректов сборщика. Ссылка жила в
+      // чужих документах и закладках, поэтому живёт, а в адресную строку встаёт новый.
+      if (report.redirected_from === slug && report.slug && report.slug !== slug) {
+        history.replaceState(null, '', campaignPath(report.slug, route.kind === 'campaign' ? route.rev : undefined));
+        route = routeOf(window.location.pathname) ?? route;
+        reportFor = report.slug;
+      }
       const first = (report.leaders ?? [])[0];
       if (first) leaderRank = first.rank ?? 1;
     } catch (e: any) { if (reportFor === slug) reportErr = e?.message || 'нет связи'; }
@@ -90,7 +104,12 @@
   onMount(() => { loadList(); window.addEventListener('popstate', onPop); });
   onDestroy(() => window.removeEventListener('popstate', onPop));
 
-  $effect(() => { if (route.kind === 'campaign') loadReport(route.slug); else { report = null; reportFor = ''; } });
+  // Не перезагружаем отчёт, который уже показан: после редиректа старого slug адрес
+  // переписан на новый, а отчёт по нему у нас на руках (reportFor выставлен заранее).
+  $effect(() => {
+    if (route.kind === 'campaign') { if (route.slug !== reportFor) loadReport(route.slug); }
+    else { report = null; reportFor = ''; }
+  });
 
   const card = $derived(route.kind === 'campaign' ? cards.find((c) => c.slug === route.slug) ?? null : null);
   $effect(() => {
@@ -125,8 +144,33 @@
 
   // «Купил и держи» и честный объём (заказ оператора 04.10.2026): считает движок
   // backtests, экран только читает. Нет поля — говорим какого, а не рисуем ноль.
-  const hold = $derived<[number, number][] | null>(report?.buyhold_curve ?? null);
-  const diff = $derived(diffCurve(leader?.curve ?? null, hold));
+  // «Купил и держи» — ПО-ЛИДЕРСКИ: он считается на полный объём лидера, а число
+  // контрактов у лидеров разное (ответ backtests 04.10.2026). Берём только у лидера.
+  const ex = $derived(leader && typeof extra[leader.rank] === 'object' ? (extra[leader.rank] as Extra) : null);
+  const curve = $derived<[number, number][] | null>(leader?.curve ?? ex?.curve ?? null);
+  const hold = $derived<[number, number][] | null>(leader?.buyhold_curve ?? ex?.buyhold_curve ?? null);
+  const diff = $derived(diffCurve(curve, hold));
+  const curveLoading = $derived(!!leader && !leader.curve && extra[leader.rank] === 'loading');
+  const curveGone = $derived(!!leader && !leader.curve && !curve && extra[leader.rank] === 'none');
+
+  async function pick(l: any) {
+    leaderRank = l.rank;
+    if (l.curve || !l.curve_url || extra[l.rank]) return;
+    extra[l.rank] = 'loading';
+    const slug = report.slug;
+    try {
+      const r = await fetchWithAuth(`/api/v1/lab/showcase/campaigns/${encodeURIComponent(slug)}/leaders/${l.rank}`);
+      if (report?.slug !== slug) return;
+      extra[l.rank] = r.ok ? await r.json() : 'none';
+    } catch { extra[l.rank] = 'none'; }
+  }
+  const cols = $derived(leaderColumns(report?.leaders ?? []));
+  const rows = $derived(sortLeaders(report?.leaders ?? [], sortKey, sortDir));
+  const anyRerun = $derived((report?.leaders ?? []).some((l: any) => rerunNote(l)));
+  function sortBy(k: string) {
+    if (sortKey === k) sortDir = sortDir === 1 ? -1 : 1; else { sortKey = k; sortDir = -1; }
+  }
+  const arrow = (k: string) => (sortKey === k ? (sortDir === 1 ? ' ▲' : ' ▼') : '');
   const vol = $derived(honestVolume(leader));
   const chain = $derived(report?.revisions ?? (route.kind === 'campaign'
     ? chainOf(cards, card?.family).map((c) => ({ slug: c.slug, rev: c.rev, changes: null })) : []));
@@ -146,19 +190,6 @@
     trades_n: 'Сделки', win_rate: 'Win rate', pf: 'PF', sharpe: 'Sharpe', gross: 'Gross',
     commission: 'Комиссия', calmar: 'Calmar', recovery: 'Recovery',
   };
-  const MONEY = /(^|_)(net|pnl|gross|dd|commission|loss|profit)($|_)/;
-  const metricKeys = $derived.by(() => {
-    const seen: string[] = [];
-    for (const l of report?.leaders ?? []) for (const k of Object.keys(l.metrics ?? {})) if (!seen.includes(k)) seen.push(k);
-    return seen;
-  });
-  function fmtMetric(k: string, v: unknown): string {
-    if (v == null || (typeof v === 'number' && !Number.isFinite(v))) return '—';
-    if (typeof v !== 'number') return String(v);
-    if (MONEY.test(k)) return fmtPnl(v, unit, k !== 'dd' && k !== 'max_dd');
-    return v.toLocaleString('ru-RU', { maximumFractionDigits: 2 });
-  }
-
   function exportList() {
     downloadCSV(shown.map((c) => ({
       slug: c.slug, название: c.title, идея: c.idea ?? '', линия: c.family ?? '', ред: c.rev ?? '',
@@ -169,7 +200,9 @@
   }
   function exportLeaders() {
     downloadCSV((report?.leaders ?? []).map((l: any) => ({
-      slug: report.slug, rank: l.rank, ...(l.metrics ?? {}), trades_n: l.trades_n ?? '',
+      slug: report.slug, rank: l.rank,
+      ...Object.fromEntries(cols.map((k) => [k, leaderValue(l, k) ?? ''])),
+      trades_n: l.trades_n ?? '',
       ...Object.fromEntries(Object.entries(l.params ?? {}).map(([k, v]) => [`param.${k}`, v])),
     })), `${report?.slug ?? 'campaign'}-leaders.csv`);
   }
@@ -221,6 +254,14 @@
         {/if}
         <label class="cs-chk"><input type="checkbox" bind:checked={filters.allRevisions} />
           показать все редакции</label>
+        {#if hiddenCount(cards, filters) > 0}
+          <!-- Перебор оптимизатора без кривой скрыт по умолчанию: 04.10.2026 это 1538
+               карточек из 1609, и стена «кривой нет» заслоняла бы остальное. -->
+          <label class="cs-chk" title="карточки перебора, у которых сборщик не оставил кривую">
+            <input type="checkbox" checked={!filters.hideNoCurve}
+                   onchange={(e) => (filters.hideNoCurve = !(e.currentTarget as HTMLInputElement).checked)} />
+            показывать без кривой ({hiddenCount(cards, filters)})</label>
+        {/if}
         {#if filtered}
           <button class="cs-btn" onclick={() => (filters = { ...NO_FILTERS })}>сбросить</button>
         {/if}
@@ -291,13 +332,15 @@
         {#if revMissing}
           <div class="cs-note bad" style="margin:8px 0">Редакции {wantRev} в этой линии нет; показана ред. {report.rev}.</div>
         {/if}
-        <CurveChart full points={leader?.curve ?? null} {unit}
+        <CurveChart full points={curve} {unit}
                     overlay={hold} overlayLabel="купил и держи"
-                    emptyText={report.no_curve_reason || (leader ? 'у этого лидера кривой нет' : 'кривой нет')} />
-        {#if leader?.curve && !hold}
+                    emptyText={curveLoading ? 'загружаю кривую лидера…'
+                      : curveGone ? 'кривой этого лидера сборщик не оставил'
+                      : (report.no_curve_reason || (leader ? 'у этого лидера кривой нет' : 'кривой нет'))} />
+        {#if curve && !hold}
           <!-- Без линии сравнения кривая стратегии читается как «в плюсе — значит хорошо»,
                хотя рынок мог вырасти сильнее. Поэтому отсутствие говорим вслух. -->
-          <div class="cs-sub">Линии «купил и держи» нет: сборщик ещё не отдаёт <code>buyhold_curve</code>.</div>
+          <div class="cs-sub">Линии «купил и держи» у этого лидера нет: сборщик не отдал <code>buyhold_curve</code>.</div>
         {/if}
         {#if diff}
           <div class="cs-sec"><h3>Стратегия минус «купил и держи»</h3></div>
@@ -346,17 +389,22 @@
           <div class="cs-scroll">
             <table class="cs-tbl">
               <thead><tr>
-                <th>№</th>
-                {#each metricKeys as k (k)}<th>{METRIC_RU[k] ?? k}</th>{/each}
+                <th class="sortable" onclick={() => sortBy('rank')}>№{arrow('rank')}</th>
+                {#each cols as k (k)}
+                  <th class="sortable" onclick={() => sortBy(k)}
+                      title="сортировать; пустые значения всегда в конце">{LEADER_LABEL[k] ?? METRIC_RU[k] ?? k}{arrow(k)}</th>
+                {/each}
                 <th>Параметры</th>
               </tr></thead>
               <tbody>
-                {#each report.leaders as l (l.rank)}
-                  <tr class:on={l.rank === leaderRank} onclick={() => (leaderRank = l.rank)}
-                      title={l.curve ? 'показать кривую этого лидера' : 'у этого лидера кривой нет'}>
+                {#each rows as l (l.rank)}
+                  {@const rr = rerunNote(l)}
+                  <tr class:on={l.rank === leaderRank} onclick={() => pick(l)}
+                      title={l.curve || l.curve_url ? 'показать кривую этого лидера' : 'у этого лидера кривой нет'}>
                     <td>{l.rank}</td>
-                    {#each metricKeys as k (k)}
-                      <td class={MONEY.test(k) && typeof l.metrics?.[k] === 'number' ? cls(l.metrics[k]) : ''}>{fmtMetric(k, l.metrics?.[k])}</td>
+                    {#each cols as k (k)}
+                      {@const v = leaderValue(l, k)}
+                      <td class={typeof v === 'number' && (k === 'net' || k === 'return_pct') ? cls(v) : ''}>{fmtLeaderCell(k, v, unit)}{#if k === 'net' && rr}<sup class="rerun" title={`перепрогон на текущем движке: лидерборд показывал ${fmtPnl(rr.was, unit)}, кривая даёт ${fmtPnl(rr.now, unit)}`}>*</sup>{/if}</td>
                     {/each}
                     <td class="p">{params(l.params)}</td>
                   </tr>
@@ -364,6 +412,12 @@
               </tbody>
             </table>
           </div>
+          {#if anyRerun}
+            <!-- Движок менялся: net лидерборда до перепрогона и net кривой расходятся.
+                 Не прячем, а подписываем (просьба backtests 04.10.2026). -->
+            <div class="cs-sub">* перепрогон на текущем движке: net из лидерборда до перепрогона отличался от net кривой
+              (в подсказке — оба числа). Цифры таблицы и график — по текущему движку.</div>
+          {/if}
         {/if}
 
         {#if chain.length > 1}
@@ -481,6 +535,9 @@
   .cs-tbl td { padding: 6px 10px; border-bottom: 1px solid var(--bd); white-space: nowrap; font-variant-numeric: tabular-nums; }
   .cs-tbl td.p { white-space: normal; color: var(--muted); font-family: ui-monospace, Consolas, monospace; font-size: 11px; min-width: 260px; }
   .cs-tbl tbody tr { cursor: pointer; }
+  .cs-tbl th.sortable { cursor: pointer; user-select: none; }
+  .cs-tbl th.sortable:hover { color: var(--ink); }
+  .rerun { color: var(--warn); margin-left: 2px; cursor: help; }
   .cs-tbl tbody tr:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
   .cs-tbl tbody tr.on { background: color-mix(in srgb, var(--accent) 14%, transparent); }
   .cs-tbl tr:last-child td { border-bottom: none; }

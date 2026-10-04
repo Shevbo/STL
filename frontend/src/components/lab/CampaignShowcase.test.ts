@@ -239,7 +239,9 @@ describe('рабочее место: купил и держи, честный о
   });
 
   it('есть buyhold_curve — линия на графике и второй ряд с разностью', async () => {
-    await open2(base({ buyhold_curve: [[1_790_000_000, 0], [1_790_100_000, 5_000]] }));
+    // «Купил и держи» ПО-ЛИДЕРСКИ (ответ backtests 04.10.2026): он считается на полный
+    // объём лидера, а контрактов у лидеров разное.
+    await open2(base({}, { buyhold_curve: [[1_790_000_000, 0], [1_790_100_000, 5_000]] }));
     expect(host.querySelector('path.hold')).not.toBeNull();
     expect(host.textContent).toContain('минус «купил и держи»');
     expect(host.textContent).not.toContain('Линии «купил и держи» нет');
@@ -282,5 +284,103 @@ describe('рабочее место: купил и держи, честный о
     await open2(base(), '/backtest/campaigns/grid-r2/rev/9');
     expect(host.textContent).toContain('Редакции 9 в этой линии нет');
     expect(host.textContent).toContain('Радиация r2');
+  });
+});
+
+describe('данные 04.10.2026: редиректы, ленивые кривые, перебор за чипом, таблица', () => {
+  const LISTX = (cards: unknown[]) => () => J({ available: true, campaigns: cards, built_at_ms: 1, reason: '' });
+  const REP = (o: Record<string, unknown> = {}) => ({
+    slug: 'new-slug', title: 'Новая', status: 'done', unit: 'rub', rev: 1,
+    leaders: [
+      { rank: 1, rev: 1, contracts_peak: 2, full_cost_rub: 400000, return_pct: 3.1,
+        metrics: { net: 12000, rf: 2.5, l_share: 0.7, score: 21000, lb_net: 15000 },
+        curve: [[1_790_000_000, 0], [1_790_100_000, 5000], [1_790_200_000, 12000]], buyhold_curve: null },
+      { rank: 2, metrics: { net: 9000, rf: 4, l_share: 0.5, score: 18000 }, curve: null,
+        curve_url: 'new-slug.leader-2.json' },
+      { rank: 3, metrics: { net: 3000 }, curve: null },
+    ],
+    ...o,
+  });
+
+  it('старый slug: URL переписывается на новый, ссылка жива', async () => {
+    api({ '/api/v1/lab/showcase/campaigns': LISTX([]),
+          '/api/v1/lab/showcase/campaigns/old-slug': () => J({ ...REP(), redirected_from: 'old-slug' }) });
+    await open('/backtest/campaigns/old-slug');
+    expect(window.location.pathname).toBe('/backtest/campaigns/new-slug');
+    expect(host.textContent).toContain('Новая');
+  });
+
+  it('кривая лидера вне топ-10 подгружается по клику', async () => {
+    let asked = 0;
+    api({ '/api/v1/lab/showcase/campaigns': LISTX([]),
+          '/api/v1/lab/showcase/campaigns/new-slug': () => J(REP()),
+          '/api/v1/lab/showcase/campaigns/new-slug/leaders/2': () => { asked++; return J({ rank: 2,
+            curve: [[1_790_000_000, 0], [1_790_100_000, -4000], [1_790_200_000, 9000]], buyhold_curve: null }); } });
+    await open('/backtest/campaigns/new-slug');
+    expect(asked).toBe(0);                                   // сразу ничего лишнего не тянем
+    ([...host.querySelectorAll('tbody tr')].find((r) => r.textContent?.startsWith('2')) as HTMLElement).click();
+    await tick();
+    expect(asked).toBe(1);
+    expect(host.querySelectorAll('svg path.area.neg').length).toBeGreaterThan(0);   // у кривой №2 есть минус
+  });
+
+  it('лидер без кривой и без curve_url — причина, а не запрос в пустоту', async () => {
+    let asked = 0;
+    api({ '/api/v1/lab/showcase/campaigns': LISTX([]),
+          '/api/v1/lab/showcase/campaigns/new-slug': () => J(REP()),
+          '/api/v1/lab/showcase/campaigns/new-slug/leaders/3': () => { asked++; return J({}, 404); } });
+    await open('/backtest/campaigns/new-slug');
+    ([...host.querySelectorAll('tbody tr')].find((r) => r.textContent?.startsWith('3')) as HTMLElement).click();
+    await tick();
+    expect(asked).toBe(0);
+    expect(host.querySelector('.cc-empty')?.textContent).toContain('кривой нет');
+  });
+
+  it('колонки топ-100: rf, net, L, score и честный объём', async () => {
+    api({ '/api/v1/lab/showcase/campaigns': LISTX([]), '/api/v1/lab/showcase/campaigns/new-slug': () => J(REP()) });
+    await open('/backtest/campaigns/new-slug');
+    const heads = [...host.querySelectorAll('thead th')].map((t) => t.textContent?.replace(/[ ▲▼]/g, ''));
+    for (const h of ['Ред.', 'Контрактов', 'Полнаястоимость', 'Net', 'Доходность', 'RF', 'L', 'RF×net×L']) {
+      expect(heads, h).toContain(h);
+    }
+    expect(host.querySelector('tbody tr')!.textContent).toContain('70');       // L = 0.7 → 70 %
+  });
+
+  it('клик по заголовку сортирует, пустые в конце', async () => {
+    api({ '/api/v1/lab/showcase/campaigns': LISTX([]), '/api/v1/lab/showcase/campaigns/new-slug': () => J(REP()) });
+    await open('/backtest/campaigns/new-slug');
+    const th = [...host.querySelectorAll('thead th')].find((t) => t.textContent?.startsWith('RF') && !t.textContent.includes('×')) as HTMLElement;
+    th.click(); await tick();
+    const first = () => host.querySelector('tbody tr td')!.textContent;
+    expect(first()).toBe('2');           // rf 4 — наибольший
+    th.click(); await tick();
+    expect(host.querySelector('tbody tr:last-child td')!.textContent).toBe('3');   // rf пуст — всегда внизу
+  });
+
+  it('перепрогон на текущем движке: звёздочка у net и пояснение', async () => {
+    api({ '/api/v1/lab/showcase/campaigns': LISTX([]), '/api/v1/lab/showcase/campaigns/new-slug': () => J(REP()) });
+    await open('/backtest/campaigns/new-slug');
+    expect(host.querySelector('sup.rerun')).not.toBeNull();
+    expect(host.textContent).toContain('перепрогон на текущем движке');
+  });
+
+  it('перебор без кривой скрыт чипом, исследование и идущее — нет', async () => {
+    const cards = [
+      { slug: 'r', title: 'Исследование без кривой', status: 'no_curve', kind: 'research', unit: 'rub', thumb: null },
+      { slug: 'o1', title: 'Перебор с кривой', status: 'done', kind: 'optimizer', unit: 'points',
+        thumb: [[1_790_000_000, 0], [1_790_100_000, 5]] },
+      { slug: 'o2', title: 'Перебор пустой', status: 'no_curve', kind: 'optimizer', unit: 'points', thumb: null },
+      { slug: 'o3', title: 'Перебор идёт', status: 'running', kind: 'optimizer', unit: 'points', thumb: null,
+        progress: { finished: 1, total: 4 } },
+    ];
+    api({ '/api/v1/lab/showcase/campaigns': LISTX(cards) });
+    await open('/backtest/campaigns');
+    const titles = () => [...host.querySelectorAll('a.cs-card h2')].map((h) => h.textContent);
+    expect(titles()).toEqual(['Исследование без кривой', 'Перебор с кривой', 'Перебор идёт']);
+    expect(host.textContent).toContain('показывать без кривой (1)');
+    const chk = [...host.querySelectorAll('input[type=checkbox]')]
+      .find((i) => i.parentElement?.textContent?.includes('без кривой')) as HTMLInputElement;
+    chk.click(); await tick();
+    expect(titles()).toHaveLength(4);
   });
 });

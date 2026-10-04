@@ -94,12 +94,64 @@ async def campaigns(request: Request):
     return read_index()
 
 
+def resolve_slug(slug: str) -> str:
+    """Старый slug → новый по `slug_redirects.json` сборщика.
+
+    04.10.2026 backtests перерезали кампании на карточки «логика + инструмент», и
+    slug СМЕНИЛИСЬ, а спека обещала, что ссылка живёт вечно. Сборщик кладёт таблицу
+    {старый: новый}, редирект делаем здесь. Файла нет или он битый — slug остаётся
+    как есть (отсутствие таблицы не должно ронять открытие живых карточек).
+
+    Идём не больше трёх шагов и не возвращаемся в уже пройденный slug: таблица,
+    которую правят руками, рано или поздно получит цикл."""
+    try:
+        table, _ = _read(DIR / "slug_redirects.json")
+    except (OSError, ValueError):
+        return slug
+    if not isinstance(table, dict):
+        return slug
+    seen = {slug}
+    cur = slug
+    for _ in range(3):
+        nxt = table.get(cur)
+        if not isinstance(nxt, str) or not _SLUG_RE.match(nxt) or nxt in seen:
+            break
+        seen.add(nxt)
+        cur = nxt
+    return cur
+
+
+@router.get("/campaigns/{slug}/leaders/{rank}")
+async def leader_curve(slug: str, rank: int, request: Request):
+    """Кривая лидера вне топ-10: сборщик кладёт её отдельным файлом
+    `<slug>.leader-<rank>.json` ({rank, curve, buyhold_curve}), чтобы отчёт на сто
+    строк не тащил сто кривых, из которых откроют одну."""
+    _auth(request)
+    if not _SLUG_RE.match(slug) or not 1 <= rank <= 9999:
+        raise HTTPException(status_code=404, detail="Нет такой кампании.")
+    try:
+        data, _ = _read(DIR / f"{slug}.leader-{rank}.json")
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Кривой этого лидера нет.") from None
+    except (OSError, ValueError) as exc:
+        log.warning("showcase.leader_unreadable", slug=slug, rank=rank, error=str(exc))
+        raise HTTPException(status_code=502, detail=f"Кривая лидера не читается: {exc}") from exc
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=502, detail="Кривая лидера не объект: формат изменился.")
+    return data
+
+
 @router.get("/campaigns/{slug}")
 async def campaign(slug: str, request: Request):
     _auth(request)
     if not _SLUG_RE.match(slug):
         raise HTTPException(status_code=404, detail="Нет такой кампании.")
+    asked = slug
     path = DIR / f"{slug}.json"
+    if not path.exists():
+        # Файла нет — может быть, slug старый (см. resolve_slug).
+        slug = resolve_slug(slug)
+        path = DIR / f"{slug}.json"
     try:
         data, mtime = _read(path)
     except FileNotFoundError:
@@ -111,4 +163,8 @@ async def campaign(slug: str, request: Request):
     if not isinstance(data, dict):
         raise HTTPException(status_code=502,
                             detail="Отчёт кампании не объект: формат сборщика изменился.")
-    return {**data, "built_at_ms": int(mtime * 1000)}
+    out = {**data, "built_at_ms": int(mtime * 1000)}
+    # Страница сверяет slug отчёта с адресом и сама переписывает URL на новый.
+    if slug != asked:
+        out["redirected_from"] = asked
+    return out

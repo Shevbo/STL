@@ -5,8 +5,9 @@
 // а инвариант: ни один зелёный кусок не лежит под нулём и наоборот.
 import { describe, it, expect } from 'vitest';
 import {
-  BASE_PATH, NO_FILTERS, campaignPath, chainOf, curveGeometry, diffCurve, fmtPnl, honestVolume,
-  niceTicks, revisionOf, routeOf, splitAtZero, statusInfo, toMs, visibleCards, type Card,
+  BASE_PATH, NO_FILTERS, campaignPath, chainOf, curveGeometry, diffCurve, fmtLeaderCell, fmtPnl,
+  hiddenCount, honestVolume, leaderColumns, leaderValue, niceTicks, rerunNote, revisionOf, routeOf,
+  sortLeaders, splitAtZero, statusInfo, toMs, visibleCards, type Card,
 } from './campaign-showcase';
 
 describe('маршрут', () => {
@@ -356,5 +357,101 @@ describe('честный объём', () => {
 
   it('нет лидера — всё пусто', () => {
     expect(honestVolume(null).missing).toHaveLength(3);
+  });
+});
+
+describe('перебор без кривой за чипом', () => {
+  // 04.10.2026: 1609 карточек, кривая у 71. Стена «кривой нет» — не витрина.
+  const mix = [
+    C('r1', { kind: 'research', status: 'no_curve' }),      // исследование без кривой — показываем
+    C('o1', { kind: 'optimizer', status: 'done', thumb: [[0, 1], [1, 2]] }),
+    C('o2', { kind: 'optimizer', status: 'no_curve' }),
+    C('o3', { kind: 'optimizer', status: 'no_curve' }),
+    C('o4', { kind: 'optimizer', status: 'queued' }),
+    C('o5', { kind: 'optimizer', status: 'running' }),
+  ];
+
+  it('по умолчанию скрыт только перебор без кривой', () => {
+    expect(visibleCards(mix, NO_FILTERS).map((c) => c.slug)).toEqual(['r1', 'o1', 'o4', 'o5']);
+  });
+
+  it('идущее и ожидающее прогона НЕ скрывается никогда', () => {
+    const v = visibleCards(mix, NO_FILTERS).map((c) => c.slug);
+    expect(v).toContain('o4');
+    expect(v).toContain('o5');
+  });
+
+  it('исследование без кривой остаётся: оно и есть содержимое витрины', () => {
+    expect(visibleCards(mix, NO_FILTERS).map((c) => c.slug)).toContain('r1');
+  });
+
+  it('чип «показывать без кривой» возвращает всё', () => {
+    expect(visibleCards(mix, { ...NO_FILTERS, hideNoCurve: false })).toHaveLength(6);
+  });
+
+  it('явный фильтр «кривой нет» отменяет скрытие, иначе дал бы пустоту', () => {
+    expect(visibleCards(mix, { ...NO_FILTERS, status: 'no_curve' }).map((c) => c.slug))
+      .toEqual(['r1', 'o2', 'o3']);
+  });
+
+  it('число скрытого для самого переключателя', () => {
+    expect(hiddenCount(mix, NO_FILTERS)).toBe(2);
+    expect(hiddenCount(mix, { ...NO_FILTERS, hideNoCurve: false })).toBe(2);   // считаем независимо от чипа
+  });
+});
+
+describe('таблица лидеров', () => {
+  const L = [
+    { rank: 1, rev: 3, contracts_peak: 4, full_cost_rub: 900000, return_pct: 5.5,
+      metrics: { net: 50000, rf: 3.456, l_share: 0.75, score: 129600, cycles: 82, lb_net: 51000 } },
+    { rank: 2, metrics: { net: 20000, rf: 1.2, l_share: 0.5, score: 12000, ulcer: 7 } },
+  ];
+
+  it('известные колонки в договорённом порядке, прочие метрики из данных следом', () => {
+    expect(leaderColumns(L)).toEqual(
+      ['rev', 'contracts_peak', 'full_cost_rub', 'net', 'return_pct', 'rf', 'l_share', 'score', 'cycles', 'ulcer']);
+  });
+
+  it('колонки, которых нет ни у кого, не рисуются', () => {
+    expect(leaderColumns([{ rank: 1, metrics: { net: 1 } }])).toEqual(['net']);
+  });
+
+  it('lb_net — служебное поле, своей колонки не имеет', () => {
+    expect(leaderColumns(L)).not.toContain('lb_net');
+  });
+
+  it('значение читается с верхнего уровня, затем из metrics', () => {
+    expect(leaderValue(L[0], 'contracts_peak')).toBe(4);
+    expect(leaderValue(L[0], 'rf')).toBe(3.456);
+    expect(leaderValue(L[1], 'contracts_peak')).toBeUndefined();
+  });
+
+  it('форматы по смыслу колонки', () => {
+    expect(fmtLeaderCell('l_share', 0.75)).toBe('75\u00a0%');          // доля → проценты
+    expect(fmtLeaderCell('rf', 3.456)).toBe('3,46');
+    expect(fmtLeaderCell('contracts_peak', 4)).toBe('4');
+    expect(fmtLeaderCell('full_cost_rub', 900000)).toBe('900\u00a0000\u00a0₽');
+    expect(fmtLeaderCell('return_pct', 5.5)).toBe('+5,5\u00a0%');
+    expect(fmtLeaderCell('net', -2000, 'rub')).toBe('−2\u00a0000\u00a0₽');
+    expect(fmtLeaderCell('score', 129600)).toBe('129\u00a0600');
+  });
+
+  it('нет значения — прочерк, а не ноль', () => {
+    expect(fmtLeaderCell('rf', null)).toBe('—');
+    expect(fmtLeaderCell('rf', undefined)).toBe('—');
+    expect(fmtLeaderCell('rf', NaN)).toBe('—');
+  });
+
+  it('сортировка: пустые всегда в конце, при любом направлении', () => {
+    const rows = [{ rank: 1, metrics: { rf: 2 } }, { rank: 2, metrics: {} }, { rank: 3, metrics: { rf: 5 } }];
+    expect(sortLeaders(rows, 'rf', -1).map((r) => r.rank)).toEqual([3, 1, 2]);
+    expect(sortLeaders(rows, 'rf', 1).map((r) => r.rank)).toEqual([1, 3, 2]);
+    expect(sortLeaders(rows, null, 1)).toBe(rows);
+  });
+
+  it('перепрогон на текущем движке: расхождение lb_net и net подписывается', () => {
+    expect(rerunNote(L[0])).toEqual({ was: 51000, now: 50000 });
+    expect(rerunNote({ metrics: { net: 100, lb_net: 100.2 } })).toBeNull();    // в пределах округления
+    expect(rerunNote({ metrics: { net: 100 } })).toBeNull();                    // нечего сравнивать
   });
 });

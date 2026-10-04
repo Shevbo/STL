@@ -138,8 +138,28 @@ export interface Filters {
   q: string;
   allRevisions: boolean;
   symbol: string;        // '' | инструмент (работает, только если сборщик отдал symbols)
+  /** Скрывать перебор оптимизатора без кривой (по умолчанию да). */
+  hideNoCurve: boolean;
 }
-export const NO_FILTERS: Filters = { status: 'all', kind: 'all', q: '', allRevisions: false, symbol: '' };
+export const NO_FILTERS: Filters = {
+  status: 'all', kind: 'all', q: '', allRevisions: false, symbol: '', hideNoCurve: true,
+};
+
+// ПЕРЕБОР БЕЗ КРИВОЙ ПО УМОЛЧАНИЮ ЗА ЧИПОМ. 04.10.2026 сборщик отдаёт 1609 карточек
+// (1573 перебора оптимизатора + 36 исследований), кривая есть у 71: остальные —
+// стена из «кривой нет». Рекомендация backtests: по умолчанию done с кривой и
+// все исследования, остальное за переключателем.
+//
+// Скрываем ТОЛЬКО то, что одновременно без кривой и не исследование: идущее и
+// ожидающее прогона не прячем никогда — оператор ждёт именно их. А выбранный
+// явно статус «кривой нет» отменяет скрытие: иначе фильтр дал бы пустоту.
+export const isHiddenNoCurve = (c: Card, f: Filters): boolean =>
+  f.hideNoCurve && f.status !== 'no_curve' && c.status === 'no_curve'
+  && (c.kind ?? 'research') !== 'research';
+
+/** Сколько карточек сейчас скрыто чипом — число для самого переключателя. */
+export const hiddenCount = (cards: Card[], f: Filters): number =>
+  cards.filter((c) => isHiddenNoCurve(c, { ...f, hideNoCurve: true })).length;
 
 export function visibleCards(cards: Card[], f: Filters): Card[] {
   // Свёртка до последней редакции линии — ДО остальных фильтров: иначе фильтр по
@@ -152,6 +172,7 @@ export function visibleCards(cards: Card[], f: Filters): Card[] {
   }
   const q = f.q.trim().toLowerCase();
   return list.filter((c) => {
+    if (isHiddenNoCurve(c, f)) return false;
     if (f.status !== 'all' && c.status !== f.status) return false;
     if (f.kind !== 'all' && (c.kind ?? 'research') !== f.kind) return false;
     if (f.symbol && !(c.symbols ?? []).includes(f.symbol)) return false;
@@ -317,4 +338,87 @@ export function honestVolume(l: Record<string, any> | null | undefined): HonestV
   if (r.fullCost == null) r.missing.push('full_cost_rub');
   if (r.returnPct == null) r.missing.push('return_pct');
   return r;
+}
+
+// ── Таблица лидеров (топ-100) ───────────────────────────────────────────────
+// Колонки RF × net × L (решение оператора): rf — recovery factor, net — чистая
+// прибыль, l_share — доля месяцев в плюсе (0..1), score = rf × net × l_share.
+// СЧИТАЕТ СБОРЩИК, фронт score не считает: вторая реализация разошлась бы с ней.
+const FIXED_COLS = ['rev', 'contracts_peak', 'full_cost_rub', 'net', 'return_pct',
+                    'rf', 'l_share', 'score'];
+// lb_net — служебное поле (net из лидерборда до перепрогона), своей колонки не
+// имеет: оно нужно для пометки «перепрогон на текущем движке».
+const HIDDEN_COLS = new Set(['lb_net']);
+
+export const LEADER_LABEL: Record<string, string> = {
+  rev: 'Ред.', contracts_peak: 'Контрактов', full_cost_rub: 'Полная стоимость', net: 'Net',
+  return_pct: 'Доходность', rf: 'RF', l_share: 'L', score: 'RF×net×L',
+};
+
+/** Значение лидера: верхний уровень, затем metrics. Ключи сборщика меняются, поэтому
+ *  читаем оба места, а не гадаем, где лежит. */
+export function leaderValue(l: Record<string, any> | null | undefined, k: string): unknown {
+  const v = l?.[k];
+  return v !== undefined ? v : l?.metrics?.[k];
+}
+
+/** Колонки: известные в договорённом порядке (только те, что есть хоть у одного
+ *  лидера), затем ВСЕ прочие метрики из данных — перечень, который молча отстаёт
+ *  от источника, на этом проекте уже дважды прятал новые поля. */
+export function leaderColumns(leaders: Record<string, any>[]): string[] {
+  const has = (k: string) => leaders.some((l) => {
+    const v = leaderValue(l, k);
+    return v !== undefined && v !== null;
+  });
+  const fixed = FIXED_COLS.filter(has);
+  const rest: string[] = [];
+  for (const l of leaders) {
+    for (const k of Object.keys(l.metrics ?? {})) {
+      if (!FIXED_COLS.includes(k) && !HIDDEN_COLS.has(k) && !rest.includes(k)) rest.push(k);
+    }
+  }
+  return [...fixed, ...rest];
+}
+
+const MONEY_KEY = /(^|_)(net|pnl|gross|dd|commission|loss|profit)($|_)/;
+
+/** Ячейка лидера. null → «—»; единицы по смыслу колонки, а не по виду числа. */
+export function fmtLeaderCell(k: string, v: unknown, unit?: string | null): string {
+  if (v == null || (typeof v === 'number' && !Number.isFinite(v))) return '—';
+  if (typeof v !== 'number') return String(v);
+  const g = (n: number, d = 0) => n.toLocaleString('ru-RU', { maximumFractionDigits: d, minimumFractionDigits: d })
+    .replace(/ /g, NBSP);
+  if (k === 'rev' || k === 'contracts_peak') return g(v);
+  if (k === 'full_cost_rub') return fmtPnl(v, 'rub', false);
+  if (k === 'return_pct') return fmtPnl(v, 'pct');
+  if (k === 'l_share') return `${g(v * 100)}${NBSP}%`;          // доля 0..1 → проценты
+  if (k === 'rf') return g(v, 2);
+  if (k === 'score') return g(v, 0);                              // произведение, без единицы
+  if (MONEY_KEY.test(k)) return fmtPnl(v, unit, !/(^|_)dd($|_)/.test(k));
+  return g(v, 2);
+}
+
+/** Сортировка по колонке; пустые значения — ВСЕГДА в конце, при любом направлении
+ *  (иначе лидер без данных всплывал бы наверх как «самый маленький»). */
+export function sortLeaders<T extends Record<string, any>>(leaders: T[], key: string | null, dir: 1 | -1): T[] {
+  if (!key) return leaders;
+  const val = (l: T) => {
+    const v = key === 'rank' ? l.rank : leaderValue(l, key);
+    return typeof v === 'number' && Number.isFinite(v) ? v : null;
+  };
+  return leaders.slice().sort((a, b) => {
+    const x = val(a), y = val(b);
+    if (x == null && y == null) return 0;
+    if (x == null) return 1;
+    if (y == null) return -1;
+    return (x - y) * dir;
+  });
+}
+
+/** Перепрогон на текущем движке: net лидерборда (lb_net) и net кривой расходятся,
+ *  потому что движок менялся. Расхождение не прячем — подписываем. */
+export function rerunNote(l: Record<string, any> | null | undefined): { was: number; now: number } | null {
+  const was = leaderValue(l, 'lb_net'), now = leaderValue(l, 'net');
+  if (typeof was !== 'number' || typeof now !== 'number') return null;
+  return Math.round(was) === Math.round(now) ? null : { was, now };
 }
