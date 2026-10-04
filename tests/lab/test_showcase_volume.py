@@ -120,3 +120,11 @@ def test_redirects_and_lazy_files(tmp_path):
 def _row(run, st):
     return {"campaign_run": run, "net": 1.0, "trades": 5, "max_dd": 1.0, "strategy": st, "symbol": "RI",
             "date_from": "2026-01-01", "date_to": "2026-02-01", "created_at": "2026-10-01T00:00:00", "params": {}}
+
+
+def test_generic_symbol_without_schedule_has_no_buyhold(tmp_path):
+    (tmp_path / "MX.json").write_text(json.dumps({"key": "MX", "rows": [[1, 1, 1, 1, 1, 1], [2, 2, 2, 2, 2, 1]]}))
+    ctx = sv.BarsCtx(str(tmp_path), {"MXU6": 1.0})
+    assert ctx.buyhold("MX", 0, 10, 1, True, 10, b.downsample) is None  # MX нет в SWEEP_CONTRACTS
+    assert ctx.pv_at("spRIZ6d0921", 1) is None
+    assert ctx.pv_at("MXU6", 1) == 1.0

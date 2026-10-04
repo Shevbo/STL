@@ -171,6 +171,8 @@ class BarsCtx:
         if self._sweep(inst) and sym == inst:
             pw, pvs = self._spliced(inst)
             return buyhold_curve(pw["bars"], pw["rolls"], pvs, t0, t1, n, to_rub, n_points, downsample)
+        if sym == inst:  # склейка без расписания контрактов (нет в SWEEP_CONTRACTS): честно склеить нечем
+            return None
         rows = self._load(sym)
         pv = self.pv_at(sym, t1)
         bars = [list(r[:6]) + [0] for r in rows]
