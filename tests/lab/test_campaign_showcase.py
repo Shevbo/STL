@@ -158,3 +158,10 @@ def test_bf_row_goes_only_to_its_own_logic():
     assert b.bf_belongs(row, runs[1:]) and not b.bf_belongs(row, runs[:1])
     assert not b.bf_belongs(dict(row, strategy=None), runs)  # неоднозначно: две стратегии
     assert not b.bf_belongs(dict(row, params={"symbol": "SiU6"}), runs)
+
+
+def test_opt_sweeps_merge_across_dates_by_logic():
+    f = lambda run, net: dict(_run(run, net, "cci", "RIU6"), date_from="2026-06-01", date_to="2026-06-30")  # noqa: E731
+    cards = b.merge_cards([], [f("opt-20260605-0618", 1.0), f("opt-20260606-1326", 2.0)])
+    assert [c["entry"]["slug"] for c in cards] == ["opt-cci-ri"]
+    assert b.varieties_of(cards[0]["runs"])[0]["n_runs"] == 2
