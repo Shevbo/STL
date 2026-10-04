@@ -206,3 +206,72 @@ describe('редакция: лог, diff, приёмка', () => {
     expect(btn('Принять').disabled).toBe(true);
   });
 });
+
+describe('карточка исследования и прогон', () => {
+  it('карточка исследования: создать нельзя, причина — несколько инструментов', async () => {
+    api({ [`${B}/status`]: status(W()), [`${B}/cards/c1/revisions`]: list([]) });
+    host = document.createElement('div'); document.body.appendChild(host);
+    app = mount(WorkbenchPanel, { target: host, props: { card: 'c1', kind: 'research', baseRev: 4 } });
+    await tick();
+    expect(btn('Создать новую редакцию').disabled).toBe(true);
+    expect(host.querySelector('.wb-why')!.textContent).toContain('несколько инструментов');
+  });
+
+  it('первая редакция шлёт parent = rev сборщика (одна нумерация с витриной)', async () => {
+    let sent: any = null;
+    api({ [`${B}/status`]: status(W()),
+          [`${B}/cards/c1/revisions`]: (o) => (o?.method === 'POST'
+            ? (sent = JSON.parse(o.body), J({ id: 1, rev: 4, status: 'queued' }))
+            : J({ revisions: [] })),
+          [`${B}/cards/c1/revisions/4`]: () => J({ id: 1, card: 'c1', rev: 4, status: 'queued', message: 'x', log: '' }) });
+    host = document.createElement('div'); document.body.appendChild(host);
+    app = mount(WorkbenchPanel, { target: host, props: { card: 'c1', kind: 'optimizer', baseRev: 3 } });
+    await tick();
+    btn('Создать новую редакцию').click(); await tick();
+    const ta = host.querySelector('textarea') as HTMLTextAreaElement;
+    ta.value = 'правь'; ta.dispatchEvent(new Event('input', { bubbles: true })); await tick();
+    btn('отправить воркеру').click(); await tick();
+    expect(sent.parent).toBe(3);
+  });
+
+  const RUN_REV = { id: 9, card: 'c1', rev: 2, parent: 1, status: 'ready', message: 'x', log: '',
+    diff: 'd', diff_sha: 's', gates: { pytest: { ok: true } }, script_bytes: 2048,
+    params: { symbol: 'RIZ6', date_from: '2026-07-01', date_to: '2026-09-30' }, runs: [] as any[] };
+
+  it('готовая редакция: прогон ставится, id и статус показаны', async () => {
+    let posted = 0;
+    const rev = { ...RUN_REV };
+    api({ [`${B}/status`]: status(W()), [`${B}/cards/c1/revisions`]: list([rev]),
+          [`${B}/cards/c1/revisions/2`]: () => J(rev),
+          [`${B}/cards/c1/revisions/2/run`]: () => { posted++; rev.runs = [{ run_id: 'run-7', by: 'boss@x', at: 1 }];
+            return J({ run_id: 'run-7', engine: 'remote', runs: rev.runs }); },
+          '/api/v1/backtest/run-7/status': () => J({ status: 'queued', runner: 'очередь на i9 (№2)' }) });
+    await open();
+    (host.querySelector('.wb-item') as HTMLElement).click(); await tick();
+    expect(host.textContent).toContain('RIZ6 · 2026-07-01 … 2026-09-30');
+    btn('Запустить прогон').click(); await tick();
+    expect(posted).toBe(1);
+    expect(host.textContent).toContain('run-7');
+    expect(host.textContent).toContain('очередь на i9 (№2)');
+  });
+
+  it('без исходника — прогон заблокирован с причиной', async () => {
+    const rev = { ...RUN_REV, script_bytes: null };
+    api({ [`${B}/status`]: status(W()), [`${B}/cards/c1/revisions`]: list([rev]),
+          [`${B}/cards/c1/revisions/2`]: () => J(rev) });
+    await open();
+    (host.querySelector('.wb-item') as HTMLElement).click(); await tick();
+    expect(btn('Запустить прогон').disabled).toBe(true);
+    expect(host.textContent).toContain('не оставил исходник');
+  });
+
+  it('отказ ручки прогона — его текст', async () => {
+    api({ [`${B}/status`]: status(W()), [`${B}/cards/c1/revisions`]: list([RUN_REV]),
+          [`${B}/cards/c1/revisions/2`]: () => J(RUN_REV),
+          [`${B}/cards/c1/revisions/2/run`]: () => J({ detail: { code: 'too_many_combos', text: 'Комбинаций 2050, предел 2000.' } }, 422) });
+    await open();
+    (host.querySelector('.wb-item') as HTMLElement).click(); await tick();
+    btn('Запустить прогон').click(); await tick();
+    expect(host.textContent).toContain('Комбинаций 2050, предел 2000.');
+  });
+});

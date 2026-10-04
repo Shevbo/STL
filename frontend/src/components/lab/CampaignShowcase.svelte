@@ -400,7 +400,7 @@
         <!-- РАБОЧЕЕ МЕСТО: редакции карточки, воркер, лог, diff, приёмка (спека
              docs/backtest-workbench-spec.md). Отдельный компонент: у него свой опрос и своё
              состояние, и он не должен перерисовываться вместе с отчётом. -->
-        <WorkbenchPanel card={report.slug} />
+        <WorkbenchPanel card={report.slug} kind={report.kind ?? null} baseRev={report.rev ?? 0} />
 
         {#if report.verdict}
           <div class="cs-verdict"><b>Вердикт.</b> {report.verdict}</div>

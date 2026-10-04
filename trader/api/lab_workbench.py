@@ -69,6 +69,10 @@ WORKING_STALE_SEC = 180        # редакция в работе без отч�
 WORKING_MAX_SEC = 2 * 3600     # никакая правка не должна идти дольше двух часов
 
 MESSAGE_MAX = 4000             # сообщение оператора: чужой для воркера текст, режем сразу
+SCRIPT_MAX = 256 * 1024        # исходник стратегии в params.script_code (договорённость с backtests)
+COMBOS_MAX = 2000              # комбинаций на один прогон; больше — отказ, а не тихое урезание
+RUNNABLE = ("ready", "accepted")
+RUNS_KEEP = 50                 # сколько прогонов помнит редакция
 LOG_MAX = 1_000_000            # лог редакции (дописывается отчётами воркера)
 DIFF_MAX = 1_000_000
 GATES_MAX = 64_000
@@ -76,7 +80,7 @@ GATES_MAX = 64_000
 COLUMNS = frozenset({
     "id", "card", "rev", "parent", "message", "status", "change_note", "log", "diff",
     "diff_sha", "gates", "params", "code_ref", "created_by", "created_at", "updated_at",
-    "claimed_by", "claimed_at", "accepted_by", "accepted_at",
+    "claimed_by", "claimed_at", "accepted_by", "accepted_at", "runs",
 })
 
 
@@ -153,7 +157,10 @@ class Service:
         raise WorkbenchError(404, "no_revision", "Нет такой редакции.")
 
     async def create(self, card: str, message: str, parent: int | None, actor: str,
-                     now: int | None = None) -> dict[str, Any]:
+                     now: int | None = None, base_rev: int = 0) -> dict[str, Any]:
+        """`base_rev` — редакция карточки в витрине (rev сборщика, «ред. 1» = результат
+        кампании). Нумерация у карточки ОДНА (решение backtests 04.10.2026): таблица
+        начинает с base_rev + 1, а parent первой равен base_rev."""
         now = now or now_ms()
         text = (message or "").strip()
         if not text:
@@ -175,12 +182,13 @@ class Service:
                 raise WorkbenchError(
                     409, "busy", f"В карточке уже есть редакция {busy[0]['rev']} в работе "
                                  f"({busy[0]['status']}).")
-            latest = max((r["rev"] for r in rows), default=0)
+            latest = max([base_rev, *(r["rev"] for r in rows)])
             if parent is not None and parent != latest:
                 raise WorkbenchError(
                     409, "stale_parent", f"Редакция строится от последней ({latest or 'нет'}), "
                                          f"а указана {parent}: страница устарела.")
             row = {"card": card, "rev": latest + 1, "parent": latest or None, "message": text,
+                   "runs": None,
                    "status": "queued", "change_note": None, "log": "", "diff": None,
                    "diff_sha": None, "gates": None, "params": None, "code_ref": None,
                    "created_by": actor, "created_at": now, "updated_at": now,
@@ -213,6 +221,27 @@ class Service:
             log.info("workbench.accepted", card=card, rev=rev, by=actor, diff_sha=diff_sha,
                      code_ref=r.get("code_ref"))
             return _public({**r, "status": "accepted", "accepted_by": actor, "accepted_at": now}, full=False)
+
+    async def runnable(self, card: str, rev: int, now: int | None = None) -> dict[str, Any]:
+        """Редакция, которую можно запускать, с её параметрами прогона (или отказ)."""
+        now = now or now_ms()
+        async with self.store.tx() as tx:
+            r = await self._need(tx, card, rev)
+            if r["status"] not in RUNNABLE:
+                raise WorkbenchError(409, "not_runnable",
+                                     f"Запускать можно только готовую или принятую редакцию, сейчас: {r['status']}.")
+            return dict(r)
+
+    async def add_run(self, card: str, rev: int, run_id: str, actor: str,
+                      now: int | None = None) -> list[dict[str, Any]]:
+        now = now or now_ms()
+        async with self.store.tx(write=True) as tx:
+            r = await self._need(tx, card, rev)
+            runs = list(r.get("runs") or [])
+            runs.append({"run_id": run_id, "by": actor, "at": now})
+            runs = runs[-RUNS_KEEP:]
+            await tx.update(r["id"], {"runs": runs, "updated_at": now})
+            return runs
 
     # -- действия воркера
     async def heartbeat(self, worker_id: str, version: str, busy_with: int | None,
@@ -313,6 +342,56 @@ class Service:
             raise WorkbenchError(403, "forbidden_transition", f"{actor} не вправе переводить {frm} → {to}.")
 
 
+def combos_of(params: dict[str, Any]) -> int:
+    """Сколько комбинаций в прогоне: список наборов или произведение длин сетки."""
+    sets = params.get("param_sets")
+    if isinstance(sets, list):
+        return max(1, len(sets))
+    grid = params.get("params_grid")
+    if isinstance(grid, dict) and grid:
+        n = 1
+        for v in grid.values():
+            n *= len(v) if isinstance(v, list) and v else 1
+        return n
+    return 1
+
+
+def build_run_body(params: dict[str, Any] | None) -> dict[str, Any]:
+    """Тело POST /api/v1/backtest/run из params редакции (формат — спека backtests 04.10.2026).
+
+    Сервер НЕ ДОВЕРЯЕТ ВОРКЕРУ: исходник ещё раз проходит validate_script, размер и число
+    комбинаций проверяются здесь, а не принимаются на слово."""
+    p = dict(params or {})
+    code = p.get("script_code")
+    if not isinstance(code, str) or not code.strip():
+        raise WorkbenchError(422, "no_script", "У редакции нет исходника стратегии (params.script_code).")
+    if len(code.encode("utf-8")) > SCRIPT_MAX:
+        raise WorkbenchError(422, "script_too_big", f"Исходник больше {SCRIPT_MAX // 1024} КБ.")
+    from trader.lab.script_guard import ScriptValidationError, validate_script
+    try:
+        validate_script(code)
+    except ScriptValidationError as exc:
+        raise WorkbenchError(422, "script_rejected", f"Исходник не прошёл проверку: {exc}") from exc
+    for k in ("symbol", "date_from", "date_to"):
+        if not isinstance(p.get(k), str) or not p[k].strip():
+            raise WorkbenchError(422, "no_window", f"В параметрах прогона нет поля {k}.")
+    n = combos_of(p)
+    if n > COMBOS_MAX:
+        raise WorkbenchError(422, "too_many_combos", f"Комбинаций {n}, предел {COMBOS_MAX}.")
+    body: dict[str, Any] = {
+        "scriptCode": code, "baseParams": dict(p.get("base_params") or {}),
+        "symbol": p["symbol"], "dateFrom": p["date_from"], "dateTo": p["date_to"],
+        "engine": "remote",
+        # Прогон запускает оператор кнопкой: за ним сидит человек, вперёд фоновых кампаний.
+        "priority": 100,
+    }
+    if isinstance(p.get("param_sets"), list):
+        body["paramSets"] = p["param_sets"]
+    elif isinstance(p.get("params_grid"), dict):
+        body["paramsGrid"] = p["params_grid"]
+    return body
+
+
 def _cap(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[:limit] + "\n[STL] лог обрезан"
 
@@ -323,9 +402,15 @@ def _public(r: dict[str, Any], full: bool) -> dict[str, Any]:
     out = {k: r.get(k) for k in ("id", "card", "rev", "parent", "status", "change_note",
                                  "code_ref", "created_by", "created_at", "updated_at",
                                  "accepted_by", "accepted_at", "diff_sha", "message")}
+    out["runs"] = list(r.get("runs") or [])
     if full:
+        # params без исходника: script_code — до 256 КБ кода, экрану он не нужен, а лог и
+        # diff его уже показывают. Наличие и размер отдаём явно.
+        prm = dict(r.get("params") or {})
+        code = prm.pop("script_code", None)
         out.update({"log": r.get("log") or "", "diff": r.get("diff"), "gates": r.get("gates"),
-                    "params": r.get("params")})
+                    "params": prm or None,
+                    "script_bytes": len(code.encode("utf-8")) if isinstance(code, str) else None})
     return out
 
 
@@ -399,7 +484,10 @@ _DDL = (
          claimed_at BIGINT,
          accepted_by TEXT,
          accepted_at BIGINT,
+         runs JSONB,
          UNIQUE (card, rev))""",
+    # Колонка прогонов добавлена после первой версии таблицы; на уже созданной её не было бы.
+    "ALTER TABLE workbench_revisions ADD COLUMN IF NOT EXISTS runs JSONB",
     """CREATE TABLE IF NOT EXISTS workbench_worker (
          singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
          worker_id TEXT,
@@ -562,12 +650,37 @@ async def get_revision(slug: str, rev: int, request: Request):
         raise _wrap(e) from e
 
 
+def _card_meta(slug: str) -> dict[str, Any]:
+    """Карточка из витрины: её kind и rev сборщика. Нет карточки — нечего и править.
+
+    Рабочее место только для карточек «логика + инструмент» (kind optimizer); карточки
+    исследований охватывают несколько инструментов, и правка «стратегии карточки» у них
+    не определена (решение backtests 04.10.2026)."""
+    from trader.api import lab_showcase
+    try:
+        data, _ = lab_showcase._read(lab_showcase.DIR / f"{slug}.json")
+    except FileNotFoundError:
+        raise WorkbenchError(404, "no_card", "Нет такой карточки в витрине.") from None
+    except (OSError, ValueError) as exc:
+        raise WorkbenchError(502, "card_unreadable", f"Карточка не читается: {exc}") from exc
+    if not isinstance(data, dict):
+        raise WorkbenchError(502, "card_unreadable", "Карточка не объект.")
+    return data
+
+
 @router.post("/cards/{slug}/revisions")
 async def create_revision(slug: str, body: CreateBody, request: Request):
     actor = _auth(request)
     _slug(slug)
     try:
-        return await _svc(request).create(slug, body.message, body.parent, actor)
+        meta = _card_meta(slug)
+        if (meta.get("kind") or "research") != "optimizer":
+            raise WorkbenchError(409, "multi_instrument",
+                                 "Карточка охватывает несколько инструментов: правка стратегии здесь "
+                                 "не определена. Рабочее место — для карточек «логика + инструмент».")
+        base = meta.get("rev")
+        base_rev = int(base) if isinstance(base, (int, float)) and base >= 0 else 0
+        return await _svc(request).create(slug, body.message, body.parent, actor, base_rev=base_rev)
     except WorkbenchError as e:
         raise _wrap(e) from e
 
@@ -594,14 +707,31 @@ async def accept_revision(slug: str, rev: int, body: AcceptBody, request: Reques
 
 @router.post("/cards/{slug}/revisions/{rev}/run")
 async def run_revision(slug: str, rev: int, request: Request):
-    """Постановка прогона на i9 из карточки — этап 2 спеки.
+    """Прогон редакции на i9: ОБЫЧНЫЙ /api/v1/backtest/run (решение backtests 04.10.2026).
 
-    Формат задания agent_tasks для прогона редакции определяет backtests: я не стану
-    его выдумывать. Пока 501, и экран говорит об этом словами."""
-    _auth(request)
-    raise HTTPException(status_code=501, detail={
-        "code": "not_implemented",
-        "text": "Постановка прогона не подключена: нужен формат задания i9 от окна backtests."})
+    Код редакции едет в теле задания, поэтому ветку wb/* не надо доставлять на i9 и в
+    main до приёмки. Запускает только оператор: прогон тратит i9, а за кнопкой сидит
+    человек. Повторный run — новый прогон, старые остаются."""
+    actor = _operator(request)
+    _slug(slug)
+    svc = _svc(request)
+    enqueue = getattr(request.app.state, "enqueue_backtest", None)
+    if enqueue is None:
+        raise HTTPException(status_code=503, detail={"code": "no_queue", "text": "Очередь прогонов недоступна."})
+    try:
+        r = await svc.runnable(slug, rev)
+        body = build_run_body(r.get("params"))
+    except WorkbenchError as e:
+        raise _wrap(e) from e
+    # no_cache: кэш одиночных прогонов не сравнивает код стратегии, а у редакции он другой
+    # при тех же параметрах — без флага вернулся бы результат СТАРОГО кода.
+    out = await enqueue(body, request, no_cache=True)
+    run_id = str((out or {}).get("run_id") or "")
+    if not run_id:
+        raise HTTPException(status_code=502, detail={"code": "no_run_id", "text": "Очередь не вернула id прогона."})
+    runs = await svc.add_run(slug, rev, run_id, actor)
+    log.info("workbench.run", card=slug, rev=rev, run_id=run_id, by=actor)
+    return {"run_id": run_id, "engine": (out or {}).get("engine"), "runs": runs}
 
 
 _SLUG_OK = frozenset("abcdefghijklmnopqrstuvwxyz0123456789-")

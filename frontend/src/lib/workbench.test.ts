@@ -5,8 +5,8 @@
 // на сервере (строка "true" не зелёная).
 import { describe, it, expect } from 'vitest';
 import {
-  MESSAGE_MAX, canAccept, canCreate, errorText, gatesSummary, isOpen, messageError,
-  statusLabel, statusTone, workerLine, type Revision, type WorkerState,
+  MESSAGE_MAX, canAccept, canCreate, canRun, errorText, gatesSummary, isOpen, messageError,
+  runStatusLabel, statusLabel, statusTone, workerLine, type Revision, type WorkerState,
 } from './workbench';
 
 const W = (o: Partial<WorkerState> = {}): WorkerState =>
@@ -146,5 +146,52 @@ describe('сообщение оператора', () => {
     expect(messageError('   ')).toContain('Опишите');
     expect(messageError('x'.repeat(MESSAGE_MAX + 1))).toContain('Длиннее');
     expect(messageError('добавь фильтр')).toBe('');
+  });
+});
+
+describe('карточка исследования', () => {
+  it('редакцию создать нельзя: карточка охватывает несколько инструментов', () => {
+    const c = canCreate(W(), [], true, 'research');
+    expect(c.ok).toBe(false);
+    expect(c.why).toContain('несколько инструментов');
+  });
+
+  it('карточка оптимизатора — можно', () => {
+    expect(canCreate(W(), [], true, 'optimizer').ok).toBe(true);
+  });
+
+  it('вид карточки неизвестен — решает сервер, экран не запрещает заранее', () => {
+    expect(canCreate(W(), [], true, null).ok).toBe(true);
+  });
+});
+
+describe('прогон редакции', () => {
+  const ok = R({ status: 'ready', script_bytes: 1200,
+                 params: { symbol: 'RIZ6', date_from: '2026-07-01', date_to: '2026-09-30' } });
+
+  it('готовая с исходником и окном — можно', () => {
+    expect(canRun(ok)).toEqual({ ok: true, why: '' });
+    expect(canRun({ ...ok, status: 'accepted' }).ok).toBe(true);
+  });
+
+  it('в работе — нельзя, статус назван словами', () => {
+    const c = canRun({ ...ok, status: 'working' });
+    expect(c.ok).toBe(false);
+    expect(c.why).toContain('воркер правит');
+  });
+
+  it('нет исходника — запускать нечего', () => {
+    expect(canRun({ ...ok, script_bytes: null }).why).toContain('исходник');
+  });
+
+  it('нет окна данных — названо, какого поля', () => {
+    expect(canRun({ ...ok, params: { symbol: 'RIZ6', date_from: '2026-07-01' } }).why).toContain('date_to');
+  });
+
+  it('статус прогона словами, незнакомый — кодом', () => {
+    expect(runStatusLabel({ status: 'queued', runner: 'очередь на i9 (№3)' })).toBe('очередь на i9 (№3)');
+    expect(runStatusLabel({ status: 'done' })).toBe('готов');
+    expect(runStatusLabel({ status: 'weird' })).toBe('weird');
+    expect(runStatusLabel(null)).toBe('статус неизвестен');
   });
 });

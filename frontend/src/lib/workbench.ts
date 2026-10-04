@@ -17,6 +17,8 @@ export interface Revision {
   created_by?: string; created_at?: number; updated_at?: number;
   accepted_by?: string | null; accepted_at?: number | null; diff_sha?: string | null;
   log?: string; diff?: string | null; gates?: Record<string, any> | null; params?: Record<string, any> | null;
+  runs?: { run_id: string; by?: string; at?: number }[];
+  script_bytes?: number | null;
 }
 
 export const MESSAGE_MAX = 4000;
@@ -38,8 +40,14 @@ export interface Can { ok: boolean; why: string }
 /** Можно ли создать редакцию. Причина отказа — человеческая: кнопка без объяснения —
  *  то же, что сломанная (так было с «Обычным режимом» сетки). */
 export function canCreate(
-  w: WorkerState | null | undefined, revs: Revision[], loaded: boolean,
+  w: WorkerState | null | undefined, revs: Revision[], loaded: boolean, kind?: string | null,
 ): Can {
+  // Рабочее место — для карточек «логика + инструмент» (kind optimizer). Карточка
+  // исследования охватывает несколько инструментов, и «стратегия карточки» у неё не
+  // определена (решение backtests 04.10.2026). Сервер откажет тем же, здесь — заранее.
+  if (kind != null && kind !== 'optimizer') {
+    return { ok: false, why: 'карточка охватывает несколько инструментов: правка стратегии — на карточках «логика + инструмент»' };
+  }
   if (!loaded) return { ok: false, why: 'состояние рабочего места ещё не загружено' };
   if (!w || !w.alive) return { ok: false, why: workerLine(w) };
   const open = revs.find(isOpen);
@@ -97,3 +105,34 @@ export function errorText(status: number, body: any): string {
 
 export const messageError = (m: string): string =>
   !m.trim() ? 'Опишите, что изменить.' : m.length > MESSAGE_MAX ? `Длиннее ${MESSAGE_MAX} знаков (${m.length}).` : '';
+
+// ── Прогон редакции ─────────────────────────────────────────────────────────
+// Прогон = обычный /api/v1/backtest/run (решение backtests 04.10.2026): код редакции
+// едет в теле задания. Запускать можно готовую или принятую редакцию; параметры прогона
+// кладёт воркер (params), без них запускать нечего.
+export const RUNNABLE = ['ready', 'accepted'];
+
+export function canRun(r: Revision | null | undefined): Can {
+  if (!r) return { ok: false, why: 'редакция не выбрана' };
+  if (!RUNNABLE.includes(r.status)) {
+    return { ok: false, why: `запускать можно только готовую или принятую редакцию, сейчас: ${statusLabel(r.status)}` };
+  }
+  if (!r.script_bytes) return { ok: false, why: 'воркер не оставил исходник стратегии: запускать нечего' };
+  const p = r.params ?? {};
+  for (const k of ['symbol', 'date_from', 'date_to']) {
+    if (!p[k]) return { ok: false, why: `в параметрах прогона нет поля ${k}` };
+  }
+  return { ok: true, why: '' };
+}
+
+/** Состояние прогона словами: статус очереди как в лаборатории, без своих выдумок. */
+export function runStatusLabel(st: { status?: string; runner?: string } | null | undefined): string {
+  if (!st) return 'статус неизвестен';
+  switch (st.status) {
+    case 'queued': return st.runner || 'в очереди';
+    case 'running': return `считается${st.runner ? ' на ' + st.runner : ''}`;
+    case 'done': return 'готов';
+    case 'error': case 'failed': return 'ошибка';
+    default: return st.status || 'статус неизвестен';
+  }
+}

@@ -260,13 +260,28 @@ class _Settings:
 
 
 @pytest.fixture
-def client(monkeypatch):
+def client(monkeypatch, tmp_path):
+    import json as _json
+
+    from trader.api import lab_showcase
     monkeypatch.setenv("WORKBENCH_WORKER_TOKEN", TOKEN)
     monkeypatch.setenv("STL_WORKBENCH_OPERATORS", "boss@x")
+    # Витрина: карточка оптимизатора «логика + инструмент» (rev сборщика 1) и карточка
+    # исследования, охватывающая несколько инструментов.
+    monkeypatch.setattr(lab_showcase, "DIR", tmp_path)
+    lab_showcase._cache.clear()
+    (tmp_path / "c.json").write_text(_json.dumps({"slug": "c", "kind": "optimizer", "rev": 1}), encoding="utf-8")
+    (tmp_path / "r.json").write_text(_json.dumps({"slug": "r", "kind": "research", "rev": 4}), encoding="utf-8")
     app = FastAPI()
     app.include_router(wb.router)
     app.state.settings = _Settings()
     app.state.workbench_store = MemStore()
+    app.state.enqueued = []
+
+    async def _enqueue(body, request, no_cache=False):
+        app.state.enqueued.append({"body": body, "no_cache": no_cache})
+        return {"run_id": f"run-{len(app.state.enqueued)}", "engine": "remote"}
+    app.state.enqueue_backtest = _enqueue
     return TestClient(app)
 
 
@@ -311,6 +326,8 @@ def test_full_flow_over_http(client):
     # оператор просит правку
     created = client.post(f"{BASE}/cards/c/revisions", json={"message": "добавь фильтр"}, headers=op())
     assert created.status_code == 200 and created.json()["status"] == "queued"
+    # ОДНА нумерация с витриной: ред. 1 — результат кампании, первая правка — ред. 2.
+    assert (created.json()["rev"], created.json()["parent"]) == (2, 1)
     # воркер забирает и сдаёт
     job = client.post(f"{BASE}/worker/claim", json={"worker_id": "w1"}, headers=WK).json()
     assert job["message"] == "добавь фильтр"
@@ -322,11 +339,11 @@ def test_full_flow_over_http(client):
     assert client.post(f"{BASE}/worker/revisions/{rid}/report", headers=WK,
                        json={"worker_id": "w1", "status": "ready"}).status_code == 200
     # оператор смотрит и принимает
-    got = client.get(f"{BASE}/cards/c/revisions/1", headers=op()).json()
+    got = client.get(f"{BASE}/cards/c/revisions/2", headers=op()).json()
     assert got["status"] == "ready" and got["diff"] == "diff --git a b"
     sha = got["diff_sha"]
-    assert client.post(f"{BASE}/cards/c/revisions/1/accept", json={"diff_sha": "bad"}, headers=op()).status_code == 409
-    ok = client.post(f"{BASE}/cards/c/revisions/1/accept", json={"diff_sha": sha}, headers=op())
+    assert client.post(f"{BASE}/cards/c/revisions/2/accept", json={"diff_sha": "bad"}, headers=op()).status_code == 409
+    ok = client.post(f"{BASE}/cards/c/revisions/2/accept", json={"diff_sha": sha}, headers=op())
     assert ok.status_code == 200 and ok.json()["status"] == "accepted"
 
 
@@ -342,10 +359,8 @@ def test_card_slug_is_validated(client, bad):
     assert r.status_code in (404, 422)
 
 
-def test_run_is_honestly_not_implemented(client):
-    r = client.post(f"{BASE}/cards/c/revisions/1/run", headers=op())
-    assert r.status_code == 501
-    assert "формат задания" in r.json()["detail"]["text"]
+def test_run_of_a_missing_revision_is_404(client):
+    assert client.post(f"{BASE}/cards/c/revisions/9/run", headers=op()).status_code == 404
 
 
 def test_no_store_is_503_not_500(client):
@@ -354,7 +369,7 @@ def test_no_store_is_503_not_500(client):
 
 
 def test_error_carries_a_code_and_a_text_for_the_screen(client):
-    r = client.post(f"{BASE}/cards/c/revisions", json={"message": "правь"}, headers=op())
+    r = client.post(f"{BASE}/cards/c/revisions", json={"message": "правь"}, headers=op())   # воркера нет
     assert r.status_code == 409
     d = r.json()["detail"]
     assert d["code"] == "worker_down" and "воркер" in d["text"]
@@ -470,3 +485,151 @@ def test_ddl_declares_the_unique_card_rev_and_the_singleton_worker():
     ddl = " ".join(wb._DDL)
     assert "UNIQUE (card, rev)" in ddl
     assert "singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton)" in ddl
+
+
+
+# ── Одна нумерация с витриной и карточки «логика + инструмент» ──────────────
+def _hb(client):
+    assert client.post(f"{BASE}/worker/heartbeat", json={"worker_id": "w1"}, headers=WK).status_code == 200
+
+
+def test_research_card_refuses_a_revision_with_the_reason(client):
+    """Карточка исследования охватывает несколько инструментов: «стратегия карточки» не определена."""
+    _hb(client)
+    r = client.post(f"{BASE}/cards/r/revisions", json={"message": "правь"}, headers=op())
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "multi_instrument"
+    assert "несколько инструментов" in r.json()["detail"]["text"]
+
+
+def test_unknown_card_is_404(client):
+    _hb(client)
+    r = client.post(f"{BASE}/cards/nope/revisions", json={"message": "правь"}, headers=op())
+    assert r.status_code == 404 and r.json()["detail"]["code"] == "no_card"
+
+
+def test_first_revision_continues_the_collector_numbering(svc):
+    run(_alive(svc))
+    r = run(svc.create("c", "правь", None, "op@x", now=T0, base_rev=3))
+    assert (r["rev"], r["parent"]) == (4, 3)
+
+
+def test_stale_parent_counts_the_collector_revision(svc):
+    """Страница без редакций рабочего места шлёт parent = rev сборщика; иначе — устарела."""
+    run(_alive(svc))
+    expect("stale_parent", svc.create("c", "правь", 1, "op@x", now=T0, base_rev=3))
+    assert run(svc.create("c", "правь", 3, "op@x", now=T0, base_rev=3))["rev"] == 4
+
+
+# ── Прогон редакции ─────────────────────────────────────────────────────────
+GOOD_SCRIPT = "def make_on_bar(params):\n    def on_bar(bar, stl):\n        return None\n    return on_bar\n"
+
+
+def _ready_over_http(client, params):
+    _hb(client)
+    assert client.post(f"{BASE}/cards/c/revisions", json={"message": "правь"}, headers=op()).status_code == 200
+    job = client.post(f"{BASE}/worker/claim", json={"worker_id": "w1"}, headers=WK).json()
+    rid = job["id"]
+    assert client.post(f"{BASE}/worker/revisions/{rid}/report", headers=WK, json={
+        "worker_id": "w1", "status": "gates", "diff": "d", "code_ref": "wb/c/2@x",
+        "gates": {"pytest": {"ok": True}, "script_guard": {"ok": True}}, "params": params}).status_code == 200
+    assert client.post(f"{BASE}/worker/revisions/{rid}/report", headers=WK,
+                       json={"worker_id": "w1", "status": "ready"}).status_code == 200
+    return rid
+
+
+PARAMS = {"script_code": GOOD_SCRIPT, "base_params": {"step": 90}, "symbol": "RIZ6",
+          "date_from": "2026-07-01T00:00:00Z", "date_to": "2026-09-30T00:00:00Z",
+          "params_grid": {"step": [80, 90, 100], "lot": [1, 2]}}
+
+
+def test_run_enqueues_through_the_common_path_without_cache(client):
+    """Прогон редакции = обычный /backtest/run, но БЕЗ кэша одиночных прогонов: кэш не
+    сравнивает код стратегии, а у редакции он другой при тех же параметрах."""
+    _ready_over_http(client, PARAMS)
+    r = client.post(f"{BASE}/cards/c/revisions/2/run", headers=op())
+    assert r.status_code == 200 and r.json()["run_id"] == "run-1"
+    sent = client.app.state.enqueued[0]
+    assert sent["no_cache"] is True
+    b = sent["body"]
+    assert b["scriptCode"] == GOOD_SCRIPT and b["engine"] == "remote" and b["priority"] == 100
+    assert b["paramsGrid"] == {"step": [80, 90, 100], "lot": [1, 2]}
+    assert (b["symbol"], b["dateFrom"], b["dateTo"]) == ("RIZ6", PARAMS["date_from"], PARAMS["date_to"])
+    # id прогона записан в редакцию; повторный run — НОВЫЙ прогон, старый остаётся
+    client.post(f"{BASE}/cards/c/revisions/2/run", headers=op())
+    runs = client.get(f"{BASE}/cards/c/revisions/2", headers=op()).json()["runs"]
+    assert [x["run_id"] for x in runs] == ["run-1", "run-2"]
+
+
+def test_run_detail_does_not_ship_the_script_source(client):
+    _ready_over_http(client, PARAMS)
+    got = client.get(f"{BASE}/cards/c/revisions/2", headers=op()).json()
+    assert "script_code" not in (got["params"] or {})
+    assert got["script_bytes"] == len(GOOD_SCRIPT.encode())
+
+
+def test_run_only_by_an_operator(client):
+    _ready_over_http(client, PARAMS)
+    assert client.post(f"{BASE}/cards/c/revisions/2/run", headers=op("someone@x")).status_code == 403
+    assert client.post(f"{BASE}/cards/c/revisions/2/run", headers=WK).status_code == 401
+
+
+def test_run_only_a_ready_or_accepted_revision(client):
+    _hb(client)
+    client.post(f"{BASE}/cards/c/revisions", json={"message": "правь"}, headers=op())
+    r = client.post(f"{BASE}/cards/c/revisions/2/run", headers=op())
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "not_runnable"
+    assert client.app.state.enqueued == []
+
+
+def test_server_does_not_trust_the_worker_script(client):
+    """validate_script повторяется в ручке: воркер мог прислать что угодно."""
+    _ready_over_http(client, {**PARAMS, "script_code": "import os\nos.system('rm -rf /')\n"})
+    r = client.post(f"{BASE}/cards/c/revisions/2/run", headers=op())
+    assert r.status_code == 422 and r.json()["detail"]["code"] == "script_rejected"
+    assert client.app.state.enqueued == []
+
+
+def test_too_many_combos_is_refused_not_trimmed(client):
+    big = {**PARAMS, "params_grid": {"a": list(range(50)), "b": list(range(41))}}     # 2050
+    _ready_over_http(client, big)
+    r = client.post(f"{BASE}/cards/c/revisions/2/run", headers=op())
+    assert r.status_code == 422 and r.json()["detail"]["code"] == "too_many_combos"
+    assert "2050" in r.json()["detail"]["text"]
+
+
+@pytest.mark.parametrize("drop", ["script_code", "symbol", "date_from", "date_to"])
+def test_run_needs_the_script_and_the_window(client, drop):
+    _ready_over_http(client, {k: v for k, v in PARAMS.items() if k != drop})
+    r = client.post(f"{BASE}/cards/c/revisions/2/run", headers=op())
+    assert r.status_code == 422
+    assert client.app.state.enqueued == []
+
+
+def test_script_size_limit(client):
+    huge = GOOD_SCRIPT + "#" + "x" * (wb.SCRIPT_MAX + 1) + "\n"
+    _ready_over_http(client, {**PARAMS, "script_code": huge})
+    r = client.post(f"{BASE}/cards/c/revisions/2/run", headers=op())
+    assert r.status_code == 422 and r.json()["detail"]["code"] == "script_too_big"
+
+
+def test_combos_counting():
+    assert wb.combos_of({}) == 1
+    assert wb.combos_of({"param_sets": [{}, {}, {}]}) == 3
+    assert wb.combos_of({"param_sets": []}) == 1
+    assert wb.combos_of({"params_grid": {"a": [1, 2], "b": [1, 2, 3]}}) == 6
+    assert wb.combos_of({"params_grid": {"a": 5}}) == 1           # скаляр — одно значение
+
+
+def test_param_sets_are_passed_as_param_sets(client):
+    _ready_over_http(client, {**{k: v for k, v in PARAMS.items() if k != "params_grid"},
+                              "param_sets": [{"step": 80}, {"step": 90}]})
+    client.post(f"{BASE}/cards/c/revisions/2/run", headers=op())
+    b = client.app.state.enqueued[0]["body"]
+    assert b["paramSets"] == [{"step": 80}, {"step": 90}] and "paramsGrid" not in b
+
+
+def test_no_queue_is_503(client):
+    _ready_over_http(client, PARAMS)
+    client.app.state.enqueue_backtest = None
+    assert client.post(f"{BASE}/cards/c/revisions/2/run", headers=op()).status_code == 503

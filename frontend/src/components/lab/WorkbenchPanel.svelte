@@ -11,14 +11,16 @@
      «ПРИНЯТЬ» НИЧЕГО НЕ СЛИВАЕТ И НЕ РЕЛИЗИТ: переводит статус и записывает, кто и какой
      diff принял. Слияние в main делает окно backtests по явной команде, релиз — real-trade. -->
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, untrack } from 'svelte';
   import { fetchWithAuth } from '$lib/fetch-auth';
   import {
-    MESSAGE_MAX, canAccept, canCreate, errorText, gatesSummary, isOpen, messageError,
-    statusLabel, statusTone, workerLine, type Revision, type WorkerState,
+    MESSAGE_MAX, canAccept, canCreate, canRun, errorText, gatesSummary, isOpen, messageError,
+    runStatusLabel, statusLabel, statusTone, workerLine, type Revision, type WorkerState,
   } from '$lib/workbench';
 
-  let { card }: { card: string } = $props();
+  // kind и baseRev — из витрины: рабочее место только для карточек «логика + инструмент»,
+  // а нумерация редакций у карточки ОДНА (ред. 1 = результат кампании, rev сборщика).
+  let { card, kind = null, baseRev = 0 }: { card: string; kind?: string | null; baseRev?: number } = $props();
 
   const API = '/api/v1/lab/workbench';
   let worker = $state<WorkerState | null>(null);
@@ -82,7 +84,7 @@
   onMount(async () => { await load(); schedule(); });
   onDestroy(() => { alive = false; if (timer) clearTimeout(timer); });
 
-  const can = $derived(canCreate(worker, revs, loaded));
+  const can = $derived(canCreate(worker, revs, loaded, kind));
   const msgErr = $derived(composing ? messageError(message) : '');
 
   async function send() {
@@ -91,8 +93,9 @@
     try {
       const r = await fetchWithAuth(`${API}/cards/${encodeURIComponent(card)}/revisions`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        // parent не шлём: сервер строит от последней, а устаревшую страницу ловит сам.
-        body: JSON.stringify({ message, parent: revs.length ? Math.max(...revs.map((x) => x.rev)) : null }),
+        // parent — последняя редакция карточки, считая rev сборщика: сервер сверит его и
+        // откажет, если страница устарела (редакцию добавили из другой вкладки).
+        body: JSON.stringify({ message, parent: Math.max(baseRev || 0, ...revs.map((x) => x.rev)) || null }),
       });
       const d = await r.json().catch(() => null);
       if (!r.ok) { actionErr = errorText(r.status, d); await load(); return; }
@@ -124,6 +127,37 @@
   const when = (ms?: number | null) => ms ? new Date(ms).toLocaleString('ru-RU',
     { timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
   const acceptState = $derived(canAccept(detail, reviewed));
+  const runState = $derived(canRun(detail));
+  let running = $state(false);
+  // Статусы прогонов редакции — из той же ручки, что у лаборатории.
+  let runStatus = $state<Record<string, any>>({});
+
+  async function loadRuns(d: Revision | null) {
+    for (const r of (d?.runs ?? []).slice(-5)) {
+      if (runStatus[r.run_id]?.status === 'done') continue;
+      try {
+        const x = await fetchWithAuth(`/api/v1/backtest/${encodeURIComponent(r.run_id)}/status`);
+        runStatus[r.run_id] = x.ok ? await x.json() : { status: `HTTP ${x.status}` };
+      } catch { runStatus[r.run_id] = null; }
+    }
+  }
+  // Эффект зависит ТОЛЬКО от detail. loadRuns читает и пишет runStatus: без untrack
+  // эффект подписался бы на собственную запись и крутился бы бесконечно, дёргая
+  // ручку статуса (поймано тестом: прогон панели зависал).
+  $effect(() => { const d = detail; untrack(() => loadRuns(d)); });
+
+  async function startRun() {
+    if (!detail || running) return;
+    running = true; actionErr = '';
+    try {
+      const r = await fetchWithAuth(`${API}/cards/${encodeURIComponent(card)}/revisions/${detail.rev}/run`, { method: 'POST' });
+      const d = await r.json().catch(() => null);
+      if (!r.ok) { actionErr = errorText(r.status, d); return; }
+      note = `Прогон ${d.run_id} поставлен в очередь i9. Результаты — в строках прогона, как у лаборатории.`;
+      await loadDetail(detail.rev, false);
+    } catch (e: any) { actionErr = e?.message || 'нет связи'; }
+    finally { running = false; }
+  }
   const gates = $derived(gatesSummary(detail?.gates));
 </script>
 
@@ -237,6 +271,30 @@
             <div class="wb-sub">Принято: {detail.accepted_by} · {when(detail.accepted_at)}. Слияние в main и релиз —
               отдельным шагом (окно backtests по вашей команде).</div>
           {/if}
+
+          {#if detail.status === 'ready' || detail.status === 'accepted'}
+            <!-- ПРОГОН: обычный /backtest/run с кодом редакции в теле (решение backtests). Ветку
+                 не надо доставлять на i9 и в main до приёмки — поэтому гонять можно и
+                 непринятую: ради этого прогон и нужен. -->
+            <div class="wb-lbl">Прогон на i9</div>
+            {#if detail.params}
+              <div class="wb-sub">{detail.params.symbol ?? '—'} · {detail.params.date_from ?? '—'} … {detail.params.date_to ?? '—'}
+                {#if detail.script_bytes} · исходник {(detail.script_bytes / 1024).toFixed(1)} КБ{/if}</div>
+            {/if}
+            <div class="wb-actions">
+              <button class="wb-btn primary" disabled={!runState.ok || running}
+                      title={runState.ok ? 'поставить прогон этой редакции в очередь i9' : runState.why}
+                      onclick={startRun}>{running ? 'ставлю…' : 'Запустить прогон'}</button>
+              {#if !runState.ok}<span class="wb-why">{runState.why}</span>{/if}
+            </div>
+            {#if (detail.runs ?? []).length}
+              <ul class="wb-runs">
+                {#each [...(detail.runs ?? [])].reverse() as r (r.run_id)}
+                  <li><code>{r.run_id}</code> · {runStatusLabel(runStatus[r.run_id])} · {when(r.at)}</li>
+                {/each}
+              </ul>
+            {/if}
+          {/if}
         </div>
       {/if}
     {/if}
@@ -291,6 +349,8 @@
   .wb-pre.small { max-height: 180px; }
   .wb-gates { list-style: none; margin: 0; padding: 0; display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--neg); }
   .wb-gates li.ok { color: var(--pos); }
+  .wb-runs { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 2px; font-size: 11px; color: var(--muted); }
+  .wb-runs code { font-size: 11px; color: var(--ink); }
   .wb-chk { display: flex; align-items: center; gap: 6px; margin-top: 12px; font-size: 12px; color: var(--muted); cursor: pointer; }
   @media (max-width: 560px) { .wb-item { flex-wrap: wrap; } .wb-msg { flex-basis: 100%; white-space: normal; } }
 </style>

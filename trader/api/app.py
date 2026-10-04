@@ -3436,6 +3436,20 @@ def create_app() -> FastAPI:
     @fastapi_app.post("/api/v1/backtest/run", status_code=202)
     async def run_backtest(body: dict, request: Request):
         _require_any_auth(request)
+        return await _enqueue_backtest(body, request)
+
+    # ПОСТАНОВКА ПРОГОНА ОТДЕЛЬНО ОТ ПРОВЕРКИ ДОСТУПА. Рабочему месту бэктеста
+    # (trader/api/lab_workbench) нужно ставить прогон РОВНО тем же путём, что лаборатория
+    # и бэкфилл (решение окна backtests 04.10.2026: «run = обычный /backtest/run»), а не
+    # копией этого обработчика: копия разошлась бы с ним при первой же правке очереди.
+    # Код ниже прежний; добавлен только no_cache.
+    #
+    # no_cache=True — НЕ отдавать кэш одиночных прогонов. Кэш ищет прошлый прогон по
+    # symbol + даты + params и НЕ сравнивает код стратегии: для лаборатории это так и
+    # задумано (тот же лидер — тот же код), а у редакции рабочего места код по построению
+    # ДРУГОЙ при тех же параметрах. Без флага прогон новой редакции молча вернул бы
+    # результат СТАРОГО кода.
+    async def _enqueue_backtest(body: dict, request: Request, no_cache: bool = False):
         import asyncio as _asyncio
         from datetime import datetime as _dt
         pool = request.app.state.db_pool
@@ -3482,7 +3496,7 @@ def create_app() -> FastAPI:
             except Exception:
                 _idx = False
             request.app.state.result_runid_indexed = _idx
-        if (_idx and body.get("scriptCode") and not body.get("paramSets")
+        if (_idx and not no_cache and body.get("scriptCode") and not body.get("paramSets")
                 and not (body.get("paramsGrid") or {})):
             try:
                 # params как DICT напрямую: пул регистрирует jsonb-кодек (db._setup_json_codec),
@@ -3555,6 +3569,8 @@ def create_app() -> FastAPI:
                 _run_backtest_task(run_id, body, pool, request.app.state)
             )
         return {"run_id": run_id, "engine": engine, "campaign": _sweep_campaign(run_id)}
+
+    fastapi_app.state.enqueue_backtest = _enqueue_backtest
 
     @fastapi_app.get("/api/v1/backtest/{run_id}/status")
     async def backtest_status(run_id: str, request: Request):
