@@ -14,7 +14,9 @@
 Правила выбора (select): карточки optimizer без кривой, не служебные (gate/plc/exec), лучшая строка с
 net>0 и >=30 сделок; среди 60 сильнейших по score берём 20 самых свежих по created_at; лидеры rank 1-3
 = три лучшие по net строки (без дублей параметров) того же инструмента и стратегии в лучшем прогоне.
-Один campaign_run - одна карточка: имена bf0..bf2 не пересекаются.
+Один campaign_run - одна карточка: имена bf0..bf2 не пересекаются. Нужен job_body кампании в
+backtest_runs (скрипт и окно оригинала): перепрогон по шаблону стратегии и окну из лидерборда строку
+НЕ воспроизвёл (проверено на opt-*), такие карточки пропускаются.
 
 Сохранённый net = net ПЕРЕПРОГОНА (честный); net строки лидерборда лежит в extra.lb_net, расхождение
 печатает `store`. Не считать совпавшим молча: допуск 1%, иначе пометка MISMATCH.
@@ -70,14 +72,6 @@ def pick(cards: list, scores: dict, n: int | None = 20, pool: int = 60) -> list:
     return out
 
 
-def template_code(strategy: str) -> str | None:
-    """Скрипт библиотечной стратегии, когда у кампании нет job_body (старые opt-*). Инверсии не берём."""
-    from trader.lab.strategies import library as lib
-    if strategy in lib.REGISTRY:
-        return f"from trader.lab.strategies.library import make_on_bar; on_bar = make_on_bar('{strategy}')"
-    return None
-
-
 async def cmd_select(a) -> None:
     import asyncpg
     c = await asyncpg.connect(_db_url())
@@ -114,13 +108,10 @@ async def cmd_select(a) -> None:
                                   cr + "-r%")
             body = _j(jb["job_body"]) if jb else None
             if not body or not body.get("scriptCode"):
-                code = template_code(best["strategy"])
-                if not code or not best.get("date_from"):
-                    print(f"пропуск {slug}: у {cr} нет job_body и нет шаблона стратегии")
-                    continue
-                body = {"scriptCode": code, "dateFrom": best["date_from"], "dateTo": best["date_to"],
-                        "fallback": True}
-                jb = {"robot_id": None}
+                # шаблон стратегии + окно строки пробовали (opt-*): перепрогон не воспроизводит
+                # строку (46 против 148 сделок, знак net другой), поэтому без job_body не считаем
+                print(f"пропуск {slug}: у {cr} нет job_body с scriptCode")
+                continue
             lead = await c.fetch("""select params, net_profit, total_trades from optimization_leaderboard
                 where campaign_run=$1 and strategy=$2 and symbol=$3 order by net_profit desc nulls last
                 limit 40""", cr, best["strategy"], best["symbol"])
@@ -137,7 +128,7 @@ async def cmd_select(a) -> None:
                 if len(leaders) == 3:
                     break
             sel.append({"slug": slug, "campaign_run": cr, "strategy": best["strategy"], "symbol": best["symbol"],
-                        "robot_id": jb["robot_id"], "script_code": body["scriptCode"], "fallback": bool(body.get("fallback")),
+                        "robot_id": jb["robot_id"], "script_code": body["scriptCode"],
                         "date_from": body["dateFrom"], "date_to": body["dateTo"], "leaders": leaders})
     finally:
         await c.close()
