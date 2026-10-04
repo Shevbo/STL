@@ -99,8 +99,8 @@ async def cmd_select(a) -> None:
             if cd["auto"] and cd["runs"]:
                 best = max(cd["runs"], key=lambda r: r.get("net") if r.get("net") is not None else -1e18)
                 scores[cd["entry"]["slug"]] = best.get("score")
-        sel = []
-        for slug, best in pick(cards, scores, None):
+        sel, skipped = [], []
+        for slug, best in pick(cards, scores, None, a.pool):
             if len(sel) == a.n:
                 break
             cr = best["campaign_run"]
@@ -112,6 +112,7 @@ async def cmd_select(a) -> None:
             if not body or not body.get("scriptCode"):
                 # шаблон стратегии + окно строки пробовали (opt-*): перепрогон не воспроизводит
                 # строку (46 против 148 сделок, знак net другой), поэтому без job_body не считаем
+                skipped.append(slug)
                 print(f"пропуск {slug}: у {cr} нет job_body стратегии {best['strategy']} со scriptCode")
                 continue
             lead = await c.fetch("""select params, net_profit, total_trades from optimization_leaderboard
@@ -137,7 +138,7 @@ async def cmd_select(a) -> None:
     json.dump(sel, open(a.out, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     for s in sel:
         print(s["slug"], s["campaign_run"], [round(x["lb_net"]) for x in s["leaders"]])
-    print(f"выбрано {len(sel)} карточек -> {a.out}")
+    print(f"выбрано {len(sel)} карточек -> {a.out}; пропущено без job_body своей стратегии: {len(skipped)}")
 
 
 def job_of(item: dict, ld: dict) -> dict:
@@ -234,6 +235,7 @@ def main() -> None:
     sp = ap.add_subparsers(dest="cmd", required=True)
     s = sp.add_parser("select")
     s.add_argument("--n", type=int, default=20)
+    s.add_argument("--pool", type=int, default=60, help="сколько сильнейших по score брать до отбора свежих")
     s.add_argument("--out", required=True)
     q = sp.add_parser("queue")
     q.add_argument("--sel", required=True)
