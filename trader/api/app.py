@@ -468,6 +468,18 @@ async def lifespan(app: FastAPI):
         except Exception as exc:
             log.warning("startup.agent_tasks_table_failed", error=str(exc))
 
+        # Рабочее место бэктеста: очередь редакций воркера (спека docs/backtest-workbench-spec.md).
+        # Схема живёт здесь, как у agent_tasks: alembic в проекте нет. Не поднялась — ручки
+        # отвечают 503 «нет базы», а торговля и остальной API не страдают.
+        try:
+            from trader.api.lab_workbench import PgStore as _WorkbenchStore
+
+            _wb_store = _WorkbenchStore(db_pool)
+            await _wb_store.ensure_schema()
+            app.state.workbench_store = _wb_store
+        except Exception as exc:
+            log.warning("startup.workbench_schema_failed", error=str(exc))
+
     # AI46 (team-46) — privileged backend strategy in PAPER mode, env-gated.
     # OFF by default: a plain deploy is a no-op until AI46_ENABLED is set on the host.
     # Symbols: AI46_SYMBOLS (comma list) overrides; otherwise top-N FORTS front
@@ -1772,6 +1784,9 @@ def create_app() -> FastAPI:
     # Витрина кампаний бэктеста: читает готовые файлы сборщика (окно backtests).
     from trader.api.lab_showcase import router as lab_showcase_router
     fastapi_app.include_router(lab_showcase_router)
+    # Рабочее место бэктеста: редакции карточки, очередь воркера, приёмка.
+    from trader.api.lab_workbench import router as lab_workbench_router
+    fastapi_app.include_router(lab_workbench_router)
 
     # Почта между окнами разработки (real-trade / backtests / ui-ux): передача
     # работы владельцу зоны вместо ручного переноса текста оператором.
