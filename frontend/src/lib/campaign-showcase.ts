@@ -28,17 +28,24 @@ export interface Card {
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,127}$/;
 export const BASE_PATH = '/backtest/campaigns';
 
-export type Route = { kind: 'list' } | { kind: 'campaign'; slug: string };
+export type Route = { kind: 'list' } | { kind: 'campaign'; slug: string; rev?: number };
 
 export function routeOf(pathname: string, search = ''): Route | null {
   const p = pathname.replace(/\/+$/, '');
   if (p === BASE_PATH) return { kind: 'list' };
   if (p.startsWith(BASE_PATH + '/')) {
+    // /<slug> или /<slug>/rev/<n> — редакция карточки (рабочее место бэктеста,
+    // спека docs/backtest-workbench-spec.md). Номер редакции — целое ≥ 1.
+    const m = p.slice(BASE_PATH.length + 1).match(/^([^/]+)(?:\/rev\/(\d+))?$/);
+    if (!m) return null;
     let slug = '';
-    try { slug = decodeURIComponent(p.slice(BASE_PATH.length + 1)); } catch { return null; }
+    try { slug = decodeURIComponent(m[1]); } catch { return null; }
     // Битый slug — это не «витрина», а неизвестная страница: возвращаем null, и
     // приложение откроет обычный терминал, а не покажет пустой отчёт.
-    return SLUG_RE.test(slug) ? { kind: 'campaign', slug } : null;
+    if (!SLUG_RE.test(slug)) return null;
+    const rev = m[2] === undefined ? undefined : Number(m[2]);
+    if (rev !== undefined && rev < 1) return null;
+    return rev === undefined ? { kind: 'campaign', slug } : { kind: 'campaign', slug, rev };
   }
   const qs = new URLSearchParams(search);
   if (qs.get('lab') === 'campaigns') {
@@ -49,7 +56,8 @@ export function routeOf(pathname: string, search = ''): Route | null {
   return null;
 }
 
-export const campaignPath = (slug: string) => `${BASE_PATH}/${encodeURIComponent(slug)}`;
+export const campaignPath = (slug: string, rev?: number) =>
+  `${BASE_PATH}/${encodeURIComponent(slug)}${rev == null ? '' : `/rev/${rev}`}`;
 
 // ── Время и единицы ─────────────────────────────────────────────────────────
 // В спеке ось времени названа «ts» без единицы. Секунды (≈1.8e9) и миллисекунды
@@ -195,6 +203,8 @@ export interface Geometry {
   xmin: number; xmax: number; ymin: number; ymax: number; y0: number;
   x: (ts: number) => number; y: (v: number) => number;
   segs: { sign: 1 | -1 | 0; line: string; area: string }[];
+  /** Вторая серия («купил и держи») на ТОЙ ЖЕ шкале, что и основная. */
+  extraLine: string | null;
 }
 
 /** Кривая → пути SVG. null — рисовать нечего (меньше двух точек): вызывающий
@@ -202,6 +212,7 @@ export interface Geometry {
 export function curveGeometry(
   points: [number, number][] | null | undefined, w: number, h: number,
   pad: Pad = { l: 0, r: 0, t: 0, b: 0 },
+  extra: [number, number][] | null = null,
 ): Geometry | null {
   if (!points || points.length < 2) return null;
   const pm = points.map((p) => [toMs(p[0]), p[1]] as [number, number])
@@ -211,8 +222,13 @@ export function curveGeometry(
   const xmin = pm[0][0], xmax = pm[pm.length - 1][0];
   // Нулевая ось входит в диапазон ВСЕГДА: кривая целиком выше нуля без оси
   // выглядела бы «в плюсе от начала», хотя это просто масштаб.
-  let ymin = Math.min(0, ...pm.map((p) => p[1]));
-  let ymax = Math.max(0, ...pm.map((p) => p[1]));
+  // Вторая серия входит в ДИАПАЗОН, но не в границы времени основной: сравнивать
+  // кривые на разных шкалах — это нарисовать ложную разницу.
+  const em = (extra ?? []).map((p) => [toMs(p[0]), p[1]] as [number, number])
+    .filter((p) => Number.isFinite(p[0]) && Number.isFinite(p[1]) && p[0] >= xmin && p[0] <= xmax)
+    .sort((a, b) => a[0] - b[0]);
+  let ymin = Math.min(0, ...pm.map((p) => p[1]), ...em.map((p) => p[1]));
+  let ymax = Math.max(0, ...pm.map((p) => p[1]), ...em.map((p) => p[1]));
   if (ymin === ymax) { ymin -= 1; ymax += 1; }
   const iw = Math.max(1, w - pad.l - pad.r), ih = Math.max(1, h - pad.t - pad.b);
   const xs = xmax === xmin ? 1 : (xmax - xmin);
@@ -227,7 +243,9 @@ export function curveGeometry(
     const area = `${line} L${fx(last[0])} ${fx(y0)} L${fx(head[0])} ${fx(y0)} Z`;
     return { sign: s.sign, line, area };
   });
-  return { xmin, xmax, ymin, ymax, y0, x, y, segs };
+  const extraLine = em.length >= 2
+    ? em.map(([t, v], i) => `${i ? 'L' : 'M'}${fx(x(t))} ${fx(y(v))}`).join(' ') : null;
+  return { xmin, xmax, ymin, ymax, y0, x, y, segs, extraLine };
 }
 
 /** «Красивые» метки оси: шаг 1/2/5 × 10^k, включая нуль, когда он в диапазоне. */
@@ -242,4 +260,61 @@ export function niceTicks(min: number, max: number, count = 5): number[] {
     out.push(Math.abs(v) < step * 1e-9 ? 0 : v);
   }
   return out;
+}
+
+// ── «Купил и держи» и разность ──────────────────────────────────────────────
+/** Стратегия минус «купил и держи», в точках СТРАТЕГИИ.
+ *
+ *  Значение второй кривой между её точками берём линейной интерполяцией; ТОЧКИ
+ *  СТРАТЕГИИ ВНЕ ДИАПАЗОНА второй кривой выбрасываем, а не экстраполируем:
+ *  дорисованный хвост выдал бы за разность то, чего в данных нет. Нет второй
+ *  кривой или она короче двух точек — null, и экран говорит об этом словами. */
+export function diffCurve(
+  strategy: [number, number][] | null | undefined,
+  hold: [number, number][] | null | undefined,
+): [number, number][] | null {
+  if (!strategy || strategy.length < 2 || !hold || hold.length < 2) return null;
+  const h = hold.map((p) => [toMs(p[0]), p[1]] as [number, number])
+    .filter((p) => Number.isFinite(p[0]) && Number.isFinite(p[1])).sort((a, b) => a[0] - b[0]);
+  if (h.length < 2) return null;
+  const out: [number, number][] = [];
+  let j = 0;
+  for (const [ts, v] of strategy) {
+    const t = toMs(ts);
+    if (!Number.isFinite(t) || !Number.isFinite(v)) continue;
+    if (t < h[0][0] || t > h[h.length - 1][0]) continue;       // вне диапазона — не гадаем
+    while (j < h.length - 2 && h[j + 1][0] < t) j++;
+    const [t0, v0] = h[j], [t1, v1] = h[j + 1];
+    const hv = t1 === t0 ? v0 : v0 + (v1 - v0) * (t - t0) / (t1 - t0);
+    out.push([ts, v - hv]);
+  }
+  return out.length >= 2 ? out : null;
+}
+
+// ── Честный объём ───────────────────────────────────────────────────────────
+// Жёсткое требование оператора (04.10.2026): ВСЕ цифры без плеча. Объём — число
+// контрактов, ПОЛНАЯ стоимость — цена × стоимость пункта × контрактов в пике;
+// гарантийное обеспечение нигде не используется. Считает движок (backtests), тут
+// только чтение: вторая реализация расчёта разошлась бы с первой.
+export interface HonestVolume {
+  contracts: number | null; fullCost: number | null; net: number | null; returnPct: number | null;
+  /** Поля, которых сборщик не отдал: экран называет их, а не рисует нули. */
+  missing: string[];
+}
+export function honestVolume(l: Record<string, any> | null | undefined): HonestVolume {
+  const num = (...keys: string[]): number | null => {
+    for (const k of keys) {
+      const v = l?.[k] ?? l?.metrics?.[k];
+      if (typeof v === 'number' && Number.isFinite(v)) return v;
+    }
+    return null;
+  };
+  const r: HonestVolume = {
+    contracts: num('contracts_peak'), fullCost: num('full_cost_rub'),
+    net: num('net', 'net_taker'), returnPct: num('return_pct'), missing: [],
+  };
+  if (r.contracts == null) r.missing.push('contracts_peak');
+  if (r.fullCost == null) r.missing.push('full_cost_rub');
+  if (r.returnPct == null) r.missing.push('return_pct');
+  return r;
 }

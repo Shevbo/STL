@@ -11,18 +11,22 @@
 <script lang="ts">
   import { curveGeometry, fmtPnl, niceTicks, toMs } from '$lib/campaign-showcase';
 
-  let { points = null, unit = '', full = false, emptyText = 'кривой нет' }: {
+  // overlay — вторая серия («купил и держи») на ТОЙ ЖЕ шкале; h — высота большого
+  // графика (разность стратегии и «купил и держи» рисуется ниже и ниже ростом).
+  let { points = null, unit = '', full = false, emptyText = 'кривой нет', overlay = null,
+        overlayLabel = '', h = 300 }: {
     points?: [number, number][] | null; unit?: string; full?: boolean; emptyText?: string;
+    overlay?: [number, number][] | null; overlayLabel?: string; h?: number;
   } = $props();
 
   // Миниатюра: фиксированный viewBox, растягивается на ширину карточки.
   const TW = 240, TH = 64;
   let boxW = $state(720);
   const W = $derived(full ? Math.max(320, boxW) : TW);
-  const H = $derived(full ? 300 : TH);
+  const H = $derived(full ? h : TH);
   const PAD = $derived(full ? { l: 62, r: 14, t: 12, b: 26 } : { l: 0, r: 0, t: 4, b: 4 });
 
-  const geo = $derived(curveGeometry(points, W, H, PAD));
+  const geo = $derived(curveGeometry(points, W, H, PAD, overlay));
   const last = $derived(points && points.length ? points[points.length - 1][1] : null);
 
   const fmtDay = (ms: number) => new Date(ms).toLocaleDateString('ru-RU',
@@ -76,6 +80,10 @@
           <path class={s.sign > 0 ? 'area pos' : 'area neg'} d={s.area} />
         {/if}
       {/each}
+      <!-- «Купил и держи»: тонкая нейтральная линия поверх заливки, на той же шкале. -->
+      {#if full && geo.extraLine}
+        <path class="hold" d={geo.extraLine} />
+      {/if}
       <!-- Нулевая ось поверх заливки: смена цвета читается именно на ней. -->
       <line class="zero" x1={PAD.l} x2={W - PAD.r} y1={geo.y0} y2={geo.y0} />
       {#each geo.segs as s, i (i)}
@@ -86,6 +94,9 @@
         <circle class={hover.v >= 0 ? 'dot pos' : 'dot neg'} cx={hover.x} cy={hover.y} r="3.5" />
       {/if}
     </svg>
+    {#if full && geo.extraLine && overlayLabel}
+      <span class="legend"><i class="sw-hold"></i>{overlayLabel}</span>
+    {/if}
     {#if !full}
       <span class="corner" class:pos={(last ?? 0) > 0} class:neg={(last ?? 0) < 0}>{fmtPnl(last, unit)}</span>
     {/if}
@@ -103,14 +114,14 @@
      Зелёный и красный мягкие, приглушённые, заливка 30-35% (заказ оператора). */
   .cc, .cc-empty {
     --pos: #6fa77a; --neg: #c47a7a; --pos-fill: rgba(111,167,122,.32); --neg-fill: rgba(196,122,122,.32);
-    --axis: #5a5f78; --grid: rgba(150,160,190,.10); --tick: #8a90a8; --flat: #8a90a8;
+    --axis: #5a5f78; --grid: rgba(150,160,190,.10); --tick: #8a90a8; --flat: #8a90a8; --hold: #b9a46a;
     --tip-bg: #1a1a2e; --tip-bd: #2d2d4a; --ink: #e2e6f0;
     position: relative; width: 100%;
   }
   @media (prefers-color-scheme: light) {
     .cc, .cc-empty {
       --pos: #4f8a5a; --neg: #b25f5f; --pos-fill: rgba(79,138,90,.26); --neg-fill: rgba(178,95,95,.26);
-      --axis: #8b8f9c; --grid: rgba(60,70,100,.10); --tick: #6a6f80; --flat: #6a6f80;
+      --axis: #8b8f9c; --grid: rgba(60,70,100,.10); --tick: #6a6f80; --flat: #6a6f80; --hold: #9a7f2a;
       --tip-bg: #fff; --tip-bd: #d6d8e0; --ink: #222630;
     }
   }
@@ -121,6 +132,11 @@
   .ln.pos { stroke: var(--pos); }
   .ln.neg { stroke: var(--neg); }
   .ln.flat { stroke: var(--flat); }
+  .hold { fill: none; stroke: var(--hold); stroke-width: 1.4; stroke-dasharray: 5 3;
+          vector-effect: non-scaling-stroke; }
+  .legend { position: absolute; left: 70px; top: 2px; display: inline-flex; align-items: center; gap: 6px;
+            font: 10px/1 ui-monospace, Consolas, monospace; color: var(--tick); }
+  .sw-hold { display: inline-block; width: 18px; border-top: 2px dashed var(--hold); }
   .zero { stroke: var(--axis); stroke-width: 1; vector-effect: non-scaling-stroke; }
   .grid { stroke: var(--grid); stroke-width: 1; vector-effect: non-scaling-stroke; }
   .cross { stroke: var(--axis); stroke-width: 1; stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; }

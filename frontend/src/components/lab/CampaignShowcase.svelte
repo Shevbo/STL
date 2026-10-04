@@ -18,8 +18,8 @@
   import { downloadCSV } from '$lib/csv';
   import { setTitle } from '$lib/page-title';
   import {
-    NO_FILTERS, KIND_LABEL, campaignPath, chainOf, cls, fmtPnl, revisionOf, routeOf,
-    statusInfo, visibleCards, BASE_PATH, type Card, type Filters, type Route,
+    NO_FILTERS, KIND_LABEL, campaignPath, chainOf, cls, diffCurve, fmtPnl, honestVolume, revisionOf,
+    routeOf, statusInfo, visibleCards, BASE_PATH, type Card, type Filters, type Route,
   } from '$lib/campaign-showcase';
   import CurveChart from './CurveChart.svelte';
   import ScreenTag from './ScreenTag.svelte';
@@ -110,6 +110,24 @@
   const leader = $derived((report?.leaders ?? []).find((l: any) => (l.rank ?? 0) === leaderRank)
     ?? (report?.leaders ?? [])[0] ?? null);
   const unit = $derived(report?.unit ?? card?.unit ?? '');
+
+  // РЕДАКЦИЯ ПО URL: /<slug>/rev/<n>. Сегодня одна редакция = одна запись сборщика со
+  // своим slug, и номер в адресе лишь выбирает её из цепочки линии. Нет такой
+  // редакции — говорим об этом, а не молча открываем соседнюю.
+  const wantRev = $derived(route.kind === 'campaign' ? route.rev : undefined);
+  const revMissing = $derived(report != null && wantRev != null && report.rev !== wantRev
+    && !(report.revisions ?? []).some((r: any) => r.rev === wantRev));
+  $effect(() => {
+    if (!report || wantRev == null || report.rev === wantRev) return;
+    const hit = (report.revisions ?? []).find((r: any) => r.rev === wantRev);
+    if (hit && hit.slug !== report.slug) go(campaignPath(hit.slug));
+  });
+
+  // «Купил и держи» и честный объём (заказ оператора 04.10.2026): считает движок
+  // backtests, экран только читает. Нет поля — говорим какого, а не рисуем ноль.
+  const hold = $derived<[number, number][] | null>(report?.buyhold_curve ?? null);
+  const diff = $derived(diffCurve(leader?.curve ?? null, hold));
+  const vol = $derived(honestVolume(leader));
   const chain = $derived(report?.revisions ?? (route.kind === 'campaign'
     ? chainOf(cards, card?.family).map((c) => ({ slug: c.slug, rev: c.rev, changes: null })) : []));
 
@@ -270,12 +288,50 @@
         {#if report.idea}<p class="cs-idea big">{report.idea}</p>{/if}
         {#if report.strategy}<p class="cs-sub">стратегия: <b>{report.strategy}</b></p>{/if}
 
+        {#if revMissing}
+          <div class="cs-note bad" style="margin:8px 0">Редакции {wantRev} в этой линии нет; показана ред. {report.rev}.</div>
+        {/if}
         <CurveChart full points={leader?.curve ?? null} {unit}
+                    overlay={hold} overlayLabel="купил и держи"
                     emptyText={report.no_curve_reason || (leader ? 'у этого лидера кривой нет' : 'кривой нет')} />
+        {#if leader?.curve && !hold}
+          <!-- Без линии сравнения кривая стратегии читается как «в плюсе — значит хорошо»,
+               хотя рынок мог вырасти сильнее. Поэтому отсутствие говорим вслух. -->
+          <div class="cs-sub">Линии «купил и держи» нет: сборщик ещё не отдаёт <code>buyhold_curve</code>.</div>
+        {/if}
+        {#if diff}
+          <div class="cs-sec"><h3>Стратегия минус «купил и держи»</h3></div>
+          <CurveChart full h={150} points={diff} {unit} emptyText="разности нет" />
+        {/if}
         {#if leader}
           <div class="cs-leadline">лидер №{leader.rank}
             {#if leader.trades_n != null}· сделок {leader.trades_n.toLocaleString('ru-RU')}{/if}
             · {params(leader.params)}</div>
+        {/if}
+
+        <!-- ЧЕСТНЫЙ ОБЪЁМ (жёсткое требование оператора): без плеча. Объём — число
+             контрактов, полная стоимость — цена × стоимость пункта × контрактов в
+             пике, ГО нигде не используется. Считает движок; поля нет — называем его. -->
+        {#if leader}
+          <div class="cs-sec"><h3>Честный объём</h3></div>
+          <dl class="cs-vol">
+            <div><dt>контрактов (пик)</dt><dd>{vol.contracts == null ? '—' : vol.contracts.toLocaleString('ru-RU')}</dd></div>
+            <div><dt>полная стоимость</dt><dd>{vol.fullCost == null ? '—' : fmtPnl(vol.fullCost, 'rub', false)}</dd></div>
+            <div><dt>net</dt><dd class={cls(vol.net)}>{fmtPnl(vol.net, unit)}</dd></div>
+            <div><dt>доходность</dt><dd class={cls(vol.returnPct)}>{vol.returnPct == null ? '—' : fmtPnl(vol.returnPct, 'pct')}</dd></div>
+          </dl>
+          {#if vol.missing.length}
+            <div class="cs-sub">Сборщик ещё не отдаёт: <code>{vol.missing.join(', ')}</code>. Доходность на экране
+              не досчитываю: вторая реализация расчёта разошлась бы с движком.</div>
+          {/if}
+          <div class="cs-actions">
+            <button class="cs-btn" disabled
+                    title="Нормализация считается движком backtests; ручки пока нет">Нормализовать объём до 1 млн</button>
+            <button class="cs-btn" disabled
+                    title="Редакции как данные, воркер правки кода и доступ к Lineman ещё не готовы (спека, порядок работ, пп. 2-3)">Создать новую редакцию</button>
+            <button class="cs-btn" disabled
+                    title="Запуск прогона на i9 из карточки — этап 2 спеки, ручки постановки пока нет">Запустить прогон</button>
+          </div>
         {/if}
 
         {#if report.verdict}
@@ -438,10 +494,16 @@
   .cs-facts dt { width: 120px; flex-shrink: 0; color: var(--faint); font-size: 11px; }
   .cs-facts dd { margin: 0; overflow-wrap: anywhere; }
   .mono { font-family: ui-monospace, Consolas, monospace; font-size: 11px; }
+  .cs-vol { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 0; }
+  .cs-vol dt { font-size: 10px; color: var(--faint); }
+  .cs-vol dd { margin: 0; font-size: 15px; font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .cs-sub code { font-size: 11px; }
+  .cs-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0 4px; }
 
   @media (max-width: 560px) {
     .cs-head, .cs-filters, .cs-grid, .cs-rep { padding-left: 12px; padding-right: 12px; }
     .cs-grid { grid-template-columns: minmax(0, 1fr); }
+    .cs-vol { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .cs-q { min-width: 0; flex: 1 1 100%; }
   }
 </style>

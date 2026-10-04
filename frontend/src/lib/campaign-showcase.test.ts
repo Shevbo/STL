@@ -5,8 +5,8 @@
 // а инвариант: ни один зелёный кусок не лежит под нулём и наоборот.
 import { describe, it, expect } from 'vitest';
 import {
-  BASE_PATH, NO_FILTERS, campaignPath, chainOf, curveGeometry, fmtPnl, niceTicks,
-  revisionOf, routeOf, splitAtZero, statusInfo, toMs, visibleCards, type Card,
+  BASE_PATH, NO_FILTERS, campaignPath, chainOf, curveGeometry, diffCurve, fmtPnl, honestVolume,
+  niceTicks, revisionOf, routeOf, splitAtZero, statusInfo, toMs, visibleCards, type Card,
 } from './campaign-showcase';
 
 describe('маршрут', () => {
@@ -254,5 +254,107 @@ describe('метки оси', () => {
 
   it('пустой диапазон не зацикливается', () => {
     expect(niceTicks(5, 5)).toEqual([5]);
+  });
+});
+
+describe('маршрут редакции', () => {
+  it('/slug/rev/N — редакция карточки', () => {
+    expect(routeOf('/backtest/campaigns/grid-r01/rev/3')).toEqual({ kind: 'campaign', slug: 'grid-r01', rev: 3 });
+    expect(campaignPath('grid-r01', 3)).toBe('/backtest/campaigns/grid-r01/rev/3');
+    expect(campaignPath('grid-r01')).toBe('/backtest/campaigns/grid-r01');
+  });
+
+  it('без редакции маршрут прежний, ссылки не ломаются', () => {
+    expect(routeOf('/backtest/campaigns/grid-r01')).toEqual({ kind: 'campaign', slug: 'grid-r01' });
+  });
+
+  it('мусорные редакции — не маршрут', () => {
+    expect(routeOf('/backtest/campaigns/grid-r01/rev/0')).toBeNull();
+    expect(routeOf('/backtest/campaigns/grid-r01/rev/abc')).toBeNull();
+    expect(routeOf('/backtest/campaigns/grid-r01/rev/')).toBeNull();
+    expect(routeOf('/backtest/campaigns/grid-r01/zzz/3')).toBeNull();
+    expect(routeOf('/backtest/campaigns/grid-r01/rev/2/extra')).toBeNull();
+  });
+
+  it('путь редакции собирается обратно в тот же маршрут', () => {
+    expect(routeOf(campaignPath('a-b', 12))).toEqual({ kind: 'campaign', slug: 'a-b', rev: 12 });
+  });
+});
+
+describe('вторая кривая на той же шкале', () => {
+  it('диапазон охватывает обе серии, нуль на месте', () => {
+    const g = curveGeometry([[0, 10], [10, 20]], 100, 100, undefined, [[0, -50], [10, 80]])!;
+    expect(g.ymin).toBe(-50);
+    expect(g.ymax).toBe(80);
+    expect(g.extraLine).toContain('M');
+  });
+
+  it('вторая серия не раздвигает ВРЕМЕННУЮ шкалу основной', () => {
+    // Сравнивать кривые на разных шкалах — значит нарисовать ложную разницу.
+    const g = curveGeometry([[100, 1], [200, 2]], 100, 100, undefined, [[0, 5], [100, 6], [200, 7], [900, 8]])!;
+    expect(g.xmin).toBe(100_000);
+    expect(g.xmax).toBe(200_000);
+  });
+
+  it('без второй серии линии нет', () => {
+    expect(curveGeometry([[0, 1], [1, 2]], 100, 50)!.extraLine).toBeNull();
+    expect(curveGeometry([[0, 1], [1, 2]], 100, 50, undefined, [[0, 1]])!.extraLine).toBeNull();
+  });
+});
+
+describe('стратегия минус «купил и держи»', () => {
+  it('интерполирует вторую кривую в точках стратегии', () => {
+    const d = diffCurve([[0, 10], [5, 20], [10, 30]], [[0, 0], [10, 10]])!;
+    expect(d).toEqual([[0, 10], [5, 15], [10, 20]]);
+  });
+
+  it('точки вне диапазона второй кривой выбрасываются, а не экстраполируются', () => {
+    // Дорисованный хвост выдал бы за разность то, чего в данных нет.
+    const d = diffCurve([[0, 1], [5, 2], [20, 3]], [[0, 0], [10, 10]])!;
+    expect(d.map((p) => p[0])).toEqual([0, 5]);
+  });
+
+  it('нет второй кривой — null, а не нулевая разность', () => {
+    expect(diffCurve([[0, 1], [1, 2]], null)).toBeNull();
+    expect(diffCurve([[0, 1], [1, 2]], [[0, 1]])).toBeNull();
+    expect(diffCurve(null, [[0, 1], [1, 2]])).toBeNull();
+  });
+
+  it('кривые не пересекаются по времени — null', () => {
+    expect(diffCurve([[0, 1], [1, 2]], [[100, 0], [200, 1]])).toBeNull();
+  });
+
+  it('секунды и миллисекунды в разных кривых не ломают сравнение', () => {
+    const d = diffCurve([[1_790_000_000, 10], [1_790_000_100, 20]],
+                        [[1_790_000_000_000, 0], [1_790_000_100_000, 10]])!;
+    expect(d.map((p) => p[1])).toEqual([10, 10]);
+  });
+});
+
+describe('честный объём', () => {
+  it('читает поля лидера и называет недостающие', () => {
+    const v = honestVolume({ contracts_peak: 3, full_cost_rub: 750_000, metrics: { net: 12_000 } });
+    expect(v.contracts).toBe(3);
+    expect(v.fullCost).toBe(750_000);
+    expect(v.net).toBe(12_000);
+    expect(v.returnPct).toBeNull();
+    expect(v.missing).toEqual(['return_pct']);
+  });
+
+  it('сборщик ещё не отдаёт поля — все три названы, ни одного нуля', () => {
+    const v = honestVolume({ metrics: { net_taker: 5 } });
+    expect(v.missing).toEqual(['contracts_peak', 'full_cost_rub', 'return_pct']);
+    expect(v.contracts).toBeNull();
+    expect(v.net).toBe(5);
+  });
+
+  it('доходность НЕ досчитывается на экране: вторая реализация разошлась бы с движком', () => {
+    // net и полная стоимость есть, return_pct нет — прочерк, а не net/cost.
+    const v = honestVolume({ contracts_peak: 1, full_cost_rub: 1_000_000, net: 50_000 });
+    expect(v.returnPct).toBeNull();
+  });
+
+  it('нет лидера — всё пусто', () => {
+    expect(honestVolume(null).missing).toHaveLength(3);
   });
 });

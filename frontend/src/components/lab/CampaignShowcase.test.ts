@@ -215,3 +215,72 @@ describe('отчёт', () => {
     expect(host.querySelector('.screen-tag')?.textContent).toContain('CAMPAIGN-grid-r2');
   });
 });
+
+describe('рабочее место: купил и держи, честный объём, редакции', () => {
+  const LIST = () => J({ available: true, campaigns: CARDS, built_at_ms: 1, reason: '' });
+  const base = (extra: Record<string, unknown> = {}, leader: Record<string, unknown> = {}) => ({
+    slug: 'grid-r2', title: 'Радиация r2', status: 'done', unit: 'rub', family: 'grid', rev: 2,
+    leaders: [{ rank: 1, params: {}, metrics: { net: 40_000 }, trades_n: 1,
+      curve: [[1_790_000_000, 0], [1_790_050_000, 10_000], [1_790_100_000, 20_000]], ...leader }],
+    revisions: [{ slug: 'grid-r1', rev: 1, changes: null }, { slug: 'grid-r2', rev: 2, changes: 'x' }],
+    ...extra,
+  });
+  const open2 = async (rep: unknown, path = '/backtest/campaigns/grid-r2') => {
+    api({ '/api/v1/lab/showcase/campaigns': LIST, '/api/v1/lab/showcase/campaigns/grid-r2': () => J(rep),
+          '/api/v1/lab/showcase/campaigns/grid-r1': () => J({ ...base(), slug: 'grid-r1', rev: 1, title: 'Радиация r1' }) });
+    await open(path);
+  };
+
+  it('нет buyhold_curve — говорим об этом вслух, разности нет', async () => {
+    await open2(base());
+    expect(host.textContent).toContain('buyhold_curve');
+    expect(host.querySelector('path.hold')).toBeNull();
+    expect(host.textContent).not.toContain('минус «купил и держи»');
+  });
+
+  it('есть buyhold_curve — линия на графике и второй ряд с разностью', async () => {
+    await open2(base({ buyhold_curve: [[1_790_000_000, 0], [1_790_100_000, 5_000]] }));
+    expect(host.querySelector('path.hold')).not.toBeNull();
+    expect(host.textContent).toContain('минус «купил и держи»');
+    expect(host.textContent).not.toContain('Линии «купил и держи» нет');
+  });
+
+  it('честный объём: нет полей — прочерки и названия, а не нули', async () => {
+    await open2(base());
+    const vol = host.querySelector('.cs-vol')!;
+    const dd = [...vol.querySelectorAll('dd')].map((d) => d.textContent?.trim());
+    expect(dd[0]).toBe('—');           // контрактов
+    expect(dd[1]).toBe('—');           // полная стоимость
+    expect(dd[3]).toBe('—');           // доходность
+    expect(host.textContent).toContain('contracts_peak, full_cost_rub, return_pct');
+  });
+
+  it('честный объём: поля есть — печатаются как отданы', async () => {
+    await open2(base({}, { contracts_peak: 3, full_cost_rub: 750_000, return_pct: 5.3 }));
+    const txt = host.querySelector('.cs-vol')!.textContent!;
+    expect(txt).toContain('3');
+    expect(txt).toMatch(/750\s?000/);
+    expect(txt).toContain('5,3');
+    expect(host.textContent).not.toContain('Сборщик ещё не отдаёт');
+  });
+
+  it('кнопки движка заблокированы и объясняют ПОЧЕМУ', async () => {
+    await open2(base());
+    const btns = [...host.querySelectorAll('.cs-actions button')] as HTMLButtonElement[];
+    expect(btns.map((b) => b.textContent)).toEqual([
+      'Нормализовать объём до 1 млн', 'Создать новую редакцию', 'Запустить прогон']);
+    for (const b of btns) { expect(b.disabled).toBe(true); expect(b.title.length).toBeGreaterThan(20); }
+  });
+
+  it('/rev/N открывает ту редакцию линии, которую просили', async () => {
+    await open2(base(), '/backtest/campaigns/grid-r2/rev/1');
+    expect(window.location.pathname).toBe('/backtest/campaigns/grid-r1');
+    expect(host.textContent).toContain('Радиация r1');
+  });
+
+  it('несуществующая редакция — сказано словами, показана текущая', async () => {
+    await open2(base(), '/backtest/campaigns/grid-r2/rev/9');
+    expect(host.textContent).toContain('Редакции 9 в этой линии нет');
+    expect(host.textContent).toContain('Радиация r2');
+  });
+});
