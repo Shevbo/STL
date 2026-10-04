@@ -123,6 +123,6 @@ Full list (~24, several "bitten prod") in `docs/critical-gotchas.md` — rag_sea
 `graphify-out/` is stale since 09.08.2026 — do not `graphify update`. Use `rag_search` for structural and content questions.
 
 <!-- onboarding-marker BEGIN — do not edit; rewritten by /onboarding -->
-> **Federation onboarding** — канон: [.onboarding/CANONICAL.md](.onboarding/CANONICAL.md); карточка агента: [.onboarding/AGENT.md](.onboarding/AGENT.md).
+> **Federation onboarding** — карточка агента: [.onboarding/AGENT.md](.onboarding/AGENT.md). Канон федерации локально не хранится: спрашивай индекс через `POST http://10.66.0.1:9090/api/fedrag/search`.
 > При старте сессии Claude обязан запустить `bash ~/.claude/skills/onboarding/bin/check_freshness.sh`. Если `status=stale` или `status=absent` — предложить пользователю `/onboarding` (без долгих объяснений, одна строка).
 <!-- onboarding-marker END -->
