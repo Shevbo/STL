@@ -104,13 +104,15 @@ async def cmd_select(a) -> None:
             if len(sel) == a.n:
                 break
             cr = best["campaign_run"]
-            jb = await c.fetchrow("select id, robot_id, job_body from backtest_runs where id like $1 limit 1",
-                                  cr + "-r%")
+            # у многостратегийной кампании (до 16) job_body у каждой стратегии свой: берём ТОЛЬКО свой,
+            # иначе чужой скрипт молча считает чужую стратегию (так бэкфилл и записал order_block вместо macd_cross)
+            jb = await c.fetchrow("""select id, robot_id, job_body from backtest_runs
+                where id like $1 and strategy = $2 limit 1""", cr + "-r%", best["strategy"])
             body = _j(jb["job_body"]) if jb else None
             if not body or not body.get("scriptCode"):
                 # шаблон стратегии + окно строки пробовали (opt-*): перепрогон не воспроизводит
                 # строку (46 против 148 сделок, знак net другой), поэтому без job_body не считаем
-                print(f"пропуск {slug}: у {cr} нет job_body с scriptCode")
+                print(f"пропуск {slug}: у {cr} нет job_body стратегии {best['strategy']} со scriptCode")
                 continue
             lead = await c.fetch("""select params, net_profit, total_trades from optimization_leaderboard
                 where campaign_run=$1 and strategy=$2 and symbol=$3 order by net_profit desc nulls last
@@ -198,6 +200,9 @@ async def cmd_store(a) -> None:
                 extra = {**(old_extra if isinstance(old_extra, dict) else {}), "lb_net": ld["lb_net"], "lb_trades": ld["lb_trades"],
                          "rerun_of": ld["run_id"]}
                 par = await c.fetchrow("select * from backtest_runs where id=$1", ld["run_id"])
+                if par["strategy"] != it["strategy"]:
+                    print("ЧУЖАЯ СТРАТЕГИЯ, не сохраняю", name, par["strategy"], "вместо", it["strategy"])
+                    continue
                 async with c.transaction():
                     await c.execute("delete from backtest_results where run_id=$1", name)
                     await c.execute("delete from backtest_runs where id=$1", name)

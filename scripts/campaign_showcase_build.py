@@ -320,6 +320,17 @@ def _window(frm, to) -> str | None:
     return f"{frm}..{to}" if frm and to else None
 
 
+def bf_drift_note(rows: list) -> str | None:
+    """Бэкфилл считан на ТЕКУЩЕМ движке; net строки лидерборда мог быть получен на старом. Расхождение > 1% - в notes."""
+    bad = [r for r in rows if r.get("lb_net") is not None and r.get("net") is not None
+           and abs(r["net"] - r["lb_net"]) > 0.01 * max(abs(r["lb_net"]), 1.0)]
+    if not bad:
+        return None
+    r = bad[0]
+    return (f"кривые лидеров = перепрогон на текущем движке; net расходится с лидербордом у {len(bad)} из "
+            f"{len(rows)} (лидер: {round(r['net'])} против {round(r['lb_net'])})")
+
+
 def bf_belongs(row: dict, runs: list) -> bool:
     """bf-строка идёт в карточку своей логики: инструмент (и стратегия, если известна) совпадают с
     её прогонами. Старые бэкфиллы без стратегии: принимаем, только если у кампании одна стратегия."""
@@ -355,8 +366,11 @@ def build_card(c: dict, tasks_all: list, bf: dict, task_results: dict, now_iso: 
     for i, r in enumerate(rows):
         leaders.append({"rank": i + 1, "params": r.get("params"), "metrics": {
             "net": r.get("net"), "trades": r.get("trades"), "max_dd_db": r.get("max_dd"),
-            "sharpe": r.get("sharpe"), "campaign_run": r["run_id"]},
+            "sharpe": r.get("sharpe"), "campaign_run": r["run_id"], "lb_net": r.get("lb_net")},
             "curve": downsample(r["curve"], CURVE_N), "trades_n": r.get("trades")})
+    note = bf_drift_note(rows)
+    if note:
+        notes.append(note)
     # (2) исследовательские кривые из результатов i9
     spec = e.get("curve")
     if not leaders and spec and task_results:
@@ -508,7 +522,7 @@ async def load_db(registry: list):
         names = sorted({r["campaign_run"] for cd in cards for r in cd["runs"]})
         ids = [f"{n}-bf{i}" for n in names for i in range(BF_MAX)]
         have = await c.fetch("""select r.run_id, r.net_profit, r.total_trades, r.max_drawdown, r.sharpe,
-                   b.strategy
+                   b.strategy, r.extra::jsonb ->> 'lb_net' as lb_net
             from backtest_results r left join backtest_runs b on b.id = r.run_id
             where r.run_id = any($1::text[]) and jsonb_array_length(r.equity_curve) > 0""", ids)
         bf: dict = {}
@@ -516,7 +530,8 @@ async def load_db(registry: list):
             run = x["run_id"].rsplit("-bf", 1)[0]
             bf.setdefault(run, []).append(dict(run_id=x["run_id"], net=x["net_profit"],
                                                trades=x["total_trades"], max_dd=x["max_drawdown"],
-                                               sharpe=x["sharpe"], strategy=x["strategy"]))
+                                               sharpe=x["sharpe"], strategy=x["strategy"],
+                                               lb_net=float(x["lb_net"]) if x["lb_net"] else None))
         # лидеры карточки: топ LEADERS_N по net; кривую читаем только им
         loaded: dict = {}
         for cd in cards:

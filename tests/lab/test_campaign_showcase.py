@@ -169,3 +169,10 @@ def test_opt_sweeps_merge_across_dates_by_logic():
 
 def test_strategy_name_without_parenthesis_tail():
     assert b.strategy_info("us_open_fvg")[0] == "US-Open Opening Range + FVG / Retest"
+
+
+def test_bf_drift_note():
+    ok = [{"net": 100.0, "lb_net": 100.5}, {"net": 5.0, "lb_net": None}]
+    assert b.bf_drift_note(ok) is None
+    note = b.bf_drift_note([{"net": -300.0, "lb_net": 350000.0}, {"net": 1.0, "lb_net": 1.0}])
+    assert "1 из 2" in note and "-300" in note
