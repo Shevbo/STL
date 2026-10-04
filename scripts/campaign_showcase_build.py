@@ -354,7 +354,7 @@ def leader_sort_key(ld: dict):
 
 def _std(ld: dict) -> dict:
     for k in ("contracts_peak", "full_cost_rub", "return_pct", "buyhold_curve", "rf", "l_share",
-              "l_share_source", "score", "unit", "curve_url"):
+              "l_share_source", "score", "unit", "unit_source", "curve_url"):
         ld.setdefault(k, None)
     ld.setdefault("rev", 1)
     return ld
@@ -382,6 +382,7 @@ def make_bf_leader(r: dict, ctx, card_unit: str) -> dict:
                     "rerun_note": "перепрогон на текущем движке", "recovery_factor": rf},
         "curve": downsample(curve, CURVE_N), "buyhold_curve": bh, "contracts_peak": n_peak,
         "full_cost_rub": cost, "return_pct": sv.return_pct(net_rub, cost), "unit": unit,
+        "unit_source": "measured" if unit else None,
         "rf": rf, "net": net, "l_share": ls, "l_share_source": "curve" if ls is not None else None,
         "score": sv.score_of(rf, net, ls)})
 
@@ -395,7 +396,7 @@ def make_row_leader(r: dict, card_unit: str) -> dict:
         "params": r.get("params"), "trades_n": r.get("trades"),
         "metrics": {"net": net, "trades": r.get("trades"), "max_dd_db": r.get("max_dd"),
                     "campaign_run": r["campaign_run"], "recovery_factor": rf},
-        "curve": None, "rf": rf, "net": net, "unit": card_unit, "l_share": ls,
+        "curve": None, "rf": rf, "net": net, "unit": None, "unit_source": None, "l_share": ls,
         "l_share_source": "leaderboard_windows" if ls is not None else None,
         "score": sv.score_of(rf, net, ls)})
 
@@ -422,12 +423,10 @@ def build_card(c: dict, tasks_all: list, bf: dict, task_results: dict, now_iso: 
              if match_any(t["id"], e.get("task_ids")) or match_any(t["module"], e.get("task_modules"))]
     leaders, notes, reason = [], [], None
     unit = e.get("unit") or "rub"
-    if runs:  # единицы берём из реальных строк, реестр - только когда прогонов нет
-        best = max(runs, key=lambda r: r.get("net") if r.get("net") is not None else -1e18)
-        unit = run_unit(best.get("point_value"))
-        mix = sorted({run_unit(r.get("point_value")) for r in runs})
-        if len(mix) > 1:
-            notes.append(f"в кампании разные единицы ({', '.join(mix)}); карточка по лучшему прогону: {unit}")
+    if runs:
+        # «point_value None/1.0 = пункты» проверено против измеренной единицы (scripts/unit_heuristic_check.py):
+        # ошибается в 7 из 15. Без перепрогона единица неизвестна: null (измеряется только у лидеров бэкфилла)
+        unit = None
 
     # (1) бэктест-кривые лидеров оптимизатора: <campaign_run>-bf<rank>
     names = sorted({r["campaign_run"] for r in runs})
@@ -476,6 +475,7 @@ def build_card(c: dict, tasks_all: list, bf: dict, task_results: dict, now_iso: 
     has_curve = lead_full is not None
     if lead and lead.get("unit"):
         unit = lead["unit"]
+    unit_source = "measured" if (lead and lead.get("unit_source") == "measured") else None
     status, progress = status_of(tasks, has_curve, bool(runs), e.get("status_hint"))
     if status == "no_curve":
         if runs and e.get("kind") == "research":
@@ -513,7 +513,8 @@ def build_card(c: dict, tasks_all: list, bf: dict, task_results: dict, now_iso: 
                      "full_cost_rub": lead.get("full_cost_rub") if has_curve else None,
                      "return_pct": lead.get("return_pct") if has_curve else None},
         "thumb": thumb, "verdict": e.get("verdict"), "doc": e.get("doc"),
-        "unit": unit, "kind": e.get("kind") or "research", "no_curve_reason": reason,
+        "unit": unit, "unit_source": unit_source, "kind": e.get("kind") or "research",
+        "no_curve_reason": reason,
     }
     varieties = varieties_of(runs)
     card["n_varieties"] = len(varieties)

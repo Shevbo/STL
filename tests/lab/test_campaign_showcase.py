@@ -106,9 +106,10 @@ def test_units_symbols_and_sort():
     reg = [_entry("r1", symbols=["RI", "Si"]), _entry("r2", status_hint="queued")]
     out = b.build(reg, runs, [], bf, {}, "now")
     cards = {c["slug"]: (c, d) for c, d in out}
-    assert cards["autoa-20260711-s-ri"][0]["unit"] == "rub" and cards["autoa-20260711-s-ri"][0]["symbols"] == ["RIU6"]
-    assert cards["autob-20260711-s-si"][0]["unit"] == "points"
-    assert "разные единицы" in cards["mixa-20260801-s-ri"][1]["notes"]
+    assert cards["autoa-20260711-s-ri"][0]["unit"] is None and cards["autoa-20260711-s-ri"][0]["symbols"] == ["RIU6"]
+    # без перепрогона единица не угадывается по point_value (эвристика ошибалась в 7 из 15)
+    assert cards["autob-20260711-s-si"][0]["unit"] is None and cards["autob-20260711-s-si"][0]["unit_source"] is None
+    assert all(ld["unit"] is None and ld["return_pct"] is None for ld in cards["mixa-20260801-s-ri"][1]["leaders"])
     assert cards["r1"][0]["symbols"] == ["RI", "Si"] and cards["r2"][0]["symbols"] is None
     order = [c["slug"] for c, _ in out]
     assert order[0] == "autoa-20260711-s-ri"  # единственная с кривой первой

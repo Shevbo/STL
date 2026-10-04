@@ -85,10 +85,10 @@ def test_bf_leader_full_fields_and_headline():
     assert ld["contracts_peak"] == 3 and ld["full_cost_rub"] == 3 * 100.0 * 2.0 and ld["unit"] == "rub"
     assert ld["return_pct"] == round(60.0 / 600.0 * 100, 2) and ld["buyhold_curve"][-1][1] == 30.0
     assert ld["metrics"]["rerun_note"] == "перепрогон на текущем движке" and ld["metrics"]["lb_net"] == 50.0
-    assert ld["l_share_source"] == "curve" and ld["score"] == 2.0 * 60.0 * ld["l_share"]
+    assert ld["unit_source"] == "measured" and ld["l_share_source"] == "curve" and ld["score"] == 2.0 * 60.0 * ld["l_share"]
     nul = b.make_bf_leader({**row, "peak": None, "peak_col": None, "gross_pts": None}, None, "rub")
     assert nul["contracts_peak"] is None and nul["full_cost_rub"] is None and nul["return_pct"] is None
-    assert nul["buyhold_curve"] is None
+    assert nul["buyhold_curve"] is None and nul["unit"] is None and nul["unit_source"] is None
 
 
 def test_row_leader_windows_fallback_and_nulls():
@@ -96,6 +96,7 @@ def test_row_leader_windows_fallback_and_nulls():
                             "params": {}}, "points")
     assert ld["l_share"] == 0.75 and ld["l_share_source"] == "leaderboard_windows" and ld["score"] == 15.0
     assert ld["contracts_peak"] is None and ld["full_cost_rub"] is None and ld["curve"] is None
+    assert ld["unit"] is None and ld["unit_source"] is None and ld["return_pct"] is None
     assert b.make_row_leader({"campaign_run": "c", "net": 1.0}, "rub")["l_share"] is None
 
 
