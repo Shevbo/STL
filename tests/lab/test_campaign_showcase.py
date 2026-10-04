@@ -165,3 +165,7 @@ def test_opt_sweeps_merge_across_dates_by_logic():
     cards = b.merge_cards([], [f("opt-20260605-0618", 1.0), f("opt-20260606-1326", 2.0)])
     assert [c["entry"]["slug"] for c in cards] == ["opt-cci-ri"]
     assert b.varieties_of(cards[0]["runs"])[0]["n_runs"] == 2
+
+
+def test_strategy_name_without_parenthesis_tail():
+    assert b.strategy_info("us_open_fvg")[0] == "US-Open Opening Range + FVG / Retest"

@@ -167,7 +167,7 @@ def strategy_info(sid: str | None) -> tuple[str, str]:
                 doc = ast.get_docstring(ast.parse(open(path, encoding="utf-8").read())) or ""
                 first = doc.strip().split(chr(10))[0]
                 if " — " not in first:  # нет «Имя — суть»: имя из первой строки, сути нет
-                    name, first = _clip(first, 60) or base, None
+                    name, first = _clip(re.split(r"\s\(", first)[0], 60) or base, None
             except (SyntaxError, OSError):
                 first = None
     if first and " — " in first:
