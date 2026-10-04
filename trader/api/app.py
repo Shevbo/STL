@@ -1769,6 +1769,9 @@ def create_app() -> FastAPI:
     # Избранные наборы бэктестов (именованные, с указателем на результат).
     from trader.api.lab_favorites import router as lab_favorites_router
     fastapi_app.include_router(lab_favorites_router)
+    # Витрина кампаний бэктеста: читает готовые файлы сборщика (окно backtests).
+    from trader.api.lab_showcase import router as lab_showcase_router
+    fastapi_app.include_router(lab_showcase_router)
 
     # Почта между окнами разработки (real-trade / backtests / ui-ux): передача
     # работы владельцу зоны вместо ручного переноса текста оператором.

@@ -40,6 +40,8 @@
         { href: '/?lab=live', label: 'LIVE роботы' },
         { href: '/?lab=botstore', label: 'Ботстор (хитпарад)' },
         { href: '/?lab=backtest', label: 'Бэктест' },
+        // Витрина всех проведённых кампаний: карточки с кривыми, по клику отчёт.
+        { href: '/backtest/campaigns', label: 'Витрина кампаний бэктеста' },
         { href: '/?lab=market', label: 'Графики рынка' },
       ],
     },

@@ -2,10 +2,14 @@ import { defineConfig } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import path from 'path';
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [svelte()],
   resolve: {
-    alias: { $lib: path.resolve('./src/lib') }
+    alias: { $lib: path.resolve('./src/lib') },
+    // В тестах Svelte иначе резолвится в СЕРВЕРНУЮ сборку, где onMount и $effect
+    // недоступны (lifecycle_function_unavailable): смонтировать компонент нельзя.
+    // Условие только для теста — боевая сборка остаётся как была.
+    conditions: mode === 'test' ? ['browser'] : undefined,
   },
   server: {
     proxy: {
@@ -17,4 +21,4 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['src/test-setup.ts']
   }
-});
+}));

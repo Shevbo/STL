@@ -26,6 +26,8 @@
   import ExecProfiles from './components/ExecProfiles.svelte';
   import { corridorDraw } from '$lib/stores/corridor-draw.svelte';
   import StrategyPage from './components/lab/StrategyPage.svelte';
+  import CampaignShowcase from './components/lab/CampaignShowcase.svelte';
+  import { routeOf as campaignRouteOf } from '$lib/campaign-showcase';
   import { WsClient } from '$lib/ws';
   import { robotsStore } from '$lib/stores/robots.svelte';
   import { quotesStore } from '$lib/stores/quotes.svelte';
@@ -47,6 +49,10 @@
   // (the same MustDescription + schematics as the param-run page). The agent-local
   // stand links here as https://stl.shectory.ru/?strategy=<strategy_id>.
   const strategyId = _qs.get('strategy');
+  // Витрина кампаний бэктеста: /backtest/campaigns[/<slug>] (nginx отдаёт
+  // index.html на любой путь) либо /?lab=campaigns[&c=<slug>] для старых ссылок.
+  // Полноэкранная страница, как стенд робота: торговые сервисы ей не нужны.
+  const campaignRoute = campaignRouteOf(window.location.pathname, window.location.search);
   // Session check is in flight on first load. While checking we show a neutral splash
   // (NOT the login form) so a normal F5 with a valid cookie does not flash the login
   // screen. The login form only appears after the check completes with a real 401.
@@ -283,7 +289,7 @@
     // The /?strategy=<id> page is a static explanation — it needs auth (to read
     // /api/v1/strategies) but NOT the trading shell's live services, whose
     // orderbook polling would otherwise 404-spam the console on this route.
-    if (authed && !strategyId) {
+    if (authed && !strategyId && !campaignRoute) {
       startWs();
       loadInstruments();
       loadFeeConfig();
@@ -305,7 +311,8 @@
     // закладка осталась «Стратегия order_block» вместо «Order Block (ICT)»).
     // Пока идёт проверка сессии, ребёнок ещё не смонтирован, и титул по URL —
     // единственный, поэтому ставим его.
-    if ((strategyId || agentRobotId) && authed && !checking) return;
+    if ((strategyId || agentRobotId || campaignRoute) && authed && !checking) return;
+    if (campaignRoute) { setTitle('Витрина кампаний'); return; }
     if (strategyId) { setTitle(`Стратегия ${strategyId}`); return; }
     if (agentRobotId) { setTitle(`Робот ${agentRobotId}`); return; }
     if (showLab) { setTitle(titleFromQuery(new URLSearchParams(window.location.search))); return; }
@@ -346,6 +353,8 @@
   </div>
 {:else if !authed}
   <LoginDialog {onLogin} />
+{:else if campaignRoute}
+  <CampaignShowcase />
 {:else if strategyId}
   <StrategyPage {strategyId} />
 {:else if agentRobotId}
