@@ -1909,6 +1909,7 @@ def _grid_count_fill(so: SmartOrder, live: dict, level: int, side_was: str,
     # В позицию — только то, что ещё не учтено частичными исполнениями (`already`).
     _grid_position_delta(so, side_was, got - already, price)
     _mark_counted(live, num)
+    so_mod.grid_note_fill(live, level, side_was)      # для запрета повтора той же стороны
     so.g_fills_done += 1                          # для защиты «N уровней подряд»
     live[f"flip:{level}"] = True                  # этот уровень погас
     woke = [n for n in (level - 1, level + 1)
@@ -2342,6 +2343,26 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
         # ОКНО: в QUIK только ближайшие уровни, дальние ждут в STL (см. g_window).
         # Стоящее за пределом «держать» снимается по номеру из таблицы терминала —
         # склад после рестарта пуст, а подхваченные строки записей не имеют.
+        # СТОЯЩАЯ ЗАЯВКА, НАРУШАЮЩАЯ ЗАПРЕТ ПОВТОРА, СНИМАЕТСЯ: после рестарта и после
+        # выката правила она могла остаться в стакане (одно снятие на строку раз в 30 с).
+        if (term_all is not None and so.g_step > 0 and not so.exit_only
+                and any(k.startswith("ls:") for k in live)):
+            for r in term_all.get(so.so_id, []):
+                lvl = round((float(r.get("price") or 0) - so.g_base) / so.g_step)
+                if r.get("side") in ("buy", "sell") and so_mod.grid_repeat_blocked(
+                        live, lvl, r["side"]):
+                    k = f"xkill:{r['num']}"
+                    if now - int(live.get(k) or 0) < 30_000:
+                        continue
+                    live[k] = now
+                    srv.enqueue_order(agent, order_msgs.build_cancel_order(
+                        client_id=f"op:kill:{r['num']}", order_id=r["num"], code=r["sec"]))
+                    dirty = True
+                    so_journal.record(
+                        "resting_withdrawn", so, so_journal.WATCHER,
+                        f"снята заявка {r['num']} уровня {lvl:+d} ({r['side']} по "
+                        f"{r.get('price')}): он уже исполнился этой же стороной, встречной "
+                        "сделки в сетке не было", now_ms=now)
         win_place, win_keep = so_mod.grid_window(so, live, price)
         if (so.g_window > 0 and price > 0 and term_all is not None and so.g_step > 0
                 and not so.exit_only):
@@ -2477,6 +2498,19 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
                     dirty = True
                 continue
             side = so_mod.grid_side_for(so, level, price)
+            if so_mod.grid_repeat_blocked(live, level, side):
+                # Уровень только что исполнился ЭТОЙ ЖЕ стороной, и встречной сделки в
+                # сетке с тех пор не было: повтор копил бы одну сторону (см. grid_repeat_blocked).
+                if live.get(f"rep:{level}") != 1:
+                    live[f"rep:{level}"] = 1
+                    dirty = True
+                    so_journal.record(
+                        "held", so, so_journal.WATCHER,
+                        f"уровень {level:+d} не выставлен: он уже исполнился этой же "
+                        f"стороной ({side}), а встречной сделки в сетке не было — повтор "
+                        "копил бы позицию в одну сторону", now_ms=now)
+                continue
+            live.pop(f"rep:{level}", None)
             px = so_mod.quantize(so_mod.grid_price(so, level), step, side)
             # Уровень по ту сторону рынка не выставляем по той же причине, что и
             # стенку коридора (инцидент 30.09.2026): лимит, пересекающий рынок,
