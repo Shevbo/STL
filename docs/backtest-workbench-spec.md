@@ -194,3 +194,31 @@ code_ref?, change_note?}` → `200 {ok, status}`. Все поля необяза
 - `STL_WORKBENCH_OPERATORS` = одна почта оператора (учётка shectory, то же значение, что
   `SHECTORY_LOCAL_USER_EMAIL` в окружении STL). Значение ставит real-trade вместе с `WORKBENCH_WORKER_TOKEN`
   (токен в keymaster федерации) и рестартом.
+
+## Воркер на smain (backtests, 05.10.2026; оператор: «Воркер на smain — ДА»)
+
+Образец: `klod-builder` на smain (`~/workspaces/klod-foreman/builder`: `claude -p` в worktree,
+`--allowedTools` + `--permission-mode`, прокси Lineman `HTTPS_PROXY=http://127.0.0.1:9090`).
+- Код: `scripts/workbench_worker.py` (один модуль, stdlib + httpx), тесты `tests/lab/test_workbench_worker.py`,
+  юнит `scripts/stl-workbench.service` (systemd --user на smain). Клон: `~/stl-workbench` (отдельный от окна
+  stl-dev-spare `~/stl`). Секреты: `~/.config/stl-workbench/worker.env` (600): `WORKBENCH_WORKER_TOKEN`,
+  `STL_API_BASE`; значения не печатаются.
+- Цикл: heartbeat каждые 30 с (отдельный поток, и во время работы модели); claim; на задание: worktree
+  `wb/<card>/<rev>` от `parent_code_ref` (или от `origin/main` у первой), файл стратегии карточки
+  `trader/lab/strategies/wb/<card_py>.py` (первая редакция создаёт его обёрткой над `card_ctx.script_code`
+  без изменения поведения), `claude -p` с промптом-рамкой + сообщением оператора как ДАННЫМИ (в ограждении),
+  `--allowedTools "Read Edit Write"` (без Bash), `--permission-mode acceptEdits`, модель sonnet, таймаут 30 мин.
+- Политика путей после модели: `git diff --name-only` ⊆ {этот файл стратегии, `tests/lab/wb/test_<card_py>.py`};
+  иначе `failed` «модель вышла за разрешённые пути», ничего не пушится.
+- Ворота (каждое в `gates` отдельно): `ruff`, `script_guard` (validate_script по исходнику),
+  `import` (модуль импортируется, есть on_bar), `pytest` (тест карточки, если есть), `no_lookahead` (решения
+  стратегии на первых N−k барах фикстуры совпадают при прогоне на N и на N−k барах), `smoke` (прогон движком
+  на коротком фиксированном наборе баров без исключений; это тест, не бэктест: считать прогоны только на i9).
+- Результат: commit в ветку `wb/<card>/<rev>`, push ТОЛЬКО этой ветки (refspec проверяется в коде,
+  `main` и чужие ветки отклоняются), `report`: diff, code_ref (`ветка@sha`), params
+  `{script_code, base_params, param_sets|params_grid, symbol, date_from, date_to}` (модель пишет
+  `params.json` рядом? нет: параметры прогона модель отдаёт в последнем блоке ответа JSON, воркер валидирует),
+  change_note (первая строка ответа модели), лог.
+- Отмена: `409 closed` на report → убить процесс модели, удалить worktree, ничего не пушить.
+- Контекст карточки для модели: claim отдаёт `card_ctx` (ui-ux берёт из `<slug>.json` поле `workbench_base`:
+  strategy, symbol, date_from, date_to, base_params, script_code, point_value); без `card_ctx` → `failed`.
