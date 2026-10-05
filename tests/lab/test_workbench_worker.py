@@ -51,7 +51,7 @@ class FakeSh:
     def norm(cmd):
         """git без -c-флагов и без префикса unshare: сценарий смотрит на суть команды."""
         c = list(cmd)
-        if c[:3] == ["unshare", "-rn", "--"] and len(c) > 3:
+        if c[:1] and Path(c[0]).name == "unshare" and c[1:3] == ["-rn", "--"] and len(c) > 3:
             c = c[3:]
         if c[:1] == ["git"]:
             i = 1
@@ -65,7 +65,7 @@ class FakeSh:
         raw_cmd, cmd = list(cmd), self.norm(cmd)
         self.calls.append(cmd)
         assert env is None or "WORKBENCH_WORKER_TOKEN" not in env
-        if raw_cmd[:1] == ["unshare"] and raw_cmd[-1] == "true":
+        if Path(raw_cmd[0]).name == "unshare" and raw_cmd[-1] == "true":
             return self.unshare_rc, ""
         if cmd[:3] == ["git", "worktree", "add"]:
             Path(cmd[5]).mkdir(parents=True, exist_ok=True)
@@ -93,12 +93,16 @@ class FakeSh:
         return [m for m in self.meta if "ruff" in m[0] or "pytest" in m[0] or "--probe" in m[0]]
 
 
+MODEL_ENV = {"ANTHROPIC_BASE_URL": "http://lineman.local", "ANTHROPIC_AUTH_TOKEN": "MODELTOK-0123456789"}
+
+
 def make(tmp_path, api=None, sh=None, claude=None):
     home = tmp_path / "home"
     home.mkdir(exist_ok=True)
     (tmp_path / "worker.py").write_text("# worker\n", encoding="utf-8")
     cfg = ww.Config(api_base="http://x", token=TOKEN, repo=str(tmp_path / "repo"), worker_id="w1",
-                    heartbeat_s=0.05, home=str(home), worker_file=str(tmp_path / "worker.py"))
+                    heartbeat_s=0.05, home=str(home), worker_file=str(tmp_path / "worker.py"),
+                    unshare="/usr/local/lib/stl-wb/unshare", model_env=dict(MODEL_ENV))
     (tmp_path / "repo").mkdir(exist_ok=True)
     api = api or FakeApi()
     sh = sh or FakeSh()
@@ -429,7 +433,7 @@ def test_model_code_gates_wrapped_in_unshare(tmp_path):
         if "ruff" in cmd:
             assert cmd[0] != "unshare"
         else:
-            assert cmd[:3] == ["unshare", "-rn", "--"], cmd
+            assert cmd[:3] == ["/usr/local/lib/stl-wb/unshare", "-rn", "--"], cmd
 
 
 def test_no_unshare_means_model_code_gates_not_run(tmp_path):
@@ -455,3 +459,73 @@ def test_clone_updated_ff_only_before_job_and_dirty_fails(tmp_path):
     w.handle(job())
     assert last(api)["status"] == "failed" and "грязный" in last(api)["log_append"]
     assert ["git", "worktree", "add"] not in [c[:3] for c in sh.calls]
+
+
+def test_parent_params_go_to_model_prompt(tmp_path):
+    seen = {}
+
+    def claude(cwd, prompt, *a):
+        seen["p"], seen["env"] = prompt, a[-1]
+        return True, ANSWER
+    w, api, sh = make(tmp_path, claude=claude)
+    pp = {"script_code": "SECRETCODE", "base_params": {"fast": 17}, "symbol": "RIZ6",
+          "date_from": "2026-03-01", "date_to": "2026-04-01", "param_sets": [{"fast": 21}]}
+    w.handle(job(parent_params=pp))
+    assert '"fast": 17' in seen["p"] and '"fast": 21' in seen["p"] and "2026-03-01" in seen["p"]
+    assert "SECRETCODE" not in seen["p"]
+    w2, api2, sh2 = make(tmp_path / "b" if (tmp_path / "b").mkdir() is None else tmp_path, claude=claude)
+    w2.handle(job())                      # первая редакция: база = card_ctx.base_params
+    assert '"a": 1' in seen["p"] and "2026-01-01" in seen["p"]
+
+
+def test_claude_env_has_model_keys_other_subprocesses_do_not(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "from-os-env-xxxxxxxx")
+    seen = {}
+
+    def claude(cwd, prompt, *a):
+        seen["env"] = a[-1]
+        return True, ANSWER
+    w, api, sh = make(tmp_path, claude=claude)
+    w.handle(job())
+    assert seen["env"]["ANTHROPIC_BASE_URL"] == "http://lineman.local"
+    assert seen["env"]["ANTHROPIC_AUTH_TOKEN"] == MODEL_ENV["ANTHROPIC_AUTH_TOKEN"]
+    assert "WORKBENCH_WORKER_TOKEN" not in seen["env"]
+    for cmd, cwd, t, env in sh.meta:
+        assert env is None or not any(k.startswith("ANTHROPIC_") for k in env), cmd
+
+
+def test_no_model_access_fails_not_hangs(tmp_path):
+    w, api, sh = make(tmp_path)
+    w.cfg.model_env = {}
+    w.handle(job())
+    assert last(api)["status"] == "failed" and "нет доступа к модели" in last(api)["log_append"]
+    assert not sh.calls[:1] or ["git", "fetch", "origin", "--prune"] not in sh.calls
+    w.beat_once()
+    assert api.beats          # heartbeat без ключей жив
+
+
+def test_model_key_not_in_log_or_reports(tmp_path, capsys):
+    key = MODEL_ENV["ANTHROPIC_AUTH_TOKEN"]
+    w, api, sh = make(tmp_path, claude=lambda *a: (True, f"ключ {key}" + chr(10) + GOOD_JSON), sh=FakeSh(ruff_rc=1))
+    w.handle(job())
+    assert key not in capsys.readouterr().out + json.dumps(api.reports, ensure_ascii=False)
+
+
+def test_unshare_path_from_env():
+    c = ww.Config.from_env({"STL_API_BASE": "http://x", "WORKBENCH_WORKER_TOKEN": "t" * 20, "WB_UNSHARE": "/opt/u",
+                            "ANTHROPIC_BASE_URL": "u", "ANTHROPIC_AUTH_TOKEN": "k" * 10})
+    assert c.unshare == "/opt/u" and c.model_env == {"ANTHROPIC_BASE_URL": "u", "ANTHROPIC_AUTH_TOKEN": "k" * 10}
+    assert ww.Config.from_env({"STL_API_BASE": "http://x", "WORKBENCH_WORKER_TOKEN": "t"}).unshare ==         "/usr/local/lib/stl-wb/unshare"
+
+
+def test_fingerprint_watches_stlwb_key(tmp_path):
+    (tmp_path / "home" / ".ssh").mkdir(parents=True)
+    key = tmp_path / "home" / ".ssh" / "id_ed25519_stlwb"
+    key.write_text("k", encoding="utf-8")
+
+    def claude(cwd, *a):
+        key.write_text("evil", encoding="utf-8")
+        return True, ANSWER
+    w, api, sh = make(tmp_path, claude=claude)
+    w.handle(job())
+    assert last(api)["status"] == "failed" and "id_ed25519_stlwb" in last(api)["log_append"]

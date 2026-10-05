@@ -1,6 +1,8 @@
-# systemd --user на smain: ~/.config/systemd/user/stl-workbench.service
-# Секреты: ~/.config/stl-workbench/worker.env (600): STL_API_BASE, WORKBENCH_WORKER_TOKEN.
-# Запуск: systemctl --user daemon-reload && systemctl --user enable --now stl-workbench
+# systemd --user пользователя stl-wb: ~stl-wb/.config/systemd/user/stl-workbench.service
+# Ставит scripts/stl-workbench-install.sh. Секреты: ~/.config/stl-workbench/worker.env (600):
+#   STL_API_BASE, WORKBENCH_WORKER_TOKEN, ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN, [ANTHROPIC_CUSTOM_HEADERS],
+#   [WB_UNSHARE]. Без ANTHROPIC_* воркер жив (heartbeat), но задания отклоняет «нет доступа к модели».
+# Запуск (из-под stl-wb): systemctl --user daemon-reload && systemctl --user enable --now stl-workbench
 [Unit]
 Description=stl-workbench: воркер рабочего места бэктеста (claude -p в worktree wb/<card>/<rev>)
 After=network-online.target
@@ -9,10 +11,10 @@ After=network-online.target
 Type=simple
 WorkingDirectory=%h/stl-workbench
 EnvironmentFile=%h/.config/stl-workbench/worker.env
-# claude нужен HTTPS_PROXY (Lineman); локальные адреса и WG мимо прокси.
-Environment=HTTPS_PROXY=http://127.0.0.1:9090
-Environment=HTTP_PROXY=http://127.0.0.1:9090
-Environment=NO_PROXY=127.0.0.1,localhost,10.66.0.1
+# Если выход claude идёт через прокси Lineman, а не через ANTHROPIC_BASE_URL, раскомментировать:
+#Environment=HTTPS_PROXY=http://127.0.0.1:9090
+#Environment=HTTP_PROXY=http://127.0.0.1:9090
+#Environment=NO_PROXY=127.0.0.1,localhost,10.66.0.1
 Environment=WB_REPO=%h/stl-workbench
 Environment=PYTHONUNBUFFERED=1
 ExecStart=%h/stl-workbench/.venv/bin/python scripts/workbench_worker.py
