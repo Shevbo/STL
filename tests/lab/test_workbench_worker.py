@@ -19,7 +19,6 @@ GOOD_JSON = ('```json\n{"base_params": {"a": 1}, "param_sets": [{"a": 2}], "symb
              '"date_from": "2026-01-01", "date_to": "2026-02-01"}\n```')
 ANSWER = "Добавил фильтр\nподробности\n" + GOOD_JSON
 RAW_OK = ":100644 100644 aaaaaaa bbbbbbb M\ttrader/lab/strategies/wb/card_x.py\n"
-PROBE_OK = json.dumps({k: {"ok": True} for k in ("script_guard", "import", "no_lookahead", "smoke")})
 
 
 class FakeApi:
@@ -43,16 +42,20 @@ class FakeApi:
 class FakeSh:
     """run(cmd, cwd, timeout, env): сценарий по началу команды, всё записывается."""
 
-    def __init__(self, raw=RAW_OK, ruff_rc=0, probe=PROBE_OK):
-        self.calls, self.raw, self.ruff_rc, self.probe = [], raw, ruff_rc, probe
+    def __init__(self, raw=RAW_OK, ruff_rc=0, probe_ok=True):
+        self.calls, self.raw, self.ruff_rc, self.probe_ok = [], raw, ruff_rc, probe_ok
+        self.meta = []   # (cmd, cwd, timeout, env)
 
     def __call__(self, cmd, cwd=None, timeout=0, env=None):
         self.calls.append(list(cmd))
+        self.meta.append((list(cmd), cwd, timeout, env))
         assert env is None or "WORKBENCH_WORKER_TOKEN" not in env
         if cmd[:3] == ["git", "worktree", "add"]:
             Path(cmd[5]).mkdir(parents=True, exist_ok=True)
         if cmd[:2] == ["git", "rev-parse"]:
             return 0, "abc1234def\n"
+        if cmd[:2] == ["git", "show"]:
+            return 0, "def test_x():\n    pass\n"
         if cmd[:3] == ["git", "diff", "--cached"] and "--raw" in cmd:
             return 0, self.raw
         if cmd[:3] == ["git", "diff", "--cached"]:
@@ -60,11 +63,14 @@ class FakeSh:
         if "ruff" in cmd:
             return self.ruff_rc, "ruff out"
         if "--probe" in cmd:
-            return 0, "шум\n" + self.probe + "\n"
+            return 0, "шум\n" + json.dumps({"ok": self.probe_ok}) + "\n"
         return 0, ""
 
     def pushed(self):
         return [c for c in self.calls if c[:2] == ["git", "push"]]
+
+    def gate_runs(self):
+        return [m for m in self.meta if "ruff" in m[0] or "pytest" in m[0] or "--probe" in m[0]]
 
 
 def make(tmp_path, api=None, sh=None, claude=None):
@@ -122,6 +128,81 @@ def test_path_policy_blocks_foreign_file(tmp_path):
     w.handle(job())
     assert last(api)["status"] == "failed" and "разрешённые пути" in last(api)["log_append"]
     assert not sh.pushed()
+
+
+def test_model_cannot_write_tests(tmp_path):
+    raw = RAW_OK + ":000000 100644 0 b A\ttests/lab/wb/test_card_x.py\n"
+    w, api, sh = make(tmp_path, sh=FakeSh(raw=raw))
+    w.handle(job())
+    assert last(api)["status"] == "failed" and "разрешённые пути" in last(api)["log_append"]
+    assert not sh.pushed() and not sh.gate_runs()
+
+
+def _rewrite(code):
+    """Фейковая модель: переписывает файл стратегии в worktree."""
+    def claude(cwd, *a):
+        (Path(cwd) / "trader/lab/strategies/wb/card_x.py").write_text(code, encoding="utf-8")
+        return True, ANSWER
+    return claude
+
+
+def test_script_guard_first_nothing_else_runs(tmp_path):
+    w, api, sh = make(tmp_path, claude=_rewrite("import os\nasync def on_bar(stl, params):\n    pass\n"))
+    w.handle(job())
+    f = last(api)
+    assert f["status"] == "failed" and f["gates"]["script_guard"]["ok"] is False
+    assert [k for k, g in f["gates"].items() if g["ok"] is not False] == []
+    assert list(f["gates"]) == list(ww.GATE_NAMES)
+    assert not sh.gate_runs() and not sh.pushed()          # ни ruff, ни pytest, ни import кода модели
+
+
+def test_pytest_gate_is_fixed_main_test_only(tmp_path):
+    w, api, sh = make(tmp_path)
+    w.handle(job())
+    assert ["git", "show", "origin/main:tests/lab/test_wb_strategy_gate.py"] in sh.calls
+    runs = [m for m in sh.meta if "pytest" in m[0]]
+    assert len(runs) == 1
+    cmd, cwd, _, env = runs[0]
+    assert Path(cmd[cmd.index("pytest") + 1]).name == "test_wb_strategy_gate.py"
+    assert "wb-gate-" in cmd[cmd.index("pytest") + 1] and str(cwd) not in cmd[cmd.index("pytest") + 1]
+    assert env["WB_STRATEGY_FILE"].endswith("trader/lab/strategies/wb/card_x.py") or "card_x.py" in env["WB_STRATEGY_FILE"]
+    assert not any("test_card_x" in " ".join(c) for c in sh.calls)
+
+
+def test_gates_sandboxed_each_own_process_with_timeout(tmp_path, monkeypatch):
+    for k in ("WORKBENCH_WORKER_TOKEN", "SSH_AUTH_SOCK", "ANTHROPIC_API_KEY", "HTTPS_PROXY", "GITHUB_TOKEN"):
+        monkeypatch.setenv(k, "secret-" + k)
+    w, api, sh = make(tmp_path)
+    w.handle(job())
+    runs = sh.gate_runs()
+    probes = [m for m in runs if "--probe" in m[0]]
+    assert sorted(m[0][m[0].index("--probe") + 1] for m in probes) == ["import", "no_lookahead", "smoke"]
+    assert len(runs) == 5                                   # ruff + pytest + 3 probe, каждое отдельно
+    wt = str(tmp_path / "stl-workbench-wt" / "card-x-2")
+    for cmd, cwd, timeout, env in runs:
+        assert cwd == wt and 0 < timeout <= 600
+        assert set(env) <= {"PATH", "HOME", "TMPDIR", "PYTHONDONTWRITEBYTECODE", "PYTHONPATH", "SYSTEMROOT",
+                            "LANG", "WB_STRATEGY_FILE", "WB_STRATEGY_SYMBOL", "WB_STRATEGY_PARAMS",
+                            "WB_WORKER_FILE"}
+        assert env["HOME"] != str(Path.home()) and "wb-gate-" in env["HOME"]
+        assert not any("secret-" in v for v in env.values())
+    assert not Path(runs[0][3]["HOME"]).exists()            # временная папка убрана
+
+
+def test_gate_test_file_in_main_runs_real_engine(tmp_path):
+    import subprocess
+    gate = Path(__file__).with_name("test_wb_strategy_gate.py")
+    good = tmp_path / "good.py"
+    good.write_text("async def on_bar(stl, params):\n    pass\n", encoding="utf-8")
+    env = {**__import__("os").environ, "WB_STRATEGY_FILE": str(good), "WB_STRATEGY_SYMBOL": "RIZ6",
+           "WB_STRATEGY_PARAMS": '{"symbol": "RIZ6"}', "WB_WORKER_FILE": str(Path(ww.__file__))}
+    r = subprocess.run([sys.executable, "-m", "pytest", str(gate), "-q", "-p", "no:cacheprovider"],
+                       env=env, capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stdout[-500:]
+    good.write_text("import os\nasync def on_bar(stl, params):\n    pass\n", encoding="utf-8")
+    r = subprocess.run([sys.executable, "-m", "pytest", str(gate), "-q", "-p", "no:cacheprovider"],
+                       env=env, capture_output=True, text=True, timeout=120)
+    assert r.returncode != 0
 
 
 def test_symlink_blocked():
@@ -216,10 +297,11 @@ def test_probe_real_engine(tmp_path, monkeypatch):
         "        await stl.place_order(s, 'buy', 1, bars[-1].close)\n"
         "    elif len(bars) == 5 and bars[-1].close < bars[-2].close and pos.side == 'long':\n"
         "        await stl.place_order(s, 'sell', pos.quantity, bars[-1].close)\n", encoding="utf-8")
-    r = ww.probe(str(ok), "RIZ6", {"symbol": "RIZ6"})
-    assert all(r[k]["ok"] is True for k in ("script_guard", "import", "smoke", "no_lookahead")), r
+    for gate in ("import", "smoke", "no_lookahead"):
+        r = ww.probe(gate, str(ok), "RIZ6", {"symbol": "RIZ6"})
+        assert r["ok"] is True, r
     bad = tmp_path / "bad.py"
     bad.write_text(ok.read_text().replace("get_bars(s, 1, 5)", "get_bars(s, 1, 5)") +
                    "    rt = stl\n    n = len(rt._bars)\n    if n % 3 == 0 and rt._cursor > 0 and pos.side == 'flat':\n"
                    "        await stl.place_order(s, 'buy', 1, 1.0)\n", encoding="utf-8")
-    assert ww.probe(str(bad), "RIZ6", {"symbol": "RIZ6"})["no_lookahead"]["ok"] is False
+    assert ww.probe("no_lookahead", str(bad), "RIZ6", {"symbol": "RIZ6"})["ok"] is False
