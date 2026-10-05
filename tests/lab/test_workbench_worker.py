@@ -42,16 +42,36 @@ class FakeApi:
 class FakeSh:
     """run(cmd, cwd, timeout, env): сценарий по началу команды, всё записывается."""
 
-    def __init__(self, raw=RAW_OK, ruff_rc=0, probe_ok=True):
+    def __init__(self, raw=RAW_OK, ruff_rc=0, probe_ok=True, unshare_rc=0):
         self.calls, self.raw, self.ruff_rc, self.probe_ok = [], raw, ruff_rc, probe_ok
-        self.meta = []   # (cmd, cwd, timeout, env)
+        self.unshare_rc, self.status_out = unshare_rc, ""
+        self.meta = []   # (сырая команда, cwd, timeout, env)
+
+    @staticmethod
+    def norm(cmd):
+        """git без -c-флагов и без префикса unshare: сценарий смотрит на суть команды."""
+        c = list(cmd)
+        if c[:3] == ["unshare", "-rn", "--"] and len(c) > 3:
+            c = c[3:]
+        if c[:1] == ["git"]:
+            i = 1
+            while c[i:i + 1] == ["-c"] and c[i + 1].split("=")[0] in ("core.fsmonitor", "core.hooksPath"):
+                i += 2
+            c = ["git"] + c[i:]
+        return c
 
     def __call__(self, cmd, cwd=None, timeout=0, env=None):
-        self.calls.append(list(cmd))
         self.meta.append((list(cmd), cwd, timeout, env))
+        raw_cmd, cmd = list(cmd), self.norm(cmd)
+        self.calls.append(cmd)
         assert env is None or "WORKBENCH_WORKER_TOKEN" not in env
+        if raw_cmd[:1] == ["unshare"] and raw_cmd[-1] == "true":
+            return self.unshare_rc, ""
         if cmd[:3] == ["git", "worktree", "add"]:
             Path(cmd[5]).mkdir(parents=True, exist_ok=True)
+            (Path(cmd[5]) / ".git").write_bytes(b"gitdir: /x/.git/worktrees/card-x-2\n")
+        if cmd[:2] == ["git", "status"]:
+            return 0, self.status_out
         if cmd[:2] == ["git", "rev-parse"]:
             return 0, "abc1234def\n"
         if cmd[:2] == ["git", "show"]:
@@ -74,8 +94,11 @@ class FakeSh:
 
 
 def make(tmp_path, api=None, sh=None, claude=None):
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    (tmp_path / "worker.py").write_text("# worker\n", encoding="utf-8")
     cfg = ww.Config(api_base="http://x", token=TOKEN, repo=str(tmp_path / "repo"), worker_id="w1",
-                    heartbeat_s=0.05)
+                    heartbeat_s=0.05, home=str(home), worker_file=str(tmp_path / "worker.py"))
     (tmp_path / "repo").mkdir(exist_ok=True)
     api = api or FakeApi()
     sh = sh or FakeSh()
@@ -305,3 +328,130 @@ def test_probe_real_engine(tmp_path, monkeypatch):
                    "    rt = stl\n    n = len(rt._bars)\n    if n % 3 == 0 and rt._cursor > 0 and pos.side == 'flat':\n"
                    "        await stl.place_order(s, 'buy', 1, 1.0)\n", encoding="utf-8")
     assert ww.probe("no_lookahead", str(bad), "RIZ6", {"symbol": "RIZ6"})["ok"] is False
+
+
+# ── правки по проверке безопасности (fable) ──────────────────────────────────
+def test_claude_cmd_no_bare_allowed_tools():
+    cmd = ww.claude_cmd("/bin/claude", "p", "sonnet")
+    assert "--allowedTools" not in cmd and "--allowed-tools" not in cmd
+    assert cmd[cmd.index("--tools") + 1] == "Read,Edit,Write"
+    assert cmd[cmd.index("--setting-sources") + 1] == "user" and "--strict-mcp-config" in cmd
+    assert cmd[cmd.index("--permission-mode") + 1] == "acceptEdits"
+
+
+def test_probe_model_writes_home_file_caught(tmp_path):
+    """«Модель» пишет ~/wb_probe: новый файл в HOME ловится снимком."""
+    def claude(cwd, *a):
+        (tmp_path / "home" / "wb_probe").write_text("x", encoding="utf-8")
+        return True, ANSWER
+    w, api, sh = make(tmp_path, claude=claude)
+    w.handle(job())
+    assert last(api)["status"] == "failed" and "ТРЕВОГА" in last(api)["log_append"]
+    assert "ls:" in last(api)["log_append"] and not sh.pushed()
+
+
+def test_probe_model_edits_worker_caught(tmp_path):
+    def claude(cwd, *a):
+        (tmp_path / "worker.py").write_text("# backdoor\n", encoding="utf-8")
+        return True, ANSWER
+    w, api, sh = make(tmp_path, claude=claude)
+    w.handle(job())
+    assert last(api)["status"] == "failed" and "ТРЕВОГА" in last(api)["log_append"] and "worker" in last(api)["log_append"]
+    assert not sh.pushed() and not sh.gate_runs()
+
+
+def test_model_edits_secret_files_and_clone_caught(tmp_path):
+    (tmp_path / "home" / ".claude").mkdir(parents=True)
+    (tmp_path / "home" / ".claude" / "settings.json").write_text("{}", encoding="utf-8")
+    holder = {}
+
+    def claude(cwd, *a):
+        (tmp_path / "home" / ".claude" / "settings.json").write_text('{"hooks": 1}', encoding="utf-8")
+        holder["sh"].status_out = " M scripts/workbench_worker.py\n"
+        return True, ANSWER
+    w, api, sh = make(tmp_path, claude=claude)
+    holder["sh"] = sh
+    w.handle(job())
+    log = last(api)["log_append"]
+    assert last(api)["status"] == "failed" and ".claude/settings.json" in log and "clone_status" in log
+    assert not sh.pushed()
+
+
+def test_wt_dotgit_swap_caught(tmp_path):
+    def claude(cwd, *a):
+        (Path(cwd) / ".git").write_bytes(b"gitdir: /evil\n")
+        return True, ANSWER
+    w, api, sh = make(tmp_path, claude=claude)
+    w.handle(job())
+    assert last(api)["status"] == "failed" and "wt/.git подменён" in last(api)["log_append"]
+    assert not sh.pushed()
+
+
+def test_git_in_worktree_explicit_dirs_and_safe_flags(tmp_path):
+    w, api, sh = make(tmp_path)
+    w.handle(job())
+    wt = str(tmp_path / "stl-workbench-wt" / "card-x-2")
+    in_wt = [m for m in sh.meta if m[1] == wt and m[0][0] == "git"]
+    assert in_wt
+    for cmd, cwd, _, env in in_wt:
+        assert env["GIT_DIR"] == "/x/.git/worktrees/card-x-2" and env["GIT_WORK_TREE"] == wt
+    for cmd, *_ in [m for m in sh.meta if m[0][0] == "git"]:
+        assert ["-c", "core.fsmonitor="] == cmd[1:3] and ["-c", "core.hooksPath=/dev/null"] == cmd[3:5], cmd
+
+
+def test_ruff_with_dash_P(tmp_path):
+    w, api, sh = make(tmp_path)
+    w.handle(job())
+    ruff = [m[0] for m in sh.meta if "ruff" in m[0]][0]
+    assert ruff[1] == "-P"
+
+
+def test_token_in_script_code_blocks_report_and_push(tmp_path):
+    w, api, sh = make(tmp_path, claude=_rewrite(f"# {TOKEN}\nasync def on_bar(stl, params):\n    pass\n"))
+    w.handle(job())
+    f = last(api)
+    assert f["status"] == "failed" and "params" not in f
+    assert not sh.pushed()
+    assert TOKEN not in json.dumps(api.reports, ensure_ascii=False)
+
+
+def test_report_drops_field_with_token(tmp_path):
+    w, api, sh = make(tmp_path)
+    w._report(7, params={"script_code": TOKEN}, code_ref="x")
+    rid, f = api.reports[-1]
+    assert "params" not in f and f["status"] == "failed" and f["code_ref"] == "x"
+
+
+def test_model_code_gates_wrapped_in_unshare(tmp_path):
+    w, api, sh = make(tmp_path)
+    w.handle(job())
+    for cmd, *_ in sh.gate_runs():
+        if "ruff" in cmd:
+            assert cmd[0] != "unshare"
+        else:
+            assert cmd[:3] == ["unshare", "-rn", "--"], cmd
+
+
+def test_no_unshare_means_model_code_gates_not_run(tmp_path):
+    w, api, sh = make(tmp_path, sh=FakeSh(unshare_rc=1))
+    w.handle(job())
+    f = last(api)
+    assert f["status"] == "failed" and not sh.pushed()
+    for k in ("import", "pytest", "no_lookahead", "smoke"):
+        assert f["gates"][k]["ok"] is False and "unshare" in f["gates"][k]["note"]
+    assert [m for m in sh.gate_runs() if "ruff" not in m[0]] == []
+
+
+def test_clone_updated_ff_only_before_job_and_dirty_fails(tmp_path):
+    w, api, sh = make(tmp_path)
+    w.handle(job())
+    names = [c[:3] for c in sh.calls]
+    assert ["git", "fetch", "origin"] in names
+    i = sh.calls.index(["git", "merge", "--ff-only", "origin/main"])
+    assert i < [c[:3] for c in sh.calls].index(["git", "worktree", "add"])
+    dirty = FakeSh()
+    dirty.status_out = " M x\n"
+    w, api, sh = make(tmp_path, sh=dirty)
+    w.handle(job())
+    assert last(api)["status"] == "failed" and "грязный" in last(api)["log_append"]
+    assert ["git", "worktree", "add"] not in [c[:3] for c in sh.calls]

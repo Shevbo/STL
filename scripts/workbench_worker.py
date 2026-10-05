@@ -15,6 +15,7 @@ WB_WORKER_ID (hostname), WB_MODEL (sonnet), WB_CLAUDE_TIMEOUT (1800), WB_CLAUDE_
 from __future__ import annotations
 
 import glob
+import hashlib
 import json
 import os
 import re
@@ -39,6 +40,13 @@ GATE_NOTE = 600
 BRANCH_RE = re.compile(r"^wb/[a-z0-9][a-z0-9-]{0,127}/[0-9]{1,6}$")
 PARENT_RE = re.compile(r"^(wb/[a-z0-9][a-z0-9-]{0,127}/[0-9]{1,6})@([0-9a-f]{7,40})$")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+GIT_SAFE = ["-c", "core.fsmonitor=", "-c", "core.hooksPath=/dev/null"]
+# Файлы, которые модель трогать не вправе: правка = тревога и failed (под HOME воркера).
+WATCH_HOME = (".claude/settings.json", ".claude/settings.local.json", ".ssh/authorized_keys", ".ssh/config",
+              ".bashrc", ".profile", ".gitconfig", ".config/stl-workbench/worker.env")
+WATCH_DIRS = ("", ".ssh", ".config/systemd/user")
+SKIP_PREFIX = (".claude", ".cache", ".npm")  # их пишет сам claude
+NET_OFF = ["unshare", "-rn", "--"]
 GATE_TEST = "tests/lab/test_wb_strategy_gate.py"  # фиксированный тест-гейт в main
 GATE_NAMES = ("script_guard", "ruff", "import", "pytest", "no_lookahead", "smoke")
 
@@ -61,6 +69,8 @@ class Config:
     claude_timeout: int = 1800
     claude_bin: str = "claude"
     poll_s: float = 10.0
+    home: str = field(default_factory=lambda: str(Path.home()))
+    worker_file: str = field(default_factory=lambda: str(Path(__file__).resolve()))
     heartbeat_s: float = HEARTBEAT_S
 
     @classmethod
@@ -216,13 +226,19 @@ def resolve_claude_bin(prefer: str = "claude") -> str | None:
     return next((c for c in sorted(glob.glob(pat), reverse=True) if os.access(c, os.X_OK)), None)
 
 
+def claude_cmd(exe: str, prompt: str, model: str) -> list[str]:
+    """Голое `--allowedTools Read Edit Write` разрешало бы запись/чтение любого пути; вместо него набор
+    встроенных инструментов + только пользовательские настройки + никаких MCP, запись только в cwd (acceptEdits)."""
+    return [exe, "-p", prompt, "--output-format", "json", "--permission-mode", "acceptEdits",
+            "--tools", "Read,Edit,Write", "--setting-sources", "user", "--strict-mcp-config", "--model", model]
+
+
 def run_claude(cwd: str, prompt: str, cancel: threading.Event, model: str, timeout: int,
                claude_bin: str, env: dict[str, str]) -> tuple[bool, str]:
     exe = resolve_claude_bin(claude_bin)
     if not exe:
         return False, "claude: бинарь не найден"
-    cmd = [exe, "-p", prompt, "--output-format", "json", "--permission-mode", "acceptEdits",
-           "--allowedTools", "Read Edit Write", "--model", model]
+    cmd = claude_cmd(exe, prompt, model)
     p = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
     deadline = time.monotonic() + timeout
     while True:
@@ -286,6 +302,8 @@ class Worker:
     stop: threading.Event = field(default_factory=threading.Event)
     _buf: list[str] = field(default_factory=list)
     _sent: int = 0
+    _gitfile: tuple = ()
+    _unshare: bool | None = None
 
     # -- служебное
     def _scrub(self, s: str) -> str:
@@ -305,6 +323,12 @@ class Worker:
         return e
 
     def _report(self, rid: int, **fields: Any) -> None:
+        tok = self.cfg.token
+        for k in [k for k, v in fields.items() if k != "log_append" and tok
+                  and tok in json.dumps(v, ensure_ascii=False)]:
+            del fields[k]  # поле с токеном не отправляется вовсе, редакция падает
+            fields["status"] = "failed"
+            self.log(f"ТРЕВОГА: токен воркера обнаружен в поле {k}: поле не отправлено, редакция failed")
         new = self._buf[self._sent:]
         self._sent = len(self._buf)
         if new:
@@ -315,10 +339,50 @@ class Worker:
         self.api.report(rid, **fields)
 
     def _sh(self, cmd: list[str], cwd: str, timeout: int = 600) -> str:
+        if cmd[0] == "git":
+            cmd = ["git", *GIT_SAFE, *cmd[1:]]
         rc, out = self.run(cmd, cwd=cwd, timeout=timeout, env=self._env())
         if rc != 0:
             raise Failed(f"{' '.join(cmd[:3])}: rc={rc} {out.strip()[-400:]}")
         return out
+
+    def _gw(self, args: list[str], wt: str, timeout: int = 600) -> str:
+        """git в worktree: явные GIT_DIR/GIT_WORK_TREE и проверка, что wt/.git не подменён моделью."""
+        gd, raw = self._gitfile
+        try:
+            now = (Path(wt) / ".git").read_bytes()
+        except OSError:
+            now = None
+        if now != raw:
+            raise Failed("ТРЕВОГА: wt/.git подменён моделью")
+        env = {**self._env(), "GIT_DIR": gd, "GIT_WORK_TREE": wt}
+        rc, out = self.run(["git", *GIT_SAFE, *args], cwd=wt, timeout=timeout, env=env)
+        if rc != 0:
+            raise Failed(f"git {' '.join(args[:2])}: rc={rc} {out.strip()[-400:]}")
+        return out
+
+    def fingerprint(self) -> dict[str, Any]:
+        """Снимок того, что модель менять не вправе: сам воркер, клон, секреты/настройки под HOME."""
+        def h(path: Path) -> str | None:
+            return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
+
+        home = Path(self.cfg.home)
+        fp: dict[str, Any] = {"worker": h(Path(self.cfg.worker_file))}
+        for rel in WATCH_HOME:
+            fp[rel] = h(home / rel)
+        for d in WATCH_DIRS:
+            base = home / d
+            fp["ls:" + d] = sorted(n for n in (os.listdir(base) if base.is_dir() else [])
+                                   if not n.startswith(SKIP_PREFIX))
+        fp["clone_status"] = self._sh(["git", "status", "--porcelain"], self.cfg.repo)
+        fp["clone_head"] = self._sh(["git", "rev-parse", "HEAD"], self.cfg.repo)
+        return fp
+
+    def unshare_ok(self) -> bool:
+        if self._unshare is None:
+            rc, _ = self.run(["unshare", "-rn", "--", "true"], cwd=None, timeout=20, env=self._env())
+            self._unshare = rc == 0
+        return self._unshare
 
     # -- heartbeat (отдельный поток; во время работы заодно пустой report = проверка отмены)
     def beat_once(self) -> None:
@@ -353,7 +417,8 @@ class Worker:
             self._fail(rid, f"{type(e).__name__}: {e}")
         finally:
             wt = wt or self._wt_path(job)
-            self.run(["git", "worktree", "remove", "--force", wt], cwd=self.cfg.repo, timeout=120, env=self._env())
+            self.run(["git", *GIT_SAFE, "worktree", "remove", "--force", wt], cwd=self.cfg.repo, timeout=120,
+                     env=self._env())
             self.busy = None
 
     def _wt_path(self, job: dict[str, Any]) -> str:
@@ -381,29 +446,42 @@ class Worker:
         self.log(f"взято: {card} ред. {rev}, ветка {branch}")
 
         self._sh(["git", "fetch", "origin", "--prune"], repo)
+        if self._sh(["git", "status", "--porcelain"], repo).strip():
+            raise Failed("клон воркера грязный: ТРЕВОГА, задание не выполняется")
+        self._sh(["git", "merge", "--ff-only", "origin/main"], repo)  # движок ворот = свежий main
         base = "origin/main"
         if job.get("parent_code_ref"):
             m = PARENT_RE.match(str(job["parent_code_ref"]))
             if not m:
                 raise Failed("parent_code_ref в неожиданном формате")
             base = m.group(2)
-        self.run(["git", "worktree", "remove", "--force", wt], cwd=repo, timeout=120, env=self._env())
+        self.run(["git", *GIT_SAFE, "worktree", "remove", "--force", wt], cwd=repo, timeout=120, env=self._env())
         self._sh(["git", "worktree", "add", "-B", branch, wt, base], repo)
+        raw = (Path(wt) / ".git").read_bytes()
+        m = re.match(rb"gitdir: (.+)\n?$", raw)
+        if not m:
+            raise Failed("wt/.git в неожиданном формате")
+        self._gitfile = (m.group(1).decode().strip(), raw)
 
         f = Path(wt) / rel
         if not f.exists():  # первая редакция: обёртка без изменения поведения = исходник карточки как есть
             f.parent.mkdir(parents=True, exist_ok=True)
             f.write_text(ctx["script_code"], encoding="utf-8", newline="")
-            self._sh(["git", "add", "-A"], wt)
-            self._sh(["git", "-c", "user.name=stl-workbench", "-c", "user.email=workbench@localhost",
+            self._gw(["add", "-A"], wt)
+            self._gw(["-c", "user.name=stl-workbench", "-c", "user.email=workbench@localhost",
                       "commit", "-m", f"wb({card}): база ред. {rev} (исходник карточки без изменений)"], wt)
-        start = self._sh(["git", "rev-parse", "HEAD"], wt).strip()
+        start = self._gw(["rev-parse", "HEAD"], wt).strip()
+        before = self.fingerprint()
 
         fence = secrets.token_hex(8)
         ok, text = self.claude(wt, build_prompt(job, ctx, rel, fence), self.cancel, self.cfg.model,
                                self.cfg.claude_timeout, self.cfg.claude_bin, self._env())
         if self.cancel.is_set():
             raise Closed()
+        after = self.fingerprint()
+        if after != before:
+            bad = [k for k in after if after[k] != before.get(k)]
+            raise Failed("ТРЕВОГА: модель изменила защищённое вне worktree: " + ", ".join(bad))
         self.log("ответ модели: " + text[:LOG_CHUNK])
         if not ok:
             raise Failed("модель не отработала: " + text[:300])
@@ -411,9 +489,9 @@ class Worker:
         if first.startswith("NEED_SHARED_MODULE"):
             raise Failed("нужна правка общего модуля, передано окну backtests: " + first[:300])
 
-        self._sh(["git", "add", "-A"], wt)
-        check_paths(self._sh(["git", "diff", "--cached", "--raw", "--no-renames", start], wt), {rel})
-        diff = self._sh(["git", "diff", "--cached", "--no-renames", start], wt)
+        self._gw(["add", "-A"], wt)
+        check_paths(self._gw(["diff", "--cached", "--raw", "--no-renames", start], wt), {rel})
+        diff = self._gw(["diff", "--cached", "--no-renames", start], wt)
         if not diff.strip():
             raise Failed("модель не внесла изменений")
         if len(diff.encode()) > DIFF_MAX:
@@ -429,12 +507,15 @@ class Worker:
             red = [k for k, g in gates.items() if g["ok"] is not True]
             self._fail(rid, "ворота не пройдены: " + ", ".join(red), gates=gates, diff=diff)
             return wt
-        self._sh(["git", "-c", "user.name=stl-workbench", "-c", "user.email=workbench@localhost",
+        tok = self.cfg.token
+        if tok and (tok in src or tok in diff or tok in json.dumps(run)):
+            raise Failed("ТРЕВОГА: токен воркера обнаружен в исходнике/diff/параметрах: ничего не отправлено и не запушено")
+        self._gw(["-c", "user.name=stl-workbench", "-c", "user.email=workbench@localhost",
                   "commit", "-m", f"wb({card}): ред. {rev}: {first[:200]}"], wt)
-        sha = self._sh(["git", "rev-parse", "HEAD"], wt).strip()
+        sha = self._gw(["rev-parse", "HEAD"], wt).strip()
         if self.cancel.is_set():
             raise Closed()
-        self._sh(["git", "push", "origin", push_refspec(branch)], wt, timeout=300)
+        self._gw(["push", "origin", push_refspec(branch)], wt, timeout=300)
         self.log(f"запушено {branch}@{sha[:10]}")
         self._report(rid, status="ready", gates=gates, diff=diff, code_ref=f"{branch}@{sha}",
                      change_note=first[:500], params={"script_code": src, **run})
@@ -475,25 +556,32 @@ class Worker:
             def sub(cmd: list[str], timeout: int, extra: dict[str, str] | None = None) -> tuple[int, str]:
                 return self.run(cmd, cwd=wt, timeout=timeout, env={**env, **(extra or {})})
 
-            rc, o = sub([sys.executable, "-m", "ruff", "check", rel], 300)
+            rc, o = sub([sys.executable, "-P", "-m", "ruff", "check", rel], 300)
             out["ruff"] = g(rc == 0, o.strip())
+            cage = self.unshare_ok()  # без сети или не исполняем вовсе: код модели не выходит в сеть
+            nocage = "не исполнялось: unshare -rn недоступен, код модели без сети не запускается"
             # pytest: только фиксированный тест-гейт из origin/main, кладётся во временную папку;
             # из ветки исполняется один файл стратегии (по пути из окружения).
-            rc, gate_src = self.run(["git", "show", f"origin/main:{GATE_TEST}"], cwd=self.cfg.repo,
+            rc, gate_src = self.run(["git", *GIT_SAFE, "show", f"origin/main:{GATE_TEST}"], cwd=self.cfg.repo,
                                     timeout=60, env=self._env())
-            if rc != 0:
+            if not cage:
+                out["pytest"] = g(False, nocage)
+            elif rc != 0:
                 out["pytest"] = g(False, f"нет {GATE_TEST} в origin/main")
             else:
                 gate_file = Path(tmp) / "test_wb_strategy_gate.py"
                 gate_file.write_text(gate_src, encoding="utf-8")
-                rc, o = sub([sys.executable, "-P", "-m", "pytest", str(gate_file), "-q", "-x",
+                rc, o = sub([*NET_OFF, sys.executable, "-P", "-m", "pytest", str(gate_file), "-q", "-x",
                              "-p", "no:cacheprovider", "--rootdir", tmp], 300,
                             {"WB_STRATEGY_FILE": str(Path(wt) / rel), "WB_STRATEGY_SYMBOL": run["symbol"],
                              "WB_STRATEGY_PARAMS": json.dumps(params),
                              "WB_WORKER_FILE": str(Path(__file__).resolve())})
                 out["pytest"] = g(rc == 0, o.strip())
             for name in ("import", "no_lookahead", "smoke"):  # каждое в своём процессе и со своим таймаутом
-                rc, o = sub([sys.executable, "-P", __file__, "--probe", name, rel, run["symbol"],
+                if not cage:
+                    out[name] = g(False, nocage)
+                    continue
+                rc, o = sub([*NET_OFF, sys.executable, "-P", __file__, "--probe", name, rel, run["symbol"],
                              json.dumps(params)], 300)
                 try:
                     p = json.loads(next(ln for ln in reversed(o.splitlines()) if ln.startswith("{")))
