@@ -36,7 +36,7 @@ class FakeStore:
         self.rows = list(rows)
 
     def stop_orders(self, agent=None):
-        return {"table": self.rows}
+        return {"table": self.rows, "table_received_ms": NOW}
 
     def agent_status(self, agent=None):
         return {"quik": {"trades": []}}

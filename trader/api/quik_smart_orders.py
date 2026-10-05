@@ -869,6 +869,19 @@ def _stop_rows_by_tag(store: Any, agent: str) -> dict[str, dict]:
     return out
 
 
+def _stop_table_known(store: Any, agent: str) -> bool:
+    """Пришла ли таблица стоп-заявок от агента в ЭТОМ процессе STL.
+
+    После рестарта склад пуст, и «записи нет» до первой таблицы значит «не знаю»,
+    а не «нет». 05.10.2026 07:46 рестарт STL: trail_tp оператора на 13 GZZ6 стоял
+    в терминале живой (310540449), а сторож на пустом складе объявил «терминал не
+    принял» и на 10 с взял охрану себе — сработай уровень в эти секунды, заявок
+    было бы две. Та же слепота у живой записи читается как «снялась по сроку» и
+    ставит вторую стоп-заявку."""
+    snap = store.stop_orders(agent) if store is not None else None
+    return bool(isinstance(snap, dict) and snap.get("table_received_ms"))
+
+
 def _stop_rows_live(store: Any, agent: str) -> dict[str, dict]:
     """Только те записи, что СТЕРЕГУТ прямо сейчас. Вопрос «кто охраняет» и
     вопрос «чем закрылась связка» читают одну таблицу, но разные её части:
@@ -1059,6 +1072,8 @@ def _track_native(book: SmartOrderBook, store: Any, agent: str, now: int) -> lis
     # Только ВЛАДЕЛЬЦЫ записи: у связки это родитель, у одиночной заявки она сама.
     # Ребёнок-держатель тоже носит native_state (в нём лежит номер стоп-заявки), и
     # без этого условия он разбирался бы вторым, отдельным «родителем».
+    if not _stop_table_known(store, agent):
+        return []
     watched = [p for p in book.orders
                if p.native_state in ("sent", "live") and not p.parent_id]
     rows = _stop_rows_by_tag(store, agent)
@@ -1604,6 +1619,12 @@ def _audit_book_vs_terminal(book: SmartOrderBook, rows: dict[str, dict]) -> list
         if o.status != "native" or o.so_id in rows:
             continue
         if any(c.parent_id == o.so_id and c.so_id in rows for c in book.orders):
+            continue
+        # Регистрация ещё идёт: через секунду после отправки записи в таблице нет
+        # по определению (ложная тревога 05.10.2026 07:40:39, запись пришла в
+        # 07:40:42). Таймаут подтверждения судит _track_native.
+        owner = by_id.get(o.parent_id) if o.parent_id else o
+        if owner is not None and owner.native_state == "sent":
             continue
         # СВЯЗКА OCO ОХРАНЯЕТСЯ ОДНОЙ СТОП-ЗАЯВКОЙ QUIK, и тег у неё — одной из ног.
         #
@@ -3075,8 +3096,16 @@ async def _watch_once(state: Any) -> None:
                                       so_mod.now_ms()) or dirty_meta
     # Сверка книги с терминалом — после всех переводов статусов этого прохода,
     # иначе она ругалась бы на промежуточные состояния.
-    await _report_audit(srv, agent, book, _stop_rows_live(store, agent))
-    for parent in _track_native(book, store, agent, so_mod.now_ms()):
+    if _stop_table_known(store, agent):
+        await _report_audit(srv, agent, book, _stop_rows_live(store, agent))
+    # Переход «отправлена -> зарегистрирована» обязан доехать до файла книги: иначе
+    # после рестарта она снова «отправлена» с давним временем и объявляется
+    # непринятой (05.10.2026 07:46).
+    native_before = [(o.so_id, o.status, o.native_state) for o in book.orders]
+    tracked = _track_native(book, store, agent, so_mod.now_ms())
+    if native_before != [(o.so_id, o.status, o.native_state) for o in book.orders]:
+        dirty_meta = True
+    for parent in tracked:
         dirty_meta = True
         # Причины разные, и оператору важно ИМЕННО какая: не принял терминал,
         # сняло сроком (заявка жива и снова у STL) или исполнилось непонятно чем.
