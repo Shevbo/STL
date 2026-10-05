@@ -652,7 +652,9 @@ def test_an_expired_record_does_not_count_as_a_standing_level(tmp_path):
 
 def test_every_non_working_state_frees_the_level(tmp_path):
     """ИНВАРИАНТ: уровень считается занятым ТОЛЬКО при рабочем состоянии записи.
-    Любое другое — заявки в рынке нет, уровень обязан встать заново."""
+    Любое другое — заявки в рынке нет, уровень обязан встать заново. После ОТКАЗА —
+    через паузу (05.10.2026: повтор каждый проход съел дневной лимит), но встать обязан."""
+    from trader.api.quik_smart_orders import _GRID_REJECT_PAUSE_MS
     for state in ("expired", "cancelled", "rejected", "unspecified", ""):
         book, so = _gbook(tmp_path / state if state else tmp_path / "empty")
         px = so_mod.grid_price(so, -1)
@@ -661,10 +663,18 @@ def test_every_non_working_state_frees_the_level(tmp_path):
         ost.working_orders = lambda agent=None, _s=state: [
             {"client_id": "so:x:gm1:1", "order_id": "", "state": _s,
              "remaining": 1, "filled": 0, "price": px}]
-        srv = GSrv()
-        _grid_sync(book, _gstore(85000.0), ost, srv, GLim(), "9618", GSTEPS, {}, GNOW, True)
-        got = [m for m in srv.sent if m.WhichOneof("payload") == "place_order"
-               and abs(m.place_order.price - px) < 1e-6]
+
+        def placed(t):
+            srv = GSrv()
+            _grid_sync(book, _gstore(85000.0), ost, srv, GLim(), "9618", GSTEPS, {}, t, True)
+            return [m for m in srv.sent if m.WhichOneof("payload") == "place_order"
+                    and abs(m.place_order.price - px) < 1e-6]
+
+        if state == "rejected":
+            assert not placed(GNOW), "отказ: сразу не повторяем"
+            got = placed(GNOW + _GRID_REJECT_PAUSE_MS + 1)
+        else:
+            got = placed(GNOW)
         assert got, f"состояние {state!r}: заявки в рынке нет, а уровень не выставлен"
     # а рабочее состояние уровень занимает
     for state in ("pending", "active", "partial"):

@@ -136,6 +136,32 @@ def test_a_fill_while_stl_was_down_is_caught_by_number(tmp_path, after):
     assert so.g_pos == (7 if after == "filled" else 0), so.g_pos
 
 
+def test_a_rejected_level_pauses_instead_of_retrying_every_pass(tmp_path):
+    """05.10.2026 11:35-11:40: защита агента от разгона закрыла продажи, сетка
+    переставляла три уровня раз в секунду — 388 отказов съели дневной лимит 500,
+    торговля стояла 23 минуты. Отказанный уровень ждёт паузу, потом пробует снова."""
+    from trader.api.quik_smart_orders import _GRID_REJECT_PAUSE_MS
+    book, so = _book(tmp_path)
+    px = so_mod.grid_price(so, -1)                                   # 84900, покупка
+    so.g_live = {"-1": "cidR"}
+    ost = _Ost()
+    ost.recs = [{"client_id": "cidR", "order_id": "", "state": "rejected", "remaining": 0,
+                 "filled": 0, "side": "buy", "price": px,
+                 "text": "остановлено: слишком быстрый набор позиции в эту сторону"}]
+
+    def places(t):
+        srv = GSrv()
+        _grid_sync(book, _gstore(84950.0), ost, srv, GLim(), "9618", GSTEPS, {}, t, True)
+        return [m for m in srv.sent if m.WhichOneof("payload") == "place_order"
+                and abs(m.place_order.price - px) < 1]
+
+    t = GNOW
+    for i in range(30):                               # полминуты проходов раз в секунду
+        assert not places(t), f"проход {i}: отказанный уровень поставлен снова без паузы"
+        t += 1000
+    assert len(places(GNOW + _GRID_REJECT_PAUSE_MS + 1)) == 1, "после паузы уровень пробует снова"
+
+
 def test_a_restart_adopted_fill_is_still_counted_by_the_table(tmp_path):
     """Обратная сторона: если склад налив НЕ засчитывал (связь снята при подхвате),
     таблица обязана его посчитать — иначе пропал бы настоящий филл."""

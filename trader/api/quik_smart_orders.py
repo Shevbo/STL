@@ -1865,6 +1865,9 @@ def _escalate_native_child(book: SmartOrderBook, store: Any, srv: Any, lim: Any,
 # лимитными заявками и стоят в стакане; сторож лишь ВОССТАНАВЛИВАЕТ исполненный
 # уровень встречной заявкой и следит за стопом.
 _GRID_CID = "so:{so_id}:g{level}"
+# Пауза уровня сетки после отказа (агент, брокер): без неё отказ повторяется
+# каждый проход сторожа и съедает дневной лимит заявок (05.10.2026).
+_GRID_REJECT_PAUSE_MS = 60_000
 
 
 def _grid_cid(so_id: str, level: int) -> str:
@@ -2558,6 +2561,25 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
                         "копил бы позицию в одну сторону", now_ms=now)
                 continue
             live.pop(f"rep:{level}", None)
+            # ОТКАЗ — ПАУЗА, А НЕ ПОВТОР КАЖДЫЙ ПРОХОД. 05.10.2026 11:35-11:40 защита
+            # агента от разгона позиции (20 контрактов за 5 минут от источника, у
+            # сетки GZ лот 7) закрыла продажи на 15 минут, а сетка ставила три уровня
+            # заново раз в секунду: 388 отказов за 5 минут съели дневной лимит 500,
+            # и торговля стояла 23 минуты.
+            if rec is not None and str(rec.get("state") or "") == "rejected":
+                until = int(live.get(f"rej:{level}") or 0)
+                if not until:
+                    live[f"rej:{level}"] = now + _GRID_REJECT_PAUSE_MS
+                    dirty = True
+                    so_journal.record(
+                        "held", so, so_journal.LIMITS,
+                        f"уровень {level:+d} отклонён: {rec.get('text') or 'причина не пришла'}; "
+                        f"повтор через {_GRID_REJECT_PAUSE_MS // 1000} с", now_ms=now)
+                    continue
+                if now < until:
+                    continue
+                live.pop(f"rej:{level}", None)
+                dirty = True
             px = so_mod.quantize(so_mod.grid_price(so, level), step, side)
             # Уровень по ту сторону рынка не выставляем по той же причине, что и
             # стенку коридора (инцидент 30.09.2026): лимит, пересекающий рынок,
