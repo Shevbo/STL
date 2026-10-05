@@ -76,7 +76,7 @@ self-exclusion). Run ssh commands ONE AT A TIME (parallel batch cascade-cancels 
 ### (prior) OPEN ITEM — confirm/relaunch full 5h run for 16 strategies.
 Server HEAD synced to 99bacd9. To (re)launch cleanly:
   ssh hoster "pkill -9 -f optimize_campaign; sleep 2; sudo -u postgres psql project_stl -c 'TRUNCATE optimization_leaderboard;'"
-  ssh hoster "cd /home/ubuntu/apps/shectory-trader && export LAB_DB_URL='postgresql://project_stl_app:f7306cb2ab5c500ffc6fb0349377621d@localhost:5432/project_stl' && nohup <venv>/bin/python3 scripts/optimize_campaign.py 5 > /home/ubuntu/campaign.log 2>&1 & echo PID \$!"
+  ssh hoster "cd /home/ubuntu/apps/shectory-trader && export LAB_DB_URL='postgresql://project_stl_app:<пароль в keymaster / LAB_DB_URL>@localhost:5432/project_stl' && nohup <venv>/bin/python3 scripts/optimize_campaign.py 5 > /home/ubuntu/campaign.log 2>&1 & echo PID \$!"
 venv = /home/ubuntu/.cache/pypoetry/virtualenvs/shectory-trader-Ik0M11VW-py3.12
 At 2026-05-31 ~22:20 UTC hit a HARNESS output-capture glitch (even local echo returned empty) —
 not a server problem. Retry when capture works.
