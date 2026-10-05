@@ -52,3 +52,29 @@ def test_exploits_rejected(code):
 def test_syntax_error_rejected():
     with pytest.raises(ScriptValidationError):
         validate_script("def (:")
+
+
+@pytest.mark.parametrize("code", [
+    "from trader.lab.backtest import os",
+    "from trader.lab.iss_loader import httpx",
+    "from trader.lab.scheduler import _os",
+    "from trader.lab.runtime import asyncio",
+    "import trader.lab.backtest\nx = trader.lab.backtest.os",
+    "x = foo.subprocess",
+    "from typing import get_type_hints",
+    "import typing\ntyping.get_type_hints(f)",
+    "from typing import ForwardRef",
+    "from functools import singledispatch",
+    "import typing\ntyping._eval_type",
+    "def f(x: \"__import__('os')\"): pass",
+    "def f() -> \"import os\": pass",
+    "y: \"__import__('os')\" = 1",
+])
+def test_bypasses_rejected(code):
+    with pytest.raises(ScriptValidationError):
+        validate_script(code)
+
+
+def test_legit_fields_pass():
+    validate_script("from trader.lab.indicators import ema\nx = bar.time + p.random\n"
+                    "def f(a: 'float') -> 'int': return 1\n")
