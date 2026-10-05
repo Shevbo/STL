@@ -162,6 +162,66 @@ def test_a_rejected_level_pauses_instead_of_retrying_every_pass(tmp_path):
     assert len(places(GNOW + _GRID_REJECT_PAUSE_MS + 1)) == 1, "после паузы уровень пробует снова"
 
 
+class _TStore:
+    """Зеркало с лентой сделок: строки заявки в таблице может уже не быть."""
+
+    def __init__(self, px, rows, trades):
+        self.b, self.trades = _gstore(px, rows), trades
+
+    def tick(self, code, agent=None):
+        return self.b.tick(code, agent)
+
+    def agent_status(self, agent=None):
+        st = self.b.agent_status(agent)
+        st["quik"]["trades"] = list(self.trades)
+        return st
+
+
+@pytest.mark.parametrize("trades_late", [False, True])
+def test_a_vanished_adopted_fill_is_found_in_trades(tmp_path, trades_late):
+    """05.10.2026 12:17:28: утренняя подхваченная покупка RI уровня -6 налилась, и
+    её строка в тот же кадр выпала из таблицы (агент отдаёт 100 последних
+    неактивных). Налив не учли, уровень встал второй покупкой и тоже налился."""
+    from trader.api.quik_smart_orders import _ADOPT_GONE_WAIT_MS
+    book, so = _book(tmp_path)
+    px = so_mod.grid_price(so, -1)
+    so.g_live = {"adopt:-1": {"num": "N5"}}
+    fill = [{"order_num": "N5", "side": "buy", "qty": 7, "price": px, "sec": "RIZ6",
+             "ts_ms": GNOW}]
+    t = GNOW
+    for i in range(4):
+        trades = [] if (trades_late and i < 2) else fill
+        srv = GSrv()
+        _grid_sync(book, _TStore(84950.0, [], trades), _Ost(), srv, GLim(), "9618",
+                   GSTEPS, {}, t, True)
+        again = [m for m in srv.sent if m.WhichOneof("payload") == "place_order"
+                 and abs(m.place_order.price - px) < 1]
+        assert not again, f"проход {i}: уровень с выпавшей строкой поставлен заново"
+        t += 2000
+    assert so.g_pos == 7, f"налив по сделкам не учтён: {so.g_pos}"
+    assert t - GNOW < _ADOPT_GONE_WAIT_MS
+
+
+def test_a_vanished_adopted_row_without_trades_frees_the_level_after_the_wait(tmp_path):
+    """Сделок нет и не пришло за ожидание — заявку сняли без налива, уровень свободен."""
+    from trader.api.quik_smart_orders import _ADOPT_GONE_WAIT_MS
+    book, so = _book(tmp_path)
+    px = so_mod.grid_price(so, -1)
+    so.g_live = {"adopt:-1": {"num": "N6"}}
+
+    def places(t):
+        srv = GSrv()
+        _grid_sync(book, _TStore(84950.0, [], []), _Ost(), srv, GLim(), "9618",
+                   GSTEPS, {}, t, True)
+        return [m for m in srv.sent if m.WhichOneof("payload") == "place_order"
+                and abs(m.place_order.price - px) < 1]
+
+    assert not places(GNOW)
+    assert not places(GNOW + _ADOPT_GONE_WAIT_MS - 1000)
+    assert places(GNOW + _ADOPT_GONE_WAIT_MS + 1), "сделок нет — уровень обязан встать"
+    assert so.g_pos == 0
+
+
 def test_a_restart_adopted_fill_is_still_counted_by_the_table(tmp_path):
     """Обратная сторона: если склад налив НЕ засчитывал (связь снята при подхвате),
     таблица обязана его посчитать — иначе пропал бы настоящий филл."""

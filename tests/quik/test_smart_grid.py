@@ -443,12 +443,16 @@ def test_a_fill_of_an_adopted_level_is_caught_up_from_the_table(tmp_path):
 
 
 def test_an_adopted_level_row_gone_from_the_table_is_reported(tmp_path):
-    """Строки нет в таблице вовсе (за капом истории, сменился день): исполнение не
-    учтено, и молчать об этом нельзя. Уровень при этом освобождается."""
+    """Строки нет в таблице вовсе (за капом истории, сменился день), и сделок по ней
+    нет: ждём их (05.10.2026 — строка выпадает в тот же кадр, что налив), потом
+    уровень освобождается, налив не выдумываем."""
+    from trader.api.quik_smart_orders import _ADOPT_GONE_WAIT_MS
     book, so = _gbook(tmp_path)
     so.g_live = {"adopt:-1": {"num": "999"}}
-    srv = GSrv()
-    _grid_sync(book, _gstore(85000.0), GOst(), srv, GLim(), "9618", GSTEPS, {}, GNOW, True)
+    _grid_sync(book, _gstore(85000.0), GOst(), GSrv(), GLim(), "9618", GSTEPS, {}, GNOW, True)
+    assert "adopt:-1" in so.g_live, "сразу не освобождаем: сделки могут ещё ехать"
+    _grid_sync(book, _gstore(85000.0), GOst(), GSrv(), GLim(), "9618", GSTEPS, {},
+               GNOW + _ADOPT_GONE_WAIT_MS + 1, True)
     assert so.g_pos == 0, "сколько налилось — неизвестно, не выдумываем"
     assert "adopt:-1" not in so.g_live
 

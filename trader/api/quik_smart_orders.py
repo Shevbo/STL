@@ -1868,6 +1868,27 @@ _GRID_CID = "so:{so_id}:g{level}"
 # Пауза уровня сетки после отказа (агент, брокер): без неё отказ повторяется
 # каждый проход сторожа и съедает дневной лимит заявок (05.10.2026).
 _GRID_REJECT_PAUSE_MS = 60_000
+# Сколько ждём сделок по подхваченной заявке, выпавшей из таблицы терминала, прежде
+# чем признать её снятой без налива (05.10.2026).
+_ADOPT_GONE_WAIT_MS = 30_000
+
+
+def _order_fills(store: Any, agent: str, num: str) -> tuple[int, float, str]:
+    """Объём, средняя цена и сторона сделок заявки по её НОМЕРУ из ленты сделок
+    агента. Нужна, когда строки заявки уже нет в таблице терминала."""
+    status = (store.agent_status(agent) or {}) if store is not None else {}
+    qty, notional, side = 0, 0.0, ""
+    for t in ((status.get("quik") or {}).get("trades") or []):
+        if str(t.get("order_num") or "") != num:
+            continue
+        try:
+            q, p = int(t.get("qty") or 0), float(t.get("price") or 0)
+        except (TypeError, ValueError):
+            continue
+        qty += q
+        notional += q * p
+        side = side or str(t.get("side") or "").lower()
+    return qty, (notional / qty if qty else 0.0), side
 
 
 def _grid_cid(so_id: str, level: int) -> str:
@@ -2524,17 +2545,43 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
                             f"подхваченная заявка {row['num']} уровня {level:+d} снята "
                             "без исполнения — уровень снова свободен", now_ms=now)
                 elif row is None and term_live is not None:
-                    # Строки нет в таблице ВОВСЕ: за капом истории или день сменился.
-                    # Молча забыть нельзя — сделаем это громко, уровень освободим.
+                    # СТРОКА ВЫПАЛА ИЗ ТАБЛИЦЫ — НАЛИВ ИЩЕМ ПО СДЕЛКАМ. Агент отдаёт все
+                    # активные строки, а неактивных только 100 последних ПО НОМЕРУ
+                    # (quikOrdersCap): утренняя заявка, исполнившись, выпадает в тот же
+                    # кадр. 05.10.2026 12:17:28 так пропал налив уровня -6 RI (заявка
+                    # ...600776): уровень освободился, встала вторая покупка 84940 и
+                    # тоже налилась. Лента сделок агента держит весь день (5000).
+                    # Сделки приезжают своим кадром, поэтому их ждём, а уровень в это
+                    # время НЕ ставим: пустота ленты в первую секунду — не «снята».
+                    num_a = str(adopted["num"])
+                    got, px_f, side_f = _order_fills(store, agent, num_a)
+                    first = int(live.get(f"gone:{level}") or 0)
+                    if got <= 0 and (not first or now - first < _ADOPT_GONE_WAIT_MS):
+                        if not first:
+                            live[f"gone:{level}"] = now
+                            dirty = True
+                        continue
                     live.pop(f"adopt:{level}", None)
+                    live.pop(f"gone:{level}", None)
                     dirty = True
-                    so_journal.record(
-                        "adopted", so, so_journal.WATCHER,
-                        f"подхваченная заявка {adopted['num']} уровня {level:+d} "
-                        "пропала из таблицы терминала: исполнение по ней НЕ учтено, "
-                        "сверьте позицию", now_ms=now)
-                    log.warning("smart_order.adopted_row_vanished", so_id=so.so_id,
-                                level=level, num=adopted["num"])
+                    if got > 0:
+                        if side_f not in ("buy", "sell"):
+                            side_f = so_mod.grid_side_for(so, level, price)
+                        _grid_count_fill(so, live, level, side_f, got, now,
+                                         f" (подхваченная заявка {num_a} выпала из таблицы "
+                                         "терминала, налив найден по сделкам)",
+                                         price=px_f,
+                                         already=int(live.pop(f"pf:{num_a}", 0) or 0),
+                                         num=num_a)
+                    else:
+                        so_journal.record(
+                            "adopted", so, so_journal.WATCHER,
+                            f"подхваченная заявка {num_a} уровня {level:+d} выпала из "
+                            f"таблицы терминала, сделок по ней за "
+                            f"{_ADOPT_GONE_WAIT_MS // 1000} с нет: снята без налива, "
+                            "уровень свободен", now_ms=now)
+                        log.warning("smart_order.adopted_row_vanished", so_id=so.so_id,
+                                    level=level, num=num_a)
             # Погасший уровень не выставляем: он ждёт филла соседа, а не повтора
             # входа по своей же цене.
             if not so_mod.grid_places_here(live, level):
