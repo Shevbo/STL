@@ -185,3 +185,20 @@ def test_headline_comparable_follows_unit():
     by = {c["slug"]: c for c, _ in out}
     assert by["autoq-20260711-s-ri"]["unit"] is None and by["autoq-20260711-s-ri"]["headline"]["comparable"] is False
     assert by["r"]["unit"] == "rub" and by["r"]["headline"]["comparable"] is True
+
+
+def test_workbench_base_present_null_and_strategy_match():
+    runs = [dict(_run("camp-20260711-autow", 9.0, "cci", "RIU6"), params={"symbol": "RIU6", "p": 1}),
+            dict(_run("opt-20260711-0001", 3.0, "roc", "SiU6"), params={"symbol": "SiU6"})]
+    out = b.build([_entry("res", kind="research")], runs, [], {}, {}, "now")
+    jobs = {("camp-20260711-autow", "cci"): {"scriptCode": "SC", "dateFrom": "2026-03-01", "dateTo": "2026-07-10"},
+            ("camp-20260711-autow", "roc"): {"scriptCode": "ЧУЖОЙ"}}  # чужая стратегия под своим ключом не берётся
+    b.apply_workbench(out, jobs, None)
+    by = {d["slug"]: d for _, d in out}
+    wb = by["autow-20260711-cci-ri"]["workbench_base"]
+    assert wb["strategy"] == "cci" and wb["script_code"] == "SC" and wb["base_params"] == {"symbol": "RIU6", "p": 1}
+    assert wb["symbol"] == "RIU6" and wb["date_from"] == "2026-03-01" and wb["date_to"] == "2026-07-10"
+    assert "point_value" in wb
+    nul = by["opt-roc-si"]
+    assert nul["workbench_base"] is None and "нет job_body" in nul["notes"]
+    assert "workbench_base" not in by["res"] and all("_wb" not in d for d in by.values())

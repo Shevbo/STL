@@ -377,6 +377,7 @@ def make_bf_leader(r: dict, ctx, card_unit: str) -> dict:
     rf = r.get("rf")
     return _std({
         "params": r.get("params"), "trades_n": r.get("trades"),
+        "_src": {"campaign_run": r["run_id"].rsplit("-bf", 1)[0], "strategy": r.get("strategy"), "symbol": sym},
         "metrics": {"net": net, "trades": r.get("trades"), "max_dd_db": r.get("max_dd"),
                     "sharpe": r.get("sharpe"), "campaign_run": r["run_id"], "lb_net": r.get("lb_net"),
                     "rerun_note": "перепрогон на текущем движке", "recovery_factor": rf},
@@ -394,6 +395,7 @@ def make_row_leader(r: dict, card_unit: str) -> dict:
     rf, net = r.get("rf"), r.get("net")
     return _std({
         "params": r.get("params"), "trades_n": r.get("trades"),
+        "_src": {"campaign_run": r["campaign_run"], "strategy": r.get("strategy"), "symbol": r.get("symbol")},
         "metrics": {"net": net, "trades": r.get("trades"), "max_dd_db": r.get("max_dd"),
                     "campaign_run": r["campaign_run"], "recovery_factor": rf},
         "curve": None, "rf": rf, "net": net, "unit": None, "unit_source": None, "l_share": ls,
@@ -464,6 +466,13 @@ def build_card(c: dict, tasks_all: list, bf: dict, task_results: dict, now_iso: 
         for r in sorted(runs, key=lambda r: -(r.get("net") if r.get("net") is not None else -1e18))[:3]:
             leaders.append(make_row_leader(r, unit))
     leaders, lazy = finalize_leaders(e["slug"], leaders)
+    srcs = [ld.pop("_src", None) for ld in leaders]
+    wb_src = dict(srcs[0]) if leaders and srcs[0] else None
+    if wb_src and not wb_src.get("strategy"):  # старые бэкфиллы без strategy: берём, если у кампании она одна
+        st = {r.get("strategy") for r in runs if r["campaign_run"] == wb_src["campaign_run"]}
+        wb_src["strategy"] = next(iter(st)) if len(st) == 1 else None
+    if wb_src is not None:
+        wb_src["params"] = leaders[0].get("params")
     lead, lead_full = None, None
     for ld in leaders:  # лидер с кривой: первый по score; кривая внутри или в lazy-файле
         if ld.get("curve"):
@@ -526,7 +535,7 @@ def build_card(c: dict, tasks_all: list, bf: dict, task_results: dict, now_iso: 
         "runs": names + [t["id"] for t in tasks], "varieties": varieties,
         "data_window": {"from": window.split("..")[0] if window else None,
                         "to": window.split("..")[1] if window else None, "symbols": syms},
-        "notes": "; ".join(notes) or e.get("notes"), "auto": c["auto"], "_lazy": lazy,
+        "notes": "; ".join(notes) or e.get("notes"), "auto": c["auto"], "_lazy": lazy, "_wb": wb_src,
     }
     return card, detail
 
@@ -568,7 +577,7 @@ def sort_cards(out: list) -> list:
 def write_all(cards_details: list, out_dir: str, redirects: dict | None = None) -> None:
     keep = {"index.json", "slug_redirects.json"}
     for _, d in cards_details:
-        body = {k: v for k, v in d.items() if k != "_lazy"}
+        body = {k: v for k, v in d.items() if k not in ("_lazy", "_wb")}
         write_atomic(os.path.join(out_dir, f"{d['slug']}.json"), body)
         keep.add(f"{d['slug']}.json")
         for z in d.get("_lazy") or []:  # кривые лидеров за пределами топ-10: ленивый файл
@@ -762,6 +771,54 @@ async def load_db(registry: list):
         await c.close()
 
 
+def apply_workbench(cards_details: list, jobs: dict, ctx=None) -> None:
+    """workbench_base у optimizer-карточек: скрипт и окно из job_body кампании ИМЕННО стратегии лидера №1,
+    base_params = params его строки. Нельзя достать честно - None и причина в notes. У research поля нет."""
+    for _, d in cards_details:
+        src = d.pop("_wb", None)
+        if d.get("kind") != "optimizer":
+            continue
+        why, wb = None, None
+        if not src or not src.get("strategy"):
+            why = "нет лидера или стратегия лидера не определена"
+        else:
+            job = jobs.get((src["campaign_run"], src["strategy"]))
+            if not job or not job.get("scriptCode"):
+                why = (f"нет job_body кампании {src['campaign_run']} со стратегией {src['strategy']} "
+                       "(opt-* без job_body или стратегия не совпала)")
+            else:
+                sym = src.get("symbol") or (src.get("params") or {}).get("symbol") or job.get("symbol")
+                pv = None
+                if ctx and sym:
+                    try:
+                        ts = int(dt.datetime.fromisoformat(str(job["dateTo"])[:10]).replace(
+                            tzinfo=dt.timezone.utc).timestamp())
+                    except (KeyError, ValueError):
+                        ts = None
+                    pv = ctx.pv_at(sym, ts)
+                wb = {"strategy": src["strategy"], "symbol": sym, "date_from": job.get("dateFrom"),
+                      "date_to": job.get("dateTo"), "base_params": src.get("params"),
+                      "script_code": job["scriptCode"], "point_value": pv}
+        d["workbench_base"] = wb
+        if why:
+            d["notes"] = f"{d['notes']}; workbench_base: {why}" if d.get("notes") else f"workbench_base: {why}"
+
+
+async def load_jobs(keys: set) -> dict:
+    """(campaign_run, strategy) -> job_body (dict) из backtest_runs; только своя стратегия кампании."""
+    import asyncpg
+    c = await asyncpg.connect(os.environ["LAB_DB_URL"].replace("postgresql+asyncpg", "postgresql"))
+    try:
+        out = {}
+        for cr, st in sorted(keys):
+            x = await c.fetchrow("select job_body from backtest_runs where id like $1 and strategy = $2 limit 1",
+                                 cr + "-r%", st)
+            out[(cr, st)] = _j(x["job_body"]) if x else None
+        return out
+    finally:
+        await c.close()
+
+
 def main() -> None:
     with open(REGISTRY, encoding="utf-8") as f:
         registry = json.load(f)["campaigns"]
@@ -769,6 +826,11 @@ def main() -> None:
     now = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
     ctx = sv.BarsCtx(os.path.join(ROOT, "agent_bars"), meta)
     out = build(registry, runs, tasks, bf, task_results, now, ctx, tops)
+    keys = {(d["_wb"]["campaign_run"], d["_wb"]["strategy"]) for _, d in out
+            if d.get("kind") == "optimizer" and d.get("_wb") and d["_wb"].get("strategy")}
+    apply_workbench(out, asyncio.run(load_jobs(keys)), ctx)
+    n_wb = sum(1 for _, d in out if d.get("workbench_base"))
+    print(f"workbench_base заполнено у {n_wb} из {sum(1 for _, d in out if d.get('kind') == 'optimizer')} optimizer")
     red = build_redirects(out)
     write_all(out, OUT_DIR, red)
     by = {}
