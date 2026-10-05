@@ -2369,6 +2369,11 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
         if (term_all is not None and so.g_step > 0 and not so.exit_only
                 and any(k.startswith("ls:") for k in live)):
             for r in term_all.get(so.so_id, []):
+                if live.get(f"fin:{r['num']}"):
+                    # Строка уже исполненной заявки: таблица отстаёт на секунды.
+                    # Снимать её = отказ QUIK «Вы не можете снять данную заявку»
+                    # после каждого филла и ложное «снята» в журнале (05.10.2026).
+                    continue
                 lvl = round((float(r.get("price") or 0) - so.g_base) / so.g_step)
                 if r.get("side") in ("buy", "sell") and so_mod.grid_repeat_blocked(
                         live, lvl, r["side"]):
@@ -2389,7 +2394,7 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
                 and not so.exit_only):
             for r in term_all.get(so.so_id, []):
                 lvl = round((float(r.get("price") or 0) - so.g_base) / so.g_step)
-                if lvl in win_keep:
+                if lvl in win_keep or live.get(f"fin:{r['num']}"):
                     continue
                 k = f"xkill:{r['num']}"
                 if now - int(live.get(k) or 0) < 30_000:
@@ -2513,7 +2518,9 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
             if not so_mod.grid_places_here(live, level):
                 cid_old = live.pop(key, "")
                 rec_old = work.get(cid_old) or {}
-                if rec_old.get("order_id"):
+                # Уровень гаснет ИМЕННО потому, что его заявка исполнилась строкой
+                # выше: снимать надо только ещё работающую, иначе отказ QUIK.
+                if rec_old.get("order_id") and _is_working(rec_old):
                     srv.enqueue_order(agent, order_msgs.build_cancel_order(
                         client_id=cid_old, order_id=str(rec_old["order_id"]), code=so.code))
                     dirty = True

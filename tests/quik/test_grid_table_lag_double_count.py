@@ -75,6 +75,33 @@ def test_a_fill_is_counted_once_while_the_table_lags(tmp_path, lag, final):
                                  f"{so.g_pos}, налив засчитан второй раз")
 
 
+@pytest.mark.parametrize("lag", [0, 1, 2, 5])
+@pytest.mark.parametrize("window", [0, 5])
+def test_a_filled_order_is_never_cancelled(tmp_path, lag, window):
+    """05.10.2026: после каждого филла уровня QUIK писал «Вы не можете снять данную
+    заявку» дважды. Первое снятие слал гейт погасшего уровня в том же проходе,
+    второе — запрет повтора по отстающей строке таблицы, и журнал врал «снята».
+    Запрет: снятие исполненной заявки не уходит ни на одном проходе."""
+    book, so = _book(tmp_path)
+    so.g_window = window
+    p0 = so_mod.grid_price(so, 0)
+    so.g_live = {"0": "cidA"}
+    ost = _Ost()
+    ost.recs = [{"client_id": "cidA", "order_id": "N1", "state": "filled", "remaining": 0,
+                 "filled": 7, "side": "sell", "price": p0}]
+    tag = f"stl-so-{so.so_id}:gp"
+    lagging = _gstore(84900.0, [_gterm_row("N1", "sell", p0, qty=7, tag=tag)])
+    t = GNOW
+    for i in range(lag + 1):
+        srv = GSrv()
+        _grid_sync(book, lagging, ost, srv, GLim(), "9618", GSTEPS, {}, t, True)
+        t += 31_000                                   # за пределом «раз в 30 с»
+        killed = [m.cancel_order.order_id for m in srv.sent
+                  if m.WhichOneof("payload") == "cancel_order"]
+        assert "N1" not in killed, f"проход {i}: снимаем уже исполненную заявку"
+    assert so.g_pos == -7
+
+
 def test_a_restart_adopted_fill_is_still_counted_by_the_table(tmp_path):
     """Обратная сторона: если склад налив НЕ засчитывал (связь снята при подхвате),
     таблица обязана его посчитать — иначе пропал бы настоящий филл."""
