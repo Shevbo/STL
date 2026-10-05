@@ -629,6 +629,30 @@ def test_param_sets_are_passed_as_param_sets(client):
     assert b["paramSets"] == [{"step": 80}, {"step": 90}] and "paramsGrid" not in b
 
 
+def test_claim_carries_the_card_context_and_the_parent_params(client, tmp_path):
+    """Без контекста карточки модели нечего править (backtests 05.10.2026): claim отдаёт
+    workbench_base витрины, а правку от редакции — с params родителя. Нет workbench_base —
+    задание всё равно выдаётся с card_ctx None: воркер завершит его failed с причиной."""
+    import json as _json
+
+    from trader.api import lab_showcase
+    _ready_over_http(client, PARAMS)                           # ред. 2 от rev сборщика
+    base = {"strategy": "macd", "symbol": "RIZ6", "base_params": {"step": 90}, "script_code": "x"}
+    (tmp_path / "c.json").write_text(_json.dumps({"slug": "c", "kind": "optimizer", "rev": 1,
+                                                  "workbench_base": base}), encoding="utf-8")
+    lab_showcase._cache.clear()
+    assert client.post(f"{BASE}/cards/c/revisions", json={"message": "ещё"}, headers=op()).status_code == 200
+    job = client.post(f"{BASE}/worker/claim", json={"worker_id": "w1"}, headers=WK).json()
+    assert job["rev"] == 3 and job["card_ctx"] == base and job["parent_params"] == PARAMS
+
+
+def test_claim_without_workbench_base_still_hands_out_the_job(client):
+    _hb(client)
+    client.post(f"{BASE}/cards/c/revisions", json={"message": "правь"}, headers=op())
+    job = client.post(f"{BASE}/worker/claim", json={"worker_id": "w1"}, headers=WK).json()
+    assert job["card_ctx"] is None and job["parent_params"] is None   # родитель — rev сборщика
+
+
 def test_no_queue_is_503(client):
     _ready_over_http(client, PARAMS)
     client.app.state.enqueue_backtest = None

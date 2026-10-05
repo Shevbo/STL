@@ -120,9 +120,13 @@
 90 секунд. `busy_with` — id редакции, которую он ведёт.
 
 **`POST .../worker/claim`** `{worker_id}` → `200` задание или `204` (очередь пуста либо воркер уже ведёт
-редакцию). Задание: `{id, card, rev, parent, message, parent_code_ref}`. `message` — текст оператора,
-то есть НЕДОВЕРЕННЫЙ ввод для модели. `parent_code_ref` — ссылка на код предыдущей редакции карточки
-(ветка + коммит), от неё строится `wb/<card>/<rev>`; `null` у первой. Claim сам считается heartbeat.
+редакцию). Задание: `{id, card, rev, parent, message, parent_code_ref, parent_params, card_ctx}`.
+`message` — текст оператора, то есть НЕДОВЕРЕННЫЙ ввод для модели. `parent_code_ref` — ссылка на код
+предыдущей редакции карточки (ветка + коммит), от неё строится `wb/<card>/<rev>`; `null` у первой.
+`parent_params` — `params` родительской редакции, от них модель правит; `null` у первой (родитель —
+rev сборщика, база тогда в `card_ctx.base_params`). `card_ctx` — поле `workbench_base` из `<slug>.json`
+витрины `{strategy, symbol, date_from, date_to, base_params, script_code, point_value}`; нет его —
+`null`, задание всё равно выдаётся, и воркер сам завершает его `failed` с причиной. Claim сам считается heartbeat.
 Работу ведёт ровно один воркер: пока он не закончил, новую ему не отдают.
 
 **`POST .../worker/revisions/{id}/report`** `{worker_id, status?, log_append?, diff?, gates?, params?,

@@ -271,13 +271,16 @@ class Service:
             self._allow("queued", "working", "worker")
             await tx.update(r["id"], {"status": "working", "claimed_by": worker_id,
                                       "claimed_at": now, "updated_at": now})
-            parent_ref = None
+            # parent_params — от них модель правит (просьба backtests 05.10.2026). Родитель —
+            # rev сборщика вне нашей таблицы: оба None, база тогда в card_ctx.base_params.
+            parent_ref = parent_params = None
             if r["parent"]:
                 for p in await tx.rows(r["card"]):
                     if p["rev"] == r["parent"]:
-                        parent_ref = p.get("code_ref")
+                        parent_ref, parent_params = p.get("code_ref"), p.get("params")
             return {"id": r["id"], "card": r["card"], "rev": r["rev"], "parent": r["parent"],
-                    "message": r["message"], "parent_code_ref": parent_ref}
+                    "message": r["message"], "parent_code_ref": parent_ref,
+                    "parent_params": parent_params}
 
     async def report(self, rid: int, worker_id: str, status: str | None, log_append: str | None,
                      diff: str | None, gates: dict | None, params: dict | None,
@@ -780,7 +783,20 @@ async def worker_claim(body: ClaimBody, request: Request,
     job = await _svc(request).claim(body.worker_id)
     if job is None:
         return Response(status_code=204)
+    job["card_ctx"] = _card_ctx(job["card"])
     return job
+
+
+def _card_ctx(slug: str) -> dict[str, Any] | None:
+    """Контекст карточки для модели: workbench_base из <slug>.json витрины {strategy, symbol,
+    date_from, date_to, base_params, script_code, point_value}. Нет его или карточки —
+    None, задание всё равно отдаём: воркер сам завершит его failed с причиной (так
+    договорились с backtests 05.10.2026), а не повиснет в queued."""
+    try:
+        base = _card_meta(slug).get("workbench_base")
+    except WorkbenchError:
+        return None
+    return base if isinstance(base, dict) else None
 
 
 @router.post("/worker/revisions/{rid}/report")
