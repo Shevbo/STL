@@ -2410,6 +2410,25 @@ def _grid_sync(book: SmartOrderBook, store: Any, ost: Any, srv: Any, lim: Any,
             key = str(level)
             cid = live.get(key) or ""
             rec = work.get(cid) if cid else None
+            # НОМЕР ЗАЯВКИ УРОВНЯ ХРАНИТСЯ В КНИГЕ, потому что склад заявок живёт в
+            # памяти. 05.10.2026 10:29:41 покупка 7 GZZ6 по 9929 (уровень -4)
+            # исполнилась, пока STL перезапускался: после старта записи по client_id
+            # не стало, исполненную строку таблицы подхват не берёт (он ищет СТОЯЩИЕ),
+            # и филл пропал — позиция сетки +21 против +28 по сделкам, а на уровень
+            # встала вторая покупка по той же цене. Запись потеряна — уровень
+            # переходит в подхват по номеру, и таблица сама скажет, что с заявкой.
+            pin = live.get(f"num:{key}")
+            if rec is not None and rec.get("order_id"):
+                if pin != [cid, str(rec["order_id"])]:
+                    live[f"num:{key}"] = [cid, str(rec["order_id"])]
+                    dirty = True
+            elif (cid and rec is None and isinstance(pin, list) and len(pin) == 2
+                  and pin[0] == cid and not isinstance(live.get(f"adopt:{level}"), dict)):
+                live[f"adopt:{level}"] = {"num": pin[1]}
+                live.pop(key, None)
+                live.pop(f"num:{key}", None)
+                cid, rec = "", None
+                dirty = True
             if _is_working(rec) and int(rec.get("remaining") or 0) > 0:
                 # Стоит в стакане. Налилась частично — в позицию сразу (см.
                 # _grid_count_partial), уровень не гасим: остаток ещё работает.

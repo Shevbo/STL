@@ -102,6 +102,40 @@ def test_a_filled_order_is_never_cancelled(tmp_path, lag, window):
     assert so.g_pos == -7
 
 
+@pytest.mark.parametrize("after", ["filled", "standing", "cancelled"])
+def test_a_fill_while_stl_was_down_is_caught_by_number(tmp_path, after):
+    """05.10.2026 10:29:41: покупка 7 GZZ6 уровня -4 исполнилась, пока STL
+    перезапускался. После старта записи склада нет, исполненную строку подхват не
+    берёт — филл пропадал, и на уровень вставала вторая покупка по той же цене."""
+    book, so = _book(tmp_path)
+    px = so_mod.grid_price(so, -1)                                   # 84900, покупка
+    so.g_live = {"-1": "cidL"}
+    tag = f"stl-so-{so.so_id}:gm"
+    ost = _Ost()
+    ost.recs = [{"client_id": "cidL", "order_id": "N7", "state": "active", "remaining": 7,
+                 "filled": 0, "side": "buy", "price": px}]
+    standing = _gstore(84950.0, [_gterm_row("N7", "buy", px, qty=7, tag=tag)])
+    _grid_sync(book, standing, ost, GSrv(), GLim(), "9618", GSTEPS, {}, GNOW, True)
+    assert so.g_pos == 0
+
+    ost.recs = []                                    # рестарт STL: склад пуст
+    row = _gterm_row("N7", "buy", px, qty=7, tag=tag, active=(after == "standing"))
+    if after != "standing":
+        row["balance"] = 0 if after == "filled" else 7
+    t = GNOW + 60_000
+    for i in range(3):
+        srv = GSrv()
+        _grid_sync(book, _gstore(84950.0, [row]), ost, srv, GLim(), "9618", GSTEPS, {},
+                   t, True)
+        t += 1000
+        again = [m for m in srv.sent if m.WhichOneof("payload") == "place_order"
+                 and abs(m.place_order.price - px) < 1]
+        if after == "cancelled":
+            continue                                 # снята без налива: уровень свободен
+        assert not again, f"проход {i}: вторая заявка на уровень {px:g}"
+    assert so.g_pos == (7 if after == "filled" else 0), so.g_pos
+
+
 def test_a_restart_adopted_fill_is_still_counted_by_the_table(tmp_path):
     """Обратная сторона: если склад налив НЕ засчитывал (связь снята при подхвате),
     таблица обязана его посчитать — иначе пропал бы настоящий филл."""
